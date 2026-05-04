@@ -54,6 +54,8 @@ tools = [{"function_declarations": [{"name": "shell", "description": "Run a shel
 
 FUNCTIONS = {"shell": shell_tool}
 
+def shell_tool(command: str) -> str:
+    return run_shell_command(command)
 
 def run_tool(call, *, functions: dict[str, Callable[..., str]] | None = None):
     name, args = call
