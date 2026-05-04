@@ -105,7 +105,16 @@ Type anything else to get a response from the AI.
                 )
                 continue
 
-            res = model.generate_content(messages, tools=tools)
+            try:
+                res = model.generate_content(messages, tools=tools)
+            except ResourceExhaustedError:
+                print(
+                    Fore.RED +
+                    "Model is currently overloaded.",
+                    "Please try again later."
+                    + Style.RESET_ALL
+                )
+                continue
 
             final = ""
             tool_calls = []
@@ -133,7 +142,18 @@ Type anything else to get a response from the AI.
                     }
                 )
 
-                followup = model.generate_content(messages, tools=tools).text
+                try:
+                    followup = model.generate_content(messages, tools=tools) \
+                        .text
+                except ResourceExhaustedError:
+                    print(
+                        Fore.RED +
+                        "While generating follow-up response:",
+                        "Model is currently overloaded.",
+                        "Please try again later."
+                        + Style.RESET_ALL
+                    )
+                    continue
                 _render_markdown(console, followup)
                 messages.append(
                     {"role": "model", "parts": [{"text": followup}]}

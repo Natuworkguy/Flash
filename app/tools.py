@@ -1,12 +1,16 @@
 import subprocess
+from colorama import Fore, Style
 
 SYSTEM_PROMPT = """
 You can use tools when useful.
-Use the provided function-calling interface instead of text-based tool directives.
+Use the provided function-calling interface instead of text-based tool
+directives.
 """.strip()
 
 
 def shell_tool(command: str) -> str:
+    print(Fore.BLUE + f"Executing shell command: {command}" + Style.RESET_ALL)
+
     result = subprocess.run(
         command,
         shell=True,
@@ -47,6 +51,7 @@ FUNCTIONS = {
 
 def run_tool(call):
     name, args = call
+
     func = FUNCTIONS.get(name)
     if func is None:
         return f"Unknown tool: {name}"
