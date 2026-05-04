@@ -1,5 +1,6 @@
 colorama
-google-generativeai
+google-genai
+google-api-core
 pyfiglet
 python-dotenv
 rich

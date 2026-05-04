@@ -24,7 +24,7 @@ This repository is currently a small CLI-focused project, not a packaged product
 1. Install dependencies:
 
    ```bash
-   pip install -r reqirements.txt
+   pip install -r requirements.txt
    ```
 
 2. Create a `.env` file in the project root:
@@ -60,7 +60,7 @@ Executing shell command: ls
 The files and directories in your current working directory are:
 
 - app/
-- reqirements.txt
+- requirements.txt
 - run.py
 ```
 
@@ -89,7 +89,7 @@ Example direct shell command:
 - `run.py` - CLI entrypoint
 - `app/ai.py` - chat loop, model interaction, and tool-follow-up handling
 - `app/tools.py` - shell tool implementation and tool declarations
-- `reqirements.txt` - current dependency list
+- `requirements.txt` - current dependency list
 
 ## Next Steps
 

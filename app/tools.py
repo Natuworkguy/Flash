@@ -1,5 +1,6 @@
 import os
 import subprocess
+from typing import Any, Callable
 
 from colorama import Fore, Style
 
@@ -9,11 +10,10 @@ When using shell, call the tool without extra text first.
 """.strip()
 
 
-def shell_tool(command: str) -> str:
-    print(Fore.BLUE + f"Executing shell command: {command}" + Style.RESET_ALL)
-
-    if os.name == "nt":
-        args = [
+def shell_command_args(command: str, *, os_name: str | None = None):
+    os_name = os_name or os.name
+    if os_name == "nt":
+        return [
             "powershell",
             "-NoProfile",
             "-ExecutionPolicy",
@@ -21,65 +21,48 @@ def shell_tool(command: str) -> str:
             "-Command",
             command,
         ]
-        result = subprocess.run(
-            args,
-            capture_output=True,
-            text=True,
-            timeout=15,
-        )
-    else:
-        result = subprocess.run(
-            command,
-            shell=True,
-            capture_output=True,
-            text=True,
-            timeout=15,
-        )
+    return command
 
+
+def run_shell_command(
+    command: str,
+    *,
+    os_name: str | None = None,
+    process_runner: Callable[..., Any] = subprocess.run,
+    output: Callable[[str], None] = print,
+) -> str:
+    output(Fore.BLUE + f"Executing shell command: {command}" + Style.RESET_ALL)
+    os_name = os_name or os.name
+    args = shell_command_args(command, os_name=os_name)
+
+    kwargs = dict(capture_output=True, text=True, timeout=15)
+    if os_name != "nt":
+        kwargs["shell"] = True
+
+    result = process_runner(args, **kwargs)
     parts = [result.stdout.strip(), result.stderr.strip()]
-    output = "\n".join(part for part in parts if part)
+    combined = "\n".join(part for part in parts if part)
 
-    if result.returncode and output:
-        return f"(exit {result.returncode})\n{output}"
-
-    return output or "(no output)"
-
-
-# Tool schema expected by google-generativeai function calling.
-tools = [
-    {
-        "function_declarations": [
-            {
-                "name": "shell",
-                "description": "Run a shell command.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "command": {
-                            "type": "string",
-                            "description": "Command.",
-                        }
-                    },
-                    "required": ["command"],
-                },
-            }
-        ]
-    }
-]
+    if result.returncode and combined:
+        return f"(exit {result.returncode})\n{combined}"
+    return combined or "(no output)"
 
 
-FUNCTIONS = {
-    "shell": shell_tool,
-}
+def shell_tool(command: str) -> str:
+    return run_shell_command(command)
 
 
-def run_tool(call):
+tools = [{"function_declarations": [{"name": "shell", "description": "Run a shell command.", "parameters": {"type": "object", "properties": {"command": {"type": "string", "description": "Command."}}, "required": ["command"]}}]}]
+
+FUNCTIONS = {"shell": shell_tool}
+
+
+def run_tool(call, *, functions: dict[str, Callable[..., str]] | None = None):
     name, args = call
-
-    func = FUNCTIONS.get(name)
+    functions = functions or FUNCTIONS
+    func = functions.get(name)
     if func is None:
         return f"Unknown tool: {name}"
-
     try:
         return func(**args)
     except Exception as e:
