@@ -1,85 +1,57 @@
 import subprocess
 
 SYSTEM_PROMPT = """
-You can use tools.
-
-When you want to use a tool, respond ONLY like this:
-
-TOOL: tool_name | arg1=value1 | arg2=value2
-
-Example:
-TOOL: shell | command=dir
-
-Otherwise respond normally.
-You can only use 1 tool in each response.
-"""
+You can use tools when useful.
+Use the provided function-calling interface instead of text-based tool directives.
+""".strip()
 
 
 def shell_tool(command: str) -> str:
-    try:
-        result = subprocess.run(
-            command,
-            shell=True,
-            capture_output=True,
-            text=True,
-            timeout=15
-        )
-        return result.stdout or result.stderr
-    except Exception as e:
-        return f"Error: {e}"
+    result = subprocess.run(
+        command,
+        shell=True,
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+    return result.stdout or result.stderr or "(no output)"
 
 
-tools = {
-    "shell": {
-        "description": "Execute shell commands and return the output.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "command": {
-                    "type": "string",
-                    "description": "The shell command to execute."
-                }
-            },
-            "required": ["command"]
-        },
-        "function": shell_tool
+# Tool schema expected by google-generativeai function calling.
+tools = [
+    {
+        "function_declarations": [
+            {
+                "name": "shell",
+                "description": "Execute shell commands and return output.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "command": {
+                            "type": "string",
+                            "description": "Shell command to execute.",
+                        }
+                    },
+                    "required": ["command"],
+                },
+            }
+        ]
     }
+]
+
+
+FUNCTIONS = {
+    "shell": shell_tool,
 }
 
 
-def parse_tool_call(text: str):
-    if not text.startswith("TOOL:"):
-        return None
+def run_tool(call):
+    name, args = call
+    func = FUNCTIONS.get(name)
+    if func is None:
+        return f"Unknown tool: {name}"
 
     try:
-        body = text.replace("TOOL:", "").strip()
-        parts = [p.strip() for p in body.split("|")]
-
-        name = parts[0]
-        args = {}
-
-        for p in parts[1:]:
-            k, v = p.split("=", 1)
-            args[k.strip()] = v.strip()
-
-        return name, args
-    except Exception:
-        return None
-
-
-def run_tool(call, Fore, Style):
-    name, args = call
-
-    if name in tools:
-        try:
-            return tools[name]["function"](**args)
-        except Exception as e:
-            exc_as_text = f"{e.__class__.__name__}: {str(e)}"
-            print(
-                Fore.RED,
-                "Error running tool:", exc_as_text,
-                Style.RESET_ALL
-            )
-            return exc_as_text
-
-    return "Unknown tool"
+        return func(**args)
+    except Exception as e:
+        return f"{e.__class__.__name__}: {e}"
