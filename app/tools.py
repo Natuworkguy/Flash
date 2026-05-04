@@ -2,9 +2,8 @@ import subprocess
 from colorama import Fore, Style
 
 SYSTEM_PROMPT = """
-You can use tools when useful.
-Use the provided function-calling interface instead of text-based tool
-directives.
+Answer concisely. Use shell only when command output is needed.
+When using shell, call the tool without extra text first.
 """.strip()
 
 
@@ -27,13 +26,13 @@ tools = [
         "function_declarations": [
             {
                 "name": "shell",
-                "description": "Execute shell commands and return output.",
+                "description": "Run a shell command.",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "command": {
                             "type": "string",
-                            "description": "Shell command to execute.",
+                            "description": "Command.",
                         }
                     },
                     "required": ["command"],

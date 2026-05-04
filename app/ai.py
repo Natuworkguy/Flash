@@ -33,9 +33,10 @@ def _int_env(name: str, default: int, *, minimum: int) -> int:
 class config:
     api_key = os.getenv("API_KEY")
     model = os.getenv("MODEL")
-    max_history_messages = _int_env("MAX_HISTORY_MESSAGES", 12, minimum=2)
-    max_tool_output_chars = _int_env("MAX_TOOL_OUTPUT_CHARS", 4000, minimum=500)
-    max_output_tokens = _int_env("MAX_OUTPUT_TOKENS", 1024, minimum=128)
+    max_history_messages = _int_env("MAX_HISTORY_MESSAGES", 6, minimum=2)
+    max_history_chars = _int_env("MAX_HISTORY_CHARS", 3000, minimum=1000)
+    max_tool_output_chars = _int_env("MAX_TOOL_OUTPUT_CHARS", 1200, minimum=500)
+    max_output_tokens = _int_env("MAX_OUTPUT_TOKENS", 512, minimum=128)
     prompt = Fore.BLUE + "[SM]> " + Style.RESET_ALL
 
 
@@ -48,9 +49,79 @@ def _message(role: str, text: str) -> dict:
     return {"role": role, "parts": [{"text": text}]}
 
 
+def _message_text(message: dict) -> str:
+    parts = message.get("parts", [])
+    text_parts = []
+
+    for part in parts:
+        text = part.get("text") if isinstance(part, dict) else None
+        if text:
+            text_parts.append(text)
+
+    return "\n".join(text_parts)
+
+
 def _trim_history(messages: list[dict]) -> None:
     if len(messages) > config.max_history_messages:
         del messages[:-config.max_history_messages]
+
+    while (
+        len(messages) > 1
+        and sum(len(_message_text(message)) for message in messages)
+        > config.max_history_chars
+    ):
+        del messages[0]
+
+
+def _should_enable_tools(text: str) -> bool:
+    lowered = text.lower()
+
+    if lowered.startswith(("run ", "execute ", "shell ", "cmd ", "powershell ")):
+        return True
+
+    tool_words = {
+        "command",
+        "directory",
+        "file",
+        "folder",
+        "git",
+        "ls",
+        "pip",
+        "python",
+        "terminal",
+        "test",
+        "workspace",
+    }
+    action_words = {
+        "check",
+        "find",
+        "inspect",
+        "list",
+        "read",
+        "run",
+        "search",
+        "show",
+        "validate",
+        "what files",
+        "what is in",
+        "what's in",
+    }
+
+    return (
+        any(word in lowered for word in tool_words)
+        and any(word in lowered for word in action_words)
+    )
+
+
+def _direct_shell_command(text: str) -> str | None:
+    if text.startswith("!"):
+        return text[1:].strip()
+
+    for prefix in ("/shell ", "/run "):
+        if text.startswith(prefix):
+            return text[len(prefix):].strip()
+
+    return None
 
 
 def _trim_tool_output(text: str) -> str:
@@ -155,6 +226,17 @@ def main() -> None:
                 print(Fore.LIGHTBLACK_EX + config.model + Style.RESET_ALL)
                 continue
 
+            if uin == "/clear":
+                messages.clear()
+                print(Fore.LIGHTBLACK_EX + "Context cleared." + Style.RESET_ALL)
+                continue
+
+            direct_command = _direct_shell_command(uin)
+            if direct_command:
+                print(run_tool(("shell", {"command": direct_command})))
+                print()
+                continue
+
             if uin in {"/help", "/?"}:
                 print(
                     f"""
@@ -162,6 +244,8 @@ def main() -> None:
 Type {Fore.BLUE}/model{Fore.YELLOW} to show active model.
 Type {Fore.BLUE}/help{Fore.YELLOW} or {Fore.BLUE}/?{Fore.YELLOW} to see this.
 Type {Fore.BLUE}/bye{Fore.YELLOW} to exit.
+Type {Fore.BLUE}/clear{Fore.YELLOW} to clear saved context.
+Type {Fore.BLUE}!<command>{Fore.YELLOW} or {Fore.BLUE}/run <command>{Fore.YELLOW} to run shell directly.
 Type anything else to get a response from the AI.
 """ + Style.RESET_ALL
                 )
@@ -171,7 +255,10 @@ Type anything else to get a response from the AI.
             _trim_history(messages)
 
             try:
-                res = model.generate_content(messages, tools=tools)
+                if _should_enable_tools(uin):
+                    res = model.generate_content(messages, tools=tools)
+                else:
+                    res = model.generate_content(messages)
             except ResourceExhaustedError:
                 print(
                     Fore.RED +
