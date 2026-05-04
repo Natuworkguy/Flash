@@ -1,4 +1,4 @@
-from app.ai import main
+from .ai import main
 
 if __name__ == "__main__":
     main()
