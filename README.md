@@ -24,6 +24,19 @@ ShellMind CLI is an AI-powered command-line interface that allows you to interac
    pip install -r requirements.txt
    ```
 
+### Quick Install & Run (Windows)
+
+For a quick build, install, and run cycle, you can use the following one-liner (replace `[VERSION]` with the actual version number, e.g., `0.1.0`):
+
+```powershell
+py.exe -m build; pip install .\dist\shellmind-[VERSION]-py3-none-any.whl --force-reinstall; py.exe -m shellmind
+```
+
+**Explanation:**
+- `py.exe -m build`: Builds the distribution packages (like the `.whl` file) from your source code.
+- `pip install .\dist\shellmind-[VERSION]-py3-none-any.whl --force-reinstall`: Installs the generated wheel file, ensuring any previous version is replaced. Replace `[VERSION]` with the version found in `pyproject.toml` or the `dist` folder.
+- `py.exe -m shellmind`: Launches the ShellMind application.
+
 ## Configuration
 
 ShellMind CLI requires configuration through environment variables. You can create a `shellmind.env` file in your home directory:
