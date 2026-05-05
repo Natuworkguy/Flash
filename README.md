@@ -6,20 +6,22 @@ ShellMind CLI is an AI-powered command-line interface that allows you to interac
 
 - **Interactive AI Chat**: Chat with advanced generative models directly from your terminal.
 - **Shell Command Execution**:
-    - AI can use a `shell` tool to execute commands and see their output.
-    - Manually execute shell commands using prefixes like `!`, `/run`, or `/shell`.
+  - AI can use a `shell` tool to execute commands and see their output.
+  - Manually execute shell commands using prefixes like `!`, `/run`, or `/shell`.
 - **Context Management**: Automatic history trimming to stay within token limits.
 - **Markdown Support**: Rich formatting for AI responses in the terminal.
 
 ## Installation
 
 1. **Clone the repository**:
+
    ```bash
    git clone <repository-url>
    cd shellmind
    ```
 
 2. **Install dependencies**:
+
    ```bash
    pip install -r requirements.txt
    ```
@@ -33,6 +35,7 @@ py.exe -m build; pip install .\dist\shellmind-[VERSION]-py3-none-any.whl --force
 ```
 
 **Explanation:**
+
 - `py.exe -m build`: Builds the distribution packages (like the `.whl` file) from ShellMind's source code.
 - `pip install .\dist\shellmind-[VERSION]-py3-none-any.whl --force-reinstall`: Installs the generated wheel file, ensuring any previous version is replaced. Replace `[VERSION]` with the version found in `pyproject.toml` or the `dist` folder.
 - `py.exe -m shellmind`: Launches the ShellMind application.
@@ -49,7 +52,7 @@ MODEL=gemini-1.5-flash
 ### Environment Variables
 
 | Variable | Description | Default |
-|----------|-------------|---------|
+|---------- |-------------|--------|
 | `API_KEY` | **Required**. Your Google Generative AI API key. | None |
 | `MODEL` | **Required**. The model name (e.g., `gemini-1.5-flash`). | None |
 | `MAX_HISTORY_MESSAGES` | Maximum number of messages kept in history. | 6 |
@@ -76,6 +79,7 @@ python run.py
 ### Direct Shell Execution
 
 You can run shell commands directly without AI intervention:
+
 - `!ls -la`
 - `/run git status`
 - `/shell echo "Hello"`
