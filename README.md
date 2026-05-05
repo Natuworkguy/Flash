@@ -26,7 +26,7 @@ ShellMind CLI is an AI-powered command-line interface that allows you to interac
 
 ## Configuration
 
-ShellMind CLI requires configuration through environment variables. You can create a `.env` file in the root directory:
+ShellMind CLI requires configuration through environment variables. You can create a `shellmind.env` file in your home directory:
 
 ```env
 API_KEY=your_google_ai_api_key

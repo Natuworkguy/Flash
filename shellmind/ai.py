@@ -12,6 +12,9 @@ from google.generativeai import protos
 from pyfiglet import Figlet
 from rich.console import Console
 from rich.markdown import Markdown
+from pathlib import Path
+
+ENV_PATH = str(Path.home() / "shellmind.env")
 
 load_dotenv()
 
@@ -158,11 +161,20 @@ def _render_markdown(console: Console, text: str, *, end: str = "\n") -> None:
 
 
 def main() -> None:
-    if not config.api_key:
-        raise ShellMindError("API_KEY is not set.")
+    def _not_set_error(name: str) -> None:
+        print(
+            Fore.RED +
+            f"{name} is not set. Please set it to use ShellMind CLI.\n" +
+            f"Set {name} in environment variable or in {ENV_PATH} file." +
+            Style.RESET_ALL
+        )
+        sys.exit(1)
 
-    if not config.model:
-        raise ShellMindError("MODEL is not set.")
+    if not config.api_key:
+        _not_set_error("API_KEY")
+
+    if not config.model or config.model is None:
+        _not_set_error("MODEL")
 
     if hasattr(genai, "configure"):
         genai.configure(api_key=config.api_key)  # type: ignore
@@ -174,7 +186,7 @@ def main() -> None:
     if hasattr(genai, "GenerativeModel"):
         try:
             model = genai.GenerativeModel(  # type: ignore
-                config.model,
+                config.model,  # pyright: ignore[reportArgumentType]
                 generation_config={
                     "max_output_tokens": config.max_output_tokens,
                 },
@@ -191,7 +203,7 @@ def main() -> None:
 
     if model is None:
         print(
-            Fore.YELLOW +
+            Fore.RED +
             "Failed to initialize the generative model."
             + Style.RESET_ALL
         )
@@ -207,7 +219,20 @@ def main() -> None:
                 return
 
             if uin == "/model":
-                print(Fore.LIGHTBLACK_EX + config.model + Style.RESET_ALL)
+                if not config.model or config.model is None:
+                    print(
+                        Fore.RED +
+                        "Error retrieving model information."
+                        + Style.RESET_ALL
+                    )
+
+                print(
+                    Fore.LIGHTBLACK_EX +
+                    config.model
+                    if config.model
+                    else ""
+                    + Style.RESET_ALL
+                )
                 continue
 
             if uin == "/clear":
