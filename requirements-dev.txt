@@ -3,3 +3,4 @@ ruff
 flake8
 build
 twine
+bandit
