@@ -1,0 +1,37 @@
+name: 'Setup ShellMind'
+description: 'Sets up Python, caches dependencies, and installs them.'
+inputs:
+  python-version:
+    description: 'Python version to use'
+    required: true
+    default: '3.10'
+  install-dev:
+    description: 'Whether to install development dependencies'
+    required: false
+    default: 'false'
+
+runs:
+  using: "composite"
+  steps:
+    - name: Set up Python ${{ inputs.python-version }}
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ inputs.python-version }}
+        cache: 'pip'
+
+    - name: Install core dependencies
+      shell: bash
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+
+    - name: Install dev dependencies
+      if: inputs.install-dev == 'true'
+      shell: bash
+      run: |
+        pip install -r requirements-dev.txt
+
+    - name: Install project in editable mode
+      shell: bash
+      run: |
+        pip install -e .
