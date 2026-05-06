@@ -12,28 +12,34 @@ When using shell, call the tool without extra text first.
 def shell_tool(command: str) -> str:
     print(Fore.BLUE + f"Executing shell command: {command}" + Style.RESET_ALL)
 
-    if os.name == "nt":
-        args = [
-            "powershell",
-            "-NoProfile",
-            "-ExecutionPolicy",
-            "Bypass",
-            "-Command",
-            command,
-        ]
-        result = subprocess.run(
-            args,
-            capture_output=True,
-            text=True,
-            timeout=15,
-        )
-    else:
-        result = subprocess.run(
-            command,
-            shell=True,
-            capture_output=True,
-            text=True,
-            timeout=15,
+    try:
+        if os.name == "nt":
+            args = [
+                "powershell",
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-Command",
+                command,
+            ]
+            result = subprocess.run(
+                args,
+                capture_output=True,
+                text=True,
+                timeout=15,
+            )
+        else:
+            result = subprocess.run(
+                command,
+                shell=True,
+                capture_output=True,
+                text=True,
+                timeout=15,
+            )
+    except subprocess.TimeoutExpired:
+        return (
+            "Error: Command timed out after 15 seconds. "
+            "Please note that shell commands are run non-interactively."
         )
 
     parts = [result.stdout.strip(), result.stderr.strip()]

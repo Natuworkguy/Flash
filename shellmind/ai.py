@@ -211,11 +211,15 @@ def main() -> None:
 
     banner(console)
 
-    try:
-        while True:
-            uin = input(config.prompt)
+    while True:
+        try:
+            try:
+                uin = input(config.prompt)
+            except EOFError:
+                print()
+                return
 
-            if uin == "/bye":
+            if uin in ("/bye", "exit", "quit"):
                 return
 
             if uin == "/model":
@@ -256,7 +260,7 @@ def main() -> None:
 {Fore.CYAN}Console{Fore.YELLOW}
 Type {Fore.BLUE}/model{Fore.YELLOW} to show active model.
 Type {Fore.BLUE}/help{Fore.YELLOW} or {Fore.BLUE}/?{Fore.YELLOW} to see this.
-Type {Fore.BLUE}/bye{Fore.YELLOW} to exit.
+Type {Fore.BLUE}/bye{Fore.YELLOW}, {Fore.BLUE}exit{Fore.YELLOW} or {Fore.BLUE}quit{Fore.YELLOW} to exit.
 Type {Fore.BLUE}/clear{Fore.YELLOW} to clear saved context.
 Type {Fore.BLUE}!<command>{Fore.YELLOW} to run shell directly.
 Type {Fore.BLUE}/run <command>{Fore.YELLOW}
@@ -377,8 +381,9 @@ Type anything else to get a response from the AI.
 
             print()
 
-    except KeyboardInterrupt:
-        return
+        except KeyboardInterrupt:
+            print()
+            continue
 
 
 if __name__ == "__main__":
