@@ -52,7 +52,7 @@ MODEL=gemini-1.5-flash
 ### Environment Variables
 
 | Variable | Description | Default | Minimum |
-|---------- |-------------|--------|---------|
+| -------- | ----------- | ------- | ------- |
 | `API_KEY` | **Required**. Your Google Generative AI API key. | None | N/A |
 | `MODEL` | **Required**. The model name (e.g., `gemini-1.5-flash`). | None | N/A |
 | `MAX_HISTORY_MESSAGES` | Maximum number of messages kept in history. | 6 | 2 |
