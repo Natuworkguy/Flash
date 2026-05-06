@@ -112,7 +112,7 @@ def _trim_tool_output(text: str) -> str:
 
 def _response_parts(response) -> tuple[str, list]:
     final = ""
-    tool_calls = []
+    tool_calls: list = []
     candidates = getattr(response, "candidates", None) or []
 
     if not candidates:
@@ -170,7 +170,7 @@ def main() -> None:
         )
         sys.exit(1)
 
-    if not config.api_key:
+    if not config.api_key or config.model is None:
         _not_set_error("API_KEY")
 
     if not config.model or config.model is None:
@@ -180,10 +180,13 @@ def main() -> None:
         genai.configure(api_key=config.api_key)  # type: ignore
 
     console = Console()
-    messages = []
+    messages: list = []
 
     model = None
     if hasattr(genai, "GenerativeModel"):
+        if config.model is None:
+            return
+
         try:
             model = genai.GenerativeModel(  # type: ignore
                 config.model,  # pyright: ignore[reportArgumentType]
