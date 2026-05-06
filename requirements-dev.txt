@@ -1,4 +1,5 @@
 pytest
 ruff
+flake8
 build
 twine

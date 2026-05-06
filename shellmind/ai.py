@@ -84,7 +84,11 @@ def _trim_history(messages: list[dict]) -> None:
 
 def _direct_shell_command(text: str) -> str | None:
     if text.startswith("!"):
-        return text[1:].strip()
+        cmd = text[1:].strip()
+        for prefix in ["shell ", "run "]:
+            if cmd.startswith(prefix):
+                return cmd[len(prefix):].strip()
+        return cmd
 
     return None
 
