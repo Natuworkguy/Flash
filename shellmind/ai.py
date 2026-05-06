@@ -16,7 +16,7 @@ from pathlib import Path
 
 ENV_PATH = str(Path.home() / "shellmind.env")
 
-load_dotenv()
+load_dotenv(dotenv_path=ENV_PATH)
 
 
 class ShellMindError(Exception):
