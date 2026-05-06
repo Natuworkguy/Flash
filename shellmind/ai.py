@@ -1,3 +1,5 @@
+"""Main App"""
+
 from .tools import tools, SYSTEM_PROMPT, run_tool
 
 import os
@@ -20,7 +22,7 @@ load_dotenv(dotenv_path=ENV_PATH)
 
 
 class ShellMindError(Exception):
-    pass
+    """General error for uncaught exceptions in the main loop"""
 
 
 def _int_env(name: str, default: int, *, minimum: int) -> int:
@@ -34,7 +36,8 @@ def _int_env(name: str, default: int, *, minimum: int) -> int:
         return default
 
 
-class config:
+class Config:
+    """App configuration"""
     api_key = os.getenv("API_KEY")
     model = os.getenv("MODEL")
     max_history_messages = _int_env("MAX_HISTORY_MESSAGES", 6, minimum=2)
@@ -50,6 +53,8 @@ class config:
 
 
 def banner(c: Console) -> None:
+    """Print the app banner"""
+
     f = Figlet(font="slant")
     c.print(f.renderText("ShellMind CLI"), style="bold cyan")
 
@@ -71,13 +76,13 @@ def _message_text(message: dict) -> str:
 
 
 def _trim_history(messages: list[dict]) -> None:
-    if len(messages) > config.max_history_messages:
-        del messages[:-config.max_history_messages]
+    if len(messages) > Config.max_history_messages:
+        del messages[:-Config.max_history_messages]
 
     while (
         len(messages) > 1
         and sum(len(_message_text(message)) for message in messages)
-        > config.max_history_chars
+        > Config.max_history_chars
     ):
         del messages[0]
 
@@ -96,12 +101,12 @@ def _direct_shell_command(text: str) -> str | None:
 def _trim_tool_output(text: str) -> str:
     text = text.strip() or "(no output)"
 
-    if len(text) <= config.max_tool_output_chars:
+    if len(text) <= Config.max_tool_output_chars:
         return text
 
-    head_len = config.max_tool_output_chars // 2
-    tail_len = config.max_tool_output_chars - head_len
-    omitted = len(text) - config.max_tool_output_chars
+    head_len = Config.max_tool_output_chars // 2
+    tail_len = Config.max_tool_output_chars - head_len
+    omitted = len(text) - Config.max_tool_output_chars
 
     return (
         text[:head_len]
@@ -161,6 +166,8 @@ def _render_markdown(console: Console, text: str, *, end: str = "\n") -> None:
 
 
 def main() -> None:
+    """Main app loop"""
+
     def _not_set_error(name: str) -> None:
         print(
             Fore.RED +
@@ -170,28 +177,28 @@ def main() -> None:
         )
         sys.exit(1)
 
-    if not config.api_key or config.model is None:
+    if not Config.api_key or Config.model is None:
         _not_set_error("API_KEY")
 
-    if not config.model or config.model is None:
+    if not Config.model or Config.model is None:
         _not_set_error("MODEL")
 
     if hasattr(genai, "configure"):
-        genai.configure(api_key=config.api_key)  # type: ignore
+        genai.configure(api_key=Config.api_key)  # type: ignore
 
     console = Console()
     messages: list = []
 
     model = None
     if hasattr(genai, "GenerativeModel"):
-        if config.model is None:
+        if Config.model is None:
             return
 
         try:
             model = genai.GenerativeModel(  # type: ignore
-                config.model,  # pyright: ignore[reportArgumentType]
+                Config.model,  # pyright: ignore[reportArgumentType]
                 generation_config={
-                    "max_output_tokens": config.max_output_tokens,
+                    "max_output_tokens": Config.max_output_tokens,
                 },
                 system_instruction=SYSTEM_PROMPT
             )
@@ -217,7 +224,7 @@ def main() -> None:
     while True:
         try:
             try:
-                uin = input(config.prompt)
+                uin = input(Config.prompt)
             except EOFError:
                 print()
                 return
@@ -226,7 +233,7 @@ def main() -> None:
                 return
 
             if uin == "/model":
-                if not config.model or config.model is None:
+                if not Config.model or Config.model is None:
                     print(
                         Fore.RED +
                         "Error retrieving model information."
@@ -235,8 +242,8 @@ def main() -> None:
 
                 print(
                     Fore.LIGHTBLACK_EX +
-                    config.model
-                    if config.model
+                    Config.model
+                    if Config.model
                     else ""
                     + Style.RESET_ALL
                 )
@@ -307,7 +314,7 @@ Type anything else to get a response from the AI.
             followup = ""
 
             try:
-                for _ in range(config.max_tool_rounds):
+                for _ in range(Config.max_tool_rounds):
                     content = _response_content(res)
                     if content is not None:
                         tool_messages.append(content)

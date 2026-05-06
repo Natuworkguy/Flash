@@ -1,9 +1,11 @@
+# pylint: disable=C0114,C0115,C0116
+
 from shellmind.ai import (
     _int_env,
     _trim_history,
     _direct_shell_command,
     _trim_tool_output,
-    config
+    Config
 )
 
 
@@ -25,7 +27,7 @@ def test_trim_history():
     messages = [{"role": "user", "parts": [{"text": "hello"}]}] * 10
     # config.max_history_messages is 6 by default
     _trim_history(messages)
-    assert len(messages) <= config.max_history_messages  # nosec B101
+    assert len(messages) <= Config.max_history_messages  # nosec B101
 
 
 def test_direct_shell_command():

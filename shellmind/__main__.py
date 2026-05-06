@@ -1,3 +1,5 @@
+# pylint: disable=C0114
+
 import warnings
 
 warnings.filterwarnings(

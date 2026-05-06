@@ -1,3 +1,5 @@
+# pylint: disable=C0114,C0115,C0116
+
 import subprocess  # nosec B404
 from shellmind.tools import shell_tool
 
@@ -21,7 +23,7 @@ def test_shell_tool_success(monkeypatch):
         stderr = ""
         returncode = 0
 
-    def mock_run(*args, **kwargs):
+    def mock_run(*_, **__):
         return MockResult()
 
     monkeypatch.setattr(subprocess, "run", mock_run)

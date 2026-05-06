@@ -1,3 +1,5 @@
+"""AI Tool System"""
+
 import os
 import subprocess  # nosec B404
 
@@ -10,6 +12,8 @@ When using shell, call the tool without extra text first.
 
 
 def shell_tool(command: str) -> str:
+    """Tool to execute a shell command"""
+
     print(Fore.BLUE + f"Executing shell command: {command}" + Style.RESET_ALL)
 
     try:
@@ -27,6 +31,7 @@ def shell_tool(command: str) -> str:
                 capture_output=True,
                 text=True,
                 timeout=15,
+                check=False
             )
         else:
             result = subprocess.run(
@@ -35,6 +40,7 @@ def shell_tool(command: str) -> str:
                 capture_output=True,
                 text=True,
                 timeout=15,
+                check=False
             )
     except subprocess.TimeoutExpired:
         return (
@@ -80,6 +86,8 @@ FUNCTIONS = {
 
 
 def run_tool(call):
+    """Run a tool with arguments"""
+
     name, args = call
 
     func = FUNCTIONS.get(name)
@@ -88,5 +96,5 @@ def run_tool(call):
 
     try:
         return func(**args)
-    except Exception as e:
+    except Exception as e:  # pylint: disable=broad-exception-caught
         return f"{e.__class__.__name__}: {e}"
