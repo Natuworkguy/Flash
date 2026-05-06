@@ -1,5 +1,5 @@
 import os
-import subprocess
+import subprocess  # nosec B404
 
 from colorama import Fore, Style
 
@@ -22,7 +22,7 @@ def shell_tool(command: str) -> str:
                 "-Command",
                 command,
             ]
-            result = subprocess.run(
+            result = subprocess.run(  # nosec B603
                 args,
                 capture_output=True,
                 text=True,
@@ -31,7 +31,7 @@ def shell_tool(command: str) -> str:
         else:
             result = subprocess.run(
                 command,
-                shell=True,
+                shell=True,  # nosec B602
                 capture_output=True,
                 text=True,
                 timeout=15,

@@ -1,4 +1,4 @@
-import subprocess
+import subprocess  # nosec B404
 from shellmind.tools import shell_tool
 
 
@@ -11,8 +11,8 @@ def test_shell_tool_timeout(monkeypatch):
     monkeypatch.setattr(subprocess, "run", mock_run)
 
     result = shell_tool("long_command")
-    assert "Command timed out" in result
-    assert "non-interactively" in result
+    assert "Command timed out" in result  # nosec B101
+    assert "non-interactively" in result  # nosec B101
 
 
 def test_shell_tool_success(monkeypatch):
@@ -27,4 +27,4 @@ def test_shell_tool_success(monkeypatch):
     monkeypatch.setattr(subprocess, "run", mock_run)
 
     result = shell_tool("echo success")
-    assert result == "success"
+    assert result == "success"  # nosec B101
