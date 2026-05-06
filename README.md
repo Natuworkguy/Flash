@@ -7,7 +7,7 @@ ShellMind CLI is an AI-powered command-line interface that allows you to interac
 - **Interactive AI Chat**: Chat with advanced generative models directly from your terminal.
 - **Shell Command Execution**:
   - AI can use a `shell` tool to execute commands and see their output.
-  - Manually execute shell commands using prefixes like `!`, `/run`, or `/shell`.
+  - Manually execute shell commands using the `!` prefix.
 - **Context Management**: Automatic history trimming to stay within token limits.
 - **Markdown Support**: Rich formatting for AI responses in the terminal.
 
@@ -81,8 +81,8 @@ python run.py
 You can run shell commands directly without AI intervention:
 
 - `!ls -la`
-- `/run git status`
-- `/shell echo "Hello"`
+- `!git status`
+- `!echo "Hello"`
 
 ### AI Interaction
 
