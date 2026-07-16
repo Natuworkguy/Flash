@@ -21,7 +21,11 @@ When you need to know the user's operating system, use the get_os tool.
 To think or plan mid-task without ending your turn, use the reason tool.
 """.strip()
 
-SYSTEM_PROMPT = f"{get_system_prompt()}\n{TOOL_SYSTEM_PROMPT}"
+SYSTEM_PROMPT = f"""
+{get_system_prompt()}
+{TOOL_SYSTEM_PROMPT}
+=== END OF SYSTEM PROMPT ===
+""".strip()
 
 
 def shell_tool(command: str) -> str:
