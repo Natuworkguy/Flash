@@ -15,6 +15,7 @@ from rich.markdown import Markdown
 from pathlib import Path
 
 ENV_PATH = str(Path.home() / "flash.env")
+OLLAMA_HOST_DEFAULT = "http://localhost:11434"
 
 load_dotenv(dotenv_path=ENV_PATH)
 
@@ -36,7 +37,7 @@ def _int_env(name: str, default: int, *, minimum: int) -> int:
 
 class Config:
     """App configuration"""
-    host = os.getenv("OLLAMA_HOST", "http://localhost:11434")
+    host = os.getenv("OLLAMA_HOST", OLLAMA_HOST_DEFAULT)
     model = os.getenv("MODEL")
     max_history_messages = _int_env("MAX_HISTORY_MESSAGES", 6, minimum=2)
     max_history_chars = _int_env("MAX_HISTORY_CHARS", 3000, minimum=1000)
@@ -47,7 +48,14 @@ class Config:
         minimum=500
     )
     max_output_tokens = _int_env("MAX_OUTPUT_TOKENS", 512, minimum=128)
-    prompt = Fore.BLUE + "[Flash]> " + Style.RESET_ALL
+    prompt = \
+        Fore.BLUE + \
+        (
+            "[Flash]> " \
+                if host == OLLAMA_HOST_DEFAULT \
+                else f"[Flash @ {host.lstrip('http://').lstrip('https://')}]> "
+        ) + \
+        Style.RESET_ALL
 
 
 def banner(c: Console) -> None:
