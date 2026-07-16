@@ -106,4 +106,4 @@ You can run shell commands directly without AI intervention:
 
 ### AI Interaction
 
-Simply type your request. If the AI needs to see the contents of a file or run a command to answer your question, it can invoke the shell tool automatically.
+Simply type your request. If the AI needs to see the contents of a file or run a command to answer your question, it can invoke the shell tool automatically. It can also search the web via Duck Duck Go and show it's reasoning.
