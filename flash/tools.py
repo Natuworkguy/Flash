@@ -203,6 +203,11 @@ def web_search(query: str) -> str:
 
 def get_os() -> str:
     """Return a brief description of the user's operating system."""
+
+    print(
+        Fore.BLUE + "Retrieving operating system information" + Style.RESET_ALL
+    )
+
     return (
         f"OS: {platform.system()} {platform.release()}\n"
         f"Platform: {platform.platform()}\n"
