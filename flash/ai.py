@@ -51,9 +51,9 @@ class Config:
     prompt = \
         Fore.BLUE + \
         (
-            "[Flash]> " \
-                if host == OLLAMA_HOST_DEFAULT \
-                else f"[Flash @ {host.lstrip('http://').lstrip('https://')}]> "
+            "[Flash]> "
+            if host == OLLAMA_HOST_DEFAULT
+            else f"[Flash @ {host.lstrip('http://').lstrip('https://')}]> "
         ) + \
         Style.RESET_ALL
 
