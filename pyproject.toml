@@ -9,14 +9,14 @@ description = "FLASH CLI"
 authors = [
     { name = "Natuworkguy" },
 ]
-dependencies = [
-    "colorama",
-    "ollama",
-    "pyfiglet",
-    "python-dotenv",
-    "rich",
-]
+dynamic = ["dependencies", "optional-dependencies"]
 requires-python = ">=3.10"
+
+[tool.setuptools.dynamic.dependencies]
+file = ["requirements.txt"]
+
+[tool.setuptools.dynamic.optional-dependencies]
+dev = { file = ["requirements-dev.txt"] }
 
 [project.scripts]
 flash = "flash.ai:main"
