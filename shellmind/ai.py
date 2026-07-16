@@ -47,7 +47,7 @@ class Config:
         minimum=500
     )
     max_output_tokens = _int_env("MAX_OUTPUT_TOKENS", 512, minimum=128)
-    prompt = Fore.BLUE + "[SM]> " + Style.RESET_ALL
+    prompt = Fore.BLUE + "[Flash]> " + Style.RESET_ALL
 
 
 def banner(c: Console) -> None:
