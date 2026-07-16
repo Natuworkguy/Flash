@@ -1,6 +1,6 @@
-# ShellMind CLI
+# FLASH CLI
 
-ShellMind CLI is an AI-powered command-line interface that allows you to interact with local (or remote) [Ollama](https://ollama.com) models while having the ability to execute shell commands directly or through the AI.
+FLASH (**F**ast **L**ocal **A**gent **SH**ell) CLI is an AI-powered command-line interface that allows you to interact with local (or remote) [Ollama](https://ollama.com) models while having the ability to execute shell commands directly or through the AI.
 
 ## Features
 
@@ -17,8 +17,8 @@ ShellMind CLI is an AI-powered command-line interface that allows you to interac
 1. **Clone the repository**:
 
    ```bash
-   git clone https://github.com/Natuworkguy/ShellMind
-   cd shellmind
+   git clone https://github.com/Natuworkguy/Flash
+   cd Flash
    ```
 
 2. **Install dependencies**:
@@ -53,7 +53,7 @@ py.exe -m build; pip install .\dist\shellmind-[VERSION]-py3-none-any.whl --force
 
 ## Configuration
 
-ShellMind CLI is configured through environment variables. You can create a `shellmind.env` file in your home directory:
+FLASH CLI is configured through environment variables. You can create a `shellmind.env` file in your home directory:
 
 ```env
 MODEL=llama3.1
