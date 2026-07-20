@@ -113,6 +113,17 @@ def _trim_tool_output(text: str) -> str:
     )
 
 
+def _tool_limit_message() -> dict:
+    return {
+        "role": "system",
+        "content": (
+            "The tool-calling loop has reached its limit and the assistant "
+            "has run out of tokens. Answer the original request now using "
+            "the tool results above. Do not call any more tools."
+        ),
+    }
+
+
 def _response_parts(response) -> tuple[str, list]:
     message = getattr(response, "message", None)
 
@@ -323,13 +334,7 @@ Type anything else to get a response from the AI.
                 continue
 
             if not followup.strip():
-                tool_messages.append(
-                    _message(
-                        "user",
-                        "Using the tool results above, answer the original "
-                        "request now. Do not call more tools."
-                    )
-                )
+                tool_messages.append(_tool_limit_message())
 
                 res, err = _try_chat(client, tool_messages, None)
                 if err:
