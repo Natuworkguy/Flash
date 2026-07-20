@@ -41,13 +41,13 @@ class Config:
     model = os.getenv("MODEL")
     max_history_messages = _int_env("MAX_HISTORY_MESSAGES", 6, minimum=2)
     max_history_chars = _int_env("MAX_HISTORY_CHARS", 3000, minimum=1000)
-    max_tool_rounds = _int_env("MAX_TOOL_ROUNDS", 4, minimum=1)
+    max_tool_rounds = _int_env("MAX_TOOL_ROUNDS", 10, minimum=1)
     max_tool_output_chars = _int_env(
         "MAX_TOOL_OUTPUT_CHARS",
         1200,
         minimum=500
     )
-    max_output_tokens = _int_env("MAX_OUTPUT_TOKENS", 512, minimum=128)
+    max_output_tokens = _int_env("MAX_OUTPUT_TOKENS", 1024, minimum=128)
     prompt = \
         Fore.BLUE + \
         (
