@@ -52,19 +52,9 @@ MODEL=llama3.1
 OLLAMA_HOST=http://localhost:11434
 ```
 
-For a full reference of every option, see [docs/CONFIGURATION.md](docs/CONFIGURATION.md).
-
 ### Environment Variables
 
-| Variable | Description | Default | Minimum |
-| -------- | ----------- | ------- | ------- |
-| `MODEL` | **Required**. The Ollama model name (e.g., `llama3.1`). Must be pulled on the target server. | None | N/A |
-| `OLLAMA_HOST` | Base URL of the Ollama server. Set this to point at a remote machine instead of localhost. | `http://localhost:11434` | N/A |
-| `MAX_HISTORY_MESSAGES` | Maximum number of messages kept in history. | 6 | 2 |
-| `MAX_HISTORY_CHARS` | Maximum characters kept in history. | 3000 | 1000 |
-| `MAX_TOOL_ROUNDS` | Maximum tool-calling rounds per request. | 4 | 1 |
-| `MAX_TOOL_OUTPUT_CHARS` | Maximum characters for tool output before truncation. | 1200 | 500 |
-| `MAX_OUTPUT_TOKENS` | Maximum tokens for AI response (`num_predict`). | 512 | 128 |
+See [docs/CONFIGURATION.md](docs/CONFIGURATION.md).
 
 ### Switching servers
 
