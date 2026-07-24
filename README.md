@@ -45,7 +45,7 @@ python3 run.py
 
 ## Configuration
 
-FLASH CLI is configured through environment variables. You can create a `flash.env` file in your home directory:
+FLASH CLI is configured through environment variables. You can create a `.flash.env` file in your home directory:
 
 ```env
 MODEL=llama3.1
