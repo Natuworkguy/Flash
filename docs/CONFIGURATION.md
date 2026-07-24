@@ -92,7 +92,7 @@ When using a remote server:
 
 Inside FLASH, run:
 
-```shellmind
+```FLASH
 /model
 ```
 
