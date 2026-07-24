@@ -53,7 +53,7 @@ class Config:
         (
             "[Flash]> "
             if host == OLLAMA_HOST_DEFAULT
-            else f"[Flash @ {host.lstrip('http://').lstrip('https://')}]> "
+            else f"[Flash @ {host.lstrip('http://').lstrip('https://')}]> "  # noqa: B005
         ) + \
         Style.RESET_ALL
 
@@ -166,7 +166,7 @@ def _try_chat(
         return _chat(client, messages, tools_arg), None
     except ResponseError as exc:
         return None, str(exc)
-    except Exception as exc:  # pylint: disable=broad-exception-caught
+    except Exception as exc:  # pylint: disable=broad-exception-caught  # noqa: BLE001
         return None, f"Could not reach Ollama at {Config.host}. {exc}"
 
 

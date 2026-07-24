@@ -173,7 +173,7 @@ def web_search(query: str) -> str:
         with urlopen(request, timeout=15) as response:  # nosec B310
             status = response.status
             html = response.read().decode("utf-8", errors="ignore")
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         return f"Web search failed: {exc}"
 
     if status != 200:
@@ -322,5 +322,5 @@ def run_tool(call):
 
     try:
         return func(**args)
-    except Exception as e:  # pylint: disable=broad-exception-caught
+    except Exception as e:  # pylint: disable=broad-exception-caught  # noqa: BLE001
         return f"{e.__class__.__name__}: {e}"
