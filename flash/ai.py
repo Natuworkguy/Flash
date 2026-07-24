@@ -1,18 +1,18 @@
 """Main App"""
 
-from .tools import tools, SYSTEM_PROMPT, run_tool
-
 import os
 import sys
+from pathlib import Path
 
+import ollama
 from colorama import Fore, Style
 from dotenv import load_dotenv
-import ollama
 from ollama import ResponseError
 from pyfiglet import Figlet
 from rich.console import Console
 from rich.markdown import Markdown
-from pathlib import Path
+
+from .tools import SYSTEM_PROMPT, run_tool, tools
 
 ENV_PATH = str(Path.home() / ".flash.env")
 OLLAMA_HOST_DEFAULT = "http://localhost:11434"

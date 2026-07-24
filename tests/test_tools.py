@@ -1,6 +1,7 @@
 # pylint: disable=C0114,C0115,C0116
 
 import subprocess  # nosec B404
+
 from flash.tools import shell_tool
 
 

@@ -11,7 +11,6 @@ from colorama import Fore, Style
 
 from .sysprompt import get_system_prompt
 
-
 TOOL_SYSTEM_PROMPT = """
 === Tool System Prompt ===
 Answer concisely. Use shell only when command output is needed.
