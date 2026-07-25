@@ -4,9 +4,9 @@ import os
 import platform
 import subprocess  # nosec B404
 from html.parser import HTMLParser
+from tempfile import mkdtemp
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
-from tempfile import mkdtemp
 
 from colorama import Fore, Style
 

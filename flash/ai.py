@@ -1,8 +1,8 @@
 """Main App"""
 
 import os
-import sys
 import shutil
+import sys
 from pathlib import Path
 
 import ollama
@@ -14,8 +14,8 @@ from rich.console import Console
 from rich.markdown import Markdown
 
 from .tools import (
-    SYSTEM_PROMPT,
     SCRATCH_DIR,
+    SYSTEM_PROMPT,
     run_tool,
     tools,
 )
