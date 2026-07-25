@@ -96,6 +96,8 @@ def shell_tool(command: str, timeout=None) -> str:
             "If the command was simply slow rather than stuck, retry it with "
             "a larger timeout."
         )
+    except KeyboardInterrupt:
+        return "Error: Command execution interrupted by user."
 
     parts = [result.stdout.strip(), result.stderr.strip()]
     output = "\n".join(part for part in parts if part)
