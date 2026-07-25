@@ -53,7 +53,11 @@ class Config:
         (
             "[Flash]> "
             if host == OLLAMA_HOST_DEFAULT
-            else f"[Flash @ {host.lstrip('http://').lstrip('https://')}]> "  # noqa: B005
+            else f"""[Flash @ {
+                host
+                .lstrip('http://')
+                .lstrip('https://')
+                .rstrip(':11434')}]> """  # noqa: B005
         ) + \
         Style.RESET_ALL
 
