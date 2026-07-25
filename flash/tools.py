@@ -6,18 +6,23 @@ import subprocess  # nosec B404
 from html.parser import HTMLParser
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
+from tempfile import mkdtemp
 
 from colorama import Fore, Style
 
 from .sysprompt import get_system_prompt
 
-TOOL_SYSTEM_PROMPT = """
+SCRATCH_DIR = mkdtemp(prefix="flash-scratch-")
+
+TOOL_SYSTEM_PROMPT = f"""
 === Tool System Prompt ===
 Answer concisely. Use shell only when command output is needed.
 When using shell, call the tool without extra text first.
 When searching for recent information, use the web_search tool.
 When you need to know the user's operating system, use the get_os tool.
 To think or plan mid-task without ending your turn, use the reason tool.
+
+Your temporary scratch directory is: {SCRATCH_DIR}
 """.strip()
 
 SYSTEM_PROMPT = f"""
@@ -322,5 +327,5 @@ def run_tool(call):
 
     try:
         return func(**args)
-    except Exception as e:  # pylint: disable=broad-exception-caught  # noqa: BLE001
+    except Exception as e:  # noqa: BLE001
         return f"{e.__class__.__name__}: {e}"

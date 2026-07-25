@@ -2,6 +2,7 @@
 
 import os
 import sys
+import shutil
 from pathlib import Path
 
 import ollama
@@ -12,7 +13,12 @@ from pyfiglet import Figlet
 from rich.console import Console
 from rich.markdown import Markdown
 
-from .tools import SYSTEM_PROMPT, run_tool, tools
+from .tools import (
+    SYSTEM_PROMPT,
+    SCRATCH_DIR,
+    run_tool,
+    tools,
+)
 
 ENV_PATH = str(Path.home() / ".flash.env")
 OLLAMA_HOST_DEFAULT = "http://localhost:11434"
@@ -148,6 +154,13 @@ def _tool_call_name_args(call) -> tuple[str, dict]:
     return name, dict(args)
 
 
+def _clear_scratch_dir() -> None:
+    if not SCRATCH_DIR:
+        return
+
+    shutil.rmtree(SCRATCH_DIR, ignore_errors=True)
+
+
 def _chat(client: "ollama.Client", messages: list, tools_arg=None):
     if Config.model is None:
         raise FlashError(
@@ -170,7 +183,7 @@ def _try_chat(
         return _chat(client, messages, tools_arg), None
     except ResponseError as exc:
         return None, str(exc)
-    except Exception as exc:  # pylint: disable=broad-exception-caught  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001
         return None, f"Could not reach Ollama at {Config.host}. {exc}"
 
 
