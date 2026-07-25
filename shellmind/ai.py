@@ -151,6 +151,18 @@ def _try_chat(
         return None, f"Could not reach Ollama at {Config.host}. {exc}"
 
 
+def _chat_with_status(
+    console: Console,
+    client: "ollama.Client",
+    messages: list,
+    tools_arg=None,
+) -> tuple[object | None, str | None]:
+    with console.status(
+        "[bold cyan]Thinking...", spinner="dots", spinner_style="cyan"
+    ):
+        return _try_chat(client, messages, tools_arg)
+
+
 def _print_backend_error(detail: str) -> None:
     print(Fore.RED + f"Ollama backend error: {detail}" + Style.RESET_ALL)
 
@@ -241,8 +253,8 @@ Type anything else to get a response from the AI.
             messages.append(_message("user", uin))
             _trim_history(messages)
 
-            res, err = _try_chat(
-                client, [system_message] + messages, tools
+            res, err = _chat_with_status(
+                console, client, [system_message] + messages, tools
             )
             if err:
                 _print_backend_error(err)
@@ -296,7 +308,9 @@ Type anything else to get a response from the AI.
                         "tool_name": name,
                     })
 
-                res, err = _try_chat(client, tool_messages, tools)
+                res, err = _chat_with_status(
+                    console, client, tool_messages, tools
+                )
                 if err:
                     tool_error = err
                     break
@@ -320,7 +334,9 @@ Type anything else to get a response from the AI.
                     )
                 )
 
-                res, err = _try_chat(client, tool_messages, None)
+                res, err = _chat_with_status(
+                    console, client, tool_messages, None
+                )
                 if err:
                     _print_backend_error(err)
                     continue
