@@ -1,11 +1,11 @@
 # pylint: disable=C0114,C0115,C0116
 
-from shellmind.ai import (
+from flash.ai import (
+    Config,
+    _direct_shell_command,
     _int_env,
     _trim_history,
-    _direct_shell_command,
     _trim_tool_output,
-    Config
 )
 
 

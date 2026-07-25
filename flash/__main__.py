@@ -1,6 +1,6 @@
 # pylint: disable=C0114
 
-from flash.__main__ import main
+from .ai import main
 
 if __name__ == "__main__":
     main()

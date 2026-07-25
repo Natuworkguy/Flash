@@ -1,25 +1,26 @@
 """Main App"""
 
-from .tools import tools, SYSTEM_PROMPT, run_tool
-
 import os
 import sys
+from pathlib import Path
 
+import ollama
 from colorama import Fore, Style
 from dotenv import load_dotenv
-import ollama
 from ollama import ResponseError
 from pyfiglet import Figlet
 from rich.console import Console
 from rich.markdown import Markdown
-from pathlib import Path
 
-ENV_PATH = str(Path.home() / "shellmind.env")
+from .tools import SYSTEM_PROMPT, run_tool, tools
+
+ENV_PATH = str(Path.home() / ".flash.env")
+OLLAMA_HOST_DEFAULT = "http://localhost:11434"
 
 load_dotenv(dotenv_path=ENV_PATH)
 
 
-class ShellMindError(Exception):
+class FlashError(Exception):
     """General error for uncaught exceptions in the main loop"""
 
 
@@ -36,25 +37,32 @@ def _int_env(name: str, default: int, *, minimum: int) -> int:
 
 class Config:
     """App configuration"""
-    host = os.getenv("OLLAMA_HOST", "http://localhost:11434")
+    host = os.getenv("OLLAMA_HOST", OLLAMA_HOST_DEFAULT)
     model = os.getenv("MODEL")
     max_history_messages = _int_env("MAX_HISTORY_MESSAGES", 6, minimum=2)
     max_history_chars = _int_env("MAX_HISTORY_CHARS", 3000, minimum=1000)
-    max_tool_rounds = _int_env("MAX_TOOL_ROUNDS", 4, minimum=1)
+    max_tool_rounds = _int_env("MAX_TOOL_ROUNDS", 10, minimum=1)
     max_tool_output_chars = _int_env(
         "MAX_TOOL_OUTPUT_CHARS",
         1200,
         minimum=500
     )
-    max_output_tokens = _int_env("MAX_OUTPUT_TOKENS", 512, minimum=128)
-    prompt = Fore.BLUE + "[SM]> " + Style.RESET_ALL
+    max_output_tokens = _int_env("MAX_OUTPUT_TOKENS", 1024, minimum=128)
+    prompt = \
+        Fore.BLUE + \
+        (
+            "[Flash]> "
+            if host == OLLAMA_HOST_DEFAULT
+            else f"[Flash @ {host.lstrip('http://').lstrip('https://')}]> "  # noqa: B005
+        ) + \
+        Style.RESET_ALL
 
 
 def banner(c: Console) -> None:
     """Print the app banner"""
 
     f = Figlet(font="slant")
-    c.print(f.renderText("ShellMind CLI"), style="bold cyan")
+    c.print(f.renderText("FLASH CLI"), style="bold cyan")
 
 
 def _message(role: str, text: str) -> dict:
@@ -105,6 +113,17 @@ def _trim_tool_output(text: str) -> str:
     )
 
 
+def _tool_limit_message() -> dict:
+    return {
+        "role": "system",
+        "content": (
+            "The tool-calling loop has reached its limit and the assistant "
+            "has run out of tokens. Answer the original request now using "
+            "the tool results above. Do not call any more tools."
+        ),
+    }
+
+
 def _response_parts(response) -> tuple[str, list]:
     message = getattr(response, "message", None)
 
@@ -127,7 +146,7 @@ def _tool_call_name_args(call) -> tuple[str, dict]:
 
 def _chat(client: "ollama.Client", messages: list, tools_arg=None):
     if Config.model is None:
-        raise ShellMindError(
+        raise FlashError(
             "MODEL is not set. Please set it in environment variable or "
             f"in {ENV_PATH} file."
         )
@@ -147,7 +166,7 @@ def _try_chat(
         return _chat(client, messages, tools_arg), None
     except ResponseError as exc:
         return None, str(exc)
-    except Exception as exc:  # pylint: disable=broad-exception-caught
+    except Exception as exc:  # pylint: disable=broad-exception-caught  # noqa: BLE001
         return None, f"Could not reach Ollama at {Config.host}. {exc}"
 
 
@@ -184,7 +203,7 @@ def main() -> None:
     def _not_set_error(name: str) -> None:
         print(
             Fore.RED +
-            f"{name} is not set. Please set it to use ShellMind CLI.\n" +
+            f"{name} is not set. Please set it to use Flash CLI.\n" +
             f"Set {name} in environment variable or in {ENV_PATH} file." +
             Style.RESET_ALL
         )
@@ -208,6 +227,9 @@ def main() -> None:
             except EOFError:
                 print()
                 return
+
+            if uin.strip() == "":
+                continue
 
             if uin in ("/bye", "/exit"):
                 return
@@ -326,13 +348,7 @@ Type anything else to get a response from the AI.
                 continue
 
             if not followup.strip():
-                tool_messages.append(
-                    _message(
-                        "user",
-                        "Using the tool results above, answer the original "
-                        "request now. Do not call more tools."
-                    )
-                )
+                tool_messages.append(_tool_limit_message())
 
                 res, err = _chat_with_status(
                     console, client, tool_messages, None
@@ -370,6 +386,6 @@ if __name__ == "__main__":
     try:
         print(Fore.GREEN + "Loading..." + Style.RESET_ALL)
         main()
-    except ShellMindError as e:
+    except FlashError as e:
         print(Fore.RED + str(e) + Style.RESET_ALL)
         sys.exit(1)

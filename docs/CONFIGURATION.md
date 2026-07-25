@@ -1,18 +1,18 @@
 # Configuration
 
-ShellMind CLI is configured entirely through environment variables. Values are
+FLASH CLI is configured entirely through environment variables. Values are
 read once at startup from your shell environment and from an optional
-`shellmind.env` file in your home directory.
+`.flash.env` file in your home directory.
 
 ## Where configuration is loaded from
 
 1. Real environment variables (highest priority).
-2. A `shellmind.env` file in your home directory
-   (`~/shellmind.env`, e.g. `C:\Users\<you>\shellmind.env` on Windows).
+2. A `.flash.env` file in your home directory
+   (`~/.flash.env`, e.g. `C:\Users\<you>\.flash.env` on Windows).
 
 If a variable is set in both places, the real environment variable wins.
 
-Example `~/shellmind.env`:
+Example `~/.flash.env`:
 
 ```env
 MODEL=llama3.1
@@ -21,7 +21,7 @@ OLLAMA_HOST=http://localhost:11434
 
 ## Backend
 
-ShellMind uses [Ollama](https://ollama.com) as its backend. It does not require
+FLASH uses [Ollama](https://ollama.com) as its backend. It does not require
 an API key. Instead, it connects to an Ollama server over HTTP — either on your
 own machine (the default) or on another host.
 
@@ -41,9 +41,9 @@ Requirements:
 | `OLLAMA_HOST` | No | `http://localhost:11434` | — | Base URL of the Ollama server. Change this to switch from a local server to a remote one. |
 | `MAX_HISTORY_MESSAGES` | No | `6` | `2` | Maximum number of chat messages kept in memory before the oldest are dropped. |
 | `MAX_HISTORY_CHARS` | No | `3000` | `1000` | Maximum total characters of history kept. Older messages are dropped once this is exceeded. |
-| `MAX_TOOL_ROUNDS` | No | `4` | `1` | Maximum number of tool-calling rounds allowed per request. |
+| `MAX_TOOL_ROUNDS` | No | `10` | `1` | Maximum number of tool-calling rounds allowed per request. |
 | `MAX_TOOL_OUTPUT_CHARS` | No | `1200` | `500` | Tool output longer than this is truncated (middle removed) before being sent back to the model. |
-| `MAX_OUTPUT_TOKENS` | No | `512` | `128` | Maximum tokens the model may generate per response. Maps to Ollama's `num_predict` option. |
+| `MAX_OUTPUT_TOKENS` | No | `1024` | `128` | Maximum tokens the model may generate per response. Maps to Ollama's `num_predict` option. |
 
 ### Notes on the numeric options
 
@@ -66,7 +66,7 @@ OLLAMA_HOST=http://localhost:11434
 
 ### Remote server
 
-Point ShellMind at another machine running Ollama:
+Point FLASH at another machine running Ollama:
 
 ```env
 MODEL=llama3.1
@@ -90,10 +90,10 @@ When using a remote server:
 
 ## Verifying the active configuration
 
-Inside ShellMind, run:
+Inside FLASH, run:
 
-```shellmind
+```FLASH
 /model
 ```
 
-This prints the active model and the Ollama host ShellMind is connected to.
+This prints the active model and the Ollama host FLASH is connected to.

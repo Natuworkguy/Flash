@@ -11,7 +11,6 @@ from colorama import Fore, Style
 
 from .sysprompt import get_system_prompt
 
-
 TOOL_SYSTEM_PROMPT = """
 === Tool System Prompt ===
 Answer concisely. Use shell only when command output is needed.
@@ -21,13 +20,43 @@ When you need to know the user's operating system, use the get_os tool.
 To think or plan mid-task without ending your turn, use the reason tool.
 """.strip()
 
-SYSTEM_PROMPT = f"{get_system_prompt()}\n{TOOL_SYSTEM_PROMPT}"
+SYSTEM_PROMPT = f"""
+{get_system_prompt()}
+{TOOL_SYSTEM_PROMPT}
+=== END OF SYSTEM PROMPT ===
+""".strip()
 
 
-def shell_tool(command: str) -> str:
+DEFAULT_SHELL_TIMEOUT = 15
+MAX_SHELL_TIMEOUT = 600
+
+
+def _shell_timeout(timeout) -> int:
+    if timeout is None:
+        return DEFAULT_SHELL_TIMEOUT
+
+    try:
+        seconds = int(float(timeout))
+    except (TypeError, ValueError):
+        return DEFAULT_SHELL_TIMEOUT
+
+    return max(1, min(seconds, MAX_SHELL_TIMEOUT))
+
+
+def shell_tool(command: str, timeout=None) -> str:
     """Tool to execute a shell command"""
 
-    print(Fore.BLUE + f"Executing shell command: {command}" + Style.RESET_ALL)
+    seconds = _shell_timeout(timeout)
+
+    suffix = "" \
+        if seconds == DEFAULT_SHELL_TIMEOUT \
+        else f" (timeout {seconds}s)"
+
+    print(
+        Fore.BLUE
+        + f"Executing shell command: {command}{suffix}"
+        + Style.RESET_ALL
+    )
 
     try:
         if os.name == "nt":
@@ -43,7 +72,7 @@ def shell_tool(command: str) -> str:
                 args,
                 capture_output=True,
                 text=True,
-                timeout=15,
+                timeout=seconds,
                 check=False,
             )
         else:
@@ -52,13 +81,15 @@ def shell_tool(command: str) -> str:
                 shell=True,  # nosec B602
                 capture_output=True,
                 text=True,
-                timeout=15,
+                timeout=seconds,
                 check=False,
             )
     except subprocess.TimeoutExpired:
         return (
-            "Error: Command timed out after 15 seconds. "
-            "Please note that shell commands are run non-interactively."
+            f"Error: Command timed out after {seconds} seconds. "
+            "Please note that shell commands are run non-interactively. "
+            "If the command was simply slow rather than stuck, retry it with "
+            "a larger timeout."
         )
 
     parts = [result.stdout.strip(), result.stderr.strip()]
@@ -78,22 +109,30 @@ class DuckDuckGoSearchParser(HTMLParser):
         self._capture_title = False
         self._capture_snippet = False
 
+    def _finish_current(self) -> None:
+        if self._current is None:
+            return
+
+        if self._current["title"].strip() and self._current["href"]:
+            self.results.append(self._current)
+
+        self._current = None
+
     def handle_starttag(self, tag, attrs):
         attrs = dict(attrs)
-        class_name = attrs.get("class", "")
+        class_name = attrs.get("class") or ""
 
-        if tag == "a" and class_name is not None and "result__a" in class_name:
+        if tag == "a" and "result__a" in class_name:
+            # A new result starts here, so bank the previous one first.
+            self._finish_current()
             self._current = {
                 "title": "",
                 "href": attrs.get("href", ""),
                 "snippet": ""
             }
             self._capture_title = True
-        elif \
-                self._current \
-                and tag in {"div", "span"} \
-                and class_name is not None \
-                and "result__snippet" in class_name:
+        elif self._current and "result__snippet" in class_name:
+            # Snippets come back as <a>, but have been <div>/<span> before.
             self._capture_snippet = True
 
     def handle_data(self, data):
@@ -103,35 +142,50 @@ class DuckDuckGoSearchParser(HTMLParser):
             self._current["snippet"] += data
 
     def handle_endtag(self, tag):
-        if self._capture_title and tag == "a" and self._current is not None:
+        if self._capture_title and tag == "a":
             self._capture_title = False
-            if self._current["title"].strip() and self._current["href"]:
-                self.results.append(self._current)
-            self._current = None
-        if self._capture_snippet and tag in {"div", "span"}:
+        if self._capture_snippet and tag in {"a", "div", "span"}:
             self._capture_snippet = False
+
+    def close(self) -> None:
+        super().close()
+        self._finish_current()
 
 
 def web_search(query: str) -> str:
     """Search the web and return the top DuckDuckGo results."""
 
     print(Fore.BLUE + f"Searching the web for: {query}" + Style.RESET_ALL)
-    url = "https://html.duckduckgo.com/html/?" + urlencode({"q": query})
+
+    # DuckDuckGo answers GET with an anti-bot challenge (HTTP 202) and no
+    # results, so the query has to be POSTed as form data instead.
     request = Request(
-        url,
+        "https://html.duckduckgo.com/html/",
+        data=urlencode({"q": query}).encode(),
+        method="POST",
         headers={
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+            "Content-Type": "application/x-www-form-urlencoded",
         },
     )
 
     try:
         with urlopen(request, timeout=15) as response:  # nosec B310
+            status = response.status
             html = response.read().decode("utf-8", errors="ignore")
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         return f"Web search failed: {exc}"
+
+    if status != 200:
+        return (
+            f"Web search failed: DuckDuckGo returned HTTP {status} instead of "
+            "results. The search backend is unavailable, so nothing was "
+            "searched. This does not mean the topic has no results."
+        )
 
     parser = DuckDuckGoSearchParser()
     parser.feed(html)
+    parser.close()
 
     if not parser.results:
         return "No web search results found."
@@ -148,6 +202,11 @@ def web_search(query: str) -> str:
 
 def get_os() -> str:
     """Return a brief description of the user's operating system."""
+
+    print(
+        Fore.BLUE + "Retrieving operating system information" + Style.RESET_ALL
+    )
+
     return (
         f"OS: {platform.system()} {platform.release()}\n"
         f"Platform: {platform.platform()}\n"
@@ -175,7 +234,19 @@ tools = [
                     "command": {
                         "type": "string",
                         "description": "Command.",
-                    }
+                    },
+                    "timeout": {
+                        "type": "integer",
+                        "description": (
+                            "Optional seconds to wait before killing the "
+                            f"command. Defaults to {DEFAULT_SHELL_TIMEOUT}. "
+                            "Omit it unless you expect the command to be "
+                            "slow, such as an install, build, or test run. "
+                            f"Maximum {MAX_SHELL_TIMEOUT}."
+                        ),
+                        "minimum": 1,
+                        "maximum": MAX_SHELL_TIMEOUT,
+                    },
                 },
                 "required": ["command"],
             },
@@ -251,5 +322,5 @@ def run_tool(call):
 
     try:
         return func(**args)
-    except Exception as e:  # pylint: disable=broad-exception-caught
+    except Exception as e:  # pylint: disable=broad-exception-caught  # noqa: BLE001
         return f"{e.__class__.__name__}: {e}"

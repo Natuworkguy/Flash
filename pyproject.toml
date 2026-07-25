@@ -3,24 +3,24 @@ requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "shellmind"
+name = "flash"
 version = "0.1.0"
-description = "ShellMind CLI"
+description = "FLASH CLI"
 authors = [
     { name = "Natuworkguy" },
 ]
-dependencies = [
-    "colorama",
-    "ollama",
-    "pyfiglet",
-    "python-dotenv",
-    "rich",
-]
+dynamic = ["dependencies", "optional-dependencies"]
 requires-python = ">=3.10"
 
+[tool.setuptools.dynamic.dependencies]
+file = ["requirements.txt"]
+
+[tool.setuptools.dynamic.optional-dependencies]
+dev = { file = ["requirements-dev.txt"] }
+
 [project.scripts]
-shellmind = "shellmind.ai:main"
+flash = "flash.ai:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["shellmind*"]
+include = ["flash*"]
