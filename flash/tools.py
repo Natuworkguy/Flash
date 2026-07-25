@@ -48,7 +48,7 @@ def _shell_timeout(timeout) -> int:
     return max(1, min(seconds, MAX_SHELL_TIMEOUT))
 
 
-def shell_tool(command: str, timeout=None) -> str:
+def shell_tool(command: str, timeout=None, is_user=False) -> str:
     """Tool to execute a shell command"""
 
     seconds = _shell_timeout(timeout)
@@ -79,6 +79,7 @@ def shell_tool(command: str, timeout=None) -> str:
                 text=True,
                 timeout=seconds,
                 check=False,
+                stdin=subprocess.DEVNULL if not is_user else None,
             )
         else:
             result = subprocess.run(
@@ -88,6 +89,7 @@ def shell_tool(command: str, timeout=None) -> str:
                 text=True,
                 timeout=seconds,
                 check=False,
+                stdin=subprocess.DEVNULL if not is_user else None,
             )
     except subprocess.TimeoutExpired:
         return (

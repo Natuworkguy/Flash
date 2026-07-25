@@ -14,9 +14,11 @@ from rich.console import Console
 from rich.markdown import Markdown
 
 from .tools import (
+    MAX_SHELL_TIMEOUT,
     SCRATCH_DIR,
     SYSTEM_PROMPT,
     run_tool,
+    shell_tool,
     tools,
 )
 
@@ -272,7 +274,13 @@ def main() -> None:
 
             direct_command = _direct_shell_command(uin)
             if direct_command:
-                print(run_tool(("shell", {"command": direct_command})))
+                print(
+                    shell_tool(
+                        direct_command,
+                        is_user=True,
+                        timeout=MAX_SHELL_TIMEOUT
+                    )
+                )
                 print()
                 continue
 
