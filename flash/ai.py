@@ -249,6 +249,7 @@ def main() -> None:
                 continue
 
             if uin in ("/bye", "/exit"):
+                _clear_scratch_dir()
                 return
 
             if uin == "/model":
