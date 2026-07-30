@@ -20,16 +20,11 @@ if [ "${1:-}" == "--uninstall" ]; then
 fi
 
 REPO_URL="https://github.com/Natuworkguy/Flash"
-REPO_DIR="/tmp/flash-install"
+TEMP_DIR="$(mktemp -d)"
+REPO_DIR="$TEMP_DIR/flash"
 
-if [ -d "$REPO_DIR" ]; then
-    echo "Removing existing directory $REPO_DIR"
-    rm -rf "$REPO_DIR"
-else
-    echo "Directory $REPO_DIR does not exist, proceeding with clone."
-fi
 
-git clone $REPO_URL "$REPO_DIR"  || {
+git clone "$REPO_URL" "$REPO_DIR"  || {
     echo "Failed to clone repository. Please check your internet connection and try again.";
     exit 1;
 }
@@ -44,7 +39,7 @@ cd "$REPO_DIR"
 
 cleanup() {
     echo "Cleaning up..."
-    rm -rf "$REPO_DIR"
+    rm -rf "$TEMP_DIR"
 }
 
 trap cleanup EXIT INT TERM
@@ -103,8 +98,9 @@ case ":$PATH:" in
     *":$PIPX_BIN_DIR:"*)
         ;;
     *)
-        echo "Refreshing this shell so $PIPX_BIN_DIR is on PATH..."
-        exec "${SHELL:-bash}" -i
+        echo "$PIPX_BIN_DIR is not on your PATH yet."
+        echo "Run this in your current shell, or open a new terminal:"
+        echo "    export PATH=\"$PIPX_BIN_DIR:\$PATH\""
         ;;
 esac
 
