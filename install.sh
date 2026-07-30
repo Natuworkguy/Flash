@@ -8,6 +8,8 @@ REPO_DIR="/tmp/flash-install"
 if [ -d "$REPO_DIR" ]; then
     echo "Removing existing directory $REPO_DIR"
     rm -rf "$REPO_DIR"
+else
+    echo "Directory $REPO_DIR does not exist, proceeding with clone."
 fi
 
 git clone $REPO_URL "$REPO_DIR"  || {
@@ -32,8 +34,10 @@ trap cleanup EXIT INT TERM
 
 detect_python() {
     if command -v python3 >/dev/null 2>&1; then
+        echo "Detected python command: python3"
         PYTHON=python3
     elif command -v python >/dev/null 2>&1; then
+        echo "Detected python command: python"
         PYTHON=python
     else
         echo "Python is not installed. Please install Python 3."
@@ -63,7 +67,7 @@ if ! command -v pipx >/dev/null 2>&1; then
         fi
     else
         echo "Could not install pipx automatically."
-        echo "Install it manually: https://pipx.pypa.io/stable/installation/"
+        echo "Install it manually: https://pipx.pypa.io/latest/how-to/install-pipx.html"
         exit 1
     fi
 fi
