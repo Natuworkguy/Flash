@@ -16,6 +16,34 @@ FLASH (**F**ast **L**ocal **A**gent **SH**ell) CLI is an AI-powered command-line
 
 ## Installation
 
+### Quick install (pipx)
+
+Install Flash with a single command. The script clones this repo into a temporary directory, installs it with [pipx](https://pipx.pypa.io/), and cleans up after itself:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Natuworkguy/Flash/main/install.sh | bash
+```
+
+Once installed, run it with:
+
+```bash
+flash
+```
+
+To uninstall:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Natuworkguy/Flash/main/install.sh | bash -s -- --uninstall
+```
+
+Or, if you already have the repo cloned locally:
+
+```bash
+./install.sh --uninstall
+```
+
+### Manual install
+
 1. **Clone the repository**:
 
    ```bash
