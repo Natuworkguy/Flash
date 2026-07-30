@@ -24,3 +24,6 @@ flash = "flash.ai:main"
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["flash*"]
+
+[tool.setuptools.package-data]
+flash = ["system_prompt.txt"]
