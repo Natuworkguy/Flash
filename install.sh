@@ -2,6 +2,23 @@
 
 set -euo pipefail
 
+uninstall() {
+    echo "Uninstalling flash..."
+    if command -v pipx >/dev/null 2>&1; then
+        echo "Uninstalling flash via pipx..."
+        pipx uninstall flash || echo "flash is not installed via pipx."
+    else
+        echo "pipx is not installed. Cannot uninstall flash via pipx."
+    fi
+}
+
+
+if [ "${1:-}" == "--uninstall" ]; then
+    uninstall
+
+    exit 0
+fi
+
 REPO_URL="https://github.com/Natuworkguy/Flash"
 REPO_DIR="/tmp/flash-install"
 
