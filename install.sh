@@ -79,6 +79,7 @@ if ! command -v pipx >/dev/null 2>&1; then
         fi
     else
         echo "Could not install pipx automatically."
+        echo "If you are on MacOS, ensure brew is installed."
         echo "Install it manually: https://pipx.pypa.io/latest/how-to/install-pipx.html"
         exit 1
     fi
