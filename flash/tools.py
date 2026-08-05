@@ -31,6 +31,8 @@ SYSTEM_PROMPT = f"""
 {get_system_prompt()}
 {TOOL_SYSTEM_PROMPT}
 === END OF SYSTEM PROMPT ===
+
+You are now being transferred to a user.
 """.strip()
 
 
