@@ -17,6 +17,7 @@ from .tools import (
     MAX_SHELL_TIMEOUT,
     SCRATCH_DIR,
     SYSTEM_PROMPT,
+    init,
     run_tool,
     shell_tool,
     tools,
@@ -56,6 +57,9 @@ class Config:
         minimum=500
     )
     max_output_tokens = _int_env("MAX_OUTPUT_TOKENS", 1024, minimum=128)
+    no_command_confirmation = bool(
+        _int_env("NO_COMMAND_CONFIRMATION", 0, minimum=0)
+    )
     prompt = \
         Fore.BLUE + \
         (
@@ -68,6 +72,9 @@ class Config:
                 .rstrip(':11434')}]> """  # noqa: B005
         ) + \
         Style.RESET_ALL
+
+
+init(Config)
 
 
 def banner(c: Console) -> None:
