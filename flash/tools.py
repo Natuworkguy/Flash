@@ -51,10 +51,11 @@ def _shell_timeout(timeout) -> int:
 def shell_tool(command: str, timeout=None, is_user=False) -> str:
     """Tool to execute a shell command"""
 
-    if input("Flash is trying to execute the following command: \n" 
-             + command + 
-             "\nDo you approve it to run? [Y/N, default n]\n"
-            ).strip().lower() != "y":
+    if input(
+        "Flash is trying to execute the following command: \n"
+        + command +
+        "\nDo you approve it to run? [Y/N, default n]\n"
+    ).strip().lower() != "y":
         return "Command blocked by user"
 
     seconds = _shell_timeout(timeout)
