@@ -53,7 +53,7 @@ def shell_tool(command: str, timeout=None, is_user=False) -> str:
 
     if input("Flash is trying to execute the following command: \n" 
              + command + 
-             "\nDo you accept it to run? [Y/N, default n]\n"
+             "\nDo you approve it to run? [Y/N, default n]\n"
             ).strip().lower() != "y":
         return "Command blocked by user"
 
