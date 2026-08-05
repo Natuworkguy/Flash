@@ -9,6 +9,8 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from colorama import Fore, Style
+from rich.console import Console
+from rich.markdown import Markdown
 
 from .sysprompt import get_system_prompt
 
@@ -34,6 +36,12 @@ SYSTEM_PROMPT = f"""
 
 DEFAULT_SHELL_TIMEOUT = 15
 MAX_SHELL_TIMEOUT = 600
+NO_COMMAND_CONFIRMATION = False
+
+
+def init(config):
+    global NO_COMMAND_CONFIRMATION
+    NO_COMMAND_CONFIRMATION = config.no_command_confirmation
 
 
 def _shell_timeout(timeout) -> int:
@@ -51,12 +59,23 @@ def _shell_timeout(timeout) -> int:
 def shell_tool(command: str, timeout=None, is_user=False) -> str:
     """Tool to execute a shell command"""
 
-    if input(
-        "Flash is trying to execute the following command: \n"
-        + command +
-        "\nDo you approve it to run? [Y/N, default n]\n"
-    ).strip().lower() != "y":
-        return "Command blocked by user"
+    if not is_user and not NO_COMMAND_CONFIRMATION:
+        Console().print(Markdown(
+            Fore.YELLOW +
+            "Flash is trying to execute "
+            f"`{command}`. " +
+            Fore.YELLOW +
+            "Do you approve it to run? [Y/N, default n] " +
+            Style.RESET_ALL
+        ), end="")
+
+        print(Fore.YELLOW + ">>> " + Fore.GREEN + Style.BRIGHT, end="")
+
+        user_input = input().strip().lower()
+        print(Style.RESET_ALL)
+
+        if user_input != "y":
+            return "Command blocked by user"
 
     seconds = _shell_timeout(timeout)
 
