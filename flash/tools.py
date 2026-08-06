@@ -143,7 +143,7 @@ def shell_tool(command: str, timeout=None, is_user=False) -> str:
 
 def web_search(query: str, max_results: int) -> str:
     """Search the web and return the top DuckDuckGo results."""
-    
+
     print(
         Fore.BLUE +
         f"Searching the web for: {query} " +
