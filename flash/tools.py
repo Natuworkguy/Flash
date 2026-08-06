@@ -3,12 +3,10 @@
 import os
 import platform
 import subprocess  # nosec B404
-from html.parser import HTMLParser
 from tempfile import mkdtemp
-from urllib.parse import urlencode
-from urllib.request import Request, urlopen
 
 from colorama import Fore, Style
+from ddgs import DDGS
 from rich.console import Console
 from rich.markdown import Markdown
 
@@ -143,103 +141,26 @@ def shell_tool(command: str, timeout=None, is_user=False) -> str:
     return output or "(no output)"
 
 
-class DuckDuckGoSearchParser(HTMLParser):
-    def __init__(self) -> None:
-        super().__init__()
-        self.results: list = []
-        self._current = None
-        self._capture_title = False
-        self._capture_snippet = False
-
-    def _finish_current(self) -> None:
-        if self._current is None:
-            return
-
-        if self._current["title"].strip() and self._current["href"]:
-            self.results.append(self._current)
-
-        self._current = None
-
-    def handle_starttag(self, tag, attrs):
-        attrs = dict(attrs)
-        class_name = attrs.get("class") or ""
-
-        if tag == "a" and "result__a" in class_name:
-            # A new result starts here, so bank the previous one first.
-            self._finish_current()
-            self._current = {
-                "title": "",
-                "href": attrs.get("href", ""),
-                "snippet": ""
-            }
-            self._capture_title = True
-        elif self._current and "result__snippet" in class_name:
-            # Snippets come back as <a>, but have been <div>/<span> before.
-            self._capture_snippet = True
-
-    def handle_data(self, data):
-        if self._capture_title and self._current is not None:
-            self._current["title"] += data
-        elif self._capture_snippet and self._current is not None:
-            self._current["snippet"] += data
-
-    def handle_endtag(self, tag):
-        if self._capture_title and tag == "a":
-            self._capture_title = False
-        if self._capture_snippet and tag in {"a", "div", "span"}:
-            self._capture_snippet = False
-
-    def close(self) -> None:
-        super().close()
-        self._finish_current()
-
-
-def web_search(query: str) -> str:
+def web_search(query: str, max_results: int) -> str:
     """Search the web and return the top DuckDuckGo results."""
-
-    print(Fore.BLUE + f"Searching the web for: {query}" + Style.RESET_ALL)
-
-    # DuckDuckGo answers GET with an anti-bot challenge (HTTP 202) and no
-    # results, so the query has to be POSTed as form data instead.
-    request = Request(
-        "https://html.duckduckgo.com/html/",
-        data=urlencode({"q": query}).encode(),
-        method="POST",
-        headers={
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
-            "Content-Type": "application/x-www-form-urlencoded",
-        },
+    
+    print(
+        Fore.BLUE +
+        f"Searching the web for: {query} " +
+        f"(Got first {max_results} results)" +
+        Style.RESET_ALL
     )
 
-    try:
-        with urlopen(request, timeout=15) as response:  # nosec B310
-            status = response.status
-            html = response.read().decode("utf-8", errors="ignore")
-    except Exception as exc:  # noqa: BLE001
-        return f"Web search failed: {exc}"
+    results = ""
 
-    if status != 200:
-        return (
-            f"Web search failed: DuckDuckGo returned HTTP {status} instead of "
-            "results. The search backend is unavailable, so nothing was "
-            "searched. This does not mean the topic has no results."
-        )
+    for result in DDGS().text(query, max_results=max_results):
+        results += f"""
+- {result['title'] or 'No title'}
+  "{result['body'] or 'No description'}"
+  URL: {result['href'] or 'No URL'}
+""".strip()
 
-    parser = DuckDuckGoSearchParser()
-    parser.feed(html)
-    parser.close()
-
-    if not parser.results:
-        return "No web search results found."
-
-    output_lines = []
-    for index, result in enumerate(parser.results[:5], start=1):
-        title = result["title"].strip().replace("\n", " ")
-        snippet = result["snippet"].strip().replace("\n", " ")
-        href = result["href"].strip()
-        output_lines.append(f"{index}. {title}\n{href}\n{snippet}")
-
-    return "\n\n".join(output_lines)
+    return results or "No results found."
 
 
 def get_os() -> str:
@@ -305,9 +226,16 @@ tools = [
                     "query": {
                         "type": "string",
                         "description": "Search query.",
-                    }
+                    },
+                    "max_results": {
+                        "type": "integer",
+                        "description": (
+                            "Maximum number of results to return. "
+                        ),
+                        "minimum": 1,
+                    },
                 },
-                "required": ["query"],
+                "required": ["query", "max_results"],
             },
         },
     },

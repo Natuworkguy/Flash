@@ -4,3 +4,4 @@ ollama
 pyfiglet
 python-dotenv
 rich
+ddgs
