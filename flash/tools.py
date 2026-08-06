@@ -3,6 +3,7 @@
 import os
 import platform
 import subprocess  # nosec B404
+from datetime import datetime
 from tempfile import mkdtemp
 
 from colorama import Fore, Style
@@ -21,6 +22,7 @@ When using shell, call the tool without extra text first.
 When searching for recent information, use the web_search tool.
 When you need to know the user's operating system, use the get_os tool.
 To think or plan mid-task without ending your turn, use the reason tool.
+When you need the current date, use the get_date tool.
 
 Your temporary scratch directory is: {SCRATCH_DIR}
 It will be deleted when the program exits. Use it for temporary files, but do
@@ -184,6 +186,14 @@ def reason(thought: str) -> str:
     return "(noted)"
 
 
+def get_date() -> str:
+    """Return the current date using the local timezone."""
+
+    print(Fore.BLUE + "Retrieving current date" + Style.RESET_ALL)
+
+    return datetime.now().date().isoformat()  # noqa: DTZ005
+
+
 # Tool schema expected by Ollama function calling (OpenAI-style).
 tools = [
     {
@@ -270,6 +280,20 @@ tools = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_date",
+            "description": (
+                "Return the current date in YYYY-MM-DD format using the "
+                "local timezone."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {},
+            },
+        },
+    },
 ]
 
 
@@ -278,6 +302,7 @@ FUNCTIONS = {
     "web_search": web_search,
     "get_os": get_os,
     "reason": reason,
+    "get_date": get_date,
 }
 
 
