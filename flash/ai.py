@@ -12,6 +12,7 @@ from ollama import ResponseError
 from pyfiglet import Figlet
 from rich.console import Console
 from rich.markdown import Markdown
+from rich.rule import Rule
 
 from .tools import (
     MAX_SHELL_TIMEOUT,
@@ -81,7 +82,14 @@ def banner(c: Console) -> None:
     """Print the app banner"""
 
     f = Figlet(font="slant")
-    c.print(f.renderText("FLASH CLI"), style="bold cyan")
+    c.print(
+        f.renderText("FLASH CLI"),
+        style="bold cyan",
+        justify="center"
+    )
+
+    c.print(Rule("Type /help for help"), style="cyan")
+    print("\n")
 
 
 def _message(role: str, text: str) -> dict:
