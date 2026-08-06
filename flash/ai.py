@@ -1,8 +1,10 @@
 """Main App"""
 
+import json
 import os
 import shutil
 import sys
+import threading
 from pathlib import Path
 
 import ollama
@@ -193,15 +195,57 @@ def _chat(client: "ollama.Client", messages: list, tools_arg=None):
     )
 
 
+def _load_thinking_states() -> tuple[list[str], float]:
+    try:
+        p = Path(__file__).parent / "thinking_states.json"
+        data = json.loads(p.read_text(encoding="utf-8"))
+        states = list(data.get("states", []))
+        interval = float(data.get("interval", 2))
+        if not states:
+            raise ValueError("no states")
+        return states, interval
+    except ValueError:
+        return [
+            "Thinking",
+            "Pondering",
+            "Analyzing",
+            "Considering",
+            "Reflecting",
+        ], 2.0
+
+
 def _try_chat(
-    client: "ollama.Client", messages: list, tools_arg=None
+    client: "ollama.Client", messages: list, status, tools_arg=None
 ) -> tuple[object | None, str | None]:
+    states, interval = _load_thinking_states()
+    stop_event = threading.Event()
+
+    def _rotate():
+        i = 0
+        try:
+            status.update(f"[bold cyan]{states[0]}...")
+        except ValueError:
+            pass
+        while not stop_event.wait(interval):
+            try:
+                state = states[i % len(states)]
+                status.update(f"[bold cyan]{state}...")
+            except ValueError:
+                pass
+            i += 1
+
+    t = threading.Thread(target=_rotate, daemon=True)
+    t.start()
+
     try:
         return _chat(client, messages, tools_arg), None
     except ResponseError as exc:
         return None, str(exc)
     except Exception as exc:  # noqa: BLE001
         return None, f"Could not reach Ollama at {Config.host}. {exc}"
+    finally:
+        stop_event.set()
+        t.join(timeout=0.1)
 
 
 def _chat_with_status(
@@ -212,8 +256,8 @@ def _chat_with_status(
 ) -> tuple[object | None, str | None]:
     with console.status(
         "[bold cyan]Thinking...", spinner="dots", spinner_style="cyan"
-    ):
-        return _try_chat(client, messages, tools_arg)
+    ) as status:
+        return _try_chat(client, messages, status, tools_arg)
 
 
 def _print_backend_error(detail: str) -> None:
