@@ -25,7 +25,7 @@ When you need to know the user's operating system, use the get_os tool.
 To think or plan mid-task without ending your turn, use the reason tool.
 
 Your temporary scratch directory is: {SCRATCH_DIR}
-It will be deleted when thre program exits. Use it for temporary files, but do
+It will be deleted when the program exits. Use it for temporary files, but do
   not assume it will persist across runs.
 Always use the scratch directory for temporary files, and never write to
   the user's home directory, other directories, or the current working
