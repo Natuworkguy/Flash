@@ -46,7 +46,7 @@ MAX_SHELL_TIMEOUT = 600
 NO_COMMAND_CONFIRMATION = False
 
 
-def init(config):
+def init(config, ):
     global NO_COMMAND_CONFIRMATION
     NO_COMMAND_CONFIRMATION = config.no_command_confirmation
 

@@ -90,7 +90,7 @@ def banner(c: Console) -> None:
         justify="center"
     )
 
-    c.print(Rule("Type /help for help"), style="cyan")
+    c.print(Rule(("" if not Config.no_command_confirmation else "Autonomous mode. ") + "Type /help for help"), style="cyan")
     print("\n")
 
 
