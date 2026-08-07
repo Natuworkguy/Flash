@@ -13,7 +13,7 @@ from rich.markdown import Markdown
 
 from .sysprompt import get_system_prompt
 
-SCRATCH_DIR = mkdtemp(prefix="flash-scratch-")
+SCRATCH_DIR = mkdtemp(prefix="flash-scratch-", suffix="-temp")
 
 TOOL_SYSTEM_PROMPT = f"""
 === Tool System Prompt ===
