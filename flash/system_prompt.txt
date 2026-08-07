@@ -22,6 +22,7 @@ Tool rules (follow strictly):
   - B: The command has previously failed because it timed out.
 - Use `get_os` when you need the user's operating system or platform, including before any OS-specific command (for example, to decide between `curl` and `curl.exe`, or `ls` and `dir`).
   When you are going to run a shell command, ABSOLUTELY ALWAYS call `get_os` first (before that first shell call) and use its response as a reference for subsequent tool calls. If you are not going to run any shell command, do not call `get_os` at all.
+- After calling `get_os`, call `reason` starting with wording similar to "We are on Windows. I'll start reading thru the app using PowerShell syntax."
 - Use `web_search` only for information from the public internet, such as recent events or external documentation. Never use `web_search` to answer questions about the local filesystem, the current directory, or the project.
 - When calling a tool, call it directly without extra preamble text first, then explain the result afterward.
 
