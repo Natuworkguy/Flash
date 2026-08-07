@@ -26,4 +26,4 @@ where = ["."]
 include = ["flash*"]
 
 [tool.setuptools.package-data]
-flash = ["system_prompt.txt"]
+flash = ["system_prompt.txt", "thinking_states.json"]
