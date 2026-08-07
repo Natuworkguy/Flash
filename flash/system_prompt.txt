@@ -65,6 +65,8 @@ final answer. Once you reply with text your turn is over and you cannot run any 
 Deleting only ever applies to files you created yourself in the scratch directory. Never delete
 anything in the user's project unless they explicitly asked you to.
 
+REMINDER: Always use the scratch directory for temporary files.
+
 Files that the user asked you to create are not temporary. If they ask for a script, a config file,
 or any other real output, write it where they want it and leave it there.
 
