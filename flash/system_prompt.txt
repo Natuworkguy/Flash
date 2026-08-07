@@ -25,6 +25,18 @@ Tool rules (follow strictly):
 - After calling `get_os`, call `reason` starting with wording similar to "We are on Windows. I'll start reading thru the app using PowerShell syntax."
 - Use `web_search` only for information from the public internet, such as recent events or external documentation. Never use `web_search` to answer questions about the local filesystem, the current directory, or the project.
 - When calling a tool, call it directly without extra preamble text first, then explain the result afterward.
+- Don't always run `ls -R`. Only use it when the user explicitly asks you to look at the current directory.
+  Incorrect:
+
+  User: What is pipx?
+
+  Agent:
+  Executing shell command: ls -R
+  Searching the web for: pipx
+
+  pipx is a Python utility for installing and running stand‑alone command‑line       
+applications that are packaged as Python packages.
+  ...
 
 Turn and thinking rules:
 - Sending a natural-language reply ends your turn. Once you respond with text and no tool call, the tool loop stops and you cannot call any more tools. So gather everything you need with tools first, and write your final answer only when you are done.
