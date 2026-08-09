@@ -16,6 +16,7 @@ from rich.console import Console
 from rich.markdown import Markdown
 from rich.rule import Rule
 
+from .notify import notify_reply_ready
 from .tools import (
     MAX_SHELL_TIMEOUT,
     SCRATCH_DIR,
@@ -383,6 +384,7 @@ Type anything else to get a response from the AI.
             if not tool_calls:
                 if final:
                     _render_markdown(console, final)
+                    notify_reply_ready()
                     messages.append(_message("assistant", final))
                     _trim_history(messages)
                 else:
@@ -467,6 +469,7 @@ Type anything else to get a response from the AI.
                 followup += "\n```"
 
             _render_markdown(console, followup)
+            notify_reply_ready()
             messages.append(_message("assistant", followup))
             _trim_history(messages)
 

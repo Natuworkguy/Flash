@@ -5,3 +5,4 @@ pyfiglet
 python-dotenv
 rich
 ddgs
+winotify; platform_system == "Windows"

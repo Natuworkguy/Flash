@@ -11,6 +11,7 @@ from ddgs import DDGS
 from rich.console import Console
 from rich.markdown import Markdown
 
+from .notify import notify_needs_input
 from .sysprompt import get_system_prompt
 
 SCRATCH_DIR = mkdtemp(prefix="flash-scratch-", suffix="-temp")
@@ -80,6 +81,7 @@ def shell_tool(command: str, timeout=None, is_user=False) -> str:
     """Tool to execute a shell command"""
 
     if not is_user and not NO_COMMAND_CONFIRMATION:
+        notify_needs_input()
         Console().print(Markdown(
             Fore.YELLOW +
             "Flash is trying to execute "
