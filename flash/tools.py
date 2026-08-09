@@ -195,7 +195,7 @@ def get_os() -> str:
 def reason(thought: str) -> str:
     """Show the user a line of reasoning without ending the turn."""
 
-    print(Fore.MAGENTA + f"Thinking: {thought}" + Style.RESET_ALL)
+    print(f"\n{thought}\n")
     return "(noted)"
 
 
