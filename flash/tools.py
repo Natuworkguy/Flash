@@ -32,9 +32,22 @@ Always use the scratch directory for temporary files, and never write to
   directory.
 """.strip()
 
+now = datetime.now()  # noqa: DTZ005
+
+CURRENT_DATE_PROMPT = f"""
+=== Current Date ===
+Today's real-world date is {now.date().isoformat()}.
+Treat the year above as the present year in every reply. When a search is
+time-sensitive, put THIS year into the query (for example "best Nvidia GPU
+{now.year}"); never a year recalled from training data. This date is
+authoritative, so you do not need to call get_date to confirm the current year,
+only to get a more precise day if a task needs one.
+""".strip()
+
 SYSTEM_PROMPT = f"""
 {get_system_prompt()}
 {TOOL_SYSTEM_PROMPT}
+{CURRENT_DATE_PROMPT}
 === END OF SYSTEM PROMPT ===
 
 You are now being transferred to a user.
