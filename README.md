@@ -67,6 +67,27 @@ Or, if you already have the repo cloned locally:
 
    By default, Flash connects to a local server at `http://localhost:11434`. To use a remote server, set `OLLAMA_HOST` (see [Configuration](#configuration)).
 
+### Flash Onyx (recommended model)
+
+**Flash Onyx** is a series of custom Ollama models built for Flash. The current
+release, [**Flash Onyx 1**](https://ollama.com/Natuworkguy/flash-onyx-1), is `llama3.1` with Flash's persona and tuned
+parameters baked in.
+
+Pull it straight from the registry:
+
+```bash
+ollama pull Natuworkguy/flash-onyx-1
+```
+
+Or build it from the repo:
+
+```bash
+ollama create flash-onyx-1 -f models/flash-onyx-1.Modelfile
+```
+
+Then set `MODEL` to whichever you used (`Natuworkguy/flash-onyx-1` or
+`flash-onyx-1`) in `~/.flash.env` or your environment.
+
 ### Run
 
 ```bash
