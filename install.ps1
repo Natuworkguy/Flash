@@ -1,0 +1,125 @@
+#Requires -Version 5.1
+<#
+    Flash CLI installer for Windows (PowerShell).
+    Mirrors install.sh: clones the repo into a temp dir, installs it with
+    pipx, and cleans up after itself.
+#>
+
+param(
+    [switch]$Uninstall
+)
+
+$ErrorActionPreference = "Stop"
+
+function Uninstall-Flash {
+    Write-Host "Uninstalling flash..."
+    if (Get-Command pipx -ErrorAction SilentlyContinue) {
+        Write-Host "Uninstalling flash via pipx..."
+        try {
+            pipx uninstall flash
+        } catch {
+            Write-Host "flash is not installed via pipx."
+        }
+    } else {
+        Write-Host "pipx is not installed. Cannot uninstall flash via pipx."
+    }
+}
+
+if ($Uninstall) {
+    Uninstall-Flash
+    exit 0
+}
+
+$RepoUrl = "https://github.com/Natuworkguy/Flash"
+$TempDir = Join-Path ([System.IO.Path]::GetTempPath()) ("flash-install-" + [System.Guid]::NewGuid().ToString("N"))
+$RepoDir = Join-Path $TempDir "flash"
+
+New-Item -ItemType Directory -Path $TempDir -Force | Out-Null
+
+try {
+    if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
+        Write-Host "git is not installed. Please install git and try again."
+        exit 1
+    }
+
+    git clone $RepoUrl $RepoDir
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "Failed to clone repository. Please check your internet connection and try again."
+        exit 1
+    }
+
+    if (-not (Test-Path $RepoDir)) {
+        Write-Host "Repository directory $RepoDir does not exist after cloning."
+        exit 1
+    }
+
+    Push-Location $RepoDir
+
+    function Get-PythonCommand {
+        foreach ($candidate in @("python", "python3", "py")) {
+            $cmd = Get-Command $candidate -ErrorAction SilentlyContinue
+            if ($cmd) {
+                Write-Host "Detected python command: $candidate"
+                return $candidate
+            }
+        }
+        Write-Host "Python is not installed. Please install Python 3."
+        exit 1
+    }
+
+    $Python = Get-PythonCommand
+
+    if (-not (Get-Command pipx -ErrorAction SilentlyContinue)) {
+        Write-Host "pipx is not installed. Installing pipx..."
+        & $Python -m pip --version | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "Could not install pipx automatically: pip is not available for $Python."
+            Write-Host "Install it manually: https://pipx.pypa.io/latest/how-to/install-pipx.html"
+            exit 1
+        }
+
+        & $Python -m pip install --user pipx
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "Failed to install pipx via pip."
+            exit 1
+        }
+
+        & $Python -m pipx ensurepath
+    }
+
+    if (-not (Get-Command pipx -ErrorAction SilentlyContinue)) {
+        # pipx was just installed into the user's Python scripts dir, which may
+        # not be on PATH in this session yet. Fall back to `python -m pipx`.
+        $PipxCmd = { & $Python -m pipx @args }
+    } else {
+        $PipxCmd = { & pipx @args }
+    }
+
+    & $PipxCmd ensurepath --force
+
+    # Install (or reinstall, if already present) flash from this repo
+    & $PipxCmd install --force $RepoDir
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "Failed to install flash via pipx."
+        exit 1
+    }
+
+    $PipxBinDir = & $PipxCmd environment --value PIPX_BIN_DIR 2>$null
+    if (-not $PipxBinDir) {
+        $PipxBinDir = Join-Path $env:USERPROFILE ".local\bin"
+    }
+
+    Write-Host ""
+    Write-Host "=== flash installed via pipx. ==="
+
+    $PathEntries = $env:PATH -split ";"
+    if ($PathEntries -notcontains $PipxBinDir) {
+        Write-Host "$PipxBinDir is not on your PATH yet."
+        Write-Host "Open a new terminal, or run this in your current session:"
+        Write-Host "    `$env:PATH = `"$PipxBinDir;`$env:PATH`""
+    }
+} finally {
+    Pop-Location -ErrorAction SilentlyContinue
+    Write-Host "Cleaning up..."
+    Remove-Item -Recurse -Force $TempDir -ErrorAction SilentlyContinue
+}
