@@ -4,13 +4,15 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "flash"
-version = "0.1.0"
 description = "FLASH CLI"
 authors = [
     { name = "Natuworkguy" },
 ]
-dynamic = ["dependencies", "optional-dependencies"]
+dynamic = ["version", "dependencies", "optional-dependencies"]
 requires-python = ">=3.10"
+
+[tool.setuptools.dynamic]
+version = { attr = "flash.version.__version__" }
 
 [tool.setuptools.dynamic.dependencies]
 file = ["requirements.txt"]
