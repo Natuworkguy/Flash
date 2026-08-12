@@ -8,15 +8,26 @@ import threading
 from pathlib import Path
 
 import ollama
-from colorama import Fore, Style
 from dotenv import load_dotenv
 from ollama import ResponseError
-from pyfiglet import Figlet
-from rich.console import Console
+from rich.console import Console, Group
 from rich.markdown import Markdown
-from rich.rule import Rule
+from rich.panel import Panel
+from rich.text import Text
 
 from .notify import notify_reply_ready
+from .theme import (
+    ACCENT,
+    ACCENT_ANSI,
+    CHEVRON,
+    DIM,
+    DIM_ANSI,
+    ELLIPSIS,
+    RESET_ANSI,
+    console,
+    warn,
+)
+from .theme import error as show_error
 from .tools import (
     MAX_SHELL_TIMEOUT,
     SCRATCH_DIR,
@@ -65,17 +76,16 @@ class Config:
         _int_env("NO_COMMAND_CONFIRMATION", 0, minimum=0)
     )
     prompt = \
-        Fore.BLUE + \
-        (
-            "[Flash]> "
-            if host == OLLAMA_HOST_DEFAULT
-            else f"""[Flash @ {
-                host
-                .removeprefix('http://')
-                .removeprefix('https://')
-                .rstrip(':11434')}]> """  # noqa: B005
-        ) + \
-        Style.RESET_ALL
+        (ACCENT_ANSI + CHEVRON + " " + RESET_ANSI) \
+        if host == OLLAMA_HOST_DEFAULT \
+        else (
+            DIM_ANSI
+            + host.removeprefix("http://").removeprefix("https://")
+            .partition(":")[0]
+            + RESET_ANSI
+            + " "
+            + ACCENT_ANSI + CHEVRON + " " + RESET_ANSI
+        )
 
 
 init(Config)
@@ -84,25 +94,27 @@ init(Config)
 def banner(c: Console) -> None:
     """Print the app banner"""
 
-    f = Figlet(font="slant")
-    c.print(
-        f.renderText("FLASH CLI"),
-        style="bold cyan",
-        justify="center"
-    )
+    title = Text()
+    title.append("Flash CLI", style="bold")
+
+    info = Text()
+    info.append("/help", style=ACCENT)
+    info.append(" for commands   model: ", style=DIM)
+    info.append(str(Config.model or "(unset)"))
+    info.append("   host: ", style=DIM)
+    info.append(Config.host)
+
+    lines = [title, Text(""), info]
+    if Config.no_command_confirmation:
+        lines.append(
+            Text("Autonomous mode: commands run without confirmation",
+                 style=f"bold {ACCENT}")
+        )
 
     c.print(
-        Rule(
-            (
-                ""
-                if not Config.no_command_confirmation
-                else "Autonomous mode. "
-            ) +
-            "Type /help for help"
-        ),
-        style="cyan"
+        Panel(Group(*lines), border_style=DIM, padding=(1, 2), expand=False)
     )
-    print("\n")
+    print()
 
 
 def _message(role: str, text: str) -> dict:
@@ -234,13 +246,13 @@ def _try_chat(
     def _rotate():
         i = 0
         try:
-            status.update(f"[bold cyan]{states[0]}...")
+            status.update(f"[bold {ACCENT}]{states[0]}{ELLIPSIS}")
         except ValueError:
             pass
         while not stop_event.wait(interval):
             try:
                 state = states[i % len(states)]
-                status.update(f"[bold cyan]{state}...")
+                status.update(f"[bold {ACCENT}]{state}{ELLIPSIS}")
             except ValueError:
                 pass
             i += 1
@@ -266,13 +278,14 @@ def _chat_with_status(
     tools_arg=None,
 ) -> tuple[object | None, str | None]:
     with console.status(
-        "[bold cyan]Thinking...", spinner="dots", spinner_style="cyan"
+        f"[bold {ACCENT}]Thinking{ELLIPSIS}", spinner="dots",
+        spinner_style=ACCENT
     ) as status:
         return _try_chat(client, messages, status, tools_arg)
 
 
 def _print_backend_error(detail: str) -> None:
-    print(Fore.RED + f"Ollama backend error: {detail}" + Style.RESET_ALL)
+    show_error(f"Ollama backend error: {detail}")
 
 
 def _render_markdown(console: Console, text: str, *, end: str = "\n") -> None:
@@ -290,11 +303,9 @@ def main() -> None:
     """Main app loop"""
 
     def _not_set_error(name: str) -> None:
-        print(
-            Fore.RED +
-            f"{name} is not set. Please set it to use Flash CLI.\n" +
-            f"Set {name} in environment variable or in {ENV_PATH} file." +
-            Style.RESET_ALL
+        show_error(
+            f"{name} is not set. Please set it to use Flash CLI.\n"
+            f"Set {name} in environment variable or in {ENV_PATH} file."
         )
         sys.exit(1)
 
@@ -303,7 +314,6 @@ def main() -> None:
 
     client = ollama.Client(host=Config.host)
 
-    console = Console()
     messages: list = []
     system_message = _message("system", SYSTEM_PROMPT)
 
@@ -325,21 +335,17 @@ def main() -> None:
                 return
 
             if uin == "/model":
-                print(
-                    Fore.LIGHTBLACK_EX +
-                    f"Model: {Config.model or '(unset)'}\n"
-                    f"Host: {Config.host}"
-                    + Style.RESET_ALL
-                )
+                info = Text()
+                info.append("model: ", style=DIM)
+                info.append(str(Config.model or "(unset)"))
+                info.append("\nhost:  ", style=DIM)
+                info.append(Config.host)
+                console.print(info)
                 continue
 
             if uin == "/clear":
                 messages.clear()
-                print(
-                    Fore.LIGHTBLACK_EX +
-                    "Context cleared."
-                    + Style.RESET_ALL
-                )
+                console.print(Text("Context cleared.", style=DIM))
                 continue
 
             direct_command = _direct_shell_command(uin)
@@ -355,17 +361,21 @@ def main() -> None:
                 continue
 
             if uin in {"/help", "/?"}:
-                print(
-                    f"""
-{Fore.CYAN}Console{Fore.YELLOW}
-Type {Fore.BLUE}/model{Fore.YELLOW} to show active model and host.
-Type {Fore.BLUE}/help{Fore.YELLOW} or {Fore.BLUE}/?{Fore.YELLOW} to see this.
-Type {Fore.BLUE}/bye{Fore.YELLOW} or {Fore.BLUE}/exit{Fore.YELLOW} to exit.
-Type {Fore.BLUE}/clear{Fore.YELLOW} to clear saved context.
-Type {Fore.BLUE}!<command>{Fore.YELLOW} to run shell directly.
-Type anything else to get a response from the AI.
-""" + Style.RESET_ALL
+                help_text = Text()
+                help_text.append("\nCommands\n\n", style="bold")
+                for cmd, desc in [
+                    ("/model", "show the active model and host"),
+                    ("/help, /?", "show this help"),
+                    ("/bye, /exit", "exit Flash"),
+                    ("/clear", "clear saved context"),
+                    ("!<command>", "run a shell command directly"),
+                ]:
+                    help_text.append(f"  {cmd:<14}", style=ACCENT)
+                    help_text.append(f"{desc}\n", style=DIM)
+                help_text.append(
+                    "\nAnything else is sent to the model.\n", style=DIM
                 )
+                console.print(help_text)
                 continue
 
             messages.append(_message("user", uin))
@@ -388,11 +398,7 @@ Type anything else to get a response from the AI.
                     messages.append(_message("assistant", final))
                     _trim_history(messages)
                 else:
-                    print(
-                        Fore.YELLOW +
-                        "The model returned no response."
-                        + Style.RESET_ALL
-                    )
+                    warn("The model returned no response.")
                     messages.pop()
                 print()
                 continue
@@ -457,11 +463,7 @@ Type anything else to get a response from the AI.
                 followup, _ = _response_parts(res)
 
             if not followup.strip():
-                print(
-                    Fore.YELLOW +
-                    "The model did not provide a final response after tools."
-                    + Style.RESET_ALL
-                )
+                warn("The model did not provide a final response after tools.")
                 followup = (
                     "Tool output:\n\n```text\n"
                     + "\n\n".join(tool_outputs)
@@ -482,8 +484,8 @@ Type anything else to get a response from the AI.
 
 if __name__ == "__main__":
     try:
-        print(Fore.GREEN + "Loading..." + Style.RESET_ALL)
+        console.print(Text(f"Loading{ELLIPSIS}", style=DIM))
         main()
     except FlashError as e:
-        print(Fore.RED + str(e) + Style.RESET_ALL)
+        show_error(str(e))
         sys.exit(1)

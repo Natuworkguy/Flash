@@ -1,7 +1,6 @@
 colorama
 types-colorama
 ollama
-pyfiglet
 python-dotenv
 rich
 ddgs

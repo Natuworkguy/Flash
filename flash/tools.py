@@ -6,13 +6,12 @@ import subprocess  # nosec B404
 from datetime import datetime
 from tempfile import mkdtemp
 
-from colorama import Fore, Style
 from ddgs import DDGS
-from rich.console import Console
-from rich.markdown import Markdown
+from rich.text import Text
 
 from .notify import notify_needs_input
 from .sysprompt import get_system_prompt
+from .theme import ACCENT, DIM, ERROR, WARN, console, tool_line, tool_result
 
 SCRATCH_DIR = mkdtemp(prefix="flash-scratch-", suffix="-temp")
 
@@ -80,36 +79,28 @@ def _shell_timeout(timeout) -> int:
 def shell_tool(command: str, timeout=None, is_user=False) -> str:
     """Tool to execute a shell command"""
 
-    if not is_user and not NO_COMMAND_CONFIRMATION:
-        notify_needs_input()
-        Console().print(Markdown(
-            Fore.YELLOW +
-            "Flash is trying to execute "
-            f"`{command}`. " +
-            Fore.YELLOW +
-            "Do you approve it to run? [Y/N, default n] " +
-            Style.RESET_ALL
-        ), end="")
-
-        print(Fore.YELLOW + ">>> " + Fore.GREEN + Style.BRIGHT, end="")
-
-        user_input = input().strip().lower()
-        print(Style.RESET_ALL)
-
-        if user_input != "y":
-            return "Command blocked by user"
-
     seconds = _shell_timeout(timeout)
 
-    suffix = "" \
-        if seconds == DEFAULT_SHELL_TIMEOUT \
-        else f" (timeout {seconds}s)"
+    if not is_user:
+        suffix = "" \
+            if seconds == DEFAULT_SHELL_TIMEOUT \
+            else f" (timeout {seconds}s)"
+        tool_line(f"Bash({command}){suffix}")
 
-    print(
-        Fore.BLUE
-        + f"Executing shell command: {command}{suffix}"
-        + Style.RESET_ALL
-    )
+        if not NO_COMMAND_CONFIRMATION:
+            notify_needs_input()
+
+            prompt = Text("  ⎿  ", style=DIM)
+            prompt.append("Run this command? ", style=DIM)
+            prompt.append("y", style=f"bold {ACCENT}")
+            prompt.append("/n ", style=DIM)
+            console.print(prompt, end="")
+
+            user_input = input().strip().lower()
+
+            if user_input != "y":
+                tool_result("Command blocked by user", style=WARN)
+                return "Command blocked by user"
 
     try:
         if os.name == "nt":
@@ -140,12 +131,15 @@ def shell_tool(command: str, timeout=None, is_user=False) -> str:
                 stdin=subprocess.DEVNULL if not is_user else None,
             )
     except subprocess.TimeoutExpired:
-        return (
+        message = (
             f"Error: Command timed out after {seconds} seconds. "
             "Please note that shell commands are run non-interactively. "
             "If the command was simply slow rather than stuck, retry it with "
             "a larger timeout."
         )
+        if not is_user:
+            tool_result(message, style=ERROR)
+        return message
     except KeyboardInterrupt:
         return "Error: Command execution interrupted by user."
 
@@ -153,29 +147,36 @@ def shell_tool(command: str, timeout=None, is_user=False) -> str:
     output = "\n".join(part for part in parts if part)
 
     if result.returncode and output:
-        return f"(exit {result.returncode})\n{output}"
+        final = f"(exit {result.returncode})\n{output}"
+    else:
+        final = output or "(no output)"
 
-    return output or "(no output)"
+    if not is_user:
+        tool_result(final, style=ERROR if result.returncode else DIM)
+
+    return final
 
 
 def web_search(query: str, max_results: int) -> str:
     """Search the web and return the top DuckDuckGo results."""
 
-    print(
-        Fore.BLUE +
-        f"Searching the web for: {query} " +
-        f"(Got first {max_results} results)" +
-        Style.RESET_ALL
-    )
+    tool_line(f"Search({query})")
 
     results = ""
 
     for result in DDGS().text(query, max_results=max_results):
-        results += f"""
+        block = f"""
 - {result['title'] or 'No title'}
   "{result['body'] or 'No description'}"
   URL: {result['href'] or 'No URL'}
 """.strip()
+        results += ("\n\n" if results else "") + block
+
+    count = results.count("\n\n") + 1 if results else 0
+    tool_result(
+        f"{count} result{'s' if count != 1 else ''}"
+        if count else "No results found."
+    )
 
     return results or "No results found."
 
@@ -183,30 +184,34 @@ def web_search(query: str, max_results: int) -> str:
 def get_os() -> str:
     """Return a brief description of the user's operating system."""
 
-    print(
-        Fore.BLUE + "Retrieving operating system information" + Style.RESET_ALL
-    )
+    tool_line("GetOS()")
 
-    return (
+    info = (
         f"OS: {platform.system()} {platform.release()}\n"
         f"Platform: {platform.platform()}\n"
         f"Architecture: {platform.machine()}"
     )
+    tool_result(info)
+
+    return info
 
 
 def reason(thought: str) -> str:
     """Show the user a line of reasoning without ending the turn."""
 
-    print(f"\n{thought}\n")
+    console.print(Text(f"\n{thought}\n", style=f"italic {DIM}"))
     return "(noted)"
 
 
 def get_date() -> str:
     """Return the current date using the local timezone."""
 
-    print(Fore.BLUE + "Retrieving current date" + Style.RESET_ALL)
+    tool_line("GetDate()")
 
-    return datetime.now().date().isoformat()  # noqa: DTZ005
+    today = datetime.now().date().isoformat()  # noqa: DTZ005
+    tool_result(today)
+
+    return today
 
 
 # Tool schema expected by Ollama function calling (OpenAI-style).
