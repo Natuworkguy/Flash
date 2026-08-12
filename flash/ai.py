@@ -15,6 +15,7 @@ from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.text import Text
 
+from .cli import parse_args
 from .notify import notify_reply_ready
 from .theme import (
     ACCENT,
@@ -308,6 +309,8 @@ def main() -> None:
             f"Set {name} in environment variable or in {ENV_PATH} file."
         )
         sys.exit(1)
+
+    parse_args()
 
     if not Config.model:
         _not_set_error("MODEL")
