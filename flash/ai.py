@@ -31,6 +31,7 @@ from .theme import (
     ELLIPSIS,
     RESET_ANSI,
     console,
+    glimmer,
     warn,
 )
 from .theme import error as show_error
@@ -294,15 +295,24 @@ def _next_thinking_state(states: list[str]) -> str:
     return state
 
 
+GLIMMER_SPEED = 10.0  # characters per second
+GLIMMER_SPREAD = 2.5
+GLIMMER_FRAME_SECONDS = 0.08
+
+
 def _try_chat(
     client: "ollama.Client", messages: list, status, tools_arg=None
 ) -> tuple[object | None, str | None]:
     state = _next_thinking_state(_load_thinking_states())
+    word = f"{state}{ELLIPSIS}"
+    period = len(word) + 2 * GLIMMER_SPREAD
     stop_event = threading.Event()
     start = time.monotonic()
 
     def _label(elapsed: float) -> str:
-        return f"[bold {ACCENT}]{state}{ELLIPSIS} ({int(elapsed)}s)"
+        offset = (elapsed * GLIMMER_SPEED) % period - GLIMMER_SPREAD
+        shine = glimmer(word, offset, GLIMMER_SPREAD)
+        return f"[bold]{shine}[/bold] [{DIM}]({int(elapsed)}s)[/{DIM}]"
 
     def _rotate():
         while True:
@@ -310,7 +320,7 @@ def _try_chat(
                 status.update(_label(time.monotonic() - start))
             except ValueError:
                 pass
-            if stop_event.wait(1):
+            if stop_event.wait(GLIMMER_FRAME_SECONDS):
                 break
 
     t = threading.Thread(target=_rotate, daemon=True)

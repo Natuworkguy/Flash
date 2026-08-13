@@ -79,3 +79,25 @@ def error(text: str) -> None:
 
 def warn(text: str) -> None:
     console.print(Text(text, style=WARN))
+
+
+_GLIMMER_BASE_RGB = (120, 120, 120)
+
+
+def glimmer(text: str, offset: float, spread: float = 2.5) -> str:
+    """Rich markup for `text` with a coral highlight sweeping across it."""
+
+    parts = []
+    for i, ch in enumerate(text):
+        if ch.isspace():
+            parts.append(ch)
+            continue
+
+        t = max(0.0, 1.0 - (abs(i - offset) / spread) ** 2)
+        rgb = (
+            round(base + (accent - base) * t)
+            for base, accent in zip(_GLIMMER_BASE_RGB, _ACCENT_RGB)
+        )
+        parts.append(f"[#{''.join(f'{c:02x}' for c in rgb)}]{ch}[/]")
+
+    return "".join(parts)
