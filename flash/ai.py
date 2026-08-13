@@ -265,15 +265,14 @@ def _chat(client: "ollama.Client", messages: list, tools_arg=None):
     )
 
 
-def _load_thinking_states() -> tuple[list[str], float]:
+def _load_thinking_states() -> list[str]:
     try:
         p = Path(__file__).parent / "thinking_states.json"
         data = json.loads(p.read_text(encoding="utf-8"))
         states = list(data.get("states", []))
-        interval = float(data.get("interval", 2))
         if not states:
             raise ValueError("no states")
-        return states, interval
+        return states
     except ValueError:
         return [
             "Thinking",
@@ -281,18 +280,27 @@ def _load_thinking_states() -> tuple[list[str], float]:
             "Analyzing",
             "Considering",
             "Reflecting",
-        ], 2.0
+        ]
+
+
+_thinking_state_index = 0
+
+
+def _next_thinking_state(states: list[str]) -> str:
+    global _thinking_state_index
+    state = states[_thinking_state_index % len(states)]
+    _thinking_state_index += 1
+    return state
 
 
 def _try_chat(
     client: "ollama.Client", messages: list, status, tools_arg=None
 ) -> tuple[object | None, str | None]:
-    states, interval = _load_thinking_states()
+    state = _next_thinking_state(_load_thinking_states())
     stop_event = threading.Event()
     start = time.monotonic()
 
     def _label(elapsed: float) -> str:
-        state = states[int(elapsed // interval) % len(states)]
         return f"[bold {ACCENT}]{state}{ELLIPSIS} ({int(elapsed)}s)"
 
     def _rotate():
