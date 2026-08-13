@@ -20,6 +20,8 @@ from rich.text import Text
 from .cli import parse_args
 from .envfile import set_env_var, unset_env_var
 from .notify import notify_reply_ready
+from .paths import ENV_PATH
+from .repl_input import COMMANDS, read_line
 from .theme import (
     ACCENT,
     ACCENT_ANSI,
@@ -42,7 +44,6 @@ from .tools import (
     tools,
 )
 
-ENV_PATH = str(Path.home() / ".flash.env")
 OLLAMA_HOST_DEFAULT = "http://localhost:11434"
 ENV_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
@@ -379,7 +380,7 @@ def main() -> None:
     while True:
         try:
             try:
-                uin = input(Config.prompt)
+                uin = read_line(Config.prompt)
             except EOFError:
                 print()
                 return
@@ -481,21 +482,10 @@ def main() -> None:
                 help_text = Text()
                 help_text.append("\nCommands\n\n", style="bold")
                 for cmd, desc in [
-                    ("/model", "show the active model and host"),
-                    ("/model <name>", "switch the active model"),
-                    ("/auto [on|off]", "toggle autonomous command mode"),
-                    (
-                        "/set NAME VALUE",
-                        f"set an env var, saved to {ENV_PATH}",
-                    ),
-                    ("/unset NAME", "remove an env var"),
-                    ("/refresh", "reload config from the env file"),
-                    ("/help, /?", "show this help"),
-                    ("/bye, /exit", "exit Flash"),
-                    ("/clear", "clear saved context"),
-                    ("!<command>", "run a shell command directly"),
+                    *COMMANDS,
+                    ("!<command>", " run a shell command directly"),
                 ]:
-                    help_text.append(f"  {cmd:<14}", style=ACCENT)
+                    help_text.append(f"  {cmd:<10}", style=ACCENT)
                     help_text.append(f"{desc}\n", style=DIM)
                 help_text.append(
                     "\nAnything else is sent to the model.\n", style=DIM
