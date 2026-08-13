@@ -33,6 +33,8 @@ from .theme import (
     RESET_ANSI,
     console,
     glimmer,
+    tool_line,
+    tool_result,
     warn,
 )
 from .theme import error as show_error
@@ -300,6 +302,33 @@ GLIMMER_SPEED = 10.0  # characters per second
 GLIMMER_SPREAD = 2.5
 GLIMMER_FRAME_SECONDS = 0.08
 
+MAX_CHAT_RETRIES = 2
+RETRY_DELAY_SECONDS = 2.0
+
+
+def _chat_with_retries(
+    client: "ollama.Client", messages: list, tools_arg=None
+) -> tuple[object | None, str | None]:
+    """Call _chat, retrying transient backend errors before giving up."""
+
+    detail = ""
+    for attempt in range(1, MAX_CHAT_RETRIES + 2):
+        try:
+            return _chat(client, messages, tools_arg), None
+        except ResponseError as exc:
+            detail = str(exc)
+        except Exception as exc:  # noqa: BLE001
+            detail = f"Could not reach Ollama at {Config.host}. {exc}"
+
+        if attempt > MAX_CHAT_RETRIES:
+            break
+
+        tool_line(f"Retry({attempt}/{MAX_CHAT_RETRIES})")
+        tool_result(f"{detail}\nRetrying in {RETRY_DELAY_SECONDS:g}s...")
+        time.sleep(RETRY_DELAY_SECONDS)
+
+    return None, detail
+
 
 def _try_chat(
     client: "ollama.Client", messages: list, status, tools_arg=None
@@ -328,11 +357,7 @@ def _try_chat(
     t.start()
 
     try:
-        return _chat(client, messages, tools_arg), None
-    except ResponseError as exc:
-        return None, str(exc)
-    except Exception as exc:  # noqa: BLE001
-        return None, f"Could not reach Ollama at {Config.host}. {exc}"
+        return _chat_with_retries(client, messages, tools_arg)
     finally:
         stop_event.set()
         t.join(timeout=0.1)
