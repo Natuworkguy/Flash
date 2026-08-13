@@ -206,6 +206,14 @@ REMINDER: Always use the scratch directory for temporary files.
 Files that the user asked you to create are not temporary. If they ask for a script, a config file,
 or any other real output, write it where they want it and leave it there.
 
+If the user asks you to generate a real output file but does not say where, and the current working
+directory is too general to write into, such as their home directory or the filesystem root (C:\ or
+/), do not drop the file there. Pick a sensible default instead, such as their Downloads folder, so
+it lands somewhere a person would actually expect to find it rather than cluttering a directory full
+of unrelated system or personal files. If you need their username to build that path (for example
+C:\Users\<username> on Windows or /home/<username> on Linux) and you do not already know it, ask the
+user directly rather than guessing at it.
+
 Generating documents (.docx and .pdf):
 When the user asks for a Word document (.docx) or a PDF, you have no dedicated document tool, so
 produce the file with the `shell` tool by running a short Python script. Follow this sequence:
