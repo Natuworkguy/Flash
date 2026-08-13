@@ -394,17 +394,7 @@ def _render_markdown(console: Console, text: str, *, end: str = "\n") -> None:
 def main() -> None:
     """Main app loop"""
 
-    def _not_set_error(name: str) -> None:
-        show_error(
-            f"{name} is not set. Please set it to use Flash CLI.\n"
-            f"Set {name} in environment variable or in {ENV_PATH} file."
-        )
-        sys.exit(1)
-
     parse_args()
-
-    if not Config.model:
-        _not_set_error("MODEL")
 
     client = ollama.Client(host=Config.host)
 
@@ -551,6 +541,12 @@ def main() -> None:
                     "\nAnything else is sent to the model.\n", style=DIM
                 )
                 console.print(help_text)
+                continue
+
+            if not Config.model:
+                show_error(
+                    "Model is not set. Use `/model <model>` to set it."
+                )
                 continue
 
             messages.append(_message("user", uin))

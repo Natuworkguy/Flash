@@ -8,9 +8,10 @@ consistently through one Console instance.
 import sys
 
 from rich.console import Console
+from rich.markdown import Markdown
 from rich.text import Text
 
-ACCENT = "#d97757"  # Claude's signature coral accent
+ACCENT = "#d97757"
 DIM = "grey62"
 ERROR = "#e5484d"
 WARN = "#d9a63f"
@@ -74,7 +75,7 @@ def dim(text: str) -> None:
 
 
 def error(text: str) -> None:
-    console.print(Text(text, style=ERROR))
+    console.print(Markdown(text, style=ERROR))
 
 
 def warn(text: str) -> None:
