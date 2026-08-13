@@ -6,6 +6,7 @@ import re
 import shutil
 import sys
 import threading
+import time
 from pathlib import Path
 
 import ollama
@@ -288,20 +289,20 @@ def _try_chat(
 ) -> tuple[object | None, str | None]:
     states, interval = _load_thinking_states()
     stop_event = threading.Event()
+    start = time.monotonic()
+
+    def _label(elapsed: float) -> str:
+        state = states[int(elapsed // interval) % len(states)]
+        return f"[bold {ACCENT}]{state}{ELLIPSIS} ({int(elapsed)}s)"
 
     def _rotate():
-        i = 0
-        try:
-            status.update(f"[bold {ACCENT}]{states[0]}{ELLIPSIS}")
-        except ValueError:
-            pass
-        while not stop_event.wait(interval):
+        while True:
             try:
-                state = states[i % len(states)]
-                status.update(f"[bold {ACCENT}]{state}{ELLIPSIS}")
+                status.update(_label(time.monotonic() - start))
             except ValueError:
                 pass
-            i += 1
+            if stop_event.wait(1):
+                break
 
     t = threading.Thread(target=_rotate, daemon=True)
     t.start()
