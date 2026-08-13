@@ -19,6 +19,7 @@ from rich.text import Text
 
 from .cli import parse_args
 from .envfile import set_env_var, unset_env_var
+from .memory import forget_memory, list_memory
 from .notify import notify_reply_ready
 from .paths import ENV_PATH
 from .repl_input import COMMANDS, read_line
@@ -469,6 +470,30 @@ def main() -> None:
                 refresh_config()
                 client = ollama.Client(host=Config.host)
                 console.print(Text("Config refreshed.", style=DIM))
+                continue
+
+            if uin == "/memory":
+                entries = list_memory()
+                if entries:
+                    listing = "\n".join(
+                        f"{i}. {e}" for i, e in enumerate(entries, start=1)
+                    )
+                    console.print(Text(listing, style=DIM))
+                else:
+                    console.print(Text("No memories saved yet.", style=DIM))
+                continue
+
+            if uin == "/forget" or uin.startswith("/forget "):
+                arg = uin[len("/forget"):].strip()
+                if not arg.isdigit():
+                    warn("Usage: /forget <index> (see /memory, 1-based)")
+                    continue
+                try:
+                    console.print(
+                        Text(forget_memory(int(arg)), style=DIM)
+                    )
+                except IndexError as exc:
+                    warn(str(exc))
                 continue
 
             if uin == "/clear":

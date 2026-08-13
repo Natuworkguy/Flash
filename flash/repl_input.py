@@ -4,6 +4,7 @@ from prompt_toolkit import PromptSession
 from prompt_toolkit.completion import Completer, Completion
 from prompt_toolkit.formatted_text import ANSI
 
+from .memory import MEMORY_PATH
 from .paths import ENV_PATH
 
 # Single source of truth for both the completion dropdown and /help.
@@ -13,6 +14,8 @@ COMMANDS = [
     ("/set", f"set an env var, saved to {ENV_PATH} (/set NAME VALUE)"),
     ("/unset", "remove an env var (/unset NAME)"),
     ("/refresh", "reload config from the env file"),
+    ("/memory", f"show saved memory, numbered ({MEMORY_PATH})"),
+    ("/forget", "delete one memory by its 1-based index (/forget N)"),
     ("/clear", "clear saved context"),
     ("/help", "show this help (alias: /?)"),
     ("/bye", "exit Flash (alias: /exit)"),

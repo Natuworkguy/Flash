@@ -9,6 +9,7 @@ from tempfile import mkdtemp
 from ddgs import DDGS
 from rich.text import Text
 
+from .memory import add_memory, forget_memory, search_memory
 from .notify import notify_needs_input
 from .sysprompt import get_system_prompt
 from .theme import ACCENT, DIM, ERROR, WARN, console, tool_line, tool_result
@@ -23,6 +24,10 @@ When searching for recent information, use the web_search tool.
 When you need to know the user's operating system, use the get_os tool.
 To think or plan mid-task without ending your turn, use the reason tool.
 When you need the current date, use the get_date tool.
+To save a durable fact or preference for future sessions, use the remember
+  tool. To check saved memory, use the recall tool with a specific phrase;
+  it does not return everything for a blank search. To delete one saved
+  memory by its 1-based index, use the forget tool.
 
 Your temporary scratch directory is: {SCRATCH_DIR}
 It will be deleted when the program exits. Use it for temporary files, but do
@@ -203,6 +208,41 @@ def reason(thought: str) -> str:
     return "(noted)"
 
 
+def remember(entry: str) -> str:
+    """Save a fact or preference to persistent memory for future sessions."""
+
+    tool_line(f"Remember({entry})")
+    result = add_memory(entry)
+    tool_result(result)
+    return result
+
+
+def recall(phrase: str) -> str:
+    """Search saved memory for every entry containing a phrase."""
+
+    tool_line(f"Recall({phrase})")
+    matches = search_memory(phrase)
+    result = (
+        "\n".join(f"{i}. {entry}" for i, entry in matches)
+        if matches
+        else "No matching memories."
+    )
+    tool_result(result)
+    return result
+
+
+def forget(index: int) -> str:
+    """Delete one saved memory entry by its 1-based index."""
+
+    tool_line(f"Forget({index})")
+    try:
+        result = forget_memory(index)
+    except IndexError as exc:
+        result = str(exc)
+    tool_result(result)
+    return result
+
+
 def get_date() -> str:
     """Return the current date using the local timezone."""
 
@@ -314,6 +354,75 @@ tools = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "remember",
+            "description": (
+                "Save a fact or user preference to persistent memory so it "
+                "is available in future sessions. Use it when the user "
+                "tells you something worth remembering long-term, not for "
+                "details only relevant to the current conversation."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "entry": {
+                        "type": "string",
+                        "description": "The fact to remember, one sentence.",
+                    }
+                },
+                "required": ["entry"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "recall",
+            "description": (
+                "Search saved memory for every entry containing a phrase. "
+                "Use this before assuming something hasn't been "
+                "remembered, or to check details saved in past sessions. "
+                "Each result is returned as 'N. entry', where N is that "
+                "entry's 1-based index; pass N to the forget tool to "
+                "delete it."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "phrase": {
+                        "type": "string",
+                        "description": "Case-insensitive phrase to search.",
+                    }
+                },
+                "required": ["phrase"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "forget",
+            "description": (
+                "Delete one saved memory entry by its 1-based index (the "
+                "number shown next to it in recall's results; the first "
+                "saved entry is index 1, not 0). Deletes exactly that one "
+                "entry, never all of memory."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "index": {
+                        "type": "integer",
+                        "description": "1-based index of the entry to delete.",
+                        "minimum": 1,
+                    }
+                },
+                "required": ["index"],
+            },
+        },
+    },
 ]
 
 
@@ -323,6 +432,9 @@ FUNCTIONS = {
     "get_os": get_os,
     "reason": reason,
     "get_date": get_date,
+    "remember": remember,
+    "recall": recall,
+    "forget": forget,
 }
 
 

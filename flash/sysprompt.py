@@ -9,6 +9,7 @@ def get_system_prompt():
             os.path.dirname(__file__),
             "system_prompt.txt"
         ),
-        "r"
+        "r",
+        encoding="utf-8"
     ) as f:
         return f.read().strip()
