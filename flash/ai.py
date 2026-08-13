@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 import shutil
 import sys
 import threading
@@ -16,6 +17,7 @@ from rich.panel import Panel
 from rich.text import Text
 
 from .cli import parse_args
+from .envfile import set_env_var, unset_env_var
 from .notify import notify_reply_ready
 from .theme import (
     ACCENT,
@@ -41,6 +43,7 @@ from .tools import (
 
 ENV_PATH = str(Path.home() / ".flash.env")
 OLLAMA_HOST_DEFAULT = "http://localhost:11434"
+ENV_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 load_dotenv(dotenv_path=ENV_PATH)
 
@@ -61,35 +64,77 @@ def _int_env(name: str, default: int, *, minimum: int) -> int:
 
 
 class Config:
-    """App configuration"""
-    host = os.getenv("OLLAMA_HOST", OLLAMA_HOST_DEFAULT)
-    model = os.getenv("MODEL")
-    max_history_messages = _int_env("MAX_HISTORY_MESSAGES", 6, minimum=2)
-    max_history_chars = _int_env("MAX_HISTORY_CHARS", 3000, minimum=1000)
-    max_tool_rounds = _int_env("MAX_TOOL_ROUNDS", 10, minimum=1)
-    max_tool_output_chars = _int_env(
-        "MAX_TOOL_OUTPUT_CHARS",
-        1200,
-        minimum=500
-    )
-    max_output_tokens = _int_env("MAX_OUTPUT_TOKENS", 1024, minimum=128)
-    no_command_confirmation = bool(
-        _int_env("NO_COMMAND_CONFIRMATION", 0, minimum=0)
-    )
-    prompt = \
-        (ACCENT_ANSI + CHEVRON + " " + RESET_ANSI) \
-        if host == OLLAMA_HOST_DEFAULT \
-        else (
-            DIM_ANSI
-            + host.removeprefix("http://").removeprefix("https://")
-            .partition(":")[0]
-            + RESET_ANSI
-            + " "
-            + ACCENT_ANSI + CHEVRON + " " + RESET_ANSI
+    """App configuration, re-derived from the environment on demand."""
+
+    host: str
+    model: str | None
+    max_history_messages: int
+    max_history_chars: int
+    max_tool_rounds: int
+    max_tool_output_chars: int
+    max_output_tokens: int
+    no_command_confirmation: bool
+    prompt: str
+
+    @classmethod
+    def refresh(cls) -> None:
+        cls.host = os.getenv("OLLAMA_HOST", OLLAMA_HOST_DEFAULT)
+        cls.model = os.getenv("MODEL")
+        cls.max_history_messages = _int_env(
+            "MAX_HISTORY_MESSAGES", 6, minimum=2
         )
+        cls.max_history_chars = _int_env(
+            "MAX_HISTORY_CHARS", 3000, minimum=1000
+        )
+        cls.max_tool_rounds = _int_env("MAX_TOOL_ROUNDS", 10, minimum=1)
+        cls.max_tool_output_chars = _int_env(
+            "MAX_TOOL_OUTPUT_CHARS", 1200, minimum=500
+        )
+        cls.max_output_tokens = _int_env(
+            "MAX_OUTPUT_TOKENS", 1024, minimum=128
+        )
+        cls.no_command_confirmation = bool(
+            _int_env("NO_COMMAND_CONFIRMATION", 0, minimum=0)
+        )
+        cls.prompt = \
+            (ACCENT_ANSI + CHEVRON + " " + RESET_ANSI) \
+            if cls.host == OLLAMA_HOST_DEFAULT \
+            else (
+                DIM_ANSI
+                + cls.host.removeprefix("http://").removeprefix("https://")
+                .partition(":")[0]
+                + RESET_ANSI
+                + " "
+                + ACCENT_ANSI + CHEVRON + " " + RESET_ANSI
+            )
+        init(cls)
 
 
-init(Config)
+Config.refresh()
+
+
+def set_config_var(name: str, value: str) -> None:
+    """Persist NAME=VALUE to the env file and apply it immediately."""
+
+    os.environ[name] = value
+    set_env_var(ENV_PATH, name, value)
+    Config.refresh()
+
+
+def unset_config_var(name: str) -> bool:
+    """Remove NAME from the env file and the live environment."""
+
+    removed_from_file = unset_env_var(ENV_PATH, name)
+    removed_from_env = os.environ.pop(name, None) is not None
+    Config.refresh()
+    return removed_from_file or removed_from_env
+
+
+def refresh_config() -> None:
+    """Reload the env file from disk and re-derive Config from it."""
+
+    load_dotenv(dotenv_path=ENV_PATH, override=True)
+    Config.refresh()
 
 
 def banner(c: Console) -> None:
@@ -337,13 +382,73 @@ def main() -> None:
                 _clear_scratch_dir()
                 return
 
-            if uin == "/model":
-                info = Text()
-                info.append("model: ", style=DIM)
-                info.append(str(Config.model or "(unset)"))
-                info.append("\nhost:  ", style=DIM)
-                info.append(Config.host)
-                console.print(info)
+            if uin == "/model" or uin.startswith("/model "):
+                arg = uin[len("/model"):].strip()
+                if arg:
+                    set_config_var("MODEL", arg)
+                    client = ollama.Client(host=Config.host)
+                    console.print(
+                        Text(f"Model set to {arg}.", style=DIM)
+                    )
+                else:
+                    info = Text()
+                    info.append("model: ", style=DIM)
+                    info.append(str(Config.model or "(unset)"))
+                    info.append("\nhost:  ", style=DIM)
+                    info.append(Config.host)
+                    console.print(info)
+                continue
+
+            if uin == "/auto" or uin.startswith("/auto "):
+                arg = uin[len("/auto"):].strip().lower()
+                if arg in ("", "toggle"):
+                    new_value = not Config.no_command_confirmation
+                elif arg in ("on", "enable", "true", "1"):
+                    new_value = True
+                elif arg in ("off", "disable", "false", "0"):
+                    new_value = False
+                else:
+                    warn("Usage: /auto [on|off]")
+                    continue
+                set_config_var(
+                    "NO_COMMAND_CONFIRMATION", "1" if new_value else "0"
+                )
+                state = "enabled" if new_value else "disabled"
+                console.print(
+                    Text(f"Autonomous mode {state}.", style=f"bold {ACCENT}")
+                )
+                continue
+
+            if uin == "/set" or uin.startswith("/set "):
+                rest = uin[len("/set"):].strip()
+                parts = rest.split(maxsplit=1)
+                if len(parts) != 2 or not ENV_NAME_RE.match(parts[0]):
+                    warn("Usage: /set NAME VALUE")
+                    continue
+                name, value = parts
+                set_config_var(name, value)
+                client = ollama.Client(host=Config.host)
+                console.print(
+                    Text(f"{name} set in {ENV_PATH}.", style=DIM)
+                )
+                continue
+
+            if uin == "/unset" or uin.startswith("/unset "):
+                name = uin[len("/unset"):].strip()
+                if not name or not ENV_NAME_RE.match(name):
+                    warn("Usage: /unset NAME")
+                    continue
+                if unset_config_var(name):
+                    client = ollama.Client(host=Config.host)
+                    console.print(Text(f"{name} unset.", style=DIM))
+                else:
+                    console.print(Text(f"{name} was not set.", style=DIM))
+                continue
+
+            if uin == "/refresh":
+                refresh_config()
+                client = ollama.Client(host=Config.host)
+                console.print(Text("Config refreshed.", style=DIM))
                 continue
 
             if uin == "/clear":
@@ -368,6 +473,14 @@ def main() -> None:
                 help_text.append("\nCommands\n\n", style="bold")
                 for cmd, desc in [
                     ("/model", "show the active model and host"),
+                    ("/model <name>", "switch the active model"),
+                    ("/auto [on|off]", "toggle autonomous command mode"),
+                    (
+                        "/set NAME VALUE",
+                        f"set an env var, saved to {ENV_PATH}",
+                    ),
+                    ("/unset NAME", "remove an env var"),
+                    ("/refresh", "reload config from the env file"),
                     ("/help, /?", "show this help"),
                     ("/bye, /exit", "exit Flash"),
                     ("/clear", "clear saved context"),
