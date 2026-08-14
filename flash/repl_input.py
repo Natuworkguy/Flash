@@ -1,5 +1,7 @@
 """REPL input with a dropdown menu of slash-command suggestions."""
 
+from typing import Union
+
 from prompt_toolkit import PromptSession
 from prompt_toolkit.completion import Completer, Completion
 from prompt_toolkit.formatted_text import ANSI
@@ -40,7 +42,7 @@ class SlashCommandCompleter(Completer):
                 )
 
 
-_session: PromptSession | None = None
+_session: Union[PromptSession, None] = None # noqa: UP007
 
 
 def read_line(prompt_ansi: str) -> str:

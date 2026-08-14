@@ -1,11 +1,12 @@
 """Command-line argument parsing for Flash CLI."""
 
 import argparse
+from typing import Union
 
 from .version import __version__
 
 
-def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+def parse_args(argv: Union[list[str], None] = None) -> argparse.Namespace:  # noqa: UP007
     parser = argparse.ArgumentParser(
         prog="flash",
         description="FLASH (Fast Local Agent SHell) CLI",
