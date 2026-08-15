@@ -34,7 +34,7 @@ It will be deleted when the program exits. Use it for temporary files, but do
   not assume it will persist across runs.
 Always use the scratch directory for temporary files, and never write to
   the user's home directory, other directories, or the current working
-  directory.
+  directory unless explicitly asked.
 """.strip()
 
 now = datetime.now()  # noqa: DTZ005
