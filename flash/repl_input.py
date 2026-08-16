@@ -42,7 +42,7 @@ class SlashCommandCompleter(Completer):
                 )
 
 
-_session: Union[PromptSession, None] = None # noqa: UP007
+_session: Union[PromptSession, None] = None  # noqa: UP007
 
 
 def read_line(prompt_ansi: str) -> str:

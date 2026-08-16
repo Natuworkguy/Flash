@@ -6,7 +6,7 @@ from typing import Union
 from .version import __version__
 
 
-def parse_args(argv: Union[list[str], None] = None) -> argparse.Namespace:  # noqa: UP007
+def parse_args(argv: Union[list[str], None] = None) -> argparse.Namespace:  # noqa: UP007  # noqa: E501
     parser = argparse.ArgumentParser(
         prog="flash",
         description="FLASH (Fast Local Agent SHell) CLI",
