@@ -11,8 +11,30 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+function Invoke-FlashScheme {
+    param(
+        [string]$FlashExe,
+        [string]$Flag,
+        [string]$SkipMessage
+    )
+
+    try {
+        & $FlashExe $Flag
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host $SkipMessage
+        }
+    } catch {
+        Write-Host $SkipMessage
+    }
+}
+
 function Uninstall-Flash {
     Write-Host "Uninstalling flash..."
+    if (Get-Command flash -ErrorAction SilentlyContinue) {
+        Write-Host "Removing the flash:// URL handler..."
+        Invoke-FlashScheme -FlashExe "flash" -Flag "--unregister-url-scheme" `
+            -SkipMessage "Could not remove the flash:// URL handler."
+    }
     if (Get-Command pipx -ErrorAction SilentlyContinue) {
         Write-Host "Uninstalling flash via pipx..."
         try {
@@ -108,6 +130,17 @@ try {
     if (-not $PipxBinDir) {
         $PipxBinDir = Join-Path $env:USERPROFILE ".local\bin"
     }
+
+    # Register the flash:// URL handler. Never fail the install over it.
+    $FlashExe = Join-Path $PipxBinDir "flash.exe"
+    if (-not (Test-Path $FlashExe)) {
+        $FlashExe = "flash"
+    }
+
+    Write-Host ""
+    Write-Host "Registering the flash:// URL handler..."
+    Invoke-FlashScheme -FlashExe $FlashExe -Flag "--register-url-scheme" `
+        -SkipMessage "Unable to install flash:// URL handler. Continuing."
 
     Write-Host ""
     Write-Host "=== flash installed via pipx. ==="

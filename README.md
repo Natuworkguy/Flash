@@ -11,6 +11,7 @@ FLASH (**F**ast **L**ocal **A**gent **SH**ell) CLI is an AI-powered command-line
 - **Shell Command Execution**:
   - AI can use a `shell` tool to execute commands and see their output.
   - Manually execute shell commands using the `!` prefix.
+- **`flash://` Links**: Open Flash from a browser or another app with a prompt ready to go (`flash://?prompt=What+is+Python`).
 - **Context Management**: Automatic history trimming to stay within token limits.
 - **Markdown Support**: Rich formatting for AI responses in the terminal.
 
@@ -136,6 +137,40 @@ You can run shell commands directly without AI intervention:
 - `!ls -la`
 - `!git status`
 - `!echo "Hello"`
+
+### `flash://` Links
+
+Flash can open from a link. `install.sh` and `install.ps1` register the handler
+for you; after a manual install, register it once yourself:
+
+```bash
+flash --register-url-scheme
+```
+
+Then a link like `flash://?prompt=What+is+Python` starts a Flash session with
+that prompt queued. Pass the same URL on the command line to test it without a
+browser:
+
+```bash
+flash "flash://?prompt=What+is+Python"
+```
+
+The prompt is URL-encoded, so use `+` or `%20` for spaces. Flash always shows
+the prompt and asks before sending it to the model — any web page can open a
+`flash://` link, so nothing runs unattended. For the same reason, URL prompts
+may not start with `/` or `!`: they carry questions for the model, never Flash
+commands or shell escapes.
+
+To remove the handler (the uninstallers do this too):
+
+```bash
+flash --unregister-url-scheme
+```
+
+Registration is per-user: it writes `HKCU\Software\Classes\flash` on Windows and
+`~/.local/share/applications/flash-url.desktop` on Linux/BSD. It cannot be
+installed on macOS, which resolves URL schemes from application bundles only.
+Passing a `flash://` URL on the command line still works everywhere.
 
 ### AI Interaction
 

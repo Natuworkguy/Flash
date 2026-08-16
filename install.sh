@@ -4,6 +4,10 @@ set -euo pipefail
 
 uninstall() {
     echo "Uninstalling flash..."
+    if command -v flash >/dev/null 2>&1; then
+        echo "Removing the flash:// URL handler..."
+        flash --unregister-url-scheme || true
+    fi
     if command -v pipx >/dev/null 2>&1; then
         echo "Uninstalling flash via pipx..."
         pipx uninstall flash || echo "flash is not installed via pipx."
@@ -91,6 +95,18 @@ pipx ensurepath --force
 pipx install --force "$REPO_DIR"
 
 PIPX_BIN_DIR="$(pipx environment --value PIPX_BIN_DIR 2>/dev/null || echo "$HOME/.local/bin")"
+
+# Register the flash:// URL handler. Unsupported on macOS, and harmless to
+# skip anywhere else, so never fail the install over it.
+FLASH_BIN="$PIPX_BIN_DIR/flash"
+if [ ! -x "$FLASH_BIN" ]; then
+    FLASH_BIN="flash"
+fi
+
+echo ""
+echo "Registering the flash:// URL handler..."
+"$FLASH_BIN" --register-url-scheme || \
+    echo "Unable to install flash:// URL handler. Continuing."
 
 echo ""
 echo "=== flash installed via pipx. ==="

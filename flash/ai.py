@@ -47,6 +47,7 @@ from .tools import (
     shell_tool,
     tools,
 )
+from .urlscheme import SchemeError, parse_flash_url, register, unregister
 
 OLLAMA_HOST_DEFAULT = "http://localhost:11434"
 ENV_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -391,10 +392,79 @@ def _render_markdown(console: Console, text: str, *, end: str = "\n") -> None:
     )
 
 
+def _handle_scheme_flags(args) -> None:
+    """Run --register-url-scheme / --unregister-url-scheme and exit."""
+
+    try:
+        if args.register_url_scheme:
+            where = register()
+            console.print(Text("flash:// handler registered.", style=DIM))
+            console.print(Text(where, style=DIM))
+        else:
+            if unregister():
+                console.print(
+                    Text("flash:// handler removed.", style=DIM)
+                )
+            else:
+                console.print(
+                    Text("No flash:// handler was registered.", style=DIM)
+                )
+    except SchemeError as exc:
+        show_error(str(exc))
+        sys.exit(1)
+    except OSError as exc:
+        show_error(f"Could not update the flash:// handler: {exc}")
+        sys.exit(1)
+
+
+def _confirm_url_prompt(prompt: str) -> bool:
+    """Confirm a prompt that arrived over a flash:// URL.
+
+    Any web page can open one of these links, so the prompt is never sent
+    to the model without the user seeing it first.
+    """
+
+    console.print(
+        Panel(
+            Text(prompt),
+            title="flash:// prompt",
+            border_style=ACCENT,
+            padding=(0, 1),
+            expand=False,
+        )
+    )
+
+    ask = Text("  Send this prompt to the model? ", style=DIM)
+    ask.append("y", style=f"bold {ACCENT}")
+    ask.append("/n ", style=DIM)
+    console.print(ask, end="")
+
+    try:
+        answer = input().strip().lower()
+    except EOFError:
+        print()
+        return False
+
+    print()
+    return answer == "y"
+
+
 def main() -> None:
     """Main app loop"""
 
-    parse_args()
+    args = parse_args()
+
+    if args.register_url_scheme or args.unregister_url_scheme:
+        _handle_scheme_flags(args)
+        return
+
+    pending: list[str] = []
+    if args.url:
+        try:
+            pending.append(parse_flash_url(args.url))
+        except SchemeError as exc:
+            show_error(str(exc))
+            sys.exit(2)
 
     client = ollama.Client(host=Config.host)
 
@@ -405,11 +475,17 @@ def main() -> None:
 
     while True:
         try:
-            try:
-                uin = read_line(Config.prompt)
-            except EOFError:
-                print()
-                return
+            if pending:
+                uin = pending.pop(0)
+                if not _confirm_url_prompt(uin):
+                    console.print(Text("Prompt discarded.", style=DIM))
+                    continue
+            else:
+                try:
+                    uin = read_line(Config.prompt)
+                except EOFError:
+                    print()
+                    return
 
             if uin.strip() == "":
                 continue

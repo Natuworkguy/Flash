@@ -16,4 +16,19 @@ def parse_args(argv: Union[list[str], None] = None) -> argparse.Namespace:  # no
         action="version",
         version=f"Flash CLI {__version__}",
     )
+    parser.add_argument(
+        "url",
+        nargs="?",
+        help="a flash://?prompt=... URL to open in a new session",
+    )
+    parser.add_argument(
+        "--register-url-scheme",
+        action="store_true",
+        help="register this machine's handler for flash:// URLs",
+    )
+    parser.add_argument(
+        "--unregister-url-scheme",
+        action="store_true",
+        help="remove this machine's handler for flash:// URLs",
+    )
     return parser.parse_args(argv)
