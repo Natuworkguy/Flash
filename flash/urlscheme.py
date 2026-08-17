@@ -169,7 +169,7 @@ def _run_quiet(command: list[str]) -> None:
 
 
 _MACOS_HELP = (
-    "The flash:// handler cannot be installed on macOS."
+    "The flash:// handler cannot be installed or uninstalled on macOS."
 )
 
 
