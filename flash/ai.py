@@ -480,7 +480,7 @@ def main() -> None:
                 uin = pending.pop(0)
                 if not _confirm_url_prompt(uin):
                     console.print(Text("Prompt discarded.", style=DIM))
-                    continue
+                    break
             else:
                 try:
                     uin = read_line(Config.prompt)
