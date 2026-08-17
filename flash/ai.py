@@ -427,7 +427,7 @@ def _confirm_url_prompt(prompt: str) -> bool:
     console.print(
         Panel(
             Text(prompt),
-            title="flash:// prompt",
+            title="This prompt was sent by a site or app",
             border_style=ACCENT,
             padding=(0, 1),
             expand=False,
