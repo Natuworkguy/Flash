@@ -521,7 +521,7 @@ def main() -> None:
                 elif arg in ("off", "disable", "false", "0"):
                     new_value = False
                 else:
-                    warn("Usage: /auto [on|off]")
+                    warn("Usage: /auto [on|off|toggle]")
                     continue
                 set_config_var(
                     "NO_COMMAND_CONFIRMATION", "1" if new_value else "0"
