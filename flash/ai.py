@@ -464,6 +464,7 @@ def main() -> None:
             pending.append(parse_flash_url(args.url))
         except SchemeError as exc:
             show_error(str(exc))
+            input("\n\nPress any key to continue ")
             sys.exit(2)
 
     client = ollama.Client(host=Config.host)
