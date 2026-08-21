@@ -345,6 +345,7 @@ GLIMMER_FRAME_SECONDS = 0.08
 
 MAX_CHAT_RETRIES = 2
 RETRY_DELAY_SECONDS = 2.0
+FINAL_RESPONSE_RETRIES = 2
 
 
 def _chat_with_retries(
@@ -426,6 +427,36 @@ def _chat_with_status(
         return _try_chat(
             client, messages, status, tools_arg, is_image=is_image
         )
+
+
+def _chat_retry_until_response(
+    console: Console,
+    client: "ollama.Client",
+    messages: list,
+    tools_arg=None,
+    *,
+    is_image: bool = False,
+) -> tuple[str, list, Union[str, None]]:  # noqa: UP007, RUF100
+    """Call the model, retrying up to FINAL_RESPONSE_RETRIES times if it
+    comes back with neither reply text nor a tool call to make."""
+
+    final, tool_calls = "", []
+    for attempt in range(1, FINAL_RESPONSE_RETRIES + 2):
+        res, err = _chat_with_status(
+            console, client, messages, tools_arg, is_image=is_image
+        )
+        if err:
+            return "", [], err
+
+        final, tool_calls = _response_parts(res)
+        if final.strip() or tool_calls or attempt > FINAL_RESPONSE_RETRIES:
+            break
+
+        tool_line(
+            f"Retry({attempt}/{FINAL_RESPONSE_RETRIES}) no response yet"
+        )
+
+    return final, tool_calls, None
 
 
 def _print_backend_error(detail: str) -> None:
@@ -826,7 +857,7 @@ def main() -> None:
             messages.append(_message("user", uin, pending_images))
             _trim_history(messages)
 
-            res, err = _chat_with_status(
+            final, tool_calls, err = _chat_retry_until_response(
                 console, client, [system_message] + messages, tools,
                 is_image=bool(pending_images),
             )
@@ -834,8 +865,6 @@ def main() -> None:
                 _print_backend_error(err)
                 messages.pop()
                 continue
-
-            final, tool_calls = _response_parts(res)
 
             if not tool_calls:
                 if final:
@@ -898,15 +927,12 @@ def main() -> None:
 
             if not followup.strip():
                 tool_messages.append(_tool_limit_message())
-
-                res, err = _chat_with_status(
+                followup, _, err = _chat_retry_until_response(
                     console, client, tool_messages, None
                 )
                 if err:
                     _print_backend_error(err)
                     continue
-
-                followup, _ = _response_parts(res)
 
             if not followup.strip():
                 warn("The model did not provide a final response after tools.")
