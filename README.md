@@ -134,12 +134,19 @@ python run.py
 
 ### Updates
 
-Flash checks `main` on GitHub for a newer version in the background and
-lets you know at the next prompt if one is available. Run `/version`
-anytime to check on demand, or `/update` to install it. Flash re-runs the
-same pipx-based steps `install.sh` uses, so it only works for installs done
-via the quick-install script. If you cloned the repo manually, update with
+Flash checks `main` on GitHub for a newer version on startup and shows it
+in the banner if one is available. Run `/version` anytime to check on
+demand, or `/update` to install it. Flash re-runs the same pipx-based
+steps `install.sh` uses, so it only works for installs done via the
+quick-install script. If you cloned the repo manually, update with
 `git pull` instead.
+
+You can also check and update from outside the REPL:
+
+```bash
+flash --update          # check for a newer version and, if found, confirm and install it
+flash --update --force  # reinstall from `main` unconditionally, no confirmation
+```
 
 ### Direct Shell Execution
 

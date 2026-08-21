@@ -57,3 +57,22 @@ def test_cli_accepts_url_and_scheme_flags():
 
     args = parse_args(["--unregister-url-scheme"])
     assert args.unregister_url_scheme  # nosec B101
+
+
+def test_cli_accepts_update_flags():
+    args = parse_args([])
+    assert not args.update  # nosec B101
+    assert not args.force  # nosec B101
+
+    args = parse_args(["--update"])
+    assert args.update  # nosec B101
+    assert not args.force  # nosec B101
+
+    args = parse_args(["--update", "--force"])
+    assert args.update  # nosec B101
+    assert args.force  # nosec B101
+
+
+def test_cli_rejects_force_without_update():
+    with pytest.raises(SystemExit):
+        parse_args(["--force"])

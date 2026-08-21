@@ -438,6 +438,57 @@ def _handle_scheme_flags(args) -> None:
         sys.exit(1)
 
 
+def _run_update(*, force: bool = False) -> bool:
+    """Check for a newer Flash version and, if one exists (or FORCE),
+    install it. Returns False only on an actual failure."""
+
+    with console.status(
+        f"[bold {ACCENT}]Checking for updates{ELLIPSIS}",
+        spinner="dots", spinner_style=ACCENT
+    ):
+        latest = fetch_latest_version()
+
+    if latest is None and not force:
+        warn(
+            "Could not check for updates "
+            "(no network or GitHub unreachable)."
+        )
+        return False
+
+    if latest is not None and not is_newer(latest) and not force:
+        console.print(Text("Already up to date.", style=DIM))
+        return True
+
+    if not force:
+        target = f"v{latest}" if latest else "the latest version"
+        ask = Text(f"  Update Flash to {target}? ", style=DIM)
+        ask.append("y", style=f"bold {ACCENT}")
+        ask.append("/n ", style=DIM)
+        console.print(ask, end="")
+        try:
+            answer = input().strip().lower()
+        except EOFError:
+            print()
+            return True
+        print()
+        if answer != "y":
+            console.print(Text("Update cancelled.", style=DIM))
+            return True
+
+    with console.status(
+        f"[bold {ACCENT}]Updating{ELLIPSIS}",
+        spinner="dots", spinner_style=ACCENT
+    ):
+        ok, message = perform_update()
+
+    if ok:
+        console.print(Text(message, style=f"bold {ACCENT}"))
+    else:
+        show_error(message)
+
+    return ok
+
+
 def _confirm_url_prompt(prompt: str) -> bool:
     """Confirm a prompt that arrived over a flash:// URL.
 
@@ -478,6 +529,9 @@ def main() -> None:
     if args.register_url_scheme or args.unregister_url_scheme:
         _handle_scheme_flags(args)
         return
+
+    if args.update:
+        sys.exit(0 if _run_update(force=args.force) else 1)
 
     pending: list[str] = []
     if args.url:
@@ -641,44 +695,7 @@ def main() -> None:
                 continue
 
             if uin == "/update":
-                with console.status(
-                    f"[bold {ACCENT}]Checking for updates{ELLIPSIS}",
-                    spinner="dots", spinner_style=ACCENT
-                ):
-                    latest = fetch_latest_version()
-                if latest is None:
-                    warn(
-                        "Could not check for updates "
-                        "(no network or GitHub unreachable)."
-                    )
-                    continue
-                if not is_newer(latest):
-                    console.print(Text("Already up to date.", style=DIM))
-                    continue
-
-                ask = Text(f"  Update Flash to v{latest}? ", style=DIM)
-                ask.append("y", style=f"bold {ACCENT}")
-                ask.append("/n ", style=DIM)
-                console.print(ask, end="")
-                try:
-                    answer = input().strip().lower()
-                except EOFError:
-                    print()
-                    continue
-                print()
-                if answer != "y":
-                    console.print(Text("Update cancelled.", style=DIM))
-                    continue
-
-                with console.status(
-                    f"[bold {ACCENT}]Updating{ELLIPSIS}",
-                    spinner="dots", spinner_style=ACCENT
-                ):
-                    ok, message = perform_update()
-                if ok:
-                    console.print(Text(message, style=f"bold {ACCENT}"))
-                else:
-                    show_error(message)
+                _run_update()
                 continue
 
             direct_command = _direct_shell_command(uin)
