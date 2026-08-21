@@ -7,6 +7,7 @@ noticeably delay the CLI, so every network failure here is swallowed and
 reported as "unknown" rather than raised.
 """
 
+import os
 import re
 import shutil
 import subprocess  # nosec B404
@@ -15,7 +16,13 @@ import urllib.request
 from pathlib import Path
 from typing import Union
 
-from .version import INSTALL_SCRIPT_URL, REPO_URL, VERSION_URL, __version__
+from .version import (
+    INSTALL_SCRIPT_PS1_URL,
+    INSTALL_SCRIPT_URL,
+    REPO_URL,
+    VERSION_URL,
+    __version__,
+)
 
 _VERSION_RE = re.compile(r'__version__\s*=\s*"([^"]+)"')
 _TIMEOUT_SECONDS = 3
@@ -74,9 +81,13 @@ def perform_update() -> tuple[bool, str]:
         return False, "git is required to update but was not found."
 
     if not shutil.which("pipx"):
+        if os.name == "nt":
+            reinstall = f"irm {INSTALL_SCRIPT_PS1_URL} | iex"
+        else:
+            reinstall = f"curl -fsSL {INSTALL_SCRIPT_URL} | bash"
         return False, (
-            "pipx is required to update but was not found. Re-run the "
-            f"installer:\ncurl -fsSL {INSTALL_SCRIPT_URL} | bash"
+            "pipx is required to update but was not found. Run this "
+            f"command:\n{reinstall}"
         )
 
     if not is_pipx_install():
