@@ -440,7 +440,8 @@ def _chat_retry_until_response(
     """Call the model, retrying up to FINAL_RESPONSE_RETRIES times if it
     comes back with neither reply text nor a tool call to make."""
 
-    final, tool_calls = "", []
+    final = ""
+    tool_calls: list = []
     for attempt in range(1, FINAL_RESPONSE_RETRIES + 2):
         res, err = _chat_with_status(
             console, client, messages, tools_arg, is_image=is_image
@@ -892,9 +893,9 @@ def main() -> None:
             for _ in range(Config.max_tool_rounds):
                 assistant_tool_calls = []
                 for call in tool_calls:
-                    name, args = _tool_call_name_args(call)
+                    name, call_args = _tool_call_name_args(call)
                     assistant_tool_calls.append(
-                        {"function": {"name": name, "arguments": args}}
+                        {"function": {"name": name, "arguments": call_args}}
                     )
 
                 tool_messages.append({
@@ -904,8 +905,8 @@ def main() -> None:
                 })
 
                 for call in tool_calls:
-                    name, args = _tool_call_name_args(call)
-                    tool_result = run_tool((name, args))
+                    name, call_args = _tool_call_name_args(call)
+                    tool_result = run_tool((name, call_args))
                     trimmed = _trim_tool_output(tool_result)
                     tool_outputs.append(f"{name}:\n{trimmed}")
                     tool_messages.append({
