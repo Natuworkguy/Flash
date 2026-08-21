@@ -15,6 +15,7 @@ import ollama
 from dotenv import load_dotenv
 from ollama import ResponseError
 from rich.console import Console, Group
+from rich.live import Live
 from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.text import Text
@@ -29,6 +30,7 @@ from .theme import (
     ACCENT,
     ACCENT_ANSI,
     CHEVRON,
+    CURSOR,
     DIM,
     DIM_ANSI,
     ELLIPSIS,
@@ -430,15 +432,42 @@ def _print_backend_error(detail: str) -> None:
     show_error(f"Ollama backend error: {detail}")
 
 
+STREAM_CPS = 200.0  # simulated characters-per-second reveal rate
+STREAM_MIN_DURATION = 0.25
+STREAM_MAX_DURATION = 2.0
+STREAM_FRAME_SECONDS = 0.04
+
+
 def _render_markdown(console: Console, text: str, *, end: str = "\n") -> None:
-    console.print(
-        Markdown(
-            text,
-            code_theme="monokai",
-            hyperlinks=True
-        ),
-        end=end
+    """Render `text` as Markdown, revealing it progressively with a
+    trailing cursor dot -- the full reply already arrived in one shot, so
+    this is a paced typewriter effect rather than real token streaming."""
+
+    def render(body: str) -> Markdown:
+        return Markdown(body, code_theme="monokai", hyperlinks=True)
+
+    if not text.strip() or not console.is_terminal:
+        console.print(render(text), end=end)
+        return
+
+    duration = max(
+        STREAM_MIN_DURATION, min(STREAM_MAX_DURATION, len(text) / STREAM_CPS)
     )
+    steps = max(1, int(duration / STREAM_FRAME_SECONDS))
+    chunk = max(1, (len(text) + steps - 1) // steps)
+
+    with Live(
+        render(CURSOR), console=console,
+        refresh_per_second=int(1 / STREAM_FRAME_SECONDS), transient=True,
+    ) as live:
+        cut = 0
+        while cut < len(text):
+            cut = min(len(text), cut + chunk)
+            partial = text[:cut] + (f" {CURSOR}" if cut < len(text) else "")
+            live.update(render(partial))
+            time.sleep(STREAM_FRAME_SECONDS)
+
+    console.print(render(text), end=end)
 
 
 def _handle_scheme_flags(args) -> None:

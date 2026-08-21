@@ -33,13 +33,14 @@ def _can_encode(text: str) -> bool:
 # report a non-UTF8 stdout encoding and raise UnicodeEncodeError on these
 # glyphs instead of substituting a fallback, crashing the whole process.
 # Fall back to plain ASCII there rather than risk that.
-_UNICODE_OK = _can_encode("✻⏺⎿❯…")
+_UNICODE_OK = _can_encode("✻⏺⎿❯…●")
 
 SPARKLE = "✻" if _UNICODE_OK else "*"      # ✻
 BULLET = "⏺" if _UNICODE_OK else "*"        # ⏺
 BRANCH = "⎿" if _UNICODE_OK else "L"        # ⎿
 CHEVRON = "❯" if _UNICODE_OK else ">"       # ❯
 ELLIPSIS = "…" if _UNICODE_OK else "..."    # …
+CURSOR = "●" if _UNICODE_OK else "."        # ●
 
 # Raw ANSI escapes for text fed straight into input()/print(), where rich
 # markup can't reach (e.g. the interactive prompt string).
