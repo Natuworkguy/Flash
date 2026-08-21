@@ -49,21 +49,61 @@ _image_path_completer = PathCompleter(
 )
 
 
+def _parse_image_path_arg(
+    remainder: str,
+) -> Union[tuple[str, bool], None]:  # noqa: UP007
+    """Track quoting while scanning the /image path argument typed so far.
+
+    Returns `(literal_path, in_quote)`: `literal_path` is the path with any
+    quote marks stripped out (what's actually on disk), and `in_quote` is
+    True if the text currently ends inside a quote the user opened
+    themselves. Returns None once an unquoted space ends the path argument
+    (the start of the optional trailing prompt).
+    """
+
+    literal_chars = []
+    quote: Union[str, None] = None  # noqa: UP007
+    for ch in remainder:
+        if quote:
+            if ch == quote:
+                quote = None
+            else:
+                literal_chars.append(ch)
+        elif ch in "\"'":
+            quote = ch
+        elif ch == " ":
+            return None
+        else:
+            literal_chars.append(ch)
+    return "".join(literal_chars), quote is not None
+
+
 class SlashCommandCompleter(Completer):
     """Suggests / commands as the line is typed, and image file paths as
-    the argument to /image."""
+    the argument to /image (auto-quoting suggestions that contain spaces)."""
 
     def get_completions(self, document, complete_event):
         text = document.text_before_cursor
 
         if text.startswith("/image "):
             remainder = text[len("/image "):]
-            if " " in remainder:
+            parsed = _parse_image_path_arg(remainder)
+            if parsed is None:
                 return  # past the path, now typing the optional prompt
-            sub_document = Document(remainder, cursor_position=len(remainder))
-            yield from _image_path_completer.get_completions(
-                sub_document, complete_event
+            literal_path, in_quote = parsed
+
+            sub_document = Document(
+                literal_path, cursor_position=len(literal_path)
             )
+            for completion in _image_path_completer.get_completions(
+                sub_document, complete_event
+            ):
+                suffix = completion.text
+                if not in_quote and " " in suffix:
+                    suffix = f'"{suffix}"'
+                yield Completion(
+                    suffix, start_position=0, display=completion.display
+                )
             return
 
         if not text.startswith("/") or " " in text:
