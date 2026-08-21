@@ -41,7 +41,7 @@ jobs:
         id: compare
         run: |
           get_version() {
-            git show "$1:engine/version.py" \
+            git show "$1:flash/version.py" \
               | sed -n 's/^__version__[[:space:]]*=[[:space:]]*["'"'"']\(.*\)["'"'"'].*/\1/p'
           }
 
@@ -52,7 +52,7 @@ jobs:
           echo "PR version:          '$NEW_VERSION'"
 
           if [ -z "$NEW_VERSION" ]; then
-            echo "Could not read __version__ from engine/version.py"
+            echo "Could not read __version__ from flash/version.py"
             exit 1
           fi
 
@@ -91,7 +91,7 @@ jobs:
               repo: context.repo.repo,
               pull_number,
               event: "REQUEST_CHANGES",
-              body: "@${{ github.event.pull_request.user.login }} This **release** PR does not bump `engine/version.py` (still `${{ steps.compare.outputs.old_version }}`). Update `__version__` before merging.\n\n" + MARKER
+              body: "@${{ github.event.pull_request.user.login }} This **release** PR does not bump `flash/version.py` (still `${{ steps.compare.outputs.old_version }}`). Update `__version__` before merging.\n\n" + MARKER
             });
 
       - name: Dismiss prior request-changes review once bumped
@@ -117,7 +117,7 @@ jobs:
                   repo: context.repo.repo,
                   pull_number,
                   review_id: review.id,
-                  message: "`engine/version.py` bumped. Clearing the version guard.",
+                  message: "`flash/version.py` bumped. Clearing the version guard.",
                 });
               }
             }
@@ -125,5 +125,5 @@ jobs:
       - name: Fail if version not bumped
         if: steps.label.outputs.release == 'true' && steps.compare.outputs.bumped == 'false'
         run: |
-          echo "Release PR must bump engine/version.py before merging."
+          echo "Release PR must bump flash/version.py before merging."
           exit 1
