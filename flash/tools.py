@@ -1,10 +1,14 @@
 """AI Tool System"""
 
+import fnmatch
 import os
 import platform
+import re
 import subprocess  # nosec B404
 from datetime import datetime
+from pathlib import Path
 from tempfile import mkdtemp
+from typing import Union
 
 from ddgs import DDGS
 from rich.text import Text
@@ -20,6 +24,11 @@ TOOL_SYSTEM_PROMPT = f"""
 === Tool System Prompt ===
 Answer concisely. Use shell only when command output is needed.
 When using shell, call the tool without extra text first.
+When searching a codebase or directory for files by name or pattern, use
+  the glob tool instead of shell find/ls. When searching file contents for
+  a pattern, use the grep tool instead of shell grep/rg. Both are read-only,
+  faster, and work the same on every platform, so prefer them over shell
+  for search whenever they cover the need.
 When searching for recent information, use the web_search tool.
 When you need to know the user's operating system, use the get_os tool.
 To think or plan mid-task without ending your turn, use the reason tool.
@@ -162,6 +171,145 @@ def shell_tool(command: str, timeout=None, is_user=False) -> str:
     return final
 
 
+# Directories that are rarely what a codebase search is looking for and
+# can be huge (dependency trees, VCS internals, caches) -- pruned while
+# walking so grep/glob stay fast and relevant.
+_SEARCH_EXCLUDE_DIRS = {
+    ".git", ".hg", ".svn", "__pycache__", "node_modules", ".venv", "venv",
+    ".tox", ".mypy_cache", ".pytest_cache", ".ruff_cache", "dist", "build",
+    ".idea", ".vscode",
+}
+MAX_SEARCH_FILES = 5000
+MAX_GREP_MATCHES = 200
+MAX_GLOB_RESULTS = 500
+MAX_MATCH_LINE_LENGTH = 300
+
+
+def _should_skip_dir(name: str) -> bool:
+    return name in _SEARCH_EXCLUDE_DIRS or name.endswith(".egg-info")
+
+
+def _iter_files(root: Path):
+    if root.is_file():
+        yield root
+        return
+
+    count = 0
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if not _should_skip_dir(d)]
+        for filename in filenames:
+            count += 1
+            if count > MAX_SEARCH_FILES:
+                return
+            yield Path(dirpath) / filename
+
+
+def _relative_path(file_path: Path, root: Path) -> str:
+    base = root if root.is_dir() else root.parent
+    try:
+        return file_path.relative_to(base).as_posix()
+    except ValueError:
+        return file_path.as_posix()
+
+
+def glob_tool(pattern: str, path: str = ".") -> str:
+    """Tool to find files by name pattern."""
+
+    label = f"Glob({pattern})" + (f" in {path}" if path != "." else "")
+    tool_line(label)
+
+    root = Path(path).expanduser()
+    if not root.exists():
+        result = f"Error: path not found: {root}"
+        tool_result(result, style=ERROR)
+        return result
+
+    matches = []
+    for file_path in _iter_files(root):
+        rel = _relative_path(file_path, root)
+        if fnmatch.fnmatch(rel, pattern) or fnmatch.fnmatch(
+            file_path.name, pattern
+        ):
+            matches.append(rel)
+            if len(matches) >= MAX_GLOB_RESULTS:
+                break
+
+    matches.sort()
+    result = "\n".join(matches) if matches else "No files matched."
+    if len(matches) >= MAX_GLOB_RESULTS:
+        result += f"\n... truncated at {MAX_GLOB_RESULTS} matches"
+
+    tool_result(
+        f"{len(matches)} match{'es' if len(matches) != 1 else ''}"
+        if matches else "No matches."
+    )
+    return result
+
+
+def grep_tool(
+    pattern: str,
+    path: str = ".",
+    glob_filter: Union[str, None] = None,  # noqa: UP007, RUF100
+    case_insensitive: bool = False,
+) -> str:
+    """Tool to search file contents by regex."""
+
+    label = f"Grep({pattern})" + (f" in {path}" if path != "." else "")
+    tool_line(label)
+
+    root = Path(path).expanduser()
+    if not root.exists():
+        result = f"Error: path not found: {root}"
+        tool_result(result, style=ERROR)
+        return result
+
+    try:
+        regex = re.compile(pattern, re.IGNORECASE if case_insensitive else 0)
+    except re.error as exc:
+        result = f"Error: invalid regex: {exc}"
+        tool_result(result, style=ERROR)
+        return result
+
+    matches = []
+    files_matched = set()
+    for file_path in _iter_files(root):
+        rel = _relative_path(file_path, root)
+        if glob_filter and not (
+            fnmatch.fnmatch(rel, glob_filter)
+            or fnmatch.fnmatch(file_path.name, glob_filter)
+        ):
+            continue
+
+        try:
+            text = file_path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+
+        for lineno, line in enumerate(text.splitlines(), start=1):
+            if not regex.search(line):
+                continue
+            snippet = line.strip()
+            if len(snippet) > MAX_MATCH_LINE_LENGTH:
+                snippet = snippet[:MAX_MATCH_LINE_LENGTH] + "..."
+            matches.append(f"{rel}:{lineno}: {snippet}")
+            files_matched.add(rel)
+            if len(matches) >= MAX_GREP_MATCHES:
+                break
+        if len(matches) >= MAX_GREP_MATCHES:
+            break
+
+    result = "\n".join(matches) if matches else "No matches."
+    if len(matches) >= MAX_GREP_MATCHES:
+        result += f"\n... truncated at {MAX_GREP_MATCHES} matches"
+
+    tool_result(
+        f"{len(matches)} match{'es' if len(matches) != 1 else ''} in "
+        f"{len(files_matched)} file{'s' if len(files_matched) != 1 else ''}"
+        if matches else "No matches."
+    )
+    return result
+
+
 def web_search(query: str, max_results: int) -> str:
     """Search the web and return the top DuckDuckGo results."""
 
@@ -282,6 +430,76 @@ tools = [
                     },
                 },
                 "required": ["command"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "glob",
+            "description": (
+                "Find files by name pattern (e.g. '*.py', '**/test_*.py'). "
+                "Read-only and fast; prefer this over shell find/ls when "
+                "searching a directory for files."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "pattern": {
+                        "type": "string",
+                        "description": (
+                            "Glob pattern to match against each file's "
+                            "path, e.g. '*.py' or 'flash/**/*.py'."
+                        ),
+                    },
+                    "path": {
+                        "type": "string",
+                        "description": (
+                            "Directory to search. Defaults to the current "
+                            "directory."
+                        ),
+                    },
+                },
+                "required": ["pattern"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "grep",
+            "description": (
+                "Search file contents for a regex pattern, returning each "
+                "match as 'path:line: text'. Read-only and fast; prefer "
+                "this over shell grep/rg when searching file contents."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "pattern": {
+                        "type": "string",
+                        "description": "Regular expression to search for.",
+                    },
+                    "path": {
+                        "type": "string",
+                        "description": (
+                            "File or directory to search. Defaults to the "
+                            "current directory."
+                        ),
+                    },
+                    "glob_filter": {
+                        "type": "string",
+                        "description": (
+                            "Optional glob pattern to only search matching "
+                            "files, e.g. '*.py'."
+                        ),
+                    },
+                    "case_insensitive": {
+                        "type": "boolean",
+                        "description": "Match case-insensitively.",
+                    },
+                },
+                "required": ["pattern"],
             },
         },
     },
@@ -428,6 +646,8 @@ tools = [
 
 FUNCTIONS = {
     "shell": shell_tool,
+    "glob": glob_tool,
+    "grep": grep_tool,
     "web_search": web_search,
     "get_os": get_os,
     "reason": reason,
