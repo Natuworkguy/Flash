@@ -201,5 +201,6 @@ def read_line(prompt_ansi: str) -> str:
             complete_while_typing=True,
             placeholder=_suggestion_placeholder,
             refresh_interval=PLACEHOLDER_REFRESH_SECONDS,
+            erase_when_done=True,
         )
     return _session.prompt(ANSI(prompt_ansi))
