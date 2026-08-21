@@ -29,3 +29,10 @@ include = ["flash*"]
 
 [tool.setuptools.package-data]
 flash = ["system_prompt.txt", "thinking_states.json"]
+
+[tool.pyright]
+# flash/urlscheme.py imports winreg only on Windows (os.name == "nt") to
+# register the flash:// handler; typeshed gates winreg's members behind
+# sys.platform == "win32", so without this, Pylance/pyright report every
+# winreg attribute as missing when analyzed from macOS or Linux.
+pythonPlatform = "All"
