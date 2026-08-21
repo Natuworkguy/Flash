@@ -1,1 +1,7 @@
 __version__ = "0.1.0"
+
+REPO = "Natuworkguy/Flash"
+REPO_URL = f"https://github.com/{REPO}"
+RAW_URL = f"https://raw.githubusercontent.com/{REPO}/main"
+VERSION_URL = f"{RAW_URL}/flash/version.py"
+INSTALL_SCRIPT_URL = f"{RAW_URL}/install.sh"

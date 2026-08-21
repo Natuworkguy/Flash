@@ -128,7 +128,18 @@ python run.py
 - `/help` or `/?`: Display the help message.
 - `/model`: Show the currently active model and Ollama host.
 - `/clear`: Clear the conversation history.
+- `/version`: Show the current version and check GitHub for updates.
+- `/update`: Update Flash to the latest version (pipx installs only).
 - `/bye`: Exit the application.
+
+### Updates
+
+Flash checks `main` on GitHub for a newer version in the background and
+lets you know at the next prompt if one is available. Run `/version`
+anytime to check on demand, or `/update` to install it. Flash re-runs the
+same pipx-based steps `install.sh` uses, so it only works for installs done
+via the quick-install script. If you cloned the repo manually, update with
+`git pull` instead.
 
 ### Direct Shell Execution
 

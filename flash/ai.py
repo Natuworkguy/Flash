@@ -47,7 +47,14 @@ from .tools import (
     shell_tool,
     tools,
 )
+from .updater import (
+    check_for_update,
+    fetch_latest_version,
+    is_newer,
+    perform_update,
+)
 from .urlscheme import SchemeError, parse_flash_url, register, unregister
+from .version import __version__
 
 OLLAMA_HOST_DEFAULT = "http://localhost:11434"
 ENV_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -148,7 +155,7 @@ def banner(c: Console) -> None:
     """Print the app banner"""
 
     title = Text()
-    title.append("Flash CLI", style="bold")
+    title.append(f"Flash CLI v{__version__}", style="bold")
 
     info = Text()
     info.append("/help", style=ACCENT)
@@ -168,6 +175,35 @@ def banner(c: Console) -> None:
         Panel(Group(*lines), border_style=DIM, padding=(1, 2), expand=False)
     )
     print()
+
+
+_update_check_result: list[str] = []
+
+
+def _start_background_update_check() -> None:
+    """Kick off a non-blocking check for a newer version on GitHub."""
+
+    def _worker() -> None:
+        latest = check_for_update()
+        if latest:
+            _update_check_result.append(latest)
+
+    threading.Thread(target=_worker, daemon=True).start()
+
+
+def _maybe_show_update_notice() -> None:
+    """Print a one-time notice if the background check found an update."""
+
+    if _update_check_result:
+        latest = _update_check_result.pop()
+        console.print(
+            Text(
+                f"A new version of Flash is available: v{latest} "
+                f"(you have v{__version__}). Run /update to upgrade.",
+                style=DIM,
+            )
+        )
+        print()
 
 
 def _message(role: str, text: str) -> dict:
@@ -473,9 +509,12 @@ def main() -> None:
     system_message = _message("system", SYSTEM_PROMPT)
 
     banner(console)
+    _start_background_update_check()
 
     while True:
         try:
+            _maybe_show_update_notice()
+
             if pending:
                 uin = pending.pop(0)
                 if not _confirm_url_prompt(uin):
@@ -591,6 +630,73 @@ def main() -> None:
             if uin == "/clear":
                 messages.clear()
                 console.print(Text("Context cleared.", style=DIM))
+                continue
+
+            if uin == "/version":
+                console.print(Text(f"Flash CLI v{__version__}", style=DIM))
+                with console.status(
+                    f"[bold {ACCENT}]Checking for updates{ELLIPSIS}",
+                    spinner="dots", spinner_style=ACCENT
+                ):
+                    latest = fetch_latest_version()
+                if latest is None:
+                    warn(
+                        "Could not check for updates "
+                        "(no network or GitHub unreachable)."
+                    )
+                elif is_newer(latest):
+                    console.print(
+                        Text(
+                            f"Update available: v{latest}. "
+                            "Run /update to upgrade.",
+                            style=f"bold {ACCENT}"
+                        )
+                    )
+                else:
+                    console.print(
+                        Text("You're on the latest version.", style=DIM)
+                    )
+                continue
+
+            if uin == "/update":
+                with console.status(
+                    f"[bold {ACCENT}]Checking for updates{ELLIPSIS}",
+                    spinner="dots", spinner_style=ACCENT
+                ):
+                    latest = fetch_latest_version()
+                if latest is None:
+                    warn(
+                        "Could not check for updates "
+                        "(no network or GitHub unreachable)."
+                    )
+                    continue
+                if not is_newer(latest):
+                    console.print(Text("Already up to date.", style=DIM))
+                    continue
+
+                ask = Text(f"  Update Flash to v{latest}? ", style=DIM)
+                ask.append("y", style=f"bold {ACCENT}")
+                ask.append("/n ", style=DIM)
+                console.print(ask, end="")
+                try:
+                    answer = input().strip().lower()
+                except EOFError:
+                    print()
+                    continue
+                print()
+                if answer != "y":
+                    console.print(Text("Update cancelled.", style=DIM))
+                    continue
+
+                with console.status(
+                    f"[bold {ACCENT}]Updating{ELLIPSIS}",
+                    spinner="dots", spinner_style=ACCENT
+                ):
+                    ok, message = perform_update()
+                if ok:
+                    console.print(Text(message, style=f"bold {ACCENT}"))
+                else:
+                    show_error(message)
                 continue
 
             direct_command = _direct_shell_command(uin)
