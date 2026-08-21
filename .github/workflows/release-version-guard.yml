@@ -1,0 +1,129 @@
+name: Release Version Guard
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, edited, labeled, unlabeled]
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+jobs:
+  check-version-bump:
+    name: Check Version Bump
+    runs-on: ubuntu-latest
+    if: github.event.pull_request.base.ref == 'main'
+
+    steps:
+      - name: Determine release label
+        id: label
+        run: |
+          HAS_RELEASE_LABEL=false
+
+          for label in ${{ join(github.event.pull_request.labels.*.name, ' ') }}; do
+            if [ "$label" = "release" ]; then
+              HAS_RELEASE_LABEL=true
+            fi
+          done
+
+          echo "Has release label: $HAS_RELEASE_LABEL"
+          echo "release=$HAS_RELEASE_LABEL" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout code
+        if: steps.label.outputs.release == 'true'
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Compare versions
+        if: steps.label.outputs.release == 'true'
+        id: compare
+        run: |
+          get_version() {
+            git show "$1:engine/version.py" \
+              | sed -n 's/^__version__[[:space:]]*=[[:space:]]*["'"'"']\(.*\)["'"'"'].*/\1/p'
+          }
+
+          OLD_VERSION=$(get_version "${{ github.event.pull_request.base.sha }}")
+          NEW_VERSION=$(get_version HEAD)
+
+          echo "Base (main) version: '$OLD_VERSION'"
+          echo "PR version:          '$NEW_VERSION'"
+
+          if [ -z "$NEW_VERSION" ]; then
+            echo "Could not read __version__ from engine/version.py"
+            exit 1
+          fi
+
+          if [ "$NEW_VERSION" = "$OLD_VERSION" ]; then
+            echo "bumped=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "bumped=true" >> "$GITHUB_OUTPUT"
+          fi
+
+          echo "old_version=$OLD_VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Request changes if version not bumped
+        if: steps.label.outputs.release == 'true' && steps.compare.outputs.bumped == 'false'
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const MARKER = "<!-- release-version-guard -->";
+            const pull_number = context.payload.pull_request.number;
+            const { data: reviews } = await github.rest.pulls.listReviews({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number,
+            });
+            const alreadyRequested = reviews.some(
+              (review) =>
+                review.user.login === "github-actions[bot]" &&
+                review.state === "CHANGES_REQUESTED" &&
+                (review.body || "").includes(MARKER)
+            );
+            if (alreadyRequested) {
+              console.log("This guard already has an open request-changes review; skipping.");
+              return;
+            }
+            await github.rest.pulls.createReview({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number,
+              event: "REQUEST_CHANGES",
+              body: "@${{ github.event.pull_request.user.login }} This **release** PR does not bump `engine/version.py` (still `${{ steps.compare.outputs.old_version }}`). Update `__version__` before merging.\n\n" + MARKER
+            });
+
+      - name: Dismiss prior request-changes review once bumped
+        if: steps.label.outputs.release == 'true' && steps.compare.outputs.bumped == 'true'
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const MARKER = "<!-- release-version-guard -->";
+            const pull_number = context.payload.pull_request.number;
+            const { data: reviews } = await github.rest.pulls.listReviews({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number,
+            });
+            for (const review of reviews) {
+              if (
+                review.user.login === "github-actions[bot]" &&
+                review.state === "CHANGES_REQUESTED" &&
+                (review.body || "").includes(MARKER)
+              ) {
+                await github.rest.pulls.dismissReview({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  pull_number,
+                  review_id: review.id,
+                  message: "`engine/version.py` bumped. Clearing the version guard.",
+                });
+              }
+            }
+
+      - name: Fail if version not bumped
+        if: steps.label.outputs.release == 'true' && steps.compare.outputs.bumped == 'false'
+        run: |
+          echo "Release PR must bump engine/version.py before merging."
+          exit 1

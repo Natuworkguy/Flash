@@ -1,0 +1,55 @@
+name: PR Target Branch Guard
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, edited, labeled, unlabeled]
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+jobs:
+  check-target-branch:
+    name: Check Target Branch
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Validate base branch
+        id: check
+        run: |
+          echo "Base branch is: ${{ github.event.pull_request.base.ref }}"
+
+          HAS_RELEASE_LABEL=false
+
+          for label in ${{ join(github.event.pull_request.labels.*.name, ' ') }}; do
+            if [ "$label" = "release" ]; then
+              HAS_RELEASE_LABEL=true
+            fi
+          done
+
+          echo "Has release label: $HAS_RELEASE_LABEL"
+
+          if [ "${{ github.event.pull_request.base.ref }}" = "main" ] && [ "$HAS_RELEASE_LABEL" != "true" ]; then
+            echo "WARN=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "WARN=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Comment warning on PR
+        if: steps.check.outputs.WARN == 'true'
+        uses: actions/github-script@v8
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.pull_request.number,
+              body: "⚠️ This PR targets **main** but does not have the **release** label. Regular PRs should target **dev**."
+            });
+
+      - name: Fail if targeting main without release label
+        if: steps.check.outputs.WARN == 'true'
+        run: |
+          echo "PRs should target dev unless they are release PRs."
+          exit 1
