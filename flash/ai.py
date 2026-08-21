@@ -302,22 +302,30 @@ def _chat(client: "ollama.Client", messages: list, tools_arg=None):
     )
 
 
-def _load_thinking_states() -> list[str]:
+def _load_states(key: str, fallback: list[str]) -> list[str]:
     try:
         p = Path(__file__).parent / "thinking_states.json"
         data = json.loads(p.read_text(encoding="utf-8"))
-        states = list(data.get("states", []))
+        states = list(data.get(key, []))
         if not states:
             raise ValueError("no states")
         return states
     except ValueError:
-        return [
-            "Thinking",
-            "Pondering",
-            "Analyzing",
-            "Considering",
-            "Reflecting",
-        ]
+        return fallback
+
+
+def _load_thinking_states() -> list[str]:
+    return _load_states(
+        "states",
+        ["Thinking", "Pondering", "Analyzing", "Considering", "Reflecting"],
+    )
+
+
+def _load_image_thinking_states() -> list[str]:
+    return _load_states(
+        "image_states",
+        ["Examining the image", "Analyzing the image", "Looking closely"],
+    )
 
 
 _thinking_state_index = 0
@@ -363,9 +371,16 @@ def _chat_with_retries(
 
 
 def _try_chat(
-    client: "ollama.Client", messages: list, status, tools_arg=None
+    client: "ollama.Client",
+    messages: list,
+    status,
+    tools_arg=None,
+    *,
+    is_image: bool = False,
 ) -> tuple[Union[object, None], Union[str, None]]:  # noqa: UP007, RUF100
-    state = _next_thinking_state(_load_thinking_states())
+    states = _load_image_thinking_states() if is_image \
+        else _load_thinking_states()
+    state = _next_thinking_state(states)
     word = f"{state}{ELLIPSIS}"
     period = len(word) + 2 * GLIMMER_SPREAD
     stop_event = threading.Event()
@@ -400,12 +415,16 @@ def _chat_with_status(
     client: "ollama.Client",
     messages: list,
     tools_arg=None,
+    *,
+    is_image: bool = False,
 ) -> tuple[Union[object, None], Union[str, None]]:  # noqa: UP007, RUF100
     with console.status(
         f"[bold {ACCENT}]Thinking{ELLIPSIS}", spinner="dots",
         spinner_style=ACCENT
     ) as status:
-        return _try_chat(client, messages, status, tools_arg)
+        return _try_chat(
+            client, messages, status, tools_arg, is_image=is_image
+        )
 
 
 def _print_backend_error(detail: str) -> None:
@@ -780,7 +799,8 @@ def main() -> None:
             _trim_history(messages)
 
             res, err = _chat_with_status(
-                console, client, [system_message] + messages, tools
+                console, client, [system_message] + messages, tools,
+                is_image=bool(pending_images),
             )
             if err:
                 _print_backend_error(err)
