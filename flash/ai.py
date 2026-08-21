@@ -3,6 +3,7 @@
 import json
 import os
 import re
+import shlex
 import shutil
 import sys
 import threading
@@ -14,6 +15,7 @@ import ollama
 from dotenv import load_dotenv
 from ollama import ResponseError
 from rich.console import Console, Group
+from rich.live import Live
 from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.text import Text
@@ -23,11 +25,12 @@ from .envfile import set_env_var, unset_env_var
 from .memory import forget_memory, list_memory
 from .notify import notify_reply_ready
 from .paths import ENV_PATH
-from .repl_input import COMMANDS, read_line
+from .repl_input import COMMANDS, IMAGE_EXTENSIONS, read_line
 from .theme import (
     ACCENT,
     ACCENT_ANSI,
     CHEVRON,
+    CURSOR,
     DIM,
     DIM_ANSI,
     ELLIPSIS,
@@ -59,6 +62,7 @@ from .version import __version__
 
 OLLAMA_HOST_DEFAULT = "http://localhost:11434"
 ENV_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+DEFAULT_IMAGE_PROMPT = "Describe this image in detail."
 
 load_dotenv(dotenv_path=ENV_PATH)
 
@@ -189,8 +193,15 @@ def banner(
     print()
 
 
-def _message(role: str, text: str) -> dict:
-    return {"role": role, "content": text}
+def _message(
+    role: str,
+    text: str,
+    images: Union[list[str], None] = None,  # noqa: UP007, RUF100
+) -> dict:
+    message: dict = {"role": role, "content": text}
+    if images:
+        message["images"] = images
+    return message
 
 
 def _message_text(message: dict) -> str:
@@ -292,22 +303,30 @@ def _chat(client: "ollama.Client", messages: list, tools_arg=None):
     )
 
 
-def _load_thinking_states() -> list[str]:
+def _load_states(key: str, fallback: list[str]) -> list[str]:
     try:
         p = Path(__file__).parent / "thinking_states.json"
         data = json.loads(p.read_text(encoding="utf-8"))
-        states = list(data.get("states", []))
+        states = list(data.get(key, []))
         if not states:
             raise ValueError("no states")
         return states
     except ValueError:
-        return [
-            "Thinking",
-            "Pondering",
-            "Analyzing",
-            "Considering",
-            "Reflecting",
-        ]
+        return fallback
+
+
+def _load_thinking_states() -> list[str]:
+    return _load_states(
+        "states",
+        ["Thinking", "Pondering", "Analyzing", "Considering", "Reflecting"],
+    )
+
+
+def _load_image_thinking_states() -> list[str]:
+    return _load_states(
+        "image_states",
+        ["Examining the image", "Analyzing the image", "Looking closely"],
+    )
 
 
 _thinking_state_index = 0
@@ -353,9 +372,16 @@ def _chat_with_retries(
 
 
 def _try_chat(
-    client: "ollama.Client", messages: list, status, tools_arg=None
+    client: "ollama.Client",
+    messages: list,
+    status,
+    tools_arg=None,
+    *,
+    is_image: bool = False,
 ) -> tuple[Union[object, None], Union[str, None]]:  # noqa: UP007, RUF100
-    state = _next_thinking_state(_load_thinking_states())
+    states = _load_image_thinking_states() if is_image \
+        else _load_thinking_states()
+    state = _next_thinking_state(states)
     word = f"{state}{ELLIPSIS}"
     period = len(word) + 2 * GLIMMER_SPREAD
     stop_event = threading.Event()
@@ -390,27 +416,58 @@ def _chat_with_status(
     client: "ollama.Client",
     messages: list,
     tools_arg=None,
+    *,
+    is_image: bool = False,
 ) -> tuple[Union[object, None], Union[str, None]]:  # noqa: UP007, RUF100
     with console.status(
         f"[bold {ACCENT}]Thinking{ELLIPSIS}", spinner="dots",
         spinner_style=ACCENT
     ) as status:
-        return _try_chat(client, messages, status, tools_arg)
+        return _try_chat(
+            client, messages, status, tools_arg, is_image=is_image
+        )
 
 
 def _print_backend_error(detail: str) -> None:
     show_error(f"Ollama backend error: {detail}")
 
 
+STREAM_CPS = 200.0  # simulated characters-per-second reveal rate
+STREAM_MIN_DURATION = 0.25
+STREAM_MAX_DURATION = 2.0
+STREAM_FRAME_SECONDS = 0.04
+
+
 def _render_markdown(console: Console, text: str, *, end: str = "\n") -> None:
-    console.print(
-        Markdown(
-            text,
-            code_theme="monokai",
-            hyperlinks=True
-        ),
-        end=end
+    """Render `text` as Markdown, revealing it progressively with a
+    trailing cursor dot -- the full reply already arrived in one shot, so
+    this is a paced typewriter effect rather than real token streaming."""
+
+    def render(body: str) -> Markdown:
+        return Markdown(body, code_theme="monokai", hyperlinks=True)
+
+    if not text.strip() or not console.is_terminal:
+        console.print(render(text), end=end)
+        return
+
+    duration = max(
+        STREAM_MIN_DURATION, min(STREAM_MAX_DURATION, len(text) / STREAM_CPS)
     )
+    steps = max(1, int(duration / STREAM_FRAME_SECONDS))
+    chunk = max(1, (len(text) + steps - 1) // steps)
+
+    with Live(
+        render(CURSOR), console=console,
+        refresh_per_second=int(1 / STREAM_FRAME_SECONDS), transient=True,
+    ) as live:
+        cut = 0
+        while cut < len(text):
+            cut = min(len(text), cut + chunk)
+            partial = text[:cut] + (f" {CURSOR}" if cut < len(text) else "")
+            live.update(render(partial))
+            time.sleep(STREAM_FRAME_SECONDS)
+
+    console.print(render(text), end=end)
 
 
 def _handle_scheme_flags(args) -> None:
@@ -551,6 +608,10 @@ def main() -> None:
 
     while True:
         try:
+            pending_images: Union[  # noqa: UP007, RUF100
+                list[str], None
+            ] = None
+
             if pending:
                 uin = pending.pop(0)
                 if not _confirm_url_prompt(uin):
@@ -698,6 +759,37 @@ def main() -> None:
                 _run_update()
                 continue
 
+            if uin == "/image" or uin.startswith("/image "):
+                arg = uin[len("/image"):].strip()
+                if not arg:
+                    warn("Usage: /image <path> [prompt]")
+                    continue
+                try:
+                    parts = shlex.split(arg)
+                except ValueError as exc:
+                    warn(f"Could not parse path: {exc}")
+                    continue
+                if not parts:
+                    warn("Usage: /image <path> [prompt]")
+                    continue
+
+                image_path = Path(parts[0]).expanduser()
+                if not image_path.is_file():
+                    show_error(f"Image not found: {image_path}")
+                    continue
+                if image_path.suffix.lower() not in IMAGE_EXTENSIONS:
+                    show_error(
+                        f"Unsupported image type '{image_path.suffix}'. "
+                        "Supported: "
+                        + ", ".join(sorted(IMAGE_EXTENSIONS))
+                    )
+                    continue
+
+                # Fall through to the normal send path below with UIN
+                # replaced by the prompt and PENDING_IMAGES attached.
+                uin = " ".join(parts[1:]).strip() or DEFAULT_IMAGE_PROMPT
+                pending_images = [str(image_path)]
+
             direct_command = _direct_shell_command(uin)
             if direct_command:
                 print(
@@ -731,11 +823,12 @@ def main() -> None:
                 )
                 continue
 
-            messages.append(_message("user", uin))
+            messages.append(_message("user", uin, pending_images))
             _trim_history(messages)
 
             res, err = _chat_with_status(
-                console, client, [system_message] + messages, tools
+                console, client, [system_message] + messages, tools,
+                is_image=bool(pending_images),
             )
             if err:
                 _print_backend_error(err)
