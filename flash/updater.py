@@ -13,6 +13,7 @@ import subprocess  # nosec B404
 import tempfile
 import urllib.request
 from pathlib import Path
+from typing import Union
 
 from .version import INSTALL_SCRIPT_URL, REPO_URL, VERSION_URL, __version__
 
@@ -33,7 +34,7 @@ def is_newer(latest: str, current: str = __version__) -> bool:
         return latest != current
 
 
-def fetch_latest_version() -> str | None:
+def fetch_latest_version() -> Union[str, None]:  # noqa: UP007, RUF100
     """Return the version on the repo's main branch, or None on failure."""
 
     try:
@@ -48,7 +49,7 @@ def fetch_latest_version() -> str | None:
     return match.group(1) if match else None
 
 
-def check_for_update() -> str | None:
+def check_for_update() -> Union[str, None]:  # noqa: UP007, RUF100
     """Return the latest version string if newer than the running one."""
 
     latest = fetch_latest_version()

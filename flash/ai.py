@@ -8,6 +8,7 @@ import sys
 import threading
 import time
 from pathlib import Path
+from typing import Union
 
 import ollama
 from dotenv import load_dotenv
@@ -81,7 +82,7 @@ class Config:
     """App configuration, re-derived from the environment on demand."""
 
     host: str
-    model: str | None
+    model: Union[str, None]  # noqa: UP007, RUF100
     max_history_messages: int
     max_history_chars: int
     max_tool_rounds: int
@@ -226,7 +227,9 @@ def _trim_history(messages: list[dict]) -> None:
         del messages[0]
 
 
-def _direct_shell_command(text: str) -> str | None:
+def _direct_shell_command(
+    text: str,
+) -> Union[str, None]:  # noqa: UP007, RUF100
     if text.startswith("!"):
         cmd = text[1:].strip()
         for prefix in ["shell ", "run "]:
@@ -345,7 +348,7 @@ RETRY_DELAY_SECONDS = 2.0
 
 def _chat_with_retries(
     client: "ollama.Client", messages: list, tools_arg=None
-) -> tuple[object | None, str | None]:
+) -> tuple[Union[object, None], Union[str, None]]:  # noqa: UP007, RUF100
     """Call _chat, retrying transient backend errors before giving up."""
 
     detail = ""
@@ -369,7 +372,7 @@ def _chat_with_retries(
 
 def _try_chat(
     client: "ollama.Client", messages: list, status, tools_arg=None
-) -> tuple[object | None, str | None]:
+) -> tuple[Union[object, None], Union[str, None]]:  # noqa: UP007, RUF100
     state = _next_thinking_state(_load_thinking_states())
     word = f"{state}{ELLIPSIS}"
     period = len(word) + 2 * GLIMMER_SPREAD
@@ -405,7 +408,7 @@ def _chat_with_status(
     client: "ollama.Client",
     messages: list,
     tools_arg=None,
-) -> tuple[object | None, str | None]:
+) -> tuple[Union[object, None], Union[str, None]]:  # noqa: UP007, RUF100
     with console.status(
         f"[bold {ACCENT}]Thinking{ELLIPSIS}", spinner="dots",
         spinner_style=ACCENT
