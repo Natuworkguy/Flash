@@ -152,7 +152,10 @@ def refresh_config() -> None:
     Config.refresh()
 
 
-def banner(c: Console) -> None:
+def banner(
+    c: Console,
+    update_version: Union[str, None] = None,  # noqa: UP007, RUF100
+) -> None:
     """Print the app banner"""
 
     title = Text()
@@ -171,40 +174,19 @@ def banner(c: Console) -> None:
             Text("Autonomous mode: commands run without confirmation",
                  style=f"bold {ACCENT}")
         )
+    if update_version:
+        lines.append(
+            Text(
+                f"\nUpdate available: v{update_version} "
+                "(run /update to upgrade)",
+                style=f"bold {ACCENT}"
+            )
+        )
 
     c.print(
         Panel(Group(*lines), border_style=DIM, padding=(1, 2), expand=False)
     )
     print()
-
-
-_update_check_result: list[str] = []
-
-
-def _start_background_update_check() -> None:
-    """Kick off a non-blocking check for a newer version on GitHub."""
-
-    def _worker() -> None:
-        latest = check_for_update()
-        if latest:
-            _update_check_result.append(latest)
-
-    threading.Thread(target=_worker, daemon=True).start()
-
-
-def _maybe_show_update_notice() -> None:
-    """Print a one-time notice if the background check found an update."""
-
-    if _update_check_result:
-        latest = _update_check_result.pop()
-        console.print(
-            Text(
-                f"A new version of Flash is available: v{latest} "
-                f"(you have v{__version__}). Run /update to upgrade.",
-                style=DIM,
-            )
-        )
-        print()
 
 
 def _message(role: str, text: str) -> dict:
@@ -511,13 +493,10 @@ def main() -> None:
     messages: list = []
     system_message = _message("system", SYSTEM_PROMPT)
 
-    banner(console)
-    _start_background_update_check()
+    banner(console, check_for_update())
 
     while True:
         try:
-            _maybe_show_update_notice()
-
             if pending:
                 uin = pending.pop(0)
                 if not _confirm_url_prompt(uin):
