@@ -1,13 +1,17 @@
 """REPL input with a dropdown menu of slash-command suggestions."""
 
+import json
+import time
+from pathlib import Path
 from typing import Union
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.completion import Completer, Completion
-from prompt_toolkit.formatted_text import ANSI
+from prompt_toolkit.formatted_text import ANSI, StyleAndTextTuples
 
 from .memory import MEMORY_PATH
 from .paths import ENV_PATH
+from .theme import SPARKLE, ptk_sweep_reveal
 
 # Single source of truth for both the completion dropdown and /help.
 COMMANDS = [
@@ -45,16 +49,79 @@ class SlashCommandCompleter(Completer):
                 )
 
 
+def _load_suggestions() -> list[str]:
+    try:
+        p = Path(__file__).parent / "suggestions.json"
+        data = json.loads(p.read_text(encoding="utf-8"))
+        items = list(data.get("suggestions", []))
+        if items:
+            return items
+    except (OSError, ValueError):
+        pass
+    return ["Try /help to see every command"]
+
+
+_SUGGESTIONS = _load_suggestions()
+
+# Timing for one suggestion's reveal-sweep -> hold -> conceal-sweep -> gap.
+_SWEEP_BAND = 1.6
+_REVEAL = 0.9
+_HOLD = 5.0
+_CONCEAL = 0.9
+_GAP = 1.2
+_CYCLE = _REVEAL + _HOLD + _CONCEAL + _GAP
+PLACEHOLDER_REFRESH_SECONDS = 0.08
+
+
+def _sweep_edge(progress: float, label_len: int) -> float:
+    """Map 0..1 sweep progress to an `edge` spanning the full label."""
+
+    span = label_len + 2 * _SWEEP_BAND
+    return -_SWEEP_BAND + progress * span
+
+
+def _suggestion_placeholder() -> StyleAndTextTuples:
+    """Current animation frame: one suggestion's letters materializing in a
+    coral sweep, holding, then erased by another sweep, cycling through
+    `_SUGGESTIONS` over time."""
+
+    total = _CYCLE * len(_SUGGESTIONS)
+    pos = time.monotonic() % total
+    idx = int(pos // _CYCLE)
+    t = pos - idx * _CYCLE
+
+    label = f"{SPARKLE} {_SUGGESTIONS[idx]}"
+
+    if t < _REVEAL:
+        edge = _sweep_edge(t / _REVEAL, len(label))
+        revealing = True
+    elif t < _REVEAL + _HOLD:
+        edge = len(label) + _SWEEP_BAND
+        revealing = True
+    elif t < _REVEAL + _HOLD + _CONCEAL:
+        edge = _sweep_edge((t - _REVEAL - _HOLD) / _CONCEAL, len(label))
+        revealing = False
+    else:
+        return []
+
+    return ptk_sweep_reveal(
+        label, edge, revealing=revealing, band=_SWEEP_BAND
+    )
+
+
 _session: Union[PromptSession, None] = None  # noqa: UP007
 
 
 def read_line(prompt_ansi: str) -> str:
-    """Read one line; suggests / commands in a dropdown while typing one."""
+    """Read one line; suggests / commands in a dropdown while typing one,
+    and animates a rotating hint at the cursor while the line is empty."""
 
     global _session
     if _session is None:
         _session = PromptSession(
             completer=SlashCommandCompleter(),
             complete_while_typing=True,
+            placeholder=_suggestion_placeholder,
+            refresh_interval=PLACEHOLDER_REFRESH_SECONDS,
         )
     return _session.prompt(ANSI(prompt_ansi))

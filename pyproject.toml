@@ -28,7 +28,7 @@ where = ["."]
 include = ["flash*"]
 
 [tool.setuptools.package-data]
-flash = ["system_prompt.txt", "thinking_states.json"]
+flash = ["system_prompt.txt", "thinking_states.json", "suggestions.json"]
 
 [tool.pyright]
 # flash/urlscheme.py imports winreg only on Windows (os.name == "nt") to
