@@ -455,6 +455,10 @@ def _chat_retry_until_response(
         tool_line(
             f"Retry({attempt}/{FINAL_RESPONSE_RETRIES}) no response yet"
         )
+        messages = messages + [{
+            "role": "system",
+            "content": "Please provide a final response to the user.",
+        }]
 
     return final, tool_calls, None
 
@@ -867,14 +871,16 @@ def main() -> None:
                 continue
 
             if not tool_calls:
-                if final:
-                    _render_markdown(console, final)
-                    notify_reply_ready()
-                    messages.append(_message("assistant", final))
-                    _trim_history(messages)
-                else:
+                if not final.strip():
                     warn("The model returned no response.")
-                    messages.pop()
+                    final = (
+                        "I wasn't able to come up with a response to that. "
+                        "Could you rephrase or try again?"
+                    )
+                _render_markdown(console, final)
+                notify_reply_ready()
+                messages.append(_message("assistant", final))
+                _trim_history(messages)
                 print()
                 continue
 
@@ -908,14 +914,13 @@ def main() -> None:
                         "tool_name": name,
                     })
 
-                res, err = _chat_with_status(
+                final, tool_calls, err = _chat_retry_until_response(
                     console, client, tool_messages, tools
                 )
                 if err:
                     tool_error = err
                     break
 
-                final, tool_calls = _response_parts(res)
                 followup = final
 
                 if not tool_calls:
