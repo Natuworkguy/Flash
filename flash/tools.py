@@ -3,8 +3,11 @@
 import fnmatch
 import os
 import platform
+import queue
 import re
 import subprocess  # nosec B404
+import threading
+import time
 from datetime import datetime
 from pathlib import Path
 from tempfile import mkdtemp
@@ -78,6 +81,65 @@ def init(config, ):
     NO_COMMAND_CONFIRMATION = config.no_command_confirmation
 
 
+def _run_shell_streaming(args, *, shell: bool, seconds: int) -> tuple[str, int]:
+    """Run a command, printing its output live as it's produced.
+
+    Uses a background reader thread so the timeout can still be enforced
+    while blocked on a line read (subprocess has no streaming timeout).
+    """
+    proc = subprocess.Popen(  # nosec B602 B603
+        args,
+        shell=shell,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
+    )
+
+    stdout = proc.stdout
+    assert stdout is not None  # nosec B101 -- guaranteed by stdout=PIPE above
+
+    # Read one character at a time rather than by line: a prompt like
+    # "Proceed (Y/n)? " has no trailing newline, so readline() would block
+    # on it -- holding it (and anything typed in response) out of order
+    # until later output finally supplies a newline.
+    output_queue: queue.Queue = queue.Queue()
+
+    def reader():
+        while True:
+            chunk = stdout.read(1)
+            if chunk == "":
+                break
+            output_queue.put(chunk)
+        output_queue.put(None)
+
+    thread = threading.Thread(target=reader, daemon=True)
+    thread.start()
+
+    start = time.monotonic()
+    chunks = []
+    try:
+        while True:
+            remaining = seconds - (time.monotonic() - start)
+            if remaining <= 0:
+                raise subprocess.TimeoutExpired(args, seconds)
+            try:
+                chunk = output_queue.get(timeout=remaining)
+            except queue.Empty:
+                raise subprocess.TimeoutExpired(args, seconds)
+            if chunk is None:
+                break
+            print(chunk, end="", flush=True)
+            chunks.append(chunk)
+    except BaseException:
+        proc.kill()
+        proc.wait()
+        raise
+
+    proc.wait()
+    return "".join(chunks), proc.returncode
+
+
 def _shell_timeout(timeout) -> int:
     if timeout is None:
         return DEFAULT_SHELL_TIMEOUT
@@ -116,33 +178,51 @@ def shell_tool(command: str, timeout=None, is_user=False) -> str:
                 tool_result("Command blocked by user", style=WARN)
                 return "Command blocked by user"
 
+    if os.name == "nt":
+        args = [
+            "powershell",
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            command,
+        ]
+        shell = False
+    else:
+        args = command
+        shell = True
+
     try:
+        if is_user:
+            # Commands typed directly by the user (via `!`) stream their
+            # output live as it's produced, instead of waiting for the
+            # whole command to finish before showing anything.
+            output, returncode = _run_shell_streaming(
+                args, shell=shell, seconds=seconds
+            )
+            if not output.strip():
+                return "(no output)"
+            if returncode:
+                return f"(exit {returncode})"
+            return ""
         if os.name == "nt":
-            args = [
-                "powershell",
-                "-NoProfile",
-                "-ExecutionPolicy",
-                "Bypass",
-                "-Command",
-                command,
-            ]
             result = subprocess.run(  # nosec B603
                 args,
                 capture_output=True,
                 text=True,
                 timeout=seconds,
                 check=False,
-                stdin=subprocess.DEVNULL if not is_user else None,
+                stdin=subprocess.DEVNULL,
             )
         else:
             result = subprocess.run(
-                command,
+                args,
                 shell=True,  # nosec B602
                 capture_output=True,
                 text=True,
                 timeout=seconds,
                 check=False,
-                stdin=subprocess.DEVNULL if not is_user else None,
+                stdin=subprocess.DEVNULL,
             )
     except subprocess.TimeoutExpired:
         message = (
@@ -165,8 +245,7 @@ def shell_tool(command: str, timeout=None, is_user=False) -> str:
     else:
         final = output or "(no output)"
 
-    if not is_user:
-        tool_result(final, style=ERROR if result.returncode else DIM)
+    tool_result(final, style=ERROR if result.returncode else DIM)
 
     return final
 
