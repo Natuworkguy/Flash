@@ -1,17 +1,21 @@
 """REPL input with a dropdown menu of slash-command suggestions."""
 
 import json
+import os
 import time
 from pathlib import Path
 from typing import Union
 
 from prompt_toolkit import PromptSession
-from prompt_toolkit.completion import Completer, Completion
+from prompt_toolkit.completion import Completer, Completion, PathCompleter
+from prompt_toolkit.document import Document
 from prompt_toolkit.formatted_text import ANSI, StyleAndTextTuples
 
 from .memory import MEMORY_PATH
 from .paths import ENV_PATH
 from .theme import SPARKLE, ptk_sweep_reveal
+
+IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}
 
 # Single source of truth for both the completion dropdown and /help.
 COMMANDS = [
@@ -31,11 +35,37 @@ COMMANDS = [
 ]
 
 
+def _is_image_path(path: str) -> bool:
+    """Passed to PathCompleter: always show directories (to navigate into),
+    and files whose extension is a supported image type."""
+
+    if os.path.isdir(path):
+        return True
+    return os.path.splitext(path)[1].lower() in IMAGE_EXTENSIONS
+
+
+_image_path_completer = PathCompleter(
+    expanduser=True, file_filter=_is_image_path
+)
+
+
 class SlashCommandCompleter(Completer):
-    """Suggests / commands as the line is typed."""
+    """Suggests / commands as the line is typed, and image file paths as
+    the argument to /image."""
 
     def get_completions(self, document, complete_event):
         text = document.text_before_cursor
+
+        if text.startswith("/image "):
+            remainder = text[len("/image "):]
+            if " " in remainder:
+                return  # past the path, now typing the optional prompt
+            sub_document = Document(remainder, cursor_position=len(remainder))
+            yield from _image_path_completer.get_completions(
+                sub_document, complete_event
+            )
+            return
+
         if not text.startswith("/") or " " in text:
             return
 

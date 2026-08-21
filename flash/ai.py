@@ -24,7 +24,7 @@ from .envfile import set_env_var, unset_env_var
 from .memory import forget_memory, list_memory
 from .notify import notify_reply_ready
 from .paths import ENV_PATH
-from .repl_input import COMMANDS, read_line
+from .repl_input import COMMANDS, IMAGE_EXTENSIONS, read_line
 from .theme import (
     ACCENT,
     ACCENT_ANSI,
@@ -60,7 +60,6 @@ from .version import __version__
 
 OLLAMA_HOST_DEFAULT = "http://localhost:11434"
 ENV_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
-IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}
 DEFAULT_IMAGE_PROMPT = "Describe this image in detail."
 
 load_dotenv(dotenv_path=ENV_PATH)
