@@ -87,7 +87,7 @@ def perform_update() -> tuple[bool, str]:
             reinstall = f"curl -fsSL {INSTALL_SCRIPT_URL} | bash"
         return False, (
             "pipx is required to update but was not found. Run this "
-            f"command:\n{reinstall}"
+            f"command:\n\n```\n{reinstall}\n```"
         )
 
     if not is_pipx_install():
