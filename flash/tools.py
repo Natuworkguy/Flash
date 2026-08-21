@@ -81,7 +81,9 @@ def init(config, ):
     NO_COMMAND_CONFIRMATION = config.no_command_confirmation
 
 
-def _run_shell_streaming(args, *, shell: bool, seconds: int) -> tuple[str, int]:
+def _run_shell_streaming(
+    args, *, shell: bool, seconds: int
+) -> tuple[str, int]:
     """Run a command, printing its output live as it's produced.
 
     Uses a background reader thread so the timeout can still be enforced
@@ -178,6 +180,7 @@ def shell_tool(command: str, timeout=None, is_user=False) -> str:
                 tool_result("Command blocked by user", style=WARN)
                 return "Command blocked by user"
 
+    args: list[str] | str
     if os.name == "nt":
         args = [
             "powershell",
@@ -197,7 +200,7 @@ def shell_tool(command: str, timeout=None, is_user=False) -> str:
             # Commands typed directly by the user (via `!`) stream their
             # output live as it's produced, instead of waiting for the
             # whole command to finish before showing anything.
-            output, returncode = _run_shell_streaming(
+            output, returncode = _run_shell_streaming(  # nosec B604
                 args, shell=shell, seconds=seconds
             )
             if not output.strip():
