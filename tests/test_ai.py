@@ -4,6 +4,7 @@ from flash.ai import (
     Config,
     _direct_shell_command,
     _int_env,
+    _message,
     _run_update,
     _trim_history,
     _trim_tool_output,
@@ -108,3 +109,15 @@ def test_run_update_failure_propagates(monkeypatch):
         "flash.ai.perform_update", lambda: (False, "pipx not found.")
     )
     assert _run_update() is False  # nosec B101
+
+
+def test_message_without_images():
+    message = _message("user", "hello")
+    assert message == {"role": "user", "content": "hello"}  # nosec B101
+    assert "images" not in message  # nosec B101
+
+
+def test_message_with_images():
+    message = _message("user", "what is this", ["photo.png"])
+    assert message["images"] == ["photo.png"]  # nosec B101
+    assert message["content"] == "what is this"  # nosec B101

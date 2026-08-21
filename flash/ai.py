@@ -3,6 +3,7 @@
 import json
 import os
 import re
+import shlex
 import shutil
 import sys
 import threading
@@ -59,6 +60,8 @@ from .version import __version__
 
 OLLAMA_HOST_DEFAULT = "http://localhost:11434"
 ENV_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}
+DEFAULT_IMAGE_PROMPT = "Describe this image in detail."
 
 load_dotenv(dotenv_path=ENV_PATH)
 
@@ -189,8 +192,15 @@ def banner(
     print()
 
 
-def _message(role: str, text: str) -> dict:
-    return {"role": role, "content": text}
+def _message(
+    role: str,
+    text: str,
+    images: Union[list[str], None] = None,  # noqa: UP007, RUF100
+) -> dict:
+    message: dict = {"role": role, "content": text}
+    if images:
+        message["images"] = images
+    return message
 
 
 def _message_text(message: dict) -> str:
@@ -551,6 +561,10 @@ def main() -> None:
 
     while True:
         try:
+            pending_images: Union[  # noqa: UP007, RUF100
+                list[str], None
+            ] = None
+
             if pending:
                 uin = pending.pop(0)
                 if not _confirm_url_prompt(uin):
@@ -698,6 +712,37 @@ def main() -> None:
                 _run_update()
                 continue
 
+            if uin == "/image" or uin.startswith("/image "):
+                arg = uin[len("/image"):].strip()
+                if not arg:
+                    warn("Usage: /image <path> [prompt]")
+                    continue
+                try:
+                    parts = shlex.split(arg)
+                except ValueError as exc:
+                    warn(f"Could not parse path: {exc}")
+                    continue
+                if not parts:
+                    warn("Usage: /image <path> [prompt]")
+                    continue
+
+                image_path = Path(parts[0]).expanduser()
+                if not image_path.is_file():
+                    show_error(f"Image not found: {image_path}")
+                    continue
+                if image_path.suffix.lower() not in IMAGE_EXTENSIONS:
+                    show_error(
+                        f"Unsupported image type '{image_path.suffix}'. "
+                        "Supported: "
+                        + ", ".join(sorted(IMAGE_EXTENSIONS))
+                    )
+                    continue
+
+                # Fall through to the normal send path below with UIN
+                # replaced by the prompt and PENDING_IMAGES attached.
+                uin = " ".join(parts[1:]).strip() or DEFAULT_IMAGE_PROMPT
+                pending_images = [str(image_path)]
+
             direct_command = _direct_shell_command(uin)
             if direct_command:
                 print(
@@ -731,7 +776,7 @@ def main() -> None:
                 )
                 continue
 
-            messages.append(_message("user", uin))
+            messages.append(_message("user", uin, pending_images))
             _trim_history(messages)
 
             res, err = _chat_with_status(

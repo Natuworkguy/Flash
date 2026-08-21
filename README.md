@@ -12,6 +12,7 @@ FLASH (**F**ast **L**ocal **A**gent **SH**ell) CLI is an AI-powered command-line
   - AI can use a `shell` tool to execute commands and see their output.
   - Manually execute shell commands using the `!` prefix.
 - **`flash://` Links**: Open Flash from a browser or another app with a prompt ready to go (`flash://?prompt=What+is+Python`).
+- **Image Recognition**: Send a local image to a vision-capable model with `/image <path> [prompt]`.
 - **Context Management**: Automatic history trimming to stay within token limits.
 - **Markdown Support**: Rich formatting for AI responses in the terminal.
 
@@ -128,9 +129,27 @@ python run.py
 - `/help` or `/?`: Display the help message.
 - `/model`: Show the currently active model and Ollama host.
 - `/clear`: Clear the conversation history.
+- `/image <path> [prompt]`: Send a local image to the model.
 - `/version`: Show the current version and check GitHub for updates.
 - `/update`: Update Flash to the latest version (pipx installs only).
 - `/bye`: Exit the application.
+
+### Image Recognition
+
+`/image <path> [prompt]` attaches a local image (`.png`, `.jpg`, `.jpeg`,
+`.webp`, `.gif`, `.bmp`) to your next message and sends both to the model.
+If you leave off the prompt, Flash asks it to describe the image. This
+requires a vision-capable model — text-only models will ignore the image
+or error. Pull one and switch to it first, e.g.:
+
+```bash
+ollama pull llama3.2-vision
+```
+
+```
+/model llama3.2-vision
+/image ~/Pictures/screenshot.png What's going on in this UI?
+```
 
 ### Updates
 

@@ -19,6 +19,7 @@ COMMANDS = [
     ("/memory", f"show saved memory, numbered ({MEMORY_PATH})"),
     ("/forget", "delete one memory by its 1-based index (/forget N)"),
     ("/clear", "clear saved context"),
+    ("/image", "send an image to the model (/image <path> [prompt])"),
     ("/version", "show the current version and check for updates"),
     ("/update", "update Flash to the latest version (pipx installs)"),
     ("/help", "show this help (alias: /?)"),
