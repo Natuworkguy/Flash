@@ -527,7 +527,11 @@ def _render_markdown(console: Console, text: str, *, end: str = "\n") -> None:
     console.print(render(text), end=end)
 
 
-def _render_sent_message(console: Console, prompt_ansi: str, text: str) -> None:
+def _render_sent_message(
+    console: Console,
+    prompt_ansi: str,
+    text: str
+) -> None:
     """Echo a just-submitted line back as rendered Markdown, in place of
     the plain text prompt_toolkit erased on submit -- so things like
     `code` show up highlighted rather than as raw backticks."""
