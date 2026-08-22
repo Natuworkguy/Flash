@@ -14,7 +14,7 @@ def parse_args(argv: Union[list[str], None] = None) -> argparse.Namespace:  # no
     parser.add_argument(
         "-V", "--version",
         action="version",
-        version=f"Flash CLI {__version__}",
+        version=f"Flash CLI v{__version__}",
     )
     parser.add_argument(
         "url",
