@@ -570,6 +570,6 @@ PARAMETER min_p 0.0
 PARAMETER repeat_penalty 1.05
 PARAMETER repeat_last_n 256
 PARAMETER num_ctx 32768
-PARAMETER num_predict 2048
+PARAMETER num_predict 8192
 PARAMETER stop "<start_of_turn>"
 PARAMETER stop "<end_of_turn>"
