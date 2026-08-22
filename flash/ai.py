@@ -22,10 +22,11 @@ from rich.text import Text
 
 from .cli import parse_args
 from .envfile import set_env_var, unset_env_var
+from .images import resolve_image_path
 from .memory import forget_memory, list_memory
 from .notify import notify_reply_ready
 from .paths import ENV_PATH
-from .repl_input import COMMANDS, IMAGE_EXTENSIONS, read_line
+from .repl_input import COMMANDS, read_line
 from .sysprompt import get_model_system_prompt
 from .theme import (
     ACCENT,
@@ -50,6 +51,7 @@ from .tools import (
     init,
     run_tool,
     shell_tool,
+    take_pending_images,
     tools,
 )
 from .updater import (
@@ -64,6 +66,14 @@ from .version import __version__
 OLLAMA_HOST_DEFAULT = "http://localhost:11434"
 ENV_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 DEFAULT_IMAGE_PROMPT = "Describe this image in detail."
+
+# Sent with the file view_image opened. The image rides on a user
+# message because that is where every vision model expects to find
+# one; a tool result carries only text.
+TOOL_IMAGE_NOTE = (
+    "Here is the image you opened with view_image. Answer from what "
+    "you can see in it."
+)
 
 load_dotenv(dotenv_path=ENV_PATH)
 
@@ -845,16 +855,9 @@ def main() -> None:
                     warn("Usage: /image <path> [prompt]")
                     continue
 
-                image_path = Path(parts[0]).expanduser()
-                if not image_path.is_file():
-                    show_error(f"Image not found: {image_path}")
-                    continue
-                if image_path.suffix.lower() not in IMAGE_EXTENSIONS:
-                    show_error(
-                        f"Unsupported image type '{image_path.suffix}'. "
-                        "Supported: "
-                        + ", ".join(sorted(IMAGE_EXTENSIONS))
-                    )
+                image_path, reason = resolve_image_path(parts[0])
+                if image_path is None:
+                    show_error(reason)
                     continue
 
                 # Fall through to the normal send path below with UIN
@@ -953,8 +956,15 @@ def main() -> None:
                         "tool_name": name,
                     })
 
+                tool_images = take_pending_images()
+                if tool_images:
+                    tool_messages.append(
+                        _message("system", TOOL_IMAGE_NOTE, tool_images)
+                    )
+
                 final, tool_calls, err = _chat_retry_until_response(
-                    console, client, tool_messages, tools
+                    console, client, tool_messages, tools,
+                    is_image=bool(tool_images),
                 )
                 if err:
                     tool_error = err

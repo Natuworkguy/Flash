@@ -16,6 +16,7 @@ from typing import Union
 from ddgs import DDGS
 from rich.text import Text
 
+from .images import resolve_image_path
 from .memory import add_memory, forget_memory, search_memory
 from .notify import notify_needs_input
 from .sysprompt import get_system_prompt
@@ -36,6 +37,9 @@ When searching for recent information, use the web_search tool.
 When you need to know the user's operating system, use the get_os tool.
 To think or plan mid-task without ending your turn, use the reason tool.
 When you need the current date, use the get_date tool.
+To look at an image file on disk, use the view_image tool with its path;
+  it is the only way to see an image the user did not send with /image.
+  Reading image bytes with shell or grep shows you nothing.
 To save a durable fact or preference for future sessions, use the remember
   tool. To check saved memory, use the recall tool with a specific phrase;
   it does not return everything for a blank search. To delete one saved
@@ -501,6 +505,45 @@ def get_date() -> str:
     return today
 
 
+_pending_images: list[str] = []
+
+
+def take_pending_images() -> list[str]:
+    """Return the image paths queued by view_image, clearing the queue.
+
+    view_image can only queue a path; the caller attaches the file to the
+    conversation, because an image reaches the model as message content
+    rather than as tool output text.
+    """
+
+    images = list(_pending_images)
+    _pending_images.clear()
+    return images
+
+
+def view_image(path: str) -> str:
+    """Attach a local image file so the model can see it."""
+
+    tool_line(f"ViewImage({path})")
+
+    image_path, reason = resolve_image_path(path)
+    if image_path is None:
+        result = f"Error: {reason}"
+        tool_result(result, style=ERROR)
+        return result
+
+    _pending_images.append(str(image_path))
+
+    kilobytes = max(1, round(image_path.stat().st_size / 1024))
+    tool_result(f"{image_path.name} ({kilobytes} KB)")
+
+    return (
+        f"Attached {image_path.name} ({kilobytes} KB). The image is "
+        "included with this tool result, so answer from what you can "
+        "actually see in it."
+    )
+
+
 # Tool schema expected by Ollama function calling (OpenAI-style).
 tools = [
     {
@@ -599,6 +642,33 @@ tools = [
                     },
                 },
                 "required": ["pattern"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "view_image",
+            "description": (
+                "Look at an image file on disk (.png, .jpg, .jpeg, .webp, "
+                ".gif, .bmp). The image is attached to the conversation so "
+                "you can see it. This is the only way to see an image the "
+                "user did not send with /image; no shell command can show "
+                "you one. It stays visible for the current turn, so call "
+                "this again later if you need another look."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": (
+                            "Path to the image file, e.g. "
+                            "'~/Pictures/screenshot.png'."
+                        ),
+                    },
+                },
+                "required": ["path"],
             },
         },
     },
@@ -747,6 +817,7 @@ FUNCTIONS = {
     "shell": shell_tool,
     "glob": glob_tool,
     "grep": grep_tool,
+    "view_image": view_image,
     "web_search": web_search,
     "get_os": get_os,
     "reason": reason,

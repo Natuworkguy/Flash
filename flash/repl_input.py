@@ -12,11 +12,10 @@ from prompt_toolkit.completion import Completer, Completion, PathCompleter
 from prompt_toolkit.document import Document
 from prompt_toolkit.formatted_text import ANSI, StyleAndTextTuples
 
+from .images import IMAGE_EXTENSIONS
 from .memory import MEMORY_PATH
 from .paths import ENV_PATH
 from .theme import SPARKLE, ptk_sweep_reveal
-
-IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}
 
 # Single source of truth for both the completion dropdown and /help.
 COMMANDS = [

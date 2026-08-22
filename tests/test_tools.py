@@ -2,7 +2,14 @@
 
 import subprocess  # nosec B404
 
-from flash.tools import glob_tool, grep_tool, shell_tool
+from flash import images
+from flash.tools import (
+    glob_tool,
+    grep_tool,
+    shell_tool,
+    take_pending_images,
+    view_image,
+)
 
 
 def test_shell_tool_timeout(monkeypatch):
@@ -85,3 +92,43 @@ def test_grep_tool_invalid_regex():
 def test_grep_tool_missing_path():
     result = grep_tool("x", "/no/such/directory")
     assert "not found" in result  # nosec B101
+
+
+def test_view_image_queues_the_path(tmp_path):
+    take_pending_images()
+    image = tmp_path / "shot.png"
+    image.write_bytes(b"not really a png, but the tool only checks the file")
+
+    result = view_image(str(image))
+    assert "Attached shot.png" in result  # nosec B101
+    assert take_pending_images() == [str(image)]  # nosec B101
+    assert take_pending_images() == []  # nosec B101
+
+
+def test_view_image_missing_file(tmp_path):
+    take_pending_images()
+
+    result = view_image(str(tmp_path / "nope.png"))
+    assert "Image not found" in result  # nosec B101
+    assert take_pending_images() == []  # nosec B101
+
+
+def test_view_image_unsupported_type(tmp_path):
+    take_pending_images()
+    text_file = tmp_path / "notes.txt"
+    text_file.write_text("hello")
+
+    result = view_image(str(text_file))
+    assert "Unsupported image type" in result  # nosec B101
+    assert take_pending_images() == []  # nosec B101
+
+
+def test_view_image_too_large(tmp_path, monkeypatch):
+    take_pending_images()
+    monkeypatch.setattr(images, "MAX_IMAGE_BYTES", 10)
+    image = tmp_path / "big.png"
+    image.write_bytes(b"x" * 100)
+
+    result = view_image(str(image))
+    assert "too large" in result  # nosec B101
+    assert take_pending_images() == []  # nosec B101

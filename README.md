@@ -12,7 +12,7 @@ FLASH (**F**ast **L**ocal **A**gent **SH**ell) CLI is an AI-powered command-line
   - AI can use a `shell` tool to execute commands and see their output.
   - Manually execute shell commands using the `!` prefix.
 - **`flash://` Links**: Open Flash from a browser or another app with a prompt ready to go (`flash://?prompt=What+is+Python`).
-- **Image Recognition**: Send a local image to a vision-capable model with `/image <path> [prompt]`.
+- **Image Recognition**: Send a local image to a vision-capable model with `/image <path> [prompt]`, or let the AI open one itself with its `view_image` tool.
 - **Context Management**: Automatic history trimming to stay within token limits.
 - **Markdown Support**: Rich formatting for AI responses in the terminal.
 
@@ -151,6 +151,16 @@ ollama pull llama3.2-vision
 /image ~/Pictures/screenshot.png What's going on in this UI?
 ```
 
+The model can also open an image on its own with the `view_image` tool, so
+you can just name the file in a normal message and let it look:
+
+```
+Why does the legend in ~/Desktop/plot.png overlap the bars?
+```
+
+It accepts the same file types (up to 20 MB) and sees the image for that
+turn only, calling `view_image` again later if it needs another look.
+
 ### Updates
 
 Flash checks `main` on GitHub for a newer version on startup and shows it
@@ -211,4 +221,4 @@ Passing a `flash://` URL on the command line still works everywhere.
 
 ### AI Interaction
 
-Simply type your request. If the AI needs to see the contents of a file or run a command to answer your question, it can invoke the shell tool automatically. It can also search the web via Duck Duck Go and show it's reasoning.
+Simply type your request. If the AI needs to see the contents of a file or run a command to answer your question, it can invoke the shell tool automatically. It can also look at an image file with the `view_image` tool, search the web via Duck Duck Go, and show it's reasoning.

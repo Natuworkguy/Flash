@@ -32,6 +32,8 @@ Requirements:
   (`ollama pull <model>`).
 - For tool calling (shell / web search / OS info) to work, choose a model that
   supports tools, such as `llama3.1`.
+- For `/image` and the `view_image` tool to work, the model must also be
+  vision-capable, such as `llama3.2-vision`.
 
 ## Options
 
