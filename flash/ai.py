@@ -14,6 +14,7 @@ from typing import Union
 import ollama
 from dotenv import load_dotenv
 from ollama import ResponseError
+from rich.cells import cell_len
 from rich.console import Console, Group
 from rich.live import Live
 from rich.markdown import Markdown
@@ -552,8 +553,12 @@ def _render_sent_message(
     the plain text prompt_toolkit erased on submit -- so things like
     `code` show up highlighted rather than as raw backticks."""
 
-    console.print(Text.from_ansi(prompt_ansi), end="")
-    console.print(Markdown(text, code_theme="monokai", hyperlinks=True))
+    prompt = Text.from_ansi(prompt_ansi)
+    console.print(prompt, end="")
+    console.print(
+        Markdown(text, code_theme="monokai", hyperlinks=True),
+        width=console.width - cell_len(prompt.plain),
+    )
 
 
 def _handle_scheme_flags(args) -> None:
