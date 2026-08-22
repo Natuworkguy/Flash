@@ -19,7 +19,7 @@ from rich.text import Text
 from .images import resolve_image_path
 from .memory import add_memory, forget_memory, search_memory
 from .notify import notify_needs_input
-from .sysprompt import get_system_prompt
+from .sysprompt import get_system_prompt, model_sees_images
 from .theme import ACCENT, DIM, ERROR, WARN, console, tool_line, tool_result
 
 SCRATCH_DIR = mkdtemp(prefix="flash-scratch-", suffix="-temp")
@@ -95,11 +95,15 @@ def build_system_prompt(model_prompt: str = "") -> str:
 DEFAULT_SHELL_TIMEOUT = 15
 MAX_SHELL_TIMEOUT = 600
 NO_COMMAND_CONFIRMATION = False
+OLLAMA_HOST = ""
+MODEL_NAME = ""
 
 
 def init(config, ):
-    global NO_COMMAND_CONFIRMATION
+    global NO_COMMAND_CONFIRMATION, OLLAMA_HOST, MODEL_NAME
     NO_COMMAND_CONFIRMATION = config.no_command_confirmation
+    OLLAMA_HOST = config.host
+    MODEL_NAME = config.model or ""
 
 
 def _run_shell_streaming(
@@ -505,13 +509,13 @@ def get_date() -> str:
     return today
 
 
-_pending_images: list[str] = []
+_pending_images: list[bytes] = []
 
 
-def take_pending_images() -> list[str]:
-    """Return the image paths queued by view_image, clearing the queue.
+def take_pending_images() -> list[bytes]:
+    """Return the image data queued by view_image, clearing the queue.
 
-    view_image can only queue a path; the caller attaches the file to the
+    view_image can only queue the bytes; the caller attaches them to the
     conversation, because an image reaches the model as message content
     rather than as tool output text.
     """
@@ -532,9 +536,28 @@ def view_image(path: str) -> str:
         tool_result(result, style=ERROR)
         return result
 
-    _pending_images.append(str(image_path))
+    if not model_sees_images(OLLAMA_HOST, MODEL_NAME):
+        result = (
+            f"Error: the active model ({MODEL_NAME}) has no vision "
+            "support, so it cannot be sent an image. Tell the user to "
+            "switch to a vision-capable model with /model."
+        )
+        tool_result(result, style=ERROR)
+        return result
 
-    kilobytes = max(1, round(image_path.stat().st_size / 1024))
+    # Read the bytes now rather than handing the path onward: the file is
+    # only known to exist at this moment, and reading it here puts any
+    # failure in the tool result, where the model can react to it.
+    try:
+        data = image_path.read_bytes()
+    except OSError as exc:
+        result = f"Error: could not read {image_path}: {exc}"
+        tool_result(result, style=ERROR)
+        return result
+
+    _pending_images.append(data)
+
+    kilobytes = max(1, round(len(data) / 1024))
     tool_result(f"{image_path.name} ({kilobytes} KB)")
 
     return (

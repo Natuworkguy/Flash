@@ -35,6 +35,34 @@ def _show_url(host: str) -> str:
     return f"{host}/api/show"
 
 
+def _show(host: str, model: str) -> dict:
+    """Ask Ollama for everything it knows about MODEL.
+
+    Returns an empty dict when Ollama cannot be reached, so every caller
+    degrades to "nothing known about this model" rather than an error.
+    """
+
+    if not model:
+        return {}
+
+    request = urllib.request.Request(
+        _show_url(host),
+        data=json.dumps({"model": model}).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+
+    try:
+        with urllib.request.urlopen(  # nosec B310 -- scheme forced to http
+            request, timeout=SHOW_TIMEOUT_SECONDS
+        ) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except (OSError, urllib.error.URLError, ValueError):
+        return {}
+
+    return payload if isinstance(payload, dict) else {}
+
+
 def get_model_system_prompt(host: str, model: str) -> str:
     """Get the system prompt baked into MODEL by its Modelfile.
 
@@ -44,22 +72,20 @@ def get_model_system_prompt(host: str, model: str) -> str:
     /api/show directly.
     """
 
-    if not model:
-        return ""
+    return str(_show(host, model).get("system") or "").strip()
 
-    request = urllib.request.Request(
-        f"{host.rstrip('/')}/api/show",
-        data=json.dumps({"model": model}).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
 
-    try:
-        with urllib.request.urlopen(
-            request, timeout=SHOW_TIMEOUT_SECONDS
-        ) as response:
-            payload = json.loads(response.read().decode("utf-8"))
-    except (OSError, urllib.error.URLError, ValueError):
-        return ""
+def model_sees_images(host: str, model: str) -> bool:
+    """Whether MODEL reports Ollama's `vision` capability.
 
-    return str(payload.get("system") or "").strip()
+    Fails open: an unreachable Ollama, or one too old to report
+    capabilities at all, answers True so the image is still attempted
+    rather than blocked on missing metadata.
+    """
+
+    capabilities = _show(host, model).get("capabilities")
+
+    if not isinstance(capabilities, list) or not capabilities:
+        return True
+
+    return "vision" in capabilities

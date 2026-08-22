@@ -2,7 +2,7 @@
 
 import subprocess  # nosec B404
 
-from flash import images
+from flash import images, tools
 from flash.tools import (
     glob_tool,
     grep_tool,
@@ -94,14 +94,17 @@ def test_grep_tool_missing_path():
     assert "not found" in result  # nosec B101
 
 
-def test_view_image_queues_the_path(tmp_path):
+def test_view_image_queues_the_bytes(tmp_path, monkeypatch):
     take_pending_images()
+    # No model name means no /api/show call, keeping the test offline.
+    monkeypatch.setattr(tools, "MODEL_NAME", "")
     image = tmp_path / "shot.png"
-    image.write_bytes(b"not really a png, but the tool only checks the file")
+    data = b"not really a png, but the tool only checks the file"
+    image.write_bytes(data)
 
     result = view_image(str(image))
     assert "Attached shot.png" in result  # nosec B101
-    assert take_pending_images() == [str(image)]  # nosec B101
+    assert take_pending_images() == [data]  # nosec B101
     assert take_pending_images() == []  # nosec B101
 
 
@@ -131,4 +134,16 @@ def test_view_image_too_large(tmp_path, monkeypatch):
 
     result = view_image(str(image))
     assert "too large" in result  # nosec B101
+    assert take_pending_images() == []  # nosec B101
+
+
+def test_view_image_refuses_a_model_without_vision(tmp_path, monkeypatch):
+    take_pending_images()
+    monkeypatch.setattr(tools, "MODEL_NAME", "text-only")
+    monkeypatch.setattr(tools, "model_sees_images", lambda *_: False)
+    image = tmp_path / "shot.png"
+    image.write_bytes(b"data")
+
+    result = view_image(str(image))
+    assert "no vision support" in result  # nosec B101
     assert take_pending_images() == []  # nosec B101

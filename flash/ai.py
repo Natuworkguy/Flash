@@ -27,7 +27,7 @@ from .memory import forget_memory, list_memory
 from .notify import notify_reply_ready
 from .paths import ENV_PATH
 from .repl_input import COMMANDS, read_line
-from .sysprompt import get_model_system_prompt
+from .sysprompt import get_model_system_prompt, model_sees_images
 from .theme import (
     ACCENT,
     ACCENT_ANSI,
@@ -73,6 +73,12 @@ DEFAULT_IMAGE_PROMPT = "Describe this image in detail."
 TOOL_IMAGE_NOTE = (
     "Here is the image you opened with view_image. Answer from what "
     "you can see in it."
+)
+
+IMAGE_BACKEND_HINT = (
+    "That request carried an image, which makes it much larger and needs "
+    "a vision-capable model. If it keeps failing, check the model with "
+    "`ollama show <model>` and that the backend is healthy."
 )
 
 load_dotenv(dotenv_path=ENV_PATH)
@@ -207,7 +213,7 @@ def banner(
 def _message(
     role: str,
     text: str,
-    images: Union[list[str], None] = None,  # noqa: UP007, RUF100
+    images: Union[list, None] = None,  # noqa: UP007, RUF100
 ) -> dict:
     message: dict = {"role": role, "content": text}
     if images:
@@ -859,6 +865,11 @@ def main() -> None:
                 if image_path is None:
                     show_error(reason)
                     continue
+                if not model_sees_images(Config.host, Config.model or ""):
+                    warn(
+                        f"{Config.model} reports no vision support; "
+                        "sending it anyway, but expect an error."
+                    )
 
                 # Fall through to the normal send path below with UIN
                 # replaced by the prompt and PENDING_IMAGES attached.
@@ -930,6 +941,7 @@ def main() -> None:
             tool_outputs = []
             followup = ""
             tool_error = None
+            sent_tool_images = False
 
             for _ in range(Config.max_tool_rounds):
                 assistant_tool_calls = []
@@ -958,6 +970,7 @@ def main() -> None:
 
                 tool_images = take_pending_images()
                 if tool_images:
+                    sent_tool_images = True
                     tool_messages.append(
                         _message("system", TOOL_IMAGE_NOTE, tool_images)
                     )
@@ -977,6 +990,8 @@ def main() -> None:
 
             if tool_error:
                 _print_backend_error(tool_error)
+                if sent_tool_images:
+                    warn(IMAGE_BACKEND_HINT)
                 continue
 
             if not followup.strip():
