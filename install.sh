@@ -107,9 +107,10 @@ echo ""
 echo "Registering the flash:// URL handler..."
 "$FLASH_BIN" --register-url-scheme || \
     echo "Unable to install flash:// URL handler. Continuing."
+FLASH_VERSION="$(flash --version)"
 
 echo ""
-echo "=== flash installed via pipx. ==="
+echo "=== $FLASH_VERSION installed via pipx. ==="
 
 case ":$PATH:" in
     *":$PIPX_BIN_DIR:"*)
