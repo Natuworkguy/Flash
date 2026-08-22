@@ -6,9 +6,11 @@ from flash import images, tools
 from flash.tools import (
     glob_tool,
     grep_tool,
+    read_tool,
     shell_tool,
     take_pending_images,
     view_image,
+    write_tool,
 )
 
 
@@ -147,3 +149,81 @@ def test_view_image_refuses_a_model_without_vision(tmp_path, monkeypatch):
     result = view_image(str(image))
     assert "no vision support" in result  # nosec B101
     assert take_pending_images() == []  # nosec B101
+
+
+def test_read_tool_numbers_lines(tmp_path):
+    target = tmp_path / "renderer.py"
+    target.write_text("\n".join(f"line {i}" for i in range(1, 21)))
+
+    result = read_tool(str(target), offset=2, limit=19)
+
+    assert "     2\tline 2" in result  # nosec B101
+    assert "    20\tline 20" in result  # nosec B101
+    assert "line 1\n" not in result  # nosec B101
+
+
+def test_read_tool_reports_remaining_lines(tmp_path):
+    target = tmp_path / "long.txt"
+    target.write_text("\n".join(str(i) for i in range(1, 11)))
+
+    result = read_tool(str(target), limit=4)
+
+    assert "6 more lines" in result  # nosec B101
+    assert "offset=5" in result  # nosec B101
+
+
+def test_read_tool_offset_past_end(tmp_path):
+    target = tmp_path / "short.txt"
+    target.write_text("only one line")
+
+    result = read_tool(str(target), offset=99)
+
+    assert "past the end" in result  # nosec B101
+
+
+def test_read_tool_missing_and_directory(tmp_path):
+    assert "not found" in read_tool(str(tmp_path / "nope.txt"))  # nosec B101
+    assert "is a directory" in read_tool(str(tmp_path))  # nosec B101
+
+
+def test_write_tool_creates_file(tmp_path, monkeypatch):
+    monkeypatch.setattr(tools, "NO_COMMAND_CONFIRMATION", True)
+    target = tmp_path / "new" / "file.py"
+
+    result = write_tool(str(target), "print(1)\nprint(2)\n")
+
+    assert target.read_text() == "print(1)\nprint(2)\n"  # nosec B101
+    assert "Created 2 lines" in result  # nosec B101
+
+
+def test_write_tool_preserves_newlines_verbatim(tmp_path, monkeypatch):
+    monkeypatch.setattr(tools, "NO_COMMAND_CONFIRMATION", True)
+    target = tmp_path / "verbatim.txt"
+
+    write_tool(str(target), "a\nb\n")
+
+    assert target.read_bytes() == b"a\nb\n"  # nosec B101
+
+
+def test_write_tool_blocked_leaves_file_untouched(tmp_path, monkeypatch):
+    monkeypatch.setattr(tools, "NO_COMMAND_CONFIRMATION", False)
+    monkeypatch.setattr("builtins.input", lambda: "n")
+    target = tmp_path / "keep.txt"
+    target.write_text("original")
+
+    result = write_tool(str(target), "replaced")
+
+    assert target.read_text() == "original"  # nosec B101
+    assert "blocked by user" in result  # nosec B101
+
+
+def test_diff_preview_counts_changes():
+    preview, omitted, additions, removals = tools._diff_preview(
+        "a\nb\nc", "a\nB\nc", "f.txt"
+    )
+
+    assert additions == 1  # nosec B101
+    assert removals == 1  # nosec B101
+    assert omitted == 0  # nosec B101
+    assert "-b" in preview  # nosec B101
+    assert "+B" in preview  # nosec B101

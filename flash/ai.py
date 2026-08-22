@@ -251,8 +251,16 @@ def _direct_shell_command(
     return None
 
 
-def _trim_tool_output(text: str) -> str:
+# read already caps its own output by whole lines and tells the model how
+# to page on; the middle-out trim below would silently gut a file read.
+_SELF_LIMITING_TOOLS = {"read"}
+
+
+def _trim_tool_output(text: str, name: str = "") -> str:
     text = text.strip() or "(no output)"
+
+    if name in _SELF_LIMITING_TOOLS:
+        return text
 
     if len(text) <= Config.max_tool_output_chars:
         return text
@@ -965,7 +973,7 @@ def main() -> None:
                 for call in tool_calls:
                     name, call_args = _tool_call_name_args(call)
                     tool_result = run_tool((name, call_args))
-                    trimmed = _trim_tool_output(tool_result)
+                    trimmed = _trim_tool_output(tool_result, name)
                     tool_outputs.append(f"{name}:\n{trimmed}")
                     tool_messages.append({
                         "role": "tool",

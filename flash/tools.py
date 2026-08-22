@@ -1,5 +1,6 @@
 """AI Tool System"""
 
+import difflib
 import fnmatch
 import os
 import platform
@@ -20,7 +21,18 @@ from .images import resolve_image_path
 from .memory import add_memory, forget_memory, search_memory
 from .notify import notify_needs_input
 from .sysprompt import get_system_prompt, model_sees_images
-from .theme import ACCENT, DIM, ERROR, WARN, console, tool_line, tool_result
+from .theme import (
+    ACCENT,
+    BRANCH,
+    DIM,
+    ERROR,
+    WARN,
+    console,
+    plural,
+    tool_diff,
+    tool_line,
+    tool_result,
+)
 
 SCRATCH_DIR = mkdtemp(prefix="flash-scratch-", suffix="-temp")
 
@@ -33,6 +45,14 @@ When searching a codebase or directory for files by name or pattern, use
   a pattern, use the grep tool instead of shell grep/rg. Both are read-only,
   faster, and work the same on every platform, so prefer them over shell
   for search whenever they cover the need.
+To look at a file's contents, use the read tool instead of shell
+  cat/sed/head/type. It numbers the lines and pages through long files with
+  its offset argument.
+To create or change a file, use the write tool instead of shell redirection,
+  heredocs, or Set-Content. It needs no quoting or escaping and works the
+  same on every platform, so shell quoting can never corrupt the content.
+  It replaces the whole file, so read the file first when editing one, and
+  pass back the complete new contents.
 When searching for recent information, use the web_search tool.
 When you need to know the user's operating system, use the get_os tool.
 To think or plan mid-task without ending your turn, use the reason tool.
@@ -417,6 +437,194 @@ def grep_tool(
     return result
 
 
+DEFAULT_READ_LINES = 200
+MAX_READ_LINES = 2000
+MAX_READ_LINE_LENGTH = 2000
+MAX_READ_OUTPUT_CHARS = 20000
+MAX_DIFF_PREVIEW_LINES = 40
+
+
+def _read_lines(file_path: Path) -> Union[list[str], str]:  # noqa: UP007
+    """Split a text file into lines, or return an error string."""
+
+    try:
+        text = file_path.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        return (
+            f"Error: {file_path} is not a UTF-8 text file. Use view_image "
+            "for images."
+        )
+    except OSError as exc:
+        return f"Error: could not read {file_path}: {exc}"
+
+    return text.splitlines()
+
+
+def read_tool(
+    path: str,
+    offset: Union[int, None] = None,  # noqa: UP007, RUF100
+    limit: Union[int, None] = None,  # noqa: UP007, RUF100
+) -> str:
+    """Tool to read a text file, numbered by line."""
+
+    start = max(1, offset or 1)
+    count = min(max(1, limit or DEFAULT_READ_LINES), MAX_READ_LINES)
+
+    label = f"Read({path})"
+    if offset or limit:
+        label += f" lines {start}-{start + count - 1}"
+    tool_line(label)
+
+    file_path = Path(path).expanduser()
+    if not file_path.exists():
+        result = f"Error: file not found: {file_path}"
+        tool_result(result, style=ERROR)
+        return result
+    if file_path.is_dir():
+        result = f"Error: {file_path} is a directory, not a file."
+        tool_result(result, style=ERROR)
+        return result
+
+    lines = _read_lines(file_path)
+    if isinstance(lines, str):
+        tool_result(lines, style=ERROR)
+        return lines
+
+    total = len(lines)
+    if total == 0:
+        tool_result("Empty file.")
+        return "(empty file)"
+    if start > total:
+        result = (
+            f"Error: offset {start} is past the end of {file_path} "
+            f"({total} lines)."
+        )
+        tool_result(result, style=ERROR)
+        return result
+
+    selected = lines[start - 1:start - 1 + count]
+
+    numbered = []
+    chars = 0
+    for offset_index, line in enumerate(selected):
+        if len(line) > MAX_READ_LINE_LENGTH:
+            line = line[:MAX_READ_LINE_LENGTH] + "..."
+        entry = f"{start + offset_index:>6}\t{line}"
+        chars += len(entry) + 1
+        if chars > MAX_READ_OUTPUT_CHARS:
+            break
+        numbered.append(entry)
+
+    last = start + len(numbered) - 1
+    result = "\n".join(numbered)
+    if last < total:
+        result += (
+            f"\n\n... {total - last} more line{plural(total - last)}; "
+            f"read again with offset={last + 1} to continue."
+        )
+
+    tool_result(
+        f"{len(numbered)} line{plural(len(numbered))} "
+        f"({start}-{last} of {total})"
+    )
+    return result
+
+
+def _diff_preview(old_text: str, new_text: str, name: str) -> tuple[
+    list[str], int, int, int
+]:
+    """Unified diff of a pending write, capped for display.
+
+    Returns (preview_lines, omitted_line_count, additions, removals).
+    """
+
+    diff = list(difflib.unified_diff(
+        old_text.splitlines(),
+        new_text.splitlines(),
+        fromfile=name,
+        tofile=name,
+        lineterm="",
+        n=2,
+    ))
+    # Drop the ---/+++ header; the tool line already names the file.
+    body = diff[2:] if len(diff) > 2 else diff
+
+    # The ---/+++ header is already gone, so every +/- line is a real one.
+    additions = sum(1 for line in body if line.startswith("+"))
+    removals = sum(1 for line in body if line.startswith("-"))
+    omitted = max(0, len(body) - MAX_DIFF_PREVIEW_LINES)
+
+    return body[:MAX_DIFF_PREVIEW_LINES], omitted, additions, removals
+
+
+def write_tool(path: str, content: str) -> str:
+    """Tool to write a text file, showing a diff and asking to confirm."""
+
+    tool_line(f"Write({path})")
+
+    file_path = Path(path).expanduser()
+    if file_path.is_dir():
+        result = f"Error: {file_path} is a directory, not a file."
+        tool_result(result, style=ERROR)
+        return result
+
+    existed = file_path.exists()
+    if existed:
+        old_lines = _read_lines(file_path)
+        if isinstance(old_lines, str):
+            tool_result(old_lines, style=ERROR)
+            return old_lines
+        old_text = "\n".join(old_lines)
+    else:
+        old_text = ""
+
+    preview, omitted, additions, removals = _diff_preview(
+        old_text, content, file_path.name
+    )
+
+    if not existed:
+        new_lines = len(content.splitlines())
+        summary = f"New file, {new_lines} line{plural(new_lines)}"
+    elif not preview:
+        summary = "No changes"
+    else:
+        summary = (
+            f"{additions} addition{plural(additions)}, "
+            f"{removals} removal{plural(removals)}"
+        )
+    tool_result(summary)
+    tool_diff(preview, more=omitted)
+
+    if not NO_COMMAND_CONFIRMATION:
+        notify_needs_input()
+
+        prompt = Text(f"  {BRANCH}  ", style=DIM)
+        prompt.append("Write this file? ", style=DIM)
+        prompt.append("y", style=f"bold {ACCENT}")
+        prompt.append("/n ", style=DIM)
+        console.print(prompt, end="")
+
+        if input().strip().lower() != "y":
+            tool_result("Write blocked by user", style=WARN)
+            return "Write blocked by user"
+
+    try:
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+        # newline="" so the model's content lands byte-for-byte, instead of
+        # every \n becoming \r\n on Windows.
+        with open(file_path, "w", encoding="utf-8", newline="") as handle:
+            handle.write(content)
+    except OSError as exc:
+        result = f"Error: could not write {file_path}: {exc}"
+        tool_result(result, style=ERROR)
+        return result
+
+    written = len(content.splitlines())
+    verb = "Wrote" if existed else "Created"
+    tool_result(f"{verb} {written} line{plural(written)}")
+    return f"{verb} {written} line{plural(written)} to {file_path}"
+
+
 def web_search(query: str, max_results: int) -> str:
     """Search the web and return the top DuckDuckGo results."""
 
@@ -671,6 +879,83 @@ tools = [
     {
         "type": "function",
         "function": {
+            "name": "read",
+            "description": (
+                "Read a text file, returned with line numbers. Read-only "
+                "and cross-platform; prefer this over shell cat/sed/head "
+                "when you need a file's contents. Returns at most "
+                f"{DEFAULT_READ_LINES} lines per call, so use offset to "
+                "page through a longer file."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": (
+                            "Path to the file, e.g. 'flash/renderer.py'."
+                        ),
+                    },
+                    "offset": {
+                        "type": "integer",
+                        "description": (
+                            "1-based line number to start at. Defaults to "
+                            "the first line."
+                        ),
+                        "minimum": 1,
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": (
+                            "How many lines to read. Defaults to "
+                            f"{DEFAULT_READ_LINES}, maximum "
+                            f"{MAX_READ_LINES}."
+                        ),
+                        "minimum": 1,
+                        "maximum": MAX_READ_LINES,
+                    },
+                },
+                "required": ["path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "write",
+            "description": (
+                "Write a text file, replacing it if it exists. The user "
+                "sees a diff and confirms before anything is written. "
+                "Cross-platform and needs no quoting or escaping; prefer "
+                "this over shell redirection or heredocs for every file "
+                "you create or change. Read the file first when editing "
+                "one, since this replaces the whole file."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": (
+                            "Path to the file, e.g. 'flash/renderer.py'. "
+                            "Missing parent directories are created."
+                        ),
+                    },
+                    "content": {
+                        "type": "string",
+                        "description": (
+                            "The file's full new contents, exactly as it "
+                            "should land on disk."
+                        ),
+                    },
+                },
+                "required": ["path", "content"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "view_image",
             "description": (
                 "Look at an image file on disk (.png, .jpg, .jpeg, .webp, "
@@ -840,6 +1125,8 @@ FUNCTIONS = {
     "shell": shell_tool,
     "glob": glob_tool,
     "grep": grep_tool,
+    "read": read_tool,
+    "write": write_tool,
     "view_image": view_image,
     "web_search": web_search,
     "get_os": get_os,
