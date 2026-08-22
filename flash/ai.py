@@ -972,7 +972,7 @@ def main() -> None:
                 if tool_images:
                     sent_tool_images = True
                     tool_messages.append(
-                        _message("system", TOOL_IMAGE_NOTE, tool_images)
+                        _message("user", TOOL_IMAGE_NOTE, tool_images)
                     )
 
                 final, tool_calls, err = _chat_retry_until_response(
