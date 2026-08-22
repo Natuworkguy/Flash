@@ -72,7 +72,7 @@ if ! command -v pipx >/dev/null 2>&1; then
             exit 1
         fi
     elif command -v brew >/dev/null 2>&1; then
-        if ! brew install pipx; then
+        if ! brew install -y pipx; then
             echo "Failed to install pipx via brew."
             exit 1
         fi
