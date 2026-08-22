@@ -642,7 +642,7 @@ def web_search(query: str, max_results: int) -> str:
 
     count = results.count("\n\n") + 1 if results else 0
     tool_result(
-        f"{count} result{'s' if count != 1 else ''}"
+        f"{count} result{plural(count)}"
         if count else "No results found."
     )
 
