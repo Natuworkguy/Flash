@@ -26,6 +26,7 @@ from .memory import forget_memory, list_memory
 from .notify import notify_reply_ready
 from .paths import ENV_PATH
 from .repl_input import COMMANDS, IMAGE_EXTENSIONS, read_line
+from .sysprompt import get_model_system_prompt
 from .theme import (
     ACCENT,
     ACCENT_ANSI,
@@ -45,7 +46,7 @@ from .theme import error as show_error
 from .tools import (
     MAX_SHELL_TIMEOUT,
     SCRATCH_DIR,
-    SYSTEM_PROMPT,
+    build_system_prompt,
     init,
     run_tool,
     shell_tool,
@@ -301,6 +302,26 @@ def _chat(client: "ollama.Client", messages: list, tools_arg=None):
         tools=tools_arg,
         options={"num_predict": Config.max_output_tokens},
     )
+
+
+_model_system_prompts: dict[str, str] = {}
+
+
+def _session_system_prompt() -> str:
+    """Flash's system prompt, with the current model's own prepended.
+
+    Cached per model name, since /api/show costs a round trip and the
+    answer only changes when the model does.
+    """
+
+    model = Config.model or ""
+
+    if model not in _model_system_prompts:
+        _model_system_prompts[model] = get_model_system_prompt(
+            Config.host, model
+        )
+
+    return build_system_prompt(_model_system_prompts[model])
 
 
 def _load_states(key: str, fallback: list[str]) -> list[str]:
@@ -647,7 +668,6 @@ def main() -> None:
     client = ollama.Client(host=Config.host)
 
     messages: list = []
-    system_message = _message("system", SYSTEM_PROMPT)
 
     banner(console, check_for_update())
 
@@ -743,6 +763,7 @@ def main() -> None:
 
             if uin == "/refresh":
                 refresh_config()
+                _model_system_prompts.clear()
                 client = ollama.Client(host=Config.host)
                 console.print(Text("Config refreshed.", style=DIM))
                 continue
@@ -872,6 +893,8 @@ def main() -> None:
 
             messages.append(_message("user", uin, pending_images))
             _trim_history(messages)
+
+            system_message = _message("system", _session_system_prompt())
 
             final, tool_calls, err = _chat_retry_until_response(
                 console, client, [system_message] + messages, tools,

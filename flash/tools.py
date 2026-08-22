@@ -62,6 +62,8 @@ only to get a more precise day if a task needs one.
 """.strip()
 
 SYSTEM_PROMPT = f"""
+=== System Prompt ===
+
 {get_system_prompt()}
 {TOOL_SYSTEM_PROMPT}
 {CURRENT_DATE_PROMPT}
@@ -69,6 +71,21 @@ SYSTEM_PROMPT = f"""
 
 You are now being transferred to a user.
 """.strip()
+
+
+def build_system_prompt(model_prompt: str = "") -> str:
+    """Prepend the model's own system prompt to Flash's, when it has one."""
+
+    model_prompt = model_prompt.strip()
+
+    if not model_prompt:
+        return SYSTEM_PROMPT
+
+    return (
+        "=== Model System Prompt ===\n\n"
+        f"{model_prompt}\n\n"
+        f"{SYSTEM_PROMPT}"
+    )
 
 
 DEFAULT_SHELL_TIMEOUT = 15
