@@ -1,3 +1,5 @@
+# name: flash-onyx-2
+# sizes: 12b, 31b
 FROM gemma4:12b
 
 SYSTEM """

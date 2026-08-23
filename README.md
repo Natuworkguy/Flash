@@ -71,24 +71,27 @@ Or, if you already have the repo cloned locally:
 
 ### Flash Onyx (recommended model)
 
-**Flash Onyx** is a series of custom Ollama models built for Flash. The current
-release, [**Flash Onyx 1**](https://ollama.com/Natuworkguy/flash-onyx-1), is `llama3.1` with Flash's persona and tuned
-parameters baked in.
+**Flash Onyx** is a series of custom Ollama models built for Flash: a base
+model with Flash's persona and tuned parameters baked in. Each one lives in a
+single Modelfile under `models/` that declares its name and sizes at the top,
+and `models/build.py` builds whatever a Modelfile declares.
 
-Pull it straight from the registry:
-
-```bash
-ollama pull Natuworkguy/flash-onyx-1
-```
-
-Or build it from the repo:
+The current release, **Flash Onyx 2**, is `gemma4` in two sizes. `12b` runs on
+consumer hardware; `31b` is the flagship and wants a bigger GPU.
 
 ```bash
-ollama create flash-onyx-1 -f models/flash-onyx-1.Modelfile
+python3 models/build.py models/flash-onyx-2.Modelfile             # every size
+python3 models/build.py models/flash-onyx-2.Modelfile --size 31b  # just one
 ```
 
-Then set `MODEL` to whichever you used (`Natuworkguy/flash-onyx-1` or
-`flash-onyx-1`) in `~/.flash.env` or your environment.
+**Flash Onyx 1** is the previous release, built on `llama3.1`:
+
+```bash
+python3 models/build.py models/flash-onyx-1.Modelfile
+```
+
+Then set `MODEL` to whichever you built (`flash-onyx-2:31b`, `flash-onyx-1`,
+and so on) in `~/.flash.env` or your environment.
 
 ### Run
 
