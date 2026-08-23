@@ -96,6 +96,18 @@ pipx install --force "$REPO_DIR"
 
 PIPX_BIN_DIR="$(pipx environment --value PIPX_BIN_DIR 2>/dev/null || echo "$HOME/.local/bin")"
 
+PIPX_VENVS="$(pipx environment --value PIPX_LOCAL_VENVS 2>/dev/null || echo "")"
+VENV_PYTHON="$PIPX_VENVS/flash/bin/python"
+
+echo ""
+echo "Downloading the headless browser used for page screenshots..."
+if [ -x "$VENV_PYTHON" ]; then
+    "$VENV_PYTHON" -m playwright install chromium || \
+        echo "Download failed. Screenshots stay unavailable until it succeeds."
+else
+    echo "Could not find the flash environment. Screenshots need chromium."
+fi
+
 # Register the flash:// URL handler. Unsupported on macOS, and harmless to
 # skip anywhere else, so never fail the install over it.
 FLASH_BIN="$PIPX_BIN_DIR/flash"

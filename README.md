@@ -13,6 +13,7 @@ FLASH (**F**ast **L**ocal **A**gent **SH**ell) CLI is an AI-powered command-line
   - Manually execute shell commands using the `!` prefix.
 - **`flash://` Links**: Open Flash from a browser or another app with a prompt ready to go (`flash://?prompt=What+is+Python`).
 - **Image Recognition**: Send a local image to a vision-capable model with `/image <path> [prompt]`, or let the AI open one itself with its `view_image` tool.
+- **Page Screenshots**: The AI renders a page it built in a headless browser with its `screenshot` tool and looks at the result, so it can see a broken layout instead of guessing from the HTML.
 - **Context Management**: Automatic history trimming to stay within token limits.
 - **Markdown Support**: Rich formatting for AI responses in the terminal.
 
@@ -163,6 +164,30 @@ Why does the legend in ~/Desktop/plot.png overlap the bars?
 
 It accepts the same file types (up to 20 MB) and sees the image for that
 turn only, calling `view_image` again later if it needs another look.
+
+### Page screenshots
+
+The `screenshot` tool renders a local `.html` file or a URL in a headless
+Chromium and attaches the picture, so a vision-capable model can check
+what it built rather than trusting its own source:
+
+```
+Build me a pricing page in ~/Desktop/pricing.html, then check how it
+looks on a phone.
+```
+
+It takes a viewport `width` and `height`, captures the whole scrollable
+page with `full_page`, and reports any JavaScript errors the page threw
+while rendering, which is usually what explains a section that came out
+empty.
+
+Screenshots need Playwright's Chromium, which `install.sh` and
+`install.ps1` download for you. Installing Flash another way means
+running it yourself:
+
+```bash
+playwright install chromium
+```
 
 ### Updates
 

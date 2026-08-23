@@ -2,11 +2,12 @@
 
 import subprocess  # nosec B404
 
-from flash import images, tools
+from flash import browser, images, tools
 from flash.tools import (
     glob_tool,
     grep_tool,
     read_tool,
+    screenshot,
     shell_tool,
     take_pending_images,
     view_image,
@@ -149,6 +150,128 @@ def test_view_image_refuses_a_model_without_vision(tmp_path, monkeypatch):
     result = view_image(str(image))
     assert "no vision support" in result  # nosec B101
     assert take_pending_images() == []  # nosec B101
+
+
+def _fake_capture(png=b"png bytes", problems=(), error=""):
+    """Stand in for a real Chromium run, writing the file it promises."""
+
+    def capture(_url, out, **_kwargs):
+        if not error:
+            out.write_bytes(png)
+
+        return list(problems), error
+
+    return capture
+
+
+def test_screenshot_queues_the_rendered_page(tmp_path, monkeypatch):
+    take_pending_images()
+    monkeypatch.setattr(tools, "MODEL_NAME", "")
+    monkeypatch.setattr(tools, "SCRATCH_DIR", str(tmp_path))
+    monkeypatch.setattr(tools, "capture", _fake_capture())
+    page = tmp_path / "index.html"
+    page.write_text("<h1>hi</h1>")
+
+    result = screenshot(str(page))
+    assert "Rendered file://" in result  # nosec B101
+    assert take_pending_images() == [b"png bytes"]  # nosec B101
+
+
+def test_screenshot_reports_page_errors(tmp_path, monkeypatch):
+    take_pending_images()
+    monkeypatch.setattr(tools, "MODEL_NAME", "")
+    monkeypatch.setattr(tools, "SCRATCH_DIR", str(tmp_path))
+    monkeypatch.setattr(
+        tools,
+        "capture",
+        _fake_capture(problems=["page error: boom is not defined"]),
+    )
+    page = tmp_path / "broken.html"
+    page.write_text("<script>boom()</script>")
+
+    result = screenshot(str(page))
+    assert "boom is not defined" in result  # nosec B101
+    assert take_pending_images() == [b"png bytes"]  # nosec B101
+
+
+def test_screenshot_clamps_an_absurd_viewport(tmp_path, monkeypatch):
+    take_pending_images()
+    monkeypatch.setattr(tools, "MODEL_NAME", "")
+    monkeypatch.setattr(tools, "SCRATCH_DIR", str(tmp_path))
+    seen = {}
+
+    def capture(_url, out, **kwargs):
+        seen.update(kwargs)
+        out.write_bytes(b"png")
+        return [], ""
+
+    monkeypatch.setattr(tools, "capture", capture)
+    page = tmp_path / "index.html"
+    page.write_text("<h1>hi</h1>")
+
+    screenshot(str(page), width=999999, height=0, wait_ms="soon")
+    assert seen["width"] == tools.MAX_SCREENSHOT_SIDE  # nosec B101
+    assert seen["height"] == tools.MIN_SCREENSHOT_SIDE  # nosec B101
+    assert seen["wait_ms"] == tools.DEFAULT_SCREENSHOT_WAIT_MS  # nosec B101
+
+
+def test_screenshot_surfaces_a_capture_failure(tmp_path, monkeypatch):
+    take_pending_images()
+    monkeypatch.setattr(tools, "MODEL_NAME", "")
+    monkeypatch.setattr(tools, "SCRATCH_DIR", str(tmp_path))
+    monkeypatch.setattr(
+        tools,
+        "capture",
+        _fake_capture(error=browser.BROWSER_HINT),
+    )
+    page = tmp_path / "index.html"
+    page.write_text("<h1>hi</h1>")
+
+    result = screenshot(str(page))
+    assert "playwright install chromium" in result  # nosec B101
+    assert take_pending_images() == []  # nosec B101
+
+
+def test_screenshot_refuses_a_model_without_vision(tmp_path, monkeypatch):
+    take_pending_images()
+    monkeypatch.setattr(tools, "MODEL_NAME", "text-only")
+    monkeypatch.setattr(tools, "model_sees_images", lambda *_: False)
+    page = tmp_path / "index.html"
+    page.write_text("<h1>hi</h1>")
+
+    result = screenshot(str(page))
+    assert "no vision support" in result  # nosec B101
+    assert take_pending_images() == []  # nosec B101
+
+
+def test_resolve_target_accepts_urls_and_local_pages(tmp_path):
+    assert browser.resolve_target("https://example.com") == (  # nosec B101
+        "https://example.com",
+        "",
+    )
+
+    page = tmp_path / "index.html"
+    page.write_text("<h1>hi</h1>")
+    url, why = browser.resolve_target(str(page))
+    assert why == ""  # nosec B101
+    assert url is not None  # nosec B101
+    assert url.startswith("file://")  # nosec B101
+
+
+def test_resolve_target_rejects_what_it_cannot_render(tmp_path):
+    _, why = browser.resolve_target(str(tmp_path / "missing.html"))
+    assert "Page not found" in why  # nosec B101
+
+    _, why = browser.resolve_target(str(tmp_path))
+    assert "is a directory" in why  # nosec B101
+
+    script = tmp_path / "app.py"
+    script.write_text("print('hi')")
+    _, why = browser.resolve_target(str(script))
+    assert "not a page Flash can render" in why  # nosec B101
+
+    _, why = browser.resolve_target("ftp://example.com/page.html")
+    assert "Cannot open a 'ftp:' URL" in why  # nosec B101
 
 
 def test_read_tool_numbers_lines(tmp_path):

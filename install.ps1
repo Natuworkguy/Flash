@@ -131,6 +131,20 @@ try {
         $PipxBinDir = Join-Path $env:USERPROFILE ".local\bin"
     }
 
+    $PipxVenvs = & $PipxCmd environment --value PIPX_LOCAL_VENVS 2>$null
+    $VenvPython = Join-Path $PipxVenvs "flash\Scripts\python.exe"
+
+    Write-Host ""
+    Write-Host "Downloading the headless browser used for page screenshots..."
+    if (Test-Path $VenvPython) {
+        & $VenvPython -m playwright install chromium
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "Download failed. Screenshots stay unavailable until it succeeds."
+        }
+    } else {
+        Write-Host "Could not find the flash environment. Screenshots need chromium."
+    }
+
     # Register the flash:// URL handler. Never fail the install over it.
     $FlashExe = Join-Path $PipxBinDir "flash.exe"
     if (-not (Test-Path $FlashExe)) {

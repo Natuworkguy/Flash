@@ -12,11 +12,12 @@ import time
 from datetime import datetime
 from pathlib import Path
 from tempfile import mkdtemp
-from typing import Union
+from typing import Any, Union
 
 from ddgs import DDGS
 from rich.text import Text
 
+from .browser import capture, resolve_target
 from .images import resolve_image_path
 from .memory import add_memory, forget_memory, search_memory
 from .notify import notify_needs_input
@@ -60,6 +61,18 @@ When you need the current date, use the get_date tool.
 To look at an image file on disk, use the view_image tool with its path;
   it is the only way to see an image the user did not send with /image.
   Reading image bytes with shell or grep shows you nothing.
+To see how a web page actually renders, use the screenshot tool on the
+  .html file you wrote or on a URL. It runs a headless browser and
+  attaches the picture, so it is the only way to check a page you built;
+  reading the source back shows you what you asked for, never what you
+  got. Call it after writing a page, after every visual edit, and again
+  after each fix, before you report the work done. width and height set
+  the viewport (default 1280x800; use width=375 for the phone layout),
+  full_page captures the whole scrollable page, and wait_ms gives a slow
+  or animated page longer to settle. It also reports the JavaScript
+  errors the page threw, which is what usually explains a blank section,
+  so read those before changing any CSS. Serve the page over HTTP with
+  shell first if it needs fetch or ES modules, which file:// blocks.
 To save a durable fact or preference for future sessions, use the remember
   tool. To check saved memory, use the recall tool with a specific phrase;
   it does not return everything for a blank search. To delete one saved
@@ -775,6 +788,121 @@ def view_image(path: str) -> str:
     )
 
 
+DEFAULT_SCREENSHOT_WIDTH = 1280
+DEFAULT_SCREENSHOT_HEIGHT = 800
+MIN_SCREENSHOT_SIDE = 200
+MAX_SCREENSHOT_SIDE = 4000
+DEFAULT_SCREENSHOT_WAIT_MS = 2000
+MAX_SCREENSHOT_WAIT_MS = 20000
+MAX_PAGE_PROBLEMS = 5
+
+_screenshot_count = 0
+
+
+def _clamp(value: Any, low: int, high: int, fallback: int) -> int:
+    """Coerce a model-supplied number into `low..high`.
+
+    Arguments arrive as whatever the model put in its JSON, so `value`
+    is deliberately untyped: a string, a float, or nothing at all all
+    fall back to the default rather than raising mid-call.
+    """
+
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return fallback
+
+    return max(low, min(high, number))
+
+
+def screenshot(
+    target: str,
+    width: Any = DEFAULT_SCREENSHOT_WIDTH,
+    height: Any = DEFAULT_SCREENSHOT_HEIGHT,
+    full_page: Any = False,
+    wait_ms: Any = DEFAULT_SCREENSHOT_WAIT_MS,
+) -> str:
+    """Render a page in a headless browser and attach the picture."""
+
+    global _screenshot_count
+
+    view_width = _clamp(width, MIN_SCREENSHOT_SIDE, MAX_SCREENSHOT_SIDE,
+                        DEFAULT_SCREENSHOT_WIDTH)
+    view_height = _clamp(height, MIN_SCREENSHOT_SIDE,
+                         MAX_SCREENSHOT_SIDE, DEFAULT_SCREENSHOT_HEIGHT)
+    settle_ms = _clamp(wait_ms, 0, MAX_SCREENSHOT_WAIT_MS,
+                       DEFAULT_SCREENSHOT_WAIT_MS)
+    whole_page = bool(full_page)
+
+    shape = f"{view_width}x{view_height}"
+    if whole_page:
+        shape += " full page"
+    tool_line(f"Screenshot({target}, {shape})")
+
+    url, why = resolve_target(target)
+    if url is None:
+        result = f"Error: {why}"
+        tool_result(result, style=ERROR)
+        return result
+
+    if not model_sees_images(OLLAMA_HOST, MODEL_NAME):
+        result = (
+            f"Error: the active model ({MODEL_NAME}) has no vision "
+            "support, so it cannot be shown a screenshot. Tell the user to "
+            "switch to a vision-capable model with /model."
+        )
+        tool_result(result, style=ERROR)
+        return result
+
+    _screenshot_count += 1
+    out = Path(SCRATCH_DIR) / f"screenshot-{_screenshot_count}.png"
+
+    problems, why = capture(
+        url,
+        out,
+        width=view_width,
+        height=view_height,
+        full_page=whole_page,
+        wait_ms=settle_ms,
+    )
+
+    if why:
+        result = f"Error: {why}"
+        tool_result(result, style=ERROR)
+        return result
+
+    data = out.read_bytes()
+    _pending_images.append(data)
+
+    kilobytes = max(1, round(len(data) / 1024))
+    tool_result(f"{shape} ({kilobytes} KB) {out.name}")
+
+    if problems:
+        for problem in problems[:MAX_PAGE_PROBLEMS]:
+            tool_result(problem, style=WARN)
+
+    result = (
+        f"Rendered {url} at {shape}. The screenshot is attached to this "
+        f"tool result and saved at {out}, so judge the page from what you "
+        "can actually see in it, not from the source you wrote."
+    )
+
+    if problems:
+        shown = problems[:MAX_PAGE_PROBLEMS]
+        extra = len(problems) - len(shown)
+        result += (
+            f"\n\nThe page reported {len(problems)} "
+            f"error{plural(len(problems))} while rendering, which may be why "
+            "it does not look right:\n"
+            + "\n".join(f"- {problem}" for problem in shown)
+        )
+
+        if extra:
+            result += f"\n- and {extra} more"
+
+    return result
+
+
 # Tool schema expected by Ollama function calling (OpenAI-style).
 tools = [
     {
@@ -983,6 +1111,75 @@ tools = [
     {
         "type": "function",
         "function": {
+            "name": "screenshot",
+            "description": (
+                "Render a web page in a headless browser and look at the "
+                "result. Takes a local .html file or a URL, and the picture "
+                "is attached to the conversation so you can see how the page "
+                "actually renders. Use it on every page you build or change, "
+                "and again at a narrow width to check it on a phone. "
+                "Reading the HTML source does not tell you what it looks "
+                "like."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "target": {
+                        "type": "string",
+                        "description": (
+                            "Path to a local page, e.g. './index.html', or "
+                            "a URL, e.g. 'http://localhost:8000'."
+                        ),
+                    },
+                    "width": {
+                        "type": "integer",
+                        "description": (
+                            "Viewport width in pixels. Defaults to "
+                            f"{DEFAULT_SCREENSHOT_WIDTH}. Use 375 to check "
+                            "the page on a phone."
+                        ),
+                        "minimum": MIN_SCREENSHOT_SIDE,
+                        "maximum": MAX_SCREENSHOT_SIDE,
+                    },
+                    "height": {
+                        "type": "integer",
+                        "description": (
+                            "Viewport height in pixels. Defaults to "
+                            f"{DEFAULT_SCREENSHOT_HEIGHT}. Only what fits in "
+                            "the viewport is captured, so raise it to see "
+                            "further down a long page."
+                        ),
+                        "minimum": MIN_SCREENSHOT_SIDE,
+                        "maximum": MAX_SCREENSHOT_SIDE,
+                    },
+                    "full_page": {
+                        "type": "boolean",
+                        "description": (
+                            "Capture the whole scrollable page instead of "
+                            "just the viewport. Use it to check a long page "
+                            "end to end; leave it off to see the fold the "
+                            "way a visitor first does."
+                        ),
+                    },
+                    "wait_ms": {
+                        "type": "integer",
+                        "description": (
+                            "Milliseconds to let the page load and animate "
+                            "before capturing. Defaults to "
+                            f"{DEFAULT_SCREENSHOT_WAIT_MS}. Raise it for a "
+                            "page that fetches data or plays an intro."
+                        ),
+                        "minimum": 0,
+                        "maximum": MAX_SCREENSHOT_WAIT_MS,
+                    },
+                },
+                "required": ["target"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "web_search",
             "description": "Search the web and return summarized results.",
             "parameters": {
@@ -1128,6 +1325,7 @@ FUNCTIONS = {
     "read": read_tool,
     "write": write_tool,
     "view_image": view_image,
+    "screenshot": screenshot,
     "web_search": web_search,
     "get_os": get_os,
     "reason": reason,
