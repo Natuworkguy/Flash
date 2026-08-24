@@ -20,6 +20,7 @@ if os.name == "nt":
         from winotify import Notification  # type: ignore[import-untyped]
 
         _Notification = Notification
+        del Notification
     except Exception:  # noqa: BLE001
         _Notification = None
 
