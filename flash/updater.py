@@ -67,7 +67,7 @@ def is_pipx_install() -> bool:
     """True if the running `flash` command lives in a pipx venv."""
 
     exe = shutil.which("flash")
-    return bool(exe) and "pipx" in Path(exe).resolve().as_posix()
+    return bool(exe) and "pipx" in Path(exe or "").resolve().as_posix()
 
 
 def perform_update() -> tuple[bool, str]:

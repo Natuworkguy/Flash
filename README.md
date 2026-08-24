@@ -12,7 +12,8 @@ FLASH (**F**ast **L**ocal **A**gent **SH**ell) CLI is an AI-powered command-line
   - AI can use a `shell` tool to execute commands and see their output.
   - Manually execute shell commands using the `!` prefix.
 - **`flash://` Links**: Open Flash from a browser or another app with a prompt ready to go (`flash://?prompt=What+is+Python`).
-- **Image Recognition**: Send a local image to a vision-capable model with `/image <path> [prompt]`.
+- **Image Recognition**: Send a local image to a vision-capable model with `/image <path> [prompt]`, or let the AI open one itself with its `view_image` tool.
+- **Page Screenshots**: The AI renders a page it built in a headless browser with its `screenshot` tool and looks at the result, so it can see a broken layout instead of guessing from the HTML.
 - **Context Management**: Automatic history trimming to stay within token limits.
 - **Markdown Support**: Rich formatting for AI responses in the terminal.
 
@@ -71,24 +72,27 @@ Or, if you already have the repo cloned locally:
 
 ### Flash Onyx (recommended model)
 
-**Flash Onyx** is a series of custom Ollama models built for Flash. The current
-release, [**Flash Onyx 1**](https://ollama.com/Natuworkguy/flash-onyx-1), is `llama3.1` with Flash's persona and tuned
-parameters baked in.
+**Flash Onyx** is a series of custom Ollama models built for Flash: a base
+model with Flash's persona and tuned parameters baked in. Each one lives in a
+single Modelfile under `models/` that declares its name and sizes at the top,
+and `models/build.py` builds whatever a Modelfile declares.
 
-Pull it straight from the registry:
-
-```bash
-ollama pull Natuworkguy/flash-onyx-1
-```
-
-Or build it from the repo:
+The current release, **Flash Onyx 2**, is `gemma4` in two sizes. `12b` runs on
+consumer hardware; `31b` is the flagship and wants a bigger GPU.
 
 ```bash
-ollama create flash-onyx-1 -f models/flash-onyx-1.Modelfile
+python3 models/build.py models/flash-onyx-2.Modelfile             # every size
+python3 models/build.py models/flash-onyx-2.Modelfile --size 31b  # just one
 ```
 
-Then set `MODEL` to whichever you used (`Natuworkguy/flash-onyx-1` or
-`flash-onyx-1`) in `~/.flash.env` or your environment.
+**Flash Onyx 1** is the previous release, built on `llama3.1`:
+
+```bash
+python3 models/build.py models/flash-onyx-1.Modelfile
+```
+
+Then set `MODEL` to whichever you built (`flash-onyx-2:31b`, `flash-onyx-1`,
+and so on) in `~/.flash.env` or your environment.
 
 ### Run
 
@@ -151,6 +155,40 @@ ollama pull llama3.2-vision
 /image ~/Pictures/screenshot.png What's going on in this UI?
 ```
 
+The model can also open an image on its own with the `view_image` tool, so
+you can just name the file in a normal message and let it look:
+
+```
+Why does the legend in ~/Desktop/plot.png overlap the bars?
+```
+
+It accepts the same file types (up to 20 MB) and sees the image for that
+turn only, calling `view_image` again later if it needs another look.
+
+### Page screenshots
+
+The `screenshot` tool renders a local `.html` file or a URL in a headless
+Chromium and attaches the picture, so a vision-capable model can check
+what it built rather than trusting its own source:
+
+```
+Build me a pricing page in ~/Desktop/pricing.html, then check how it
+looks on a phone.
+```
+
+It takes a viewport `width` and `height`, captures the whole scrollable
+page with `full_page`, and reports any JavaScript errors the page threw
+while rendering, which is usually what explains a section that came out
+empty.
+
+Screenshots need Playwright's Chromium, which `install.sh` and
+`install.ps1` download for you. Installing Flash another way means
+running it yourself:
+
+```bash
+playwright install chromium
+```
+
 ### Updates
 
 Flash checks `main` on GitHub for a newer version on startup and shows it
@@ -211,4 +249,4 @@ Passing a `flash://` URL on the command line still works everywhere.
 
 ### AI Interaction
 
-Simply type your request. If the AI needs to see the contents of a file or run a command to answer your question, it can invoke the shell tool automatically. It can also search the web via Duck Duck Go and show it's reasoning.
+Simply type your request. If the AI needs to see the contents of a file or run a command to answer your question, it can invoke the shell tool automatically. It can also look at an image file with the `view_image` tool, search the web via Duck Duck Go, and show it's reasoning.

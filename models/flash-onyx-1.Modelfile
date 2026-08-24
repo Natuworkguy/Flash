@@ -1,3 +1,4 @@
+# name: flash-onyx-1
 FROM llama3.1
 
 SYSTEM """

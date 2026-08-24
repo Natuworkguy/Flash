@@ -14,6 +14,7 @@ from typing import Union
 import ollama
 from dotenv import load_dotenv
 from ollama import ResponseError
+from rich.cells import cell_len
 from rich.console import Console, Group
 from rich.live import Live
 from rich.markdown import Markdown
@@ -22,10 +23,12 @@ from rich.text import Text
 
 from .cli import parse_args
 from .envfile import set_env_var, unset_env_var
+from .images import resolve_image_path
 from .memory import forget_memory, list_memory
 from .notify import notify_reply_ready
 from .paths import ENV_PATH
-from .repl_input import COMMANDS, IMAGE_EXTENSIONS, read_line
+from .repl_input import COMMANDS, read_line
+from .sysprompt import get_model_system_prompt, model_sees_images
 from .theme import (
     ACCENT,
     ACCENT_ANSI,
@@ -45,10 +48,12 @@ from .theme import error as show_error
 from .tools import (
     MAX_SHELL_TIMEOUT,
     SCRATCH_DIR,
-    SYSTEM_PROMPT,
+    build_system_prompt,
     init,
+    reason,
     run_tool,
     shell_tool,
+    take_pending_images,
     tools,
 )
 from .updater import (
@@ -63,6 +68,20 @@ from .version import __version__
 OLLAMA_HOST_DEFAULT = "http://localhost:11434"
 ENV_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 DEFAULT_IMAGE_PROMPT = "Describe this image in detail."
+
+# Sent with the file view_image opened. The image rides on a user
+# message because that is where every vision model expects to find
+# one; a tool result carries only text.
+TOOL_IMAGE_NOTE = (
+    "Here is the image you opened with view_image. Answer from what "
+    "you can see in it."
+)
+
+IMAGE_BACKEND_HINT = (
+    "That request carried an image, which makes it much larger and needs "
+    "a vision-capable model. If it keeps failing, check the model with "
+    "`ollama show <model>` and that the backend is healthy."
+)
 
 load_dotenv(dotenv_path=ENV_PATH)
 
@@ -196,7 +215,7 @@ def banner(
 def _message(
     role: str,
     text: str,
-    images: Union[list[str], None] = None,  # noqa: UP007, RUF100
+    images: Union[list, None] = None,  # noqa: UP007, RUF100
 ) -> dict:
     message: dict = {"role": role, "content": text}
     if images:
@@ -233,8 +252,16 @@ def _direct_shell_command(
     return None
 
 
-def _trim_tool_output(text: str) -> str:
+# read already caps its own output by whole lines and tells the model how
+# to page on; the middle-out trim below would silently gut a file read.
+_SELF_LIMITING_TOOLS = {"read"}
+
+
+def _trim_tool_output(text: str, name: str = "") -> str:
     text = text.strip() or "(no output)"
+
+    if name in _SELF_LIMITING_TOOLS:
+        return text
 
     if len(text) <= Config.max_tool_output_chars:
         return text
@@ -261,16 +288,33 @@ def _tool_limit_message() -> dict:
     }
 
 
-def _response_parts(response) -> tuple[str, list]:
+def _response_parts(response) -> tuple[str, str, list]:
     message = getattr(response, "message", None)
 
     if message is None:
-        return "", []
+        return "", "", []
 
     text = getattr(message, "content", "") or ""
+    thinking = getattr(message, "thinking", "") or ""
     tool_calls = list(getattr(message, "tool_calls", None) or [])
 
-    return text, tool_calls
+    return text, thinking, tool_calls
+
+
+def _render_thinking(text: str) -> None:
+    """Show the reasoning a thinking model returns alongside its reply.
+
+    Ollama sends it in `message.thinking`, separate from the content, so
+    it only appears if something asks for it. The `reason` tool already
+    draws a thought, so hand it over rather than drawing it twice.
+    """
+
+    body = text.strip()
+
+    if not body:
+        return
+
+    reason(body)
 
 
 def _tool_call_name_args(call) -> tuple[str, dict]:
@@ -301,6 +345,26 @@ def _chat(client: "ollama.Client", messages: list, tools_arg=None):
         tools=tools_arg,
         options={"num_predict": Config.max_output_tokens},
     )
+
+
+_model_system_prompts: dict[str, str] = {}
+
+
+def _session_system_prompt() -> str:
+    """Flash's system prompt, with the current model's own prepended.
+
+    Cached per model name, since /api/show costs a round trip and the
+    answer only changes when the model does.
+    """
+
+    model = Config.model or ""
+
+    if model not in _model_system_prompts:
+        _model_system_prompts[model] = get_model_system_prompt(
+            Config.host, model
+        )
+
+    return build_system_prompt(_model_system_prompts[model])
 
 
 def _load_states(key: str, fallback: list[str]) -> list[str]:
@@ -345,6 +409,7 @@ GLIMMER_FRAME_SECONDS = 0.08
 
 MAX_CHAT_RETRIES = 2
 RETRY_DELAY_SECONDS = 2.0
+FINAL_RESPONSE_RETRIES = 2
 
 
 def _chat_with_retries(
@@ -428,6 +493,42 @@ def _chat_with_status(
         )
 
 
+def _chat_retry_until_response(
+    console: Console,
+    client: "ollama.Client",
+    messages: list,
+    tools_arg=None,
+    *,
+    is_image: bool = False,
+) -> tuple[str, str, list, Union[str, None]]:  # noqa: UP007, RUF100
+    """Call the model, retrying up to FINAL_RESPONSE_RETRIES times if it
+    comes back with neither reply text nor a tool call to make."""
+
+    final = ""
+    thinking = ""
+    tool_calls: list = []
+    for attempt in range(1, FINAL_RESPONSE_RETRIES + 2):
+        res, err = _chat_with_status(
+            console, client, messages, tools_arg, is_image=is_image
+        )
+        if err:
+            return "", "", [], err
+
+        final, thinking, tool_calls = _response_parts(res)
+        if final.strip() or tool_calls or attempt > FINAL_RESPONSE_RETRIES:
+            break
+
+        tool_line(
+            f"Retry({attempt}/{FINAL_RESPONSE_RETRIES}) no response yet"
+        )
+        messages = messages + [{
+            "role": "system",
+            "content": "Please provide a final response to the user.",
+        }]
+
+    return final, thinking, tool_calls, None
+
+
 def _print_backend_error(detail: str) -> None:
     show_error(f"Ollama backend error: {detail}")
 
@@ -468,6 +569,23 @@ def _render_markdown(console: Console, text: str, *, end: str = "\n") -> None:
             time.sleep(STREAM_FRAME_SECONDS)
 
     console.print(render(text), end=end)
+
+
+def _render_sent_message(
+    console: Console,
+    prompt_ansi: str,
+    text: str
+) -> None:
+    """Echo a just-submitted line back as rendered Markdown, in place of
+    the plain text prompt_toolkit erased on submit -- so things like
+    `code` show up highlighted rather than as raw backticks."""
+
+    prompt = Text.from_ansi(prompt_ansi)
+    console.print(prompt, end="")
+    console.print(
+        Markdown(text, code_theme="monokai", hyperlinks=True),
+        width=console.width - cell_len(prompt.plain),
+    )
 
 
 def _handle_scheme_flags(args) -> None:
@@ -602,7 +720,6 @@ def main() -> None:
     client = ollama.Client(host=Config.host)
 
     messages: list = []
-    system_message = _message("system", SYSTEM_PROMPT)
 
     banner(console, check_for_update())
 
@@ -623,6 +740,8 @@ def main() -> None:
                 except EOFError:
                     print()
                     return
+                if uin.strip():
+                    _render_sent_message(console, Config.prompt, uin)
 
             if uin.strip() == "":
                 continue
@@ -696,6 +815,7 @@ def main() -> None:
 
             if uin == "/refresh":
                 refresh_config()
+                _model_system_prompts.clear()
                 client = ollama.Client(host=Config.host)
                 console.print(Text("Config refreshed.", style=DIM))
                 continue
@@ -773,17 +893,15 @@ def main() -> None:
                     warn("Usage: /image <path> [prompt]")
                     continue
 
-                image_path = Path(parts[0]).expanduser()
-                if not image_path.is_file():
-                    show_error(f"Image not found: {image_path}")
+                image_path, reason = resolve_image_path(parts[0])
+                if image_path is None:
+                    show_error(reason)
                     continue
-                if image_path.suffix.lower() not in IMAGE_EXTENSIONS:
-                    show_error(
-                        f"Unsupported image type '{image_path.suffix}'. "
-                        "Supported: "
-                        + ", ".join(sorted(IMAGE_EXTENSIONS))
+                if not model_sees_images(Config.host, Config.model or ""):
+                    warn(
+                        f"{Config.model} reports no vision support; "
+                        "sending it anyway, but expect an error."
                     )
-                    continue
 
                 # Fall through to the normal send path below with UIN
                 # replaced by the prompt and PENDING_IMAGES attached.
@@ -826,7 +944,9 @@ def main() -> None:
             messages.append(_message("user", uin, pending_images))
             _trim_history(messages)
 
-            res, err = _chat_with_status(
+            system_message = _message("system", _session_system_prompt())
+
+            final, thinking, tool_calls, err = _chat_retry_until_response(
                 console, client, [system_message] + messages, tools,
                 is_image=bool(pending_images),
             )
@@ -835,17 +955,19 @@ def main() -> None:
                 messages.pop()
                 continue
 
-            final, tool_calls = _response_parts(res)
+            _render_thinking(thinking)
 
             if not tool_calls:
-                if final:
-                    _render_markdown(console, final)
-                    notify_reply_ready()
-                    messages.append(_message("assistant", final))
-                    _trim_history(messages)
-                else:
+                if not final.strip():
                     warn("The model returned no response.")
-                    messages.pop()
+                    final = (
+                        "I wasn't able to come up with a response to that. "
+                        "Could you rephrase or try again?"
+                    )
+                _render_markdown(console, final)
+                notify_reply_ready()
+                messages.append(_message("assistant", final))
+                _trim_history(messages)
                 print()
                 continue
 
@@ -853,13 +975,14 @@ def main() -> None:
             tool_outputs = []
             followup = ""
             tool_error = None
+            sent_tool_images = False
 
             for _ in range(Config.max_tool_rounds):
                 assistant_tool_calls = []
                 for call in tool_calls:
-                    name, args = _tool_call_name_args(call)
+                    name, call_args = _tool_call_name_args(call)
                     assistant_tool_calls.append(
-                        {"function": {"name": name, "arguments": args}}
+                        {"function": {"name": name, "arguments": call_args}}
                     )
 
                 tool_messages.append({
@@ -869,9 +992,9 @@ def main() -> None:
                 })
 
                 for call in tool_calls:
-                    name, args = _tool_call_name_args(call)
-                    tool_result = run_tool((name, args))
-                    trimmed = _trim_tool_output(tool_result)
+                    name, call_args = _tool_call_name_args(call)
+                    tool_result = run_tool((name, call_args))
+                    trimmed = _trim_tool_output(tool_result, name)
                     tool_outputs.append(f"{name}:\n{trimmed}")
                     tool_messages.append({
                         "role": "tool",
@@ -879,14 +1002,23 @@ def main() -> None:
                         "tool_name": name,
                     })
 
-                res, err = _chat_with_status(
-                    console, client, tool_messages, tools
+                tool_images = take_pending_images()
+                if tool_images:
+                    sent_tool_images = True
+                    tool_messages.append(
+                        _message("user", TOOL_IMAGE_NOTE, tool_images)
+                    )
+
+                final, thinking, tool_calls, err = _chat_retry_until_response(
+                    console, client, tool_messages, tools,
+                    is_image=bool(tool_images),
                 )
                 if err:
                     tool_error = err
                     break
 
-                final, tool_calls = _response_parts(res)
+                _render_thinking(thinking)
+
                 followup = final
 
                 if not tool_calls:
@@ -894,19 +1026,20 @@ def main() -> None:
 
             if tool_error:
                 _print_backend_error(tool_error)
+                if sent_tool_images:
+                    warn(IMAGE_BACKEND_HINT)
                 continue
 
             if not followup.strip():
                 tool_messages.append(_tool_limit_message())
-
-                res, err = _chat_with_status(
+                followup, thinking, _, err = _chat_retry_until_response(
                     console, client, tool_messages, None
                 )
                 if err:
                     _print_backend_error(err)
                     continue
 
-                followup, _ = _response_parts(res)
+                _render_thinking(thinking)
 
             if not followup.strip():
                 warn("The model did not provide a final response after tools.")

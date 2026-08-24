@@ -7,15 +7,15 @@ from pathlib import Path
 from typing import Union
 
 from prompt_toolkit import PromptSession
+from prompt_toolkit.application.current import get_app
 from prompt_toolkit.completion import Completer, Completion, PathCompleter
 from prompt_toolkit.document import Document
 from prompt_toolkit.formatted_text import ANSI, StyleAndTextTuples
 
+from .images import IMAGE_EXTENSIONS
 from .memory import MEMORY_PATH
 from .paths import ENV_PATH
 from .theme import SPARKLE, ptk_sweep_reveal
-
-IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}
 
 # Single source of truth for both the completion dropdown and /help.
 COMMANDS = [
@@ -155,6 +155,13 @@ def _suggestion_placeholder() -> StyleAndTextTuples:
     coral sweep, holding, then erased by another sweep, cycling through
     `_SUGGESTIONS` over time."""
 
+    # The app does one final render (in its "done" state) right as it's
+    # exiting, e.g. on Ctrl+C or Ctrl+D. Without this, that last frame
+    # would freeze whatever sweep frame was mid-animation and leave it
+    # printed on screen permanently once the session tears down.
+    if get_app().is_done:
+        return []
+
     total = _CYCLE * len(_SUGGESTIONS)
     pos = time.monotonic() % total
     idx = int(pos // _CYCLE)
@@ -193,5 +200,6 @@ def read_line(prompt_ansi: str) -> str:
             complete_while_typing=True,
             placeholder=_suggestion_placeholder,
             refresh_interval=PLACEHOLDER_REFRESH_SECONDS,
+            erase_when_done=True,
         )
     return _session.prompt(ANSI(prompt_ansi))

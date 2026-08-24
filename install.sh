@@ -72,7 +72,7 @@ if ! command -v pipx >/dev/null 2>&1; then
             exit 1
         fi
     elif command -v brew >/dev/null 2>&1; then
-        if ! brew install pipx; then
+        if ! brew install -y pipx; then
             echo "Failed to install pipx via brew."
             exit 1
         fi
@@ -96,6 +96,18 @@ pipx install --force "$REPO_DIR"
 
 PIPX_BIN_DIR="$(pipx environment --value PIPX_BIN_DIR 2>/dev/null || echo "$HOME/.local/bin")"
 
+PIPX_VENVS="$(pipx environment --value PIPX_LOCAL_VENVS 2>/dev/null || echo "")"
+VENV_PYTHON="$PIPX_VENVS/flash/bin/python"
+
+echo ""
+echo "Downloading the headless browser used for page screenshots..."
+if [ -x "$VENV_PYTHON" ]; then
+    "$VENV_PYTHON" -m playwright install chromium || \
+        echo "Download failed. Screenshots stay unavailable until it succeeds."
+else
+    echo "Could not find the flash environment. Screenshots need chromium."
+fi
+
 # Register the flash:// URL handler. Unsupported on macOS, and harmless to
 # skip anywhere else, so never fail the install over it.
 FLASH_BIN="$PIPX_BIN_DIR/flash"
@@ -107,9 +119,10 @@ echo ""
 echo "Registering the flash:// URL handler..."
 "$FLASH_BIN" --register-url-scheme || \
     echo "Unable to install flash:// URL handler. Continuing."
+FLASH_VERSION="$(flash --version)"
 
 echo ""
-echo "=== flash installed via pipx. ==="
+echo "=== $FLASH_VERSION installed via pipx. ==="
 
 case ":$PATH:" in
     *":$PIPX_BIN_DIR:"*)

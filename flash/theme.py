@@ -16,6 +16,8 @@ ACCENT = "#d97757"
 DIM = "grey62"
 ERROR = "#e5484d"
 WARN = "#d9a63f"
+DIFF_ADD = "#3fb950"
+DIFF_DEL = "#e5484d"
 
 console = Console()
 
@@ -70,6 +72,36 @@ def tool_result(text: str, *, style: str = DIM) -> None:
 
     for line in lines[1:]:
         console.print(Text(f"     {line}", style=style))
+
+
+def tool_diff(diff_lines: list[str], *, more: int = 0) -> None:
+    """Print a colored unified diff, indented under a tool_result() line.
+
+    `more` is the number of diff lines omitted from the tail, shown as a
+    trailing note so a large rewrite does not flood the terminal.
+    """
+
+    for line in diff_lines:
+        if line.startswith("+"):
+            style = DIFF_ADD
+        elif line.startswith("-"):
+            style = DIFF_DEL
+        elif line.startswith("@@"):
+            style = ACCENT
+        else:
+            style = DIM
+        console.print(Text(f"     {line}", style=style))
+
+    if more > 0:
+        console.print(
+            Text(f"     ... {more} more diff line{plural(more)}", style=DIM)
+        )
+
+
+def plural(count: int, suffix: str = "s") -> str:
+    """'' for one, `suffix` otherwise -- for '1 line' / '2 lines'."""
+
+    return "" if count == 1 else suffix
 
 
 def dim(text: str) -> None:

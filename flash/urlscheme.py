@@ -70,7 +70,8 @@ def launch_command() -> list[str]:
 
     exe = shutil.which(SCHEME)
     if exe:
-        return [exe]
+        found = Path(exe)
+        return [str(found.with_suffix(found.suffix.lower()))]
 
     return [sys.executable, "-m", SCHEME]
 

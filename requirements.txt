@@ -1,6 +1,7 @@
 colorama
 types-colorama
 ollama
+playwright
 prompt_toolkit
 python-dotenv
 rich
