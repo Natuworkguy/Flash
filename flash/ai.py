@@ -50,6 +50,7 @@ from .tools import (
     SCRATCH_DIR,
     build_system_prompt,
     init,
+    reason,
     run_tool,
     shell_tool,
     take_pending_images,
@@ -287,16 +288,33 @@ def _tool_limit_message() -> dict:
     }
 
 
-def _response_parts(response) -> tuple[str, list]:
+def _response_parts(response) -> tuple[str, str, list]:
     message = getattr(response, "message", None)
 
     if message is None:
-        return "", []
+        return "", "", []
 
     text = getattr(message, "content", "") or ""
+    thinking = getattr(message, "thinking", "") or ""
     tool_calls = list(getattr(message, "tool_calls", None) or [])
 
-    return text, tool_calls
+    return text, thinking, tool_calls
+
+
+def _render_thinking(text: str) -> None:
+    """Show the reasoning a thinking model returns alongside its reply.
+
+    Ollama sends it in `message.thinking`, separate from the content, so
+    it only appears if something asks for it. The `reason` tool already
+    draws a thought, so hand it over rather than drawing it twice.
+    """
+
+    body = text.strip()
+
+    if not body:
+        return
+
+    reason(body)
 
 
 def _tool_call_name_args(call) -> tuple[str, dict]:
@@ -482,20 +500,21 @@ def _chat_retry_until_response(
     tools_arg=None,
     *,
     is_image: bool = False,
-) -> tuple[str, list, Union[str, None]]:  # noqa: UP007, RUF100
+) -> tuple[str, str, list, Union[str, None]]:  # noqa: UP007, RUF100
     """Call the model, retrying up to FINAL_RESPONSE_RETRIES times if it
     comes back with neither reply text nor a tool call to make."""
 
     final = ""
+    thinking = ""
     tool_calls: list = []
     for attempt in range(1, FINAL_RESPONSE_RETRIES + 2):
         res, err = _chat_with_status(
             console, client, messages, tools_arg, is_image=is_image
         )
         if err:
-            return "", [], err
+            return "", "", [], err
 
-        final, tool_calls = _response_parts(res)
+        final, thinking, tool_calls = _response_parts(res)
         if final.strip() or tool_calls or attempt > FINAL_RESPONSE_RETRIES:
             break
 
@@ -507,7 +526,7 @@ def _chat_retry_until_response(
             "content": "Please provide a final response to the user.",
         }]
 
-    return final, tool_calls, None
+    return final, thinking, tool_calls, None
 
 
 def _print_backend_error(detail: str) -> None:
@@ -927,7 +946,7 @@ def main() -> None:
 
             system_message = _message("system", _session_system_prompt())
 
-            final, tool_calls, err = _chat_retry_until_response(
+            final, thinking, tool_calls, err = _chat_retry_until_response(
                 console, client, [system_message] + messages, tools,
                 is_image=bool(pending_images),
             )
@@ -935,6 +954,8 @@ def main() -> None:
                 _print_backend_error(err)
                 messages.pop()
                 continue
+
+            _render_thinking(thinking)
 
             if not tool_calls:
                 if not final.strip():
@@ -988,13 +1009,15 @@ def main() -> None:
                         _message("user", TOOL_IMAGE_NOTE, tool_images)
                     )
 
-                final, tool_calls, err = _chat_retry_until_response(
+                final, thinking, tool_calls, err = _chat_retry_until_response(
                     console, client, tool_messages, tools,
                     is_image=bool(tool_images),
                 )
                 if err:
                     tool_error = err
                     break
+
+                _render_thinking(thinking)
 
                 followup = final
 
@@ -1009,12 +1032,14 @@ def main() -> None:
 
             if not followup.strip():
                 tool_messages.append(_tool_limit_message())
-                followup, _, err = _chat_retry_until_response(
+                followup, thinking, _, err = _chat_retry_until_response(
                     console, client, tool_messages, None
                 )
                 if err:
                     _print_backend_error(err)
                     continue
+
+                _render_thinking(thinking)
 
             if not followup.strip():
                 warn("The model did not provide a final response after tools.")
