@@ -485,8 +485,9 @@ def _chat_with_status(
     is_image: bool = False,
 ) -> tuple[Union[object, None], Union[str, None]]:  # noqa: UP007, RUF100
     with console.status(
-        f"[bold {ACCENT}]Thinking{ELLIPSIS}", spinner="dots",
-        spinner_style=ACCENT
+        f"[bold {ACCENT}]Thinking{ELLIPSIS}", spinner="point",
+        spinner_style=ACCENT,
+        speed=2.5
     ) as status:
         return _try_chat(
             client, messages, status, tools_arg, is_image=is_image
@@ -619,7 +620,7 @@ def _run_update(*, force: bool = False) -> bool:
 
     with console.status(
         f"[bold {ACCENT}]Checking for updates{ELLIPSIS}",
-        spinner="dots", spinner_style=ACCENT
+        spinner="bouncingBall", spinner_style=ACCENT
     ):
         latest = fetch_latest_version()
 
@@ -652,7 +653,7 @@ def _run_update(*, force: bool = False) -> bool:
 
     with console.status(
         f"[bold {ACCENT}]Updating{ELLIPSIS}",
-        spinner="dots", spinner_style=ACCENT
+        spinner="arrow3", spinner_style=ACCENT
     ):
         ok, message = perform_update()
 
@@ -853,7 +854,7 @@ def main() -> None:
                 console.print(Text(f"Flash CLI v{__version__}", style=DIM))
                 with console.status(
                     f"[bold {ACCENT}]Checking for updates{ELLIPSIS}",
-                    spinner="dots", spinner_style=ACCENT
+                    spinner="bouncingBall", spinner_style=ACCENT
                 ):
                     latest = fetch_latest_version()
                 if latest is None:
