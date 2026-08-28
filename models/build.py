@@ -16,6 +16,7 @@ FROM_PATTERN = re.compile(
     re.MULTILINE,
 )
 HEADER_PATTERN = re.compile(r"^#[ \t]*(?P<key>\w+)[ \t]*:[ \t]*(?P<value>.*)$")
+NAME_PLACEHOLDER = "{{name}}"
 
 
 def header(source: str, path: Path) -> tuple[str, list[str]]:
@@ -38,17 +39,28 @@ def header(source: str, path: Path) -> tuple[str, list[str]]:
     return fields["name"], fields.get("sizes", "").replace(",", " ").split()
 
 
-def render(source: str, size: str) -> str:
-    """Return SOURCE with its FROM tag set to SIZE."""
+def spoken(name: str) -> str:
+    """Return NAME as the model says it: flash-onyx-2.2 -> Flash Onyx 2.2."""
 
-    match = FROM_PATTERN.search(source)
+    return " ".join(word.capitalize() for word in name.split("-"))
+
+
+def render(source: str, name: str, size: str) -> str:
+    """Return SOURCE with NAME filled in and its FROM tag set to SIZE."""
+
+    body = source.replace(NAME_PLACEHOLDER, spoken(name))
+
+    if not size:
+        return body
+
+    match = FROM_PATTERN.search(body)
 
     if match is None:
         raise SystemExit("no FROM line to size.")
 
     pinned = f"FROM {match['repo']}:{size}"
 
-    return source[: match.start()] + pinned + source[match.end():]
+    return body[: match.start()] + pinned + body[match.end():]
 
 
 def build(
@@ -65,10 +77,7 @@ def build(
 
     with tempfile.TemporaryDirectory() as workdir:
         generated = Path(workdir) / f"{name}-{size or 'base'}.Modelfile"
-        generated.write_text(
-            render(source, size) if size else source,
-            encoding="utf-8",
-        )
+        generated.write_text(render(source, name, size), encoding="utf-8")
         argv = ["ollama", "create", tag, "-f", str(generated)]
 
         print(f"$ {' '.join(argv)}")
@@ -147,7 +156,7 @@ def main() -> int:
             if len(sizes) != 1:
                 parser.error("--print takes one --size")
 
-            sys.stdout.write(render(source, sizes[0]) if sizes[0] else source)
+            sys.stdout.write(render(source, name, sizes[0]))
 
             return 0
 
