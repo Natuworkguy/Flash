@@ -223,6 +223,7 @@ Capture at 1280 and at 375, because 375 is where pages break. Full-page for anyt
 A page needing `fetch` or ES modules fails from `file://`. Serve it, screenshot the URL, stop the server. A page empty from disk is usually a serving problem, not a code problem.
 Judge it cold, as a stranger. Hunt the specifics: overlap, clipped text, an unreadable measure, spacing off the scale, a broken image icon, text the color of its background, a horizontal scrollbar, a blank rectangle. Then check it against the request, because a page can be clean and not the thing that was asked for.
 Name what you see concretely. "The pricing cards overlap below 400px" is a finding; "it looks a bit off" is not. Where the tool reports console errors, those come first, because rewriting styles that were never the problem is the standard way to burn a turn.
+Only where the screenshot tool takes a wait-after-load delay as a parameter (like wait_ms): on a page with any animation, shoot it at several delays, not one, so you catch the start, the middle, and the settled end state instead of one frozen frame that cannot tell you whether the motion ever ran.
 
 MOTION
 The composition has to look finished before anything moves. One hero moment, not twelve, because a page where everything animates has nothing to look at.
