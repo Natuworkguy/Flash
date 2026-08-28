@@ -250,3 +250,23 @@ Passing a `flash://` URL on the command line still works everywhere.
 ### AI Interaction
 
 Simply type your request. If the AI needs to see the contents of a file or run a command to answer your question, it can invoke the shell tool automatically. It can also look at an image file with the `view_image` tool, search the web via Duck Duck Go, and show it's reasoning.
+
+## License
+
+The Flash CLI, the Modelfiles under `models/`, and the system prompts in them
+are MIT licensed. See [LICENSE](LICENSE).
+
+A published Flash Onyx model is a derivative of the base model it is built on,
+and that base license travels with it. The MIT license above covers the
+Modelfile and the prompt, not the weights underneath:
+
+- **Flash Onyx 2.x** is built on `gemma4`, which Ollama ships under the Apache
+  License 2.0.
+- **Flash Onyx 1** is built on `llama3.1`, which ships under the
+  [Llama 3.1 Community License](https://www.llama.com/llama3_1/license/). Its
+  terms include a naming requirement for any derivative model you distribute.
+
+`models/build.py` copies this repository's `LICENSE` into every model it
+builds, together with a pointer to the base model's own terms, so
+`ollama show --license flash-onyx-2.2:12b` prints both. Check the base model's
+license with `ollama show --license gemma4` before publishing a build.

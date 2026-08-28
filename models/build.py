@@ -17,6 +17,17 @@ FROM_PATTERN = re.compile(
 )
 HEADER_PATTERN = re.compile(r"^#[ \t]*(?P<key>\w+)[ \t]*:[ \t]*(?P<value>.*)$")
 NAME_PLACEHOLDER = "{{name}}"
+LICENSE_PATH = Path(__file__).resolve().parent.parent / "LICENSE"
+LICENSE_PATTERN = re.compile(r"^LICENSE\b", re.MULTILINE)
+OWN_TERMS = (
+    "The Modelfile and system prompt behind this model are covered by "
+    "this license:"
+)
+BASE_TERMS = (
+    "Built on {base}. The terms {base} ships under still apply to this "
+    "model and are not replaced by the license above. Run "
+    "`ollama show --license {base}` to read them."
+)
 
 
 def header(source: str, path: Path) -> tuple[str, list[str]]:
@@ -45,10 +56,36 @@ def spoken(name: str) -> str:
     return " ".join(word.capitalize() for word in name.split("-"))
 
 
-def render(source: str, name: str, size: str) -> str:
-    """Return SOURCE with NAME filled in and its FROM tag set to SIZE."""
+def licensing() -> str:
+    """Return the repository's license, or "" if it is not there."""
 
-    body = source.replace(NAME_PLACEHOLDER, spoken(name))
+    if not LICENSE_PATH.is_file():
+        print(f"warning: no {LICENSE_PATH}", file=sys.stderr)
+
+        return ""
+
+    return LICENSE_PATH.read_text(encoding="utf-8").strip()
+
+
+def notice(body: str, terms: str) -> str:
+    """Return BODY with a LICENSE block for it and for its base model."""
+
+    if not terms or LICENSE_PATTERN.search(body):
+        return body
+
+    match = FROM_PATTERN.search(body)
+    block = [OWN_TERMS, "", terms]
+
+    if match:
+        block += ["", BASE_TERMS.format(base=match["repo"])]
+
+    return f'{body.rstrip()}\n\nLICENSE """\n' + "\n".join(block) + '\n"""\n'
+
+
+def render(source: str, name: str, size: str, terms: str) -> str:
+    """Return SOURCE named, sized to SIZE, and licensed under TERMS."""
+
+    body = notice(source.replace(NAME_PLACEHOLDER, spoken(name)), terms)
 
     if not size:
         return body
@@ -67,6 +104,7 @@ def build(
     source: str,
     name: str,
     size: str,
+    terms: str,
     namespace: str | None,
     dry_run: bool,
 ) -> None:
@@ -77,7 +115,10 @@ def build(
 
     with tempfile.TemporaryDirectory() as workdir:
         generated = Path(workdir) / f"{name}-{size or 'base'}.Modelfile"
-        generated.write_text(render(source, name, size), encoding="utf-8")
+        generated.write_text(
+            render(source, name, size, terms),
+            encoding="utf-8",
+        )
         argv = ["ollama", "create", tag, "-f", str(generated)]
 
         print(f"$ {' '.join(argv)}")
@@ -147,6 +188,8 @@ def main() -> int:
     if building and shutil.which("ollama") is None:
         raise SystemExit("ollama is not on PATH.")
 
+    terms = licensing()
+
     for path in args.modelfile:
         source = path.read_text(encoding="utf-8")
         name, declared = header(source, path)
@@ -156,12 +199,19 @@ def main() -> int:
             if len(sizes) != 1:
                 parser.error("--print takes one --size")
 
-            sys.stdout.write(render(source, name, sizes[0]))
+            sys.stdout.write(render(source, name, sizes[0], terms))
 
             return 0
 
         for size in sizes:
-            build(source, name, size, args.namespace, args.dry_run)
+            build(
+                source,
+                name,
+                size,
+                terms,
+                args.namespace,
+                args.dry_run,
+            )
 
     return 0
 
