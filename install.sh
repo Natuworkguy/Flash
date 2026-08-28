@@ -63,6 +63,54 @@ detect_python() {
 
 detect_python
 
+# Install Ollama only when it is missing. Reinstalling over an existing
+# install wipes the models and data already on the machine, so an existing
+# ollama on PATH is always left exactly as it is.
+install_ollama() {
+    if command -v ollama >/dev/null 2>&1; then
+        echo "Ollama is already installed."
+        return 0
+    fi
+
+    echo "Ollama is not installed. Installing Ollama..."
+    case "$(uname -s)" in
+        Darwin)
+            if command -v brew >/dev/null 2>&1; then
+                brew install ollama || {
+                    echo "Failed to install Ollama via brew."
+                    echo "Install it manually: https://ollama.com/download"
+                    return 1
+                }
+            else
+                echo "brew is not installed, so Ollama cannot be installed automatically."
+                echo "Install it manually: https://ollama.com/download"
+                return 1
+            fi
+            ;;
+        Linux)
+            if command -v curl >/dev/null 2>&1; then
+                curl -fsSL https://ollama.com/install.sh | sh || {
+                    echo "Failed to install Ollama."
+                    echo "Install it manually: https://ollama.com/download"
+                    return 1
+                }
+            else
+                echo "curl is not installed, so Ollama cannot be installed automatically."
+                echo "Install it manually: https://ollama.com/download"
+                return 1
+            fi
+            ;;
+        *)
+            echo "Unrecognized platform. Install Ollama manually: https://ollama.com/download"
+            return 1
+            ;;
+    esac
+}
+
+# Flash can also talk to a remote Ollama server, so never fail the install
+# over a missing local one.
+install_ollama || echo "Flash needs an Ollama server. Continuing."
+
 if ! command -v pipx >/dev/null 2>&1; then
     echo "pipx is not installed. Installing pipx..."
     if command -v apt-get >/dev/null 2>&1; then
