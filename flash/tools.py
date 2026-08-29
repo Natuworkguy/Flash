@@ -18,6 +18,7 @@ from ddgs import DDGS
 from rich.text import Text
 
 from .browser import capture, resolve_target
+from .documents import extract_document_text, is_document_path
 from .images import resolve_image_path
 from .memory import add_memory, forget_memory, search_memory
 from .notify import notify_needs_input
@@ -48,7 +49,9 @@ When searching a codebase or directory for files by name or pattern, use
   for search whenever they cover the need.
 To look at a file's contents, use the read tool instead of shell
   cat/sed/head/type. It numbers the lines and pages through long files with
-  its offset argument.
+  its offset argument. It also extracts text from .pdf and .docx files, so
+  read them the same way; a legacy .doc file needs converting to .docx
+  first.
 To create or change a file, use the write tool instead of shell redirection,
   heredocs, or Set-Content. It needs no quoting or escaping and works the
   same on every platform, so shell quoting can never corrupt the content.
@@ -459,6 +462,12 @@ MAX_DIFF_PREVIEW_LINES = 40
 
 def _read_lines(file_path: Path) -> Union[list[str], str]:  # noqa: UP007
     """Split a text file into lines, or return an error string."""
+
+    if is_document_path(file_path):
+        text, reason = extract_document_text(file_path)
+        if text is None:
+            return f"Error: {reason}"
+        return text.splitlines()
 
     try:
         text = file_path.read_text(encoding="utf-8")
@@ -1011,7 +1020,10 @@ tools = [
             "description": (
                 "Read a text file, returned with line numbers. Read-only "
                 "and cross-platform; prefer this over shell cat/sed/head "
-                "when you need a file's contents. Returns at most "
+                "when you need a file's contents. Also reads .pdf and "
+                ".docx files, extracting their text the same way; a "
+                "legacy .doc file needs converting to .docx first. "
+                "Returns at most "
                 f"{DEFAULT_READ_LINES} lines per call, so use offset to "
                 "page through a longer file."
             ),
