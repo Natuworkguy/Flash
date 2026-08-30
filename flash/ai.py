@@ -637,7 +637,7 @@ def _run_update(*, force: bool = False) -> bool:
 
     if not force:
         target = f"v{latest}" if latest else "the latest version"
-        ask = Text(f"  Update Flash to {target}? ", style=DIM)
+        ask = Text(f"  Update Flash {__version__} to {target}? ", style=DIM)
         ask.append("y", style=f"bold {ACCENT}")
         ask.append("/n ", style=DIM)
         console.print(ask, end="")
