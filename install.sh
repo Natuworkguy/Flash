@@ -63,6 +63,20 @@ detect_python() {
 
 detect_python
 
+install_ollama_curl() {
+    if command -v curl >/dev/null 2>&1; then
+        curl -fsSL https://ollama.com/install.sh | sh || {
+            echo "Failed to install Ollama via curl."
+            echo "Install it manually: https://ollama.com/download"
+            return 1
+        }
+    else
+        echo "curl is not installed, so Ollama cannot be installed automatically."
+        echo "Install it manually: https://ollama.com/download"
+        return 1
+    fi
+}
+
 # Install Ollama only when it is missing. Reinstalling over an existing
 # install wipes the models and data already on the machine, so an existing
 # ollama on PATH is always left exactly as it is.
@@ -78,8 +92,9 @@ install_ollama() {
             if command -v brew >/dev/null 2>&1; then
                 brew install ollama || {
                     echo "Failed to install Ollama via brew."
-                    echo "Install it manually: https://ollama.com/download"
-                    return 1
+                    echo
+                    echo "Trying to install Ollama via curl..."
+                    install_ollama_curl || return 1
                 }
             else
                 echo "brew is not installed, so Ollama cannot be installed automatically."
@@ -88,17 +103,7 @@ install_ollama() {
             fi
             ;;
         Linux)
-            if command -v curl >/dev/null 2>&1; then
-                curl -fsSL https://ollama.com/install.sh | sh || {
-                    echo "Failed to install Ollama."
-                    echo "Install it manually: https://ollama.com/download"
-                    return 1
-                }
-            else
-                echo "curl is not installed, so Ollama cannot be installed automatically."
-                echo "Install it manually: https://ollama.com/download"
-                return 1
-            fi
+            install_ollama_curl
             ;;
         *)
             echo "Unrecognized platform. Install Ollama manually: https://ollama.com/download"

@@ -487,7 +487,7 @@ def _chat_with_status(
     with console.status(
         f"[bold {ACCENT}]Thinking{ELLIPSIS}", spinner="point",
         spinner_style=ACCENT,
-        speed=2.5
+        speed=5
     ) as status:
         return _try_chat(
             client, messages, status, tools_arg, is_image=is_image
