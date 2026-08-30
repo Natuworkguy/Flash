@@ -487,7 +487,7 @@ def _chat_with_status(
     with console.status(
         f"[bold {ACCENT}]Thinking{ELLIPSIS}", spinner="point",
         spinner_style=ACCENT,
-        speed=2.5
+        speed=5
     ) as status:
         return _try_chat(
             client, messages, status, tools_arg, is_image=is_image
@@ -637,7 +637,7 @@ def _run_update(*, force: bool = False) -> bool:
 
     if not force:
         target = f"v{latest}" if latest else "the latest version"
-        ask = Text(f"  Update Flash to {target}? ", style=DIM)
+        ask = Text(f"  Update Flash {__version__} to {target}? ", style=DIM)
         ask.append("y", style=f"bold {ACCENT}")
         ask.append("/n ", style=DIM)
         console.print(ask, end="")

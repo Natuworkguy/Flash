@@ -309,6 +309,28 @@ def test_read_tool_missing_and_directory(tmp_path):
     assert "is a directory" in read_tool(str(tmp_path))  # nosec B101
 
 
+def test_read_tool_extracts_docx_text(tmp_path):
+    import docx
+
+    target = tmp_path / "notes.docx"
+    document = docx.Document()
+    document.add_paragraph("Hello from docx.")
+    document.save(target)
+
+    result = read_tool(str(target))
+
+    assert "Hello from docx." in result  # nosec B101
+
+
+def test_read_tool_reports_legacy_doc(tmp_path):
+    target = tmp_path / "old.doc"
+    target.write_bytes(b"not a real .doc file")
+
+    result = read_tool(str(target))
+
+    assert "Save it as .docx" in result  # nosec B101
+
+
 def test_write_tool_creates_file(tmp_path, monkeypatch):
     monkeypatch.setattr(tools, "NO_COMMAND_CONFIRMATION", True)
     target = tmp_path / "new" / "file.py"

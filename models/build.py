@@ -16,6 +16,18 @@ FROM_PATTERN = re.compile(
     re.MULTILINE,
 )
 HEADER_PATTERN = re.compile(r"^#[ \t]*(?P<key>\w+)[ \t]*:[ \t]*(?P<value>.*)$")
+NAME_PLACEHOLDER = "{{name}}"
+LICENSE_PATH = Path(__file__).resolve().parent.parent / "LICENSE"
+LICENSE_PATTERN = re.compile(r"^LICENSE\b", re.MULTILINE)
+OWN_TERMS = (
+    "The Modelfile and system prompt behind this model are covered by "
+    "this license:"
+)
+BASE_TERMS = (
+    "Built on {base}. The terms {base} ships under still apply to this "
+    "model and are not replaced by the license above. Run "
+    "`ollama show --license {base}` to read them."
+)
 
 
 def header(source: str, path: Path) -> tuple[str, list[str]]:
@@ -38,23 +50,61 @@ def header(source: str, path: Path) -> tuple[str, list[str]]:
     return fields["name"], fields.get("sizes", "").replace(",", " ").split()
 
 
-def render(source: str, size: str) -> str:
-    """Return SOURCE with its FROM tag set to SIZE."""
+def spoken(name: str) -> str:
+    """Return NAME as the model says it: flash-onyx-2.2 -> Flash Onyx 2.2."""
 
-    match = FROM_PATTERN.search(source)
+    return " ".join(word.capitalize() for word in name.split("-"))
+
+
+def licensing() -> str:
+    """Return the repository's license, or "" if it is not there."""
+
+    if not LICENSE_PATH.is_file():
+        print(f"warning: no {LICENSE_PATH}", file=sys.stderr)
+
+        return ""
+
+    return LICENSE_PATH.read_text(encoding="utf-8").strip()
+
+
+def notice(body: str, terms: str) -> str:
+    """Return BODY with a LICENSE block for it and for its base model."""
+
+    if not terms or LICENSE_PATTERN.search(body):
+        return body
+
+    match = FROM_PATTERN.search(body)
+    block = [OWN_TERMS, "", terms]
+
+    if match:
+        block += ["", BASE_TERMS.format(base=match["repo"])]
+
+    return f'{body.rstrip()}\n\nLICENSE """\n' + "\n".join(block) + '\n"""\n'
+
+
+def render(source: str, name: str, size: str, terms: str) -> str:
+    """Return SOURCE named, sized to SIZE, and licensed under TERMS."""
+
+    body = notice(source.replace(NAME_PLACEHOLDER, spoken(name)), terms)
+
+    if not size:
+        return body
+
+    match = FROM_PATTERN.search(body)
 
     if match is None:
         raise SystemExit("no FROM line to size.")
 
     pinned = f"FROM {match['repo']}:{size}"
 
-    return source[: match.start()] + pinned + source[match.end():]
+    return body[: match.start()] + pinned + body[match.end():]
 
 
 def build(
     source: str,
     name: str,
     size: str,
+    terms: str,
     namespace: str | None,
     dry_run: bool,
 ) -> None:
@@ -66,7 +116,7 @@ def build(
     with tempfile.TemporaryDirectory() as workdir:
         generated = Path(workdir) / f"{name}-{size or 'base'}.Modelfile"
         generated.write_text(
-            render(source, size) if size else source,
+            render(source, name, size, terms),
             encoding="utf-8",
         )
         argv = ["ollama", "create", tag, "-f", str(generated)]
@@ -138,6 +188,8 @@ def main() -> int:
     if building and shutil.which("ollama") is None:
         raise SystemExit("ollama is not on PATH.")
 
+    terms = licensing()
+
     for path in args.modelfile:
         source = path.read_text(encoding="utf-8")
         name, declared = header(source, path)
@@ -147,12 +199,19 @@ def main() -> int:
             if len(sizes) != 1:
                 parser.error("--print takes one --size")
 
-            sys.stdout.write(render(source, sizes[0]) if sizes[0] else source)
+            sys.stdout.write(render(source, name, sizes[0], terms))
 
             return 0
 
         for size in sizes:
-            build(source, name, size, args.namespace, args.dry_run)
+            build(
+                source,
+                name,
+                size,
+                terms,
+                args.namespace,
+                args.dry_run,
+            )
 
     return 0
 

@@ -6,4 +6,6 @@ prompt_toolkit
 python-dotenv
 rich
 ddgs
+pypdf
+python-docx
 winotify; platform_system == "Windows"

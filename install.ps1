@@ -28,6 +28,34 @@ function Invoke-FlashScheme {
     }
 }
 
+function Install-Ollama {
+    # Install Ollama only when it is missing. Reinstalling over an existing
+    # install wipes the models and data already on the machine, so an existing
+    # ollama on PATH is always left exactly as it is.
+    if (Get-Command ollama -ErrorAction SilentlyContinue) {
+        Write-Host "Ollama is already installed."
+        return
+    }
+
+    Write-Host "Ollama is not installed. Installing Ollama..."
+    if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
+        Write-Host "winget is not available, so Ollama cannot be installed automatically."
+        Write-Host "Install it manually: https://ollama.com/download"
+        return
+    }
+
+    try {
+        winget install --id Ollama.Ollama -e --accept-source-agreements --accept-package-agreements
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "Failed to install Ollama via winget."
+            Write-Host "Install it manually: https://ollama.com/download"
+        }
+    } catch {
+        Write-Host "Failed to install Ollama via winget."
+        Write-Host "Install it manually: https://ollama.com/download"
+    }
+}
+
 function Uninstall-Flash {
     Write-Host "Uninstalling flash..."
     if (Get-Command flash -ErrorAction SilentlyContinue) {
@@ -90,6 +118,10 @@ try {
     }
 
     $Python = Get-PythonCommand
+
+    # Flash can also talk to a remote Ollama server, so never fail the
+    # install over a missing local one.
+    Install-Ollama
 
     if (-not (Get-Command pipx -ErrorAction SilentlyContinue)) {
         Write-Host "pipx is not installed. Installing pipx..."
