@@ -135,7 +135,7 @@ python run.py
 - `/clear`: Clear the conversation history.
 - `/image <path> [prompt]`: Send a local image to the model.
 - `/version`: Show the current version and check GitHub for updates.
-- `/update`: Update Flash to the latest version (pipx installs only).
+- `/update`: Update Flash to the latest version (requires pipx).
 - `/bye`: Exit the application.
 
 ### Image Recognition
@@ -194,9 +194,8 @@ playwright install chromium
 Flash checks `main` on GitHub for a newer version on startup and shows it
 in the banner if one is available. Run `/version` anytime to check on
 demand, or `/update` to install it. Flash re-runs the same pipx-based
-steps `install.sh` uses, so it only works for installs done via the
-quick-install script. If you cloned the repo manually, update with
-`git pull` instead.
+steps `install.sh` uses, so it needs pipx on PATH. If you cloned the repo
+manually, update with `git pull` instead.
 
 You can also check and update from outside the REPL:
 
