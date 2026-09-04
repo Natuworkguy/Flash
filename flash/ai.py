@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Union
 
 import ollama
+from colorama.ansi import clear_screen
 from dotenv import load_dotenv
 from ollama import ResponseError
 from rich.cells import cell_len
@@ -731,6 +732,8 @@ def main() -> None:
             sys.exit(2)
 
     client = ollama.Client(host=Config.host)
+
+    print(clear_screen(), end="")
 
     messages: list = []
 
