@@ -547,3 +547,50 @@ def test_interact_turns_down_an_action_it_does_not_have(monkeypatch):
     _, why = browser.interact("frobnicate")
 
     assert "Unknown action" in why  # nosec B101
+
+
+def test_write_tool_appends_instead_of_replacing(tmp_path, monkeypatch):
+    monkeypatch.setattr(tools, "NO_COMMAND_CONFIRMATION", True)
+    target = tmp_path / "long.py"
+
+    write_tool(str(target), "first\nsecond\n")
+    result = write_tool(str(target), "third\n", append=True)
+
+    assert target.read_bytes() == b"first\nsecond\nthird\n"  # nosec B101
+    assert "Appended 1 line" in result  # nosec B101
+    assert "now has 3 lines" in result  # nosec B101
+
+
+def test_write_tool_append_creates_a_missing_file(tmp_path, monkeypatch):
+    monkeypatch.setattr(tools, "NO_COMMAND_CONFIRMATION", True)
+    target = tmp_path / "new" / "part.txt"
+
+    write_tool(str(target), "start\n", append=True)
+
+    assert target.read_bytes() == b"start\n"  # nosec B101
+
+
+def test_write_tool_append_joins_a_file_with_no_trailing_newline(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(tools, "NO_COMMAND_CONFIRMATION", True)
+    target = tmp_path / "seam.txt"
+    target.write_bytes(b"tail")
+
+    write_tool(str(target), "ing\n", append=True)
+
+    assert target.read_bytes() == b"tailing\n"  # nosec B101
+
+
+def test_write_tool_append_blocked_leaves_the_file_untouched(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(tools, "NO_COMMAND_CONFIRMATION", False)
+    monkeypatch.setattr("builtins.input", lambda: "n")
+    target = tmp_path / "keep.txt"
+    target.write_bytes(b"original\n")
+
+    result = write_tool(str(target), "more\n", append=True)
+
+    assert target.read_bytes() == b"original\n"  # nosec B101
+    assert "blocked by user" in result  # nosec B101

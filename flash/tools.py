@@ -70,7 +70,10 @@ To create or change a file, use the write tool instead of shell redirection,
   heredocs, or Set-Content. It needs no quoting or escaping and works the
   same on every platform, so shell quoting can never corrupt the content.
   It replaces the whole file, so read the file first when editing one, and
-  pass back the complete new contents.
+  pass back the complete new contents. Your reply has a token limit, so a
+  long file does not fit in one call: write the first part, then call
+  write again with append=true for each following part, about 80 lines
+  at a time, until the file is finished.
 When searching for recent information, use the web_search tool.
 When you need to know the user's operating system, use the get_os tool.
 To think or plan mid-task without ending your turn, use the reason tool.
@@ -608,10 +611,21 @@ def _diff_preview(old_text: str, new_text: str, name: str) -> tuple[
     return body[:MAX_DIFF_PREVIEW_LINES], omitted, additions, removals
 
 
-def write_tool(path: str, content: str) -> str:
+def _read_exact(file_path: Path) -> Union[str, None]:  # noqa: UP007
+    """The file's text exactly as it sits on disk, or None if unreadable."""
+
+    try:
+        return file_path.read_text(encoding="utf-8", newline="")
+    except (OSError, UnicodeDecodeError):
+        return None
+
+
+def write_tool(path: str, content: str, append: Any = False) -> str:
     """Tool to write a text file, showing a diff and asking to confirm."""
 
-    tool_line(f"Write({path})")
+    adding = bool(append)
+
+    tool_line(f"Write({path}, append)" if adding else f"Write({path})")
 
     file_path = Path(path).expanduser()
     if file_path.is_dir():
@@ -629,8 +643,18 @@ def write_tool(path: str, content: str) -> str:
     else:
         old_text = ""
 
+    # An append is confirmed as the whole file it will produce, so the
+    # user sees the new lines in place rather than a fragment out of
+    # context. The exact text matters: whether the file already ends in
+    # a newline decides whether the first added line joins the last one.
+    if adding and existed:
+        exact = _read_exact(file_path)
+        new_text = (old_text if exact is None else exact) + content
+    else:
+        new_text = content
+
     preview, omitted, additions, removals = _diff_preview(
-        old_text, content, file_path.name
+        old_text, new_text, file_path.name
     )
 
     if not existed:
@@ -650,7 +674,10 @@ def write_tool(path: str, content: str) -> str:
         notify_needs_input()
 
         prompt = Text(f"  {BRANCH}  ", style=DIM)
-        prompt.append("Write this file? ", style=DIM)
+        prompt.append(
+            "Append to this file? " if adding else "Write this file? ",
+            style=DIM,
+        )
         prompt.append("y", style=f"bold {ACCENT}")
         prompt.append("/n ", style=DIM)
         console.print(prompt, end="")
@@ -663,7 +690,8 @@ def write_tool(path: str, content: str) -> str:
         file_path.parent.mkdir(parents=True, exist_ok=True)
         # newline="" so the model's content lands byte-for-byte, instead of
         # every \n becoming \r\n on Windows.
-        with open(file_path, "w", encoding="utf-8", newline="") as handle:
+        mode = "a" if adding else "w"
+        with open(file_path, mode, encoding="utf-8", newline="") as handle:
             handle.write(content)
     except OSError as exc:
         result = f"Error: could not write {file_path}: {exc}"
@@ -671,6 +699,17 @@ def write_tool(path: str, content: str) -> str:
         return result
 
     written = len(content.splitlines())
+
+    if adding:
+        total = len(new_text.splitlines())
+        tool_result(f"Appended {written} line{plural(written)}")
+
+        return (
+            f"Appended {written} line{plural(written)} to {file_path}, "
+            f"which now has {total} line{plural(total)}. Append the next "
+            "piece the same way, or stop here if the file is finished."
+        )
+
     verb = "Wrote" if existed else "Created"
     tool_result(f"{verb} {written} line{plural(written)}")
     return f"{verb} {written} line{plural(written)} to {file_path}"
@@ -1253,12 +1292,15 @@ tools = [
         "function": {
             "name": "write",
             "description": (
-                "Write a text file, replacing it if it exists. The user "
-                "sees a diff and confirms before anything is written. "
-                "Cross-platform and needs no quoting or escaping; prefer "
-                "this over shell redirection or heredocs for every file "
-                "you create or change. Read the file first when editing "
-                "one, since this replaces the whole file."
+                "Write a text file, replacing it if it exists, or add to "
+                "the end of one with append. The user sees a diff and "
+                "confirms before anything is written. Cross-platform and "
+                "needs no quoting or escaping; prefer this over shell "
+                "redirection or heredocs for every file you create or "
+                "change. Read the file first when editing one, since "
+                "without append this replaces the whole file. A long file "
+                "will not fit in one call, so write the first part, then "
+                "append the rest a piece at a time."
             ),
             "parameters": {
                 "type": "object",
@@ -1274,7 +1316,20 @@ tools = [
                         "type": "string",
                         "description": (
                             "The file's full new contents, exactly as it "
-                            "should land on disk."
+                            "should land on disk, or the piece to add to "
+                            "the end of it when append is true."
+                        ),
+                    },
+                    "append": {
+                        "type": "boolean",
+                        "description": (
+                            "Add content to the end of the file instead of "
+                            "replacing it. Use it to build a file that is "
+                            "too long for one call, one piece per call, "
+                            "and to continue an unfinished one. It is "
+                            "written exactly as given, so start the piece "
+                            "with a newline if the last one did not end "
+                            "with one."
                         ),
                     },
                 },
