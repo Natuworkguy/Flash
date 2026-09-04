@@ -614,8 +614,12 @@ def _diff_preview(old_text: str, new_text: str, name: str) -> tuple[
 def _read_exact(file_path: Path) -> Union[str, None]:  # noqa: UP007
     """The file's text exactly as it sits on disk, or None if unreadable."""
 
+    # newline="" keeps the line endings exactly as they are on disk,
+    # which is the whole point of reading it again here. Path.read_text
+    # only learned that argument in 3.13, and Flash supports 3.10.
     try:
-        return file_path.read_text(encoding="utf-8", newline="")
+        with open(file_path, encoding="utf-8", newline="") as handle:
+            return handle.read()
     except (OSError, UnicodeDecodeError):
         return None
 
