@@ -143,14 +143,16 @@ python run.py
 `/image <path> [prompt]` attaches a local image (`.png`, `.jpg`, `.jpeg`,
 `.webp`, `.gif`, `.bmp`) to your next message and sends both to the model.
 If you leave off the prompt, Flash asks it to describe the image. This
-requires a vision-capable model — text-only models will ignore the image
+requires a vision-capable model  text-only models will ignore the image
 or error. Pull one and switch to it first, e.g.:
 
 ```bash
 ollama pull llama3.2-vision
 ```
 
-```
+Flash Onyx 2+ is vision capable.
+
+```console
 /model llama3.2-vision
 /image ~/Pictures/screenshot.png What's going on in this UI?
 ```
@@ -158,7 +160,7 @@ ollama pull llama3.2-vision
 The model can also open an image on its own with the `view_image` tool, so
 you can just name the file in a normal message and let it look:
 
-```
+```prompt
 Why does the legend in ~/Desktop/plot.png overlap the bars?
 ```
 
@@ -171,7 +173,7 @@ The `screenshot` tool renders a local `.html` file or a URL in a headless
 Chromium and attaches the picture, so a vision-capable model can check
 what it built rather than trusting its own source:
 
-```
+```prompt
 Build me a pricing page in ~/Desktop/pricing.html, then check how it
 looks on a phone.
 ```
@@ -230,7 +232,7 @@ flash "flash://?prompt=What+is+Python"
 ```
 
 The prompt is URL-encoded, so use `+` or `%20` for spaces. Flash always shows
-the prompt and asks before sending it to the model — any web page can open a
+the prompt and asks before sending it to the model. Any web page can open a
 `flash://` link, so nothing runs unattended. For the same reason, URL prompts
 may not start with `/` or `!`: they carry questions for the model, never Flash
 commands or shell escapes.
