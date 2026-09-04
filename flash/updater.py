@@ -85,6 +85,10 @@ def perform_update() -> tuple[bool, str]:
     tmp_dir = tempfile.mkdtemp(prefix="flash-update-")
     try:
         subprocess.run(  # nosec B603 B607
+            ["pipx", "uninstall", "flash"],
+            check=True, capture_output=True, text=True,
+        )
+        subprocess.run(  # nosec B603 B607
             ["git", "clone", "--depth", "1", REPO_URL, tmp_dir],
             check=True, capture_output=True, text=True,
         )
