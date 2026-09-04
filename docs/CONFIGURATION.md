@@ -22,7 +22,7 @@ OLLAMA_HOST=http://localhost:11434
 ## Backend
 
 FLASH uses [Ollama](https://ollama.com) as its backend. It does not require
-an API key. Instead, it connects to an Ollama server over HTTP — either on your
+an API key. Instead, it connects to an Ollama server over HTTP, either on your
 own machine (the default) or on another host.
 
 Requirements:
@@ -39,8 +39,8 @@ Requirements:
 
 | Variable | Required | Default | Minimum | Description |
 | -------- | -------- | ------- | ------- | ----------- |
-| `MODEL` | Yes | — | — | Name of the Ollama model to use, e.g. `llama3.1`, `qwen2.5`, `mistral`. Must be pulled on the target server. |
-| `OLLAMA_HOST` | No | `http://localhost:11434` | — | Base URL of the Ollama server. Change this to switch from a local server to a remote one. |
+| `MODEL` | Yes | - | - | Name of the Ollama model to use, e.g. `llama3.1`, `qwen2.5`, `mistral`. Must be pulled on the target server. |
+| `OLLAMA_HOST` | No | `http://localhost:11434` | - | Base URL of the Ollama server. Change this to switch from a local server to a remote one. |
 | `MAX_HISTORY_MESSAGES` | No | `6` | `2` | Maximum number of chat messages kept in memory before the oldest are dropped. |
 | `MAX_HISTORY_CHARS` | No | `3000` | `1000` | Maximum total characters of history kept. Older messages are dropped once this is exceeded. |
 | `MAX_TOOL_ROUNDS` | No | `10` | `1` | Maximum number of tool-calling rounds allowed per request. |
