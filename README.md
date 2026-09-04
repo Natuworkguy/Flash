@@ -14,6 +14,7 @@ FLASH (**F**ast **L**ocal **A**gent **SH**ell) CLI is an AI-powered command-line
 - **`flash://` Links**: Open Flash from a browser or another app with a prompt ready to go (`flash://?prompt=What+is+Python`).
 - **Image Recognition**: Send a local image to a vision-capable model with `/image <path> [prompt]`, or let the AI open one itself with its `view_image` tool.
 - **Page Screenshots**: The AI renders a page it built in a headless browser with its `screenshot` tool and looks at the result, so it can see a broken layout instead of guessing from the HTML.
+- **Page Control**: The AI opens a page with `open_page` and then clicks buttons, fills forms, presses keys, and runs JavaScript on it with `interact`, seeing a fresh screenshot, the page's elements, and its console errors after every step, so it can debug what a page *does*, not just how it looks.
 - **Context Management**: Automatic history trimming to stay within token limits.
 - **Markdown Support**: Rich formatting for AI responses in the terminal.
 
@@ -135,7 +136,7 @@ python run.py
 - `/clear`: Clear the conversation history.
 - `/image <path> [prompt]`: Send a local image to the model.
 - `/version`: Show the current version and check GitHub for updates.
-- `/update`: Update Flash to the latest version (pipx installs only).
+- `/update`: Update Flash to the latest version (requires pipx).
 - `/bye`: Exit the application.
 
 ### Image Recognition
@@ -181,7 +182,29 @@ page with `full_page`, and reports any JavaScript errors the page threw
 while rendering, which is usually what explains a section that came out
 empty.
 
-Screenshots need Playwright's Chromium, which `install.sh` and
+### Clicking through a page
+
+A screenshot is a still picture, so for a page with buttons or a form the
+AI opens it with `open_page` and then drives it with `interact`, one
+action per call:
+
+```
+Open ~/Desktop/signup.html, fill in the form, submit it, and tell me why
+the confirmation never shows up.
+```
+
+The browser stays open between calls, so the page keeps its state while
+the AI works through a flow. `interact` takes an `action` (`click`,
+`fill`, `press`, `hover`, `select`, `scroll`, `wait`, `eval`, `back`,
+`reload`, `close`) and a `selector`, which can be the number Flash prints
+beside each element, a CSS selector, or the text on the element itself.
+Every call answers with where the page is now, what can be clicked or
+typed into next, and the JavaScript errors the page threw, with a
+screenshot attached. The `eval` action runs JavaScript against the live
+page and returns the result, which is how the AI inspects state a picture
+cannot show.
+
+Both tools need Playwright's Chromium, which `install.sh` and
 `install.ps1` download for you. Installing Flash another way means
 running it yourself:
 
@@ -194,9 +217,8 @@ playwright install chromium
 Flash checks `main` on GitHub for a newer version on startup and shows it
 in the banner if one is available. Run `/version` anytime to check on
 demand, or `/update` to install it. Flash re-runs the same pipx-based
-steps `install.sh` uses, so it only works for installs done via the
-quick-install script. If you cloned the repo manually, update with
-`git pull` instead.
+steps `install.sh` uses, so it needs pipx on PATH. If you cloned the repo
+manually, update with `git pull` instead.
 
 You can also check and update from outside the REPL:
 

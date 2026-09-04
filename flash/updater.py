@@ -13,7 +13,6 @@ import shutil
 import subprocess  # nosec B404
 import tempfile
 import urllib.request
-from pathlib import Path
 from typing import Union
 
 from .version import (
@@ -63,13 +62,6 @@ def check_for_update() -> Union[str, None]:  # noqa: UP007, RUF100
     return latest if latest and is_newer(latest) else None
 
 
-def is_pipx_install() -> bool:
-    """True if the running `flash` command lives in a pipx venv."""
-
-    exe = shutil.which("flash")
-    return bool(exe) and "pipx" in Path(exe or "").resolve().as_posix()
-
-
 def perform_update() -> tuple[bool, str]:
     """Reinstall Flash from the latest `main` branch.
 
@@ -90,14 +82,12 @@ def perform_update() -> tuple[bool, str]:
             f"command:\n\n```\n{reinstall}\n```"
         )
 
-    if not is_pipx_install():
-        return False, (
-            "This doesn't look like a pipx install. If you cloned the "
-            "repo manually, update it with `git pull` instead."
-        )
-
     tmp_dir = tempfile.mkdtemp(prefix="flash-update-")
     try:
+        subprocess.run(  # nosec B603 B607
+            ["pipx", "uninstall", "flash"],
+            check=True, capture_output=True, text=True,
+        )
         subprocess.run(  # nosec B603 B607
             ["git", "clone", "--depth", "1", REPO_URL, tmp_dir],
             check=True, capture_output=True, text=True,

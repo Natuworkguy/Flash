@@ -2,10 +2,14 @@
 
 import subprocess  # nosec B404
 
+import pytest
+
 from flash import browser, images, tools
 from flash.tools import (
     glob_tool,
     grep_tool,
+    interact,
+    open_page,
     read_tool,
     screenshot,
     shell_tool,
@@ -372,3 +376,221 @@ def test_diff_preview_counts_changes():
     assert omitted == 0  # nosec B101
     assert "-b" in preview  # nosec B101
     assert "+B" in preview  # nosec B101
+
+
+def _fake_page(monkeypatch, tmp_path, *, elements=(), problems=()):
+    """Stand in for a live Chromium, writing the screenshot it promises."""
+
+    monkeypatch.setattr(tools, "MODEL_NAME", "")
+    monkeypatch.setattr(tools, "SCRATCH_DIR", str(tmp_path))
+    monkeypatch.setattr(tools, "model_sees_images", lambda *_: True)
+    monkeypatch.setattr(tools, "page_is_open", lambda: True)
+    monkeypatch.setattr(
+        tools, "page_where", lambda: ("http://localhost/page", "Demo")
+    )
+    monkeypatch.setattr(tools, "page_elements", lambda: (list(elements), ""))
+    monkeypatch.setattr(tools, "page_problems", lambda: list(problems))
+
+    def snapshot(out, **_kwargs):
+        out.write_bytes(b"png bytes")
+
+        return ""
+
+    monkeypatch.setattr(tools, "page_snapshot", snapshot)
+
+
+def test_open_page_shows_the_page_and_what_it_can_click(tmp_path, monkeypatch):
+    take_pending_images()
+    _fake_page(
+        monkeypatch,
+        tmp_path,
+        elements=['[1] button "Add one"'],
+        problems=["page error: boom is not defined"],
+    )
+    monkeypatch.setattr(tools, "browser_open", lambda *_a, **_k: "")
+    page = tmp_path / "index.html"
+    page.write_text("<button>Add one</button>")
+
+    result = open_page(str(page))
+
+    assert "Opened file://" in result  # nosec B101
+    assert '[1] button "Add one"' in result  # nosec B101
+    assert "boom is not defined" in result  # nosec B101
+    assert take_pending_images() == [b"png bytes"]  # nosec B101
+
+
+def test_open_page_surfaces_a_browser_that_will_not_start(
+    tmp_path, monkeypatch
+):
+    take_pending_images()
+    _fake_page(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        tools, "browser_open", lambda *_a, **_k: browser.BROWSER_HINT
+    )
+    page = tmp_path / "index.html"
+    page.write_text("<h1>hi</h1>")
+
+    result = open_page(str(page))
+
+    assert "playwright install chromium" in result  # nosec B101
+    assert take_pending_images() == []  # nosec B101
+
+
+def test_interact_needs_a_page_to_be_open(tmp_path, monkeypatch):
+    take_pending_images()
+    _fake_page(monkeypatch, tmp_path)
+    monkeypatch.setattr(tools, "page_is_open", lambda: False)
+
+    result = interact("click", selector="1")
+
+    assert "No page is open" in result  # nosec B101
+    assert take_pending_images() == []  # nosec B101
+
+
+def test_interact_shows_the_page_after_every_action(tmp_path, monkeypatch):
+    take_pending_images()
+    _fake_page(monkeypatch, tmp_path, elements=['[1] button "Add one"'])
+    monkeypatch.setattr(
+        tools, "browser_interact", lambda *_a, **_k: ("Clicked 1.", "")
+    )
+
+    result = interact("click", selector="1")
+
+    assert "Clicked 1." in result  # nosec B101
+    assert '[1] button "Add one"' in result  # nosec B101
+    assert take_pending_images() == [b"png bytes"]  # nosec B101
+
+
+def test_interact_still_shows_the_page_when_the_action_fails(
+    tmp_path, monkeypatch
+):
+    take_pending_images()
+    _fake_page(monkeypatch, tmp_path, elements=['[1] button "Add one"'])
+    monkeypatch.setattr(
+        tools,
+        "browser_interact",
+        lambda *_a, **_k: ("", "Nothing on the page matches 'ghost'."),
+    )
+
+    result = interact("click", selector="ghost")
+
+    assert "did not work" in result  # nosec B101
+    assert '[1] button "Add one"' in result  # nosec B101
+    assert take_pending_images() == [b"png bytes"]  # nosec B101
+
+
+def test_interact_close_shuts_the_browser(tmp_path, monkeypatch):
+    take_pending_images()
+    _fake_page(monkeypatch, tmp_path)
+    closed = []
+    monkeypatch.setattr(tools, "close_session", lambda: closed.append(1) or 1)
+
+    result = interact("close")
+
+    assert closed == [1]  # nosec B101
+    assert "Closed the browser" in result  # nosec B101
+    assert take_pending_images() == []  # nosec B101
+
+
+class _FakeLocator:
+    """The little of Playwright's locator that `_locate` leans on."""
+
+    def __init__(self, count):
+        self._count = count
+        self.first = self
+
+    def count(self):
+        return self._count
+
+
+class _FakePage:
+    """A page where only the given selectors match anything."""
+
+    def __init__(self, matches):
+        self.matches = matches
+        self.asked = []
+
+    def locator(self, selector):
+        self.asked.append(selector)
+
+        return _FakeLocator(self.matches.get(selector, 0))
+
+    def get_by_text(self, text):
+        return _FakeLocator(self.matches.get(f"text={text}", 0))
+
+
+def test_locate_takes_an_element_number():
+    page = _FakePage({'[data-flash-id="3"]': 1})
+
+    assert browser._locate(page, "3") is not None  # nosec B101
+
+
+def test_locate_falls_back_from_a_selector_to_the_visible_text():
+    page = _FakePage({"text=Sign in": 1})
+
+    assert browser._locate(page, "Sign in") is not None  # nosec B101
+    assert "Sign in" in page.asked  # nosec B101
+
+
+def test_locate_explains_a_stale_element_number():
+    page = _FakePage({})
+
+    with pytest.raises(browser.PageProblem) as caught:
+        browser._locate(page, "9")
+
+    assert "no element 9" in str(caught.value)  # nosec B101
+
+
+def test_interact_turns_down_an_action_it_does_not_have(monkeypatch):
+    monkeypatch.setattr(browser, "is_open", lambda: True)
+
+    _, why = browser.interact("frobnicate")
+
+    assert "Unknown action" in why  # nosec B101
+
+
+def test_write_tool_appends_instead_of_replacing(tmp_path, monkeypatch):
+    monkeypatch.setattr(tools, "NO_COMMAND_CONFIRMATION", True)
+    target = tmp_path / "long.py"
+
+    write_tool(str(target), "first\nsecond\n")
+    result = write_tool(str(target), "third\n", append=True)
+
+    assert target.read_bytes() == b"first\nsecond\nthird\n"  # nosec B101
+    assert "Appended 1 line" in result  # nosec B101
+    assert "now has 3 lines" in result  # nosec B101
+
+
+def test_write_tool_append_creates_a_missing_file(tmp_path, monkeypatch):
+    monkeypatch.setattr(tools, "NO_COMMAND_CONFIRMATION", True)
+    target = tmp_path / "new" / "part.txt"
+
+    write_tool(str(target), "start\n", append=True)
+
+    assert target.read_bytes() == b"start\n"  # nosec B101
+
+
+def test_write_tool_append_joins_a_file_with_no_trailing_newline(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(tools, "NO_COMMAND_CONFIRMATION", True)
+    target = tmp_path / "seam.txt"
+    target.write_bytes(b"tail")
+
+    write_tool(str(target), "ing\n", append=True)
+
+    assert target.read_bytes() == b"tailing\n"  # nosec B101
+
+
+def test_write_tool_append_blocked_leaves_the_file_untouched(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(tools, "NO_COMMAND_CONFIRMATION", False)
+    monkeypatch.setattr("builtins.input", lambda: "n")
+    target = tmp_path / "keep.txt"
+    target.write_bytes(b"original\n")
+
+    result = write_tool(str(target), "more\n", append=True)
+
+    assert target.read_bytes() == b"original\n"  # nosec B101
+    assert "blocked by user" in result  # nosec B101

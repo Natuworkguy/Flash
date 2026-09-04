@@ -254,7 +254,10 @@ def _direct_shell_command(
 
 # read already caps its own output by whole lines and tells the model how
 # to page on; the middle-out trim below would silently gut a file read.
-_SELF_LIMITING_TOOLS = {"read"}
+# The page tools cap themselves too, and their element list is only useful
+# whole: a trim through the middle of it takes away the very numbers the
+# next click has to name.
+_SELF_LIMITING_TOOLS = {"read", "open_page", "interact"}
 
 
 def _trim_tool_output(text: str, name: str = "") -> str:
