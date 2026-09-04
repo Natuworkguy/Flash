@@ -100,6 +100,15 @@ def render(source: str, name: str, size: str, terms: str) -> str:
     return body[: match.start()] + pinned + body[match.end():]
 
 
+def run(argv: list[str], dry_run: bool) -> None:
+    """Show ARGV, and run it unless DRY_RUN."""
+
+    print(f"$ {' '.join(argv)}")
+
+    if not dry_run:
+        subprocess.run(argv, check=True)
+
+
 def build(
     source: str,
     name: str,
@@ -107,6 +116,7 @@ def build(
     terms: str,
     namespace: str | None,
     dry_run: bool,
+    push: bool,
 ) -> None:
     """Create NAME at SIZE, under NAMESPACE if one is given."""
 
@@ -119,12 +129,10 @@ def build(
             render(source, name, size, terms),
             encoding="utf-8",
         )
-        argv = ["ollama", "create", tag, "-f", str(generated)]
+        run(["ollama", "create", tag, "-f", str(generated)], dry_run)
 
-        print(f"$ {' '.join(argv)}")
-
-        if not dry_run:
-            subprocess.run(argv, check=True)
+    if push:
+        run(["ollama", "push", tag], dry_run)
 
 
 def wanted(
@@ -168,6 +176,11 @@ def main() -> int:
         help="namespace to tag the model under",
     )
     parser.add_argument(
+        "--push",
+        action="store_true",
+        help="push each built model to the Ollama registry",
+    )
+    parser.add_argument(
         "--print",
         action="store_true",
         dest="print_only",
@@ -182,6 +195,15 @@ def main() -> int:
 
     if args.print_only and len(args.modelfile) != 1:
         parser.error("--print takes one Modelfile")
+
+    if args.push and args.print_only:
+        parser.error("--print builds nothing to push.")
+
+    if args.push and not args.namespace:
+        parser.error(
+            "--push needs --namespace: the registry tags models as "
+            "NAMESPACE/name."
+        )
 
     building = not args.dry_run and not args.print_only
 
@@ -211,6 +233,7 @@ def main() -> int:
                 terms,
                 args.namespace,
                 args.dry_run,
+                args.push,
             )
 
     return 0
