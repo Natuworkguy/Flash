@@ -655,10 +655,19 @@ def _run_update(*, force: bool = False) -> bool:
             return True
 
     with console.status(
-        f"[bold {ACCENT}]Updating{ELLIPSIS}",
+        f"[bold {ACCENT}]Updating{ELLIPSIS} ",
         spinner="arrow3", spinner_style=ACCENT
-    ):
-        ok, message = perform_update()
+    ) as status:
+        # git and pipx print their progress straight to the terminal,
+        # which collides with the spinner and comes out shredded. Their
+        # output arrives here a line at a time instead, and printing it
+        # through the console puts each line cleanly above the spinner.
+        ok, message = perform_update(
+            on_step=lambda label: status.update(
+                f"[bold {ACCENT}]{label}{ELLIPSIS} "
+            ),
+            on_output=lambda line: console.print(Text(line, style=DIM)),
+        )
 
     if ok:
         console.print(Text(message, style=f"bold {ACCENT}"))
