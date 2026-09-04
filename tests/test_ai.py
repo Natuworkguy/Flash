@@ -84,7 +84,7 @@ def test_run_update_confirmed(monkeypatch):
     monkeypatch.setattr("flash.ai.fetch_latest_version", lambda: "99.0.0")
     monkeypatch.setattr("builtins.input", lambda: "y")
     monkeypatch.setattr(
-        "flash.ai.perform_update", lambda: (True, "Flash updated.")
+        "flash.ai.perform_update", lambda **_kw: (True, "Flash updated.")
     )
     assert _run_update() is True  # nosec B101
 
@@ -97,7 +97,7 @@ def test_run_update_force_skips_check_and_confirmation(monkeypatch):
 
     monkeypatch.setattr("builtins.input", _fail_if_called)
     monkeypatch.setattr(
-        "flash.ai.perform_update", lambda: (True, "Flash updated.")
+        "flash.ai.perform_update", lambda **_kw: (True, "Flash updated.")
     )
     assert _run_update(force=True) is True  # nosec B101
 
@@ -106,7 +106,7 @@ def test_run_update_failure_propagates(monkeypatch):
     monkeypatch.setattr("flash.ai.fetch_latest_version", lambda: "99.0.0")
     monkeypatch.setattr("builtins.input", lambda: "y")
     monkeypatch.setattr(
-        "flash.ai.perform_update", lambda: (False, "pipx not found.")
+        "flash.ai.perform_update", lambda **_kw: (False, "pipx not found.")
     )
     assert _run_update() is False  # nosec B101
 
