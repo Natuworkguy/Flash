@@ -17,7 +17,21 @@ from typing import Any, Union
 from ddgs import DDGS
 from rich.text import Text
 
-from .browser import capture, resolve_target
+from .browser import (
+    ACTIONS,
+    MAX_ELEMENTS,
+    NO_PAGE,
+    capture,
+    close_session,
+    resolve_target,
+)
+from .browser import drain_problems as page_problems
+from .browser import elements as page_elements
+from .browser import interact as browser_interact
+from .browser import is_open as page_is_open
+from .browser import open_page as browser_open
+from .browser import snapshot as page_snapshot
+from .browser import where as page_where
 from .documents import extract_document_text, is_document_path
 from .images import resolve_image_path
 from .memory import add_memory, forget_memory, search_memory
@@ -76,6 +90,21 @@ To see how a web page actually renders, use the screenshot tool on the
   errors the page threw, which is what usually explains a blank section,
   so read those before changing any CSS. Serve the page over HTTP with
   shell first if it needs fetch or ES modules, which file:// blocks.
+To click a button, fill in a form, or work out why a page misbehaves,
+  open it with the open_page tool and then drive it with the interact
+  tool, one action per call: click, fill, press, hover, select, scroll,
+  wait, eval, back, reload, close. The browser stays open between calls,
+  so the page keeps whatever state your last action put it in. Each call
+  answers with the page's address, up to {MAX_ELEMENTS} numbered elements
+  you can act on, and the JavaScript errors the page threw, and attaches
+  a fresh screenshot, so you see the result of every action instead of
+  guessing it. Act on an element by the number beside it; a CSS selector
+  or the visible text works too. Those numbers are handed out again after
+  every call, so use the newest list, never one from earlier in the
+  conversation. The eval action runs JavaScript on the live page and
+  returns the result, which is the quickest way to check state a picture
+  cannot show, such as what a handler stored or what a value really is.
+  Close the browser with the close action once the page is working.
 To save a durable fact or preference for future sessions, use the remember
   tool. To check saved memory, use the recall tool with a specific phrase;
   it does not return everything for a blank search. To delete one saved
@@ -912,6 +941,166 @@ def screenshot(
     return result
 
 
+def _page_report(headline: str, *, full_page: bool = False) -> str:
+    """Show the model the page it just acted on.
+
+    Every open_page and interact call ends here, because an action the
+    model cannot see the result of is an action it has to guess about: a
+    picture when the model has eyes, the elements it can act on next, and
+    whatever the page complained about while doing it.
+    """
+
+    global _screenshot_count
+
+    lines = [headline]
+
+    url, title = page_where()
+    if url:
+        lines.append(f"Page: {title or 'untitled'} - {url}")
+
+    if model_sees_images(OLLAMA_HOST, MODEL_NAME):
+        _screenshot_count += 1
+        out = Path(SCRATCH_DIR) / f"page-{_screenshot_count}.png"
+        why = page_snapshot(out, full_page=bool(full_page))
+
+        if why:
+            lines.append(f"No screenshot of the page: {why}")
+            tool_result(why, style=WARN)
+        else:
+            data = out.read_bytes()
+            _pending_images.append(data)
+            kilobytes = max(1, round(len(data) / 1024))
+            tool_result(f"{out.name} ({kilobytes} KB)")
+            lines.append(
+                "A screenshot of the page as it stands is attached to this "
+                "tool result, so judge it from what you can see there."
+            )
+    else:
+        lines.append(
+            f"The active model ({MODEL_NAME}) has no vision, so there is no "
+            "screenshot. Work from the element list and from eval."
+        )
+
+    found, why = page_elements()
+    if why:
+        lines.append(f"Could not list the page's elements: {why}")
+    elif found:
+        lines.append(
+            "Things you can act on now (pass the number as the selector):"
+        )
+        lines.extend(found)
+    else:
+        lines.append("Nothing on this page can be clicked or typed into.")
+
+    problems = page_problems()
+    if problems:
+        for problem in problems[:MAX_PAGE_PROBLEMS]:
+            tool_result(problem, style=WARN)
+
+        shown = problems[:MAX_PAGE_PROBLEMS]
+        extra = len(problems) - len(shown)
+        lines.append(
+            f"The page reported {len(problems)} error{plural(len(problems))}, "
+            "which is usually what explains anything that looks wrong:"
+        )
+        lines.extend(f"- {problem}" for problem in shown)
+
+        if extra:
+            lines.append(f"- and {extra} more")
+
+    return "\n".join(lines)
+
+
+def open_page(
+    target: str,
+    width: Any = DEFAULT_SCREENSHOT_WIDTH,
+    height: Any = DEFAULT_SCREENSHOT_HEIGHT,
+    wait_ms: Any = DEFAULT_SCREENSHOT_WAIT_MS,
+) -> str:
+    """Open a page in a browser that stays open to be clicked through."""
+
+    view_width = _clamp(width, MIN_SCREENSHOT_SIDE, MAX_SCREENSHOT_SIDE,
+                        DEFAULT_SCREENSHOT_WIDTH)
+    view_height = _clamp(height, MIN_SCREENSHOT_SIDE,
+                         MAX_SCREENSHOT_SIDE, DEFAULT_SCREENSHOT_HEIGHT)
+    settle_ms = _clamp(wait_ms, 0, MAX_SCREENSHOT_WAIT_MS,
+                       DEFAULT_SCREENSHOT_WAIT_MS)
+
+    shape = f"{view_width}x{view_height}"
+    tool_line(f"OpenPage({target}, {shape})")
+
+    url, why = resolve_target(target)
+    if url is None:
+        result = f"Error: {why}"
+        tool_result(result, style=ERROR)
+        return result
+
+    why = browser_open(
+        url,
+        width=view_width,
+        height=view_height,
+        wait_ms=settle_ms,
+    )
+
+    if why:
+        result = f"Error: {why}"
+        tool_result(result, style=ERROR)
+        return result
+
+    return _page_report(
+        f"Opened {url} at {shape}. The browser stays open, so use the "
+        "interact tool to click, type, or run JavaScript on this page, and "
+        "close it when you are done."
+    )
+
+
+def interact(
+    action: str,
+    selector: str = "",
+    value: str = "",
+    wait_ms: Any = 0,
+    full_page: Any = False,
+) -> str:
+    """Act on the page the browser already has open."""
+
+    action = str(action).strip().lower()
+    selector = str(selector or "")
+    value = "" if value is None else str(value)
+
+    label = f"{action} {selector}".strip()
+    tool_line(f"Interact({label})")
+
+    if action == "close":
+        result = (
+            "Closed the browser."
+            if close_session()
+            else "There was no browser open."
+        )
+        tool_result(result)
+        return result
+
+    if not page_is_open():
+        result = f"Error: {NO_PAGE}"
+        tool_result(result, style=ERROR)
+        return result
+
+    note, why = browser_interact(
+        action,
+        selector=selector,
+        value=value,
+        wait_ms=_clamp(wait_ms, 0, MAX_SCREENSHOT_WAIT_MS, 0),
+    )
+
+    if why:
+        # A failed action leaves the page as it was, so the model still
+        # needs to see it to work out what went wrong.
+        result = _page_report(f"That did not work: {why}")
+        tool_result(why, style=ERROR)
+        return result
+
+    return _page_report(note, full_page=bool(full_page))
+
+
 # Tool schema expected by Ollama function calling (OpenAI-style).
 tools = [
     {
@@ -1192,6 +1381,139 @@ tools = [
     {
         "type": "function",
         "function": {
+            "name": "open_page",
+            "description": (
+                "Open a local .html file or a URL in a real browser that "
+                "stays open, so you can then click, type, and debug your "
+                "way through the page with the interact tool. The result "
+                "shows the page's address, a numbered list of everything "
+                "that can be clicked or typed into, and any JavaScript "
+                "errors it threw, with a screenshot attached. Use this "
+                "instead of screenshot whenever the page has buttons, a "
+                "form, or behaviour to check; screenshot is only a still "
+                "picture."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "target": {
+                        "type": "string",
+                        "description": (
+                            "Path to a local page, e.g. './index.html', or "
+                            "a URL, e.g. 'http://localhost:8000'."
+                        ),
+                    },
+                    "width": {
+                        "type": "integer",
+                        "description": (
+                            "Viewport width in pixels. Defaults to "
+                            f"{DEFAULT_SCREENSHOT_WIDTH}. Use 375 to work "
+                            "through the page as a phone would show it."
+                        ),
+                        "minimum": MIN_SCREENSHOT_SIDE,
+                        "maximum": MAX_SCREENSHOT_SIDE,
+                    },
+                    "height": {
+                        "type": "integer",
+                        "description": (
+                            "Viewport height in pixels. Defaults to "
+                            f"{DEFAULT_SCREENSHOT_HEIGHT}."
+                        ),
+                        "minimum": MIN_SCREENSHOT_SIDE,
+                        "maximum": MAX_SCREENSHOT_SIDE,
+                    },
+                    "wait_ms": {
+                        "type": "integer",
+                        "description": (
+                            "Milliseconds to let the page load before "
+                            "looking at it. Defaults to "
+                            f"{DEFAULT_SCREENSHOT_WAIT_MS}."
+                        ),
+                        "minimum": 0,
+                        "maximum": MAX_SCREENSHOT_WAIT_MS,
+                    },
+                },
+                "required": ["target"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "interact",
+            "description": (
+                "Do one thing to the page open_page opened, then look at "
+                "the result: click a button, fill a field, press a key, "
+                "choose an option, scroll, wait for something to appear, "
+                "or run JavaScript against the live page. The page keeps "
+                "its state between calls, so work through a flow one call "
+                "at a time. Every call reports where the page is now, its "
+                "numbered elements, and the errors it threw, with a "
+                "screenshot attached, so this is how you debug what a page "
+                "actually does rather than what its source says."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "description": (
+                            "What to do: 'click', 'fill' (type value into "
+                            "a field), 'press' (send a key such as Enter or "
+                            "Tab), 'hover', 'select' (choose value in a "
+                            "dropdown), 'scroll', 'wait', 'eval' (run the "
+                            "JavaScript in value and return its result), "
+                            "'back', 'reload', or 'close' (shut the "
+                            "browser when you are done)."
+                        ),
+                        "enum": list(ACTIONS),
+                    },
+                    "selector": {
+                        "type": "string",
+                        "description": (
+                            "Which element to act on: the number shown "
+                            "next to it in the last element list (simplest "
+                            "and safest), a CSS selector, or the visible "
+                            "text on it. The numbers are handed out again "
+                            "after every call, so always use the newest "
+                            "list. Leave it out for eval, back, reload, "
+                            "close, and for a scroll of the whole page."
+                        ),
+                    },
+                    "value": {
+                        "type": "string",
+                        "description": (
+                            "The text to type for fill, the key for press, "
+                            "the option for select, the JavaScript for "
+                            "eval, or 'top', 'bottom', or a number of "
+                            "pixels for scroll."
+                        ),
+                    },
+                    "wait_ms": {
+                        "type": "integer",
+                        "description": (
+                            "Extra milliseconds to wait after the action "
+                            "before looking, for a page that animates or "
+                            "fetches in response to it."
+                        ),
+                        "minimum": 0,
+                        "maximum": MAX_SCREENSHOT_WAIT_MS,
+                    },
+                    "full_page": {
+                        "type": "boolean",
+                        "description": (
+                            "Photograph the whole scrollable page instead "
+                            "of just the viewport."
+                        ),
+                    },
+                },
+                "required": ["action"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "web_search",
             "description": "Search the web and return summarized results.",
             "parameters": {
@@ -1338,6 +1660,8 @@ FUNCTIONS = {
     "write": write_tool,
     "view_image": view_image,
     "screenshot": screenshot,
+    "open_page": open_page,
+    "interact": interact,
     "web_search": web_search,
     "get_os": get_os,
     "reason": reason,
