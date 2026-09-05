@@ -718,7 +718,7 @@ def write_tool(path: str, content: str, append: Any = False) -> str:
         )
 
     verb = "Wrote" if existed else "Created"
-    tool_result(f"{verb} {written} line{plural(written)}")
+    tool_result(f"{verb} {written} line{plural(written)} to {file_path}")
     return f"{verb} {written} line{plural(written)} to {file_path}"
 
 
