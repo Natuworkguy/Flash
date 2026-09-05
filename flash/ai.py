@@ -12,7 +12,6 @@ from pathlib import Path
 from typing import Union
 
 import ollama
-from colorama.ansi import clear_screen
 from dotenv import load_dotenv
 from ollama import ResponseError
 from rich.cells import cell_len
@@ -733,7 +732,8 @@ def main() -> None:
 
     client = ollama.Client(host=Config.host)
 
-    print(clear_screen(), end="")
+    if console.is_terminal:
+        print("\x1b[H\x1b[2J\x1b[3J", end="", flush=True)
 
     messages: list = []
 
