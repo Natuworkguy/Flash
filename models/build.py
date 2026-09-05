@@ -9,22 +9,14 @@ import shutil
 import subprocess
 import sys
 import tempfile
-import urllib.error
-import urllib.request
-from functools import cache
 from pathlib import Path
 
 FROM_PATTERN = re.compile(
     r"^FROM[ \t]+(?P<repo>[^\s:]+)(?::\S+)?[ \t]*$",
     re.MULTILINE,
 )
-HEADER_PATTERN = re.compile(
-    r"^#[ \t]*(?P<key>[\w-]+)[ \t]*:[ \t]*(?P<value>.*)$"
-)
+HEADER_PATTERN = re.compile(r"^#[ \t]*(?P<key>\w+)[ \t]*:[ \t]*(?P<value>.*)$")
 NAME_PLACEHOLDER = "{{name}}"
-CLOUD_SUFFIX = "-cloud"
-MANIFEST_URL = "https://registry.ollama.ai/v2/{repo}/manifests/{tag}"
-TRUTHY = frozenset({"true", "yes", "on", "1"})
 LICENSE_PATH = Path(__file__).resolve().parent.parent / "LICENSE"
 LICENSE_PATTERN = re.compile(r"^LICENSE\b", re.MULTILINE)
 OWN_TERMS = (
@@ -38,8 +30,8 @@ BASE_TERMS = (
 )
 
 
-def header(source: str, path: Path) -> tuple[str, list[str], bool]:
-    """Return the name, sizes, and cloud flag commented atop SOURCE."""
+def header(source: str, path: Path) -> tuple[str, list[str]]:
+    """Return the name and sizes commented at the top of SOURCE."""
 
     fields: dict[str, str] = {}
 
@@ -55,11 +47,7 @@ def header(source: str, path: Path) -> tuple[str, list[str], bool]:
     if not fields.get("name"):
         raise SystemExit(f"{path}: no `# name:` line.")
 
-    return (
-        fields["name"],
-        fields.get("sizes", "").replace(",", " ").split(),
-        fields.get("cloud-model", "").lower() in TRUTHY,
-    )
+    return fields["name"], fields.get("sizes", "").replace(",", " ").split()
 
 
 def spoken(name: str) -> str:
@@ -112,44 +100,6 @@ def render(source: str, name: str, size: str, terms: str) -> str:
     return body[: match.start()] + pinned + body[match.end():]
 
 
-def origin(source: str, path: Path) -> str:
-    """Return the repo SOURCE builds on: FROM gemma4:12b -> gemma4."""
-
-    match = FROM_PATTERN.search(source)
-
-    if match is None:
-        raise SystemExit(f"{path}: no FROM line.")
-
-    return match["repo"]
-
-
-def variant(size: str) -> str:
-    """Return the cloud tag matching SIZE: 31b -> 31b-cloud."""
-
-    return f"{size}{CLOUD_SUFFIX}" if size else CLOUD_SUFFIX.lstrip("-")
-
-
-@cache
-def published(repo: str, tag: str) -> bool:
-    """Return whether REPO:TAG is a tag the Ollama registry serves."""
-
-    library = repo if "/" in repo else f"library/{repo}"
-    url = MANIFEST_URL.format(repo=library, tag=tag)
-
-    try:
-        with urllib.request.urlopen(
-            urllib.request.Request(url, method="HEAD"),
-            timeout=10,
-        ) as response:
-            return response.status == 200
-    except urllib.error.HTTPError:
-        return False
-    except urllib.error.URLError as error:
-        print(f"warning: {repo}:{tag}: {error.reason}", file=sys.stderr)
-
-        return False
-
-
 def run(argv: list[str], dry_run: bool) -> None:
     """Show ARGV, and run it unless DRY_RUN."""
 
@@ -189,60 +139,21 @@ def wanted(
     declared: list[str],
     asked: list[str] | None,
     path: Path,
-    cloud: bool,
 ) -> list[str]:
     """Return the sizes to build, checking ASKED against DECLARED."""
 
     if not asked:
         return declared or [""]
 
-    known = declared
-
-    if cloud:
-        known = [tag for size in declared for tag in (size, variant(size))]
-
-    unknown = [size for size in asked if size not in known]
+    unknown = [size for size in asked if size not in declared]
 
     if unknown:
         raise SystemExit(
             f"{path}: no size {', '.join(unknown)}. "
-            f"Declared: {', '.join(known) or 'none'}."
+            f"Declared: {', '.join(declared) or 'none'}."
         )
 
     return asked
-
-
-def targets(
-    sizes: list[str],
-    base: str,
-    cloud: bool,
-    path: Path,
-) -> list[str]:
-    """Return SIZES, each followed by its cloud tag if BASE has one."""
-
-    if not cloud:
-        return sizes
-
-    tags = []
-
-    for size in sizes:
-        if size.endswith(CLOUD_SUFFIX):
-            if not published(base, size):
-                raise SystemExit(f"{path}: {base} has no {size} to build on.")
-
-            tags.append(size)
-
-            continue
-
-        tags.append(size)
-        tag = variant(size)
-
-        if published(base, tag):
-            tags.append(tag)
-        else:
-            print(f"{path}: no {base}:{tag}, skipping it.", file=sys.stderr)
-
-    return tags
 
 
 def main() -> int:
@@ -303,8 +214,8 @@ def main() -> int:
 
     for path in args.modelfile:
         source = path.read_text(encoding="utf-8")
-        name, declared, cloud = header(source, path)
-        sizes = wanted(declared, args.size, path, cloud)
+        name, declared = header(source, path)
+        sizes = wanted(declared, args.size, path)
 
         if args.print_only:
             if len(sizes) != 1:
@@ -314,9 +225,7 @@ def main() -> int:
 
             return 0
 
-        base = origin(source, path) if cloud else ""
-
-        for size in targets(sizes, base, cloud, path):
+        for size in sizes:
             build(
                 source,
                 name,
