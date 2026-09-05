@@ -66,6 +66,9 @@ To look at a file's contents, use the read tool instead of shell
   its offset argument. It also extracts text from .pdf and .docx files, so
   read them the same way; a legacy .doc file needs converting to .docx
   first.
+A path the user writes after an @, such as @flash/models.py, is a file they
+  are pointing you at. Read it before answering, unless what they asked
+  plainly does not depend on what is in it.
 To create or change a file, use the write tool instead of shell redirection,
   heredocs, or Set-Content. It needs no quoting or escaping and works the
   same on every platform, so shell quoting can never corrupt the content.

@@ -141,6 +141,11 @@ python run.py
 - `/update`: Update Flash to the latest version (requires pipx).
 - `/bye`: Exit the application.
 
+Type `@` anywhere in a message to pick a file out of a dropdown, e.g.
+`why does @flash/theme.py fall back to ASCII?`. Arrow keys and Tab pick
+one, `/` walks into a directory, and the model reads whatever you point
+it at. Dot-entries stay hidden until you type the leading dot.
+
 ### Image Recognition
 
 `/image <path> [prompt]` attaches a local image (`.png`, `.jpg`, `.jpeg`,
