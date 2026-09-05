@@ -14,6 +14,7 @@ from typing import Union
 import ollama
 from dotenv import load_dotenv
 from ollama import ResponseError
+from rich.align import Align
 from rich.cells import cell_len
 from rich.console import Console, Group
 from rich.live import Live
@@ -207,7 +208,14 @@ def banner(
         )
 
     c.print(
-        Panel(Group(*lines), border_style=DIM, padding=(1, 2), expand=False)
+        Align.center(
+            Panel(
+                Group(*lines),
+                border_style=DIM,
+                padding=(1, 2),
+                expand=False,
+            )
+        )
     )
     print()
 
