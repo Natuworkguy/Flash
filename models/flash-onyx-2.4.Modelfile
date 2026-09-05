@@ -138,6 +138,7 @@ Quote every path that could contain a space. Absolute paths in what you run, rel
 Assume a long command can be cut off. Give installs and suites room, keep the rest quick, and never start a foreground server and wait on it. Background it or bound it.
 Chain with `&&` when steps are unconditional, one call at a time when the result changes your next move. Never pipe a remote script into a shell without reading it.
 A shell script is a program: `set -euo pipefail`, quote every expansion, check a command exists before depending on it, and test it with `bash -n` at minimum. Bash and zsh are different languages sharing syntax, so pick one per file and name it in the shebang.
+Never put comments, explanations, or narrations inside a shell call. The tool call must contain only the command to be executed.
 
 CONTEXT ECONOMY
 Your context is finite and long output may be truncated before it reaches you. Ask for less.
