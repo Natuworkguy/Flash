@@ -393,7 +393,7 @@ def _chat(client: "ollama.Client", messages: list, tools_arg=None):
 _model_system_prompts: dict[str, str] = {}
 
 
-def _session_system_prompt() -> str:
+def _session_system_prompt(heard: bool = False) -> str:
     """Flash's system prompt, with the current model's own prepended.
 
     Cached per model name, since /api/show costs a round trip and the
@@ -409,7 +409,7 @@ def _session_system_prompt() -> str:
 
     prompt = build_system_prompt(_model_system_prompts[model])
 
-    return prompt + VOICE_PROMPT if Config.voice else prompt
+    return prompt + VOICE_PROMPT if heard else prompt
 
 
 def _load_states(key: str, fallback: list[str]) -> list[str]:
@@ -741,14 +741,16 @@ def _voice_input() -> Union[str, None]:  # noqa: UP007, RUF100
     return heard
 
 
-def _speak_reply(text: str) -> bool:
-    """Read a finished reply aloud when voice mode is on.
+def _speak_reply(text: str, heard: bool = True) -> bool:
+    """Read a finished reply aloud when the turn was spoken to us.
 
     Returns whether to listen for the answer straight away, so a spoken
-    conversation carries on without a keypress between turns.
+    conversation carries on without a keypress between turns. A typed
+    turn is answered in writing and hands the prompt back, because voice
+    mode being armed is not the same as the user talking.
     """
 
-    if not Config.voice:
+    if not (Config.voice and heard):
         return False
 
     spoken = for_speech(text)
@@ -929,6 +931,7 @@ def main() -> None:
             pending_images: Union[  # noqa: UP007, RUF100
                 list[str], None
             ] = None
+            heard = False
 
             if pending:
                 uin = pending.pop(0)
@@ -968,6 +971,7 @@ def main() -> None:
                     continue
 
                 uin = spoken
+                heard = True
                 _render_sent_message(console, Config.prompt, uin)
 
             if uin in ("/bye", "/exit"):
@@ -1180,7 +1184,9 @@ def main() -> None:
             messages.append(_message("user", uin, pending_images))
             _trim_history(messages)
 
-            system_message = _message("system", _session_system_prompt())
+            system_message = _message(
+                "system", _session_system_prompt(heard)
+            )
 
             final, thinking, tool_calls, err = _chat_retry_until_response(
                 console, client, [system_message] + messages, tools,
@@ -1202,7 +1208,7 @@ def main() -> None:
                     )
                 _render_markdown(console, final)
                 notify_reply_ready()
-                listening_on = _speak_reply(final)
+                listening_on = _speak_reply(final, heard)
                 messages.append(_message("assistant", final))
                 _trim_history(messages)
                 print()
@@ -1288,7 +1294,7 @@ def main() -> None:
 
             _render_markdown(console, followup)
             notify_reply_ready()
-            listening_on = _speak_reply(followup)
+            listening_on = _speak_reply(followup, heard)
             messages.append(_message("assistant", followup))
             _trim_history(messages)
 
