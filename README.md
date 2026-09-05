@@ -133,7 +133,8 @@ python run.py
 ### Internal Commands
 
 - `/help` or `/?`: Display the help message.
-- `/model`: Show the currently active model and Ollama host.
+- `/model`: Pick from the models on this machine, or type a name to
+  download one. `/model <name>` switches straight to one.
 - `/clear`: Clear the conversation history.
 - `/image <path> [prompt]`: Send a local image to the model.
 - `/version`: Show the current version and check GitHub for updates.

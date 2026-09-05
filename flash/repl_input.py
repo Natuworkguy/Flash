@@ -19,7 +19,7 @@ from .theme import SPARKLE, ptk_sweep_reveal
 
 # Single source of truth for both the completion dropdown and /help.
 COMMANDS = [
-    ("/model", "show the active model, or /model <name> to switch"),
+    ("/model", "pick from the models here, or /model <name> to switch"),
     ("/auto", "toggle autonomous command mode (/auto on|off)"),
     ("/voice", "talk to Flash and hear its replies (/voice on|off)"),
     ("/set", f"set an env var, saved to {ENV_PATH} (/set NAME VALUE)"),

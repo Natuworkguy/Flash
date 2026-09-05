@@ -26,6 +26,7 @@ from .cli import parse_args
 from .envfile import set_env_var, unset_env_var
 from .images import resolve_image_path
 from .memory import forget_memory, list_memory
+from .models import fetch_if_missing, pick_model
 from .notify import notify_reply_ready
 from .paths import ENV_PATH
 from .repl_input import COMMANDS, read_line
@@ -980,6 +981,18 @@ def main() -> None:
 
             if uin == "/model" or uin.startswith("/model "):
                 arg = uin[len("/model"):].strip()
+
+                if arg:
+                    # Setting a model by hand stays allowed whatever the
+                    # backend says, so a declined or failed download is
+                    # not a reason to leave MODEL where it was.
+                    fetch_if_missing(client, arg)
+                else:
+                    # Bare /model picks from what this machine holds.
+                    # Picking nothing falls through to the summary below
+                    # rather than leaving the screen bare.
+                    arg = pick_model(client, Config.model or "") or ""
+
                 if arg:
                     set_config_var("MODEL", arg)
                     client = ollama.Client(host=Config.host)
