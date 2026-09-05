@@ -1,5 +1,7 @@
 # name: flash-onyx-2.2
 # sizes: 12b, 31b
+# cloud-base: true
+
 FROM gemma4:12b
 
 SYSTEM """
