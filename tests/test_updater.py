@@ -48,7 +48,7 @@ def test_check_for_update_available(monkeypatch):
 def _fake_tools(monkeypatch):
     monkeypatch.setattr(updater.shutil, "which", lambda name: f"/bin/{name}")
     monkeypatch.setattr(
-        updater.tempfile, "mkdtemp", lambda **_kw: "/tmp/flash"
+        updater.tempfile, "mkdtemp", lambda **_kw: "/tmp/flash"  # nosec B108
     )
     monkeypatch.setattr(updater.shutil, "rmtree", lambda *_a, **_kw: None)
 

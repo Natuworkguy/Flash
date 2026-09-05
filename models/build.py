@@ -147,7 +147,7 @@ def published(repo: str, tag: str) -> bool:
     url = MANIFEST_URL.format(repo=library, tag=tag)
 
     try:
-        with urllib.request.urlopen(
+        with urllib.request.urlopen(  # nosec B310
             urllib.request.Request(url, method="HEAD"),
             timeout=10,
         ) as response:
