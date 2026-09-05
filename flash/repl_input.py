@@ -50,16 +50,51 @@ _image_path_completer = PathCompleter(
 )
 
 
-def _parse_image_path_arg(
+def _mention_completer(typed: str) -> PathCompleter:
+    """A completer over every file, for @ mentions.
+
+    Dot-entries stay out of the way until one is asked for by name, so a
+    bare @ offers the working directory rather than .git and __pycache__.
+    """
+
+    show_hidden = os.path.basename(typed).startswith(".")
+
+    return PathCompleter(
+        expanduser=True,
+        file_filter=lambda path: (
+            show_hidden or not os.path.basename(path).startswith(".")
+        ),
+    )
+
+
+def _mention_before(text: str) -> Union[str, None]:  # noqa: UP007, RUF100
+    """The @ mention being typed at the end of TEXT, if there is one.
+
+    Returns whatever follows the '@', which is "" the moment it is typed,
+    so the dropdown opens on the working directory right away. A mention
+    only starts at an '@' that opens the line or follows a space, so an
+    email address or a decorator halfway through a word does not open it.
+    """
+
+    at = text.rfind("@")
+
+    if at == -1 or (at > 0 and not text[at - 1].isspace()):
+        return None
+
+    return text[at + 1:]
+
+
+def _parse_path_arg(
     remainder: str,
 ) -> Union[tuple[str, bool], None]:  # noqa: UP007
-    """Track quoting while scanning the /image path argument typed so far.
+    """Track quoting while scanning the path argument typed so far.
 
     Returns `(literal_path, in_quote)`: `literal_path` is the path with any
     quote marks stripped out (what's actually on disk), and `in_quote` is
     True if the text currently ends inside a quote the user opened
-    themselves. Returns None once an unquoted space ends the path argument
-    (the start of the optional trailing prompt).
+    themselves. Returns None once an unquoted space ends the path
+    argument, which is where /image's optional prompt starts, and where
+    an @ mention stops being one.
     """
 
     literal_chars = []
@@ -88,7 +123,7 @@ class SlashCommandCompleter(Completer):
 
         if text.startswith("/image "):
             remainder = text[len("/image "):]
-            parsed = _parse_image_path_arg(remainder)
+            parsed = _parse_path_arg(remainder)
             if parsed is None:
                 return  # past the path, now typing the optional prompt
             literal_path, in_quote = parsed
@@ -105,6 +140,37 @@ class SlashCommandCompleter(Completer):
                 yield Completion(
                     suffix, start_position=0, display=completion.display
                 )
+            return
+
+        mention = _mention_before(text)
+        if mention is not None:
+            parsed = _parse_path_arg(mention)
+            if parsed is None:
+                return  # a space ended the mention
+            literal_path, in_quote = parsed
+
+            sub_document = Document(
+                literal_path, cursor_position=len(literal_path)
+            )
+            for completion in _mention_completer(
+                literal_path
+            ).get_completions(sub_document, complete_event):
+                whole = literal_path + completion.text
+
+                # A path with a space in it has to be quoted whole, so
+                # the mention is replaced rather than appended to.
+                if " " in whole and not in_quote:
+                    yield Completion(
+                        f'"{whole}"',
+                        start_position=-len(mention),
+                        display=completion.display,
+                    )
+                else:
+                    yield Completion(
+                        completion.text,
+                        start_position=0,
+                        display=completion.display,
+                    )
             return
 
         if not text.startswith("/") or " " in text:

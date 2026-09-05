@@ -1178,6 +1178,7 @@ def main() -> None:
                 help_text.append("\nCommands\n\n", style="bold")
                 for cmd, desc in [
                     *COMMANDS,
+                    ("@<path>", "point the model at a file"),
                     ("!<command>", " run a shell command directly"),
                 ]:
                     help_text.append(f"  {cmd:<10}", style=ACCENT)
