@@ -35,7 +35,7 @@ def _can_encode(text: str) -> bool:
 # report a non-UTF8 stdout encoding and raise UnicodeEncodeError on these
 # glyphs instead of substituting a fallback, crashing the whole process.
 # Fall back to plain ASCII there rather than risk that.
-_UNICODE_OK = _can_encode("✻⏺⎿❯…●")
+_UNICODE_OK = _can_encode("✻⏺⎿❯…●━─")
 
 SPARKLE = "✻" if _UNICODE_OK else "*"      # ✻
 BULLET = "⏺" if _UNICODE_OK else "*"        # ⏺
@@ -43,12 +43,17 @@ BRANCH = "⎿" if _UNICODE_OK else "L"        # ⎿
 CHEVRON = "❯" if _UNICODE_OK else ">"       # ❯
 ELLIPSIS = "…" if _UNICODE_OK else "..."    # …
 CURSOR = "●" if _UNICODE_OK else "."        # ●
+BAR_FULL = "━" if _UNICODE_OK else "#"      # ━
+BAR_EMPTY = "─" if _UNICODE_OK else "-"     # ─
 
 # Raw ANSI escapes for text fed straight into input()/print(), where rich
 # markup can't reach (e.g. the interactive prompt string).
 _ACCENT_RGB = (217, 119, 87)
 ACCENT_ANSI = f"\033[38;2;{_ACCENT_RGB[0]};{_ACCENT_RGB[1]};{_ACCENT_RGB[2]}m"
 DIM_ANSI = "\033[38;5;244m"
+# DIM as a hex literal (see _REST_RGB), for prompt_toolkit style
+# strings, which take neither rich's style names nor raw escapes.
+DIM_HEX = "#949494"
 RESET_ANSI = "\033[0m"
 
 
@@ -96,6 +101,24 @@ def tool_diff(diff_lines: list[str], *, more: int = 0) -> None:
         console.print(
             Text(f"     ... {more} more diff line{plural(more)}", style=DIM)
         )
+
+
+def confirm(question: str) -> bool:
+    """Ask QUESTION on one y/n line. True only for a plain yes."""
+
+    ask = Text(f"  {question} ", style=DIM)
+    ask.append("y", style=f"bold {ACCENT}")
+    ask.append("/n ", style=DIM)
+    console.print(ask, end="")
+
+    try:
+        answer = input().strip().lower()
+    except EOFError:
+        print()
+        return False
+
+    print()
+    return answer == "y"
 
 
 def plural(count: int, suffix: str = "s") -> str:
