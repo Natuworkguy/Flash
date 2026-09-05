@@ -1,11 +1,13 @@
 # pylint: disable=C0114,C0115,C0116
 
+from flash import ai
 from flash.ai import (
     Config,
     _direct_shell_command,
     _int_env,
     _message,
     _run_update,
+    _speak_reply,
     _trim_history,
     _trim_tool_output,
 )
@@ -84,7 +86,7 @@ def test_run_update_confirmed(monkeypatch):
     monkeypatch.setattr("flash.ai.fetch_latest_version", lambda: "99.0.0")
     monkeypatch.setattr("builtins.input", lambda: "y")
     monkeypatch.setattr(
-        "flash.ai.perform_update", lambda: (True, "Flash updated.")
+        "flash.ai.perform_update", lambda **_kw: (True, "Flash updated.")
     )
     assert _run_update() is True  # nosec B101
 
@@ -97,7 +99,7 @@ def test_run_update_force_skips_check_and_confirmation(monkeypatch):
 
     monkeypatch.setattr("builtins.input", _fail_if_called)
     monkeypatch.setattr(
-        "flash.ai.perform_update", lambda: (True, "Flash updated.")
+        "flash.ai.perform_update", lambda **_kw: (True, "Flash updated.")
     )
     assert _run_update(force=True) is True  # nosec B101
 
@@ -106,7 +108,7 @@ def test_run_update_failure_propagates(monkeypatch):
     monkeypatch.setattr("flash.ai.fetch_latest_version", lambda: "99.0.0")
     monkeypatch.setattr("builtins.input", lambda: "y")
     monkeypatch.setattr(
-        "flash.ai.perform_update", lambda: (False, "pipx not found.")
+        "flash.ai.perform_update", lambda **_kw: (False, "pipx not found.")
     )
     assert _run_update() is False  # nosec B101
 
@@ -121,3 +123,48 @@ def test_message_with_images():
     message = _message("user", "what is this", ["photo.png"])
     assert message["images"] == ["photo.png"]  # nosec B101
     assert message["content"] == "what is this"  # nosec B101
+
+
+def test_speak_reply_stays_quiet_when_voice_is_off(monkeypatch):
+    monkeypatch.setattr(Config, "voice", False)
+    monkeypatch.setattr(ai, "speak", _refuse_to_speak)
+
+    assert _speak_reply("all done") is False  # nosec B101
+
+
+def _refuse_to_speak(_text):
+    raise AssertionError("nothing should be spoken")
+
+
+def test_speak_reply_takes_the_next_turn_by_voice(monkeypatch):
+    said = []
+    monkeypatch.setattr(Config, "voice", True)
+    monkeypatch.setattr(
+        ai, "speak", lambda text: (said.append(text), ("", False))[1]
+    )
+
+    assert _speak_reply("All done. See `main.py`.") is True  # nosec B101
+    assert said == ["All done. See main.py."]  # nosec B101
+
+
+def test_speak_reply_hands_back_the_prompt_when_it_cannot_speak(monkeypatch):
+    warned = []
+    monkeypatch.setattr(Config, "voice", True)
+    monkeypatch.setattr(
+        ai, "speak", lambda text: ("no audio device", False)
+    )
+    monkeypatch.setattr(ai, "warn", warned.append)
+
+    assert _speak_reply("all done") is False  # nosec B101
+    assert warned == ["no audio device"]  # nosec B101
+
+
+def test_speak_reply_keeps_listening_after_a_reply_with_nothing_to_say(
+    monkeypatch,
+):
+    monkeypatch.setattr(Config, "voice", True)
+    monkeypatch.setattr(ai, "speak", _refuse_to_speak)
+
+    # for_speech() drops an empty reply entirely; the turn still passes
+    # back to the user rather than dropping out of the conversation.
+    assert _speak_reply("   ") is True  # nosec B101

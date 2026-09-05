@@ -9,14 +9,26 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import urllib.error
+import urllib.request
+from functools import cache
 from pathlib import Path
 
 FROM_PATTERN = re.compile(
     r"^FROM[ \t]+(?P<repo>[^\s:]+)(?::\S+)?[ \t]*$",
     re.MULTILINE,
 )
-HEADER_PATTERN = re.compile(r"^#[ \t]*(?P<key>\w+)[ \t]*:[ \t]*(?P<value>.*)$")
+HEADER_PATTERN = re.compile(
+    r"^#[ \t]*(?P<key>[\w-]+)[ \t]*:[ \t]*(?P<value>.*)$"
+)
 NAME_PLACEHOLDER = "{{name}}"
+# The tag a base publishes for cloud runs, and the one we publish for a
+# model built on it. Ours must not end in -cloud: Ollama reads that suffix
+# as "resolve this name on ollama.com", and our name is not there.
+CLOUD_SUFFIX = "-cloud"
+BASE_SUFFIX = "-cloudbase"
+MANIFEST_URL = "https://registry.ollama.ai/v2/{repo}/manifests/{tag}"
+TRUTHY = frozenset({"true", "yes", "on", "1"})
 LICENSE_PATH = Path(__file__).resolve().parent.parent / "LICENSE"
 LICENSE_PATTERN = re.compile(r"^LICENSE\b", re.MULTILINE)
 OWN_TERMS = (
@@ -30,8 +42,8 @@ BASE_TERMS = (
 )
 
 
-def header(source: str, path: Path) -> tuple[str, list[str]]:
-    """Return the name and sizes commented at the top of SOURCE."""
+def header(source: str, path: Path) -> tuple[str, list[str], bool]:
+    """Return the name, sizes, and cloud-base flag commented atop SOURCE."""
 
     fields: dict[str, str] = {}
 
@@ -47,7 +59,11 @@ def header(source: str, path: Path) -> tuple[str, list[str]]:
     if not fields.get("name"):
         raise SystemExit(f"{path}: no `# name:` line.")
 
-    return fields["name"], fields.get("sizes", "").replace(",", " ").split()
+    return (
+        fields["name"],
+        fields.get("sizes", "").replace(",", " ").split(),
+        fields.get("cloud-base", "").lower() in TRUTHY,
+    )
 
 
 def spoken(name: str) -> str:
@@ -100,52 +116,150 @@ def render(source: str, name: str, size: str, terms: str) -> str:
     return body[: match.start()] + pinned + body[match.end():]
 
 
+def origin(source: str, path: Path) -> str:
+    """Return the repo SOURCE builds on: FROM gemma4:12b -> gemma4."""
+
+    match = FROM_PATTERN.search(source)
+
+    if match is None:
+        raise SystemExit(f"{path}: no FROM line.")
+
+    return match["repo"]
+
+
+def hosted(size: str) -> str:
+    """Return the base's cloud tag for SIZE: 31b -> 31b-cloud."""
+
+    return f"{size}{CLOUD_SUFFIX}" if size else CLOUD_SUFFIX.lstrip("-")
+
+
+def wrapper(size: str) -> str:
+    """Return our tag for a build on that cloud tag: 31b -> 31b-cloudbase."""
+
+    return f"{size}{BASE_SUFFIX}" if size else BASE_SUFFIX.lstrip("-")
+
+
+@cache
+def published(repo: str, tag: str) -> bool:
+    """Return whether REPO:TAG is a tag the Ollama registry serves."""
+
+    library = repo if "/" in repo else f"library/{repo}"
+    url = MANIFEST_URL.format(repo=library, tag=tag)
+
+    try:
+        with urllib.request.urlopen(  # nosec B310
+            urllib.request.Request(url, method="HEAD"),
+            timeout=10,
+        ) as response:
+            return response.status == 200
+    except urllib.error.HTTPError:
+        return False
+    except urllib.error.URLError as error:
+        print(f"warning: {repo}:{tag}: {error.reason}", file=sys.stderr)
+
+        return False
+
+
+def run(argv: list[str], dry_run: bool) -> None:
+    """Show ARGV, and run it unless DRY_RUN."""
+
+    print(f"$ {' '.join(argv)}")
+
+    if not dry_run:
+        subprocess.run(argv, check=True)
+
+
 def build(
     source: str,
     name: str,
     size: str,
+    label: str,
     terms: str,
     namespace: str | None,
     dry_run: bool,
+    push: bool,
 ) -> None:
-    """Create NAME at SIZE, under NAMESPACE if one is given."""
+    """Create NAME:LABEL from SIZE, under NAMESPACE if one is given."""
 
     prefix = f"{namespace.rstrip('/')}/" if namespace else ""
-    tag = f"{prefix}{name}:{size}" if size else f"{prefix}{name}"
+    tag = f"{prefix}{name}:{label}" if label else f"{prefix}{name}"
 
     with tempfile.TemporaryDirectory() as workdir:
-        generated = Path(workdir) / f"{name}-{size or 'base'}.Modelfile"
+        generated = Path(workdir) / f"{name}-{label or 'base'}.Modelfile"
         generated.write_text(
             render(source, name, size, terms),
             encoding="utf-8",
         )
-        argv = ["ollama", "create", tag, "-f", str(generated)]
+        run(["ollama", "create", tag, "-f", str(generated)], dry_run)
 
-        print(f"$ {' '.join(argv)}")
-
-        if not dry_run:
-            subprocess.run(argv, check=True)
+    if push:
+        run(["ollama", "push", tag], dry_run)
 
 
 def wanted(
     declared: list[str],
     asked: list[str] | None,
     path: Path,
+    cloud: bool,
 ) -> list[str]:
     """Return the sizes to build, checking ASKED against DECLARED."""
 
     if not asked:
         return declared or [""]
 
-    unknown = [size for size in asked if size not in declared]
+    known = declared
+
+    if cloud:
+        known = [tag for size in declared for tag in (size, wrapper(size))]
+
+    unknown = [size for size in asked if size not in known]
 
     if unknown:
         raise SystemExit(
             f"{path}: no size {', '.join(unknown)}. "
-            f"Declared: {', '.join(declared) or 'none'}."
+            f"Declared: {', '.join(known) or 'none'}."
         )
 
     return asked
+
+
+def targets(
+    sizes: list[str],
+    base: str,
+    cloud: bool,
+    path: Path,
+) -> list[tuple[str, str]]:
+    """Return the (size to build on, tag to build it as) pairs for SIZES.
+
+    With a cloud base declared, each size also builds against the base's
+    -cloud tag, when the registry has one, under our own -cloudbase tag.
+    """
+
+    if not cloud:
+        return [(size, size) for size in sizes]
+
+    pairs = []
+
+    for size in sizes:
+        if size.endswith(BASE_SUFFIX):
+            tag = hosted(size[: -len(BASE_SUFFIX)])
+
+            if not published(base, tag):
+                raise SystemExit(f"{path}: {base} has no {tag} to build on.")
+
+            pairs.append((tag, size))
+
+            continue
+
+        pairs.append((size, size))
+        tag = hosted(size)
+
+        if published(base, tag):
+            pairs.append((tag, wrapper(size)))
+        else:
+            print(f"{path}: no {base}:{tag}, skipping it.", file=sys.stderr)
+
+    return pairs
 
 
 def main() -> int:
@@ -168,6 +282,11 @@ def main() -> int:
         help="namespace to tag the model under",
     )
     parser.add_argument(
+        "--push",
+        action="store_true",
+        help="push each built model to the Ollama registry",
+    )
+    parser.add_argument(
         "--print",
         action="store_true",
         dest="print_only",
@@ -183,6 +302,15 @@ def main() -> int:
     if args.print_only and len(args.modelfile) != 1:
         parser.error("--print takes one Modelfile")
 
+    if args.push and args.print_only:
+        parser.error("--print builds nothing to push.")
+
+    if args.push and not args.namespace:
+        parser.error(
+            "--push needs --namespace: the registry tags models as "
+            "NAMESPACE/name."
+        )
+
     building = not args.dry_run and not args.print_only
 
     if building and shutil.which("ollama") is None:
@@ -192,25 +320,34 @@ def main() -> int:
 
     for path in args.modelfile:
         source = path.read_text(encoding="utf-8")
-        name, declared = header(source, path)
-        sizes = wanted(declared, args.size, path)
+        name, declared, cloud = header(source, path)
+        sizes = wanted(declared, args.size, path, cloud)
 
         if args.print_only:
             if len(sizes) != 1:
                 parser.error("--print takes one --size")
 
-            sys.stdout.write(render(source, name, sizes[0], terms))
+            size = sizes[0]
+
+            if size.endswith(BASE_SUFFIX):
+                size = hosted(size[: -len(BASE_SUFFIX)])
+
+            sys.stdout.write(render(source, name, size, terms))
 
             return 0
 
-        for size in sizes:
+        base = origin(source, path) if cloud else ""
+
+        for size, label in targets(sizes, base, cloud, path):
             build(
                 source,
                 name,
                 size,
+                label,
                 terms,
                 args.namespace,
                 args.dry_run,
+                args.push,
             )
 
     return 0

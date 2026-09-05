@@ -177,6 +177,15 @@ try {
         Write-Host "Could not find the flash environment. Screenshots need chromium."
     }
 
+    # A failure here leaves the rest of Flash working, so it never
+    # stops the install.
+    Write-Host ""
+    Write-Host "Installing the voice mode packages..."
+    & $PipxCmd inject flash vosk piper-tts sounddevice
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "Voice packages failed to install. Voice mode stays unavailable."
+    }
+
     # Register the flash:// URL handler. Never fail the install over it.
     $FlashExe = Join-Path $PipxBinDir "flash.exe"
     if (-not (Test-Path $FlashExe)) {
@@ -190,6 +199,9 @@ try {
 
     Write-Host ""
     Write-Host "=== flash installed via pipx. ==="
+
+    Write-Host "Run /voice on inside Flash to talk to it (it downloads"
+    Write-Host "the speech models the first time)."
 
     $PathEntries = $env:PATH -split ";"
     if ($PathEntries -notcontains $PipxBinDir) {

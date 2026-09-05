@@ -161,6 +161,19 @@ else
     echo "Could not find the flash environment. Screenshots need chromium."
 fi
 
+echo ""
+echo "Installing the voice mode packages..."
+pipx inject flash vosk piper-tts sounddevice || \
+    echo "Voice packages failed to install. Voice mode stays unavailable."
+
+# sounddevice bundles PortAudio on macOS and Windows, but takes it from
+# the system on Linux.
+if [ "$(uname -s)" = "Linux" ] && command -v apt-get >/dev/null 2>&1; then
+    echo "Installing PortAudio (needed to reach the microphone)..."
+    sudo apt-get install -y libportaudio2 || \
+        echo "Install libportaudio2 yourself if voice mode finds no mic."
+fi
+
 # Register the flash:// URL handler. Unsupported on macOS, and harmless to
 # skip anywhere else, so never fail the install over it.
 FLASH_BIN="$PIPX_BIN_DIR/flash"
@@ -176,6 +189,9 @@ FLASH_VERSION="$(flash --version)"
 
 echo ""
 echo "=== $FLASH_VERSION installed via pipx. ==="
+
+echo "Run /voice on inside Flash to talk to it (it downloads the speech"
+echo "models the first time)."
 
 case ":$PATH:" in
     *":$PIPX_BIN_DIR:"*)

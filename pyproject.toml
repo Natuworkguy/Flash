@@ -21,6 +21,7 @@ file = ["requirements.txt"]
 
 [tool.setuptools.dynamic.optional-dependencies]
 dev = { file = ["requirements-dev.txt"] }
+voice = { file = ["requirements-voice.txt"] }
 
 [project.scripts]
 flash = "flash.ai:main"

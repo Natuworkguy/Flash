@@ -14,6 +14,7 @@ from typing import Union
 import ollama
 from dotenv import load_dotenv
 from ollama import ResponseError
+from rich.align import Align
 from rich.cells import cell_len
 from rich.console import Console, Group
 from rich.live import Live
@@ -64,6 +65,18 @@ from .updater import (
 )
 from .urlscheme import SchemeError, parse_flash_url, register, unregister
 from .version import __version__
+from .voice import (
+    INSTALL_HINT as VOICE_INSTALL_HINT,
+)
+from .voice import (
+    ensure_models,
+    for_speech,
+    is_exit_phrase,
+    listen,
+    missing_packages,
+    models_present,
+    speak,
+)
 
 OLLAMA_HOST_DEFAULT = "http://localhost:11434"
 ENV_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -84,6 +97,18 @@ IMAGE_BACKEND_HINT = (
 )
 
 load_dotenv(dotenv_path=ENV_PATH)
+
+
+VOICE_PROMPT = """
+
+=== Voice Mode ===
+The user is speaking to you, and your reply is read back to them out loud.
+Keep it short and plain: whole sentences, no code blocks, tables, or long
+lists unless they ask for one, because only the prose is spoken and the
+rest is silently dropped. What they said reached you through speech
+recognition, so expect missing punctuation and the occasional misheard
+word; ask when a name, path, or command sounds wrong rather than acting on
+a guess.""".rstrip()
 
 
 class FlashError(Exception):
@@ -112,6 +137,7 @@ class Config:
     max_tool_output_chars: int
     max_output_tokens: int
     no_command_confirmation: bool
+    voice: bool
     prompt: str
 
     @classmethod
@@ -134,6 +160,7 @@ class Config:
         cls.no_command_confirmation = bool(
             _int_env("NO_COMMAND_CONFIRMATION", 0, minimum=0)
         )
+        cls.voice = bool(_int_env("VOICE", 0, minimum=0))
         cls.prompt = \
             (ACCENT_ANSI + CHEVRON + " " + RESET_ANSI) \
             if cls.host == OLLAMA_HOST_DEFAULT \
@@ -197,6 +224,12 @@ def banner(
             Text("Autonomous mode: commands run without confirmation",
                  style=f"bold {ACCENT}")
         )
+    if Config.voice:
+        lines.append(
+            Text("Voice mode: Enter on an empty line speaks, "
+                 "/voice off disables it",
+                 style=f"bold {ACCENT}")
+        )
     if update_version:
         lines.append(
             Text(
@@ -207,7 +240,14 @@ def banner(
         )
 
     c.print(
-        Panel(Group(*lines), border_style=DIM, padding=(1, 2), expand=False)
+        Align.center(
+            Panel(
+                Group(*lines),
+                border_style=DIM,
+                padding=(1, 2),
+                expand=False,
+            )
+        )
     )
     print()
 
@@ -367,7 +407,9 @@ def _session_system_prompt() -> str:
             Config.host, model
         )
 
-    return build_system_prompt(_model_system_prompts[model])
+    prompt = build_system_prompt(_model_system_prompts[model])
+
+    return prompt + VOICE_PROMPT if Config.voice else prompt
 
 
 def _load_states(key: str, fallback: list[str]) -> list[str]:
@@ -592,6 +634,145 @@ def _render_sent_message(
     )
 
 
+VOICE_STATES = {
+    "listening": 'Listening, speak now (say "voice off" to leave)',
+    "transcribing": "Working out what you said",
+}
+
+
+def _voice_progress_line(label: str, percent: int) -> Text:
+    line = Text()
+    line.append(f"Downloading the {label} ", style=DIM)
+    line.append(f"{percent}%", style=ACCENT)
+    return line
+
+
+def _download_voice_models() -> bool:
+    """Fetch whatever voice mode is missing, showing how far along it is."""
+
+    console.print(Text(
+        "Voice mode needs a listening model and a voice. "
+        "Downloading them once now.",
+        style=DIM,
+    ))
+
+    last: list = [None]
+
+    with Live(Text(), console=console, transient=True,
+              refresh_per_second=10) as live:
+        def on_progress(label: str, percent: int) -> None:
+            if last[0] != (label, percent):
+                last[0] = (label, percent)
+                live.update(_voice_progress_line(label, percent))
+
+        why = ensure_models(on_progress)
+
+    if why:
+        show_error(f"Voice mode is not ready: {why}")
+        return False
+
+    console.print(Text("Speech models ready.", style=DIM))
+    return True
+
+
+def _set_voice(on: bool) -> None:
+    """Turn voice mode on (downloading what it needs) or off."""
+
+    if on:
+        missing = missing_packages()
+        if missing:
+            show_error(VOICE_INSTALL_HINT)
+            return
+
+        if not models_present() and not _download_voice_models():
+            return
+
+    set_config_var("VOICE", "1" if on else "0")
+
+    if not on:
+        console.print(Text("Voice mode off.", style=f"bold {ACCENT}"))
+        return
+
+    told = Text()
+    told.append("Voice mode on. ", style=f"bold {ACCENT}")
+    told.append(
+        "Press Enter on an empty line to start talking."
+        "Talk over a reply with \"interrupt\" to cut it "
+        "short, and say \"voice off\" to stop the conversation; Enter "
+        "starts it again.\nType /voice off to disable voice mode "
+        "altogether.",
+        style=DIM,
+    )
+    console.print(told)
+
+
+def _voice_input() -> Union[str, None]:  # noqa: UP007, RUF100
+    """Record one spoken turn and return it, or None if nothing was said."""
+
+    # VOICE can be set by hand, and a model directory can be deleted, so
+    # the models are checked here rather than only when /voice turns on.
+    if not models_present() and not _download_voice_models():
+        return None
+
+    try:
+        with Live(Text(), console=console, transient=True,
+                  refresh_per_second=10) as live:
+            def on_state(state: str) -> None:
+                live.update(Text(
+                    f"{VOICE_STATES.get(state, state)}{ELLIPSIS}",
+                    style=ACCENT,
+                ))
+
+            heard, why = listen(on_state)
+    except KeyboardInterrupt:
+        # Ctrl+C ends the spoken turn and hands the prompt back, rather
+        # than tearing down whatever else the main loop was doing.
+        console.print(Text("Stopped listening.", style=DIM))
+        return None
+
+    if why:
+        show_error(why)
+        return None
+
+    if not heard:
+        console.print(Text("Nothing heard.", style=DIM))
+        return None
+
+    return heard
+
+
+def _speak_reply(text: str) -> bool:
+    """Read a finished reply aloud when voice mode is on.
+
+    Returns whether to listen for the answer straight away, so a spoken
+    conversation carries on without a keypress between turns.
+    """
+
+    if not Config.voice:
+        return False
+
+    spoken = for_speech(text)
+    if not spoken:
+        return True
+
+    with Live(
+        Text(f'Speaking (say "interrupt" to stop){ELLIPSIS}', style=DIM),
+        console=console,
+        transient=True,
+        refresh_per_second=4,
+    ):
+        why, interrupted = speak(spoken)
+
+    if why:
+        warn(why)
+        return False
+
+    if interrupted:
+        console.print(Text("Interrupted.", style=DIM))
+
+    return True
+
+
 def _handle_scheme_flags(args) -> None:
     """Run --register-url-scheme / --unregister-url-scheme and exit."""
 
@@ -655,10 +836,19 @@ def _run_update(*, force: bool = False) -> bool:
             return True
 
     with console.status(
-        f"[bold {ACCENT}]Updating{ELLIPSIS}",
+        f"[bold {ACCENT}]Updating{ELLIPSIS} ",
         spinner="arrow3", spinner_style=ACCENT
-    ):
-        ok, message = perform_update()
+    ) as status:
+        # git and pipx print their progress straight to the terminal,
+        # which collides with the spinner and comes out shredded. Their
+        # output arrives here a line at a time instead, and printing it
+        # through the console puts each line cleanly above the spinner.
+        ok, message = perform_update(
+            on_step=lambda label: status.update(
+                f"[bold {ACCENT}]{label}{ELLIPSIS} "
+            ),
+            on_output=lambda line: console.print(Text(line, style=DIM)),
+        )
 
     if ok:
         console.print(Text(message, style=f"bold {ACCENT}"))
@@ -723,7 +913,14 @@ def main() -> None:
 
     client = ollama.Client(host=Config.host)
 
+    if console.is_terminal:
+        print("\x1b[H\x1b[2J\x1b[3J", end="", flush=True)
+
     messages: list = []
+
+    # Voice mode holds the floor: after a reply is spoken, the next turn
+    # starts listening on its own instead of waiting for a keypress.
+    listening_on = False
 
     banner(console, check_for_update())
 
@@ -738,6 +935,10 @@ def main() -> None:
                 if not _confirm_url_prompt(uin):
                     console.print(Text("Prompt discarded.", style=DIM))
                     break
+            elif listening_on:
+                # An empty line is what the voice branch below listens on.
+                listening_on = False
+                uin = ""
             else:
                 try:
                     uin = read_line(Config.prompt)
@@ -748,7 +949,26 @@ def main() -> None:
                     _render_sent_message(console, Config.prompt, uin)
 
             if uin.strip() == "":
-                continue
+                if not Config.voice:
+                    continue
+
+                spoken = _voice_input()
+                if spoken is None:
+                    continue
+
+                # Saying "voice off" ends the conversation, it does not
+                # disarm voice mode: Enter picks it straight back up,
+                # and only a typed /voice off turns the feature off.
+                if is_exit_phrase(spoken):
+                    console.print(Text(
+                        "Stopped listening. Press Enter to speak again, "
+                        "or type /voice off to disable voice mode.",
+                        style=DIM,
+                    ))
+                    continue
+
+                uin = spoken
+                _render_sent_message(console, Config.prompt, uin)
 
             if uin in ("/bye", "/exit"):
                 _clear_scratch_dir()
@@ -789,6 +1009,18 @@ def main() -> None:
                 console.print(
                     Text(f"Autonomous mode {state}.", style=f"bold {ACCENT}")
                 )
+                continue
+
+            if uin == "/voice" or uin.startswith("/voice "):
+                arg = uin[len("/voice"):].strip().lower()
+                if arg in ("", "toggle"):
+                    _set_voice(not Config.voice)
+                elif arg in ("on", "enable", "true", "1"):
+                    _set_voice(True)
+                elif arg in ("off", "disable", "false", "0"):
+                    _set_voice(False)
+                else:
+                    warn("Usage: /voice [on|off|toggle]")
                 continue
 
             if uin == "/set" or uin.startswith("/set "):
@@ -970,6 +1202,7 @@ def main() -> None:
                     )
                 _render_markdown(console, final)
                 notify_reply_ready()
+                listening_on = _speak_reply(final)
                 messages.append(_message("assistant", final))
                 _trim_history(messages)
                 print()
@@ -1055,6 +1288,7 @@ def main() -> None:
 
             _render_markdown(console, followup)
             notify_reply_ready()
+            listening_on = _speak_reply(followup)
             messages.append(_message("assistant", followup))
             _trim_history(messages)
 
