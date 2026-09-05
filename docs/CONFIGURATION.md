@@ -46,6 +46,39 @@ Requirements:
 | `MAX_TOOL_ROUNDS` | No | `10` | `1` | Maximum number of tool-calling rounds allowed per request. |
 | `MAX_TOOL_OUTPUT_CHARS` | No | `1200` | `500` | Tool output longer than this is truncated (middle removed) before being sent back to the model. |
 | `MAX_OUTPUT_TOKENS` | No | `1024` | `128` | Maximum tokens the model may generate per response. Maps to Ollama's `num_predict` option. |
+| `VOICE` | No | `0` | - | `1` turns voice mode on at startup: press Enter on an empty prompt to speak, and replies are read aloud. Usually set with `/voice on` rather than by hand. |
+| `VOICE_VOSK_MODEL` | No | `vosk-model-small-en-us-0.15` | - | Name of the [Vosk model](https://alphacephei.com/vosk/models) used for listening. Downloaded to `~/.flash/models` on first use. |
+| `VOICE_PIPER_VOICE` | No | `en_US-amy-medium` | - | Name of the [Piper voice](https://huggingface.co/rhasspy/piper-voices) used for speaking, as `locale-speaker-quality`. |
+| `VOICE_SILENCE_SECONDS` | No | `1.2` | `0.2` | How long you have to stop talking before Flash decides your turn is over. |
+| `VOICE_INTERRUPT_WORD` | No | `interrupt` | - | Word that stops a reply being read aloud when you say it over the top. Matched as a whole word; "stop talking" and "be quiet" always work as well. |
+| `VOICE_NO_SPEECH_SECONDS` | No | `8` | `1` | How long a listening turn waits for you to start speaking before handing the prompt back. This is what ends a hands-free conversation. |
+| `VOICE_SILENCE_THRESHOLD` | No | `500` | `0` | Loudness (0-32768) above which audio counts as speech. Raise it in a noisy room; lower it if a quiet voice is missed. |
+| `VOICE_MAX_CHARS` | No | `700` | `80` | Longest reply spoken aloud. Past this the voice stops at a sentence and says the rest is on screen. |
+
+### Notes on the voice options
+
+- Every `VOICE_*` option is read when it is used, so `/set` followed by
+  `/refresh` changes voice mode without restarting Flash, including
+  swapping the voice or the listening model.
+- An unreadable value (a typo, a unit like `8 seconds`) falls back to the
+  default rather than failing.
+
+- Voice mode needs the `vosk`, `piper-tts`, and `sounddevice` packages.
+  The installers add them for every install; `/voice on` prints the right
+  command if they are somehow missing, and downloads the two models the
+  first time it runs.
+- Voice mode listens again after each reply, so a conversation continues
+  without a keypress. It stops when you stay quiet for
+  `VOICE_NO_SPEECH_SECONDS`, press Ctrl+C, or leave voice mode.
+- While a reply is being read aloud, Flash listens for
+  `VOICE_INTERRUPT_WORD`. Saying it cuts the reply off and starts
+  listening for your next message.
+- Saying "voice off" (or "exit voice mode", "stop listening") ends the
+  conversation and hands the prompt back, leaving `VOICE` set so Enter
+  starts talking again. Typing `/voice off` is what turns the feature off,
+  since a dictated slash command cannot reach Flash.
+- The models live in `~/.flash/models`. Deleting that directory frees the
+  space; the next `/voice on` downloads them again.
 
 ### Notes on the numeric options
 

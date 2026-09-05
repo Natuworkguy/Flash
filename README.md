@@ -15,6 +15,7 @@ FLASH (**F**ast **L**ocal **A**gent **SH**ell) CLI is an AI-powered command-line
 - **Image Recognition**: Send a local image to a vision-capable model with `/image <path> [prompt]`, or let the AI open one itself with its `view_image` tool.
 - **Page Screenshots**: The AI renders a page it built in a headless browser with its `screenshot` tool and looks at the result, so it can see a broken layout instead of guessing from the HTML.
 - **Page Control**: The AI opens a page with `open_page` and then clicks buttons, fills forms, presses keys, and runs JavaScript on it with `interact`, seeing a fresh screenshot, the page's elements, and its console errors after every step, so it can debug what a page *does*, not just how it looks.
+- **Voice Mode**: `/voice on` downloads a Vosk speech model and a Piper voice, then lets you talk to Flash and hear its replies, with typing still available at any time.
 - **Context Management**: Automatic history trimming to stay within token limits.
 - **Markdown Support**: Rich formatting for AI responses in the terminal.
 
@@ -167,6 +168,67 @@ Why does the legend in ~/Desktop/plot.png overlap the bars?
 
 It accepts the same file types (up to 20 MB) and sees the image for that
 turn only, calling `view_image` again later if it needs another look.
+
+### Voice mode
+
+`/voice on` turns Flash into something you can talk to. The first time it
+runs it downloads the two models it needs into `~/.flash/models`: a Vosk
+speech-recognition model for listening (about 40 MB) and a Piper voice for
+speaking (about 60 MB). After that everything runs locally, with no audio
+leaving the machine.
+
+```FLASH
+/voice on
+```
+
+With voice mode on, press Enter on an empty prompt to start talking. Flash
+records until you stop, prints what it heard, and sends it as your message;
+the reply is printed as usual and read aloud. It then listens again on its
+own, so a conversation carries on hands-free with no keypress between
+turns. Say nothing for eight seconds (`VOICE_NO_SPEECH_SECONDS`), or press
+Ctrl+C, and it hands the prompt back. Typing works exactly as before, so
+slash commands and long paths can still be typed rather than dictated.
+
+Say **"interrupt"** while Flash is talking and it stops mid-sentence and
+listens for what you say next, so you never have to sit through an answer
+that started off wrong. "stop talking" and "be quiet" work too, as does
+Ctrl+C, and the word can be changed with `VOICE_INTERRUPT_WORD`. It is
+matched as a whole word, so "the interrupted process" is just a message.
+
+Say **"voice off"** (or "stop listening", "exit voice mode") to end the
+conversation. That hands the prompt back but leaves voice mode armed, so
+pressing Enter starts talking again without re-enabling anything. To turn
+the feature off altogether, type `/voice off`; the setting is saved in
+`~/.flash.env` as `VOICE`, so voice mode survives a restart either way.
+
+Only the prose of a reply is spoken. Code blocks, tables, and URLs are
+skipped, because they are on screen already and unpleasant to listen to,
+and a long answer is cut at a sentence once it passes `VOICE_MAX_CHARS`.
+Flash also tells the model that it is being heard rather than read, so
+replies in voice mode come back shorter and plainer.
+
+Voice mode needs three extra packages: `vosk`, `piper-tts`, and
+`sounddevice`. `install.sh` and `install.ps1` install them for you, so
+this is only needed if you installed Flash some other way. Flash installed
+with pipx keeps its own environment, so the packages go in with `inject`:
+
+```bash
+pipx inject flash vosk piper-tts sounddevice
+```
+
+For a plain pip install of Flash it is the extra instead:
+
+```bash
+pip install "flash[voice]"
+```
+
+`/voice on` prints whichever of the two commands fits your install. On
+Linux
+`sounddevice` also needs PortAudio from the system (`apt install
+libportaudio2`); the macOS and Windows wheels bundle it. The voice and the
+listening model can be swapped with `VOICE_PIPER_VOICE` and
+`VOICE_VOSK_MODEL`, and the microphone's sensitivity tuned with
+`VOICE_SILENCE_THRESHOLD`; see [docs/CONFIGURATION.md](docs/CONFIGURATION.md).
 
 ### Page screenshots
 
