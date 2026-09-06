@@ -94,7 +94,7 @@ class Turn:
         return self.generated / (self.eval_nanoseconds / NS_PER_SECOND)
 
 
-def _window(limit: int) -> str:
+def window(limit: int) -> str:
     """A context size the way people say it: 65536 -> '64K'."""
 
     return f"{limit // 1024}K" if limit >= 1024 else str(limit)
@@ -139,6 +139,6 @@ def summary(
             if percent >= MIN_SHOWN_PERCENT
             else f"under {MIN_SHOWN_PERCENT:.0f}%"
         )
-        line.append(f"   context {shown} of {_window(limit)}")
+        line.append(f"   context {shown} of {window(limit)}")
 
     return line
