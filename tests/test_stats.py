@@ -1,0 +1,140 @@
+# pylint: disable=C0114,C0115,C0116
+
+from flash import sysprompt
+from flash.stats import Turn, summary
+from flash.sysprompt import get_context_limit
+
+NS = 1_000_000_000
+
+
+class _Response:
+    def __init__(self, eval_count=0, eval_duration=0, total_duration=0,
+                 prompt_eval_count=0):
+        self.eval_count = eval_count
+        self.eval_duration = eval_duration
+        self.total_duration = total_duration
+        self.prompt_eval_count = prompt_eval_count
+
+
+def _plain(turn, limit=None):
+    line = summary(turn, limit)
+    return None if line is None else line.plain
+
+
+def test_turn_sums_generation_across_calls():
+    turn = Turn()
+    turn.add(_Response(eval_count=100, eval_duration=10 * NS,
+                       total_duration=12 * NS, prompt_eval_count=900))
+    turn.add(_Response(eval_count=50, eval_duration=5 * NS,
+                       total_duration=6 * NS, prompt_eval_count=1500))
+
+    assert turn.generated == 150  # nosec B101
+    assert turn.seconds == 18  # nosec B101
+    assert turn.rate == 10  # nosec B101
+
+
+def test_turn_counts_the_prompt_once_at_its_high_water_mark():
+    # A tool round re-sends the prompt; counting it per round would tell
+    # the user they spent tokens they never spent.
+    turn = Turn()
+    turn.add(_Response(eval_count=10, prompt_eval_count=8000))
+    turn.add(_Response(eval_count=10, prompt_eval_count=8200))
+    turn.add(_Response(eval_count=10, prompt_eval_count=8100))
+
+    assert turn.prompt_tokens == 8200  # nosec B101
+    assert turn.tokens == 8230  # nosec B101
+
+
+def test_turn_reads_a_plain_dict_response():
+    turn = Turn()
+    turn.add({"eval_count": 20, "eval_duration": 2 * NS,
+              "prompt_eval_count": 40})
+
+    assert turn.tokens == 60  # nosec B101
+    assert turn.rate == 10  # nosec B101
+
+
+def test_turn_survives_missing_counters():
+    turn = Turn()
+    turn.add(_Response())
+    turn.add({})
+
+    assert turn.tokens == 0  # nosec B101
+    assert turn.seconds == 0  # nosec B101
+    assert turn.rate is None  # nosec B101
+
+
+def test_summary_leads_with_tokens_and_time():
+    turn = Turn()
+    turn.add(_Response(eval_count=412, eval_duration=33 * NS,
+                       total_duration=35 * NS, prompt_eval_count=2140))
+
+    assert _plain(turn, 65536) == (  # nosec B101
+        "  2,552 tokens in 35s   12.5 tok/s   context 3% of 64K"
+    )
+
+
+def test_summary_says_nothing_when_nothing_was_generated():
+    assert summary(Turn(), 65536) is None  # nosec B101
+
+
+def test_summary_drops_each_part_it_has_no_number_for():
+    turn = Turn()
+    turn.add(_Response(eval_count=88))
+
+    assert _plain(turn) == "  88 tokens"  # nosec B101
+
+
+def test_summary_omits_a_sub_second_turn():
+    turn = Turn()
+    turn.add(_Response(eval_count=5, eval_duration=NS // 2,
+                       total_duration=NS // 2))
+
+    assert "in 0s" not in _plain(turn)  # nosec B101
+
+
+def test_summary_spells_out_a_tiny_context_share():
+    turn = Turn()
+    turn.add(_Response(eval_count=10, prompt_eval_count=100))
+
+    assert "context under 1% of 64K" in _plain(turn, 65536)  # nosec B101
+
+
+def test_summary_counts_minutes_past_sixty_seconds():
+    turn = Turn()
+    turn.add(_Response(eval_count=1000, eval_duration=100 * NS,
+                       total_duration=93 * NS))
+
+    assert "in 1m 33s" in _plain(turn)  # nosec B101
+
+
+def test_context_limit_prefers_the_pinned_num_ctx(monkeypatch):
+    monkeypatch.setattr(
+        sysprompt,
+        "_show",
+        lambda _host, _model: {
+            "parameters": "temperature 0.6\nnum_ctx 65536\ntop_k 64",
+            "model_info": {"gemma4.context_length": 262144},
+        },
+    )
+
+    assert get_context_limit("h", "m") == 65536  # nosec B101
+
+
+def test_context_limit_falls_back_to_the_architecture(monkeypatch):
+    monkeypatch.setattr(
+        sysprompt,
+        "_show",
+        lambda _host, _model: {
+            "parameters": "temperature 0.6",
+            "model_info": {"gemma4.context_length": 262144},
+        },
+    )
+
+    assert get_context_limit("h", "m") == 262144  # nosec B101
+
+
+def test_context_limit_is_none_when_ollama_says_nothing(monkeypatch):
+    monkeypatch.setattr(sysprompt, "_show", lambda _host, _model: {})
+
+    assert get_context_limit("h", "m") is None  # nosec B101
