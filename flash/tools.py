@@ -9,7 +9,10 @@ import re
 import subprocess  # nosec B404
 import threading
 import time
+import urllib.error
+import urllib.request
 from datetime import datetime
+from html.parser import HTMLParser
 from pathlib import Path
 from tempfile import mkdtemp
 from typing import Any, Union
@@ -66,6 +69,9 @@ To look at a file's contents, use the read tool instead of shell
   its offset argument. It also extracts text from .pdf and .docx files, so
   read them the same way; a legacy .doc file needs converting to .docx
   first.
+A path the user writes after an @, such as @flash/models.py, is a file they
+  are pointing you at. Read it before answering, unless what they asked
+  plainly does not depend on what is in it.
 To create or change a file, use the write tool instead of shell redirection,
   heredocs, or Set-Content. It needs no quoting or escaping and works the
   same on every platform, so shell quoting can never corrupt the content.
@@ -715,7 +721,7 @@ def write_tool(path: str, content: str, append: Any = False) -> str:
         )
 
     verb = "Wrote" if existed else "Created"
-    tool_result(f"{verb} {written} line{plural(written)}")
+    tool_result(f"{verb} {written} line{plural(written)} to {file_path}")
     return f"{verb} {written} line{plural(written)} to {file_path}"
 
 
@@ -741,6 +747,236 @@ def web_search(query: str, max_results: int) -> str:
     )
 
     return results or "No results found."
+
+
+FETCH_TIMEOUT_SECONDS = 20
+FETCH_MAX_BYTES = 5_000_000
+FETCH_MAX_CHARS = 20000
+FETCH_USER_AGENT = "Mozilla/5.0 (compatible; FlashCLI)"
+FETCH_SCHEMES = ("http://", "https://")
+
+# Everything inside these is markup machinery, never page text.
+_SKIPPED_TAGS = frozenset({"script", "style", "noscript", "template"})
+# Tags whose content is a block, so it needs a line break around it.
+_BLOCK_TAGS = frozenset({
+    "p", "div", "br", "tr", "li", "section", "article", "header",
+    "footer", "h1", "h2", "h3", "h4", "h5", "h6", "pre", "blockquote",
+})
+_BLANK_LINES_RE = re.compile(r"\n{3,}")
+_SPACES_RE = re.compile(r"[ \t]{2,}")
+
+
+class _TextExtractor(HTMLParser):
+    """Pulls the readable text out of a page, with its title and summary.
+
+    Deliberately not a renderer. It keeps block boundaries so lists and
+    paragraphs do not run together, drops script and style content, and
+    leaves everything else to the reader. The head metadata is kept
+    because a page that draws its body with JavaScript still says what
+    it is up there, and that is worth more than an empty answer.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.title = ""
+        self.description = ""
+        self._parts: list[str] = []
+        self._skip_depth = 0
+        self._in_title = False
+
+    def _note_meta(self, attrs) -> None:
+        """Keep the page summary, preferring the plain description over
+        the social-card copy written for a preview box."""
+
+        pairs = {name: (value or "") for name, value in attrs}
+        kind = (pairs.get("name") or pairs.get("property") or "").lower()
+        content = pairs.get("content", "").strip()
+
+        if not content:
+            return
+
+        if kind not in ("description", "og:description"):
+            return
+
+        if kind == "description" or not self.description:
+            self.description = content
+
+    def handle_startendtag(self, tag, attrs) -> None:
+        self.handle_starttag(tag, attrs)
+
+    def handle_starttag(self, tag, attrs) -> None:
+        if tag == "meta":
+            self._note_meta(attrs)
+        elif tag in _SKIPPED_TAGS:
+            self._skip_depth += 1
+        elif tag == "title":
+            self._in_title = True
+        elif tag in _BLOCK_TAGS:
+            self._parts.append("\n")
+
+    def handle_endtag(self, tag) -> None:
+        if tag in _SKIPPED_TAGS:
+            self._skip_depth = max(0, self._skip_depth - 1)
+        elif tag == "title":
+            self._in_title = False
+        elif tag in _BLOCK_TAGS:
+            self._parts.append("\n")
+
+    def handle_data(self, data) -> None:
+        if self._skip_depth:
+            return
+
+        if self._in_title:
+            self.title += data.strip()
+            return
+
+        self._parts.append(data)
+
+    def text(self) -> str:
+        joined = "".join(self._parts)
+        lines = [_SPACES_RE.sub(" ", line.strip()) for line in
+                 joined.splitlines()]
+        return _BLANK_LINES_RE.sub("\n\n", "\n".join(lines)).strip()
+
+
+def _readable(body: bytes, content_type: str) -> tuple[str, str, str]:
+    """Return (title, description, text) for a body of CONTENT_TYPE."""
+
+    charset = "utf-8"
+
+    if "charset=" in content_type:
+        charset = content_type.split("charset=", 1)[1].split(";")[0].strip()
+
+    try:
+        decoded = body.decode(charset, "replace")
+    except LookupError:
+        decoded = body.decode("utf-8", "replace")
+
+    if "html" not in content_type:
+        # JSON, plain text, CSV and friends are already readable, and
+        # running them through an HTML parser would eat the angle
+        # brackets they use as data.
+        return "", "", decoded.strip()
+
+    parser = _TextExtractor()
+
+    try:
+        parser.feed(decoded)
+        parser.close()
+    except (AssertionError, ValueError):
+        # A malformed page is still worth something, so keep whatever
+        # was parsed before it broke rather than failing the call.
+        pass
+
+    return parser.title, parser.description, parser.text()
+
+
+EMPTY_BODY_NOTE = (
+    "This page builds its body with JavaScript, so the HTML carries "
+    "nothing to read. Use screenshot to see it, or open_page to work "
+    "with it."
+)
+
+
+def _head_only(
+    final_url: str, title: str, description: str, content_type: str
+) -> str:
+    """What to say about a page whose body came back empty.
+
+    The head still names and summarises the page, so hand that back with
+    the reason the rest is missing, rather than reporting nothing and
+    sending the reader away empty.
+    """
+
+    if not (title or description):
+        result = (
+            f"Error: {final_url} returned no readable text "
+            f"(content type {content_type}). {EMPTY_BODY_NOTE}"
+        )
+        tool_result(result, style=ERROR)
+        return result
+
+    lines = [f"URL: {final_url}"]
+
+    if title:
+        lines.append(f"Title: {title}")
+
+    if description:
+        lines.append(f"Description: {description}")
+
+    tool_result(f"head only, no body text: {title or final_url}", style=WARN)
+
+    return "\n".join(lines) + f"\n\n{EMPTY_BODY_NOTE}"
+
+
+def fetch(url: str) -> str:
+    """Fetch a URL and return its readable text."""
+
+    tool_line(f"Fetch({url})")
+
+    address = url.strip()
+
+    if not address.lower().startswith(FETCH_SCHEMES):
+        result = (
+            f"Error: fetch only handles http:// and https:// URLs, "
+            f"got {address!r}."
+        )
+        tool_result(result, style=ERROR)
+        return result
+
+    request = urllib.request.Request(
+        address,
+        headers={"User-Agent": FETCH_USER_AGENT},
+    )
+
+    try:
+        with urllib.request.urlopen(  # nosec B310 -- scheme checked above
+            request, timeout=FETCH_TIMEOUT_SECONDS
+        ) as response:
+            content_type = response.headers.get_content_type()
+            charset_header = response.headers.get("Content-Type", "")
+            body = response.read(FETCH_MAX_BYTES)
+            final_url = response.geturl()
+    except urllib.error.HTTPError as exc:
+        result = f"Error: {address} returned HTTP {exc.code} {exc.reason}."
+        tool_result(result, style=ERROR)
+        return result
+    except (urllib.error.URLError, OSError, ValueError) as exc:
+        result = f"Error: could not fetch {address}: {exc}"
+        tool_result(result, style=ERROR)
+        return result
+
+    title, description, text = _readable(
+        body, charset_header or content_type
+    )
+
+    if not text:
+        return _head_only(final_url, title, description, content_type)
+
+    clipped = len(text) > FETCH_MAX_CHARS
+    text = text[:FETCH_MAX_CHARS]
+
+    header = f"URL: {final_url}"
+
+    if title:
+        header += f"\nTitle: {title}"
+
+    if description:
+        header += f"\nDescription: {description}"
+
+    if clipped:
+        header += (
+            f"\nNote: truncated to the first {FETCH_MAX_CHARS} characters."
+        )
+
+    summary = f"{len(text)} char{plural(len(text))}"
+
+    if title:
+        summary += f" from {title}"
+
+    tool_result(summary + (" (truncated)" if clipped else ""))
+
+    return f"{header}\n\n{text}"
 
 
 def get_os() -> str:
@@ -1597,6 +1833,28 @@ tools = [
     {
         "type": "function",
         "function": {
+            "name": "fetch",
+            "description": (
+                "Fetch a URL and return its readable text, with no "
+                "browser and no screenshot."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url": {
+                        "type": "string",
+                        "description": (
+                            "Absolute http:// or https:// URL to fetch."
+                        ),
+                    },
+                },
+                "required": ["url"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "get_os",
             "description": "Return the operating system and platform info.",
             "parameters": {
@@ -1722,6 +1980,7 @@ FUNCTIONS = {
     "open_page": open_page,
     "interact": interact,
     "web_search": web_search,
+    "fetch": fetch,
     "get_os": get_os,
     "reason": reason,
     "get_date": get_date,
