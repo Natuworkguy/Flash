@@ -2,7 +2,7 @@
 
 FLASH (**F**ast **L**ocal **A**gent **SH**ell) CLI is an AI-powered command-line interface that allows you to interact with local (or remote) [Ollama](https://ollama.com) models while having the ability to execute shell commands directly or through the AI.
 
-[Watch the video on YouTube](https://www.youtube.com/watch?v=padyQR3tPUs)
+[Watch the original video on YouTube](https://www.youtube.com/watch?v=padyQR3tPUs)
 
 ## Features
 
