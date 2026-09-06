@@ -30,7 +30,13 @@ from .models import fetch_if_missing, pick_model
 from .notify import notify_reply_ready
 from .paths import ENV_PATH
 from .repl_input import COMMANDS, read_line
-from .sysprompt import get_model_system_prompt, model_sees_images
+from .stats import Turn
+from .stats import summary as stats_summary
+from .sysprompt import (
+    get_context_limit,
+    get_model_system_prompt,
+    model_sees_images,
+)
 from .theme import (
     ACCENT,
     ACCENT_ANSI,
@@ -138,6 +144,7 @@ class Config:
     max_tool_output_chars: int
     max_output_tokens: int
     no_command_confirmation: bool
+    show_stats: bool
     voice: bool
     prompt: str
 
@@ -161,6 +168,7 @@ class Config:
         cls.no_command_confirmation = bool(
             _int_env("NO_COMMAND_CONFIRMATION", 0, minimum=0)
         )
+        cls.show_stats = bool(_int_env("SHOW_STATS", 1, minimum=0))
         cls.voice = bool(_int_env("VOICE", 0, minimum=0))
         cls.prompt = \
             (ACCENT_ANSI + CHEVRON + " " + RESET_ANSI) \
@@ -392,6 +400,7 @@ def _chat(client: "ollama.Client", messages: list, tools_arg=None):
 
 
 _model_system_prompts: dict[str, str] = {}
+_context_limits: dict[str, Union[int, None]] = {}  # noqa: UP007
 
 
 def _session_system_prompt(heard: bool = False) -> str:
@@ -547,6 +556,7 @@ def _chat_retry_until_response(
     tools_arg=None,
     *,
     is_image: bool = False,
+    turn: Union[Turn, None] = None,  # noqa: UP007, RUF100
 ) -> tuple[str, str, list, Union[str, None]]:  # noqa: UP007, RUF100
     """Call the model, retrying up to FINAL_RESPONSE_RETRIES times if it
     comes back with neither reply text nor a tool call to make."""
@@ -561,6 +571,9 @@ def _chat_retry_until_response(
         if err:
             return "", "", [], err
 
+        if turn is not None:
+            turn.add(res)
+
         final, thinking, tool_calls = _response_parts(res)
         if final.strip() or tool_calls or attempt > FINAL_RESPONSE_RETRIES:
             break
@@ -574,6 +587,29 @@ def _chat_retry_until_response(
         }]
 
     return final, thinking, tool_calls, None
+
+
+def _context_limit() -> Union[int, None]:  # noqa: UP007, RUF100
+    """The active model's context window, asked for once per model."""
+
+    model = Config.model or ""
+
+    if model not in _context_limits:
+        _context_limits[model] = get_context_limit(Config.host, model)
+
+    return _context_limits[model]
+
+
+def _render_stats(turn: Turn) -> None:
+    """Print what the finished turn cost, unless SHOW_STATS turns it off."""
+
+    if not Config.show_stats:
+        return
+
+    line = stats_summary(turn, _context_limit())
+
+    if line is not None:
+        console.print(line)
 
 
 def _print_backend_error(detail: str) -> None:
@@ -1069,6 +1105,7 @@ def main() -> None:
             if uin == "/refresh":
                 refresh_config()
                 _model_system_prompts.clear()
+                _context_limits.clear()
                 client = ollama.Client(host=Config.host)
                 console.print(Text("Config refreshed.", style=DIM))
                 continue
@@ -1202,9 +1239,10 @@ def main() -> None:
                 "system", _session_system_prompt(heard)
             )
 
+            turn = Turn()
             final, thinking, tool_calls, err = _chat_retry_until_response(
                 console, client, [system_message] + messages, tools,
-                is_image=bool(pending_images),
+                is_image=bool(pending_images), turn=turn,
             )
             if err:
                 _print_backend_error(err)
@@ -1221,6 +1259,7 @@ def main() -> None:
                         "Could you rephrase or try again?"
                     )
                 _render_markdown(console, final)
+                _render_stats(turn)
                 notify_reply_ready()
                 listening_on = _speak_reply(final, heard)
                 messages.append(_message("assistant", final))
@@ -1267,7 +1306,7 @@ def main() -> None:
                     )
 
                 final, thinking, tool_calls, err = _chat_retry_until_response(
-                    console, client, tool_messages, tools,
+                    console, client, tool_messages, tools, turn=turn,
                     is_image=bool(tool_images),
                 )
                 if err:
@@ -1290,7 +1329,7 @@ def main() -> None:
             if not followup.strip():
                 tool_messages.append(_tool_limit_message())
                 followup, thinking, _, err = _chat_retry_until_response(
-                    console, client, tool_messages, None
+                    console, client, tool_messages, None, turn=turn
                 )
                 if err:
                     _print_backend_error(err)
@@ -1307,6 +1346,7 @@ def main() -> None:
                 followup += "\n```"
 
             _render_markdown(console, followup)
+            _render_stats(turn)
             notify_reply_ready()
             listening_on = _speak_reply(followup, heard)
             messages.append(_message("assistant", followup))
