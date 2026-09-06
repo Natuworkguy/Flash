@@ -1,8 +1,8 @@
 # pylint: disable=C0114,C0115,C0116
 
-from flash import sysprompt
+from flash import ai, sysprompt
 from flash.stats import Turn, summary
-from flash.sysprompt import get_context_limit
+from flash.sysprompt import get_context_ceiling, get_context_limit
 
 NS = 1_000_000_000
 
@@ -121,7 +121,7 @@ def test_context_limit_prefers_the_pinned_num_ctx(monkeypatch):
     assert get_context_limit("h", "m") == 65536  # nosec B101
 
 
-def test_context_limit_falls_back_to_the_architecture(monkeypatch):
+def test_context_limit_ignores_the_architecture_ceiling(monkeypatch):
     monkeypatch.setattr(
         sysprompt,
         "_show",
@@ -131,10 +131,126 @@ def test_context_limit_falls_back_to_the_architecture(monkeypatch):
         },
     )
 
-    assert get_context_limit("h", "m") == 262144  # nosec B101
+    assert get_context_limit("h", "m") is None  # nosec B101
 
 
 def test_context_limit_is_none_when_ollama_says_nothing(monkeypatch):
     monkeypatch.setattr(sysprompt, "_show", lambda _host, _model: {})
 
     assert get_context_limit("h", "m") is None  # nosec B101
+
+
+def test_context_ceiling_reports_what_the_architecture_supports(monkeypatch):
+    monkeypatch.setattr(
+        sysprompt,
+        "_show",
+        lambda _host, _model: {
+            "parameters": "num_ctx 65536",
+            "model_info": {"gemma4.context_length": 262144},
+        },
+    )
+
+    # The pinned window is what it runs in; the ceiling is only what it
+    # could be told to run in.
+    assert get_context_limit("h", "m") == 65536  # nosec B101
+    assert get_context_ceiling("h", "m") == 262144  # nosec B101
+
+
+def test_context_ceiling_is_none_when_unreported(monkeypatch):
+    monkeypatch.setattr(sysprompt, "_show", lambda _host, _model: {})
+
+    assert get_context_ceiling("h", "m") is None  # nosec B101
+
+
+def _config(monkeypatch, num_ctx="", model="m"):
+    monkeypatch.setattr(ai.Config, "num_ctx", num_ctx, raising=False)
+    monkeypatch.setattr(ai.Config, "model", model, raising=False)
+    monkeypatch.setattr(ai.Config, "host", "h", raising=False)
+    ai._context_limits.clear()
+    ai._context_ceilings.clear()
+    ai._context_notices.clear()
+    ai._num_ctx_notices.clear()
+
+
+def test_num_ctx_is_left_alone_when_unset(monkeypatch):
+    _config(monkeypatch)
+    monkeypatch.setattr(ai, "get_context_limit", lambda _h, _m: None)
+
+    assert ai._num_ctx() == 0  # nosec B101
+    assert "num_ctx" not in ai._chat_options()  # nosec B101
+
+
+def test_num_ctx_takes_a_token_count(monkeypatch):
+    _config(monkeypatch, num_ctx="32768")
+
+    assert ai._num_ctx() == 32768  # nosec B101
+    assert ai._chat_options()["num_ctx"] == 32768  # nosec B101
+
+
+def test_num_ctx_max_resolves_to_the_model_ceiling(monkeypatch):
+    _config(monkeypatch, num_ctx="max")
+    monkeypatch.setattr(ai, "get_context_ceiling", lambda _h, _m: 262144)
+
+    assert ai._num_ctx() == 262144  # nosec B101
+
+
+def test_num_ctx_ignores_a_value_it_cannot_read(monkeypatch):
+    _config(monkeypatch, num_ctx="lots")
+
+    assert ai._num_ctx() == 0  # nosec B101
+
+
+def test_what_flash_asks_for_beats_what_the_model_pins(monkeypatch):
+    _config(monkeypatch, num_ctx="8192")
+    monkeypatch.setattr(ai, "get_context_limit", lambda _h, _m: 65536)
+
+    assert ai._context_limit() == 8192  # nosec B101
+
+
+def test_the_unpinned_notice_is_printed_once_per_model(monkeypatch):
+    _config(monkeypatch)
+    monkeypatch.setattr(ai, "get_context_ceiling", lambda _h, _m: 262144)
+    printed = []
+    monkeypatch.setattr(ai.console, "print", lambda text: printed.append(text))
+
+    ai._note_unpinned_context()
+    ai._note_unpinned_context()
+
+    assert len(printed) == 1  # nosec B101
+    assert "256K" in printed[0].plain  # nosec B101
+    assert "NUM_CTX" in printed[0].plain  # nosec B101
+
+
+def test_num_ctx_max_says_so_when_it_cannot_resolve(monkeypatch):
+    # A setting that is quietly ignored is worse than one never set.
+    _config(monkeypatch, num_ctx="max")
+    monkeypatch.setattr(ai, "get_context_ceiling", lambda _h, _m: None)
+    monkeypatch.setattr(ai, "is_remote", lambda _h, _m: True)
+    warned = []
+    monkeypatch.setattr(ai, "warn", warned.append)
+
+    assert ai._num_ctx() == 0  # nosec B101
+    assert ai._num_ctx() == 0  # nosec B101
+
+    assert len(warned) == 1  # nosec B101
+    assert "changed nothing" in warned[0]  # nosec B101
+    assert "cloud" in warned[0]  # nosec B101
+
+
+def test_num_ctx_says_so_when_the_value_is_junk(monkeypatch):
+    _config(monkeypatch, num_ctx="lots")
+    warned = []
+    monkeypatch.setattr(ai, "warn", warned.append)
+
+    assert ai._num_ctx() == 0  # nosec B101
+    assert "'lots'" in warned[0]  # nosec B101
+
+
+def test_num_ctx_max_is_quiet_when_it_works(monkeypatch):
+    _config(monkeypatch, num_ctx="max")
+    monkeypatch.setattr(ai, "get_context_ceiling", lambda _h, _m: 262144)
+    warned = []
+    monkeypatch.setattr(ai, "warn", warned.append)
+
+    assert ai._num_ctx() == 262144  # nosec B101
+    assert warned == []  # nosec B101

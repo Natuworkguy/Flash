@@ -46,6 +46,7 @@ Requirements:
 | `MAX_TOOL_ROUNDS` | No | `10` | `1` | Maximum number of tool-calling rounds allowed per request. |
 | `MAX_TOOL_OUTPUT_CHARS` | No | `1200` | `500` | Tool output longer than this is truncated (middle removed) before being sent back to the model. |
 | `MAX_OUTPUT_TOKENS` | No | `1024` | `128` | Maximum tokens the model may generate per response. Maps to Ollama's `num_predict` option. |
+| `NUM_CTX` | No | unset | - | Context window to ask Ollama for: a token count, or `max` for the largest the model's architecture supports. Left unset, the model keeps whatever its Modelfile pins (Flash Onyx pins 65536) and Ollama's default applies to models that pin nothing. The cache is allocated when the model loads, whether or not a session fills it, so raising this costs memory up front. |
 | `SHOW_STATS` | No | `1` | - | Prints a dim line under each reply with the tokens the turn used, how long it took, the generation rate, and how full the context got. `0` hides it. |
 | `VOICE` | No | `0` | - | `1` turns voice mode on at startup: press Enter on an empty prompt to speak, and replies are read aloud. Usually set with `/voice on` rather than by hand. |
 | `VOICE_VOSK_MODEL` | No | `vosk-model-small-en-us-0.15` | - | Name of the [Vosk model](https://alphacephei.com/vosk/models) used for listening. Downloaded to `~/.flash/models` on first use. |
