@@ -147,6 +147,27 @@ def test_speak_reply_takes_the_next_turn_by_voice(monkeypatch):
     assert said == ["All done. See main.py."]  # nosec B101
 
 
+def test_speak_reply_stays_quiet_for_a_typed_turn(monkeypatch):
+    monkeypatch.setattr(Config, "voice", True)
+    monkeypatch.setattr(ai, "speak", _refuse_to_speak)
+
+    # Voice mode armed is not the user talking: typing "hi" gets a written
+    # answer and the prompt back, not speech and a live microphone.
+    assert _speak_reply("hi there", heard=False) is False  # nosec B101
+
+
+def test_session_system_prompt_only_says_it_is_heard_when_spoken_to(
+    monkeypatch,
+):
+    monkeypatch.setattr(Config, "voice", True)
+    monkeypatch.setattr(ai, "build_system_prompt", lambda _base: "BASE")
+    monkeypatch.setattr(ai, "_model_system_prompts", {"": ""})
+
+    assert ai._session_system_prompt(False) == "BASE"  # nosec B101
+    assert ai._session_system_prompt(True).startswith("BASE")  # nosec B101
+    assert ai.VOICE_PROMPT in ai._session_system_prompt(True)  # nosec B101
+
+
 def test_speak_reply_hands_back_the_prompt_when_it_cannot_speak(monkeypatch):
     warned = []
     monkeypatch.setattr(Config, "voice", True)

@@ -26,10 +26,19 @@ from .cli import parse_args
 from .envfile import set_env_var, unset_env_var
 from .images import resolve_image_path
 from .memory import forget_memory, list_memory
+from .models import fetch_if_missing, pick_model
 from .notify import notify_reply_ready
 from .paths import ENV_PATH
 from .repl_input import COMMANDS, read_line
-from .sysprompt import get_model_system_prompt, model_sees_images
+from .stats import Turn, window
+from .stats import summary as stats_summary
+from .sysprompt import (
+    get_context_ceiling,
+    get_context_limit,
+    get_model_system_prompt,
+    is_remote,
+    model_sees_images,
+)
 from .theme import (
     ACCENT,
     ACCENT_ANSI,
@@ -136,7 +145,9 @@ class Config:
     max_tool_rounds: int
     max_tool_output_chars: int
     max_output_tokens: int
+    num_ctx: str
     no_command_confirmation: bool
+    show_stats: bool
     voice: bool
     prompt: str
 
@@ -157,9 +168,11 @@ class Config:
         cls.max_output_tokens = _int_env(
             "MAX_OUTPUT_TOKENS", 1024, minimum=128
         )
+        cls.num_ctx = (os.getenv("NUM_CTX") or "").strip().lower()
         cls.no_command_confirmation = bool(
             _int_env("NO_COMMAND_CONFIRMATION", 0, minimum=0)
         )
+        cls.show_stats = bool(_int_env("SHOW_STATS", 1, minimum=0))
         cls.voice = bool(_int_env("VOICE", 0, minimum=0))
         cls.prompt = \
             (ACCENT_ANSI + CHEVRON + " " + RESET_ANSI) \
@@ -375,6 +388,18 @@ def _clear_scratch_dir() -> None:
     shutil.rmtree(SCRATCH_DIR, ignore_errors=True)
 
 
+def _chat_options() -> dict:
+    """The per-call options Flash sends, on top of the model's own."""
+
+    options: dict = {"num_predict": Config.max_output_tokens}
+    num_ctx = _num_ctx()
+
+    if num_ctx:
+        options["num_ctx"] = num_ctx
+
+    return options
+
+
 def _chat(client: "ollama.Client", messages: list, tools_arg=None):
     if Config.model is None:
         raise FlashError(
@@ -386,14 +411,19 @@ def _chat(client: "ollama.Client", messages: list, tools_arg=None):
         model=Config.model,  # pyright: ignore[reportArgumentType]
         messages=messages,
         tools=tools_arg,
-        options={"num_predict": Config.max_output_tokens},
+        options=_chat_options(),
     )
 
 
 _model_system_prompts: dict[str, str] = {}
+_context_limits: dict[str, Union[int, None]] = {}  # noqa: UP007
+_context_ceilings: dict[str, Union[int, None]] = {}  # noqa: UP007
+_context_notices: set[str] = set()
+_num_ctx_notices: set[str] = set()
+NUM_CTX_MAX = "max"
 
 
-def _session_system_prompt() -> str:
+def _session_system_prompt(heard: bool = False) -> str:
     """Flash's system prompt, with the current model's own prepended.
 
     Cached per model name, since /api/show costs a round trip and the
@@ -409,7 +439,7 @@ def _session_system_prompt() -> str:
 
     prompt = build_system_prompt(_model_system_prompts[model])
 
-    return prompt + VOICE_PROMPT if Config.voice else prompt
+    return prompt + VOICE_PROMPT if heard else prompt
 
 
 def _load_states(key: str, fallback: list[str]) -> list[str]:
@@ -546,6 +576,7 @@ def _chat_retry_until_response(
     tools_arg=None,
     *,
     is_image: bool = False,
+    turn: Union[Turn, None] = None,  # noqa: UP007, RUF100
 ) -> tuple[str, str, list, Union[str, None]]:  # noqa: UP007, RUF100
     """Call the model, retrying up to FINAL_RESPONSE_RETRIES times if it
     comes back with neither reply text nor a tool call to make."""
@@ -560,6 +591,9 @@ def _chat_retry_until_response(
         if err:
             return "", "", [], err
 
+        if turn is not None:
+            turn.add(res)
+
         final, thinking, tool_calls = _response_parts(res)
         if final.strip() or tool_calls or attempt > FINAL_RESPONSE_RETRIES:
             break
@@ -573,6 +607,147 @@ def _chat_retry_until_response(
         }]
 
     return final, thinking, tool_calls, None
+
+
+def _context_ceiling() -> Union[int, None]:  # noqa: UP007, RUF100
+    """The longest window the active model could do, asked once."""
+
+    model = Config.model or ""
+
+    if model not in _context_ceilings:
+        _context_ceilings[model] = get_context_ceiling(Config.host, model)
+
+    return _context_ceilings[model]
+
+
+def _num_ctx() -> int:
+    """The window Flash asks Ollama for, or 0 to leave it alone.
+
+    NUM_CTX takes a token count or "max", where max is the model's own
+    ceiling. Max is opt-in on purpose: Ollama allocates the cache at
+    load whether the session fills it or not, so nothing here picks it
+    for someone who did not ask for it.
+    """
+
+    setting = Config.num_ctx
+
+    if not setting:
+        return 0
+
+    if setting == NUM_CTX_MAX:
+        ceiling = _context_ceiling()
+
+        if ceiling:
+            return ceiling
+
+        model = Config.model or ""
+        why = (
+            "runs on Ollama's cloud, so its architecture is not readable "
+            "from here"
+            if is_remote(Config.host, model)
+            else "does not report one"
+        )
+        _note_num_ctx(
+            f"NUM_CTX=max changed nothing: {model} {why}. "
+            "Set NUM_CTX to a token count instead."
+        )
+
+        return 0
+
+    if setting.isdigit():
+        return int(setting)
+
+    _note_num_ctx(
+        f"NUM_CTX is set to {setting!r}, which is neither a token count "
+        f"nor {NUM_CTX_MAX!r}, so it was ignored."
+    )
+
+    return 0
+
+
+def _note_num_ctx(message: str) -> None:
+    """Say once why NUM_CTX did nothing.
+
+    A setting that is quietly ignored is worse than one never set: the
+    user believes the window changed and reads every number after it in
+    that belief.
+    """
+
+    key = f"{Config.model}:{Config.num_ctx}"
+
+    if key in _num_ctx_notices:
+        return
+
+    _num_ctx_notices.add(key)
+    warn(f"  {message}")
+
+
+def _context_limit() -> Union[int, None]:  # noqa: UP007, RUF100
+    """The window this turn ran in, or None if nobody set one.
+
+    What Flash asks for wins, since that is what Ollama allocates, then
+    whatever the Modelfile pins. A model pinning nothing, with NUM_CTX
+    unset, has no window worth quoting.
+    """
+
+    asked = _num_ctx()
+
+    if asked:
+        return asked
+
+    model = Config.model or ""
+
+    if model not in _context_limits:
+        _context_limits[model] = get_context_limit(Config.host, model)
+
+    return _context_limits[model]
+
+
+def _note_unpinned_context() -> None:
+    """Say once per model that it runs in Ollama's default window.
+
+    A model pinning no num_ctx gets whatever Ollama defaults to, small
+    enough to quietly drop the top of a long session. Fixing that costs
+    memory, so the choice stays the user's; this is the line that lets
+    them know there is one to make.
+    """
+
+    model = Config.model or ""
+
+    if model in _context_notices:
+        return
+
+    _context_notices.add(model)
+
+    note = Text(
+        "  no context window pinned, so Ollama's default applies",
+        style=DIM,
+    )
+    ceiling = _context_ceiling()
+
+    if ceiling:
+        note.append(
+            f"\n  {model} goes up to {window(ceiling)}: "
+            "set NUM_CTX to a size, or to max"
+        )
+
+    console.print(note)
+
+
+def _render_stats(turn: Turn) -> None:
+    """Print what the finished turn cost, unless SHOW_STATS turns it off."""
+
+    if not Config.show_stats:
+        return
+
+    limit = _context_limit()
+    line = stats_summary(turn, limit)
+
+    if line is not None:
+        console.print(line)
+
+    if limit is None:
+        _note_unpinned_context()
 
 
 def _print_backend_error(detail: str) -> None:
@@ -741,14 +916,16 @@ def _voice_input() -> Union[str, None]:  # noqa: UP007, RUF100
     return heard
 
 
-def _speak_reply(text: str) -> bool:
-    """Read a finished reply aloud when voice mode is on.
+def _speak_reply(text: str, heard: bool = True) -> bool:
+    """Read a finished reply aloud when the turn was spoken to us.
 
     Returns whether to listen for the answer straight away, so a spoken
-    conversation carries on without a keypress between turns.
+    conversation carries on without a keypress between turns. A typed
+    turn is answered in writing and hands the prompt back, because voice
+    mode being armed is not the same as the user talking.
     """
 
-    if not Config.voice:
+    if not (Config.voice and heard):
         return False
 
     spoken = for_speech(text)
@@ -929,6 +1106,7 @@ def main() -> None:
             pending_images: Union[  # noqa: UP007, RUF100
                 list[str], None
             ] = None
+            heard = False
 
             if pending:
                 uin = pending.pop(0)
@@ -968,6 +1146,7 @@ def main() -> None:
                     continue
 
                 uin = spoken
+                heard = True
                 _render_sent_message(console, Config.prompt, uin)
 
             if uin in ("/bye", "/exit"):
@@ -976,6 +1155,18 @@ def main() -> None:
 
             if uin == "/model" or uin.startswith("/model "):
                 arg = uin[len("/model"):].strip()
+
+                if arg:
+                    # Setting a model by hand stays allowed whatever the
+                    # backend says, so a declined or failed download is
+                    # not a reason to leave MODEL where it was.
+                    fetch_if_missing(client, arg)
+                else:
+                    # Bare /model picks from what this machine holds.
+                    # Picking nothing falls through to the summary below
+                    # rather than leaving the screen bare.
+                    arg = pick_model(client, Config.model or "") or ""
+
                 if arg:
                     set_config_var("MODEL", arg)
                     client = ollama.Client(host=Config.host)
@@ -1052,6 +1243,10 @@ def main() -> None:
             if uin == "/refresh":
                 refresh_config()
                 _model_system_prompts.clear()
+                _context_limits.clear()
+                _context_ceilings.clear()
+                _context_notices.clear()
+                _num_ctx_notices.clear()
                 client = ollama.Client(host=Config.host)
                 console.print(Text("Config refreshed.", style=DIM))
                 continue
@@ -1161,6 +1356,7 @@ def main() -> None:
                 help_text.append("\nCommands\n\n", style="bold")
                 for cmd, desc in [
                     *COMMANDS,
+                    ("@<path>", "point the model at a file"),
                     ("!<command>", " run a shell command directly"),
                 ]:
                     help_text.append(f"  {cmd:<10}", style=ACCENT)
@@ -1180,11 +1376,14 @@ def main() -> None:
             messages.append(_message("user", uin, pending_images))
             _trim_history(messages)
 
-            system_message = _message("system", _session_system_prompt())
+            system_message = _message(
+                "system", _session_system_prompt(heard)
+            )
 
+            turn = Turn()
             final, thinking, tool_calls, err = _chat_retry_until_response(
                 console, client, [system_message] + messages, tools,
-                is_image=bool(pending_images),
+                is_image=bool(pending_images), turn=turn,
             )
             if err:
                 _print_backend_error(err)
@@ -1201,8 +1400,9 @@ def main() -> None:
                         "Could you rephrase or try again?"
                     )
                 _render_markdown(console, final)
+                _render_stats(turn)
                 notify_reply_ready()
-                listening_on = _speak_reply(final)
+                listening_on = _speak_reply(final, heard)
                 messages.append(_message("assistant", final))
                 _trim_history(messages)
                 print()
@@ -1247,7 +1447,7 @@ def main() -> None:
                     )
 
                 final, thinking, tool_calls, err = _chat_retry_until_response(
-                    console, client, tool_messages, tools,
+                    console, client, tool_messages, tools, turn=turn,
                     is_image=bool(tool_images),
                 )
                 if err:
@@ -1270,7 +1470,7 @@ def main() -> None:
             if not followup.strip():
                 tool_messages.append(_tool_limit_message())
                 followup, thinking, _, err = _chat_retry_until_response(
-                    console, client, tool_messages, None
+                    console, client, tool_messages, None, turn=turn
                 )
                 if err:
                     _print_backend_error(err)
@@ -1287,8 +1487,9 @@ def main() -> None:
                 followup += "\n```"
 
             _render_markdown(console, followup)
+            _render_stats(turn)
             notify_reply_ready()
-            listening_on = _speak_reply(followup)
+            listening_on = _speak_reply(followup, heard)
             messages.append(_message("assistant", followup))
             _trim_history(messages)
 

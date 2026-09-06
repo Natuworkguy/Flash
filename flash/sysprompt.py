@@ -1,9 +1,14 @@
 import json
 import os
+import re
 import urllib.error
 import urllib.request
+from typing import Union
 
 SHOW_TIMEOUT_SECONDS = 5
+
+_NUM_CTX_RE = re.compile(r"^num_ctx\s+(\d+)", re.MULTILINE)
+_CONTEXT_LENGTH_SUFFIX = ".context_length"
 
 
 def get_system_prompt():
@@ -89,3 +94,56 @@ def model_sees_images(host: str, model: str) -> bool:
         return True
 
     return "vision" in capabilities
+
+
+def get_context_limit(
+    host: str, model: str
+) -> Union[int, None]:  # noqa: UP007, RUF100
+    """The token window MODEL pins in its Modelfile, or None.
+
+    Deliberately not the architecture's maximum. A model that pins
+    nothing runs in whatever Ollama defaults to, which is far smaller,
+    so reporting the ceiling would tell the user they have room at the
+    moment they are running out of it. None means nobody has said, and
+    the caller says nothing rather than guessing.
+    """
+
+    match = _NUM_CTX_RE.search(
+        str(_show(host, model).get("parameters") or "")
+    )
+
+    return int(match.group(1)) if match else None
+
+
+def get_context_ceiling(
+    host: str, model: str
+) -> Union[int, None]:  # noqa: UP007, RUF100
+    """The longest window MODEL's architecture can do, or None.
+
+    Never a window to run in by default. Ollama allocates the cache for
+    whatever it is given, at load, whether or not a session ever fills
+    it, so this number is for telling a user what they could ask for,
+    not for asking on their behalf.
+    """
+
+    info = _show(host, model).get("model_info")
+
+    if not isinstance(info, dict):
+        return None
+
+    for key, value in info.items():
+        if key.endswith(_CONTEXT_LENGTH_SUFFIX) and isinstance(value, int):
+            return value
+
+    return None
+
+
+def is_remote(host: str, model: str) -> bool:
+    """Whether MODEL runs elsewhere, with no weights on this machine.
+
+    Ollama answers /api/show for these from the manifest alone, so the
+    architecture block comes back empty and anything derived from it is
+    unknowable locally.
+    """
+
+    return bool(_show(host, model).get("remote_host"))

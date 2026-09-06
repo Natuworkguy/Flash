@@ -2,7 +2,7 @@
 
 FLASH (**F**ast **L**ocal **A**gent **SH**ell) CLI is an AI-powered command-line interface that allows you to interact with local (or remote) [Ollama](https://ollama.com) models while having the ability to execute shell commands directly or through the AI.
 
-[Watch the video on YouTube](https://www.youtube.com/watch?v=padyQR3tPUs)
+[Watch the original video on YouTube](https://www.youtube.com/watch?v=padyQR3tPUs)
 
 ## Features
 
@@ -133,12 +133,18 @@ python run.py
 ### Internal Commands
 
 - `/help` or `/?`: Display the help message.
-- `/model`: Show the currently active model and Ollama host.
+- `/model`: Pick from the models on this machine, or type a name to
+  download one. `/model <name>` switches straight to one.
 - `/clear`: Clear the conversation history.
 - `/image <path> [prompt]`: Send a local image to the model.
 - `/version`: Show the current version and check GitHub for updates.
 - `/update`: Update Flash to the latest version (requires pipx).
 - `/bye`: Exit the application.
+
+Type `@` anywhere in a message to pick a file out of a dropdown, e.g.
+`why does @flash/theme.py fall back to ASCII?`. Arrow keys and Tab pick
+one, `/` walks into a directory, and the model reads whatever you point
+it at. Dot-entries stay hidden until you type the leading dot.
 
 ### Image Recognition
 
