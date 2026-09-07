@@ -163,7 +163,13 @@ fi
 
 echo ""
 echo "Installing the voice mode packages..."
-pipx inject flash vosk piper-tts sounddevice || \
+NEEDED_VOICE_PACKAGES="sounddevice vosk piper-tts"
+{
+    # shellcheck disable=SC2086
+    pipx inject flash $NEEDED_VOICE_PACKAGES
+    # shellcheck disable=SC2086
+    pipx runpip flash pip install --upgrade --force-reinstall $NEEDED_VOICE_PACKAGES
+} || \
     echo "Voice packages failed to install. Voice mode stays unavailable."
 
 # sounddevice bundles PortAudio on macOS and Windows, but takes it from
