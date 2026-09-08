@@ -258,7 +258,7 @@ A screenshot is a still picture, so for a page with buttons or a form the
 AI opens it with `open_page` and then drives it with `interact`, one
 action per call:
 
-```
+```prompt
 Open ~/Desktop/signup.html, fill in the form, submit it, and tell me why
 the confirmation never shows up.
 ```
