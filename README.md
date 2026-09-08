@@ -297,6 +297,13 @@ flash --update          # check for a newer version and, if found, confirm and i
 flash --update --force  # reinstall from `main` unconditionally, no confirmation
 ```
 
+On Windows the install cannot run while Flash is open, because Windows
+holds a lock on every running program and pipx has to replace two of
+them: `flash.exe` and the Python it starts. Flash downloads the update,
+then hands the install to a PowerShell window that waits for Flash to
+close and finishes there. Quit Flash and the update completes on its
+own.
+
 ### Direct Shell Execution
 
 You can run shell commands directly without AI intervention:
