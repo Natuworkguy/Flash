@@ -35,6 +35,18 @@ _MAX_ERROR_LINES = 12
 # trying anyway. Long enough for a slow exit, short of hanging.
 _WAIT_SECONDS = 300
 
+# `pipx install --force` builds the venv again from scratch, so every
+# package injected into the old one is gone by the time the update
+# finishes. Voice mode is optional, so putting these back never decides
+# whether the update succeeded. Kept in step with install.sh,
+# install.ps1, and requirements-voice.txt.
+VOICE_PACKAGES = ("sounddevice", "vosk", "piper-tts")
+
+_VOICE_FAILED = (
+    "Voice packages could not be reinstalled, so voice mode stays "
+    "unavailable until you run the installer again."
+)
+
 
 def _parse_version(text: str) -> tuple[int, ...]:
     return tuple(int(part) for part in text.split("."))
@@ -137,6 +149,40 @@ def _stream(
     return code, "\n".join(lines)
 
 
+def _voice_commands() -> list[list[str]]:
+    """The two commands that put the voice packages back, in order.
+
+    `inject` leaves a package that is already in the venv at whatever
+    version it was, so the forced reinstall behind it is what actually
+    moves one. `runpip` hands its arguments straight to pip, which is
+    why the subcommand is `install` and not `pip install`.
+    """
+
+    packages = list(VOICE_PACKAGES)
+
+    return [
+        ["pipx", "inject", "flash"] + packages,
+        [
+            "pipx", "runpip", "flash", "install",
+            "--upgrade", "--force-reinstall",
+        ] + packages,
+    ]
+
+
+def _install_voice(
+    on_output: Union[Callable[[str], None], None] = None,  # noqa: UP007
+) -> bool:
+    """Reinstall the voice packages the update wiped. True if they took."""
+
+    for command in _voice_commands():
+        code, _output = _stream(command, on_output)
+
+        if code != 0:
+            return False
+
+    return True
+
+
 def _quoted(value: str) -> str:
     """A PowerShell single-quoted literal, which only escapes quotes."""
 
@@ -155,6 +201,22 @@ def _handoff_command(shell: str, pipx: str, tmp_dir: str) -> list[str]:
     """
 
     clone = _quoted(tmp_dir)
+    packages = " ".join(VOICE_PACKAGES)
+
+    # The reinstall wipes the injected voice packages, and this window is
+    # the only thing still running once flash is gone, so they go back
+    # here. PowerShell 5.1 has no `&&`, so each step is its own
+    # statement, and a voice failure never changes the install's own
+    # exit code.
+    voice = (
+        "if ($code -eq 0) { "
+        f"& {_quoted(pipx)} inject flash {packages}; "
+        f"& {_quoted(pipx)} runpip flash install --upgrade "
+        f"--force-reinstall {packages}; "
+        "if ($LASTEXITCODE -ne 0) { "
+        "Write-Host 'Voice packages failed to install. "
+        "Voice mode stays unavailable.' } }; "
+    )
 
     script = (
         # This process is the venv's python, and pipx replaces that.
@@ -169,6 +231,7 @@ def _handoff_command(shell: str, pipx: str, tmp_dir: str) -> list[str]:
         "Start-Sleep -Milliseconds 500; "
         f"& {_quoted(pipx)} install --force {clone}; "
         "$code = $LASTEXITCODE; "
+        + voice +
         f"Remove-Item -Recurse -Force {clone} -ErrorAction SilentlyContinue; "
         "if ($code -ne 0) { "
         "Read-Host 'Update failed. Press Enter to close' } "
@@ -196,8 +259,9 @@ def perform_update(
 ) -> tuple[bool, str]:
     """Reinstall Flash from the latest `main` branch.
 
-    Mirrors install.sh: clone `main` to a temp dir and `pipx install
-    --force` it. Returns (success, message).
+    Mirrors install.sh: clone `main` to a temp dir, `pipx install
+    --force` it, then put the voice packages that reinstall wiped back
+    in. Returns (success, message).
 
     `on_step` is called with a short label before each step, and
     `on_output` with every line git and pipx print, so the caller can
@@ -278,6 +342,17 @@ def perform_update(
         if code != 0:
             return False, _failed(
                 "Could not install the update", code, output
+            )
+
+        # The reinstall took the injected voice packages with it. Voice
+        # is optional, so this reports and moves on rather than calling
+        # a working update a failure.
+        step("Restoring voice mode")
+
+        if not _install_voice(on_output):
+            return True, (
+                "Flash updated. Restart flash to use the new version. "
+                f"{_VOICE_FAILED}"
             )
     except OSError as exc:
         return False, f"Update failed: {exc}"
