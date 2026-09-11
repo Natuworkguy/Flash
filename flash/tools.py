@@ -20,6 +20,7 @@ from typing import Any, Union
 from ddgs import DDGS
 from rich.text import Text
 
+from . import plan
 from .browser import (
     ACTIONS,
     MAX_ELEMENTS,
@@ -114,6 +115,15 @@ To click a button, fill in a form, or work out why a page misbehaves,
   returns the result, which is the quickest way to check state a picture
   cannot show, such as what a handler stored or what a value really is.
   Close the browser with the close action once the page is working.
+When a request takes several steps, call the plan tool first with those
+  steps, shortest useful list you can write. They appear to the user as a
+  checklist of empty boxes. Then work the list in order, and call
+  check_step with a step's number the moment that step is actually
+  finished, so its box ticks in front of them. Tick each step as you go,
+  never all of them at the end, and never before the work is done. Call
+  plan again to replace the list if the task turns out to need different
+  steps. Skip the plan entirely for anything you can finish in one or two
+  tool calls; a checklist for a one-line answer is noise.
 To save a durable fact or preference for future sessions, use the remember
   tool. To check saved memory, use the recall tool with a specific phrase;
   it does not return everything for a blank search. To delete one saved
@@ -999,6 +1009,58 @@ def reason(thought: str) -> str:
 
     console.print(Text(f"\n{thought}\n", style=f"italic {DIM}"))
     return "(noted)"
+
+
+def _plan_steps(steps: Any) -> list[str]:
+    """Coerce whatever the model sent into a list of step descriptions.
+
+    Small models often hand back one newline-separated string, or a list
+    of {"step": ...} objects, instead of the list of strings asked for.
+    """
+
+    if isinstance(steps, str):
+        steps = steps.replace("\\n", "\n").splitlines()
+    if not isinstance(steps, (list, tuple)):
+        return []
+
+    items = []
+    for entry in steps:
+        if isinstance(entry, dict):
+            entry = entry.get("step") or entry.get("text") or ""
+        text = re.sub(r"^\s*(?:[-*•]|\d+[.)])\s*", "", str(entry)).strip()
+        if text:
+            items.append(text)
+    return items
+
+
+def plan_tool(steps: Any) -> str:
+    """Post a checklist of the steps about to be taken."""
+
+    items = _plan_steps(steps)
+    if not items:
+        return "A plan needs at least one step."
+
+    plan.set_steps(items)
+    tool_line(plan.headline())
+    plan.render()
+    return plan.as_text()
+
+
+def check_step(index: Any) -> str:
+    """Tick one step of the current plan, by its 1-based number."""
+
+    try:
+        number = int(str(index).strip())
+    except (TypeError, ValueError):
+        return f"Step number must be a whole number, not {index!r}."
+
+    problem = plan.mark_done(number)
+    if problem:
+        return problem
+
+    tool_line(plan.headline())
+    plan.render()
+    return plan.as_text()
 
 
 def remember(entry: str) -> str:
@@ -1900,6 +1962,56 @@ tools = [
     {
         "type": "function",
         "function": {
+            "name": "plan",
+            "description": (
+                "Post the steps you are about to take as a checklist the "
+                "user can watch. Replaces any earlier plan. Use it for a "
+                "task with several distinct steps, not for something you "
+                "can finish in one or two tool calls."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "steps": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": (
+                            "The steps, in the order you will do them. One "
+                            "short line each, phrased as the work itself "
+                            "(e.g. 'Read the renderer'), not as a promise. "
+                            f"At most {plan.MAX_STEPS}."
+                        ),
+                    },
+                },
+                "required": ["steps"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "check_step",
+            "description": (
+                "Tick one step of the current plan, by its 1-based number, "
+                "the moment that step is finished. Ticking a step redraws "
+                "the checklist for the user."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "index": {
+                        "type": "integer",
+                        "description": "1-based number of the finished step.",
+                        "minimum": 1,
+                    },
+                },
+                "required": ["index"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "remember",
             "description": (
                 "Save a fact or user preference to persistent memory so it "
@@ -1984,6 +2096,8 @@ FUNCTIONS = {
     "get_os": get_os,
     "reason": reason,
     "get_date": get_date,
+    "plan": plan_tool,
+    "check_step": check_step,
     "remember": remember,
     "recall": recall,
     "forget": forget,

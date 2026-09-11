@@ -22,6 +22,7 @@ from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.text import Text
 
+from . import plan
 from .cli import parse_args
 from .envfile import set_env_var, unset_env_var
 from .images import resolve_image_path
@@ -1280,7 +1281,13 @@ def main() -> None:
 
             if uin == "/clear":
                 messages.clear()
+                plan.clear()
                 console.print(Text("Context cleared.", style=DIM))
+                continue
+
+            if uin == "/plan":
+                console.print(Text(plan.headline(), style=DIM))
+                plan.render()
                 continue
 
             if uin == "/version":
