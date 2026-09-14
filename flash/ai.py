@@ -22,9 +22,11 @@ from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.text import Text
 
+from . import plan
 from .cli import parse_args
 from .envfile import set_env_var, unset_env_var
 from .images import resolve_image_path
+from .latex import render_latex
 from .memory import forget_memory, list_memory
 from .models import fetch_if_missing, pick_model
 from .notify import notify_reply_ready
@@ -765,6 +767,8 @@ def _render_markdown(console: Console, text: str, *, end: str = "\n") -> None:
     trailing cursor dot -- the full reply already arrived in one shot, so
     this is a paced typewriter effect rather than real token streaming."""
 
+    text = render_latex(text)
+
     def render(body: str) -> Markdown:
         return Markdown(body, code_theme="monokai", hyperlinks=True)
 
@@ -804,7 +808,7 @@ def _render_sent_message(
     prompt = Text.from_ansi(prompt_ansi)
     console.print(prompt, end="")
     console.print(
-        Markdown(text, code_theme="monokai", hyperlinks=True),
+        Markdown(render_latex(text), code_theme="monokai", hyperlinks=True),
         width=console.width - cell_len(prompt.plain),
     )
 
@@ -1277,7 +1281,13 @@ def main() -> None:
 
             if uin == "/clear":
                 messages.clear()
+                plan.clear()
                 console.print(Text("Context cleared.", style=DIM))
+                continue
+
+            if uin == "/plan":
+                console.print(Text(plan.headline(), style=DIM))
+                plan.render()
                 continue
 
             if uin == "/version":
