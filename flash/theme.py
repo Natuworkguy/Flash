@@ -46,6 +46,12 @@ CURSOR = "●" if _UNICODE_OK else "."        # ●
 BAR_FULL = "━" if _UNICODE_OK else "#"      # ━
 BAR_EMPTY = "─" if _UNICODE_OK else "-"     # ─
 
+# Plan checkboxes, kept on their own encoding check: a terminal can carry
+# the glyphs above and still choke on these.
+_BOXES_OK = _can_encode("☒☐")
+CHECK_DONE = "☒" if _BOXES_OK else "[x]"    # ☒
+CHECK_TODO = "☐" if _BOXES_OK else "[ ]"    # ☐
+
 # Raw ANSI escapes for text fed straight into input()/print(), where rich
 # markup can't reach (e.g. the interactive prompt string).
 _ACCENT_RGB = (217, 119, 87)

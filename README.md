@@ -16,6 +16,7 @@ FLASH (**F**ast **L**ocal **A**gent **SH**ell) CLI is an AI-powered command-line
 - **Page Screenshots**: The AI renders a page it built in a headless browser with its `screenshot` tool and looks at the result, so it can see a broken layout instead of guessing from the HTML.
 - **Page Control**: The AI opens a page with `open_page` and then clicks buttons, fills forms, presses keys, and runs JavaScript on it with `interact`, seeing a fresh screenshot, the page's elements, and its console errors after every step, so it can debug what a page *does*, not just how it looks.
 - **Voice Mode**: `/voice on` downloads a Vosk speech model and a Piper voice, then lets you talk to Flash and hear its replies, with typing still available at any time.
+- **Visible Plans**: For a multi-step task the AI posts a checklist up front and ticks each box as it finishes that step, so you can see where it is instead of waiting for the wall of text at the end.
 - **Context Management**: Automatic history trimming to stay within token limits.
 - **Markdown Support**: Rich formatting for AI responses in the terminal.
 
@@ -135,6 +136,7 @@ python run.py
 - `/help` or `/?`: Display the help message.
 - `/model`: Pick from the models on this machine, or type a name to
   download one. `/model <name>` switches straight to one.
+- `/plan`: Show the checklist the model is working through.
 - `/clear`: Clear the conversation history.
 - `/image <path> [prompt]`: Send a local image to the model.
 - `/version`: Show the current version and check GitHub for updates.
@@ -145,6 +147,26 @@ Type `@` anywhere in a message to pick a file out of a dropdown, e.g.
 `why does @flash/theme.py fall back to ASCII?`. Arrow keys and Tab pick
 one, `/` walks into a directory, and the model reads whatever you point
 it at. Dot-entries stay hidden until you type the leading dot.
+
+### Plans
+
+When a request takes several steps, the model posts a checklist before it
+starts and ticks each box as that step lands:
+
+```console
+> add latex rendering to the response renderer
+
+⏺ Plan(2/4 done)
+  ⎿  ☒ Read the response renderer
+     ☒ Add the LaTeX module
+     ☐ Wire it into the render path
+     ☐ Add tests
+```
+
+Each tick redraws the list in place of the previous one, so the terminal
+shows the run as it happens. `/plan` reprints the current checklist at any
+time, and `/clear` drops it along with the conversation. Short tasks skip
+the plan entirely.
 
 ### Image Recognition
 
