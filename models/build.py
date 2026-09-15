@@ -189,6 +189,7 @@ def build(
         generated.write_text(
             render(source, name, size, terms),
             encoding="utf-8",
+            newline="\n"
         )
         run(["ollama", "create", tag, "-f", str(generated)], dry_run)
 
