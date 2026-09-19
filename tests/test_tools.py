@@ -12,6 +12,7 @@ from flash.tools import (
     open_page,
     read_tool,
     screenshot,
+    send_image,
     shell_tool,
     take_pending_images,
     view_image,
@@ -594,3 +595,339 @@ def test_write_tool_append_blocked_leaves_the_file_untouched(
 
     assert target.read_bytes() == b"original\n"  # nosec B101
     assert "blocked by user" in result  # nosec B101
+
+
+def _png(tmp_path, name="art.png", data=b"pretend png bytes"):
+    image = tmp_path / name
+    image.write_bytes(data)
+    return image
+
+
+@pytest.fixture
+def plain_terminal(monkeypatch):
+    """A tty that speaks no graphics protocol."""
+
+    for name in ("TMUX", "STY", "KITTY_WINDOW_ID", "LC_TERMINAL"):
+        monkeypatch.delenv(name, raising=False)
+    # Patching isatty below makes rich think it can animate, and the
+    # sweep would then sleep through every one of these tests.
+    monkeypatch.setenv("FLASH_NO_ANIMATION", "1")
+    monkeypatch.setenv("TERM", "xterm-256color")
+    monkeypatch.setenv("TERM_PROGRAM", "Apple_Terminal")
+    monkeypatch.setattr(tools.sys.stdout, "isatty", lambda: True)
+
+
+def test_graphics_protocol_reads_kitty(monkeypatch, plain_terminal):
+    monkeypatch.setenv("KITTY_WINDOW_ID", "1")
+
+    assert tools._graphics_protocol() == "kitty"  # nosec B101
+
+
+def test_graphics_protocol_reads_iterm(monkeypatch, plain_terminal):
+    monkeypatch.setenv("TERM_PROGRAM", "iTerm.app")
+
+    assert tools._graphics_protocol() == "iterm"  # nosec B101
+
+
+def test_graphics_protocol_gives_up_inside_tmux(monkeypatch, plain_terminal):
+    # An unwrapped graphics escape corrupts the pane, so tmux gets the
+    # viewer fallback rather than a mangled screen.
+    monkeypatch.setenv("KITTY_WINDOW_ID", "1")
+    monkeypatch.setenv("TMUX", "/tmp/tmux-501/default,123,0")
+
+    assert tools._graphics_protocol() == ""  # nosec B101
+
+
+def test_graphics_protocol_gives_up_when_piped(monkeypatch, plain_terminal):
+    monkeypatch.setenv("KITTY_WINDOW_ID", "1")
+    monkeypatch.setattr(tools.sys.stdout, "isatty", lambda: False)
+
+    assert tools._graphics_protocol() == ""  # nosec B101
+
+
+def test_inline_payload_chunks_kitty_over_the_limit():
+    data = b"x" * 9000
+    out = tools._inline_payload("kitty", data, "big.png")
+
+    # Every chunk but the last is flagged m=1, and the last is m=0.
+    assert out.count(b"\033_G") > 1  # nosec B101
+    assert b"a=T,f=100,m=1;" in out  # nosec B101
+    assert out.rstrip(b"\n").endswith(b"\033\\")  # nosec B101
+    assert b"m=0;" in out  # nosec B101
+
+
+def test_inline_payload_iterm_carries_the_byte_count():
+    data = b"pretend png bytes"
+    out = tools._inline_payload("iterm", data, "art.png")
+
+    assert b"]1337;File=inline=1" in out  # nosec B101
+    assert str(len(data)).encode() in out  # nosec B101
+    assert out.endswith(b"\a\n")  # nosec B101
+
+
+def test_send_image_draws_inline_when_the_terminal_can(
+    tmp_path, monkeypatch, plain_terminal
+):
+    monkeypatch.setenv("KITTY_WINDOW_ID", "1")
+    written = []
+
+    def draw(protocol, data, name, indent=0):
+        written.append((protocol, data, name, indent))
+        return True
+
+    monkeypatch.setattr(tools, "_draw_inline", draw)
+
+    result = send_image(str(_png(tmp_path)))
+
+    assert written and written[0][0] == "kitty"  # nosec B101
+    # Drawn inside the result gutter, not out at column zero.
+    assert written[0][3] == tools.RESULT_INDENT  # nosec B101
+    assert "drawn in the user's terminal" in result  # nosec B101
+    assert "view_image" in result  # nosec B101
+
+
+def test_send_image_opens_the_viewer_when_it_cannot(
+    tmp_path, monkeypatch, plain_terminal
+):
+    opened = []
+    monkeypatch.setattr(
+        tools, "_open_in_viewer", lambda path: opened.append(path) or ""
+    )
+
+    result = send_image(str(_png(tmp_path)))
+
+    assert opened == [tmp_path / "art.png"]  # nosec B101
+    assert "image viewer" in result  # nosec B101
+
+
+def test_send_image_reports_a_viewer_that_failed(
+    tmp_path, monkeypatch, plain_terminal
+):
+    monkeypatch.setattr(
+        tools, "_open_in_viewer", lambda path: "the viewer failed (OSError)"
+    )
+
+    result = send_image(str(_png(tmp_path)))
+
+    assert "could not display it" in result  # nosec B101
+    assert "the viewer failed" in result  # nosec B101
+
+
+def test_send_image_falls_back_when_the_draw_fails(
+    tmp_path, monkeypatch, plain_terminal
+):
+    # The escape went nowhere, so the file still has to reach the user.
+    monkeypatch.setenv("KITTY_WINDOW_ID", "1")
+    monkeypatch.setattr(
+        tools, "_draw_inline", lambda p, d, n, i=0: False
+    )
+    opened = []
+    monkeypatch.setattr(
+        tools, "_open_in_viewer", lambda path: opened.append(path) or ""
+    )
+
+    result = send_image(str(_png(tmp_path)))
+
+    assert opened  # nosec B101
+    assert "image viewer" in result  # nosec B101
+
+
+def test_send_image_missing_file(tmp_path):
+    result = send_image(str(tmp_path / "nope.png"))
+
+    assert "Image not found" in result  # nosec B101
+
+
+def test_send_image_unsupported_type(tmp_path):
+    notes = tmp_path / "notes.txt"
+    notes.write_text("hello")
+
+    result = send_image(str(notes))
+
+    assert "Unsupported image type" in result  # nosec B101
+
+
+def test_send_image_never_queues_it_for_the_model(
+    tmp_path, monkeypatch, plain_terminal
+):
+    # send_image shows the user; only view_image attaches to the chat.
+    take_pending_images()
+    monkeypatch.setattr(tools, "_open_in_viewer", lambda path: "")
+
+    send_image(str(_png(tmp_path)))
+
+    assert take_pending_images() == []  # nosec B101
+
+
+def test_send_image_is_registered():
+    assert tools.FUNCTIONS["send_image"] is send_image  # nosec B101
+    names = {
+        entry["function"]["name"]
+        for entry in tools.tools
+        if entry.get("type") == "function"
+    }
+    assert "send_image" in names  # nosec B101
+
+
+PNG_2X2 = bytes.fromhex(
+    "89504e470d0a1a0a0000000d49484452000000020000000208020000"
+    "00fdd49a730000000a49444154789c6360000000020001e221bc3300"
+    "00000049454e44ae426082"
+)
+
+
+def test_image_size_reads_a_png():
+    assert tools._image_size(PNG_2X2) == (2, 2)  # nosec B101
+
+
+def test_image_size_reads_a_gif():
+    # GIF carries width and height little-endian at byte 6.
+    gif = b"GIF89a" + (640).to_bytes(2, "little") + (480).to_bytes(2, "little")
+
+    assert tools._image_size(gif + b"\x00" * 8) == (640, 480)  # nosec B101
+
+
+def test_image_size_reads_a_bmp():
+    import struct
+
+    bmp = b"BM" + b"\x00" * 16 + struct.pack("<ii", 800, -600)
+
+    # A negative height is a top-down BMP, still 600 pixels tall.
+    assert tools._image_size(bmp + b"\x00" * 8) == (800, 600)  # nosec B101
+
+
+def test_image_size_reads_every_webp_layout():
+    head = b"RIFF" + b"\x00" * 4 + b"WEBP"
+
+    lossy = head + b"VP8 " + b"\x00" * 10 + (300).to_bytes(2, "little") \
+        + (200).to_bytes(2, "little")
+    assert tools._image_size(lossy) == (300, 200)  # nosec B101
+
+    bits = (300 - 1) | ((200 - 1) << 14)
+    lossless = head + b"VP8L" + b"\x00" * 5 + bits.to_bytes(4, "little")
+    assert tools._image_size(lossless) == (300, 200)  # nosec B101
+
+    extended = head + b"VP8X" + b"\x00" * 8 \
+        + (299).to_bytes(3, "little") + (199).to_bytes(3, "little")
+    assert tools._image_size(extended) == (300, 200)  # nosec B101
+
+
+def test_image_size_shrugs_at_a_truncated_header():
+    # A half-written file must label the result, never raise.
+    assert tools._image_size(b"\x89PNG\r\n\x1a\n") == (0, 0)  # nosec B101
+    assert tools._image_size(b"") == (0, 0)  # nosec B101
+    assert tools._image_size(b"\xff\xd8\xff") == (0, 0)  # nosec B101
+
+
+def test_display_path_shortens_home(tmp_path, monkeypatch):
+    monkeypatch.setattr(tools.Path, "home", classmethod(lambda cls: tmp_path))
+    inside = tmp_path / "shots" / "art.png"
+    inside.parent.mkdir()
+    inside.touch()
+
+    shown = tools._display_path(inside)
+
+    assert shown.startswith("~")  # nosec B101
+    assert "shots" in shown  # nosec B101
+
+
+def test_display_path_is_absolute_outside_home(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        tools.Path, "home", classmethod(lambda cls: tmp_path / "elsewhere")
+    )
+    art = tmp_path / "art.png"
+    art.touch()
+
+    assert tools._display_path(art) == str(art.resolve())  # nosec B101
+
+
+def test_animation_is_off_without_a_terminal(monkeypatch):
+    monkeypatch.delenv("FLASH_NO_ANIMATION", raising=False)
+    monkeypatch.setattr(
+        type(tools.console), "is_terminal", property(lambda self: False)
+    )
+
+    assert not tools._animating()  # nosec B101
+
+
+def test_animation_is_off_when_switched_off(monkeypatch):
+    monkeypatch.setenv("FLASH_NO_ANIMATION", "1")
+    monkeypatch.setattr(
+        type(tools.console), "is_terminal", property(lambda self: True)
+    )
+
+    assert not tools._animating()  # nosec B101
+
+
+def test_sweep_still_prints_the_settled_line_without_motion(monkeypatch):
+    monkeypatch.setenv("FLASH_NO_ANIMATION", "1")
+    printed = []
+    monkeypatch.setattr(tools.console, "print", printed.append)
+
+    tools._sweep_in("  L  art.png  2x2", tools.Text("settled"))
+
+    # One line, and it is the styled one, not a glimmer frame.
+    assert len(printed) == 1  # nosec B101
+    assert printed[0].plain == "settled"  # nosec B101
+
+
+def test_sweep_animates_then_settles(monkeypatch):
+    # The one test that actually runs the Live loop, so the animated
+    # path is covered without every other test paying for it.
+    monkeypatch.delenv("FLASH_NO_ANIMATION", raising=False)
+    monkeypatch.setattr(
+        type(tools.console), "is_terminal", property(lambda self: True)
+    )
+    monkeypatch.setattr(tools, "SWEEP_FRAME_SECONDS", 0.001)
+    frames = []
+
+    class FakeLive:
+        def __init__(self, *a, **k):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def update(self, renderable):
+            frames.append(renderable)
+
+    monkeypatch.setattr(tools, "Live", FakeLive)
+    printed = []
+    monkeypatch.setattr(tools.console, "print", printed.append)
+
+    tools._sweep_in("art.png", tools.Text("settled"))
+
+    assert len(frames) > 1  # nosec B101
+    assert printed[-1].plain == "settled"  # nosec B101
+
+
+def test_apart_separates_only_distinct_colors():
+    assert tools._apart((0, 0, 0), (255, 255, 255))  # nosec B101
+    assert not tools._apart((2, 4, 8), (3, 5, 9))  # nosec B101
+
+
+def test_palette_is_empty_without_pillow(monkeypatch):
+    import builtins
+
+    real = builtins.__import__
+
+    def no_pil(name, *args, **kwargs):
+        if name == "PIL" or name.startswith("PIL."):
+            raise ImportError("no PIL")
+        return real(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", no_pil)
+
+    assert tools._palette(PNG_2X2) == []  # nosec B101
+
+
+def test_swatch_row_paints_one_block_per_color():
+    row = tools._swatch_row(["#d97757", "#1f6feb"])
+
+    assert row.plain.startswith(" " * tools.RESULT_INDENT)  # nosec B101
+    styles = [str(span.style) for span in row.spans]
+    assert "on #d97757" in styles  # nosec B101
+    assert "on #1f6feb" in styles  # nosec B101
