@@ -1,12 +1,16 @@
 """AI Tool System"""
 
+import base64
 import difflib
 import fnmatch
+import io
 import os
 import platform
 import queue
 import re
+import struct
 import subprocess  # nosec B404
+import sys
 import threading
 import time
 import urllib.error
@@ -18,6 +22,7 @@ from tempfile import mkdtemp
 from typing import Any, Union
 
 from ddgs import DDGS
+from rich.live import Live
 from rich.text import Text
 
 from . import plan
@@ -45,9 +50,11 @@ from .theme import (
     ACCENT,
     BRANCH,
     DIM,
+    ELLIPSIS,
     ERROR,
     WARN,
     console,
+    glimmer,
     plural,
     tool_diff,
     tool_line,
@@ -88,6 +95,11 @@ When you need the current date, use the get_date tool.
 To look at an image file on disk, use the view_image tool with its path;
   it is the only way to see an image the user did not send with /image.
   Reading image bytes with shell or grep shows you nothing.
+To hand a finished picture to the user, use the send_image tool with its
+  path. It draws the image in their terminal where the terminal can draw
+  one and opens it in their image viewer where it cannot, naming the path
+  either way. It shows the image to them and not to you, so look at your
+  own render with view_image first and send it once it is right.
 To see how a web page actually renders, use the screenshot tool on the
   .html file you wrote or on a URL. It runs a headless browser and
   attaches the picture, so it is the only way to check a page you built;
@@ -1167,6 +1179,447 @@ def view_image(path: str) -> str:
     )
 
 
+# Terminals that can draw a picture between two lines of output. Writing
+# a graphics escape to one that cannot read it dumps a screenful of
+# base64 into the session, so anything unrecognised falls back to the
+# OS image viewer instead.
+_KITTY_TERMINALS = {"ghostty", "kitty"}
+_ITERM_TERMINALS = {"iterm.app", "wezterm", "hyper", "tabby"}
+_INLINE_CHUNK = 4096
+
+# Width of the '  L  ' gutter tool_result() prints, so the picture and
+# the path line up under the name instead of starting at column zero.
+RESULT_INDENT = 5
+
+
+def _graphics_protocol() -> str:
+    """Name the inline-image protocol this terminal speaks, or ""."""
+
+    if not sys.stdout.isatty():
+        return ""
+
+    # Inside tmux or screen the escape has to be wrapped to pass through
+    # and an unwrapped one corrupts the pane, so do not try.
+    if os.environ.get("TMUX") or os.environ.get("STY"):
+        return ""
+
+    term = os.environ.get("TERM", "").lower()
+    program = os.environ.get("TERM_PROGRAM", "").lower()
+
+    if os.environ.get("KITTY_WINDOW_ID") or "kitty" in term:
+        return "kitty"
+
+    if program in _KITTY_TERMINALS:
+        return "kitty"
+
+    if os.environ.get("LC_TERMINAL", "").lower() == "iterm2":
+        return "iterm"
+
+    if program in _ITERM_TERMINALS:
+        return "iterm"
+
+    return ""
+
+
+def _inline_payload(protocol: str, data: bytes, name: str) -> bytes:
+    """Build the escape sequence that draws DATA in the terminal."""
+
+    encoded = base64.standard_b64encode(data)
+
+    if protocol == "kitty":
+        # Base64 goes out in chunks of at most 4096, each flagged m=1
+        # while more follow and m=0 on the last one.
+        chunks = [
+            encoded[at:at + _INLINE_CHUNK]
+            for at in range(0, len(encoded), _INLINE_CHUNK)
+        ] or [b""]
+
+        out = bytearray()
+        for index, chunk in enumerate(chunks):
+            more = 0 if index == len(chunks) - 1 else 1
+            if index == 0:
+                out += b"\033_Ga=T,f=100,m=%d;" % more
+            else:
+                out += b"\033_Gm=%d;" % more
+            out += chunk + b"\033\\"
+
+        return bytes(out) + b"\n"
+
+    return (
+        b"\033]1337;File=inline=1;preserveAspectRatio=1;size="
+        + str(len(data)).encode()
+        + b";name="
+        + base64.standard_b64encode(name.encode())
+        + b":"
+        + encoded
+        + b"\a\n"
+    )
+
+
+def _draw_inline(
+    protocol: str, data: bytes, name: str, indent: int = 0
+) -> bool:
+    """Write the image to the terminal. True when the bytes went out."""
+
+    try:
+        sys.stdout.buffer.write(
+            b" " * indent + _inline_payload(protocol, data, name)
+        )
+        sys.stdout.buffer.flush()
+    except (OSError, ValueError, AttributeError):
+        return False
+
+    return True
+
+
+def _open_in_viewer(path: Path) -> str:
+    """Hand PATH to whatever the OS shows pictures with.
+
+    Returns "" on success, or a short reason it could not be opened.
+    """
+
+    try:
+        if platform.system() == "Darwin":
+            subprocess.run(  # nosec B603 B607
+                ["open", str(path)], check=True, timeout=10
+            )
+        elif os.name == "nt":
+            start = getattr(os, "startfile", None)
+            if start is None:
+                return "no image viewer on this system"
+            start(str(path))
+        else:
+            subprocess.run(  # nosec B603 B607
+                ["xdg-open", str(path)], check=True, timeout=10
+            )
+    except FileNotFoundError:
+        return "no image viewer on this system"
+    except (OSError, subprocess.SubprocessError) as exc:
+        return f"the viewer failed ({exc.__class__.__name__})"
+
+    return ""
+
+
+# The result block sweeps in the way ai.py streams a reply: a transient
+# Live carries the coral glimmer across the line, then the settled Text
+# is printed so scrollback keeps the real styling.
+SWEEP_FRAME_SECONDS = 0.02
+SWEEP_SPREAD = 3.0
+SWEEP_CPS = 180.0
+SWATCH_COUNT = 6
+SWATCH_WIDTH = 4
+# Quantizing straight to six on a dark image returns six near-identical
+# blacks, which render as one smudge. Take a wider pool and keep only
+# the colors far enough apart in RGB to actually read as different.
+SWATCH_POOL = 24
+SWATCH_MIN_DISTANCE = 32
+
+
+def _animating() -> bool:
+    """False when motion would be wasted or unwanted.
+
+    Nothing animates into a pipe or a log, and FLASH_NO_ANIMATION turns
+    it off for a slow link, a recording, or anyone who just wants the
+    line to appear.
+    """
+
+    return console.is_terminal and not os.environ.get("FLASH_NO_ANIMATION")
+
+
+def _sweep_in(plain: str, settled: Text) -> None:
+    """Glimmer across PLAIN, then leave SETTLED on the screen."""
+
+    if not _animating() or not plain.strip():
+        console.print(settled)
+        return
+
+    period = len(plain) + 2 * SWEEP_SPREAD
+    frames = max(1, round(period / (SWEEP_CPS * SWEEP_FRAME_SECONDS)))
+
+    with Live(
+        Text(),
+        console=console,
+        transient=True,
+        refresh_per_second=round(1 / SWEEP_FRAME_SECONDS),
+    ) as live:
+        for step in range(frames + 1):
+            offset = -SWEEP_SPREAD + period * step / frames
+            live.update(
+                Text.from_markup(glimmer(plain, offset, SWEEP_SPREAD))
+            )
+            time.sleep(SWEEP_FRAME_SECONDS)
+
+    console.print(settled)
+
+
+def _palette(data: bytes) -> list:
+    """Up to SWATCH_COUNT dominant colors as hex, or [].
+
+    Pillow is not a dependency of the CLI, so the swatches appear for
+    anyone who has it and are simply absent for anyone who does not.
+    """
+
+    try:
+        from PIL import Image
+    except ImportError:
+        return []
+
+    try:
+        with Image.open(io.BytesIO(data)) as opened:
+            small = opened.convert("RGB").resize((64, 64))
+            reduced = small.quantize(colors=SWATCH_POOL)
+            table = reduced.getpalette() or []
+            counts = sorted(reduced.getcolors() or [], reverse=True)
+    except (OSError, ValueError, TypeError):
+        return []
+
+    kept = []
+    for _count, index in counts:
+        rgb = tuple(table[index * 3:index * 3 + 3])
+        if len(rgb) < 3:
+            continue
+        if all(_apart(rgb, seen) for seen in kept):
+            kept.append(rgb)
+        if len(kept) == SWATCH_COUNT:
+            break
+
+    return [f"#{r:02x}{g:02x}{b:02x}" for r, g, b in kept]
+
+
+def _apart(one: tuple, other: tuple) -> bool:
+    """True when two colors differ enough to read as different."""
+
+    gap = sum((a - b) ** 2 for a, b in zip(one, other))
+
+    return gap >= SWATCH_MIN_DISTANCE ** 2
+
+
+def _swatch_row(colors: list) -> Text:
+    """A row of solid blocks, one per dominant color."""
+
+    row = Text(" " * RESULT_INDENT)
+    for color in colors:
+        row.append(" " * SWATCH_WIDTH, style=f"on {color}")
+        row.append(" ")
+
+    return row
+
+
+def _open_with_spinner(image_path: Path) -> str:
+    """Open PATH in the OS viewer, glimmering while it starts.
+
+    Returns "" on success or the reason it could not be opened, the
+    same as _open_in_viewer, which it runs on a worker thread so the
+    cold start of an image viewer is not dead air.
+    """
+
+    if not _animating():
+        return _open_in_viewer(image_path)
+
+    outcome = {}
+
+    def work():
+        outcome["why"] = _open_in_viewer(image_path)
+
+    worker = threading.Thread(target=work, daemon=True)
+    worker.start()
+
+    word = f"opening{ELLIPSIS}"
+    period = len(word) + 2 * SWEEP_SPREAD
+    start = time.monotonic()
+
+    with Live(
+        Text(),
+        console=console,
+        transient=True,
+        refresh_per_second=round(1 / SWEEP_FRAME_SECONDS),
+    ) as live:
+        while worker.is_alive():
+            elapsed = time.monotonic() - start
+            offset = (elapsed * SWEEP_CPS / 6) % period - SWEEP_SPREAD
+            live.update(
+                Text.from_markup(
+                    " " * RESULT_INDENT
+                    + glimmer(word, offset, SWEEP_SPREAD)
+                )
+            )
+            time.sleep(SWEEP_FRAME_SECONDS)
+
+    worker.join()
+
+    return outcome.get("why", "")
+
+
+def _image_size(data: bytes) -> tuple:
+    """Read (width, height) out of an image header, or (0, 0).
+
+    Pillow would do this in one line, but it is not a dependency of the
+    CLI and the pixel count is only here to label the result line, so
+    the five formats resolve_image_path accepts are parsed by hand.
+    """
+
+    try:
+        if data[:8] == b"\x89PNG\r\n\x1a\n":
+            return struct.unpack(">II", data[16:24])
+
+        if data[:3] == b"GIF":
+            return struct.unpack("<HH", data[6:10])
+
+        if data[:2] == b"BM":
+            width, height = struct.unpack("<ii", data[18:26])
+            return abs(width), abs(height)
+
+        if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+            return _webp_size(data)
+
+        if data[:2] == b"\xff\xd8":
+            return _jpeg_size(data)
+    except (struct.error, IndexError, ValueError):
+        return 0, 0
+
+    return 0, 0
+
+
+def _webp_size(data: bytes) -> tuple:
+    """(width, height) for the three WebP chunk layouts."""
+
+    kind = data[12:16]
+
+    if kind == b"VP8X":
+        wide = int.from_bytes(data[24:27], "little") + 1
+        high = int.from_bytes(data[27:30], "little") + 1
+        return wide, high
+
+    if kind == b"VP8L":
+        bits = int.from_bytes(data[21:25], "little")
+        return (bits & 0x3FFF) + 1, ((bits >> 14) & 0x3FFF) + 1
+
+    if kind == b"VP8 ":
+        wide, high = struct.unpack("<HH", data[26:30])
+        return wide & 0x3FFF, high & 0x3FFF
+
+    return 0, 0
+
+
+def _jpeg_size(data: bytes) -> tuple:
+    """(width, height) from the first JPEG start-of-frame marker."""
+
+    at = 2
+    while at + 9 < len(data):
+        if data[at] != 0xFF:
+            at += 1
+            continue
+
+        marker = data[at + 1]
+
+        # Every SOF carries the dimensions except DHT, DAC and the
+        # restart markers, which share the range.
+        if 0xC0 <= marker <= 0xCF and marker not in (0xC4, 0xC8, 0xCC):
+            high, wide = struct.unpack(">HH", data[at + 5:at + 9])
+            return wide, high
+
+        if marker in (0xD8, 0x01) or 0xD0 <= marker <= 0xD7:
+            at += 2
+            continue
+
+        at += 2 + int.from_bytes(data[at + 2:at + 4], "big")
+
+    return 0, 0
+
+
+def _display_path(path: Path) -> str:
+    """PATH made absolute, with the home directory shortened to ~."""
+
+    try:
+        full = path.expanduser().resolve()
+    except OSError:
+        return str(path)
+
+    try:
+        return str(Path("~") / full.relative_to(Path.home()))
+    except (ValueError, RuntimeError):
+        return str(full)
+
+
+def _image_block(
+    image_path: Path, data: bytes, note: str, status: str
+) -> None:
+    """Render the result block: name, shape, size, status, caption."""
+
+    wide, high = _image_size(data)
+    kilobytes = max(1, round(len(data) / 1024))
+
+    shape = f"  {wide}x{high}" if wide and high else ""
+    tail = f"{shape}  {kilobytes} KB" + (f"  {status}" if status else "")
+
+    head = Text(f"  {BRANCH}  ", style=DIM)
+    head.append(image_path.name, style=ACCENT)
+    head.append(tail, style=DIM)
+
+    _sweep_in(f"  {BRANCH}  {image_path.name}{tail}", head)
+
+    colors = _palette(data)
+    if colors:
+        console.print(_swatch_row(colors))
+
+    if note:
+        console.print(
+            Text(f"{' ' * RESULT_INDENT}{note}", style=f"italic {DIM}")
+        )
+
+
+def send_image(path: str, caption: str = "") -> str:
+    """Put an image file in front of the user."""
+
+    tool_line(f"SendImage({path})")
+
+    image_path, reason = resolve_image_path(path)
+    if image_path is None:
+        result = f"Error: {reason}"
+        tool_result(result, style=ERROR)
+        return result
+
+    try:
+        data = image_path.read_bytes()
+    except OSError as exc:
+        result = f"Error: could not read {image_path}: {exc}"
+        tool_result(result, style=ERROR)
+        return result
+
+    kilobytes = max(1, round(len(data) / 1024))
+    note = caption.strip()
+    protocol = _graphics_protocol()
+
+    if protocol:
+        _image_block(image_path, data, note, "")
+        if _draw_inline(protocol, data, image_path.name, RESULT_INDENT):
+            return (
+                f"Sent {image_path.name} ({kilobytes} KB), drawn in the "
+                "user's terminal. You cannot see it from here; "
+                "view_image is what shows it to you."
+            )
+
+    problem = _open_with_spinner(image_path)
+    status = problem or "opened in your image viewer"
+    _image_block(image_path, data, note, status)
+    console.print(
+        Text(f"{' ' * RESULT_INDENT}{_display_path(image_path)}", style=DIM)
+    )
+
+    if problem:
+        return (
+            f"Wrote {image_path.name} ({kilobytes} KB) and put its path "
+            f"on screen, but could not display it: {problem}. Tell the "
+            "user where the file is."
+        )
+
+    return (
+        f"Sent {image_path.name} ({kilobytes} KB). This terminal cannot "
+        "draw images, so it opened in the user's image viewer with the "
+        "path on screen. You cannot see it from here."
+    )
+
+
 DEFAULT_SCREENSHOT_WIDTH = 1280
 DEFAULT_SCREENSHOT_HEIGHT = 800
 MIN_SCREENSHOT_SIDE = 200
@@ -1642,6 +2095,40 @@ tools = [
     {
         "type": "function",
         "function": {
+            "name": "send_image",
+            "description": (
+                "Show an image file (.png, .jpg, .jpeg, .webp, .gif, "
+                ".bmp) to the user. It is drawn in their terminal where "
+                "the terminal can draw one, and opened in their image "
+                "viewer where it cannot, with the path printed either "
+                "way. Use it to hand over a picture you generated or "
+                "edited, once it is finished. This shows the image to "
+                "the user and not to you, so check your own work with "
+                "view_image before sending it."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": (
+                            "Path to the image file, e.g. './poster.png'."
+                        ),
+                    },
+                    "caption": {
+                        "type": "string",
+                        "description": (
+                            "Optional single line shown with the image."
+                        ),
+                    },
+                },
+                "required": ["path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "view_image",
             "description": (
                 "Look at an image file on disk (.png, .jpg, .jpeg, .webp, "
@@ -2088,6 +2575,7 @@ FUNCTIONS = {
     "read": read_tool,
     "write": write_tool,
     "view_image": view_image,
+    "send_image": send_image,
     "screenshot": screenshot,
     "open_page": open_page,
     "interact": interact,

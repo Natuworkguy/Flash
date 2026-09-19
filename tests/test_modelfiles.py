@@ -161,7 +161,7 @@ def test_the_flagship_never_says_the_same_thing_twice():
     repeats = []
 
     for number, line in enumerate(lines, 1):
-        if line.strip() == RECAP:
+        if RECAP in line:
             break
 
         words = re.findall(r"[a-z']+", line.lower())
