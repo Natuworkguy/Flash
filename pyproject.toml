@@ -33,6 +33,28 @@ include = ["flash*"]
 [tool.setuptools.package-data]
 flash = ["system_prompt.txt", "thinking_states.json", "suggestions.json"]
 
+[tool.ruff]
+line-length = 79
+target-version = "py310"
+
+[tool.ruff.lint]
+select = [
+    "E",      # pycodestyle errors
+    "W",      # pycodestyle warnings
+    "F",      # pyflakes
+    "I",      # import sorting
+    "UP",     # pyupgrade, including PEP 604 `X | None` annotations
+    "BLE",    # blind excepts
+    "DTZ",    # naive datetimes
+    "S110",   # try/except/pass
+    "RUF100", # noqa directives that no longer suppress anything
+]
+
+# Security is the separate bandit job's responsibility. Selecting
+# ruff's full S family here would report the same code twice, at a
+# lower severity bar than bandit's -ll, so only the one rule this
+# codebase actually suppresses by hand is enabled.
+
 [tool.pyright]
 # flash/urlscheme.py imports winreg only on Windows (os.name == "nt") to
 # register the flash:// handler; typeshed gates winreg's members behind
