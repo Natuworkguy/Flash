@@ -31,6 +31,7 @@ COMMANDS = [
     ("/forget", "delete one memory by its 1-based index (/forget N)"),
     ("/plan", "show the checklist the model is working through"),
     ("/agents", "watch sub-agents work live (/agents <id> for one)"),
+    ("/hook", "let Flash see what you run in VS Code's terminal"),
     ("/clear", "clear saved context"),
     ("/image", "send an image to the model (/image <path> [prompt])"),
     ("/version", "show the current version and check for updates"),

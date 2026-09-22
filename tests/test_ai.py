@@ -1,5 +1,7 @@
 # pylint: disable=C0114,C0115,C0116
 
+import time
+
 from flash import ai
 from flash.ai import (
     Config,
@@ -281,3 +283,83 @@ def test_wakes_stop_after_the_cap(monkeypatch):
 
     assert len(sent) == ai.MAX_WAKES_IN_A_ROW  # nosec B101
     assert agent.unseen()  # nosec B101  -- still waiting for the user
+
+
+# --- what the user ran in VS Code's terminal -------------------------------
+
+
+def _ran(*rows):
+    from flash import terminal
+
+    terminal.LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with terminal.LOG_PATH.open("a") as handle:
+        for code, command in rows:
+            handle.write(f"{time.time()}\t{code}\t1\t/proj\t{command}\n")
+
+
+def test_terminal_commands_ride_on_the_next_message_once(monkeypatch):
+    from flash import terminal
+
+    def second_message():
+        _ran((0, "git status"))
+        return "and now?"
+
+    _, sent = _script_main(monkeypatch, ["why did that fail?", second_message,
+                                         "thanks"])
+    _ran((1, "npm test"))
+
+    ai.main()
+
+    assert sent[0].startswith(terminal.HEADER)  # nosec B101
+    assert "✗ exit 1 · 1s · /proj · npm test" in sent[0]  # nosec B101
+    assert sent[0].endswith("why did that fail?")  # nosec B101
+    assert "npm test" not in sent[1] and "git status" in sent[1]  # nosec
+    assert sent[2] == "thanks"  # nosec B101
+
+
+def test_a_failed_request_keeps_the_commands_for_the_retry(monkeypatch):
+    _, sent = _script_main(monkeypatch, ["first", "retry"],
+                           chat_err="backend down")
+    _ran((2, "make build"))
+
+    ai.main()
+
+    assert "make build" in sent[0] and "make build" in sent[1]  # nosec
+
+
+def test_hook_command_installs_after_asking(monkeypatch, isolated_home,
+                                            capsys):
+    from flash import terminal
+
+    monkeypatch.setenv("SHELL", "/bin/zsh")
+    monkeypatch.setattr(ai, "confirm", lambda question: True)
+    _script_main(monkeypatch, ["/hook", "/hook install", "/hook",
+                               "/hook remove"])
+
+    ai.main()
+
+    out = capsys.readouterr().out
+    assert "Not set up." in out  # nosec B101
+    assert "Added to" in out  # nosec B101
+    assert "Set up in" in out  # nosec B101
+    assert "Removed from" in out  # nosec B101
+    assert terminal.BEGIN not in (isolated_home / ".zshrc").read_text()
+
+
+def test_hook_command_declined_changes_nothing(monkeypatch, isolated_home):
+    monkeypatch.setenv("SHELL", "/bin/bash")
+    monkeypatch.setattr(ai, "confirm", lambda question: False)
+    _script_main(monkeypatch, ["/hook install"])
+
+    ai.main()
+
+    assert not (isolated_home / ".bashrc").exists()  # nosec B101
+
+
+def test_hook_command_unsupported_shell(monkeypatch, capsys):
+    monkeypatch.setenv("SHELL", "/usr/bin/fish")
+    _script_main(monkeypatch, ["/hook install"])
+
+    ai.main()
+
+    assert "supports zsh and bash" in capsys.readouterr().out  # nosec

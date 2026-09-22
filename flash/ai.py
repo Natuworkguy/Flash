@@ -23,7 +23,7 @@ from rich.panel import Panel
 from rich.text import Text
 
 from . import agent as subagents
-from . import plan
+from . import plan, terminal
 from .cli import parse_args
 from .envfile import set_env_var, unset_env_var
 from .images import resolve_image_path
@@ -51,6 +51,7 @@ from .theme import (
     DIM_ANSI,
     ELLIPSIS,
     RESET_ANSI,
+    confirm,
     console,
     glimmer,
     tool_line,
@@ -67,8 +68,8 @@ from .tools import (
     run_tool,
     shell_tool,
     take_pending_images,
-    tools,
     trim_tool_output,
+    turn_tools,
 )
 from .updater import (
     check_for_update,
@@ -763,6 +764,57 @@ def _note_running_agents() -> None:
         ))
 
 
+def _hook_command(arg: str) -> None:
+    """/hook, /hook install, /hook remove: the VS Code terminal hook."""
+
+    shell = terminal.current_shell()
+    if not shell:
+        warn(
+            "The terminal hook supports zsh and bash; your shell is "
+            f"{os.environ.get('SHELL') or 'unknown'}."
+        )
+        return
+
+    rc = terminal.rc_path(shell)
+
+    if arg == "install":
+        if terminal.installed(shell):
+            terminal.write_hook(shell)
+            console.print(Text(f"Already set up in {rc}.", style=DIM))
+            return
+        console.print(Text(
+            f"This adds three lines to {rc} that load "
+            f"{terminal.hook_path(shell)} in VS Code's terminal only:\n"
+            f"{terminal.rc_block(shell)}",
+            style=DIM,
+        ))
+        if confirm("Add them?"):
+            console.print(Text(terminal.install(shell), style=DIM))
+        return
+
+    if arg == "remove":
+        console.print(Text(terminal.remove(shell), style=DIM))
+        return
+
+    if arg:
+        warn("Usage: /hook [install|remove]")
+        return
+
+    if terminal.installed(shell):
+        console.print(Text(
+            f"Set up in {rc}: Flash sees the commands you run in VS "
+            "Code's terminal and their exit codes. /hook remove turns it "
+            "off.",
+            style=DIM,
+        ))
+    else:
+        console.print(Text(
+            "Not set up. /hook install lets Flash see the commands you run "
+            "in VS Code's terminal, so it knows what just broke.",
+            style=DIM,
+        ))
+
+
 def _print_backend_error(detail: str) -> None:
     show_error(f"Ollama backend error: {detail}")
 
@@ -1116,6 +1168,13 @@ def main() -> None:
 
     wakes_in_a_row = 0
 
+    # Commands from the user's VS Code terminal newer than this are
+    # attached to their next message.
+    terminal_seen = terminal.start_time()
+    hook_shell = terminal.current_shell()
+    if hook_shell and terminal.installed(hook_shell):
+        terminal.write_hook(hook_shell)
+
     def wake_ready() -> bool:
         return (
             wakes_in_a_row < MAX_WAKES_IN_A_ROW
@@ -1323,6 +1382,10 @@ def main() -> None:
                 plan.render()
                 continue
 
+            if uin == "/hook" or uin.startswith("/hook "):
+                _hook_command(uin[len("/hook"):].strip().lower())
+                continue
+
             if uin == "/agents" or uin.startswith("/agents "):
                 subagents.watch(uin[len("/agents"):].strip())
                 print()
@@ -1425,7 +1488,11 @@ def main() -> None:
             # roles alternating for templates that require it, and lets
             # history trimming keep or drop the two together.
             agent_news, delivered_ids = subagents.notices()
-            content = f"{agent_news}\n\n{uin}" if agent_news else uin
+            looked_at = time.time()
+            ran = "" if woken else terminal.since(terminal_seen)
+            content = "\n\n".join(
+                part for part in (ran, agent_news, uin) if part
+            )
 
             messages.append(_message("user", content, pending_images))
             _trim_history(messages)
@@ -1435,8 +1502,9 @@ def main() -> None:
             )
 
             turn = Turn()
+            offered = turn_tools()
             final, thinking, tool_calls, err = _chat_retry_until_response(
-                console, client, [system_message] + messages, tools,
+                console, client, [system_message] + messages, offered,
                 is_image=bool(pending_images), turn=turn,
             )
             if err:
@@ -1445,6 +1513,8 @@ def main() -> None:
                 continue
 
             subagents.mark_delivered(delivered_ids)
+            if not woken:
+                terminal_seen = looked_at
 
             _render_thinking(thinking)
 
@@ -1504,7 +1574,7 @@ def main() -> None:
                     )
 
                 final, thinking, tool_calls, err = _chat_retry_until_response(
-                    console, client, tool_messages, tools, turn=turn,
+                    console, client, tool_messages, offered, turn=turn,
                     is_image=bool(tool_images),
                 )
                 if err:
