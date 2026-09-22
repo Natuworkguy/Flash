@@ -6,7 +6,6 @@ tool accept exactly the same files and reject them for the same reasons.
 """
 
 from pathlib import Path
-from typing import Union
 
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}
 
@@ -17,7 +16,7 @@ MAX_IMAGE_BYTES = 20 * 1024 * 1024
 
 def resolve_image_path(
     path: str,
-) -> tuple[Union[Path, None], str]:  # noqa: UP007, RUF100
+) -> tuple[Path | None, str]:
     """Expand and validate `path` as a local image file.
 
     Returns `(path, "")` when it can be sent to the model, or

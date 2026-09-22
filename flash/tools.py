@@ -20,7 +20,7 @@ from datetime import datetime
 from html.parser import HTMLParser
 from pathlib import Path
 from tempfile import mkdtemp
-from typing import Any, Union
+from typing import Any
 
 from ddgs import DDGS
 from rich.live import Live
@@ -549,7 +549,7 @@ def glob_tool(pattern: str, path: str = ".") -> str:
 def grep_tool(
     pattern: str,
     path: str = ".",
-    glob_filter: Union[str, None] = None,  # noqa: UP007, RUF100
+    glob_filter: str | None = None,
     case_insensitive: bool = False,
 ) -> str:
     """Tool to search file contents by regex."""
@@ -617,7 +617,7 @@ MAX_READ_OUTPUT_CHARS = 20000
 MAX_DIFF_PREVIEW_LINES = 40
 
 
-def _read_lines(file_path: Path) -> Union[list[str], str]:  # noqa: UP007
+def _read_lines(file_path: Path) -> list[str] | str:
     """Split a text file into lines, or return an error string."""
 
     if is_document_path(file_path):
@@ -641,8 +641,8 @@ def _read_lines(file_path: Path) -> Union[list[str], str]:  # noqa: UP007
 
 def read_tool(
     path: str,
-    offset: Union[int, None] = None,  # noqa: UP007, RUF100
-    limit: Union[int, None] = None,  # noqa: UP007, RUF100
+    offset: int | None = None,
+    limit: int | None = None,
 ) -> str:
     """Tool to read a text file, numbered by line."""
 
@@ -736,7 +736,7 @@ def _diff_preview(old_text: str, new_text: str, name: str) -> tuple[
     return body[:MAX_DIFF_PREVIEW_LINES], omitted, additions, removals
 
 
-def _read_exact(file_path: Path) -> Union[str, None]:  # noqa: UP007
+def _read_exact(file_path: Path) -> str | None:
     """The file's text exactly as it sits on disk, or None if unreadable."""
 
     # newline="" keeps the line endings exactly as they are on disk,
@@ -856,7 +856,7 @@ def _confirm_change(
     old_text: str,
     new_text: str,
     question: str,
-) -> Union[str, None]:  # noqa: UP007, RUF100
+) -> str | None:
     """Show the pending change and ask. None means go ahead.
 
     The same diff, editor window, and y/n the write tool uses, so an
@@ -929,7 +929,7 @@ def _editable_text(file_path: Path) -> str:
 
 def _write_exact(
     file_path: Path, text: str
-) -> Union[str, None]:  # noqa: UP007, RUF100
+) -> str | None:
     """Replace the file's contents byte for byte. None on success."""
 
     try:
@@ -1008,7 +1008,7 @@ def edit_tool(
     )
 
 
-def _parse_edits(edits: Any) -> Union[list[Edit], str]:  # noqa: UP007
+def _parse_edits(edits: Any) -> list[Edit] | str:
     """Turn the model's edit list into Edit objects, or explain why not."""
 
     if isinstance(edits, str):

@@ -3,7 +3,6 @@ import os
 import re
 import urllib.error
 import urllib.request
-from typing import Union
 
 SHOW_TIMEOUT_SECONDS = 5
 
@@ -19,7 +18,6 @@ def get_system_prompt():
             os.path.dirname(__file__),
             "system_prompt.txt"
         ),
-        "r",
         encoding="utf-8"
     ) as f:
         return f.read().strip()
@@ -98,7 +96,7 @@ def model_sees_images(host: str, model: str) -> bool:
 
 def get_context_limit(
     host: str, model: str
-) -> Union[int, None]:  # noqa: UP007, RUF100
+) -> int | None:
     """The token window MODEL pins in its Modelfile, or None.
 
     Deliberately not the architecture's maximum. A model that pins
@@ -117,7 +115,7 @@ def get_context_limit(
 
 def get_context_ceiling(
     host: str, model: str
-) -> Union[int, None]:  # noqa: UP007, RUF100
+) -> int | None:
     """The longest window MODEL's architecture can do, or None.
 
     Never a window to run in by default. Ollama allocates the cache for

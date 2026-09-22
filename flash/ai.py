@@ -9,7 +9,6 @@ import sys
 import threading
 import time
 from pathlib import Path
-from typing import Union
 
 import ollama
 from dotenv import load_dotenv
@@ -145,7 +144,7 @@ def _int_env(name: str, default: int, *, minimum: int) -> int:
 
 def _opt_int_env(
     name: str, *, minimum: int
-) -> Union[int, None]:  # noqa: UP007, RUF100
+) -> int | None:
     """An override the user set, or None when they left it alone.
 
     Distinguishing "unset" from a default matters for the history caps:
@@ -169,12 +168,12 @@ class Config:
     """App configuration, re-derived from the environment on demand."""
 
     host: str
-    model: Union[str, None]  # noqa: UP007, RUF100
+    model: str | None
     # Unset by default: the token budget in context.py decides how
     # much history survives, and these only cap it further when the
     # user has explicitly asked for a smaller one.
-    max_history_messages: Union[int, None]  # noqa: UP007, RUF100
-    max_history_chars: Union[int, None]  # noqa: UP007, RUF100
+    max_history_messages: int | None
+    max_history_chars: int | None
     auto_compact: bool
     max_tool_rounds: int
     max_tool_output_chars: int
@@ -252,7 +251,7 @@ def refresh_config() -> None:
 
 def banner(
     c: Console,
-    update_version: Union[str, None] = None,  # noqa: UP007, RUF100
+    update_version: str | None = None,
 ) -> None:
     """Print the app banner"""
 
@@ -303,7 +302,7 @@ def banner(
 def _message(
     role: str,
     text: str,
-    images: Union[list, None] = None,  # noqa: UP007, RUF100
+    images: list | None = None,
 ) -> dict:
     message: dict = {"role": role, "content": text}
     if images:
@@ -411,7 +410,7 @@ def _trim_history(messages: list[dict]) -> list[dict]:
 
 def _summarize(
     console: Console, client: "ollama.Client", messages: list[dict]
-) -> Union[str, None]:  # noqa: UP007, RUF100
+) -> str | None:
     """Have the model condense MESSAGES into a few lines, or None."""
 
     if not messages:
@@ -480,7 +479,7 @@ def _fit_and_compact(
 
 def _direct_shell_command(
     text: str,
-) -> Union[str, None]:  # noqa: UP007, RUF100
+) -> str | None:
     if text.startswith("!"):
         cmd = text[1:].strip()
         for prefix in ["shell ", "run "]:
@@ -579,8 +578,8 @@ subagents.chat_options = _chat_options
 
 
 _model_system_prompts: dict[str, str] = {}
-_context_limits: dict[str, Union[int, None]] = {}  # noqa: UP007
-_context_ceilings: dict[str, Union[int, None]] = {}  # noqa: UP007
+_context_limits: dict[str, int | None] = {}
+_context_ceilings: dict[str, int | None] = {}
 _context_notices: set[str] = set()
 _num_ctx_notices: set[str] = set()
 NUM_CTX_MAX = "max"
@@ -652,7 +651,7 @@ FINAL_RESPONSE_RETRIES = 2
 
 def _chat_with_retries(
     client: "ollama.Client", messages: list, tools_arg=None
-) -> tuple[Union[object, None], Union[str, None]]:  # noqa: UP007, RUF100
+) -> tuple[object | None, str | None]:
     """Call _chat, retrying transient backend errors before giving up."""
 
     detail = ""
@@ -681,7 +680,7 @@ def _try_chat(
     tools_arg=None,
     *,
     is_image: bool = False,
-) -> tuple[Union[object, None], Union[str, None]]:  # noqa: UP007, RUF100
+) -> tuple[object | None, str | None]:
     states = _load_image_thinking_states() if is_image \
         else _load_thinking_states()
     state = _next_thinking_state(states)
@@ -721,7 +720,7 @@ def _chat_with_status(
     tools_arg=None,
     *,
     is_image: bool = False,
-) -> tuple[Union[object, None], Union[str, None]]:  # noqa: UP007, RUF100
+) -> tuple[object | None, str | None]:
     with console.status(
         f"[bold {ACCENT}]Thinking{ELLIPSIS}", spinner="point",
         spinner_style=ACCENT,
@@ -739,8 +738,8 @@ def _chat_retry_until_response(
     tools_arg=None,
     *,
     is_image: bool = False,
-    turn: Union[Turn, None] = None,  # noqa: UP007, RUF100
-) -> tuple[str, str, list, Union[str, None]]:  # noqa: UP007, RUF100
+    turn: Turn | None = None,
+) -> tuple[str, str, list, str | None]:
     """Call the model, retrying up to FINAL_RESPONSE_RETRIES times if it
     comes back with neither reply text nor a tool call to make."""
 
@@ -772,7 +771,7 @@ def _chat_retry_until_response(
     return final, thinking, tool_calls, None
 
 
-def _context_ceiling() -> Union[int, None]:  # noqa: UP007, RUF100
+def _context_ceiling() -> int | None:
     """The longest window the active model could do, asked once."""
 
     model = Config.model or ""
@@ -845,7 +844,7 @@ def _note_num_ctx(message: str) -> None:
     warn(f"  {message}")
 
 
-def _context_limit() -> Union[int, None]:  # noqa: UP007, RUF100
+def _context_limit() -> int | None:
     """The window this turn ran in, or None if nobody set one.
 
     What Flash asks for wins, since that is what Ollama allocates, then
@@ -1174,7 +1173,7 @@ def _set_voice(on: bool) -> None:
     console.print(told)
 
 
-def _voice_input() -> Union[str, None]:  # noqa: UP007, RUF100
+def _voice_input() -> str | None:
     """Record one spoken turn and return it, or None if nothing was said."""
 
     # VOICE can be set by hand, and a model directory can be deleted, so
@@ -1411,9 +1410,7 @@ def main() -> None:
 
     while True:
         try:
-            pending_images: Union[  # noqa: UP007, RUF100
-                list[str], None
-            ] = None
+            pending_images: list[str] | None = None
             heard = False
 
             woken = False

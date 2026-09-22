@@ -12,7 +12,6 @@ import sys
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Union
 
 import httpx
 from ollama import ResponseError
@@ -98,7 +97,7 @@ def _elapsed(seconds: float) -> str:
     return f"{whole // _MINUTE}m {whole % _MINUTE:02d}s"
 
 
-def _ago(when: Union[datetime, None]) -> str:  # noqa: UP007, RUF100
+def _ago(when: datetime | None) -> str:
     """Roughly how long ago WHEN was: 'pulled 3 days ago'."""
 
     if when is None:
@@ -132,7 +131,7 @@ def _tagged(name: str) -> str:
     return name if ":" in name.rpartition("/")[2] else f"{name}:latest"
 
 
-def _listing(client) -> Union[list, None]:  # noqa: UP007, RUF100
+def _listing(client) -> list | None:
     """Everything Ollama holds, or None if it could not be asked.
 
     None and an empty list mean different things to a caller offering to
@@ -148,7 +147,7 @@ def _listing(client) -> Union[list, None]:  # noqa: UP007, RUF100
         return None
 
 
-def installed_names(client) -> Union[set[str], None]:  # noqa: UP007, RUF100
+def installed_names(client) -> set[str] | None:
     """Every model Ollama holds locally, or None if it could not be asked."""
 
     listing = _listing(client)
@@ -158,7 +157,7 @@ def installed_names(client) -> Union[set[str], None]:  # noqa: UP007, RUF100
     }
 
 
-def is_installed(client, name: str) -> Union[bool, None]:  # noqa: UP007
+def is_installed(client, name: str) -> bool | None:
     """Whether Ollama already has NAME, or None if it could not be asked."""
 
     here = installed_names(client)
@@ -187,7 +186,7 @@ def _describe(model) -> str:
 def installed_models(
     client,
     current: str = "",
-) -> Union[list[Model], None]:  # noqa: UP007, RUF100
+) -> list[Model] | None:
     """Every model on this machine, as picker rows.
 
     The one in use leads the list, so opening the picker and pressing
@@ -241,7 +240,7 @@ def _fit(text: str, width: int) -> str:
     return text[: max(0, width - len(ELLIPSIS))] + ELLIPSIS
 
 
-def choose(models: list[Model]) -> Union[str, None]:  # noqa: UP007, RUF100
+def choose(models: list[Model]) -> str | None:
     """Run the picker over MODELS; return a model name, or None if cancelled.
 
     Typing filters the list. A query that matches nothing is handed back
@@ -514,7 +513,7 @@ def download(client, name: str) -> bool:
 
     layers = _Layers()
     started = time.monotonic()
-    last: Union[tuple, None] = None  # noqa: UP007, RUF100
+    last: tuple | None = None
 
     try:
         with Live(
@@ -588,7 +587,7 @@ def fetch_if_missing(client, name: str) -> bool:
 def pick_model(
     client,
     current: str = "",
-) -> Union[str, None]:  # noqa: UP007, RUF100
+) -> str | None:
     """The bare `/model` flow: pick one of this machine's models, or type
     the name of one to download. Returns the model to switch to, or None
     when there is no terminal, no answer from Ollama, or no choice made.
