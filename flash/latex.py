@@ -157,14 +157,14 @@ _DROP = {
 
 # --- tokenizer / parser -----------------------------------------------
 
-_CMD_RE = re.compile(r"\\(?:[A-Za-z]+\*?|.)", re.S)
+_CMD_RE = re.compile(r"\\(?:[A-Za-z]+\*?|.)", re.DOTALL)
 
 # Atom kinds, used only to decide spacing and parenthesisation.
 _ORD_K, _REL_K, _BIN_K, _OPEN_K, _CLOSE_K, _PUNCT_K, _OP_K = range(7)
 
 
 class _Atom:
-    __slots__ = ("text", "kind", "atomic")
+    __slots__ = ("atomic", "kind", "text")
 
     def __init__(self, text, kind=_ORD_K, atomic=True):
         self.text = text
@@ -351,7 +351,7 @@ class _Parser:
             body = self.argument()
             return _Atom(
                 "".join(
-                    _BLACKBOARD[c] if c in _BLACKBOARD else c
+                    _BLACKBOARD.get(c, c)
                     for c in body.text
                 )
             )
@@ -432,7 +432,7 @@ def render_math(source):
     """Render one LaTeX math expression as Unicode text."""
     try:
         text = _join(_Parser(_tokenize(source)).parse()).text
-    except Exception:          # a stray macro must never break a reply
+    except Exception:  # noqa: BLE001 -- a stray macro must never break a reply
         return source.strip()
     text = re.sub(r"[ \t]+", " ", text)
     text = re.sub(r" *\n *", "\n", text)
@@ -444,12 +444,12 @@ def render_math(source):
 _PLACEHOLDER = "\x00\x00{}\x00\x00"
 _PROTECT_RE = re.compile(
     r"```.*?(?:```|\Z)|~~~.*?(?:~~~|\Z)|(?<!`)(`+)(?!`).+?(?<!`)\1(?!`)",
-    re.S,
+    re.DOTALL,
 )
-_DISPLAY_RE = re.compile(r"\$\$(.+?)\$\$|\\\[(.+?)\\\]", re.S)
+_DISPLAY_RE = re.compile(r"\$\$(.+?)\$\$|\\\[(.+?)\\\]", re.DOTALL)
 _INLINE_RE = re.compile(
     r"(?<![\\$])\$(?![\s$])([^$\n]+?)(?<![\s\\])\$(?!\$)|\\\((.+?)\\\)",
-    re.S,
+    re.DOTALL,
 )
 _ESCAPE_RE = re.compile(r"([*_`\[\]~])")
 
