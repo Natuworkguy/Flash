@@ -633,7 +633,7 @@ def test_graphics_protocol_gives_up_inside_tmux(monkeypatch, plain_terminal):
     # An unwrapped graphics escape corrupts the pane, so tmux gets the
     # viewer fallback rather than a mangled screen.
     monkeypatch.setenv("KITTY_WINDOW_ID", "1")
-    monkeypatch.setenv("TMUX", "/tmp/tmux-501/default,123,0")
+    monkeypatch.setenv("TMUX", "/tmp/tmux-501/default,123,0")  # nosec B108
 
     assert tools._graphics_protocol() == ""  # nosec B101
 
