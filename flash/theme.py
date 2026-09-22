@@ -6,6 +6,9 @@ consistently through one Console instance.
 """
 
 import sys
+import threading
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 
 from prompt_toolkit.formatted_text import StyleAndTextTuples
 from rich.console import Console
@@ -52,6 +55,11 @@ _BOXES_OK = _can_encode("☒☐")
 CHECK_DONE = "☒" if _BOXES_OK else "[x]"    # ☒
 CHECK_TODO = "☐" if _BOXES_OK else "[ ]"    # ☐
 
+_MARKS_OK = _can_encode("✓✗⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏")
+TICK = "✓" if _MARKS_OK else "+"
+CROSS = "✗" if _MARKS_OK else "x"
+SPINNER_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏" if _MARKS_OK else "|/-\\"
+
 # Raw ANSI escapes for text fed straight into input()/print(), where rich
 # markup can't reach (e.g. the interactive prompt string).
 _ACCENT_RGB = (217, 119, 87)
@@ -63,8 +71,38 @@ DIM_HEX = "#949494"
 RESET_ANSI = "\033[0m"
 
 
+ToolSink = Callable[[str, str, str], None]
+
+_capture = threading.local()
+
+
+@contextmanager
+def capture_tool_output(sink: ToolSink) -> Iterator[None]:
+    """Send this thread's tool_line/tool_result/tool_diff output to SINK.
+
+    SINK gets (kind, text, style) with kind "line", "result" or "diff".
+    A sub-agent's tools run on a background thread; printing there would
+    land in the middle of whatever the main loop is drawing.
+    """
+
+    _capture.sink = sink
+    try:
+        yield
+    finally:
+        _capture.sink = None
+
+
+def _sink() -> ToolSink | None:
+    return getattr(_capture, "sink", None)
+
+
 def tool_line(label: str) -> None:
     """Print a tool-invocation header, e.g. '⏺ Bash(ls -la)'."""
+
+    sink = _sink()
+    if sink:
+        sink("line", label, "")
+        return
 
     line = Text()
     line.append(f"{BULLET} ", style=ACCENT)
@@ -74,6 +112,11 @@ def tool_line(label: str) -> None:
 
 def tool_result(text: str, *, style: str = DIM) -> None:
     """Print an indented result block under the most recent tool_line()."""
+
+    sink = _sink()
+    if sink:
+        sink("result", text or "", style)
+        return
 
     lines = (text or "").splitlines() or [""]
 
@@ -91,6 +134,11 @@ def tool_diff(diff_lines: list[str], *, more: int = 0) -> None:
     `more` is the number of diff lines omitted from the tail, shown as a
     trailing note so a large rewrite does not flood the terminal.
     """
+
+    sink = _sink()
+    if sink:
+        sink("diff", "\n".join(diff_lines), DIM)
+        return
 
     for line in diff_lines:
         if line.startswith("+"):

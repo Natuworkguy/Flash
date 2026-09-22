@@ -17,6 +17,7 @@ FLASH (**F**ast **L**ocal **A**gent **SH**ell) CLI is an AI-powered command-line
 - **Page Control**: The AI opens a page with `open_page` and then clicks buttons, fills forms, presses keys, and runs JavaScript on it with `interact`, seeing a fresh screenshot, the page's elements, and its console errors after every step, so it can debug what a page *does*, not just how it looks.
 - **Voice Mode**: `/voice on` downloads a Vosk speech model and a Piper voice, then lets you talk to Flash and hear its replies, with typing still available at any time.
 - **Visible Plans**: For a multi-step task the AI posts a checklist up front and ticks each box as it finishes that step, so you can see where it is instead of waiting for the wall of text at the end.
+- **Async Sub-agents**: The AI can spawn background sub-agents with the `agent` tool to work on independent pieces of a task at the same time, then collect each one's answer with `agent_result` once it's needed.
 - **Context Management**: Automatic history trimming to stay within token limits.
 - **Markdown Support**: Rich formatting for AI responses in the terminal.
 
@@ -137,6 +138,8 @@ python run.py
 - `/model`: Pick from the models on this machine, or type a name to
   download one. `/model <name>` switches straight to one.
 - `/plan`: Show the checklist the model is working through.
+- `/agents`: Watch sub-agents work live. `/agents <id>` shows one in full,
+  with its answer once it is done.
 - `/clear`: Clear the conversation history.
 - `/image <path> [prompt]`: Send a local image to the model.
 - `/version`: Show the current version and check GitHub for updates.
@@ -167,6 +170,42 @@ Each tick redraws the list in place of the previous one, so the terminal
 shows the run as it happens. `/plan` reprints the current checklist at any
 time, and `/clear` drops it along with the conversation. Short tasks skip
 the plan entirely.
+
+### Sub-agents
+
+For work that splits into independent pieces, the model can start
+sub-agents with its `agent` tool. Each one runs on a background thread
+against the same model, and the model usually just ends its turn: when a
+sub-agent finishes, Flash wakes the model with the answer so it can
+report back, without you typing anything.
+
+```console
+⏺ Sub-agent 28a965 finished
+LK-99 did not hold up: the replications traced its resistance drop to
+copper sulfide impurities, ...
+```
+
+Flash only wakes it while the prompt is empty, so a half-typed message is
+never taken from you; the answer rides along with what you send instead.
+Wakes stop after three in a row without you writing, so a chain of
+sub-agents cannot run on its own forever.
+
+When the model needs an answer before it can go on, it calls
+`agent_result`, which draws the sub-agent's progress live while it waits:
+
+```console
+⏺ AgentResult(4b86ea)
+  ⎿  ⠹ Running Read(README.md) · round 4 · 21s
+     ✓ Reason  Primer is GitHub's design system
+     ✓ Glob(*.md) in docs  1 match
+     ✓ Grep(Features) in README.md  1 match in 1 file
+     … Read(README.md) lines 1-20
+```
+
+Sub-agents keep running after a reply, and `/agents` watches all of them
+update in place (Ctrl+C goes back to the prompt). They cannot talk to you,
+so they get no tool that asks first: `shell` and `write` are only theirs
+in autonomous mode (`/auto on`).
 
 ### Image Recognition
 
