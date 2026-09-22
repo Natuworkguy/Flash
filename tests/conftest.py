@@ -2,7 +2,7 @@
 
 import pytest
 
-from flash import terminal
+from flash import terminal, tools
 
 
 @pytest.fixture(autouse=True)
@@ -29,3 +29,10 @@ def isolated_home(tmp_path_factory, monkeypatch):
     monkeypatch.setattr(terminal, "FLASH_DIR", home / ".flash")
     monkeypatch.setattr(terminal, "LOG_PATH", home / ".flash" / "terminal.log")
     return home
+
+
+@pytest.fixture(autouse=True)
+def no_leftover_bang_commands(monkeypatch):
+    """Each test starts with no `!` commands waiting to be attached."""
+
+    monkeypatch.setattr(tools, "_user_runs", [])
