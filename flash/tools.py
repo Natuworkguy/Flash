@@ -26,7 +26,7 @@ from rich.live import Live
 from rich.text import Text
 
 from . import agent as subagents
-from . import plan
+from . import editor, plan
 from .browser import (
     ACTIONS,
     MAX_ELEMENTS,
@@ -150,6 +150,12 @@ To work on independent pieces of a task at the same time, use the agent
   mode), so give it one clear, self-contained task rather than something
   needing back and forth. Skip it for anything you can just do yourself
   in a tool call or two.
+A message can start with the commands the user ran in their VS Code
+  terminal since their last message, each with its exit code. You see
+  the command and whether it failed, never its output. When they ask
+  about a failure, re-run it with shell to read the error if it is safe
+  to repeat, such as a build, test, or lint; for anything that deploys,
+  deletes, sends, or pays, ask them to paste the error instead.
 To save a durable fact or preference for future sessions, use the remember
   tool. To check saved memory, use the recall tool with a specific phrase;
   it does not return everything for a blank search. To delete one saved
@@ -748,6 +754,11 @@ def write_tool(path: str, content: str, append: Any = False) -> str:
     tool_diff(preview, more=omitted)
 
     if not NO_COMMAND_CONFIRMATION:
+        if (preview or not existed) and editor.show_diff(
+            old_text, new_text, file_path.name, SCRATCH_DIR
+        ):
+            tool_result("Opened side by side in VS Code")
+
         notify_needs_input()
 
         prompt = Text(f"  {BRANCH}  ", style=DIM)
@@ -1153,6 +1164,66 @@ def forget(index: int) -> str:
         result = str(exc)
     tool_result(result)
     return result
+
+
+def open_in_editor(path: str, line: Any = None) -> str:
+    """Open a file in the user's VS Code, at a line when given."""
+
+    try:
+        number = max(int(line), 0) if line not in (None, "") else 0
+    except (TypeError, ValueError):
+        number = 0
+
+    tool_line(f"OpenInEditor({path}{f':{number}' if number else ''})")
+
+    if not Path(path).expanduser().is_file():
+        result = f"Error: {path} is not a file."
+        tool_result(result, style=ERROR)
+        return result
+
+    if not editor.open_at(path, number):
+        result = "VS Code is not available here, so nothing was opened."
+        tool_result(result, style=WARN)
+        return result
+
+    result = f"Opened {path}{f' at line {number}' if number else ''}."
+    tool_result(result)
+    return result
+
+
+EDITOR_TOOLS: list[dict[str, Any]] = [
+    {
+        "type": "function",
+        "function": {
+            "name": "open_in_editor",
+            "description": (
+                "Open a file in the user's VS Code, at a line if given, so "
+                "they see the spot you are talking about in their editor."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Path to the file.",
+                    },
+                    "line": {
+                        "type": "integer",
+                        "description": "1-based line to put the cursor on.",
+                        "minimum": 1,
+                    },
+                },
+                "required": ["path"],
+            },
+        },
+    },
+]
+
+
+def turn_tools() -> list[dict[str, Any]]:
+    """The tools offered on this turn: the editor's only inside VS Code."""
+
+    return tools + (EDITOR_TOOLS if editor.available() else [])
 
 
 def agent_tool(task: str) -> str:
@@ -2761,6 +2832,7 @@ FUNCTIONS = {
     "forget": forget,
     "agent": agent_tool,
     "agent_result": agent_result,
+    "open_in_editor": open_in_editor,
 }
 
 # Tools a sub-agent (flash/agent.py) is allowed to call: read/search/shell
