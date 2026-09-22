@@ -24,6 +24,8 @@ def isolated_home(tmp_path_factory, monkeypatch):
 
     home = tmp_path_factory.mktemp("home")
     monkeypatch.setenv("HOME", str(home))
+    # Windows finds the home folder through USERPROFILE and ignores HOME.
+    monkeypatch.setenv("USERPROFILE", str(home))
     monkeypatch.setattr(terminal, "FLASH_DIR", home / ".flash")
     monkeypatch.setattr(terminal, "LOG_PATH", home / ".flash" / "terminal.log")
     return home
