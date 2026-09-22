@@ -291,20 +291,24 @@ def test_wakes_stop_after_the_cap(monkeypatch):
 # --- what the user ran in VS Code's terminal -------------------------------
 
 
-def _ran(*rows):
+def _ran(*rows, later=0.0):
     from flash import terminal
 
+    stamp = time.time() + later
     terminal.LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
     with terminal.LOG_PATH.open("a") as handle:
         for code, command in rows:
-            handle.write(f"{time.time()}\t{code}\t1\t/proj\t{command}\n")
+            handle.write(f"{stamp}\t{code}\t1\t/proj\t{command}\n")
 
 
 def test_terminal_commands_ride_on_the_next_message_once(monkeypatch):
     from flash import terminal
 
     def second_message():
-        _ran((0, "git status"))
+        # Windows' clock ticks every ~15ms, so a command logged right
+        # after the first message can share its timestamp; a real one is
+        # always typed later than that.
+        _ran((0, "git status"), later=1.0)
         return "and now?"
 
     _, sent = _script_main(monkeypatch, ["why did that fail?", second_message,
