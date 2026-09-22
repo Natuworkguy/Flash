@@ -4,6 +4,7 @@ import base64
 import difflib
 import fnmatch
 import io
+import json
 import os
 import platform
 import queue
@@ -26,7 +27,7 @@ from rich.live import Live
 from rich.text import Text
 
 from . import agent as subagents
-from . import editor, plan
+from . import checkpoint, editor, plan
 from .browser import (
     ACTIONS,
     MAX_ELEMENTS,
@@ -43,6 +44,7 @@ from .browser import open_page as browser_open
 from .browser import snapshot as page_snapshot
 from .browser import where as page_where
 from .documents import extract_document_text, is_document_path
+from .edit import Edit, apply_edits
 from .images import resolve_image_path
 from .memory import add_memory, forget_memory, search_memory
 from .notify import notify_needs_input
@@ -81,14 +83,24 @@ To look at a file's contents, use the read tool instead of shell
 A path the user writes after an @, such as @flash/models.py, is a file they
   are pointing you at. Read it before answering, unless what they asked
   plainly does not depend on what is in it.
-To create or change a file, use the write tool instead of shell redirection,
+To change a file that already exists, use the edit tool. It swaps one exact
+  block of text for another and leaves the rest of the file untouched, so
+  it costs you only the lines that actually change. Copy old_string out of
+  a read of the file, without the line numbers read puts in front, and take
+  in enough surrounding lines that it appears exactly once. Set
+  replace_all=true only when you mean every occurrence. Use multi_edit to
+  make several changes to one file in a single call; they are applied in
+  order and either all land or none do. If an edit comes back not found,
+  the error quotes the closest text in the file: fix old_string from it and
+  call edit again rather than falling back to write or to a sed command.
+To create a file, use the write tool instead of shell redirection,
   heredocs, or Set-Content. It needs no quoting or escaping and works the
   same on every platform, so shell quoting can never corrupt the content.
-  It replaces the whole file, so read the file first when editing one, and
-  pass back the complete new contents. Your reply has a token limit, so a
-  long file does not fit in one call: write the first part, then call
-  write again with append=true for each following part, about 80 lines
-  at a time, until the file is finished.
+  It replaces the whole file, so point it at an existing one only when you
+  mean to rewrite all of it. Your reply has a token limit, so a long file
+  does not fit in one call: write the first part, then call write again
+  with append=true for each following part, about 80 lines at a time,
+  until the file is finished.
 When searching for recent information, use the web_search tool.
 When you need to know the user's operating system, use the get_os tool.
 To think or plan mid-task without ending your turn, use the reason tool.
@@ -808,6 +820,8 @@ def write_tool(path: str, content: str, append: Any = False) -> str:
             tool_result("Write blocked by user", style=WARN)
             return "Write blocked by user"
 
+    checkpoint.record(file_path)
+
     try:
         file_path.parent.mkdir(parents=True, exist_ok=True)
         # newline="" so the model's content lands byte-for-byte, instead of
@@ -835,6 +849,219 @@ def write_tool(path: str, content: str, append: Any = False) -> str:
     verb = "Wrote" if existed else "Created"
     tool_result(f"{verb} {written} line{plural(written)} to {file_path}")
     return f"{verb} {written} line{plural(written)} to {file_path}"
+
+
+def _confirm_change(
+    file_path: Path,
+    old_text: str,
+    new_text: str,
+    question: str,
+) -> Union[str, None]:  # noqa: UP007, RUF100
+    """Show the pending change and ask. None means go ahead.
+
+    The same diff, editor window, and y/n the write tool uses, so an
+    edit and a write look identical to the user however the model chose
+    to make the change.
+    """
+
+    preview, omitted, additions, removals = _diff_preview(
+        old_text, new_text, file_path.name
+    )
+    tool_result(
+        f"{additions} addition{plural(additions)}, "
+        f"{removals} removal{plural(removals)}"
+    )
+    tool_diff(preview, more=omitted)
+
+    if NO_COMMAND_CONFIRMATION:
+        return None
+
+    if editor.show_diff(old_text, new_text, file_path.name, SCRATCH_DIR):
+        tool_result("Opened side by side in VS Code")
+
+    notify_needs_input()
+
+    prompt = Text(f"  {BRANCH}  ", style=DIM)
+    prompt.append(question + " ", style=DIM)
+    prompt.append("y", style=f"bold {ACCENT}")
+    prompt.append("/n ", style=DIM)
+    console.print(prompt, end="")
+
+    if input().strip().lower() != "y":
+        tool_result("Edit blocked by user", style=WARN)
+        return "Edit blocked by user"
+
+    return None
+
+
+def _editable_text(file_path: Path) -> str:
+    """The file's exact text, or an "Error: ..." string explaining why not.
+
+    Callers tell the two apart by the "Error: " prefix, the same way the
+    rest of the tools in this module report a failure to the model.
+    """
+
+    if not file_path.exists():
+        return (
+            f"Error: file not found: {file_path}. Use the write tool to "
+            "create a file; edit only changes one that already exists."
+        )
+
+    if file_path.is_dir():
+        return f"Error: {file_path} is a directory, not a file."
+
+    if is_document_path(file_path):
+        return (
+            f"Error: {file_path} is a document, not a text file. Its "
+            "text can be read but not edited in place; rebuild it with "
+            "the write tool or a script instead."
+        )
+
+    text = _read_exact(file_path)
+    if text is None:
+        return (
+            f"Error: could not read {file_path} as UTF-8 text. Binary "
+            "files cannot be edited."
+        )
+
+    return text
+
+
+def _write_exact(
+    file_path: Path, text: str
+) -> Union[str, None]:  # noqa: UP007, RUF100
+    """Replace the file's contents byte for byte. None on success."""
+
+    try:
+        # newline="" so the text lands exactly as the edit produced it,
+        # which is what keeps a CRLF file from being rewritten as LF.
+        with open(file_path, "w", encoding="utf-8", newline="") as handle:
+            handle.write(text)
+    except OSError as exc:
+        return f"Error: could not write {file_path}: {exc}"
+
+    return None
+
+
+def _edit_file(path: str, edits: list[Edit], question: str) -> str:
+    """Apply edits to one file, confirming the result as a diff."""
+
+    file_path = Path(path).expanduser()
+
+    old_text = _editable_text(file_path)
+    if old_text.startswith("Error: "):
+        tool_result(old_text, style=ERROR)
+        return old_text
+
+    result = apply_edits(old_text, edits)
+
+    if not result.ok:
+        tool_result(result.error, style=ERROR)
+        return result.error
+
+    new_text = result.text
+
+    if new_text == old_text:
+        message = (
+            "No change: the edit produced text identical to what is "
+            "already in the file."
+        )
+        tool_result(message)
+        return message
+
+    blocked = _confirm_change(file_path, old_text, new_text, question)
+    if blocked is not None:
+        return blocked
+
+    # Snapshotted only once the user has said yes, so a declined edit
+    # never lands in the undo history.
+    checkpoint.record(file_path)
+
+    failed = _write_exact(file_path, new_text)
+    if failed is not None:
+        tool_result(failed, style=ERROR)
+        return failed
+
+    made = result.replacements
+    summary = (
+        f"Made {made} replacement{plural(made)} in {file_path}"
+    )
+    tool_result(summary)
+
+    return "\n".join([summary + ".", *result.notes])
+
+
+def edit_tool(
+    path: str,
+    old_string: str,
+    new_string: str,
+    replace_all: Any = False,
+) -> str:
+    """Tool to replace one exact block of text in a file."""
+
+    tool_line(f"Edit({path})")
+
+    return _edit_file(
+        path,
+        [Edit(str(old_string), str(new_string), bool(replace_all))],
+        "Apply this edit?",
+    )
+
+
+def _parse_edits(edits: Any) -> Union[list[Edit], str]:  # noqa: UP007
+    """Turn the model's edit list into Edit objects, or explain why not."""
+
+    if isinstance(edits, str):
+        # Some models hand back a JSON string instead of a real array.
+        try:
+            edits = json.loads(edits)
+        except ValueError:
+            return (
+                "Error: edits could not be read as a list. Pass an array "
+                'of {"old_string": ..., "new_string": ...} objects.'
+            )
+
+    if not isinstance(edits, list):
+        return (
+            "Error: edits must be a list of "
+            '{"old_string": ..., "new_string": ...} objects.'
+        )
+
+    parsed = []
+    for index, entry in enumerate(edits, start=1):
+        if not isinstance(entry, dict):
+            return (
+                f"Error: edit {index} is not an object. Each edit needs "
+                "an old_string and a new_string."
+            )
+        if "old_string" not in entry or "new_string" not in entry:
+            return (
+                f"Error: edit {index} is missing old_string or "
+                "new_string."
+            )
+        parsed.append(Edit(
+            str(entry["old_string"]),
+            str(entry["new_string"]),
+            bool(entry.get("replace_all", False)),
+        ))
+
+    return parsed
+
+
+def multi_edit_tool(path: str, edits: Any) -> str:
+    """Tool to make several exact edits to one file, all or nothing."""
+
+    parsed = _parse_edits(edits)
+
+    if isinstance(parsed, str):
+        tool_line(f"MultiEdit({path})")
+        tool_result(parsed, style=ERROR)
+        return parsed
+
+    count = len(parsed)
+    tool_line(f"MultiEdit({path}, {count} edit{plural(count)})")
+
+    return _edit_file(path, parsed, f"Apply these {count} edits?")
 
 
 def web_search(query: str, max_results: int) -> str:
@@ -2255,15 +2482,17 @@ tools: list[dict[str, Any]] = [
         "function": {
             "name": "write",
             "description": (
-                "Write a text file, replacing it if it exists, or add to "
-                "the end of one with append. The user sees a diff and "
-                "confirms before anything is written. Cross-platform and "
-                "needs no quoting or escaping; prefer this over shell "
-                "redirection or heredocs for every file you create or "
-                "change. Read the file first when editing one, since "
-                "without append this replaces the whole file. A long file "
-                "will not fit in one call, so write the first part, then "
-                "append the rest a piece at a time."
+                "Create a new text file, or replace an existing one "
+                "outright, or add to the end of one with append. To "
+                "change part of a file that already exists, use edit "
+                "instead: this tool makes you write out every line in "
+                "the file, which is slow and truncates on a long one. "
+                "The user sees a diff and confirms before anything is "
+                "written. Cross-platform and needs no quoting or "
+                "escaping; prefer it over shell redirection or heredocs "
+                "for every file you create. A file too long for one call "
+                "is written in pieces: the first part with no append, "
+                "then the rest with append=true, in order."
             ),
             "parameters": {
                 "type": "object",
@@ -2297,6 +2526,123 @@ tools: list[dict[str, Any]] = [
                     },
                 },
                 "required": ["path", "content"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "edit",
+            "description": (
+                "Change part of a text file by replacing one exact block "
+                "of text with another. This is how you change a file "
+                "that already exists: it costs you only the lines that "
+                "actually change, where write costs you every line in "
+                "the file. old_string must match the file exactly, "
+                "character for character, and must appear only once, so "
+                "include the lines above and below it until it is "
+                "unique. Read the file first and copy the text out of "
+                "the result rather than typing it from memory, leaving "
+                "off the line numbers read adds. The user sees a diff "
+                "and confirms before anything is written."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": (
+                            "Path to the file, e.g. 'flash/theme.py'."
+                        ),
+                    },
+                    "old_string": {
+                        "type": "string",
+                        "description": (
+                            "The exact text to replace, copied from the "
+                            "file. Include enough surrounding lines that "
+                            "it appears only once."
+                        ),
+                    },
+                    "new_string": {
+                        "type": "string",
+                        "description": (
+                            "The text to put in its place. Pass an empty "
+                            "string to delete old_string outright."
+                        ),
+                    },
+                    "replace_all": {
+                        "type": "boolean",
+                        "description": (
+                            "Replace every occurrence instead of failing "
+                            "when old_string appears more than once. Use "
+                            "it for a rename across a file."
+                        ),
+                    },
+                },
+                "required": ["path", "old_string", "new_string"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "multi_edit",
+            "description": (
+                "Make several exact edits to one file in a single call. "
+                "They are applied in order, and each one sees the text "
+                "the one before it produced. Either all of them land or "
+                "none do, so a failed edit never leaves the file half "
+                "changed. Prefer this over several edit calls whenever "
+                "you have more than one change to make to the same file: "
+                "it costs one confirmation and one round trip instead of "
+                "one of each per edit. Every old_string follows the same "
+                "rules as the edit tool."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": (
+                            "Path to the file every edit applies to."
+                        ),
+                    },
+                    "edits": {
+                        "type": "array",
+                        "description": (
+                            "The edits to apply, in the order they "
+                            "should be made."
+                        ),
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "old_string": {
+                                    "type": "string",
+                                    "description": (
+                                        "Exact text to replace, unique "
+                                        "in the file as it stands when "
+                                        "this edit's turn comes."
+                                    ),
+                                },
+                                "new_string": {
+                                    "type": "string",
+                                    "description": (
+                                        "The text to put in its place."
+                                    ),
+                                },
+                                "replace_all": {
+                                    "type": "boolean",
+                                    "description": (
+                                        "Replace every occurrence of "
+                                        "old_string."
+                                    ),
+                                },
+                            },
+                            "required": ["old_string", "new_string"],
+                        },
+                    },
+                },
+                "required": ["path", "edits"],
             },
         },
     },
@@ -2851,6 +3197,8 @@ FUNCTIONS = {
     "grep": grep_tool,
     "read": read_tool,
     "write": write_tool,
+    "edit": edit_tool,
+    "multi_edit": multi_edit_tool,
     "view_image": view_image,
     "send_image": send_image,
     "screenshot": screenshot,
@@ -2877,13 +3225,13 @@ FUNCTIONS = {
 # Kept here, next to FUNCTIONS, as the one place that names a tool, so
 # adding, renaming, or removing one only means updating this file.
 SUBAGENT_TOOL_NAMES = (
-    "shell", "glob", "grep", "read", "write",
+    "shell", "glob", "grep", "read", "write", "edit", "multi_edit",
     "web_search", "fetch", "get_os", "get_date", "reason",
 )
 
 # Tools that stop for a y/n unless autonomous mode is on. A sub-agent has
 # no terminal to ask from, so it only gets these in autonomous mode.
-CONFIRMED_TOOL_NAMES = ("shell", "write")
+CONFIRMED_TOOL_NAMES = ("shell", "write", "edit", "multi_edit")
 
 
 def run_tool(call):

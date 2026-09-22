@@ -23,7 +23,7 @@ from rich.panel import Panel
 from rich.text import Text
 
 from . import agent as subagents
-from . import plan, terminal
+from . import checkpoint, context, plan, terminal
 from .cli import parse_args
 from .envfile import set_env_var, unset_env_var
 from .images import resolve_image_path
@@ -51,6 +51,7 @@ from .theme import (
     DIM_ANSI,
     ELLIPSIS,
     RESET_ANSI,
+    WARN,
     confirm,
     console,
     glimmer,
@@ -142,13 +143,39 @@ def _int_env(name: str, default: int, *, minimum: int) -> int:
         return default
 
 
+def _opt_int_env(
+    name: str, *, minimum: int
+) -> Union[int, None]:  # noqa: UP007, RUF100
+    """An override the user set, or None when they left it alone.
+
+    Distinguishing "unset" from a default matters for the history caps:
+    unset means the token budget decides, which is almost always the
+    better answer, while a number means the user asked for that number
+    and gets it.
+    """
+
+    value = os.getenv(name)
+
+    if value is None or not value.strip():
+        return None
+
+    try:
+        return max(int(value), minimum)
+    except ValueError:
+        return None
+
+
 class Config:
     """App configuration, re-derived from the environment on demand."""
 
     host: str
     model: Union[str, None]  # noqa: UP007, RUF100
-    max_history_messages: int
-    max_history_chars: int
+    # Unset by default: the token budget in context.py decides how
+    # much history survives, and these only cap it further when the
+    # user has explicitly asked for a smaller one.
+    max_history_messages: Union[int, None]  # noqa: UP007, RUF100
+    max_history_chars: Union[int, None]  # noqa: UP007, RUF100
+    auto_compact: bool
     max_tool_rounds: int
     max_tool_output_chars: int
     max_output_tokens: int
@@ -162,12 +189,13 @@ class Config:
     def refresh(cls) -> None:
         cls.host = os.getenv("OLLAMA_HOST", OLLAMA_HOST_DEFAULT)
         cls.model = os.getenv("MODEL")
-        cls.max_history_messages = _int_env(
-            "MAX_HISTORY_MESSAGES", 6, minimum=2
+        cls.max_history_messages = _opt_int_env(
+            "MAX_HISTORY_MESSAGES", minimum=2
         )
-        cls.max_history_chars = _int_env(
-            "MAX_HISTORY_CHARS", 3000, minimum=1000
+        cls.max_history_chars = _opt_int_env(
+            "MAX_HISTORY_CHARS", minimum=1000
         )
+        cls.auto_compact = bool(_int_env("AUTO_COMPACT", 1, minimum=0))
         cls.max_tool_rounds = _int_env("MAX_TOOL_ROUNDS", 10, minimum=1)
         cls.max_tool_output_chars = _int_env(
             "MAX_TOOL_OUTPUT_CHARS", 1200, minimum=500
@@ -287,16 +315,167 @@ def _message_text(message: dict) -> str:
     return message.get("content", "") or ""
 
 
-def _trim_history(messages: list[dict]) -> None:
-    if len(messages) > Config.max_history_messages:
-        del messages[:-Config.max_history_messages]
+def _worth_keeping(messages: list[dict], start: int) -> list[dict]:
+    """This turn's tool traffic, as the next turn should remember it.
 
-    while (
-        len(messages) > 1
-        and sum(len(_message_text(message)) for message in messages)
-        > Config.max_history_chars
-    ):
-        del messages[0]
+    Without this the history kept only the model's closing prose, so
+    the next turn could read a file, be told what the file said, and
+    have no record of either.
+
+    Two things do not survive. The mid-loop nudge to wrap up is Flash
+    talking to the model, not part of the conversation. And the message
+    carrying an image a tool opened is dropped whole: the bytes cost
+    more than any later turn gets back from them, and the tool result
+    just above it already records that the image was opened, so the
+    exchange still reads correctly without it.
+    """
+
+    kept = []
+
+    for message in messages[start:]:
+        if message.get("role") == "system" or message.get("images"):
+            continue
+
+        kept.append(message)
+
+    return kept
+
+
+def _history_budget() -> int:
+    """How many tokens of conversation this model can afford to keep.
+
+    Measured against the window the turn will actually run in, minus
+    what the request carries besides the history: the system prompt,
+    the tool schemas, and room for the reply.
+    """
+
+    overhead = context.estimate_tokens(_session_system_prompt())
+
+    try:
+        overhead += context.estimate_tokens(json.dumps(turn_tools()))
+    except (TypeError, ValueError):
+        pass
+
+    return context.history_budget(
+        _context_limit(),
+        system_tokens=overhead,
+        output_tokens=Config.max_output_tokens,
+    )
+
+
+def _apply_legacy_caps(messages: list[dict]) -> list[dict]:
+    """Honour MAX_HISTORY_MESSAGES and MAX_HISTORY_CHARS if they are set.
+
+    Both used to have defaults that governed every session. They are
+    overrides now, so a user who pinned one still gets it and everyone
+    else gets the token budget instead.
+    """
+
+    kept = messages
+
+    if Config.max_history_messages is not None:
+        kept = kept[-Config.max_history_messages:]
+
+    if Config.max_history_chars is not None:
+        while (
+            len(kept) > 1
+            and sum(len(_message_text(m)) for m in kept)
+            > Config.max_history_chars
+        ):
+            kept = kept[1:]
+
+    return kept
+
+
+def _trim_history(messages: list[dict]) -> list[dict]:
+    """Fit MESSAGES into the budget in place; return what fell off.
+
+    Whole blocks go at a time, so a tool result is never left behind
+    without the call that produced it. What comes back is the material
+    a compaction pass would summarize.
+    """
+
+    result = context.trim(messages, _history_budget())
+    kept = _apply_legacy_caps(result.kept)
+
+    # The caps only ever take messages off the front, so what they cut
+    # is the prefix of result.kept that is no longer there. Counted by
+    # length rather than by value: two identical messages compare equal,
+    # and `not in` would report neither of them as dropped.
+    capped = result.kept[:len(result.kept) - len(kept)]
+
+    messages[:] = kept
+
+    return result.dropped + capped
+
+
+def _summarize(
+    console: Console, client: "ollama.Client", messages: list[dict]
+) -> Union[str, None]:  # noqa: UP007, RUF100
+    """Have the model condense MESSAGES into a few lines, or None."""
+
+    if not messages:
+        return None
+
+    summary, _, _, err = _chat_retry_until_response(
+        console, client, context.summary_request(messages), None
+    )
+
+    if err or not summary.strip():
+        return None
+
+    return summary.strip()
+
+
+def _compact(
+    console: Console,
+    client: "ollama.Client",
+    messages: list[dict],
+    dropped: list[dict],
+) -> bool:
+    """Replace DROPPED with a summary at the head of MESSAGES.
+
+    Without this, running out of room simply loses the start of the
+    session: what the user originally asked for, and every decision
+    made before the window filled. A few lines of summary cost far less
+    than the turns they stand in for and keep the thread intact.
+    """
+
+    if not dropped:
+        return False
+
+    tool_line(f"Compact({len(dropped)} earlier messages)")
+
+    carried = [m for m in dropped if not context.is_summary(m)]
+    summary = _summarize(console, client, carried)
+
+    if summary is None:
+        tool_result(
+            "Could not summarize; the earlier turns were dropped.",
+            style=WARN,
+        )
+        return False
+
+    messages[:] = context.merge_summary(messages, summary)
+    tool_result(
+        f"Summarized into {context.estimate_tokens(summary)} tokens"
+    )
+
+    return True
+
+
+def _fit_and_compact(
+    console: Console, client: "ollama.Client", messages: list[dict]
+) -> None:
+    """Trim to the budget, summarizing whatever that costs."""
+
+    dropped = _trim_history(messages)
+
+    if dropped and Config.auto_compact:
+        _compact(console, client, messages, dropped)
+        # The summary takes up room of its own, so make sure the
+        # result still fits rather than trusting that it does.
+        _trim_history(messages)
 
 
 def _direct_shell_command(
@@ -716,6 +895,51 @@ def _note_unpinned_context() -> None:
         )
 
     console.print(note)
+
+
+TURN_LABEL_MAX = 48
+
+
+def _turn_label(text: str) -> str:
+    """A short name for the turn, so /undo can say what it would revert."""
+
+    line = " ".join(text.split())
+
+    if len(line) <= TURN_LABEL_MAX:
+        return line
+
+    return line[:TURN_LABEL_MAX - 1].rstrip() + ELLIPSIS
+
+
+def _render_context(messages: list[dict]) -> None:
+    """Show how much room the conversation is using, and what /undo holds."""
+
+    budget = _history_budget()
+    used = context.total_tokens(messages)
+    limit = _context_limit()
+    share = round(100 * used / budget) if budget else 0
+
+    body = Text()
+    body.append("history   ", style=DIM)
+    body.append(f"{used} of {budget} tokens ({share}%)\n")
+    body.append("messages  ", style=DIM)
+    body.append(f"{len(messages)}\n")
+    body.append("window    ", style=DIM)
+    body.append(f"{window(limit)}\n" if limit else "not pinned\n")
+    body.append("compact   ", style=DIM)
+    body.append(
+        "automatic when full\n" if Config.auto_compact
+        else "off; run /compact by hand\n"
+    )
+
+    if any(context.is_summary(message) for message in messages):
+        body.append("summary   ", style=DIM)
+        body.append("earlier turns have been summarized\n")
+
+    body.append("undo      ", style=DIM)
+    body.append(checkpoint.describe())
+
+    console.print(body)
 
 
 def _render_stats(turn: Turn) -> None:
@@ -1376,7 +1600,43 @@ def main() -> None:
             if uin == "/clear":
                 messages.clear()
                 plan.clear()
+                checkpoint.clear()
                 console.print(Text("Context cleared.", style=DIM))
+                continue
+
+            if uin == "/undo":
+                console.print(Text(checkpoint.undo(), style=DIM))
+                continue
+
+            if uin == "/context":
+                _render_context(messages)
+                continue
+
+            if uin == "/compact":
+                if not messages:
+                    console.print(Text("Nothing to compact.", style=DIM))
+                    continue
+                if not Config.model:
+                    show_error(
+                        "Model is not set. Use `/model <model>` to set it."
+                    )
+                    continue
+
+                tool_line(f"Compact({len(messages)} messages)")
+                summary = _summarize(console, client, messages)
+
+                if summary is None:
+                    tool_result(
+                        "The model returned no summary; history kept as is.",
+                        style=WARN,
+                    )
+                else:
+                    was = context.total_tokens(messages)
+                    messages[:] = [context.summary_message(summary)]
+                    now = context.total_tokens(messages)
+                    tool_result(
+                        f"{was} tokens of history down to {now}"
+                    )
                 continue
 
             if uin == "/plan":
@@ -1497,11 +1757,13 @@ def main() -> None:
             )
 
             messages.append(_message("user", content, pending_images))
-            _trim_history(messages)
+            _fit_and_compact(console, client, messages)
 
             system_message = _message(
                 "system", _session_system_prompt(heard)
             )
+
+            checkpoint.start_turn(_turn_label(uin))
 
             turn = Turn()
             offered = turn_tools()
@@ -1534,11 +1796,15 @@ def main() -> None:
                 notify_reply_ready()
                 listening_on = _speak_reply(final, heard)
                 messages.append(_message("assistant", final))
-                _trim_history(messages)
+                _fit_and_compact(console, client, messages)
                 print()
                 continue
 
             tool_messages = [system_message] + messages.copy()
+            # Everything tool_messages grows past this point is this
+            # turn's tool traffic, which is kept so the next turn
+            # remembers what was read, run, and changed.
+            keep_from = len(tool_messages)
             tool_outputs = []
             followup = ""
             tool_error = None
@@ -1560,8 +1826,11 @@ def main() -> None:
 
                 for call in tool_calls:
                     name, call_args = _tool_call_name_args(call)
-                    tool_result = run_tool((name, call_args))
-                    trimmed = trim_tool_output(tool_result, name)
+                    # Not `tool_result`: that is the imported renderer,
+                    # and a local of that name shadows it for the whole
+                    # of main(), including code that runs before this.
+                    output = run_tool((name, call_args))
+                    trimmed = trim_tool_output(output, name)
                     tool_outputs.append(f"{name}:\n{trimmed}")
                     tool_messages.append({
                         "role": "tool",
@@ -1621,8 +1890,9 @@ def main() -> None:
             _note_running_agents()
             notify_reply_ready()
             listening_on = _speak_reply(followup, heard)
+            messages.extend(_worth_keeping(tool_messages, keep_from))
             messages.append(_message("assistant", followup))
-            _trim_history(messages)
+            _fit_and_compact(console, client, messages)
 
             print()
 

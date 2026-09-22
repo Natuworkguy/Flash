@@ -36,3 +36,20 @@ def no_leftover_bang_commands(monkeypatch):
     """Each test starts with no `!` commands waiting to be attached."""
 
     monkeypatch.setattr(tools, "_user_runs", [])
+
+
+@pytest.fixture(autouse=True)
+def no_developer_config(monkeypatch):
+    """No test inherits the confirmation setting from a real ~/.flash.env.
+
+    `flash.ai` calls load_dotenv at import, which puts the developer's
+    own settings into os.environ, and any later Config.refresh() copies
+    NO_COMMAND_CONFIRMATION from there onto the module global in
+    flash.tools. Nothing puts it back, so whether a test that reaches a
+    confirmation prompt blocks on stdin came down to whose machine the
+    suite was running on. Pinned to the module default here: a test
+    that wants autonomous mode asks for it explicitly.
+    """
+
+    monkeypatch.setattr(tools, "NO_COMMAND_CONFIRMATION", False)
+    monkeypatch.delenv("NO_COMMAND_CONFIRMATION", raising=False)

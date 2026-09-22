@@ -8,6 +8,9 @@ FLASH (**F**ast **L**ocal **A**gent **SH**ell) CLI is an AI-powered command-line
 
 - **Interactive AI Chat**: Chat with local or self-hosted models served by Ollama, directly from your terminal.
 - **Switchable Backend**: Point Flash at `localhost` or any remote Ollama server via a single config option.
+- **Precise File Edits**: The AI changes a file by naming the exact lines that change, not by retyping the file. A one-line fix in a thousand-line file costs one line of output, so big files stop being out of reach and long writes stop truncating half way. Several changes to the same file go in one call that either lands whole or not at all.
+- **Undo**: `/undo` puts back every file the last turn changed, including deleting the ones it created. Snapshots are taken the moment you approve an edit, so a yes you regret costs you one command instead of your afternoon.
+- **Context That Lasts**: History is measured against the model's real context window instead of a fixed message count, and dropped in whole exchanges so a tool result is never left without the call that produced it. When it overflows, the model summarizes what is falling off and keeps the summary, so a long session keeps its thread. `/context` shows the usage, `/compact` summarizes on demand.
 - **Shell Command Execution**:
   - AI can use a `shell` tool to execute commands and see their output.
   - Manually execute shell commands using the `!` prefix.
@@ -145,6 +148,9 @@ python run.py
 - `/agents`: Watch sub-agents work live. `/agents <id>` shows one in full,
   with its answer once it is done.
 - `/clear`: Clear the conversation history.
+- `/undo`: Take back the file changes from the last turn.
+- `/compact`: Summarize the conversation to free up room.
+- `/context`: Show how much of the context window is in use.
 - `/image <path> [prompt]`: Send a local image to the model.
 - `/version`: Show the current version and check GitHub for updates.
 - `/update`: Update Flash to the latest version (requires pipx).

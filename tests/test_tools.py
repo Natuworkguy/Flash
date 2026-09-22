@@ -27,6 +27,7 @@ def test_shell_tool_timeout(monkeypatch):
         raise subprocess.TimeoutExpired(args[0], 15)
 
     monkeypatch.setattr(subprocess, "run", mock_run)
+    monkeypatch.setattr(tools, "NO_COMMAND_CONFIRMATION", True)
 
     result = shell_tool("long_command")
     assert "Command timed out" in result  # nosec B101
@@ -43,6 +44,7 @@ def test_shell_tool_success(monkeypatch):
         return MockResult()
 
     monkeypatch.setattr(subprocess, "run", mock_run)
+    monkeypatch.setattr(tools, "NO_COMMAND_CONFIRMATION", True)
 
     result = shell_tool("echo success")
     assert result == "success"  # nosec B101
