@@ -1,8 +1,14 @@
 # pylint: disable=C0114,C0115,C0116
 
+import threading
+
+from prompt_toolkit import PromptSession
 from prompt_toolkit.completion import CompleteEvent
 from prompt_toolkit.document import Document
+from prompt_toolkit.input import create_pipe_input
+from prompt_toolkit.output import DummyOutput
 
+from flash import repl_input
 from flash.repl_input import SlashCommandCompleter, _mention_before
 
 
@@ -114,3 +120,37 @@ def test_at_hides_dot_entries_until_one_is_asked_for(tmp_path, monkeypatch):
     assert _completions(  # nosec B101
         "@.e", tmp_path, monkeypatch
     ) == ["nv"]
+
+
+# --- waking the prompt -----------------------------------------------------
+
+def _piped_session(monkeypatch, pipe):
+    monkeypatch.setattr(repl_input, "WAKE_POLL_SECONDS", 0.01)
+    monkeypatch.setattr(
+        repl_input, "_session",
+        PromptSession(input=pipe, output=DummyOutput()),
+    )
+
+
+def test_read_line_gives_way_to_wake_on_an_empty_line(monkeypatch):
+    with create_pipe_input() as pipe:
+        _piped_session(monkeypatch, pipe)
+        result = repl_input.read_line("> ", wake=lambda: True)
+    assert result == repl_input.WAKE  # nosec B101
+
+
+def test_read_line_never_wakes_over_typed_text(monkeypatch):
+    with create_pipe_input() as pipe:
+        _piped_session(monkeypatch, pipe)
+        pipe.send_text("half a thought")
+        # Submit only after the poller has had many chances to wake.
+        threading.Timer(0.3, lambda: pipe.send_text("\r")).start()
+        result = repl_input.read_line("> ", wake=lambda: True)
+    assert result == "half a thought"  # nosec B101
+
+
+def test_read_line_without_wake_reads_normally(monkeypatch):
+    with create_pipe_input() as pipe:
+        _piped_session(monkeypatch, pipe)
+        pipe.send_text("hello\r")
+        assert repl_input.read_line("> ") == "hello"  # nosec B101

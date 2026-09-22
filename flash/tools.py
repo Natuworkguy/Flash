@@ -25,6 +25,7 @@ from ddgs import DDGS
 from rich.live import Live
 from rich.text import Text
 
+from . import agent as subagents
 from . import plan
 from .browser import (
     ACTIONS,
@@ -136,6 +137,19 @@ When a request takes several steps, call the plan tool first with those
   plan again to replace the list if the task turns out to need different
   steps. Skip the plan entirely for anything you can finish in one or two
   tool calls; a checklist for a one-line answer is noise.
+To work on independent pieces of a task at the same time, use the agent
+  tool to start a sub-agent per piece, e.g. one for each of two unrelated
+  research questions. It returns an ID at once and runs in the background.
+  Prefer ending your turn over waiting for it: tell the user what you
+  started, and when a sub-agent finishes you are woken with its answer in
+  a sub-agent update, so you can report back then.
+  Call agent_result only when this turn cannot go on without the answer;
+  it waits for the sub-agent to finish.
+  A sub-agent cannot talk to the user or start sub-agents of its own, and
+  has the file, search, and web tools (plus shell and write in autonomous
+  mode), so give it one clear, self-contained task rather than something
+  needing back and forth. Skip it for anything you can just do yourself
+  in a tool call or two.
 To save a durable fact or preference for future sessions, use the remember
   tool. To check saved memory, use the recall tool with a specific phrase;
   it does not return everything for a blank search. To delete one saved
@@ -193,13 +207,44 @@ MAX_SHELL_TIMEOUT = 600
 NO_COMMAND_CONFIRMATION = False
 OLLAMA_HOST = ""
 MODEL_NAME = ""
+MAX_TOOL_OUTPUT_CHARS = 1200
 
 
 def init(config, ):
     global NO_COMMAND_CONFIRMATION, OLLAMA_HOST, MODEL_NAME
+    global MAX_TOOL_OUTPUT_CHARS
     NO_COMMAND_CONFIRMATION = config.no_command_confirmation
     OLLAMA_HOST = config.host
     MODEL_NAME = config.model or ""
+    MAX_TOOL_OUTPUT_CHARS = config.max_tool_output_chars
+
+
+# read already caps its own output by whole lines and tells the model how
+# to page on; the middle-out trim below would silently gut a file read.
+# The page tools cap themselves too, and their element list is only useful
+# whole: a trim through the middle of it takes away the very numbers the
+# next click has to name.
+_SELF_LIMITING_TOOLS = {"read", "open_page", "interact"}
+
+
+def trim_tool_output(text: str, name: str = "") -> str:
+    """Cut a tool result down to MAX_TOOL_OUTPUT_CHARS, keeping both ends."""
+
+    text = text.strip() or "(no output)"
+    limit = MAX_TOOL_OUTPUT_CHARS
+
+    if name in _SELF_LIMITING_TOOLS or len(text) <= limit:
+        return text
+
+    head_len = limit // 2
+    tail_len = limit - head_len
+    omitted = len(text) - limit
+
+    return (
+        text[:head_len]
+        + f"\n\n... truncated {omitted} characters ...\n\n"
+        + text[-tail_len:]
+    )
 
 
 def _run_shell_streaming(
@@ -1110,6 +1155,62 @@ def forget(index: int) -> str:
     return result
 
 
+def agent_tool(task: str) -> str:
+    """Start an async sub-agent for TASK; return immediately with its ID."""
+
+    task = str(task).strip()
+    tool_line(f"Agent({task})")
+
+    if not task:
+        result = "Error: task must not be empty."
+        tool_result(result, style=ERROR)
+        return result
+
+    agent_id = subagents.start(task)
+    result = f"Started sub-agent. ID: {agent_id}"
+    tool_result(result)
+    return result
+
+
+def agent_result(agent_id: str, wait_seconds: Any = None) -> str:
+    """Wait for a sub-agent to finish and return its result."""
+
+    agent_id = str(agent_id).strip()
+    tool_line(f"AgentResult({agent_id})")
+
+    try:
+        timeout = (
+            subagents.DEFAULT_WAIT_SECONDS
+            if wait_seconds is None
+            else float(wait_seconds)
+        )
+    except (TypeError, ValueError):
+        timeout = subagents.DEFAULT_WAIT_SECONDS
+    timeout = max(1.0, min(timeout, subagents.MAX_WAIT_SECONDS))
+
+    entry = subagents.follow(agent_id, timeout)
+
+    if entry is None:
+        result = f"Error: no sub-agent with ID {agent_id!r}."
+        tool_result(result, style=ERROR)
+        return result
+
+    if entry.status == subagents.RUNNING:
+        result = (
+            f"Sub-agent {agent_id} is still running after {timeout:.0f}s. "
+            "Call agent_result again to keep waiting."
+        )
+        tool_result(result, style=WARN)
+        return result
+
+    subagents.mark_delivered([agent_id])
+
+    if entry.status == subagents.FAILED:
+        return f"Sub-agent {agent_id} failed: {entry.result}"
+
+    return entry.result
+
+
 def get_date() -> str:
     """Return the current date using the local timezone."""
 
@@ -1896,7 +1997,7 @@ def interact(
 
 
 # Tool schema expected by Ollama function calling (OpenAI-style).
-tools = [
+tools: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
@@ -2545,6 +2646,75 @@ tools = [
     {
         "type": "function",
         "function": {
+            "name": "agent",
+            "description": (
+                "Start a sub-agent on a background thread to do one "
+                "focused piece of work, and return immediately with its "
+                "ID rather than waiting for it. Use this to run "
+                "independent pieces of a task (e.g. researching two "
+                "separate topics) at the same time: call agent once per "
+                "piece of work, then end your turn; you are woken with "
+                "each answer when its sub-agent finishes. Call "
+                "agent_result instead only if this turn cannot go on "
+                "without the answer. The "
+                "sub-agent cannot talk to the user or spawn further "
+                "sub-agents, so give it a self-contained task it can "
+                "finish without asking anything."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "task": {
+                        "type": "string",
+                        "description": (
+                            "The full task for the sub-agent to carry "
+                            "out on its own, written so it needs no "
+                            "further context or follow-up questions."
+                        ),
+                    },
+                },
+                "required": ["task"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "agent_result",
+            "description": (
+                "Wait for a sub-agent started with agent to finish, and "
+                "return its final answer. Returns right away if it has "
+                "already finished. If it is still running when the wait "
+                "runs out, call agent_result again with the same ID to "
+                "keep waiting."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "agent_id": {
+                        "type": "string",
+                        "description": (
+                            "The ID returned by the agent tool call to "
+                            "wait for."
+                        ),
+                    },
+                    "wait_seconds": {
+                        "type": "number",
+                        "description": (
+                            f"Maximum seconds to wait. Defaults to "
+                            f"{subagents.DEFAULT_WAIT_SECONDS:.0f}, "
+                            f"maximum {subagents.MAX_WAIT_SECONDS:.0f}."
+                        ),
+                        "minimum": 1,
+                    },
+                },
+                "required": ["agent_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "forget",
             "description": (
                 "Delete one saved memory entry by its 1-based index (the "
@@ -2589,7 +2759,23 @@ FUNCTIONS = {
     "remember": remember,
     "recall": recall,
     "forget": forget,
+    "agent": agent_tool,
+    "agent_result": agent_result,
 }
+
+# Tools a sub-agent (flash/agent.py) is allowed to call: read/search/shell
+# only, since plan, check_step, remember/recall/forget, the browser tools,
+# and agent itself all touch single-user global state on the main loop.
+# Kept here, next to FUNCTIONS, as the one place that names a tool, so
+# adding, renaming, or removing one only means updating this file.
+SUBAGENT_TOOL_NAMES = (
+    "shell", "glob", "grep", "read", "write",
+    "web_search", "fetch", "get_os", "get_date", "reason",
+)
+
+# Tools that stop for a y/n unless autonomous mode is on. A sub-agent has
+# no terminal to ask from, so it only gets these in autonomous mode.
+CONFIRMED_TOOL_NAMES = ("shell", "write")
 
 
 def run_tool(call):

@@ -9,8 +9,9 @@ from flash.ai import (
     _run_update,
     _speak_reply,
     _trim_history,
-    _trim_tool_output,
 )
+from flash.repl_input import WAKE
+from flash.tools import trim_tool_output
 
 
 def test_int_env(monkeypatch):
@@ -43,15 +44,15 @@ def test_direct_shell_command():
 
 def test_trim_tool_output():
     text = "a" * 2000
-    trimmed = _trim_tool_output(text)
+    trimmed = trim_tool_output(text)
     assert "truncated" in trimmed  # nosec B101
     assert len(trimmed) < 2000  # nosec B101
 
     short_text = "hello"
-    assert _trim_tool_output(short_text) == "hello"  # nosec B101
+    assert trim_tool_output(short_text) == "hello"  # nosec B101
 
     empty_text = ""
-    assert _trim_tool_output(empty_text) == "(no output)"  # nosec B101
+    assert trim_tool_output(empty_text) == "(no output)"  # nosec B101
 
 
 def test_run_update_network_failure(monkeypatch):
@@ -189,3 +190,94 @@ def test_speak_reply_keeps_listening_after_a_reply_with_nothing_to_say(
     # for_speech() drops an empty reply entirely; the turn still passes
     # back to the user rather than dropping out of the conversation.
     assert _speak_reply("   ") is True  # nosec B101
+
+
+# --- waking up for a finished sub-agent ------------------------------------
+
+
+def _script_main(monkeypatch, lines, chat_err=None):
+    """Run ai.main() against scripted input and a fake model.
+
+    Returns the user-message contents the model was sent, in order.
+    """
+
+    from flash import agent
+    from flash.cli import parse_args
+
+    feed = iter(lines)
+    sent = []
+
+    def fake_read_line(prompt, wake=None):
+        try:
+            line = next(feed)
+        except StopIteration:
+            raise EOFError from None
+        return line() if callable(line) else line
+
+    def fake_chat(console, client, messages, tools_arg, **kwargs):
+        sent.append(messages[-1]["content"])
+        return "reply", "", [], chat_err
+
+    monkeypatch.setattr(ai, "parse_args", lambda: parse_args([]))
+    monkeypatch.setattr(ai, "check_for_update", lambda: None)
+    monkeypatch.setattr(ai, "read_line", fake_read_line)
+    monkeypatch.setattr(ai, "_chat_retry_until_response", fake_chat)
+    monkeypatch.setattr(ai, "_session_system_prompt", lambda heard=False: "")
+    monkeypatch.setattr(ai, "notify_reply_ready", lambda: None)
+    monkeypatch.setattr(ai.Config, "model", "test-model")
+    monkeypatch.setattr(ai.Config, "show_stats", False)
+    monkeypatch.setattr(ai.Config, "voice", False)
+    monkeypatch.setattr(agent, "_agents", {})
+
+    return agent, sent
+
+
+def test_wakes_to_report_a_finished_subagent(monkeypatch):
+    def finish_while_prompting():
+        agent._agents["28a965"] = agent.SubAgent(
+            id="28a965", task="superconductors", status=agent.DONE,
+            result="LK-99 did not hold up.",
+        )
+        return WAKE
+
+    agent, sent = _script_main(monkeypatch, [finish_while_prompting])
+
+    ai.main()
+
+    assert len(sent) == 1  # nosec B101
+    assert "LK-99 did not hold up." in sent[0]  # nosec B101
+    assert sent[0].endswith(ai.WAKE_NOTE)  # nosec B101
+    assert agent.unseen() == []  # nosec B101
+
+
+def test_finished_mid_turn_wakes_without_waiting_for_input(monkeypatch):
+    agent, sent = _script_main(monkeypatch, ["research it"])
+    real_chat = ai._chat_retry_until_response
+
+    def chat_that_finishes_an_agent(*args, **kwargs):
+        agent._agents["d4e5f6"] = agent.SubAgent(
+            id="d4e5f6", task="t", status=agent.DONE, result="found it",
+        )
+        monkeypatch.setattr(ai, "_chat_retry_until_response", real_chat)
+        return real_chat(*args, **kwargs)
+
+    monkeypatch.setattr(
+        ai, "_chat_retry_until_response", chat_that_finishes_an_agent
+    )
+
+    ai.main()
+
+    assert len(sent) == 2  # nosec B101
+    assert "found it" in sent[1]  # nosec B101
+
+
+def test_wakes_stop_after_the_cap(monkeypatch):
+    agent, sent = _script_main(monkeypatch, [], chat_err="backend down")
+    agent._agents["x"] = agent.SubAgent(
+        id="x", task="t", status=agent.DONE, result="answer",
+    )
+
+    ai.main()
+
+    assert len(sent) == ai.MAX_WAKES_IN_A_ROW  # nosec B101
+    assert agent.unseen()  # nosec B101  -- still waiting for the user
