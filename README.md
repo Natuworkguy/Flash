@@ -87,18 +87,18 @@ The current release, **Flash Onyx 2.5**, is `gemma4` in two sizes. `12b` runs on
 consumer hardware; `31b` is the flagship and wants a bigger GPU.
 
 ```bash
-python3 models/build.py models/flash-onyx-2.Modelfile             # every size
-python3 models/build.py models/flash-onyx-2.Modelfile --size 31b  # just one
+python3 models/build.py models/flash-onyx-2.5.Modelfile             # every size
+python3 models/build.py models/flash-onyx-2.5.Modelfile --size 31b  # just one
 ```
 
-**Flash Onyx 2.4** is the previous release, built on `llama3.1`:
+**Flash Onyx 2.4** is the previous release, also built on `gemma4`:
 
 ```bash
-python3 models/build.py models/flash-onyx-1.Modelfile
+python3 models/build.py models/flash-onyx-2.4.Modelfile
 ```
 
-Then set `MODEL` to whichever you built (`flash-onyx-2:31b`, `flash-onyx-1`,
-and so on) in `~/.flash.env` or your environment.
+Then set `MODEL` to whichever you built (`flash-onyx-2.5:31b`,
+`flash-onyx-2.4:12b`, and so on) in `~/.flash.env` or your environment.
 
 ### Run
 
