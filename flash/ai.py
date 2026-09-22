@@ -63,6 +63,7 @@ from .tools import (
     MAX_SHELL_TIMEOUT,
     SCRATCH_DIR,
     build_system_prompt,
+    clear_user_runs,
     init,
     reason,
     run_tool,
@@ -70,6 +71,7 @@ from .tools import (
     take_pending_images,
     trim_tool_output,
     turn_tools,
+    user_runs,
 )
 from .updater import (
     check_for_update,
@@ -1491,7 +1493,7 @@ def main() -> None:
             looked_at = time.time()
             ran = "" if woken else terminal.since(terminal_seen)
             content = "\n\n".join(
-                part for part in (ran, agent_news, uin) if part
+                part for part in (user_runs(), ran, agent_news, uin) if part
             )
 
             messages.append(_message("user", content, pending_images))
@@ -1515,6 +1517,7 @@ def main() -> None:
             subagents.mark_delivered(delivered_ids)
             if not woken:
                 terminal_seen = looked_at
+            clear_user_runs()
 
             _render_thinking(thinking)
 

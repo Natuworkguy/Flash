@@ -1,6 +1,9 @@
 # pylint: disable=C0114,C0115,C0116
 
+import os
 import time
+
+import pytest
 
 from flash import ai
 from flash.ai import (
@@ -363,3 +366,65 @@ def test_hook_command_unsupported_shell(monkeypatch, capsys):
     ai.main()
 
     assert "supports zsh and bash" in capsys.readouterr().out  # nosec
+
+
+# --- commands the user ran with ! ------------------------------------------
+
+
+needs_posix = pytest.mark.skipif(os.name == "nt", reason="POSIX shell syntax")
+
+
+@needs_posix
+def test_a_bang_command_rides_on_the_next_message(monkeypatch):
+    from flash import tools
+
+    failing = "sh -c 'echo \"fatal: main is not a remote\" >&2; exit 128'"
+    _, sent = _script_main(monkeypatch, [f"!{failing}", "why did that fail",
+                                         "thanks"])
+
+    ai.main()
+
+    first = sent[0]
+    assert first.startswith(tools.USER_RUNS_HEADER)  # nosec B101
+    assert f"$ {failing}\nexit 128:" in first  # nosec B101
+    assert "fatal: main is not a remote" in first  # nosec B101
+    assert first.endswith("why did that fail")  # nosec B101
+    assert sent[1] == "thanks"  # nosec B101
+
+
+@needs_posix
+def test_bang_commands_survive_a_failed_request(monkeypatch):
+    _, sent = _script_main(monkeypatch, ["!echo hello", "first", "retry"],
+                           chat_err="backend down")
+
+    ai.main()
+
+    assert "$ echo hello" in sent[0] and "$ echo hello" in sent[1]  # nosec
+
+
+def test_only_the_latest_bang_commands_are_kept(monkeypatch):
+    from flash import tools
+
+    monkeypatch.setattr(tools, "_user_runs", [])
+    for number in range(5):
+        tools._note_user_run(f"cmd {number}", "exit 0", f"out {number}")
+
+    block = tools.user_runs()
+
+    assert "cmd 1" not in block and "cmd 2" in block  # nosec B101
+    assert "cmd 4" in block  # nosec B101
+    tools.clear_user_runs()
+    assert tools.user_runs() == ""  # nosec B101
+
+
+def test_a_bang_command_with_no_output_or_a_timeout(monkeypatch):
+    from flash import tools
+
+    monkeypatch.setattr(tools, "_user_runs", [])
+    tools._note_user_run("touch x", "exit 0", "")
+    tools._note_user_run("sleep 999", "timed out after 600s", "")
+
+    block = tools.user_runs()
+
+    assert "$ touch x\nexit 0\n" in block  # nosec B101
+    assert "$ sleep 999\ntimed out after 600s" in block  # nosec B101

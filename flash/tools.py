@@ -320,6 +320,41 @@ def _shell_timeout(timeout) -> int:
     return max(1, min(seconds, MAX_SHELL_TIMEOUT))
 
 
+MAX_USER_RUNS = 3
+USER_RUNS_HEADER = (
+    "=== Commands the user ran in Flash with ! since their last message ==="
+)
+USER_RUNS_FOOTER = "=== End of ! commands ==="
+
+# What the user ran with `!` since their last message. Those runs stream
+# straight to the terminal and never enter the conversation, so without
+# this "why did that fail?" would reach a model that saw nothing.
+_user_runs: list[str] = []
+
+
+def _note_user_run(command: str, outcome: str, output: str) -> None:
+    lines = [f"$ {command}", f"{outcome}:" if output.strip() else outcome]
+    if output.strip():
+        lines.append(trim_tool_output(output))
+    _user_runs.append("\n".join(lines))
+    del _user_runs[:-MAX_USER_RUNS]
+
+
+def user_runs() -> str:
+    """The `!` commands since the last message, as the block put before
+    the next one, or "" when there were none."""
+
+    if not _user_runs:
+        return ""
+    return "\n\n".join([USER_RUNS_HEADER, *_user_runs, USER_RUNS_FOOTER])
+
+
+def clear_user_runs() -> None:
+    """Forget the `!` commands once a message carrying them went through."""
+
+    _user_runs.clear()
+
+
 def shell_tool(command: str, timeout=None, is_user=False) -> str:
     """Tool to execute a shell command"""
 
@@ -369,6 +404,7 @@ def shell_tool(command: str, timeout=None, is_user=False) -> str:
             output, returncode = _run_shell_streaming(  # nosec B604
                 args, shell=shell, seconds=seconds
             )
+            _note_user_run(command, f"exit {returncode}", output)
             if not output.strip():
                 return "(no output)"
             if returncode:
@@ -400,10 +436,14 @@ def shell_tool(command: str, timeout=None, is_user=False) -> str:
             "If the command was simply slow rather than stuck, retry it with "
             "a larger timeout."
         )
-        if not is_user:
+        if is_user:
+            _note_user_run(command, f"timed out after {seconds}s", "")
+        else:
             tool_result(message, style=ERROR)
         return message
     except KeyboardInterrupt:
+        if is_user:
+            _note_user_run(command, "interrupted with Ctrl+C", "")
         return "Error: Command execution interrupted by user."
 
     parts = [result.stdout.strip(), result.stderr.strip()]
