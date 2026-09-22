@@ -6,7 +6,6 @@ import os
 import time
 from collections.abc import Callable
 from pathlib import Path
-from typing import Union
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.application.current import get_app
@@ -75,7 +74,7 @@ def _mention_completer(typed: str) -> PathCompleter:
     )
 
 
-def _mention_before(text: str) -> Union[str, None]:  # noqa: UP007, RUF100
+def _mention_before(text: str) -> str | None:
     """The @ mention being typed at the end of TEXT, if there is one.
 
     Returns whatever follows the '@', which is "" the moment it is typed,
@@ -94,7 +93,7 @@ def _mention_before(text: str) -> Union[str, None]:  # noqa: UP007, RUF100
 
 def _parse_path_arg(
     remainder: str,
-) -> Union[tuple[str, bool], None]:  # noqa: UP007
+) -> tuple[str, bool] | None:
     """Track quoting while scanning the path argument typed so far.
 
     Returns `(literal_path, in_quote)`: `literal_path` is the path with any
@@ -106,7 +105,7 @@ def _parse_path_arg(
     """
 
     literal_chars = []
-    quote: Union[str, None] = None  # noqa: UP007
+    quote: str | None = None
     for ch in remainder:
         if quote:
             if ch == quote:
@@ -261,7 +260,7 @@ def _suggestion_placeholder() -> StyleAndTextTuples:
     )
 
 
-_session: Union[PromptSession, None] = None  # noqa: UP007
+_session: PromptSession | None = None
 
 # What read_line returns when `wake` fired instead of the user submitting.
 # A NUL can't be typed at the prompt, so no real line can collide with it.
@@ -271,7 +270,7 @@ WAKE_POLL_SECONDS = 0.25
 
 def read_line(
     prompt_ansi: str,
-    wake: Union[Callable[[], bool], None] = None,  # noqa: UP007, RUF100
+    wake: Callable[[], bool] | None = None,
 ) -> str:
     """Read one line; suggests / commands in a dropdown while typing one,
     and animates a rotating hint at the cursor while the line is empty.

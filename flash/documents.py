@@ -7,7 +7,6 @@ read_tool can treat like any other file.
 """
 
 from pathlib import Path
-from typing import Union
 
 DOCUMENT_EXTENSIONS = {".pdf", ".docx", ".doc"}
 
@@ -20,7 +19,7 @@ def is_document_path(path: Path) -> bool:
 
 def extract_document_text(
     path: Path,
-) -> tuple[Union[str, None], str]:  # noqa: UP007, RUF100
+) -> tuple[str | None, str]:
     """Extract plain text from a PDF or Word document.
 
     Returns `(text, "")` on success, or `(None, reason)` explaining why
@@ -42,7 +41,7 @@ def extract_document_text(
 
 def _extract_pdf(
     path: Path,
-) -> tuple[Union[str, None], str]:  # noqa: UP007, RUF100
+) -> tuple[str | None, str]:
     try:
         from pypdf import PdfReader
     except ImportError:
@@ -80,7 +79,7 @@ def _extract_pdf(
 
 def _extract_docx(
     path: Path,
-) -> tuple[Union[str, None], str]:  # noqa: UP007, RUF100
+) -> tuple[str | None, str]:
     try:
         import docx
     except ImportError:

@@ -16,7 +16,7 @@ last action actually did.
 import atexit
 import json
 from pathlib import Path
-from typing import Any, Union
+from typing import Any
 from urllib.parse import urlparse
 
 PAGE_EXTENSIONS = {".html", ".htm", ".xhtml", ".svg"}
@@ -40,7 +40,7 @@ NAVIGATION_TIMEOUT_MS = 20000
 
 def resolve_target(
     target: str,
-) -> tuple[Union[str, None], str]:  # noqa: UP007, RUF100
+) -> tuple[str | None, str]:
     """Turn `target` into a URL a browser can open.
 
     Accepts an http(s) or file URL as given, and turns a local path to a
@@ -272,7 +272,7 @@ class _Session:
                 pass
 
 
-_session: Union[_Session, None] = None  # noqa: UP007, RUF100
+_session: _Session | None = None
 
 
 def is_open() -> bool:

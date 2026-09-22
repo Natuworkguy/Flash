@@ -8,8 +8,6 @@ walk away from, and knowing which one you are getting is the difference
 between waiting and wasting the wait.
 """
 
-from typing import Union
-
 from rich.text import Text
 
 from .theme import DIM
@@ -80,7 +78,7 @@ class Turn:
         return self.total_nanoseconds / NS_PER_SECOND
 
     @property
-    def rate(self) -> Union[float, None]:  # noqa: UP007, RUF100
+    def rate(self) -> float | None:
         """Tokens per second generated, or None if Ollama did not say.
 
         Generation only. Prefill runs an order of magnitude faster on the
@@ -113,8 +111,8 @@ def _elapsed(seconds: float) -> str:
 
 def summary(
     turn: Turn,
-    limit: Union[int, None] = None,  # noqa: UP007, RUF100
-) -> Union[Text, None]:  # noqa: UP007, RUF100
+    limit: int | None = None,
+) -> Text | None:
     """The one-line cost of a finished turn, or None if there is nothing
     to say. Every part is dropped independently, so a backend that
     reports half the counters still gets half a line."""
