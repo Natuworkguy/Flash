@@ -22,14 +22,17 @@ from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.text import Text
 
+from . import agent as subagents
+from . import plan, terminal
 from .cli import parse_args
 from .envfile import set_env_var, unset_env_var
 from .images import resolve_image_path
+from .latex import render_latex
 from .memory import forget_memory, list_memory
 from .models import fetch_if_missing, pick_model
 from .notify import notify_reply_ready
 from .paths import ENV_PATH
-from .repl_input import COMMANDS, read_line
+from .repl_input import COMMANDS, WAKE, read_line
 from .stats import Turn, window
 from .stats import summary as stats_summary
 from .sysprompt import (
@@ -48,6 +51,7 @@ from .theme import (
     DIM_ANSI,
     ELLIPSIS,
     RESET_ANSI,
+    confirm,
     console,
     glimmer,
     tool_line,
@@ -59,12 +63,15 @@ from .tools import (
     MAX_SHELL_TIMEOUT,
     SCRATCH_DIR,
     build_system_prompt,
+    clear_user_runs,
     init,
     reason,
     run_tool,
     shell_tool,
     take_pending_images,
-    tools,
+    trim_tool_output,
+    turn_tools,
+    user_runs,
 )
 from .updater import (
     check_for_update,
@@ -305,34 +312,6 @@ def _direct_shell_command(
     return None
 
 
-# read already caps its own output by whole lines and tells the model how
-# to page on; the middle-out trim below would silently gut a file read.
-# The page tools cap themselves too, and their element list is only useful
-# whole: a trim through the middle of it takes away the very numbers the
-# next click has to name.
-_SELF_LIMITING_TOOLS = {"read", "open_page", "interact"}
-
-
-def _trim_tool_output(text: str, name: str = "") -> str:
-    text = text.strip() or "(no output)"
-
-    if name in _SELF_LIMITING_TOOLS:
-        return text
-
-    if len(text) <= Config.max_tool_output_chars:
-        return text
-
-    head_len = Config.max_tool_output_chars // 2
-    tail_len = Config.max_tool_output_chars - head_len
-    omitted = len(text) - Config.max_tool_output_chars
-
-    return (
-        text[:head_len]
-        + f"\n\n... truncated {omitted} characters ...\n\n"
-        + text[-tail_len:]
-    )
-
-
 def _tool_limit_message() -> dict:
     return {
         "role": "system",
@@ -413,6 +392,11 @@ def _chat(client: "ollama.Client", messages: list, tools_arg=None):
         tools=tools_arg,
         options=_chat_options(),
     )
+
+
+# Sub-agents send the same options: Ollama reloads a model whenever the
+# requested num_ctx changes, so mismatched requests would thrash it.
+subagents.chat_options = _chat_options
 
 
 _model_system_prompts: dict[str, str] = {}
@@ -750,6 +734,89 @@ def _render_stats(turn: Turn) -> None:
         _note_unpinned_context()
 
 
+# A woken turn can start another sub-agent, and a failing backend would
+# wake straight back up, so wakes stop after this many without the user
+# writing; answers after that ride along with their next message.
+MAX_WAKES_IN_A_ROW = 3
+
+WAKE_NOTE = (
+    "(The user has not written anything new. You were woken because a "
+    "sub-agent finished; tell them what it found.)"
+)
+
+
+def _announce_wake() -> None:
+    """Show why the model is taking a turn nobody asked for."""
+
+    for entry in subagents.unseen():
+        verb = "finished" if entry.status == subagents.DONE else "failed"
+        tool_line(f"Sub-agent {entry.id} {verb}")
+
+
+def _note_running_agents() -> None:
+    """Point at /agents when sub-agents outlive the turn that started them."""
+
+    count = subagents.running_count()
+
+    if count:
+        console.print(Text(
+            f"  {count} sub-agent{'' if count == 1 else 's'} still "
+            "running · /agents to watch",
+            style=DIM,
+        ))
+
+
+def _hook_command(arg: str) -> None:
+    """/hook, /hook install, /hook remove: the VS Code terminal hook."""
+
+    shell = terminal.current_shell()
+    if not shell:
+        warn(
+            "The terminal hook supports zsh and bash; your shell is "
+            f"{os.environ.get('SHELL') or 'unknown'}."
+        )
+        return
+
+    rc = terminal.rc_path(shell)
+
+    if arg == "install":
+        if terminal.installed(shell):
+            terminal.write_hook(shell)
+            console.print(Text(f"Already set up in {rc}.", style=DIM))
+            return
+        console.print(Text(
+            f"This adds three lines to {rc} that load "
+            f"{terminal.hook_path(shell)} in VS Code's terminal only:\n"
+            f"{terminal.rc_block(shell)}",
+            style=DIM,
+        ))
+        if confirm("Add them?"):
+            console.print(Text(terminal.install(shell), style=DIM))
+        return
+
+    if arg == "remove":
+        console.print(Text(terminal.remove(shell), style=DIM))
+        return
+
+    if arg:
+        warn("Usage: /hook [install|remove]")
+        return
+
+    if terminal.installed(shell):
+        console.print(Text(
+            f"Set up in {rc}: Flash sees the commands you run in VS "
+            "Code's terminal and their exit codes. /hook remove turns it "
+            "off.",
+            style=DIM,
+        ))
+    else:
+        console.print(Text(
+            "Not set up. /hook install lets Flash see the commands you run "
+            "in VS Code's terminal, so it knows what just broke.",
+            style=DIM,
+        ))
+
+
 def _print_backend_error(detail: str) -> None:
     show_error(f"Ollama backend error: {detail}")
 
@@ -764,6 +831,8 @@ def _render_markdown(console: Console, text: str, *, end: str = "\n") -> None:
     """Render `text` as Markdown, revealing it progressively with a
     trailing cursor dot -- the full reply already arrived in one shot, so
     this is a paced typewriter effect rather than real token streaming."""
+
+    text = render_latex(text)
 
     def render(body: str) -> Markdown:
         return Markdown(body, code_theme="monokai", hyperlinks=True)
@@ -804,7 +873,7 @@ def _render_sent_message(
     prompt = Text.from_ansi(prompt_ansi)
     console.print(prompt, end="")
     console.print(
-        Markdown(text, code_theme="monokai", hyperlinks=True),
+        Markdown(render_latex(text), code_theme="monokai", hyperlinks=True),
         width=console.width - cell_len(prompt.plain),
     )
 
@@ -1099,6 +1168,21 @@ def main() -> None:
     # starts listening on its own instead of waiting for a keypress.
     listening_on = False
 
+    wakes_in_a_row = 0
+
+    # Commands from the user's VS Code terminal newer than this are
+    # attached to their next message.
+    terminal_seen = terminal.start_time()
+    hook_shell = terminal.current_shell()
+    if hook_shell and terminal.installed(hook_shell):
+        terminal.write_hook(hook_shell)
+
+    def wake_ready() -> bool:
+        return (
+            wakes_in_a_row < MAX_WAKES_IN_A_ROW
+            and bool(subagents.unseen())
+        )
+
     banner(console, check_for_update())
 
     while True:
@@ -1107,6 +1191,8 @@ def main() -> None:
                 list[str], None
             ] = None
             heard = False
+
+            woken = False
 
             if pending:
                 uin = pending.pop(0)
@@ -1117,14 +1203,26 @@ def main() -> None:
                 # An empty line is what the voice branch below listens on.
                 listening_on = False
                 uin = ""
+            elif wake_ready():
+                # Finished while the last turn was still running.
+                woken = True
             else:
                 try:
-                    uin = read_line(Config.prompt)
+                    uin = read_line(Config.prompt, wake=wake_ready)
                 except EOFError:
                     print()
                     return
-                if uin.strip():
+                if uin == WAKE:
+                    woken = True
+                elif uin.strip():
                     _render_sent_message(console, Config.prompt, uin)
+
+            if woken:
+                _announce_wake()
+                uin = WAKE_NOTE
+                wakes_in_a_row += 1
+            else:
+                wakes_in_a_row = 0
 
             if uin.strip() == "":
                 if not Config.voice:
@@ -1277,7 +1375,22 @@ def main() -> None:
 
             if uin == "/clear":
                 messages.clear()
+                plan.clear()
                 console.print(Text("Context cleared.", style=DIM))
+                continue
+
+            if uin == "/plan":
+                console.print(Text(plan.headline(), style=DIM))
+                plan.render()
+                continue
+
+            if uin == "/hook" or uin.startswith("/hook "):
+                _hook_command(uin[len("/hook"):].strip().lower())
+                continue
+
+            if uin == "/agents" or uin.startswith("/agents "):
+                subagents.watch(uin[len("/agents"):].strip())
+                print()
                 continue
 
             if uin == "/version":
@@ -1373,7 +1486,17 @@ def main() -> None:
                 )
                 continue
 
-            messages.append(_message("user", uin, pending_images))
+            # Riding inside the user's own message, not beside it, keeps
+            # roles alternating for templates that require it, and lets
+            # history trimming keep or drop the two together.
+            agent_news, delivered_ids = subagents.notices()
+            looked_at = time.time()
+            ran = "" if woken else terminal.since(terminal_seen)
+            content = "\n\n".join(
+                part for part in (user_runs(), ran, agent_news, uin) if part
+            )
+
+            messages.append(_message("user", content, pending_images))
             _trim_history(messages)
 
             system_message = _message(
@@ -1381,14 +1504,20 @@ def main() -> None:
             )
 
             turn = Turn()
+            offered = turn_tools()
             final, thinking, tool_calls, err = _chat_retry_until_response(
-                console, client, [system_message] + messages, tools,
+                console, client, [system_message] + messages, offered,
                 is_image=bool(pending_images), turn=turn,
             )
             if err:
                 _print_backend_error(err)
                 messages.pop()
                 continue
+
+            subagents.mark_delivered(delivered_ids)
+            if not woken:
+                terminal_seen = looked_at
+            clear_user_runs()
 
             _render_thinking(thinking)
 
@@ -1401,6 +1530,7 @@ def main() -> None:
                     )
                 _render_markdown(console, final)
                 _render_stats(turn)
+                _note_running_agents()
                 notify_reply_ready()
                 listening_on = _speak_reply(final, heard)
                 messages.append(_message("assistant", final))
@@ -1431,7 +1561,7 @@ def main() -> None:
                 for call in tool_calls:
                     name, call_args = _tool_call_name_args(call)
                     tool_result = run_tool((name, call_args))
-                    trimmed = _trim_tool_output(tool_result, name)
+                    trimmed = trim_tool_output(tool_result, name)
                     tool_outputs.append(f"{name}:\n{trimmed}")
                     tool_messages.append({
                         "role": "tool",
@@ -1447,7 +1577,7 @@ def main() -> None:
                     )
 
                 final, thinking, tool_calls, err = _chat_retry_until_response(
-                    console, client, tool_messages, tools, turn=turn,
+                    console, client, tool_messages, offered, turn=turn,
                     is_image=bool(tool_images),
                 )
                 if err:
@@ -1488,6 +1618,7 @@ def main() -> None:
 
             _render_markdown(console, followup)
             _render_stats(turn)
+            _note_running_agents()
             notify_reply_ready()
             listening_on = _speak_reply(followup, heard)
             messages.append(_message("assistant", followup))

@@ -1,12 +1,16 @@
 """AI Tool System"""
 
+import base64
 import difflib
 import fnmatch
+import io
 import os
 import platform
 import queue
 import re
+import struct
 import subprocess  # nosec B404
+import sys
 import threading
 import time
 import urllib.error
@@ -18,8 +22,11 @@ from tempfile import mkdtemp
 from typing import Any, Union
 
 from ddgs import DDGS
+from rich.live import Live
 from rich.text import Text
 
+from . import agent as subagents
+from . import editor, plan
 from .browser import (
     ACTIONS,
     MAX_ELEMENTS,
@@ -44,9 +51,11 @@ from .theme import (
     ACCENT,
     BRANCH,
     DIM,
+    ELLIPSIS,
     ERROR,
     WARN,
     console,
+    glimmer,
     plural,
     tool_diff,
     tool_line,
@@ -87,6 +96,11 @@ When you need the current date, use the get_date tool.
 To look at an image file on disk, use the view_image tool with its path;
   it is the only way to see an image the user did not send with /image.
   Reading image bytes with shell or grep shows you nothing.
+To hand a finished picture to the user, use the send_image tool with its
+  path. It draws the image in their terminal where the terminal can draw
+  one and opens it in their image viewer where it cannot, naming the path
+  either way. It shows the image to them and not to you, so look at your
+  own render with view_image first and send it once it is right.
 To see how a web page actually renders, use the screenshot tool on the
   .html file you wrote or on a URL. It runs a headless browser and
   attaches the picture, so it is the only way to check a page you built;
@@ -114,6 +128,28 @@ To click a button, fill in a form, or work out why a page misbehaves,
   returns the result, which is the quickest way to check state a picture
   cannot show, such as what a handler stored or what a value really is.
   Close the browser with the close action once the page is working.
+When a request takes several steps, call the plan tool first with those
+  steps, shortest useful list you can write. They appear to the user as a
+  checklist of empty boxes. Then work the list in order, and call
+  check_step with a step's number the moment that step is actually
+  finished, so its box ticks in front of them. Tick each step as you go,
+  never all of them at the end, and never before the work is done. Call
+  plan again to replace the list if the task turns out to need different
+  steps. Skip the plan entirely for anything you can finish in one or two
+  tool calls; a checklist for a one-line answer is noise.
+To work on independent pieces of a task at the same time, use the agent
+  tool to start a sub-agent per piece, e.g. one for each of two unrelated
+  research questions. It returns an ID at once and runs in the background.
+  Prefer ending your turn over waiting for it: tell the user what you
+  started, and when a sub-agent finishes you are woken with its answer in
+  a sub-agent update, so you can report back then.
+  Call agent_result only when this turn cannot go on without the answer;
+  it waits for the sub-agent to finish.
+  A sub-agent cannot talk to the user or start sub-agents of its own, and
+  has the file, search, and web tools (plus shell and write in autonomous
+  mode), so give it one clear, self-contained task rather than something
+  needing back and forth. Skip it for anything you can just do yourself
+  in a tool call or two.
 To save a durable fact or preference for future sessions, use the remember
   tool. To check saved memory, use the recall tool with a specific phrase;
   it does not return everything for a blank search. To delete one saved
@@ -171,13 +207,44 @@ MAX_SHELL_TIMEOUT = 600
 NO_COMMAND_CONFIRMATION = False
 OLLAMA_HOST = ""
 MODEL_NAME = ""
+MAX_TOOL_OUTPUT_CHARS = 1200
 
 
 def init(config, ):
     global NO_COMMAND_CONFIRMATION, OLLAMA_HOST, MODEL_NAME
+    global MAX_TOOL_OUTPUT_CHARS
     NO_COMMAND_CONFIRMATION = config.no_command_confirmation
     OLLAMA_HOST = config.host
     MODEL_NAME = config.model or ""
+    MAX_TOOL_OUTPUT_CHARS = config.max_tool_output_chars
+
+
+# read already caps its own output by whole lines and tells the model how
+# to page on; the middle-out trim below would silently gut a file read.
+# The page tools cap themselves too, and their element list is only useful
+# whole: a trim through the middle of it takes away the very numbers the
+# next click has to name.
+_SELF_LIMITING_TOOLS = {"read", "open_page", "interact"}
+
+
+def trim_tool_output(text: str, name: str = "") -> str:
+    """Cut a tool result down to MAX_TOOL_OUTPUT_CHARS, keeping both ends."""
+
+    text = text.strip() or "(no output)"
+    limit = MAX_TOOL_OUTPUT_CHARS
+
+    if name in _SELF_LIMITING_TOOLS or len(text) <= limit:
+        return text
+
+    head_len = limit // 2
+    tail_len = limit - head_len
+    omitted = len(text) - limit
+
+    return (
+        text[:head_len]
+        + f"\n\n... truncated {omitted} characters ...\n\n"
+        + text[-tail_len:]
+    )
 
 
 def _run_shell_streaming(
@@ -253,6 +320,41 @@ def _shell_timeout(timeout) -> int:
     return max(1, min(seconds, MAX_SHELL_TIMEOUT))
 
 
+MAX_USER_RUNS = 3
+USER_RUNS_HEADER = (
+    "=== Commands the user ran in Flash with ! since their last message ==="
+)
+USER_RUNS_FOOTER = "=== End of ! commands ==="
+
+# What the user ran with `!` since their last message. Those runs stream
+# straight to the terminal and never enter the conversation, so without
+# this "why did that fail?" would reach a model that saw nothing.
+_user_runs: list[str] = []
+
+
+def _note_user_run(command: str, outcome: str, output: str) -> None:
+    lines = [f"$ {command}", f"{outcome}:" if output.strip() else outcome]
+    if output.strip():
+        lines.append(trim_tool_output(output))
+    _user_runs.append("\n".join(lines))
+    del _user_runs[:-MAX_USER_RUNS]
+
+
+def user_runs() -> str:
+    """The `!` commands since the last message, as the block put before
+    the next one, or "" when there were none."""
+
+    if not _user_runs:
+        return ""
+    return "\n\n".join([USER_RUNS_HEADER, *_user_runs, USER_RUNS_FOOTER])
+
+
+def clear_user_runs() -> None:
+    """Forget the `!` commands once a message carrying them went through."""
+
+    _user_runs.clear()
+
+
 def shell_tool(command: str, timeout=None, is_user=False) -> str:
     """Tool to execute a shell command"""
 
@@ -302,6 +404,7 @@ def shell_tool(command: str, timeout=None, is_user=False) -> str:
             output, returncode = _run_shell_streaming(  # nosec B604
                 args, shell=shell, seconds=seconds
             )
+            _note_user_run(command, f"exit {returncode}", output)
             if not output.strip():
                 return "(no output)"
             if returncode:
@@ -333,10 +436,14 @@ def shell_tool(command: str, timeout=None, is_user=False) -> str:
             "If the command was simply slow rather than stuck, retry it with "
             "a larger timeout."
         )
-        if not is_user:
+        if is_user:
+            _note_user_run(command, f"timed out after {seconds}s", "")
+        else:
             tool_result(message, style=ERROR)
         return message
     except KeyboardInterrupt:
+        if is_user:
+            _note_user_run(command, "interrupted with Ctrl+C", "")
         return "Error: Command execution interrupted by user."
 
     parts = [result.stdout.strip(), result.stderr.strip()]
@@ -681,6 +788,11 @@ def write_tool(path: str, content: str, append: Any = False) -> str:
     tool_diff(preview, more=omitted)
 
     if not NO_COMMAND_CONFIRMATION:
+        if (preview or not existed) and editor.show_diff(
+            old_text, new_text, file_path.name, SCRATCH_DIR
+        ):
+            tool_result("Opened side by side in VS Code")
+
         notify_needs_input()
 
         prompt = Text(f"  {BRANCH}  ", style=DIM)
@@ -1001,6 +1113,58 @@ def reason(thought: str) -> str:
     return "(noted)"
 
 
+def _plan_steps(steps: Any) -> list[str]:
+    """Coerce whatever the model sent into a list of step descriptions.
+
+    Small models often hand back one newline-separated string, or a list
+    of {"step": ...} objects, instead of the list of strings asked for.
+    """
+
+    if isinstance(steps, str):
+        steps = steps.replace("\\n", "\n").splitlines()
+    if not isinstance(steps, (list, tuple)):
+        return []
+
+    items = []
+    for entry in steps:
+        if isinstance(entry, dict):
+            entry = entry.get("step") or entry.get("text") or ""
+        text = re.sub(r"^\s*(?:[-*•]|\d+[.)])\s*", "", str(entry)).strip()
+        if text:
+            items.append(text)
+    return items
+
+
+def plan_tool(steps: Any) -> str:
+    """Post a checklist of the steps about to be taken."""
+
+    items = _plan_steps(steps)
+    if not items:
+        return "A plan needs at least one step."
+
+    plan.set_steps(items)
+    tool_line(plan.headline())
+    plan.render()
+    return plan.as_text()
+
+
+def check_step(index: Any) -> str:
+    """Tick one step of the current plan, by its 1-based number."""
+
+    try:
+        number = int(str(index).strip())
+    except (TypeError, ValueError):
+        return f"Step number must be a whole number, not {index!r}."
+
+    problem = plan.mark_done(number)
+    if problem:
+        return problem
+
+    tool_line(plan.headline())
+    plan.render()
+    return plan.as_text()
+
+
 def remember(entry: str) -> str:
     """Save a fact or preference to persistent memory for future sessions."""
 
@@ -1034,6 +1198,124 @@ def forget(index: int) -> str:
         result = str(exc)
     tool_result(result)
     return result
+
+
+def open_in_editor(path: str, line: Any = None) -> str:
+    """Open a file in the user's VS Code, at a line when given."""
+
+    try:
+        number = max(int(line), 0) if line not in (None, "") else 0
+    except (TypeError, ValueError):
+        number = 0
+
+    tool_line(f"OpenInEditor({path}{f':{number}' if number else ''})")
+
+    if not Path(path).expanduser().is_file():
+        result = f"Error: {path} is not a file."
+        tool_result(result, style=ERROR)
+        return result
+
+    if not editor.open_at(path, number):
+        result = "VS Code is not available here, so nothing was opened."
+        tool_result(result, style=WARN)
+        return result
+
+    result = f"Opened {path}{f' at line {number}' if number else ''}."
+    tool_result(result)
+    return result
+
+
+EDITOR_TOOLS: list[dict[str, Any]] = [
+    {
+        "type": "function",
+        "function": {
+            "name": "open_in_editor",
+            "description": (
+                "Open a file in the user's VS Code, at a line if given, so "
+                "they see the spot you are talking about in their editor. "
+                "Call it whenever they ask you to show them where "
+                "something is."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Path to the file.",
+                    },
+                    "line": {
+                        "type": "integer",
+                        "description": "1-based line to put the cursor on.",
+                        "minimum": 1,
+                    },
+                },
+                "required": ["path"],
+            },
+        },
+    },
+]
+
+
+def turn_tools() -> list[dict[str, Any]]:
+    """The tools offered on this turn: the editor's only inside VS Code."""
+
+    return tools + (EDITOR_TOOLS if editor.available() else [])
+
+
+def agent_tool(task: str) -> str:
+    """Start an async sub-agent for TASK; return immediately with its ID."""
+
+    task = str(task).strip()
+    tool_line(f"Agent({task})")
+
+    if not task:
+        result = "Error: task must not be empty."
+        tool_result(result, style=ERROR)
+        return result
+
+    agent_id = subagents.start(task)
+    result = f"Started sub-agent. ID: {agent_id}"
+    tool_result(result)
+    return result
+
+
+def agent_result(agent_id: str, wait_seconds: Any = None) -> str:
+    """Wait for a sub-agent to finish and return its result."""
+
+    agent_id = str(agent_id).strip()
+    tool_line(f"AgentResult({agent_id})")
+
+    try:
+        timeout = (
+            subagents.DEFAULT_WAIT_SECONDS
+            if wait_seconds is None
+            else float(wait_seconds)
+        )
+    except (TypeError, ValueError):
+        timeout = subagents.DEFAULT_WAIT_SECONDS
+    timeout = max(1.0, min(timeout, subagents.MAX_WAIT_SECONDS))
+
+    entry = subagents.follow(agent_id, timeout)
+
+    if entry is None:
+        result = f"Error: no sub-agent with ID {agent_id!r}."
+        tool_result(result, style=ERROR)
+        return result
+
+    if entry.status == subagents.RUNNING:
+        result = (
+            f"Sub-agent {agent_id} is still running after {timeout:.0f}s. "
+            "Call agent_result again to keep waiting."
+        )
+        tool_result(result, style=WARN)
+        return result
+
+    subagents.mark_delivered([agent_id])
+
+    if entry.status == subagents.FAILED:
+        return f"Sub-agent {agent_id} failed: {entry.result}"
+
+    return entry.result
 
 
 def get_date() -> str:
@@ -1102,6 +1384,447 @@ def view_image(path: str) -> str:
         f"Attached {image_path.name} ({kilobytes} KB). The image is "
         "included with this tool result, so answer from what you can "
         "actually see in it."
+    )
+
+
+# Terminals that can draw a picture between two lines of output. Writing
+# a graphics escape to one that cannot read it dumps a screenful of
+# base64 into the session, so anything unrecognised falls back to the
+# OS image viewer instead.
+_KITTY_TERMINALS = {"ghostty", "kitty"}
+_ITERM_TERMINALS = {"iterm.app", "wezterm", "hyper", "tabby"}
+_INLINE_CHUNK = 4096
+
+# Width of the '  L  ' gutter tool_result() prints, so the picture and
+# the path line up under the name instead of starting at column zero.
+RESULT_INDENT = 5
+
+
+def _graphics_protocol() -> str:
+    """Name the inline-image protocol this terminal speaks, or ""."""
+
+    if not sys.stdout.isatty():
+        return ""
+
+    # Inside tmux or screen the escape has to be wrapped to pass through
+    # and an unwrapped one corrupts the pane, so do not try.
+    if os.environ.get("TMUX") or os.environ.get("STY"):
+        return ""
+
+    term = os.environ.get("TERM", "").lower()
+    program = os.environ.get("TERM_PROGRAM", "").lower()
+
+    if os.environ.get("KITTY_WINDOW_ID") or "kitty" in term:
+        return "kitty"
+
+    if program in _KITTY_TERMINALS:
+        return "kitty"
+
+    if os.environ.get("LC_TERMINAL", "").lower() == "iterm2":
+        return "iterm"
+
+    if program in _ITERM_TERMINALS:
+        return "iterm"
+
+    return ""
+
+
+def _inline_payload(protocol: str, data: bytes, name: str) -> bytes:
+    """Build the escape sequence that draws DATA in the terminal."""
+
+    encoded = base64.standard_b64encode(data)
+
+    if protocol == "kitty":
+        # Base64 goes out in chunks of at most 4096, each flagged m=1
+        # while more follow and m=0 on the last one.
+        chunks = [
+            encoded[at:at + _INLINE_CHUNK]
+            for at in range(0, len(encoded), _INLINE_CHUNK)
+        ] or [b""]
+
+        out = bytearray()
+        for index, chunk in enumerate(chunks):
+            more = 0 if index == len(chunks) - 1 else 1
+            if index == 0:
+                out += b"\033_Ga=T,f=100,m=%d;" % more
+            else:
+                out += b"\033_Gm=%d;" % more
+            out += chunk + b"\033\\"
+
+        return bytes(out) + b"\n"
+
+    return (
+        b"\033]1337;File=inline=1;preserveAspectRatio=1;size="
+        + str(len(data)).encode()
+        + b";name="
+        + base64.standard_b64encode(name.encode())
+        + b":"
+        + encoded
+        + b"\a\n"
+    )
+
+
+def _draw_inline(
+    protocol: str, data: bytes, name: str, indent: int = 0
+) -> bool:
+    """Write the image to the terminal. True when the bytes went out."""
+
+    try:
+        sys.stdout.buffer.write(
+            b" " * indent + _inline_payload(protocol, data, name)
+        )
+        sys.stdout.buffer.flush()
+    except (OSError, ValueError, AttributeError):
+        return False
+
+    return True
+
+
+def _open_in_viewer(path: Path) -> str:
+    """Hand PATH to whatever the OS shows pictures with.
+
+    Returns "" on success, or a short reason it could not be opened.
+    """
+
+    try:
+        if platform.system() == "Darwin":
+            subprocess.run(  # nosec B603 B607
+                ["open", str(path)], check=True, timeout=10
+            )
+        elif os.name == "nt":
+            start = getattr(os, "startfile", None)
+            if start is None:
+                return "no image viewer on this system"
+            start(str(path))
+        else:
+            subprocess.run(  # nosec B603 B607
+                ["xdg-open", str(path)], check=True, timeout=10
+            )
+    except FileNotFoundError:
+        return "no image viewer on this system"
+    except (OSError, subprocess.SubprocessError) as exc:
+        return f"the viewer failed ({exc.__class__.__name__})"
+
+    return ""
+
+
+# The result block sweeps in the way ai.py streams a reply: a transient
+# Live carries the coral glimmer across the line, then the settled Text
+# is printed so scrollback keeps the real styling.
+SWEEP_FRAME_SECONDS = 0.02
+SWEEP_SPREAD = 3.0
+SWEEP_CPS = 180.0
+SWATCH_COUNT = 6
+SWATCH_WIDTH = 4
+# Quantizing straight to six on a dark image returns six near-identical
+# blacks, which render as one smudge. Take a wider pool and keep only
+# the colors far enough apart in RGB to actually read as different.
+SWATCH_POOL = 24
+SWATCH_MIN_DISTANCE = 32
+
+
+def _animating() -> bool:
+    """False when motion would be wasted or unwanted.
+
+    Nothing animates into a pipe or a log, and FLASH_NO_ANIMATION turns
+    it off for a slow link, a recording, or anyone who just wants the
+    line to appear.
+    """
+
+    return console.is_terminal and not os.environ.get("FLASH_NO_ANIMATION")
+
+
+def _sweep_in(plain: str, settled: Text) -> None:
+    """Glimmer across PLAIN, then leave SETTLED on the screen."""
+
+    if not _animating() or not plain.strip():
+        console.print(settled)
+        return
+
+    period = len(plain) + 2 * SWEEP_SPREAD
+    frames = max(1, round(period / (SWEEP_CPS * SWEEP_FRAME_SECONDS)))
+
+    with Live(
+        Text(),
+        console=console,
+        transient=True,
+        refresh_per_second=round(1 / SWEEP_FRAME_SECONDS),
+    ) as live:
+        for step in range(frames + 1):
+            offset = -SWEEP_SPREAD + period * step / frames
+            live.update(
+                Text.from_markup(glimmer(plain, offset, SWEEP_SPREAD))
+            )
+            time.sleep(SWEEP_FRAME_SECONDS)
+
+    console.print(settled)
+
+
+def _palette(data: bytes) -> list:
+    """Up to SWATCH_COUNT dominant colors as hex, or [].
+
+    Pillow is not a dependency of the CLI, so the swatches appear for
+    anyone who has it and are simply absent for anyone who does not.
+    """
+
+    try:
+        from PIL import Image
+    except ImportError:
+        return []
+
+    try:
+        with Image.open(io.BytesIO(data)) as opened:
+            small = opened.convert("RGB").resize((64, 64))
+            reduced = small.quantize(colors=SWATCH_POOL)
+            table = reduced.getpalette() or []
+            counts = sorted(reduced.getcolors() or [], reverse=True)
+    except (OSError, ValueError, TypeError):
+        return []
+
+    kept = []
+    for _count, index in counts:
+        rgb = tuple(table[index * 3:index * 3 + 3])
+        if len(rgb) < 3:
+            continue
+        if all(_apart(rgb, seen) for seen in kept):
+            kept.append(rgb)
+        if len(kept) == SWATCH_COUNT:
+            break
+
+    return [f"#{r:02x}{g:02x}{b:02x}" for r, g, b in kept]
+
+
+def _apart(one: tuple, other: tuple) -> bool:
+    """True when two colors differ enough to read as different."""
+
+    gap = sum((a - b) ** 2 for a, b in zip(one, other))
+
+    return gap >= SWATCH_MIN_DISTANCE ** 2
+
+
+def _swatch_row(colors: list) -> Text:
+    """A row of solid blocks, one per dominant color."""
+
+    row = Text(" " * RESULT_INDENT)
+    for color in colors:
+        row.append(" " * SWATCH_WIDTH, style=f"on {color}")
+        row.append(" ")
+
+    return row
+
+
+def _open_with_spinner(image_path: Path) -> str:
+    """Open PATH in the OS viewer, glimmering while it starts.
+
+    Returns "" on success or the reason it could not be opened, the
+    same as _open_in_viewer, which it runs on a worker thread so the
+    cold start of an image viewer is not dead air.
+    """
+
+    if not _animating():
+        return _open_in_viewer(image_path)
+
+    outcome = {}
+
+    def work():
+        outcome["why"] = _open_in_viewer(image_path)
+
+    worker = threading.Thread(target=work, daemon=True)
+    worker.start()
+
+    word = f"opening{ELLIPSIS}"
+    period = len(word) + 2 * SWEEP_SPREAD
+    start = time.monotonic()
+
+    with Live(
+        Text(),
+        console=console,
+        transient=True,
+        refresh_per_second=round(1 / SWEEP_FRAME_SECONDS),
+    ) as live:
+        while worker.is_alive():
+            elapsed = time.monotonic() - start
+            offset = (elapsed * SWEEP_CPS / 6) % period - SWEEP_SPREAD
+            live.update(
+                Text.from_markup(
+                    " " * RESULT_INDENT
+                    + glimmer(word, offset, SWEEP_SPREAD)
+                )
+            )
+            time.sleep(SWEEP_FRAME_SECONDS)
+
+    worker.join()
+
+    return outcome.get("why", "")
+
+
+def _image_size(data: bytes) -> tuple:
+    """Read (width, height) out of an image header, or (0, 0).
+
+    Pillow would do this in one line, but it is not a dependency of the
+    CLI and the pixel count is only here to label the result line, so
+    the five formats resolve_image_path accepts are parsed by hand.
+    """
+
+    try:
+        if data[:8] == b"\x89PNG\r\n\x1a\n":
+            return struct.unpack(">II", data[16:24])
+
+        if data[:3] == b"GIF":
+            return struct.unpack("<HH", data[6:10])
+
+        if data[:2] == b"BM":
+            width, height = struct.unpack("<ii", data[18:26])
+            return abs(width), abs(height)
+
+        if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+            return _webp_size(data)
+
+        if data[:2] == b"\xff\xd8":
+            return _jpeg_size(data)
+    except (struct.error, IndexError, ValueError):
+        return 0, 0
+
+    return 0, 0
+
+
+def _webp_size(data: bytes) -> tuple:
+    """(width, height) for the three WebP chunk layouts."""
+
+    kind = data[12:16]
+
+    if kind == b"VP8X":
+        wide = int.from_bytes(data[24:27], "little") + 1
+        high = int.from_bytes(data[27:30], "little") + 1
+        return wide, high
+
+    if kind == b"VP8L":
+        bits = int.from_bytes(data[21:25], "little")
+        return (bits & 0x3FFF) + 1, ((bits >> 14) & 0x3FFF) + 1
+
+    if kind == b"VP8 ":
+        wide, high = struct.unpack("<HH", data[26:30])
+        return wide & 0x3FFF, high & 0x3FFF
+
+    return 0, 0
+
+
+def _jpeg_size(data: bytes) -> tuple:
+    """(width, height) from the first JPEG start-of-frame marker."""
+
+    at = 2
+    while at + 9 < len(data):
+        if data[at] != 0xFF:
+            at += 1
+            continue
+
+        marker = data[at + 1]
+
+        # Every SOF carries the dimensions except DHT, DAC and the
+        # restart markers, which share the range.
+        if 0xC0 <= marker <= 0xCF and marker not in (0xC4, 0xC8, 0xCC):
+            high, wide = struct.unpack(">HH", data[at + 5:at + 9])
+            return wide, high
+
+        if marker in (0xD8, 0x01) or 0xD0 <= marker <= 0xD7:
+            at += 2
+            continue
+
+        at += 2 + int.from_bytes(data[at + 2:at + 4], "big")
+
+    return 0, 0
+
+
+def _display_path(path: Path) -> str:
+    """PATH made absolute, with the home directory shortened to ~."""
+
+    try:
+        full = path.expanduser().resolve()
+    except OSError:
+        return str(path)
+
+    try:
+        return str(Path("~") / full.relative_to(Path.home()))
+    except (ValueError, RuntimeError):
+        return str(full)
+
+
+def _image_block(
+    image_path: Path, data: bytes, note: str, status: str
+) -> None:
+    """Render the result block: name, shape, size, status, caption."""
+
+    wide, high = _image_size(data)
+    kilobytes = max(1, round(len(data) / 1024))
+
+    shape = f"  {wide}x{high}" if wide and high else ""
+    tail = f"{shape}  {kilobytes} KB" + (f"  {status}" if status else "")
+
+    head = Text(f"  {BRANCH}  ", style=DIM)
+    head.append(image_path.name, style=ACCENT)
+    head.append(tail, style=DIM)
+
+    _sweep_in(f"  {BRANCH}  {image_path.name}{tail}", head)
+
+    colors = _palette(data)
+    if colors:
+        console.print(_swatch_row(colors))
+
+    if note:
+        console.print(
+            Text(f"{' ' * RESULT_INDENT}{note}", style=f"italic {DIM}")
+        )
+
+
+def send_image(path: str, caption: str = "") -> str:
+    """Put an image file in front of the user."""
+
+    tool_line(f"SendImage({path})")
+
+    image_path, reason = resolve_image_path(path)
+    if image_path is None:
+        result = f"Error: {reason}"
+        tool_result(result, style=ERROR)
+        return result
+
+    try:
+        data = image_path.read_bytes()
+    except OSError as exc:
+        result = f"Error: could not read {image_path}: {exc}"
+        tool_result(result, style=ERROR)
+        return result
+
+    kilobytes = max(1, round(len(data) / 1024))
+    note = caption.strip()
+    protocol = _graphics_protocol()
+
+    if protocol:
+        _image_block(image_path, data, note, "")
+        if _draw_inline(protocol, data, image_path.name, RESULT_INDENT):
+            return (
+                f"Sent {image_path.name} ({kilobytes} KB), drawn in the "
+                "user's terminal. You cannot see it from here; "
+                "view_image is what shows it to you."
+            )
+
+    problem = _open_with_spinner(image_path)
+    status = problem or "opened in your image viewer"
+    _image_block(image_path, data, note, status)
+    console.print(
+        Text(f"{' ' * RESULT_INDENT}{_display_path(image_path)}", style=DIM)
+    )
+
+    if problem:
+        return (
+            f"Wrote {image_path.name} ({kilobytes} KB) and put its path "
+            f"on screen, but could not display it: {problem}. Tell the "
+            "user where the file is."
+        )
+
+    return (
+        f"Sent {image_path.name} ({kilobytes} KB). This terminal cannot "
+        "draw images, so it opened in the user's image viewer with the "
+        "path on screen. You cannot see it from here."
     )
 
 
@@ -1381,7 +2104,7 @@ def interact(
 
 
 # Tool schema expected by Ollama function calling (OpenAI-style).
-tools = [
+tools: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
@@ -1574,6 +2297,40 @@ tools = [
                     },
                 },
                 "required": ["path", "content"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "send_image",
+            "description": (
+                "Show an image file (.png, .jpg, .jpeg, .webp, .gif, "
+                ".bmp) to the user. It is drawn in their terminal where "
+                "the terminal can draw one, and opened in their image "
+                "viewer where it cannot, with the path printed either "
+                "way. Use it to hand over a picture you generated or "
+                "edited, once it is finished. This shows the image to "
+                "the user and not to you, so check your own work with "
+                "view_image before sending it."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": (
+                            "Path to the image file, e.g. './poster.png'."
+                        ),
+                    },
+                    "caption": {
+                        "type": "string",
+                        "description": (
+                            "Optional single line shown with the image."
+                        ),
+                    },
+                },
+                "required": ["path"],
             },
         },
     },
@@ -1900,6 +2657,56 @@ tools = [
     {
         "type": "function",
         "function": {
+            "name": "plan",
+            "description": (
+                "Post the steps you are about to take as a checklist the "
+                "user can watch. Replaces any earlier plan. Use it for a "
+                "task with several distinct steps, not for something you "
+                "can finish in one or two tool calls."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "steps": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": (
+                            "The steps, in the order you will do them. One "
+                            "short line each, phrased as the work itself "
+                            "(e.g. 'Read the renderer'), not as a promise. "
+                            f"At most {plan.MAX_STEPS}."
+                        ),
+                    },
+                },
+                "required": ["steps"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "check_step",
+            "description": (
+                "Tick one step of the current plan, by its 1-based number, "
+                "the moment that step is finished. Ticking a step redraws "
+                "the checklist for the user."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "index": {
+                        "type": "integer",
+                        "description": "1-based number of the finished step.",
+                        "minimum": 1,
+                    },
+                },
+                "required": ["index"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "remember",
             "description": (
                 "Save a fact or user preference to persistent memory so it "
@@ -1946,6 +2753,75 @@ tools = [
     {
         "type": "function",
         "function": {
+            "name": "agent",
+            "description": (
+                "Start a sub-agent on a background thread to do one "
+                "focused piece of work, and return immediately with its "
+                "ID rather than waiting for it. Use this to run "
+                "independent pieces of a task (e.g. researching two "
+                "separate topics) at the same time: call agent once per "
+                "piece of work, then end your turn; you are woken with "
+                "each answer when its sub-agent finishes. Call "
+                "agent_result instead only if this turn cannot go on "
+                "without the answer. The "
+                "sub-agent cannot talk to the user or spawn further "
+                "sub-agents, so give it a self-contained task it can "
+                "finish without asking anything."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "task": {
+                        "type": "string",
+                        "description": (
+                            "The full task for the sub-agent to carry "
+                            "out on its own, written so it needs no "
+                            "further context or follow-up questions."
+                        ),
+                    },
+                },
+                "required": ["task"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "agent_result",
+            "description": (
+                "Wait for a sub-agent started with agent to finish, and "
+                "return its final answer. Returns right away if it has "
+                "already finished. If it is still running when the wait "
+                "runs out, call agent_result again with the same ID to "
+                "keep waiting."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "agent_id": {
+                        "type": "string",
+                        "description": (
+                            "The ID returned by the agent tool call to "
+                            "wait for."
+                        ),
+                    },
+                    "wait_seconds": {
+                        "type": "number",
+                        "description": (
+                            f"Maximum seconds to wait. Defaults to "
+                            f"{subagents.DEFAULT_WAIT_SECONDS:.0f}, "
+                            f"maximum {subagents.MAX_WAIT_SECONDS:.0f}."
+                        ),
+                        "minimum": 1,
+                    },
+                },
+                "required": ["agent_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "forget",
             "description": (
                 "Delete one saved memory entry by its 1-based index (the "
@@ -1976,6 +2852,7 @@ FUNCTIONS = {
     "read": read_tool,
     "write": write_tool,
     "view_image": view_image,
+    "send_image": send_image,
     "screenshot": screenshot,
     "open_page": open_page,
     "interact": interact,
@@ -1984,10 +2861,29 @@ FUNCTIONS = {
     "get_os": get_os,
     "reason": reason,
     "get_date": get_date,
+    "plan": plan_tool,
+    "check_step": check_step,
     "remember": remember,
     "recall": recall,
     "forget": forget,
+    "agent": agent_tool,
+    "agent_result": agent_result,
+    "open_in_editor": open_in_editor,
 }
+
+# Tools a sub-agent (flash/agent.py) is allowed to call: read/search/shell
+# only, since plan, check_step, remember/recall/forget, the browser tools,
+# and agent itself all touch single-user global state on the main loop.
+# Kept here, next to FUNCTIONS, as the one place that names a tool, so
+# adding, renaming, or removing one only means updating this file.
+SUBAGENT_TOOL_NAMES = (
+    "shell", "glob", "grep", "read", "write",
+    "web_search", "fetch", "get_os", "get_date", "reason",
+)
+
+# Tools that stop for a y/n unless autonomous mode is on. A sub-agent has
+# no terminal to ask from, so it only gets these in autonomous mode.
+CONFIRMED_TOOL_NAMES = ("shell", "write")
 
 
 def run_tool(call):

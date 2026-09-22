@@ -16,6 +16,10 @@ FLASH (**F**ast **L**ocal **A**gent **SH**ell) CLI is an AI-powered command-line
 - **Page Screenshots**: The AI renders a page it built in a headless browser with its `screenshot` tool and looks at the result, so it can see a broken layout instead of guessing from the HTML.
 - **Page Control**: The AI opens a page with `open_page` and then clicks buttons, fills forms, presses keys, and runs JavaScript on it with `interact`, seeing a fresh screenshot, the page's elements, and its console errors after every step, so it can debug what a page *does*, not just how it looks.
 - **Voice Mode**: `/voice on` downloads a Vosk speech model and a Piper voice, then lets you talk to Flash and hear its replies, with typing still available at any time.
+- **Visible Plans**: For a multi-step task the AI posts a checklist up front and ticks each box as it finishes that step, so you can see where it is instead of waiting for the wall of text at the end.
+- **Knows What Just Broke**: With `/hook install`, Flash sees the commands you run in VS Code's terminal and whether they failed, so "why did that fail?" works without pasting anything.
+- **VS Code Aware**: Run from VS Code's terminal, Flash opens its edits as side-by-side diffs while it waits for your yes, and opens files at the line it's talking about.
+- **Async Sub-agents**: The AI can spawn background sub-agents with the `agent` tool to work on independent pieces of a task at the same time, then collect each one's answer with `agent_result` once it's needed.
 - **Context Management**: Automatic history trimming to stay within token limits.
 - **Markdown Support**: Rich formatting for AI responses in the terminal.
 
@@ -79,22 +83,22 @@ model with Flash's persona and tuned parameters baked in. Each one lives in a
 single Modelfile under `models/` that declares its name and sizes at the top,
 and `models/build.py` builds whatever a Modelfile declares.
 
-The current release, **Flash Onyx 2**, is `gemma4` in two sizes. `12b` runs on
+The current release, **Flash Onyx 2.5**, is `gemma4` in two sizes. `12b` runs on
 consumer hardware; `31b` is the flagship and wants a bigger GPU.
 
 ```bash
-python3 models/build.py models/flash-onyx-2.Modelfile             # every size
-python3 models/build.py models/flash-onyx-2.Modelfile --size 31b  # just one
+python3 models/build.py models/flash-onyx-2.5.Modelfile             # every size
+python3 models/build.py models/flash-onyx-2.5.Modelfile --size 31b  # just one
 ```
 
-**Flash Onyx 1** is the previous release, built on `llama3.1`:
+**Flash Onyx 2.4** is the previous release, also built on `gemma4`:
 
 ```bash
-python3 models/build.py models/flash-onyx-1.Modelfile
+python3 models/build.py models/flash-onyx-2.4.Modelfile
 ```
 
-Then set `MODEL` to whichever you built (`flash-onyx-2:31b`, `flash-onyx-1`,
-and so on) in `~/.flash.env` or your environment.
+Then set `MODEL` to whichever you built (`flash-onyx-2.5:31b`,
+`flash-onyx-2.4:12b`, and so on) in `~/.flash.env` or your environment.
 
 ### Run
 
@@ -135,6 +139,11 @@ python run.py
 - `/help` or `/?`: Display the help message.
 - `/model`: Pick from the models on this machine, or type a name to
   download one. `/model <name>` switches straight to one.
+- `/plan`: Show the checklist the model is working through.
+- `/hook [install|remove]`: Let Flash see the commands you run in VS
+  Code's terminal (zsh and bash).
+- `/agents`: Watch sub-agents work live. `/agents <id>` shows one in full,
+  with its answer once it is done.
 - `/clear`: Clear the conversation history.
 - `/image <path> [prompt]`: Send a local image to the model.
 - `/version`: Show the current version and check GitHub for updates.
@@ -145,6 +154,96 @@ Type `@` anywhere in a message to pick a file out of a dropdown, e.g.
 `why does @flash/theme.py fall back to ASCII?`. Arrow keys and Tab pick
 one, `/` walks into a directory, and the model reads whatever you point
 it at. Dot-entries stay hidden until you type the leading dot.
+
+### Plans
+
+When a request takes several steps, the model posts a checklist before it
+starts and ticks each box as that step lands:
+
+```console
+> add latex rendering to the response renderer
+
+⏺ Plan(2/4 done)
+  ⎿  ☒ Read the response renderer
+     ☒ Add the LaTeX module
+     ☐ Wire it into the render path
+     ☐ Add tests
+```
+
+Each tick redraws the list in place of the previous one, so the terminal
+shows the run as it happens. `/plan` reprints the current checklist at any
+time, and `/clear` drops it along with the conversation. Short tasks skip
+the plan entirely.
+
+### VS Code
+
+Run Flash in VS Code's integrated terminal and it works with the editor
+around it, through VS Code's own `code` command:
+
+- When Flash wants to change a file and waits for your yes, the change
+  opens as a side-by-side diff in the editor, so you can review it there.
+- The model can open a file at the line it is talking about.
+
+`/hook install` goes one step further: it adds three lines to your
+`~/.zshrc` or `~/.bashrc` (after asking) that load a small hook in VS
+Code's terminal only. From then on, the commands you run there travel
+with your next message:
+
+```console
+❯ why did that fail?
+```
+
+```text
+=== Commands the user ran in VS Code's terminal since their last message ===
+✓ · 3s · ~/proj · npm install
+✗ exit 1 · 12s · ~/proj · npm test
+```
+
+A shell hook sees each command and its exit code, never its output, so
+when you ask about a failure Flash re-runs the command to read the error
+if it is safe to repeat (a build, test, or lint; it still asks first
+unless autonomous mode is on), and asks you to paste it otherwise.
+Commands you start with a space are not recorded, anything that looks
+like a secret (`TOKEN=…`, `--password …`, credentials in URLs) is
+redacted before the model sees it, and the log in
+`~/.flash/terminal.log` is readable only by you and keeps the last 500
+commands. `/hook remove` takes the lines back out.
+
+### Sub-agents
+
+For work that splits into independent pieces, the model can start
+sub-agents with its `agent` tool. Each one runs on a background thread
+against the same model, and the model usually just ends its turn: when a
+sub-agent finishes, Flash wakes the model with the answer so it can
+report back, without you typing anything.
+
+```console
+⏺ Sub-agent 28a965 finished
+LK-99 did not hold up: the replications traced its resistance drop to
+copper sulfide impurities, ...
+```
+
+Flash only wakes it while the prompt is empty, so a half-typed message is
+never taken from you; the answer rides along with what you send instead.
+Wakes stop after three in a row without you writing, so a chain of
+sub-agents cannot run on its own forever.
+
+When the model needs an answer before it can go on, it calls
+`agent_result`, which draws the sub-agent's progress live while it waits:
+
+```console
+⏺ AgentResult(4b86ea)
+  ⎿  ⠹ Running Read(README.md) · round 4 · 21s
+     ✓ Reason  Primer is GitHub's design system
+     ✓ Glob(*.md) in docs  1 match
+     ✓ Grep(Features) in README.md  1 match in 1 file
+     … Read(README.md) lines 1-20
+```
+
+Sub-agents keep running after a reply, and `/agents` watches all of them
+update in place (Ctrl+C goes back to the prompt). They cannot talk to you,
+so they get no tool that asks first: `shell` and `write` are only theirs
+in autonomous mode (`/auto on`).
 
 ### Image Recognition
 
@@ -258,7 +357,7 @@ A screenshot is a still picture, so for a page with buttons or a form the
 AI opens it with `open_page` and then drives it with `interact`, one
 action per call:
 
-```
+```prompt
 Open ~/Desktop/signup.html, fill in the form, submit it, and tell me why
 the confirmation never shows up.
 ```
@@ -296,6 +395,13 @@ You can also check and update from outside the REPL:
 flash --update          # check for a newer version and, if found, confirm and install it
 flash --update --force  # reinstall from `main` unconditionally, no confirmation
 ```
+
+On Windows the install cannot run while Flash is open, because Windows
+holds a lock on every running program and pipx has to replace two of
+them: `flash.exe` and the Python it starts. Flash downloads the update,
+then hands the install to a PowerShell window that waits for Flash to
+close and finishes there. Quit Flash and the update completes on its
+own.
 
 ### Direct Shell Execution
 
