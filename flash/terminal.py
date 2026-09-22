@@ -55,7 +55,7 @@ _flash_precmd() {
   cmd="${cmd//$'\n'/ }"
   cmd="${cmd//$'\t'/ }"
   ( umask 077; mkdir -p "$HOME/.flash"
-    print -r -- "${EPOCHSECONDS}	${code}	${took%.*}	${PWD}	${cmd}" \
+    print -r -- "${EPOCHREALTIME/,/.}	${code}	${took%.*}	${PWD}	${cmd}" \
       >> "$HOME/.flash/terminal.log" )
   return $code
 }
@@ -86,8 +86,9 @@ _flash_prompt() {
   [[ "$cmd" == " "* ]] && return $code
   cmd="${cmd//$'\n'/ }"
   cmd="${cmd//$'\t'/ }"
+  local stamp=${EPOCHREALTIME:-$(date +%s)}
   ( umask 077; mkdir -p "$HOME/.flash"
-    printf '%s\t%s\t-\t%s\t%s\n' "$(date +%s)" "$code" "$PWD" "$cmd" \
+    printf '%s\t%s\t-\t%s\t%s\n' "${stamp/,/.}" "$code" "$PWD" "$cmd" \
       >> "$HOME/.flash/terminal.log" )
   return $code
 }

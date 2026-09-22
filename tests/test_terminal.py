@@ -212,6 +212,15 @@ def test_hook_records_commands_in_vscode(shell, isolated_home):
     else:
         assert got[3].took is None  # nosec B101
 
+    # Whole-second stamps would put a command that finished in the same
+    # second as the user's message before it, and since() would skip it.
+    realtime = shell == "zsh" or subprocess.run(  # nosec B603 B607
+        ["bash", "-c", 'echo "${EPOCHREALTIME:+yes}"'],
+        capture_output=True, text=True, check=False,
+    ).stdout.strip() == "yes"
+    if realtime:
+        assert any(c.time % 1 for c in got)  # nosec B101
+
 
 @needs_pty
 @pytest.mark.parametrize("shell", ["zsh", "bash"])
