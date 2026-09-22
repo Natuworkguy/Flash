@@ -83,7 +83,7 @@ model with Flash's persona and tuned parameters baked in. Each one lives in a
 single Modelfile under `models/` that declares its name and sizes at the top,
 and `models/build.py` builds whatever a Modelfile declares.
 
-The current release, **Flash Onyx 2**, is `gemma4` in two sizes. `12b` runs on
+The current release, **Flash Onyx 2.5**, is `gemma4` in two sizes. `12b` runs on
 consumer hardware; `31b` is the flagship and wants a bigger GPU.
 
 ```bash
@@ -91,7 +91,7 @@ python3 models/build.py models/flash-onyx-2.Modelfile             # every size
 python3 models/build.py models/flash-onyx-2.Modelfile --size 31b  # just one
 ```
 
-**Flash Onyx 1** is the previous release, built on `llama3.1`:
+**Flash Onyx 2.4** is the previous release, built on `llama3.1`:
 
 ```bash
 python3 models/build.py models/flash-onyx-1.Modelfile
