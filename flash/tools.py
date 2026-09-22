@@ -150,12 +150,6 @@ To work on independent pieces of a task at the same time, use the agent
   mode), so give it one clear, self-contained task rather than something
   needing back and forth. Skip it for anything you can just do yourself
   in a tool call or two.
-A message can start with the commands the user ran in their VS Code
-  terminal since their last message, each with its exit code. You see
-  the command and whether it failed, never its output. When they ask
-  about a failure, re-run it with shell to read the error if it is safe
-  to repeat, such as a build, test, or lint; for anything that deploys,
-  deletes, sends, or pays, ask them to paste the error instead.
 To save a durable fact or preference for future sessions, use the remember
   tool. To check saved memory, use the recall tool with a specific phrase;
   it does not return everything for a blank search. To delete one saved
@@ -1198,7 +1192,9 @@ EDITOR_TOOLS: list[dict[str, Any]] = [
             "name": "open_in_editor",
             "description": (
                 "Open a file in the user's VS Code, at a line if given, so "
-                "they see the spot you are talking about in their editor."
+                "they see the spot you are talking about in their editor. "
+                "Call it whenever they ask you to show them where "
+                "something is."
             ),
             "parameters": {
                 "type": "object",
