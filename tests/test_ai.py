@@ -5,7 +5,7 @@ import time
 
 import pytest
 
-from flash import ai
+from flash import ai, context
 from flash.ai import (
     Config,
     _direct_shell_command,
@@ -33,11 +33,110 @@ def test_int_env(monkeypatch):
     assert _int_env("TEST_VAR", 5, minimum=2) == 5  # nosec B101
 
 
-def test_trim_history():
-    messages = [{"role": "user", "content": "hello"}] * 10
-    # config.max_history_messages is 6 by default
+@pytest.fixture
+def budget(monkeypatch):
+    """A small, fixed history budget, so a test is not at the mercy of
+    whichever model happens to be configured."""
+
+    monkeypatch.setattr(ai, "_history_budget", lambda: 200)
+
+
+def test_trim_history_fits_the_budget(budget):
+    messages = [
+        {"role": "user", "content": f"message {i} " + "x" * 400}
+        for i in range(10)
+    ]
+
     _trim_history(messages)
-    assert len(messages) <= Config.max_history_messages  # nosec B101
+
+    assert context.total_tokens(messages) <= 200  # nosec B101
+    assert messages  # nosec B101
+
+
+def test_trim_history_keeps_the_newest_turn(budget):
+    messages = [
+        {"role": "user", "content": f"message {i} " + "x" * 400}
+        for i in range(10)
+    ]
+    newest = messages[-1]
+
+    _trim_history(messages)
+
+    assert newest in messages  # nosec B101
+
+
+def test_trim_history_hands_back_what_it_dropped(budget):
+    messages = [
+        {"role": "user", "content": f"message {i} " + "x" * 400}
+        for i in range(10)
+    ]
+    before = len(messages)
+
+    dropped = _trim_history(messages)
+
+    assert dropped  # nosec B101
+    assert len(dropped) + len(messages) == before  # nosec B101
+
+
+def test_trim_history_never_orphans_a_tool_result(budget):
+    messages = []
+    for index in range(8):
+        messages.extend([
+            {"role": "user", "content": f"q{index} " + "x" * 300},
+            {"role": "assistant", "content": "", "tool_calls": [
+                {"function": {"name": "grep", "arguments": {}}}
+            ]},
+            {"role": "tool", "content": "m" * 300, "tool_name": "grep"},
+            {"role": "assistant", "content": f"a{index}"},
+        ])
+
+    _trim_history(messages)
+
+    for position, message in enumerate(messages):
+        if message.get("role") == "tool":
+            before = messages[position - 1] if position else {}
+            assert before.get("tool_calls")  # nosec B101
+
+
+def test_history_caps_are_unset_by_default(monkeypatch):
+    monkeypatch.delenv("MAX_HISTORY_MESSAGES", raising=False)
+    monkeypatch.delenv("MAX_HISTORY_CHARS", raising=False)
+    Config.refresh()
+
+    assert Config.max_history_messages is None  # nosec B101
+    assert Config.max_history_chars is None  # nosec B101
+
+
+def test_an_explicit_message_cap_is_still_honoured(monkeypatch, budget):
+    monkeypatch.setenv("MAX_HISTORY_MESSAGES", "3")
+    Config.refresh()
+    try:
+        messages = [
+            {"role": "user", "content": f"m{i}"} for i in range(10)
+        ]
+        _trim_history(messages)
+
+        assert len(messages) == 3  # nosec B101
+    finally:
+        monkeypatch.delenv("MAX_HISTORY_MESSAGES", raising=False)
+        Config.refresh()
+
+
+def test_an_explicit_char_cap_is_still_honoured(monkeypatch, budget):
+    monkeypatch.setenv("MAX_HISTORY_CHARS", "1000")
+    Config.refresh()
+    try:
+        messages = [
+            {"role": "user", "content": "x" * 400} for _ in range(10)
+        ]
+        _trim_history(messages)
+
+        total = sum(len(m["content"]) for m in messages)
+
+        assert total <= 1000 or len(messages) == 1  # nosec B101
+    finally:
+        monkeypatch.delenv("MAX_HISTORY_CHARS", raising=False)
+        Config.refresh()
 
 
 def test_direct_shell_command():
