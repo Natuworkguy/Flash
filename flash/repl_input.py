@@ -1,8 +1,10 @@
 """REPL input with a dropdown menu of slash-command suggestions."""
 
+import asyncio
 import json
 import os
 import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import Union
 
@@ -27,6 +29,9 @@ COMMANDS = [
     ("/refresh", "reload config from the env file"),
     ("/memory", f"show saved memory, numbered ({MEMORY_PATH})"),
     ("/forget", "delete one memory by its 1-based index (/forget N)"),
+    ("/plan", "show the checklist the model is working through"),
+    ("/agents", "watch sub-agents work live (/agents <id> for one)"),
+    ("/hook", "let Flash see what you run in VS Code's terminal"),
     ("/clear", "clear saved context"),
     ("/image", "send an image to the model (/image <path> [prompt])"),
     ("/version", "show the current version and check for updates"),
@@ -255,10 +260,23 @@ def _suggestion_placeholder() -> StyleAndTextTuples:
 
 _session: Union[PromptSession, None] = None  # noqa: UP007
 
+# What read_line returns when `wake` fired instead of the user submitting.
+# A NUL can't be typed at the prompt, so no real line can collide with it.
+WAKE = "\x00wake"
+WAKE_POLL_SECONDS = 0.25
 
-def read_line(prompt_ansi: str) -> str:
+
+def read_line(
+    prompt_ansi: str,
+    wake: Union[Callable[[], bool], None] = None,  # noqa: UP007, RUF100
+) -> str:
     """Read one line; suggests / commands in a dropdown while typing one,
-    and animates a rotating hint at the cursor while the line is empty."""
+    and animates a rotating hint at the cursor while the line is empty.
+
+    If `wake` turns true while the line is still empty, the prompt gives
+    way and returns WAKE. It never does while the user has typed
+    something, so a half-written message is not snatched away.
+    """
 
     global _session
     if _session is None:
@@ -269,4 +287,20 @@ def read_line(prompt_ansi: str) -> str:
             refresh_interval=PLACEHOLDER_REFRESH_SECONDS,
             erase_when_done=True,
         )
-    return _session.prompt(ANSI(prompt_ansi))
+
+    def watch_for_wake() -> None:
+        if wake is None:
+            return
+
+        app = get_app()
+
+        async def poll() -> None:
+            while True:
+                await asyncio.sleep(WAKE_POLL_SECONDS)
+                if not app.current_buffer.text and wake():
+                    app.exit(result=WAKE)
+                    return
+
+        app.create_background_task(poll())
+
+    return _session.prompt(ANSI(prompt_ansi), pre_run=watch_for_wake)

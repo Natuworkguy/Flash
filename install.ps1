@@ -181,7 +181,15 @@ try {
     # stops the install.
     Write-Host ""
     Write-Host "Installing the voice mode packages..."
-    & $PipxCmd inject flash vosk piper-tts sounddevice
+    $NeededVoicePackages = @("sounddevice", "vosk", "piper-tts")
+    # `inject` leaves a package that is already in the venv at whatever
+    # version it was, so the forced reinstall behind it is what actually
+    # moves one. `runpip` hands its arguments straight to pip, so the
+    # subcommand here is `install`, not `pip install`.
+    & $PipxCmd inject flash @NeededVoicePackages
+    if ($LASTEXITCODE -eq 0) {
+        & $PipxCmd runpip flash install --upgrade --force-reinstall @NeededVoicePackages
+    }
     if ($LASTEXITCODE -ne 0) {
         Write-Host "Voice packages failed to install. Voice mode stays unavailable."
     }

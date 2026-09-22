@@ -163,7 +163,17 @@ fi
 
 echo ""
 echo "Installing the voice mode packages..."
-pipx inject flash vosk piper-tts sounddevice || \
+NEEDED_VOICE_PACKAGES="sounddevice vosk piper-tts"
+# `inject` leaves a package that is already in the venv at whatever
+# version it was, so the forced reinstall behind it is what actually
+# moves one. `runpip` hands its arguments straight to pip, so the
+# subcommand here is `install`, not `pip install`.
+# shellcheck disable=SC2086
+{
+    pipx inject flash $NEEDED_VOICE_PACKAGES &&
+        pipx runpip flash install --upgrade --force-reinstall \
+            $NEEDED_VOICE_PACKAGES
+} || \
     echo "Voice packages failed to install. Voice mode stays unavailable."
 
 # sounddevice bundles PortAudio on macOS and Windows, but takes it from
