@@ -546,6 +546,13 @@ SYNC_BEGIN = "\x1b[?2026h"
 SYNC_END = "\x1b[?2026l"
 
 
+def _sync(begin: bool) -> None:
+    """Open or close a synchronized update, see SYNC_BEGIN."""
+
+    if console.is_terminal:
+        print(SYNC_BEGIN if begin else SYNC_END, end="", flush=True)
+
+
 _background_notices: set = set()
 
 
@@ -600,10 +607,14 @@ PREVIEW_ROWS = 12
 def _preview_scene(scene: background.Scene) -> None:
     """Draw a scene at once, so switching shows what you switched to."""
 
-    for line in background.render(
-        scene, console.size.width, PREVIEW_ROWS
-    ):
-        console.print(line)
+    def paint() -> None:
+        for line in background.render(
+            scene, console.size.width, PREVIEW_ROWS
+        ):
+            console.print(line)
+
+    # Cut to the terminal's width, so a redraw has to cut it again.
+    console.draw(paint)
 
 
 def _list_backgrounds(scenes: list) -> None:
@@ -1698,11 +1709,15 @@ def _render_sent_message(
     `code` show up highlighted rather than as raw backticks."""
 
     prompt = Text.from_ansi(prompt_ansi)
-    console.print(prompt, end="")
-    console.print(
-        Markdown(render_latex(text), code_theme="monokai", hyperlinks=True),
-        width=console.width - cell_len(prompt.plain),
-    )
+    body = Markdown(render_latex(text), code_theme="monokai", hyperlinks=True)
+
+    def paint() -> None:
+        console.print(prompt, end="")
+        console.print(body, width=console.width - cell_len(prompt.plain))
+
+    # Measured against the terminal, so a redraw after a resize runs it
+    # again rather than bringing it back at the old width.
+    console.draw(paint)
 
 
 VOICE_STATES = {
@@ -2060,7 +2075,9 @@ def main() -> None:
                 if uin == RESIZE:
                     _settle_size()
                     if banner_showing:
+                        _sync(True)
                         backdrop = repaint(console, update)
+                        _sync(False)
                     else:
                         redraw_conversation(console)
                     screen_redrawn()

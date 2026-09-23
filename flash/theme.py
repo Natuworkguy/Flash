@@ -77,12 +77,25 @@ class ScreenConsole(Console):
         """Note down something that reached the screen.
 
         A string is raw text, as a subprocess or the terminal's own echo
-        of typed input left it. Anything else is a renderable, or a
-        ("print", objects, kwargs) call to make again.
+        of typed input left it. A callable is run again, see draw().
+        Anything else is a renderable, or a ("print", objects, kwargs)
+        call to make again.
         """
 
         if not self._not_keeping:
             self.transcript.append(item)
+
+    def draw(self, paint: Callable[[], None]) -> None:
+        """Run `paint` now, and again in place of what it printed on a redraw.
+
+        For output measured against the terminal, which kept as printed
+        would come back at the width it was printed for: `paint` gets
+        to measure again.
+        """
+
+        self.keep(paint)
+        with self.unkept():
+            paint()
 
     def echo(self, text: str) -> None:
         """Write raw text, keeping it."""
@@ -110,6 +123,8 @@ class ScreenConsole(Console):
             with self.capture() as capture:
                 if isinstance(item, tuple) and item[:1] == ("print",):
                     super().print(*item[1], **item[2])
+                elif callable(item):
+                    item()
                 else:
                     super().print(item)
 
