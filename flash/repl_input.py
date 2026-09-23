@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Optional
 
 from prompt_toolkit import PromptSession
-from prompt_toolkit.application.current import get_app
+from prompt_toolkit.application.current import get_app, get_app_or_none
 from prompt_toolkit.completion import Completer, Completion, PathCompleter
 from prompt_toolkit.document import Document
 from prompt_toolkit.formatted_text import ANSI, StyleAndTextTuples
@@ -153,23 +153,12 @@ class SlashCommandCompleter(Completer):
                 )
             return
 
-        # Emoji completions for :smile etc.
-        if ":" in text:
-            # Find the last word starting with :
-            words = text.split()
-            if words:
-                last_word = words[-1]
-                if last_word.startswith(":"):
-                    query = last_word[1:].lower()
-                    start_pos = -len(last_word)
-                    for name, emoji in EMOJIS.items():
-                        if name.startswith(query):
-                            yield Completion(
-                                f"{emoji}",
-                                start_position=start_pos,
-                                display=f"{name}: {emoji}",
-                            )
-                    return
+        if text.startswith("/image "):
+            remainder = text[len("/image "):]
+            parsed = _parse_path_arg(remainder)
+            if parsed is None:
+                return  # past the path, now typing the optional prompt
+            literal_path, in_quote = parsed
 
             sub_document = Document(
                 literal_path, cursor_position=len(literal_path)
@@ -183,6 +172,23 @@ class SlashCommandCompleter(Completer):
                 yield Completion(
                     suffix, start_position=0, display=completion.display
                 )
+            return
+
+        # Emoji names, as :smile. Checked after the path branches so a
+        # colon inside a path does not swallow the completion.
+        words = text.split()
+
+        if words and words[-1].startswith(":"):
+            query = words[-1][1:].lower()
+            start = -len(words[-1])
+
+            for name, emoji in EMOJIS.items():
+                if name.startswith(query):
+                    yield Completion(
+                        emoji,
+                        start_position=start,
+                        display=f"{name}: {emoji}",
+                    )
             return
 
         mention = _mention_before(text)
@@ -371,6 +377,34 @@ def closing_rule() -> StyleAndTextTuples:
     return [("class:bottom-toolbar", input_rule())]
 
 
+# How far the completion menu may open upward.
+#
+# prompt_toolkit draws the menu over the rows above the cursor and no
+# further: containers.py caps it at min(height, cursor_position.y),
+# which for an inline prompt is however tall the prompt itself is. A
+# three row prompt therefore gets a two row menu, which is the single
+# visible completion. The prompt grows by the rows the menu needs
+# while one is open and shrinks back when it closes, so the menu has
+# somewhere to go without leaving a hole there the rest of the time.
+MAX_MENU_ROWS = 12
+
+
+def menu_headroom() -> int:
+    """Blank rows to open above the input for the menu to draw into."""
+
+    app = get_app_or_none()
+
+    if app is None:
+        return 0
+
+    state = app.current_buffer.complete_state
+
+    if state is None or not state.completions:
+        return 0
+
+    return min(MAX_MENU_ROWS, len(state.completions))
+
+
 def status_prefix(
     status: Optional[str] = None, health: str = HEALTH_UNKNOWN
 ) -> str:
@@ -439,6 +473,27 @@ _session: Optional[PromptSession] = None
 WAKE = "\x00wake"
 WAKE_POLL_SECONDS = 0.25
 
+# What read_line returns when the terminal was resized while it waited.
+# The picture behind the prompt is ordinary scrolling output, so a
+# resize reflows it at the width it was drawn for and leaves it
+# mangled. Nothing here can redraw it from inside the prompt, so the
+# prompt stands down and lets the caller paint the screen again.
+RESIZE = "\x00resize"
+RESIZE_POLL_SECONDS = 0.2
+
+# Whatever was half typed when that happened, handed back on the next
+# call so a resize does not cost someone their sentence.
+_carried = ""
+
+
+def _take_carried() -> str:
+    """The half-typed line a resize interrupted, once."""
+
+    global _carried
+
+    text, _carried = _carried, ""
+    return text
+
 
 def read_line(
     prompt_ansi: str,
@@ -486,7 +541,50 @@ def read_line(
 
         app.create_background_task(poll())
 
-    prompt_ansi = status_prefix(status, health) + prompt_ansi
+    def watch_for_resize() -> None:
+        """Stand down when the terminal changes shape.
+
+        Polled rather than hooked to SIGWINCH: prompt_toolkit installs
+        its own handler there to redraw itself, and taking that over
+        would fix the picture by breaking the prompt.
+        """
+
+        app = get_app()
+        was = shutil.get_terminal_size()
+
+        async def poll() -> None:
+            global _carried
+
+            while True:
+                await asyncio.sleep(RESIZE_POLL_SECONDS)
+
+                if shutil.get_terminal_size() == was:
+                    continue
+
+                _carried = app.current_buffer.text
+                app.exit(result=RESIZE)
+                return
+
+        app.create_background_task(poll())
+
+    def pre_run() -> None:
+        watch_for_wake()
+        watch_for_resize()
+
+    def message() -> ANSI:
+        """The prompt, rebuilt on every redraw.
+
+        Built once, it was measured for the terminal it was built in,
+        so a resize left both rules at the old width and the status
+        line padded to a margin that had moved. Rebuilding each frame
+        is also what lets the prompt grow to make room for the menu.
+        """
+
+        return ANSI(
+            "\n" * menu_headroom()
+            + status_prefix(status, health)
+            + prompt_ansi
+        )
 
     # Nothing pinned under the input, and nothing reserved under it
     # either. Those reserved rows are drawn whether or not a menu is
@@ -495,8 +593,9 @@ def read_line(
     # With none, prompt_toolkit has no room below the cursor and opens
     # the completion menu upward, over the rows above the input.
     return _session.prompt(
-        ANSI(prompt_ansi),
-        pre_run=watch_for_wake,
+        message,
+        default=_take_carried(),
+        pre_run=pre_run,
         reserve_space_for_menu=0,
         bottom_toolbar=closing_rule,
     )

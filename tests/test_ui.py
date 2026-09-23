@@ -564,3 +564,79 @@ class TestClearingToTheBottom:
         ai._clear_screen(bottom=True)
 
         assert capsys.readouterr().out == ""
+
+
+class TestRepaintingOnResize:
+    """The picture is ordinary output, so a resize reflows it at the
+    width it was drawn for. The opening screen gets drawn again."""
+
+    def drive(self, monkeypatch, lines):
+        """Run main() over `lines`, returning what repaint saw."""
+
+        from flash import agent as subagents
+        from flash.cli import parse_args
+        from flash.repl_input import RESIZE
+
+        repaints = []
+        feed = iter(lines)
+        sent = []
+
+        def fake_read_line(prompt, wake=None, status=None, health=None):
+            try:
+                return next(feed)
+            except StopIteration:
+                raise EOFError from None
+
+        def fake_chat(console, client, messages, tools_arg=None, **kwargs):
+            sent.append(messages[-1]["content"])
+            return "reply", "", [], None
+
+        monkeypatch.setattr(ai, "parse_args", lambda: parse_args([]))
+        monkeypatch.setattr(ai, "check_for_update", lambda: None)
+        monkeypatch.setattr(ai, "read_line", fake_read_line)
+        monkeypatch.setattr(ai, "_chat_retry_until_response", fake_chat)
+        monkeypatch.setattr(
+            ai, "_session_system_prompt", lambda heard=False: ""
+        )
+        monkeypatch.setattr(ai, "notify_reply_ready", lambda: None)
+        monkeypatch.setattr(
+            ai, "repaint", lambda c, update=None: repaints.append(update)
+        )
+        monkeypatch.setattr(Config, "show_stats", False)
+        monkeypatch.setattr(subagents, "_agents", {})
+
+        ai.main()
+        return repaints, sent, RESIZE
+
+    def test_a_resize_repaints_the_opening_screen(self, monkeypatch):
+        from flash.repl_input import RESIZE
+
+        repaints, sent, _ = self.drive(monkeypatch, [RESIZE, "hello"])
+
+        assert len(repaints) == 1
+
+    def test_the_sentinel_never_reaches_the_model(self, monkeypatch):
+        from flash.repl_input import RESIZE
+
+        repaints, sent, _ = self.drive(monkeypatch, [RESIZE, "hello"])
+
+        assert all(RESIZE not in message for message in sent)
+        assert any("hello" in message for message in sent)
+
+    def test_several_resizes_each_repaint(self, monkeypatch):
+        from flash.repl_input import RESIZE
+
+        repaints, _, _ = self.drive(
+            monkeypatch, [RESIZE, RESIZE, RESIZE, "hi"]
+        )
+
+        assert len(repaints) == 3
+
+    def test_no_repaint_once_the_banner_has_gone(self, monkeypatch):
+        from flash.repl_input import RESIZE
+
+        # After a turn the conversation above is the terminal's to
+        # reflow, and prompt_toolkit has redrawn the prompt already.
+        repaints, _, _ = self.drive(monkeypatch, ["hi", RESIZE])
+
+        assert repaints == []
