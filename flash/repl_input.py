@@ -13,8 +13,17 @@ from prompt_toolkit import PromptSession
 from prompt_toolkit.application.current import get_app, get_app_or_none
 from prompt_toolkit.completion import Completer, Completion, PathCompleter
 from prompt_toolkit.document import Document
-from prompt_toolkit.formatted_text import ANSI, StyleAndTextTuples
+from prompt_toolkit.data_structures import Point
+from prompt_toolkit.formatted_text import (
+    ANSI,
+    StyleAndTextTuples,
+    fragment_list_width,
+    to_formatted_text,
+)
+from prompt_toolkit.layout.screen import Screen
+from prompt_toolkit.renderer import Renderer
 from prompt_toolkit.styles import Style
+from prompt_toolkit.utils import get_cwidth
 
 from . import background
 from .emojis import EMOJIS
@@ -377,16 +386,22 @@ def closing_rule() -> StyleAndTextTuples:
     return [("class:bottom-toolbar", input_rule())]
 
 
-# How far the completion menu may open upward.
+# How far the completion menu may open.
 #
 # prompt_toolkit draws the menu over the rows above the cursor and no
 # further: containers.py caps it at min(height, cursor_position.y),
 # which for an inline prompt is however tall the prompt itself is. A
 # three row prompt therefore gets a two row menu, which is the single
-# visible completion. The prompt grows by the rows the menu needs
-# while one is open and shrinks back when it closes, so the menu has
-# somewhere to go without leaving a hole there the rest of the time.
+# visible completion. The prompt fills the gap above its frame to
+# keep the frame on the foot of the screen, and those are the rows
+# the menu opens over.
 MAX_MENU_ROWS = 12
+
+# The fewest rows the menu gets once the conversation fills the screen
+# and there is no gap left above the frame. Any rows the prompt grows
+# by then scroll the messages up, so it gets a short scrolling list
+# rather than the whole thing.
+MIN_MENU_ROWS = 4
 
 
 def menu_headroom() -> int:
@@ -495,11 +510,139 @@ def _take_carried() -> str:
     return text
 
 
+def reflowed_rows(screen: Screen, rows: int, columns: int) -> int:
+    """How many rows `rows` lines of `screen` take up at `columns` wide.
+
+    A terminal that narrows rewraps whatever it already shows, so a
+    full width rule drawn at 120 columns becomes two rows at 80. The
+    renderer still thinks the prompt starts where it did, erases from
+    there, and every rewrapped row above that point is left behind as
+    a stale copy of the frame.
+    """
+
+    total = 0
+
+    for y in range(rows):
+        row = screen.data_buffer[y]
+        used = max(
+            (x + 1 for x, cell in row.items()
+             if cell.char != " " or cell.style),
+            default=0,
+        )
+        total += max(1, -(-used // columns))
+
+    return total
+
+
+class SnugRenderer(Renderer):
+    """The renderer, minus the two things a resize broke.
+
+    It never stretches the prompt to the foot of the screen. Stock
+    prompt_toolkit asks how many rows are left below the cursor and
+    fills them all, which is harmless when the prompt already sits at
+    the bottom. After a resize it asks again from the top of the
+    prompt, on a terminal that may have grown, and the frame opens
+    into a tall empty box with the closing rule stranded at the
+    bottom until something else forces a redraw.
+
+    And it deals with a size change itself, on whichever render first
+    sees it, rather than in a resize handler that races the placeholder
+    refresh and the terminal's own rewrapping.
+    """
+
+    on_resize: Optional[Callable[[], None]] = None
+
+    # The size the last prompt's last frame went out at. A resize in
+    # between prompts, while a reply streams or the caller repaints,
+    # happens while no renderer is watching, and this is how the next
+    # prompt finds out about it.
+    settled = None
+
+    @property
+    def _min_available_height(self) -> int:
+        # One row is enough for height_is_known to say yes, which is
+        # all the bottom toolbar waits on. Anything more is padding.
+        return min(self._rows_below, 1)
+
+    @_min_available_height.setter
+    def _min_available_height(self, value: int) -> None:
+        self._rows_below = value
+
+    @property
+    def rows_below(self) -> int:
+        """Rows from the top of the prompt to the foot of the screen.
+
+        Zero until the terminal has said where the cursor is.
+        """
+
+        return self._rows_below
+
+    def render(self, app, layout, is_done: bool = False) -> None:
+        size = self.output.get_size()
+        was = self._last_size
+        screen = self._last_screen
+
+        if was is not None and screen is not None and size != was:
+            if size.columns < was.columns:
+                x, y = self._cursor_pos
+                up = reflowed_rows(screen, y, size.columns)
+                self._cursor_pos = Point(x=x, y=up + x // size.columns)
+
+            self.erase(leave_alternate_screen=False)
+            self.request_absolute_cursor_position()
+
+            if self.on_resize is not None:
+                self.on_resize()
+        elif (
+            not is_done
+            and screen is not None
+            and layout.container.preferred_height(
+                size.columns, size.rows
+            ).preferred < screen.height
+        ):
+            # prompt_toolkit never draws a frame shorter than the last
+            # one, so rows the menu gave back stayed on as padding
+            # between the input and the closing rule. Wiping the frame
+            # and drawing it fresh is the only way it gets shorter.
+            rows_below = self._rows_below
+            self.erase(leave_alternate_screen=False)
+            self._rows_below = rows_below
+        elif was is None and SnugRenderer.settled not in (None, size):
+            if self.on_resize is not None:
+                self.on_resize()
+
+        super().render(app, layout, is_done)
+        SnugRenderer.settled = size
+
+        # A frame taller than the rows that were under it scrolled the
+        # screen, which leaves its top that much higher up.
+        if self._rows_below and self._last_screen is not None:
+            self._rows_below = max(
+                self._rows_below, self._last_screen.height
+            )
+
+
+def _snug(session: PromptSession) -> None:
+    """Swap the session's renderer for a SnugRenderer, in place."""
+
+    app = session.app
+    renderer = app.renderer
+    rows_below = renderer.__dict__.pop("_min_available_height", 0)
+    renderer.__class__ = SnugRenderer
+    renderer._min_available_height = rows_below
+
+    # The renderer notices a new size on its next frame, and the
+    # placeholder redraws several times a second, so the stock handler
+    # has nothing left to do but erase from the wrong row first.
+    app._on_resize = app.invalidate
+
+
 def read_line(
     prompt_ansi: str,
     wake: Optional[Callable[[], bool]] = None,
     status: Optional[str] = None,
     health: str = HEALTH_UNKNOWN,
+    backdrop: Optional[list[str]] = None,
 ) -> str:
     """Read one line; suggests / commands in a dropdown while typing one,
     and animates a rotating hint at the cursor while the line is empty.
@@ -525,6 +668,7 @@ def read_line(
             erase_when_done=True,
             style=_RULE_STYLE,
         )
+        _snug(_session)
 
     def watch_for_wake() -> None:
         if wake is None:
@@ -544,28 +688,25 @@ def read_line(
     def watch_for_resize() -> None:
         """Stand down when the terminal changes shape.
 
-        Polled rather than hooked to SIGWINCH: prompt_toolkit installs
-        its own handler there to redraw itself, and taking that over
-        would fix the picture by breaking the prompt.
+        The renderer has already wiped the old frame by the time this
+        runs, reflowed rows included, so all that is left is handing
+        the caller the chance to repaint what sits above the prompt.
         """
 
         app = get_app()
-        was = shutil.get_terminal_size()
 
-        async def poll() -> None:
+        def stand_down() -> None:
             global _carried
 
-            while True:
-                await asyncio.sleep(RESIZE_POLL_SECONDS)
-
-                if shutil.get_terminal_size() == was:
-                    continue
-
-                _carried = app.current_buffer.text
-                app.exit(result=RESIZE)
+            if app.is_done:
                 return
 
-        app.create_background_task(poll())
+            _carried = app.current_buffer.text
+            app.exit(result=RESIZE)
+
+        renderer = app.renderer
+        if isinstance(renderer, SnugRenderer):
+            renderer.on_resize = stand_down
 
     def pre_run() -> None:
         watch_for_wake()
@@ -576,22 +717,68 @@ def read_line(
 
         Built once, it was measured for the terminal it was built in,
         so a resize left both rules at the old width and the status
-        line padded to a margin that had moved. Rebuilding each frame
-        is also what lets the prompt grow to make room for the menu.
+        line padded to a margin that had moved.
         """
 
-        return ANSI(
-            "\n" * menu_headroom()
-            + status_prefix(status, health)
-            + prompt_ansi
+        return ANSI(above() + status_prefix(status, health) + prompt_ansi)
+
+    def above() -> str:
+        """Everything between the last message and the status line.
+
+        The rows of the picture the caller held back, then blank rows
+        down to wherever the frame has to start for it to sit on the
+        foot of the screen. Messages run from the top, so until they
+        fill the screen there is a gap between them and the frame, and
+        the prompt owns it.
+
+        The menu opens up over those rows. They are blank or the
+        prompt's own to redraw, so it covers nothing it cannot give
+        back and nothing has to move to make room for it. Only once
+        the conversation fills the screen, with no gap left, does the
+        prompt grow for the menu, by as little as it can.
+        """
+
+        held = backdrop or []
+        rows = "".join(row + RESET_ANSI + "\n" for row in held)
+        app = get_app_or_none()
+
+        if app is None:
+            return rows
+
+        renderer = app.renderer
+        below = (
+            renderer.rows_below
+            if isinstance(renderer, SnugRenderer) else 0
+        )
+        head = (status_prefix(status, health) + prompt_ansi).count("\n")
+        gap = max(0, below - len(held) - head - input_rows(app) - 1)
+
+        # The menu can cover every row above the cursor.
+        cover = len(held) + gap + head
+        wanted = menu_headroom()
+
+        if wanted > cover:
+            gap += max(0, min(wanted, MIN_MENU_ROWS) - cover)
+
+        return rows + "\n" * gap
+
+    def input_rows(app) -> int:
+        """Rows the line being typed takes up, wrapping included."""
+
+        columns = max(1, app.output.get_size().columns)
+        indent = fragment_list_width(
+            to_formatted_text(ANSI(prompt_ansi.split("\n")[-1]))
         )
 
-    # Nothing pinned under the input, and nothing reserved under it
-    # either. Those reserved rows are drawn whether or not a menu is
-    # open, so they show up as dead space below the prompt and push
-    # the banner off the top of the screen by exactly their height.
-    # With none, prompt_toolkit has no room below the cursor and opens
-    # the completion menu upward, over the rows above the input.
+        return sum(
+            # One more column for the cursor sitting past the end.
+            max(1, -(-(indent + get_cwidth(line) + 1) // columns))
+            for line in app.current_buffer.document.lines
+        )
+
+    # Nothing reserved under the input. Those rows are drawn whether or
+    # not a menu is open, so they show up as dead space below the
+    # prompt and lift the frame off the foot of the screen.
     return _session.prompt(
         message,
         default=_take_carried(),

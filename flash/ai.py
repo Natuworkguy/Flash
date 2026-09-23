@@ -40,6 +40,7 @@ from .repl_input import (
     HEALTH_HEX,
     HEALTH_OK,
     HEALTH_UNKNOWN,
+    MAX_MENU_ROWS,
     RESIZE,
     WAKE,
     read_line,
@@ -286,6 +287,12 @@ def _short_host(host: str) -> str:
 # second prompt onward, once there is a turn behind it.
 FIRST_PROMPT_ROWS = 3
 
+# Rows of the opening screen handed to the prompt to draw rather than
+# printed. The completion menu can only open over rows the prompt
+# owns, so owning the foot of the picture lets it open over the scene
+# instead of growing the prompt and shoving the scene up the screen.
+HELD_ROWS = MAX_MENU_ROWS
+
 
 def _banner_lines(update_version: Optional[str] = None) -> list:
     """What goes inside the welcome box.
@@ -389,7 +396,23 @@ def _overlay_cells(c: Console, renderable, width: int, height: int) -> list:
     return rows[:height]
 
 
-def repaint(c: Console, update_version: Optional[str] = None) -> None:
+def open_screen(
+    c: Console, update_version: Optional[str] = None
+) -> list[str]:
+    """Draw the opening screen, and answer with the rows held back.
+
+    Those rows are the prompt's to draw, see HELD_ROWS.
+    """
+
+    held: list[str] = []
+
+    if not paint_launch(c, update_version, held):
+        pad_to_bottom(c, banner(c, update_version), held)
+
+    return held
+
+
+def repaint(c: Console, update_version: Optional[str] = None) -> list[str]:
     """Draw the opening screen again, after the terminal changed shape.
 
     The picture is ordinary output, so a resize reflows it at the
@@ -400,11 +423,14 @@ def repaint(c: Console, update_version: Optional[str] = None) -> None:
 
     _clear_screen()
 
-    if not paint_launch(c, update_version):
-        pad_to_bottom(c, banner(c, update_version))
+    return open_screen(c, update_version)
 
 
-def paint_launch(c: Console, update_version: Optional[str] = None) -> bool:
+def paint_launch(
+    c: Console,
+    update_version: Optional[str] = None,
+    held: Optional[list[str]] = None,
+) -> bool:
     """Fill the screen with the scene, banner set on top of it.
 
     Returns whether it drew anything. Painting only the gap under the
@@ -428,8 +454,16 @@ def paint_launch(c: Console, update_version: Optional[str] = None) -> bool:
     if not drawn:
         return False
 
-    for line in drawn:
+    keep = min(HELD_ROWS, len(drawn) - 1) if held is not None else 0
+    cut = len(drawn) - max(keep, 0)
+
+    for line in drawn[:cut]:
         c.print(line)
+
+    for line in drawn[cut:]:
+        with c.capture() as capture:
+            c.print(line)
+        held.append(capture.get().rstrip("\n"))
 
     return True
 
@@ -592,7 +626,9 @@ def _background_command(arg: str) -> None:
     _preview_scene(scene)
 
 
-def pad_to_bottom(c: Console, used: int) -> int:
+def pad_to_bottom(
+    c: Console, used: int, held: Optional[list[str]] = None
+) -> int:
     """Push the opening prompt down to the foot of the screen.
 
     A prompt drawn straight under the banner leaves the rest of the
@@ -614,7 +650,13 @@ def pad_to_bottom(c: Console, used: int) -> int:
     if room <= 0:
         return 0
 
-    print("\n" * room, end="")
+    keep = min(HELD_ROWS, room) if held is not None else 0
+
+    print("\n" * (room - keep), end="")
+
+    if held is not None:
+        held.extend([""] * keep)
+
     return room
 
 
@@ -1918,8 +1960,7 @@ def main() -> None:
 
     update = check_for_update()
 
-    if not paint_launch(console, update):
-        pad_to_bottom(console, banner(console, update))
+    backdrop = open_screen(console, update)
 
     banner_showing = True
 
@@ -1951,6 +1992,7 @@ def main() -> None:
                             _status_text(messages) if prompted else None
                         ),
                         health=_backend_health,
+                        backdrop=backdrop if banner_showing else None,
                     )
                     prompted = True
                 except EOFError:
@@ -1963,8 +2005,19 @@ def main() -> None:
                     # the terminal's to reflow, and prompt_toolkit has
                     # already redrawn the prompt itself by now.
                     if banner_showing:
-                        repaint(console, update)
+                        backdrop = repaint(console, update)
                     continue
+
+                if banner_showing and (
+                    uin == WAKE or (not uin.strip() and Config.voice)
+                ):
+                    # Something is about to print under the opening
+                    # screen. The foot of the picture went with the
+                    # prompt, so put it back first, and from here on
+                    # the screen is a conversation, not ours to redraw.
+                    for row in backdrop:
+                        print(row)
+                    banner_showing = False
 
                 if uin == WAKE:
                     woken = True
@@ -1973,8 +2026,12 @@ def main() -> None:
                         # The banner has been read by now, and the
                         # padding under it was only ever there to put
                         # the opening prompt at the foot of the screen.
-                        # Both are in the way of the conversation.
-                        _clear_screen(bottom=True)
+                        # Both are in the way of the conversation, which
+                        # starts from the top: the prompt then follows
+                        # the last message down with free rows under it,
+                        # and the completion menu opens into those
+                        # instead of shoving the messages up the screen.
+                        _clear_screen()
                         banner_showing = False
                     _render_sent_message(console, Config.prompt, uin)
 
