@@ -55,6 +55,13 @@ class Turn:
         self.total_nanoseconds = 0
         self.prompt_tokens = 0
 
+        # What the spinner called this turn, in the past tense, and how
+        # long it actually spun. Not the same as `seconds`, which is
+        # what Ollama reports for generation; this is what the user sat
+        # through, summed across every round the turn took.
+        self.state = ""
+        self.waited = 0.0
+
     def add(self, response) -> None:
         """Fold one chat response into the running totals."""
 
@@ -64,6 +71,18 @@ class Turn:
         self.prompt_tokens = max(
             self.prompt_tokens, _count(response, "prompt_eval_count")
         )
+
+    def note_wait(self, state: str, seconds: float) -> None:
+        """Record one spell of waiting on the model.
+
+        The first state of the turn is the one that sticks, because it
+        is the one the user watched while the wait was still new.
+        """
+
+        if not self.state:
+            self.state = state
+
+        self.waited += max(0.0, seconds)
 
     @property
     def tokens(self) -> int:
@@ -100,7 +119,7 @@ def window(limit: int) -> str:
     return f"{limit // 1024}K" if limit >= 1024 else str(limit)
 
 
-def _elapsed(seconds: float) -> str:
+def elapsed(seconds: float) -> str:
     """A short duration: 93.4 -> '1m 33s'."""
 
     whole = int(seconds)
@@ -125,7 +144,7 @@ def summary(
     line = Text(f"  {turn.tokens:,} tokens", style=DIM)
 
     if turn.seconds >= 1:
-        line.append(f" in {_elapsed(turn.seconds)}")
+        line.append(f" in {elapsed(turn.seconds)}")
 
     rate = turn.rate
 

@@ -10,7 +10,7 @@ import threading
 import time
 from collections.abc import Callable
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 import ollama
 from dotenv import load_dotenv
@@ -44,7 +44,7 @@ from .repl_input import (
     read_line,
     status_segments,
 )
-from .stats import Turn, window
+from .stats import Turn, elapsed, window
 from .stats import summary as stats_summary
 from .sysprompt import (
     get_context_ceiling,
@@ -62,6 +62,7 @@ from .theme import (
     DIM,
     DIM_ANSI,
     ELLIPSIS,
+    MIDDOT,
     RESET_ANSI,
     WARN,
     confirm,
@@ -721,36 +722,58 @@ def _session_system_prompt(heard: bool = False) -> str:
     return prompt + VOICE_PROMPT if heard else prompt
 
 
-def _load_states(key: str, fallback: list[str]) -> list[str]:
+def _state_pair(entry: Any) -> dict:
+    """One state as {"now", "then"}, whatever shape the file used.
+
+    A bare string still works and reads back as its own past tense,
+    which is wrong but harmless, and better than dropping the state.
+    """
+
+    if isinstance(entry, dict):
+        now = str(entry.get("now", "")).strip()
+        then = str(entry.get("then", "")).strip()
+    else:
+        now = str(entry).strip()
+        then = ""
+
+    if not now:
+        return {}
+
+    return {"now": now, "then": then or now}
+
+
+def _load_states(key: str, fallback: list[dict]) -> list[dict]:
     try:
         p = Path(__file__).parent / "thinking_states.json"
         data = json.loads(p.read_text(encoding="utf-8"))
-        states = list(data.get(key, []))
+        states = [_state_pair(entry) for entry in data.get(key, [])]
+        states = [state for state in states if state]
         if not states:
             raise ValueError("no states")
         return states
-    except ValueError:
+    except (ValueError, OSError):
         return fallback
 
 
-def _load_thinking_states() -> list[str]:
-    return _load_states(
-        "states",
-        ["Thinking", "Pondering", "Analyzing", "Considering", "Reflecting"],
-    )
+def _load_thinking_states() -> list[dict]:
+    return _load_states("states", [
+        {"now": "Thinking", "then": "Thought"},
+        {"now": "Pondering", "then": "Pondered"},
+        {"now": "Analyzing", "then": "Analyzed"},
+    ])
 
 
-def _load_image_thinking_states() -> list[str]:
-    return _load_states(
-        "image_states",
-        ["Examining the image", "Analyzing the image", "Looking closely"],
-    )
+def _load_image_thinking_states() -> list[dict]:
+    return _load_states("image_states", [
+        {"now": "Examining the image", "then": "Examined the image"},
+        {"now": "Looking closely", "then": "Looked closely"},
+    ])
 
 
 _thinking_state_index = 0
 
 
-def _next_thinking_state(states: list[str]) -> str:
+def _next_thinking_state(states: list[dict]) -> dict:
     global _thinking_state_index
     state = states[_thinking_state_index % len(states)]
     _thinking_state_index += 1
@@ -801,11 +824,12 @@ def _try_chat(
     *,
     is_image: bool = False,
     bar: Optional[Callable[[], str]] = None,
+    turn: Optional[Turn] = None,
 ) -> tuple[Optional[object], Optional[str]]:
     states = _load_image_thinking_states() if is_image \
         else _load_thinking_states()
     state = _next_thinking_state(states)
-    word = f"{state}{ELLIPSIS}"
+    word = f"{state['now']}{ELLIPSIS}"
     period = len(word) + 2 * GLIMMER_SPREAD
     stop_event = threading.Event()
     start = time.monotonic()
@@ -860,6 +884,9 @@ def _try_chat(
         stop_event.set()
         t.join(timeout=0.1)
 
+        if turn is not None:
+            turn.note_wait(state["then"], time.monotonic() - start)
+
 
 # console.status() draws one line and nothing else, so the waiting view
 # is a Live of its own: the spinner on top, the status bar under it.
@@ -874,6 +901,7 @@ def _chat_with_status(
     *,
     is_image: bool = False,
     bar: Optional[Callable[[], str]] = None,
+    turn: Optional[Turn] = None,
 ) -> tuple[Optional[object], Optional[str]]:
     with Live(
         Spinner(
@@ -888,7 +916,7 @@ def _chat_with_status(
     ) as live:
         return _try_chat(
             client, messages, live, tools_arg,
-            is_image=is_image, bar=bar,
+            is_image=is_image, bar=bar, turn=turn,
         )
 
 
@@ -911,7 +939,7 @@ def _chat_retry_until_response(
     for attempt in range(1, FINAL_RESPONSE_RETRIES + 2):
         res, err = _chat_with_status(
             console, client, messages, tools_arg,
-            is_image=is_image, bar=bar,
+            is_image=is_image, bar=bar, turn=turn,
         )
         _note_backend(err is None)
 
@@ -1167,6 +1195,30 @@ def _render_context(messages: list[dict]) -> None:
     body.append(checkpoint.describe())
 
     console.print(body)
+
+
+def _clock() -> str:
+    """The wall clock the way a person reads it: 7:32 PM."""
+
+    return time.strftime("%I:%M %p").lstrip("0")
+
+
+def _render_done(turn: Turn) -> None:
+    """Close the turn out: what the wait was, how long, and when it ended.
+
+    The state is the one the spinner opened with, in the past tense,
+    so the line reads as that same thought finishing rather than as a
+    new one starting.
+    """
+
+    if not turn.state:
+        return
+
+    console.print(Text(
+        f"  {turn.state} for {elapsed(turn.waited)} "
+        f"{MIDDOT} done {_clock()}",
+        style=DIM,
+    ))
 
 
 def _render_stats(turn: Turn) -> None:
@@ -2042,6 +2094,7 @@ def main() -> None:
                         "Could you rephrase or try again?"
                     )
                 _render_markdown(console, final)
+                _render_done(turn)
                 _render_stats(turn)
                 _note_running_agents()
                 notify_reply_ready()
@@ -2138,6 +2191,7 @@ def main() -> None:
                 followup += "\n```"
 
             _render_markdown(console, followup)
+            _render_done(turn)
             _render_stats(turn)
             _note_running_agents()
             notify_reply_ready()
