@@ -43,12 +43,19 @@ select = [
     "W",      # pycodestyle warnings
     "F",      # pyflakes
     "I",      # import sorting
-    "UP",     # pyupgrade, including PEP 604 `X | None` annotations
+    "UP",     # pyupgrade, minus the two annotation rules below
     "BLE",    # blind excepts
     "DTZ",    # naive datetimes
     "S110",   # try/except/pass
     "RUF100", # noqa directives that no longer suppress anything
 ]
+
+# This codebase spells a union `Union[A, B]` and a nullable
+# `Optional[X]`. UP007 and UP045 rewrite both into `A | B`, which is a
+# house-style question rather than a correctness one, so they are the
+# one part of UP that stays off. Without this, `ruff --fix` silently
+# converts the whole codebase back.
+ignore = ["UP007", "UP045"]
 
 # Security is the separate bandit job's responsibility. Selecting
 # ruff's full S family here would report the same code twice, at a

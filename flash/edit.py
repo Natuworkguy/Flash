@@ -24,6 +24,7 @@ pure so they can be tested directly.
 
 import difflib
 from dataclasses import dataclass, field
+from typing import Optional
 
 # A miss reports the closest thing in the file, but only when it really
 # is close; below this ratio the "did you mean" is noise that sends the
@@ -89,7 +90,7 @@ def _leading(line: str) -> str:
     return line[:len(line) - len(line.lstrip())]
 
 
-def _shift(line: str, add: str, strip: int) -> str | None:
+def _shift(line: str, add: str, strip: int) -> Optional[str]:
     """`line` as it would appear in the file under this shift.
 
     Returns None when `strip` would eat something that is not
@@ -109,7 +110,7 @@ def _shift(line: str, add: str, strip: int) -> str | None:
     return add + line
 
 
-def _shift_for(file_line: str, old_line: str) -> tuple[str, int] | None:
+def _shift_for(file_line: str, old_line: str) -> Optional[tuple[str, int]]:
     """The one shift that could turn `old_line` into `file_line`.
 
     Either the file has extra leading whitespace the model dropped, or
@@ -268,7 +269,7 @@ def _quote(lines: list[str]) -> str:
     return body
 
 
-def nearest(text: str, old: str) -> str | None:
+def nearest(text: str, old: str) -> Optional[str]:
     """The block in `text` that comes closest to `old`, if one is close.
 
     A failed edit is nearly always one wrong character, and the model
@@ -284,7 +285,7 @@ def nearest(text: str, old: str) -> str | None:
         return None
 
     best_ratio = 0.0
-    best: list[str] | None = None
+    best: Optional[list[str]] = None
     matcher = difflib.SequenceMatcher(autojunk=False)
     matcher.set_seq2("\n".join(line.strip() for line in old_lines))
 

@@ -17,6 +17,7 @@ import time
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from typing import Optional
 
 import ollama
 from rich.console import Group, RenderableType
@@ -94,7 +95,7 @@ class SubAgent:
     status: str = RUNNING
     result: str = ""
     started: float = field(default_factory=time.time)
-    finished: float | None = None
+    finished: Optional[float] = None
     rounds: int = 0
     activity: str = "Starting"
     steps: list[Step] = field(default_factory=list)
@@ -292,7 +293,7 @@ def _snapshot(entry: SubAgent) -> SubAgent:
     )
 
 
-def status(agent_id: str) -> SubAgent | None:
+def status(agent_id: str) -> Optional[SubAgent]:
     """A copy of a sub-agent's current state, or None if unknown."""
 
     with _lock:
@@ -462,7 +463,7 @@ def render(
     entry: SubAgent,
     *,
     header: bool = True,
-    recent: int | None = RECENT_STEPS,
+    recent: Optional[int] = RECENT_STEPS,
     result: bool = False,
 ) -> RenderableType:
     """One sub-agent's progress: status, latest steps, maybe its answer."""
@@ -548,7 +549,7 @@ def _live(
             time.sleep(1 / REFRESH_PER_SECOND)
 
 
-def follow(agent_id: str, timeout: float) -> SubAgent | None:
+def follow(agent_id: str, timeout: float) -> Optional[SubAgent]:
     """Wait up to TIMEOUT seconds for a sub-agent, drawing it live."""
 
     if status(agent_id) is None:
