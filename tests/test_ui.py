@@ -518,6 +518,7 @@ class TestClearingToTheBottom:
             SimpleNamespace(
                 is_terminal=is_terminal,
                 size=SimpleNamespace(width=80, height=rows),
+                forget=lambda: None,
             ),
         )
 
@@ -579,6 +580,7 @@ class TestRepaintingOnResize:
         from flash.repl_input import RESIZE
 
         repaints = []
+        self.redraws = []
         feed = iter(lines)
         sent = []
 
@@ -604,6 +606,10 @@ class TestRepaintingOnResize:
         monkeypatch.setattr(
             ai, "repaint", lambda c, update=None: repaints.append(update)
         )
+        monkeypatch.setattr(
+            ai, "redraw_conversation", lambda c: self.redraws.append(c)
+        )
+        monkeypatch.setattr(ai, "_settle_size", lambda: None)
         monkeypatch.setattr(Config, "show_stats", False)
         monkeypatch.setattr(subagents, "_agents", {})
 
@@ -637,8 +643,24 @@ class TestRepaintingOnResize:
     def test_no_repaint_once_the_banner_has_gone(self, monkeypatch):
         from flash.repl_input import RESIZE
 
-        # After a turn the conversation above is the terminal's to
-        # reflow, and prompt_toolkit has redrawn the prompt already.
         repaints, _, _ = self.drive(monkeypatch, ["hi", RESIZE])
 
         assert repaints == []
+
+    def test_the_conversation_is_redrawn_instead(self, monkeypatch):
+        from flash.repl_input import RESIZE
+
+        # Left to the terminal, it rewraps at the old width and the
+        # prompt's frame gets rewrapped into the middle of it.
+        self.drive(monkeypatch, ["hi", RESIZE])
+
+        assert self.redraws == [ai.console]
+
+    def test_the_opening_screen_is_not_redrawn_as_a_conversation(
+        self, monkeypatch
+    ):
+        from flash.repl_input import RESIZE
+
+        self.drive(monkeypatch, [RESIZE, "hi"])
+
+        assert self.redraws == []

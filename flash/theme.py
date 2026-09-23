@@ -13,6 +13,7 @@ from typing import Optional
 
 from prompt_toolkit.formatted_text import StyleAndTextTuples
 from rich.console import Console
+from rich.control import Control
 from rich.markdown import Markdown
 from rich.text import Text
 
@@ -23,7 +24,111 @@ WARN = "#d9a63f"
 DIFF_ADD = "#3fb950"
 DIFF_DEL = "#e5484d"
 
-console = Console()
+
+class ScreenConsole(Console):
+    """The console, keeping a copy of what it has left on screen.
+
+    A terminal that changes shape rewraps what it shows at the width it
+    was printed for, the prompt's frame included, and nothing can put
+    that right in place. So after a resize the screen is wiped and
+    everything since it was last cleared is printed again, at the width
+    the terminal is now. This is where that copy comes from.
+
+    Only what stays counts: a Live's frames are drawn through render
+    hooks and wiped again, and the newline it writes on the way out
+    goes with them when it was transient.
+    """
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.transcript: list = []
+        self._not_keeping = 0
+
+    @contextmanager
+    def unkept(self) -> Iterator[None]:
+        """Output in here is not kept, whatever path it takes."""
+
+        self._not_keeping += 1
+        try:
+            yield
+        finally:
+            self._not_keeping -= 1
+
+    def print(self, *objects, **kwargs) -> None:
+        if not (objects and all(isinstance(o, Control) for o in objects)):
+            self.keep(("print", objects, kwargs))
+        super().print(*objects, **kwargs)
+
+    def line(self, count: int = 1) -> None:
+        # Only Live calls this, to step past its frame, and a transient
+        # one wipes the step along with the frame.
+        with self.unkept():
+            super().line(count)
+
+    def begin_capture(self) -> None:
+        self._not_keeping += 1
+        super().begin_capture()
+
+    def end_capture(self) -> str:
+        self._not_keeping -= 1
+        return super().end_capture()
+
+    def keep(self, item) -> None:
+        """Note down something that reached the screen.
+
+        A string is raw text, as a subprocess or the terminal's own echo
+        of typed input left it. Anything else is a renderable, or a
+        ("print", objects, kwargs) call to make again.
+        """
+
+        if not self._not_keeping:
+            self.transcript.append(item)
+
+    def echo(self, text: str) -> None:
+        """Write raw text, keeping it."""
+
+        self.keep(text)
+        with self.unkept():
+            self.file.write(text)
+            self.file.flush()
+
+    def forget(self) -> None:
+        """The screen was cleared, so there is nothing on it to redraw."""
+
+        self.transcript = []
+
+    def rendered(self) -> str:
+        """Everything kept, as it prints at the terminal's current size."""
+
+        parts = []
+
+        for item in self.transcript:
+            if isinstance(item, str):
+                parts.append(item)
+                continue
+
+            with self.capture() as capture:
+                if isinstance(item, tuple) and item[:1] == ("print",):
+                    super().print(*item[1], **item[2])
+                else:
+                    super().print(item)
+
+            parts.append(capture.get())
+
+        return "".join(parts)
+
+    def replay(self) -> None:
+        """Print everything kept again, at the terminal's current size.
+
+        In one write, so the terminal takes it in as one change rather
+        than scrolling through the conversation a print at a time.
+        """
+
+        self.file.write(self.rendered())
+        self.file.flush()
+
+
+console = ScreenConsole()
 
 
 def can_encode(text: str) -> bool:
@@ -175,6 +280,19 @@ def tool_diff(diff_lines: list[str], *, more: int = 0) -> None:
         )
 
 
+def typed() -> str:
+    """input(), lowered and stripped, keeping the line the terminal echoed.
+
+    The terminal draws what is typed at input(), not the console, so
+    without this a redraw would bring back the question and not the
+    answer.
+    """
+
+    answer = input()
+    console.keep(answer + "\n")
+    return answer.strip().lower()
+
+
 def confirm(question: str) -> bool:
     """Ask QUESTION on one y/n line. True only for a plain yes."""
 
@@ -184,12 +302,12 @@ def confirm(question: str) -> bool:
     console.print(ask, end="")
 
     try:
-        answer = input().strip().lower()
+        answer = typed()
     except EOFError:
-        print()
+        console.print()
         return False
 
-    print()
+    console.print()
     return answer == "y"
 
 

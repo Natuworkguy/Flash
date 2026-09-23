@@ -43,6 +43,7 @@ from .repl_input import (
     MAX_MENU_ROWS,
     RESIZE,
     WAKE,
+    screen_redrawn,
     read_line,
     status_segments,
 )
@@ -67,11 +68,13 @@ from .theme import (
     MIDDOT,
     RESET_ANSI,
     WARN,
+    ScreenConsole,
     confirm,
     console,
     glimmer,
     tool_line,
     tool_result,
+    typed,
     warn,
 )
 from .theme import error as show_error
@@ -475,17 +478,72 @@ def _clear_screen(bottom: bool = False) -> None:
     What prints next then fills the screen from the bottom upward, and
     the prompt stays glued to the foot of the terminal from that point
     on, the way it does once a long session has filled the screen on
-    its own. Clearing without it leaves the cursor at the top, which
-    is what strands the prompt halfway up with dead space beneath it.
+    its own. Without it, the conversation runs down from the top and
+    the prompt keeps its own frame on the last rows.
+
+    The console's transcript goes with it: there is nothing left on
+    screen to draw again after a resize.
     """
 
     if not console.is_terminal:
         return
 
+    console.forget()
     print("\x1b[H\x1b[2J\x1b[3J", end="", flush=True)
 
     if bottom:
         print(f"\x1b[{console.size.height};1H", end="", flush=True)
+
+
+# How long the terminal has to hold one size before it is redrawn. A
+# drag resizes it many times a second, and each redraw prints the whole
+# conversation again, so only the size it comes to rest at is drawn.
+RESIZE_SETTLE_SECONDS = 0.25
+RESIZE_SETTLE_LIMIT_SECONDS = 2.0
+
+
+def _settle_size() -> None:
+    """Wait for the terminal to stop changing shape, up to a limit."""
+
+    size = shutil.get_terminal_size()
+    until = time.monotonic() + RESIZE_SETTLE_LIMIT_SECONDS
+
+    while time.monotonic() < until:
+        time.sleep(RESIZE_SETTLE_SECONDS)
+        now = shutil.get_terminal_size()
+
+        if now == size:
+            return
+
+        size = now
+
+
+def redraw_conversation(c: ScreenConsole) -> None:
+    """Wipe the screen and print the conversation on it again.
+
+    The terminal rewraps what it shows when it changes shape, at the
+    width it was printed for, and the prompt's frame on the last rows
+    goes with it. Printing it all again lets rich wrap it for the width
+    the terminal is now, and gives the prompt a clean screen to pin its
+    frame to the foot of.
+    """
+
+    if not c.is_terminal:
+        return
+
+    # The wipe and everything after it go out as one write, inside a
+    # synchronized update where the terminal has them, so it goes from
+    # the old screen to the new one without showing the steps between.
+    c.file.write(
+        SYNC_BEGIN + "\x1b[H\x1b[2J\x1b[3J" + c.rendered() + SYNC_END
+    )
+    c.file.flush()
+
+
+# DEC mode 2026. Terminals that know it hold the screen still between
+# the two and show the result at once; the rest ignore both.
+SYNC_BEGIN = "\x1b[?2026h"
+SYNC_END = "\x1b[?2026l"
 
 
 _background_notices: set = set()
@@ -1841,11 +1899,11 @@ def _run_update(*, force: bool = False) -> bool:
         ask.append("/n ", style=DIM)
         console.print(ask, end="")
         try:
-            answer = input().strip().lower()
+            answer = typed()
         except EOFError:
-            print()
+            console.print()
             return True
-        print()
+        console.print()
         if answer != "y":
             console.print(Text("Update cancelled.", style=DIM))
             return True
@@ -1896,12 +1954,12 @@ def _confirm_url_prompt(prompt: str) -> bool:
     console.print(ask, end="")
 
     try:
-        answer = input().strip().lower()
+        answer = typed()
     except EOFError:
-        print()
+        console.print()
         return False
 
-    print()
+    console.print()
     return answer == "y"
 
 
@@ -2000,12 +2058,12 @@ def main() -> None:
                     return
 
                 if uin == RESIZE:
-                    # Only the opening screen is ours to redraw. Once
-                    # there is a conversation above the prompt it is
-                    # the terminal's to reflow, and prompt_toolkit has
-                    # already redrawn the prompt itself by now.
+                    _settle_size()
                     if banner_showing:
                         backdrop = repaint(console, update)
+                    else:
+                        redraw_conversation(console)
+                    screen_redrawn()
                     continue
 
                 if banner_showing and (
@@ -2248,7 +2306,7 @@ def main() -> None:
 
             if uin == "/agents" or uin.startswith("/agents "):
                 subagents.watch(uin[len("/agents"):].strip())
-                print()
+                console.print()
                 continue
 
             if uin == "/version":
@@ -2312,14 +2370,15 @@ def main() -> None:
 
             direct_command = _direct_shell_command(uin)
             if direct_command:
-                print(
+                console.echo(
                     shell_tool(
                         direct_command,
                         is_user=True,
                         timeout=MAX_SHELL_TIMEOUT
                     )
+                    + "\n"
                 )
-                print()
+                console.print()
                 continue
 
             if uin in {"/help", "/?"}:
@@ -2400,7 +2459,7 @@ def main() -> None:
                 listening_on = _speak_reply(final, heard)
                 messages.append(_message("assistant", final))
                 _fit_and_compact(console, client, messages)
-                print()
+                console.print()
                 continue
 
             tool_messages = [system_message] + messages.copy()
@@ -2499,10 +2558,10 @@ def main() -> None:
             messages.append(_message("assistant", followup))
             _fit_and_compact(console, client, messages)
 
-            print()
+            console.print()
 
         except KeyboardInterrupt:
-            print()
+            console.print()
             continue
 
 

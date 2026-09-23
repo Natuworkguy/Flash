@@ -62,6 +62,7 @@ from .theme import (
     tool_diff,
     tool_line,
     tool_result,
+    typed,
 )
 
 SCRATCH_DIR = mkdtemp(prefix="flash-scratch-", suffix="-temp")
@@ -309,7 +310,7 @@ def _run_shell_streaming(
                 raise subprocess.TimeoutExpired(args, seconds)
             if chunk is None:
                 break
-            print(chunk, end="", flush=True)
+            console.echo(chunk)
             chunks.append(chunk)
     except BaseException:
         proc.kill()
@@ -387,7 +388,7 @@ def shell_tool(command: str, timeout=None, is_user=False) -> str:
             prompt.append("/n ", style=DIM)
             console.print(prompt, end="")
 
-            user_input = input().strip().lower()
+            user_input = typed()
 
             if user_input != "y":
                 tool_result("Command blocked by user", style=WARN)
@@ -817,7 +818,7 @@ def write_tool(path: str, content: str, append: Any = False) -> str:
         console.print(prompt, end="")
 
         try:
-            answer = input().strip().lower()
+            answer = typed()
         finally:
             _close_diff()
 
@@ -919,7 +920,7 @@ def _confirm_change(
     console.print(prompt, end="")
 
     try:
-        answer = input().strip().lower()
+        answer = typed()
     finally:
         # Closed on the way out whichever way it went, and even if the
         # read was interrupted, so a decided diff never lingers.

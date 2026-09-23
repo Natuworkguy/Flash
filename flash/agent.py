@@ -540,13 +540,18 @@ def _live(
         console.print(view())
         return
 
-    with Live(
-        get_renderable=view,
-        console=console,
-        refresh_per_second=REFRESH_PER_SECOND,
-    ):
-        while busy():
-            time.sleep(1 / REFRESH_PER_SECOND)
+    try:
+        with Live(
+            get_renderable=view,
+            console=console,
+            refresh_per_second=REFRESH_PER_SECOND,
+        ):
+            while busy():
+                time.sleep(1 / REFRESH_PER_SECOND)
+    finally:
+        # A Live's frames never pass through console.print, so the one
+        # it leaves behind has to be noted down to be drawn again.
+        console.keep(view())
 
 
 def follow(agent_id: str, timeout: float) -> Optional[SubAgent]:
