@@ -18,6 +18,7 @@ reporting a clean revert that left one of them changed.
 
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Optional
 
 # Big enough for any source file, small enough that a session that
 # rewrites a few dozen of them costs megabytes rather than gigabytes.
@@ -36,7 +37,7 @@ class Group:
     """Every file one turn touched, as it looked before the turn."""
 
     label: str = ""
-    files: dict[str, bytes | None] = field(default_factory=dict)
+    files: dict[str, Optional[bytes]] = field(default_factory=dict)
     # Files that changed but were too big to snapshot.
     skipped: list[str] = field(default_factory=list)
 
@@ -128,7 +129,7 @@ def describe() -> str:
     return f"Undo would restore {count} {noun}{label}."
 
 
-def _last() -> Group | None:
+def _last() -> Optional[Group]:
     for group in reversed(_groups):
         if len(group):
             return group
@@ -136,7 +137,7 @@ def _last() -> Group | None:
     return None
 
 
-def _restore(key: str, before: bytes | None) -> tuple[str, str]:
+def _restore(key: str, before: Optional[bytes]) -> tuple[str, str]:
     """Put one file back. Returns (outcome, detail) for the summary."""
 
     target = Path(key)

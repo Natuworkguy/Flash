@@ -9,6 +9,7 @@ import sys
 import threading
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
+from typing import Optional
 
 from prompt_toolkit.formatted_text import StyleAndTextTuples
 from rich.console import Console
@@ -92,7 +93,7 @@ def capture_tool_output(sink: ToolSink) -> Iterator[None]:
         _capture.sink = None
 
 
-def _sink() -> ToolSink | None:
+def _sink() -> Optional[ToolSink]:
     return getattr(_capture, "sink", None)
 
 

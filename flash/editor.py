@@ -11,9 +11,10 @@ import os
 import shutil
 import subprocess  # nosec B404 -- fixed argv to VS Code's CLI, no shell
 from pathlib import Path
+from typing import Optional
 
 
-def cli() -> str | None:
+def cli() -> Optional[str]:
     """Path to the `code` command, if Flash runs inside VS Code."""
 
     if os.environ.get("TERM_PROGRAM") != "vscode":

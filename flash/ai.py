@@ -8,17 +8,20 @@ import shutil
 import sys
 import threading
 import time
+from collections.abc import Callable
 from pathlib import Path
+from typing import Optional
 
 import ollama
 from dotenv import load_dotenv
 from ollama import ResponseError
-from rich.align import Align
+from rich.box import ROUNDED
 from rich.cells import cell_len
 from rich.console import Console, Group
 from rich.live import Live
 from rich.markdown import Markdown
 from rich.panel import Panel
+from rich.spinner import Spinner
 from rich.text import Text
 
 from . import agent as subagents
@@ -31,7 +34,16 @@ from .memory import forget_memory, list_memory
 from .models import fetch_if_missing, pick_model
 from .notify import notify_reply_ready
 from .paths import ENV_PATH
-from .repl_input import COMMANDS, WAKE, read_line
+from .repl_input import (
+    COMMANDS,
+    HEALTH_DOWN,
+    HEALTH_HEX,
+    HEALTH_OK,
+    HEALTH_UNKNOWN,
+    WAKE,
+    read_line,
+    status_segments,
+)
 from .stats import Turn, window
 from .stats import summary as stats_summary
 from .sysprompt import (
@@ -44,6 +56,7 @@ from .sysprompt import (
 from .theme import (
     ACCENT,
     ACCENT_ANSI,
+    BULLET,
     CHEVRON,
     CURSOR,
     DIM,
@@ -144,7 +157,7 @@ def _int_env(name: str, default: int, *, minimum: int) -> int:
 
 def _opt_int_env(
     name: str, *, minimum: int
-) -> int | None:
+) -> Optional[int]:
     """An override the user set, or None when they left it alone.
 
     Distinguishing "unset" from a default matters for the history caps:
@@ -168,12 +181,12 @@ class Config:
     """App configuration, re-derived from the environment on demand."""
 
     host: str
-    model: str | None
+    model: Optional[str]
     # Unset by default: the token budget in context.py decides how
     # much history survives, and these only cap it further when the
     # user has explicitly asked for a smaller one.
-    max_history_messages: int | None
-    max_history_chars: int | None
+    max_history_messages: Optional[int]
+    max_history_chars: Optional[int]
     auto_compact: bool
     max_tool_rounds: int
     max_tool_output_chars: int
@@ -249,60 +262,81 @@ def refresh_config() -> None:
     Config.refresh()
 
 
+def _short_path(path: Path) -> str:
+    """A path the way a shell prompt writes it, with $HOME as ~."""
+
+    try:
+        return "~/" + str(path.relative_to(Path.home()))
+    except ValueError:
+        return str(path)
+
+
+def _short_host(host: str) -> str:
+    """The host without its scheme, which is noise in a status line."""
+
+    return host.removeprefix("http://").removeprefix("https://")
+
+
 def banner(
     c: Console,
-    update_version: str | None = None,
+    update_version: Optional[str] = None,
 ) -> None:
-    """Print the app banner"""
+    """Print the app banner.
+
+    Laid out the way a terminal agent's welcome reads best: the name on
+    the marked line, then one fact per line underneath. Centering it and
+    running the fields together made the host wrap mid-URL on a narrow
+    terminal, which is the one line someone actually needs to read when
+    they are pointed at the wrong backend.
+    """
 
     title = Text()
     title.append(f"Flash CLI v{__version__}", style="bold")
 
-    info = Text()
-    info.append("/help", style=ACCENT)
-    info.append(" for commands   model: ", style=DIM)
-    info.append(str(Config.model or "(unset)"))
-    info.append("   host: ", style=DIM)
-    info.append(Config.host)
+    fields = Text()
+    fields.append("  /help", style=ACCENT)
+    fields.append(" for commands\n", style=DIM)
+    for label, value in (
+        ("model", str(Config.model or "(unset)")),
+        ("host", _short_host(Config.host)),
+        ("cwd", _short_path(Path.cwd())),
+    ):
+        fields.append(f"  {label + ':':<7}", style=DIM)
+        fields.append(f"{value}\n")
+    fields.rstrip()
 
-    lines = [title, Text(""), info]
+    lines = [title, Text(""), fields]
+
+    notices = []
     if Config.no_command_confirmation:
-        lines.append(
-            Text("Autonomous mode: commands run without confirmation",
-                 style=f"bold {ACCENT}")
-        )
+        notices.append("autonomous, commands run without confirmation")
     if Config.voice:
-        lines.append(
-            Text("Voice mode: Enter on an empty line speaks, "
-                 "/voice off disables it",
-                 style=f"bold {ACCENT}")
-        )
+        notices.append("voice on, Enter on an empty line speaks")
     if update_version:
-        lines.append(
-            Text(
-                f"\nUpdate available: v{update_version} "
-                "(run /update to upgrade)",
-                style=f"bold {ACCENT}"
-            )
-        )
+        notices.append(f"v{update_version} available, run /update")
 
-    c.print(
-        Align.center(
-            Panel(
-                Group(*lines),
-                border_style=DIM,
-                padding=(1, 2),
-                expand=False,
-            )
-        )
-    )
+    if notices:
+        block = Text()
+        for index, notice in enumerate(notices):
+            if index:
+                block.append("\n")
+            block.append(f"  {BULLET} {notice}", style=f"bold {ACCENT}")
+        lines.extend([Text(""), block])
+
+    c.print(Panel(
+        Group(*lines),
+        border_style=DIM,
+        box=ROUNDED,
+        padding=(0, 1),
+        expand=False,
+    ))
     print()
 
 
 def _message(
     role: str,
     text: str,
-    images: list | None = None,
+    images: Optional[list] = None,
 ) -> dict:
     message: dict = {"role": role, "content": text}
     if images:
@@ -340,6 +374,33 @@ def _worth_keeping(messages: list[dict], start: int) -> list[dict]:
     return kept
 
 
+_tool_schema_tokens: dict[int, int] = {}
+
+
+def _tools_overhead(tools_arg) -> int:
+    """What the tool schemas cost, measured once per tool set.
+
+    Serialising two dozen JSON schemas is nothing once a turn and
+    wasteful a dozen times a second, which is how often the waiting
+    view redraws now that it carries the status line.
+    """
+
+    if not tools_arg:
+        return 0
+
+    key = len(tools_arg)
+
+    if key not in _tool_schema_tokens:
+        try:
+            _tool_schema_tokens[key] = context.estimate_tokens(
+                json.dumps(tools_arg)
+            )
+        except (TypeError, ValueError):
+            _tool_schema_tokens[key] = 0
+
+    return _tool_schema_tokens[key]
+
+
 def _history_budget() -> int:
     """How many tokens of conversation this model can afford to keep.
 
@@ -349,11 +410,7 @@ def _history_budget() -> int:
     """
 
     overhead = context.estimate_tokens(_session_system_prompt())
-
-    try:
-        overhead += context.estimate_tokens(json.dumps(turn_tools()))
-    except (TypeError, ValueError):
-        pass
+    overhead += _tools_overhead(turn_tools())
 
     return context.history_budget(
         _context_limit(),
@@ -410,7 +467,7 @@ def _trim_history(messages: list[dict]) -> list[dict]:
 
 def _summarize(
     console: Console, client: "ollama.Client", messages: list[dict]
-) -> str | None:
+) -> Optional[str]:
     """Have the model condense MESSAGES into a few lines, or None."""
 
     if not messages:
@@ -479,7 +536,7 @@ def _fit_and_compact(
 
 def _direct_shell_command(
     text: str,
-) -> str | None:
+) -> Optional[str]:
     if text.startswith("!"):
         cmd = text[1:].strip()
         for prefix in ["shell ", "run "]:
@@ -578,8 +635,8 @@ subagents.chat_options = _chat_options
 
 
 _model_system_prompts: dict[str, str] = {}
-_context_limits: dict[str, int | None] = {}
-_context_ceilings: dict[str, int | None] = {}
+_context_limits: dict[str, Optional[int]] = {}
+_context_ceilings: dict[str, Optional[int]] = {}
 _context_notices: set[str] = set()
 _num_ctx_notices: set[str] = set()
 NUM_CTX_MAX = "max"
@@ -644,6 +701,9 @@ GLIMMER_SPEED = 10.0  # characters per second
 GLIMMER_SPREAD = 2.5
 GLIMMER_FRAME_SECONDS = 0.08
 
+# How long a wait runs before the spinner says how to end it.
+STOP_HINT_SECONDS = 4
+
 MAX_CHAT_RETRIES = 2
 RETRY_DELAY_SECONDS = 2.0
 FINAL_RESPONSE_RETRIES = 2
@@ -651,7 +711,7 @@ FINAL_RESPONSE_RETRIES = 2
 
 def _chat_with_retries(
     client: "ollama.Client", messages: list, tools_arg=None
-) -> tuple[object | None, str | None]:
+) -> tuple[Optional[object], Optional[str]]:
     """Call _chat, retrying transient backend errors before giving up."""
 
     detail = ""
@@ -676,11 +736,12 @@ def _chat_with_retries(
 def _try_chat(
     client: "ollama.Client",
     messages: list,
-    status,
+    live,
     tools_arg=None,
     *,
     is_image: bool = False,
-) -> tuple[object | None, str | None]:
+    bar: Optional[Callable[[], str]] = None,
+) -> tuple[Optional[object], Optional[str]]:
     states = _load_image_thinking_states() if is_image \
         else _load_thinking_states()
     state = _next_thinking_state(states)
@@ -692,12 +753,39 @@ def _try_chat(
     def _label(elapsed: float) -> str:
         offset = (elapsed * GLIMMER_SPEED) % period - GLIMMER_SPREAD
         shine = glimmer(word, offset, GLIMMER_SPREAD)
-        return f"[bold]{shine}[/bold] [{DIM}]({int(elapsed)}s)[/{DIM}]"
+        # The way out only appears once the wait is long enough to want
+        # one, so a quick answer is not decorated with an escape hatch.
+        stop = "   ctrl+c to stop" if elapsed >= STOP_HINT_SECONDS else ""
+        return (
+            f"[bold]{shine}[/bold] "
+            f"[{DIM}]({int(elapsed)}s{stop})[/{DIM}]"
+        )
+
+    def _frame(elapsed: float):
+        spinner = Spinner(
+            "point",
+            text=Text.from_markup(_label(elapsed)),
+            style=ACCENT,
+            speed=5,
+        )
+
+        # Rebuilt each frame rather than captured once: sub-agents
+        # finish while the model is writing, which is exactly when a
+        # count frozen at the start of the turn would be wrong.
+        line = bar() if bar is not None else None
+
+        if line is None or not line.plain.strip():
+            return spinner
+
+        # A top-level line rather than more text beside the spinner, so
+        # it sits at column zero and reads as the same bar the prompt
+        # carries rather than a continuation of the label.
+        return Group(spinner, line)
 
     def _rotate():
         while True:
             try:
-                status.update(_label(time.monotonic() - start))
+                live.update(_frame(time.monotonic() - start))
             except ValueError:
                 pass
             if stop_event.wait(GLIMMER_FRAME_SECONDS):
@@ -713,6 +801,11 @@ def _try_chat(
         t.join(timeout=0.1)
 
 
+# console.status() draws one line and nothing else, so the waiting view
+# is a Live of its own: the spinner on top, the status bar under it.
+GLIMMER_REFRESH_PER_SECOND = max(1, round(1 / GLIMMER_FRAME_SECONDS))
+
+
 def _chat_with_status(
     console: Console,
     client: "ollama.Client",
@@ -720,14 +813,22 @@ def _chat_with_status(
     tools_arg=None,
     *,
     is_image: bool = False,
-) -> tuple[object | None, str | None]:
-    with console.status(
-        f"[bold {ACCENT}]Thinking{ELLIPSIS}", spinner="point",
-        spinner_style=ACCENT,
-        speed=5
-    ) as status:
+    bar: Optional[Callable[[], str]] = None,
+) -> tuple[Optional[object], Optional[str]]:
+    with Live(
+        Spinner(
+            "point",
+            text=Text.from_markup(f"[bold]Thinking{ELLIPSIS}[/bold]"),
+            style=ACCENT,
+            speed=5,
+        ),
+        console=console,
+        refresh_per_second=GLIMMER_REFRESH_PER_SECOND,
+        transient=True,
+    ) as live:
         return _try_chat(
-            client, messages, status, tools_arg, is_image=is_image
+            client, messages, live, tools_arg,
+            is_image=is_image, bar=bar,
         )
 
 
@@ -738,8 +839,9 @@ def _chat_retry_until_response(
     tools_arg=None,
     *,
     is_image: bool = False,
-    turn: Turn | None = None,
-) -> tuple[str, str, list, str | None]:
+    turn: Optional[Turn] = None,
+    bar: Optional[Callable[[], str]] = None,
+) -> tuple[str, str, list, Optional[str]]:
     """Call the model, retrying up to FINAL_RESPONSE_RETRIES times if it
     comes back with neither reply text nor a tool call to make."""
 
@@ -748,8 +850,11 @@ def _chat_retry_until_response(
     tool_calls: list = []
     for attempt in range(1, FINAL_RESPONSE_RETRIES + 2):
         res, err = _chat_with_status(
-            console, client, messages, tools_arg, is_image=is_image
+            console, client, messages, tools_arg,
+            is_image=is_image, bar=bar,
         )
+        _note_backend(err is None)
+
         if err:
             return "", "", [], err
 
@@ -771,7 +876,7 @@ def _chat_retry_until_response(
     return final, thinking, tool_calls, None
 
 
-def _context_ceiling() -> int | None:
+def _context_ceiling() -> Optional[int]:
     """The longest window the active model could do, asked once."""
 
     model = Config.model or ""
@@ -844,7 +949,7 @@ def _note_num_ctx(message: str) -> None:
     warn(f"  {message}")
 
 
-def _context_limit() -> int | None:
+def _context_limit() -> Optional[int]:
     """The window this turn ran in, or None if nobody set one.
 
     What Flash asks for wins, since that is what Ollama allocates, then
@@ -908,6 +1013,69 @@ def _turn_label(text: str) -> str:
         return line
 
     return line[:TURN_LABEL_MAX - 1].rstrip() + ELLIPSIS
+
+
+# Whether the backend answered the last time it was asked. Nothing
+# here polls it: a request either came back or it did not, and that is
+# the only evidence worth showing.
+_backend_health = HEALTH_UNKNOWN
+
+
+def _note_backend(ok: bool) -> None:
+    """Record how the last request to the backend went."""
+
+    global _backend_health
+    _backend_health = HEALTH_OK if ok else HEALTH_DOWN
+
+
+def _bar_text(messages: list[dict]) -> Text:
+    """The status bar as rich draws it, for the waiting view."""
+
+    dot, rest = status_segments(_status_text(messages), _backend_health)
+
+    line = Text()
+    line.append(dot[1], style=HEALTH_HEX[_backend_health])
+    line.append(rest[1], style=DIM)
+
+    return line
+
+
+def _status_text(messages: list[dict]) -> str:
+    """The dim line under the prompt: what Flash is currently pointed at.
+
+    Only what changes the next answer earns a place here. The model is
+    always worth saying, the host only when it is not this machine, the
+    sub-agents only while some are still working, and the two modes
+    that change what happens without being asked again.
+    """
+
+    parts = [str(Config.model or "no model")]
+
+    if Config.host != OLLAMA_HOST_DEFAULT:
+        parts.append(_short_host(Config.host))
+
+    budget = _history_budget()
+
+    if budget and messages:
+        used = context.total_tokens(messages)
+        # Capped: history is trimmed on the way into a turn, not out of
+        # one, so a reading above the budget is real but says "full"
+        # rather than anything the reader can act on.
+        share = min(100, round(100 * used / budget))
+        parts.append(f"context {share}%")
+
+    agents = subagents.running_count()
+
+    if agents:
+        parts.append(f"{agents} agent{'' if agents == 1 else 's'}")
+
+    if Config.no_command_confirmation:
+        parts.append("auto")
+
+    if Config.voice:
+        parts.append("voice")
+
+    return "   ".join(parts)
 
 
 def _render_context(messages: list[dict]) -> None:
@@ -1173,7 +1341,7 @@ def _set_voice(on: bool) -> None:
     console.print(told)
 
 
-def _voice_input() -> str | None:
+def _voice_input() -> Optional[str]:
     """Record one spoken turn and return it, or None if nothing was said."""
 
     # VOICE can be set by hand, and a model directory can be deleted, so
@@ -1372,6 +1540,13 @@ def main() -> None:
         sys.exit(0 if _run_update(force=args.force) else 1)
 
     pending: list[str] = []
+
+    # The status bar stays off until the opening prompt has been run. It
+    # pins prompt_toolkit's layout to the foot of the screen, and the
+    # rows reserved for the completion menu would push the banner off
+    # the top before anyone has read it.
+    prompted = False
+
     if args.url:
         try:
             pending.append(parse_flash_url(args.url))
@@ -1410,7 +1585,7 @@ def main() -> None:
 
     while True:
         try:
-            pending_images: list[str] | None = None
+            pending_images: Optional[list[str]] = None
             heard = False
 
             woken = False
@@ -1429,7 +1604,15 @@ def main() -> None:
                 woken = True
             else:
                 try:
-                    uin = read_line(Config.prompt, wake=wake_ready)
+                    uin = read_line(
+                        Config.prompt,
+                        wake=wake_ready,
+                        status=(
+                            _status_text(messages) if prompted else None
+                        ),
+                        health=_backend_health,
+                    )
+                    prompted = True
                 except EOFError:
                     print()
                     return
@@ -1764,9 +1947,13 @@ def main() -> None:
 
             turn = Turn()
             offered = turn_tools()
+
+            def bar() -> Text:
+                return _bar_text(messages)
+
             final, thinking, tool_calls, err = _chat_retry_until_response(
                 console, client, [system_message] + messages, offered,
-                is_image=bool(pending_images), turn=turn,
+                is_image=bool(pending_images), turn=turn, bar=bar,
             )
             if err:
                 _print_backend_error(err)
@@ -1844,7 +2031,7 @@ def main() -> None:
 
                 final, thinking, tool_calls, err = _chat_retry_until_response(
                     console, client, tool_messages, offered, turn=turn,
-                    is_image=bool(tool_images),
+                    is_image=bool(tool_images), bar=bar,
                 )
                 if err:
                     tool_error = err
@@ -1866,7 +2053,8 @@ def main() -> None:
             if not followup.strip():
                 tool_messages.append(_tool_limit_message())
                 followup, thinking, _, err = _chat_retry_until_response(
-                    console, client, tool_messages, None, turn=turn
+                    console, client, tool_messages, None, turn=turn,
+                    bar=bar,
                 )
                 if err:
                     _print_backend_error(err)

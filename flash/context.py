@@ -20,6 +20,7 @@ keep the thread of a long session instead of losing it.
 
 import math
 from dataclasses import dataclass, field
+from typing import Optional
 
 # Characters per token. Real tokenizers average nearer 4 on prose and
 # worse on code and JSON, which is most of what a tool result holds.
@@ -81,7 +82,7 @@ def total_tokens(messages: list[dict]) -> int:
 
 
 def history_budget(
-    context_window: int | None,
+    context_window: Optional[int],
     *,
     system_tokens: int = 0,
     output_tokens: int = 0,

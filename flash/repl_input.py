@@ -3,20 +3,30 @@
 import asyncio
 import json
 import os
+import shutil
 import time
 from collections.abc import Callable
 from pathlib import Path
+from typing import Optional
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.application.current import get_app
 from prompt_toolkit.completion import Completer, Completion, PathCompleter
 from prompt_toolkit.document import Document
 from prompt_toolkit.formatted_text import ANSI, StyleAndTextTuples
+from prompt_toolkit.styles import Style
 
 from .images import IMAGE_EXTENSIONS
 from .memory import MEMORY_PATH
 from .paths import ENV_PATH
-from .theme import SPARKLE, ptk_sweep_reveal
+from .theme import (
+    CURSOR,
+    DIFF_ADD,
+    DIM_HEX,
+    ERROR,
+    SPARKLE,
+    ptk_sweep_reveal,
+)
 
 # Single source of truth for both the completion dropdown and /help.
 COMMANDS = [
@@ -74,7 +84,7 @@ def _mention_completer(typed: str) -> PathCompleter:
     )
 
 
-def _mention_before(text: str) -> str | None:
+def _mention_before(text: str) -> Optional[str]:
     """The @ mention being typed at the end of TEXT, if there is one.
 
     Returns whatever follows the '@', which is "" the moment it is typed,
@@ -93,7 +103,7 @@ def _mention_before(text: str) -> str | None:
 
 def _parse_path_arg(
     remainder: str,
-) -> tuple[str, bool] | None:
+) -> Optional[tuple[str, bool]]:
     """Track quoting while scanning the path argument typed so far.
 
     Returns `(literal_path, in_quote)`: `literal_path` is the path with any
@@ -105,7 +115,7 @@ def _parse_path_arg(
     """
 
     literal_chars = []
-    quote: str | None = None
+    quote: Optional[str] = None
     for ch in remainder:
         if quote:
             if ch == quote:
@@ -260,7 +270,116 @@ def _suggestion_placeholder() -> StyleAndTextTuples:
     )
 
 
-_session: PromptSession | None = None
+# The line pinned under the input, the way a terminal agent carries
+# its state: what it is pointed at on the left, what you can type on
+# the right.
+HINTS = "/ commands   @ files   ! shell"
+
+# Below this the two halves collide, so the hints go and the state stays.
+MIN_STATUS_WIDTH = 60
+
+# Overrides prompt_toolkit's default bottom bar, which is a reversed
+# block of colour. This is meant to read as a footnote, not a widget.
+# Whether the backend answered last time it was asked. Green once it
+# has, red once it has not, and grey before anything has been sent,
+# because "untested" and "broken" are different things to look at.
+HEALTH_OK = "ok"
+HEALTH_DOWN = "down"
+HEALTH_UNKNOWN = "unknown"
+
+HEALTH_DOT = CURSOR
+
+HEALTH_HEX = {
+    HEALTH_OK: DIFF_ADD,
+    HEALTH_DOWN: ERROR,
+    HEALTH_UNKNOWN: DIM_HEX,
+}
+
+
+_STATUS_STYLE = Style.from_dict({
+    "bottom-toolbar": f"noreverse {DIM_HEX} bg:default",
+    "bottom-toolbar.text": f"noreverse {DIM_HEX} bg:default",
+    f"bottom-toolbar.health.{HEALTH_OK}":
+        f"noreverse {HEALTH_HEX[HEALTH_OK]} bg:default",
+    f"bottom-toolbar.health.{HEALTH_DOWN}":
+        f"noreverse {HEALTH_HEX[HEALTH_DOWN]} bg:default",
+    f"bottom-toolbar.health.{HEALTH_UNKNOWN}":
+        f"noreverse {HEALTH_HEX[HEALTH_UNKNOWN]} bg:default",
+})
+
+
+# prompt_toolkit keeps eight rows free for the completion dropdown, and
+# once a bottom toolbar anchors the layout it draws them whether or not
+# a menu is open. Ten rows of banner plus a prompt, those eight and the
+# bar comes to twenty, which fits a terminal window and does not fit a
+# VS Code panel, so the reservation scales with the room there is.
+MAX_MENU_ROWS = 8
+MIN_MENU_ROWS = 2
+
+
+def menu_rows() -> int:
+    """How many rows to keep free for the completion dropdown."""
+
+    rows = shutil.get_terminal_size().lines
+
+    return max(MIN_MENU_ROWS, min(MAX_MENU_ROWS, rows // 4))
+
+
+def status_line(status: str, prefix: int = 0) -> str:
+    """The bar as plain text, with the hints at the right margin.
+
+    `prefix` is how many columns something else has already drawn on
+    this line, so the right margin still lands at the right margin.
+
+    Kept separate from `status_bar` so the same line can be drawn by
+    rich while the model is answering, where prompt_toolkit is not
+    running and its formatted-text tuples mean nothing.
+    """
+
+    width = shutil.get_terminal_size().columns - prefix
+
+    if width < MIN_STATUS_WIDTH:
+        return f" {status}"
+
+    gap = width - len(status) - len(HINTS) - 2
+
+    if gap < 2:
+        return f" {status}"
+
+    return f" {status}{' ' * gap}{HINTS} "
+
+
+def status_segments(
+    status: str, health: str = HEALTH_UNKNOWN
+) -> list[tuple[str, str]]:
+    """The bar as (style name, text) pairs, health dot first.
+
+    The dot is the one part of the line that is not dim, because it is
+    the one part that is worth looking at when something is wrong.
+    """
+
+    return [
+        (f"health.{health}", f" {HEALTH_DOT}"),
+        ("", status_line(status, prefix=2)),
+    ]
+
+
+def status_bar(
+    status: str, health: str = HEALTH_UNKNOWN
+) -> StyleAndTextTuples:
+    """The status line, as prompt_toolkit's bottom toolbar wants it."""
+
+    return [
+        (
+            f"class:bottom-toolbar.{name}" if name
+            else "class:bottom-toolbar",
+            text,
+        )
+        for name, text in status_segments(status, health)
+    ]
+
+
+_session: Optional[PromptSession] = None
 
 # What read_line returns when `wake` fired instead of the user submitting.
 # A NUL can't be typed at the prompt, so no real line can collide with it.
@@ -270,7 +389,9 @@ WAKE_POLL_SECONDS = 0.25
 
 def read_line(
     prompt_ansi: str,
-    wake: Callable[[], bool] | None = None,
+    wake: Optional[Callable[[], bool]] = None,
+    status: Optional[str] = None,
+    health: str = HEALTH_UNKNOWN,
 ) -> str:
     """Read one line; suggests / commands in a dropdown while typing one,
     and animates a rotating hint at the cursor while the line is empty.
@@ -278,6 +399,12 @@ def read_line(
     If `wake` turns true while the line is still empty, the prompt gives
     way and returns WAKE. It never does while the user has typed
     something, so a half-written message is not snatched away.
+
+    A `status` pins a state line under the input. Passing None leaves it
+    off, which is what the opening prompt does: a bottom bar anchors
+    prompt_toolkit's layout to the foot of the screen, and the rows it
+    reserves for the completion menu would then scroll the banner away
+    before it has been read.
     """
 
     global _session
@@ -288,6 +415,7 @@ def read_line(
             placeholder=_suggestion_placeholder,
             refresh_interval=PLACEHOLDER_REFRESH_SECONDS,
             erase_when_done=True,
+            style=_STATUS_STYLE,
         )
 
     def watch_for_wake() -> None:
@@ -305,4 +433,11 @@ def read_line(
 
         app.create_background_task(poll())
 
-    return _session.prompt(ANSI(prompt_ansi), pre_run=watch_for_wake)
+    return _session.prompt(
+        ANSI(prompt_ansi),
+        pre_run=watch_for_wake,
+        reserve_space_for_menu=menu_rows(),
+        bottom_toolbar=(
+            (lambda: status_bar(status, health)) if status else None
+        ),
+    )

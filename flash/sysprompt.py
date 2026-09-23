@@ -3,6 +3,7 @@ import os
 import re
 import urllib.error
 import urllib.request
+from typing import Optional
 
 SHOW_TIMEOUT_SECONDS = 5
 
@@ -96,7 +97,7 @@ def model_sees_images(host: str, model: str) -> bool:
 
 def get_context_limit(
     host: str, model: str
-) -> int | None:
+) -> Optional[int]:
     """The token window MODEL pins in its Modelfile, or None.
 
     Deliberately not the architecture's maximum. A model that pins
@@ -115,7 +116,7 @@ def get_context_limit(
 
 def get_context_ceiling(
     host: str, model: str
-) -> int | None:
+) -> Optional[int]:
     """The longest window MODEL's architecture can do, or None.
 
     Never a window to run in by default. Ollama allocates the cache for

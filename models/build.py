@@ -13,6 +13,7 @@ import urllib.error
 import urllib.request
 from functools import cache
 from pathlib import Path
+from typing import Optional
 
 FROM_PATTERN = re.compile(
     r"^FROM[ \t]+(?P<repo>[^\s:]+)(?::\S+)?[ \t]*$",
@@ -175,7 +176,7 @@ def build(
     size: str,
     label: str,
     terms: str,
-    namespace: str | None,
+    namespace: Optional[str],
     dry_run: bool,
     push: bool,
 ) -> None:
@@ -199,7 +200,7 @@ def build(
 
 def wanted(
     declared: list[str],
-    asked: list[str] | None,
+    asked: Optional[list[str]],
     path: Path,
     cloud: bool,
 ) -> list[str]:
