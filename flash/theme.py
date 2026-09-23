@@ -50,6 +50,10 @@ CURSOR = "●" if _UNICODE_OK else "."        # ●
 BAR_FULL = "━" if _UNICODE_OK else "#"      # ━
 BAR_EMPTY = "─" if _UNICODE_OK else "-"     # ─
 
+# Its own check: a console can carry every glyph above and still
+# choke on this one.
+MIDDOT = "·" if _can_encode("·") else "-"   # ·
+
 # Plan checkboxes, kept on their own encoding check: a terminal can carry
 # the glyphs above and still choke on these.
 _BOXES_OK = _can_encode("☒☐")
