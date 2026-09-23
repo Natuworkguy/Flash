@@ -323,3 +323,43 @@ class TestSnugRenderer:
 
         assert erased == []
 
+
+
+class TestScreenRedrawn:
+    """After a full redraw the next prompt must not see a resize that
+    has already been dealt with, or it asks for another, forever."""
+
+    def test_it_measures_the_way_the_renderer_does(self, monkeypatch):
+        from types import SimpleNamespace
+        from prompt_toolkit.data_structures import Size
+
+        # prompt_toolkit's Windows output is a column narrower than
+        # shutil's figure; the settled size has to be prompt_toolkit's.
+        ptk = Size(rows=30, columns=99)
+        monkeypatch.setattr(
+            repl_input,
+            "_session",
+            SimpleNamespace(app=SimpleNamespace(
+                output=SimpleNamespace(get_size=lambda: ptk)
+            )),
+        )
+        monkeypatch.setattr(
+            repl_input.shutil,
+            "get_terminal_size",
+            lambda: __import__("os").terminal_size((100, 30)),
+        )
+        monkeypatch.setattr(repl_input.SnugRenderer, "settled", None)
+
+        repl_input.screen_redrawn()
+
+        assert repl_input.SnugRenderer.settled == ptk
+
+    def test_before_any_prompt_there_is_nothing_to_compare(
+        self, monkeypatch
+    ):
+        monkeypatch.setattr(repl_input, "_session", None)
+        monkeypatch.setattr(repl_input.SnugRenderer, "settled", "stale")
+
+        repl_input.screen_redrawn()
+
+        assert repl_input.SnugRenderer.settled is None
