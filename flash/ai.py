@@ -25,7 +25,7 @@ from rich.spinner import Spinner
 from rich.text import Text
 
 from . import agent as subagents
-from . import checkpoint, context, plan, terminal
+from . import background, checkpoint, context, plan, terminal
 from .cli import parse_args
 from .envfile import set_env_var, unset_env_var
 from .images import resolve_image_path
@@ -196,6 +196,7 @@ class Config:
     no_command_confirmation: bool
     show_stats: bool
     voice: bool
+    background: str
     prompt: str
 
     @classmethod
@@ -222,6 +223,7 @@ class Config:
         )
         cls.show_stats = bool(_int_env("SHOW_STATS", 1, minimum=0))
         cls.voice = bool(_int_env("VOICE", 0, minimum=0))
+        cls.background = (os.getenv("BACKGROUND") or "").strip()
         cls.prompt = \
             (ACCENT_ANSI + CHEVRON + " " + RESET_ANSI) \
             if cls.host == OLLAMA_HOST_DEFAULT \
@@ -284,17 +286,14 @@ def _short_host(host: str) -> str:
 FIRST_PROMPT_ROWS = 3
 
 
-def banner(
-    c: Console,
-    update_version: Optional[str] = None,
-) -> int:
-    """Print the app banner, and answer with the rows it used.
+def _banner_lines(update_version: Optional[str] = None) -> list:
+    """What goes inside the welcome box.
 
     Laid out the way a terminal agent's welcome reads best: the name on
-    the marked line, then one fact per line underneath. Centering it and
-    running the fields together made the host wrap mid-URL on a narrow
-    terminal, which is the one line someone actually needs to read when
-    they are pointed at the wrong backend.
+    its own line, then one fact per line underneath. Running the fields
+    together wrapped the host mid-URL on a narrow terminal, which is
+    the one line someone actually needs when they are pointed at the
+    wrong backend.
     """
 
     title = Text()
@@ -330,13 +329,28 @@ def banner(
             block.append(f"  {BULLET} {notice}", style=f"bold {ACCENT}")
         lines.extend([Text(""), block])
 
-    panel = Panel(
-        Group(*lines),
+    return lines
+
+
+def banner_panel(update_version: Optional[str] = None) -> Panel:
+    """The welcome box, built but not drawn."""
+
+    return Panel(
+        Group(*_banner_lines(update_version)),
         border_style=DIM,
         box=ROUNDED,
         padding=(0, 1),
         expand=False,
     )
+
+
+def banner(
+    c: Console,
+    update_version: Optional[str] = None,
+) -> int:
+    """Print the welcome box, and answer with the rows it used."""
+
+    panel = banner_panel(update_version)
 
     c.print(panel)
     # c.print, not print: the blank row has to land in the same stream
@@ -346,6 +360,62 @@ def banner(
 
     # The blank line above counts as one of the rows it used.
     return len(c.render_lines(panel, c.options, pad=False)) + 1
+
+
+def _overlay_cells(c: Console, renderable, width: int, height: int) -> list:
+    """A rich renderable as rows of (character, style) cells.
+
+    Padded out to the full area so the rows a short banner does not
+    reach come back as blank cells, which is what lets the scene show
+    through underneath them.
+    """
+
+    # Width only. Handing rich a height as well stretches the banner
+    # to fill it, and a welcome box with its sides running the length
+    # of the terminal is not a welcome box.
+    options = c.options.update(width=width)
+    rows = []
+
+    for line in c.render_lines(renderable, options, pad=True):
+        cells = []
+        for segment in line:
+            cells.extend((char, segment.style) for char in segment.text)
+        rows.append(cells)
+
+    while len(rows) < height:
+        rows.append([])
+
+    return rows[:height]
+
+
+def paint_launch(c: Console, update_version: Optional[str] = None) -> bool:
+    """Fill the screen with the scene, banner set on top of it.
+
+    Returns whether it drew anything. Painting only the gap under the
+    banner left the picture in a band with black above and below it,
+    so the scene now runs from the top of the terminal down to the
+    frame around the prompt, and the banner sits on the picture rather
+    than punching a hole in it.
+    """
+
+    scene = current_scene()
+
+    if scene is None or not c.is_terminal:
+        return False
+
+    rows = c.size.height - FIRST_PROMPT_ROWS
+    width = c.size.width
+
+    overlay = _overlay_cells(c, banner_panel(update_version), width, rows)
+    drawn = background.render(scene, width, rows, overlay=overlay)
+
+    if not drawn:
+        return False
+
+    for line in drawn:
+        c.print(line)
+
+    return True
 
 
 def _clear_screen(bottom: bool = False) -> None:
@@ -366,6 +436,144 @@ def _clear_screen(bottom: bool = False) -> None:
 
     if bottom:
         print(f"\x1b[{console.size.height};1H", end="", flush=True)
+
+
+_background_notices: set = set()
+
+
+def _note_background(message: str) -> None:
+    """Say once why the chosen background is not showing.
+
+    A scene that quietly fails to draw looks like the feature is
+    broken rather than like the file is.
+    """
+
+    if Config.background in _background_notices:
+        return
+
+    _background_notices.add(Config.background)
+    warn(f"  {message}")
+
+
+def current_scene() -> Optional[background.Scene]:
+    """The scene the user picked, if it can be drawn at all."""
+
+    if not Config.background:
+        return None
+
+    if not background.drawable():
+        _note_background(
+            "This terminal cannot draw the half block a background is "
+            "made of, so BACKGROUND was ignored."
+        )
+        return None
+
+    path = background.find(Config.background)
+
+    if path is None:
+        _note_background(
+            f"No background called {Config.background!r}. "
+            "Run /background to see what there is."
+        )
+        return None
+
+    try:
+        return background.load(path)
+    except background.SceneError as exc:
+        _note_background(str(exc))
+        return None
+
+
+# Tall enough to read as a picture, short enough not to shove the
+# conversation off the screen when someone is just browsing scenes.
+PREVIEW_ROWS = 12
+
+
+def _preview_scene(scene: background.Scene) -> None:
+    """Draw a scene at once, so switching shows what you switched to."""
+
+    for line in background.render(
+        scene, console.size.width, PREVIEW_ROWS
+    ):
+        console.print(line)
+
+
+def _list_backgrounds(scenes: list) -> None:
+    """Every scene there is, with the current one marked."""
+
+    body = Text()
+    body.append("\nBackgrounds\n\n", style="bold")
+
+    for name in scenes:
+        current = name == Config.background
+        body.append(
+            f"  {BULLET} " if current else "    ",
+            style=ACCENT,
+        )
+        body.append(f"{name:<12}", style="" if current else DIM)
+
+        path = background.find(name)
+        try:
+            title = background.load(path).name if path else ""
+        except background.SceneError as exc:
+            body.append(f"unreadable: {exc}\n", style=WARN)
+            continue
+
+        body.append(f"{title}\n", style=DIM)
+
+    body.append(
+        "\n  /background <name> to switch, /background off to stop\n",
+        style=DIM,
+    )
+    console.print(body)
+
+
+def _background_command(arg: str) -> None:
+    """/background on its own, with a name, or with off."""
+
+    if arg.lower() in ("off", "none", "no", "0"):
+        unset_config_var("BACKGROUND")
+        _background_notices.clear()
+        console.print(Text("Background off.", style=DIM))
+        return
+
+    scenes = background.names()
+
+    if not scenes:
+        warn(
+            "No scenes found. Drop .scene files in "
+            f"{background.user_dir()}."
+        )
+        return
+
+    if not arg:
+        _list_backgrounds(scenes)
+        return
+
+    path = background.find(arg)
+
+    if path is None:
+        warn(
+            f"No background called {arg!r}. "
+            f"There is: {', '.join(scenes)}."
+        )
+        return
+
+    try:
+        scene = background.load(path)
+    except background.SceneError as exc:
+        show_error(str(exc))
+        return
+
+    set_config_var("BACKGROUND", path.stem)
+    _background_notices.clear()
+
+    if not background.drawable():
+        warn("Saved, but this terminal cannot draw it.")
+        return
+
+    console.print(Text(f"Background set to {scene.name}.", style=DIM))
+    _preview_scene(scene)
 
 
 def pad_to_bottom(c: Console, used: int) -> int:
@@ -1692,7 +1900,11 @@ def main() -> None:
             and bool(subagents.unseen())
         )
 
-    pad_to_bottom(console, banner(console, check_for_update()))
+    update = check_for_update()
+
+    if not paint_launch(console, update):
+        pad_to_bottom(console, banner(console, update))
+
     banner_showing = True
 
     while True:
@@ -1821,6 +2033,10 @@ def main() -> None:
                 console.print(
                     Text(f"Autonomous mode {state}.", style=f"bold {ACCENT}")
                 )
+                continue
+
+            if uin == "/background" or uin.startswith("/background "):
+                _background_command(uin[len("/background"):].strip())
                 continue
 
             if uin == "/voice" or uin.startswith("/voice "):

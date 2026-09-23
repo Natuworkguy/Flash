@@ -31,7 +31,12 @@ where = ["."]
 include = ["flash*"]
 
 [tool.setuptools.package-data]
-flash = ["system_prompt.txt", "thinking_states.json", "suggestions.json"]
+flash = [
+    "system_prompt.txt",
+    "thinking_states.json",
+    "suggestions.json",
+    "backgrounds/*.scene",
+]
 
 [tool.ruff]
 line-length = 79

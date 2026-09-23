@@ -26,7 +26,7 @@ DIFF_DEL = "#e5484d"
 console = Console()
 
 
-def _can_encode(text: str) -> bool:
+def can_encode(text: str) -> bool:
     encoding = getattr(sys.stdout, "encoding", None) or "utf-8"
     try:
         text.encode(encoding)
@@ -39,7 +39,7 @@ def _can_encode(text: str) -> bool:
 # report a non-UTF8 stdout encoding and raise UnicodeEncodeError on these
 # glyphs instead of substituting a fallback, crashing the whole process.
 # Fall back to plain ASCII there rather than risk that.
-_UNICODE_OK = _can_encode("✻⏺⎿❯…●━─")
+_UNICODE_OK = can_encode("✻⏺⎿❯…●━─")
 
 SPARKLE = "✻" if _UNICODE_OK else "*"      # ✻
 BULLET = "⏺" if _UNICODE_OK else "*"        # ⏺
@@ -52,15 +52,15 @@ BAR_EMPTY = "─" if _UNICODE_OK else "-"     # ─
 
 # Its own check: a console can carry every glyph above and still
 # choke on this one.
-MIDDOT = "·" if _can_encode("·") else "-"   # ·
+MIDDOT = "·" if can_encode("·") else "-"   # ·
 
 # Plan checkboxes, kept on their own encoding check: a terminal can carry
 # the glyphs above and still choke on these.
-_BOXES_OK = _can_encode("☒☐")
+_BOXES_OK = can_encode("☒☐")
 CHECK_DONE = "☒" if _BOXES_OK else "[x]"    # ☒
 CHECK_TODO = "☐" if _BOXES_OK else "[ ]"    # ☐
 
-_MARKS_OK = _can_encode("✓✗⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏")
+_MARKS_OK = can_encode("✓✗⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏")
 TICK = "✓" if _MARKS_OK else "+"
 CROSS = "✗" if _MARKS_OK else "x"
 SPINNER_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏" if _MARKS_OK else "|/-\\"
