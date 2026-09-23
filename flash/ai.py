@@ -277,11 +277,17 @@ def _short_host(host: str) -> str:
     return host.removeprefix("http://").removeprefix("https://")
 
 
+# The opening prompt is three rows: the rule above, the line you type
+# on, and the rule below. The status line joins above them from the
+# second prompt onward, once there is a turn behind it.
+FIRST_PROMPT_ROWS = 3
+
+
 def banner(
     c: Console,
     update_version: Optional[str] = None,
-) -> None:
-    """Print the app banner.
+) -> int:
+    """Print the app banner, and answer with the rows it used.
 
     Laid out the way a terminal agent's welcome reads best: the name on
     the marked line, then one fact per line underneath. Centering it and
@@ -323,14 +329,68 @@ def banner(
             block.append(f"  {BULLET} {notice}", style=f"bold {ACCENT}")
         lines.extend([Text(""), block])
 
-    c.print(Panel(
+    panel = Panel(
         Group(*lines),
         border_style=DIM,
         box=ROUNDED,
         padding=(0, 1),
         expand=False,
-    ))
-    print()
+    )
+
+    c.print(panel)
+    # c.print, not print: the blank row has to land in the same stream
+    # the panel did, or the height reported below counts a row that
+    # went somewhere else.
+    c.print()
+
+    # The blank line above counts as one of the rows it used.
+    return len(c.render_lines(panel, c.options, pad=False)) + 1
+
+
+def _clear_screen(bottom: bool = False) -> None:
+    """Wipe the terminal, scrollback included.
+
+    With `bottom`, the cursor is parked on the last row afterwards.
+    What prints next then fills the screen from the bottom upward, and
+    the prompt stays glued to the foot of the terminal from that point
+    on, the way it does once a long session has filled the screen on
+    its own. Clearing without it leaves the cursor at the top, which
+    is what strands the prompt halfway up with dead space beneath it.
+    """
+
+    if not console.is_terminal:
+        return
+
+    print("\x1b[H\x1b[2J\x1b[3J", end="", flush=True)
+
+    if bottom:
+        print(f"\x1b[{console.size.height};1H", end="", flush=True)
+
+
+def pad_to_bottom(c: Console, used: int) -> int:
+    """Push the opening prompt down to the foot of the screen.
+
+    A prompt drawn straight under the banner leaves the rest of the
+    terminal empty below it, which reads as a window that has not
+    finished loading. Dropping the blank rows above instead puts the
+    input where every other agent TUI keeps it, at the bottom, with
+    the banner above it.
+
+    Only the first screen needs this. After a turn or two the
+    conversation has filled the terminal and the prompt sits at the
+    bottom on its own.
+    """
+
+    if not c.is_terminal:
+        return 0
+
+    room = c.size.height - used - FIRST_PROMPT_ROWS
+
+    if room <= 0:
+        return 0
+
+    print("\n" * room, end="")
+    return room
 
 
 def _message(
@@ -1557,8 +1617,7 @@ def main() -> None:
 
     client = ollama.Client(host=Config.host)
 
-    if console.is_terminal:
-        print("\x1b[H\x1b[2J\x1b[3J", end="", flush=True)
+    _clear_screen()
 
     messages: list = []
 
@@ -1581,7 +1640,8 @@ def main() -> None:
             and bool(subagents.unseen())
         )
 
-    banner(console, check_for_update())
+    pad_to_bottom(console, banner(console, check_for_update()))
+    banner_showing = True
 
     while True:
         try:
@@ -1619,6 +1679,13 @@ def main() -> None:
                 if uin == WAKE:
                     woken = True
                 elif uin.strip():
+                    if banner_showing:
+                        # The banner has been read by now, and the
+                        # padding under it was only ever there to put
+                        # the opening prompt at the foot of the screen.
+                        # Both are in the way of the conversation.
+                        _clear_screen(bottom=True)
+                        banner_showing = False
                     _render_sent_message(console, Config.prompt, uin)
 
             if woken:
