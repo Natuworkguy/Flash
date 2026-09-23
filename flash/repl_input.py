@@ -16,6 +16,7 @@ from prompt_toolkit.document import Document
 from prompt_toolkit.formatted_text import ANSI, StyleAndTextTuples
 from prompt_toolkit.styles import Style
 
+from . import background
 from .images import IMAGE_EXTENSIONS
 from .memory import MEMORY_PATH
 from .paths import ENV_PATH
@@ -142,12 +143,14 @@ class SlashCommandCompleter(Completer):
     def get_completions(self, document, complete_event):
         text = document.text_before_cursor
 
-        if text.startswith("/image "):
-            remainder = text[len("/image "):]
-            parsed = _parse_path_arg(remainder)
-            if parsed is None:
-                return  # past the path, now typing the optional prompt
-            literal_path, in_quote = parsed
+        if text.startswith("/background "):
+            for name in background.names():
+                yield Completion(
+                    name,
+                    start_position=0,
+                    display=f"scene: {name}",
+                )
+            return
 
             sub_document = Document(
                 literal_path, cursor_position=len(literal_path)
