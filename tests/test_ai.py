@@ -311,7 +311,8 @@ def _script_main(monkeypatch, lines, chat_err=None):
     feed = iter(lines)
     sent = []
 
-    def fake_read_line(prompt, wake=None, status=None, health=None):
+    def fake_read_line(prompt, wake=None, status=None, health=None,
+                       backdrop=None):
         try:
             line = next(feed)
         except StopIteration:

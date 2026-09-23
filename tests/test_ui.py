@@ -135,7 +135,8 @@ class TestWhenTheBarAppears:
         seen = []
         feed = iter(lines)
 
-        def fake_read_line(prompt, wake=None, status=None, health=None):
+        def fake_read_line(prompt, wake=None, status=None, health=None,
+                           backdrop=None):
             seen.append(status)
             try:
                 return next(feed)
@@ -581,7 +582,8 @@ class TestRepaintingOnResize:
         feed = iter(lines)
         sent = []
 
-        def fake_read_line(prompt, wake=None, status=None, health=None):
+        def fake_read_line(prompt, wake=None, status=None, health=None,
+                           backdrop=None):
             try:
                 return next(feed)
             except StopIteration:

@@ -199,10 +199,127 @@ class TestResizeSentinel:
         assert "watch_for_resize" in source
         assert "pre_run=pre_run" in source
 
-    def test_it_polls_rather_than_taking_sigwinch(self):
-        source = inspect.getsource(repl_input.read_line)
+class TestSnugRenderer:
+    """A resize used to leave stale copies of the frame behind and
+    stretch the prompt to the foot of the screen."""
 
-        # prompt_toolkit owns SIGWINCH to redraw itself; taking it over
-        # would fix the picture by breaking the prompt.
-        assert "signal" not in source
-        assert "get_terminal_size" in source
+    def renderer(self, size):
+        from prompt_toolkit.data_structures import Size
+        from prompt_toolkit.output import DummyOutput
+        from prompt_toolkit.styles import Style
+
+        box = {"size": Size(rows=size[1], columns=size[0])}
+        output = DummyOutput()
+        output.get_size = lambda: box["size"]
+
+        renderer = repl_input.Renderer(Style([]), output)
+        rows_below = renderer.__dict__.pop("_min_available_height", 0)
+        renderer.__class__ = repl_input.SnugRenderer
+        renderer._min_available_height = rows_below
+
+        def resize(columns, rows):
+            box["size"] = Size(rows=rows, columns=columns)
+
+        return renderer, resize
+
+    def test_it_never_asks_for_more_than_a_row(self):
+        renderer, _ = self.renderer((80, 40))
+        renderer._min_available_height = 30
+
+        assert renderer._min_available_height == 1
+
+    def test_a_rewrapped_rule_counts_twice(self):
+        from prompt_toolkit.layout.screen import Char, Screen
+
+        screen = Screen()
+        for x in range(120):
+            screen.data_buffer[0][x] = Char("-", "")
+        screen.data_buffer[1][0] = Char(">", "")
+
+        assert repl_input.reflowed_rows(screen, 2, 80) == 3
+        assert repl_input.reflowed_rows(screen, 2, 120) == 2
+
+    def test_unstyled_trailing_space_does_not_wrap(self):
+        from prompt_toolkit.layout.screen import Char, Screen
+
+        screen = Screen()
+        screen.data_buffer[0][0] = Char("x", "")
+        screen.data_buffer[0][100] = Char(" ", "")
+
+        assert repl_input.reflowed_rows(screen, 1, 80) == 1
+
+    def test_a_resize_tells_the_prompt(self, monkeypatch):
+        from types import SimpleNamespace
+        from prompt_toolkit.data_structures import Point, Size
+        from prompt_toolkit.layout.screen import Char, Screen
+
+        renderer, resize = self.renderer((120, 40))
+        screen = Screen()
+        for x in range(120):
+            screen.data_buffer[0][x] = Char("-", "")
+        renderer._last_screen = screen
+        renderer._last_size = Size(rows=40, columns=120)
+        renderer._cursor_pos = Point(x=2, y=1)
+
+        told = []
+        renderer.on_resize = lambda: told.append(True)
+        erased_from = []
+        renderer.erase = lambda **_: erased_from.append(renderer._cursor_pos)
+        renderer.request_absolute_cursor_position = lambda: None
+
+        resize(80, 40)
+        monkeypatch.setattr(
+            repl_input.Renderer, "render", lambda *a, **k: None
+        )
+        renderer.render(SimpleNamespace(), SimpleNamespace())
+
+        assert told == [True]
+        assert erased_from == [Point(x=2, y=2)]
+
+    def test_a_shorter_frame_is_drawn_fresh(self, monkeypatch):
+        from types import SimpleNamespace
+        from prompt_toolkit.data_structures import Size
+        from prompt_toolkit.layout.screen import Screen
+
+        renderer, _ = self.renderer((80, 40))
+        renderer._last_size = Size(rows=40, columns=80)
+        renderer._last_screen = Screen(initial_height=10)
+        renderer._min_available_height = 30
+
+        erased = []
+        renderer.erase = lambda **_: erased.append(True)
+        monkeypatch.setattr(
+            repl_input.Renderer, "render", lambda *a, **k: None
+        )
+        layout = SimpleNamespace(container=SimpleNamespace(
+            preferred_height=lambda w, h: SimpleNamespace(preferred=3)
+        ))
+
+        renderer.render(SimpleNamespace(), layout)
+
+        assert erased == [True]
+        # Still at the same spot, so what is below it has not changed.
+        assert renderer.rows_below == 30
+
+    def test_a_frame_the_same_height_is_left_to_diff(self, monkeypatch):
+        from types import SimpleNamespace
+        from prompt_toolkit.data_structures import Size
+        from prompt_toolkit.layout.screen import Screen
+
+        renderer, _ = self.renderer((80, 40))
+        renderer._last_size = Size(rows=40, columns=80)
+        renderer._last_screen = Screen(initial_height=3)
+
+        erased = []
+        renderer.erase = lambda **_: erased.append(True)
+        monkeypatch.setattr(
+            repl_input.Renderer, "render", lambda *a, **k: None
+        )
+        layout = SimpleNamespace(container=SimpleNamespace(
+            preferred_height=lambda w, h: SimpleNamespace(preferred=3)
+        ))
+
+        renderer.render(SimpleNamespace(), layout)
+
+        assert erased == []
+
