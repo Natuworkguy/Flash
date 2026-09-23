@@ -48,8 +48,16 @@ def no_developer_config(monkeypatch):
     flash.tools. Nothing puts it back, so whether a test that reaches a
     confirmation prompt blocks on stdin came down to whose machine the
     suite was running on. Pinned to the module default here: a test
-    that wants autonomous mode asks for it explicitly.
+    that wants autonomous mode, or a background, asks for it.
     """
 
     monkeypatch.setattr(tools, "NO_COMMAND_CONFIRMATION", False)
-    monkeypatch.delenv("NO_COMMAND_CONFIRMATION", raising=False)
+
+    # The same leak reaches every other setting in that file, so the
+    # ones that change what a test does are cleared too.
+    for name in ("NO_COMMAND_CONFIRMATION", "BACKGROUND"):
+        monkeypatch.delenv(name, raising=False)
+
+    from flash.ai import Config
+
+    monkeypatch.setattr(Config, "background", "")
