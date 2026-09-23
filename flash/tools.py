@@ -816,7 +816,12 @@ def write_tool(path: str, content: str, append: Any = False) -> str:
         prompt.append("/n ", style=DIM)
         console.print(prompt, end="")
 
-        if input().strip().lower() != "y":
+        try:
+            answer = input().strip().lower()
+        finally:
+            _close_diff()
+
+        if answer != "y":
             tool_result("Write blocked by user", style=WARN)
             return "Write blocked by user"
 
@@ -849,6 +854,32 @@ def write_tool(path: str, content: str, append: Any = False) -> str:
     verb = "Wrote" if existed else "Created"
     tool_result(f"{verb} {written} line{plural(written)} to {file_path}")
     return f"{verb} {written} line{plural(written)} to {file_path}"
+
+
+_diff_hint_shown = False
+
+
+def _close_diff() -> None:
+    """Drop the diff Flash opened, now that it has been answered.
+
+    Said once per session if VS Code is set to leave the tab behind:
+    the files go either way, and the setting is the only thing that
+    turns that into the tab actually closing.
+    """
+
+    global _diff_hint_shown
+
+    if not editor.close_diff():
+        return
+
+    if _diff_hint_shown or editor.closes_deleted_editors() is not False:
+        return
+
+    _diff_hint_shown = True
+    tool_result(
+        f"Set {editor.CLOSE_SETTING} to true in VS Code and the diff "
+        "tab will close itself once you have answered."
+    )
 
 
 def _confirm_change(
@@ -887,7 +918,14 @@ def _confirm_change(
     prompt.append("/n ", style=DIM)
     console.print(prompt, end="")
 
-    if input().strip().lower() != "y":
+    try:
+        answer = input().strip().lower()
+    finally:
+        # Closed on the way out whichever way it went, and even if the
+        # read was interrupted, so a decided diff never lingers.
+        _close_diff()
+
+    if answer != "y":
         tool_result("Edit blocked by user", style=WARN)
         return "Edit blocked by user"
 
