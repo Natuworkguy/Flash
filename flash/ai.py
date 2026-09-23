@@ -40,6 +40,7 @@ from .repl_input import (
     HEALTH_HEX,
     HEALTH_OK,
     HEALTH_UNKNOWN,
+    RESIZE,
     WAKE,
     read_line,
     status_segments,
@@ -386,6 +387,21 @@ def _overlay_cells(c: Console, renderable, width: int, height: int) -> list:
         rows.append([])
 
     return rows[:height]
+
+
+def repaint(c: Console, update_version: Optional[str] = None) -> None:
+    """Draw the opening screen again, after the terminal changed shape.
+
+    The picture is ordinary output, so a resize reflows it at the
+    width it was drawn for. Nothing can rescue those rows in place;
+    they have to be wiped and drawn again at the size the terminal is
+    now.
+    """
+
+    _clear_screen()
+
+    if not paint_launch(c, update_version):
+        pad_to_bottom(c, banner(c, update_version))
 
 
 def paint_launch(c: Console, update_version: Optional[str] = None) -> bool:
@@ -1940,6 +1956,16 @@ def main() -> None:
                 except EOFError:
                     print()
                     return
+
+                if uin == RESIZE:
+                    # Only the opening screen is ours to redraw. Once
+                    # there is a conversation above the prompt it is
+                    # the terminal's to reflow, and prompt_toolkit has
+                    # already redrawn the prompt itself by now.
+                    if banner_showing:
+                        repaint(console, update)
+                    continue
+
                 if uin == WAKE:
                     woken = True
                 elif uin.strip():
