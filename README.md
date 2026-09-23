@@ -21,7 +21,7 @@ FLASH (**F**ast **L**ocal **A**gent **SH**ell) CLI is an AI-powered command-line
 - **Voice Mode**: `/voice on` downloads a Vosk speech model and a Piper voice, then lets you talk to Flash and hear its replies, with typing still available at any time.
 - **Visible Plans**: For a multi-step task the AI posts a checklist up front and ticks each box as it finishes that step, so you can see where it is instead of waiting for the wall of text at the end.
 - **Knows What Just Broke**: With `/hook install`, Flash sees the commands you run in VS Code's terminal and whether they failed, so "why did that fail?" works without pasting anything.
-- **VS Code Aware**: Run from VS Code's terminal, Flash opens its edits as side-by-side diffs while it waits for your yes, and opens files at the line it's talking about.
+- **VS Code Aware**: Run from VS Code's terminal, Flash opens its edits as side-by-side diffs while it waits for your yes, clears them away once you have answered, and opens files at the line it's talking about.
 - **Async Sub-agents**: The AI can spawn background sub-agents with the `agent` tool to work on independent pieces of a task at the same time, then collect each one's answer with `agent_result` once it's needed.
 - **Context Management**: Automatic history trimming to stay within token limits.
 - **Markdown Support**: Rich formatting for AI responses in the terminal.
@@ -188,6 +188,11 @@ around it, through VS Code's own `code` command:
 
 - When Flash wants to change a file and waits for your yes, the change
   opens as a side-by-side diff in the editor, so you can review it there.
+  Once you have answered, Flash drops the files behind that diff, so a
+  decided change stops sitting in the editor looking like it is still
+  waiting for you. Whether the tab itself closes is VS Code's call: set
+  `workbench.editor.closeOnFileDelete` to `true` and it closes with
+  them. Flash says so once per session if it is off.
 - The model can open a file at the line it is talking about.
 
 `/hook install` goes one step further: it adds three lines to your
