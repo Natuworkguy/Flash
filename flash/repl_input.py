@@ -17,6 +17,7 @@ from prompt_toolkit.formatted_text import ANSI, StyleAndTextTuples
 from prompt_toolkit.styles import Style
 
 from . import background
+from .emojis import EMOJIS
 from .images import IMAGE_EXTENSIONS
 from .memory import MEMORY_PATH
 from .paths import ENV_PATH
@@ -151,6 +152,24 @@ class SlashCommandCompleter(Completer):
                     display=f"scene: {name}",
                 )
             return
+
+        # Emoji completions for :smile etc.
+        if ":" in text:
+            # Find the last word starting with :
+            words = text.split()
+            if words:
+                last_word = words[-1]
+                if last_word.startswith(":"):
+                    query = last_word[1:].lower()
+                    start_pos = -len(last_word)
+                    for name, emoji in EMOJIS.items():
+                        if name.startswith(query):
+                            yield Completion(
+                                f"{emoji}",
+                                start_position=start_pos,
+                                display=f"{name}: {emoji}",
+                            )
+                    return
 
             sub_document = Document(
                 literal_path, cursor_position=len(literal_path)
