@@ -271,7 +271,7 @@ class TestSnugRenderer:
         monkeypatch.setattr(
             repl_input.Renderer, "render", lambda *a, **k: None
         )
-        renderer.render(SimpleNamespace(), SimpleNamespace())
+        renderer.render(SimpleNamespace(future=None), SimpleNamespace())
 
         assert told == [True]
         assert erased_from == [Point(x=2, y=2)]

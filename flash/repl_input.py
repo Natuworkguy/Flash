@@ -593,6 +593,12 @@ class SnugRenderer(Renderer):
 
             if self.on_resize is not None:
                 self.on_resize()
+
+            # The prompt is standing down for a redraw of the whole
+            # screen. A frame drawn now would land on a screen the
+            # terminal is still rewrapping and stay there until then.
+            if app.future is not None and app.future.done():
+                return
         elif (
             not is_done
             and screen is not None
@@ -620,6 +626,24 @@ class SnugRenderer(Renderer):
             self._rows_below = max(
                 self._rows_below, self._last_screen.height
             )
+
+
+def screen_redrawn() -> None:
+    """Say the whole screen was just drawn again at its current size.
+
+    The next prompt checks the size against the last frame it drew, to
+    catch a resize while no prompt was up. After a redraw that frame is
+    stale, and the check would only ask for the same redraw again.
+
+    Measured the way the renderer measures, through prompt_toolkit's
+    output. On Windows that is a column narrower than shutil's figure,
+    and a size taken from shutil never matched, so every prompt after
+    a resize asked for another redraw, forever.
+    """
+
+    SnugRenderer.settled = (
+        None if _session is None else _session.app.output.get_size()
+    )
 
 
 def _snug(session: PromptSession) -> None:
