@@ -2,6 +2,8 @@
 
 import io
 import os
+import re
+from types import SimpleNamespace
 
 import pytest
 from rich.console import Console
@@ -120,149 +122,9 @@ class TestStatusText:
         assert "no model" in ai._status_text([])
 
 
-class TestStatusBar:
-    def wide(self, monkeypatch, columns):
-        monkeypatch.setattr(
-            repl_input.shutil,
-            "get_terminal_size",
-            lambda: os.terminal_size((columns, 24)),
-        )
-
-    def text(self, status="model"):
-        """Every segment of the bar joined, as it appears on screen."""
-
-        return "".join(
-            chunk for _, chunk in repl_input.status_bar(status)
-        )
-
-    def body(self, status="model"):
-        """Just the text half, without the leading health dot."""
-
-        return repl_input.status_bar(status)[-1][1]
-
-    def test_the_hints_sit_at_the_right_margin(self, monkeypatch):
-        self.wide(monkeypatch, 100)
-
-        assert self.body().startswith(" model")
-        assert self.text().rstrip().endswith(repl_input.HINTS)
-        assert len(self.text()) <= 100
-
-    def test_a_narrow_terminal_drops_the_hints(self, monkeypatch):
-        self.wide(monkeypatch, 40)
-
-        text = self.text()
-
-        assert repl_input.HINTS not in text
-        assert "model" in text
-
-    def test_a_long_status_drops_the_hints_rather_than_wrapping(
-        self, monkeypatch
-    ):
-        self.wide(monkeypatch, 80)
-
-        text = self.text("m" * 70)
-
-        assert repl_input.HINTS not in text
-        assert len(text) <= 80
-
-    def test_it_never_overruns_the_terminal(self, monkeypatch):
-        for columns in (20, 40, 60, 61, 80, 120, 200):
-            self.wide(monkeypatch, columns)
-
-            assert len(self.text("model  auto")) <= columns
-
-    def test_it_is_styled_as_a_footnote_not_a_widget(self, monkeypatch):
-        self.wide(monkeypatch, 100)
-
-        assert repl_input.status_bar("model")[-1][0] == (
-            "class:bottom-toolbar"
-        )
-
-
-class TestHealthDot:
-    """The one part of the bar that is not dim, because it is the one
-    part worth looking at when something is wrong."""
-
-    def wide(self, monkeypatch, columns=100):
-        monkeypatch.setattr(
-            repl_input.shutil,
-            "get_terminal_size",
-            lambda: os.terminal_size((columns, 24)),
-        )
-
-    def test_the_dot_leads_the_bar(self, monkeypatch):
-        self.wide(monkeypatch)
-
-        first = repl_input.status_bar("model")[0]
-
-        assert repl_input.HEALTH_DOT in first[1]
-
-    def test_each_state_gets_its_own_style(self, monkeypatch):
-        self.wide(monkeypatch)
-
-        seen = {
-            repl_input.status_bar("model", state)[0][0]
-            for state in (
-                repl_input.HEALTH_OK,
-                repl_input.HEALTH_DOWN,
-                repl_input.HEALTH_UNKNOWN,
-            )
-        }
-
-        assert len(seen) == 3
-
-    def test_a_reachable_backend_is_green(self, monkeypatch):
-        self.wide(monkeypatch)
-
-        assert repl_input.HEALTH_HEX[repl_input.HEALTH_OK] != (
-            repl_input.HEALTH_HEX[repl_input.HEALTH_DOWN]
-        )
-
-    def test_untested_is_not_the_same_as_broken(self):
-        # Grey before anything has been sent, red once something has
-        # failed: they are different things to look at.
-        assert repl_input.HEALTH_HEX[repl_input.HEALTH_UNKNOWN] != (
-            repl_input.HEALTH_HEX[repl_input.HEALTH_DOWN]
-        )
-
-    def test_the_dot_does_not_eat_the_right_margin(self, monkeypatch):
-        self.wide(monkeypatch, 100)
-
-        whole = "".join(
-            chunk for _, chunk in repl_input.status_bar("model")
-        )
-
-        assert len(whole) <= 100
-        assert whole.rstrip().endswith(repl_input.HINTS)
-
-    def test_a_failed_request_turns_it_red(self, monkeypatch):
-        monkeypatch.setattr(ai, "_backend_health", repl_input.HEALTH_OK)
-        ai._note_backend(False)
-
-        assert ai._backend_health == repl_input.HEALTH_DOWN
-
-    def test_a_good_request_turns_it_green(self, monkeypatch):
-        monkeypatch.setattr(ai, "_backend_health", repl_input.HEALTH_DOWN)
-        ai._note_backend(True)
-
-        assert ai._backend_health == repl_input.HEALTH_OK
-
-    def test_the_waiting_bar_carries_it_too(self, monkeypatch):
-        self.wide(monkeypatch)
-        monkeypatch.setattr(ai, "_backend_health", repl_input.HEALTH_DOWN)
-
-        line = ai._bar_text([])
-
-        assert repl_input.HEALTH_DOT in line.plain
-
-
 class TestWhenTheBarAppears:
-    """The bar is off for the opening prompt and on from then on.
-
-    A bottom toolbar anchors prompt_toolkit's layout to the foot of the
-    screen, so the rows it reserves for the completion menu render as
-    blank lines and scroll the banner away before it has been read.
-    """
+    """The bar is off for the opening prompt and on from then on, so
+    the banner has the screen to itself while it is being read."""
 
     def statuses(self, monkeypatch, lines):
         """The `status` each prompt was given, in order."""
@@ -323,51 +185,6 @@ class TestWhenTheBarAppears:
         assert seen[1] is not None
 
 
-class TestMenuRows:
-    """How much room the completion dropdown is allowed to reserve.
-
-    prompt_toolkit keeps eight rows free by default and, once a bottom
-    toolbar anchors the layout, draws them whether or not a menu is
-    open. Ten rows of banner plus a prompt, those eight and the bar is
-    twenty rows, which fits a terminal window and not a VS Code panel.
-    """
-
-    def at(self, monkeypatch, rows):
-        monkeypatch.setattr(
-            repl_input.shutil,
-            "get_terminal_size",
-            lambda: os.terminal_size((80, rows)),
-        )
-        return repl_input.menu_rows()
-
-    def test_a_tall_terminal_keeps_the_full_dropdown(self, monkeypatch):
-        assert self.at(monkeypatch, 60) == repl_input.MAX_MENU_ROWS
-
-    def test_a_short_panel_reserves_less(self, monkeypatch):
-        assert self.at(monkeypatch, 16) < repl_input.MAX_MENU_ROWS
-
-    def test_it_never_reserves_nothing(self, monkeypatch):
-        assert self.at(monkeypatch, 4) >= repl_input.MIN_MENU_ROWS
-
-    def test_it_never_exceeds_the_cap(self, monkeypatch):
-        for rows in (4, 10, 24, 40, 200):
-            assert self.at(monkeypatch, rows) <= repl_input.MAX_MENU_ROWS
-
-    def test_it_never_takes_more_than_a_quarter_of_the_screen(
-        self, monkeypatch
-    ):
-        for rows in (12, 16, 20, 24, 32):
-            reserved = self.at(monkeypatch, rows)
-
-            assert reserved <= max(repl_input.MIN_MENU_ROWS, rows // 4)
-
-    def test_it_grows_with_the_terminal(self, monkeypatch):
-        short = self.at(monkeypatch, 16)
-        tall = self.at(monkeypatch, 48)
-
-        assert tall > short
-
-
 class TestAgentsInTheBar:
     def running(self, monkeypatch, count):
         from flash import agent as subagents
@@ -414,3 +231,336 @@ class TestAgentsInTheBar:
 
         assert "2 agents" in seen[0]
         assert "1 agent" in seen[2]
+
+
+class TestPadToBottom:
+    """The opening prompt is pushed to the foot of the screen, so the
+    blank rows land above the frame rather than inside it."""
+
+    def console(self, rows, terminal=True):
+        return SimpleNamespace(
+            is_terminal=terminal,
+            size=SimpleNamespace(width=80, height=rows),
+        )
+
+    def test_it_fills_the_room_under_the_banner(self, capsys):
+        written = ai.pad_to_bottom(self.console(24), used=11)
+
+        assert written == 24 - 11 - ai.FIRST_PROMPT_ROWS
+        assert capsys.readouterr().out == "\n" * written
+
+    def test_a_full_screen_gets_no_padding(self, capsys):
+        # A banner that already reaches the prompt leaves no room.
+        used = 14 - ai.FIRST_PROMPT_ROWS
+
+        assert ai.pad_to_bottom(self.console(14), used=used) == 0
+        assert capsys.readouterr().out == ""
+
+    def test_an_overflowing_banner_gets_no_padding(self, capsys):
+        # Already taller than the terminal: padding would only make it
+        # worse by scrolling the banner away.
+        assert ai.pad_to_bottom(self.console(10), used=20) == 0
+        assert capsys.readouterr().out == ""
+
+    def test_a_pipe_is_left_alone(self, capsys):
+        assert ai.pad_to_bottom(self.console(40, terminal=False), 11) == 0
+        assert capsys.readouterr().out == ""
+
+    def test_a_taller_terminal_gets_more_padding(self):
+        short = ai.pad_to_bottom(self.console(20), used=11)
+        tall = ai.pad_to_bottom(self.console(50), used=11)
+
+        assert tall > short
+
+
+class TestBannerHeight:
+    def test_it_reports_the_rows_it_used(self):
+        console = Console(file=io.StringIO(), width=100, force_terminal=False)
+
+        used = ai.banner(console, None)
+        drawn = len(console.file.getvalue().splitlines())
+
+        assert used == drawn
+
+    def test_a_longer_banner_reports_more(self, monkeypatch):
+        console = Console(file=io.StringIO(), width=100, force_terminal=False)
+        plain = ai.banner(console, None)
+
+        monkeypatch.setattr(Config, "no_command_confirmation", True)
+        monkeypatch.setattr(Config, "voice", True)
+        loud = ai.banner(
+            Console(file=io.StringIO(), width=100, force_terminal=False),
+            "9.9.9",
+        )
+
+        assert loud > plain
+
+
+def strip_ansi(text):
+    return re.sub(r"\x1b\[[0-9;]*m", "", text)
+
+
+class TestStatusLine:
+    """The text half of the bar: state on the left, hints right."""
+
+    def wide(self, monkeypatch, columns):
+        monkeypatch.setattr(
+            repl_input.shutil,
+            "get_terminal_size",
+            lambda: os.terminal_size((columns, 24)),
+        )
+
+    def test_the_hints_sit_at_the_right_margin(self, monkeypatch):
+        self.wide(monkeypatch, 100)
+
+        line = repl_input.status_line("model")
+
+        assert line.startswith(" model")
+        assert line.rstrip().endswith(repl_input.HINTS)
+
+    def test_a_narrow_terminal_drops_the_hints(self, monkeypatch):
+        self.wide(monkeypatch, 40)
+
+        line = repl_input.status_line("model")
+
+        assert repl_input.HINTS not in line
+        assert "model" in line
+
+    def test_a_long_status_drops_the_hints_rather_than_wrapping(
+        self, monkeypatch
+    ):
+        self.wide(monkeypatch, 80)
+
+        assert repl_input.HINTS not in repl_input.status_line("m" * 70)
+
+    def test_a_prefix_is_taken_off_the_right_margin(self, monkeypatch):
+        self.wide(monkeypatch, 100)
+
+        # The health dot is drawn before it, so the line has two fewer
+        # columns to work with.
+        assert len(repl_input.status_line("model", prefix=2)) <= 98
+
+    def test_it_never_overruns_the_terminal(self, monkeypatch):
+        for columns in (20, 40, 60, 61, 80, 120, 200):
+            self.wide(monkeypatch, columns)
+
+            assert len(repl_input.status_line("model  auto")) <= columns
+
+
+class TestInputFrame:
+    def wide(self, monkeypatch, columns=80):
+        monkeypatch.setattr(
+            repl_input.shutil,
+            "get_terminal_size",
+            lambda: os.terminal_size((columns, 24)),
+        )
+
+    def test_the_rule_spans_the_terminal(self, monkeypatch):
+        self.wide(monkeypatch, 80)
+
+        assert len(repl_input.input_rule()) == 80
+
+    def test_it_follows_a_resize(self, monkeypatch):
+        self.wide(monkeypatch, 120)
+
+        assert len(repl_input.input_rule()) == 120
+
+    def test_it_is_drawn_with_the_themes_glyph(self, monkeypatch):
+        self.wide(monkeypatch)
+
+        from flash.theme import BAR_EMPTY
+
+        assert set(repl_input.input_rule()) == {BAR_EMPTY}
+
+
+class TestStatusPrefix:
+    """Everything drawn above the input, as one prompt string.
+
+    It hangs off the prompt rather than a bottom toolbar, because a
+    toolbar pins the layout to the foot of the screen and leaves the
+    completion dropdown nowhere to open.
+    """
+
+    def wide(self, monkeypatch, columns=100):
+        monkeypatch.setattr(
+            repl_input.shutil,
+            "get_terminal_size",
+            lambda: os.terminal_size((columns, 24)),
+        )
+
+    def test_with_no_status_it_is_just_the_rule(self, monkeypatch):
+        self.wide(monkeypatch)
+
+        prefix = strip_ansi(repl_input.status_prefix())
+
+        assert prefix == repl_input.input_rule() + "\n"
+
+    def test_an_empty_status_is_treated_as_none(self, monkeypatch):
+        self.wide(monkeypatch)
+
+        assert repl_input.status_prefix("") == repl_input.status_prefix()
+
+    def test_with_a_status_the_line_sits_above_the_rule(self, monkeypatch):
+        self.wide(monkeypatch)
+
+        rows = strip_ansi(repl_input.status_prefix("model")).splitlines()
+
+        assert len(rows) == 2
+        assert "model" in rows[0]
+        assert rows[1] == repl_input.input_rule()
+
+    def test_it_always_ends_ready_for_the_prompt(self, monkeypatch):
+        self.wide(monkeypatch)
+
+        for status in (None, "model"):
+            assert repl_input.status_prefix(status).endswith("\n")
+
+    def test_the_dot_leads_the_status_line(self, monkeypatch):
+        self.wide(monkeypatch)
+
+        first = strip_ansi(repl_input.status_prefix("model")).splitlines()[0]
+
+        assert first.lstrip().startswith(repl_input.HEALTH_DOT)
+
+    def test_each_state_is_coloured_differently(self, monkeypatch):
+        self.wide(monkeypatch)
+
+        seen = {
+            repl_input.status_prefix("model", state)
+            for state in (
+                repl_input.HEALTH_OK,
+                repl_input.HEALTH_DOWN,
+                repl_input.HEALTH_UNKNOWN,
+            )
+        }
+
+        assert len(seen) == 3
+
+    def test_the_status_row_fits_the_terminal(self, monkeypatch):
+        self.wide(monkeypatch, 100)
+
+        first = strip_ansi(repl_input.status_prefix("model")).splitlines()[0]
+
+        assert len(first) <= 100
+
+
+class TestWhatSitsBelowTheInput:
+    """Only the closing rule. The status line goes above the input
+    instead, which is what leaves the completion menu room to open
+    upward over the rows above it."""
+
+    def wide(self, monkeypatch, columns=80):
+        monkeypatch.setattr(
+            repl_input.shutil,
+            "get_terminal_size",
+            lambda: os.terminal_size((columns, 24)),
+        )
+
+    def test_the_toolbar_carries_the_rule_and_nothing_else(
+        self, monkeypatch
+    ):
+        self.wide(monkeypatch)
+
+        bar = repl_input.closing_rule()
+
+        assert len(bar) == 1
+        assert bar[0][1] == repl_input.input_rule()
+
+    def test_the_closing_rule_costs_one_row(self, monkeypatch):
+        self.wide(monkeypatch)
+
+        # A newline here would reserve a second row for nothing and
+        # stretch the frame.
+        assert "\n" not in repl_input.closing_rule()[0][1]
+
+    def test_the_status_line_is_not_down_there(self, monkeypatch):
+        self.wide(monkeypatch)
+
+        drawn = repl_input.closing_rule()[0][1]
+
+        assert repl_input.HEALTH_DOT not in drawn
+        assert repl_input.HINTS not in drawn
+
+    def test_the_prompt_asks_for_that_toolbar(self):
+        import inspect
+
+        source = inspect.getsource(repl_input.read_line)
+
+        assert "bottom_toolbar=closing_rule" in source
+
+    def test_nothing_is_reserved_for_the_menu(self):
+        import inspect
+
+        source = inspect.getsource(repl_input.read_line)
+
+        # Pinned to zero, not left to prompt_toolkit's default of 8.
+        # Those rows are drawn whether or not a menu is open, so they
+        # sit under the prompt as dead space and overflow the screen by
+        # their own height, which scrolls the banner away on launch.
+        assert "reserve_space_for_menu=0" in source
+
+    def test_the_opening_prompt_is_three_rows(self):
+        # Rule, the line you type on, rule. pad_to_bottom counts on it.
+        assert ai.FIRST_PROMPT_ROWS == 3
+
+
+class TestClearingToTheBottom:
+    """Clearing leaves the cursor at the top, which is what strands the
+    prompt halfway up the screen with dead space under it. Parking it
+    on the last row makes output fill upward and keeps the prompt at
+    the foot of the terminal for the rest of the session."""
+
+    def terminal(self, monkeypatch, rows=24, is_terminal=True):
+        monkeypatch.setattr(
+            ai,
+            "console",
+            SimpleNamespace(
+                is_terminal=is_terminal,
+                size=SimpleNamespace(width=80, height=rows),
+            ),
+        )
+
+    def test_a_plain_clear_leaves_the_cursor_where_it_lands(
+        self, monkeypatch, capsys
+    ):
+        self.terminal(monkeypatch)
+
+        ai._clear_screen()
+
+        assert capsys.readouterr().out == "\x1b[H\x1b[2J\x1b[3J"
+
+    def test_clearing_to_the_bottom_parks_on_the_last_row(
+        self, monkeypatch, capsys
+    ):
+        self.terminal(monkeypatch, rows=24)
+
+        ai._clear_screen(bottom=True)
+
+        assert capsys.readouterr().out.endswith("\x1b[24;1H")
+
+    def test_the_row_follows_the_terminal_height(
+        self, monkeypatch, capsys
+    ):
+        self.terminal(monkeypatch, rows=50)
+
+        ai._clear_screen(bottom=True)
+
+        assert capsys.readouterr().out.endswith("\x1b[50;1H")
+
+    def test_the_scrollback_is_cleared_either_way(
+        self, monkeypatch, capsys
+    ):
+        self.terminal(monkeypatch)
+
+        ai._clear_screen(bottom=True)
+
+        # 3J is the one that drops scrollback; without it the banner
+        # is still up there to be scrolled back to.
+        assert "\x1b[3J" in capsys.readouterr().out
+
+    def test_a_pipe_is_left_alone(self, monkeypatch, capsys):
+        self.terminal(monkeypatch, is_terminal=False)
+
+        ai._clear_screen(bottom=True)
+
+        assert capsys.readouterr().out == ""

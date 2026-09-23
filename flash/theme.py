@@ -72,6 +72,19 @@ DIM_HEX = "#949494"
 RESET_ANSI = "\033[0m"
 
 
+def ansi(colour: str) -> str:
+    """A truecolour escape for a "#rrggbb" string.
+
+    For text fed straight into a prompt string, where rich's styles
+    and prompt_toolkit's style classes both fall outside.
+    """
+
+    value = colour.lstrip("#")
+    red, green, blue = (int(value[at:at + 2], 16) for at in (0, 2, 4))
+
+    return f"\033[38;2;{red};{green};{blue}m"
+
+
 ToolSink = Callable[[str, str, str], None]
 
 _capture = threading.local()

@@ -20,11 +20,14 @@ from .images import IMAGE_EXTENSIONS
 from .memory import MEMORY_PATH
 from .paths import ENV_PATH
 from .theme import (
+    BAR_EMPTY,
     CURSOR,
     DIFF_ADD,
     DIM_HEX,
     ERROR,
+    RESET_ANSI,
     SPARKLE,
+    ansi,
     ptk_sweep_reveal,
 )
 
@@ -278,8 +281,7 @@ HINTS = "/ commands   @ files   ! shell"
 # Below this the two halves collide, so the hints go and the state stays.
 MIN_STATUS_WIDTH = 60
 
-# Overrides prompt_toolkit's default bottom bar, which is a reversed
-# block of colour. This is meant to read as a footnote, not a widget.
+
 # Whether the backend answered last time it was asked. Green once it
 # has, red once it has not, and grey before anything has been sent,
 # because "untested" and "broken" are different things to look at.
@@ -296,57 +298,21 @@ HEALTH_HEX = {
 }
 
 
-_STATUS_STYLE = Style.from_dict({
-    "bottom-toolbar": f"noreverse {DIM_HEX} bg:default",
-    "bottom-toolbar.text": f"noreverse {DIM_HEX} bg:default",
-    f"bottom-toolbar.health.{HEALTH_OK}":
-        f"noreverse {HEALTH_HEX[HEALTH_OK]} bg:default",
-    f"bottom-toolbar.health.{HEALTH_DOWN}":
-        f"noreverse {HEALTH_HEX[HEALTH_DOWN]} bg:default",
-    f"bottom-toolbar.health.{HEALTH_UNKNOWN}":
-        f"noreverse {HEALTH_HEX[HEALTH_UNKNOWN]} bg:default",
-})
+def input_rule() -> str:
+    """The horizontal rule that frames the input area.
 
+    A rule above the prompt and another below it, which is how the
+    current crop of agent TUIs mark out where you type: Hermes names
+    them input_rule_top and input_rule_bot, Pi calls the result a
+    rounded editor. Plain rules rather than a box with sides, because
+    the completion dropdown renders between the two and a box would
+    have to leave its walls off those rows.
 
-# prompt_toolkit keeps eight rows free for the completion dropdown, and
-# once a bottom toolbar anchors the layout it draws them whether or not
-# a menu is open. Ten rows of banner plus a prompt, those eight and the
-# bar comes to twenty, which fits a terminal window and does not fit a
-# VS Code panel, so the reservation scales with the room there is.
-MAX_MENU_ROWS = 8
-MIN_MENU_ROWS = 2
-
-
-def menu_rows() -> int:
-    """How many rows to keep free for the completion dropdown."""
-
-    rows = shutil.get_terminal_size().lines
-
-    return max(MIN_MENU_ROWS, min(MAX_MENU_ROWS, rows // 4))
-
-
-def status_line(status: str, prefix: int = 0) -> str:
-    """The bar as plain text, with the hints at the right margin.
-
-    `prefix` is how many columns something else has already drawn on
-    this line, so the right margin still lands at the right margin.
-
-    Kept separate from `status_bar` so the same line can be drawn by
-    rich while the model is answering, where prompt_toolkit is not
-    running and its formatted-text tuples mean nothing.
+    Drawn from the opening prompt onward. The status line under it
+    waits until a turn has happened; the frame itself does not.
     """
 
-    width = shutil.get_terminal_size().columns - prefix
-
-    if width < MIN_STATUS_WIDTH:
-        return f" {status}"
-
-    gap = width - len(status) - len(HINTS) - 2
-
-    if gap < 2:
-        return f" {status}"
-
-    return f" {status}{' ' * gap}{HINTS} "
+    return BAR_EMPTY * shutil.get_terminal_size().columns
 
 
 def status_segments(
@@ -364,19 +330,83 @@ def status_segments(
     ]
 
 
-def status_bar(
-    status: str, health: str = HEALTH_UNKNOWN
-) -> StyleAndTextTuples:
-    """The status line, as prompt_toolkit's bottom toolbar wants it."""
+_RULE_STYLE = Style.from_dict({
+    "bottom-toolbar": f"noreverse {DIM_HEX} bg:default",
+    "bottom-toolbar.text": f"noreverse {DIM_HEX} bg:default",
+})
 
-    return [
-        (
-            f"class:bottom-toolbar.{name}" if name
-            else "class:bottom-toolbar",
-            text,
-        )
-        for name, text in status_segments(status, health)
-    ]
+
+def closing_rule() -> StyleAndTextTuples:
+    """The rule under the input, as prompt_toolkit's toolbar wants it.
+
+    The toolbar is the only thing that can draw below the input, so
+    the rule that closes the frame has to ride on it. It carries the
+    rule and nothing else: the status line sits above the input
+    instead, which leaves the completion menu somewhere to open.
+    """
+
+    return [("class:bottom-toolbar", input_rule())]
+
+
+def status_prefix(
+    status: Optional[str] = None, health: str = HEALTH_UNKNOWN
+) -> str:
+    """The status line and the rule, as rows drawn above the input.
+
+    They used to hang off prompt_toolkit's bottom toolbar, which pins
+    the layout to the foot of the screen. Nothing can then be drawn
+    under the input except the rows reserved for the completion
+    dropdown, so the dropdown and a frame that hugs the input were
+    competing for the same space and the dropdown lost, down to a
+    single visible row.
+
+    Above the input, neither has to give: the input is the last thing
+    on screen, so the menu opens into the whole terminal below it, and
+    the frame stays three rows whatever the menu is doing.
+    """
+
+    rule = ansi(DIM_HEX) + input_rule() + RESET_ANSI + "\n"
+
+    if not status:
+        return rule
+
+    dot, rest = status_segments(status, health)
+
+    return (
+        ansi(HEALTH_HEX[health]) + dot[1] + RESET_ANSI
+        + ansi(DIM_HEX) + rest[1] + RESET_ANSI + "\n"
+        + rule
+    )
+
+
+# Nothing is reserved for the completion dropdown. prompt_toolkit
+# draws that reservation between the input and the bottom toolbar, so
+# any of it stretches the frame into a tall empty box with the closing
+# rule stranded at the bottom. With none, the rule hugs the line you
+# are typing and the menu simply scrolls the screen when it opens,
+# which is what it would do on a full terminal anyway.
+def status_line(status: str, prefix: int = 0) -> str:
+    """The bar as plain text, with the hints at the right margin.
+
+    `prefix` is how many columns something else has already drawn on
+    this line, so the right margin still lands at the right margin.
+
+    Kept separate from `status_prefix` so the same line can be drawn
+    by rich while the model is answering, where the prompt is not
+    running and its escape codes would land in the wrong place.
+    """
+
+    width = shutil.get_terminal_size().columns - prefix
+
+    if width < MIN_STATUS_WIDTH:
+        return f" {status}"
+
+    gap = width - len(status) - len(HINTS) - 2
+
+    if gap < 2:
+        return f" {status}"
+
+    return f" {status}{' ' * gap}{HINTS} "
 
 
 _session: Optional[PromptSession] = None
@@ -415,7 +445,7 @@ def read_line(
             placeholder=_suggestion_placeholder,
             refresh_interval=PLACEHOLDER_REFRESH_SECONDS,
             erase_when_done=True,
-            style=_STATUS_STYLE,
+            style=_RULE_STYLE,
         )
 
     def watch_for_wake() -> None:
@@ -433,11 +463,17 @@ def read_line(
 
         app.create_background_task(poll())
 
+    prompt_ansi = status_prefix(status, health) + prompt_ansi
+
+    # Nothing pinned under the input, and nothing reserved under it
+    # either. Those reserved rows are drawn whether or not a menu is
+    # open, so they show up as dead space below the prompt and push
+    # the banner off the top of the screen by exactly their height.
+    # With none, prompt_toolkit has no room below the cursor and opens
+    # the completion menu upward, over the rows above the input.
     return _session.prompt(
         ANSI(prompt_ansi),
         pre_run=watch_for_wake,
-        reserve_space_for_menu=menu_rows(),
-        bottom_toolbar=(
-            (lambda: status_bar(status, health)) if status else None
-        ),
+        reserve_space_for_menu=0,
+        bottom_toolbar=closing_rule,
     )
