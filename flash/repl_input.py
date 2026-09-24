@@ -628,12 +628,8 @@ class SnugRenderer(Renderer):
             )
 
 
-def screen_redrawn() -> None:
-    """Say the whole screen was just drawn again at its current size.
-
-    The next prompt checks the size against the last frame it drew, to
-    catch a resize while no prompt was up. After a redraw that frame is
-    stale, and the check would only ask for the same redraw again.
+def screen_size():
+    """The terminal's size as the prompt's renderer measures it, or None.
 
     Measured the way the renderer measures, through prompt_toolkit's
     output. On Windows that is a column narrower than shutil's figure,
@@ -641,9 +637,26 @@ def screen_redrawn() -> None:
     a resize asked for another redraw, forever.
     """
 
-    SnugRenderer.settled = (
-        None if _session is None else _session.app.output.get_size()
-    )
+    return None if _session is None else _session.app.output.get_size()
+
+
+def screen_redrawn(size=None) -> None:
+    """Say the whole screen was just drawn again, at SIZE.
+
+    The next prompt checks the size against the last frame it drew, to
+    catch a resize while no prompt was up. After a redraw that frame is
+    stale, and the check would only ask for the same redraw again.
+
+    SIZE is what screen_size() said before the drawing started. Taken
+    afterwards instead, a terminal still being dragged could have moved
+    on while the screen went out, and the new size would be recorded as
+    the one it was drawn for: the prompt then opens a row taller than
+    the terminal and scrolls the top line away. With the size from
+    before, that mismatch is caught and drawn again. Left out, the size
+    is measured now.
+    """
+
+    SnugRenderer.settled = size if size is not None else screen_size()
 
 
 def _snug(session: PromptSession) -> None:
