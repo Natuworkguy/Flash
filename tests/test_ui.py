@@ -178,6 +178,23 @@ class TestWhenTheBarAppears:
         assert seen[0] is None
         assert all(entry is not None for entry in seen[1:])
 
+    def test_an_empty_enter_leaves_the_bar_off(self, monkeypatch):
+        # The banner is still up after it, filling the terminal to the
+        # row, so a bar would scroll its top line away.
+        seen = self.statuses(monkeypatch, ["", "hello"])
+
+        assert seen[:2] == [None, None]
+
+    def test_a_resize_leaves_the_bar_off(self, monkeypatch):
+        from flash.repl_input import RESIZE
+
+        monkeypatch.setattr(ai, "repaint", lambda c, update=None: [])
+        monkeypatch.setattr(ai, "_settle_size", lambda: None)
+
+        seen = self.statuses(monkeypatch, [RESIZE, "hello"])
+
+        assert seen[:2] == [None, None]
+
     def test_a_slash_command_still_counts_as_a_prompt(self, monkeypatch):
         seen = self.statuses(monkeypatch, ["/help", "then ask"])
 
@@ -655,6 +672,21 @@ class TestRepaintingOnResize:
         self.drive(monkeypatch, ["hi", RESIZE])
 
         assert self.redraws == [ai.console]
+
+    def test_the_size_recorded_is_the_one_painted_for(self, monkeypatch):
+        from flash.repl_input import RESIZE
+
+        # The terminal is still moving while the repaint goes out: the
+        # size before it is the one the screen was drawn for, and the
+        # one the next prompt has to compare against.
+        sizes = iter(["painted", "moved on"])
+        recorded = []
+        monkeypatch.setattr(ai, "screen_size", lambda: next(sizes))
+        monkeypatch.setattr(ai, "screen_redrawn", recorded.append)
+
+        self.drive(monkeypatch, [RESIZE, "hi"])
+
+        assert recorded == ["painted"]
 
     def test_the_opening_screen_is_not_redrawn_as_a_conversation(
         self, monkeypatch

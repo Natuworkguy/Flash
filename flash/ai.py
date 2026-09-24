@@ -43,8 +43,9 @@ from .repl_input import (
     MAX_MENU_ROWS,
     RESIZE,
     WAKE,
-    screen_redrawn,
     read_line,
+    screen_redrawn,
+    screen_size,
     status_segments,
 )
 from .stats import Turn, elapsed, window
@@ -1992,12 +1993,6 @@ def main() -> None:
 
     pending: list[str] = []
 
-    # The status bar stays off until the opening prompt has been run. It
-    # pins prompt_toolkit's layout to the foot of the screen, and the
-    # rows reserved for the completion menu would push the banner off
-    # the top before anyone has read it.
-    prompted = False
-
     if args.url:
         try:
             pending.append(parse_flash_url(args.url))
@@ -2061,26 +2056,38 @@ def main() -> None:
                     uin = read_line(
                         Config.prompt,
                         wake=wake_ready,
+                        # Off while the opening screen is up. That screen
+                        # fills the terminal to the row, so a status line
+                        # is one row more than there is and scrolls the
+                        # top of the banner away. An empty Enter or a
+                        # resize leaves the screen up, and has to leave
+                        # the bar off with it.
                         status=(
-                            _status_text(messages) if prompted else None
+                            None if banner_showing
+                            else _status_text(messages)
                         ),
                         health=_backend_health,
                         backdrop=backdrop if banner_showing else None,
                     )
-                    prompted = True
                 except EOFError:
                     print()
                     return
 
                 if uin == RESIZE:
                     _settle_size()
+                    # Measured before the paint, not after it. A drag
+                    # that moves again while the paint goes out would
+                    # otherwise be written down as the size the screen
+                    # was drawn for, and the prompt would never find
+                    # out that it was not.
+                    painted = screen_size()
                     if banner_showing:
                         _sync(True)
                         backdrop = repaint(console, update)
                         _sync(False)
                     else:
                         redraw_conversation(console)
-                    screen_redrawn()
+                    screen_redrawn(painted)
                     continue
 
                 if banner_showing and (

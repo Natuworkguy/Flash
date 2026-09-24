@@ -354,6 +354,21 @@ class TestScreenRedrawn:
 
         assert repl_input.SnugRenderer.settled == ptk
 
+    def test_a_size_given_is_the_size_recorded(self, monkeypatch):
+        # Measured before the paint, so a drag that moved on during it
+        # still shows up as a mismatch at the next prompt.
+        monkeypatch.setattr(
+            repl_input,
+            "_session",
+            SimpleNamespace(app=SimpleNamespace(
+                output=SimpleNamespace(get_size=lambda: "moved on")
+            )),
+        )
+
+        repl_input.screen_redrawn("painted")
+
+        assert repl_input.SnugRenderer.settled == "painted"
+
     def test_before_any_prompt_there_is_nothing_to_compare(
         self, monkeypatch
     ):
