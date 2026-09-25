@@ -234,13 +234,41 @@ def _sink() -> Optional[ToolSink]:
     return getattr(_capture, "sink", None)
 
 
+# Past this many lines a tool's output is cut down on screen, since a
+# test run or a directory listing would otherwise push the reply that
+# follows off the top. The model always gets the whole of it.
+COLLAPSE_AFTER = 12
+COLLAPSED_LINES = 5
+
+EXPAND_HINT = "ctrl+o to expand"
+
+# The outputs that were cut this turn, as (tool line, whole output),
+# for Ctrl+O to print in full.
+_collapsed: list[tuple[str, str]] = []
+_last_label = ""
+
+
+def collapsed() -> list[tuple[str, str]]:
+    return list(_collapsed)
+
+
+def clear_collapsed() -> None:
+    """Forget the cut outputs, once a new turn starts making its own."""
+
+    _collapsed.clear()
+
+
 def tool_line(label: str) -> None:
     """Print a tool-invocation header, e.g. '⏺ Bash(ls -la)'."""
+
+    global _last_label
 
     sink = _sink()
     if sink:
         sink("line", label, "")
         return
+
+    _last_label = label
 
     line = Text()
     line.append(f"{BULLET} ", style=ACCENT)
@@ -258,12 +286,47 @@ def tool_result(text: str, *, style: str = DIM) -> None:
 
     lines = (text or "").splitlines() or [""]
 
+    if len(lines) > COLLAPSE_AFTER:
+        _collapsed.append((_last_label, text))
+        hidden = len(lines) - COLLAPSED_LINES
+
+        # A failure says what went wrong at the end, a traceback's last
+        # line or a test run's summary, so that is the end kept.
+        if style == ERROR:
+            lines = [
+                f"{ELLIPSIS} {hidden} lines above ({EXPAND_HINT})",
+                *lines[-COLLAPSED_LINES:],
+            ]
+        else:
+            lines = [
+                *lines[:COLLAPSED_LINES],
+                f"{ELLIPSIS} +{hidden} lines ({EXPAND_HINT})",
+            ]
+
     first = Text(f"  {BRANCH}  ", style=style)
     first.append(lines[0], style=style)
     console.print(first)
 
     for line in lines[1:]:
         console.print(Text(f"     {line}", style=style))
+
+
+def expand_collapsed() -> None:
+    """Print, whole, every tool output this turn cut short."""
+
+    if not _collapsed:
+        dim("No tool output was cut short this turn.")
+        return
+
+    for label, text in _collapsed:
+        head = Text()
+        head.append(f"{BULLET} ", style=ACCENT)
+        head.append(label or "Tool output")
+        console.print(head)
+
+        for index, line in enumerate(text.splitlines()):
+            lead = f"  {BRANCH}  " if index == 0 else "     "
+            console.print(Text(lead + line, style=DIM))
 
 
 def tool_diff(diff_lines: list[str], *, more: int = 0) -> None:

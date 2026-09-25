@@ -2,7 +2,7 @@
 
 import pytest
 
-from flash import extensions, terminal, tools
+from flash import extensions, repl_input, terminal, tools
 
 
 @pytest.fixture(autouse=True)
@@ -32,6 +32,9 @@ def isolated_home(tmp_path_factory, monkeypatch):
     # this the suite would pick up whatever the developer has installed.
     monkeypatch.setattr(extensions, "FLASH_DIR", home / ".flash")
     extensions.reload()
+    monkeypatch.setattr(
+        repl_input, "HISTORY_PATH", home / ".flash" / "history"
+    )
     yield home
     extensions.reload()
 
