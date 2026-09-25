@@ -45,6 +45,25 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
         ),
     )
 
+    parser.add_argument(
+        "--extension-install",
+        metavar="SOURCE",
+        help=(
+            "install an extension, e.g. github@owner/repo, or "
+            "path@/some/folder for one on disk"
+        ),
+    )
+    parser.add_argument(
+        "--extension-remove",
+        metavar="NAME",
+        help="remove an installed extension",
+    )
+    parser.add_argument(
+        "--extension-list",
+        action="store_true",
+        help="list installed extensions",
+    )
+
     args = parser.parse_args(argv)
     if args.force and not args.update:
         parser.error("--force can only be used with --update")

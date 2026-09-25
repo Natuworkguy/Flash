@@ -27,7 +27,7 @@ from rich.live import Live
 from rich.text import Text
 
 from . import agent as subagents
-from . import checkpoint, editor, plan
+from . import checkpoint, editor, extensions, plan
 from .browser import (
     ACTIONS,
     MAX_ELEMENTS,
@@ -188,30 +188,50 @@ authoritative, so you do not need to call get_date to confirm the current year,
 only to get a more precise day if a task needs one.
 """.strip()
 
-SYSTEM_PROMPT = f"""
+FLASH_PROMPT = get_system_prompt()
+
+
+def _flash_system_prompt(extension_prompt: str = "") -> str:
+    """Flash's own prompt, with the installed extensions' inside it.
+
+    Inside rather than after: everything past the end marker reads to
+    the model as the conversation starting, not as more instructions.
+    """
+
+    added = f"{extension_prompt}\n" if extension_prompt else ""
+
+    return f"""
 === System Prompt ===
 
-{get_system_prompt()}
+{FLASH_PROMPT}
 {TOOL_SYSTEM_PROMPT}
 {CURRENT_DATE_PROMPT}
-=== END OF SYSTEM PROMPT ===
+{added}=== END OF SYSTEM PROMPT ===
 
 You are now being transferred to a user.
 """.strip()
+
+
+SYSTEM_PROMPT = _flash_system_prompt()
 
 
 def build_system_prompt(model_prompt: str = "") -> str:
     """Prepend the model's own system prompt to Flash's, when it has one."""
 
     model_prompt = model_prompt.strip()
+    extension_prompt = extensions.system_prompt()
+    flash_prompt = (
+        _flash_system_prompt(extension_prompt)
+        if extension_prompt else SYSTEM_PROMPT
+    )
 
     if not model_prompt:
-        return SYSTEM_PROMPT
+        return flash_prompt
 
     return (
         "=== Model System Prompt ===\n\n"
         f"{model_prompt}\n\n"
-        f"{SYSTEM_PROMPT}"
+        f"{flash_prompt}"
     )
 
 
@@ -261,7 +281,7 @@ def trim_tool_output(text: str, name: str = "") -> str:
 
 
 def _run_shell_streaming(
-    args, *, shell: bool, seconds: int
+    args, *, shell: bool, seconds: int, env: Optional[dict] = None
 ) -> tuple[str, int]:
     """Run a command, printing its output live as it's produced.
 
@@ -275,6 +295,7 @@ def _run_shell_streaming(
         stderr=subprocess.STDOUT,
         text=True,
         bufsize=1,
+        env=env,
     )
 
     stdout = proc.stdout
@@ -1523,9 +1544,86 @@ EDITOR_TOOLS: list[dict[str, Any]] = [
 
 
 def turn_tools() -> list[dict[str, Any]]:
-    """The tools offered on this turn: the editor's only inside VS Code."""
+    """The tools offered on this turn: the editor's only inside VS Code,
+    and whatever the installed extensions add."""
 
-    return tools + (EDITOR_TOOLS if editor.available() else [])
+    return (
+        tools
+        + (EDITOR_TOOLS if editor.available() else [])
+        + extensions.tool_schemas(frozenset(FUNCTIONS))
+    )
+
+
+def run_extension_command(
+    extension: "extensions.Extension",
+    command: "extensions.Command",
+    arguments: list[str],
+) -> str:
+    """Run an extension's command the way `!` runs one typed by hand.
+
+    Its output streams to the terminal as it comes, and is noted like a
+    `!` command's, so a model asked next about what just happened has
+    seen it.
+    """
+
+    argv = extensions.argv(extension, command.run or []) + arguments
+    label = f"/{command.name}" + "".join(f" {a}" for a in arguments)
+
+    try:
+        output, returncode = _run_shell_streaming(
+            argv,
+            shell=False,
+            seconds=command.timeout,
+            env=extensions.environment(extension),
+        )
+    except subprocess.TimeoutExpired:
+        _note_user_run(label, f"timed out after {command.timeout}s", "")
+        return f"(timed out after {command.timeout}s)"
+    except KeyboardInterrupt:
+        _note_user_run(label, "interrupted with Ctrl+C", "")
+        return "(interrupted)"
+    except OSError as exc:
+        return f"Could not start /{command.name}: {exc}"
+
+    _note_user_run(label, f"exit {returncode}", output)
+
+    if returncode:
+        return f"(exit {returncode})"
+    if not output.strip():
+        return "(no output)"
+    return ""
+
+
+def _extension_tool(name: str, args: dict) -> Optional[str]:
+    """Answer a call to an extension's tool, or None if none has it."""
+
+    found = extensions.find_tool(name, frozenset(FUNCTIONS))
+
+    if found is None:
+        return None
+
+    extension, tool = found
+    shown = json.dumps(args, ensure_ascii=False)
+    tool_line(f"{name}({shown})")
+
+    if tool.confirm and not NO_COMMAND_CONFIRMATION:
+        notify_needs_input()
+
+        prompt = Text("  ⎿  ", style=DIM)
+        prompt.append(f"Let {extension.name} run {name}? ", style=DIM)
+        prompt.append("y", style=f"bold {ACCENT}")
+        prompt.append("/n ", style=DIM)
+        console.print(prompt, end="")
+
+        if typed() != "y":
+            tool_result("Blocked by user", style=WARN)
+            return "Blocked by user"
+
+    result = extensions.call_tool(extension, tool, args)
+    tool_result(
+        result, style=ERROR if result.startswith(("(exit", "Error")) else DIM
+    )
+    return result
 
 
 def agent_tool(task: str) -> str:
@@ -3280,7 +3378,8 @@ def run_tool(call):
 
     func = FUNCTIONS.get(name)
     if func is None:
-        return f"Unknown tool: {name}"
+        answered = _extension_tool(name, args)
+        return f"Unknown tool: {name}" if answered is None else answered
 
     try:
         return func(**args)

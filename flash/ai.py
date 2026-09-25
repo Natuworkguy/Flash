@@ -25,7 +25,7 @@ from rich.spinner import Spinner
 from rich.text import Text
 
 from . import agent as subagents
-from . import background, checkpoint, context, plan, terminal
+from . import background, checkpoint, context, extensions, plan, terminal
 from .cli import parse_args
 from .envfile import set_env_var, unset_env_var
 from .images import resolve_image_path
@@ -35,14 +35,15 @@ from .models import fetch_if_missing, pick_model
 from .notify import notify_reply_ready
 from .paths import ENV_PATH
 from .repl_input import (
-    COMMANDS,
     HEALTH_DOWN,
     HEALTH_HEX,
     HEALTH_OK,
     HEALTH_UNKNOWN,
     MAX_MENU_ROWS,
+    RESERVED_COMMANDS,
     RESIZE,
     WAKE,
+    all_commands,
     read_line,
     screen_redrawn,
     screen_size,
@@ -80,12 +81,14 @@ from .theme import (
 )
 from .theme import error as show_error
 from .tools import (
+    FUNCTIONS,
     MAX_SHELL_TIMEOUT,
     SCRATCH_DIR,
     build_system_prompt,
     clear_user_runs,
     init,
     reason,
+    run_extension_command,
     run_tool,
     shell_tool,
     take_pending_images,
@@ -1656,6 +1659,197 @@ def _hook_command(arg: str) -> None:
         ))
 
 
+EXTENSION_USAGE = (
+    "Usage: /extension [list] | install github@owner/repo | "
+    "remove <name>"
+)
+
+
+def _extensions_changed() -> None:
+    """Drop what was worked out from the old set of extensions."""
+
+    _tool_schema_tokens.clear()
+    _background_notices.clear()
+
+
+def _describe_extension(
+    ext: extensions.Extension, source: str = ""
+) -> Text:
+    """One extension: its name, what it is, and what it adds."""
+
+    body = Text()
+    body.append(f"  {BULLET} ", style=ACCENT)
+    body.append(ext.name, style="bold")
+
+    if ext.version:
+        body.append(f" v{ext.version}", style=DIM)
+    if ext.description:
+        body.append(f"  {ext.description}", style=DIM)
+
+    body.append("\n")
+
+    source = source or ext.source
+    lines = [f"from {source}"] if source else []
+
+    for line in lines + ext.contents():
+        body.append(f"    {line}\n", style=DIM)
+
+    return body
+
+
+def _list_extensions() -> None:
+    installed = extensions.installed()
+    broken = extensions.problems()
+
+    if not installed and not broken:
+        console.print(Text(
+            "No extensions installed. /extension install "
+            "github@owner/repo adds one.",
+            style=DIM,
+        ))
+        return
+
+    body = Text()
+    body.append("\nExtensions\n\n", style="bold")
+
+    for ext in installed:
+        body.append_text(_describe_extension(ext))
+
+    for problem in broken:
+        body.append(f"  {problem}\n", style=WARN)
+
+    body.append(
+        f"\n  Installed in {_short_path(extensions.extensions_dir())}. "
+        "/extension remove <name> takes one out.\n",
+        style=DIM,
+    )
+    console.print(body)
+
+
+def _install_extension(spec: str) -> bool:
+    """Fetch, show, confirm, install. False only on an actual failure."""
+
+    try:
+        source = extensions.canonical(spec)
+    except extensions.ExtensionError as exc:
+        show_error(str(exc))
+        return False
+
+    try:
+        with console.status(
+            f"[bold {ACCENT}]Fetching {source.partition('@')[2]}"
+            f"{ELLIPSIS}",
+            spinner="bouncingBall", spinner_style=ACCENT,
+        ):
+            checkout = extensions.fetch(spec)
+    except (extensions.ExtensionError, OSError) as exc:
+        show_error(str(exc))
+        return False
+
+    try:
+        try:
+            ext = extensions.load(checkout)
+        except extensions.ExtensionError as exc:
+            show_error(f"{source} is not a Flash extension: {exc}")
+            return False
+
+        clashes = extensions.clashes(
+            ext, RESERVED_COMMANDS, frozenset(FUNCTIONS)
+        )
+        if clashes:
+            show_error(
+                f"Cannot install {ext.name}: " + "; ".join(clashes) + "."
+            )
+            return False
+
+        existing = extensions.find(ext.name)
+
+        console.print(_describe_extension(ext, source))
+
+        if existing and existing.source and existing.source != source:
+            warn(
+                f"  This replaces the {ext.name} installed from "
+                f"{existing.source}."
+            )
+        if ext.commands or ext.tools:
+            warn(
+                "  Extensions run programs on this machine as you. "
+                "Only install ones you trust."
+            )
+
+        verb = "Update" if existing else "Install"
+        if not confirm(f"{verb} {ext.name}?"):
+            console.print(Text("Nothing installed.", style=DIM))
+            return True
+
+        try:
+            ext = extensions.install(checkout, spec)
+        except (extensions.ExtensionError, OSError) as exc:
+            show_error(f"Could not install {ext.name}: {exc}")
+            return False
+    finally:
+        extensions.discard(checkout)
+
+    _extensions_changed()
+
+    done = "updated" if existing else "installed"
+    console.print(
+        Text(f"{ext.name} {done}.", style=f"bold {ACCENT}")
+    )
+
+    if ext.commands:
+        console.print(Text(
+            "Try " + ", ".join(f"/{c.name}" for c in ext.commands) + ".",
+            style=DIM,
+        ))
+
+    return True
+
+
+def _remove_extension(name: str) -> bool:
+    if not name:
+        warn("Usage: /extension remove <name>")
+        return False
+
+    if not extensions.remove(name):
+        warn(f"No extension called {name!r} is installed.")
+        return False
+
+    _extensions_changed()
+    console.print(Text(f"{name.strip().lower()} removed.", style=DIM))
+    return True
+
+
+def _extension_command(arg: str) -> None:
+    """/extension, /extension install <source>, /extension remove <name>."""
+
+    action, _, rest = arg.partition(" ")
+    action = action.lower()
+    rest = rest.strip()
+
+    if action in ("", "list", "ls"):
+        _list_extensions()
+    elif action in ("install", "add", "update") and rest:
+        _install_extension(rest)
+    elif action in ("remove", "uninstall", "rm"):
+        _remove_extension(rest)
+    else:
+        warn(EXTENSION_USAGE)
+
+
+def _handle_extension_flags(args) -> bool:
+    """Run --extension-install/-remove/-list. False on a failure."""
+
+    if args.extension_install:
+        return _install_extension(args.extension_install)
+
+    if args.extension_remove:
+        return _remove_extension(args.extension_remove)
+
+    _list_extensions()
+    return True
+
+
 def _print_backend_error(detail: str) -> None:
     show_error(f"Ollama backend error: {detail}")
 
@@ -1991,6 +2185,13 @@ def main() -> None:
     if args.update:
         sys.exit(0 if _run_update(force=args.force) else 1)
 
+    if (
+        args.extension_install
+        or args.extension_remove
+        or args.extension_list
+    ):
+        sys.exit(0 if _handle_extension_flags(args) else 1)
+
     pending: list[str] = []
 
     if args.url:
@@ -2244,6 +2445,8 @@ def main() -> None:
 
             if uin == "/refresh":
                 refresh_config()
+                extensions.reload()
+                _extensions_changed()
                 _model_system_prompts.clear()
                 _context_limits.clear()
                 _context_ceilings.clear()
@@ -2363,6 +2566,37 @@ def main() -> None:
                 _run_update()
                 continue
 
+            if uin in ("/extension", "/extensions") or uin.startswith(
+                "/extension "
+            ):
+                _extension_command(uin[len("/extension"):].strip())
+                continue
+
+            called = (
+                extensions.find_command(uin)
+                if uin.split(" ", 1)[0] not in RESERVED_COMMANDS
+                else None
+            )
+            if called:
+                ext, command, rest = called
+
+                if command.run is None:
+                    # A prompt command: its text goes to the model as
+                    # though it had been typed.
+                    uin = extensions.expand_prompt(command, rest)
+                else:
+                    try:
+                        arguments = shlex.split(rest)
+                    except ValueError as exc:
+                        warn(f"Could not parse arguments: {exc}")
+                        continue
+                    console.echo(
+                        run_extension_command(ext, command, arguments)
+                        + "\n"
+                    )
+                    console.print()
+                    continue
+
             if uin == "/image" or uin.startswith("/image "):
                 arg = uin[len("/image"):].strip()
                 if not arg:
@@ -2408,12 +2642,14 @@ def main() -> None:
             if uin in {"/help", "/?"}:
                 help_text = Text()
                 help_text.append("\nCommands\n\n", style="bold")
-                for cmd, desc in [
-                    *COMMANDS,
+                rows = [
+                    *all_commands(),
                     ("@<path>", "point the model at a file"),
-                    ("!<command>", " run a shell command directly"),
-                ]:
-                    help_text.append(f"  {cmd:<10}", style=ACCENT)
+                    ("!<command>", "run a shell command directly"),
+                ]
+                width = max(len(cmd) for cmd, _desc in rows) + 2
+                for cmd, desc in rows:
+                    help_text.append(f"  {cmd:<{width}}", style=ACCENT)
                     help_text.append(f"{desc}\n", style=DIM)
                 help_text.append(
                     "\nAnything else is sent to the model.\n", style=DIM
