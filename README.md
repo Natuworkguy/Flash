@@ -152,6 +152,8 @@ python run.py
 - `/compact`: Summarize the conversation to free up room.
 - `/context`: Show how much of the context window is in use.
 - `/image <path> [prompt]`: Send a local image to the model.
+- `/extension [install <source>|remove <name>]`: List, install, or
+  remove extensions.
 - `/version`: Show the current version and check GitHub for updates.
 - `/update`: Update Flash to the latest version (requires pipx).
 - `/bye`: Exit the application.
@@ -413,6 +415,20 @@ them: `flash.exe` and the Python it starts. Flash downloads the update,
 then hands the install to a PowerShell window that waits for Flash to
 close and finishes there. Quit Flash and the update completes on its
 own.
+
+### Extensions
+
+Extensions add slash commands, tools the model can call, system prompt
+text, and backgrounds. Install one from GitHub:
+
+```bash
+flash --extension-install github@username/my-ext
+```
+
+or with `/extension install github@username/my-ext` in a session. Flash
+shows what the extension adds and asks before installing it.
+`flash --extension-list` and `flash --extension-remove <name>` do the
+rest. See [docs/EXTENSIONS.md](docs/EXTENSIONS.md) to write your own.
 
 ### Direct Shell Execution
 

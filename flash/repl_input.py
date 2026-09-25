@@ -25,7 +25,7 @@ from prompt_toolkit.renderer import Renderer
 from prompt_toolkit.styles import Style
 from prompt_toolkit.utils import get_cwidth
 
-from . import background
+from . import background, extensions
 from .emojis import EMOJIS
 from .images import IMAGE_EXTENSIONS
 from .memory import MEMORY_PATH
@@ -61,11 +61,28 @@ COMMANDS = [
     ("/compact", "summarize the conversation to free up room"),
     ("/context", "show how much of the window is in use"),
     ("/image", "send an image to the model (/image <path> [prompt])"),
+    ("/extension", "list, install, or remove extensions (/extension help)"),
     ("/version", "show the current version and check for updates"),
     ("/update", "update Flash to the latest version (pipx installs)"),
     ("/help", "show this help (alias: /?)"),
     ("/bye", "exit Flash (alias: /exit)"),
 ]
+
+# Every name an extension may not take: the commands above and their
+# aliases.
+RESERVED_COMMANDS = frozenset(
+    [cmd for cmd, _desc in COMMANDS] + ["/?", "/exit", "/extensions"]
+)
+
+
+def all_commands() -> list[tuple[str, str]]:
+    """COMMANDS, then every command the installed extensions add."""
+
+    return COMMANDS + [
+        (f"/{command.name}", command.description or f"from {ext.name}")
+        for ext, command in extensions.commands()
+        if f"/{command.name}" not in RESERVED_COMMANDS
+    ]
 
 
 def _is_image_path(path: str) -> bool:
@@ -234,7 +251,7 @@ class SlashCommandCompleter(Completer):
         if not text.startswith("/") or " " in text:
             return
 
-        for cmd, desc in COMMANDS:
+        for cmd, desc in all_commands():
             if cmd.startswith(text):
                 yield Completion(
                     cmd,

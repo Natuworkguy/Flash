@@ -34,6 +34,7 @@ from rich.color import Color
 from rich.style import Style
 from rich.text import Text
 
+from . import extensions
 from .paths import FLASH_DIR
 from .theme import can_encode
 
@@ -185,9 +186,10 @@ def user_dir() -> Path:
 
 
 def search_paths() -> list[Path]:
-    """Both scene directories, the user's first so it can override."""
+    """Every scene directory: the user's first so it can override, then
+    the ones extensions bring, then the scenes that ship with Flash."""
 
-    return [user_dir(), bundled_dir()]
+    return [user_dir(), *extensions.background_dirs(), bundled_dir()]
 
 
 def names() -> list[str]:
