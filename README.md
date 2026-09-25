@@ -158,6 +158,20 @@ python run.py
 - `/update`: Update Flash to the latest version (requires pipx).
 - `/bye`: Exit the application.
 
+### Keys
+
+- `Enter` sends. `Alt+Enter`, or `\` at the end of a line followed by
+  `Enter`, starts a new line instead.
+- `Up` / `Down` step through earlier messages, saved across sessions in
+  `~/.flash/history`. `/set` lines are never saved, since that is how
+  API keys get typed in. `Ctrl+R` searches them.
+- `Shift+Tab` toggles autonomous mode, the same as `/auto`.
+- `Ctrl+O` prints in full any tool output that was cut short this turn.
+  Output longer than 12 lines shows its first 5 lines, or its last 5 if
+  the command failed, since the error is usually at the end. The model
+  always sees all of it.
+- `Ctrl+C` stops the model mid-answer.
+
 Type `@` anywhere in a message to pick a file out of a dropdown, e.g.
 `why does @flash/theme.py fall back to ASCII?`. Arrow keys and Tab pick
 one, `/` walks into a directory, and the model reads whatever you point

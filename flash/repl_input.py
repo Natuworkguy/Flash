@@ -12,14 +12,17 @@ from typing import Optional
 from prompt_toolkit import PromptSession
 from prompt_toolkit.application.current import get_app, get_app_or_none
 from prompt_toolkit.completion import Completer, Completion, PathCompleter
-from prompt_toolkit.document import Document
 from prompt_toolkit.data_structures import Point
+from prompt_toolkit.document import Document
+from prompt_toolkit.filters import Condition, has_completions
 from prompt_toolkit.formatted_text import (
     ANSI,
     StyleAndTextTuples,
     fragment_list_width,
     to_formatted_text,
 )
+from prompt_toolkit.history import FileHistory
+from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.layout.screen import Screen
 from prompt_toolkit.renderer import Renderer
 from prompt_toolkit.styles import Style
@@ -29,7 +32,7 @@ from . import background, extensions
 from .emojis import EMOJIS
 from .images import IMAGE_EXTENSIONS
 from .memory import MEMORY_PATH
-from .paths import ENV_PATH
+from .paths import ENV_PATH, FLASH_DIR
 from .theme import (
     BAR_EMPTY,
     CURSOR,
@@ -513,9 +516,99 @@ WAKE_POLL_SECONDS = 0.25
 RESIZE = "\x00resize"
 RESIZE_POLL_SECONDS = 0.2
 
+# What read_line returns for Shift+Tab, which flips autonomous mode
+# without having to clear the line to type /auto.
+TOGGLE_AUTO = "\x00auto"
+
+# What read_line returns for Ctrl+O: print the tool output this turn
+# cut short. The output is ordinary scrollback above the prompt, which
+# the prompt cannot draw into, so it stands down for the caller to.
+EXPAND = "\x00expand"
+
 # Whatever was half typed when that happened, handed back on the next
 # call so a resize does not cost someone their sentence.
 _carried = ""
+
+# Up-arrow history, kept across sessions like a shell's.
+HISTORY_PATH = FLASH_DIR / "history"
+
+# Lines that never reach the history file, since it is plain text on
+# disk: /set is how an API key gets into the config.
+PRIVATE_PREFIXES = ("/set ",)
+
+
+class SessionHistory(FileHistory):
+    """FileHistory that keeps secrets out and never breaks the prompt.
+
+    Up-arrow is a convenience. A history file that cannot be read or
+    written costs the history and nothing else.
+    """
+
+    def load_history_strings(self):
+        try:
+            yield from super().load_history_strings()
+        except OSError:
+            return
+
+    def store_string(self, string: str) -> None:
+        if string.startswith(PRIVATE_PREFIXES):
+            return
+
+        try:
+            Path(self.filename).parent.mkdir(parents=True, exist_ok=True)
+            super().store_string(string)
+        except OSError:
+            pass
+
+
+def _stand_down(app, result: str) -> None:
+    """Leave the prompt with RESULT, keeping what was typed for later."""
+
+    global _carried
+
+    _carried = app.current_buffer.text
+    app.exit(result=result)
+
+
+@Condition
+def _after_backslash() -> bool:
+    return get_app().current_buffer.document.text_before_cursor.endswith(
+        "\\"
+    )
+
+
+def key_bindings() -> KeyBindings:
+    """The keys Flash adds to prompt_toolkit's own.
+
+    A newline is Alt+Enter, or a backslash before Enter, which works in
+    every terminal. Not Ctrl+J: prompt_toolkit reads that as Enter
+    because WSL sends it for one, and taking it over would leave WSL
+    with no way to send a message at all.
+    """
+
+    keys = KeyBindings()
+
+    @keys.add("escape", "enter")
+    def _newline(event) -> None:
+        event.current_buffer.insert_text("\n")
+
+    @keys.add("enter", filter=_after_backslash)
+    def _continued(event) -> None:
+        buffer = event.current_buffer
+        buffer.delete_before_cursor(1)
+        buffer.insert_text("\n")
+
+    # While the completion menu is open, Shift+Tab steps back through
+    # it, as it always has.
+    @keys.add("s-tab", filter=~has_completions)
+    def _toggle_auto(event) -> None:
+        _stand_down(event.app, TOGGLE_AUTO)
+
+    @keys.add("c-o")
+    def _expand(event) -> None:
+        _stand_down(event.app, EXPAND)
+
+    return keys
 
 
 def _take_carried() -> str:
@@ -721,6 +814,8 @@ def read_line(
             refresh_interval=PLACEHOLDER_REFRESH_SECONDS,
             erase_when_done=True,
             style=_RULE_STYLE,
+            history=SessionHistory(str(HISTORY_PATH)),
+            key_bindings=key_bindings(),
         )
         _snug(_session)
 
@@ -750,13 +845,10 @@ def read_line(
         app = get_app()
 
         def stand_down() -> None:
-            global _carried
-
             if app.is_done:
                 return
 
-            _carried = app.current_buffer.text
-            app.exit(result=RESIZE)
+            _stand_down(app, RESIZE)
 
         renderer = app.renderer
         if isinstance(renderer, SnugRenderer):

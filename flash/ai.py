@@ -35,6 +35,7 @@ from .models import fetch_if_missing, pick_model
 from .notify import notify_reply_ready
 from .paths import ENV_PATH
 from .repl_input import (
+    EXPAND,
     HEALTH_DOWN,
     HEALTH_HEX,
     HEALTH_OK,
@@ -42,6 +43,7 @@ from .repl_input import (
     MAX_MENU_ROWS,
     RESERVED_COMMANDS,
     RESIZE,
+    TOGGLE_AUTO,
     WAKE,
     all_commands,
     read_line,
@@ -71,8 +73,10 @@ from .theme import (
     RESET_ANSI,
     WARN,
     ScreenConsole,
+    clear_collapsed,
     confirm,
     console,
+    expand_collapsed,
     glimmer,
     tool_line,
     tool_result,
@@ -1894,6 +1898,49 @@ def _render_markdown(console: Console, text: str, *, end: str = "\n") -> None:
     console.print(render(text), end=end)
 
 
+# Listed under /help. The bindings themselves are in repl_input.
+KEYS = [
+    ("Alt+Enter", "new line (or end the line with \\ and press Enter)"),
+    ("Up / Down", "earlier messages, kept across sessions"),
+    ("Ctrl+R", "search earlier messages"),
+    ("Shift+Tab", "toggle autonomous mode"),
+    ("Ctrl+O", "show tool output that was cut short this turn"),
+    ("Ctrl+C", "stop the model mid-answer"),
+]
+
+
+def _set_auto(on: bool) -> None:
+    """Autonomous mode on or off, from /auto, saying which."""
+
+    set_config_var("NO_COMMAND_CONFIRMATION", "1" if on else "0")
+    state = "enabled" if on else "disabled"
+    console.print(
+        Text(f"Autonomous mode {state}.", style=f"bold {ACCENT}")
+    )
+
+
+def _hard_breaks(text: str) -> str:
+    """TEXT with every line break kept when rendered as Markdown.
+
+    Markdown joins single line breaks into one paragraph, which is
+    right for a model's prose and wrong for a message typed over
+    several lines on purpose. Code fences are left alone: their breaks
+    already survive, and the marker would show up inside them.
+    """
+
+    lines = text.split("\n")
+    fenced = False
+
+    for index, line in enumerate(lines[:-1]):
+        if line.lstrip().startswith(("```", "~~~")):
+            fenced = not fenced
+            continue
+        if not fenced and line.strip():
+            lines[index] = line + "  "
+
+    return "\n".join(lines)
+
+
 def _render_sent_message(
     console: Console,
     prompt_ansi: str,
@@ -1904,7 +1951,11 @@ def _render_sent_message(
     `code` show up highlighted rather than as raw backticks."""
 
     prompt = Text.from_ansi(prompt_ansi)
-    body = Markdown(render_latex(text), code_theme="monokai", hyperlinks=True)
+    body = Markdown(
+        _hard_breaks(render_latex(text)),
+        code_theme="monokai",
+        hyperlinks=True,
+    )
 
     def paint() -> None:
         console.print(prompt, end="")
@@ -2233,6 +2284,21 @@ def main() -> None:
 
     banner_showing = True
 
+    def redraw_banner() -> None:
+        """Paint the opening screen again, for a resize or a toggle."""
+
+        nonlocal backdrop
+
+        # Measured before the paint, not after it. A drag that moves
+        # again while the paint goes out would otherwise be written
+        # down as the size the screen was drawn for, and the prompt
+        # would never find out that it was not.
+        painted = screen_size()
+        _sync(True)
+        backdrop = repaint(console, update)
+        _sync(False)
+        screen_redrawn(painted)
+
     while True:
         try:
             pending_images: Optional[list[str]] = None
@@ -2276,23 +2342,19 @@ def main() -> None:
 
                 if uin == RESIZE:
                     _settle_size()
-                    # Measured before the paint, not after it. A drag
-                    # that moves again while the paint goes out would
-                    # otherwise be written down as the size the screen
-                    # was drawn for, and the prompt would never find
-                    # out that it was not.
-                    painted = screen_size()
                     if banner_showing:
-                        _sync(True)
-                        backdrop = repaint(console, update)
-                        _sync(False)
+                        redraw_banner()
                     else:
+                        # Measured before the paint, as redraw_banner
+                        # does, and for the same reason.
+                        painted = screen_size()
                         redraw_conversation(console)
-                    screen_redrawn(painted)
+                        screen_redrawn(painted)
                     continue
 
                 if banner_showing and (
-                    uin == WAKE or (not uin.strip() and Config.voice)
+                    uin in (WAKE, EXPAND)
+                    or (not uin.strip() and Config.voice)
                 ):
                     # Something is about to print under the opening
                     # screen. The foot of the picture went with the
@@ -2301,6 +2363,24 @@ def main() -> None:
                     for row in backdrop:
                         print(row)
                     banner_showing = False
+
+                if uin == TOGGLE_AUTO:
+                    # Silent: a line per press would pile up in the
+                    # conversation for someone flicking it back and
+                    # forth. The feedback is the status bar's "auto",
+                    # or on the opening screen, which has no status
+                    # bar, the banner's autonomous notice.
+                    set_config_var(
+                        "NO_COMMAND_CONFIRMATION",
+                        "0" if Config.no_command_confirmation else "1",
+                    )
+                    if banner_showing:
+                        redraw_banner()
+                    continue
+
+                if uin == EXPAND:
+                    expand_collapsed()
+                    continue
 
                 if uin == WAKE:
                     woken = True
@@ -2384,21 +2464,13 @@ def main() -> None:
             if uin == "/auto" or uin.startswith("/auto "):
                 arg = uin[len("/auto"):].strip().lower()
                 if arg in ("", "toggle"):
-                    new_value = not Config.no_command_confirmation
+                    _set_auto(not Config.no_command_confirmation)
                 elif arg in ("on", "enable", "true", "1"):
-                    new_value = True
+                    _set_auto(True)
                 elif arg in ("off", "disable", "false", "0"):
-                    new_value = False
+                    _set_auto(False)
                 else:
                     warn("Usage: /auto [on|off|toggle]")
-                    continue
-                set_config_var(
-                    "NO_COMMAND_CONFIRMATION", "1" if new_value else "0"
-                )
-                state = "enabled" if new_value else "disabled"
-                console.print(
-                    Text(f"Autonomous mode {state}.", style=f"bold {ACCENT}")
-                )
                 continue
 
             if uin == "/background" or uin.startswith("/background "):
@@ -2482,6 +2554,7 @@ def main() -> None:
 
             if uin == "/clear":
                 messages.clear()
+                clear_collapsed()
                 plan.clear()
                 checkpoint.clear()
                 console.print(Text("Context cleared.", style=DIM))
@@ -2651,6 +2724,11 @@ def main() -> None:
                 for cmd, desc in rows:
                     help_text.append(f"  {cmd:<{width}}", style=ACCENT)
                     help_text.append(f"{desc}\n", style=DIM)
+                help_text.append("\nKeys\n\n", style="bold")
+                keys_width = max(len(key) for key, _desc in KEYS) + 2
+                for key, desc in KEYS:
+                    help_text.append(f"  {key:<{keys_width}}", style=ACCENT)
+                    help_text.append(f"{desc}\n", style=DIM)
                 help_text.append(
                     "\nAnything else is sent to the model.\n", style=DIM
                 )
@@ -2681,6 +2759,7 @@ def main() -> None:
             )
 
             checkpoint.start_turn(_turn_label(uin))
+            clear_collapsed()
 
             turn = Turn()
             offered = turn_tools()

@@ -71,11 +71,19 @@ class TestParsing:
             background.parse("palette:\n  . nope\n", where="mine.scene")
 
 
+# Read from the bundled folder alone. background.names() also lists the
+# developer's own scenes and their extensions', and is called here at
+# collection, before any fixture has swapped the home folder out.
+BUNDLED = sorted(
+    path.stem for path in background.bundled_dir().glob("*.scene")
+)
+
+
 class TestBundled:
     def test_there_are_scenes_to_choose_from(self):
         assert len(background.names()) >= 4
 
-    @pytest.mark.parametrize("name", background.names())
+    @pytest.mark.parametrize("name", BUNDLED)
     def test_every_bundled_scene_loads(self, name):
         scene = background.load(background.find(name))
 
@@ -83,7 +91,7 @@ class TestBundled:
         assert scene.height > 0
         assert scene.name
 
-    @pytest.mark.parametrize("name", background.names())
+    @pytest.mark.parametrize("name", BUNDLED)
     def test_every_bundled_scene_is_even_height(self, name):
         # Two pixels to a cell: an odd row would be half drawn.
         assert background.load(background.find(name)).height % 2 == 0
