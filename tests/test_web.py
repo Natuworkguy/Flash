@@ -173,6 +173,9 @@ class TestTurns:
         assert answered[0]["answer"] == "n"
         assert "Command blocked by user" in json.dumps(chat.messages)
 
+    @pytest.mark.skipif(
+        os.name == "nt", reason="PowerShell has no touch command"
+    )
     def test_allowing_runs_it(self, tmp_path):
         target = tmp_path / "made"
         FakeClient.scripts = [
@@ -1090,3 +1093,10 @@ class TestShownFiles:
                        token=False)[0] == 403
         assert request(server, "GET", "/api/files/../../chats")[0] == 404
         assert request(server, "GET", "/api/files/0123456789abcdef")[0] == 404
+
+
+def test_the_qr_code_scales_to_its_box():
+    svg = web.qr_svg("http://192.168.1.20:7433/?token=" + "x" * 32)
+
+    assert "viewBox=" in svg
+    assert 'width="' not in svg.split(">")[0]

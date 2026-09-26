@@ -3,6 +3,7 @@
 import os
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 
 import pytest
 
@@ -117,7 +118,9 @@ class TestProjects:
     def test_home_is_expanded(self):
         made = workspace.create_project("Home", "~")
 
-        assert made.path == os.path.expanduser("~")
+        # Resolved on both sides: a Windows runner's home can come back
+        # as an 8.3 short name that resolve() expands.
+        assert made.path == str(Path(os.path.expanduser("~")).resolve())
 
     def test_instructions_are_capped(self, tmp_path):
         with pytest.raises(WorkspaceError, match="limited"):
