@@ -1265,8 +1265,15 @@ def lan_address() -> str:
 
 
 def qr_svg(url: str) -> str:
+    """The QR code as an SVG that scales to whatever box holds it.
+
+    omitsize gives it a viewBox rather than a fixed width and height.
+    With a fixed size, the page shrinking it to its box clipped the
+    right and bottom edges, quiet zone included, which a camera needs.
+    """
+
     return segno.make(url, error="m").svg_inline(
-        scale=6, dark="#000", light="#fff", border=2
+        omitsize=True, dark="#000", light="#fff", border=2
     )
 
 
