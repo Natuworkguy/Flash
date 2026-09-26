@@ -39,6 +39,7 @@ from .theme import (
     WARN,
     ToolSink,
     capture_tool_output,
+    capturing,
     console,
     plural,
 )
@@ -56,6 +57,7 @@ FAILED = "error"
 RECENT_STEPS = 4
 RESULT_PREVIEW_LINES = 20
 REFRESH_PER_SECOND = 8
+FOLLOW_POLL_SECONDS = 0.2
 
 # ai.py swaps in its own, so sub-agent requests ask Ollama for the same
 # num_ctx and num_predict as the main loop's.
@@ -315,13 +317,18 @@ def running_count() -> int:
         return sum(1 for e in _agents.values() if e.status == RUNNING)
 
 
-def unseen() -> list[SubAgent]:
-    """Finished sub-agents whose answer the main agent has not had yet."""
+def unseen(only: Optional[set] = None) -> list[SubAgent]:
+    """Finished sub-agents whose answer the main agent has not had yet.
+
+    ONLY limits it to those IDs: the web UI runs several conversations,
+    and each hears about its own sub-agents alone.
+    """
 
     with _lock:
         return [
             _snapshot(e) for e in _agents.values()
             if e.status != RUNNING and not e.delivered
+            and (only is None or e.id in only)
         ]
 
 
@@ -337,7 +344,7 @@ def mark_delivered(agent_ids: list[str]) -> None:
 NOTICE_TASK_CHARS = 200
 
 
-def notices() -> tuple[str, list[str]]:
+def notices(only: Optional[set] = None) -> tuple[str, list[str]]:
     """News for the main agent's next turn, and the finished IDs it covers.
 
     The main loop keeps only final replies in its history, never tool
@@ -349,8 +356,11 @@ def notices() -> tuple[str, list[str]]:
 
     from . import tools as flash_tools  # deferred: avoids a module cycle
 
-    finished = unseen()
-    running = [e for e in list_all() if e.status == RUNNING]
+    finished = unseen(only)
+    running = [
+        e for e in list_all()
+        if e.status == RUNNING and (only is None or e.id in only)
+    ]
 
     if not finished and not running:
         return "", []
@@ -574,7 +584,14 @@ def follow(agent_id: str, timeout: float) -> Optional[SubAgent]:
         entry = status(agent_id)
         return render(entry, header=False) if entry else Text("")
 
-    _live(view, busy)
+    # A turn the web UI is running has no terminal to draw in: the live
+    # view would land in the one running the server. It waits quietly,
+    # and the page shows the call as still in progress.
+    if capturing():
+        while busy():
+            time.sleep(FOLLOW_POLL_SECONDS)
+    else:
+        _live(view, busy)
 
     return status(agent_id)
 

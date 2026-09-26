@@ -1100,3 +1100,199 @@ def test_the_qr_code_scales_to_its_box():
 
     assert "viewBox=" in svg
     assert 'width="' not in svg.split(">")[0]
+
+
+# --- Sub-agents in the web UI ----------------------------------------------
+
+
+class SubAgentModel(FakeClient):
+    """Both models. Ollama is one module, so the web turn and the
+    sub-agent share a Client: the turn streams, and the sub-agent, which
+    answers its task in one go, does not."""
+
+    answer = "Found 3 Python files."
+
+    def chat(self, **kwargs):
+        if kwargs.get("stream"):
+            return super().chat(**kwargs)
+        return self.answer_task(**kwargs)
+
+    def answer_task(self, **kwargs):
+        return SimpleNamespace(message=SimpleNamespace(
+            content=SubAgentModel.answer, tool_calls=None,
+        ))
+
+
+@pytest.fixture
+def subagent_world(monkeypatch):
+    from flash import agent as subagents
+
+    monkeypatch.setattr(subagents, "_agents", {})
+    monkeypatch.setattr(subagents.ollama, "Client", SubAgentModel)
+    monkeypatch.setattr(tools, "MODEL_NAME", "flash-test")
+    monkeypatch.setattr(web, "WATCH_SECONDS", 0.02)
+    sessions = []
+    yield sessions
+    for session in sessions:
+        session.close()
+
+
+def wait_for(check, timeout=5):
+    deadline = time.monotonic() + timeout
+    while not check():
+        assert time.monotonic() < deadline, "timed out"
+        time.sleep(0.02)
+
+
+class TestSubAgents:
+    def test_a_finished_sub_agent_wakes_its_chat(self, subagent_world):
+        FakeClient.scripts = [
+            [part(calls=[call("agent", task="count the python files")]),
+             part(done=True)],
+            [part("Started a sub-agent; I'll report back."), part(done=True)],
+            [part("The sub-agent found 3 Python files."), part(done=True)],
+        ]
+        session = web.Session()
+        subagent_world.append(session)
+        chat = session.new_chat()
+
+        run(session, chat, "how many python files are there?")
+        wait_for(lambda: any(
+            e["type"] == "assistant" and "found 3" in e["text"]
+            for e in chat.log
+        ))
+
+        # The turn that started it finished cleanly, stats and all.
+        assert "error" not in types(chat.log)
+        assert types(chat.log).count("stats") == 2
+        notes = [e["text"] for e in chat.log if e["type"] == "note"]
+        assert notes == [web.WAKE_TEXT]
+        # The wake turn told the model what the sub-agent found.
+        woke = FakeClient.requests[-1]["messages"][-1]["content"]
+        assert "finished" in woke and SubAgentModel.answer in woke
+        # Nobody typed the wake, so it is not shown as a message.
+        assert [e["text"] for e in chat.log if e["type"] == "user"] == [
+            "how many python files are there?"
+        ]
+
+    def test_news_stays_in_the_chat_that_asked(
+        self, subagent_world, monkeypatch
+    ):
+        from flash import agent as subagents
+
+        FakeClient.scripts = [
+            [part(calls=[call("agent", task="slow task")]), part(done=True)],
+            [part("Started."), part(done=True)],
+            [part("Other chat reply."), part(done=True)],
+        ]
+        session = web.Session()
+        subagent_world.append(session)
+        # Held running, so nothing wakes and both chats stay quiet.
+        release = threading.Event()
+        monkeypatch.setattr(SubAgentModel, "answer_task", lambda self, **kw: (
+            release.wait(5) and None
+        ) or SimpleNamespace(message=SimpleNamespace(
+            content="done", tool_calls=None)))
+        try:
+            first = session.new_chat()
+            run(session, first, "start one")
+            other = session.new_chat()
+            run(session, other, "unrelated question")
+
+            sent = FakeClient.requests[-1]["messages"][-1]["content"]
+            assert "Sub-agent" not in sent
+            assert session.owned(first.id) and not session.owned(other.id)
+            assert session.agent_list(first.id)[0]["status"] == "running"
+            assert session.agent_list(other.id) == []
+        finally:
+            release.set()
+            wait_for(lambda: subagents.running_count() == 0)
+
+    def test_waking_stops_after_three_in_a_row(
+        self, subagent_world, monkeypatch
+    ):
+        from flash import agent as subagents
+
+        # Never marked as seen, so the watcher keeps finding it.
+        monkeypatch.setattr(subagents, "mark_delivered", lambda ids: None)
+        FakeClient.scripts = [
+            [part(calls=[call("agent", task="t")]), part(done=True)],
+            [part("Started."), part(done=True)],
+        ] + [[part(f"Report {n}."), part(done=True)] for n in range(6)]
+        session = web.Session()
+        subagent_world.append(session)
+        chat = session.new_chat()
+
+        run(session, chat, "go")
+        wait_for(lambda: sum(e["type"] == "note" for e in chat.log) >= 3)
+        time.sleep(0.5)
+
+        assert sum(e["type"] == "note" for e in chat.log) == 3
+
+    def test_agent_result_waits_without_drawing_in_the_terminal(
+        self, subagent_world, monkeypatch
+    ):
+        from flash import agent as subagents
+        from flash.theme import capture_tool_output
+
+        def no_terminal(*args, **kwargs):
+            raise AssertionError("drew a live view in the terminal")
+
+        monkeypatch.setattr(subagents, "_live", no_terminal)
+        agent_id = subagents.start("quick task")
+
+        with capture_tool_output(lambda *event: None):
+            answer = tools.agent_result(agent_id, 5)
+
+        assert answer == SubAgentModel.answer
+
+    def test_the_page_can_list_them(self, server, subagent_world):
+        chat = server.session.new_chat()
+        from flash import agent as subagents
+
+        agent_id = subagents.start("list things")
+        server.session.adopt(chat, {agent_id})
+        subagent_world.append(server.session)
+        wait_for(lambda: subagents.running_count() == 0)
+
+        status, body = request(server, "GET", f"/api/agents?chat={chat.id}")
+
+        assert status == 200
+        listed = json.loads(body)["agents"]
+        assert listed[0]["id"] == agent_id
+        assert listed[0]["result"] == SubAgentModel.answer
+        assert request(server, "GET", f"/api/agents?chat={chat.id}",
+                       token=False)[0] == 403
+
+
+class TestPlans:
+    def test_a_plan_is_drawn_on_the_page_not_the_terminal(
+        self, monkeypatch
+    ):
+        from flash import plan, theme
+
+        terminal = []
+        monkeypatch.setattr(
+            theme.console, "print", lambda *a, **k: terminal.append(a)
+        )
+        monkeypatch.setattr(plan, "_steps", [])
+        FakeClient.scripts = [
+            [part(calls=[call("plan", steps=["Read it", "Fix it"])]),
+             part(done=True)],
+            [part(calls=[call("check_step", index=1)]), part(done=True)],
+            [part("Planned."), part(done=True)],
+        ]
+        session = web.Session()
+        chat = session.new_chat()
+
+        run(session, chat, "fix the bug")
+
+        assert terminal == []
+        drawn = [e["steps"] for e in chat.log if e["type"] == "plan"]
+        assert drawn == [
+            [{"text": "Read it", "status": "active"},
+             {"text": "Fix it", "status": "todo"}],
+            [{"text": "Read it", "status": "done"},
+             {"text": "Fix it", "status": "active"}],
+        ]
+        assert "plan" in web.KEPT

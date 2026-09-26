@@ -278,6 +278,15 @@ pre code { display: block; padding: 2px 16px 14px; overflow-x: auto; font-size: 
 .tool .diff .a { color: var(--add); background: color-mix(in srgb, var(--add) 10%, transparent); }
 .tool .diff .d { color: var(--del); background: color-mix(in srgb, var(--del) 10%, transparent); }
 .tool .diff .h { color: var(--text-3); }
+.checklist { list-style: none; margin: 0; padding: 10px 14px 12px; border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: 7px; font-size: 14px; line-height: 1.45; color: var(--text-3); }
+.checklist li { display: flex; gap: 10px; align-items: flex-start; transition: color 0.2s; }
+.checklist .box { flex: none; width: 16px; height: 16px; margin-top: 2px; border: 1.5px solid currentColor; border-radius: 5px; display: grid; place-items: center; transition: background 0.2s, border-color 0.2s; }
+.checklist .box svg { width: 11px; height: 11px; stroke-width: 3; opacity: 0; transform: scale(0.4); transition: opacity 0.2s, transform 0.28s var(--ease); }
+.checklist .active { color: var(--text); font-weight: 500; }
+.checklist .active .box { border-color: var(--accent); }
+.checklist .done .box { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+.checklist .done .box svg { opacity: 1; transform: none; }
+.checklist .done .text { text-decoration: line-through; text-decoration-color: var(--text-3); }
 
 .thinking .head { display: inline-flex; align-items: center; gap: 6px; color: var(--text-3); font-size: 14px; padding: 2px 0; }
 .thinking .head:hover { color: var(--text-2); }
@@ -352,6 +361,14 @@ pre code { display: block; padding: 2px 16px 14px; overflow-x: auto; font-size: 
 }
 .pill:hover { background: var(--hover); color: var(--text); }
 .pill svg { width: 15px; height: 15px; }
+#agents-btn { color: var(--text-2); }
+#agents-btn .pulse-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); animation: pulse 1.2s ease-in-out infinite; }
+.menu .agent-row { display: flex; flex-direction: column; gap: 2px; padding: 8px 10px; border-radius: 9px; font-size: 13px; color: var(--text-2); min-width: 0; }
+.menu .agent-row .top { display: flex; gap: 8px; align-items: center; }
+.menu .agent-row .task { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
+.menu .agent-row .state { font-size: 11.5px; color: var(--text-3); white-space: nowrap; }
+.menu .agent-row .state.running { color: var(--accent); }
+.menu .agent-row .detail { font: 11.5px var(--mono); color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #auto-btn.on { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 45%, transparent); background: color-mix(in srgb, var(--accent) 10%, transparent); }
 #model-btn { margin-left: auto; border-color: transparent; max-width: 55%; }
 #model-btn span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -793,6 +810,7 @@ body.page-projects #dock { display: none; }
           <textarea id="input" rows="1" placeholder="Message Flash" aria-label="Message Flash"></textarea>
           <div class="composer-row">
             <button type="button" class="pill" id="auto-btn" data-tip="Autonomous mode" data-keys="Shift Tab"></button>
+            <button type="button" class="pill" id="agents-btn" hidden data-tip="Sub-agents"><span class="pulse-dot"></span><span id="agents-count"></span></button>
             <span id="context"></span>
             <button type="button" class="pill" id="model-btn" data-tip="Switch model" data-keys="Alt M"><span id="model-name">No model</span><i id="model-chev"></i></button>
             <button type="submit" id="send" data-tip="Send" data-keys="Enter" aria-label="Send" disabled></button>
@@ -1151,6 +1169,7 @@ function toolIcon(label) {
   if (/read|glob|grep|recall|skillview/.test(name)) return "file";
   if (/edit|write/.test(name)) return "edit";
   if (/web|fetch|page|screenshot|interact/.test(name)) return "globe";
+  if (/^(plan|checkstep)$/.test(name)) return "check";
   return "dot";
 }
 
@@ -1173,6 +1192,21 @@ function addResult(card, text, error, warn) {
   const body = el("div", "body" + (error ? " error" : ""));
   body.textContent = text;
   slideBox(card).appendChild(body);
+}
+
+// A plan draws as boxes to tick, left open: it is there to be watched.
+function addPlan(card, steps) {
+  card.classList.remove("running");
+  card.classList.add("open");
+  const active = steps.find((step) => step.status === "active");
+  card.querySelector(".summary").textContent = active ? active.text : "All done";
+  const list = el("ul", "checklist");
+  for (const step of steps) {
+    const item = el("li", step.status, `<span class="box">${icon("check")}</span><span class="text"></span>`);
+    item.lastChild.textContent = step.text;
+    list.appendChild(item);
+  }
+  slideBox(card).appendChild(list);
 }
 
 function addDiff(card, text) {
@@ -1379,6 +1413,7 @@ function drawEntry(entry, ctx) {
     case "file": messagesEl.appendChild(attachment(entry)); break;
     case "result": if (ctx.tool) addResult(ctx.tool, entry.text, entry.error, entry.warn); break;
     case "diff": if (ctx.tool) addDiff(ctx.tool, entry.text); break;
+    case "plan": if (ctx.tool) addPlan(ctx.tool, entry.steps || []); break;
     case "ask": messagesEl.appendChild(askCard(entry)); break;
     case "answered": { const card = messagesEl.querySelector(`[data-ask="${entry.id}"]`); if (card) settleAsk(card, entry.answer); break; }
     case "error": { const node = el("div", "block error", icon("alert") + "<span></span>"); node.lastChild.textContent = entry.text; messagesEl.appendChild(node); break; }
@@ -1951,7 +1986,28 @@ function renderChats() {
   }
 }
 
+function renderAgents() {
+  const count = info.agents || 0;
+  const btn = $("#agents-btn");
+  btn.hidden = !count;
+  $("#agents-count").textContent = `${count} agent${count === 1 ? "" : "s"} working`;
+}
+
+// What this chat's sub-agents are doing: a menu over the pill.
+async function openAgents() {
+  const anchor = $("#agents-btn");
+  const { agents } = await api("/api/agents?chat=" + encodeURIComponent(current || "")).catch(() => ({ agents: [] }));
+  const rows = agents.length ? [] : [{ header: true, html: '<span style="font-weight:400">Working in another chat</span>' }];
+  for (const a of agents) {
+    const state = a.status === "running" ? `running · ${a.seconds}s` : a.status === "done" ? "done" : "failed";
+    const detail = a.status === "running" ? (a.steps[a.steps.length - 1] || a.activity) : a.result.split("\n")[0];
+    rows.push({ header: true, html: `<div class="agent-row"><div class="top"><span class="task">${esc(a.task)}</span><span class="state ${a.status}">${esc(state)}</span></div><div class="detail">${esc(detail || "")}</div></div>` });
+  }
+  openMenu(anchor, [{ header: true, html: "Sub-agents" }, ...rows], () => {}, "", true);
+}
+
 function renderInfo() {
+  renderAgents();
   const local = !info.host_name || info.host_name === "This computer";
   $("#model-name").textContent = (local ? "" : info.host_name + " · ") + (info.model || "No model");
   const auto = !!info.auto;
@@ -2482,7 +2538,7 @@ async function removeHost(url) {
   drawModelMenu(true);
 }
 
-document.addEventListener("mousedown", (e) => { if (menuEl && !menuEl.contains(e.target) && !e.target.closest("#model-btn")) { closeMenu(); slashOpen = false; } });
+document.addEventListener("mousedown", (e) => { if (menuEl && !menuEl.contains(e.target) && !e.target.closest("#model-btn, #agents-btn")) { closeMenu(); slashOpen = false; } });
 
 // Slash commands ------------------------------------------------------------
 
@@ -2875,6 +2931,7 @@ $("#close-side").onclick = toggleSide;
 $("#open-side").onclick = toggleSide;
 $("#scrim").onclick = closeSide;
 $("#auto-btn").onclick = toggleAuto;
+$("#agents-btn").onclick = () => (menuEl ? closeMenu() : openAgents());
 $("#model-btn").onclick = () => (menuEl && !slashOpen ? closeMenu() : openModels());
 $("#projects-btn").onclick = showProjects;
 $("#crumb").onclick = () => { const c = chats.get(current); if (c && c.project) openProject(c.project, "back"); };
