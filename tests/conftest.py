@@ -2,7 +2,15 @@
 
 import pytest
 
-from flash import extensions, repl_input, terminal, tools
+from flash import (
+    extensions,
+    learning,
+    memory,
+    repl_input,
+    skills,
+    terminal,
+    tools,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -35,8 +43,16 @@ def isolated_home(tmp_path_factory, monkeypatch):
     monkeypatch.setattr(
         repl_input, "HISTORY_PATH", home / ".flash" / "history"
     )
+    # The system prompt carries saved memory and the skill list, so
+    # both have to come from the temp home too.
+    monkeypatch.setattr(memory, "MEMORY_PATH", home / ".flash_memory.md")
+    monkeypatch.setattr(skills, "FLASH_DIR", home / ".flash")
+    learning.refresh()
+    learning.reset()
     yield home
     extensions.reload()
+    learning.refresh()
+    learning.reset()
 
 
 @pytest.fixture(autouse=True)
@@ -65,6 +81,11 @@ def no_developer_config(monkeypatch):
     # ones that change what a test does are cleared too.
     for name in ("NO_COMMAND_CONFIRMATION", "BACKGROUND"):
         monkeypatch.delenv(name, raising=False)
+
+    # No test starts a background learning review against a real model
+    # by running enough turns; one that wants a review asks for it.
+    monkeypatch.setenv("SKILL_REVIEW_AFTER", "0")
+    monkeypatch.setenv("MEMORY_REVIEW_EVERY", "0")
 
     from flash.ai import Config
 

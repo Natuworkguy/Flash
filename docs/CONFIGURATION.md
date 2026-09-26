@@ -48,6 +48,8 @@ Requirements:
 | `MAX_TOOL_OUTPUT_CHARS` | No | `1200` | `500` | Tool output longer than this is truncated (middle removed) before being sent back to the model. |
 | `MAX_OUTPUT_TOKENS` | No | `1024` | `128` | Maximum tokens the model may generate per response. Maps to Ollama's `num_predict` option. |
 | `NUM_CTX` | No | unset | - | Context window to ask Ollama for: a token count, or `max` for the largest the model's architecture supports. Left unset, the model keeps whatever its Modelfile pins (Flash Onyx pins 65536) and Ollama's default applies to models that pin nothing. The cache is allocated when the model loads, whether or not a session fills it, so raising this costs memory up front. |
+| `SKILL_REVIEW_AFTER` | No | `10` | `0` | Once this many tool calls have built up since the last review, Flash reviews the conversation in the background after the reply and saves or fixes a skill. `0` turns this off. See [Learning](../README.md#learning). |
+| `MEMORY_REVIEW_EVERY` | No | `10` | `0` | Every this many messages, the same background review also saves facts worth remembering about you and your setup. `0` turns this off. |
 | `SHOW_STATS` | No | `1` | - | Prints a dim line under each reply with the tokens the turn used, how long it took, the generation rate, and how full the context got. `0` hides it. |
 | `VOICE` | No | `0` | - | `1` turns voice mode on at startup: press Enter on an empty prompt to speak, and replies are read aloud. Usually set with `/voice on` rather than by hand. |
 | `VOICE_VOSK_MODEL` | No | `vosk-model-small-en-us-0.15` | - | Name of the [Vosk model](https://alphacephei.com/vosk/models) used for listening. Downloaded to `~/.flash/models` on first use. |

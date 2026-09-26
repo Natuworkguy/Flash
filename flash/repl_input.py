@@ -56,6 +56,7 @@ COMMANDS = [
     ("/refresh", "reload config from the env file"),
     ("/memory", f"show saved memory, numbered ({MEMORY_PATH})"),
     ("/forget", "delete one memory by its 1-based index (/forget N)"),
+    ("/skills", "procedures Flash has learned (/skills show|remove <name>)"),
     ("/plan", "show the checklist the model is working through"),
     ("/agents", "watch sub-agents work live (/agents <id> for one)"),
     ("/hook", "let Flash see what you run in VS Code's terminal"),
