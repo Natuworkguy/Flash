@@ -154,3 +154,104 @@ def test_read_line_without_wake_reads_normally(monkeypatch):
         _piped_session(monkeypatch, pipe)
         pipe.send_text("hello\r")
         assert repl_input.read_line("> ") == "hello"  # nosec B101
+
+
+# --- keys ------------------------------------------------------------------
+
+ALT_ENTER = "\x1b\r"
+SHIFT_TAB = "\x1b[Z"
+CTRL_O = "\x0f"
+
+
+def _keyed(monkeypatch, pipe, tmp_path):
+    monkeypatch.setattr(repl_input, "_carried", "")
+    monkeypatch.setattr(
+        repl_input, "_session",
+        PromptSession(
+            input=pipe,
+            output=DummyOutput(),
+            key_bindings=repl_input.key_bindings(),
+            history=repl_input.SessionHistory(str(tmp_path / "history")),
+        ),
+    )
+
+
+def _typed(monkeypatch, tmp_path, keys):
+    with create_pipe_input() as pipe:
+        _keyed(monkeypatch, pipe, tmp_path)
+        pipe.send_text(keys)
+        return repl_input.read_line("> ")
+
+
+def test_alt_enter_starts_a_new_line(monkeypatch, tmp_path):
+    assert _typed(  # nosec B101
+        monkeypatch, tmp_path, f"one{ALT_ENTER}two\r"
+    ) == "one\ntwo"
+
+
+def test_a_backslash_before_enter_starts_a_new_line(monkeypatch, tmp_path):
+    assert _typed(  # nosec B101
+        monkeypatch, tmp_path, "one\\\rtwo\r"
+    ) == "one\ntwo"
+
+
+def test_enter_and_ctrl_j_still_send(monkeypatch, tmp_path):
+    # WSL sends Ctrl+J for Enter, so it has to keep sending.
+    assert _typed(monkeypatch, tmp_path, "hi\r") == "hi"  # nosec B101
+    assert _typed(monkeypatch, tmp_path, "hi\n") == "hi"  # nosec B101
+
+
+def test_shift_tab_stands_down_and_keeps_the_line(monkeypatch, tmp_path):
+    result = _typed(monkeypatch, tmp_path, f"half{SHIFT_TAB}")
+
+    assert result == repl_input.TOGGLE_AUTO  # nosec B101
+    assert repl_input._take_carried() == "half"  # nosec B101
+
+
+def test_ctrl_o_stands_down_for_expand(monkeypatch, tmp_path):
+    assert _typed(  # nosec B101
+        monkeypatch, tmp_path, CTRL_O
+    ) == repl_input.EXPAND
+
+
+def test_up_arrow_brings_back_the_last_line(monkeypatch, tmp_path):
+    _typed(monkeypatch, tmp_path, "first\r")
+
+    # A fresh session, as the next run of flash would make.
+    assert _typed(  # nosec B101
+        monkeypatch, tmp_path, "\x1b[A\r"
+    ) == "first"
+
+
+# --- history ---------------------------------------------------------------
+
+def test_history_survives_and_keeps_secrets_out(tmp_path):
+    path = tmp_path / "nested" / "history"
+    history = repl_input.SessionHistory(str(path))
+
+    history.append_string("explain this repo")
+    history.append_string("/set API_KEY sk-secret")
+
+    reread = list(repl_input.SessionHistory(str(path)).load_history_strings())
+
+    assert reread == ["explain this repo"]  # nosec B101
+    assert "sk-secret" not in path.read_text()  # nosec B101
+
+
+def test_a_broken_history_file_costs_only_the_history(tmp_path):
+    # A directory where the file should be: every read and write fails.
+    history = repl_input.SessionHistory(str(tmp_path))
+
+    history.append_string("still works")
+
+    assert list(history.load_history_strings()) == []  # nosec B101
+
+
+def test_ctrl_r_searches_history(monkeypatch, tmp_path):
+    _typed(monkeypatch, tmp_path, "first message\r")
+    _typed(monkeypatch, tmp_path, "second message\r")
+
+    # Ctrl+R, a few letters, Enter to take the match, Enter to send it.
+    assert _typed(  # nosec B101
+        monkeypatch, tmp_path, "\x12fir\r\r"
+    ) == "first message"
