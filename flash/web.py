@@ -41,6 +41,7 @@ import ollama
 import segno
 from rich.text import Text
 
+from . import agent as subagents
 from . import checkpoint, context, learning, workspace
 from .theme import (
     ACCENT,
@@ -75,6 +76,13 @@ ASK_POLL_SECONDS = 0.25
 TITLE_CHARS = 48
 
 MAX_BODY_BYTES = 1_000_000
+
+# Sub-agents: how often the watcher looks for finished ones, and how many
+# times in a row it may wake a chat before waiting for the person, the
+# same limit the terminal keeps.
+WATCH_SECONDS = 0.5
+MAX_WAKES_IN_A_ROW = 3
+WAKE_TEXT = "A sub-agent finished. Flash is reading what it found."
 
 # Search: how many chats come back, how many words a query may have,
 # and how much of a message a result quotes around its match.
@@ -213,7 +221,7 @@ class Ask:
 # The rest (tokens, status) only matter to a page that is watching.
 KEPT = {
     "user", "assistant", "tool", "result", "diff", "ask", "answered",
-    "error", "stats", "note", "thought", "file",
+    "error", "stats", "note", "thought", "file", "plan",
 }
 
 
@@ -235,6 +243,12 @@ class Session:
         self.asks: dict[str, Ask] = {}
         self.turn_lock = threading.Lock()
         self._lock = threading.Lock()
+        # Which chat started each sub-agent, and how many times in a row
+        # each chat has been woken for one, with no message in between.
+        self.agents: dict[str, str] = {}
+        self.wakes: dict[str, int] = {}
+        self._watching: Optional[threading.Thread] = None
+        self._stop_watching = threading.Event()
 
     # Chats ---------------------------------------------------------
 
@@ -305,6 +319,70 @@ class Session:
             "projects": [asdict(p) for p in workspace.projects()],
             "status": {**status(ai), "lan": self.lan},
         }
+
+    # Sub-agents ----------------------------------------------------
+
+    def adopt(self, chat: Chat, agent_ids: set) -> None:
+        """Note that CHAT started these sub-agents, and watch for them."""
+
+        if not agent_ids:
+            return
+        for agent_id in agent_ids:
+            self.agents[agent_id] = chat.id
+        self.hub.publish({"type": "status"})
+        if self._watching is None:
+            self._watching = threading.Thread(target=self._watch, daemon=True)
+            self._watching.start()
+
+    def owned(self, chat_id: str) -> set:
+        return {a for a, c in list(self.agents.items()) if c == chat_id}
+
+    def _watch(self) -> None:
+        """Wake a chat when a sub-agent it started finishes.
+
+        The terminal does this at its prompt. Here nothing else would:
+        the model ended its turn expecting to be told, and without this
+        the answer sat unread until someone typed again.
+        """
+
+        running = None
+        while not self._stop_watching.wait(WATCH_SECONDS):
+            now = subagents.running_count()
+            if now != running:
+                running = now
+                self.hub.publish({"type": "status"})
+
+            for chat_id in set(self.agents.values()):
+                chat = self.chats.get(chat_id)
+                if chat is None or chat.busy or chat.queued:
+                    continue
+                if not subagents.unseen(self.owned(chat_id)):
+                    continue
+                if self.wakes.get(chat_id, 0) >= MAX_WAKES_IN_A_ROW:
+                    continue
+                self.wakes[chat_id] = self.wakes.get(chat_id, 0) + 1
+                self.send(chat, ai_wake_note(), wake=True)
+
+    def close(self) -> None:
+        self._stop_watching.set()
+
+    def agent_list(self, chat_id: str) -> list[dict]:
+        """What a chat's sub-agents are doing, for the page's menu."""
+
+        owned = self.owned(chat_id)
+        return [
+            {
+                "id": entry.id,
+                "task": entry.task,
+                "status": entry.status,
+                "activity": entry.activity,
+                "seconds": round(entry.elapsed),
+                "steps": [step.label for step in entry.steps[-3:]],
+                "result": entry.result[:400],
+            }
+            for entry in subagents.list_all()
+            if entry.id in owned
+        ]
 
     # Search --------------------------------------------------------
 
@@ -406,20 +484,28 @@ class Session:
 
     # Turns ---------------------------------------------------------
 
-    def send(self, chat: Chat, text: str) -> None:
-        """Start a turn on a thread of its own and return at once."""
+    def send(self, chat: Chat, text: str, wake: bool = False) -> None:
+        """Start a turn on a thread of its own and return at once.
+
+        WAKE is a turn nobody typed: a sub-agent finished, and the model
+        is woken to report back. The page shows a note, not a message.
+        """
 
         text = text.strip()
         if not text:
             return
 
-        if chat.title == "New chat":
-            chat.title = " ".join(text.split())[:TITLE_CHARS] or chat.title
-            self.hub.publish({"type": "chats", "chat": chat.id})
+        if wake:
+            self.emit(chat, {"type": "note", "text": WAKE_TEXT})
+        else:
+            self.wakes[chat.id] = 0
+            if chat.title == "New chat":
+                chat.title = " ".join(text.split())[:TITLE_CHARS] or chat.title
+                self.hub.publish({"type": "chats", "chat": chat.id})
+            self.emit(chat, {"type": "user", "text": text})
 
         chat.stop.clear()
         chat.queued = True
-        self.emit(chat, {"type": "user", "text": text})
         threading.Thread(
             target=self._run, args=(chat, text), daemon=True
         ).start()
@@ -543,6 +629,8 @@ def _sink(session: Session, chat: Chat):
             })
         elif kind == "diff":
             session.emit(chat, {"type": "diff", "text": text})
+        elif kind == "plan":
+            session.emit(chat, {"type": "plan", "steps": json.loads(text)})
         elif kind == "file":
             try:
                 kept = workspace.keep_file(text)
@@ -651,7 +739,13 @@ def run_turn(
     tokens = 0
     generating = 0.0
 
-    chat.messages.append(ai._message("user", text))
+    # What this chat's sub-agents have done since, carried in the same
+    # message the way the terminal carries it, so the model hears about
+    # its own sub-agents and never another chat's.
+    owned = session.owned(chat.id)
+    news, delivered = subagents.notices(owned) if owned else ("", [])
+    content = "\n\n".join(part for part in (news, text) if part)
+    chat.messages.append(ai._message("user", content))
 
     with capture_tool_output(_sink(session, chat)), \
             answer_from(session.answerer(chat)):
@@ -700,7 +794,11 @@ def run_turn(
                     })
                     output = "(noted)"
                 else:
+                    before = {e.id for e in subagents.list_all()}
                     output = flash_tools.run_tool((name, args))
+                    if name == "agent":
+                        after = {e.id for e in subagents.list_all()}
+                        session.adopt(chat, after - before)
                     tool_count += 1
                 convo.append({
                     "role": "tool",
@@ -743,6 +841,9 @@ def run_turn(
         "tools": tool_count,
     })
 
+    if delivered and not reply.stopped:
+        subagents.mark_delivered(delivered)
+
     if not reply.stopped:
         learning.after_turn(
             chat.messages, tool_count,
@@ -751,6 +852,12 @@ def run_turn(
 
 
 # --- Status and commands -------------------------------------------------
+
+
+def ai_wake_note() -> str:
+    from . import ai  # deferred: ai imports half of Flash
+
+    return ai.WAKE_NOTE
 
 
 def status(ai) -> dict:
@@ -772,6 +879,7 @@ def status(ai) -> dict:
         "folder": Path.cwd().name,
         "home": str(Path.home()),
         "learning": learning.running(),
+        "agents": subagents.running_count(),
     }
 
 
@@ -1063,6 +1171,10 @@ class Handler(BaseHTTPRequestHandler):
         elif url.path.startswith("/api/files/"):
             self._file(url.path.removeprefix("/api/files/"),
                        download=query.get("download", [""])[0] == "1")
+        elif url.path == "/api/agents":
+            self._json({"agents": self.server.session.agent_list(
+                query.get("chat", [""])[0]
+            )})
         elif url.path == "/api/search":
             self._json({"results": self.server.session.search(
                 query.get("q", [""])[0]
@@ -1243,6 +1355,7 @@ class Server(ThreadingHTTPServer):
     def server_close(self) -> None:
         self.closing.set()
         self.session.hub.close()
+        self.session.close()
         super().server_close()
 
 

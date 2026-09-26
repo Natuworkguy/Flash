@@ -79,6 +79,31 @@ class TestCollapsing:
         assert seen == [("result", numbered(40), theme.DIM)]
         assert theme.collapsed() == []
 
+    def test_a_plan_goes_to_the_sink_as_its_steps(self, screen, monkeypatch):
+        from flash import plan
+
+        monkeypatch.setattr(plan, "_steps", [])
+        plan.set_steps(["one", "two"])
+        seen = []
+
+        with theme.capture_tool_output(lambda *event: seen.append(event)):
+            plan.render()
+
+        assert shown(screen) == ""
+        assert [kind for kind, _, _ in seen] == ["plan"]
+        assert '"status": "active"' in seen[0][1]
+
+    def test_a_plan_prints_in_the_terminal(self, screen, monkeypatch):
+        from flash import plan
+
+        monkeypatch.setattr(plan, "_steps", [])
+        monkeypatch.setattr(plan, "console", screen)
+        plan.set_steps(["one", "two"])
+
+        plan.render()
+
+        assert "one" in shown(screen) and "two" in shown(screen)
+
 
 class TestHardBreaks:
     def test_single_breaks_are_kept(self):

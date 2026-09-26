@@ -18,6 +18,7 @@ from .theme import (
     DIM,
     console,
     plural,
+    tool_plan,
 )
 
 DONE = "done"
@@ -93,6 +94,9 @@ def headline() -> str:
 
 def render() -> None:
     """Print the checklist, indented under the most recent tool_line()."""
+
+    if tool_plan(steps()):
+        return
 
     if not _steps:
         console.print(Text(f"  {BRANCH}  No plan yet.", style=DIM))
