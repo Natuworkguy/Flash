@@ -27,7 +27,7 @@ from rich.live import Live
 from rich.text import Text
 
 from . import agent as subagents
-from . import checkpoint, editor, extensions, plan
+from . import checkpoint, editor, extensions, learning, plan, skills
 from .browser import (
     ACTIONS,
     MAX_ELEMENTS,
@@ -164,9 +164,13 @@ To work on independent pieces of a task at the same time, use the agent
   needing back and forth. Skip it for anything you can just do yourself
   in a tool call or two.
 To save a durable fact or preference for future sessions, use the remember
-  tool. To check saved memory, use the recall tool with a specific phrase;
-  it does not return everything for a blank search. To delete one saved
-  memory by its 1-based index, use the forget tool.
+  tool. What is already saved is under === Memory === below, when there is
+  any; recall searches older entries by a specific phrase. To delete one
+  saved memory by its 1-based index, use the forget tool.
+When a task matches a skill under === Skills === below, call skill_view on
+  it first and follow it. When the user asks you to remember how to do
+  something, or corrects how you did a task that will come up again, save
+  the procedure with skill_manage, or patch the skill that was wrong.
 
 Your temporary scratch directory is: {SCRATCH_DIR}
 It will be deleted when the program exits. Use it for temporary files, but do
@@ -219,11 +223,12 @@ def build_system_prompt(model_prompt: str = "") -> str:
     """Prepend the model's own system prompt to Flash's, when it has one."""
 
     model_prompt = model_prompt.strip()
-    extension_prompt = extensions.system_prompt()
-    flash_prompt = (
-        _flash_system_prompt(extension_prompt)
-        if extension_prompt else SYSTEM_PROMPT
+    added = "\n\n".join(
+        part
+        for part in (extensions.system_prompt(), learning.prompt_block())
+        if part
     )
+    flash_prompt = _flash_system_prompt(added) if added else SYSTEM_PROMPT
 
     if not model_prompt:
         return flash_prompt
@@ -1483,6 +1488,50 @@ def forget(index: int) -> str:
         result = forget_memory(index)
     except IndexError as exc:
         result = str(exc)
+    tool_result(result)
+    return result
+
+
+def skill_view(name: str, path: str = "") -> str:
+    """Read a saved skill, or one of its other files."""
+
+    tool_line(f"SkillView({name}{', ' + path if path else ''})")
+    try:
+        result = skills.view(name, path)
+    except skills.SkillError as exc:
+        result = f"Error: {exc}"
+        tool_result(result, style=ERROR)
+        return result
+    tool_result(f"Read {len(result.splitlines())} lines")
+    return result
+
+
+def skill_manage_tool(
+    action: str = "",
+    name: str = "",
+    description: Optional[str] = None,
+    content: Optional[str] = None,
+    old_string: Optional[str] = None,
+    new_string: Optional[str] = None,
+    managed_only: bool = False,
+) -> str:
+    """Create, patch, rewrite, or delete a skill."""
+
+    tool_line(f"SkillManage({action} {name})")
+    try:
+        result = skills.manage(
+            action,
+            name,
+            description=description,
+            content=content,
+            old_string=old_string,
+            new_string=new_string,
+            managed_only=managed_only,
+        )
+    except (skills.SkillError, OSError) as exc:
+        result = f"Error: {exc}"
+        tool_result(result, style=ERROR)
+        return result
     tool_result(result)
     return result
 
@@ -3305,6 +3354,87 @@ tools: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "skill_view",
+            "description": (
+                "Read one of your saved skills: the procedure for a kind "
+                "of task, as this user wants it done. Call it before "
+                "starting a task that a skill listed under Skills covers."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "The skill's name, as listed.",
+                    },
+                    "path": {
+                        "type": "string",
+                        "description": (
+                            "Optional: another file in the skill's "
+                            "folder, when the skill points to one."
+                        ),
+                    },
+                },
+                "required": ["name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "skill_manage",
+            "description": (
+                "Save or fix a skill: a procedure for a kind of task that "
+                "will come up again. create writes a new one; patch swaps "
+                "one exact passage for another (call skill_view first and "
+                "copy old_string from it); rewrite replaces the whole "
+                "procedure; delete removes it. Write steps and pitfalls, "
+                "not a story of what happened."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": list(skills.ACTIONS),
+                    },
+                    "name": {
+                        "type": "string",
+                        "description": (
+                            "Lowercase with hyphens, naming the kind of "
+                            "task."
+                        ),
+                    },
+                    "description": {
+                        "type": "string",
+                        "description": (
+                            "One line saying when to use it. Needed for "
+                            "create."
+                        ),
+                    },
+                    "content": {
+                        "type": "string",
+                        "description": (
+                            "The procedure, in Markdown. For create and "
+                            "rewrite."
+                        ),
+                    },
+                    "old_string": {
+                        "type": "string",
+                        "description": "For patch: exact text to replace.",
+                    },
+                    "new_string": {
+                        "type": "string",
+                        "description": "For patch: what replaces it.",
+                    },
+                },
+                "required": ["action", "name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "forget",
             "description": (
                 "Delete one saved memory entry by its 1-based index (the "
@@ -3351,6 +3481,8 @@ FUNCTIONS = {
     "remember": remember,
     "recall": recall,
     "forget": forget,
+    "skill_view": skill_view,
+    "skill_manage": skill_manage_tool,
     "agent": agent_tool,
     "agent_result": agent_result,
     "open_in_editor": open_in_editor,

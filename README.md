@@ -142,6 +142,8 @@ python run.py
 - `/help` or `/?`: Display the help message.
 - `/model`: Pick from the models on this machine, or type a name to
   download one. `/model <name>` switches straight to one.
+- `/skills [show|remove <name>]`: List, read, or delete what Flash has
+  learned.
 - `/plan`: Show the checklist the model is working through.
 - `/hook [install|remove]`: Let Flash see the commands you run in VS
   Code's terminal (zsh and bash).
@@ -443,6 +445,38 @@ or with `/extension install github@username/my-ext` in a session. Flash
 shows what the extension adds and asks before installing it.
 `flash --extension-list` and `flash --extension-remove <name>` do the
 rest. See [docs/EXTENSIONS.md](docs/EXTENSIONS.md) to write your own.
+
+### Learning
+
+Flash learns from its own work.
+
+- **Skills** are procedures for tasks that come up again: the steps, the
+  commands that worked, and the pitfalls to avoid. Each one lives in
+  `~/.flash/skills/<name>/SKILL.md`. The model sees each skill's name and
+  one-line description on every turn, and reads the full skill when a
+  task matches it. Ask it to remember how to do something, or correct
+  how it did a task, and it saves or fixes the skill.
+- **Memory** is saved with the `remember` tool, and it is now in the
+  system prompt, so the model uses it without having to search for it.
+  The newest entries that fit in 2200 characters are sent. `recall`
+  still searches older ones.
+- **Reviews** happen in the background. After 10 tool calls, and every
+  10 messages, Flash rereads the recent conversation once the reply has
+  gone out and saves what is worth keeping: a new skill, a fix to one it
+  wrote before, or a fact about you. It says what it saved under your
+  next reply, and the status bar shows `learning` while it runs. A review
+  can only change skills Flash wrote itself, never ones you wrote. It
+  stops the moment you send a message, so it never holds up your turn,
+  and it runs again after the next turn.
+
+What is learned reaches the system prompt in your next session, or
+after `/clear`. The prompt stays the same for the rest of a session,
+so Ollama can reuse the work it did on it instead of rereading it all.
+
+`/skills` lists what Flash has learned, `/skills show <name>` shows one,
+and `/skills remove <name>` deletes one. `SKILL_REVIEW_AFTER` and
+`MEMORY_REVIEW_EVERY` change how often reviews run, and `0` turns them
+off (see [docs/CONFIGURATION.md](docs/CONFIGURATION.md)).
 
 ### Direct Shell Execution
 

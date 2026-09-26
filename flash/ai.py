@@ -25,7 +25,16 @@ from rich.spinner import Spinner
 from rich.text import Text
 
 from . import agent as subagents
-from . import background, checkpoint, context, extensions, plan, terminal
+from . import (
+    background,
+    checkpoint,
+    context,
+    extensions,
+    learning,
+    plan,
+    skills,
+    terminal,
+)
 from .cli import parse_args
 from .envfile import set_env_var, unset_env_var
 from .images import resolve_image_path
@@ -71,6 +80,7 @@ from .theme import (
     ELLIPSIS,
     MIDDOT,
     RESET_ANSI,
+    SPARKLE,
     WARN,
     ScreenConsole,
     clear_collapsed,
@@ -1036,6 +1046,7 @@ def _chat(client: "ollama.Client", messages: list, tools_arg=None):
 # Sub-agents send the same options: Ollama reloads a model whenever the
 # requested num_ctx changes, so mismatched requests would thrash it.
 subagents.chat_options = _chat_options
+learning.chat_options = _chat_options
 
 
 _model_system_prompts: dict[str, str] = {}
@@ -1506,6 +1517,9 @@ def _status_text(messages: list[dict]) -> str:
     if Config.voice:
         parts.append("voice")
 
+    if learning.running():
+        parts.append("learning")
+
     return "   ".join(parts)
 
 
@@ -1610,6 +1624,77 @@ def _note_running_agents() -> None:
             "running · /agents to watch",
             style=DIM,
         ))
+
+
+def _note_learning() -> None:
+    """Say what the background review saved, once it has finished."""
+
+    for line in learning.news():
+        note = Text(f"  {SPARKLE} ", style=ACCENT)
+        note.append(line, style=DIM)
+        console.print(note)
+
+
+def _after_turn(messages: list[dict], tool_calls: int) -> None:
+    """Count the turn toward the next learning review, maybe start it."""
+
+    learning.after_turn(
+        messages, tool_calls, host=Config.host, model=Config.model or ""
+    )
+
+
+def _skills_command(arg: str) -> None:
+    """/skills, /skills show <name>, /skills remove <name>."""
+
+    action, _, name = arg.partition(" ")
+    action = action.lower()
+    name = name.strip()
+
+    if action in ("show", "view") and name:
+        try:
+            console.print(Markdown(skills.view(name), code_theme="monokai"))
+        except skills.SkillError as exc:
+            warn(str(exc))
+        return
+
+    if action in ("remove", "rm", "delete") and name:
+        if skills.remove(name):
+            console.print(Text(f"Skill {name} removed.", style=DIM))
+        else:
+            warn(f"No skill called {name!r}.")
+        return
+
+    if action:
+        warn("Usage: /skills [show <name> | remove <name>]")
+        return
+
+    saved = skills.all_skills()
+
+    if not saved:
+        console.print(Text(
+            "No skills yet. Flash saves one when it works out how to do a "
+            "task that will come up again, or when you ask it to.",
+            style=DIM,
+        ))
+        return
+
+    body = Text()
+    body.append("\nSkills\n\n", style="bold")
+    width = max(len(skill.name) for skill in saved) + 2
+
+    for skill in saved:
+        body.append(f"  {skill.name:<{width}}", style=ACCENT)
+        body.append(skill.description, style=DIM)
+        if skill.managed:
+            body.append("  (learned)", style=DIM)
+        body.append("\n")
+
+    body.append(
+        f"\n  In {_short_path(skills.skills_dir())}. /skills show <name> "
+        "to read one, /skills remove <name> to drop it.\n",
+        style=DIM,
+    )
+    console.print(body)
 
 
 def _hook_command(arg: str) -> None:
@@ -2319,6 +2404,8 @@ def main() -> None:
                 # Finished while the last turn was still running.
                 woken = True
             else:
+                if not banner_showing:
+                    _note_learning()
                 try:
                     uin = read_line(
                         Config.prompt,
@@ -2473,6 +2560,10 @@ def main() -> None:
                     warn("Usage: /auto [on|off|toggle]")
                 continue
 
+            if uin == "/skills" or uin.startswith("/skills "):
+                _skills_command(uin[len("/skills"):].strip())
+                continue
+
             if uin == "/background" or uin.startswith("/background "):
                 _background_command(uin[len("/background"):].strip())
                 continue
@@ -2518,6 +2609,7 @@ def main() -> None:
             if uin == "/refresh":
                 refresh_config()
                 extensions.reload()
+                learning.refresh()
                 _extensions_changed()
                 _model_system_prompts.clear()
                 _context_limits.clear()
@@ -2555,6 +2647,9 @@ def main() -> None:
             if uin == "/clear":
                 messages.clear()
                 clear_collapsed()
+                # The prompt starts over anyway, so it can pick up what
+                # was learned this session.
+                learning.refresh()
                 plan.clear()
                 checkpoint.clear()
                 console.print(Text("Context cleared.", style=DIM))
@@ -2760,6 +2855,9 @@ def main() -> None:
 
             checkpoint.start_turn(_turn_label(uin))
             clear_collapsed()
+            # A local backend runs one generation at a time, and this
+            # turn is the one the user is waiting on.
+            learning.cancel()
 
             turn = Turn()
             offered = turn_tools()
@@ -2794,10 +2892,12 @@ def main() -> None:
                 _render_done(turn)
                 _render_stats(turn)
                 _note_running_agents()
+                _note_learning()
                 notify_reply_ready()
                 listening_on = _speak_reply(final, heard)
                 messages.append(_message("assistant", final))
                 _fit_and_compact(console, client, messages)
+                _after_turn(messages, 0)
                 console.print()
                 continue
 
@@ -2891,11 +2991,13 @@ def main() -> None:
             _render_done(turn)
             _render_stats(turn)
             _note_running_agents()
+            _note_learning()
             notify_reply_ready()
             listening_on = _speak_reply(followup, heard)
             messages.extend(_worth_keeping(tool_messages, keep_from))
             messages.append(_message("assistant", followup))
             _fit_and_compact(console, client, messages)
+            _after_turn(messages, len(tool_outputs))
 
             console.print()
 
