@@ -110,6 +110,15 @@ class TestWorthKeeping:
         assert _worth_keeping(messages, 1) == [assistant("new")]
 
 
+@pytest.fixture(autouse=True)
+def a_model(monkeypatch):
+    """A model name to ask for. Without one, _chat stops before reaching
+    the fake client, which passed only where the developer's own
+    ~/.flash.env happened to set MODEL."""
+
+    monkeypatch.setattr(Config, "model", "test-model")
+
+
 class TestCompaction:
     def test_a_summary_replaces_what_was_dropped(self):
         client = FakeClient("we renamed the parser")
