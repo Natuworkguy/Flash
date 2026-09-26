@@ -199,6 +199,7 @@ class TestResizeSentinel:
         assert "watch_for_resize" in source
         assert "pre_run=pre_run" in source
 
+
 class TestSnugRenderer:
     """A resize used to leave stale copies of the frame behind and
     stretch the prompt to the foot of the screen."""
@@ -250,6 +251,7 @@ class TestSnugRenderer:
 
     def test_a_resize_tells_the_prompt(self, monkeypatch):
         from types import SimpleNamespace
+
         from prompt_toolkit.data_structures import Point, Size
         from prompt_toolkit.layout.screen import Char, Screen
 
@@ -278,6 +280,7 @@ class TestSnugRenderer:
 
     def test_a_shorter_frame_is_drawn_fresh(self, monkeypatch):
         from types import SimpleNamespace
+
         from prompt_toolkit.data_structures import Size
         from prompt_toolkit.layout.screen import Screen
 
@@ -303,6 +306,7 @@ class TestSnugRenderer:
 
     def test_a_frame_the_same_height_is_left_to_diff(self, monkeypatch):
         from types import SimpleNamespace
+
         from prompt_toolkit.data_structures import Size
         from prompt_toolkit.layout.screen import Screen
 
@@ -324,13 +328,13 @@ class TestSnugRenderer:
         assert erased == []
 
 
-
 class TestScreenRedrawn:
     """After a full redraw the next prompt must not see a resize that
     has already been dealt with, or it asks for another, forever."""
 
     def test_it_measures_the_way_the_renderer_does(self, monkeypatch):
         from types import SimpleNamespace
+
         from prompt_toolkit.data_structures import Size
 
         # prompt_toolkit's Windows output is a column narrower than

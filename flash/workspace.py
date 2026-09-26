@@ -295,7 +295,10 @@ def folder_suggestions(typed: str) -> list[str]:
     """
 
     typed = os.path.expanduser(typed or "~/")
-    base, _, prefix = typed.rpartition(os.sep)
+    # "/" works as a separator everywhere, Windows included, and it is
+    # what a person typing a path in a browser reaches for.
+    cut = max(typed.rfind("/"), typed.rfind(os.sep))
+    base, prefix = typed[:cut], typed[cut + 1:]
     parent = Path(base or os.sep)
 
     try:
