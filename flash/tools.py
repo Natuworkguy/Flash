@@ -59,7 +59,9 @@ from .theme import (
     console,
     glimmer,
     plural,
+    remote_answer,
     tool_diff,
+    tool_file,
     tool_line,
     tool_result,
     typed,
@@ -114,6 +116,7 @@ To hand a finished picture to the user, use the send_image tool with its
   one and opens it in their image viewer where it cannot, naming the path
   either way. It shows the image to them and not to you, so look at your
   own render with view_image first and send it once it is right.
+To hand the user a finished PDF, use the send_pdf tool with its path.
 To see how a web page actually renders, use the screenshot tool on the
   .html file you wrote or on a URL. It runs a headless browser and
   attaches the picture, so it is the only way to check a page you built;
@@ -408,13 +411,16 @@ def shell_tool(command: str, timeout=None, is_user=False) -> str:
         if not NO_COMMAND_CONFIRMATION:
             notify_needs_input()
 
-            prompt = Text("  ⎿  ", style=DIM)
-            prompt.append("Run this command? ", style=DIM)
-            prompt.append("y", style=f"bold {ACCENT}")
-            prompt.append("/n ", style=DIM)
-            console.print(prompt, end="")
+            user_input = remote_answer(f"Run this command?\n{command}")
 
-            user_input = typed()
+            if user_input is None:
+                prompt = Text("  ⎿  ", style=DIM)
+                prompt.append("Run this command? ", style=DIM)
+                prompt.append("y", style=f"bold {ACCENT}")
+                prompt.append("/n ", style=DIM)
+                console.print(prompt, end="")
+
+                user_input = typed()
 
             if user_input != "y":
                 tool_result("Command blocked by user", style=WARN)
@@ -934,10 +940,19 @@ def _confirm_change(
     if NO_COMMAND_CONFIRMATION:
         return None
 
+    notify_needs_input()
+
+    # Asked of the browser when the web UI is running this turn, where
+    # the diff is already on screen above the question.
+    answer = remote_answer(f"{question}\n{file_path}")
+    if answer is not None:
+        if answer != "y":
+            tool_result("Edit blocked by user", style=WARN)
+            return "Edit blocked by user"
+        return None
+
     if editor.show_diff(old_text, new_text, file_path.name, SCRATCH_DIR):
         tool_result("Opened side by side in VS Code")
-
-    notify_needs_input()
 
     prompt = Text(f"  {BRANCH}  ", style=DIM)
     prompt.append(question + " ", style=DIM)
@@ -1658,13 +1673,18 @@ def _extension_tool(name: str, args: dict) -> Optional[str]:
     if tool.confirm and not NO_COMMAND_CONFIRMATION:
         notify_needs_input()
 
-        prompt = Text("  ⎿  ", style=DIM)
-        prompt.append(f"Let {extension.name} run {name}? ", style=DIM)
-        prompt.append("y", style=f"bold {ACCENT}")
-        prompt.append("/n ", style=DIM)
-        console.print(prompt, end="")
+        question = f"Let {extension.name} run {name}?"
+        answer = remote_answer(question)
 
-        if typed() != "y":
+        if answer is None:
+            prompt = Text("  ⎿  ", style=DIM)
+            prompt.append(question + " ", style=DIM)
+            prompt.append("y", style=f"bold {ACCENT}")
+            prompt.append("/n ", style=DIM)
+            console.print(prompt, end="")
+            answer = typed()
+
+        if answer != "y":
             tool_result("Blocked by user", style=WARN)
             return "Blocked by user"
 
@@ -2209,6 +2229,18 @@ def send_image(path: str, caption: str = "") -> str:
 
     kilobytes = max(1, round(len(data) / 1024))
     note = caption.strip()
+
+    # In the web UI the picture goes to the page, which shows it itself.
+    # Drawing it here would put it on the screen of whatever machine runs
+    # the server, which may not be the one the user is looking at.
+    if tool_file(str(image_path)):
+        tool_result(f"{image_path.name} ({kilobytes} KB)")
+        return (
+            f"Sent {image_path.name} ({kilobytes} KB) to the user's "
+            "screen. You cannot see it from here; view_image is what "
+            "shows it to you."
+        )
+
     protocol = _graphics_protocol()
 
     if protocol:
@@ -2238,6 +2270,69 @@ def send_image(path: str, caption: str = "") -> str:
         f"Sent {image_path.name} ({kilobytes} KB). This terminal cannot "
         "draw images, so it opened in the user's image viewer with the "
         "path on screen. You cannot see it from here."
+    )
+
+
+MAX_PDF_BYTES = 50 * 1024 * 1024
+
+
+def send_pdf(path: str, caption: str = "") -> str:
+    """Put a PDF in front of the user."""
+
+    tool_line(f"SendPDF({path})")
+
+    pdf_path = Path(path).expanduser()
+    problem = ""
+    if not pdf_path.is_file():
+        problem = f"no file at {pdf_path}"
+    elif pdf_path.suffix.lower() != ".pdf":
+        problem = f"{pdf_path.name} is not a .pdf file"
+    else:
+        try:
+            size = pdf_path.stat().st_size
+            with open(pdf_path, "rb") as handle:
+                head = handle.read(5)
+        except OSError as exc:
+            problem = f"could not read {pdf_path}: {exc}"
+        else:
+            if head != b"%PDF-":
+                problem = (
+                    f"{pdf_path.name} does not start like a PDF; write it "
+                    "with a PDF library, not as text"
+                )
+            elif size > MAX_PDF_BYTES:
+                problem = (
+                    f"{pdf_path.name} is {size // (1024 * 1024)} MB; the "
+                    f"limit is {MAX_PDF_BYTES // (1024 * 1024)} MB"
+                )
+
+    if problem:
+        result = f"Error: {problem}."
+        tool_result(result, style=ERROR)
+        return result
+
+    kilobytes = max(1, round(size / 1024))
+    note = caption.strip()
+    label = f"{pdf_path.name} ({kilobytes} KB)" + (f": {note}" if note else "")
+
+    if tool_file(str(pdf_path)):
+        tool_result(label)
+        return f"Sent {pdf_path.name} ({kilobytes} KB) to the user's screen."
+
+    problem = _open_with_spinner(pdf_path)
+    tool_result(label + (f" ({problem})" if problem else ""))
+    console.print(
+        Text(f"{' ' * RESULT_INDENT}{_display_path(pdf_path)}", style=DIM)
+    )
+
+    if problem:
+        return (
+            f"Could not open {pdf_path.name}: {problem}. Its path is on "
+            "screen; tell the user where the file is."
+        )
+    return (
+        f"Sent {pdf_path.name} ({kilobytes} KB). It opened in the user's "
+        "PDF viewer, with its path on screen."
     )
 
 
@@ -2869,6 +2964,34 @@ tools: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "send_pdf",
+            "description": (
+                "Show a PDF file to the user: a report, invoice, or paper "
+                "you made or found. It opens beside the chat in the web "
+                "UI, and in their PDF viewer in the terminal. Make the "
+                "file first with a PDF library; this only shows it."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Path to the .pdf file.",
+                    },
+                    "caption": {
+                        "type": "string",
+                        "description": (
+                            "Optional single line shown with it."
+                        ),
+                    },
+                },
+                "required": ["path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "view_image",
             "description": (
                 "Look at an image file on disk (.png, .jpg, .jpeg, .webp, "
@@ -3468,6 +3591,7 @@ FUNCTIONS = {
     "multi_edit": multi_edit_tool,
     "view_image": view_image,
     "send_image": send_image,
+    "send_pdf": send_pdf,
     "screenshot": screenshot,
     "open_page": open_page,
     "interact": interact,

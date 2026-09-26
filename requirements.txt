@@ -10,3 +10,4 @@ ddgs
 pypdf
 python-docx
 winotify; platform_system == "Windows"
+segno

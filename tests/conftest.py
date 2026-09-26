@@ -10,6 +10,7 @@ from flash import (
     skills,
     terminal,
     tools,
+    workspace,
 )
 
 
@@ -47,6 +48,8 @@ def isolated_home(tmp_path_factory, monkeypatch):
     # both have to come from the temp home too.
     monkeypatch.setattr(memory, "MEMORY_PATH", home / ".flash_memory.md")
     monkeypatch.setattr(skills, "FLASH_DIR", home / ".flash")
+    # The web UI's saved hosts, projects, and chats.
+    monkeypatch.setattr(workspace, "FLASH_DIR", home / ".flash")
     learning.refresh()
     learning.reset()
     yield home

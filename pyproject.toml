@@ -36,6 +36,9 @@ flash = [
     "thinking_states.json",
     "suggestions.json",
     "backgrounds/*.scene",
+    "web/*.html",
+    "web/*.woff2",
+    "web/*.txt",
 ]
 
 [tool.ruff]

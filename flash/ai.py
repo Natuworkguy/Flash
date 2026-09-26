@@ -288,6 +288,20 @@ def refresh_config() -> None:
     Config.refresh()
 
 
+def forget_model_facts() -> None:
+    """Drop what was learned about each model from the backend.
+
+    Keyed by model name alone, so after a switch of host the same name
+    can mean a different model, with its own prompt and window.
+    """
+
+    _model_system_prompts.clear()
+    _context_limits.clear()
+    _context_ceilings.clear()
+    _context_notices.clear()
+    _num_ctx_notices.clear()
+
+
 def _short_path(path: Path) -> str:
     """A path the way a shell prompt writes it, with $HOME as ~."""
 
@@ -1939,6 +1953,39 @@ def _handle_extension_flags(args) -> bool:
     return True
 
 
+def _web_command(arg: str) -> None:
+    """/web, /web lan, /web stop: the browser UI beside this session."""
+
+    from . import web  # only the web UI needs the server
+
+    arg = arg.lower()
+
+    if arg == "stop":
+        stopped = web.stop_background()
+        console.print(Text(
+            "Web UI stopped." if stopped else "The web UI was not running.",
+            style=DIM,
+        ))
+        return
+
+    if arg not in ("", "lan"):
+        warn("Usage: /web [lan|stop]")
+        return
+
+    try:
+        server = web.start_background(lan=arg == "lan")
+    except OSError as exc:
+        show_error(str(exc))
+        return
+
+    web.announce(server)
+    console.print(Text(
+        "It runs until you quit Flash, or /web stop. Chats there are "
+        "separate from this one.",
+        style=DIM,
+    ))
+
+
 def _print_backend_error(detail: str) -> None:
     show_error(f"Ollama backend error: {detail}")
 
@@ -2328,6 +2375,20 @@ def main() -> None:
     ):
         sys.exit(0 if _handle_extension_flags(args) else 1)
 
+    if args.web:
+        from . import web  # only the web UI needs the server
+
+        try:
+            web.serve(
+                port=args.port or web.DEFAULT_PORT,
+                open_browser=not args.no_open,
+                lan=args.lan,
+            )
+        except OSError as exc:
+            show_error(str(exc))
+            sys.exit(1)
+        return
+
     pending: list[str] = []
 
     if args.url:
@@ -2560,6 +2621,10 @@ def main() -> None:
                     warn("Usage: /auto [on|off|toggle]")
                 continue
 
+            if uin == "/web" or uin.startswith("/web "):
+                _web_command(uin[len("/web"):].strip())
+                continue
+
             if uin == "/skills" or uin.startswith("/skills "):
                 _skills_command(uin[len("/skills"):].strip())
                 continue
@@ -2611,11 +2676,7 @@ def main() -> None:
                 extensions.reload()
                 learning.refresh()
                 _extensions_changed()
-                _model_system_prompts.clear()
-                _context_limits.clear()
-                _context_ceilings.clear()
-                _context_notices.clear()
-                _num_ctx_notices.clear()
+                forget_model_facts()
                 client = ollama.Client(host=Config.host)
                 console.print(Text("Config refreshed.", style=DIM))
                 continue
