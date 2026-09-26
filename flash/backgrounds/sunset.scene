@@ -1,0 +1,150 @@
+# Flash background scene
+name: Sunset Ridge
+palette:
+  ! #101040
+  " #201040
+  $ #301050
+  % #302050
+  & #402050
+  ' #402060
+  ( #502060
+  ) #503060
+  * #603060
+  + #602060
+  , #703060
+  - #704060
+  . #704070
+  / #804060
+  0 #805060
+  1 #803060
+  2 #904060
+  3 #905060
+  4 #a05060
+  5 #a06060
+  6 #a04060
+  7 #b06060
+  8 #b05060
+  9 #c06060
+  : #b04060
+  ; #c05060
+  < #c07060
+  = #d06060
+  > #d07060
+  ? #c06070
+  @ #c07070
+  A #d07070
+  B #d05050
+  C #d05060
+  D #e07060
+  E #d08070
+  F #d08080
+  G #e09080
+  H #d06050
+  I #e08060
+  J #e07070
+  K #e08070
+  L #e0a090
+  M #e0b090
+  N #e06050
+  O #e07050
+  P #e0a080
+  Q #f0b090
+  R #f0c0a0
+  S #e08050
+  T #e09070
+  U #f0d0a0
+  V #f0d0b0
+  W #e09050
+  X #f0b080
+  Y #f0c090
+  Z #f0e0b0
+  [ #f0e0c0
+  \ #e07040
+  ] #e08040
+  ^ #f09050
+  _ #e09060
+  ` #f0a070
+  a #f0f0c0
+  b #f0a060
+  c #f0b070
+  d #301040
+  e #f09040
+  f #100020
+  g #d08060
+  h #c08060
+  i #b07070
+  j #703050
+  k #603050
+  l #906060
+  m #502050
+  n #705050
+  o #403050
+  p #604050
+  q #504050
+  r #403040
+  s #201030
+  t #302040
+  u #202040
+  v #101030
+  w #101020
+pixels:
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
+""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
+""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
+$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$
+$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$
+$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$%%%%%%%%%%%%%$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$
+&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&
+''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''((((((((((((((((((((((((('''''''''''''''''''''''''''''
+'''''''''''''''''''''''''''''''''''''''''''''''''''''''''''(((((((()))))))))))))))))))))))((((((((''''''''''''''''''''''
+((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((())*******************************))((((((((((((((((((((((((
+((((((((((((((((((((((((((((((((((((((((((((((((((((((((+*************,,,-----------,,,*************+(((((((((((((((((((
+(((((((((((((((((((((((((((((((((((((((((((((((((((++********,,,,--.......................--,,,,********++((((((((((((((
+*************************************************,,,,,,,,,--/////////////////000/////////////////--,,,,,,,,,************
+,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,1111////////22223333333333333333333333333332222////////1111,,,,,,,,,,,,
+111111111111111111111111111111111111111111111111//222222223333444444444444455555554444444444444333322222222//11111111111
+222222222222222222222222222222222222222222222222226666444444444447777777777777777777777777774444444444466662222222222222
+666666666666666666666666666666666666666666666666644488888888777777777999999999999999999977777777788888888444666666666666
+:::::::::::::::::::::::::::::::::::::::::::::888888888;999999999999<<<<<<<<<<<<<<<<<<<<<<<999999999999;888888888::::::::
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;9999999====>>>>>>>>>;;9?@@AAA@@?9;;>>>>>>>>>====9999999;;;;;;;;;;;;;;
+BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBCCCC===========>>>>>>>>DDC=AAEFGGGGGGGGGFEAA=CDD>>>>>>>>===========CCCCBBBBBB
+BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBHHHHHHH====DDDDDDDDDDDIIH=JKGGLLLMMMMMMMLLLGGKJ=HIIDDDDDDDDDDD====HHHHHHHBBBBB
+HHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHNNOOOOOOOOODDDIIIIII>DKGPLMQRRRRRRRRRRRQMLPGKD>IIIIIIDDDOOOOOOOOONNHHHHHHHH
+NNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNOOOOOOOOOOOOSSSSSSSIIIIOITPPQQRRUVVVVVVVVVURRQQPPTIOIIIISSSSSSSOOOOOOOOOOOONNNN
+OOOOOOOOOOOOO&O&&&&O&OOOOOOOOOOOOOOOOOOOOOOOOO&&&&&&&&&&SSSSWWWOITPXQYRUVZZZ[[[[[ZZZVURYQXPTIO&W&&&&&&&&&&&&SSOOOOOOOOOO
+&&&&&\&&&&&&&&&&&&&&&&&&\&\\\\\\\\\\\\\\]]S&&&&&&&&&&&&&&&&^&^&S_`XQYUUVZZ[[aaaa&[[ZZV&U&QX&&&&&&&&&&&&&&&&&&&SS&SS]]\\\
+&&&&&&&&&&&&&&&&&&&&&&&&&&&&]]]]]]]]]]]]]&&&&&&&&&&&&&&&&&&&&&&&bcd&RU&Z&&&a&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&
+&&&&ddd&&&&dddd&&ddddddd&&&&&&&&&&ee&&&&&&&&&&&ddd&dd&dd&dddddddddddddd&dd&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&
+dddddddddddddddddddddddddddd&&&&&&&&d&&dddddddddddddddddddddddddddddddddddddd&d&dd&d&&&d&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&
+dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd&&&&&&&&&f&&ff&&&&&&&&&&&&&&&&
+dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd&ff&fffffffff&&ffff&&&&&&&
+fdfffddfddddffdffdfdddddddddddddddddddddddddddddfddfffddffffdfdffdfdffffddfdfdddfddddddffdfffffffffffffffffffffffdfdf&&f
+fffffffffffffffffffffdfdddddddddddddddddddffdffffffffffffffffffffffffffffffffffffdffffffffffffffffffffffffffffffffffffff
+ffffffffffffffffffffffffffffdddddddddddfdfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+999999999999999999999999999999999999999999999999999999999999999999999999_____________99999999999999999999999999999999999
+888888888888888888888888888888888888888888888888888888888888888888888888ggggggggggggg88888888888888888888888888888888888
+888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888
+666666666666666666666666666666666666666666666666666666666666666666666666hhhhhhhhhhhhh66666666666666666666666666666666666
+222222222222222222222222222222222222222222222222222222222222222222222222<<<<<<<<<<<<<22222222222222222222222222222222222
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////iiiiiiiiiiiii///////////////////////////////////
+jjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjj55555555555jjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjj
+kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk
+kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkklllllllllllkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk
+*************************************************************************lllllllllll************************************
+mmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmm
+&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&00000000000&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&
+&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&nnnnnnnnn&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&
+oooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooo
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%ppppppppp%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+ddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddqqqqqqqqqddddddddddddddddddddddddddddddddddddd
+""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%qqqqqqqqq%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""rrrrrrrrr"""""""""""""""""""""""""""""""""""""
+""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
+ssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssstttttttssssssssssssssssssssssssssssssssssssss
+uuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuutttttttuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuu
+vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv
+vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvsssssssvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv
+wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwvvvvvvvwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww

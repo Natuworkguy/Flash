@@ -16,6 +16,7 @@ import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Optional
 
 FLASH_DIR = Path.home() / ".flash"
 LOG_PATH = FLASH_DIR / "terminal.log"
@@ -126,7 +127,7 @@ class Command:
 
     time: float
     exit: int
-    took: int | None
+    took: Optional[int]
     cwd: str
     command: str
 
@@ -134,7 +135,7 @@ class Command:
 # --- reading the log -----------------------------------------------------
 
 
-def _parse(line: str) -> Command | None:
+def _parse(line: str) -> Optional[Command]:
     parts = line.rstrip("\n").split("\t", 4)
     if len(parts) != 5:
         return None

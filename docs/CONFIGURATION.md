@@ -41,12 +41,15 @@ Requirements:
 | -------- | -------- | ------- | ------- | ----------- |
 | `MODEL` | Yes | - | - | Name of the Ollama model to use, e.g. `llama3.1`, `qwen2.5`, `mistral`. Must be pulled on the target server. |
 | `OLLAMA_HOST` | No | `http://localhost:11434` | - | Base URL of the Ollama server. Change this to switch from a local server to a remote one. |
-| `MAX_HISTORY_MESSAGES` | No | `6` | `2` | Maximum number of chat messages kept in memory before the oldest are dropped. |
-| `MAX_HISTORY_CHARS` | No | `3000` | `1000` | Maximum total characters of history kept. Older messages are dropped once this is exceeded. |
+| `MAX_HISTORY_MESSAGES` | No | unset | `2` | Hard cap on how many messages of history are kept. Left unset, the token budget below decides, which is almost always the better answer; set it only to force a smaller history than the budget would allow. |
+| `MAX_HISTORY_CHARS` | No | unset | `1000` | Hard cap on the total characters of history kept, applied on top of the token budget. Left unset, the budget decides. |
+| `AUTO_COMPACT` | No | `1` | - | When history outgrows the budget, have the model summarize the turns being dropped and keep the summary at the head of the conversation. `0` drops them without summarizing. `/compact` runs it by hand at any time. |
 | `MAX_TOOL_ROUNDS` | No | `10` | `1` | Maximum number of tool-calling rounds allowed per request. |
 | `MAX_TOOL_OUTPUT_CHARS` | No | `1200` | `500` | Tool output longer than this is truncated (middle removed) before being sent back to the model. |
 | `MAX_OUTPUT_TOKENS` | No | `1024` | `128` | Maximum tokens the model may generate per response. Maps to Ollama's `num_predict` option. |
 | `NUM_CTX` | No | unset | - | Context window to ask Ollama for: a token count, or `max` for the largest the model's architecture supports. Left unset, the model keeps whatever its Modelfile pins (Flash Onyx pins 65536) and Ollama's default applies to models that pin nothing. The cache is allocated when the model loads, whether or not a session fills it, so raising this costs memory up front. |
+| `SKILL_REVIEW_AFTER` | No | `10` | `0` | Once this many tool calls have built up since the last review, Flash reviews the conversation in the background after the reply and saves or fixes a skill. `0` turns this off. See [Learning](../README.md#learning). |
+| `MEMORY_REVIEW_EVERY` | No | `10` | `0` | Every this many messages, the same background review also saves facts worth remembering about you and your setup. `0` turns this off. |
 | `SHOW_STATS` | No | `1` | - | Prints a dim line under each reply with the tokens the turn used, how long it took, the generation rate, and how full the context got. `0` hides it. |
 | `VOICE` | No | `0` | - | `1` turns voice mode on at startup: press Enter on an empty prompt to speak, and replies are read aloud. Usually set with `/voice on` rather than by hand. |
 | `VOICE_VOSK_MODEL` | No | `vosk-model-small-en-us-0.15` | - | Name of the [Vosk model](https://alphacephei.com/vosk/models) used for listening. Downloaded to `~/.flash/models` on first use. |
@@ -56,6 +59,20 @@ Requirements:
 | `VOICE_NO_SPEECH_SECONDS` | No | `8` | `1` | How long a listening turn waits for you to start speaking before handing the prompt back. This is what ends a hands-free conversation. |
 | `VOICE_SILENCE_THRESHOLD` | No | `500` | `0` | Loudness (0-32768) above which audio counts as speech. Raise it in a noisy room; lower it if a quiet voice is missed. |
 | `VOICE_MAX_CHARS` | No | `700` | `80` | Longest reply spoken aloud. Past this the voice stops at a sentence and says the rest is on screen. |
+
+### How much conversation is kept
+
+Flash sizes the history against the model's real context window rather
+than a fixed number of messages. The window comes from `NUM_CTX` when
+you set one, otherwise from whatever the model's Modelfile pins. Off the
+top come the system prompt, the tool schemas, and the room a reply
+needs; the history gets a share of what is left.
+
+What falls off the end falls off in whole exchanges: a user message and
+every tool call and result that answered it go together, so the model is
+never shown a tool result whose call has already been dropped. `/context`
+shows what the conversation is currently using, and `/compact`
+summarizes it on demand.
 
 ### Notes on the voice options
 

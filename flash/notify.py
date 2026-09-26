@@ -12,7 +12,7 @@ import os
 
 _APP_NAME = "Flash CLI"
 
-# Resolve the notifier once. winotify is Windows-only and optional, so a missing  # noqa: E501, RUF100
+# Resolve the notifier once. winotify is Windows-only and optional, so a missing  # noqa: E501
 # package or import error simply disables notifications.
 _Notification = None
 if os.name == "nt":

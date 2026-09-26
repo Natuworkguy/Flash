@@ -8,6 +8,9 @@ FLASH (**F**ast **L**ocal **A**gent **SH**ell) CLI is an AI-powered command-line
 
 - **Interactive AI Chat**: Chat with local or self-hosted models served by Ollama, directly from your terminal.
 - **Switchable Backend**: Point Flash at `localhost` or any remote Ollama server via a single config option.
+- **Precise File Edits**: The AI changes a file by naming the exact lines that change, not by retyping the file. A one-line fix in a thousand-line file costs one line of output, so big files stop being out of reach and long writes stop truncating half way. Several changes to the same file go in one call that either lands whole or not at all.
+- **Undo**: `/undo` puts back every file the last turn changed, including deleting the ones it created. Snapshots are taken the moment you approve an edit, so a yes you regret costs you one command instead of your afternoon.
+- **Context That Lasts**: History is measured against the model's real context window instead of a fixed message count, and dropped in whole exchanges so a tool result is never left without the call that produced it. When it overflows, the model summarizes what is falling off and keeps the summary, so a long session keeps its thread. `/context` shows the usage, `/compact` summarizes on demand.
 - **Shell Command Execution**:
   - AI can use a `shell` tool to execute commands and see their output.
   - Manually execute shell commands using the `!` prefix.
@@ -18,7 +21,7 @@ FLASH (**F**ast **L**ocal **A**gent **SH**ell) CLI is an AI-powered command-line
 - **Voice Mode**: `/voice on` downloads a Vosk speech model and a Piper voice, then lets you talk to Flash and hear its replies, with typing still available at any time.
 - **Visible Plans**: For a multi-step task the AI posts a checklist up front and ticks each box as it finishes that step, so you can see where it is instead of waiting for the wall of text at the end.
 - **Knows What Just Broke**: With `/hook install`, Flash sees the commands you run in VS Code's terminal and whether they failed, so "why did that fail?" works without pasting anything.
-- **VS Code Aware**: Run from VS Code's terminal, Flash opens its edits as side-by-side diffs while it waits for your yes, and opens files at the line it's talking about.
+- **VS Code Aware**: Run from VS Code's terminal, Flash opens its edits as side-by-side diffs while it waits for your yes, clears them away once you have answered, and opens files at the line it's talking about.
 - **Async Sub-agents**: The AI can spawn background sub-agents with the `agent` tool to work on independent pieces of a task at the same time, then collect each one's answer with `agent_result` once it's needed.
 - **Context Management**: Automatic history trimming to stay within token limits.
 - **Markdown Support**: Rich formatting for AI responses in the terminal.
@@ -139,16 +142,37 @@ python run.py
 - `/help` or `/?`: Display the help message.
 - `/model`: Pick from the models on this machine, or type a name to
   download one. `/model <name>` switches straight to one.
+- `/skills [show|remove <name>]`: List, read, or delete what Flash has
+  learned.
 - `/plan`: Show the checklist the model is working through.
 - `/hook [install|remove]`: Let Flash see the commands you run in VS
   Code's terminal (zsh and bash).
 - `/agents`: Watch sub-agents work live. `/agents <id>` shows one in full,
   with its answer once it is done.
 - `/clear`: Clear the conversation history.
+- `/undo`: Take back the file changes from the last turn.
+- `/compact`: Summarize the conversation to free up room.
+- `/context`: Show how much of the context window is in use.
 - `/image <path> [prompt]`: Send a local image to the model.
+- `/extension [install <source>|remove <name>]`: List, install, or
+  remove extensions.
 - `/version`: Show the current version and check GitHub for updates.
 - `/update`: Update Flash to the latest version (requires pipx).
 - `/bye`: Exit the application.
+
+### Keys
+
+- `Enter` sends. `Alt+Enter`, or `\` at the end of a line followed by
+  `Enter`, starts a new line instead.
+- `Up` / `Down` step through earlier messages, saved across sessions in
+  `~/.flash/history`. `/set` lines are never saved, since that is how
+  API keys get typed in. `Ctrl+R` searches them.
+- `Shift+Tab` toggles autonomous mode, the same as `/auto`.
+- `Ctrl+O` prints in full any tool output that was cut short this turn.
+  Output longer than 12 lines shows its first 5 lines, or its last 5 if
+  the command failed, since the error is usually at the end. The model
+  always sees all of it.
+- `Ctrl+C` stops the model mid-answer.
 
 Type `@` anywhere in a message to pick a file out of a dropdown, e.g.
 `why does @flash/theme.py fall back to ASCII?`. Arrow keys and Tab pick
@@ -182,6 +206,11 @@ around it, through VS Code's own `code` command:
 
 - When Flash wants to change a file and waits for your yes, the change
   opens as a side-by-side diff in the editor, so you can review it there.
+  Once you have answered, Flash drops the files behind that diff, so a
+  decided change stops sitting in the editor looking like it is still
+  waiting for you. Whether the tab itself closes is VS Code's call: set
+  `workbench.editor.closeOnFileDelete` to `true` and it closes with
+  them. Flash says so once per session if it is off.
 - The model can open a file at the line it is talking about.
 
 `/hook install` goes one step further: it adds three lines to your
@@ -402,6 +431,122 @@ them: `flash.exe` and the Python it starts. Flash downloads the update,
 then hands the install to a PowerShell window that waits for Flash to
 close and finishes there. Quit Flash and the update completes on its
 own.
+
+### Extensions
+
+Extensions add slash commands, tools the model can call, system prompt
+text, and backgrounds. Install one from GitHub:
+
+```bash
+flash --extension-install github@username/my-ext
+```
+
+or with `/extension install github@username/my-ext` in a session. Flash
+shows what the extension adds and asks before installing it.
+`flash --extension-list` and `flash --extension-remove <name>` do the
+rest. See [docs/EXTENSIONS.md](docs/EXTENSIONS.md) to write your own.
+
+### Learning
+
+Flash learns from its own work.
+
+- **Skills** are procedures for tasks that come up again: the steps, the
+  commands that worked, and the pitfalls to avoid. Each one lives in
+  `~/.flash/skills/<name>/SKILL.md`. The model sees each skill's name and
+  one-line description on every turn, and reads the full skill when a
+  task matches it. Ask it to remember how to do something, or correct
+  how it did a task, and it saves or fixes the skill.
+- **Memory** is saved with the `remember` tool, and it is now in the
+  system prompt, so the model uses it without having to search for it.
+  The newest entries that fit in 2200 characters are sent. `recall`
+  still searches older ones.
+- **Reviews** happen in the background. After 10 tool calls, and every
+  10 messages, Flash rereads the recent conversation once the reply has
+  gone out and saves what is worth keeping: a new skill, a fix to one it
+  wrote before, or a fact about you. It says what it saved under your
+  next reply, and the status bar shows `learning` while it runs. A review
+  can only change skills Flash wrote itself, never ones you wrote. It
+  stops the moment you send a message, so it never holds up your turn,
+  and it runs again after the next turn.
+
+What is learned reaches the system prompt in your next session, or
+after `/clear`. The prompt stays the same for the rest of a session,
+so Ollama can reuse the work it did on it instead of rereading it all.
+
+`/skills` lists what Flash has learned, `/skills show <name>` shows one,
+and `/skills remove <name>` deletes one. `SKILL_REVIEW_AFTER` and
+`MEMORY_REVIEW_EVERY` change how often reviews run, and `0` turns them
+off (see [docs/CONFIGURATION.md](docs/CONFIGURATION.md)).
+
+### Web UI
+
+```bash
+flash --web                 # opens Flash in your browser
+flash --web --lan           # also reachable from your phone, with a QR code to scan
+flash --web --port 9000     # on another port (the default is 7433)
+flash --web --no-open       # print the link instead of opening it
+```
+
+Inside a terminal session, `/web` starts the same UI in the background,
+`/web lan` opens it to your network, and `/web stop` shuts it down.
+
+The browser UI is the same agent as the terminal, with the same model,
+tools, permission prompts, skills, and extensions. Replies stream in as
+the model writes them. Tool calls show as compact rows that expand, and
+file changes show as colored diffs. A permission prompt takes the
+keyboard focus, so a single `y` or `n` answers it.
+
+Every button has a shortcut, shown when you hover over it, and `?`
+lists them all:
+
+- `Ctrl K` searches every action, chat, and model.
+- `Alt N` starts a new chat, `Alt ↑` and `Alt ↓` step between chats,
+  and `Alt 1`–`9` jumps to one.
+- `Alt F` searches every chat, titles and messages alike. Opening a
+  result scrolls to the message that matched and highlights the words.
+- `Alt M` switches model, `Alt R` retries, `Alt E` edits your last
+  message, and `Alt Z` undoes the last turn's file changes.
+- `Shift Tab` toggles autonomous mode, `Ctrl O` expands every tool
+  row, `Esc` stops a reply, and `Alt T` switches between light and dark.
+- Outside the message box, `j` and `k` move between blocks, `c` copies
+  one, and `g` and `G` jump to the top and bottom.
+
+**Files** the agent makes come to you. It sends a picture with
+`send_image` and a PDF with `send_pdf`. In the browser, the file slides
+out in a panel on the right, with its name and size across the top and
+buttons to download it or open it in a tab. A card stays in the chat to
+open it again, and `Alt V` shows or hides the panel. Each file is kept
+as a copy in `~/.flash/web/files`, so a chat still shows its files
+after the originals are gone. In the terminal, a PDF opens in your PDF
+viewer.
+
+**Projects** group chats about one codebase. A project is a folder plus
+instructions: every chat in it runs its tools in that folder, and the
+instructions go into its system prompt. Open them from Projects in the
+sidebar (`Alt P`). Chats are saved as they change, so a project keeps its
+conversations across restarts. Hosts, projects, and chats live in
+`~/.flash/web`, and removing a project never touches its folder or its
+chats.
+
+**Hosts** are the Ollama servers Flash can talk to: this computer, and
+any other machine you add, like one with a bigger GPU. The model menu
+(`Alt M`, or `Alt H` to start on the hosts) lists them with a dot showing
+which ones answer. Picking one switches Flash to it and lists the models
+there. The choice is saved as `OLLAMA_HOST`, the same setting the
+terminal uses.
+
+By default the server only listens on this machine. `--lan` listens on
+your network too, prints a QR code in the terminal, and shows one under
+Open on phone in the sidebar. Every request needs the random token in
+that link, so other websites and other people on the network cannot
+drive Flash without it. The link travels unencrypted, though, so use
+`--lan` only on a network you trust. If your phone cannot connect, your
+firewall is probably blocking Python from accepting connections. On a
+Mac, allow it in System Settings, Network, Firewall.
+
+The suggestions use the [Orbit](https://github.com/JAMO-TYPEFACE/Orbit)
+typeface, bundled under the SIL Open Font License
+(`flash/web/OFL-orbit.txt`).
 
 ### Direct Shell Execution
 

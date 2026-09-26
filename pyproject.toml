@@ -31,7 +31,44 @@ where = ["."]
 include = ["flash*"]
 
 [tool.setuptools.package-data]
-flash = ["system_prompt.txt", "thinking_states.json", "suggestions.json"]
+flash = [
+    "system_prompt.txt",
+    "thinking_states.json",
+    "suggestions.json",
+    "backgrounds/*.scene",
+    "web/*.html",
+    "web/*.woff2",
+    "web/*.txt",
+]
+
+[tool.ruff]
+line-length = 79
+target-version = "py310"
+
+[tool.ruff.lint]
+select = [
+    "E",      # pycodestyle errors
+    "W",      # pycodestyle warnings
+    "F",      # pyflakes
+    "I",      # import sorting
+    "UP",     # pyupgrade, minus the two annotation rules below
+    "BLE",    # blind excepts
+    "DTZ",    # naive datetimes
+    "S110",   # try/except/pass
+    "RUF100", # noqa directives that no longer suppress anything
+]
+
+# This codebase spells a union `Union[A, B]` and a nullable
+# `Optional[X]`. UP007 and UP045 rewrite both into `A | B`, which is a
+# house-style question rather than a correctness one, so they are the
+# one part of UP that stays off. Without this, `ruff --fix` silently
+# converts the whole codebase back.
+ignore = ["UP007", "UP045"]
+
+# Security is the separate bandit job's responsibility. Selecting
+# ruff's full S family here would report the same code twice, at a
+# lower severity bar than bandit's -ll, so only the one rule this
+# codebase actually suppresses by hand is enabled.
 
 [tool.pyright]
 # flash/urlscheme.py imports winreg only on Windows (os.name == "nt") to

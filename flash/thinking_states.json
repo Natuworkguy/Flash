@@ -1,51 +1,186 @@
 {
   "states": [
-    "Thinking",
-    "Pondering",
-    "Analyzing",
-    "Considering",
-    "Reflecting",
-    "Processing",
-    "Weighing options",
-    "Simulating",
-    "Working it out",
-    "Deliberating",
-    "Reasoning",
-    "Evaluating",
-    "Contemplating",
-    "Connecting the dots",
-    "Piecing it together",
-    "Exploring angles",
-    "Sorting ideas",
-    "Cross-checking",
-    "Formulating",
-    "Digesting",
-    "Untangling",
-    "Synthesizing",
-    "Sifting through details",
-    "Mapping it out",
-    "Running the numbers",
-    "Testing hypotheses",
-    "Drawing conclusions",
-    "Refining",
-    "Double-checking",
-    "FLASHing through possibilities"
+    {
+      "now": "Thinking",
+      "then": "Thought"
+    },
+    {
+      "now": "Pondering",
+      "then": "Pondered"
+    },
+    {
+      "now": "Analyzing",
+      "then": "Analyzed"
+    },
+    {
+      "now": "Considering",
+      "then": "Considered"
+    },
+    {
+      "now": "Reflecting",
+      "then": "Reflected"
+    },
+    {
+      "now": "Processing",
+      "then": "Processed"
+    },
+    {
+      "now": "Weighing options",
+      "then": "Weighed the options"
+    },
+    {
+      "now": "Simulating",
+      "then": "Simulated"
+    },
+    {
+      "now": "Working it out",
+      "then": "Worked it out"
+    },
+    {
+      "now": "Deliberating",
+      "then": "Deliberated"
+    },
+    {
+      "now": "Reasoning",
+      "then": "Reasoned"
+    },
+    {
+      "now": "Evaluating",
+      "then": "Evaluated"
+    },
+    {
+      "now": "Contemplating",
+      "then": "Contemplated"
+    },
+    {
+      "now": "Connecting the dots",
+      "then": "Connected the dots"
+    },
+    {
+      "now": "Piecing it together",
+      "then": "Pieced it together"
+    },
+    {
+      "now": "Exploring angles",
+      "then": "Explored the angles"
+    },
+    {
+      "now": "Sorting ideas",
+      "then": "Sorted the ideas"
+    },
+    {
+      "now": "Cross-checking",
+      "then": "Cross-checked"
+    },
+    {
+      "now": "Formulating",
+      "then": "Formulated"
+    },
+    {
+      "now": "Digesting",
+      "then": "Digested"
+    },
+    {
+      "now": "Untangling",
+      "then": "Untangled"
+    },
+    {
+      "now": "Synthesizing",
+      "then": "Synthesized"
+    },
+    {
+      "now": "Sifting through details",
+      "then": "Sifted through the details"
+    },
+    {
+      "now": "Mapping it out",
+      "then": "Mapped it out"
+    },
+    {
+      "now": "Running the numbers",
+      "then": "Ran the numbers"
+    },
+    {
+      "now": "Testing hypotheses",
+      "then": "Tested the hypotheses"
+    },
+    {
+      "now": "Drawing conclusions",
+      "then": "Drew conclusions"
+    },
+    {
+      "now": "Refining",
+      "then": "Refined"
+    },
+    {
+      "now": "Double-checking",
+      "then": "Double-checked"
+    },
+    {
+      "now": "FLASHing through possibilities",
+      "then": "FLASHed through the possibilities"
+    }
   ],
   "image_states": [
-    "Examining the image",
-    "Analyzing the image",
-    "Looking closely",
-    "Inspecting",
-    "Studying the image",
-    "Scanning the image",
-    "Peering closer",
-    "Taking a closer look",
-    "Reading the image",
-    "Parsing the visuals",
-    "Making out details",
-    "Piecing together the scene",
-    "Focusing in",
-    "Interpreting the image",
-    "Assessing the image"
+    {
+      "now": "Examining the image",
+      "then": "Examined the image"
+    },
+    {
+      "now": "Analyzing the image",
+      "then": "Analyzed the image"
+    },
+    {
+      "now": "Looking closely",
+      "then": "Looked closely"
+    },
+    {
+      "now": "Inspecting",
+      "then": "Inspected"
+    },
+    {
+      "now": "Studying the image",
+      "then": "Studied the image"
+    },
+    {
+      "now": "Scanning the image",
+      "then": "Scanned the image"
+    },
+    {
+      "now": "Peering closer",
+      "then": "Peered closer"
+    },
+    {
+      "now": "Taking a closer look",
+      "then": "Took a closer look"
+    },
+    {
+      "now": "Reading the image",
+      "then": "Read the image"
+    },
+    {
+      "now": "Parsing the visuals",
+      "then": "Parsed the visuals"
+    },
+    {
+      "now": "Making out details",
+      "then": "Made out the details"
+    },
+    {
+      "now": "Piecing together the scene",
+      "then": "Pieced together the scene"
+    },
+    {
+      "now": "Focusing in",
+      "then": "Focused in"
+    },
+    {
+      "now": "Interpreting the image",
+      "then": "Interpreted the image"
+    },
+    {
+      "now": "Assessing the image",
+      "then": "Assessed the image"
+    }
   ]
 }

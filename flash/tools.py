@@ -4,6 +4,7 @@ import base64
 import difflib
 import fnmatch
 import io
+import json
 import os
 import platform
 import queue
@@ -19,14 +20,14 @@ from datetime import datetime
 from html.parser import HTMLParser
 from pathlib import Path
 from tempfile import mkdtemp
-from typing import Any, Union
+from typing import Any, Optional, Union
 
 from ddgs import DDGS
 from rich.live import Live
 from rich.text import Text
 
 from . import agent as subagents
-from . import editor, plan
+from . import checkpoint, editor, extensions, learning, plan, skills
 from .browser import (
     ACTIONS,
     MAX_ELEMENTS,
@@ -43,6 +44,7 @@ from .browser import open_page as browser_open
 from .browser import snapshot as page_snapshot
 from .browser import where as page_where
 from .documents import extract_document_text, is_document_path
+from .edit import Edit, apply_edits
 from .images import resolve_image_path
 from .memory import add_memory, forget_memory, search_memory
 from .notify import notify_needs_input
@@ -57,9 +59,12 @@ from .theme import (
     console,
     glimmer,
     plural,
+    remote_answer,
     tool_diff,
+    tool_file,
     tool_line,
     tool_result,
+    typed,
 )
 
 SCRATCH_DIR = mkdtemp(prefix="flash-scratch-", suffix="-temp")
@@ -81,14 +86,24 @@ To look at a file's contents, use the read tool instead of shell
 A path the user writes after an @, such as @flash/models.py, is a file they
   are pointing you at. Read it before answering, unless what they asked
   plainly does not depend on what is in it.
-To create or change a file, use the write tool instead of shell redirection,
+To change a file that already exists, use the edit tool. It swaps one exact
+  block of text for another and leaves the rest of the file untouched, so
+  it costs you only the lines that actually change. Copy old_string out of
+  a read of the file, without the line numbers read puts in front, and take
+  in enough surrounding lines that it appears exactly once. Set
+  replace_all=true only when you mean every occurrence. Use multi_edit to
+  make several changes to one file in a single call; they are applied in
+  order and either all land or none do. If an edit comes back not found,
+  the error quotes the closest text in the file: fix old_string from it and
+  call edit again rather than falling back to write or to a sed command.
+To create a file, use the write tool instead of shell redirection,
   heredocs, or Set-Content. It needs no quoting or escaping and works the
   same on every platform, so shell quoting can never corrupt the content.
-  It replaces the whole file, so read the file first when editing one, and
-  pass back the complete new contents. Your reply has a token limit, so a
-  long file does not fit in one call: write the first part, then call
-  write again with append=true for each following part, about 80 lines
-  at a time, until the file is finished.
+  It replaces the whole file, so point it at an existing one only when you
+  mean to rewrite all of it. Your reply has a token limit, so a long file
+  does not fit in one call: write the first part, then call write again
+  with append=true for each following part, about 80 lines at a time,
+  until the file is finished.
 When searching for recent information, use the web_search tool.
 When you need to know the user's operating system, use the get_os tool.
 To think or plan mid-task without ending your turn, use the reason tool.
@@ -101,6 +116,7 @@ To hand a finished picture to the user, use the send_image tool with its
   one and opens it in their image viewer where it cannot, naming the path
   either way. It shows the image to them and not to you, so look at your
   own render with view_image first and send it once it is right.
+To hand the user a finished PDF, use the send_pdf tool with its path.
 To see how a web page actually renders, use the screenshot tool on the
   .html file you wrote or on a URL. It runs a headless browser and
   attaches the picture, so it is the only way to check a page you built;
@@ -151,9 +167,13 @@ To work on independent pieces of a task at the same time, use the agent
   needing back and forth. Skip it for anything you can just do yourself
   in a tool call or two.
 To save a durable fact or preference for future sessions, use the remember
-  tool. To check saved memory, use the recall tool with a specific phrase;
-  it does not return everything for a blank search. To delete one saved
-  memory by its 1-based index, use the forget tool.
+  tool. What is already saved is under === Memory === below, when there is
+  any; recall searches older entries by a specific phrase. To delete one
+  saved memory by its 1-based index, use the forget tool.
+When a task matches a skill under === Skills === below, call skill_view on
+  it first and follow it. When the user asks you to remember how to do
+  something, or corrects how you did a task that will come up again, save
+  the procedure with skill_manage, or patch the skill that was wrong.
 
 Your temporary scratch directory is: {SCRATCH_DIR}
 It will be deleted when the program exits. Use it for temporary files, but do
@@ -175,30 +195,51 @@ authoritative, so you do not need to call get_date to confirm the current year,
 only to get a more precise day if a task needs one.
 """.strip()
 
-SYSTEM_PROMPT = f"""
+FLASH_PROMPT = get_system_prompt()
+
+
+def _flash_system_prompt(extension_prompt: str = "") -> str:
+    """Flash's own prompt, with the installed extensions' inside it.
+
+    Inside rather than after: everything past the end marker reads to
+    the model as the conversation starting, not as more instructions.
+    """
+
+    added = f"{extension_prompt}\n" if extension_prompt else ""
+
+    return f"""
 === System Prompt ===
 
-{get_system_prompt()}
+{FLASH_PROMPT}
 {TOOL_SYSTEM_PROMPT}
 {CURRENT_DATE_PROMPT}
-=== END OF SYSTEM PROMPT ===
+{added}=== END OF SYSTEM PROMPT ===
 
 You are now being transferred to a user.
 """.strip()
+
+
+SYSTEM_PROMPT = _flash_system_prompt()
 
 
 def build_system_prompt(model_prompt: str = "") -> str:
     """Prepend the model's own system prompt to Flash's, when it has one."""
 
     model_prompt = model_prompt.strip()
+    added = "\n\n".join(
+        part
+        for part in (extensions.system_prompt(), learning.prompt_block())
+        if part
+    )
+    flash_prompt = _flash_system_prompt(added) if added else SYSTEM_PROMPT
 
     if not model_prompt:
-        return SYSTEM_PROMPT
+        return flash_prompt
 
     return (
         "=== Model System Prompt ===\n\n"
         f"{model_prompt}\n\n"
-        f"{SYSTEM_PROMPT}"
+        f"{flash_prompt}"
     )
 
 
@@ -248,7 +289,7 @@ def trim_tool_output(text: str, name: str = "") -> str:
 
 
 def _run_shell_streaming(
-    args, *, shell: bool, seconds: int
+    args, *, shell: bool, seconds: int, env: Optional[dict] = None
 ) -> tuple[str, int]:
     """Run a command, printing its output live as it's produced.
 
@@ -262,6 +303,7 @@ def _run_shell_streaming(
         stderr=subprocess.STDOUT,
         text=True,
         bufsize=1,
+        env=env,
     )
 
     stdout = proc.stdout
@@ -297,7 +339,7 @@ def _run_shell_streaming(
                 raise subprocess.TimeoutExpired(args, seconds)
             if chunk is None:
                 break
-            print(chunk, end="", flush=True)
+            console.echo(chunk)
             chunks.append(chunk)
     except BaseException:
         proc.kill()
@@ -369,19 +411,22 @@ def shell_tool(command: str, timeout=None, is_user=False) -> str:
         if not NO_COMMAND_CONFIRMATION:
             notify_needs_input()
 
-            prompt = Text("  ⎿  ", style=DIM)
-            prompt.append("Run this command? ", style=DIM)
-            prompt.append("y", style=f"bold {ACCENT}")
-            prompt.append("/n ", style=DIM)
-            console.print(prompt, end="")
+            user_input = remote_answer(f"Run this command?\n{command}")
 
-            user_input = input().strip().lower()
+            if user_input is None:
+                prompt = Text("  ⎿  ", style=DIM)
+                prompt.append("Run this command? ", style=DIM)
+                prompt.append("y", style=f"bold {ACCENT}")
+                prompt.append("/n ", style=DIM)
+                console.print(prompt, end="")
+
+                user_input = typed()
 
             if user_input != "y":
                 tool_result("Command blocked by user", style=WARN)
                 return "Command blocked by user"
 
-    args: list[str] | str
+    args: Union[list[str], str]
     if os.name == "nt":
         args = [
             "powershell",
@@ -537,7 +582,7 @@ def glob_tool(pattern: str, path: str = ".") -> str:
 def grep_tool(
     pattern: str,
     path: str = ".",
-    glob_filter: Union[str, None] = None,  # noqa: UP007, RUF100
+    glob_filter: Optional[str] = None,
     case_insensitive: bool = False,
 ) -> str:
     """Tool to search file contents by regex."""
@@ -605,7 +650,7 @@ MAX_READ_OUTPUT_CHARS = 20000
 MAX_DIFF_PREVIEW_LINES = 40
 
 
-def _read_lines(file_path: Path) -> Union[list[str], str]:  # noqa: UP007
+def _read_lines(file_path: Path) -> Union[list[str], str]:
     """Split a text file into lines, or return an error string."""
 
     if is_document_path(file_path):
@@ -629,8 +674,8 @@ def _read_lines(file_path: Path) -> Union[list[str], str]:  # noqa: UP007
 
 def read_tool(
     path: str,
-    offset: Union[int, None] = None,  # noqa: UP007, RUF100
-    limit: Union[int, None] = None,  # noqa: UP007, RUF100
+    offset: Optional[int] = None,
+    limit: Optional[int] = None,
 ) -> str:
     """Tool to read a text file, numbered by line."""
 
@@ -724,7 +769,7 @@ def _diff_preview(old_text: str, new_text: str, name: str) -> tuple[
     return body[:MAX_DIFF_PREVIEW_LINES], omitted, additions, removals
 
 
-def _read_exact(file_path: Path) -> Union[str, None]:  # noqa: UP007
+def _read_exact(file_path: Path) -> Optional[str]:
     """The file's text exactly as it sits on disk, or None if unreadable."""
 
     # newline="" keeps the line endings exactly as they are on disk,
@@ -804,9 +849,16 @@ def write_tool(path: str, content: str, append: Any = False) -> str:
         prompt.append("/n ", style=DIM)
         console.print(prompt, end="")
 
-        if input().strip().lower() != "y":
+        try:
+            answer = typed()
+        finally:
+            _close_diff()
+
+        if answer != "y":
             tool_result("Write blocked by user", style=WARN)
             return "Write blocked by user"
+
+    checkpoint.record(file_path)
 
     try:
         file_path.parent.mkdir(parents=True, exist_ok=True)
@@ -835,6 +887,261 @@ def write_tool(path: str, content: str, append: Any = False) -> str:
     verb = "Wrote" if existed else "Created"
     tool_result(f"{verb} {written} line{plural(written)} to {file_path}")
     return f"{verb} {written} line{plural(written)} to {file_path}"
+
+
+_diff_hint_shown = False
+
+
+def _close_diff() -> None:
+    """Drop the diff Flash opened, now that it has been answered.
+
+    Said once per session if VS Code is set to leave the tab behind:
+    the files go either way, and the setting is the only thing that
+    turns that into the tab actually closing.
+    """
+
+    global _diff_hint_shown
+
+    if not editor.close_diff():
+        return
+
+    if _diff_hint_shown or editor.closes_deleted_editors() is not False:
+        return
+
+    _diff_hint_shown = True
+    tool_result(
+        f"Set {editor.CLOSE_SETTING} to true in VS Code and the diff "
+        "tab will close itself once you have answered."
+    )
+
+
+def _confirm_change(
+    file_path: Path,
+    old_text: str,
+    new_text: str,
+    question: str,
+) -> Optional[str]:
+    """Show the pending change and ask. None means go ahead.
+
+    The same diff, editor window, and y/n the write tool uses, so an
+    edit and a write look identical to the user however the model chose
+    to make the change.
+    """
+
+    preview, omitted, additions, removals = _diff_preview(
+        old_text, new_text, file_path.name
+    )
+    tool_result(
+        f"{additions} addition{plural(additions)}, "
+        f"{removals} removal{plural(removals)}"
+    )
+    tool_diff(preview, more=omitted)
+
+    if NO_COMMAND_CONFIRMATION:
+        return None
+
+    notify_needs_input()
+
+    # Asked of the browser when the web UI is running this turn, where
+    # the diff is already on screen above the question.
+    answer = remote_answer(f"{question}\n{file_path}")
+    if answer is not None:
+        if answer != "y":
+            tool_result("Edit blocked by user", style=WARN)
+            return "Edit blocked by user"
+        return None
+
+    if editor.show_diff(old_text, new_text, file_path.name, SCRATCH_DIR):
+        tool_result("Opened side by side in VS Code")
+
+    prompt = Text(f"  {BRANCH}  ", style=DIM)
+    prompt.append(question + " ", style=DIM)
+    prompt.append("y", style=f"bold {ACCENT}")
+    prompt.append("/n ", style=DIM)
+    console.print(prompt, end="")
+
+    try:
+        answer = typed()
+    finally:
+        # Closed on the way out whichever way it went, and even if the
+        # read was interrupted, so a decided diff never lingers.
+        _close_diff()
+
+    if answer != "y":
+        tool_result("Edit blocked by user", style=WARN)
+        return "Edit blocked by user"
+
+    return None
+
+
+def _editable_text(file_path: Path) -> str:
+    """The file's exact text, or an "Error: ..." string explaining why not.
+
+    Callers tell the two apart by the "Error: " prefix, the same way the
+    rest of the tools in this module report a failure to the model.
+    """
+
+    if not file_path.exists():
+        return (
+            f"Error: file not found: {file_path}. Use the write tool to "
+            "create a file; edit only changes one that already exists."
+        )
+
+    if file_path.is_dir():
+        return f"Error: {file_path} is a directory, not a file."
+
+    if is_document_path(file_path):
+        return (
+            f"Error: {file_path} is a document, not a text file. Its "
+            "text can be read but not edited in place; rebuild it with "
+            "the write tool or a script instead."
+        )
+
+    text = _read_exact(file_path)
+    if text is None:
+        return (
+            f"Error: could not read {file_path} as UTF-8 text. Binary "
+            "files cannot be edited."
+        )
+
+    return text
+
+
+def _write_exact(
+    file_path: Path, text: str
+) -> Optional[str]:
+    """Replace the file's contents byte for byte. None on success."""
+
+    try:
+        # newline="" so the text lands exactly as the edit produced it,
+        # which is what keeps a CRLF file from being rewritten as LF.
+        with open(file_path, "w", encoding="utf-8", newline="") as handle:
+            handle.write(text)
+    except OSError as exc:
+        return f"Error: could not write {file_path}: {exc}"
+
+    return None
+
+
+def _edit_file(path: str, edits: list[Edit], question: str) -> str:
+    """Apply edits to one file, confirming the result as a diff."""
+
+    file_path = Path(path).expanduser()
+
+    old_text = _editable_text(file_path)
+    if old_text.startswith("Error: "):
+        tool_result(old_text, style=ERROR)
+        return old_text
+
+    result = apply_edits(old_text, edits)
+
+    if not result.ok:
+        tool_result(result.error, style=ERROR)
+        return result.error
+
+    new_text = result.text
+
+    if new_text == old_text:
+        message = (
+            "No change: the edit produced text identical to what is "
+            "already in the file."
+        )
+        tool_result(message)
+        return message
+
+    blocked = _confirm_change(file_path, old_text, new_text, question)
+    if blocked is not None:
+        return blocked
+
+    # Snapshotted only once the user has said yes, so a declined edit
+    # never lands in the undo history.
+    checkpoint.record(file_path)
+
+    failed = _write_exact(file_path, new_text)
+    if failed is not None:
+        tool_result(failed, style=ERROR)
+        return failed
+
+    made = result.replacements
+    summary = (
+        f"Made {made} replacement{plural(made)} in {file_path}"
+    )
+    tool_result(summary)
+
+    return "\n".join([summary + ".", *result.notes])
+
+
+def edit_tool(
+    path: str,
+    old_string: str,
+    new_string: str,
+    replace_all: Any = False,
+) -> str:
+    """Tool to replace one exact block of text in a file."""
+
+    tool_line(f"Edit({path})")
+
+    return _edit_file(
+        path,
+        [Edit(str(old_string), str(new_string), bool(replace_all))],
+        "Apply this edit?",
+    )
+
+
+def _parse_edits(edits: Any) -> Union[list[Edit], str]:
+    """Turn the model's edit list into Edit objects, or explain why not."""
+
+    if isinstance(edits, str):
+        # Some models hand back a JSON string instead of a real array.
+        try:
+            edits = json.loads(edits)
+        except ValueError:
+            return (
+                "Error: edits could not be read as a list. Pass an array "
+                'of {"old_string": ..., "new_string": ...} objects.'
+            )
+
+    if not isinstance(edits, list):
+        return (
+            "Error: edits must be a list of "
+            '{"old_string": ..., "new_string": ...} objects.'
+        )
+
+    parsed = []
+    for index, entry in enumerate(edits, start=1):
+        if not isinstance(entry, dict):
+            return (
+                f"Error: edit {index} is not an object. Each edit needs "
+                "an old_string and a new_string."
+            )
+        if "old_string" not in entry or "new_string" not in entry:
+            return (
+                f"Error: edit {index} is missing old_string or "
+                "new_string."
+            )
+        parsed.append(Edit(
+            str(entry["old_string"]),
+            str(entry["new_string"]),
+            bool(entry.get("replace_all", False)),
+        ))
+
+    return parsed
+
+
+def multi_edit_tool(path: str, edits: Any) -> str:
+    """Tool to make several exact edits to one file, all or nothing."""
+
+    parsed = _parse_edits(edits)
+
+    if isinstance(parsed, str):
+        tool_line(f"MultiEdit({path})")
+        tool_result(parsed, style=ERROR)
+        return parsed
+
+    count = len(parsed)
+    tool_line(f"MultiEdit({path}, {count} edit{plural(count)})")
+
+    return _edit_file(path, parsed, f"Apply these {count} edits?")
 
 
 def web_search(query: str, max_results: int) -> str:
@@ -1200,6 +1507,50 @@ def forget(index: int) -> str:
     return result
 
 
+def skill_view(name: str, path: str = "") -> str:
+    """Read a saved skill, or one of its other files."""
+
+    tool_line(f"SkillView({name}{', ' + path if path else ''})")
+    try:
+        result = skills.view(name, path)
+    except skills.SkillError as exc:
+        result = f"Error: {exc}"
+        tool_result(result, style=ERROR)
+        return result
+    tool_result(f"Read {len(result.splitlines())} lines")
+    return result
+
+
+def skill_manage_tool(
+    action: str = "",
+    name: str = "",
+    description: Optional[str] = None,
+    content: Optional[str] = None,
+    old_string: Optional[str] = None,
+    new_string: Optional[str] = None,
+    managed_only: bool = False,
+) -> str:
+    """Create, patch, rewrite, or delete a skill."""
+
+    tool_line(f"SkillManage({action} {name})")
+    try:
+        result = skills.manage(
+            action,
+            name,
+            description=description,
+            content=content,
+            old_string=old_string,
+            new_string=new_string,
+            managed_only=managed_only,
+        )
+    except (skills.SkillError, OSError) as exc:
+        result = f"Error: {exc}"
+        tool_result(result, style=ERROR)
+        return result
+    tool_result(result)
+    return result
+
+
 def open_in_editor(path: str, line: Any = None) -> str:
     """Open a file in the user's VS Code, at a line when given."""
 
@@ -1257,9 +1608,91 @@ EDITOR_TOOLS: list[dict[str, Any]] = [
 
 
 def turn_tools() -> list[dict[str, Any]]:
-    """The tools offered on this turn: the editor's only inside VS Code."""
+    """The tools offered on this turn: the editor's only inside VS Code,
+    and whatever the installed extensions add."""
 
-    return tools + (EDITOR_TOOLS if editor.available() else [])
+    return (
+        tools
+        + (EDITOR_TOOLS if editor.available() else [])
+        + extensions.tool_schemas(frozenset(FUNCTIONS))
+    )
+
+
+def run_extension_command(
+    extension: "extensions.Extension",
+    command: "extensions.Command",
+    arguments: list[str],
+) -> str:
+    """Run an extension's command the way `!` runs one typed by hand.
+
+    Its output streams to the terminal as it comes, and is noted like a
+    `!` command's, so a model asked next about what just happened has
+    seen it.
+    """
+
+    argv = extensions.argv(extension, command.run or []) + arguments
+    label = f"/{command.name}" + "".join(f" {a}" for a in arguments)
+
+    try:
+        output, returncode = _run_shell_streaming(
+            argv,
+            shell=False,
+            seconds=command.timeout,
+            env=extensions.environment(extension),
+        )
+    except subprocess.TimeoutExpired:
+        _note_user_run(label, f"timed out after {command.timeout}s", "")
+        return f"(timed out after {command.timeout}s)"
+    except KeyboardInterrupt:
+        _note_user_run(label, "interrupted with Ctrl+C", "")
+        return "(interrupted)"
+    except OSError as exc:
+        return f"Could not start /{command.name}: {exc}"
+
+    _note_user_run(label, f"exit {returncode}", output)
+
+    if returncode:
+        return f"(exit {returncode})"
+    if not output.strip():
+        return "(no output)"
+    return ""
+
+
+def _extension_tool(name: str, args: dict) -> Optional[str]:
+    """Answer a call to an extension's tool, or None if none has it."""
+
+    found = extensions.find_tool(name, frozenset(FUNCTIONS))
+
+    if found is None:
+        return None
+
+    extension, tool = found
+    shown = json.dumps(args, ensure_ascii=False)
+    tool_line(f"{name}({shown})")
+
+    if tool.confirm and not NO_COMMAND_CONFIRMATION:
+        notify_needs_input()
+
+        question = f"Let {extension.name} run {name}?"
+        answer = remote_answer(question)
+
+        if answer is None:
+            prompt = Text("  ⎿  ", style=DIM)
+            prompt.append(question + " ", style=DIM)
+            prompt.append("y", style=f"bold {ACCENT}")
+            prompt.append("/n ", style=DIM)
+            console.print(prompt, end="")
+            answer = typed()
+
+        if answer != "y":
+            tool_result("Blocked by user", style=WARN)
+            return "Blocked by user"
+
+    result = extensions.call_tool(extension, tool, args)
+    tool_result(
+        result, style=ERROR if result.startswith(("(exit", "Error")) else DIM
+    )
+    return result
 
 
 def agent_tool(task: str) -> str:
@@ -1796,6 +2229,18 @@ def send_image(path: str, caption: str = "") -> str:
 
     kilobytes = max(1, round(len(data) / 1024))
     note = caption.strip()
+
+    # In the web UI the picture goes to the page, which shows it itself.
+    # Drawing it here would put it on the screen of whatever machine runs
+    # the server, which may not be the one the user is looking at.
+    if tool_file(str(image_path)):
+        tool_result(f"{image_path.name} ({kilobytes} KB)")
+        return (
+            f"Sent {image_path.name} ({kilobytes} KB) to the user's "
+            "screen. You cannot see it from here; view_image is what "
+            "shows it to you."
+        )
+
     protocol = _graphics_protocol()
 
     if protocol:
@@ -1825,6 +2270,69 @@ def send_image(path: str, caption: str = "") -> str:
         f"Sent {image_path.name} ({kilobytes} KB). This terminal cannot "
         "draw images, so it opened in the user's image viewer with the "
         "path on screen. You cannot see it from here."
+    )
+
+
+MAX_PDF_BYTES = 50 * 1024 * 1024
+
+
+def send_pdf(path: str, caption: str = "") -> str:
+    """Put a PDF in front of the user."""
+
+    tool_line(f"SendPDF({path})")
+
+    pdf_path = Path(path).expanduser()
+    problem = ""
+    if not pdf_path.is_file():
+        problem = f"no file at {pdf_path}"
+    elif pdf_path.suffix.lower() != ".pdf":
+        problem = f"{pdf_path.name} is not a .pdf file"
+    else:
+        try:
+            size = pdf_path.stat().st_size
+            with open(pdf_path, "rb") as handle:
+                head = handle.read(5)
+        except OSError as exc:
+            problem = f"could not read {pdf_path}: {exc}"
+        else:
+            if head != b"%PDF-":
+                problem = (
+                    f"{pdf_path.name} does not start like a PDF; write it "
+                    "with a PDF library, not as text"
+                )
+            elif size > MAX_PDF_BYTES:
+                problem = (
+                    f"{pdf_path.name} is {size // (1024 * 1024)} MB; the "
+                    f"limit is {MAX_PDF_BYTES // (1024 * 1024)} MB"
+                )
+
+    if problem:
+        result = f"Error: {problem}."
+        tool_result(result, style=ERROR)
+        return result
+
+    kilobytes = max(1, round(size / 1024))
+    note = caption.strip()
+    label = f"{pdf_path.name} ({kilobytes} KB)" + (f": {note}" if note else "")
+
+    if tool_file(str(pdf_path)):
+        tool_result(label)
+        return f"Sent {pdf_path.name} ({kilobytes} KB) to the user's screen."
+
+    problem = _open_with_spinner(pdf_path)
+    tool_result(label + (f" ({problem})" if problem else ""))
+    console.print(
+        Text(f"{' ' * RESULT_INDENT}{_display_path(pdf_path)}", style=DIM)
+    )
+
+    if problem:
+        return (
+            f"Could not open {pdf_path.name}: {problem}. Its path is on "
+            "screen; tell the user where the file is."
+        )
+    return (
+        f"Sent {pdf_path.name} ({kilobytes} KB). It opened in the user's "
+        "PDF viewer, with its path on screen."
     )
 
 
@@ -2255,15 +2763,17 @@ tools: list[dict[str, Any]] = [
         "function": {
             "name": "write",
             "description": (
-                "Write a text file, replacing it if it exists, or add to "
-                "the end of one with append. The user sees a diff and "
-                "confirms before anything is written. Cross-platform and "
-                "needs no quoting or escaping; prefer this over shell "
-                "redirection or heredocs for every file you create or "
-                "change. Read the file first when editing one, since "
-                "without append this replaces the whole file. A long file "
-                "will not fit in one call, so write the first part, then "
-                "append the rest a piece at a time."
+                "Create a new text file, or replace an existing one "
+                "outright, or add to the end of one with append. To "
+                "change part of a file that already exists, use edit "
+                "instead: this tool makes you write out every line in "
+                "the file, which is slow and truncates on a long one. "
+                "The user sees a diff and confirms before anything is "
+                "written. Cross-platform and needs no quoting or "
+                "escaping; prefer it over shell redirection or heredocs "
+                "for every file you create. A file too long for one call "
+                "is written in pieces: the first part with no append, "
+                "then the rest with append=true, in order."
             ),
             "parameters": {
                 "type": "object",
@@ -2303,6 +2813,123 @@ tools: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "edit",
+            "description": (
+                "Change part of a text file by replacing one exact block "
+                "of text with another. This is how you change a file "
+                "that already exists: it costs you only the lines that "
+                "actually change, where write costs you every line in "
+                "the file. old_string must match the file exactly, "
+                "character for character, and must appear only once, so "
+                "include the lines above and below it until it is "
+                "unique. Read the file first and copy the text out of "
+                "the result rather than typing it from memory, leaving "
+                "off the line numbers read adds. The user sees a diff "
+                "and confirms before anything is written."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": (
+                            "Path to the file, e.g. 'flash/theme.py'."
+                        ),
+                    },
+                    "old_string": {
+                        "type": "string",
+                        "description": (
+                            "The exact text to replace, copied from the "
+                            "file. Include enough surrounding lines that "
+                            "it appears only once."
+                        ),
+                    },
+                    "new_string": {
+                        "type": "string",
+                        "description": (
+                            "The text to put in its place. Pass an empty "
+                            "string to delete old_string outright."
+                        ),
+                    },
+                    "replace_all": {
+                        "type": "boolean",
+                        "description": (
+                            "Replace every occurrence instead of failing "
+                            "when old_string appears more than once. Use "
+                            "it for a rename across a file."
+                        ),
+                    },
+                },
+                "required": ["path", "old_string", "new_string"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "multi_edit",
+            "description": (
+                "Make several exact edits to one file in a single call. "
+                "They are applied in order, and each one sees the text "
+                "the one before it produced. Either all of them land or "
+                "none do, so a failed edit never leaves the file half "
+                "changed. Prefer this over several edit calls whenever "
+                "you have more than one change to make to the same file: "
+                "it costs one confirmation and one round trip instead of "
+                "one of each per edit. Every old_string follows the same "
+                "rules as the edit tool."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": (
+                            "Path to the file every edit applies to."
+                        ),
+                    },
+                    "edits": {
+                        "type": "array",
+                        "description": (
+                            "The edits to apply, in the order they "
+                            "should be made."
+                        ),
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "old_string": {
+                                    "type": "string",
+                                    "description": (
+                                        "Exact text to replace, unique "
+                                        "in the file as it stands when "
+                                        "this edit's turn comes."
+                                    ),
+                                },
+                                "new_string": {
+                                    "type": "string",
+                                    "description": (
+                                        "The text to put in its place."
+                                    ),
+                                },
+                                "replace_all": {
+                                    "type": "boolean",
+                                    "description": (
+                                        "Replace every occurrence of "
+                                        "old_string."
+                                    ),
+                                },
+                            },
+                            "required": ["old_string", "new_string"],
+                        },
+                    },
+                },
+                "required": ["path", "edits"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "send_image",
             "description": (
                 "Show an image file (.png, .jpg, .jpeg, .webp, .gif, "
@@ -2327,6 +2954,34 @@ tools: list[dict[str, Any]] = [
                         "type": "string",
                         "description": (
                             "Optional single line shown with the image."
+                        ),
+                    },
+                },
+                "required": ["path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "send_pdf",
+            "description": (
+                "Show a PDF file to the user: a report, invoice, or paper "
+                "you made or found. It opens beside the chat in the web "
+                "UI, and in their PDF viewer in the terminal. Make the "
+                "file first with a PDF library; this only shows it."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Path to the .pdf file.",
+                    },
+                    "caption": {
+                        "type": "string",
+                        "description": (
+                            "Optional single line shown with it."
                         ),
                     },
                 },
@@ -2822,6 +3477,87 @@ tools: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "skill_view",
+            "description": (
+                "Read one of your saved skills: the procedure for a kind "
+                "of task, as this user wants it done. Call it before "
+                "starting a task that a skill listed under Skills covers."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "The skill's name, as listed.",
+                    },
+                    "path": {
+                        "type": "string",
+                        "description": (
+                            "Optional: another file in the skill's "
+                            "folder, when the skill points to one."
+                        ),
+                    },
+                },
+                "required": ["name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "skill_manage",
+            "description": (
+                "Save or fix a skill: a procedure for a kind of task that "
+                "will come up again. create writes a new one; patch swaps "
+                "one exact passage for another (call skill_view first and "
+                "copy old_string from it); rewrite replaces the whole "
+                "procedure; delete removes it. Write steps and pitfalls, "
+                "not a story of what happened."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": list(skills.ACTIONS),
+                    },
+                    "name": {
+                        "type": "string",
+                        "description": (
+                            "Lowercase with hyphens, naming the kind of "
+                            "task."
+                        ),
+                    },
+                    "description": {
+                        "type": "string",
+                        "description": (
+                            "One line saying when to use it. Needed for "
+                            "create."
+                        ),
+                    },
+                    "content": {
+                        "type": "string",
+                        "description": (
+                            "The procedure, in Markdown. For create and "
+                            "rewrite."
+                        ),
+                    },
+                    "old_string": {
+                        "type": "string",
+                        "description": "For patch: exact text to replace.",
+                    },
+                    "new_string": {
+                        "type": "string",
+                        "description": "For patch: what replaces it.",
+                    },
+                },
+                "required": ["action", "name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "forget",
             "description": (
                 "Delete one saved memory entry by its 1-based index (the "
@@ -2851,8 +3587,11 @@ FUNCTIONS = {
     "grep": grep_tool,
     "read": read_tool,
     "write": write_tool,
+    "edit": edit_tool,
+    "multi_edit": multi_edit_tool,
     "view_image": view_image,
     "send_image": send_image,
+    "send_pdf": send_pdf,
     "screenshot": screenshot,
     "open_page": open_page,
     "interact": interact,
@@ -2866,6 +3605,8 @@ FUNCTIONS = {
     "remember": remember,
     "recall": recall,
     "forget": forget,
+    "skill_view": skill_view,
+    "skill_manage": skill_manage_tool,
     "agent": agent_tool,
     "agent_result": agent_result,
     "open_in_editor": open_in_editor,
@@ -2877,13 +3618,13 @@ FUNCTIONS = {
 # Kept here, next to FUNCTIONS, as the one place that names a tool, so
 # adding, renaming, or removing one only means updating this file.
 SUBAGENT_TOOL_NAMES = (
-    "shell", "glob", "grep", "read", "write",
+    "shell", "glob", "grep", "read", "write", "edit", "multi_edit",
     "web_search", "fetch", "get_os", "get_date", "reason",
 )
 
 # Tools that stop for a y/n unless autonomous mode is on. A sub-agent has
 # no terminal to ask from, so it only gets these in autonomous mode.
-CONFIRMED_TOOL_NAMES = ("shell", "write")
+CONFIRMED_TOOL_NAMES = ("shell", "write", "edit", "multi_edit")
 
 
 def run_tool(call):
@@ -2893,7 +3634,8 @@ def run_tool(call):
 
     func = FUNCTIONS.get(name)
     if func is None:
-        return f"Unknown tool: {name}"
+        answered = _extension_tool(name, args)
+        return f"Unknown tool: {name}" if answered is None else answered
 
     try:
         return func(**args)

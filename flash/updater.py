@@ -14,7 +14,7 @@ import subprocess  # nosec B404
 import tempfile
 import urllib.request
 from collections.abc import Callable
-from typing import Union
+from typing import Optional
 
 from .version import (
     INSTALL_SCRIPT_PS1_URL,
@@ -61,7 +61,7 @@ def is_newer(latest: str, current: str = __version__) -> bool:
         return latest != current
 
 
-def fetch_latest_version() -> Union[str, None]:  # noqa: UP007, RUF100
+def fetch_latest_version() -> Optional[str]:
     """Return the version on the repo's main branch, or None on failure."""
 
     try:
@@ -76,7 +76,7 @@ def fetch_latest_version() -> Union[str, None]:  # noqa: UP007, RUF100
     return match.group(1) if match else None
 
 
-def check_for_update() -> Union[str, None]:  # noqa: UP007, RUF100
+def check_for_update() -> Optional[str]:
     """Return the latest version string if newer than the running one."""
 
     latest = fetch_latest_version()
@@ -113,7 +113,7 @@ def _failed(what: str, code: int, output: str) -> str:
 
 def _stream(
     command: list[str],
-    on_output: Union[Callable[[str], None], None] = None,  # noqa: UP007
+    on_output: Optional[Callable[[str], None]] = None,
 ) -> tuple[int, str]:
     """Run `command`, handing each line it prints to `on_output`.
 
@@ -170,7 +170,7 @@ def _voice_commands() -> list[list[str]]:
 
 
 def _install_voice(
-    on_output: Union[Callable[[str], None], None] = None,  # noqa: UP007
+    on_output: Optional[Callable[[str], None]] = None,
 ) -> bool:
     """Reinstall the voice packages the update wiped. True if they took."""
 
@@ -254,8 +254,8 @@ def _detached(command: list[str]) -> None:
 
 
 def perform_update(
-    on_step: Union[Callable[[str], None], None] = None,  # noqa: UP007
-    on_output: Union[Callable[[str], None], None] = None,  # noqa: UP007
+    on_step: Optional[Callable[[str], None]] = None,
+    on_output: Optional[Callable[[str], None]] = None,
 ) -> tuple[bool, str]:
     """Reinstall Flash from the latest `main` branch.
 

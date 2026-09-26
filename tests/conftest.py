@@ -2,7 +2,16 @@
 
 import pytest
 
-from flash import terminal, tools
+from flash import (
+    extensions,
+    learning,
+    memory,
+    repl_input,
+    skills,
+    terminal,
+    tools,
+    workspace,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -28,7 +37,25 @@ def isolated_home(tmp_path_factory, monkeypatch):
     monkeypatch.setenv("USERPROFILE", str(home))
     monkeypatch.setattr(terminal, "FLASH_DIR", home / ".flash")
     monkeypatch.setattr(terminal, "LOG_PATH", home / ".flash" / "terminal.log")
-    return home
+    # Every turn's tool list reads the installed extensions, so without
+    # this the suite would pick up whatever the developer has installed.
+    monkeypatch.setattr(extensions, "FLASH_DIR", home / ".flash")
+    extensions.reload()
+    monkeypatch.setattr(
+        repl_input, "HISTORY_PATH", home / ".flash" / "history"
+    )
+    # The system prompt carries saved memory and the skill list, so
+    # both have to come from the temp home too.
+    monkeypatch.setattr(memory, "MEMORY_PATH", home / ".flash_memory.md")
+    monkeypatch.setattr(skills, "FLASH_DIR", home / ".flash")
+    # The web UI's saved hosts, projects, and chats.
+    monkeypatch.setattr(workspace, "FLASH_DIR", home / ".flash")
+    learning.refresh()
+    learning.reset()
+    yield home
+    extensions.reload()
+    learning.refresh()
+    learning.reset()
 
 
 @pytest.fixture(autouse=True)
@@ -36,3 +63,33 @@ def no_leftover_bang_commands(monkeypatch):
     """Each test starts with no `!` commands waiting to be attached."""
 
     monkeypatch.setattr(tools, "_user_runs", [])
+
+
+@pytest.fixture(autouse=True)
+def no_developer_config(monkeypatch):
+    """No test inherits the confirmation setting from a real ~/.flash.env.
+
+    `flash.ai` calls load_dotenv at import, which puts the developer's
+    own settings into os.environ, and any later Config.refresh() copies
+    NO_COMMAND_CONFIRMATION from there onto the module global in
+    flash.tools. Nothing puts it back, so whether a test that reaches a
+    confirmation prompt blocks on stdin came down to whose machine the
+    suite was running on. Pinned to the module default here: a test
+    that wants autonomous mode, or a background, asks for it.
+    """
+
+    monkeypatch.setattr(tools, "NO_COMMAND_CONFIRMATION", False)
+
+    # The same leak reaches every other setting in that file, so the
+    # ones that change what a test does are cleared too.
+    for name in ("NO_COMMAND_CONFIRMATION", "BACKGROUND"):
+        monkeypatch.delenv(name, raising=False)
+
+    # No test starts a background learning review against a real model
+    # by running enough turns; one that wants a review asks for it.
+    monkeypatch.setenv("SKILL_REVIEW_AFTER", "0")
+    monkeypatch.setenv("MEMORY_REVIEW_EVERY", "0")
+
+    from flash.ai import Config
+
+    monkeypatch.setattr(Config, "background", "")
