@@ -1,6 +1,7 @@
 # pylint: disable=C0114,C0115,C0116
 
 import threading
+import time
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.completion import CompleteEvent
@@ -176,10 +177,29 @@ def _keyed(monkeypatch, pipe, tmp_path):
     )
 
 
-def _typed(monkeypatch, tmp_path, keys):
+def _typed(monkeypatch, tmp_path, keys, history=0):
+    """KEYS at a fresh prompt. With HISTORY, not before that many earlier
+    lines have loaded: prompt_toolkit loads them in the background once
+    the prompt starts, and a slow machine was still loading when an Up
+    arrow sent straight away arrived."""
+
     with create_pipe_input() as pipe:
         _keyed(monkeypatch, pipe, tmp_path)
-        pipe.send_text(keys)
+
+        def send():
+            buffer = repl_input._session.default_buffer
+            deadline = time.monotonic() + 10
+            # The line being typed is the last working line; the loaded
+            # history comes before it.
+            while (len(buffer._working_lines) <= history
+                   and time.monotonic() < deadline):
+                time.sleep(0.01)
+            pipe.send_text(keys)
+
+        if history:
+            threading.Thread(target=send, daemon=True).start()
+        else:
+            pipe.send_text(keys)
         return repl_input.read_line("> ")
 
 
@@ -219,7 +239,7 @@ def test_up_arrow_brings_back_the_last_line(monkeypatch, tmp_path):
 
     # A fresh session, as the next run of flash would make.
     assert _typed(  # nosec B101
-        monkeypatch, tmp_path, "\x1b[A\r"
+        monkeypatch, tmp_path, "\x1b[A\r", history=1
     ) == "first"
 
 
@@ -253,5 +273,5 @@ def test_ctrl_r_searches_history(monkeypatch, tmp_path):
 
     # Ctrl+R, a few letters, Enter to take the match, Enter to send it.
     assert _typed(  # nosec B101
-        monkeypatch, tmp_path, "\x12fir\r\r"
+        monkeypatch, tmp_path, "\x12fir\r\r", history=2
     ) == "first message"

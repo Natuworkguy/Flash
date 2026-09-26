@@ -200,7 +200,7 @@ def view(name: str, path: str = "") -> str:
     if not path:
         head = f"Skill: {skill.name}\n{skill.description}\n\n"
         extras = sorted(
-            str(p.relative_to(skill.path))
+            p.relative_to(skill.path).as_posix()
             for p in skill.path.rglob("*")
             if p.is_file() and p.name != SKILL_FILE
         )

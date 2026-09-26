@@ -214,3 +214,17 @@ class TestUndo:
 
         assert source.read_text(encoding="utf-8") == after_first
         assert checkpoint.depth() == 1
+
+
+def test_a_crlf_file_takes_an_edit_written_with_lf(tmp_path):
+    # Bytes, so the file is CRLF on every platform, not just Windows.
+    path = tmp_path / "win.py"
+    path.write_bytes(b'def greet(name):\r\n    return "hello"\r\n')
+
+    result = multi_edit_tool(str(path), [
+        {"old_string": 'def greet(name):\n    return "hello"\n',
+         "new_string": 'def greet(name):\n    return "hi"\n'},
+    ])
+
+    assert "1 replacement" in result
+    assert path.read_bytes() == b'def greet(name):\r\n    return "hi"\r\n'

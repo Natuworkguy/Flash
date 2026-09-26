@@ -342,8 +342,19 @@ def _ambiguous(count: int, old: str) -> str:
     )
 
 
+def _crlf(text: str) -> str:
+    return text.replace("\r\n", "\n").replace("\n", "\r\n")
+
+
 def apply_one(text: str, edit: Edit) -> Result:
     """Apply one edit to `text`."""
+
+    # A file with Windows line endings. A model writes \n whatever the
+    # file uses, so an old_string over more than one line could never
+    # match; put the edit in the file's own terms, which also keeps the
+    # file CRLF once it is written back.
+    if "\r\n" in text:
+        edit = Edit(_crlf(edit.old), _crlf(edit.new), edit.replace_all)
 
     if not edit.old:
         return Result(error=(
