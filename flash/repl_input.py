@@ -65,6 +65,7 @@ COMMANDS = [
     ("/compact", "summarize the conversation to free up room"),
     ("/context", "show how much of the window is in use"),
     ("/image", "send an image to the model (/image <path> [prompt])"),
+    ("/web", "open Flash in your browser (/web lan for your phone)"),
     ("/extension", "list, install, or remove extensions (/extension help)"),
     ("/version", "show the current version and check for updates"),
     ("/update", "update Flash to the latest version (pipx installs)"),

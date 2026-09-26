@@ -478,6 +478,76 @@ and `/skills remove <name>` deletes one. `SKILL_REVIEW_AFTER` and
 `MEMORY_REVIEW_EVERY` change how often reviews run, and `0` turns them
 off (see [docs/CONFIGURATION.md](docs/CONFIGURATION.md)).
 
+### Web UI
+
+```bash
+flash --web                 # opens Flash in your browser
+flash --web --lan           # also reachable from your phone, with a QR code to scan
+flash --web --port 9000     # on another port (the default is 7433)
+flash --web --no-open       # print the link instead of opening it
+```
+
+Inside a terminal session, `/web` starts the same UI in the background,
+`/web lan` opens it to your network, and `/web stop` shuts it down.
+
+The browser UI is the same agent as the terminal, with the same model,
+tools, permission prompts, skills, and extensions. Replies stream in as
+the model writes them. Tool calls show as compact rows that expand, and
+file changes show as colored diffs. A permission prompt takes the
+keyboard focus, so a single `y` or `n` answers it.
+
+Every button has a shortcut, shown when you hover over it, and `?`
+lists them all:
+
+- `Ctrl K` searches every action, chat, and model.
+- `Alt N` starts a new chat, `Alt ↑` and `Alt ↓` step between chats,
+  and `Alt 1`–`9` jumps to one.
+- `Alt F` searches every chat, titles and messages alike. Opening a
+  result scrolls to the message that matched and highlights the words.
+- `Alt M` switches model, `Alt R` retries, `Alt E` edits your last
+  message, and `Alt Z` undoes the last turn's file changes.
+- `Shift Tab` toggles autonomous mode, `Ctrl O` expands every tool
+  row, `Esc` stops a reply, and `Alt T` switches between light and dark.
+- Outside the message box, `j` and `k` move between blocks, `c` copies
+  one, and `g` and `G` jump to the top and bottom.
+
+**Files** the agent makes come to you. It sends a picture with
+`send_image` and a PDF with `send_pdf`. In the browser, the file slides
+out in a panel on the right, with its name and size across the top and
+buttons to download it or open it in a tab. A card stays in the chat to
+open it again, and `Alt V` shows or hides the panel. Each file is kept
+as a copy in `~/.flash/web/files`, so a chat still shows its files
+after the originals are gone. In the terminal, a PDF opens in your PDF
+viewer.
+
+**Projects** group chats about one codebase. A project is a folder plus
+instructions: every chat in it runs its tools in that folder, and the
+instructions go into its system prompt. Open them from Projects in the
+sidebar (`Alt P`). Chats are saved as they change, so a project keeps its
+conversations across restarts. Hosts, projects, and chats live in
+`~/.flash/web`, and removing a project never touches its folder or its
+chats.
+
+**Hosts** are the Ollama servers Flash can talk to: this computer, and
+any other machine you add, like one with a bigger GPU. The model menu
+(`Alt M`, or `Alt H` to start on the hosts) lists them with a dot showing
+which ones answer. Picking one switches Flash to it and lists the models
+there. The choice is saved as `OLLAMA_HOST`, the same setting the
+terminal uses.
+
+By default the server only listens on this machine. `--lan` listens on
+your network too, prints a QR code in the terminal, and shows one under
+Open on phone in the sidebar. Every request needs the random token in
+that link, so other websites and other people on the network cannot
+drive Flash without it. The link travels unencrypted, though, so use
+`--lan` only on a network you trust. If your phone cannot connect, your
+firewall is probably blocking Python from accepting connections. On a
+Mac, allow it in System Settings, Network, Firewall.
+
+The suggestions use the [Orbit](https://github.com/JAMO-TYPEFACE/Orbit)
+typeface, bundled under the SIL Open Font License
+(`flash/web/OFL-orbit.txt`).
+
 ### Direct Shell Execution
 
 You can run shell commands directly without AI intervention:

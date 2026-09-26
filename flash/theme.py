@@ -234,6 +234,37 @@ def _sink() -> Optional[ToolSink]:
     return getattr(_capture, "sink", None)
 
 
+Answerer = Callable[[str], str]
+
+
+@contextmanager
+def answer_from(answerer: Answerer) -> Iterator[None]:
+    """Send this thread's y/n questions to ANSWERER instead of stdin.
+
+    ANSWERER gets the question and returns the answer typed, lowered.
+    The web UI runs a turn on a thread of its own and asks the browser;
+    reading the terminal from there would hang on a keypress nobody is
+    going to make.
+    """
+
+    _capture.answerer = answerer
+    try:
+        yield
+    finally:
+        _capture.answerer = None
+
+
+def remote_answer(question: str) -> Optional[str]:
+    """The answer from this thread's answerer, or None to ask here."""
+
+    answerer = getattr(_capture, "answerer", None)
+
+    if answerer is None:
+        return None
+
+    return (answerer(question) or "").strip().lower()
+
+
 # Past this many lines a tool's output is cut down on screen, since a
 # test run or a directory listing would otherwise push the reply that
 # follows off the top. The model always gets the whole of it.
@@ -274,6 +305,20 @@ def tool_line(label: str) -> None:
     line.append(f"{BULLET} ", style=ACCENT)
     line.append(label)
     console.print(line)
+
+
+def tool_file(path: str) -> bool:
+    """Hand a file the agent is showing the user to whoever is drawing.
+
+    True when something took it: the web UI, which shows the file
+    itself. False in the terminal, where the tool shows it its own way.
+    """
+
+    sink = _sink()
+    if sink is None:
+        return False
+    sink("file", path, "")
+    return True
 
 
 def tool_result(text: str, *, style: str = DIM) -> None:

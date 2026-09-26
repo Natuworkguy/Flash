@@ -64,8 +64,35 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
         help="list installed extensions",
     )
 
+    parser.add_argument(
+        "--web",
+        action="store_true",
+        help="open Flash in your browser instead of the terminal",
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=None,
+        help="with --web, the port to serve on (default 7433)",
+    )
+    parser.add_argument(
+        "--lan",
+        action="store_true",
+        help=(
+            "with --web, let other devices on your network open it, and "
+            "print a QR code for your phone"
+        ),
+    )
+    parser.add_argument(
+        "--no-open",
+        action="store_true",
+        help="with --web, print the link instead of opening a browser",
+    )
+
     args = parser.parse_args(argv)
     if args.force and not args.update:
         parser.error("--force can only be used with --update")
+    if (args.port is not None or args.no_open or args.lan) and not args.web:
+        parser.error("--port, --lan and --no-open go with --web")
 
     return args
