@@ -18,6 +18,10 @@ the cost of a large library to a line per skill.
 `managed: true` marks a skill Flash's background review wrote. The
 review may change only those: a skill the user wrote, or asked for, is
 theirs, and a pass nobody is watching does not get to rewrite it.
+
+`by:` says who wrote it, for the web UI's label: `flash` for one the
+model made with skill_manage, `you` for one made in the page. A skill
+from before the field existed has none, unless the review wrote it.
 """
 
 import re
@@ -42,6 +46,9 @@ MAX_LISTING_CHARS = 3000
 
 ACTIONS = ("create", "patch", "rewrite", "delete")
 
+# Who can have written a skill: the model, or the user in the web UI.
+AUTHORS = ("flash", "you")
+
 
 class SkillError(ValueError):
     """A skill that could not be read or written, and why."""
@@ -54,6 +61,7 @@ class Skill:
     body: str
     managed: bool
     path: Path
+    by: str = ""
 
 
 def skills_dir() -> Path:
@@ -98,6 +106,8 @@ def _render(skill: Skill) -> str:
     ]
     if skill.managed:
         lines.append("managed: true")
+    if skill.by:
+        lines.append(f"by: {skill.by}")
     lines += ["---", "", skill.body.strip(), ""]
     return "\n".join(lines)
 
@@ -111,13 +121,16 @@ def load(path: Path) -> Skill:
         raise SkillError(f"could not read {path.name}: {exc}") from exc
 
     fields, body = _parse(text)
+    managed = fields.get("managed", "").lower() == "true"
+    by = fields.get("by", "").lower()
 
     return Skill(
         name=path.name,
         description=fields.get("description", ""),
         body=body,
-        managed=fields.get("managed", "").lower() == "true",
+        managed=managed,
         path=path,
+        by=by if by in AUTHORS else ("flash" if managed else ""),
     )
 
 
@@ -256,6 +269,7 @@ def manage(
     old_string: Optional[str] = None,
     new_string: Optional[str] = None,
     managed_only: bool = False,
+    by: str = "",
 ) -> str:
     """Create, patch, rewrite, or delete a skill; say what happened.
 
@@ -286,6 +300,7 @@ def manage(
             body=content or "",
             managed=managed_only,
             path=skills_dir() / name,
+            by=by if by in AUTHORS else "",
         ))
         return f"Created skill {name}."
 
