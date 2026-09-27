@@ -2018,3 +2018,64 @@ class TestQueueAndSteer:
         FakeClient.scripts.append([part("Steered."), part(done=True)])
         gate.set()
         self.settle(session, chat)
+
+
+class TestSwitchingLan:
+    def test_the_server_reopens_with_the_same_port_token_and_chats(
+        self, monkeypatch
+    ):
+        # The network side on loopback: a test never opens a real port.
+        monkeypatch.setattr(web, "LAN_HOST", "127.0.0.1")
+        monkeypatch.setattr(web, "SWITCH_DELAY", 0.01)
+        monkeypatch.setattr(web, "announce", lambda server: None)
+        first = web.Server(0)
+        chat = first.session.new_chat()
+        said(first.session, "Kept across the switch", "still here")
+        web._attach(first, standalone=True)
+        running = []
+        threading.Thread(
+            target=web._serve, args=(first, True, running), daemon=True,
+        ).start()
+        wait_for(lambda: running)
+
+        try:
+            result = web.command(first.session, {"name": "lan", "arg": "on"})
+            wait_for(lambda: running[0] is not first)
+            now = running[0]
+
+            assert result == {"lan": True, "switching": True}
+            assert now.lan is True and now.session.lan is True
+            assert now.port == first.port
+            assert now.token == first.token
+            assert now.session is first.session
+            status, body = request(now, "GET", "/api/state?lite=1")
+            assert status == 200
+            titles = [c["title"] for c in json.loads(body)["chats"]]
+            assert "Kept across the switch" in titles
+            assert json.loads(body)["status"]["lan"] is True
+            assert chat.id in now.session.chats
+            # Asking for what it already is changes nothing.
+            again = web.command(now.session, {"name": "lan", "arg": "on"})
+            assert again == {"lan": True, "switching": False}
+        finally:
+            running[0].shutdown()
+            running[0].server_close()
+
+    def test_only_a_server_that_can_reopen_offers_it(self):
+        with pytest.raises(ValueError, match="cannot reopen"):
+            web.command(web.Session(), {"name": "lan", "arg": "on"})
+
+    def test_a_restart_keeps_the_current_choice(self, monkeypatch):
+        ran = {}
+        monkeypatch.setattr(web.os, "execv",
+                            lambda path, argv: ran.update(argv=argv))
+        monkeypatch.setattr(web.sys, "argv", ["flash", "--web"])
+        monkeypatch.setattr(web, "LAN_HOST", "127.0.0.1")
+        server = web.Server(0, lan=True)
+        try:
+            web._restart(server)
+        finally:
+            server.server_close()
+            os.environ.pop(web.TOKEN_ENV, None)
+
+        assert ran["argv"][3:] == ["--web", "--lan", "--no-open"]

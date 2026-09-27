@@ -1716,12 +1716,19 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(status)
         for name, value in (headers or {}).items():
             self.send_header(name, value)
+        if self.server.closing.is_set():
+            # A server replaced after a LAN switch still answers what
+            # arrives on a connection the browser kept open, then hangs
+            # up, so the browser's next request reaches the new one.
+            self.send_header("Connection", "close")
         self.send_header("Content-Type", kind)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Referrer-Policy", "no-referrer")
         self.end_headers()
+        if self.server.closing.is_set():
+            self.close_connection = True
         self.wfile.write(body)
 
     def _json(self, value: Any, status: int = HTTPStatus.OK) -> None:
@@ -2216,8 +2223,6 @@ def start_background(
     A second /web with a different --lan choice starts over, since
     which interfaces a server listens on is fixed when it opens.
     """
-
-    global _background
 
     if _background is not None and _background.lan == lan:
         return _background
