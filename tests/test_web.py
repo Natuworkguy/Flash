@@ -803,7 +803,9 @@ class TestCookie:
         cookie = request.last.getheader("Set-Cookie")
 
         assert status == 200
-        assert cookie.startswith(cookie_of(server) + ";")
+        # A key of this browser's own, not the link's token.
+        assert cookie.startswith(server.cookie_name + "=")
+        assert server.token not in cookie
         assert "HttpOnly" in cookie
         assert "SameSite=Strict" in cookie
         assert "Expires" not in cookie and "Max-Age" not in cookie
@@ -890,6 +892,192 @@ class TestCookie:
         finally:
             first.server_close()
             second.server_close()
+
+
+MAC_CHROME = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/140.0 Safari/537.36"
+)
+
+
+def sign_in(srv, agent=MAC_CHROME):
+    """Open the link as a browser would, and give back its cookie."""
+
+    status, _ = request(srv, "GET", f"/?token={srv.token}", token=False,
+                        headers={"User-Agent": agent})
+    assert status == 200
+    return request.last.getheader("Set-Cookie").split(";")[0]
+
+
+def as_browser(srv, jar, name, arg=""):
+    status, body = request(srv, "POST", "/api/command",
+                           {"name": name, "arg": arg}, token=False,
+                           headers={"Cookie": jar})
+    return status, json.loads(body)
+
+
+class TestSignedInBrowsers:
+    def test_the_cookie_alone_carries_a_browser_on(self, server):
+        jar = sign_in(server)
+
+        assert request(server, "GET", "/", token=False,
+                       headers={"Cookie": jar})[0] == 200
+        assert request(server, "GET", "/api/state", token=False,
+                       headers={"Cookie": jar})[0] == 200
+        # A reload is the same browser, not another one.
+        assert request.last.getheader("Set-Cookie") is None
+        _, listed = as_browser(server, jar, "browsers")
+        assert len(listed["browsers"]) == 1
+
+    def test_each_browser_is_listed_and_knows_which_is_itself(self, server):
+        mac = sign_in(server)
+        sign_in(server, "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac "
+                        "OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) "
+                        "Version/18.0 Mobile/15E148 Safari/604.1")
+
+        _, listed = as_browser(server, mac, "browsers")
+        first, second = listed["browsers"]
+
+        assert first["current"] and first["device"] == "Chrome on macOS"
+        assert not first["phone"] and first["here"]
+        assert not second["current"] and second["device"] == "Safari on iPhone"
+        assert second["phone"]
+        assert all(len(b["id"]) == 8 for b in listed["browsers"])
+        assert server.token not in json.dumps(listed)
+
+    def test_signing_out_a_browser_locks_it_out_and_says_why(self, server):
+        kept, other = sign_in(server), sign_in(server)
+        _, listed = as_browser(server, kept, "browsers")
+        other_id = next(b["id"] for b in listed["browsers"]
+                        if not b["current"])
+
+        status, result = as_browser(server, kept, "sign-out", other_id)
+
+        assert status == 200 and result == {"signed_out": 1, "you": False}
+        assert request(server, "GET", "/api/state", token=False,
+                       headers={"Cookie": other})[0] == 403
+        status, page = request(server, "GET", "/", token=False,
+                               headers={"Cookie": other})
+        assert status == 403 and b"This browser was signed out" in page
+        assert request(server, "GET", "/api/state", token=False,
+                       headers={"Cookie": kept})[0] == 200
+
+    def test_signing_out_ends_that_browsers_event_stream(self, server):
+        kept, other = sign_in(server), sign_in(server)
+        port = server.port
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request("GET", "/api/events",
+                     headers={"Host": f"127.0.0.1:{port}", "Cookie": other})
+        stream = conn.getresponse()
+        assert stream.fp.readline() == b": connected\n"
+        wait_for(lambda: len(server.session.hub.owners()) == 1)
+        _, listed = as_browser(server, kept, "browsers")
+        watching = [b for b in listed["browsers"] if b["active"]]
+        assert len(watching) == 1 and not watching[0]["current"]
+
+        as_browser(server, kept, "sign-out", watching[0]["id"])
+
+        while stream.fp.readline():
+            pass  # the announcement of the change, then the end
+        conn.close()
+        wait_for(lambda: not server.session.hub.owners())
+
+    def test_signing_out_everywhere_else_also_ends_the_link(self, server):
+        kept, other = sign_in(server), sign_in(server)
+        old = server.token
+        told = []
+        server.session.relink = lambda: told.append(server.token)
+
+        status, result = as_browser(server, kept, "sign-out-others")
+
+        assert status == 200 and result == {"signed_out": 1, "you": False}
+        assert server.token != old and told == [server.token]
+        assert request(server, "GET", f"/?token={old}", token=False)[0] == 403
+        assert request(server, "GET", "/api/state", token=False,
+                       headers={"Cookie": other})[0] == 403
+        assert request(server, "GET", "/api/state", token=False,
+                       headers={"Cookie": kept})[0] == 200
+        assert request(server, "GET", f"/?token={server.token}",
+                       token=False)[0] == 200
+
+    def test_a_browser_can_sign_itself_out(self, server):
+        jar = sign_in(server)
+        _, listed = as_browser(server, jar, "browsers")
+
+        _, result = as_browser(server, jar, "sign-out",
+                               listed["browsers"][0]["id"])
+
+        assert result == {"signed_out": 1, "you": True}
+        assert request(server, "GET", "/api/state", token=False,
+                       headers={"Cookie": jar})[0] == 403
+
+    def test_a_cookie_holding_the_token_is_signed_in_properly(self, server):
+        # What a page opened before this version still has.
+        status, _ = request(server, "GET", "/", token=False,
+                            headers={"Cookie": cookie_of(server)})
+        cookie = request.last.getheader("Set-Cookie")
+
+        assert status == 200
+        assert cookie.startswith(server.cookie_name + "=")
+        assert server.token not in cookie
+
+    def test_too_many_browsers_drops_the_stalest(self, monkeypatch):
+        monkeypatch.setattr(web, "MAX_BROWSERS", 2)
+        access = web.Access()
+        first = access.sign_in("127.0.0.1", "")
+        time.sleep(0.01)
+        second = access.sign_in("127.0.0.1", "")
+        time.sleep(0.01)
+        access.browser(first, "127.0.0.1")
+        access.sign_in("127.0.0.1", "")
+
+        assert access.browser(first, "127.0.0.1") is not None
+        assert access.browser(second, "127.0.0.1") is None
+        assert access.signed_out(second)
+
+    def test_a_restart_keeps_who_was_signed_in(self, monkeypatch):
+        access = web.Access()
+        key = access.sign_in("192.168.1.9", "Firefox/130.0 (Windows NT 10)")
+        access.hand_over()
+
+        kept = web.Access.kept()
+
+        assert kept.token == access.token
+        assert kept.browser(key, "192.168.1.9") is not None
+        assert web.TOKEN_ENV not in os.environ
+        assert web.BROWSERS_ENV not in os.environ
+
+    def test_a_mangled_hand_over_starts_clean(self, monkeypatch):
+        monkeypatch.setenv(web.TOKEN_ENV, "kept-token-from-before-1234")
+        monkeypatch.setenv(web.BROWSERS_ENV, "{not json")
+
+        kept = web.Access.kept()
+
+        assert kept.token == "kept-token-from-before-1234"
+        assert kept.listing("", set()) == []
+
+    def test_an_odd_token_is_refused_not_a_crash(self, server):
+        status, _ = request(server, "GET", "/api/state", token=False,
+                            headers={"X-Flash-Token": "café"})
+
+        assert status == 403
+
+    @pytest.mark.parametrize("agent, device", [
+        ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+         "(KHTML, like Gecko) Chrome/140.0 Safari/537.36 Edg/140.0",
+         "Edge on Windows"),
+        ("Mozilla/5.0 (X11; Linux x86_64; rv:130.0) Gecko/20100101 "
+         "Firefox/130.0", "Firefox on Linux"),
+        ("Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 "
+         "(KHTML, like Gecko) Chrome/140.0 Mobile Safari/537.36",
+         "Chrome on Android"),
+        ("Mozilla/5.0 (iPad; CPU OS 18_0 like Mac OS X) AppleWebKit/605.1.15 "
+         "(KHTML, like Gecko) CriOS/140.0 Mobile/15E148 Safari/604.1",
+         "Chrome on iPad"),
+        ("curl/8.7.1", "Unknown browser"),
+    ])
+    def test_describing_a_browser(self, agent, device):
+        assert web.describe_agent(agent) == device
 
 
 class TestStreamsEnd:

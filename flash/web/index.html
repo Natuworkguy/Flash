@@ -705,6 +705,23 @@ body.page-projects #dock, body.page-settings #dock, body.page-tool #dock { displ
 .settings-section { font-size: 15px; font-weight: 600; margin: 0 0 4px; }
 .settings-sub { color: var(--text-3); font-size: 14px; margin: 0 0 16px; }
 .settings-gap { margin-top: 34px; }
+.browser-list { max-width: 620px; border: 1px solid var(--border); border-radius: 14px; background: var(--surface); overflow: hidden; }
+.browser-row { display: flex; align-items: center; gap: 14px; padding: 13px 16px; }
+.browser-row + .browser-row { border-top: 1px solid var(--border); }
+.browser-row.new { animation: fresh 1.4s var(--ease) both; }
+.browser-row .dev { position: relative; flex: none; width: 38px; height: 38px; border-radius: 10px; display: grid; place-items: center; background: var(--hover); color: var(--text-2); }
+.browser-row .dev svg { width: 18px; height: 18px; }
+.browser-row .dev.live::after { content: ""; position: absolute; right: -3px; bottom: -3px; width: 11px; height: 11px; border-radius: 50%; background: var(--add); border: 2px solid var(--surface); }
+.browser-row .who { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.browser-row .name { display: flex; align-items: center; gap: 8px; font-size: 14.5px; font-weight: 500; color: var(--text); min-width: 0; }
+.browser-row .device { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.browser-row .you { flex: none; font-size: 11.5px; font-weight: 500; color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); padding: 2px 8px; border-radius: 999px; }
+.browser-row .sub { font-size: 13px; color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.browser-row .btn { flex: none; padding: 6px 12px; font-size: 13px; }
+.browser-empty { padding: 18px 16px; color: var(--text-3); font-size: 14px; }
+.btn.danger { color: var(--del); border-color: color-mix(in srgb, var(--del) 40%, transparent); white-space: nowrap; }
+.btn.danger:hover { background: color-mix(in srgb, var(--del) 10%, transparent); }
+.btn.danger.arm { background: var(--del); color: #fff; border-color: transparent; }
 .setting-row { display: flex; align-items: center; justify-content: space-between; gap: 20px; max-width: 620px; padding: 14px 16px; border: 1px solid var(--border); border-radius: 14px; background: var(--surface); text-align: left; width: 100%; }
 .setting-row .what b { display: block; font-size: 14.5px; font-weight: 500; color: var(--text); margin-bottom: 3px; }
 .setting-row .what span { font-size: 13px; color: var(--text-3); line-height: 1.45; }
@@ -1273,25 +1290,20 @@ function slideBox(parent) {
 }
 
 // ---------------------------------------------------------------------------
-// Connection. The token came in the link Flash opened. It moves into
-// session storage and out of the address bar, so it is not left in the
-// history or shown over a shoulder.
+// Connection. The link Flash opened carried a token, which the server
+// traded for a cookie that signs this browser in: the page never holds
+// the token, so signing the browser out in Settings locks it out. The
+// token leaves the address bar too, so it is not left in the history or
+// shown over a shoulder.
 
 const params = new URLSearchParams(location.search);
-let token = params.get("token") || "";
-try {
-  if (token) sessionStorage.setItem("flash-token", token);
-  else token = sessionStorage.getItem("flash-token") || "";
-} catch (_) { /* storage blocked: the link still works this time */ }
 if (params.has("token")) window.history.replaceState(null, "", location.pathname);
+try { sessionStorage.removeItem("flash-token"); } catch (_) { /* where older pages kept it */ }
 
-// The server also set a cookie with the token, which is what carries a
-// reload; the header is there for as long as this tab still has it.
 async function api(path, body) {
-  const auth = token ? { "X-Flash-Token": token } : {};
   const options = body === undefined
-    ? { headers: auth, credentials: "same-origin" }
-    : { method: "POST", headers: { ...auth, "Content-Type": "application/json" }, body: JSON.stringify(body), credentials: "same-origin" };
+    ? { credentials: "same-origin" }
+    : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), credentials: "same-origin" };
   const response = await fetch(path, options);
   const data = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(data.error || response.statusText);
@@ -1353,7 +1365,7 @@ function routeTo(path) {
   } else if ((m = path.match(/^\/p\/([0-9a-f]{8})\/?$/))) {
     if (projectOf(m[1])) { view = "project"; viewProject = m[1]; }
     else { view = "projects"; replaceUrl = true; }
-  } else if ((m = path.match(/^\/settings(?:\/(general|usage|memory))?\/?$/))) {
+  } else if ((m = path.match(/^\/settings(?:\/(general|usage|memory|security))?\/?$/))) {
     view = "settings";
     settingsTab = m[1] || "general";
   } else if ((m = path.match(/^\/(projects|skills|extensions)\/?$/))) {
@@ -2142,7 +2154,7 @@ function drawSettings() {
   $("#title").textContent = "Settings";
   document.title = "Settings · Flash";
   const page = el("div", "page settings");
-  page.innerHTML = `<div class="page-head"><h1>Settings</h1></div><div class="tabs" role="tablist"><span class="thumb"></span><button type="button" role="tab" data-tab="general">General</button><button type="button" role="tab" data-tab="usage">Usage</button><button type="button" role="tab" data-tab="memory">Memory</button></div><div class="tab-body"></div>`;
+  page.innerHTML = `<div class="page-head"><h1>Settings</h1></div><div class="tabs" role="tablist"><span class="thumb"></span><button type="button" role="tab" data-tab="general">General</button><button type="button" role="tab" data-tab="usage">Usage</button><button type="button" role="tab" data-tab="memory">Memory</button><button type="button" role="tab" data-tab="security">Security</button></div><div class="tab-body"></div>`;
   messagesEl.appendChild(page);
   const tabs = page.querySelector(".tabs");
   const thumb = tabs.querySelector(".thumb");
@@ -2164,7 +2176,7 @@ function drawSettings() {
     const old = page.querySelector(".tab-body");
     const body = el("div", "tab-body");
     old.replaceWith(body);
-    ({ general: drawGeneral, usage: drawUsage, memory: drawMemory })[tab](body);
+    ({ general: drawGeneral, usage: drawUsage, memory: drawMemory, security: drawSecurity })[tab](body);
   };
   tabs.onclick = (e) => {
     const b = e.target.closest("button");
@@ -2208,7 +2220,7 @@ function drawGeneral(body) {
   };
   body.appendChild(row);
 
-  body.insertAdjacentHTML("beforeend", `<h2 class="settings-section settings-gap">Network</h2><p class="settings-sub">Who can reach Flash. Every request still needs the link's random token.</p><div class="lan-box"></div>`);
+  body.insertAdjacentHTML("beforeend", `<h2 class="settings-section settings-gap">Network</h2><p class="settings-sub">Who can reach Flash. A browser still has to open the link, with its random token, to get in.</p><div class="lan-box"></div>`);
   renderLan(body.querySelector(".lan-box"));
 
   body.insertAdjacentHTML("beforeend", `<h2 class="settings-section settings-gap">Updates</h2><p class="settings-sub">New versions come from the Flash repository on GitHub, the same as /update in the terminal.</p><div class="updates-box"></div>`);
@@ -2797,6 +2809,93 @@ async function drawUsage(body) {
   body.appendChild(note);
 }
 
+// Security: every browser signed in with the link, each one signed out
+// on its own, or all but this one at once with a new link.
+async function drawSecurity(body) {
+  body.innerHTML = `<h2 class="settings-section">Signed-in browsers</h2><p class="settings-sub">Every browser that opened Flash's link. Each stays signed in until it is signed out here or Flash stops.</p><div class="browser-list"></div>` +
+    `<h2 class="settings-section settings-gap">Everywhere else</h2><p class="settings-sub">For a link that went somewhere it should not have, or a device you no longer use.</p>`;
+  const row = el("div", "setting-row static", `<span class="what"><b>Sign out all other browsers</b><span>They lose access at once. Flash also makes a new link, so the old link and QR code stop working. The new one shows in the terminal Flash runs in.</span></span><span class="side"></span>`);
+  const others = el("button", "btn danger", "Sign out others");
+  others.type = "button";
+  others.onclick = () => confirmed(others, signOutOthers);
+  row.querySelector(".side").appendChild(others);
+  body.appendChild(row);
+  await renderBrowsers(body.querySelector(".browser-list"));
+}
+
+async function renderBrowsers(list = document.querySelector(".browser-list")) {
+  if (!list) return;
+  let listed;
+  try { listed = (await command("browsers")).browsers; } catch (error) { showFailure(error); return; }
+  if (!list.isConnected) return;
+  const known = new Set([...list.children].map((r) => r.dataset.id));
+  list.textContent = "";
+  if (!listed.length) {
+    list.innerHTML = `<div class="browser-empty">No browser is signed in yet.</div>`;
+    return;
+  }
+  for (const b of listed) {
+    const row = el("div", "browser-row" + (known.size && !known.has(b.id) ? " new" : ""), `<span class="dev${b.active ? " live" : ""}">${icon(b.phone ? "phone" : "monitor")}</span><span class="who"><span class="name"><span class="device"></span></span><span class="sub"></span></span>`);
+    row.dataset.id = b.id;
+    row.querySelector(".device").textContent = b.device;
+    if (b.current) row.querySelector(".name").insertAdjacentHTML("beforeend", `<span class="you">This browser</span>`);
+    const sub = [b.here ? "This computer" : b.address, b.active ? "Active now" : `Seen ${ago(b.seen)}`, `Signed in ${when(b.since)}`];
+    row.querySelector(".sub").textContent = sub.join(" · ");
+    row.querySelector(".sub").title = row.querySelector(".sub").textContent;
+    const out = el("button", "btn danger", "Sign out");
+    out.type = "button";
+    // Signing this browser out is the one that cannot be undone from
+    // here, so it asks twice.
+    out.onclick = () => (b.current ? confirmed(out, () => signOut(b)) : signOut(b));
+    row.appendChild(out);
+    list.appendChild(row);
+  }
+}
+
+// The first press arms the button, a second within four seconds acts.
+function confirmed(b, action) {
+  if (b.classList.contains("arm")) {
+    clearTimeout(b.disarm);
+    b.classList.remove("arm");
+    b.textContent = b.dataset.label;
+    action();
+    return;
+  }
+  b.dataset.label = b.textContent;
+  b.classList.add("arm");
+  b.textContent = "Click again to confirm";
+  b.disarm = setTimeout(() => { b.classList.remove("arm"); b.textContent = b.dataset.label; }, 4000);
+}
+
+async function signOut(b) {
+  let result;
+  try { result = await command("sign-out", b.id); } catch (error) { showFailure(error); return; }
+  if (result.you) { location.reload(); return; }
+  toast(`Signed out ${b.device}`);
+}
+
+async function signOutOthers() {
+  let result;
+  try { result = await command("sign-out-others"); } catch (error) { showFailure(error); return; }
+  const n = result.signed_out;
+  toast(n ? `Signed out ${n} other browser${n === 1 ? "" : "s"}. The old link no longer works.` : "No other browsers were signed in. The old link no longer works.");
+}
+
+function ago(seconds) {
+  const s = Math.max(0, Date.now() / 1000 - seconds);
+  if (s < 60) return "just now";
+  if (s < 3600) return `${Math.floor(s / 60)} min ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)} h ago`;
+  return `${Math.floor(s / 86400)} d ago`;
+}
+
+function when(seconds) {
+  const d = new Date(seconds * 1000);
+  return d.toDateString() === new Date().toDateString()
+    ? `at ${d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`
+    : d.toLocaleDateString([], { month: "short", day: "numeric" });
+}
+
 async function drawMemory(body) {
   let m;
   try { m = await command("memory"); } catch (error) { showFailure(error); return; }
@@ -3263,6 +3362,7 @@ function apply(event) {
   if (event.seq) lastSeq = event.seq;
   if (event.type === "chats" || event.type === "status" || event.type === "projects") { refreshLite(); return; }
   if (event.type === "update") { info.update = event.update; onUpdate(); return; }
+  if (event.type === "browsers") { if (view === "settings" && settingsTab === "security") renderBrowsers(); return; }
 
   const chat = chats.get(event.chat);
   if (!chat) { if (event.chat) refreshLite(); return; }
@@ -3372,7 +3472,7 @@ function refreshLite() {
 }
 
 function connect() {
-  const source = new EventSource(token ? "/api/events?token=" + encodeURIComponent(token) : "/api/events");
+  const source = new EventSource("/api/events");
   let first = true;
   source.onopen = () => { if (!first) loadState().catch(showFailure); first = false; };
   source.onmessage = (message) => {
@@ -3380,7 +3480,8 @@ function connect() {
     if (loading) buffered.push(event); else apply(event);
   };
   source.onerror = async () => {
-    // Refused rather than unreachable: Flash restarted with a new token.
+    // Refused rather than unreachable: Flash restarted with a new token,
+    // or this browser was signed out.
     // Loading the page again shows why, instead of retrying forever.
     try { await api("/api/state?lite=1"); toast("Reconnecting to Flash…"); }
     catch (error) {
@@ -4439,6 +4540,7 @@ const ACTIONS = [
   { label: "Background", keys: "", slash: "/background", run: () => showSettings("general") },
   { label: "Extensions", keys: "", slash: "/extensions", run: () => showPage("extensions") },
   { label: "Import memory from another AI", keys: "", slash: "/import", run: () => { showSettings("memory"); importMemory(); } },
+  { label: "Signed-in browsers", keys: "", slash: "/security", run: () => showSettings("security") },
   { label: "Search chats", keys: "Alt F", slash: "/search", run: () => openSearch() },
   { label: "Show or hide the file panel", keys: "Alt V", slash: "/file", run: toggleViewer },
   { label: "New project", keys: "", slash: "/project", run: () => projectForm() },

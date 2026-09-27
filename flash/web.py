@@ -90,7 +90,7 @@ HTML_SANDBOX = "sandbox allow-scripts allow-forms allow-popups allow-modals"
 # opens whatever the address names: a chat, a project, a settings tab.
 PAGE_PATHS = re.compile(
     r"^/(?:c/[0-9a-f]{8}|p/[0-9a-f]{8}|projects|skills|extensions"
-    r"|settings(?:/(?:general|usage|memory))?)?/?$"
+    r"|settings(?:/(?:general|usage|memory|security))?)?/?$"
 )
 
 STATIC = {"orbit.woff2": "font/woff2", "logo-icon.svg": "image/svg+xml"}
@@ -149,6 +149,16 @@ code{font-size:13px}</style></head><body><div>
 in your terminal, or run <code>flash --web</code> again.</p>
 </div></body></html>"""
 
+# For a browser signed out from Settings, Security.
+SIGNED_OUT_PAGE = EXPIRED_PAGE.replace(
+    "<h1>This link has expired</h1>", "<h1>This browser was signed out</h1>"
+).replace(
+    "Flash makes a new link each time it starts. Open the one it printed\n"
+    "in your terminal, or run <code>flash --web</code> again.",
+    "Someone signed it out from Flash's settings. To use Flash here again,\n"
+    "open the link Flash printed in your terminal.",
+)
+
 
 # --- Events --------------------------------------------------------------
 
@@ -163,19 +173,20 @@ class Hub:
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
-        self._queues: list[Queue] = []
+        # Each open stream, and the signed-in browser it belongs to ("" for
+        # one opened with the link's token itself).
+        self._queues: dict[Queue, str] = {}
         self.seq = 0
 
-    def subscribe(self) -> Queue:
+    def subscribe(self, owner: str = "") -> Queue:
         queue: Queue = Queue()
         with self._lock:
-            self._queues.append(queue)
+            self._queues[queue] = owner
         return queue
 
     def unsubscribe(self, queue: Queue) -> None:
         with self._lock:
-            if queue in self._queues:
-                self._queues.remove(queue)
+            self._queues.pop(queue, None)
 
     def close(self) -> None:
         """End every open stream now, rather than at its next ping."""
@@ -183,6 +194,20 @@ class Hub:
         with self._lock:
             for queue in self._queues:
                 queue.put(None)
+
+    def end(self, owners) -> None:
+        """End the streams of browsers just signed out."""
+
+        with self._lock:
+            for queue, owner in self._queues.items():
+                if owner and owner in owners:
+                    queue.put(None)
+
+    def owners(self) -> set:
+        """The browsers with a stream open: the ones watching right now."""
+
+        with self._lock:
+            return set(self._queues.values())
 
     def publish(self, event: dict) -> dict:
         with self._lock:
@@ -277,9 +302,193 @@ KEPT = {
 # user redirecting the work in progress rather than a new request.
 STEER_NOTE = "[Sent while you were working. Take it into account from here.]"
 
-# Carries the token from a server to the one that replaces it after an
-# update, across the exec that starts the new version.
+# Carry the token, and the browsers signed in with it, from a server to
+# the one that replaces it after an update, across the exec that starts
+# the new version.
 TOKEN_ENV = "FLASH_WEB_TOKEN"  # nosec B105 -- a variable name
+BROWSERS_ENV = "FLASH_WEB_BROWSERS"
+
+# The most browsers kept signed in at once: past it, the one seen least
+# recently is signed out. And how much of a browser's own description
+# is kept.
+MAX_BROWSERS = 50
+AGENT_CHARS = 300
+
+
+class Access:
+    """Who may use Flash.
+
+    The link Flash prints carries a token. A browser that opens it is
+    signed in: it gets a cookie of its own, a random key recorded here,
+    so each browser can be signed out by itself. A new token ends the
+    link, and with it the way back in for a browser signed out.
+    """
+
+    def __init__(
+        self,
+        token: str = "",  # nosec B107 -- empty means make a new one
+        browsers: Optional[dict] = None,
+    ) -> None:
+        self._lock = threading.Lock()
+        self.token = token if len(token) >= 16 else secrets.token_urlsafe(24)
+        # key -> {id, agent, address, since, seen}. The key is the
+        # cookie's secret; the id is what the page may see and name.
+        self._browsers: dict[str, dict] = dict(browsers or {})
+        # Keys signed out, so their browser is told why it is locked out.
+        self._gone: set[str] = set()
+
+    @classmethod
+    def kept(cls) -> "Access":
+        """What a restart handed over, or a fresh start without it."""
+
+        token = os.environ.pop(TOKEN_ENV, "")
+        try:
+            browsers = json.loads(os.environ.pop(BROWSERS_ENV, "") or "{}")
+        except ValueError:
+            browsers = {}
+        if not token or not isinstance(browsers, dict):
+            browsers = {}
+        return cls(token, {
+            key: value for key, value in browsers.items()
+            if isinstance(value, dict) and value.get("id")
+        })
+
+    def hand_over(self) -> None:
+        """Leave all this where the restarted Flash will look for it."""
+
+        os.environ[TOKEN_ENV] = self.token
+        with self._lock:
+            os.environ[BROWSERS_ENV] = json.dumps(self._browsers)
+
+    def token_matches(self, given: Optional[str]) -> bool:
+        if not given:
+            return False
+        return secrets.compare_digest(
+            given.encode("utf-8", "replace"), self.token.encode()
+        )
+
+    def browser(self, key: str, address: str) -> Optional[dict]:
+        """The signed-in browser holding KEY, now marked as seen."""
+
+        if not key:
+            return None
+        with self._lock:
+            found = self._browsers.get(key)
+            if found is not None:
+                found["seen"] = time.time()
+                found["address"] = address
+            return found
+
+    def signed_out(self, key: str) -> bool:
+        with self._lock:
+            return key in self._gone
+
+    def sign_in(self, address: str, agent: str) -> str:
+        """Sign a browser in, and give back the key for its cookie."""
+
+        key = secrets.token_urlsafe(24)
+        now = time.time()
+        with self._lock:
+            self._browsers[key] = {
+                "id": secrets.token_hex(4),
+                "agent": agent[:AGENT_CHARS],
+                "address": address,
+                "since": now,
+                "seen": now,
+            }
+            while len(self._browsers) > MAX_BROWSERS:
+                stalest = min(
+                    self._browsers, key=lambda k: self._browsers[k]["seen"]
+                )
+                self._drop(stalest)
+        return key
+
+    def _drop(self, key: str) -> None:
+        del self._browsers[key]
+        self._gone.add(key)
+
+    def sign_out(self, browser_id: str) -> list[str]:
+        """Sign out the browser the page knows as BROWSER_ID."""
+
+        with self._lock:
+            keys = [
+                k for k, b in self._browsers.items() if b["id"] == browser_id
+            ]
+            for key in keys:
+                self._drop(key)
+        return keys
+
+    def sign_out_others(self, keep: str) -> list[str]:
+        """Sign out every browser but KEEP's, and end the link.
+
+        A browser that still had the old link could otherwise just open
+        it again. The one asking stays signed in by its cookie.
+        """
+
+        with self._lock:
+            keys = [k for k in self._browsers if k != keep]
+            for key in keys:
+                self._drop(key)
+            self.token = secrets.token_urlsafe(24)
+        return keys
+
+    def listing(self, current: str, watching: set) -> list[dict]:
+        """The signed-in browsers, as the page shows them, newest first."""
+
+        with self._lock:
+            items = list(self._browsers.items())
+        shown = [
+            {
+                "id": b["id"],
+                "device": describe_agent(b.get("agent", "")),
+                "phone": _is_phone(b.get("agent", "")),
+                "address": b.get("address", ""),
+                "here": _is_loopback(b.get("address", "")),
+                "since": b.get("since", 0),
+                "seen": b.get("seen", 0),
+                "current": key == current,
+                "active": key in watching,
+            }
+            for key, b in items
+        ]
+        shown.sort(key=lambda b: (not b["current"], -b["since"]))
+        return shown
+
+
+# Checked in order: several browsers name the ones they are built on.
+_BROWSER_NAMES = (
+    ("Edg/", "Edge"), ("OPR/", "Opera"), ("Vivaldi/", "Vivaldi"),
+    ("SamsungBrowser/", "Samsung Internet"), ("Firefox/", "Firefox"),
+    ("FxiOS/", "Firefox"), ("CriOS/", "Chrome"), ("EdgiOS/", "Edge"),
+    ("Chrome/", "Chrome"), ("Safari/", "Safari"),
+)
+_SYSTEM_NAMES = (
+    ("iPhone", "iPhone"), ("iPad", "iPad"), ("Android", "Android"),
+    ("Windows", "Windows"), ("CrOS", "ChromeOS"), ("Mac OS X", "macOS"),
+    ("Macintosh", "macOS"), ("Linux", "Linux"),
+)
+
+
+def describe_agent(agent: str) -> str:
+    """ "Firefox on Windows", from what a browser says it is."""
+
+    name = next((n for mark, n in _BROWSER_NAMES if mark in agent), "")
+    system = next((n for mark, n in _SYSTEM_NAMES if mark in agent), "")
+    if name and system:
+        return f"{name} on {system}"
+    return name or system or "Unknown browser"
+
+
+def _is_phone(agent: str) -> bool:
+    return any(mark in agent for mark in ("iPhone", "Android", "Mobile"))
+
+
+def _is_loopback(address: str) -> bool:
+    try:
+        return ipaddress.ip_address(address).is_loopback
+    except ValueError:
+        return False
+
 
 # The most of an update's output the page is sent: the end is what
 # explains a failure.
@@ -411,6 +620,12 @@ class Session:
     def __init__(self, hub: Optional[Hub] = None) -> None:
         self.hub = hub or Hub()
         self.lan = False
+        # The link's token and the browsers signed in with it. A server
+        # restarted after an update takes over the old one's (Server).
+        self.access = Access()
+        # Tells whoever started Flash its new link, once the old one is
+        # ended. Set by whatever runs the server (see _attach).
+        self.relink: Optional[Callable[[], None]] = None
         self.updates = Updates(self.hub)
         # An extension fetched and shown, waiting for the user's yes:
         # (id, checkout, source). One at a time.
@@ -1492,8 +1707,11 @@ def _install_staged(session: Session, staged_id: str) -> dict:
     return _extension_info(ext)
 
 
-def command(session: Session, body: dict) -> dict:
-    """The page's commands: models, modes, chats, undo."""
+def command(session: Session, body: dict, browser: str = "") -> dict:
+    """The page's commands: models, modes, chats, undo.
+
+    BROWSER is the key of the signed-in browser asking, if it is one.
+    """
 
     from . import ai  # deferred: ai imports half of Flash
 
@@ -1625,6 +1843,22 @@ def command(session: Session, body: dict) -> dict:
         # Its scenes, commands and prompt text went with it.
         session.hub.publish({"type": "status"})
         return {"removed": arg}
+
+    if name == "browsers":
+        return {"browsers": session.access.listing(
+            browser, session.hub.owners()
+        )}
+
+    if name in ("sign-out", "sign-out-others"):
+        gone = (
+            session.access.sign_out(arg) if name == "sign-out"
+            else session.access.sign_out_others(browser)
+        )
+        session.hub.end(set(gone))
+        session.hub.publish({"type": "browsers"})
+        if name == "sign-out-others" and session.relink is not None:
+            session.relink()
+        return {"signed_out": len(gone), "you": bool(browser in gone)}
 
     if name == "lan":
         if session.switch_lan is None:
@@ -1804,6 +2038,8 @@ class Handler(BaseHTTPRequestHandler):
 
     server: "Server"
     protocol_version = "HTTP/1.1"
+    # The key of the signed-in browser asking, once it is known.
+    browser = ""
 
     def log_message(self, *args: Any) -> None:
         """Quiet: the terminal running the server is not a log."""
@@ -1868,14 +2104,20 @@ class Handler(BaseHTTPRequestHandler):
         if not self._same_site():
             return False
 
-        for given in (
+        # A signed-in browser, by its cookie. Anything else has to show
+        # the token: in the link, a header, or a cookie from before
+        # browsers were signed in one by one.
+        access = self.server.session.access
+        cookie = self._cookie()
+        if access.browser(cookie, self.client_address[0]) is not None:
+            self.browser = cookie
+            return True
+        self.browser = ""
+        return any(access.token_matches(given) for given in (
             self.headers.get("X-Flash-Token"),
             query.get("token", [""])[0],
-            self._cookie(),
-        ):
-            if given and secrets.compare_digest(given, self.server.token):
-                return True
-        return False
+            cookie,
+        ))
 
     # Responses ------------------------------------------------------
 
@@ -1913,7 +2155,9 @@ class Handler(BaseHTTPRequestHandler):
     def _refuse_page(self) -> None:
         """A page, not JSON, for a person who opened a stale link."""
 
-        self._send(HTTPStatus.FORBIDDEN, EXPIRED_PAGE.encode(),
+        gone = self.server.session.access.signed_out(self._cookie())
+        page = SIGNED_OUT_PAGE if gone else EXPIRED_PAGE
+        self._send(HTTPStatus.FORBIDDEN, page.encode(),
                    "text/html; charset=utf-8")
 
     # Routes ---------------------------------------------------------
@@ -1939,18 +2183,26 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         if PAGE_PATHS.match(url.path):
-            # The page, and a cookie holding the token: HttpOnly so no
-            # script can read it, SameSite=Strict so no other site's
-            # request carries it, and no expiry, so it goes when the
-            # browser closes. A new server makes a new token, which the
-            # old cookie no longer matches.
-            cookie = (
-                f"{self.server.cookie_name}={self.server.token}; Path=/; "
-                "HttpOnly; SameSite=Strict"
-            )
+            # The page. Opened with the token rather than as a signed-in
+            # browser, it signs this browser in: a cookie with a key of
+            # its own, HttpOnly so no script can read it, SameSite=Strict
+            # so no other site's request carries it, and no expiry, so it
+            # goes when the browser closes. A new server knows none of
+            # the old keys.
+            headers = {}
+            if not self.browser:
+                key = self.server.session.access.sign_in(
+                    self.client_address[0],
+                    self.headers.get("User-Agent", ""),
+                )
+                headers["Set-Cookie"] = (
+                    f"{self.server.cookie_name}={key}; Path=/; "
+                    "HttpOnly; SameSite=Strict"
+                )
+                self.server.session.hub.publish({"type": "browsers"})
             self._send(
                 HTTPStatus.OK, PAGE.read_bytes(), "text/html; charset=utf-8",
-                {"Set-Cookie": cookie},
+                headers,
             )
         elif url.path == "/api/state":
             self._json(self.server.session.state(
@@ -2042,7 +2294,7 @@ class Handler(BaseHTTPRequestHandler):
             }
 
         if path == "/api/command":
-            return command(session, body)
+            return command(session, body, self.browser)
 
         raise ValueError(f"unknown endpoint {path}")
 
@@ -2076,7 +2328,11 @@ class Handler(BaseHTTPRequestHandler):
     def _events(self) -> None:
         """A Server-Sent Events stream of everything that happens."""
 
-        queue = self.server.session.hub.subscribe()
+        hub = self.server.session.hub
+        queue = hub.subscribe(self.browser)
+        if self.browser:
+            # Settings, Security shows which browsers are watching.
+            hub.publish({"type": "browsers"})
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", "text/event-stream")
         self.send_header("Cache-Control", "no-store")
@@ -2106,7 +2362,9 @@ class Handler(BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError, OSError):
             pass
         finally:
-            self.server.session.hub.unsubscribe(queue)
+            hub.unsubscribe(queue)
+            if self.browser and not self.server.closing.is_set():
+                hub.publish({"type": "browsers"})
 
 
 class Server(ThreadingHTTPServer):
@@ -2122,14 +2380,17 @@ class Server(ThreadingHTTPServer):
         # call server_close() from inside its own __init__.
         self.closing = threading.Event()
         super().__init__((LAN_HOST if lan else HOST, port), Handler)
-        # A restart after an update keeps the token, so an open page
-        # carries on signed in rather than being locked out.
-        kept = os.environ.pop(TOKEN_ENV, "")
-        self.token = kept if len(kept) >= 16 else secrets.token_urlsafe(24)
         # Cookies ignore the port, so two servers on one machine each
         # need a name of their own.
         self.cookie_name = f"flash_{self.server_address[1]}"
-        self.session = session or Session()
+        # One reopened after a LAN switch carries its session's access
+        # on. A restart after an update keeps the token and who was
+        # signed in, so an open page carries on rather than being
+        # locked out.
+        if session is None:
+            session = Session()
+            session.access = Access.kept()
+        self.session = session
         self.session.lan = lan
         self.lan = lan
         # A LAN switch in progress: the server that replaces this one,
@@ -2142,6 +2403,10 @@ class Server(ThreadingHTTPServer):
     @property
     def port(self) -> int:
         return self.server_address[1]
+
+    @property
+    def token(self) -> str:
+        return self.session.access.token
 
     def handle_error(self, request, client_address) -> None:
         """Say nothing when a browser simply hangs up.
@@ -2284,11 +2549,12 @@ def _restart(server: "Server") -> None:
     """Start this `flash --web` again as the version now installed.
 
     exec replaces the process in place: the same port, the same
-    arguments, and through TOKEN_ENV the same token, so an open page
-    reloads straight into the new version. No second tab opens.
+    arguments, and through TOKEN_ENV and BROWSERS_ENV the same token and
+    signed-in browsers, so an open page reloads straight into the new
+    version. No second tab opens.
     """
 
-    os.environ[TOKEN_ENV] = server.token
+    server.session.access.hand_over()
     # As it is now, which a LAN switch may have changed since it began.
     args = [a for a in sys.argv[1:] if a != "--lan"]
     if server.lan:
@@ -2322,14 +2588,13 @@ def _switch_lan(server: "Server", lan: bool) -> None:
     server.session.reopen()
 
     for choice in (lan, server.lan):
-        os.environ[TOKEN_ENV] = server.token
         try:
             server.replacement = Server(
                 server.port, session=server.session, lan=choice,
             )
             break
         except OSError:
-            os.environ.pop(TOKEN_ENV, None)
+            pass
 
     server.swapped.set()
     if server.replacement is not None:
@@ -2342,6 +2607,7 @@ def _attach(server: "Server", standalone: bool) -> None:
     global _background
 
     session = server.session
+    session.relink = lambda: announce(server)
     session.switch_lan = lambda on: threading.Timer(
         SWITCH_DELAY, _switch_lan, (server, on),
     ).start()
