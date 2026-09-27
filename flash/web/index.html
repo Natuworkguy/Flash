@@ -644,6 +644,9 @@ body.page-projects #dock, body.page-settings #dock, body.page-tool #dock { displ
 .setting-row[aria-checked="true"] .switch { background: var(--accent); }
 .setting-row[aria-checked="true"] .switch::after { transform: translateX(16px); }
 .setting-row.static { cursor: default; }
+.setting-row[disabled] { opacity: 0.6; cursor: default; }
+.lan-warn { font-size: 13px !important; color: var(--text-3); margin-top: 10px !important; }
+#phone .dialog-buttons { justify-content: center; margin-top: 16px; }
 .setting-row .side { flex: none; display: flex; align-items: center; }
 .spin { width: 18px; height: 18px; border-radius: 50%; border: 2px solid color-mix(in srgb, var(--text) 18%, transparent); border-top-color: var(--accent); animation: spin 0.8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
@@ -1965,6 +1968,9 @@ function drawGeneral(body) {
   };
   body.appendChild(row);
 
+  body.insertAdjacentHTML("beforeend", `<h2 class="settings-section settings-gap">Network</h2><p class="settings-sub">Who can reach Flash. Every request still needs the link's random token.</p><div class="lan-box"></div>`);
+  renderLan(body.querySelector(".lan-box"));
+
   body.insertAdjacentHTML("beforeend", `<h2 class="settings-section settings-gap">Updates</h2><p class="settings-sub">New versions come from the Flash repository on GitHub, the same as /update in the terminal.</p><div class="updates-box"></div>`);
   renderUpdates(body.querySelector(".updates-box"));
 }
@@ -2176,6 +2182,66 @@ function extensionForm() {
   };
   form.querySelector("[data-cancel]").onclick = () => { if (staged) command("extension-cancel").catch(() => {}); closeForm(); };
   form.spec.addEventListener("input", () => { staged = null; host.textContent = ""; });
+}
+
+// LAN ----------------------------------------------------------------------
+
+// Whether this page came in over the network rather than from this
+// computer: turning the network off would cut it off.
+const remotePage = () => !["localhost", "127.0.0.1", "[::1]", "::1"].includes(location.hostname);
+
+function renderLan(box = document.querySelector(".lan-box")) {
+  if (!box) return;
+  const on = !!info.lan;
+  box.textContent = "";
+  const row = el("button", "setting-row", `<span class="what"><b>Open on your network</b><span></span></span><span class="switch" aria-hidden="true"></span>`);
+  row.type = "button";
+  row.setAttribute("role", "switch");
+  row.setAttribute("aria-checked", on);
+  row.querySelector(".what span").textContent = on
+    ? "Phones and other computers on this network can open Flash with the link. It travels unencrypted, so keep this to networks you trust."
+    : "Only this computer can reach Flash. Turn this on to open it on your phone.";
+  if (!info.can_switch_lan) { row.disabled = true; row.querySelector(".what span").textContent += " Restart Flash with --lan to change this."; }
+  row.onclick = () => switchLan(!on, row);
+  box.appendChild(row);
+}
+
+let lanConfirm = 0;
+
+async function switchLan(on, from) {
+  // From a phone, turning it off ends the page it is on: ask twice.
+  if (!on && remotePage() && Date.now() - lanConfirm > 4000) {
+    lanConfirm = Date.now();
+    toast("This page is on your network, so it will disconnect. Click again to turn it off.");
+    return false;
+  }
+  if (from) { from.setAttribute("aria-checked", on); from.disabled = true; }
+  try {
+    const result = await command("lan", on ? "on" : "off");
+    if (result.switching && !(await waitForLan(on))) {
+      toast("Flash did not come back. Check the terminal it runs in.");
+      renderLan();
+      return false;
+    }
+  } catch (error) { showFailure(error); renderLan(); return false; }
+  info.lan = on;
+  renderLan();
+  toast(on ? "Flash is open on your network. Open on phone shows the code." : "Only this computer can reach Flash now.");
+  return true;
+}
+
+// The server closes and opens again listening elsewhere; the page waits
+// for it to answer as the new choice.
+async function waitForLan(on) {
+  const started = Date.now();
+  while (Date.now() - started < 12000) {
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    try {
+      const state = await api("/api/state?lite=1");
+      if (!!state.status.lan === on) { Object.assign(info, state.status); return true; }
+    } catch (_) { /* reopening */ }
+  }
+  return false;
 }
 
 // Updates ------------------------------------------------------------------
@@ -4094,7 +4160,20 @@ async function openPhone() {
     body.innerHTML = `<h2>Open on your phone</h2><p class="sub">Point your camera at the code. Your phone has to be on the same network.</p><div id="qr">${link.svg}</div><div class="link"></div>`;
     body.querySelector(".link").textContent = link.url;
   } else {
-    body.innerHTML = `<h2>Open on your phone</h2><p class="sub" style="margin-top:10px">Right now only this computer can reach Flash. Start it with <code>flash --web --lan</code>, or type <code>/web lan</code> in the terminal, and the code to scan will show here.</p>`;
+    body.innerHTML = `<h2>Open on your phone</h2><p class="sub" style="margin-top:10px">Right now only this computer can reach Flash. Open it to your network and the code to scan shows here.</p><p class="sub lan-warn">Anyone on the network with the link can use Flash as you, and it travels unencrypted, so do this only on a network you trust.</p><div class="dialog-buttons"></div>`;
+    const buttons = body.querySelector(".dialog-buttons");
+    if (info.can_switch_lan) {
+      const go = el("button", "btn primary", "Open to my network");
+      go.type = "button";
+      go.onclick = async () => {
+        go.disabled = true;
+        go.textContent = "Opening…";
+        if (await switchLan(true)) openPhone(); else { go.disabled = false; go.textContent = "Open to my network"; }
+      };
+      buttons.appendChild(go);
+    } else {
+      buttons.insertAdjacentHTML("beforebegin", `<p class="sub">Start Flash with <code>flash --web --lan</code> to open it.</p>`);
+    }
   }
 }
 function closePhone() { hideOverlay($("#phone")); input.focus(); }
