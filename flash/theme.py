@@ -5,6 +5,7 @@ header line followed by an indented result) so ai.py and tools.py render
 consistently through one Console instance.
 """
 
+import json
 import sys
 import threading
 from collections.abc import Callable, Iterator
@@ -307,6 +308,13 @@ def tool_line(label: str) -> None:
     console.print(line)
 
 
+def capturing() -> bool:
+    """Whether this thread's output goes somewhere other than the
+    terminal: a sub-agent's log, or the web UI."""
+
+    return _sink() is not None
+
+
 def tool_file(path: str) -> bool:
     """Hand a file the agent is showing the user to whoever is drawing.
 
@@ -318,6 +326,21 @@ def tool_file(path: str) -> bool:
     if sink is None:
         return False
     sink("file", path, "")
+    return True
+
+
+def tool_plan(steps: list[dict]) -> bool:
+    """Hand the plan's checklist to whoever is drawing, as its steps.
+
+    True when something took it. The web UI draws the boxes itself, and
+    a sub-agent keeps no checklist on screen, so neither wants the
+    terminal's lines. False in the terminal, where the plan prints.
+    """
+
+    sink = _sink()
+    if sink is None:
+        return False
+    sink("plan", json.dumps(steps), "")
     return True
 
 
