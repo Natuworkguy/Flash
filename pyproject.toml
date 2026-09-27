@@ -38,6 +38,7 @@ flash = [
     "backgrounds/*.scene",
     "web/*.html",
     "web/*.woff2",
+    "web/*.svg",
     "web/*.txt",
 ]
 
