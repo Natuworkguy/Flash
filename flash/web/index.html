@@ -334,10 +334,28 @@ pre code { display: block; padding: 2px 16px 14px; overflow-x: auto; font-size: 
 .error { display: flex; gap: 10px; align-items: flex-start; color: var(--del); font-size: 14px; }
 .error svg { margin-top: 2px; }
 
-.typing { display: inline-flex; gap: 5px; padding: 12px 0 4px; }
-.typing span { width: 7px; height: 7px; border-radius: 50%; background: var(--text-3); animation: bounce 1.2s ease-in-out infinite; }
-.typing span:nth-child(2) { animation-delay: 0.15s; }
-.typing span:nth-child(3) { animation-delay: 0.3s; }
+/* Math, typeset by the browser from KaTeX's MathML. */
+.katex math { font-family: "STIX Two Math", "Cambria Math", "Latin Modern Math", math; font-size: 1.12em; }
+.katex:has(> math[display="block"]) { display: block; margin: 0.9em 0; overflow-x: auto; overflow-y: hidden; padding: 2px 0; }
+.katex math[display="block"] { font-size: 1.22em; }
+
+/* The loader, until the reply's first word: the bolt charging, and a
+   word for what is happening that changes every few seconds. */
+.loader { display: flex; align-items: center; gap: 11px; padding: 10px 0 4px; font-size: 14.5px; color: var(--text-3); }
+.loader .bolt { position: relative; flex: none; width: 24px; height: 24px; }
+.loader .bolt::before, .loader .bolt::after { content: ""; position: absolute; inset: 0; -webkit-mask: url(/static/logo-icon.svg) center / contain no-repeat; mask: url(/static/logo-icon.svg) center / contain no-repeat; }
+.loader .bolt::before { background: url(/static/logo-icon.svg) center / contain no-repeat; image-rendering: pixelated; animation: charge 1.6s ease-in-out infinite; }
+.loader .bolt::after { background: linear-gradient(180deg, transparent 30%, rgba(255, 255, 255, 0.85) 50%, transparent 70%) 0 0 / 100% 300% no-repeat; animation: surge 1.6s cubic-bezier(0.45, 0, 0.3, 1) infinite; }
+@keyframes charge { 0%, 100% { opacity: 0.55; transform: scale(0.94); filter: drop-shadow(0 0 0 rgba(255, 140, 20, 0)); } 50% { opacity: 1; transform: scale(1.04); filter: drop-shadow(0 0 7px rgba(255, 140, 20, 0.6)); } }
+@keyframes surge { from { background-position: 0 100%; } to { background-position: 0 -50%; } }
+.loader .word { display: inline-grid; }
+.loader .word span { grid-area: 1 / 1; white-space: nowrap; background: linear-gradient(90deg, var(--text-3) 25%, var(--text) 50%, var(--text-3) 75%) 0 0 / 200% 100%; -webkit-background-clip: text; background-clip: text; color: transparent; animation: shine 1.8s linear infinite, word-in 0.45s var(--ease) both; }
+.loader .word span.out { animation: shine 1.8s linear infinite, word-out 0.3s var(--ease) both; }
+@keyframes word-in { from { opacity: 0; transform: translateY(7px); filter: blur(3px); } }
+@keyframes word-out { to { opacity: 0; transform: translateY(-7px); filter: blur(3px); } }
+.loader .elapsed { font-size: 13px; font-variant-numeric: tabular-nums; opacity: 0; transition: opacity 0.4s; }
+.loader .elapsed.shown { opacity: 0.8; }
+@media (prefers-reduced-motion: reduce) { .loader .bolt::before, .loader .bolt::after, .loader .word span { animation: none; } .loader .bolt::after { display: none; } .loader .word span { color: var(--text-3); background: none; } }
 .cursor { display: inline-block; width: 9px; height: 9px; border-radius: 50%; background: var(--text); margin-left: 4px; vertical-align: 1px; animation: pulse 1s ease-in-out infinite; }
 
 #jump {
@@ -1009,6 +1027,7 @@ body.page-projects #dock, body.page-settings #dock { display: none; }
 <div id="tip" role="tooltip"></div>
 <div id="toast" role="status"></div>
 
+<script src="/static/katex/katex.min.js" id="katex" async></script>
 <script>
 "use strict";
 
@@ -1224,7 +1243,44 @@ function table(rows) {
   return html + "</tbody></table></div>";
 }
 
+// Math: $...$, $$...$$, \(...\) and \[...\] become MathML through
+// KaTeX, which the browser typesets with its own math font. Pulled out
+// before the Markdown pass so neither mangles the other, and left alone
+// inside code, or where a $ reads like a price rather than algebra.
+const MATH_RE = /\uE000(\d+)\uE001/g;
+const CODE_RE = /```[\s\S]*?(?:```|$)|~~~[\s\S]*?(?:~~~|$)|(`+)(?!`)[^\n]+?\1(?!`)/g;
+const DISPLAY_MATH_RE = /\$\$([\s\S]+?)\$\$|\\\[([\s\S]+?)\\\]/g;
+const INLINE_MATH_RE = /(?<![\\$])\$(?![\s$])([^$\n]+?)(?<![\s\\])\$(?!\$)(?!\d)|\\\(([\s\S]+?)\\\)/g;
+const looksLikeMath = (body) => /[\\^_{}]/.test(body) || (body.length <= 3 && /[a-z]/i.test(body));
+
 function markdown(text) {
+  const spans = [];
+  let html = markdownBody(pullMath(String(text), spans));
+  if (spans.length) html = html.replace(MATH_RE, (_, i) => renderMath(spans[+i]));
+  return html;
+}
+
+function pullMath(text, spans) {
+  if (!text.includes("$") && !text.includes("\\")) return text;
+  const code = [];
+  text = text.replace(CODE_RE, (m) => { code.push(m); return `\uE002${code.length - 1}\uE003`; });
+  const stash = (tex, display, raw) => { spans.push({ tex, display, raw }); return `\uE000${spans.length - 1}\uE001`; };
+  text = text.replace(DISPLAY_MATH_RE, (m, a, b) => stash(a ?? b, true, m));
+  text = text.replace(INLINE_MATH_RE, (m, a, b) => (a !== undefined && !looksLikeMath(a) ? m : stash(a ?? b, false, m)));
+  return text.replace(/\uE002(\d+)\uE003/g, (_, i) => code[+i]);
+}
+
+function renderMath(span) {
+  if (!span) return "";
+  if (!window.katex) return esc(span.raw);
+  try {
+    return window.katex.renderToString(span.tex.trim(), { displayMode: span.display, output: "mathml", throwOnError: false, strict: "ignore" });
+  } catch (_) {
+    return esc(span.raw);
+  }
+}
+
+function markdownBody(text) {
   const lines = String(text).replace(/\r\n/g, "\n").split("\n");
   let html = "";
   let para = [];
@@ -1250,7 +1306,7 @@ function markdown(text) {
       const quote = [];
       while (i < lines.length && /^\s*>/.test(lines[i])) quote.push(lines[i++].replace(/^\s*>\s?/, ""));
       i--;
-      html += `<blockquote>${markdown(quote.join("\n"))}</blockquote>`;
+      html += `<blockquote>${markdownBody(quote.join("\n"))}</blockquote>`;
       continue;
     }
     if (line.includes("|") && i + 1 < lines.length && /^\s*\|?\s*:?-{2,}/.test(lines[i + 1])) {
@@ -2388,6 +2444,10 @@ let streamScheduled = false;
 
 function drawStreaming() {
   const chat = chats.get(current);
+  const waiting = chat && (chat.busy || chat.queued) && !chat.partial && !chat.thinking && !pendingAsk();
+  // Put back where it already is, the loader would start its
+  // animations over on every event; left alone, it keeps going.
+  if (waiting && streamNode && streamNode.classList.contains("loading") && streamNode === messagesEl.lastElementChild) return;
   if (streamNode) { streamNode.remove(); streamNode = null; }
   if (!chat || !(chat.busy || chat.queued)) return;
   streamNode = el("div", "streaming");
@@ -2406,11 +2466,70 @@ function drawStreaming() {
     tail.appendChild(cursor);
     wrap.appendChild(body);
     streamNode.appendChild(wrap);
-  } else if (!chat.thinking && !pendingAsk()) {
-    streamNode.appendChild(el("div", "block", '<div class="typing"><span></span><span></span><span></span></div>'));
+  } else if (waiting) {
+    streamNode.classList.add("loading");
+    streamNode.appendChild(loaderBlock(chat));
   }
   messagesEl.appendChild(streamNode);
 }
+
+// The loader. Its word and its clock count from when the turn began,
+// not from when the loader was drawn, so drawing it again (after a tool
+// runs, say) picks up where it was instead of starting over.
+const WORD_MS = 3200;
+let words = ["Thinking"];
+const busySince = new Map();
+const wordOffset = new Map();
+
+function startedWaiting(id) {
+  if (!busySince.has(id)) {
+    busySince.set(id, Date.now());
+    wordOffset.set(id, Math.floor(Math.random() * words.length));
+  }
+}
+
+function loaderBlock(chat) {
+  startedWaiting(chat.id);
+  const node = el("div", "block loader", `<span class="bolt" aria-hidden="true"></span><span class="word"></span><span class="elapsed"></span>`);
+  node.setAttribute("role", "status");
+  node.dataset.chat = chat.id;
+  node.wordAt = -1;
+  tickLoader(node, true);
+  return node;
+}
+
+function tickLoader(node, first) {
+  const age = Date.now() - (busySince.get(node.dataset.chat) || Date.now());
+  const at = Math.floor(age / WORD_MS);
+  if (at !== node.wordAt) {
+    node.wordAt = at;
+    const box = node.querySelector(".word");
+    for (const old of box.querySelectorAll("span:not(.out)")) {
+      if (first || calm.matches) old.remove();
+      else { old.classList.add("out"); setTimeout(() => old.remove(), 320); }
+    }
+    const word = el("span");
+    word.textContent = `${words[((wordOffset.get(node.dataset.chat) || 0) + at) % words.length]}…`;
+    box.appendChild(word);
+  }
+  const seconds = Math.floor(age / 1000);
+  const clock = node.querySelector(".elapsed");
+  clock.textContent = seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
+  clock.classList.toggle("shown", seconds >= 3);
+}
+
+setInterval(() => {
+  const node = messagesEl.querySelector(".loader");
+  if (node) tickLoader(node, false);
+}, 250);
+
+// KaTeX arrives after the page. A chat already drawn with math in it is
+// drawn again once it can be typeset.
+$("#katex").addEventListener("load", () => {
+  const chat = chats.get(current);
+  const hasMath = (e) => e.type === "assistant" && /\$|\\\(|\\\[/.test(e.text || "");
+  if (view === "chat" && chat && chat.log.some(hasMath)) drawChat();
+});
 
 // Ink: the text a reply gained in the last moment fades in from a blur.
 // The reply is drawn again for every few tokens, so each stretch keeps a
@@ -2519,6 +2638,7 @@ function apply(event) {
     case "thinking": chat.thinking += event.text; if (here) scheduleStream(); return;
     case "busy":
       chat.busy = event.busy;
+      if (event.busy) startedWaiting(chat.id); else busySince.delete(chat.id);
       if (event.busy) chat.queued = false;
       else { chat.partial = ""; chat.thinking = ""; refreshContext(); }
       renderChats();
@@ -2568,6 +2688,7 @@ async function loadState() {
   order = state.chats.map((c) => c.id);
   info = state.status;
   projects = state.projects || [];
+  if (state.words && state.words.length) words = state.words;
   lastSeq = state.seq;
   if (current && !chats.has(current)) current = null;
   loading = false;
