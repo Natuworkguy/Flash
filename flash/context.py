@@ -39,14 +39,28 @@ TOKENS_PER_IMAGE = 800
 # When the backend will not say how big the window is.
 DEFAULT_CONTEXT = 8192
 
-# Never hand the history the entire window: the system prompt, the
-# tool schemas, and the reply all have to fit beside it.
-MIN_HISTORY_TOKENS = 1024
+# The least history ever gets, however crowded the window: a couple of
+# real exchanges. Below that the model forgets what it said last turn.
+MIN_HISTORY_TOKENS = 2048
 
 # Fraction of whatever is left after the system prompt and the reply
-# that history may use. The rest absorbs the tool schemas and the fact
-# that the estimate above is an estimate.
-HISTORY_SHARE = 0.75
+# that history may use. The rest absorbs the fact that the estimate
+# above is an estimate, and it already leans high.
+HISTORY_SHARE = 0.85
+
+# The most of the window held back for the reply. MAX_OUTPUT_TOKENS is a
+# ceiling on how long a reply may run, not what a reply costs, and set
+# near the window it used to leave history nothing at all.
+MAX_REPLY_SHARE = 0.25
+
+# The newest exchanges are kept word for word whatever the budget says:
+# a model that cannot see what happened two messages ago is not saving
+# room, it is broken. Their old tool output gives way first instead.
+KEEP_RECENT_BLOCKS = 3
+
+# What is left of an old tool result once it has been cut down to fit.
+TOOL_STUB_CHARS = 600
+TOOL_STUB_NOTE = "\n[... output cut to fit the context window ...]"
 
 SUMMARY_MARKER = "=== Summary of earlier conversation ==="
 
@@ -94,7 +108,8 @@ def history_budget(
     """
 
     window = context_window or DEFAULT_CONTEXT
-    spare = window - system_tokens - output_tokens
+    reply = min(output_tokens, int(window * MAX_REPLY_SHARE))
+    spare = window - system_tokens - reply
 
     return max(MIN_HISTORY_TOKENS, int(spare * HISTORY_SHARE))
 
@@ -160,25 +175,63 @@ def _shrink_last(block: list[dict], budget: int) -> list[dict]:
     return kept
 
 
-def trim(messages: list[dict], budget: int) -> Trimmed:
-    """Fit `messages` into `budget`, dropping whole blocks from the front.
+def _squeeze_tools(kept_blocks: list[list[dict]], budget: int) -> None:
+    """Cut tool results down to their opening, oldest first, until the
+    history fits.
 
-    The newest block always survives, even when it alone is over
-    budget, because dropping it would throw away the request the model
-    is answering right now.
+    A result that has already been read and acted on matters far less
+    than the conversation around it, so it gives way before a whole
+    exchange does. Squeezed messages are copies: the caller's list is
+    never changed underneath it.
+    """
+
+    def flat() -> list[dict]:
+        return [message for block in kept_blocks for message in block]
+
+    for block in kept_blocks:
+        for index, message in enumerate(block):
+            if total_tokens(flat()) <= budget:
+                return
+            content = message.get("content") or ""
+            if (
+                message.get("role") != "tool"
+                or len(content) <= TOOL_STUB_CHARS + len(TOOL_STUB_NOTE)
+            ):
+                continue
+            block[index] = {
+                **message,
+                "content": content[:TOOL_STUB_CHARS] + TOOL_STUB_NOTE,
+            }
+
+
+def trim(messages: list[dict], budget: int) -> Trimmed:
+    """Fit `messages` into `budget`.
+
+    In order: drop the oldest blocks, down to the last few; then cut old
+    tool output down; and only then, if it still will not fit, drop
+    more blocks. The newest block always survives, even when it alone
+    is over budget, because dropping it would throw away the request
+    the model is answering right now.
     """
 
     if not messages:
         return Trimmed()
 
     grouped = blocks(messages)
-    kept_blocks = list(grouped)
+    kept_blocks = [list(block) for block in grouped]
     dropped: list[dict] = []
 
-    while len(kept_blocks) > 1:
+    def over() -> bool:
         flat = [message for block in kept_blocks for message in block]
-        if total_tokens(flat) <= budget:
-            break
+        return total_tokens(flat) > budget
+
+    while len(kept_blocks) > KEEP_RECENT_BLOCKS and over():
+        dropped.extend(kept_blocks.pop(0))
+
+    if over():
+        _squeeze_tools(kept_blocks, budget)
+
+    while len(kept_blocks) > 1 and over():
         dropped.extend(kept_blocks.pop(0))
 
     kept = [message for block in kept_blocks for message in block]
@@ -225,14 +278,17 @@ def transcript(messages: list[dict]) -> str:
 
 SUMMARY_INSTRUCTION = """\
 Summarize the conversation below so it can replace the original in a \
-context window that has run out of room. Write it for yourself to read \
-later, not for the user, and keep every detail a later turn would \
-need: what the user asked for, decisions made and the reasons for \
-them, files and paths touched and what changed in each, commands run \
-and what they returned, facts established, and anything still \
-unfinished. Drop pleasantries, restatements, and anything already \
-superseded. Write plain prose or short bullets, no preamble, under 400 \
-words. Reply with the summary alone."""
+context window that has run out of room. The latest exchanges stay \
+word for word after it, so this is the earlier part of the session. \
+Write it for yourself to read later, not for the user, and keep every \
+detail a later turn would need: what the user asked for and why, \
+decisions made and the reasons for them, files and paths touched and \
+what changed in each, commands run and what they returned, errors hit \
+and how they were fixed, facts established, and anything still \
+unfinished. Copy names, paths, versions, numbers, and error text \
+exactly; a paraphrased path is a wrong path. Drop pleasantries, \
+restatements, and anything already superseded. Write short bullets, no \
+preamble, under 600 words. Reply with the summary alone."""
 
 
 def summary_request(messages: list[dict]) -> list[dict]:

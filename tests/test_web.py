@@ -1075,7 +1075,60 @@ class TestShownFiles:
         picture.unlink()
         assert web.workspace.kept_file(shown[0]["id"])[0].read_bytes() == PNG
 
-    def test_only_images_and_pdfs_are_kept(self, tmp_path):
+    def test_send_html_checks_what_it_is_given(self, tmp_path):
+        wrong = tmp_path / "notes.txt"
+        wrong.write_text("x")
+
+        assert "not an .html file" in tools.send_html(str(wrong))
+        assert "no file" in tools.send_html(str(tmp_path / "gone.html"))
+
+    def test_in_the_terminal_a_page_opens_in_the_browser(
+        self, tmp_path, monkeypatch
+    ):
+        page = tmp_path / "site.html"
+        page.write_text("<h1>hi</h1>")
+        opened = []
+        monkeypatch.setattr(tools, "_open_with_spinner",
+                            lambda path: opened.append(path) or "")
+
+        reply = tools.send_html(str(page))
+
+        assert opened == [page]
+        assert "opened in the user's browser" in reply
+
+    def test_in_the_web_ui_a_page_goes_to_the_page(self, tmp_path):
+        page = tmp_path / "site.html"
+        page.write_text("<h1>hi</h1>")
+        FakeClient.scripts = [
+            [part(calls=[call("send_html", path=str(page))]),
+             part(done=True)],
+            [part("There it is."), part(done=True)],
+        ]
+        session = web.Session()
+        chat = session.new_chat()
+
+        run(session, chat, "make me a page")
+
+        shown = [e for e in chat.log if e["type"] == "file"]
+        assert [(f["name"], f["kind"]) for f in shown] == [
+            ("site.html", "html"),
+        ]
+
+    def test_a_page_is_served_sandboxed(self, server, tmp_path):
+        page = tmp_path / "site.html"
+        page.write_text("<script>fetch('/api/state')</script>")
+        kept = web.workspace.keep_file(str(page))
+
+        status, _ = request(server, "GET", f"/api/files/{kept['id']}")
+        headers = request.last
+
+        assert status == 200
+        assert headers.getheader("Content-Type") == "text/html"
+        policy = headers.getheader("Content-Security-Policy")
+        assert policy.startswith("sandbox")
+        assert "allow-same-origin" not in policy
+
+    def test_an_svg_is_never_kept(self, tmp_path):
         page = tmp_path / "page.svg"
         page.write_text("<svg onload='alert(1)'/>")
 
@@ -1469,3 +1522,146 @@ class TestMemoryCommands:
         assert status == 403
         from flash import memory
         assert memory.list_memory() == []
+
+
+class TestCompactSetting:
+    def test_off_by_default_and_switched_from_settings(self, monkeypatch):
+        saved = {}
+
+        def save(name, value):
+            saved[name] = value
+            ai.Config.auto_compact = value == "1"
+
+        # Put back whatever the rest of the suite had, once this is done.
+        monkeypatch.setattr(ai.Config, "auto_compact", ai.Config.auto_compact)
+        monkeypatch.delenv("AUTO_COMPACT", raising=False)
+        ai.Config.refresh()
+        assert ai.Config.auto_compact is False
+        assert web.status(ai)["compact"] is False
+
+        monkeypatch.setattr(ai, "set_config_var", save)
+        result = web.command(web.Session(), {
+            "name": "compact-setting", "arg": "on",
+        })
+
+        assert result == {"compact": True}
+        assert saved == {"AUTO_COMPACT": "1"}
+        assert web.status(ai)["compact"] is True
+
+
+class TestUpdates:
+    @pytest.fixture
+    def fake_updater(self, monkeypatch):
+        from flash import updater
+
+        state = {"latest": "9.9.9", "ok": True}
+
+        def install(on_step=None, on_output=None):
+            on_step("Downloading the latest version")
+            on_output("Cloning into '/tmp/flash-update'...")
+            on_step("Installing")
+            on_output("installed package flash 9.9.9")
+            if state["ok"]:
+                return True, "Flash updated. Restart flash to use it."
+            return False, "Could not install the update (exit code 1)."
+
+        monkeypatch.setattr(updater, "fetch_latest_version",
+                            lambda: state["latest"])
+        monkeypatch.setattr(updater, "perform_update", install)
+        return state
+
+    def test_a_check_finds_a_newer_version(self, fake_updater):
+        session = web.Session()
+
+        found = web.command(session, {"name": "update-check"})
+
+        assert found["available"] is True
+        assert found["latest"] == "9.9.9"
+        assert found["current"] == web.__version__
+        assert session.state()["status"]["update"]["available"] is True
+
+    def test_nothing_newer_is_not_an_update(self, fake_updater):
+        fake_updater["latest"] = web.__version__
+        found = web.command(web.Session(), {"name": "update-check"})
+
+        assert found["available"] is False and found["checked"] is True
+
+    def test_a_failed_check_says_so(self, fake_updater):
+        fake_updater["latest"] = None
+        found = web.command(web.Session(), {"name": "update-check"})
+
+        assert found["checked"] is False
+        assert "Could not check" in found["message"]
+
+    def test_installing_streams_its_progress(self, fake_updater):
+        session = web.Session()
+        seen = events_of(session)
+
+        web.command(session, {"name": "update"})
+        wait_for(lambda: session.updates.state == "updated")
+
+        snapshot = session.updates.snapshot()
+        assert snapshot["log"] == [
+            "Cloning into '/tmp/flash-update'...",
+            "installed package flash 9.9.9",
+        ]
+        assert "Restart" in snapshot["message"]
+        steps = {
+            e["update"]["step"] for e in seen() if e["type"] == "update"
+        }
+        assert {"Downloading the latest version", "Installing"} <= steps
+
+    def test_a_failed_install_keeps_the_reason(self, fake_updater):
+        fake_updater["ok"] = False
+        session = web.Session()
+
+        web.command(session, {"name": "update"})
+        wait_for(lambda: session.updates.state == "failed")
+
+        assert "exit code 1" in session.updates.snapshot()["message"]
+
+    def test_restart_needs_a_server_that_owns_its_process(self):
+        with pytest.raises(ValueError, match="terminal session"):
+            web.command(web.Session(), {"name": "update-restart"})
+
+    def test_restart_waits_for_a_reply_to_finish(self):
+        session = web.Session()
+        session.restart = lambda: None
+        session.new_chat().busy = True
+
+        with pytest.raises(ValueError, match="Wait for the reply"):
+            web.command(session, {"name": "update-restart"})
+
+    def test_restart_runs_once_the_page_has_its_answer(self, monkeypatch):
+        monkeypatch.setattr(web, "RESTART_DELAY", 0.01)
+        session = web.Session()
+        restarted = threading.Event()
+        session.restart = restarted.set
+
+        result = web.command(session, {"name": "update-restart"})
+
+        assert result["state"] == "restarting"
+        assert restarted.wait(2)
+
+    def test_a_restarted_server_keeps_its_token(self, monkeypatch):
+        monkeypatch.setenv(web.TOKEN_ENV, "kept-token-from-before-1234")
+        server = web.Server(0)
+        try:
+            assert server.token == "kept-token-from-before-1234"
+            assert web.TOKEN_ENV not in os.environ
+        finally:
+            server.server_close()
+
+    def test_restart_execs_flash_again_quietly(self, monkeypatch):
+        ran = {}
+        monkeypatch.setattr(web.os, "execv",
+                            lambda path, argv: ran.update(argv=argv))
+        monkeypatch.setattr(web.sys, "argv", ["flash", "--web"])
+        server = web.Server(0)
+        try:
+            web._restart(server)
+        finally:
+            server.server_close()
+
+        assert ran["argv"][1:] == ["-m", "flash", "--web", "--no-open"]
+        assert os.environ.pop(web.TOKEN_ENV) == server.token

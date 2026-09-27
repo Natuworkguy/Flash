@@ -117,6 +117,12 @@ To hand a finished picture to the user, use the send_image tool with its
   either way. It shows the image to them and not to you, so look at your
   own render with view_image first and send it once it is right.
 To hand the user a finished PDF, use the send_pdf tool with its path.
+To hand the user a finished web page, use the send_html tool with its
+  path. It opens in their browser, or beside the chat in the web UI.
+  Screenshot it first and send it once it looks right.
+When you make an image, PDF, or web page for the user, send it with the
+  matching tool as soon as it is finished, without being asked: that is
+  how they see it.
 To see how a web page actually renders, use the screenshot tool on the
   .html file you wrote or on a URL. It runs a headless browser and
   attaches the picture, so it is the only way to check a page you built;
@@ -2274,6 +2280,8 @@ def send_image(path: str, caption: str = "") -> str:
 
 
 MAX_PDF_BYTES = 50 * 1024 * 1024
+MAX_HTML_BYTES = 10 * 1024 * 1024
+HTML_SUFFIXES = (".html", ".htm")
 
 
 def send_pdf(path: str, caption: str = "") -> str:
@@ -2333,6 +2341,64 @@ def send_pdf(path: str, caption: str = "") -> str:
     return (
         f"Sent {pdf_path.name} ({kilobytes} KB). It opened in the user's "
         "PDF viewer, with its path on screen."
+    )
+
+
+def send_html(path: str, caption: str = "") -> str:
+    """Put a web page in front of the user."""
+
+    tool_line(f"SendHTML({path})")
+
+    page = Path(path).expanduser()
+    problem = ""
+    size = 0
+    if not page.is_file():
+        problem = f"no file at {page}"
+    elif page.suffix.lower() not in HTML_SUFFIXES:
+        problem = f"{page.name} is not an .html file"
+    else:
+        try:
+            size = page.stat().st_size
+        except OSError as exc:
+            problem = f"could not read {page}: {exc}"
+        else:
+            if size > MAX_HTML_BYTES:
+                problem = (
+                    f"{page.name} is {size // (1024 * 1024)} MB; the "
+                    f"limit is {MAX_HTML_BYTES // (1024 * 1024)} MB"
+                )
+
+    if problem:
+        result = f"Error: {problem}."
+        tool_result(result, style=ERROR)
+        return result
+
+    kilobytes = max(1, round(size / 1024))
+    note = caption.strip()
+    label = f"{page.name} ({kilobytes} KB)" + (f": {note}" if note else "")
+
+    if tool_file(str(page)):
+        tool_result(label)
+        return (
+            f"Sent {page.name} ({kilobytes} KB) to the user's screen. "
+            "Only the page itself went: files it links to by relative "
+            "path, like a separate stylesheet or image, do not load there."
+        )
+
+    problem = _open_with_spinner(page)
+    tool_result(label + (f" ({problem})" if problem else ""))
+    console.print(
+        Text(f"{' ' * RESULT_INDENT}{_display_path(page)}", style=DIM)
+    )
+
+    if problem:
+        return (
+            f"Could not open {page.name}: {problem}. Its path is on "
+            "screen; tell the user where the file is."
+        )
+    return (
+        f"Sent {page.name} ({kilobytes} KB). It opened in the user's "
+        "browser, with its path on screen."
     )
 
 
@@ -2992,6 +3058,35 @@ tools: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "send_html",
+            "description": (
+                "Show a web page (.html) to the user: a page, report, or "
+                "chart you built. It opens in their browser, and beside "
+                "the chat in the web UI. Keep it one self-contained "
+                "file, with its CSS and scripts inline, so it looks the "
+                "same wherever it opens."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Path to the .html file.",
+                    },
+                    "caption": {
+                        "type": "string",
+                        "description": (
+                            "Optional single line shown with it."
+                        ),
+                    },
+                },
+                "required": ["path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "view_image",
             "description": (
                 "Look at an image file on disk (.png, .jpg, .jpeg, .webp, "
@@ -3592,6 +3687,7 @@ FUNCTIONS = {
     "view_image": view_image,
     "send_image": send_image,
     "send_pdf": send_pdf,
+    "send_html": send_html,
     "screenshot": screenshot,
     "open_page": open_page,
     "interact": interact,

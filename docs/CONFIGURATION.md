@@ -43,7 +43,7 @@ Requirements:
 | `OLLAMA_HOST` | No | `http://localhost:11434` | - | Base URL of the Ollama server. Change this to switch from a local server to a remote one. |
 | `MAX_HISTORY_MESSAGES` | No | unset | `2` | Hard cap on how many messages of history are kept. Left unset, the token budget below decides, which is almost always the better answer; set it only to force a smaller history than the budget would allow. |
 | `MAX_HISTORY_CHARS` | No | unset | `1000` | Hard cap on the total characters of history kept, applied on top of the token budget. Left unset, the budget decides. |
-| `AUTO_COMPACT` | No | `1` | - | When history outgrows the budget, have the model summarize the turns being dropped and keep the summary at the head of the conversation. `0` drops them without summarizing. `/compact` runs it by hand at any time. |
+| `AUTO_COMPACT` | No | `0` | - | `1` has the model summarize the turns that no longer fit and keep the summary at the head of the conversation. Off by default: they are dropped instead, and the last three exchanges always stay word for word. The web UI switches it under Settings, General. `/compact` runs it by hand at any time. |
 | `MAX_TOOL_ROUNDS` | No | `10` | `1` | Maximum number of tool-calling rounds allowed per request. |
 | `MAX_TOOL_OUTPUT_CHARS` | No | `1200` | `500` | Tool output longer than this is truncated (middle removed) before being sent back to the model. |
 | `MAX_OUTPUT_TOKENS` | No | `1024` | `128` | Maximum tokens the model may generate per response. Maps to Ollama's `num_predict` option. |

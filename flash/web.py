@@ -23,11 +23,13 @@ import json
 import os
 import secrets
 import socket
+import sys
 import threading
 import time
 import uuid
 import webbrowser
 from collections import Counter
+from collections.abc import Callable
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
 from datetime import date, datetime, timedelta, timezone
@@ -44,7 +46,7 @@ import segno
 from rich.text import Text
 
 from . import agent as subagents
-from . import checkpoint, context, learning, memory, skills, workspace
+from . import checkpoint, context, learning, memory, skills, updater, workspace
 from .theme import (
     ACCENT,
     DIM,
@@ -66,6 +68,11 @@ PAGE = WEB_DIR / "index.html"
 
 # The only files served without the token: a stylesheet cannot send
 # one, and there is nothing in a font to protect.
+# What a page the agent sent may do: run its own scripts, forms, and
+# pop-ups, all without the same-origin grant that would let it act as
+# Flash.
+HTML_SANDBOX = "sandbox allow-scripts allow-forms allow-popups allow-modals"
+
 STATIC = {"orbit.woff2": "font/woff2", "logo-icon.svg": "image/svg+xml"}
 
 # How often an idle event stream says it is still there. Proxies and
@@ -227,6 +234,129 @@ KEPT = {
 }
 
 
+# Carries the token from a server to the one that replaces it after an
+# update, across the exec that starts the new version.
+TOKEN_ENV = "FLASH_WEB_TOKEN"  # nosec B105 -- a variable name
+
+# The most of an update's output the page is sent: the end is what
+# explains a failure.
+UPDATE_LOG_LINES = 200
+
+
+class Updates:
+    """Checking for a newer Flash, and installing it, for the page.
+
+    The same check and the same install as /update in the terminal; the
+    difference is that the page watches the progress as events instead
+    of a spinner.
+    """
+
+    def __init__(self, hub: "Hub") -> None:
+        self.hub = hub
+        self.lock = threading.Lock()
+        self.latest: Optional[str] = None
+        self.checked = False
+        # idle, checking, updating, updated, failed, or restarting.
+        self.state = "idle"
+        self.step = ""
+        self.message = ""
+        self.log: list[str] = []
+        # Whether a finished update can restart into the new version
+        # from the page (see Session.restart).
+        self.can_restart = False
+
+    def snapshot(self) -> dict:
+        return {
+            "current": __version__,
+            "latest": self.latest,
+            "available": bool(
+                self.latest and updater.is_newer(self.latest)
+            ),
+            "checked": self.checked,
+            "state": self.state,
+            "step": self.step,
+            "message": self.message,
+            "log": self.log[-UPDATE_LOG_LINES:],
+            "can_restart": self.can_restart,
+        }
+
+    def _publish(self) -> None:
+        self.hub.publish({"type": "update", "update": self.snapshot()})
+
+    def check(self) -> None:
+        """Ask GitHub what the newest version is. A failed check
+        leaves what an earlier one found."""
+
+        with self.lock:
+            if self.state in ("updating", "restarting"):
+                return
+            self.state = "checking"
+        self._publish()
+
+        latest = updater.fetch_latest_version()
+
+        with self.lock:
+            if latest is not None:
+                self.latest = latest
+                self.checked = True
+                self.message = ""
+            else:
+                self.message = (
+                    "Could not check for updates: no network, or GitHub "
+                    "did not answer."
+                )
+            self.state = "idle"
+        self._publish()
+
+    def check_in_background(self) -> None:
+        threading.Thread(target=self.check, daemon=True).start()
+
+    def start(self) -> None:
+        """Install the newest version, on a thread of its own."""
+
+        with self.lock:
+            if self.state in ("updating", "restarting"):
+                raise ValueError("An update is already running.")
+            self.state = "updating"
+            self.step = "Starting"
+            self.message = ""
+            self.log = []
+        self._publish()
+        threading.Thread(target=self._install, daemon=True).start()
+
+    def _install(self) -> None:
+        def on_step(label: str) -> None:
+            self.step = label
+            self._publish()
+
+        def on_output(line: str) -> None:
+            self.log.append(line)
+            del self.log[:-UPDATE_LOG_LINES]
+            self._publish()
+
+        try:
+            ok, message = updater.perform_update(
+                on_step=on_step, on_output=on_output,
+            )
+        except Exception as exc:  # noqa: BLE001 -- shown, never raised
+            ok, message = False, f"Update failed: {exc}"
+
+        with self.lock:
+            self.state = "updated" if ok else "failed"
+            self.step = ""
+            self.message = message
+            if ok:
+                # What is installed now is what main had.
+                self.latest = self.latest or __version__
+        self._publish()
+
+    def restarting(self) -> None:
+        with self.lock:
+            self.state = "restarting"
+            self.message = ""
+        self._publish()
+
+
 class Session:
     """Every chat, and the one turn allowed to run at a time.
 
@@ -238,6 +368,11 @@ class Session:
     def __init__(self, hub: Optional[Hub] = None) -> None:
         self.hub = hub or Hub()
         self.lan = False
+        self.updates = Updates(self.hub)
+        # Starts this same `flash --web` again, as whatever version is
+        # installed now. Only a server that owns its process can: one
+        # beside a terminal session would take the session down with it.
+        self.restart: Optional[Callable[[], None]] = None
         self.chats: dict[str, Chat] = {
             data["id"]: Chat.restore(data)
             for data in workspace.load_chats()
@@ -319,7 +454,10 @@ class Session:
             "seq": self.hub.seq,
             "chats": summaries,
             "projects": [asdict(p) for p in workspace.projects()],
-            "status": {**status(ai), "lan": self.lan},
+            "status": {
+                **status(ai), "lan": self.lan,
+                "update": self.updates.snapshot(),
+            },
         }
 
     # Sub-agents ----------------------------------------------------
@@ -962,6 +1100,7 @@ def status(ai) -> dict:
         "host": host,
         "host_name": named,
         "auto": bool(ai.Config.no_command_confirmation),
+        "compact": bool(ai.Config.auto_compact),
         "cwd": str(Path.cwd()),
         "folder": Path.cwd().name,
         "home": str(Path.home()),
@@ -1026,6 +1165,33 @@ def command(session: Session, body: dict) -> dict:
     if name == "stop":
         session.chat(chat_id).stop.set()
         return {}
+
+    if name == "update-check":
+        session.updates.check()
+        return session.updates.snapshot()
+
+    if name == "update":
+        session.updates.start()
+        return session.updates.snapshot()
+
+    if name == "update-restart":
+        if session.restart is None:
+            raise ValueError(
+                "This Flash runs beside a terminal session. Quit it there "
+                "and start it again to use the new version."
+            )
+        if any(c.busy or c.queued for c in session.chats.values()):
+            raise ValueError("Wait for the reply to finish first.")
+        session.updates.restarting()
+        # Late enough that this answer reaches the page first.
+        threading.Timer(RESTART_DELAY, session.restart).start()
+        return session.updates.snapshot()
+
+    if name == "compact-setting":
+        on = arg in ("on", "1", "true")
+        ai.set_config_var("AUTO_COMPACT", "1" if on else "0")
+        session.hub.publish({"type": "status"})
+        return {"compact": on}
 
     if name == "auto":
         on = (
@@ -1379,9 +1545,11 @@ class Handler(BaseHTTPRequestHandler):
     def _file(self, file_id: str, download: bool) -> None:
         """A file the agent showed, as the type it was stored as.
 
-        Only types a browser shows without running anything are ever
-        stored, and nosniff keeps it from guessing another. The name in
-        a download comes from the page, which knows it.
+        Only types a browser shows are ever stored, and nosniff keeps it
+        from guessing another. A web page is served sandboxed: it runs
+        on an origin of its own, so its scripts cannot reach this one's
+        cookie, its API, or the rest of the page. The name in a download
+        comes from the page, which knows it.
         """
 
         kept = workspace.kept_file(file_id)
@@ -1394,9 +1562,12 @@ class Handler(BaseHTTPRequestHandler):
         except OSError:
             self._json({"error": "not found"}, HTTPStatus.NOT_FOUND)
             return
-        self._send(HTTPStatus.OK, data, mime, {
+        headers = {
             "Content-Disposition": "attachment" if download else "inline",
-        })
+        }
+        if mime == "text/html":
+            headers["Content-Security-Policy"] = HTML_SANDBOX
+        self._send(HTTPStatus.OK, data, mime, headers)
 
     def _events(self) -> None:
         """A Server-Sent Events stream of everything that happens."""
@@ -1447,7 +1618,10 @@ class Server(ThreadingHTTPServer):
         # call server_close() from inside its own __init__.
         self.closing = threading.Event()
         super().__init__((LAN_HOST if lan else HOST, port), Handler)
-        self.token = secrets.token_urlsafe(24)
+        # A restart after an update keeps the token, so an open page
+        # carries on signed in rather than being locked out.
+        kept = os.environ.pop(TOKEN_ENV, "")
+        self.token = kept if len(kept) >= 16 else secrets.token_urlsafe(24)
         # Cookies ignore the port, so two servers on one machine each
         # need a name of their own.
         self.cookie_name = f"flash_{self.server_address[1]}"
@@ -1589,6 +1763,28 @@ def _listen(port: int, lan: bool) -> "Server":
         ) from exc
 
 
+# How long a restart waits, so the page hears it is coming.
+RESTART_DELAY = 0.4
+
+
+def _restart(server: "Server") -> None:
+    """Start this `flash --web` again as the version now installed.
+
+    exec replaces the process in place: the same port, the same
+    arguments, and through TOKEN_ENV the same token, so an open page
+    reloads straight into the new version. No second tab opens.
+    """
+
+    os.environ[TOKEN_ENV] = server.token
+    args = list(sys.argv[1:])
+    if "--no-open" not in args:
+        args.append("--no-open")
+    console.print(Text("Restarting to finish the update.", style=DIM))
+    os.execv(  # nosec B606 -- this same interpreter, running Flash again
+        sys.executable, [sys.executable, "-m", "flash", *args]
+    )
+
+
 def serve(
     port: int = DEFAULT_PORT, open_browser: bool = True, lan: bool = False
 ) -> None:
@@ -1597,6 +1793,13 @@ def serve(
     server = _listen(port, lan)
     announce(server)
     console.print(Text("Ctrl+C stops it.", style=DIM))
+
+    if os.name != "nt":
+        # Windows cannot replace a running Flash at all: its update
+        # finishes after this one quits, so there is nothing to restart.
+        server.session.restart = lambda: _restart(server)
+        server.session.updates.can_restart = True
+    server.session.updates.check_in_background()
 
     if open_browser:
         webbrowser.open(server.url)
@@ -1629,6 +1832,7 @@ def start_background(
 
     stop_background()
     _background = _listen(DEFAULT_PORT if port is None else port, lan)
+    _background.session.updates.check_in_background()
     threading.Thread(
         target=_background.serve_forever,
         kwargs={"poll_interval": 0.5},
