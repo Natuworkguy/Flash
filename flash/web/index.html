@@ -778,6 +778,7 @@ button.item-row:hover { background: var(--hover); }
 .menu .item:hover .remove { opacity: 1; }
 .menu .remove:hover { color: var(--text); background: var(--hover); }
 .menu .remove svg { width: 14px; height: 14px; }
+.menu .menu-note { font-weight: 400; }
 .menu .item.add { color: var(--text-3); }
 .menu .item.add svg { width: 16px; height: 16px; }
 .menu hr { border: 0; border-top: 1px solid var(--border); margin: 6px 4px; }
@@ -3746,15 +3747,30 @@ function openMenu(anchor, rows, pick, emptyText, alignLeft) {
   mark(true);
 }
 
+let modelsLoading = false;
+let modelsReachable = true;
+
+// The menu opens at once with the hosts. The models and the hosts' dots
+// fill in as each answers, so a host that is down never holds it shut.
 async function openModels(focusHosts = false) {
   slashOpen = false;
-  const [modelResult] = await Promise.all([command("model").catch(() => ({ models: [] }))]);
-  models = modelResult.models || [];
+  modelsLoading = true;
+  const hadModels = models.length > 0;
   drawModelMenu(focusHosts);
-  // Checking every host takes as long as the slowest; the menu is up
-  // before that, and the dots fill in when it answers.
-  const result = await command("hosts").catch(() => null);
-  if (result && menuEl && !slashOpen) { hosts = result.hosts; info.host_url = result.current; drawModelMenu(focusHosts, true); }
+  const stillOpen = () => menuEl && !slashOpen && menuEl.dataset.kind === "models";
+  command("model").then(
+    (r) => { models = r.models || []; modelsReachable = r.reachable !== false; },
+    () => { modelsReachable = false; },
+  ).finally(() => {
+    modelsLoading = false;
+    // Where the highlight goes if nothing had loaded to put it on yet.
+    if (stillOpen()) drawModelMenu(focusHosts, hadModels || focusHosts);
+  });
+  command("hosts").then((r) => {
+    hosts = r.hosts;
+    info.host_url = r.current;
+    if (stillOpen()) drawModelMenu(focusHosts, true);
+  }, () => {});
 }
 
 function drawModelMenu(focusHosts, keepSelection) {
@@ -3774,10 +3790,15 @@ function drawModelMenu(focusHosts, keepSelection) {
   }
   rows.push({ html: `${icon("plus")}<span class="label">Add host…</span>`, add: true, cls: "add" });
   rows.push({ header: true, html: "Model", rule: true });
-  for (const m of models) rows.push({ html: `<span class="label">${esc(m)}</span>`, value: m, current: m === info.model });
-  if (!models.length) rows.push({ header: true, html: '<span style="font-weight:400">No models on this host</span>' });
+  if (modelsLoading && !models.length) rows.push({ header: true, html: '<span class="menu-note">Loading models…</span>' });
+  else if (!modelsReachable && !modelsLoading) rows.push({ header: true, html: '<span class="menu-note">This host is not answering. Pick another above.</span>' });
+  else {
+    for (const m of models) rows.push({ html: `<span class="label">${esc(m)}</span>`, value: m, current: m === info.model });
+    if (!models.length) rows.push({ header: true, html: '<span class="menu-note">No models on this host</span>' });
+  }
   const previous = keepSelection && menuEl ? menuSel : null;
   openMenu($("#model-btn"), rows, pickModelRow, "");
+  menuEl.dataset.kind = "models";
   if (previous !== null) { menuSel = previous; menuEl.redraw(); }
   else if (focusHosts) { menuSel = rows.findIndex((r) => r.host && r.current); menuEl.redraw(); }
   else { const at = rows.findIndex((r) => r.value && r.current); if (at >= 0) { menuSel = at; menuEl.redraw(); } }
@@ -3803,6 +3824,7 @@ async function switchHost(url, reopen) {
     const known = hosts.find((h) => h.url === info.host_url);
     info.host_name = known ? known.name : result.host;
     models = result.models || [];
+    modelsReachable = !!result.up;
     renderInfo();
     toast(result.up ? `Switched to ${info.host_name}` : `${info.host_name} is not answering`);
     if (reopen) openModels(true);

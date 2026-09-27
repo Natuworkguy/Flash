@@ -1256,12 +1256,32 @@ def context_share(ai, chat: Chat) -> int:
     return min(100, round(100 * context.total_tokens(chat.messages) / budget))
 
 
-def list_models(ai) -> list[str]:
-    try:
-        listed = ollama.Client(host=ai.Config.host).list()
-    except Exception:  # noqa: BLE001
-        return []
-    models = getattr(listed, "models", None) or []
+# How long the page waits for a host to list its models. One that has
+# not answered by then is reported as not answering, rather than
+# holding the model menu shut until the connection gives up.
+MODEL_LIST_SECONDS = 4.0
+
+
+def list_models(ai) -> Optional[list[str]]:
+    """The models on the current host, or None if it did not answer."""
+
+    found: dict = {}
+
+    def ask() -> None:
+        try:
+            found["listed"] = ollama.Client(host=ai.Config.host).list()
+        except Exception:  # noqa: BLE001
+            found["failed"] = True
+
+    # On a thread of its own, so a host that never answers costs this
+    # long and no longer; the thread gives up when the connection does.
+    asking = threading.Thread(target=ask, daemon=True)
+    asking.start()
+    asking.join(MODEL_LIST_SECONDS)
+    if "listed" not in found:
+        return None
+
+    models = getattr(found["listed"], "models", None) or []
     return sorted(
         str(getattr(m, "model", "") or "") for m in models
         if getattr(m, "model", "")
@@ -1510,7 +1530,9 @@ def command(session: Session, body: dict) -> dict:
         if arg:
             ai.set_config_var("MODEL", arg)
             session.hub.publish({"type": "status"})
-        return {"model": ai.Config.model or "", "models": list_models(ai)}
+        models = list_models(ai)
+        return {"model": ai.Config.model or "", "models": models or [],
+                "reachable": models is not None}
 
     if name == "hosts":
         return {"hosts": workspace.hosts_with_health(ai.Config.host),
@@ -1521,8 +1543,11 @@ def command(session: Session, body: dict) -> dict:
         ai.set_config_var("OLLAMA_HOST", url)
         ai.forget_model_facts()
         session.hub.publish({"type": "status"})
+        # The quick check first: a host that is down has no models to
+        # list, and asking would only make the switch wait.
+        up = workspace.host_up(url)
         return {"host": url, "host_url": workspace.listed_url(url),
-                "models": list_models(ai), "up": workspace.host_up(url)}
+                "models": (list_models(ai) or []) if up else [], "up": up}
 
     if name == "host-add":
         added = workspace.add_host(str(body.get("label") or ""), arg)
