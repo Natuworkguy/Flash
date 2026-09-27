@@ -184,6 +184,7 @@ body.side-closed #sidebar { margin-left: -272px; }
 /* Main --------------------------------------------------------------- */
 main { flex: 1; min-width: 0; display: flex; flex-direction: column; position: relative; }
 #top {
+  position: relative;
   height: 56px; flex: none;
   display: flex; align-items: center; gap: 4px;
   padding: 0 12px;
@@ -205,6 +206,18 @@ body.empty #title { visibility: hidden; }
 .col { width: 100%; max-width: 768px; margin: 0 auto; padding: 0 24px; }
 #messages { padding-top: 8px; padding-bottom: 40px; }
 body.empty #log { display: none; }
+/* The pixel-art scene behind a new chat, the terminal's /background.
+   Stretched to fill the pane the way the terminal fills its screen, so
+   the whole picture shows rather than a cropped middle. It stays
+   sharp, fades into the page toward the bottom, and gives way once
+   there is a conversation to read. */
+#scene { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: fill; image-rendering: pixelated; pointer-events: none; z-index: 0; opacity: 0; transition: opacity 0.7s var(--ease); -webkit-mask-image: linear-gradient(to bottom, #000 58%, transparent 100%); mask-image: linear-gradient(to bottom, #000 58%, transparent 100%); }
+body.has-scene.empty:not(.on-page) #scene { opacity: 1; }
+#top, #dock { z-index: 1; }
+body.has-scene.empty:not(.on-page) #greeting { color: #fbf7ef; text-shadow: 0 2px 22px rgba(0, 0, 0, 0.6); }
+body.has-scene.empty:not(.on-page) #greeting .soft, body.has-scene.empty:not(.on-page) #greeting .in { color: rgba(251, 247, 239, 0.78); }
+body.has-scene.empty:not(.on-page) .suggestion { background: color-mix(in srgb, var(--bg) 78%, transparent); -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px); }
+body.has-scene.empty:not(.on-page) #top .icon-btn { color: #fbf7ef; }
 
 /* Hero (empty chat) ---------------------------------------------------- */
 #hero { display: none; }
@@ -681,6 +694,10 @@ body.page-projects #dock, body.page-settings #dock, body.page-tool #dock { displ
 .mini .line.short { width: 64%; }
 .mini .box { margin-top: auto; height: 20%; border-radius: 8px 8px 0 0; background: var(--m-box); border: 1px solid var(--m-line); border-bottom: 0; }
 @media (max-width: 560px) { .appearance { grid-template-columns: 1fr 1fr; } }
+.scene-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 14px; max-width: 620px; }
+.scene-grid .preview { aspect-ratio: 2 / 1; }
+.scene-grid canvas { display: block; width: 100%; height: 100%; image-rendering: pixelated; }
+.scene-grid .none { position: absolute; inset: 0; display: grid; place-items: center; font-size: 12.5px; color: var(--text-3); background: var(--hover); }
 .usage-note { font-size: 12.5px; color: var(--text-3); margin: 4px 2px 0; }
 .mem-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; margin-bottom: 16px; }
 .mem-head .sub { color: var(--text-3); font-size: 14px; margin: 0; max-width: 440px; }
@@ -1000,6 +1017,7 @@ button.item-row:hover { background: var(--hover); }
   <div id="scrim"></div>
 
   <main>
+    <canvas id="scene" aria-hidden="true"></canvas>
     <header id="top">
       <button class="icon-btn when-closed" id="open-side" data-tip="Open sidebar" data-keys="Ctrl B" aria-label="Open sidebar"></button>
       <button class="icon-btn when-closed" id="top-new" data-tip="New chat" data-keys="Alt N" aria-label="New chat"></button>
@@ -1956,6 +1974,9 @@ function drawGeneral(body) {
   });
   markThemeCards();
 
+  body.insertAdjacentHTML("beforeend", `<h2 class="settings-section settings-gap">Background</h2><p class="settings-sub">A pixel-art scene behind a new chat, the same ones <code>/background</code> shows in the terminal. Add your own as <code>.scene</code> files in <code>~/.flash/backgrounds</code>.</p><div class="scene-grid" role="radiogroup" aria-label="Background"></div>`);
+  drawSceneCards(body.querySelector(".scene-grid"));
+
   body.insertAdjacentHTML("beforeend", `<h2 class="settings-section settings-gap">Conversation</h2><p class="settings-sub">What happens when a chat outgrows the model's context window. The last three exchanges always stay word for word.</p>`);
   const row = el("button", "setting-row", `<span class="what"><b>Summarize old messages</b><span>Have the model condense what no longer fits into a summary it keeps reading. Off, the oldest messages are dropped instead, which is faster and never loses detail from the ones kept.</span></span><span class="switch" aria-hidden="true"></span>`);
   row.type = "button";
@@ -2185,6 +2206,77 @@ function extensionForm() {
   form.spec.addEventListener("input", () => { staged = null; host.textContent = ""; });
 }
 
+// Background scenes ----------------------------------------------------------
+
+let sceneName = "";
+
+// A scene arrives as a palette and every pixel's index into it; one
+// canvas pixel per scene pixel, scaled up by CSS with no smoothing.
+function paintScene(canvas, scene) {
+  canvas.width = scene.width;
+  canvas.height = scene.height;
+  const ctx = canvas.getContext("2d");
+  const image = ctx.createImageData(scene.width, scene.height);
+  const rgb = scene.palette.map((hex) => [1, 3, 5].map((at) => parseInt(hex.slice(at, at + 2), 16)));
+  scene.pixels.forEach((index, at) => {
+    const [r, g, b] = rgb[index];
+    image.data[at * 4] = r;
+    image.data[at * 4 + 1] = g;
+    image.data[at * 4 + 2] = b;
+    image.data[at * 4 + 3] = 255;
+  });
+  ctx.putImageData(image, 0, 0);
+}
+
+function showScene(scene) {
+  sceneName = scene ? scene.name : "";
+  document.body.classList.toggle("has-scene", !!scene);
+  if (scene) paintScene($("#scene"), scene);
+}
+
+// Another page, or the terminal, may have picked a different one.
+async function syncScene() {
+  if ((info.background || "") === sceneName) return;
+  const r = await command("background-scene").catch(() => null);
+  if (r) showScene(r.scene);
+}
+
+async function drawSceneCards(grid) {
+  let r;
+  try { r = await command("backgrounds"); } catch (error) { showFailure(error); return; }
+  if (!grid.isConnected) return;
+  const choices = [{ name: "", title: "None" }, ...r.scenes];
+  const mark = (name) => {
+    for (const card of grid.querySelectorAll(".theme-card")) {
+      const on = card.dataset.scene === name;
+      card.classList.toggle("on", on);
+      card.setAttribute("aria-checked", on);
+    }
+  };
+  choices.forEach((scene, i) => {
+    const card = el("button", "theme-card");
+    card.type = "button";
+    card.dataset.scene = scene.name;
+    card.setAttribute("role", "radio");
+    card.style.setProperty("--i", i);
+    card.innerHTML = `<span class="preview">${scene.name ? "<canvas></canvas>" : '<span class="none">No background</span>'}<span class="tick">${icon("check")}</span></span><span class="name"></span>`;
+    card.querySelector(".name").textContent = scene.title;
+    if (scene.name) paintScene(card.querySelector("canvas"), scene);
+    card.onclick = async () => {
+      try {
+        const result = await command("background", scene.name || "off");
+        info.background = result.background;
+        showScene(result.scene);
+        mark(result.background);
+        toast(result.scene ? `Background: ${result.scene.title}` : "Background off");
+      } catch (error) { showFailure(error); }
+    };
+    grid.appendChild(card);
+  });
+  mark(r.current || "");
+  if (!r.scenes.length) grid.insertAdjacentHTML("afterend", `<p class="settings-sub">No scenes found.</p>`);
+}
+
 // LAN ----------------------------------------------------------------------
 
 // Whether this page came in over the network rather than from this
@@ -2356,7 +2448,7 @@ async function waitForRestart() {
 }
 
 function markThemeCards() {
-  for (const card of document.querySelectorAll(".theme-card")) {
+  for (const card of document.querySelectorAll(".appearance .theme-card")) {
     const on = card.dataset.choice === themeChoice;
     card.classList.toggle("on", on);
     card.setAttribute("aria-checked", on);
@@ -3017,6 +3109,7 @@ async function loadState() {
   info = state.status;
   projects = state.projects || [];
   if (state.words && state.words.length) words = state.words;
+  showScene(state.scene);
   lastSeq = state.seq;
   if (current && !chats.has(current)) current = null;
   loading = false;
@@ -3151,6 +3244,7 @@ async function openAgents() {
 
 function renderInfo() {
   renderAgents();
+  syncScene();
   $("#settings-btn").classList.toggle("has-update", !!(info.update && info.update.available && !["updated", "restarting"].includes(info.update.state)));
   const local = !info.host_name || info.host_name === "This computer";
   $("#model-name").textContent = (local ? "" : info.host_name + " · ") + (info.model || "No model");
@@ -3854,6 +3948,7 @@ const ACTIONS = [
   { label: "Settings and usage", keys: "Alt ,", slash: "/settings", run: () => showSettings() },
   { label: "Update Flash", keys: "", slash: "/update", run: () => { showSettings("general"); checkUpdates(); } },
   { label: "Skills", keys: "", slash: "/skills", run: () => showPage("skills") },
+  { label: "Background", keys: "", slash: "/background", run: () => showSettings("general") },
   { label: "Extensions", keys: "", slash: "/extensions", run: () => showPage("extensions") },
   { label: "Import memory from another AI", keys: "", slash: "/import", run: () => { showSettings("memory"); importMemory(); } },
   { label: "Search chats", keys: "Alt F", slash: "/search", run: () => openSearch() },

@@ -47,6 +47,7 @@ from rich.text import Text
 
 from . import agent as subagents
 from . import (
+    background,
     checkpoint,
     context,
     extensions,
@@ -489,6 +490,9 @@ class Session:
             "seq": self.hub.seq,
             "chats": summaries,
             "projects": [asdict(p) for p in workspace.projects()],
+            # The picture behind a new chat, drawn by the page: sent
+            # with the whole state only, not with every quick refresh.
+            "scene": None if lite else scene_data(ai.Config.background or ""),
             # The words the loader cycles through, the terminal's own.
             "words": [s["now"] for s in ai._load_thinking_states()],
             "status": {
@@ -1234,6 +1238,13 @@ def status(ai) -> dict:
         "host_name": named,
         "auto": bool(ai.Config.no_command_confirmation),
         "compact": bool(ai.Config.auto_compact),
+        # The scene actually in effect: a name that no longer finds one,
+        # because the extension that brought it was removed, is none.
+        "background": (
+            ai.Config.background
+            if ai.Config.background and background.find(ai.Config.background)
+            else ""
+        ),
         "cwd": str(Path.cwd()),
         "folder": Path.cwd().name,
         "home": str(Path.home()),
@@ -1286,6 +1297,36 @@ def list_models(ai) -> Optional[list[str]]:
         str(getattr(m, "model", "") or "") for m in models
         if getattr(m, "model", "")
     )
+
+
+def scene_data(name: str) -> Optional[dict]:
+    """A background scene as the page draws it: its palette, and every
+    pixel as an index into that palette, row by row. None when there is
+    no such scene, or it cannot be read."""
+
+    path = background.find(name) if name else None
+    if path is None:
+        return None
+    try:
+        scene = background.load(path)
+    except background.SceneError:
+        return None
+
+    palette: list[str] = []
+    index: dict[str, int] = {}
+    pixels: list[int] = []
+    for row in scene.rows:
+        for colour in row:
+            if colour not in index:
+                index[colour] = len(palette)
+                palette.append(colour)
+            pixels.append(index[colour])
+
+    return {
+        "name": path.stem, "title": scene.name,
+        "width": scene.width, "height": scene.height,
+        "palette": palette, "pixels": pixels,
+    }
 
 
 def _extension_info(ext: "extensions.Extension") -> dict:
@@ -1371,6 +1412,7 @@ def _install_staged(session: Session, staged_id: str) -> dict:
     finally:
         _discard_staged(session)
 
+    session.hub.publish({"type": "status"})
     return _extension_info(ext)
 
 
@@ -1500,6 +1542,8 @@ def command(session: Session, body: dict) -> dict:
     if name == "extension-remove":
         if not extensions.remove(arg):
             raise ValueError(f"No extension called {arg!r}.")
+        # Its scenes, commands and prompt text went with it.
+        session.hub.publish({"type": "status"})
         return {"removed": arg}
 
     if name == "lan":
@@ -1510,6 +1554,30 @@ def command(session: Session, body: dict) -> dict:
             return {"lan": on, "switching": False}
         session.switch_lan(on)
         return {"lan": on, "switching": True}
+
+    if name == "backgrounds":
+        listed = [scene_data(n) for n in background.names()]
+        return {
+            "current": ai.Config.background or "",
+            "scenes": [scene for scene in listed if scene],
+        }
+
+    if name == "background-scene":
+        return {"scene": scene_data(ai.Config.background or "")}
+
+    if name == "background":
+        if arg.lower() in ("", "off", "none"):
+            ai.unset_config_var("BACKGROUND")
+            session.hub.publish({"type": "status"})
+            return {"background": "", "scene": None}
+        scene = scene_data(arg)
+        if scene is None:
+            raise ValueError(f"No background called {arg!r}.")
+        # The same setting /background writes, so the terminal and the
+        # page show the same scene.
+        ai.set_config_var("BACKGROUND", scene["name"])
+        session.hub.publish({"type": "status"})
+        return {"background": scene["name"], "scene": scene}
 
     if name == "compact-setting":
         on = arg in ("on", "1", "true")
