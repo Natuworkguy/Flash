@@ -2144,3 +2144,94 @@ class TestSlowHosts:
 
         assert result["up"] is False and result["models"] == []
         assert asked == []
+
+
+class TestBackgrounds:
+    def test_a_scene_goes_to_the_page_as_a_palette_and_pixels(self):
+        from flash import background
+
+        scene = web.scene_data("sunset")
+        loaded = background.load(background.find("sunset"))
+
+        assert scene["title"] == loaded.name
+        assert (scene["width"], scene["height"]) == (
+            loaded.width, loaded.height,
+        )
+        assert len(scene["pixels"]) == loaded.width * loaded.height
+        # Every pixel names its colour through the palette, in order.
+        assert scene["palette"][scene["pixels"][0]] == loaded.rows[0][0]
+        assert scene["palette"][scene["pixels"][-1]] == loaded.rows[-1][-1]
+        assert web.scene_data("no-such-scene") is None
+        assert web.scene_data("") is None
+
+    def test_the_bundled_scenes_are_listed(self):
+        listed = web.command(web.Session(), {"name": "backgrounds"})
+
+        names = [s["name"] for s in listed["scenes"]]
+        assert {"forest", "midnight", "reef", "sunset"} <= set(names)
+
+    def test_picking_one_is_the_terminal_setting_too(self, monkeypatch):
+        saved = {}
+        monkeypatch.setattr(ai, "set_config_var",
+                            lambda name, value: saved.update({name: value}))
+        monkeypatch.setattr(ai, "unset_config_var",
+                            lambda name: saved.update({name: None}))
+
+        chosen = web.command(web.Session(), {
+            "name": "background", "arg": "reef",
+        })
+        assert chosen["background"] == "reef"
+        assert chosen["scene"]["name"] == "reef"
+        assert saved == {"BACKGROUND": "reef"}
+
+        off = web.command(web.Session(), {"name": "background", "arg": "off"})
+        assert off == {"background": "", "scene": None}
+        assert saved == {"BACKGROUND": None}
+
+        with pytest.raises(ValueError, match="No background"):
+            web.command(web.Session(), {"name": "background", "arg": "x"})
+
+    def test_the_scene_rides_with_the_full_state_only(self, monkeypatch):
+        monkeypatch.setattr(ai.Config, "background", "forest")
+        session = web.Session()
+
+        assert session.state()["scene"]["name"] == "forest"
+        assert session.state(lite=True)["scene"] is None
+        assert session.state(lite=True)["status"]["background"] == "forest"
+
+
+class TestAnExtensionsBackground:
+    def test_removing_the_extension_takes_its_scene_away(
+        self, tmp_path, monkeypatch
+    ):
+        source = tmp_path / "scenery"
+        (source / "scenes").mkdir(parents=True)
+        (source / "flash-extension.json").write_text(json.dumps({
+            "name": "scenery", "backgrounds": "scenes",
+        }))
+        (source / "scenes" / "dunes.scene").write_text(
+            "name: Dunes\npalette:\n  . #c2a060\n  o #402010\npixels:\n"
+            + "\n".join(["..oo" * 6] * 6) + "\n"
+        )
+        session = web.Session()
+        preview = web.command(session, {
+            "name": "extension-preview", "arg": f"path@{source}",
+        })
+        web.command(session, {
+            "name": "extension-install", "arg": preview["id"],
+        })
+        monkeypatch.setattr(ai.Config, "background", "dunes")
+        assert web.status(ai)["background"] == "dunes"
+        assert web.scene_data("dunes")["title"] == "Dunes"
+        seen = events_of(session)
+
+        web.command(session, {
+            "name": "extension-remove", "arg": "scenery",
+        })
+
+        # Open pages hear about it, and there is no scene to show now.
+        assert "status" in types(seen())
+        assert web.status(ai)["background"] == ""
+        assert web.command(session, {"name": "background-scene"}) == {
+            "scene": None,
+        }
