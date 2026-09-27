@@ -388,6 +388,11 @@ pre code { display: block; padding: 2px 16px 14px; overflow-x: auto; font-size: 
 .menu .agent-row .state { font-size: 11.5px; color: var(--text-3); white-space: nowrap; }
 .menu .agent-row .state.running { color: var(--accent); }
 .menu .agent-row .detail { font: 11.5px var(--mono); color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Only before the first message: after that, the chat has its project. */
+#project-btn { display: none; max-width: 220px; }
+body.empty:not(.on-page) #project-btn { display: inline-flex; }
+#project-btn span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#project-btn.on { color: var(--text); background: var(--hover); border-color: var(--border-strong); }
 #auto-btn.on { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 45%, transparent); background: color-mix(in srgb, var(--accent) 10%, transparent); }
 #model-btn { margin-left: auto; border-color: transparent; max-width: 55%; }
 #model-btn span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -938,6 +943,7 @@ body.page-projects #dock, body.page-settings #dock { display: none; }
           <textarea id="input" rows="1" placeholder="Message Flash" aria-label="Message Flash"></textarea>
           <div class="composer-row">
             <button type="button" class="pill" id="auto-btn" data-tip="Autonomous mode" data-keys="Shift Tab"></button>
+            <button type="button" class="pill" id="project-btn" data-tip="Start in a project" aria-haspopup="listbox"></button>
             <button type="button" class="pill" id="agents-btn" hidden data-tip="Sub-agents"><span class="pulse-dot"></span><span id="agents-count"></span></button>
             <span id="context"></span>
             <button type="button" class="pill" id="model-btn" data-tip="Switch model" data-keys="Alt M"><span id="model-name">No model</span><i id="model-chev"></i></button>
@@ -1597,6 +1603,7 @@ function drawChat() {
   $("#crumb").hidden = !inProject;
   if (inProject) $("#crumb").textContent = inProject.name;
   input.placeholder = empty ? (inProject ? `Message Flash in ${inProject.name}` : "Message Flash") : "Reply to Flash";
+  renderProjectBtn();
   greet();
   markSide();
   updateSend();
@@ -2706,7 +2713,7 @@ async function send(text) {
   updateSend();
   // The chat has to exist here before anything is said in it, or its
   // first events would arrive for a chat this page has never seen.
-  if (!current) await createChat(view === "project" ? viewProject : "");
+  if (!current) await createChat(viewProject || "");
   await api("/api/send", { chat: current, text }).catch(showFailure);
 }
 
@@ -2725,6 +2732,39 @@ function stopReply() {
   const chat = chats.get(current);
   if (chat && (chat.busy || chat.queued)) { command("stop"); return true; }
   return false;
+}
+
+// The project a chat starts in, picked from the box before its first
+// message. Picking one on a chat that has nothing in it yet starts over
+// on a new one, since a chat's project is set when it is made.
+function renderProjectBtn() {
+  const p = projectOf(viewProject);
+  const b = $("#project-btn");
+  b.innerHTML = `${icon("folder")}<span></span>`;
+  b.lastChild.textContent = p ? p.name : "Project";
+  b.classList.toggle("on", !!p);
+}
+
+function openProjectPicker() {
+  const rows = [{ header: true, html: "Start this chat in" }];
+  rows.push({ html: `<span class="label">No project</span>`, project: "", current: !viewProject });
+  for (const p of [...projects].reverse()) {
+    rows.push({
+      html: `<span class="stack"><span class="label">${esc(p.name)}</span><span class="sub">${esc(shortPath(p.path))}</span></span>`,
+      project: p.id, current: p.id === viewProject,
+    });
+  }
+  rows.push({ html: `${icon("plus")}<span class="label">New project…</span>`, add: true, cls: "add" });
+  openMenu($("#project-btn"), rows, (row) => (row.add ? projectForm() : pickProject(row.project)), "", true);
+}
+
+function pickProject(id) {
+  const chat = chats.get(current);
+  if (chat && (chat.log.length || chat.busy || chat.queued)) return;
+  current = null;
+  viewProject = id || null;
+  drawChat();
+  input.focus();
 }
 
 async function newChat() {
@@ -3119,7 +3159,7 @@ async function removeHost(url) {
   drawModelMenu(true);
 }
 
-document.addEventListener("mousedown", (e) => { if (menuEl && !menuEl.contains(e.target) && !e.target.closest("#model-btn, #agents-btn")) { closeMenu(); slashOpen = false; } });
+document.addEventListener("mousedown", (e) => { if (menuEl && !menuEl.contains(e.target) && !e.target.closest("#model-btn, #agents-btn, #project-btn")) { closeMenu(); slashOpen = false; } });
 
 // Slash commands ------------------------------------------------------------
 
@@ -3516,8 +3556,9 @@ $("#scrim").onclick = closeSide;
 $("#auto-btn").onclick = toggleAuto;
 $("#agents-btn").onclick = () => (menuEl ? closeMenu() : openAgents());
 $("#model-btn").onclick = () => (menuEl && !slashOpen ? closeMenu() : openModels());
+$("#project-btn").onclick = () => (menuEl && !slashOpen ? closeMenu() : openProjectPicker());
 $("#projects-btn").onclick = showProjects;
-$("#crumb").onclick = () => { const c = chats.get(current); if (c && c.project) openProject(c.project, "back"); };
+$("#crumb").onclick = () => { const c = chats.get(current); const id = c ? c.project : viewProject; if (id) openProject(id, "back"); };
 $("#title").onclick = rename;
 $("#keys-btn").onclick = () => openHelp();
 $("#phone-btn").onclick = () => openPhone();
