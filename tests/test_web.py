@@ -537,6 +537,20 @@ class TestFont:
         assert response.getheader("Content-Type") == "font/woff2"
         assert body[:4] == b"wOF2"
 
+    def test_the_logo_is_served_too(self, server):
+        port = server.port
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request("GET", "/static/logo-icon.svg",
+                     headers={"Host": f"127.0.0.1:{port}"})
+        response = conn.getresponse()
+        body = response.read()
+        conn.close()
+
+        assert response.status == 200
+        assert response.getheader("Content-Type") == "image/svg+xml"
+        assert body.startswith(b"<svg")
+        assert b"/static/logo-icon.svg" in web.PAGE.read_bytes()
+
     def test_but_nothing_else_is(self, server):
         assert request(server, "GET", "/static/index.html",
                        token=False)[0] == 403
@@ -1100,3 +1114,358 @@ def test_the_qr_code_scales_to_its_box():
 
     assert "viewBox=" in svg
     assert 'width="' not in svg.split(">")[0]
+
+
+# --- Sub-agents in the web UI ----------------------------------------------
+
+
+class SubAgentModel(FakeClient):
+    """Both models. Ollama is one module, so the web turn and the
+    sub-agent share a Client: the turn streams, and the sub-agent, which
+    answers its task in one go, does not."""
+
+    answer = "Found 3 Python files."
+
+    def chat(self, **kwargs):
+        if kwargs.get("stream"):
+            return super().chat(**kwargs)
+        return self.answer_task(**kwargs)
+
+    def answer_task(self, **kwargs):
+        return SimpleNamespace(message=SimpleNamespace(
+            content=SubAgentModel.answer, tool_calls=None,
+        ))
+
+
+@pytest.fixture
+def subagent_world(monkeypatch):
+    from flash import agent as subagents
+
+    monkeypatch.setattr(subagents, "_agents", {})
+    monkeypatch.setattr(subagents.ollama, "Client", SubAgentModel)
+    monkeypatch.setattr(tools, "MODEL_NAME", "flash-test")
+    monkeypatch.setattr(web, "WATCH_SECONDS", 0.02)
+    sessions = []
+    yield sessions
+    for session in sessions:
+        session.close()
+
+
+def wait_for(check, timeout=5):
+    deadline = time.monotonic() + timeout
+    while not check():
+        assert time.monotonic() < deadline, "timed out"
+        time.sleep(0.02)
+
+
+class TestSubAgents:
+    def test_a_finished_sub_agent_wakes_its_chat(self, subagent_world):
+        FakeClient.scripts = [
+            [part(calls=[call("agent", task="count the python files")]),
+             part(done=True)],
+            [part("Started a sub-agent; I'll report back."), part(done=True)],
+            [part("The sub-agent found 3 Python files."), part(done=True)],
+        ]
+        session = web.Session()
+        subagent_world.append(session)
+        chat = session.new_chat()
+
+        run(session, chat, "how many python files are there?")
+        wait_for(lambda: any(
+            e["type"] == "assistant" and "found 3" in e["text"]
+            for e in chat.log
+        ))
+
+        # The turn that started it finished cleanly, stats and all.
+        assert "error" not in types(chat.log)
+        assert types(chat.log).count("stats") == 2
+        notes = [e["text"] for e in chat.log if e["type"] == "note"]
+        assert notes == [web.WAKE_TEXT]
+        # The wake turn told the model what the sub-agent found.
+        woke = FakeClient.requests[-1]["messages"][-1]["content"]
+        assert "finished" in woke and SubAgentModel.answer in woke
+        # Nobody typed the wake, so it is not shown as a message.
+        assert [e["text"] for e in chat.log if e["type"] == "user"] == [
+            "how many python files are there?"
+        ]
+
+    def test_news_stays_in_the_chat_that_asked(
+        self, subagent_world, monkeypatch
+    ):
+        from flash import agent as subagents
+
+        FakeClient.scripts = [
+            [part(calls=[call("agent", task="slow task")]), part(done=True)],
+            [part("Started."), part(done=True)],
+            [part("Other chat reply."), part(done=True)],
+        ]
+        session = web.Session()
+        subagent_world.append(session)
+        # Held running, so nothing wakes and both chats stay quiet.
+        release = threading.Event()
+        monkeypatch.setattr(SubAgentModel, "answer_task", lambda self, **kw: (
+            release.wait(5) and None
+        ) or SimpleNamespace(message=SimpleNamespace(
+            content="done", tool_calls=None)))
+        try:
+            first = session.new_chat()
+            run(session, first, "start one")
+            other = session.new_chat()
+            run(session, other, "unrelated question")
+
+            sent = FakeClient.requests[-1]["messages"][-1]["content"]
+            assert "Sub-agent" not in sent
+            assert session.owned(first.id) and not session.owned(other.id)
+            assert session.agent_list(first.id)[0]["status"] == "running"
+            assert session.agent_list(other.id) == []
+        finally:
+            release.set()
+            wait_for(lambda: subagents.running_count() == 0)
+
+    def test_waking_stops_after_three_in_a_row(
+        self, subagent_world, monkeypatch
+    ):
+        from flash import agent as subagents
+
+        # Never marked as seen, so the watcher keeps finding it.
+        monkeypatch.setattr(subagents, "mark_delivered", lambda ids: None)
+        FakeClient.scripts = [
+            [part(calls=[call("agent", task="t")]), part(done=True)],
+            [part("Started."), part(done=True)],
+        ] + [[part(f"Report {n}."), part(done=True)] for n in range(6)]
+        session = web.Session()
+        subagent_world.append(session)
+        chat = session.new_chat()
+
+        run(session, chat, "go")
+        wait_for(lambda: sum(e["type"] == "note" for e in chat.log) >= 3)
+        time.sleep(0.5)
+
+        assert sum(e["type"] == "note" for e in chat.log) == 3
+
+    def test_agent_result_waits_without_drawing_in_the_terminal(
+        self, subagent_world, monkeypatch
+    ):
+        from flash import agent as subagents
+        from flash.theme import capture_tool_output
+
+        def no_terminal(*args, **kwargs):
+            raise AssertionError("drew a live view in the terminal")
+
+        monkeypatch.setattr(subagents, "_live", no_terminal)
+        agent_id = subagents.start("quick task")
+
+        with capture_tool_output(lambda *event: None):
+            answer = tools.agent_result(agent_id, 5)
+
+        assert answer == SubAgentModel.answer
+
+    def test_the_page_can_list_them(self, server, subagent_world):
+        chat = server.session.new_chat()
+        from flash import agent as subagents
+
+        agent_id = subagents.start("list things")
+        server.session.adopt(chat, {agent_id})
+        subagent_world.append(server.session)
+        wait_for(lambda: subagents.running_count() == 0)
+
+        status, body = request(server, "GET", f"/api/agents?chat={chat.id}")
+
+        assert status == 200
+        listed = json.loads(body)["agents"]
+        assert listed[0]["id"] == agent_id
+        assert listed[0]["result"] == SubAgentModel.answer
+        assert request(server, "GET", f"/api/agents?chat={chat.id}",
+                       token=False)[0] == 403
+
+
+class TestPlans:
+    def test_a_plan_is_drawn_on_the_page_not_the_terminal(
+        self, monkeypatch
+    ):
+        from flash import plan, theme
+
+        terminal = []
+        monkeypatch.setattr(
+            theme.console, "print", lambda *a, **k: terminal.append(a)
+        )
+        monkeypatch.setattr(plan, "_steps", [])
+        FakeClient.scripts = [
+            [part(calls=[call("plan", steps=["Read it", "Fix it"])]),
+             part(done=True)],
+            [part(calls=[call("check_step", index=1)]), part(done=True)],
+            [part("Planned."), part(done=True)],
+        ]
+        session = web.Session()
+        chat = session.new_chat()
+
+        run(session, chat, "fix the bug")
+
+        assert terminal == []
+        drawn = [e["steps"] for e in chat.log if e["type"] == "plan"]
+        assert drawn == [
+            [{"text": "Read it", "status": "active"},
+             {"text": "Fix it", "status": "todo"}],
+            [{"text": "Read it", "status": "done"},
+             {"text": "Fix it", "status": "active"}],
+        ]
+        assert "plan" in web.KEPT
+
+
+# --- Settings: usage and memory ---------------------------------------------
+
+
+def logged(*entries, updated=0.0):
+    return SimpleNamespace(log=list(entries), updated=updated)
+
+
+def at(day, hour=12):
+    from datetime import datetime, timezone
+
+    # Noon UTC is the same date almost everywhere a test runs.
+    return datetime(2026, 9, day, hour, tzinfo=timezone.utc).timestamp()
+
+
+class TestUsage:
+    def test_turns_are_counted_by_day_and_model(self):
+        from datetime import date
+
+        chats = [
+            logged(
+                {"type": "user", "text": "a"},
+                {"type": "stats", "at": at(24), "model": "onyx",
+                 "tokens": 100, "rate": 10, "seconds": 12, "tools": 2},
+                {"type": "user", "text": "b"},
+                {"type": "stats", "at": at(25), "model": "onyx",
+                 "tokens": 50, "rate": 25, "seconds": 3, "tools": 0},
+            ),
+            logged(
+                {"type": "user", "text": "c"},
+                {"type": "stats", "at": at(26), "model": "qwen",
+                 "tokens": 0, "rate": 0, "seconds": 1, "tools": 1},
+            ),
+            logged(),
+        ]
+
+        u = web.usage(chats, today=date(2026, 9, 26))
+
+        assert (u["chats"], u["messages"], u["turns"]) == (2, 3, 3)
+        assert (u["tokens"], u["tools"], u["seconds"]) == (150, 3, 16)
+        # 150 tokens over 10s + 2s of generating.
+        assert u["rate"] == 12.5
+        assert u["days"] == {
+            "2026-09-24": 1, "2026-09-25": 1, "2026-09-26": 1,
+        }
+        assert u["models"] == [("onyx", 2), ("qwen", 1)]
+        assert (u["streak"], u["longest_streak"], u["active_days"]) == (
+            3, 3, 3,
+        )
+
+    def test_an_older_turn_counts_on_its_chats_last_day(self):
+        from datetime import date
+
+        chat = logged({"type": "stats", "tokens": 5}, updated=at(20))
+
+        u = web.usage([chat], today=date(2026, 9, 26))
+
+        assert u["days"] == {"2026-09-20": 1}
+        assert u["models"] == []
+        assert u["streak"] == 0 and u["longest_streak"] == 1
+
+    def test_a_streak_survives_until_a_whole_day_is_missed(self):
+        from datetime import date
+
+        days = {date(2026, 9, d) for d in (1, 2, 3, 20, 21, 22, 23, 25)}
+
+        assert web._streaks(days, date(2026, 9, 26)) == (1, 4)
+        assert web._streaks(days, date(2026, 9, 25)) == (1, 4)
+        assert web._streaks(days, date(2026, 9, 27)) == (0, 4)
+
+    def test_a_turn_records_when_and_on_what(self):
+        FakeClient.scripts = [[part("Hi."), part(done=True, tokens=3)]]
+        session = web.Session()
+        chat = session.new_chat()
+
+        run(session, chat, "hello")
+
+        stats = next(e for e in chat.log if e["type"] == "stats")
+        assert stats["model"] == "flash-test"
+        assert abs(stats["at"] - time.time()) < 60
+        assert web.command(session, {"name": "usage"})["turns"] == 1
+
+
+class TestMemoryCommands:
+    REPLY = "```\n- Likes tea\n- Uses Vim\n```"
+
+    def test_preview_saves_nothing(self):
+        from flash import memory
+
+        memory.add_memory("Uses Vim")
+
+        shown = web.command(web.Session(), {
+            "name": "memory-preview", "text": self.REPLY,
+        })
+
+        assert shown == {"new": ["Likes tea"], "known": 1}
+        assert memory.list_memory() == ["Uses Vim"]
+
+    def test_import_saves_and_reaches_the_next_prompt(self):
+        from flash import learning
+
+        session = web.Session()
+        assert "Likes tea" not in learning.prompt_block()
+
+        result = web.command(session, {
+            "name": "memory-import", "text": self.REPLY,
+        })
+
+        assert result["added"] == ["Likes tea", "Uses Vim"]
+        assert result["entries"] == ["Likes tea", "Uses Vim"]
+        assert "Likes tea" in learning.prompt_block()
+
+    def test_listing_and_forgetting(self):
+        from flash import memory
+
+        session = web.Session()
+        web.command(session, {"name": "memory-import", "text": self.REPLY})
+
+        listed = web.command(session, {"name": "memory"})
+        assert listed["entries"] == ["Likes tea", "Uses Vim"]
+        assert listed["prompt"] == memory.IMPORT_PROMPT
+
+        left = web.command(session, {"name": "memory-forget", "arg": "1"})
+        assert left["entries"] == ["Uses Vim"]
+        with pytest.raises(ValueError, match="No memory at index 5"):
+            web.command(session, {"name": "memory-forget", "arg": "5"})
+
+    def test_adding_and_editing(self):
+        from flash import learning
+
+        session = web.Session()
+
+        added = web.command(session, {
+            "name": "memory-add", "text": "Uses\n npm",
+        })
+        assert added == {"entries": ["Uses npm"], "text": "Uses npm"}
+
+        edited = web.command(session, {
+            "name": "memory-edit", "arg": "1", "text": "Uses pnpm",
+        })
+        assert edited["entries"] == ["Uses pnpm"]
+        assert "Uses pnpm" in learning.prompt_block()
+
+        with pytest.raises(ValueError, match="No memory at index 3"):
+            web.command(session, {
+                "name": "memory-edit", "arg": "3", "text": "x",
+            })
+        with pytest.raises(ValueError, match="Nothing to remember"):
+            web.command(session, {"name": "memory-add", "text": " "})
+
+    def test_over_http_it_needs_the_token(self, server):
+        status, body = request(server, "POST", "/api/command",
+                               {"name": "memory-import", "text": self.REPLY},
+                               token=False)
+
+        assert status == 403
+        from flash import memory
+        assert memory.list_memory() == []
