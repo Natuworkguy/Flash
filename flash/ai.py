@@ -232,7 +232,7 @@ class Config:
         cls.max_history_chars = _opt_int_env(
             "MAX_HISTORY_CHARS", minimum=1000
         )
-        cls.auto_compact = bool(_int_env("AUTO_COMPACT", 1, minimum=0))
+        cls.auto_compact = bool(_int_env("AUTO_COMPACT", 0, minimum=0))
         cls.max_tool_rounds = _int_env("MAX_TOOL_ROUNDS", 10, minimum=1)
         cls.max_tool_output_chars = _int_env(
             "MAX_TOOL_OUTPUT_CHARS", 1200, minimum=500

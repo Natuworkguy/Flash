@@ -610,6 +610,24 @@ body.page-projects #dock, body.page-settings #dock { display: none; }
 @keyframes grow { from { transform: scaleX(0); } }
 .settings-section { font-size: 15px; font-weight: 600; margin: 0 0 4px; }
 .settings-sub { color: var(--text-3); font-size: 14px; margin: 0 0 16px; }
+.settings-gap { margin-top: 34px; }
+.setting-row { display: flex; align-items: center; justify-content: space-between; gap: 20px; max-width: 620px; padding: 14px 16px; border: 1px solid var(--border); border-radius: 14px; background: var(--surface); text-align: left; width: 100%; }
+.setting-row .what b { display: block; font-size: 14.5px; font-weight: 500; color: var(--text); margin-bottom: 3px; }
+.setting-row .what span { font-size: 13px; color: var(--text-3); line-height: 1.45; }
+.switch { position: relative; flex: none; width: 38px; height: 22px; border-radius: 999px; background: color-mix(in srgb, var(--text) 18%, transparent); transition: background 0.2s; }
+.switch::after { content: ""; position: absolute; top: 2px; left: 2px; width: 18px; height: 18px; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3); transition: transform 0.28s var(--spring); }
+.setting-row[aria-checked="true"] .switch { background: var(--accent); }
+.setting-row[aria-checked="true"] .switch::after { transform: translateX(16px); }
+.setting-row.static { cursor: default; }
+.setting-row .side { flex: none; display: flex; align-items: center; }
+.spin { width: 18px; height: 18px; border-radius: 50%; border: 2px solid color-mix(in srgb, var(--text) 18%, transparent); border-top-color: var(--accent); animation: spin 0.8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.update-extra { max-width: 620px; margin-top: 10px; }
+.update-extra .note { font: 12.5px/1.55 var(--mono); color: var(--del); white-space: pre-wrap; margin: 0 0 8px; }
+.update-log summary { cursor: pointer; font-size: 12.5px; color: var(--text-3); padding: 4px 2px; }
+.update-log pre { margin: 6px 0 0; max-height: 220px; overflow: auto; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--code-bg); font: 11.5px/1.5 var(--mono); color: var(--text-2); white-space: pre-wrap; }
+#settings-btn { position: relative; }
+#settings-btn.has-update::after { content: ""; position: absolute; left: 25px; top: 7px; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 2px var(--side-bg, var(--bg)); animation: pop 0.3s var(--spring) both; }
 .appearance { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; max-width: 620px; }
 .theme-card { display: flex; flex-direction: column; gap: 9px; text-align: left; color: var(--text-3); font-size: 13.5px; font-weight: 500; animation: rise-far 0.42s var(--ease) both; animation-delay: calc(var(--i, 0) * 0.05s); }
 .theme-card .preview { position: relative; aspect-ratio: 16 / 10; border-radius: 12px; border: 1px solid var(--border-strong); overflow: hidden; transition: box-shadow 0.2s, border-color 0.2s, transform 0.28s var(--spring); }
@@ -754,6 +772,7 @@ body.page-projects #dock, body.page-settings #dock { display: none; }
 .viewer-bar a.icon-btn { text-decoration: none; }
 #viewer-body { flex: 1; min-height: 0; position: relative; background: var(--code-bg); }
 #viewer-body iframe { width: 100%; height: 100%; border: 0; display: block; background: var(--code-bg); }
+#viewer-body iframe.page { background: #fff; }
 #viewer-body .image { position: absolute; inset: 0; overflow: auto; display: grid; place-items: center; padding: 20px; cursor: zoom-in; }
 #viewer-body .image img { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: 8px; box-shadow: var(--shadow); animation: rise-far 0.45s var(--apple) both; }
 #viewer-body .image.actual { place-items: start; cursor: zoom-out; }
@@ -1398,7 +1417,7 @@ function fileSize(bytes) {
   return `${(bytes / (1024 * 1024)).toFixed(bytes < 10 * 1024 * 1024 ? 1 : 0)} MB`;
 }
 const fileUrl = (entry, download) => `/api/files/${encodeURIComponent(entry.id)}${download ? "?download=1" : ""}`;
-const fileKind = (entry) => (entry.kind === "pdf" ? "PDF" : (entry.mime || "image/").split("/")[1].toUpperCase());
+const fileKind = (entry) => (entry.kind === "pdf" ? "PDF" : entry.kind === "html" ? "HTML" : (entry.mime || "image/").split("/")[1].toUpperCase());
 
 function attachment(entry) {
   const card = el("button", "block attachment");
@@ -1406,7 +1425,7 @@ function attachment(entry) {
   card.dataset.file = entry.id;
   const thumb = entry.kind === "image"
     ? `<img alt="" loading="lazy" src="${fileUrl(entry)}">`
-    : `<span class="badge">PDF</span>`;
+    : `<span class="badge">${fileKind(entry)}</span>`;
   card.innerHTML = `<span class="thumb">${thumb}</span><span class="info"><div class="name"></div>` +
     `<div class="meta">${fileKind(entry)} · ${fileSize(entry.size)}</div></span><span class="chev">${icon("chevRight")}</span>`;
   card.querySelector(".name").textContent = entry.name;
@@ -1424,14 +1443,22 @@ function openViewer(entry) {
   viewing = lastViewed = entry;
   $("#viewer-title").textContent = entry.name;
   $("#viewer-size").textContent = `${fileKind(entry)} · ${fileSize(entry.size)}`;
-  $("#viewer-kind").innerHTML = icon(entry.kind === "pdf" ? "file" : "image");
+  $("#viewer-kind").innerHTML = icon({ pdf: "file", html: "globe" }[entry.kind] || "image");
   const download = $("#viewer-download");
   download.href = fileUrl(entry, true);
   download.setAttribute("download", entry.name);
   $("#viewer-open").href = fileUrl(entry);
   const body = $("#viewer-body");
   body.textContent = "";
-  if (entry.kind === "pdf") {
+  if (entry.kind === "html") {
+    // Sandboxed twice over: here, and by the header the server sends,
+    // so the page runs on an origin of its own and never as Flash.
+    const frame = el("iframe", "page");
+    frame.title = entry.name;
+    frame.setAttribute("sandbox", "allow-scripts allow-forms allow-popups allow-modals");
+    frame.src = fileUrl(entry);
+    body.appendChild(frame);
+  } else if (entry.kind === "pdf") {
     const frame = el("iframe");
     frame.title = entry.name;
     frame.src = fileUrl(entry) + "#view=FitH";
@@ -1822,6 +1849,132 @@ function drawGeneral(body) {
     grid.appendChild(card);
   });
   markThemeCards();
+
+  body.insertAdjacentHTML("beforeend", `<h2 class="settings-section settings-gap">Conversation</h2><p class="settings-sub">What happens when a chat outgrows the model's context window. The last three exchanges always stay word for word.</p>`);
+  const row = el("button", "setting-row", `<span class="what"><b>Summarize old messages</b><span>Have the model condense what no longer fits into a summary it keeps reading. Off, the oldest messages are dropped instead, which is faster and never loses detail from the ones kept.</span></span><span class="switch" aria-hidden="true"></span>`);
+  row.type = "button";
+  row.setAttribute("role", "switch");
+  row.setAttribute("aria-checked", !!info.compact);
+  row.onclick = async () => {
+    const on = row.getAttribute("aria-checked") !== "true";
+    row.setAttribute("aria-checked", on);
+    try { info.compact = (await command("compact-setting", on ? "on" : "off")).compact; }
+    catch (error) { row.setAttribute("aria-checked", !on); showFailure(error); }
+  };
+  body.appendChild(row);
+
+  body.insertAdjacentHTML("beforeend", `<h2 class="settings-section settings-gap">Updates</h2><p class="settings-sub">New versions come from the Flash repository on GitHub, the same as /update in the terminal.</p><div class="updates-box"></div>`);
+  renderUpdates(body.querySelector(".updates-box"));
+}
+
+// Updates ------------------------------------------------------------------
+
+let updateLogOpen = false;
+let toldAboutUpdate = false;
+let waitingForRestart = false;
+
+function renderUpdates(box = document.querySelector(".updates-box")) {
+  if (!box) return;
+  const u = info.update || {};
+  const state = u.state || "idle";
+  let line = "";
+  let action = null;
+  let busy = false;
+  if (state === "checking") { line = "Checking for updates…"; busy = true; }
+  else if (state === "updating") { line = `${u.step || "Updating"}…`; busy = true; }
+  else if (state === "restarting") { line = "Restarting into the new version…"; busy = true; }
+  else if (state === "updated") {
+    line = u.message || "Updated.";
+    if (u.can_restart) action = ["Restart now", restartFlash, true];
+  } else if (state === "failed") { line = "The update did not finish."; action = ["Try again", startUpdate, true]; }
+  else if (u.available) { line = `Version ${u.latest} is available.`; action = [`Update to v${u.latest}`, startUpdate, true]; }
+  else if (u.message) { line = u.message; action = ["Try again", checkUpdates, false]; }
+  else if (u.checked) { line = "You're on the latest version."; action = ["Check again", checkUpdates, false]; }
+  else { line = "Not checked yet."; action = ["Check for updates", checkUpdates, false]; }
+
+  box.textContent = "";
+  const row = el("div", "setting-row static", `<span class="what"><b></b><span></span></span><span class="side"></span>`);
+  row.querySelector("b").textContent = `Flash v${u.current || info.version || ""}`;
+  row.querySelector(".what span").textContent = line;
+  const side = row.querySelector(".side");
+  if (busy) side.appendChild(el("span", "spin"));
+  else if (action) {
+    const [label, run, primary] = action;
+    const b = el("button", "btn small" + (primary ? " primary" : ""));
+    b.type = "button";
+    b.textContent = label;
+    b.onclick = run;
+    side.appendChild(b);
+  }
+  box.appendChild(row);
+
+  if (state === "failed" || ((state === "updating" || state === "updated") && (u.log || []).length)) {
+    const extra = el("div", "update-extra");
+    if (state === "failed" && u.message) {
+      // The message ends with the installer's own last lines, fenced.
+      extra.appendChild(el("p", "note")).textContent = u.message.replace(/```/g, "").trim();
+    }
+    if ((u.log || []).length) {
+      const log = el("details", "update-log", `<summary>Installer output</summary><pre></pre>`);
+      log.open = updateLogOpen;
+      log.ontoggle = () => { updateLogOpen = log.open; };
+      const pre = log.querySelector("pre");
+      pre.textContent = u.log.join("\n");
+      extra.appendChild(log);
+      requestAnimationFrame(() => { pre.scrollTop = pre.scrollHeight; });
+    }
+    box.appendChild(extra);
+  }
+}
+
+function onUpdate() {
+  const u = info.update || {};
+  $("#settings-btn").classList.toggle("has-update", !!u.available && u.state !== "updated" && u.state !== "restarting");
+  renderUpdates();
+  if (u.available && u.state === "idle" && !toldAboutUpdate) {
+    toldAboutUpdate = true;
+    toast(`Flash v${u.latest} is available. Update it in Settings.`);
+  }
+  if (u.state === "updated" && view !== "settings") toast("Flash updated. Open Settings to restart it.");
+  if (u.state === "failed" && view !== "settings") toast("The update did not finish. Open Settings for why.");
+  if (u.state === "restarting") waitForRestart();
+}
+
+async function checkUpdates() {
+  try { info.update = await command("update-check"); onUpdate(); }
+  catch (error) { showFailure(error); }
+}
+
+async function startUpdate() {
+  updateLogOpen = true;
+  try { info.update = await command("update"); onUpdate(); }
+  catch (error) { showFailure(error); }
+}
+
+async function restartFlash() {
+  try { info.update = await command("update-restart"); onUpdate(); }
+  catch (error) { showFailure(error); }
+}
+
+// The server goes away and comes back as the new version, with the same
+// link. Once it answers again, the page loads fresh from it.
+async function waitForRestart() {
+  if (waitingForRestart) return;
+  waitingForRestart = true;
+  const started = Date.now();
+  let wentAway = false;
+  while (Date.now() - started < 90000) {
+    await new Promise((resolve) => setTimeout(resolve, 700));
+    try {
+      await api("/api/state?lite=1");
+      if (wentAway) { location.reload(); return; }
+    } catch (error) {
+      if (error.message === "forbidden") { location.reload(); return; }
+      wentAway = true;
+    }
+  }
+  waitingForRestart = false;
+  toast("Flash did not come back. Start it again in your terminal.");
 }
 
 function markThemeCards() {
@@ -2355,6 +2508,7 @@ function apply(event) {
   if (event.seq && event.seq <= lastSeq) return;
   if (event.seq) lastSeq = event.seq;
   if (event.type === "chats" || event.type === "status" || event.type === "projects") { refreshLite(); return; }
+  if (event.type === "update") { info.update = event.update; onUpdate(); return; }
 
   const chat = chats.get(event.chat);
   if (!chat) { if (event.chat) refreshLite(); return; }
@@ -2420,6 +2574,7 @@ async function loadState() {
   renderChats();
   renderInfo();
   drawChat();
+  if (info.update) onUpdate();
   for (const event of buffered) apply(event);
   buffered = [];
   refreshContext();
@@ -2547,6 +2702,7 @@ async function openAgents() {
 
 function renderInfo() {
   renderAgents();
+  $("#settings-btn").classList.toggle("has-update", !!(info.update && info.update.available && !["updated", "restarting"].includes(info.update.state)));
   const local = !info.host_name || info.host_name === "This computer";
   $("#model-name").textContent = (local ? "" : info.host_name + " · ") + (info.model || "No model");
   const auto = !!info.auto;
@@ -3169,6 +3325,7 @@ const ACTIONS = [
   { label: "Switch host", keys: "Alt H", slash: "/host", run: () => openModels(true) },
   { label: "Projects", keys: "Alt P", slash: "/projects", run: showProjects },
   { label: "Settings and usage", keys: "Alt ,", slash: "/settings", run: () => showSettings() },
+  { label: "Update Flash", keys: "", slash: "/update", run: () => { showSettings("general"); checkUpdates(); } },
   { label: "Import memory from another AI", keys: "", slash: "/import", run: () => { showSettings("memory"); importMemory(); } },
   { label: "Search chats", keys: "Alt F", slash: "/search", run: () => openSearch() },
   { label: "Show or hide the file panel", keys: "Alt V", slash: "/file", run: toggleViewer },
