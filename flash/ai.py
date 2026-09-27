@@ -36,6 +36,7 @@ from . import (
     terminal,
 )
 from .cli import parse_args
+from .dashes import undash
 from .envfile import set_env_var, unset_env_var
 from .images import resolve_image_path
 from .latex import render_latex
@@ -992,7 +993,8 @@ def _response_parts(response) -> tuple[str, str, list]:
     if message is None:
         return "", "", []
 
-    text = getattr(message, "content", "") or ""
+    # The prompt asks for no dashes; this makes sure of it.
+    text = undash(getattr(message, "content", "") or "")
     thinking = getattr(message, "thinking", "") or ""
     tool_calls = list(getattr(message, "tool_calls", None) or [])
 
