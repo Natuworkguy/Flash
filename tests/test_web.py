@@ -1839,3 +1839,36 @@ class TestExtensionsInThePage:
             web.command(session, {
                 "name": "extension-remove", "arg": "weather",
             })
+
+
+class TestRemovingHosts:
+    def test_the_host_in_use_cannot_be_removed(self, monkeypatch):
+        web.workspace.add_host("Studio", "10.0.0.5")
+        monkeypatch.setattr(ai.Config, "host", "http://10.0.0.5:11434")
+
+        with pytest.raises(ValueError, match="in use"):
+            web.command(web.Session(), {
+                "name": "host-remove", "arg": "http://10.0.0.5:11434",
+            })
+
+    def test_another_saved_host_can(self, monkeypatch):
+        web.workspace.add_host("Studio", "10.0.0.5")
+        monkeypatch.setattr(ai.Config, "host", "http://127.0.0.1:11434")
+
+        result = web.command(web.Session(), {
+            "name": "host-remove", "arg": "http://10.0.0.5:11434",
+        })
+
+        assert result == {"removed": True}
+        listed = web.command(web.Session(), {"name": "hosts"})
+        assert [h["name"] for h in listed["hosts"]] == ["This computer"]
+        # 127.0.0.1 is this computer, and the page is told so.
+        assert listed["current"] == web.workspace.LOCAL_HOST
+
+    def test_status_names_a_loopback_host_this_computer(self, monkeypatch):
+        monkeypatch.setattr(ai.Config, "host", "http://127.0.0.1:11434")
+
+        shown = web.status(ai)
+
+        assert shown["host_name"] == "This computer"
+        assert shown["host_url"] == web.workspace.LOCAL_HOST

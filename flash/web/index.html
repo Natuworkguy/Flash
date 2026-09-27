@@ -3616,17 +3616,18 @@ async function openModels(focusHosts = false) {
   // Checking every host takes as long as the slowest; the menu is up
   // before that, and the dots fill in when it answers.
   const result = await command("hosts").catch(() => null);
-  if (result && menuEl && !slashOpen) { hosts = result.hosts; drawModelMenu(focusHosts, true); }
+  if (result && menuEl && !slashOpen) { hosts = result.hosts; info.host_url = result.current; drawModelMenu(focusHosts, true); }
 }
 
 function drawModelMenu(focusHosts, keepSelection) {
-  const active = normalHost(info.host);
+  const active = info.host_url || normalHost(info.host);
   const shown = hosts.length ? hosts : [{ name: "This computer", url: "http://localhost:11434" }];
   if (!shown.some((h) => h.url === active)) shown.push({ name: info.host_name || "Current", url: active });
   const rows = [{ header: true, html: "Host" }];
   for (const h of shown) {
     const health = h.up === undefined ? "" : h.up ? " up" : " down";
-    const removable = h.url !== "http://localhost:11434";
+    // Only a saved host can go, and not while it is the one in use.
+    const removable = h.saved && h.url !== active;
     rows.push({
       html: `<span class="health${health}"></span><span class="stack"><span class="label">${esc(h.name)}</span><span class="sub">${esc(h.url.replace(/^https?:\/\//, ""))}</span></span>` +
         (removable ? `<span class="remove" data-remove="${esc(h.url)}" data-tip="Remove host">${icon("x")}</span>` : ""),
@@ -3660,7 +3661,8 @@ async function switchHost(url, reopen) {
   try {
     const result = await command("host", url);
     info.host = result.host;
-    const known = hosts.find((h) => h.url === result.host);
+    info.host_url = result.host_url || result.host;
+    const known = hosts.find((h) => h.url === info.host_url);
     info.host_name = known ? known.name : result.host;
     models = result.models || [];
     renderInfo();
@@ -3670,9 +3672,14 @@ async function switchHost(url, reopen) {
 }
 
 async function removeHost(url) {
-  await command("host-remove", url).catch(showFailure);
-  hosts = hosts.filter((h) => h.url !== url);
-  drawModelMenu(true);
+  let result;
+  try { result = await command("host-remove", url); } catch (error) { showFailure(error); return; }
+  if (!result.removed) toast("That host was not saved, so there was nothing to remove.");
+  // What the server has now, rather than what the page assumes.
+  const listed = await command("hosts").catch(() => null);
+  hosts = listed ? listed.hosts : hosts.filter((h) => h.url !== url);
+  if (listed) info.host_url = listed.current;
+  drawModelMenu(true, true);
 }
 
 document.addEventListener("mousedown", (e) => { if (menuEl && !menuEl.contains(e.target) && !e.target.closest("#model-btn, #agents-btn, #project-btn")) { closeMenu(); slashOpen = false; } });
