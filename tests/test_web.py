@@ -2079,3 +2079,68 @@ class TestSwitchingLan:
             os.environ.pop(web.TOKEN_ENV, None)
 
         assert ran["argv"][3:] == ["--web", "--lan", "--no-open"]
+
+
+class TestSlowHosts:
+    def test_a_host_that_never_answers_is_not_waited_on(self, monkeypatch):
+        release = threading.Event()
+
+        class Silent:
+            def __init__(self, host=None):
+                pass
+
+            def list(self):
+                release.wait(5)
+                return SimpleNamespace(models=[])
+
+        monkeypatch.setattr(web.ollama, "Client", Silent)
+        monkeypatch.setattr(web, "MODEL_LIST_SECONDS", 0.1)
+        started = time.monotonic()
+        try:
+            result = web.command(web.Session(), {"name": "model"})
+        finally:
+            release.set()
+
+        assert time.monotonic() - started < 1
+        assert result["models"] == [] and result["reachable"] is False
+
+    def test_a_host_that_answers_lists_its_models(self, monkeypatch):
+        class Up:
+            def __init__(self, host=None):
+                pass
+
+            def list(self):
+                return SimpleNamespace(models=[
+                    SimpleNamespace(model="b"), SimpleNamespace(model="a"),
+                ])
+
+        monkeypatch.setattr(web.ollama, "Client", Up)
+
+        result = web.command(web.Session(), {"name": "model"})
+
+        assert result["models"] == ["a", "b"] and result["reachable"]
+
+    def test_switching_to_a_down_host_does_not_ask_it_for_models(
+        self, monkeypatch
+    ):
+        asked = []
+
+        class Tracked:
+            def __init__(self, host=None):
+                pass
+
+            def list(self):
+                asked.append(True)
+                return SimpleNamespace(models=[])
+
+        monkeypatch.setattr(web.ollama, "Client", Tracked)
+        monkeypatch.setattr(web.workspace, "host_up", lambda url: False)
+        monkeypatch.setattr(ai, "set_config_var", lambda *a: None)
+        monkeypatch.setattr(ai, "forget_model_facts", lambda: None)
+
+        result = web.command(web.Session(), {
+            "name": "host", "arg": "10.0.0.9",
+        })
+
+        assert result["up"] is False and result["models"] == []
+        assert asked == []
