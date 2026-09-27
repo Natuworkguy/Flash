@@ -237,3 +237,46 @@ class TestSummary:
         merged = context.merge_summary([user("a")], "   ")
 
         assert merged == [user("a")]
+
+
+class TestKeepingTheThread:
+    def test_the_reply_cannot_take_the_whole_window(self):
+        # MAX_OUTPUT_TOKENS set to the window left history nothing.
+        budget = context.history_budget(
+            263000, system_tokens=58500, output_tokens=262144
+        )
+
+        assert budget > 100000
+
+    def test_the_last_exchanges_survive_a_tight_budget(self):
+        messages = []
+        for index in range(6):
+            messages.extend([
+                user(f"question {index}"),
+                assistant("", ["read"]),
+                tool("read", f"file {index} " + "y" * 4000),
+                assistant(f"answer {index}"),
+            ])
+
+        result = context.trim(messages, 900)
+        said = context.transcript(result.kept)
+
+        for index in (3, 4, 5):
+            assert f"question {index}" in said
+            assert f"answer {index}" in said
+        assert "question 0" not in said
+
+    def test_old_tool_output_is_cut_before_an_exchange_is_dropped(self):
+        messages = [
+            user("first"), assistant("", ["read"]),
+            tool("read", "z" * 6000), assistant("read it"),
+            user("second"), assistant("done"),
+        ]
+
+        result = context.trim(messages, 400)
+        squeezed = [m for m in result.kept if m.get("role") == "tool"]
+
+        assert not result.lost
+        assert squeezed[0]["content"].endswith(context.TOOL_STUB_NOTE)
+        # The caller's messages are never changed underneath it.
+        assert messages[2]["content"] == "z" * 6000

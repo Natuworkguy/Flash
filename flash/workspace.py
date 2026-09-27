@@ -329,10 +329,12 @@ def folder_suggestions(typed: str) -> list[str]:
 
 # --- Files the agent showed ---------------------------------------------
 
-# What can be shown, and as what. Only types a browser displays without
-# running anything: no SVG or HTML, which could carry a script onto the
-# page's own origin.
+# What can be shown, and as what. A page is the one type that can run a
+# script, so it is only ever served sandboxed, on an origin of its own
+# (see web.Handler._file). SVG stays out: it has no sandboxed way in.
 SHOWN_TYPES = {
+    ".html": "text/html",
+    ".htm": "text/html",
     ".png": "image/png",
     ".jpg": "image/jpeg",
     ".jpeg": "image/jpeg",
@@ -356,7 +358,9 @@ def keep_file(source: str) -> dict:
     path = Path(source)
     suffix = path.suffix.lower()
     if suffix not in SHOWN_TYPES:
-        raise WorkspaceError(f"{path.name} is not an image or a PDF")
+        raise WorkspaceError(
+            f"{path.name} is not an image, a PDF, or a web page"
+        )
 
     size = path.stat().st_size
     if size > MAX_SHOWN_BYTES:
@@ -373,7 +377,11 @@ def keep_file(source: str) -> dict:
         "name": path.name,
         "size": size,
         "mime": SHOWN_TYPES[suffix],
-        "kind": "pdf" if suffix == ".pdf" else "image",
+        "kind": (
+            "pdf" if suffix == ".pdf"
+            else "html" if SHOWN_TYPES[suffix] == "text/html"
+            else "image"
+        ),
     }
 
 
