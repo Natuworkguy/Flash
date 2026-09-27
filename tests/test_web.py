@@ -107,6 +107,21 @@ class TestTurns:
         stats = next(e for e in seen if e["type"] == "stats")
         assert (stats["tokens"], stats["rate"]) == (4, 10.0)
 
+    def test_a_streamed_reply_comes_without_dashes(self):
+        FakeClient.scripts = [[
+            part("It works \u2014"), part(" mostly, pages 1\u2013"),
+            part("3."), part(done=True, tokens=4),
+        ]]
+        session = web.Session()
+        drain = events_of(session)
+        chat = session.new_chat()
+
+        run(session, chat, "hi")
+
+        shown = "".join(e["text"] for e in drain() if e["type"] == "token")
+        assert shown == "It works, mostly, pages 1-3."
+        assert chat.messages[-1]["content"] == shown
+
     def test_the_first_message_names_the_chat(self):
         FakeClient.scripts = [[part("ok", done=True)]]
         session = web.Session()

@@ -59,6 +59,7 @@ from . import (
     updater,
     workspace,
 )
+from .dashes import DashGuard
 from .sysprompt import model_sees_images
 from .theme import (
     ACCENT,
@@ -1083,7 +1084,9 @@ def stream_reply(
     from . import ai  # deferred: ai imports half of Flash
 
     out = Streamed()
-    content: list[str] = []
+    # The prompt asks for no dashes; this makes sure of it, a
+    # token at a time.
+    content = DashGuard()
     thinking: list[str] = []
 
     parts = client.chat(
@@ -1110,8 +1113,8 @@ def stream_reply(
                 thinking.append(thought)
                 chat.thinking += thought
                 session.emit(chat, {"type": "thinking", "text": thought})
+            text = content.feed(text) if text else ""
             if text:
-                content.append(text)
                 chat.partial += text
                 session.emit(chat, {"type": "token", "text": text})
 
@@ -1127,7 +1130,11 @@ def stream_reply(
         if close is not None:
             close()
 
-    out.content = "".join(content)
+    rest = content.flush()
+    if rest:
+        chat.partial += rest
+        session.emit(chat, {"type": "token", "text": rest})
+    out.content = content.text()
     out.thinking = "".join(thinking)
     return out
 

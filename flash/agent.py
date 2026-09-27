@@ -24,6 +24,7 @@ from rich.console import Group, RenderableType
 from rich.live import Live
 from rich.text import Text
 
+from .dashes import undash
 from .sysprompt import get_model_system_prompt
 from .theme import (
     ACCENT,
@@ -265,7 +266,8 @@ def _run(entry: SubAgent) -> None:
         _update(
             entry,
             status=DONE,
-            result=final.strip() or "(sub-agent finished with no output)",
+            result=undash(final).strip()
+            or "(sub-agent finished with no output)",
             finished=time.time(),
         )
     except Exception as e:  # noqa: BLE001
