@@ -1379,7 +1379,68 @@ function pullMath(text, spans) {
   const stash = (tex, display, raw) => { spans.push({ tex, display, raw }); return `\uE000${spans.length - 1}\uE001`; };
   text = text.replace(DISPLAY_MATH_RE, (m, a, b) => stash(a ?? b, true, m));
   text = text.replace(INLINE_MATH_RE, (m, a, b) => (a !== undefined && !looksLikeMath(a) ? m : stash(a ?? b, false, m)));
+  text = pullBareMath(text, stash);
   return text.replace(/\uE002(\d+)\uE003/g, (_, i) => code[+i]);
+}
+
+// Models often write a formula with no $ around it at all:
+// "looks like \sum_{i=1}^{n} i^2 = \frac{n(n+1)(2n+1)}{6}." That is
+// still math. A run of math-looking words counts when it holds a real
+// LaTeX command and every command in it is one: a Windows path's
+// \Users, or a \n in prose, is not.
+const MATH_COMMANDS = new Set(("frac dfrac tfrac sum prod int iint oint lim sqrt cdot times div pm mp " +
+  "leq geq le ge neq ne approx equiv sim propto infty partial nabla to rightarrow leftarrow " +
+  "Rightarrow Leftarrow leftrightarrow Leftrightarrow mapsto implies iff in notin subset subseteq supset " +
+  "supseteq cup cap setminus emptyset forall exists neg land lor oplus otimes circ log ln exp sin cos tan " +
+  "sec csc cot arcsin arccos arctan sinh cosh tanh min max det dim mod bmod pmod gcd binom choose " +
+  "alpha beta gamma delta epsilon varepsilon zeta eta theta vartheta iota kappa lambda mu nu xi pi varpi " +
+  "rho sigma tau upsilon phi varphi chi psi omega Gamma Delta Theta Lambda Xi Pi Sigma Phi Psi Omega " +
+  "mathbb mathbf mathrm mathcal mathit text operatorname left right big Big bigg Bigg hat bar vec dot ddot " +
+  "tilde overline underline overbrace underbrace ldots cdots dots vdots ddots quad qquad prime degree angle " +
+  "perp parallel mid vert Vert langle rangle lceil rceil lfloor rfloor").split(" "));
+const MATH_WORD = /[\\^_{}=<>+]/;
+
+function pullBareMath(text, stash) {
+  if (!text.includes("\\")) return text;
+  return text.split("\n").map((line) => {
+    if (!line.includes("\\")) return line;
+    const words = line.split(/(\s+)/);
+    const mathy = (w) => w && !/\s/.test(w) && !/[\uE000-\uE003]/.test(w) &&
+      (MATH_WORD.test(w) || /^[A-Za-z]$/.test(w) || /^[\d.,()+\-*/=|]+$/.test(w));
+    const out = [];
+    let i = 0;
+    while (i < words.length) {
+      if (!mathy(words[i])) { out.push(words[i]); i++; continue; }
+      // The longest run of math words, spaces between them included. A
+      // short word between two math words is part of it too: the dx of
+      // an integral, the x of 2 x.
+      let j = i;
+      const joins = (k) => k + 2 < words.length && /^\s+$/.test(words[k + 1]);
+      for (;;) {
+        if (joins(j) && mathy(words[j + 2])) { j += 2; continue; }
+        if (joins(j) && /^[A-Za-z]{1,2}$/.test(words[j + 2]) && joins(j + 2) && mathy(words[j + 4])) { j += 4; continue; }
+        break;
+      }
+      let run = words.slice(i, j + 1);
+      // An article at the front is English, not a variable.
+      const lead = [];
+      while (run.length > 1 && run[0] === "a") lead.push(...run.splice(0, 2));
+      let body = run.join("");
+      // Sentence punctuation after it stays in the sentence; the comma
+      // of a \, spacing command is part of the math.
+      const tail = body.match(/(?<!\\)[.,;:!?]+$/);
+      if (tail) body = body.slice(0, -tail[0].length);
+      const commands = body.match(/\\[A-Za-z]+/g) || [];
+      if (commands.length && commands.every((c) => MATH_COMMANDS.has(c.slice(1)))) {
+        const alone = !lead.length && !line.slice(0, line.indexOf(words[i])).trim() && !line.slice(line.lastIndexOf(words[j]) + words[j].length).replace(/[.,;:!?]+$/, "").trim();
+        out.push(...lead, stash(body, alone, body), tail ? tail[0] : "");
+      } else {
+        out.push(...words.slice(i, j + 1));
+      }
+      i = j + 1;
+    }
+    return out.join("");
+  }).join("\n");
 }
 
 function renderMath(span) {
