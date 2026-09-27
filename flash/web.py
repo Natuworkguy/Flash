@@ -21,6 +21,7 @@ import io
 import ipaddress
 import json
 import os
+import re
 import secrets
 import socket
 import sys
@@ -82,6 +83,13 @@ PAGE = WEB_DIR / "index.html"
 # pop-ups, all without the same-origin grant that would let it act as
 # Flash.
 HTML_SANDBOX = "sandbox allow-scripts allow-forms allow-popups allow-modals"
+
+# The addresses the page answers to. Each serves the same page, which
+# opens whatever the address names: a chat, a project, a settings tab.
+PAGE_PATHS = re.compile(
+    r"^/(?:c/[0-9a-f]{8}|p/[0-9a-f]{8}|projects|skills|extensions"
+    r"|settings(?:/(?:general|usage|memory))?)?/?$"
+)
 
 STATIC = {"orbit.woff2": "font/woff2", "logo-icon.svg": "image/svg+xml"}
 
@@ -1852,13 +1860,13 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         if not self._authorized(query):
-            if url.path == "/":
+            if PAGE_PATHS.match(url.path):
                 self._refuse_page()
             else:
                 self._refuse()
             return
 
-        if url.path == "/":
+        if PAGE_PATHS.match(url.path):
             # The page, and a cookie holding the token: HttpOnly so no
             # script can read it, SameSite=Strict so no other site's
             # request carries it, and no expiry, so it goes when the

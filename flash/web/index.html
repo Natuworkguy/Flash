@@ -156,7 +156,7 @@ body.side-closed #sidebar { margin-left: -272px; }
 }
 .chat:hover { background: var(--hover); color: var(--text); }
 .chat.current { background: var(--pressed); color: var(--text); }
-.chat .open { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; padding: 7px 10px; text-align: left; }
+.chat .open { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; padding: 7px 10px; text-align: left; color: inherit; text-decoration: none; }
 .chat .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; transition: color 0.14s; }
 .chat:hover .name { color: var(--text-3); }
 .chat .proj { flex: none; max-width: 42%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; font-weight: 500; line-height: 18px; padding: 0 7px; border-radius: 999px; color: var(--text-3); background: color-mix(in srgb, var(--text) 6%, transparent); border: 1px solid var(--border); }
@@ -1257,6 +1257,55 @@ let hosts = [];            // { name, url, up }
 let view = "chat";         // "chat" | "projects" | "project" | "settings" | "skills" | "extensions"
 let viewProject = null;    // the project page shown, or the project a new chat starts in
 
+// Addresses. Every view has one, so a chat can be reloaded, bookmarked,
+// opened in a new tab, or left with Back. The server answers each with
+// this same page, which reads the address and opens what it names.
+let replaceUrl = false;    // the next change replaces the entry: a new chat getting its id
+
+function routeFor() {
+  if (view === "chat") return current ? `/c/${current}` : "/";
+  if (view === "project") return viewProject ? `/p/${viewProject}` : "/projects";
+  if (view === "settings") return settingsTab && settingsTab !== "general" ? `/settings/${settingsTab}` : "/settings";
+  return `/${view}`;
+}
+
+function syncUrl() {
+  const path = routeFor();
+  const replace = replaceUrl;
+  replaceUrl = false;
+  if (location.pathname === path) return;
+  history[replace ? "replaceState" : "pushState"](null, "", path);
+}
+
+// What an address names, set without drawing: the caller draws.
+function routeTo(path) {
+  let m;
+  current = null;
+  viewProject = null;
+  view = "chat";
+  if ((m = path.match(/^\/c\/([0-9a-f]{8})\/?$/))) {
+    if (chats.has(m[1])) { current = m[1]; viewProject = chats.get(m[1]).project || null; }
+    else { toast("That chat is not here any more."); replaceUrl = true; }
+  } else if ((m = path.match(/^\/p\/([0-9a-f]{8})\/?$/))) {
+    if (projectOf(m[1])) { view = "project"; viewProject = m[1]; }
+    else { view = "projects"; replaceUrl = true; }
+  } else if ((m = path.match(/^\/settings(?:\/(general|usage|memory))?\/?$/))) {
+    view = "settings";
+    settingsTab = m[1] || "general";
+  } else if ((m = path.match(/^\/(projects|skills|extensions)\/?$/))) {
+    view = m[1];
+  } else if (path !== "/") {
+    replaceUrl = true;
+  }
+}
+
+window.addEventListener("popstate", () => {
+  routeTo(location.pathname);
+  closeMenu();
+  renderChats();
+  morph(drawChat);
+});
+
 function pref(key, fallback) { try { return localStorage.getItem("flash-" + key) ?? fallback; } catch (_) { return fallback; } }
 function savePref(key, value) { try { localStorage.setItem("flash-" + key, value); } catch (_) { /* per viewer only */ } }
 
@@ -1752,6 +1801,7 @@ function drawChat() {
   input.placeholder = empty ? (inProject ? `Message Flash in ${inProject.name}` : "Message Flash") : "Reply to Flash";
   renderProjectBtn();
   renderPending();
+  syncUrl();
   greet();
   markSide();
   updateSend();
@@ -1781,6 +1831,7 @@ function drawPage() {
   const pages = { projects: drawProjects, settings: drawSettings, skills: drawSkillsPage, extensions: drawExtensionsPage };
   (pages[view] || drawProject)();
   renderPending();
+  syncUrl();
   markSide();
   updateSend();
   logEl.scrollTop = 0;
@@ -1932,6 +1983,8 @@ function drawSettings() {
   const thumb = tabs.querySelector(".thumb");
   const select = (tab, animate) => {
     settingsTab = tab;
+    replaceUrl = true;
+    syncUrl();
     for (const b of tabs.querySelectorAll("button")) {
       b.classList.toggle("on", b.dataset.tab === tab);
       b.setAttribute("aria-selected", b.dataset.tab === tab);
@@ -3099,6 +3152,8 @@ function arrived(entry) {
   if (entry.type === "file") openViewer(entry);
 }
 
+let routed = false;
+
 async function loadState() {
   loading = true;
   buffered = [];
@@ -3111,6 +3166,7 @@ async function loadState() {
   if (state.words && state.words.length) words = state.words;
   showScene(state.scene);
   lastSeq = state.seq;
+  if (!routed) { routed = true; routeTo(location.pathname); }
   if (current && !chats.has(current)) current = null;
   loading = false;
   renderChats();
@@ -3190,8 +3246,9 @@ function renderChats() {
     const fresh = before && !before.has(id);
     const row = el("div", "chat" + (id === current ? " current" : "") + (fresh ? " fresh" : ""));
     row.dataset.chat = id;
-    const open = el("button", "open", `<span class="name"></span>`);
-    open.type = "button";
+    const open = el("a", "open", `<span class="name"></span>`);
+    open.href = `/c/${id}`;
+    open.draggable = false;
     open.firstChild.textContent = chat.title;
     const project = chat.project && projectOf(chat.project);
     if (project) {
@@ -3199,7 +3256,13 @@ function renderChats() {
       pill.textContent = project.name;
       open.prepend(pill);
     }
-    open.onclick = () => { switchTo(id); if (innerWidth <= 800) closeSide(); };
+    open.onclick = (e) => {
+      // With a modifier, the browser opens the link as it would any other.
+      if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+      e.preventDefault();
+      switchTo(id);
+      if (innerWidth <= 800) closeSide();
+    };
     open.ondblclick = () => renameInSide(id, row);
     row.appendChild(open);
     if (chat.busy || chat.queued) row.appendChild(el("span", "live"));
@@ -3443,6 +3506,7 @@ async function createChat(project = "") {
   current = id;
   view = "chat";
   viewProject = project || null;
+  replaceUrl = true;
   renderChats();
   drawChat();
 }
