@@ -339,15 +339,9 @@ pre code { display: block; padding: 2px 16px 14px; overflow-x: auto; font-size: 
 .katex:has(> math[display="block"]) { display: block; margin: 0.9em 0; overflow-x: auto; overflow-y: hidden; padding: 2px 0; }
 .katex math[display="block"] { font-size: 1.22em; }
 
-/* The loader, until the reply's first word: the bolt charging, and a
-   word for what is happening that changes every few seconds. */
-.loader { display: flex; align-items: center; gap: 11px; padding: 10px 0 4px; font-size: 14.5px; color: var(--text-3); }
-.loader .bolt { position: relative; flex: none; width: 24px; height: 24px; }
-.loader .bolt::before, .loader .bolt::after { content: ""; position: absolute; inset: 0; -webkit-mask: url(/static/logo-icon.svg) center / contain no-repeat; mask: url(/static/logo-icon.svg) center / contain no-repeat; }
-.loader .bolt::before { background: url(/static/logo-icon.svg) center / contain no-repeat; image-rendering: pixelated; animation: charge 1.6s ease-in-out infinite; }
-.loader .bolt::after { background: linear-gradient(180deg, transparent 30%, rgba(255, 255, 255, 0.85) 50%, transparent 70%) 0 0 / 100% 300% no-repeat; animation: surge 1.6s cubic-bezier(0.45, 0, 0.3, 1) infinite; }
-@keyframes charge { 0%, 100% { opacity: 0.55; transform: scale(0.94); filter: drop-shadow(0 0 0 rgba(255, 140, 20, 0)); } 50% { opacity: 1; transform: scale(1.04); filter: drop-shadow(0 0 7px rgba(255, 140, 20, 0.6)); } }
-@keyframes surge { from { background-position: 0 100%; } to { background-position: 0 -50%; } }
+/* The loader, until the reply's first word: a word for what is
+   happening, changing every few seconds, and how long it has been. */
+.loader { display: flex; align-items: center; gap: 9px; padding: 10px 0 4px; font-size: 14.5px; color: var(--text-3); }
 .loader .word { display: inline-grid; }
 .loader .word span { grid-area: 1 / 1; white-space: nowrap; background: linear-gradient(90deg, var(--text-3) 25%, var(--text) 50%, var(--text-3) 75%) 0 0 / 200% 100%; -webkit-background-clip: text; background-clip: text; color: transparent; animation: shine 1.8s linear infinite, word-in 0.45s var(--ease) both; }
 .loader .word span.out { animation: shine 1.8s linear infinite, word-out 0.3s var(--ease) both; }
@@ -355,7 +349,7 @@ pre code { display: block; padding: 2px 16px 14px; overflow-x: auto; font-size: 
 @keyframes word-out { to { opacity: 0; transform: translateY(-7px); filter: blur(3px); } }
 .loader .elapsed { font-size: 13px; font-variant-numeric: tabular-nums; opacity: 0; transition: opacity 0.4s; }
 .loader .elapsed.shown { opacity: 0.8; }
-@media (prefers-reduced-motion: reduce) { .loader .bolt::before, .loader .bolt::after, .loader .word span { animation: none; } .loader .bolt::after { display: none; } .loader .word span { color: var(--text-3); background: none; } }
+@media (prefers-reduced-motion: reduce) { .loader .word span { animation: none; color: var(--text-3); background: none; } }
 .cursor { display: inline-block; width: 9px; height: 9px; border-radius: 50%; background: var(--text); margin-left: 4px; vertical-align: 1px; animation: pulse 1s ease-in-out infinite; }
 
 #jump {
@@ -553,7 +547,7 @@ html.theme-switch::view-transition-new(root) { animation: theme-sweep 0.8s cubic
 
 /* Pages: projects and a project ------------------------------------- */
 body.on-page #hero, body.on-page #suggestions { display: none; }
-body.page-projects #dock, body.page-settings #dock { display: none; }
+body.page-projects #dock, body.page-settings #dock, body.page-tool #dock { display: none; }
 .page { padding: 18px 0 40px; animation: rise 0.22s cubic-bezier(0.2, 0, 0, 1); }
 .page-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 22px; }
 .page h1 { font: 600 28px/1.2 var(--brand); letter-spacing: -0.025em; margin: 0; }
@@ -593,7 +587,7 @@ body.page-projects #dock, body.page-settings #dock { display: none; }
 .section-label { font-size: 12px; font-weight: 500; color: var(--text-3); margin: 0 0 8px; }
 
 /* Settings */
-.tabs { position: relative; display: inline-flex; padding: 3px; border-radius: 11px; background: var(--hover); margin: -6px 0 22px; }
+.tabs { position: relative; display: inline-flex; max-width: 100%; overflow-x: auto; scrollbar-width: none; padding: 3px; border-radius: 11px; background: var(--hover); margin: -6px 0 22px; }
 .tabs button { position: relative; z-index: 1; padding: 6px 16px; border-radius: 8px; font-size: 13.5px; font-weight: 500; color: var(--text-3); transition: color 0.2s; }
 .tabs button.on { color: var(--text); }
 .tabs .thumb { position: absolute; top: 3px; bottom: 3px; left: 3px; border-radius: 8px; background: var(--surface); box-shadow: 0 1px 3px rgba(0, 0, 0, 0.18), 0 0 0 1px var(--border); transition: left 0.34s var(--spring), width 0.34s var(--spring); }
@@ -695,6 +689,33 @@ body.page-projects #dock, body.page-settings #dock { display: none; }
 .mem-empty { border: 1px dashed var(--border-strong); border-radius: 14px; padding: 28px 22px; text-align: center; color: var(--text-3); font-size: 14px; }
 .mem-empty b { display: block; color: var(--text); font-size: 15px; font-weight: 600; margin-bottom: 6px; }
 .mem-empty .btn { margin-top: 14px; }
+.item-list { border: 1px solid var(--border); border-radius: 14px; background: var(--surface); overflow: hidden; }
+.item-row { display: flex; align-items: flex-start; gap: 12px; width: 100%; padding: 13px 14px 13px 16px; text-align: left; border-top: 1px solid var(--border); animation: rise 0.3s var(--ease) both; animation-delay: calc(var(--i, 0) * 0.03s); }
+.item-row:first-child { border-top: 0; }
+button.item-row:hover { background: var(--hover); }
+.item-row .main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.item-row .top { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.item-row .name { font: 500 13.5px var(--mono); color: var(--text); }
+.item-row .ver { font-size: 12px; color: var(--text-3); }
+.item-row .desc { font-size: 13.5px; color: var(--text-3); line-height: 1.45; }
+.item-row .chips { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 3px; }
+.chip { font: 11.5px var(--mono); color: var(--text-2); padding: 1px 7px; border-radius: 6px; background: var(--hover); border: 1px solid var(--border); }
+.item-row .src { font: 11.5px var(--mono); color: var(--text-3); overflow-wrap: anywhere; }
+.item-row .chev svg { width: 15px; height: 15px; color: var(--text-3); margin-top: 3px; }
+.made-by { font: 500 11px var(--sans); line-height: 18px; padding: 0 8px; border-radius: 999px; color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent); }
+.item-row .remove { flex: none; }
+.item-row .remove.sure { color: var(--del); border-color: color-mix(in srgb, var(--del) 40%, transparent); }
+.warn-list { margin: 0 0 12px; padding: 10px 14px; border-radius: 12px; font-size: 13px; color: var(--del); background: color-mix(in srgb, var(--del) 8%, transparent); border: 1px solid color-mix(in srgb, var(--del) 25%, transparent); }
+.dialog h2.mono-title { font: 600 17px var(--mono); display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.skill-read { max-height: 48vh; overflow: auto; margin: 12px 0 4px; padding: 12px 16px; border: 1px solid var(--border); border-radius: 12px; background: var(--code-bg); font-size: 14px; }
+.skill-read > :first-child { margin-top: 0; }
+.field .count { float: right; font-size: 11.5px; color: var(--text-3); font-weight: 400; }
+.field textarea.mono { font: 12.5px/1.55 var(--mono); }
+.ext-preview { margin: 14px 0 6px; padding: 12px 14px; border: 1px solid var(--border); border-radius: 12px; background: var(--code-bg); }
+.ext-preview .name { font: 600 14px var(--mono); }
+.ext-preview ul { margin: 8px 0 0; padding-left: 18px; font-size: 13.5px; color: var(--text-2); }
+.ext-preview .note { margin: 10px 0 0; font-size: 13px; color: var(--text-3); }
+.ext-preview .note.warn { color: var(--del); }
 .mem-path { font: 12px var(--mono); color: var(--text-3); margin: 10px 2px 0; }
 .steps { display: flex; flex-direction: column; gap: 20px; margin: 18px 0 16px; }
 .step { display: grid; grid-template-columns: 24px minmax(0, 1fr); gap: 12px; }
@@ -948,6 +969,8 @@ body.page-projects #dock, body.page-settings #dock { display: none; }
     <button class="side-row" id="new-chat" data-tip="New chat" data-keys="Alt N"><span class="plus"></span>New chat</button>
     <button class="side-row" id="search-btn" data-tip="Search chats" data-keys="Alt F"></button>
     <button class="side-row" id="projects-btn" data-tip="Projects" data-keys="Alt P"></button>
+    <button class="side-row" id="skills-btn" data-tip="Skills"></button>
+    <button class="side-row" id="extensions-btn" data-tip="Extensions"></button>
     <div class="side-label">Recents</div>
     <nav id="chats"></nav>
     <div class="side-foot">
@@ -1035,6 +1058,8 @@ body.page-projects #dock, body.page-settings #dock { display: none; }
 // Icons: stroked, 24-unit paths, drawn in the text colour.
 
 const ICON = {
+  book: '<path d="M12 7v14"/><path d="M3 18a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h5a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-6a3 3 0 0 0-3 3 3 3 0 0 0-3-3z"/>',
+  puzzle: '<path d="M15.39 4.39a1 1 0 0 0 1.68-.474 2.5 2.5 0 1 1 3.014 3.015 1 1 0 0 0-.474 1.68l1.683 1.682a2.414 2.414 0 0 1 0 3.414L19.61 15.39a1 1 0 0 1-1.68-.474 2.5 2.5 0 1 0-3.014 3.015 1 1 0 0 1 .474 1.68l-1.683 1.682a2.414 2.414 0 0 1-3.414 0L8.61 19.61a1 1 0 0 0-1.68.474 2.5 2.5 0 1 1-3.014-3.015 1 1 0 0 0 .474-1.68l-1.683-1.682a2.414 2.414 0 0 1 0-3.414L4.39 8.61a1 1 0 0 1 1.68.474 2.5 2.5 0 1 0 3.014-3.015 1 1 0 0 1-.474-1.68l1.683-1.682a2.414 2.414 0 0 1 3.414 0z"/>',
   monitor: '<rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/>',
   settings: '<path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/>',
   panel: '<rect x="3" y="3" width="18" height="18" rx="3"/><path d="M9 3v18"/>',
@@ -1191,7 +1216,7 @@ let focusedIndex = -1;
 let models = [];
 let projects = [];         // { id, name, path, instructions, created }
 let hosts = [];            // { name, url, up }
-let view = "chat";         // "chat" | "projects" | "project" | "settings"
+let view = "chat";         // "chat" | "projects" | "project" | "settings" | "skills" | "extensions"
 let viewProject = null;    // the project page shown, or the project a new chat starts in
 
 function pref(key, fallback) { try { return localStorage.getItem("flash-" + key) ?? fallback; } catch (_) { return fallback; } }
@@ -1667,7 +1692,7 @@ function drawChat() {
   const files = chatNow ? chatNow.log.filter((e) => e.type === "file") : [];
   if (viewing && !files.some((f) => f.id === viewing.id)) closeViewer();
   lastViewed = files.length ? files[files.length - 1] : null;
-  document.body.classList.remove("on-page", "page-projects", "page-project", "page-settings");
+  document.body.classList.remove("on-page", "page-projects", "page-project", "page-settings", "page-tool");
   const chat = chats.get(current);
   messagesEl.textContent = "";
   drawCtx = {};
@@ -1709,10 +1734,12 @@ function drawPage() {
   document.body.classList.toggle("page-projects", view === "projects");
   document.body.classList.toggle("page-project", view === "project");
   document.body.classList.toggle("page-settings", view === "settings");
+  document.body.classList.toggle("page-tool", view === "skills" || view === "extensions");
   messagesEl.textContent = "";
   streamNode = null;
   $("#crumb").hidden = true;
-  if (view === "projects") drawProjects(); else if (view === "settings") drawSettings(); else drawProject();
+  const pages = { projects: drawProjects, settings: drawSettings, skills: drawSkillsPage, extensions: drawExtensionsPage };
+  (pages[view] || drawProject)();
   markSide();
   updateSend();
   logEl.scrollTop = 0;
@@ -1921,6 +1948,215 @@ function drawGeneral(body) {
 
   body.insertAdjacentHTML("beforeend", `<h2 class="settings-section settings-gap">Updates</h2><p class="settings-sub">New versions come from the Flash repository on GitHub, the same as /update in the terminal.</p><div class="updates-box"></div>`);
   renderUpdates(body.querySelector(".updates-box"));
+}
+
+// Skills --------------------------------------------------------------------
+
+async function drawSkills(body) {
+  let r;
+  try { r = await command("skills"); } catch (error) { showFailure(error); return; }
+  if (!body.isConnected) return;
+  const made = r.skills.filter((s) => s.by === "flash").length;
+  body.innerHTML = `<div class="mem-head"><p class="sub">Procedures Flash follows for tasks that come up again. It reads the matching one before it starts, and writes its own as it learns.</p></div><div class="host"></div><div class="mem-path"></div>`;
+  const add = el("button", "btn primary with-icon", `${icon("plus")}<span>New skill</span>`);
+  add.type = "button";
+  add.onclick = () => skillForm();
+  body.querySelector(".mem-head").appendChild(add);
+  const host = body.querySelector(".host");
+  if (!r.skills.length) {
+    host.innerHTML = `<div class="mem-empty"><b>No skills yet</b>Flash saves one when it works out how to do something that will come up again. You can write your own, too.</div>`;
+    return;
+  }
+  const list = el("div", "item-list");
+  r.skills.forEach((skill, i) => {
+    const row = el("button", "item-row", `<span class="main"><span class="top"><span class="name"></span></span><span class="desc"></span></span><span class="chev">${icon("chevRight")}</span>`);
+    row.type = "button";
+    row.style.setProperty("--i", i);
+    row.querySelector(".name").textContent = skill.name;
+    row.querySelector(".desc").textContent = skill.description;
+    if (skill.by === "flash") row.querySelector(".top").appendChild(el("span", "made-by", "Made by Flash"));
+    row.onclick = () => openSkill(skill.name);
+    list.appendChild(row);
+  });
+  host.appendChild(list);
+  body.querySelector(".mem-path").textContent = `${r.skills.length} skill${r.skills.length === 1 ? "" : "s"}${made ? ` · ${made} made by Flash` : ""} · saved in ~/.flash/skills`;
+}
+
+// Skills and Extensions: pages of their own, opened from the sidebar.
+function showPage(name) {
+  view = name;
+  viewProject = null;
+  closeMenu();
+  morph(drawPage);
+  renderChats();
+  if (innerWidth <= 800) closeSide();
+}
+
+function toolPage(title, draw) {
+  $("#title").textContent = title;
+  document.title = `${title} · Flash`;
+  const page = el("div", "page", `<div class="page-head"><h1></h1></div>`);
+  page.querySelector("h1").textContent = title;
+  const body = el("div", "tab-body");
+  page.appendChild(body);
+  messagesEl.appendChild(page);
+  draw(body);
+}
+const drawSkillsPage = () => toolPage("Skills", drawSkills);
+const drawExtensionsPage = () => toolPage("Extensions", drawExtensions);
+
+function redrawSettingsTab(name) {
+  if (view === name) drawPage(); else showPage(name);
+}
+
+async function openSkill(name) {
+  let skill;
+  try { skill = await command("skill", name); } catch (error) { showFailure(error); return; }
+  const form = openForm(`
+    <h2 class="mono-title"></h2>
+    <p class="sub"></p>
+    <div class="skill-read assistant"></div>
+    <div class="dialog-buttons"><button type="button" class="btn danger" data-delete>Delete</button><span class="spacer"></span>
+      <button type="button" class="btn" data-cancel>Close</button><button type="button" class="btn primary" data-edit>Edit</button></div>`, async () => {});
+  form.querySelector("h2").textContent = skill.name;
+  if (skill.by === "flash") form.querySelector("h2").insertAdjacentHTML("beforeend", ` <span class="made-by">Made by Flash</span>`);
+  form.querySelector(".sub").textContent = skill.description;
+  form.querySelector(".skill-read").innerHTML = markdown(skill.content);
+  form.querySelector("[data-cancel]").onclick = closeForm;
+  form.querySelector("[data-edit]").onclick = () => skillForm(skill);
+  const del = form.querySelector("[data-delete]");
+  del.onclick = async () => {
+    if (!del.classList.contains("sure")) { del.classList.add("sure"); del.textContent = "Delete it?"; return; }
+    try { await command("skill-delete", skill.name); } catch (error) { showFailure(error); return; }
+    closeForm();
+    toast(`Deleted ${skill.name}`);
+    redrawSettingsTab("skills");
+  };
+}
+
+function skillForm(skill) {
+  const editing = !!skill;
+  const form = openForm(`
+    <h2>${editing ? "Edit skill" : "New skill"}</h2>
+    <p class="sub">${editing ? "" : "A procedure Flash reads before a task that matches it."}</p>
+    <label class="field"><span>Name</span><input name="skillname" class="mono" placeholder="deploy-the-site" autocomplete="off" spellcheck="false"><small>Lowercase words joined by hyphens, naming the kind of task.</small></label>
+    <label class="field"><span>When to use it <em class="count"></em></span><input name="description" maxlength="120" placeholder="Deploying the site to production" autocomplete="off"></label>
+    <label class="field"><span>Procedure</span><textarea name="content" rows="10" class="mono" placeholder="1. First step&#10;2. Next step&#10;&#10;## Pitfalls&#10;- What goes wrong, and how to avoid it"></textarea></label>
+    <div class="dialog-buttons"><button type="button" class="btn" data-cancel>Cancel</button><button type="submit" class="btn primary">${editing ? "Save" : "Create skill"}</button></div>`,
+    async (data) => {
+      const name = editing ? skill.name : data.skillname.trim().toLowerCase();
+      await command(editing ? "skill-save" : "skill-create", name, null, { description: data.description, content: data.content });
+      toast(editing ? `Saved ${name}` : `Created ${name}`);
+      redrawSettingsTab("skills");
+    });
+  const count = form.querySelector(".count");
+  const counted = () => { count.textContent = `${form.description.value.length}/120`; };
+  form.description.addEventListener("input", counted);
+  if (editing) {
+    form.skillname.value = skill.name;
+    form.skillname.disabled = true;
+    form.description.value = skill.description;
+    form.content.value = skill.content;
+    form.description.focus();
+  }
+  counted();
+  form.querySelector("[data-cancel]").onclick = closeForm;
+}
+
+// Extensions ----------------------------------------------------------------
+
+async function drawExtensions(body) {
+  let r;
+  try { r = await command("extensions"); } catch (error) { showFailure(error); return; }
+  if (!body.isConnected) return;
+  body.innerHTML = `<div class="mem-head"><p class="sub">Slash commands, tools, and prompt text from a GitHub repository or a folder. Extensions run programs on this machine as you, so install only ones you trust.</p></div><div class="host"></div>`;
+  const add = el("button", "btn primary with-icon", `${icon("download")}<span>Install</span>`);
+  add.type = "button";
+  add.onclick = () => extensionForm();
+  body.querySelector(".mem-head").appendChild(add);
+  const host = body.querySelector(".host");
+  if (r.problems.length) {
+    const warn = el("div", "warn-list");
+    warn.textContent = r.problems.join("\n");
+    warn.style.whiteSpace = "pre-wrap";
+    host.appendChild(warn);
+  }
+  if (!r.extensions.length) {
+    host.appendChild(el("div", "mem-empty", `<b>No extensions installed</b>Install one with <code>github@owner/repo</code>, or <code>path@/some/folder</code> while you write your own.`));
+    return;
+  }
+  const list = el("div", "item-list");
+  r.extensions.forEach((ext, i) => {
+    const row = el("div", "item-row", `<span class="main"><span class="top"><span class="name"></span><span class="ver"></span></span><span class="desc"></span><span class="chips"></span><span class="src"></span></span>`);
+    row.style.setProperty("--i", i);
+    row.querySelector(".name").textContent = ext.name;
+    row.querySelector(".ver").textContent = ext.version ? `v${ext.version}` : "";
+    row.querySelector(".desc").textContent = ext.description;
+    row.querySelector(".src").textContent = ext.source;
+    const chips = row.querySelector(".chips");
+    for (const c of ext.commands) chips.appendChild(el("span", "chip")).textContent = c;
+    for (const t of ext.tools) chips.appendChild(el("span", "chip")).textContent = `tool ${t}`;
+    const remove = el("button", "btn small remove", "Remove");
+    remove.type = "button";
+    remove.onclick = async () => {
+      if (!remove.classList.contains("sure")) { remove.classList.add("sure"); remove.textContent = "Remove it?"; return; }
+      try { await command("extension-remove", ext.name); } catch (error) { showFailure(error); return; }
+      toast(`Removed ${ext.name}`);
+      redrawSettingsTab("extensions");
+    };
+    row.appendChild(remove);
+    list.appendChild(row);
+  });
+  host.appendChild(list);
+}
+
+// Fetched and shown first, installed only on a second, deliberate yes:
+// the same checks the terminal makes before /extension install.
+function extensionForm() {
+  let staged = null;
+  const form = openForm(`
+    <h2>Install an extension</h2>
+    <p class="sub">From GitHub, or from a folder on the computer Flash runs on.</p>
+    <label class="field"><span>Source</span><input name="spec" class="mono" placeholder="github@owner/repo" autocomplete="off" spellcheck="false"></label>
+    <div class="preview-host"></div>
+    <div class="dialog-buttons"><button type="button" class="btn" data-cancel>Cancel</button><button type="submit" class="btn primary">Check it</button></div>`,
+    async (data) => {
+      if (!staged) {
+        submit.disabled = true;
+        submit.textContent = "Fetching…";
+        try {
+          staged = await command("extension-preview", data.spec.trim());
+        } finally {
+          submit.disabled = false;
+          submit.textContent = "Check it";
+        }
+        form.querySelector(".form-error").textContent = "";
+        showPreview();
+        return false;
+      }
+      const ext = await command("extension-install", staged.id);
+      toast(`${staged.update ? "Updated" : "Installed"} ${ext.name}`);
+      staged = null;
+      redrawSettingsTab("extensions");
+    });
+  const submit = form.querySelector("[type=submit]");
+  const host = form.querySelector(".preview-host");
+  const showPreview = () => {
+    const box = el("div", "ext-preview", `<div><span class="name"></span> <span class="ver"></span></div><div class="sub"></div><ul></ul>`);
+    box.querySelector(".name").textContent = staged.name;
+    box.querySelector(".ver").textContent = staged.version ? `v${staged.version}` : "";
+    box.querySelector(".sub").textContent = staged.description;
+    const lines = staged.contents.length ? staged.contents : ["Nothing Flash would use"];
+    for (const line of lines) box.querySelector("ul").appendChild(el("li")).textContent = line;
+    if (staged.replaces) box.appendChild(el("p", "note warn")).textContent = `This replaces the ${staged.name} installed from ${staged.replaces}.`;
+    if (staged.runs_programs) box.appendChild(el("p", "note warn")).textContent = "It runs programs on this machine as you. Only install it if you trust where it came from.";
+    host.textContent = "";
+    host.appendChild(box);
+    form.spec.readOnly = true;
+    submit.textContent = staged.update ? `Update ${staged.name}` : `Install ${staged.name}`;
+  };
+  form.querySelector("[data-cancel]").onclick = () => { if (staged) command("extension-cancel").catch(() => {}); closeForm(); };
+  form.spec.addEventListener("input", () => { staged = null; host.textContent = ""; });
 }
 
 // Updates ------------------------------------------------------------------
@@ -2351,6 +2587,8 @@ async function importMemory() {
 
 function markSide() {
   $("#projects-btn").classList.toggle("active", view === "projects" || view === "project");
+  $("#skills-btn").classList.toggle("active", view === "skills");
+  $("#extensions-btn").classList.toggle("active", view === "extensions");
   $("#settings-btn").classList.toggle("active", view === "settings");
 }
 
@@ -2366,7 +2604,8 @@ function openForm(html, onSubmit) {
   form.onsubmit = async (e) => {
     e.preventDefault();
     const data = Object.fromEntries(new FormData(form));
-    try { await onSubmit(data, form); closeForm(); }
+    // A handler that returns false keeps the dialog open for a next step.
+    try { if ((await onSubmit(data, form)) !== false) closeForm(); }
     catch (error) { form.querySelector(".form-error").textContent = error.message || String(error); }
   };
   form.addEventListener("keydown", (e) => {
@@ -2490,7 +2729,7 @@ function startedWaiting(id) {
 
 function loaderBlock(chat) {
   startedWaiting(chat.id);
-  const node = el("div", "block loader", `<span class="bolt" aria-hidden="true"></span><span class="word"></span><span class="elapsed"></span>`);
+  const node = el("div", "block loader", `<span class="word"></span><span class="elapsed"></span>`);
   node.setAttribute("role", "status");
   node.dataset.chat = chat.id;
   node.wordAt = -1;
@@ -2721,7 +2960,7 @@ function refreshLite() {
     // Not while something on the page is being edited: redrawing it
     // would throw away what is half typed.
     const editing = messagesEl.contains(document.activeElement) && /TEXTAREA|INPUT/.test(document.activeElement.tagName);
-    if (view !== "chat" && view !== "settings" && !editing && $("#form").hidden) drawPage();
+    if (!["chat", "settings", "skills", "extensions"].includes(view) && !editing && $("#form").hidden) drawPage();
     renderChats();
     renderInfo();
     const chat = chats.get(current);
@@ -3447,6 +3686,8 @@ const ACTIONS = [
   { label: "Projects", keys: "Alt P", slash: "/projects", run: showProjects },
   { label: "Settings and usage", keys: "Alt ,", slash: "/settings", run: () => showSettings() },
   { label: "Update Flash", keys: "", slash: "/update", run: () => { showSettings("general"); checkUpdates(); } },
+  { label: "Skills", keys: "", slash: "/skills", run: () => showPage("skills") },
+  { label: "Extensions", keys: "", slash: "/extensions", run: () => showPage("extensions") },
   { label: "Import memory from another AI", keys: "", slash: "/import", run: () => { showSettings("memory"); importMemory(); } },
   { label: "Search chats", keys: "Alt F", slash: "/search", run: () => openSearch() },
   { label: "Show or hide the file panel", keys: "Alt V", slash: "/file", run: toggleViewer },
@@ -3836,6 +4077,8 @@ $("#agents-btn").onclick = () => (menuEl ? closeMenu() : openAgents());
 $("#model-btn").onclick = () => (menuEl && !slashOpen ? closeMenu() : openModels());
 $("#project-btn").onclick = () => (menuEl && !slashOpen ? closeMenu() : openProjectPicker());
 $("#projects-btn").onclick = showProjects;
+$("#skills-btn").onclick = () => showPage("skills");
+$("#extensions-btn").onclick = () => showPage("extensions");
 $("#crumb").onclick = () => { const c = chats.get(current); const id = c ? c.project : viewProject; if (id) openProject(id, "back"); };
 $("#title").onclick = rename;
 $("#keys-btn").onclick = () => openHelp();
@@ -3932,6 +4175,8 @@ $("#open-side").innerHTML = icon("panel");
 $("#top-new").innerHTML = icon("compose");
 $("#new-chat .plus").innerHTML = icon("plus");
 $("#projects-btn").innerHTML = icon("folder") + "<span>Projects</span>";
+$("#skills-btn").innerHTML = icon("book") + "<span>Skills</span>";
+$("#extensions-btn").innerHTML = icon("puzzle") + "<span>Extensions</span>";
 $("#search-btn").innerHTML = icon("search") + "<span>Search</span>";
 $("#viewer-download").innerHTML = icon("download");
 $("#viewer-open").innerHTML = icon("external");

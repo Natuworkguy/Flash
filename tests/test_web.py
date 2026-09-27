@@ -1693,3 +1693,149 @@ def test_the_loader_words_are_the_terminals():
 
     assert words == [s["now"] for s in ai._load_thinking_states()]
     assert "Pondering" in words
+
+
+class TestSkillsInThePage:
+    def test_who_wrote_each_skill(self):
+        from flash import skills
+
+        tools.skill_manage_tool(
+            "create", "by-the-model", description="Made in a chat",
+            content="1. Step",
+        )
+        web.command(web.Session(), {
+            "name": "skill-create", "arg": "by-the-user",
+            "description": "Made in the page", "content": "1. Step",
+        })
+
+        listed = {
+            s["name"]: s["by"]
+            for s in web.command(web.Session(), {"name": "skills"})["skills"]
+        }
+
+        assert listed == {"by-the-model": "flash", "by-the-user": "you"}
+        # Kept through an edit.
+        web.command(web.Session(), {
+            "name": "skill-save", "arg": "by-the-model",
+            "description": "Still the model's", "content": "1. New step",
+        })
+        assert skills.find("by-the-model").by == "flash"
+
+    def test_an_older_skill_the_review_wrote_is_flash_s(self):
+        from flash import skills
+
+        folder = skills.skills_dir() / "older"
+        folder.mkdir(parents=True)
+        (folder / skills.SKILL_FILE).write_text(
+            "---\nname: older\ndescription: d\nmanaged: true\n---\n\nx\n"
+        )
+        (skills.skills_dir() / "hand").mkdir()
+        (skills.skills_dir() / "hand" / skills.SKILL_FILE).write_text(
+            "---\nname: hand\ndescription: d\n---\n\nx\n"
+        )
+
+        assert skills.find("older").by == "flash"
+        assert skills.find("hand").by == ""
+
+    def test_view_and_delete(self):
+        session = web.Session()
+        web.command(session, {
+            "name": "skill-create", "arg": "deploy-site",
+            "description": "Deploying the site", "content": "1. Push",
+        })
+
+        shown = web.command(session, {"name": "skill", "arg": "deploy-site"})
+        assert shown["content"] == "1. Push"
+
+        web.command(session, {"name": "skill-delete", "arg": "deploy-site"})
+        with pytest.raises(ValueError, match="No skill"):
+            web.command(session, {"name": "skill", "arg": "deploy-site"})
+
+    def test_a_bad_skill_says_why(self):
+        with pytest.raises(ValueError, match="description"):
+            web.command(web.Session(), {
+                "name": "skill-create", "arg": "no-description",
+                "content": "1. Step",
+            })
+
+
+class TestExtensionsInThePage:
+    def make(self, folder, name="weather"):
+        folder.mkdir()
+        (folder / "flash-extension.json").write_text(json.dumps({
+            "name": name,
+            "description": "Weather lookups",
+            "version": "0.1.0",
+            "commands": [{"name": "forecast", "prompt": "forecast.md"}],
+        }))
+        (folder / "forecast.md").write_text("Forecast for $ARGUMENTS")
+        return folder
+
+    def test_shown_first_and_installed_on_yes(self, tmp_path):
+        from flash import extensions
+
+        source = self.make(tmp_path / "weather")
+        session = web.Session()
+
+        preview = web.command(session, {
+            "name": "extension-preview", "arg": f"path@{source}",
+        })
+
+        assert preview["name"] == "weather"
+        assert preview["commands"] == ["/forecast"]
+        assert preview["update"] is False
+        assert extensions.find("weather") is None
+
+        web.command(session, {
+            "name": "extension-install", "arg": preview["id"],
+        })
+
+        listed = web.command(session, {"name": "extensions"})
+        assert [e["name"] for e in listed["extensions"]] == ["weather"]
+        assert session.staged is None
+
+    def test_a_stale_preview_installs_nothing(self, tmp_path):
+        from flash import extensions
+
+        source = self.make(tmp_path / "weather")
+        session = web.Session()
+        web.command(session, {
+            "name": "extension-preview", "arg": f"path@{source}",
+        })
+
+        with pytest.raises(ValueError, match="Check the extension again"):
+            web.command(session, {
+                "name": "extension-install", "arg": "not-the-id",
+            })
+        assert extensions.find("weather") is None
+
+    def test_a_clash_is_refused_before_anything_installs(self, tmp_path):
+        folder = self.make(tmp_path / "clash")
+        manifest = json.loads((folder / "flash-extension.json").read_text())
+        manifest["commands"][0]["name"] = "help"
+        (folder / "flash-extension.json").write_text(json.dumps(manifest))
+
+        with pytest.raises(ValueError, match="built-in command"):
+            web.command(web.Session(), {
+                "name": "extension-preview", "arg": f"path@{folder}",
+            })
+
+    def test_remove(self, tmp_path):
+        source = self.make(tmp_path / "weather")
+        session = web.Session()
+        preview = web.command(session, {
+            "name": "extension-preview", "arg": f"path@{source}",
+        })
+        web.command(session, {
+            "name": "extension-install", "arg": preview["id"],
+        })
+
+        web.command(session, {"name": "extension-remove", "arg": "weather"})
+
+        assert web.command(session, {"name": "extensions"})[
+            "extensions"
+        ] == []
+        with pytest.raises(ValueError, match="No extension"):
+            web.command(session, {
+                "name": "extension-remove", "arg": "weather",
+            })
