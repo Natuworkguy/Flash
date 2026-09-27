@@ -39,6 +39,8 @@ flash = [
     "web/*.html",
     "web/*.woff2",
     "web/*.svg",
+    "web/katex/*.js",
+    "web/katex/*.txt",
     "web/*.txt",
 ]
 

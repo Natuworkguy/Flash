@@ -75,6 +75,16 @@ HTML_SANDBOX = "sandbox allow-scripts allow-forms allow-popups allow-modals"
 
 STATIC = {"orbit.woff2": "font/woff2", "logo-icon.svg": "image/svg+xml"}
 
+# KaTeX, which turns the math in replies into MathML for the browser to
+# draw with its own math font: just the script, shipped with Flash so
+# math renders offline too. Served by exact name, and nothing else.
+KATEX_TYPES = {".js": "text/javascript; charset=utf-8"}
+STATIC.update({
+    path.relative_to(WEB_DIR).as_posix(): KATEX_TYPES[path.suffix]
+    for path in sorted((WEB_DIR / "katex").rglob("*"))
+    if path.is_file() and path.suffix in KATEX_TYPES
+})
+
 # How often an idle event stream says it is still there. Proxies and
 # some browsers drop a stream that has been silent for a minute.
 PING_SECONDS = 15
@@ -454,6 +464,8 @@ class Session:
             "seq": self.hub.seq,
             "chats": summaries,
             "projects": [asdict(p) for p in workspace.projects()],
+            # The words the loader cycles through, the terminal's own.
+            "words": [s["now"] for s in ai._load_thinking_states()],
             "status": {
                 **status(ai), "lan": self.lan,
                 "update": self.updates.snapshot(),

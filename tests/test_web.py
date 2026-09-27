@@ -551,6 +551,27 @@ class TestFont:
         assert body.startswith(b"<svg")
         assert b"/static/logo-icon.svg" in web.PAGE.read_bytes()
 
+    def test_katex_is_served_for_math(self, server):
+        port = server.port
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request("GET", "/static/katex/katex.min.js",
+                     headers={"Host": f"127.0.0.1:{port}"})
+        response = conn.getresponse()
+        body = response.read()
+        conn.close()
+
+        assert response.status == 200
+        assert response.getheader("Content-Type").startswith(
+            "text/javascript"
+        )
+        assert b"katex" in body[:400]
+        assert b"/static/katex/katex.min.js" in web.PAGE.read_bytes()
+        # The script alone: the browser draws the MathML itself.
+        assert [n for n in web.STATIC if n.startswith("katex/")] == [
+            "katex/katex.min.js"
+        ]
+        assert (web.WEB_DIR / "katex" / "LICENSE.txt").is_file()
+
     def test_but_nothing_else_is(self, server):
         assert request(server, "GET", "/static/index.html",
                        token=False)[0] == 403
@@ -1665,3 +1686,10 @@ class TestUpdates:
 
         assert ran["argv"][1:] == ["-m", "flash", "--web", "--no-open"]
         assert os.environ.pop(web.TOKEN_ENV) == server.token
+
+
+def test_the_loader_words_are_the_terminals():
+    words = web.Session().state()["words"]
+
+    assert words == [s["now"] for s in ai._load_thinking_states()]
+    assert "Pondering" in words
