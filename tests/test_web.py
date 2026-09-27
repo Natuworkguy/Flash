@@ -1,5 +1,6 @@
 """Tests for the web UI's server: its locks, its API, and its turns."""
 
+import base64
 import http.client
 import json
 import os
@@ -1988,7 +1989,7 @@ class TestQueueAndSteer:
         wait_for(lambda: not chat.busy)
         time.sleep(0.1)
 
-        assert result == {"restored": ["then this"]}
+        assert result == {"restored": ["then this"], "files": []}
         assert chat.pending == []
         assert len(FakeClient.requests) == 1
 
@@ -2010,7 +2011,7 @@ class TestQueueAndSteer:
                                      "chat": chat.id, "arg": second})
 
         assert left["pending"] == [
-            {"id": first, "text": "a", "mode": "steer"}
+            {"id": first, "text": "a", "mode": "steer", "files": []}
         ]
         with pytest.raises(ValueError, match="already been sent"):
             web.command(session, {"name": "pending-remove",
@@ -2264,3 +2265,75 @@ class TestAddresses:
 
         assert status == 403
         assert b"<html" in body.lower()
+
+
+class TestAttachments:
+    def upload(self, server, name, data):
+        return request(server, "POST", "/api/upload", {
+            "name": name, "data": base64.b64encode(data).decode(),
+        })
+
+    def test_an_image_upload_is_kept_and_shown(self, server):
+        status, body = self.upload(server, "../../dot.png", PNG)
+        meta = json.loads(body)
+
+        assert status == 200
+        # The name loses its path: it cannot climb out of its folder.
+        assert meta["name"] == "dot.png"
+        assert meta["kind"] == "image" and meta["size"] == len(PNG)
+        assert "path" not in meta
+        status, served = request(server, "GET", f"/api/files/{meta['id']}")
+        assert status == 200 and served == PNG
+
+    def test_other_files_are_kept_but_not_served(self, server):
+        status, body = self.upload(server, "notes.txt", b"hello")
+        meta = json.loads(body)
+
+        assert status == 200 and meta["kind"] == "file"
+        assert request(server, "GET", f"/api/files/{meta['id']}")[0] == 404
+
+    def test_a_bad_upload_says_why(self, server):
+        status, body = request(server, "POST", "/api/upload",
+                               {"name": "x.png", "data": "not base64!"})
+        assert status == 400
+        status, body = self.upload(server, "empty.txt", b"")
+        assert status == 400 and b"empty" in body
+        assert request(server, "POST", "/api/upload", {
+            "name": "x", "data": "aGk=",
+        }, token=False)[0] == 403
+
+    def test_the_model_gets_the_image_and_the_files_path(self):
+        image = web.workspace.keep_upload("chart.png", PNG)
+        doc = web.workspace.keep_upload("data.csv", b"a,b\n1,2\n")
+        FakeClient.scripts = [[part("Got them."), part(done=True)]]
+        session = web.Session()
+        chat = session.new_chat()
+
+        session.send(chat, "what is this?", files=[image["id"], doc["id"]])
+        wait_for(lambda: not (chat.busy or chat.queued))
+
+        sent = FakeClient.requests[-1]["messages"][-1]
+        assert sent["images"] == [
+            web.workspace.upload_info(image["id"])["path"]
+        ]
+        assert "Attached file:" in sent["content"]
+        assert sent["content"].endswith("data.csv")
+        shown = next(e for e in chat.log if e["type"] == "user")
+        assert [f["name"] for f in shown["files"]] == ["chart.png", "data.csv"]
+        assert all("path" not in f for f in shown["files"])
+
+    def test_an_image_alone_still_asks_something(self):
+        image = web.workspace.keep_upload("cat.jpg", b"\xff\xd8\xff fake")
+        FakeClient.scripts = [[part("A cat."), part(done=True)]]
+        session = web.Session()
+        chat = session.new_chat()
+
+        session.send(chat, "", files=[image["id"]])
+        wait_for(lambda: not (chat.busy or chat.queued))
+
+        sent = FakeClient.requests[-1]["messages"][-1]
+        assert sent["content"] == ai.DEFAULT_IMAGE_PROMPT
+        assert chat.title == "cat.jpg"
+
+    def test_unknown_ids_are_dropped(self):
+        assert web.attachments(["0123456789abcdef", "../x"]) == []

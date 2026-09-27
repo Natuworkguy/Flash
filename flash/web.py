@@ -17,6 +17,7 @@ to name this machine, which stops a DNS rebinding attack; and a
 request from a page has to come from this server's own origin.
 """
 
+import base64
 import io
 import ipaddress
 import json
@@ -58,6 +59,7 @@ from . import (
     updater,
     workspace,
 )
+from .sysprompt import model_sees_images
 from .theme import (
     ACCENT,
     DIM,
@@ -113,6 +115,10 @@ ASK_POLL_SECONDS = 0.25
 TITLE_CHARS = 48
 
 MAX_BODY_BYTES = 1_000_000
+# An upload arrives as base64 in JSON: a third bigger than the file.
+MAX_UPLOAD_BODY = workspace.MAX_UPLOAD_BYTES * 4 // 3 + 64_000
+# The most attachments one message carries.
+MAX_ATTACHMENTS = 10
 
 # Sub-agents: how often the watcher looks for finished ones, and how many
 # times in a row it may wake a chat before waiting for the person, the
@@ -681,6 +687,7 @@ class Session:
 
     def send(
         self, chat: Chat, text: str, wake: bool = False, mode: str = "",
+        files: Optional[list] = None,
     ) -> dict:
         """Start a turn on a thread of its own and return at once.
 
@@ -692,7 +699,8 @@ class Session:
         """
 
         text = text.strip()
-        if not text:
+        attached = attachments(files)
+        if not text and not attached:
             return {}
 
         with self._lock:
@@ -703,6 +711,7 @@ class Session:
                     "id": uuid.uuid4().hex[:8],
                     "text": text,
                     "mode": "steer" if mode == "steer" else "queue",
+                    "files": attached,
                 }
                 chat.pending.append(item)
                 waiting = True
@@ -715,13 +724,16 @@ class Session:
             self._publish_pending(chat)
             return {"pending": item["id"]}
 
-        self._begin(chat, text, wake)
+        self._begin(chat, text, wake, attached)
         threading.Thread(
-            target=self._run, args=(chat, text), daemon=True
+            target=self._run, args=(chat, text, attached), daemon=True
         ).start()
         return {}
 
-    def _begin(self, chat: Chat, text: str, wake: bool = False) -> None:
+    def _begin(
+        self, chat: Chat, text: str, wake: bool = False,
+        files: Optional[list] = None,
+    ) -> None:
         """Put a turn's message in the chat, as its turn starts."""
 
         if wake:
@@ -729,9 +741,13 @@ class Session:
             return
         self.wakes[chat.id] = 0
         if chat.title == "New chat":
-            chat.title = " ".join(text.split())[:TITLE_CHARS] or chat.title
+            named = text or (files[0]["name"] if files else "")
+            chat.title = " ".join(named.split())[:TITLE_CHARS] or chat.title
             self.hub.publish({"type": "chats", "chat": chat.id})
-        self.emit(chat, {"type": "user", "text": text})
+        event: dict = {"type": "user", "text": text}
+        if files:
+            event["files"] = files
+        self.emit(chat, event)
 
     def _publish_pending(self, chat: Chat) -> None:
         self.hub.publish({
@@ -739,7 +755,7 @@ class Session:
             "pending": [dict(p) for p in chat.pending],
         })
 
-    def take_steers(self, chat: Chat) -> list[str]:
+    def take_steers(self, chat: Chat) -> list[dict]:
         """The steering messages waiting for this turn, taken off the
         list and shown in the chat where the model reads them."""
 
@@ -750,11 +766,14 @@ class Session:
             return []
         self._publish_pending(chat)
         for item in steers:
-            self.emit(chat, {"type": "user", "text": item["text"],
-                             "steer": True})
-        return [item["text"] for item in steers]
+            event: dict = {"type": "user", "text": item["text"],
+                           "steer": True}
+            if item.get("files"):
+                event["files"] = item["files"]
+            self.emit(chat, event)
+        return steers
 
-    def _take_next(self, chat: Chat) -> Optional[str]:
+    def _take_next(self, chat: Chat) -> Optional[dict]:
         """The next waiting message to run as a turn, if any. A steer
         the turn ended before it could read comes first: it is older.
         Stopping emptied the list, so anything here was sent after it,
@@ -765,19 +784,20 @@ class Session:
         item = chat.pending.pop(0)
         chat.queued = True
         chat.stop.clear()
-        return item["text"]
+        return item
 
-    def unqueue(self, chat: Chat) -> list[str]:
-        """Drop every waiting message, handing back what they said."""
+    def unqueue(self, chat: Chat) -> list[dict]:
+        """Drop every waiting message, handing back the messages."""
 
         with self._lock:
-            texts = [p["text"] for p in chat.pending]
-            chat.pending = []
-        if texts:
+            items, chat.pending = chat.pending, []
+        if items:
             self._publish_pending(chat)
-        return texts
+        return items
 
-    def _run(self, chat: Chat, text: str) -> None:
+    def _run(
+        self, chat: Chat, text: str, files: Optional[list] = None,
+    ) -> None:
         # A local backend runs one generation at a time, and this turn
         # is the one somebody is now waiting on.
         learning.cancel()
@@ -785,7 +805,9 @@ class Session:
         # One runner per chat, so its waiting messages go in the order
         # they were sent. The lock is let go between turns, so another
         # chat is not held up behind a long queue.
-        while text is not None:
+        following: Optional[dict] = {"text": text, "files": files or []}
+        while following is not None:
+            text, files = following["text"], following.get("files") or []
             with self.turn_lock:
                 chat.queued = False
                 chat.busy = True
@@ -799,7 +821,7 @@ class Session:
                         self.emit(chat, {"type": "note", "text": "Stopped."})
                     else:
                         with inside(found.path if found else None):
-                            run_turn(self, chat, text, found)
+                            run_turn(self, chat, text, found, files)
                 except Exception as exc:  # noqa: BLE001
                     self.emit(chat, {
                         "type": "error",
@@ -807,15 +829,18 @@ class Session:
                     })
                 finally:
                     with self._lock:
-                        text = self._take_next(chat)
+                        following = self._take_next(chat)
                         chat.busy = False
                     chat.partial = chat.thinking = ""
                     self.save(chat)
                     self.emit(chat, {"type": "busy", "busy": False})
                     self.hub.publish({"type": "status"})
-            if text is not None:
+            if following is not None:
                 self._publish_pending(chat)
-                self._begin(chat, text)
+                self._begin(
+                    chat, following["text"], False,
+                    following.get("files") or [],
+                )
 
 
 # --- A turn --------------------------------------------------------------
@@ -988,11 +1013,45 @@ def project_prompt(found: "workspace.Project") -> str:
     return "\n".join(lines)
 
 
+def attachments(files: Optional[list]) -> list[dict]:
+    """The files a message carries, as the page shows them: those that
+    are really there, and no more than MAX_ATTACHMENTS."""
+
+    found = []
+    for file_id in (files or [])[:MAX_ATTACHMENTS]:
+        info = workspace.upload_info(str(file_id))
+        if info is not None:
+            info.pop("path", None)
+            found.append(info)
+    return found
+
+
+def outgoing(ai, text: str, files: Optional[list]) -> tuple[str, list]:
+    """What the model gets for a message with attachments: its images
+    alongside it, and any other file named by path, for its tools to
+    open."""
+
+    images: list[str] = []
+    notes: list[str] = []
+    for meta in files or []:
+        info = workspace.upload_info(meta.get("id", ""))
+        if info is None:
+            continue
+        if info["kind"] == "image":
+            images.append(info["path"])
+        else:
+            notes.append(f"Attached file: {info['path']}")
+    asked = text or (ai.DEFAULT_IMAGE_PROMPT if images else "")
+    content = "\n\n".join(part for part in (asked, "\n".join(notes)) if part)
+    return content, images
+
+
 def run_turn(
     session: Session,
     chat: Chat,
     text: str,
     found: "Optional[workspace.Project]" = None,
+    files: Optional[list] = None,
 ) -> None:
     """One exchange, with as many tool rounds as it takes.
 
@@ -1021,8 +1080,14 @@ def run_turn(
     # its own sub-agents and never another chat's.
     owned = session.owned(chat.id)
     news, delivered = subagents.notices(owned) if owned else ("", [])
-    content = "\n\n".join(part for part in (news, text) if part)
-    chat.messages.append(ai._message("user", content))
+    said, images = outgoing(ai, text, files)
+    if images and not model_sees_images(ai.Config.host, ai.Config.model):
+        session.emit(chat, {"type": "note", "text": (
+            f"{ai.Config.model} reports no vision support; the image is "
+            "sent anyway, but expect an error."
+        )})
+    content = "\n\n".join(part for part in (news, said) if part)
+    chat.messages.append(ai._message("user", content, images or None))
 
     with capture_tool_output(_sink(session, chat)), \
             answer_from(session.answerer(chat)):
@@ -1092,7 +1157,10 @@ def run_turn(
             # Whatever the user sent to steer this turn, read before the
             # model decides its next step.
             for steer in session.take_steers(chat):
-                convo.append(ai._message("user", f"{STEER_NOTE}\n{steer}"))
+                said, shown = outgoing(ai, steer["text"], steer.get("files"))
+                convo.append(ai._message(
+                    "user", f"{STEER_NOTE}\n{said}", shown or None,
+                ))
 
             if chat.stop.is_set():
                 reply = Streamed(stopped=True)
@@ -1455,7 +1523,11 @@ def command(session: Session, body: dict) -> dict:
         chat = session.chat(chat_id)
         chat.stop.set()
         # What was waiting goes back to the page, to send again or not.
-        return {"restored": session.unqueue(chat)}
+        items = session.unqueue(chat)
+        return {
+            "restored": [item["text"] for item in items],
+            "files": [f for item in items for f in item.get("files") or []],
+        }
 
     if name in ("pending-remove", "pending-mode"):
         chat = session.chat(chat_id)
@@ -1919,7 +1991,10 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         length = int(self.headers.get("Content-Length") or 0)
-        if length > MAX_BODY_BYTES:
+        limit = (
+            MAX_UPLOAD_BODY if url.path == "/api/upload" else MAX_BODY_BYTES
+        )
+        if length > limit:
             self._json(
                 {"error": "too large"}, HTTPStatus.REQUEST_ENTITY_TOO_LARGE
             )
@@ -1946,8 +2021,18 @@ class Handler(BaseHTTPRequestHandler):
             sent = session.send(
                 chat, str(body.get("text", "")),
                 mode=str(body.get("mode") or ""),
+                files=[str(f) for f in body.get("files") or []],
             )
             return {"chat": chat.id, **sent}
+
+        if path == "/api/upload":
+            try:
+                data = base64.b64decode(
+                    str(body.get("data") or ""), validate=True
+                )
+            except (ValueError, TypeError):
+                raise ValueError("that upload did not arrive whole") from None
+            return workspace.keep_upload(str(body.get("name") or ""), data)
 
         if path == "/api/answer":
             return {

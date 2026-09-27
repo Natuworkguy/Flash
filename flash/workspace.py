@@ -424,7 +424,9 @@ def keep_file(source: str) -> dict:
 
 
 def kept_file(file_id: str) -> Optional[tuple[Path, str]]:
-    """The stored copy of a shown file, and its type, or None."""
+    """The stored copy of a shown file, and its type, or None. That is
+    a file the agent showed, or one the user attached that a browser
+    can show, like a photo."""
 
     if not FILE_ID_RE.match(file_id or ""):
         return None
@@ -432,7 +434,75 @@ def kept_file(file_id: str) -> Optional[tuple[Path, str]]:
         path = store() / "files" / f"{file_id}{suffix}"
         if path.is_file():
             return path, mime
+    uploaded = upload_path(file_id)
+    if uploaded is not None and uploaded.suffix.lower() in SHOWN_TYPES:
+        return uploaded, SHOWN_TYPES[uploaded.suffix.lower()]
     return None
+
+
+# --- Files the user attached --------------------------------------------
+
+MAX_UPLOAD_BYTES = 20 * 1024 * 1024
+_UNSAFE_NAME = re.compile(r"[^\w.\- ]+")
+
+
+def upload_path(file_id: str) -> Optional[Path]:
+    """Where a file the user attached is kept, or None."""
+
+    if not FILE_ID_RE.match(file_id or ""):
+        return None
+    try:
+        kept = [p for p in (store() / "uploads" / file_id).iterdir()
+                if p.is_file()]
+    except OSError:
+        return None
+    return kept[0] if len(kept) == 1 else None
+
+
+def upload_info(file_id: str) -> Optional[dict]:
+    """What the page shows for an attached file, and its path."""
+
+    path = upload_path(file_id)
+    if path is None:
+        return None
+    suffix = path.suffix.lower()
+    mime = SHOWN_TYPES.get(suffix, "application/octet-stream")
+    return {
+        "id": file_id,
+        "name": path.name,
+        "size": path.stat().st_size,
+        "mime": mime,
+        "kind": (
+            "image" if mime.startswith("image/")
+            else "pdf" if suffix == ".pdf" else "file"
+        ),
+        "path": str(path),
+    }
+
+
+def keep_upload(name: str, data: bytes) -> dict:
+    """Keep a file the user attached in the page, and describe it.
+
+    Under its own name, in a folder of its own, so the model's tools
+    can open it by a real path and the name still says what it is.
+    Nothing is run or unpacked: it is only written down.
+    """
+
+    if not data:
+        raise WorkspaceError("that file is empty")
+    if len(data) > MAX_UPLOAD_BYTES:
+        raise WorkspaceError(
+            f"that file is over {MAX_UPLOAD_BYTES // (1024 * 1024)} MB"
+        )
+    clean = _UNSAFE_NAME.sub("_", Path(name or "").name).strip(" .")[:100]
+    clean = clean or "upload"
+    file_id = uuid.uuid4().hex[:16]
+    folder = store() / "uploads" / file_id
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / clean).write_bytes(data)
+    info = upload_info(file_id) or {}
+    info.pop("path", None)
+    return info
 
 
 # --- Chats ---------------------------------------------------------------
