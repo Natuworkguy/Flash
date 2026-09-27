@@ -318,6 +318,12 @@ pre code { display: block; padding: 2px 16px 14px; overflow-x: auto; font-size: 
 .tool.blocked .ico svg { color: var(--warn); }
 .tool .body { border-top: 1px solid var(--border); padding: 10px 14px; font: 12.5px/1.55 var(--mono); color: var(--text-2); white-space: pre-wrap; word-break: break-word; max-height: 420px; overflow: auto; background: var(--code-bg); }
 .tool .body.error { color: var(--del); }
+.tool .command { display: flex; align-items: baseline; gap: 10px; border-top: 1px solid var(--border); padding: 10px 14px; font: 12.5px/1.55 var(--mono); background: var(--code-bg); color: var(--text); }
+.tool .command .prompt { color: var(--accent); flex: none; user-select: none; }
+.tool .command code { flex: 1; min-width: 0; white-space: pre-wrap; word-break: break-word; font: inherit; color: inherit; background: none; border: 0; padding: 0; border-radius: 0; }
+.tool .command .timeout { flex: none; font: 11.5px var(--sans); color: var(--text-3); }
+/* The rule between what ran and what it printed. */
+.tool.shell .command + .body { border-top: 1px dashed var(--border-strong); }
 .tool .diff { padding: 6px 0; }
 .tool .diff span { display: block; padding: 0 14px; }
 .tool .diff .a { color: var(--add); background: color-mix(in srgb, var(--add) 10%, transparent); }
@@ -1557,11 +1563,25 @@ function toolIcon(label) {
   return "dot";
 }
 
+// A shell call's label is Bash(<command>), with " (timeout Ns)" after it
+// when the call asked for longer than the default.
+const SHELL_LABEL = /^Bash\(([\s\S]*?)\)(?: \(timeout (\d+)s\))?$/;
+
 function toolCard(label) {
   const card = el("div", "block tool running");
   card.innerHTML = `<button class="head" type="button"><span class="ico">${icon(toolIcon(label))}</span><span class="label"></span><span class="summary"></span><span class="chev">${icon("chevRight")}</span></button>`;
   card.querySelector(".label").textContent = label;
   if (allOpen) card.classList.add("open");
+  // Opened, a shell call shows the whole command on top, and its output
+  // under a rule: the head can only fit the start of a long one.
+  const shell = label.match(SHELL_LABEL);
+  if (shell) {
+    card.classList.add("shell");
+    const command = el("div", "command", `<span class="prompt">$</span><code></code>`);
+    command.querySelector("code").textContent = shell[1];
+    if (shell[2]) command.appendChild(el("span", "timeout")).textContent = `timeout ${shell[2]}s`;
+    slideBox(card).appendChild(command);
+  }
   return card;
 }
 
