@@ -46,7 +46,16 @@ import segno
 from rich.text import Text
 
 from . import agent as subagents
-from . import checkpoint, context, learning, memory, skills, updater, workspace
+from . import (
+    checkpoint,
+    context,
+    extensions,
+    learning,
+    memory,
+    skills,
+    updater,
+    workspace,
+)
 from .theme import (
     ACCENT,
     DIM,
@@ -74,6 +83,16 @@ PAGE = WEB_DIR / "index.html"
 HTML_SANDBOX = "sandbox allow-scripts allow-forms allow-popups allow-modals"
 
 STATIC = {"orbit.woff2": "font/woff2", "logo-icon.svg": "image/svg+xml"}
+
+# KaTeX, which turns the math in replies into MathML for the browser to
+# draw with its own math font: just the script, shipped with Flash so
+# math renders offline too. Served by exact name, and nothing else.
+KATEX_TYPES = {".js": "text/javascript; charset=utf-8"}
+STATIC.update({
+    path.relative_to(WEB_DIR).as_posix(): KATEX_TYPES[path.suffix]
+    for path in sorted((WEB_DIR / "katex").rglob("*"))
+    if path.is_file() and path.suffix in KATEX_TYPES
+})
 
 # How often an idle event stream says it is still there. Proxies and
 # some browsers drop a stream that has been silent for a minute.
@@ -369,6 +388,9 @@ class Session:
         self.hub = hub or Hub()
         self.lan = False
         self.updates = Updates(self.hub)
+        # An extension fetched and shown, waiting for the user's yes:
+        # (id, checkout, source). One at a time.
+        self.staged: Optional[tuple[str, Path, str]] = None
         # Starts this same `flash --web` again, as whatever version is
         # installed now. Only a server that owns its process can: one
         # beside a terminal session would take the session down with it.
@@ -454,6 +476,8 @@ class Session:
             "seq": self.hub.seq,
             "chats": summaries,
             "projects": [asdict(p) for p in workspace.projects()],
+            # The words the loader cycles through, the terminal's own.
+            "words": [s["now"] for s in ai._load_thinking_states()],
             "status": {
                 **status(ai), "lan": self.lan,
                 "update": self.updates.snapshot(),
@@ -1135,6 +1159,92 @@ def list_models(ai) -> list[str]:
     )
 
 
+def _extension_info(ext: "extensions.Extension") -> dict:
+    return {
+        "name": ext.name,
+        "description": ext.description,
+        "version": ext.version,
+        "source": ext.source,
+        "contents": ext.contents(),
+        "commands": [f"/{c.name}" for c in ext.commands],
+        "tools": [t.name for t in ext.tools],
+    }
+
+
+def _discard_staged(session: Session) -> None:
+    if session.staged is not None:
+        extensions.discard(session.staged[1])
+        session.staged = None
+
+
+def _stage_extension(session: Session, spec: str) -> dict:
+    """Fetch an extension and say what it adds, installing nothing.
+
+    The same checks as /extension install in the terminal: it has to be
+    a real extension, and none of its names may already be taken. The
+    fetched copy waits here for the user's yes.
+    """
+
+    from .repl_input import RESERVED_COMMANDS
+    from .tools import FUNCTIONS
+
+    _discard_staged(session)
+    try:
+        source = extensions.canonical(spec)
+        checkout = extensions.fetch(spec)
+    except (extensions.ExtensionError, OSError) as exc:
+        raise ValueError(str(exc)) from None
+
+    try:
+        ext = extensions.load(checkout)
+    except extensions.ExtensionError as exc:
+        extensions.discard(checkout)
+        raise ValueError(
+            f"{source} is not a Flash extension: {exc}"
+        ) from None
+
+    clashes = extensions.clashes(
+        ext, RESERVED_COMMANDS, frozenset(FUNCTIONS)
+    )
+    if clashes:
+        extensions.discard(checkout)
+        raise ValueError(
+            f"Cannot install {ext.name}: " + "; ".join(clashes) + "."
+        )
+
+    staged_id = uuid.uuid4().hex[:12]
+    session.staged = (staged_id, checkout, spec)
+    existing = extensions.find(ext.name)
+
+    return {
+        **_extension_info(ext),
+        "id": staged_id,
+        "source": source,
+        "update": existing is not None,
+        "replaces": (
+            existing.source
+            if existing and existing.source and existing.source != source
+            else ""
+        ),
+        "runs_programs": bool(ext.commands or ext.tools),
+    }
+
+
+def _install_staged(session: Session, staged_id: str) -> dict:
+    if session.staged is None or session.staged[0] != staged_id:
+        raise ValueError("Check the extension again before installing it.")
+
+    _, checkout, spec = session.staged
+    try:
+        ext = extensions.install(checkout, spec)
+    except (extensions.ExtensionError, OSError) as exc:
+        raise ValueError(f"Could not install it: {exc}") from None
+    finally:
+        _discard_staged(session)
+
+    return _extension_info(ext)
+
+
 def command(session: Session, body: dict) -> dict:
     """The page's commands: models, modes, chats, undo."""
 
@@ -1186,6 +1296,65 @@ def command(session: Session, body: dict) -> dict:
         # Late enough that this answer reaches the page first.
         threading.Timer(RESTART_DELAY, session.restart).start()
         return session.updates.snapshot()
+
+    if name == "skills":
+        return {"skills": [
+            {
+                "name": s.name,
+                "description": s.description,
+                "by": s.by,
+                "size": len(s.body),
+            }
+            for s in skills.all_skills()
+        ]}
+
+    if name == "skill":
+        found = skills.find(arg)
+        if found is None:
+            raise ValueError(f"No skill called {arg!r}.")
+        return {
+            "name": found.name, "description": found.description,
+            "by": found.by, "content": found.body,
+        }
+
+    if name in ("skill-create", "skill-save", "skill-delete"):
+        action = {
+            "skill-create": "create", "skill-save": "rewrite",
+            "skill-delete": "delete",
+        }[name]
+        try:
+            message = skills.manage(
+                action, arg,
+                description=str(body.get("description") or ""),
+                content=str(body.get("content") or ""),
+                by="you",
+            )
+        except (skills.SkillError, OSError) as exc:
+            raise ValueError(str(exc)) from None
+        # The list of skills rides in the system prompt.
+        learning.refresh()
+        return {"message": message}
+
+    if name == "extensions":
+        return {
+            "extensions": [_extension_info(e) for e in extensions.installed()],
+            "problems": extensions.problems(),
+        }
+
+    if name == "extension-preview":
+        return _stage_extension(session, arg)
+
+    if name == "extension-install":
+        return _install_staged(session, arg)
+
+    if name == "extension-cancel":
+        _discard_staged(session)
+        return {}
+
+    if name == "extension-remove":
+        if not extensions.remove(arg):
+            raise ValueError(f"No extension called {arg!r}.")
+        return {"removed": arg}
 
     if name == "compact-setting":
         on = arg in ("on", "1", "true")

@@ -1548,6 +1548,9 @@ def skill_manage_tool(
             old_string=old_string,
             new_string=new_string,
             managed_only=managed_only,
+            # The model is the only caller of this tool: the review, or
+            # a chat that asked for one. Either way, Flash wrote it.
+            by="flash",
         )
     except (skills.SkillError, OSError) as exc:
         result = f"Error: {exc}"
