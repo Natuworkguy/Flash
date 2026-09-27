@@ -1872,3 +1872,149 @@ class TestRemovingHosts:
 
         assert shown["host_name"] == "This computer"
         assert shown["host_url"] == web.workspace.LOCAL_HOST
+
+
+class TestQueueAndSteer:
+    def held(self, gate, *parts):
+        """A reply that waits on GATE, so a turn stays running."""
+
+        def script():
+            gate.wait(5)
+            yield from parts
+
+        return script
+
+    def settle(self, session, chat):
+        wait_for(lambda: not (chat.busy or chat.queued or chat.pending))
+
+    def test_queued_messages_run_in_order_after_the_turn(self):
+        gate = threading.Event()
+        FakeClient.scripts = [
+            self.held(gate, part("First answer."), part(done=True)),
+            [part("Second answer."), part(done=True)],
+            [part("Third answer."), part(done=True)],
+        ]
+        session = web.Session()
+        chat = session.new_chat()
+
+        session.send(chat, "one")
+        wait_for(lambda: chat.busy)
+        assert session.send(chat, "two")["pending"]
+        session.send(chat, "three")
+
+        # Waiting, not yet in the conversation.
+        assert [p["text"] for p in chat.pending] == ["two", "three"]
+        assert [e["text"] for e in chat.log if e["type"] == "user"] == [
+            "one"
+        ]
+
+        gate.set()
+        self.settle(session, chat)
+
+        said = [
+            (e["type"], e["text"]) for e in chat.log
+            if e["type"] in ("user", "assistant")
+        ]
+        assert said == [
+            ("user", "one"), ("assistant", "First answer."),
+            ("user", "two"), ("assistant", "Second answer."),
+            ("user", "three"), ("assistant", "Third answer."),
+        ]
+
+    def test_a_steer_reaches_the_model_at_the_next_step(self):
+        gate = threading.Event()
+        FakeClient.scripts = [
+            self.held(gate, part(calls=[call("get_os")]), part(done=True)),
+            [part("Using Rust instead."), part(done=True)],
+        ]
+        session = web.Session()
+        chat = session.new_chat()
+
+        session.send(chat, "write it in python")
+        wait_for(lambda: chat.busy)
+        session.send(chat, "actually, use rust", mode="steer")
+        gate.set()
+        self.settle(session, chat)
+
+        second = FakeClient.requests[1]["messages"][-1]
+        assert second["role"] == "user"
+        assert second["content"].endswith("actually, use rust")
+        assert web.STEER_NOTE in second["content"]
+        steered = [e for e in chat.log if e.get("steer")]
+        assert [e["text"] for e in steered] == ["actually, use rust"]
+        # Shown after the tool it followed, before the answer to it.
+        kinds = [e["type"] for e in chat.log]
+        answer = next(
+            i for i, e in enumerate(chat.log)
+            if e["type"] == "assistant" and e["text"]
+        )
+        assert kinds.index("result") < chat.log.index(steered[0]) < answer
+        # It was part of this turn, not a turn of its own.
+        assert len(FakeClient.requests) == 2
+
+    def test_a_steer_the_turn_never_reached_runs_next(self):
+        gate = threading.Event()
+        FakeClient.scripts = [
+            self.held(gate, part("Done already."), part(done=True)),
+            [part("Adding the tests."), part(done=True)],
+        ]
+        session = web.Session()
+        chat = session.new_chat()
+
+        session.send(chat, "fix it")
+        wait_for(lambda: chat.busy)
+        session.send(chat, "and add tests", mode="steer")
+        gate.set()
+        self.settle(session, chat)
+
+        assert [e["text"] for e in chat.log if e["type"] == "user"] == [
+            "fix it", "and add tests",
+        ]
+        assert chat.log[-2]["text"] == "Adding the tests."
+
+    def test_stopping_hands_waiting_messages_back(self):
+        gate = threading.Event()
+        FakeClient.scripts = [
+            self.held(gate, part("Working."), part(done=True)),
+        ]
+        session = web.Session()
+        chat = session.new_chat()
+
+        session.send(chat, "go")
+        wait_for(lambda: chat.busy)
+        session.send(chat, "then this")
+        result = web.command(session, {"name": "stop", "chat": chat.id})
+        gate.set()
+        wait_for(lambda: not chat.busy)
+        time.sleep(0.1)
+
+        assert result == {"restored": ["then this"]}
+        assert chat.pending == []
+        assert len(FakeClient.requests) == 1
+
+    def test_a_waiting_message_can_change_mode_or_go(self):
+        gate = threading.Event()
+        FakeClient.scripts = [
+            self.held(gate, part("Working."), part(done=True)),
+        ]
+        session = web.Session()
+        chat = session.new_chat()
+        session.send(chat, "go")
+        wait_for(lambda: chat.busy)
+        first = session.send(chat, "a")["pending"]
+        second = session.send(chat, "b")["pending"]
+
+        web.command(session, {"name": "pending-mode", "chat": chat.id,
+                              "arg": first, "mode": "steer"})
+        left = web.command(session, {"name": "pending-remove",
+                                     "chat": chat.id, "arg": second})
+
+        assert left["pending"] == [
+            {"id": first, "text": "a", "mode": "steer"}
+        ]
+        with pytest.raises(ValueError, match="already been sent"):
+            web.command(session, {"name": "pending-remove",
+                                  "chat": chat.id, "arg": second})
+        FakeClient.scripts.append([part("Steered."), part(done=True)])
+        gate.set()
+        self.settle(session, chat)

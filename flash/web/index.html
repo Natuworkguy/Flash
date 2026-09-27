@@ -236,6 +236,19 @@ body.empty #suggestions { display: flex; flex-wrap: wrap; justify-content: cente
 .block { margin: 22px 0 0; }
 .block.focused { box-shadow: -14px 0 0 -11px var(--accent); }
 .user-wrap { display: flex; flex-direction: column; align-items: flex-end; }
+.steer-tag { display: flex; align-items: center; gap: 5px; font-size: 11.5px; color: var(--text-3); margin: 0 6px 5px 0; }
+.steer-tag svg { width: 13px; height: 13px; color: var(--accent); }
+#pending { display: flex; flex-direction: column; gap: 6px; margin: 0 8px 8px; }
+#pending[hidden] { display: none; }
+.pending-row { display: flex; align-items: center; gap: 10px; padding: 6px 6px 6px 12px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); font-size: 13.5px; animation: rise 0.25s var(--ease) both; }
+.pending-row .ico { display: grid; place-items: center; color: var(--text-3); }
+.pending-row.steer .ico { color: var(--accent); }
+.pending-row .ico svg { width: 15px; height: 15px; }
+.pending-row .text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-2); }
+.pending-row .mode { flex: none; font-size: 12px; color: var(--text-3); padding: 4px 8px; border-radius: 7px; white-space: nowrap; transition: background 0.12s, color 0.12s; }
+.pending-row .mode:hover { background: var(--hover); color: var(--text); }
+.pending-row .icon-btn { width: 26px; height: 26px; }
+.pending-row .icon-btn svg { width: 14px; height: 14px; }
 .user {
   max-width: min(85%, 600px);
   background: var(--surface);
@@ -998,6 +1011,7 @@ button.item-row:hover { background: var(--hover); }
     <div id="dock">
       <div class="col">
         <div id="hero"><h1 id="greeting">Good evening</h1></div>
+        <div id="pending" hidden aria-label="Waiting messages"></div>
         <div class="shell"><div class="glow" aria-hidden="true"></div>
         <form id="composer" autocomplete="off">
           <textarea id="input" rows="1" placeholder="Message Flash" aria-label="Message Flash"></textarea>
@@ -1058,6 +1072,8 @@ button.item-row:hover { background: var(--hover); }
 // Icons: stroked, 24-unit paths, drawn in the text colour.
 
 const ICON = {
+  steer: '<path d="m15 10 5 5-5 5"/><path d="M4 4v7a4 4 0 0 0 4 4h12"/>',
+  clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
   book: '<path d="M12 7v14"/><path d="M3 18a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h5a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-6a3 3 0 0 0-3 3 3 3 0 0 0-3-3z"/>',
   puzzle: '<path d="M15.39 4.39a1 1 0 0 0 1.68-.474 2.5 2.5 0 1 1 3.014 3.015 1 1 0 0 0-.474 1.68l1.683 1.682a2.414 2.414 0 0 1 0 3.414L19.61 15.39a1 1 0 0 1-1.68-.474 2.5 2.5 0 1 0-3.014 3.015 1 1 0 0 1 .474 1.68l-1.683 1.682a2.414 2.414 0 0 1-3.414 0L8.61 19.61a1 1 0 0 0-1.68.474 2.5 2.5 0 1 1-3.014-3.015 1 1 0 0 0 .474-1.68l-1.683-1.682a2.414 2.414 0 0 1 0-3.414L4.39 8.61a1 1 0 0 1 1.68.474 2.5 2.5 0 1 0 3.014-3.015 1 1 0 0 1-.474-1.68l1.683-1.682a2.414 2.414 0 0 1 3.414 0z"/>',
   monitor: '<rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/>',
@@ -1602,8 +1618,9 @@ function replyActions(text) {
   return row;
 }
 
-function userBlock(text) {
+function userBlock(text, steered) {
   const wrap = el("div", "block user-wrap turn");
+  if (steered) wrap.appendChild(el("div", "steer-tag", `${icon("steer")}<span>Steered mid-turn</span>`));
   const bubble = el("div", "user");
   bubble.textContent = text;
   wrap.dataset.raw = text;
@@ -1635,7 +1652,7 @@ function assistantBlock(entry) {
 function drawEntry(entry, ctx) {
   switch (entry.type) {
     case "user": {
-      const block = messagesEl.appendChild(userBlock(entry.text));
+      const block = messagesEl.appendChild(userBlock(entry.text, entry.steer));
       block.dataset.log = ctx.index;
       ctx.lastReply = null;
       break;
@@ -1712,6 +1729,7 @@ function drawChat() {
   if (inProject) $("#crumb").textContent = inProject.name;
   input.placeholder = empty ? (inProject ? `Message Flash in ${inProject.name}` : "Message Flash") : "Reply to Flash";
   renderProjectBtn();
+  renderPending();
   greet();
   markSide();
   updateSend();
@@ -1740,6 +1758,7 @@ function drawPage() {
   $("#crumb").hidden = true;
   const pages = { projects: drawProjects, settings: drawSettings, skills: drawSkillsPage, extensions: drawExtensionsPage };
   (pages[view] || drawProject)();
+  renderPending();
   markSide();
   updateSend();
   logEl.scrollTop = 0;
@@ -2873,6 +2892,7 @@ function apply(event) {
   const here = event.chat === current && view === "chat";
 
   switch (event.type) {
+    case "pending": chat.pending = event.pending; if (event.chat === current) { renderPending(); updateSend(); } return;
     case "token": chat.partial += event.text; if (here) scheduleStream(); return;
     case "thinking": chat.thinking += event.text; if (here) scheduleStream(); return;
     case "busy":
@@ -2891,7 +2911,9 @@ function apply(event) {
       const entry = { ...event };
       delete entry.chat;
       chat.log.push(entry);
-      if (event.type === "user") { chat.queued = true; chat.updated = Date.now() / 1000; }
+      // A steer joins the turn already running; any other message is
+      // the start of one.
+      if (event.type === "user" && !event.steer) { chat.queued = true; chat.updated = Date.now() / 1000; }
       if (event.type === "assistant") { chat.partial = ""; chat.thinking = ""; }
       if (here) {
         // The first thing in a chat turns the empty screen into a
@@ -2951,7 +2973,7 @@ function refreshLite() {
     const ids = state.chats.map((c) => c.id);
     for (const c of state.chats) {
       const known = chats.get(c.id);
-      if (known) Object.assign(known, { title: c.title, busy: c.busy, queued: c.queued, project: c.project, updated: c.updated });
+      if (known) Object.assign(known, { title: c.title, busy: c.busy, queued: c.queued, pending: c.pending || [], project: c.project, updated: c.updated });
       else chats.set(c.id, { ...c, log: [], partial: "", thinking: "" });
     }
     for (const id of [...chats.keys()]) if (!ids.includes(id)) chats.delete(id);
@@ -3134,19 +3156,26 @@ async function refreshContext() {
 function updateSend() {
   const chat = chats.get(current);
   const busy = chat && (chat.busy || chat.queued);
+  const typed = !!input.value.trim();
+  // Working with nothing typed: Stop. Working with something typed: it
+  // steers. Otherwise: send.
+  const state = busy ? (typed ? "steer" : "stop") : "up";
   const send = $("#send");
-  send.classList.toggle("stop", !!busy);
+  send.classList.toggle("stop", state === "stop");
   document.body.classList.toggle("working", !!busy && view === "chat");
   // Swapped only when it changes, so the icon's entrance plays once per
   // change rather than on every keystroke.
-  if (send.dataset.state !== (busy ? "stop" : "up")) {
-    send.dataset.state = busy ? "stop" : "up";
-    send.innerHTML = icon(busy ? "stop" : "up");
+  if (send.dataset.state !== state) {
+    send.dataset.state = state;
+    send.innerHTML = icon(state);
   }
-  send.dataset.tip = busy ? "Stop" : "Send";
-  send.dataset.keys = busy ? "Esc" : "Enter";
-  send.setAttribute("aria-label", busy ? "Stop" : "Send");
-  send.disabled = !busy && !input.value.trim();
+  const tip = { stop: ["Stop", "Esc"], steer: ["Steer: Flash reads it at its next step. Ctrl Enter runs it after instead", "Enter"], up: ["Send", "Enter"] }[state];
+  send.dataset.tip = tip[0];
+  send.dataset.keys = tip[1];
+  send.setAttribute("aria-label", state === "stop" ? "Stop" : state === "steer" ? "Steer" : "Send");
+  send.disabled = !busy && !typed;
+  if (busy && view === "chat") input.placeholder = "Steer Flash, or Ctrl Enter to queue";
+  else if (input.placeholder.startsWith("Steer")) input.placeholder = "Reply to Flash";
 }
 
 // A notice grows out of a small capsule, springs to its width, and
@@ -3213,10 +3242,23 @@ document.addEventListener("scroll", hideTip, true);
 // ---------------------------------------------------------------------------
 // Actions: every key, button, menu row and slash command lands here.
 
-async function send(text) {
+// While a turn runs, a message waits: MODE "steer" (Enter) reaches the
+// model at the turn's next step, "queue" (Ctrl Enter) runs after it.
+async function send(text, mode = "steer") {
   text = text.trim();
   if (!text) return;
   if (text.startsWith("/") && runSlash(text)) return;
+  const running = chats.get(current);
+  if (running && (running.busy || running.queued)) {
+    sent.push(text);
+    sentAt = -1;
+    flash($("#composer"), "sent", 340);
+    input.value = "";
+    autosize();
+    updateSend();
+    await api("/api/send", { chat: current, text, mode }).catch(showFailure);
+    return;
+  }
   sent.push(text);
   sentAt = -1;
   flash($("#send"), "launch", 420);
@@ -3246,8 +3288,38 @@ async function createChat(project = "") {
 
 function stopReply() {
   const chat = chats.get(current);
-  if (chat && (chat.busy || chat.queued)) { command("stop"); return true; }
-  return false;
+  if (!chat || !(chat.busy || chat.queued)) return false;
+  command("stop").then((r) => {
+    // Anything that was waiting comes back to the box, not lost.
+    const back = (r && r.restored) || [];
+    if (!back.length) return;
+    input.value = [input.value.trim(), ...back].filter(Boolean).join("\n\n");
+    autosize();
+    updateSend();
+    input.focus();
+    toast(back.length === 1 ? "Stopped. Your waiting message is back in the box." : "Stopped. Your waiting messages are back in the box.");
+  }).catch(showFailure);
+  return true;
+}
+
+function renderPending() {
+  const box = $("#pending");
+  const chat = chats.get(current);
+  const items = (view === "chat" && chat && chat.pending) || [];
+  box.hidden = !items.length;
+  box.textContent = "";
+  for (const item of items) {
+    const steer = item.mode === "steer";
+    const row = el("div", `pending-row${steer ? " steer" : ""}`, `<span class="ico">${icon(steer ? "steer" : "clock")}</span><span class="text"></span>`);
+    row.querySelector(".text").textContent = item.text;
+    row.querySelector(".text").title = item.text;
+    const mode = el("button", "mode", steer ? "Steers at the next step" : "Runs after this turn");
+    mode.type = "button";
+    mode.dataset.tip = steer ? "Switch to running after this turn" : "Switch to steering this turn";
+    mode.onclick = () => command("pending-mode", item.id, current, { mode: steer ? "queue" : "steer" }).catch(showFailure);
+    row.append(mode, button("icon-btn", "x", "Remove", "", () => command("pending-remove", item.id).catch(showFailure)));
+    box.appendChild(row);
+  }
 }
 
 // The project a chat starts in, picked from the box before its first
@@ -4047,7 +4119,7 @@ input.addEventListener("keydown", (e) => {
     if (e.key === "Escape") { e.preventDefault(); closeMenu(); slashOpen = false; return; }
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); const row = menuRows[menuSel]; clearInput(); row.action.run(); return; }
   }
-  if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(input.value); return; }
+  if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(input.value, e.ctrlKey || e.metaKey ? "queue" : "steer"); return; }
   if (e.key === "Tab" && e.shiftKey) { e.preventDefault(); toggleAuto(); return; }
   if (e.key === "Escape") {
     if (menuEl) return;
@@ -4072,7 +4144,7 @@ input.addEventListener("keydown", (e) => {
   }
 });
 
-$("#composer").addEventListener("submit", (e) => { e.preventDefault(); if (!stopReply()) send(input.value); });
+$("#composer").addEventListener("submit", (e) => { e.preventDefault(); if (input.value.trim()) send(input.value); else stopReply(); });
 $("#composer").addEventListener("mousedown", (e) => { if (e.target === e.currentTarget) { e.preventDefault(); input.focus(); } });
 $("#new-chat").onclick = newChat;
 $("#top-new").onclick = newChat;

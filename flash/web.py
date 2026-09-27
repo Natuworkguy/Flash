@@ -192,6 +192,10 @@ class Chat:
     thinking: str = ""
     busy: bool = False
     queued: bool = False
+    # Messages sent while a turn was running, oldest first: each is
+    # {"id", "text", "mode"}. A "steer" one goes to the model at the
+    # running turn's next step; a "queue" one becomes the next turn.
+    pending: list[dict] = field(default_factory=list)
     stop: threading.Event = field(default_factory=threading.Event)
     created: float = field(default_factory=time.time)
     updated: float = field(default_factory=time.time)
@@ -203,6 +207,7 @@ class Chat:
             "title": self.title,
             "busy": self.busy,
             "queued": self.queued,
+            "pending": [dict(p) for p in self.pending],
             "log": self.log,
             "partial": self.partial,
             "thinking": self.thinking,
@@ -252,6 +257,10 @@ KEPT = {
     "error", "stats", "note", "thought", "file", "plan",
 }
 
+
+# How a steering message reaches the model: marked, so it reads as the
+# user redirecting the work in progress rather than a new request.
+STEER_NOTE = "[Sent while you were working. Take it into account from here.]"
 
 # Carries the token from a server to the one that replaces it after an
 # update, across the exec that starts the new version.
@@ -395,6 +404,9 @@ class Session:
         # installed now. Only a server that owns its process can: one
         # beside a terminal session would take the session down with it.
         self.restart: Optional[Callable[[], None]] = None
+        # Opens the server again listening on the network, or not. Set
+        # by whatever runs the server (see _attach).
+        self.switch_lan: Optional[Callable[[bool], None]] = None
         self.chats: dict[str, Chat] = {
             data["id"]: Chat.restore(data)
             for data in workspace.load_chats()
@@ -443,6 +455,7 @@ class Session:
 
     def clear_chat(self, chat: Chat) -> None:
         chat.stop.set()
+        self.unqueue(chat)
         chat.messages.clear()
         chat.log.clear()
         chat.partial = chat.thinking = ""
@@ -480,6 +493,7 @@ class Session:
             "words": [s["now"] for s in ai._load_thinking_states()],
             "status": {
                 **status(ai), "lan": self.lan,
+                "can_switch_lan": self.switch_lan is not None,
                 "update": self.updates.snapshot(),
             },
         }
@@ -529,6 +543,11 @@ class Session:
 
     def close(self) -> None:
         self._stop_watching.set()
+
+    def reopen(self) -> None:
+        """Carry on under a new server after a LAN switch."""
+
+        self._stop_watching.clear()
 
     def agent_list(self, chat_id: str) -> list[dict]:
         """What a chat's sub-agents are doing, for the page's menu."""
@@ -648,61 +667,143 @@ class Session:
 
     # Turns ---------------------------------------------------------
 
-    def send(self, chat: Chat, text: str, wake: bool = False) -> None:
+    def send(
+        self, chat: Chat, text: str, wake: bool = False, mode: str = "",
+    ) -> dict:
         """Start a turn on a thread of its own and return at once.
 
-        WAKE is a turn nobody typed: a sub-agent finished, and the model
-        is woken to report back. The page shows a note, not a message.
+        While one is already running, the message waits in the chat's
+        pending list instead: MODE "steer" hands it to the model at the
+        running turn's next step, and anything else makes it the next
+        turn. WAKE is a turn nobody typed: a sub-agent finished, and the
+        model is woken to report back. It never waits in line.
         """
 
         text = text.strip()
         if not text:
-            return
+            return {}
 
-        if wake:
-            self.emit(chat, {"type": "note", "text": WAKE_TEXT})
-        else:
-            self.wakes[chat.id] = 0
-            if chat.title == "New chat":
-                chat.title = " ".join(text.split())[:TITLE_CHARS] or chat.title
-                self.hub.publish({"type": "chats", "chat": chat.id})
-            self.emit(chat, {"type": "user", "text": text})
+        with self._lock:
+            if chat.busy or chat.queued:
+                if wake:
+                    return {}
+                item = {
+                    "id": uuid.uuid4().hex[:8],
+                    "text": text,
+                    "mode": "steer" if mode == "steer" else "queue",
+                }
+                chat.pending.append(item)
+                waiting = True
+            else:
+                chat.stop.clear()
+                chat.queued = True
+                waiting = False
 
-        chat.stop.clear()
-        chat.queued = True
+        if waiting:
+            self._publish_pending(chat)
+            return {"pending": item["id"]}
+
+        self._begin(chat, text, wake)
         threading.Thread(
             target=self._run, args=(chat, text), daemon=True
         ).start()
+        return {}
+
+    def _begin(self, chat: Chat, text: str, wake: bool = False) -> None:
+        """Put a turn's message in the chat, as its turn starts."""
+
+        if wake:
+            self.emit(chat, {"type": "note", "text": WAKE_TEXT})
+            return
+        self.wakes[chat.id] = 0
+        if chat.title == "New chat":
+            chat.title = " ".join(text.split())[:TITLE_CHARS] or chat.title
+            self.hub.publish({"type": "chats", "chat": chat.id})
+        self.emit(chat, {"type": "user", "text": text})
+
+    def _publish_pending(self, chat: Chat) -> None:
+        self.hub.publish({
+            "type": "pending", "chat": chat.id,
+            "pending": [dict(p) for p in chat.pending],
+        })
+
+    def take_steers(self, chat: Chat) -> list[str]:
+        """The steering messages waiting for this turn, taken off the
+        list and shown in the chat where the model reads them."""
+
+        with self._lock:
+            steers = [p for p in chat.pending if p["mode"] == "steer"]
+            chat.pending = [p for p in chat.pending if p["mode"] != "steer"]
+        if not steers:
+            return []
+        self._publish_pending(chat)
+        for item in steers:
+            self.emit(chat, {"type": "user", "text": item["text"],
+                             "steer": True})
+        return [item["text"] for item in steers]
+
+    def _take_next(self, chat: Chat) -> Optional[str]:
+        """The next waiting message to run as a turn, if any. A steer
+        the turn ended before it could read comes first: it is older.
+        Stopping emptied the list, so anything here was sent after it,
+        and runs. Called with the lock held."""
+
+        if not chat.pending:
+            return None
+        item = chat.pending.pop(0)
+        chat.queued = True
+        chat.stop.clear()
+        return item["text"]
+
+    def unqueue(self, chat: Chat) -> list[str]:
+        """Drop every waiting message, handing back what they said."""
+
+        with self._lock:
+            texts = [p["text"] for p in chat.pending]
+            chat.pending = []
+        if texts:
+            self._publish_pending(chat)
+        return texts
 
     def _run(self, chat: Chat, text: str) -> None:
         # A local backend runs one generation at a time, and this turn
         # is the one somebody is now waiting on.
         learning.cancel()
 
-        with self.turn_lock:
-            chat.queued = False
-            chat.busy = True
-            self.emit(chat, {"type": "busy", "busy": True})
-            try:
-                found = (
-                    workspace.project(chat.project) if chat.project else None
-                )
-                if chat.stop.is_set():
-                    self.emit(chat, {"type": "note", "text": "Stopped."})
-                else:
-                    with inside(found.path if found else None):
-                        run_turn(self, chat, text, found)
-            except Exception as exc:  # noqa: BLE001
-                self.emit(chat, {
-                    "type": "error",
-                    "text": f"{exc.__class__.__name__}: {exc}",
-                })
-            finally:
-                chat.busy = False
-                chat.partial = chat.thinking = ""
-                self.save(chat)
-                self.emit(chat, {"type": "busy", "busy": False})
-                self.hub.publish({"type": "status"})
+        # One runner per chat, so its waiting messages go in the order
+        # they were sent. The lock is let go between turns, so another
+        # chat is not held up behind a long queue.
+        while text is not None:
+            with self.turn_lock:
+                chat.queued = False
+                chat.busy = True
+                self.emit(chat, {"type": "busy", "busy": True})
+                try:
+                    found = (
+                        workspace.project(chat.project)
+                        if chat.project else None
+                    )
+                    if chat.stop.is_set():
+                        self.emit(chat, {"type": "note", "text": "Stopped."})
+                    else:
+                        with inside(found.path if found else None):
+                            run_turn(self, chat, text, found)
+                except Exception as exc:  # noqa: BLE001
+                    self.emit(chat, {
+                        "type": "error",
+                        "text": f"{exc.__class__.__name__}: {exc}",
+                    })
+                finally:
+                    with self._lock:
+                        text = self._take_next(chat)
+                        chat.busy = False
+                    chat.partial = chat.thinking = ""
+                    self.save(chat)
+                    self.emit(chat, {"type": "busy", "busy": False})
+                    self.hub.publish({"type": "status"})
+            if text is not None:
+                self._publish_pending(chat)
+                self._begin(chat, text)
 
 
 # --- A turn --------------------------------------------------------------
@@ -975,6 +1076,11 @@ def run_turn(
                 convo.append(
                     ai._message("user", ai.TOOL_IMAGE_NOTE, images)
                 )
+
+            # Whatever the user sent to steer this turn, read before the
+            # model decides its next step.
+            for steer in session.take_steers(chat):
+                convo.append(ai._message("user", f"{STEER_NOTE}\n{steer}"))
 
             if chat.stop.is_set():
                 reply = Streamed(stopped=True)
@@ -1276,8 +1382,25 @@ def command(session: Session, body: dict) -> dict:
         return {}
 
     if name == "stop":
-        session.chat(chat_id).stop.set()
-        return {}
+        chat = session.chat(chat_id)
+        chat.stop.set()
+        # What was waiting goes back to the page, to send again or not.
+        return {"restored": session.unqueue(chat)}
+
+    if name in ("pending-remove", "pending-mode"):
+        chat = session.chat(chat_id)
+        with session._lock:
+            found = next((p for p in chat.pending if p["id"] == arg), None)
+            if found is None:
+                raise ValueError("That message has already been sent.")
+            if name == "pending-remove":
+                chat.pending.remove(found)
+            else:
+                found["mode"] = (
+                    "steer" if body.get("mode") == "steer" else "queue"
+                )
+        session._publish_pending(chat)
+        return {"pending": [dict(p) for p in chat.pending]}
 
     if name == "update-check":
         session.updates.check()
@@ -1358,6 +1481,15 @@ def command(session: Session, body: dict) -> dict:
         if not extensions.remove(arg):
             raise ValueError(f"No extension called {arg!r}.")
         return {"removed": arg}
+
+    if name == "lan":
+        if session.switch_lan is None:
+            raise ValueError("This Flash cannot reopen its server.")
+        on = arg in ("on", "1", "true")
+        if on == session.lan:
+            return {"lan": on, "switching": False}
+        session.switch_lan(on)
+        return {"lan": on, "switching": True}
 
     if name == "compact-setting":
         on = arg in ("on", "1", "true")
@@ -1703,8 +1835,11 @@ class Handler(BaseHTTPRequestHandler):
             chat = (
                 session.chat(chat_id) if chat_id else session.new_chat()
             )
-            session.send(chat, str(body.get("text", "")))
-            return {"chat": chat.id}
+            sent = session.send(
+                chat, str(body.get("text", "")),
+                mode=str(body.get("mode") or ""),
+            )
+            return {"chat": chat.id, **sent}
 
         if path == "/api/answer":
             return {
@@ -1804,6 +1939,12 @@ class Server(ThreadingHTTPServer):
         self.session = session or Session()
         self.session.lan = lan
         self.lan = lan
+        # A LAN switch in progress: the server that replaces this one,
+        # once it is listening, and whether to leave the session open.
+        self.swapping = False
+        self.swapped = threading.Event()
+        self.replacement: Optional[Server] = None
+        self.keep_session = False
 
     @property
     def port(self) -> int:
@@ -1841,7 +1982,8 @@ class Server(ThreadingHTTPServer):
     def server_close(self) -> None:
         self.closing.set()
         self.session.hub.close()
-        self.session.close()
+        if not self.keep_session:
+            self.session.close()
         super().server_close()
 
 
@@ -1929,9 +2071,11 @@ def announce(server: "Server") -> None:
     ))
 
 
-def _listen(port: int, lan: bool) -> "Server":
+def _listen(
+    port: int, lan: bool, session: Optional[Session] = None,
+) -> "Server":
     try:
-        return Server(port, lan=lan)
+        return Server(port, session=session, lan=lan)
     except OSError as exc:
         raise OSError(
             f"could not listen on port {port} ({exc.strerror}); pass "
@@ -1952,13 +2096,88 @@ def _restart(server: "Server") -> None:
     """
 
     os.environ[TOKEN_ENV] = server.token
-    args = list(sys.argv[1:])
+    # As it is now, which a LAN switch may have changed since it began.
+    args = [a for a in sys.argv[1:] if a != "--lan"]
+    if server.lan:
+        args.append("--lan")
     if "--no-open" not in args:
         args.append("--no-open")
     console.print(Text("Restarting to finish the update.", style=DIM))
     os.execv(  # nosec B606 -- this same interpreter, running Flash again
         sys.executable, [sys.executable, "-m", "flash", *args]
     )
+
+
+# How long a LAN switch waits, so the page hears the answer first.
+SWITCH_DELAY = 0.4
+
+
+def _switch_lan(server: "Server", lan: bool) -> None:
+    """Open SERVER again, listening on the network or only here.
+
+    Which interfaces a server listens on is fixed when it opens, so this
+    closes it and opens another on the same port, with the same token
+    and the same session: chats, running turns, and open pages all
+    carry on, and the pages reconnect by themselves. If the new one
+    cannot listen, the old choice is opened again instead.
+    """
+
+    server.swapping = True
+    server.keep_session = True
+    server.shutdown()
+    server.server_close()
+    server.session.reopen()
+
+    for choice in (lan, server.lan):
+        os.environ[TOKEN_ENV] = server.token
+        try:
+            server.replacement = Server(
+                server.port, session=server.session, lan=choice,
+            )
+            break
+        except OSError:
+            os.environ.pop(TOKEN_ENV, None)
+
+    server.swapped.set()
+    if server.replacement is not None:
+        announce(server.replacement)
+
+
+def _attach(server: "Server", standalone: bool) -> None:
+    """Give the page its handles on the process running SERVER."""
+
+    global _background
+
+    session = server.session
+    session.switch_lan = lambda on: threading.Timer(
+        SWITCH_DELAY, _switch_lan, (server, on),
+    ).start()
+    if standalone:
+        if os.name != "nt":
+            # Windows cannot replace a running Flash at all: its update
+            # finishes after this one quits, so there is nothing to
+            # restart.
+            session.restart = lambda: _restart(server)
+            session.updates.can_restart = True
+    else:
+        _background = server
+
+
+def _serve(server: "Server", standalone: bool, running: list) -> None:
+    """Serve until stopped, carrying on through LAN switches. RUNNING
+    holds the server serving now, for whoever has to close it."""
+
+    running[:] = [server]
+    while True:
+        server.serve_forever(poll_interval=0.5)
+        if not server.swapping:
+            return
+        server.swapped.wait()
+        if server.replacement is None:
+            return
+        server = server.replacement
+        running[:] = [server]
+        _attach(server, standalone)
 
 
 def serve(
@@ -1970,22 +2189,19 @@ def serve(
     announce(server)
     console.print(Text("Ctrl+C stops it.", style=DIM))
 
-    if os.name != "nt":
-        # Windows cannot replace a running Flash at all: its update
-        # finishes after this one quits, so there is nothing to restart.
-        server.session.restart = lambda: _restart(server)
-        server.session.updates.can_restart = True
+    _attach(server, standalone=True)
     server.session.updates.check_in_background()
 
     if open_browser:
         webbrowser.open(server.url)
 
+    running = [server]
     try:
-        server.serve_forever(poll_interval=0.5)
+        _serve(server, True, running)
     except KeyboardInterrupt:
         console.print(Text("Stopped.", style=DIM))
     finally:
-        server.server_close()
+        running[0].server_close()
 
 
 # The server /web started from inside a terminal session, if any.
@@ -2007,14 +2223,13 @@ def start_background(
         return _background
 
     stop_background()
-    _background = _listen(DEFAULT_PORT if port is None else port, lan)
-    _background.session.updates.check_in_background()
+    server = _listen(DEFAULT_PORT if port is None else port, lan)
+    _attach(server, standalone=False)
+    server.session.updates.check_in_background()
     threading.Thread(
-        target=_background.serve_forever,
-        kwargs={"poll_interval": 0.5},
-        daemon=True,
+        target=_serve, args=(server, False, []), daemon=True,
     ).start()
-    return _background
+    return server
 
 
 def stop_background() -> bool:
