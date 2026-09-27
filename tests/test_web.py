@@ -2235,3 +2235,32 @@ class TestAnExtensionsBackground:
         assert web.command(session, {"name": "background-scene"}) == {
             "scene": None,
         }
+
+
+class TestAddresses:
+    @pytest.mark.parametrize("path", [
+        "/", "/c/0123abcd", "/p/89abcdef", "/projects", "/settings",
+        "/settings/usage", "/settings/memory", "/skills", "/extensions",
+        "/c/0123abcd/",
+    ])
+    def test_every_view_has_the_page(self, server, path):
+        status, body = request(server, "GET", path)
+
+        assert status == 200
+        assert b"<!doctype html>" in body[:200].lower()
+        assert "flash_" in request.last.getheader("Set-Cookie")
+
+    @pytest.mark.parametrize("path", [
+        "/c/not-an-id", "/c/0123ABCD", "/settings/secret", "/c",
+        "/index.html", "/c/0123abcd/extra",
+    ])
+    def test_anything_else_is_not_found(self, server, path):
+        assert request(server, "GET", path)[0] == 404
+
+    def test_a_chat_address_without_the_token_is_the_expired_page(
+        self, server
+    ):
+        status, body = request(server, "GET", "/c/0123abcd", token=False)
+
+        assert status == 403
+        assert b"<html" in body.lower()
