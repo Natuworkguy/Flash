@@ -28,6 +28,10 @@ from .paths import FLASH_DIR
 LOCAL_HOST = "http://localhost:11434"
 LOCAL_NAME = "This computer"
 
+# Names for this computer. An OLLAMA_HOST of 127.0.0.1 is the same
+# server as localhost, not a second host to list, switch to, or remove.
+LOOPBACK = frozenset({"localhost", "127.0.0.1", "::1"})
+
 HOST_CHECK_SECONDS = 1.5
 
 MAX_NAME = 60
@@ -94,35 +98,67 @@ def normalize_host(url: str) -> str:
     return f"{parsed.scheme}://{host}:{port}"
 
 
+def host_key(url: str) -> str:
+    """Which server URL means, for telling hosts apart: every name for
+    this computer on a port counts as the same one. Only for comparing;
+    the URL Flash connects to is never rewritten, since localhost and
+    127.0.0.1 can reach different sockets."""
+
+    try:
+        url = normalize_host(url)
+    except WorkspaceError:
+        return url
+    parsed = urlparse(url)
+    if (parsed.hostname or "") in LOOPBACK:
+        return f"{parsed.scheme}://localhost:{parsed.port}"
+    return url
+
+
 def hosts(current: str = "") -> list[dict]:
-    """The saved hosts, this computer first, plus CURRENT if unsaved."""
+    """The saved hosts, this computer first, plus CURRENT if unsaved.
+
+    `saved` marks the ones in hosts.json: only those can be removed.
+    """
 
     saved = [
         h for h in _read("hosts.json", [])
         if isinstance(h, dict) and h.get("url")
     ]
-    listed = [{"name": LOCAL_NAME, "url": LOCAL_HOST}]
-    seen = {LOCAL_HOST}
+    listed = [{"name": LOCAL_NAME, "url": LOCAL_HOST, "saved": False}]
+    seen = {host_key(LOCAL_HOST)}
 
     for entry in saved:
         try:
             url = normalize_host(entry["url"])
         except WorkspaceError:
             continue
-        if url in seen:
+        if host_key(url) in seen:
             continue
-        seen.add(url)
-        listed.append({"name": str(entry.get("name") or url), "url": url})
+        seen.add(host_key(url))
+        listed.append({
+            "name": str(entry.get("name") or url), "url": url, "saved": True,
+        })
 
     if current:
         try:
             url = normalize_host(current)
         except WorkspaceError:
             url = ""
-        if url and url not in seen:
-            listed.append({"name": "Current", "url": url})
+        if url and host_key(url) not in seen:
+            listed.append({"name": "Current", "url": url, "saved": False})
 
     return listed
+
+
+def listed_url(current: str) -> str:
+    """The URL CURRENT goes by in hosts(), so the page can tell which
+    entry is in use: 127.0.0.1 shows up as This computer's."""
+
+    key = host_key(current)
+    return next(
+        (h["url"] for h in hosts(current) if host_key(h["url"]) == key),
+        current,
+    )
 
 
 def add_host(name: str, url: str) -> dict:
@@ -132,9 +168,10 @@ def add_host(name: str, url: str) -> dict:
     with _lock:
         saved = [
             h for h in _read("hosts.json", [])
-            if isinstance(h, dict) and h.get("url") != url
+            if isinstance(h, dict)
+            and host_key(str(h.get("url") or "")) != host_key(url)
         ]
-        if url != LOCAL_HOST:
+        if host_key(url) != host_key(LOCAL_HOST):
             saved.append({"name": name, "url": url})
         _write("hosts.json", saved)
 
@@ -151,7 +188,8 @@ def remove_host(url: str) -> bool:
         saved = _read("hosts.json", [])
         kept = [
             h for h in saved
-            if isinstance(h, dict) and h.get("url") != url
+            if isinstance(h, dict)
+            and host_key(str(h.get("url") or "")) != host_key(url)
         ]
         if len(kept) == len(saved):
             return False

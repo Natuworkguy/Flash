@@ -1115,13 +1115,16 @@ def status(ai) -> dict:
     host = ai.Config.host
     named = next(
         (h["name"] for h in workspace.hosts(host)
-         if h["url"] == _normal(host)),
+         if workspace.host_key(h["url"]) == workspace.host_key(host)),
         host,
     )
     return {
         "version": __version__,
         "model": ai.Config.model or "",
         "host": host,
+        # The entry in the host list that is in use, by the URL the list
+        # gives it: 127.0.0.1 is listed as This computer's localhost.
+        "host_url": workspace.listed_url(host),
         "host_name": named,
         "auto": bool(ai.Config.no_command_confirmation),
         "compact": bool(ai.Config.auto_compact),
@@ -1379,21 +1382,25 @@ def command(session: Session, body: dict) -> dict:
 
     if name == "hosts":
         return {"hosts": workspace.hosts_with_health(ai.Config.host),
-                "current": _normal(ai.Config.host)}
+                "current": workspace.listed_url(ai.Config.host)}
 
     if name == "host":
         url = workspace.normalize_host(arg)
         ai.set_config_var("OLLAMA_HOST", url)
         ai.forget_model_facts()
         session.hub.publish({"type": "status"})
-        return {"host": url, "models": list_models(ai),
-                "up": workspace.host_up(url)}
+        return {"host": url, "host_url": workspace.listed_url(url),
+                "models": list_models(ai), "up": workspace.host_up(url)}
 
     if name == "host-add":
         added = workspace.add_host(str(body.get("label") or ""), arg)
         return {**added, "up": workspace.host_up(added["url"])}
 
     if name == "host-remove":
+        if workspace.host_key(arg) == workspace.host_key(ai.Config.host):
+            raise ValueError(
+                "That host is in use. Switch to another one first."
+            )
         return {"removed": workspace.remove_host(arg)}
 
     if name == "project-new":
