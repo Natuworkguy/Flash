@@ -27,8 +27,10 @@ import threading
 import time
 import uuid
 import webbrowser
+from collections import Counter
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
+from datetime import date, datetime, timedelta, timezone
 from http import HTTPStatus
 from http.cookies import CookieError, SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -42,7 +44,7 @@ import segno
 from rich.text import Text
 
 from . import agent as subagents
-from . import checkpoint, context, learning, workspace
+from . import checkpoint, context, learning, memory, skills, workspace
 from .theme import (
     ACCENT,
     DIM,
@@ -64,7 +66,7 @@ PAGE = WEB_DIR / "index.html"
 
 # The only files served without the token: a stylesheet cannot send
 # one, and there is nothing in a font to protect.
-STATIC = {"orbit.woff2": "font/woff2"}
+STATIC = {"orbit.woff2": "font/woff2", "logo-icon.svg": "image/svg+xml"}
 
 # How often an idle event stream says it is still there. Proxies and
 # some browsers drop a stream that has been silent for a minute.
@@ -835,6 +837,9 @@ def run_turn(
 
     session.emit(chat, {
         "type": "stats",
+        # When, and on what: the settings page counts days and models.
+        "at": round(time.time()),
+        "model": ai.Config.model or "",
         "tokens": tokens,
         "rate": round(tokens / generating, 1) if generating else 0,
         "seconds": round(time.monotonic() - started, 1),
@@ -858,6 +863,88 @@ def ai_wake_note() -> str:
     from . import ai  # deferred: ai imports half of Flash
 
     return ai.WAKE_NOTE
+
+
+def _streaks(days: set, today: date) -> tuple[int, int]:
+    """The run of active days up to today, and the longest run."""
+
+    longest = run = 0
+    previous = None
+    for day in sorted(days):
+        run = run + 1 if previous == day - timedelta(days=1) else 1
+        longest = max(longest, run)
+        previous = day
+
+    # A streak survives until a whole day goes by without a message,
+    # so it still counts in the morning, before today's first one.
+    current = 0
+    day = today if today in days else today - timedelta(days=1)
+    while day in days:
+        current += 1
+        day -= timedelta(days=1)
+
+    return current, longest
+
+
+def usage(chats, today: Optional[date] = None) -> dict:
+    """What the settings page's dashboard shows, counted from the
+    saved web chats.
+
+    Newer turns record when they ran and on which model;
+    an older one counts on the day its chat was last used.
+    """
+
+    today = today or datetime.now(timezone.utc).astimezone().date()
+    per_day: Counter = Counter()
+    models: Counter = Counter()
+    messages = turns = tokens = tools = 0
+    seconds = generating = 0.0
+    used = 0
+
+    for chat in chats:
+        log = list(chat.log)
+        if log:
+            used += 1
+        for entry in log:
+            if entry.get("type") == "user":
+                messages += 1
+            if entry.get("type") != "stats":
+                continue
+            turns += 1
+            at = entry.get("at") or chat.updated
+            # Days as this computer's clock has them, like the page's.
+            day = datetime.fromtimestamp(at, timezone.utc).astimezone()
+            per_day[day.date()] += 1
+            if entry.get("model"):
+                models[entry["model"]] += 1
+            count = int(entry.get("tokens") or 0)
+            rate = float(entry.get("rate") or 0)
+            tokens += count
+            tools += int(entry.get("tools") or 0)
+            seconds += float(entry.get("seconds") or 0)
+            if rate > 0:
+                generating += count / rate
+
+    current, longest = _streaks(set(per_day), today)
+
+    return {
+        "chats": used,
+        "messages": messages,
+        "turns": turns,
+        "tokens": tokens,
+        "tools": tools,
+        "seconds": round(seconds),
+        "rate": round(tokens / generating, 1) if generating else 0,
+        "days": {day.isoformat(): n for day, n in sorted(per_day.items())},
+        "active_days": len(per_day),
+        "streak": current,
+        "longest_streak": longest,
+        "models": models.most_common(),
+        "today": today.isoformat(),
+        "memories": len(memory.list_memory()),
+        "skills": len(skills.all_skills()),
+        "projects": len(workspace.projects()),
+    }
 
 
 def status(ai) -> dict:
@@ -1006,6 +1093,55 @@ def command(session: Session, body: dict) -> dict:
                 "type": "note", "text": message,
             })
         return {"message": message}
+
+    if name == "usage":
+        return usage(session.chats.values())
+
+    if name == "memory":
+        return {
+            "entries": memory.list_memory(),
+            "prompt": memory.IMPORT_PROMPT,
+            "path": str(memory.MEMORY_PATH),
+        }
+
+    if name == "memory-preview":
+        known = {e.lower() for e in memory.list_memory()}
+        facts = memory.parse_import(str(body.get("text") or ""))
+        return {
+            "new": [f for f in facts if f.lower() not in known],
+            "known": sum(f.lower() in known for f in facts),
+        }
+
+    if name == "memory-import":
+        added, skipped = memory.import_memory(str(body.get("text") or ""))
+        # Memory rides in the system prompt, which is kept as it was
+        # when the server started until something asks for it again.
+        learning.refresh()
+        return {"added": added, "skipped": skipped,
+                "entries": memory.list_memory()}
+
+    if name in ("memory-add", "memory-edit"):
+        # One line each: the file holds one fact per line.
+        text = " ".join(str(body.get("text") or "").split())
+        try:
+            if name == "memory-add":
+                if not text:
+                    raise ValueError("Nothing to remember.")
+                memory.add_memory(text)
+            else:
+                memory.edit_memory(int(arg), text)
+        except IndexError as exc:
+            raise ValueError(str(exc)) from None
+        learning.refresh()
+        return {"entries": memory.list_memory(), "text": text}
+
+    if name == "memory-forget":
+        try:
+            memory.forget_memory(int(arg))
+        except IndexError as exc:
+            raise ValueError(str(exc)) from None
+        learning.refresh()
+        return {"entries": memory.list_memory()}
 
     if name == "context":
         return {"share": context_share(ai, session.chat(chat_id))}

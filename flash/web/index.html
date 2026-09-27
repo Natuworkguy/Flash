@@ -6,6 +6,7 @@
 <meta name="referrer" content="no-referrer">
 <meta name="theme-color" content="#262624">
 <title>Flash</title>
+<link rel="icon" type="image/svg+xml" href="/static/logo-icon.svg">
 <style>
 @font-face {
   font-family: "Orbit";
@@ -113,10 +114,14 @@ body.side-closed #sidebar > * { opacity: 0; }
 body.side-closed #sidebar { margin-left: -272px; }
 .side-top { display: flex; align-items: center; justify-content: space-between; padding: 12px 10px 10px 18px; height: 56px; }
 .wordmark {
+  display: inline-flex; align-items: center; gap: 6px;
   font: 700 21px/1 var(--brand);
   letter-spacing: -0.025em;
   color: var(--text);
 }
+/* Pixel art: kept sharp, and pulled left so the bolt, not its empty
+   margin, lines up with the rows below. */
+.wordmark .logo { width: 26px; height: 26px; margin-left: -5px; image-rendering: pixelated; flex: none; }
 .icon-btn {
   width: 34px; height: 34px; border-radius: 9px;
   display: grid; place-items: center;
@@ -151,14 +156,28 @@ body.side-closed #sidebar { margin-left: -272px; }
 }
 .chat:hover { background: var(--hover); color: var(--text); }
 .chat.current { background: var(--pressed); color: var(--text); }
-.chat .open { flex: 1; min-width: 0; padding: 7px 10px; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.chat .del { width: 28px; height: 28px; margin-right: 4px; border-radius: 7px; display: grid; place-items: center; color: var(--text-3); opacity: 0; transition: opacity 0.14s, background 0.14s, color 0.14s; }
-.chat:hover .del, .chat.current .del { opacity: 1; }
-.chat .del:hover { color: var(--text); background: var(--hover); }
-.chat .del svg { width: 15px; height: 15px; }
-.chat .live { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); margin-right: 12px; animation: pulse 1.2s ease-in-out infinite; }
+.chat .open { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; padding: 7px 10px; text-align: left; }
+.chat .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; transition: color 0.14s; }
+.chat:hover .name { color: var(--text-3); }
+.chat .proj { flex: none; max-width: 42%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; font-weight: 500; line-height: 18px; padding: 0 7px; border-radius: 999px; color: var(--text-3); background: color-mix(in srgb, var(--text) 6%, transparent); border: 1px solid var(--border); }
+/* The row's buttons sit at its right end only while it is pointed at,
+   and the title stops short of them. The rest of the time it has the
+   room. */
+.chat .acts { position: absolute; right: 4px; top: 50%; translate: 0 -50%; display: flex; gap: 2px; opacity: 0; pointer-events: none; transition: opacity 0.14s; }
+.chat:hover .acts, .chat:focus-within .acts { opacity: 1; pointer-events: auto; }
+.chat:hover .open, .chat:focus-within .open { padding-right: 62px; }
+.chat .acts button { width: 26px; height: 26px; border-radius: 7px; display: grid; place-items: center; color: var(--text-3); transition: background 0.14s, color 0.14s; }
+.chat .acts button:hover { color: var(--text); background: var(--hover); }
+.chat .acts svg { width: 14px; height: 14px; }
+@media (hover: none) {
+  .chat .acts { position: static; translate: none; opacity: 1; pointer-events: auto; padding-right: 4px; }
+  .chat:hover .open, .chat:focus-within .open { padding-right: 10px; }
+}
+.chat .rename { flex: 1; min-width: 0; margin: 3px 4px; padding: 3px 6px; font: inherit; color: var(--text); background: var(--surface); border: 1px solid color-mix(in srgb, var(--text) 30%, transparent); border-radius: 7px; outline: none; }
+.chat .live { flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); margin-right: 12px; animation: pulse 1.2s ease-in-out infinite; }
 .side-foot { padding: 8px 0 12px; border-top: 1px solid var(--border); }
 .side-foot .side-row svg { color: var(--text-3); }
+.side-sep { height: 1px; background: var(--border); margin: 6px 12px; }
 
 #scrim { display: none; }
 
@@ -483,7 +502,15 @@ body.working .shell::after { opacity: 0.9; }
 ::view-transition-group(dock) { animation-duration: 0.42s; animation-timing-function: cubic-bezier(0.3, 0, 0, 1); }
 ::view-transition-old(root), ::view-transition-new(root) { animation-duration: 0.22s; }
 html.theme-switch #log, html.theme-switch #dock { view-transition-name: none; }
-html.theme-switch::view-transition-old(root), html.theme-switch::view-transition-new(root) { animation: none; mix-blend-mode: normal; }
+/* The new theme lands whole inside the circle, not fading in piece by piece. */
+html.theme-switch *, html.theme-switch *::before, html.theme-switch *::after { transition: none !important; }
+/* A changed theme sweeps in as a circle from the top-left corner until it
+   reaches the bottom-right one. All in CSS, so the circle starts on the
+   transition's first frame and the transition lasts exactly as long as it:
+   142% of a circle() radius is the box's full diagonal. */
+html.theme-switch::view-transition-group(root), html.theme-switch::view-transition-old(root) { animation: none; }
+html.theme-switch::view-transition-new(root) { animation: theme-sweep 0.8s cubic-bezier(0.45, 0, 0.3, 1) both; mix-blend-mode: normal; }
+@keyframes theme-sweep { from { clip-path: circle(0% at 0% 0%); } to { clip-path: circle(142% at 0% 0%); } }
 
 @keyframes bubble { from { opacity: 0; transform: translateY(10px) scale(0.96); } }
 @keyframes rise-far { from { opacity: 0; transform: translateY(10px); } }
@@ -503,7 +530,7 @@ html.theme-switch::view-transition-old(root), html.theme-switch::view-transition
 
 /* Pages: projects and a project ------------------------------------- */
 body.on-page #hero, body.on-page #suggestions { display: none; }
-body.page-projects #dock { display: none; }
+body.page-projects #dock, body.page-settings #dock { display: none; }
 .page { padding: 18px 0 40px; animation: rise 0.22s cubic-bezier(0.2, 0, 0, 1); }
 .page-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 22px; }
 .page h1 { font: 600 28px/1.2 var(--brand); letter-spacing: -0.025em; margin: 0; }
@@ -531,16 +558,117 @@ body.page-projects #dock { display: none; }
 .panel .label { font-size: 12px; font-weight: 500; color: var(--text-3); margin-bottom: 6px; display: flex; justify-content: space-between; align-items: center; }
 .panel .text { white-space: pre-wrap; font-size: 14.5px; color: var(--text-2); }
 .panel .text.placeholder { color: var(--text-3); }
-.panel textarea, .field input, .field textarea {
+.panel textarea, .field input, .field textarea, .step textarea {
   width: 100%; font: 14.5px/1.5 var(--sans); color: var(--text);
   background: var(--bg); border: 1px solid var(--border-strong); border-radius: 10px;
   padding: 9px 12px; resize: vertical; outline: 0;
 }
-.panel textarea:focus, .field input:focus, .field textarea:focus { border-color: color-mix(in srgb, var(--text) 35%, transparent); }
+.panel textarea:focus, .field input:focus, .field textarea:focus, .step textarea:focus { border-color: color-mix(in srgb, var(--text) 35%, transparent); }
 .panel textarea { min-height: 120px; }
 .link-btn { font-size: 12.5px; color: var(--text-3); padding: 3px 8px; border-radius: 7px; }
 .link-btn:hover { color: var(--text); background: var(--hover); }
 .section-label { font-size: 12px; font-weight: 500; color: var(--text-3); margin: 0 0 8px; }
+
+/* Settings */
+.tabs { position: relative; display: inline-flex; padding: 3px; border-radius: 11px; background: var(--hover); margin: -6px 0 22px; }
+.tabs button { position: relative; z-index: 1; padding: 6px 16px; border-radius: 8px; font-size: 13.5px; font-weight: 500; color: var(--text-3); transition: color 0.2s; }
+.tabs button.on { color: var(--text); }
+.tabs .thumb { position: absolute; top: 3px; bottom: 3px; left: 3px; border-radius: 8px; background: var(--surface); box-shadow: 0 1px 3px rgba(0, 0, 0, 0.18), 0 0 0 1px var(--border); transition: left 0.34s var(--spring), width 0.34s var(--spring); }
+.tab-body { animation: rise 0.26s var(--ease) both; }
+.tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; margin-bottom: 14px; }
+.tile { border: 1px solid var(--border); border-radius: 14px; background: var(--surface); padding: 14px 16px 13px; animation: rise-far 0.42s var(--ease) both; animation-delay: calc(var(--i, 0) * 0.035s); }
+.tile .num { font: 600 24px/1.15 var(--brand); letter-spacing: -0.02em; color: var(--text); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.tile .what { font-size: 12.5px; color: var(--text-3); margin-top: 4px; }
+.usage-card { border: 1px solid var(--border); border-radius: 14px; background: var(--surface); padding: 14px 16px 16px; margin-bottom: 14px; animation: rise-far 0.42s var(--ease) 0.2s both; }
+.usage-card .label { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; font-size: 13px; font-weight: 500; color: var(--text-2); margin-bottom: 12px; }
+.usage-card .label small { font-size: 12.5px; font-weight: 400; color: var(--text-3); }
+.heat-wrap { overflow-x: auto; padding-bottom: 2px; }
+.heat-months, .heat { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(10px, 1fr); gap: 3px; min-width: min-content; }
+.heat-months { height: 16px; font-size: 11px; color: var(--text-3); }
+.heat-months span { white-space: nowrap; overflow: visible; width: 0; }
+.heat { grid-template-rows: repeat(7, auto); }
+.heat i { aspect-ratio: 1; border-radius: 3px; background: color-mix(in srgb, var(--text) 7%, transparent); animation: pop-cell 0.3s var(--ease) both; animation-delay: calc(var(--c, 0) * 7ms + 0.2s); }
+.heat i[data-l="1"], .legend i[data-l="1"] { background: color-mix(in srgb, var(--accent) 30%, transparent); }
+.heat i[data-l="2"], .legend i[data-l="2"] { background: color-mix(in srgb, var(--accent) 52%, transparent); }
+.heat i[data-l="3"], .legend i[data-l="3"] { background: color-mix(in srgb, var(--accent) 76%, transparent); }
+.heat i[data-l="4"], .legend i[data-l="4"] { background: var(--accent); }
+.heat i.today { box-shadow: 0 0 0 1.5px var(--text-3); }
+@keyframes pop-cell { from { opacity: 0; transform: scale(0.4); } }
+.heat-foot { display: flex; justify-content: space-between; align-items: center; margin-top: 10px; font-size: 12px; color: var(--text-3); }
+.legend { display: flex; align-items: center; gap: 3px; }
+.legend i { width: 10px; height: 10px; border-radius: 3px; display: inline-block; background: color-mix(in srgb, var(--text) 7%, transparent); }
+.legend span { margin: 0 4px; }
+.model-row { display: grid; grid-template-columns: minmax(0, 1fr) 38%; gap: 14px; align-items: center; padding: 5px 0; font-size: 13px; }
+.model-row .name { font-family: var(--mono); font-size: 12.5px; color: var(--text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.model-row .bar { position: relative; height: 6px; border-radius: 3px; background: color-mix(in srgb, var(--text) 7%, transparent); }
+.model-row .bar b { position: absolute; inset: 0 auto 0 0; border-radius: 3px; background: var(--accent); transform-origin: left; animation: grow 0.7s var(--ease) 0.3s both; }
+@keyframes grow { from { transform: scaleX(0); } }
+.settings-section { font-size: 15px; font-weight: 600; margin: 0 0 4px; }
+.settings-sub { color: var(--text-3); font-size: 14px; margin: 0 0 16px; }
+.appearance { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; max-width: 620px; }
+.theme-card { display: flex; flex-direction: column; gap: 9px; text-align: left; color: var(--text-3); font-size: 13.5px; font-weight: 500; animation: rise-far 0.42s var(--ease) both; animation-delay: calc(var(--i, 0) * 0.05s); }
+.theme-card .preview { position: relative; aspect-ratio: 16 / 10; border-radius: 12px; border: 1px solid var(--border-strong); overflow: hidden; transition: box-shadow 0.2s, border-color 0.2s, transform 0.28s var(--spring); }
+.theme-card:hover .preview { transform: translateY(-2px); }
+.theme-card:active .preview { transform: scale(0.98); }
+.theme-card.on { color: var(--text); }
+.theme-card.on .preview { border-color: transparent; box-shadow: 0 0 0 2px var(--accent); }
+.theme-card .name { display: flex; align-items: center; gap: 7px; }
+.theme-card .name svg { width: 15px; height: 15px; }
+.theme-card .tick { position: absolute; top: 7px; right: 7px; z-index: 2; width: 20px; height: 20px; border-radius: 50%; background: var(--accent); color: #fff; display: grid; place-items: center; opacity: 0; transform: scale(0.3); transition: opacity 0.18s, transform 0.3s var(--spring); }
+.theme-card .tick svg { width: 12px; height: 12px; stroke-width: 3; }
+.theme-card.on .tick { opacity: 1; transform: none; }
+.mini { position: absolute; inset: 0; display: grid; grid-template-columns: 28% 1fr; background: var(--m-bg); }
+.mini.light { --m-bg: #faf9f5; --m-side: #f0eee6; --m-line: #dcd9ce; --m-bubble: #e6e3d9; --m-box: #ffffff; }
+.mini.dark { --m-bg: #262624; --m-side: #1f1e1d; --m-line: #3e3d3a; --m-bubble: #3a3936; --m-box: #30302e; }
+.mini.half { clip-path: polygon(100% 0, 100% 100%, 0 100%); }
+.mini .side { background: var(--m-side); padding: 16% 14%; display: flex; flex-direction: column; gap: 9%; }
+.mini .side i { height: 5%; min-height: 4px; border-radius: 3px; background: var(--m-line); }
+.mini .side i:first-child { width: 60%; background: #d97757; }
+.mini .main { display: flex; flex-direction: column; gap: 7%; padding: 14% 12% 0; }
+.mini .bubble { align-self: flex-end; width: 46%; height: 12%; border-radius: 6px; background: var(--m-bubble); }
+.mini .line { height: 5%; min-height: 4px; border-radius: 3px; background: var(--m-line); }
+.mini .line.short { width: 64%; }
+.mini .box { margin-top: auto; height: 20%; border-radius: 8px 8px 0 0; background: var(--m-box); border: 1px solid var(--m-line); border-bottom: 0; }
+@media (max-width: 560px) { .appearance { grid-template-columns: 1fr 1fr; } }
+.usage-note { font-size: 12.5px; color: var(--text-3); margin: 4px 2px 0; }
+.mem-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; margin-bottom: 16px; }
+.mem-head .sub { color: var(--text-3); font-size: 14px; margin: 0; max-width: 440px; }
+.btn.with-icon { display: inline-flex; align-items: center; gap: 7px; white-space: nowrap; }
+.btn.with-icon svg { width: 15px; height: 15px; }
+.btn.small { padding: 5px 11px; font-size: 13px; border-radius: 8px; }
+.btn[disabled] { opacity: 0.45; pointer-events: none; }
+.memories { list-style: none; margin: 0; padding: 0; border: 1px solid var(--border); border-radius: 14px; background: var(--surface); overflow: hidden; }
+.memories li { display: flex; align-items: flex-start; gap: 10px; padding: 10px 8px 10px 16px; font-size: 14.5px; line-height: 1.5; color: var(--text-2); border-top: 1px solid var(--border); overflow: hidden; }
+.memories li:first-child { border-top: 0; }
+.memories li .text { flex: 1; min-width: 0; padding-top: 3px; overflow-wrap: anywhere; }
+.memories li .acts { display: flex; gap: 2px; flex: none; opacity: 0; transition: opacity 0.15s; }
+.memories li:hover .acts, .memories li:focus-within .acts { opacity: 1; }
+@media (hover: none) { .memories li .acts { opacity: 1; } }
+.memories li.editing { padding: 8px 10px; }
+.mem-edit { flex: 1; min-width: 0; resize: none; overflow: hidden; font: inherit; line-height: 1.5; color: var(--text); background: var(--bg); border: 1px solid color-mix(in srgb, var(--text) 30%, transparent); border-radius: 9px; padding: 6px 9px; outline: none; }
+.mem-edit-row { flex: 1; display: flex; flex-direction: column; gap: 6px; }
+.mem-edit-row small { font-size: 12px; color: var(--text-3); padding-left: 2px; }
+.mem-head .buttons { display: flex; gap: 8px; flex: none; }
+.memories li.fresh { animation: fresh 1.8s var(--ease) both; animation-delay: calc(var(--i, 0) * 0.04s); }
+@keyframes fresh { 0% { opacity: 0; transform: translateY(6px); background: color-mix(in srgb, var(--accent) 16%, transparent); } 25% { opacity: 1; transform: none; } 100% { background: transparent; } }
+.mem-empty { border: 1px dashed var(--border-strong); border-radius: 14px; padding: 28px 22px; text-align: center; color: var(--text-3); font-size: 14px; }
+.mem-empty b { display: block; color: var(--text); font-size: 15px; font-weight: 600; margin-bottom: 6px; }
+.mem-empty .btn { margin-top: 14px; }
+.mem-path { font: 12px var(--mono); color: var(--text-3); margin: 10px 2px 0; }
+.steps { display: flex; flex-direction: column; gap: 20px; margin: 18px 0 16px; }
+.step { display: grid; grid-template-columns: 24px minmax(0, 1fr); gap: 12px; }
+.step .num { width: 24px; height: 24px; border-radius: 50%; background: var(--hover); border: 1px solid var(--border); display: grid; place-items: center; font-size: 12px; font-weight: 600; color: var(--text-2); }
+.step-title { font-size: 14px; font-weight: 500; margin: 2px 0 9px; }
+.prompt-box { border: 1px solid var(--border); border-radius: 12px; background: var(--code-bg); overflow: hidden; }
+.prompt-box pre { margin: 0; padding: 12px 14px; max-height: 128px; overflow: auto; font: 12px/1.6 var(--mono); white-space: pre-wrap; color: var(--text-2); }
+.prompt-box .bar { display: flex; justify-content: flex-end; padding: 7px 8px; border-top: 1px solid var(--border); }
+.step textarea { width: 100%; min-height: 118px; resize: vertical; font: 13px/1.55 var(--mono); }
+#form .dialog-buttons.sticky { position: sticky; bottom: -24px; margin: 0 -24px -24px; padding: 12px 24px 20px; background: var(--surface); border-top: 1px solid var(--border); }
+.import-preview { font-size: 13px; color: var(--text-3); margin-top: 8px; min-height: 18px; }
+.import-preview .found { display: flex; align-items: center; gap: 6px; color: var(--text-2); font-weight: 500; }
+.import-preview .found svg { width: 15px; height: 15px; color: var(--add); }
+.import-preview ul { margin: 8px 0 0; padding: 8px 12px 8px 26px; max-height: 132px; overflow: auto; border-radius: 10px; background: var(--hover); color: var(--text-2); line-height: 1.5; }
+.import-preview li { animation: rise 0.2s var(--ease) both; }
 .chat-list { border: 1px solid var(--border); border-radius: 14px; overflow: hidden; }
 .chat-list button { display: flex; justify-content: space-between; gap: 16px; width: 100%; padding: 12px 16px; text-align: left; font-size: 14.5px; border-bottom: 1px solid var(--border); }
 .chat-list button:last-child { border-bottom: 0; }
@@ -744,7 +872,6 @@ body.page-projects #dock { display: none; }
 
 @media (hover: none) {
   .actions { opacity: 1; }
-  .chat .del { opacity: 1; }
   #tip { display: none; }
 }
 @media (max-width: 800px) {
@@ -784,7 +911,8 @@ body.page-projects #dock { display: none; }
     <div class="side-foot">
       <button class="side-row" id="phone-btn" data-tip="Open on your phone"></button>
       <button class="side-row" id="keys-btn" data-tip="Keyboard shortcuts" data-keys="?"></button>
-      <button class="side-row" id="theme-btn" data-tip="Light or dark" data-keys="Alt T"></button>
+      <div class="side-sep" role="separator"></div>
+      <button class="side-row" id="settings-btn" data-tip="Settings" data-keys="Alt ,"></button>
     </div>
   </aside>
   <div id="scrim"></div>
@@ -863,6 +991,8 @@ body.page-projects #dock { display: none; }
 // Icons: stroked, 24-unit paths, drawn in the text colour.
 
 const ICON = {
+  monitor: '<rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/>',
+  settings: '<path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/>',
   panel: '<rect x="3" y="3" width="18" height="18" rx="3"/><path d="M9 3v18"/>',
   plus: '<path d="M12 5v14M5 12h14"/>',
   compose: '<path d="M12 4H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-6"/><path d="M18.4 2.6a2 2 0 0 1 3 3L12 15l-4 1 1-4Z"/>',
@@ -1017,7 +1147,7 @@ let focusedIndex = -1;
 let models = [];
 let projects = [];         // { id, name, path, instructions, created }
 let hosts = [];            // { name, url, up }
-let view = "chat";         // "chat" | "projects" | "project"
+let view = "chat";         // "chat" | "projects" | "project" | "settings"
 let viewProject = null;    // the project page shown, or the project a new chat starts in
 
 function pref(key, fallback) { try { return localStorage.getItem("flash-" + key) ?? fallback; } catch (_) { return fallback; } }
@@ -1448,7 +1578,7 @@ function drawChat() {
   const files = chatNow ? chatNow.log.filter((e) => e.type === "file") : [];
   if (viewing && !files.some((f) => f.id === viewing.id)) closeViewer();
   lastViewed = files.length ? files[files.length - 1] : null;
-  document.body.classList.remove("on-page", "page-projects", "page-project");
+  document.body.classList.remove("on-page", "page-projects", "page-project", "page-settings");
   const chat = chats.get(current);
   messagesEl.textContent = "";
   drawCtx = {};
@@ -1488,10 +1618,11 @@ function drawPage() {
   document.body.classList.add("on-page");
   document.body.classList.toggle("page-projects", view === "projects");
   document.body.classList.toggle("page-project", view === "project");
+  document.body.classList.toggle("page-settings", view === "settings");
   messagesEl.textContent = "";
   streamNode = null;
   $("#crumb").hidden = true;
-  if (view === "projects") drawProjects(); else drawProject();
+  if (view === "projects") drawProjects(); else if (view === "settings") drawSettings(); else drawProject();
   markSide();
   updateSend();
   logEl.scrollTop = 0;
@@ -1617,8 +1748,394 @@ function openProject(id, nav) {
   if (innerWidth <= 800) closeSide();
 }
 
+// Settings ----------------------------------------------------------------
+
+let settingsTab = "general";
+let memoryPrompt = "";
+let freshMemories = [];
+
+function showSettings(tab) {
+  if (tab) settingsTab = tab;
+  view = "settings";
+  viewProject = null;
+  closeMenu();
+  morph(drawPage);
+  renderChats();
+  if (innerWidth <= 800) closeSide();
+}
+
+function drawSettings() {
+  $("#title").textContent = "Settings";
+  document.title = "Settings · Flash";
+  const page = el("div", "page settings");
+  page.innerHTML = `<div class="page-head"><h1>Settings</h1></div><div class="tabs" role="tablist"><span class="thumb"></span><button type="button" role="tab" data-tab="general">General</button><button type="button" role="tab" data-tab="usage">Usage</button><button type="button" role="tab" data-tab="memory">Memory</button></div><div class="tab-body"></div>`;
+  messagesEl.appendChild(page);
+  const tabs = page.querySelector(".tabs");
+  const thumb = tabs.querySelector(".thumb");
+  const select = (tab, animate) => {
+    settingsTab = tab;
+    for (const b of tabs.querySelectorAll("button")) {
+      b.classList.toggle("on", b.dataset.tab === tab);
+      b.setAttribute("aria-selected", b.dataset.tab === tab);
+    }
+    const on = tabs.querySelector("button.on");
+    if (!animate) thumb.style.transition = "none";
+    thumb.style.left = `${on.offsetLeft}px`;
+    thumb.style.width = `${on.offsetWidth}px`;
+    if (!animate) { thumb.offsetWidth; thumb.style.transition = ""; }
+    // A new body each time, so the one a slow answer was meant for
+    // can tell it has been replaced.
+    const old = page.querySelector(".tab-body");
+    const body = el("div", "tab-body");
+    old.replaceWith(body);
+    ({ general: drawGeneral, usage: drawUsage, memory: drawMemory })[tab](body);
+  };
+  tabs.onclick = (e) => {
+    const b = e.target.closest("button");
+    if (b && b.dataset.tab !== settingsTab) select(b.dataset.tab, true);
+  };
+  select(settingsTab, false);
+}
+
+const THEMES = [["light", "Light", "sun"], ["dark", "Dark", "moon"], ["system", "System", "monitor"]];
+const mini = (kind, extra = "") => `<div class="mini ${kind} ${extra}"><div class="side"><i></i><i></i><i></i><i></i></div><div class="main"><span class="bubble"></span><span class="line"></span><span class="line short"></span><span class="box"></span></div></div>`;
+
+function drawGeneral(body) {
+  body.innerHTML = `<h2 class="settings-section">Appearance</h2><p class="settings-sub">How Flash looks in this browser. System follows your computer's light or dark setting.</p><div class="appearance" role="radiogroup" aria-label="Appearance"></div>`;
+  const grid = body.querySelector(".appearance");
+  THEMES.forEach(([choice, name, iconName], i) => {
+    const card = el("button", "theme-card");
+    card.type = "button";
+    card.dataset.choice = choice;
+    card.setAttribute("role", "radio");
+    card.style.setProperty("--i", i);
+    const look = choice === "system" ? mini("light") + mini("dark", "half") : mini(choice);
+    card.innerHTML = `<span class="preview">${look}<span class="tick">${icon("check")}</span></span><span class="name">${icon(iconName)}${name}</span>`;
+    card.onclick = () => setTheme(choice);
+    grid.appendChild(card);
+  });
+  markThemeCards();
+}
+
+function markThemeCards() {
+  for (const card of document.querySelectorAll(".theme-card")) {
+    const on = card.dataset.choice === themeChoice;
+    card.classList.toggle("on", on);
+    card.setAttribute("aria-checked", on);
+  }
+}
+
+const fmtCount = (n) => n < 1000 ? Math.round(n).toLocaleString()
+  : n < 1e6 ? `${(n / 1e3).toFixed(n < 1e4 ? 1 : 0)}K` : `${(n / 1e6).toFixed(n < 1e7 ? 1 : 0)}M`;
+const fmtDays = (n) => `${Math.round(n)} day${Math.round(n) === 1 ? "" : "s"}`;
+const fmtStreak = (n) => `${n}-day`;
+function fmtDuration(s) {
+  s = Math.round(s);
+  if (s < 60) return `${s}s`;
+  if (s < 3600) return `${Math.floor(s / 60)}m`;
+  return `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m`;
+}
+
+// Numbers run up to their value, quickly, and land exactly on it.
+function countUp(node, value, format) {
+  if (calm.matches || !value) { node.textContent = format(value); return; }
+  const start = performance.now();
+  const span = 900;
+  const step = (now) => {
+    const t = Math.min(1, (now - start) / span);
+    node.textContent = format(t === 1 ? value : value * (1 - Math.pow(1 - t, 4)));
+    if (t < 1 && node.isConnected) requestAnimationFrame(step);
+  };
+  requestAnimationFrame(step);
+}
+
+const localDay = (iso) => { const [y, m, d] = iso.split("-").map(Number); return new Date(y, m - 1, d); };
+const isoDay = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+const HEAT_WEEKS = 53;
+
+function heatmap(u) {
+  const today = localDay(u.today);
+  const start = new Date(today);
+  start.setDate(start.getDate() - start.getDay() - (HEAT_WEEKS - 1) * 7);
+  const counts = u.days || {};
+  let max = 0;
+  for (const n of Object.values(counts)) max = Math.max(max, n);
+  const months = el("div", "heat-months");
+  const grid = el("div", "heat");
+  let shown = 0;
+  let lastMonth = -1;
+  for (let week = 0; week < HEAT_WEEKS; week++) {
+    const first = new Date(start);
+    first.setDate(first.getDate() + week * 7);
+    const label = el("span");
+    // A month is named over its first week. The one cut off at the
+    // left edge is not, or its name would run into the next.
+    if (first.getMonth() !== lastMonth) {
+      lastMonth = first.getMonth();
+      if ((week > 0 || first.getDate() <= 7) && week < HEAT_WEEKS - 2) {
+        label.textContent = first.toLocaleDateString(undefined, { month: "short" });
+      }
+    }
+    months.appendChild(label);
+    for (let d = 0; d < 7; d++) {
+      const day = new Date(first);
+      day.setDate(day.getDate() + d);
+      const cell = el("i");
+      cell.style.setProperty("--c", week);
+      if (day > today) { cell.style.visibility = "hidden"; grid.appendChild(cell); continue; }
+      const n = counts[isoDay(day)] || 0;
+      shown += n;
+      if (n) cell.dataset.l = Math.max(1, Math.ceil((n / max) * 4));
+      if (+day === +today) cell.classList.add("today");
+      const when = day.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
+      cell.dataset.tip = `${n ? `${n} turn${n === 1 ? "" : "s"}` : "No turns"} · ${when}`;
+      grid.appendChild(cell);
+    }
+  }
+  const card = el("div", "usage-card");
+  card.innerHTML = `<div class="label"><span>Activity</span><small></small></div><div class="heat-wrap"></div><div class="heat-foot"><span class="streaks"></span><span class="legend"><span>Less</span><i></i><i data-l="1"></i><i data-l="2"></i><i data-l="3"></i><i data-l="4"></i><span>More</span></span></div>`;
+  card.querySelector(".label small").textContent = `${fmtCount(shown)} turn${shown === 1 ? "" : "s"} in the last year`;
+  card.querySelector(".heat-wrap").append(months, grid);
+  card.querySelector(".streaks").textContent = u.streak
+    ? `On a ${fmtStreak(u.streak)} streak · longest ${fmtDays(u.longest_streak)}`
+    : u.longest_streak ? `Longest streak ${fmtDays(u.longest_streak)}` : "";
+  requestAnimationFrame(() => { const wrap = card.querySelector(".heat-wrap"); wrap.scrollLeft = wrap.scrollWidth; });
+  return card;
+}
+
+async function drawUsage(body) {
+  let u;
+  try { u = await command("usage"); } catch (error) { showFailure(error); return; }
+  if (!body.isConnected) return;
+  const tiles = el("div", "tiles");
+  const rows = [
+    ["Messages sent", u.messages, fmtCount],
+    ["Tokens generated", u.tokens, fmtCount],
+    ["Tool calls", u.tools, fmtCount],
+    ["Time working", u.seconds, fmtDuration],
+    ["Active days", u.active_days, fmtCount],
+    ["Current streak", u.streak, fmtDays],
+    ["Longest streak", u.longest_streak, fmtDays],
+    ["Average speed", u.rate, (n) => (u.rate ? `${n.toFixed(1)} tok/s` : "–")],
+  ];
+  rows.forEach(([what, value, format], i) => {
+    const tile = el("div", "tile", `<div class="num"></div><div class="what"></div>`);
+    tile.style.setProperty("--i", i);
+    tile.lastChild.textContent = what;
+    countUp(tile.firstChild, value, format);
+    tiles.appendChild(tile);
+  });
+  body.appendChild(tiles);
+  body.appendChild(heatmap(u));
+
+  if (u.models.length) {
+    const card = el("div", "usage-card");
+    card.innerHTML = `<div class="label"><span>Models</span><small>Share of turns</small></div>`;
+    const total = u.models.reduce((sum, [, n]) => sum + n, 0);
+    for (const [name, n] of u.models.slice(0, 6)) {
+      const row = el("div", "model-row", `<span class="name"></span><span class="bar"><b></b></span>`);
+      row.firstChild.textContent = name;
+      row.dataset.tip = `${Math.round((n / total) * 100)}% · ${n} turn${n === 1 ? "" : "s"}`;
+      row.querySelector("b").style.width = `${Math.max(2, (n / total) * 100)}%`;
+      card.appendChild(row);
+    }
+    body.appendChild(card);
+  }
+
+  const note = el("p", "usage-note");
+  const bits = [`${u.chats} chat${u.chats === 1 ? "" : "s"}`, `${u.projects} project${u.projects === 1 ? "" : "s"}`,
+    `${u.skills} skill${u.skills === 1 ? "" : "s"} learned`, `${u.memories} memor${u.memories === 1 ? "y" : "ies"}`];
+  note.textContent = `${bits.join(" · ")}. Counted from the web chats saved on this computer.`;
+  body.appendChild(note);
+}
+
+async function drawMemory(body) {
+  let m;
+  try { m = await command("memory"); } catch (error) { showFailure(error); return; }
+  if (!body.isConnected) return;
+  memoryPrompt = m.prompt;
+  body.innerHTML = `<div class="mem-head"><p class="sub">Facts Flash keeps about you and your work. Every new chat starts with them, and Flash adds to them as it learns.</p></div><div class="mem-list"></div><div class="mem-path"></div>`;
+  const host = body.querySelector(".mem-list");
+  const addBtn = el("button", "btn with-icon", `${icon("plus")}<span>Add</span>`);
+  addBtn.type = "button";
+  addBtn.onclick = () => addMemory(host);
+  const importBtn = el("button", "btn primary with-icon", `${icon("download")}<span>Import memory</span>`);
+  importBtn.type = "button";
+  importBtn.onclick = importMemory;
+  const buttons = el("div", "buttons");
+  buttons.append(addBtn, importBtn);
+  body.querySelector(".mem-head").appendChild(buttons);
+  body.querySelector(".mem-path").textContent = `Saved in ${shortPath(m.path)}`;
+  renderMemories(host, m.entries);
+}
+
+function renderMemories(host, entries) {
+  host.entries = entries;
+  host.textContent = "";
+  const fresh = new Set(freshMemories);
+  freshMemories = [];
+  if (!entries.length) {
+    host.innerHTML = `<div class="mem-empty"><b>Nothing saved yet</b>Flash saves what is worth keeping as you work. Or bring over what another AI already knows about you.</div>`;
+    const b = el("button", "btn with-icon", `${icon("download")}<span>Import memory</span>`);
+    b.type = "button";
+    b.onclick = importMemory;
+    host.firstChild.appendChild(b);
+    return;
+  }
+  const list = el("ul", "memories");
+  let n = 0;
+  entries.forEach((text, i) => {
+    const item = el("li", "", `<span class="text"></span>`);
+    item.firstChild.textContent = text;
+    if (fresh.has(text)) { item.classList.add("fresh"); item.style.setProperty("--i", n++); }
+    const acts = el("span", "acts");
+    acts.append(
+      button("icon-btn", "edit", "Edit", "", () => editMemory(host, item, i + 1, text)),
+      button("icon-btn", "x", "Forget", "", () => forgetMemory(host, item, i + 1)),
+    );
+    item.appendChild(acts);
+    item.ondblclick = (e) => { if (!e.target.closest(".acts")) editMemory(host, item, i + 1, text); };
+    list.appendChild(item);
+  });
+  host.appendChild(list);
+  const first = list.querySelector(".fresh");
+  if (first) requestAnimationFrame(() => reveal(logEl, first, true, 80));
+}
+
+// Edit a memory where it sits: Enter saves, Escape puts it back, and
+// clicking away saves too. INDEX 0 is a new one, added at the end.
+function editMemory(host, item, index, text) {
+  if (host.querySelector(".mem-edit")) return;
+  item.classList.add("editing");
+  item.textContent = "";
+  const row = el("div", "mem-edit-row", `<textarea class="mem-edit" rows="1" aria-label="Memory"></textarea><small>Enter to save · Esc to cancel</small>`);
+  item.appendChild(row);
+  const field = row.firstChild;
+  field.value = text;
+  const fit = () => { field.style.height = "auto"; field.style.height = `${field.scrollHeight + 2}px`; };
+  field.addEventListener("input", fit);
+  fit();
+  field.focus();
+  field.setSelectionRange(text.length, text.length);
+  let finished = false;
+  const done = async (save) => {
+    if (finished) return;
+    finished = true;
+    const value = field.value.split(/\s+/).join(" ").trim();
+    if (!save || !value || value === text) { renderMemories(host, host.entries); return; }
+    try {
+      const result = index
+        ? await command("memory-edit", String(index), null, { text: value })
+        : await command("memory-add", null, null, { text: value });
+      freshMemories = [result.text];
+      renderMemories(host, result.entries);
+      toast(index ? "Memory updated" : "Memory added");
+    } catch (error) {
+      showFailure(error);
+      renderMemories(host, host.entries);
+    }
+  };
+  field.onkeydown = (e) => {
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); done(true); }
+    if (e.key === "Escape") { e.preventDefault(); done(false); }
+    e.stopPropagation();
+  };
+  field.onblur = () => done(true);
+}
+
+function addMemory(host) {
+  if (host.querySelector(".mem-edit")) { host.querySelector(".mem-edit").focus(); return; }
+  let list = host.querySelector(".memories");
+  if (!list) {
+    host.textContent = "";
+    list = host.appendChild(el("ul", "memories"));
+  }
+  const item = list.appendChild(el("li"));
+  editMemory(host, item, 0, "");
+  item.querySelector("textarea").placeholder = "A fact Flash should know, like \"I use pnpm, not npm\"";
+  reveal(logEl, item, true, 80);
+}
+
+async function forgetMemory(host, item, index) {
+  let result;
+  try { result = await command("memory-forget", String(index)); } catch (error) { showFailure(error); return; }
+  const done = () => renderMemories(host, result.entries);
+  if (calm.matches) { done(); return; }
+  const h = item.offsetHeight;
+  item.animate([{ height: `${h}px`, opacity: 1 }, { height: "0px", opacity: 0, paddingTop: "0px", paddingBottom: "0px" }],
+    { duration: 220, easing: "cubic-bezier(0.2, 0, 0, 1)" }).finished.then(done, done);
+}
+
+async function importMemory() {
+  if (!memoryPrompt) {
+    const m = await command("memory").catch(() => null);
+    memoryPrompt = m ? m.prompt : "";
+  }
+  const form = openForm(`
+    <h2>Import memory</h2>
+    <p class="sub">Bring over what another AI, like ChatGPT, Claude, or Gemini, already knows about you.</p>
+    <div class="steps">
+      <div class="step"><span class="num">1</span><div><div class="step-title">Copy this prompt into a chat with the other AI</div>
+        <div class="prompt-box"><pre></pre><div class="bar"><button type="button" class="btn small with-icon" data-copy>${icon("copy")}<span>Copy prompt</span></button></div></div></div></div>
+      <div class="step"><span class="num">2</span><div><div class="step-title">Paste its reply here</div>
+        <textarea name="text" placeholder="Paste the code block it gives you" spellcheck="false"></textarea><div class="import-preview"></div></div></div>
+    </div>
+    <div class="dialog-buttons sticky"><button type="button" class="btn" data-cancel>Cancel</button><button type="submit" class="btn primary" disabled>Add to memory</button></div>`,
+    async (data) => {
+      const r = await command("memory-import", null, null, { text: data.text });
+      if (!r.added.length) throw new Error(r.skipped ? "All of it is already saved." : "No memories found. Paste the code block the other AI wrote.");
+      toast(`Added ${r.added.length} memor${r.added.length === 1 ? "y" : "ies"}`);
+      freshMemories = r.added;
+      if (view === "settings") { settingsTab = "memory"; drawPage(); } else showSettings("memory");
+    });
+  const pre = form.querySelector("pre");
+  pre.textContent = memoryPrompt;
+  form.querySelector("[data-cancel]").onclick = closeForm;
+  const copyBtn = form.querySelector("[data-copy]");
+  copyBtn.onclick = async () => {
+    try {
+      await navigator.clipboard.writeText(memoryPrompt);
+      copyBtn.innerHTML = `${icon("check")}<span>Copied</span>`;
+      flash(copyBtn, "done", 1300);
+      setTimeout(() => { copyBtn.innerHTML = `${icon("copy")}<span>Copy prompt</span>`; }, 1800);
+    } catch (_) {
+      // Over plain http from a phone there is no clipboard API, but a
+      // selection can still be copied by hand.
+      const range = document.createRange();
+      range.selectNodeContents(pre);
+      getSelection().removeAllRanges();
+      getSelection().addRange(range);
+      toast("Selected. Copy it with your keyboard or the menu.");
+    }
+  };
+  const area = form.text;
+  const preview = form.querySelector(".import-preview");
+  const submit = form.querySelector("[type=submit]");
+  let timer = null;
+  let asked = 0;
+  area.addEventListener("input", () => {
+    clearTimeout(timer);
+    timer = setTimeout(async () => {
+      const text = area.value;
+      const mine = ++asked;
+      if (!text.trim()) { preview.textContent = ""; submit.disabled = true; submit.textContent = "Add to memory"; return; }
+      const r = await command("memory-preview", null, null, { text }).catch(() => null);
+      if (!r || mine !== asked) return;
+      const n = r.new.length;
+      submit.disabled = !n;
+      submit.textContent = n ? `Add ${n} memor${n === 1 ? "y" : "ies"}` : "Add to memory";
+      if (!n) { preview.textContent = r.known ? "Everything here is already saved." : "No memories found yet. Paste the whole code block."; return; }
+      preview.innerHTML = `<div class="found">${icon("check")}<span></span></div><ul></ul>`;
+      preview.querySelector(".found span").textContent = `${n} new memor${n === 1 ? "y" : "ies"}${r.known ? ` · ${r.known} already saved` : ""}`;
+      const list = preview.querySelector("ul");
+      for (const fact of r.new) list.appendChild(el("li")).textContent = fact;
+    }, 140);
+  });
+}
+
 function markSide() {
-  $("#projects-btn").classList.toggle("active", view !== "chat");
+  $("#projects-btn").classList.toggle("active", view === "projects" || view === "project");
+  $("#settings-btn").classList.toggle("active", view === "settings");
 }
 
 // A form in a dialog: new or edited project, a new host.
@@ -1921,7 +2438,7 @@ function refreshLite() {
     // Not while something on the page is being edited: redrawing it
     // would throw away what is half typed.
     const editing = messagesEl.contains(document.activeElement) && /TEXTAREA|INPUT/.test(document.activeElement.tagName);
-    if (view !== "chat" && !editing && $("#form").hidden) drawPage();
+    if (view !== "chat" && view !== "settings" && !editing && $("#form").hidden) drawPage();
     renderChats();
     renderInfo();
     const chat = chats.get(current);
@@ -1952,7 +2469,11 @@ function connect() {
 // Chrome
 
 let shownChats = null;
+let renamingChat = null;   // a sidebar row being renamed in place
+
 function renderChats() {
+  // Redrawing would throw away the half-typed name; it catches up after.
+  if (renamingChat) return;
   const nav = $("#chats");
   // Where each row was, so a chat that moves up the list can glide there.
   const was = new Map([...nav.children].map((row) => [row.dataset.chat, row.getBoundingClientRect().top]));
@@ -1965,14 +2486,25 @@ function renderChats() {
     const fresh = before && !before.has(id);
     const row = el("div", "chat" + (id === current ? " current" : "") + (fresh ? " fresh" : ""));
     row.dataset.chat = id;
-    const open = el("button", "open");
+    const open = el("button", "open", `<span class="name"></span>`);
     open.type = "button";
-    open.textContent = chat.title;
+    open.firstChild.textContent = chat.title;
+    const project = chat.project && projectOf(chat.project);
+    if (project) {
+      const pill = el("span", "proj");
+      pill.textContent = project.name;
+      open.prepend(pill);
+    }
     open.onclick = () => { switchTo(id); if (innerWidth <= 800) closeSide(); };
-    open.ondblclick = () => rename();
+    open.ondblclick = () => renameInSide(id, row);
     row.appendChild(open);
     if (chat.busy || chat.queued) row.appendChild(el("span", "live"));
-    row.appendChild(button("del", "x", "Delete chat", "Alt Shift D", () => deleteChat(id)));
+    const acts = el("span", "acts");
+    acts.append(
+      button("", "edit", "Rename", "", () => renameInSide(id, row)),
+      button("", "x", "Delete chat", "Alt Shift D", () => deleteChat(id)),
+    );
+    row.appendChild(acts);
     nav.appendChild(row);
   }
   if (calm.matches) return;
@@ -2270,6 +2802,41 @@ async function deleteChat(id = current) {
   renderChats();
 }
 
+// Rename a chat right where it sits in the sidebar.
+function renameInSide(id, row) {
+  const chat = chats.get(id);
+  if (!chat || renamingChat) return;
+  renamingChat = id;
+  const field = el("input", "rename");
+  field.value = chat.title;
+  field.setAttribute("aria-label", "Chat name");
+  row.textContent = "";
+  row.appendChild(field);
+  field.focus();
+  field.select();
+  let finished = false;
+  const done = async (save) => {
+    if (finished) return;
+    finished = true;
+    const value = field.value.trim();
+    renamingChat = null;
+    const changed = save && value && value !== chat.title;
+    if (changed) {
+      chat.title = value;
+      if (id === current && view === "chat") { $("#title").textContent = value; document.title = `${value} · Flash`; }
+    }
+    renderChats();
+    if (changed) await command("rename", value, id).catch(showFailure);
+  };
+  field.onkeydown = (e) => {
+    if (e.key === "Enter") { e.preventDefault(); done(true); input.focus(); }
+    if (e.key === "Escape") { e.preventDefault(); done(false); input.focus(); }
+    e.stopPropagation();
+  };
+  field.onblur = () => done(true);
+  field.onclick = (e) => e.stopPropagation();
+}
+
 function rename() {
   const chat = chats.get(current);
   if (!chat || view !== "chat" || document.body.classList.contains("empty")) return;
@@ -2345,27 +2912,41 @@ function toggleAllTools() {
   messagesEl.querySelectorAll(".tool").forEach((card) => card.classList.toggle("open", allOpen));
 }
 
+// "light", "dark", or "system", which follows the computer.
+const lightQuery = matchMedia("(prefers-color-scheme: light)");
+let themeChoice = pref("theme", "system");
+const resolveTheme = (choice) => (choice === "system" ? (lightQuery.matches ? "light" : "dark") : choice);
+
 function applyTheme(theme) {
   document.documentElement.dataset.theme = theme;
   document.querySelector('meta[name="theme-color"]').content = theme === "light" ? "#faf9f5" : "#262624";
-  $("#theme-btn").innerHTML = icon(theme === "light" ? "moon" : "sun") + `<span>${theme === "light" ? "Dark mode" : "Light mode"}</span>`;
 }
-// The new theme spreads out from the button that asked for it.
+
+function setTheme(choice) {
+  themeChoice = choice;
+  savePref("theme", choice);
+  markThemeCards();
+  const next = resolveTheme(choice);
+  if (next !== document.documentElement.dataset.theme) wipeTheme(next);
+}
+
 function toggleTheme() {
-  const next = document.documentElement.dataset.theme === "light" ? "dark" : "light";
-  const change = () => { applyTheme(next); savePref("theme", next); };
-  if (!document.startViewTransition || calm.matches) { change(); return; }
-  const from = $("#theme-btn").getBoundingClientRect();
-  const x = document.body.classList.contains("side-closed") ? innerWidth - 40 : from.left + 20;
-  const y = document.body.classList.contains("side-closed") ? 28 : from.top + from.height / 2;
-  const radius = Math.hypot(Math.max(x, innerWidth - x), Math.max(y, innerHeight - y));
+  setTheme(document.documentElement.dataset.theme === "light" ? "dark" : "light");
+}
+
+lightQuery.addEventListener("change", () => {
+  if (themeChoice === "system") wipeTheme(resolveTheme("system"));
+});
+
+// The new theme sweeps across from the top-left corner. The circle
+// itself is CSS (theme-sweep); this only marks the switch and runs it.
+function wipeTheme(next) {
+  const change = () => applyTheme(next);
+  if (!document.startViewTransition || calm.matches || document.hidden) { change(); return; }
   const root = document.documentElement;
   root.classList.add("theme-switch");
   const transition = document.startViewTransition(change);
-  transition.ready.then(() => root.animate(
-    { clipPath: [`circle(0px at ${x}px ${y}px)`, `circle(${radius}px at ${x}px ${y}px)`] },
-    { duration: 520, easing: "cubic-bezier(0.3, 0, 0, 1)", pseudoElement: "::view-transition-new(root)" },
-  )).catch(() => {});
+  transition.ready.catch(() => {});
   const done = () => root.classList.remove("theme-switch");
   transition.finished.then(done, done);
 }
@@ -2547,6 +3128,8 @@ const ACTIONS = [
   { label: "Switch model", keys: "Alt M", slash: "/model", run: () => openModels() },
   { label: "Switch host", keys: "Alt H", slash: "/host", run: () => openModels(true) },
   { label: "Projects", keys: "Alt P", slash: "/projects", run: showProjects },
+  { label: "Settings and usage", keys: "Alt ,", slash: "/settings", run: () => showSettings() },
+  { label: "Import memory from another AI", keys: "", slash: "/import", run: () => { showSettings("memory"); importMemory(); } },
   { label: "Search chats", keys: "Alt F", slash: "/search", run: () => openSearch() },
   { label: "Show or hide the file panel", keys: "Alt V", slash: "/file", run: toggleViewer },
   { label: "New project", keys: "", slash: "/project", run: () => projectForm() },
@@ -2835,7 +3418,7 @@ const HELP = [
   ["Everywhere", [
     [["Ctrl K"], "Search actions, chats, models"], [["Ctrl /"], "Shortcuts"],
     [["Alt N"], "New chat"], [["Alt ↑", "Alt ↓"], "Previous or next chat"], [["Alt 1–9"], "Go to a chat"],
-    [["Alt M"], "Switch model"], [["Alt H"], "Switch host"], [["Alt P"], "Projects"],
+    [["Alt M"], "Switch model"], [["Alt H"], "Switch host"], [["Alt P"], "Projects"], [["Alt ,"], "Settings"],
     [["Alt F"], "Search chats"], [["Alt V"], "Show or hide the file panel"],
     [["Alt R"], "Retry"], [["Alt E"], "Edit last message"],
     [["Alt C"], "Copy last reply"], [["Alt Shift C"], "Copy last code block"], [["Alt Z"], "Undo file changes"],
@@ -2938,7 +3521,7 @@ $("#crumb").onclick = () => { const c = chats.get(current); if (c && c.project) 
 $("#title").onclick = rename;
 $("#keys-btn").onclick = () => openHelp();
 $("#phone-btn").onclick = () => openPhone();
-$("#theme-btn").onclick = toggleTheme;
+$("#settings-btn").onclick = () => showSettings();
 $("#jump").onclick = () => toBottom(true, true);
 
 messagesEl.addEventListener("click", (e) => {
@@ -2989,7 +3572,7 @@ window.addEventListener("keydown", (e) => {
     if (k === "KeyN" && pendingAsk()) { e.preventDefault(); answerPending("n"); return; }
     if (k === "KeyY") { e.preventDefault(); if (!answerPending("y")) toast("Nothing is waiting for an answer"); return; }
     if (/^Digit[1-9]$/.test(k)) { e.preventDefault(); const id = visibleChats()[+k.slice(5) - 1]; if (id) switchTo(id); return; }
-    const act = { KeyV: toggleViewer, KeyN: newChat, KeyM: () => openModels(), KeyH: () => openModels(true), KeyP: showProjects, KeyF: () => openSearch(), KeyR: retry, KeyE: () => editLast(), KeyZ: undo, KeyL: clearChat, KeyT: toggleTheme, ArrowUp: () => stepChat(-1), ArrowDown: () => stepChat(1) }[k];
+    const act = { KeyV: toggleViewer, KeyN: newChat, KeyM: () => openModels(), KeyH: () => openModels(true), KeyP: showProjects, Comma: () => showSettings(), KeyF: () => openSearch(), KeyR: retry, KeyE: () => editLast(), KeyZ: undo, KeyL: clearChat, KeyT: toggleTheme, ArrowUp: () => stepChat(-1), ArrowDown: () => stepChat(1) }[k];
     if (act) { e.preventDefault(); act(); return; }
   }
 
@@ -3038,11 +3621,12 @@ $("#viewer-close").onclick = closeViewer;
 $("#search-ico2").innerHTML = icon("search");
 $("#search-btn").onclick = () => { openSearch(); if (innerWidth <= 800) closeSide(); };
 $("#keys-btn").innerHTML = icon("keyboard") + "<span>Shortcuts</span>";
+$("#settings-btn").innerHTML = icon("settings") + "<span>Settings</span>";
 $("#phone-btn").innerHTML = icon("phone") + "<span>Open on phone</span>";
 $("#jump").innerHTML = icon("down");
 $("#search-ico").innerHTML = icon("search");
 $("#model-chev").outerHTML = icon("chevDown");
-applyTheme(pref("theme", matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark"));
+applyTheme(resolveTheme(themeChoice));
 if (innerWidth <= 800 || pref("side", "open") === "closed") document.body.classList.add("side-closed");
 renderInfo();
 updateSend();

@@ -537,6 +537,20 @@ class TestFont:
         assert response.getheader("Content-Type") == "font/woff2"
         assert body[:4] == b"wOF2"
 
+    def test_the_logo_is_served_too(self, server):
+        port = server.port
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request("GET", "/static/logo-icon.svg",
+                     headers={"Host": f"127.0.0.1:{port}"})
+        response = conn.getresponse()
+        body = response.read()
+        conn.close()
+
+        assert response.status == 200
+        assert response.getheader("Content-Type") == "image/svg+xml"
+        assert body.startswith(b"<svg")
+        assert b"/static/logo-icon.svg" in web.PAGE.read_bytes()
+
     def test_but_nothing_else_is(self, server):
         assert request(server, "GET", "/static/index.html",
                        token=False)[0] == 403
@@ -1296,3 +1310,162 @@ class TestPlans:
              {"text": "Fix it", "status": "active"}],
         ]
         assert "plan" in web.KEPT
+
+
+# --- Settings: usage and memory ---------------------------------------------
+
+
+def logged(*entries, updated=0.0):
+    return SimpleNamespace(log=list(entries), updated=updated)
+
+
+def at(day, hour=12):
+    from datetime import datetime, timezone
+
+    # Noon UTC is the same date almost everywhere a test runs.
+    return datetime(2026, 9, day, hour, tzinfo=timezone.utc).timestamp()
+
+
+class TestUsage:
+    def test_turns_are_counted_by_day_and_model(self):
+        from datetime import date
+
+        chats = [
+            logged(
+                {"type": "user", "text": "a"},
+                {"type": "stats", "at": at(24), "model": "onyx",
+                 "tokens": 100, "rate": 10, "seconds": 12, "tools": 2},
+                {"type": "user", "text": "b"},
+                {"type": "stats", "at": at(25), "model": "onyx",
+                 "tokens": 50, "rate": 25, "seconds": 3, "tools": 0},
+            ),
+            logged(
+                {"type": "user", "text": "c"},
+                {"type": "stats", "at": at(26), "model": "qwen",
+                 "tokens": 0, "rate": 0, "seconds": 1, "tools": 1},
+            ),
+            logged(),
+        ]
+
+        u = web.usage(chats, today=date(2026, 9, 26))
+
+        assert (u["chats"], u["messages"], u["turns"]) == (2, 3, 3)
+        assert (u["tokens"], u["tools"], u["seconds"]) == (150, 3, 16)
+        # 150 tokens over 10s + 2s of generating.
+        assert u["rate"] == 12.5
+        assert u["days"] == {
+            "2026-09-24": 1, "2026-09-25": 1, "2026-09-26": 1,
+        }
+        assert u["models"] == [("onyx", 2), ("qwen", 1)]
+        assert (u["streak"], u["longest_streak"], u["active_days"]) == (
+            3, 3, 3,
+        )
+
+    def test_an_older_turn_counts_on_its_chats_last_day(self):
+        from datetime import date
+
+        chat = logged({"type": "stats", "tokens": 5}, updated=at(20))
+
+        u = web.usage([chat], today=date(2026, 9, 26))
+
+        assert u["days"] == {"2026-09-20": 1}
+        assert u["models"] == []
+        assert u["streak"] == 0 and u["longest_streak"] == 1
+
+    def test_a_streak_survives_until_a_whole_day_is_missed(self):
+        from datetime import date
+
+        days = {date(2026, 9, d) for d in (1, 2, 3, 20, 21, 22, 23, 25)}
+
+        assert web._streaks(days, date(2026, 9, 26)) == (1, 4)
+        assert web._streaks(days, date(2026, 9, 25)) == (1, 4)
+        assert web._streaks(days, date(2026, 9, 27)) == (0, 4)
+
+    def test_a_turn_records_when_and_on_what(self):
+        FakeClient.scripts = [[part("Hi."), part(done=True, tokens=3)]]
+        session = web.Session()
+        chat = session.new_chat()
+
+        run(session, chat, "hello")
+
+        stats = next(e for e in chat.log if e["type"] == "stats")
+        assert stats["model"] == "flash-test"
+        assert abs(stats["at"] - time.time()) < 60
+        assert web.command(session, {"name": "usage"})["turns"] == 1
+
+
+class TestMemoryCommands:
+    REPLY = "```\n- Likes tea\n- Uses Vim\n```"
+
+    def test_preview_saves_nothing(self):
+        from flash import memory
+
+        memory.add_memory("Uses Vim")
+
+        shown = web.command(web.Session(), {
+            "name": "memory-preview", "text": self.REPLY,
+        })
+
+        assert shown == {"new": ["Likes tea"], "known": 1}
+        assert memory.list_memory() == ["Uses Vim"]
+
+    def test_import_saves_and_reaches_the_next_prompt(self):
+        from flash import learning
+
+        session = web.Session()
+        assert "Likes tea" not in learning.prompt_block()
+
+        result = web.command(session, {
+            "name": "memory-import", "text": self.REPLY,
+        })
+
+        assert result["added"] == ["Likes tea", "Uses Vim"]
+        assert result["entries"] == ["Likes tea", "Uses Vim"]
+        assert "Likes tea" in learning.prompt_block()
+
+    def test_listing_and_forgetting(self):
+        from flash import memory
+
+        session = web.Session()
+        web.command(session, {"name": "memory-import", "text": self.REPLY})
+
+        listed = web.command(session, {"name": "memory"})
+        assert listed["entries"] == ["Likes tea", "Uses Vim"]
+        assert listed["prompt"] == memory.IMPORT_PROMPT
+
+        left = web.command(session, {"name": "memory-forget", "arg": "1"})
+        assert left["entries"] == ["Uses Vim"]
+        with pytest.raises(ValueError, match="No memory at index 5"):
+            web.command(session, {"name": "memory-forget", "arg": "5"})
+
+    def test_adding_and_editing(self):
+        from flash import learning
+
+        session = web.Session()
+
+        added = web.command(session, {
+            "name": "memory-add", "text": "Uses\n npm",
+        })
+        assert added == {"entries": ["Uses npm"], "text": "Uses npm"}
+
+        edited = web.command(session, {
+            "name": "memory-edit", "arg": "1", "text": "Uses pnpm",
+        })
+        assert edited["entries"] == ["Uses pnpm"]
+        assert "Uses pnpm" in learning.prompt_block()
+
+        with pytest.raises(ValueError, match="No memory at index 3"):
+            web.command(session, {
+                "name": "memory-edit", "arg": "3", "text": "x",
+            })
+        with pytest.raises(ValueError, match="Nothing to remember"):
+            web.command(session, {"name": "memory-add", "text": " "})
+
+    def test_over_http_it_needs_the_token(self, server):
+        status, body = request(server, "POST", "/api/command",
+                               {"name": "memory-import", "text": self.REPLY},
+                               token=False)
+
+        assert status == 403
+        from flash import memory
+        assert memory.list_memory() == []
