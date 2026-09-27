@@ -146,7 +146,18 @@ body.side-closed #sidebar { margin-left: -272px; }
 }
 #new-chat .plus svg { width: 14px; height: 14px; stroke-width: 2.4; }
 .side-label { padding: 18px 18px 6px; font-size: 12px; color: var(--text-3); font-weight: 500; }
-#chats { flex: 1; overflow-y: auto; padding-bottom: 8px; }
+/* Recents folds away: the list shrinks to nothing, the chevron turns. */
+#recents-btn { display: flex; align-items: center; gap: 4px; width: calc(100% - 16px); margin: 12px 8px 2px; padding: 6px 10px; border-radius: 8px; text-align: left; transition: background 0.14s, color 0.14s; }
+#recents-btn:hover { background: var(--hover); color: var(--text-2); }
+#recents-btn i { display: grid; opacity: 0; transition: opacity 0.14s, transform 0.28s var(--spring); }
+#recents-btn i svg { width: 13px; height: 13px; }
+#recents-btn:hover i, #recents-btn:focus-visible i, #recents-btn[aria-expanded="false"] i { opacity: 1; }
+#recents-btn[aria-expanded="false"] i { transform: rotate(-90deg); }
+#recents-btn .count { margin-left: auto; order: 2; font-variant-numeric: tabular-nums; opacity: 0; transition: opacity 0.2s; }
+#recents-btn[aria-expanded="false"] .count { opacity: 1; }
+#chats { flex: 1 1 0; min-height: 0; overflow-y: auto; padding-bottom: 8px; transition: flex-grow 0.32s var(--ease), opacity 0.2s var(--ease), padding 0.32s var(--ease); }
+#chats.folded { flex-grow: 0; opacity: 0; padding-bottom: 0; overflow: hidden; }
+#chats.folded.gone { visibility: hidden; }
 .chat {
   position: relative;
   display: flex; align-items: center;
@@ -175,7 +186,7 @@ body.side-closed #sidebar { margin-left: -272px; }
 }
 .chat .rename { flex: 1; min-width: 0; margin: 3px 4px; padding: 3px 6px; font: inherit; color: var(--text); background: var(--surface); border: 1px solid color-mix(in srgb, var(--text) 30%, transparent); border-radius: 7px; outline: none; }
 .chat .live { flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); margin-right: 12px; animation: pulse 1.2s ease-in-out infinite; }
-.side-foot { padding: 8px 0 12px; border-top: 1px solid var(--border); }
+.side-foot { margin-top: auto; padding: 8px 0 12px; border-top: 1px solid var(--border); }
 .side-foot .side-row svg { color: var(--text-3); }
 .side-sep { height: 1px; background: var(--border); margin: 6px 12px; }
 
@@ -1079,7 +1090,7 @@ button.item-row:hover { background: var(--hover); }
     <button class="side-row" id="projects-btn" data-tip="Projects" data-keys="Alt P"></button>
     <button class="side-row" id="skills-btn" data-tip="Skills"></button>
     <button class="side-row" id="extensions-btn" data-tip="Extensions"></button>
-    <div class="side-label">Recents</div>
+    <button class="side-label" id="recents-btn" type="button" aria-expanded="true" aria-controls="chats"><span>Recents</span><span class="count"></span><i></i></button>
     <nav id="chats"></nav>
     <div class="side-foot">
       <button class="side-row" id="phone-btn" data-tip="Open on your phone"></button>
@@ -3497,6 +3508,24 @@ function connect() {
 let shownChats = null;
 let renamingChat = null;   // a sidebar row being renamed in place
 
+// Recents folds away, and stays that way in this browser until opened.
+function foldRecents(fold, instant) {
+  const list = $("#chats");
+  const b = $("#recents-btn");
+  b.setAttribute("aria-expanded", !fold);
+  b.dataset.tip = fold ? "Show recent chats" : "Hide recent chats";
+  savePref("recents", fold ? "folded" : "open");
+  clearTimeout(list.hiding);
+  if (instant) list.style.transition = "none";
+  list.classList.toggle("folded", fold);
+  // Hidden once folded, so its links are out of the Tab order; shown
+  // before it unfolds, so it can be seen opening.
+  if (!fold) list.classList.remove("gone");
+  else if (instant) list.classList.add("gone");
+  else list.hiding = setTimeout(() => list.classList.add("gone"), 320);
+  if (instant) { void list.offsetWidth; list.style.transition = ""; }
+}
+
 function renderChats() {
   // Redrawing would throw away the half-typed name; it catches up after.
   if (renamingChat) return;
@@ -3540,6 +3569,8 @@ function renderChats() {
     row.appendChild(acts);
     nav.appendChild(row);
   }
+  // Folded, the label still says how many are in there.
+  $("#recents-btn .count").textContent = shownChats.size || "";
   if (calm.matches) return;
   for (const row of nav.children) {
     const before = was.get(row.dataset.chat);
@@ -5045,6 +5076,9 @@ $("#projects-btn").innerHTML = icon("folder") + "<span>Projects</span>";
 $("#skills-btn").innerHTML = icon("book") + "<span>Skills</span>";
 $("#extensions-btn").innerHTML = icon("puzzle") + "<span>Extensions</span>";
 $("#search-btn").innerHTML = icon("search") + "<span>Search</span>";
+$("#recents-btn i").innerHTML = icon("chevDown");
+$("#recents-btn").onclick = () => foldRecents($("#recents-btn").getAttribute("aria-expanded") === "true");
+foldRecents(pref("recents", "open") === "folded", true);
 $("#viewer-download").innerHTML = icon("download");
 $("#viewer-open").innerHTML = icon("external");
 $("#viewer-close").innerHTML = icon("x");
