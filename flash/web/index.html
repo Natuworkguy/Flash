@@ -100,6 +100,23 @@ kbd {
 [hidden] { display: none !important; }
 
 #app { display: flex; height: 100%; }
+/* The window is the sidebar's colour, and the conversation sits in a
+   rounded panel inset from its edges, the way Poolside Desktop lays
+   out a workspace. On a phone the sidebar slides over instead. */
+@media (min-width: 801px) {
+  body, #app { background: var(--sidebar); }
+  #app > #sidebar { border-right: 0; background: transparent; }
+  main {
+    margin: 8px 8px 8px 0; border-radius: 14px; overflow: hidden;
+    background: var(--bg); border: 1px solid var(--border);
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1), 0 10px 32px rgba(0, 0, 0, 0.12);
+    transition: margin 0.42s var(--apple);
+  }
+  :root[data-theme="light"] main { box-shadow: 0 1px 2px rgba(60, 50, 30, 0.06), 0 10px 32px rgba(60, 50, 30, 0.07); }
+  body.side-closed main { margin-left: 8px; }
+  #viewer { margin: 8px 0; border-radius: 14px; border: 1px solid transparent; transition: width 0.46s var(--apple), margin 0.46s var(--apple), border-color 0.46s var(--apple); }
+  #viewer.open { margin: 8px 8px 8px 0; border-color: var(--border); background: var(--bg); }
+}
 
 /* Sidebar ------------------------------------------------------------ */
 #sidebar > * { transition: opacity 0.2s var(--ease); }
@@ -167,9 +184,24 @@ body.side-closed #sidebar { margin-left: -272px; }
 }
 .chat:hover { background: var(--hover); color: var(--text); }
 .chat.current { color: var(--text); }
+/* A project's chats hang under it on a thin guide line. */
+.group-head { display: flex; align-items: center; gap: 8px; width: calc(100% - 16px); margin: 1px 8px; padding: 7px 10px; border-radius: 9px; font-size: 14px; color: var(--text-2); text-align: left; transition: background 0.14s, color 0.14s; }
+.group-head:hover { background: var(--hover); color: var(--text); }
+.group-head > svg:first-child { width: 16px; height: 16px; flex: none; color: var(--text-3); }
+.group-head:hover > svg:first-child { color: var(--accent); }
+.group-head .gname { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.group-head .gcount { font-size: 11.5px; color: var(--text-3); font-variant-numeric: tabular-nums; opacity: 0; transition: opacity 0.2s; }
+.group.folded .group-head .gcount { opacity: 1; }
+.group-head > svg:last-child { width: 13px; height: 13px; flex: none; margin-left: auto; color: var(--text-3); opacity: 0; transition: opacity 0.14s, transform 0.28s var(--spring); }
+.group-head:hover > svg:last-child, .group.folded .group-head > svg:last-child { opacity: 1; }
+.group.folded .group-head > svg:last-child { transform: rotate(-90deg); }
+.group-body { margin: 0 0 4px 26px; padding: 1px 0; border-left: 1px solid var(--border-strong); }
+.group-body .chat { width: calc(100% - 16px); margin-left: 8px; }
+.group.folded .group-body { display: none; }
+.group-label { padding: 14px 18px 4px; font-size: 12px; font-weight: 500; color: var(--text-3); }
 /* One highlight for the current chat, gliding to whichever row it is. */
 #chats { position: relative; isolation: isolate; }
-#chat-pill { position: absolute; left: 8px; right: 8px; top: 0; z-index: -1; border-radius: 9px; background: var(--pressed); pointer-events: none; opacity: 0; transition: transform 0.42s cubic-bezier(0.32, 0.72, 0, 1), height 0.42s cubic-bezier(0.32, 0.72, 0, 1), opacity 0.2s; }
+#chat-pill { position: absolute; left: 0; top: 0; z-index: -1; border-radius: 9px; background: color-mix(in srgb, var(--accent) 12%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 48%, transparent); pointer-events: none; opacity: 0; transition: transform 0.42s cubic-bezier(0.32, 0.72, 0, 1), width 0.42s cubic-bezier(0.32, 0.72, 0, 1), height 0.42s cubic-bezier(0.32, 0.72, 0, 1), opacity 0.2s; }
 #chat-pill.on { opacity: 1; }
 #chat-pill.still { transition: opacity 0.2s; }
 .chat .open { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; padding: 7px 10px; text-align: left; color: inherit; text-decoration: none; }
@@ -280,8 +312,9 @@ body.empty #suggestions { display: flex; flex-wrap: wrap; justify-content: cente
 .pending-row .icon-btn svg { width: 14px; height: 14px; }
 .user {
   max-width: min(85%, 600px);
-  background: var(--surface);
-  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--accent) 88%, #000);
+  color: #fff;
+  border: 1px solid transparent;
   padding: 10px 16px; border-radius: 20px 20px 6px 20px;
   white-space: pre-wrap; word-wrap: break-word;
 }
@@ -422,7 +455,7 @@ pre code { display: block; padding: 2px 16px 14px; overflow-x: auto; font-size: 
   transition: border-color 0.15s, box-shadow 0.15s;
   cursor: text;
 }
-#composer:focus-within { border-color: color-mix(in srgb, var(--text) 30%, transparent); }
+#composer:focus-within { border-color: color-mix(in srgb, var(--accent) 60%, transparent); }
 #input, #input::placeholder { font: 400 16px/1.5 var(--sans); letter-spacing: normal; }
 #input {
   display: block; width: 100%; resize: none; border: 0; outline: 0;
@@ -543,8 +576,8 @@ body { animation: fade 0.3s var(--ease) both; }
 
 /* The composer lifts a little when you are in it. */
 #composer { transition: border-color 0.2s, box-shadow 0.25s var(--ease), transform 0.25s var(--ease); }
-#composer:focus-within { box-shadow: 0 6px 28px rgba(0, 0, 0, 0.22), 0 0 0 4px color-mix(in srgb, var(--text) 5%, transparent); }
-:root[data-theme="light"] #composer:focus-within { box-shadow: 0 6px 28px rgba(60, 50, 30, 0.1), 0 0 0 4px rgba(31, 30, 29, 0.04); }
+#composer:focus-within { box-shadow: 0 6px 28px rgba(0, 0, 0, 0.22), 0 0 0 4px color-mix(in srgb, var(--accent) 14%, transparent); }
+:root[data-theme="light"] #composer:focus-within { box-shadow: 0 6px 28px rgba(60, 50, 30, 0.1), 0 0 0 4px color-mix(in srgb, var(--accent) 12%, transparent); }
 #composer.sent { animation: nudge 0.32s var(--ease); }
 
 /* Arrivals. */
@@ -3724,6 +3757,18 @@ function connect() {
 let shownChats = null;
 let renamingChat = null;   // a sidebar row being renamed in place
 
+// Which projects' chats are folded away in the sidebar, per browser.
+function foldedProjects() {
+  try { return new Set(JSON.parse(pref("folded-projects", "[]"))); } catch (_) { return new Set(); }
+}
+
+function foldProject(id) {
+  const folded = foldedProjects();
+  if (folded.has(id)) folded.delete(id); else folded.add(id);
+  savePref("folded-projects", JSON.stringify([...folded]));
+  renderChats();
+}
+
 // Moves the current chat's highlight to its row: gliding from the last
 // one, or appearing in place when there was none.
 function placePill(nav) {
@@ -3731,9 +3776,11 @@ function placePill(nav) {
   if (!pill) { pill = el("div"); pill.id = "chat-pill"; nav.prepend(pill); }
   const row = nav.querySelector(".chat.current");
   const was = pill.classList.contains("on");
-  if (!row) { pill.classList.remove("on"); return; }
+  // In a folded project there is no row to show it on.
+  if (!row || !row.offsetParent) { pill.classList.remove("on"); return; }
   pill.classList.toggle("still", !was || calm.matches);
-  pill.style.transform = `translateY(${row.offsetTop}px)`;
+  pill.style.transform = `translate(${row.offsetLeft}px, ${row.offsetTop}px)`;
+  pill.style.width = `${row.offsetWidth}px`;
   pill.style.height = `${row.offsetHeight}px`;
   pill.classList.add("on");
 }
@@ -3762,10 +3809,38 @@ function renderChats() {
   const nav = $("#chats");
   // Where each row was, so a chat that moves up the list can glide there.
   const was = new Map([...nav.querySelectorAll(".chat")].map((row) => [row.dataset.chat, row.getBoundingClientRect().top]));
-  nav.querySelectorAll(".chat").forEach((row) => row.remove());
+  [...nav.children].forEach((node) => { if (node.id !== "chat-pill") node.remove(); });
   const before = shownChats;
   shownChats = new Set();
+  // Chats in a project go under it, the project with the latest chat
+  // first; the rest follow under Chats.
+  const groups = new Map();
+  const loose = [];
   for (const id of visibleChats()) {
+    const p = chats.get(id).project && projectOf(chats.get(id).project);
+    if (p) { if (!groups.has(p.id)) groups.set(p.id, []); groups.get(p.id).push(id); } else loose.push(id);
+  }
+  const folded = foldedProjects();
+  const places = [];
+  for (const [pid, ids] of groups) {
+    const p = projectOf(pid);
+    const group = el("div", "group" + (folded.has(pid) ? " folded" : ""));
+    const head = el("button", "group-head", `${icon("folder")}<span class="gname"></span><span class="gcount"></span>${icon("chevDown")}`);
+    head.type = "button";
+    head.querySelector(".gname").textContent = p.name;
+    head.querySelector(".gcount").textContent = ids.length;
+    head.setAttribute("aria-expanded", !folded.has(pid));
+    head.onclick = () => foldProject(pid);
+    head.ondblclick = () => openProject(pid);
+    head.dataset.tip = "Double-click to open the project";
+    const body = el("div", "group-body");
+    group.append(head, body);
+    nav.appendChild(group);
+    for (const id of ids) places.push([id, body]);
+  }
+  if (groups.size && loose.length) nav.appendChild(el("div", "group-label", "Chats"));
+  for (const id of loose) places.push([id, nav]);
+  for (const [id, holder] of places) {
     const chat = chats.get(id);
     shownChats.add(id);
     const fresh = before && !before.has(id);
@@ -3775,12 +3850,6 @@ function renderChats() {
     open.href = `/c/${id}`;
     open.draggable = false;
     open.firstChild.textContent = chat.title;
-    const project = chat.project && projectOf(chat.project);
-    if (project) {
-      const pill = el("span", "proj");
-      pill.textContent = project.name;
-      open.prepend(pill);
-    }
     open.onclick = (e) => {
       // With a modifier, the browser opens the link as it would any other.
       if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
@@ -3797,13 +3866,13 @@ function renderChats() {
       button("", "x", "Delete chat", "Alt Shift D", () => deleteChat(id)),
     );
     row.appendChild(acts);
-    nav.appendChild(row);
+    holder.appendChild(row);
   }
   placePill(nav);
   // Folded, the label still says how many are in there.
   $("#recents-btn .count").textContent = shownChats.size || "";
   if (calm.matches) return;
-  for (const row of nav.children) {
+  for (const row of nav.querySelectorAll(".chat")) {
     const before = was.get(row.dataset.chat);
     const shift = before === undefined ? 0 : before - row.getBoundingClientRect().top;
     if (Math.abs(shift) > 1) {
