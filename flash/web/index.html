@@ -442,6 +442,49 @@ pre code { display: block; padding: 2px 16px 14px; overflow-x: auto; font-size: 
 }
 #jump svg { width: 16px; height: 16px; }
 
+/* Voice mode: the box gives way to an orb that listens and speaks. */
+body.voice-on .shell, body.voice-on #suggestions, body.voice-on #pending { display: none !important; }
+#voice { display: flex; align-items: center; gap: 16px; padding: 14px 14px 14px 16px; border: 1px solid var(--border-strong); border-radius: 22px; background: var(--surface); box-shadow: var(--composer-shadow); animation: pop 0.2s var(--ease); }
+#voice[hidden] { display: none; }
+.voice-orb { --lvl: 0; position: relative; flex: none; width: 58px; height: 58px; border-radius: 50%; cursor: pointer;
+  background: radial-gradient(circle at 34% 30%, #ffe1bd 0%, #f0a36f 30%, var(--accent) 62%, color-mix(in srgb, var(--accent) 55%, #000) 100%);
+  box-shadow: 0 0 calc(8px + var(--lvl) * 44px) color-mix(in srgb, var(--accent) 55%, transparent);
+  transform: scale(calc(1 + var(--lvl) * 0.22)); transition: transform 0.08s linear, box-shadow 0.08s linear, filter 0.3s; }
+.voice-orb span { position: absolute; inset: -7px; border-radius: 50%; border: 2px solid color-mix(in srgb, var(--accent) 45%, transparent); opacity: 0; }
+#voice[data-state="thinking"] .voice-orb, #voice[data-state="hearing"] .voice-orb, #voice[data-state="setup"] .voice-orb { animation: orb-breathe 1.5s ease-in-out infinite; }
+#voice[data-state="listening"] .voice-orb span, #voice[data-state="asking"] .voice-orb span { animation: orb-ring 1.8s ease-out infinite; }
+#voice[data-state="paused"] .voice-orb { filter: saturate(0.25) brightness(0.8); }
+@keyframes orb-breathe { 50% { transform: scale(0.9); filter: brightness(0.85); } }
+@keyframes orb-ring { from { opacity: 0.8; transform: scale(0.9); } to { opacity: 0; transform: scale(1.35); } }
+.voice-say { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.voice-say b { font-size: 15.5px; font-weight: 600; color: var(--text); }
+.voice-say span { font-size: 13px; color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.voice-end { flex: none; }
+@media (prefers-reduced-motion: reduce) { .voice-orb { transform: none; } }
+
+/* Settings, voice models. */
+.voice-models { max-width: 620px; }
+.vm-missing { font: 12.5px var(--mono); color: var(--warn); margin: 0 0 12px; }
+.vm-head { display: flex; align-items: baseline; gap: 10px; margin: 16px 0 8px; }
+.vm-head:first-child, .vm-missing + .vm-head { margin-top: 0; }
+.vm-head b { font-size: 14px; font-weight: 600; color: var(--text); }
+.vm-head span { font-size: 13px; color: var(--text-3); }
+.vm-list { border: 1px solid var(--border); border-radius: 14px; background: var(--surface); overflow: hidden; }
+.vm-row { display: flex; align-items: center; gap: 12px; padding: 11px 12px 11px 14px; }
+.vm-row + .vm-row { border-top: 1px solid var(--border); }
+.vm-mark { width: 16px; flex: none; color: var(--accent); display: grid; place-items: center; }
+.vm-mark svg { width: 16px; height: 16px; }
+.vm-what { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.vm-what b { font-size: 14px; font-weight: 500; color: var(--text); }
+.vm-dot { color: var(--text-3); margin: 0 3px; font-size: 11px; vertical-align: 1px; }
+.vm-what small { font: 12px var(--mono); color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vm-act { flex: none; display: flex; align-items: center; gap: 6px; }
+.vm-act .btn.small { padding: 5px 12px; font-size: 13px; }
+.vm-act .btn:disabled { opacity: 0.5; cursor: default; }
+.vm-tag { font-size: 12px; font-weight: 500; color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); padding: 3px 9px; border-radius: 999px; }
+.vm-progress { font: 12.5px var(--mono); color: var(--text-2); }
+.vm-row.current .vm-what b { color: var(--text); }
+
 /* Composer ------------------------------------------------------------- */
 #dock { flex: none; padding: 0 0 max(18px, env(safe-area-inset-bottom)); position: relative; }
 #composer {
@@ -1058,6 +1101,8 @@ button.item-row:hover { background: var(--hover); }
 
 /* The message a search led to glows, and its words are marked. */
 ::highlight(found) { background-color: color-mix(in srgb, var(--accent) 38%, transparent); color: var(--text); }
+/* What voice mode is reading aloud right now. */
+::highlight(speaking) { background-color: color-mix(in srgb, var(--accent) 26%, transparent); color: var(--text); }
 .block.found { animation: found 2.2s var(--ease); border-radius: 14px; }
 @keyframes found {
   0%, 30% { box-shadow: 0 0 0 8px color-mix(in srgb, var(--accent) 16%, transparent); background: color-mix(in srgb, var(--accent) 7%, transparent); }
@@ -1223,6 +1268,11 @@ button.item-row:hover { background: var(--hover); }
       <div class="col">
         <div id="hero"><h1 id="greeting">Good evening</h1></div>
         <div id="pending" hidden aria-label="Waiting messages"></div>
+        <div id="voice" hidden role="group" aria-label="Voice mode">
+          <button type="button" class="voice-orb" aria-label="Voice"><span></span></button>
+          <div class="voice-say"><b class="voice-state">Listening</b><span class="voice-hint"></span></div>
+          <button type="button" class="icon-btn voice-end" data-tip="End voice mode" data-keys="Esc" aria-label="End voice mode"></button>
+        </div>
         <div class="shell"><div class="glow" aria-hidden="true"></div>
         <form id="composer" autocomplete="off">
           <div id="tray" hidden aria-label="Attached"></div>
@@ -1321,6 +1371,7 @@ const ICON = {
   camera: '<path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3Z"/><circle cx="12" cy="13" r="3.5"/>',
   clip: '<path d="m21.4 11.1-9.2 9.2a6 6 0 0 1-8.5-8.5l9.2-9.2a4 4 0 0 1 5.7 5.7l-9.2 9.2a2 2 0 0 1-2.8-2.8l8.5-8.5"/>',
   slash: '<path d="M15 4 9 20"/>',
+  voice: '<path d="M4 10v4M8 6.5v11M12 3.5v17M16 6.5v11M20 10v4"/>',
   image: '<rect x="3" y="4" width="18" height="16" rx="3"/><circle cx="9" cy="10" r="1.6"/><path d="m21 16-5.5-5.5L6 20"/>',
   server: '<rect x="3" y="4" width="18" height="7" rx="2"/><rect x="3" y="13" width="18" height="7" rx="2"/><path d="M7 7.5h.01M7 16.5h.01"/>',
   more: '<circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/>',
@@ -1444,6 +1495,15 @@ let models = [];
 let projects = [];         // { id, name, path, instructions, created }
 let hosts = [];            // { name, url, up }
 let attached = [];         // what goes with the next message: { name, size, image, url, id, uploading, node }
+// Recording needs a secure page: this computer, or HTTPS.
+const canRecord = !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia && window.isSecureContext);
+const VOICE_RATE = 16000;        // what Vosk listens at
+const VOICE_LOUD = 500 / 32768;  // the terminal's threshold for speech
+const VOICE_PAUSE = 1.2;         // seconds of quiet that end a turn
+const VOICE_PATIENCE = 8;        // seconds with no speech before pausing
+const VOICE_LONGEST = 120;       // seconds in one turn, at most
+
+const voice = { on: false, state: "", ctx: null, stream: null, level: 0, turn: null, tap: null, source: null, cut: false, setup: null, analyser: null };
 let view = "chat";         // "chat" | "projects" | "project" | "settings" | "skills" | "extensions"
 let viewProject = null;    // the project page shown, or the project a new chat starts in
 
@@ -2334,6 +2394,9 @@ function drawGeneral(body) {
   };
   body.appendChild(row);
 
+  body.insertAdjacentHTML("beforeend", `<h2 class="settings-section settings-gap">Voice models</h2><p class="settings-sub">What voice mode listens and speaks with. Both run on this computer, so pick lighter ones for a weaker machine.</p><div class="voice-models"></div>`);
+  drawVoiceModels(body.querySelector(".voice-models"));
+
   body.insertAdjacentHTML("beforeend", `<h2 class="settings-section settings-gap">Network</h2><p class="settings-sub">Who can reach Flash. A browser still has to open the link, with its random token, to get in.</p><div class="lan-box"></div>`);
   renderLan(body.querySelector(".lan-box"));
 
@@ -2619,6 +2682,62 @@ async function drawSceneCards(grid) {
   });
   mark(r.current || "");
   if (!r.scenes.length) grid.insertAdjacentHTML("afterend", `<p class="settings-sub">No scenes found.</p>`);
+}
+
+// Voice models: the listening and speaking models voice mode can use,
+// each with its size and who it suits, to download, switch to, or free
+// the space of.
+const fmtBytes = (n) => (n >= 1e9 ? `${(n / 1e9).toFixed(1)} GB` : `${Math.round(n / 1e6)} MB`);
+const VOICE_GROUPS = [["listening", "Listening", "Turns what you say into text."], ["speaking", "Speaking", "Reads Flash's replies aloud."]];
+
+async function drawVoiceModels(box = document.querySelector(".voice-models")) {
+  if (!box) return;
+  let r;
+  try { r = await command("voice-models"); } catch (error) { showFailure(error); return; }
+  if (!box.isConnected) return;
+  box.textContent = "";
+  if (r.missing.length) box.appendChild(el("p", "vm-missing")).textContent = r.install;
+  for (const [kind, title, sub] of VOICE_GROUPS) {
+    box.insertAdjacentHTML("beforeend", `<div class="vm-head"><b>${title}</b><span>${sub}</span></div>`);
+    const list = box.appendChild(el("div", "vm-list"));
+    for (const m of r[kind]) {
+      const fetching = r.downloading && r.downloading.kind === kind && r.downloading.name === m.name;
+      const row = list.appendChild(el("div", "vm-row" + (m.current ? " current" : ""), `<span class="vm-mark">${m.current ? icon("check") : ""}</span><span class="vm-what"><b></b><small></small></span><span class="vm-act"></span>`));
+      row.dataset.key = `${kind}:${m.name}`;
+      row.querySelector("b").innerHTML = `${fmtBytes(m.size)} <span class="vm-dot">&bull;</span> ${esc(m.label)}`;
+      row.querySelector("small").textContent = m.name;
+      const act = row.querySelector(".vm-act");
+      if (fetching) { act.innerHTML = `<span class="vm-progress">Downloading</span>`; continue; }
+      if (m.current) { act.innerHTML = `<span class="vm-tag">In use</span>`; continue; }
+      const pick = el("button", "btn small", m.installed ? "Use" : "Download");
+      pick.type = "button";
+      pick.disabled = !!r.downloading || (!m.installed && r.missing.length > 0);
+      pick.onclick = async () => {
+        pick.disabled = true;
+        try { await command("voice-model", m.name, null, { kind }); drawVoiceModels(box); }
+        catch (error) { pick.disabled = false; showFailure(error); }
+      };
+      act.appendChild(pick);
+      if (m.installed) {
+        const drop = button("icon-btn", "x", `Remove, freeing ${fmtBytes(m.size)}`, "", () => confirmed(drop, async () => {
+          try { await command("voice-model-remove", m.name, null, { kind }); drawVoiceModels(box); } catch (error) { showFailure(error); }
+        }));
+        act.appendChild(drop);
+      }
+    }
+  }
+}
+
+function voiceModelEvent(event) {
+  const box = document.querySelector(".voice-models");
+  if (event.done) {
+    if (event.error) toast(`Could not download ${event.name}: ${event.error}`);
+    else toast(`${event.name} is ready and in use`);
+    if (box) drawVoiceModels(box);
+    return;
+  }
+  const slot = box && box.querySelector(`.vm-row[data-key="${CSS.escape(`${event.kind}:${event.name}`)}"] .vm-act`);
+  if (slot) slot.innerHTML = `<span class="vm-progress">${esc(event.label)} ${event.percent}%</span>`;
 }
 
 // LAN ----------------------------------------------------------------------
@@ -3525,6 +3644,426 @@ function scheduleStream() {
 let follow = true;
 const nearBottom = () => logEl.scrollHeight - logEl.scrollTop - logEl.clientHeight < 100;
 
+// ---------------------------------------------------------------------------
+// Voice mode. The browser records; Flash's own models, on the computer
+// it runs on, turn speech into text and replies back into speech, the
+// same Vosk and Piper the terminal's voice mode uses. So a round is:
+// listen until you pause, send what was said, wait for the reply, read
+// it aloud, and listen again. Tap the orb to cut a reply short.
+
+
+function setVoice(state, hint) {
+  voice.state = state;
+  const panel = $("#voice");
+  panel.dataset.state = state;
+  const words = {
+    setup: ["Getting voice ready", "Downloading the voice models, once."],
+    listening: ["Listening", "Speak, then pause. Say “stop voice” to finish."],
+    hearing: ["Catching that", ""],
+    thinking: ["Flash is working", pendingAsk() ? "It is asking you something on screen." : "It will answer out loud."],
+    speaking: ["Speaking", "Say \u201cinterrupt\u201d, or tap the orb, to cut in."],
+    paused: ["Paused", "Say \u201cresume\u201d, or tap the orb."],
+    asking: ["Flash is asking", "Say \u201cyes\u201d or \u201cno\u201d."],
+  }[state] || [state, ""];
+  panel.querySelector(".voice-state").textContent = words[0];
+  panel.querySelector(".voice-hint").textContent = hint ?? words[1];
+}
+
+async function startVoice() {
+  if (voice.on) return;
+  if (!canRecord) { toast("Voice mode needs this page opened on this computer, or over HTTPS"); return; }
+  let status;
+  try { status = await command("voice-status"); } catch (error) { showFailure(error); return; }
+  if (status.missing.length) { toast(status.install); return; }
+  voice.on = true;
+  voice.cut = false;
+  document.body.classList.add("voice-on");
+  $("#voice").hidden = false;
+  if (!status.ready) {
+    setVoice("setup");
+    const why = await new Promise((resolve) => {
+      voice.setup = resolve;
+      command("voice-setup").then((r) => { if (r.ready) resolve(""); }).catch((error) => resolve(error.message));
+    });
+    voice.setup = null;
+    if (why) { toast(`Voice mode could not get ready: ${why}`); endVoice(); return; }
+    if (!voice.on) return;
+  }
+  try {
+    voice.stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true } });
+  } catch (_) {
+    toast("Flash could not use the microphone. Allow it for this page, then try again.");
+    endVoice();
+    return;
+  }
+  if (!voice.on) { voice.stream.getTracks().forEach((t) => t.stop()); return; }
+  voice.ctx = new AudioContext();
+  const source = voice.ctx.createMediaStreamSource(voice.stream);
+  // A script processor, not a worklet: it needs no module file, and a
+  // chunk of a few thousand samples at a time is plenty for speech.
+  const tap = voice.ctx.createScriptProcessor(4096, 1, 1);
+  const hush = voice.ctx.createGain();
+  hush.gain.value = 0;
+  source.connect(tap);
+  tap.connect(hush);
+  hush.connect(voice.ctx.destination);
+  tap.onaudioprocess = (e) => hearChunk(e.inputBuffer.getChannelData(0));
+  voice.analyser = voice.ctx.createAnalyser();
+  voice.analyser.fftSize = 512;
+  voice.analyser.connect(voice.ctx.destination);
+  drawOrb();
+  voiceLoop();
+}
+
+function endVoice() {
+  if (!voice.on) return;
+  voice.on = false;
+  if (voice.source) { try { voice.source.stop(); } catch (_) { /* already over */ } }
+  if (voice.turn) voice.turn.finish(null);
+  if (voice.tap) voice.tap();
+  if (voice.setup) voice.setup("");
+  if (voice.stream) voice.stream.getTracks().forEach((t) => t.stop());
+  if (voice.ctx) voice.ctx.close().catch(() => {});
+  Object.assign(voice, { ctx: null, stream: null, turn: null, tap: null, source: null, analyser: null, state: "" });
+  $("#voice").hidden = true;
+  document.body.classList.remove("voice-on");
+  updateSend();
+  input.focus();
+}
+
+function voiceSetupEvent(event) {
+  if (!voice.on || voice.state !== "setup") return;
+  if (event.done) { if (voice.setup) voice.setup(event.error || ""); return; }
+  setVoice("setup", `Downloading the ${event.label}: ${event.percent}%`);
+}
+
+// One turn of listening: resolves to the audio, 16 kHz 16-bit, once the
+// speaker pauses, or to null if nobody spoke in time. OPTS tune it: how
+// long a pause ends the turn, how long to wait for speech at all, the
+// longest turn, and how loud speech has to be.
+function listenOnce(opts = {}) {
+  const o = { pause: VOICE_PAUSE, patience: VOICE_PATIENCE, longest: VOICE_LONGEST, loud: VOICE_LOUD, ...opts };
+  if (voice.turn) voice.turn.finish(null);
+  return new Promise((resolve) => {
+    const turn = { o, parts: [], heard: false, quiet: 0, elapsed: 0, finish: (pcm) => { if (voice.turn === turn) voice.turn = null; resolve(pcm); } };
+    voice.turn = turn;
+  });
+}
+
+function hearChunk(samples) {
+  let sum = 0;
+  for (let i = 0; i < samples.length; i++) sum += samples[i] * samples[i];
+  const rms = Math.sqrt(sum / samples.length);
+  if (voice.state === "listening" || voice.state === "asking") voice.level = Math.min(1, rms * 12);
+  const turn = voice.turn;
+  if (!turn) return;
+  // Down to Vosk's rate: each output sample the average of the input
+  // samples it stands for.
+  const ratio = voice.ctx.sampleRate / VOICE_RATE;
+  const out = new Int16Array(Math.floor(samples.length / ratio));
+  for (let i = 0; i < out.length; i++) {
+    const from = Math.floor(i * ratio), to = Math.min(samples.length, Math.floor((i + 1) * ratio));
+    let total = 0;
+    for (let j = from; j < to; j++) total += samples[j];
+    const value = total / Math.max(1, to - from);
+    out[i] = Math.max(-32768, Math.min(32767, Math.round(value * 32767)));
+  }
+  const step = samples.length / voice.ctx.sampleRate;
+  turn.elapsed += step;
+  const loud = rms >= turn.o.loud;
+  // Waiting for speech, only the last second or so is kept, so a long
+  // wait does not become a long recording.
+  if (!turn.heard && !loud) {
+    turn.parts.push(out);
+    if (turn.parts.length > 6) turn.parts.shift();
+  } else turn.parts.push(out);
+  if (loud) { turn.heard = true; turn.quiet = 0; } else turn.quiet += step;
+  const spoken = turn.heard ? turn.parts.length * out.length / VOICE_RATE : 0;
+  if (turn.heard && (turn.quiet >= turn.o.pause || spoken >= turn.o.longest)) {
+    const pcm = new Int16Array(turn.parts.reduce((n, part) => n + part.length, 0));
+    let at = 0;
+    for (const part of turn.parts) { pcm.set(part, at); at += part.length; }
+    turn.finish(pcm);
+  } else if (!turn.heard && turn.elapsed >= turn.o.patience) turn.finish(null);
+}
+
+function base64Of(bytes) {
+  let text = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) text += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+  return btoa(text);
+}
+
+// What was said, and what it asks of voice mode. SPEAKING is the line
+// Flash is reading out, so its own words coming back through the
+// microphone are not taken for an interruption. Null if it failed.
+async function hear(pcm, speaking = "") {
+  try { return await api("/api/voice/hear", { data: base64Of(new Uint8Array(pcm.buffer)), speaking }); }
+  catch (error) { if (voice.on) toast(error.message); return null; }
+}
+
+// Paused: waits for "resume", or a tap on the orb, and listens for
+// nothing else, so a conversation in the room is not sent to Flash.
+// Resolves false if voice mode ended meanwhile.
+async function pausedUntilResume() {
+  setVoice("paused");
+  for (;;) {
+    const tapped = new Promise((resolve) => { voice.tap = () => { voice.tap = null; resolve("tap"); }; });
+    const which = await Promise.race([tapped, listenOnce({ pause: 0.8, patience: Infinity, longest: 6 })]);
+    if (!voice.on) return false;
+    if (which === "tap") { if (voice.turn) voice.turn.finish(null); return true; }
+    voice.tap = null;
+    if (!which) continue;
+    const heard = await hear(which);
+    if (!voice.on) return false;
+    if (heard && heard.exit) { endVoice(); toast("Voice mode off"); return false; }
+    if (heard && heard.resume) return true;
+  }
+}
+
+async function voiceLoop() {
+  while (voice.on) {
+    setVoice("listening");
+    const pcm = await listenOnce();
+    if (!voice.on) return;
+    if (!pcm) { if (!(await pausedUntilResume())) return; continue; }
+    setVoice("hearing");
+    const heard = await hear(pcm);
+    if (!voice.on) return;
+    if (!heard || !heard.text || heard.alone) continue;
+    if (heard.exit) { endVoice(); toast("Voice mode off"); return; }
+    if (heard.pause) { if (!(await pausedUntilResume())) return; continue; }
+    setVoice("thinking");
+    const reply = await sendAndWait(heard.text);
+    if (!voice.on) return;
+    if (!reply) continue;
+    const how = await readAloud(reply);
+    if (how === "exit") { endVoice(); toast("Voice mode off"); return; }
+    if (how === "pause" && !(await pausedUntilResume())) return;
+  }
+}
+
+// Sends TEXT as any message is sent, and resolves to the reply on the
+// page once the turn it starts is over, or null if there was none. A
+// permission Flash asks for on the way is asked out loud, and answered
+// by voice.
+async function sendAndWait(text) {
+  const before = current;
+  const startedAt = current && chats.get(current) ? chats.get(current).log.length : 0;
+  await send(text);
+  const asked = new Set();
+  for (;;) {
+    await new Promise((r) => setTimeout(r, 250));
+    if (!voice.on) return null;
+    const card = pendingAsk();
+    if (card && !asked.has(card)) {
+      asked.add(card);
+      await askAloud(card);
+      if (!voice.on) return null;
+      setVoice("thinking");
+      continue;
+    }
+    const chat = chats.get(current);
+    if (!chat) continue;
+    const from = current === before ? startedAt : 0;
+    if (chat.busy || chat.queued || chat.log.length <= from) continue;
+    const replies = chat.log.slice(from).filter((e) => e.type === "assistant" && e.text && e.text.trim());
+    if (!replies.length) return null;
+    const said = replies[replies.length - 1].text;
+    const shown = [...messagesEl.querySelectorAll("[data-reply]")].reverse().find((n) => n.dataset.raw === said);
+    return shown || null;
+  }
+}
+
+// Reads a permission question out and waits for a spoken yes or no. After
+// a few tries without one, it is left on screen to answer by hand.
+const YES = /^(yes|yeah|yep|yup|sure|ok|okay|allow|allowed|go ahead|do it|approve)\b/;
+const NO = /^(no|nope|nah|deny|denied|don't|do not|stop|cancel|reject)\b/;
+async function askAloud(card) {
+  setVoice("asking");
+  const question = (card.querySelector(".q") || card).textContent.trim();
+  // What it wants to run or change, so it can be judged by ear; a long
+  // one is cut, the rest is on screen.
+  const what = (card.querySelector("pre") || {}).textContent || "";
+  const detail = what.trim().replace(/\s+/g, " ");
+  const said = detail.length > 160 ? `${detail.slice(0, 160)}, and more on screen` : detail;
+  await sayLine(`Flash asks: ${question} ${said ? `${said}.` : ""} Say yes or no.`);
+  for (let tries = 0; tries < 3 && voice.on && card.isConnected && !card.classList.contains("done"); tries++) {
+    setVoice("asking");
+    const pcm = await listenOnce();
+    if (!voice.on || !card.isConnected || card.classList.contains("done")) return;
+    if (!pcm) continue;
+    const heard = await hear(pcm);
+    if (!voice.on) return;
+    if (!heard) continue;
+    if (heard.exit) { endVoice(); toast("Voice mode off"); return; }
+    const said = heard.text.toLowerCase().trim();
+    if (YES.test(said)) { answerPending("y"); return; }
+    if (NO.test(said)) { answerPending("n"); return; }
+    await sayLine("Say yes or no.");
+  }
+}
+
+// A reply's sentences as they read on screen, each with the range of the
+// page it covers, so the one being said can be marked where it sits.
+// Code blocks and tables are shown, not read.
+function sentencesOf(root) {
+  const skip = "pre, table, .katex, math, svg, .actions";
+  const spans = [];
+  let text = "", home = null;
+  const walk = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+    acceptNode: (n) => (n.parentElement.closest(skip) ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT),
+  });
+  for (let n = walk.nextNode(); n; n = walk.nextNode()) {
+    const block = n.parentElement.closest("p, li, h1, h2, h3, h4, h5, h6, blockquote, dt, dd") || root;
+    if (home && block !== home) text += "\n";
+    home = block;
+    spans.push({ node: n, from: text.length });
+    text += n.nodeValue;
+  }
+  const point = (offset, closing) => {
+    for (let i = spans.length - 1; i >= 0; i--) {
+      const s = spans[i];
+      if (closing ? offset > s.from : offset >= s.from) return [s.node, Math.min(offset - s.from, s.node.nodeValue.length)];
+    }
+    return [spans[0].node, 0];
+  };
+  const out = [];
+  for (const m of text.matchAll(/[^\n]+?(?:[.!?]+["')\]]*(?=\s|$)|$)/gm)) {
+    const lead = m[0].length - m[0].trimStart().length;
+    const body = m[0].trim();
+    // A sentence of emoji, or of punctuation, has nothing to say.
+    if (!/[\p{L}\p{N}]/u.test(body)) continue;
+    const a = m.index + lead, b = a + body.length;
+    const range = document.createRange();
+    range.setStart(...point(a, false));
+    range.setEnd(...point(b, true));
+    out.push({ text: body.replace(/\s+/g, " "), range });
+  }
+  return out;
+}
+
+// Marks what is being said, and keeps it in view as the reading moves on.
+function markSpoken(range) {
+  if (!range || !window.CSS || !CSS.highlights) return;
+  CSS.highlights.set("speaking", new Highlight(range));
+  const r = range.getBoundingClientRect();
+  const box = logEl.getBoundingClientRect();
+  if (r.top < box.top + 64 || r.bottom > box.bottom - 24) {
+    follow = false;
+    logEl.scrollBy({ top: r.top - box.top - box.height * 0.3, behavior: calm.matches ? "auto" : "smooth" });
+  }
+}
+const unmarkSpoken = () => { if (window.CSS && CSS.highlights) CSS.highlights.delete("speaking"); };
+
+// A line of speech, made on this computer, ready to play.
+function makeSpeech(line) {
+  return api("/api/voice/say", { text: line }).then((r) => {
+    const raw = atob(r.audio);
+    const bytes = new Uint8Array(raw.length);
+    for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
+    return voice.ctx.decodeAudioData(bytes.buffer);
+  });
+}
+
+function playSpeech(audio) {
+  return new Promise((resolve) => {
+    const source = voice.ctx.createBufferSource();
+    source.buffer = audio;
+    source.connect(voice.analyser);
+    source.onended = () => { if (voice.source === source) voice.source = null; resolve(); };
+    voice.source = source;
+    source.start();
+  });
+}
+
+async function sayLine(line) {
+  try { const audio = await makeSpeech(line); if (voice.on) await playSpeech(audio); } catch (error) { if (voice.on) toast(error.message); }
+}
+
+// Stops the reading for REASON: "tap", "interrupt", "pause" or "exit".
+function cutReading(reason) {
+  voice.cut = reason;
+  if (voice.source) { try { voice.source.stop(); } catch (_) { /* already over */ } }
+}
+
+// While a reply is read out, keeps an ear open for the interrupt word,
+// "pause", or "stop voice". Only a louder sound counts as speech here, so
+// the reply itself, softened by the browser's echo cancelling, does not.
+function listenForInterruptions(line) {
+  let stopped = false;
+  (async () => {
+    while (!stopped && voice.on && voice.state === "speaking") {
+      const pcm = await listenOnce({ pause: 0.6, patience: Infinity, longest: 5, loud: VOICE_LOUD * 2.5 });
+      if (stopped || !pcm || !voice.on) return;
+      const heard = await hear(pcm, line());
+      if (stopped || !heard) continue;
+      if (heard.exit) { cutReading("exit"); return; }
+      if (heard.pause) { cutReading("pause"); return; }
+      if (heard.interrupt) { cutReading("interrupt"); return; }
+    }
+  })();
+  return () => { stopped = true; if (voice.turn) voice.turn.finish(null); };
+}
+
+// Reads a whole reply aloud, a sentence at a time: the next one is made
+// while this one plays, so the gaps stay short. Resolves to how it ended:
+// "done", or what cut it short.
+async function readAloud(node) {
+  const parts = sentencesOf(node.querySelector(".assistant") || node);
+  if (!parts.length) parts.push({ text: "That reply is code. It is on screen.", range: null });
+  setVoice("speaking");
+  voice.cut = false;
+  let now = "";
+  const stopListening = listenForInterruptions(() => now);
+  let next = makeSpeech(parts[0].text);
+  try {
+    for (let i = 0; i < parts.length; i++) {
+      let audio;
+      try { audio = await next; } catch (error) { if (voice.on) toast(error.message); return "done"; }
+      if (i + 1 < parts.length) next = makeSpeech(parts[i + 1].text);
+      if (!voice.on) return "exit";
+      if (voice.cut) return voice.cut;
+      now = parts[i].text;
+      markSpoken(parts[i].range);
+      await playSpeech(audio);
+      if (!voice.on) return "exit";
+      if (voice.cut) return voice.cut;
+    }
+    return "done";
+  } finally {
+    stopListening();
+    next.catch(() => {});
+    unmarkSpoken();
+  }
+}
+
+// The orb: what the microphone hears while listening, what Flash says
+// while speaking.
+function drawOrb() {
+  if (!voice.on) return;
+  const orb = $("#voice .voice-orb");
+  let level = 0;
+  if (voice.state === "listening") level = voice.level;
+  else if (voice.state === "speaking" && voice.analyser) {
+    const data = new Uint8Array(voice.analyser.fftSize);
+    voice.analyser.getByteTimeDomainData(data);
+    let sum = 0;
+    for (const v of data) sum += ((v - 128) / 128) ** 2;
+    level = Math.min(1, Math.sqrt(sum / data.length) * 4);
+  }
+  voice.shown = (voice.shown || 0) * 0.7 + level * 0.3;
+  orb.style.setProperty("--lvl", voice.shown.toFixed(3));
+  requestAnimationFrame(drawOrb);
+}
+
+$("#voice .voice-orb").onclick = () => {
+  if (voice.state === "speaking") cutReading("tap");
+  else if (voice.state === "paused" && voice.tap) voice.tap();
+  else if (voice.state === "listening" && voice.turn && voice.turn.heard) voice.turn.quiet = VOICE_PAUSE;
+};
+$("#voice .voice-end").innerHTML = icon("x");
+$("#voice .voice-end").onclick = endVoice;
+
 // Two rings out from the send button, the second a beat behind.
 function shockwave(from) {
   if (calm.matches) return;
@@ -3619,6 +4158,8 @@ function apply(event) {
   if (event.seq) lastSeq = event.seq;
   if (event.type === "chats" || event.type === "status" || event.type === "projects") { refreshLite(); return; }
   if (event.type === "update") { info.update = event.update; onUpdate(); return; }
+  if (event.type === "voice-setup") { voiceSetupEvent(event); return; }
+  if (event.type === "voice-model") { voiceModelEvent(event); return; }
   if (event.type === "browsers") { if (view === "settings" && settingsTab === "security") renderBrowsers(); return; }
 
   const chat = chats.get(event.chat);
@@ -3983,7 +4524,8 @@ function updateSend() {
   const typed = !!input.value.trim() || attached.length > 0;
   // Working with nothing typed: Stop. Working with something typed: it
   // steers. Otherwise: send.
-  const state = busy ? (typed ? "steer" : "stop") : "up";
+  // Idle with nothing typed, where a browser can record: voice mode.
+  const state = busy ? (typed ? "steer" : "stop") : (typed || !canRecord ? "up" : "voice");
   const send = $("#send");
   send.classList.toggle("stop", state === "stop");
   document.body.classList.toggle("working", !!busy && view === "chat");
@@ -3993,11 +4535,11 @@ function updateSend() {
     send.dataset.state = state;
     send.innerHTML = icon(state);
   }
-  const tip = { stop: ["Stop", "Esc"], steer: ["Steer: Flash reads it at its next step. Ctrl Enter runs it after instead", "Enter"], up: ["Send", "Enter"] }[state];
+  const tip = { stop: ["Stop", "Esc"], steer: ["Steer: Flash reads it at its next step. Ctrl Enter runs it after instead", "Enter"], up: ["Send", "Enter"], voice: ["Voice mode: talk with Flash", ""] }[state];
   send.dataset.tip = tip[0];
   send.dataset.keys = tip[1];
-  send.setAttribute("aria-label", state === "stop" ? "Stop" : state === "steer" ? "Steer" : "Send");
-  send.disabled = (!busy && !typed) || (typed && uploading());
+  send.setAttribute("aria-label", { stop: "Stop", steer: "Steer", voice: "Voice mode" }[state] || "Send");
+  send.disabled = (state === "up" && !typed) || (typed && uploading());
   if (busy && view === "chat") input.placeholder = "Steer Flash, or Ctrl Enter to queue";
   else if (input.placeholder.startsWith("Steer")) input.placeholder = "Reply to Flash";
 }
@@ -4101,7 +4643,8 @@ async function send(text, mode = "steer") {
   // The chat has to exist here before anything is said in it, or its
   // first events would arrive for a chat this page has never seen.
   if (!current) await createChat(viewProject || "");
-  await api("/api/send", { chat: current, text, files }).catch(showFailure);
+  // From voice mode, the reply will be heard: the model is told so.
+  await api("/api/send", { chat: current, text, files, voice: voice.on }).catch(showFailure);
 }
 
 async function createChat(project = "") {
@@ -4875,6 +5418,7 @@ const ACTIONS = [
   { label: "Background", keys: "", slash: "/background", run: () => showSettings("general") },
   { label: "Extensions", keys: "", slash: "/extensions", run: () => showPage("extensions") },
   { label: "Import memory from another AI", keys: "", slash: "/import", run: () => { showSettings("memory"); importMemory(); } },
+  { label: "Voice mode", keys: "", slash: "/voice", run: () => startVoice() },
   { label: "Signed-in browsers", keys: "", slash: "/security", run: () => showSettings("security") },
   { label: "Search chats", keys: "Alt F", slash: "/search", run: () => openSearch() },
   { label: "Show or hide the file panel", keys: "Alt V", slash: "/file", run: toggleViewer },
@@ -5265,7 +5809,11 @@ input.addEventListener("keydown", (e) => {
   }
 });
 
-$("#composer").addEventListener("submit", (e) => { e.preventDefault(); if (input.value.trim() || attached.length) send(input.value); else stopReply(); });
+$("#composer").addEventListener("submit", (e) => {
+  e.preventDefault();
+  if (input.value.trim() || attached.length) send(input.value);
+  else if (!stopReply() && canRecord) startVoice();
+});
 $("#composer").addEventListener("mousedown", (e) => { if (e.target === e.currentTarget) { e.preventDefault(); input.focus(); } });
 $("#new-chat").onclick = newChat;
 $("#top-new").onclick = newChat;
@@ -5304,6 +5852,7 @@ window.addEventListener("keydown", (e) => {
   // An overlay on its way out counts as closed, so a key pressed during
   // its exit (Ctrl K straight after Esc) is not swallowed.
   const up = (node) => !node.hidden && !node.classList.contains("closing");
+  if (voice.on && e.key === "Escape") { e.preventDefault(); endVoice(); return; }
   if (up($("#help"))) { if (e.key === "Escape" || e.key === "?" || (mod && e.key === "/")) { e.preventDefault(); closeHelp(); } return; }
   if (up($("#phone"))) { if (e.key === "Escape") { e.preventDefault(); closePhone(); } return; }
   if (up($("#form"))) return;
