@@ -100,6 +100,23 @@ kbd {
 [hidden] { display: none !important; }
 
 #app { display: flex; height: 100%; }
+/* The window is the sidebar's colour, and the conversation sits in a
+   rounded panel inset from its edges, the way Poolside Desktop lays
+   out a workspace. On a phone the sidebar slides over instead. */
+@media (min-width: 801px) {
+  body, #app { background: var(--sidebar); }
+  #app > #sidebar { border-right: 0; background: transparent; }
+  main {
+    margin: 8px 8px 8px 0; border-radius: 14px; overflow: hidden;
+    background: var(--bg); border: 1px solid var(--border);
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1), 0 10px 32px rgba(0, 0, 0, 0.12);
+    transition: margin 0.42s var(--apple);
+  }
+  :root[data-theme="light"] main { box-shadow: 0 1px 2px rgba(60, 50, 30, 0.06), 0 10px 32px rgba(60, 50, 30, 0.07); }
+  body.side-closed main { margin-left: 8px; }
+  #viewer { margin: 8px 0; border-radius: 14px; border: 1px solid transparent; transition: width 0.46s var(--apple), margin 0.46s var(--apple), border-color 0.46s var(--apple); }
+  #viewer.open { margin: 8px 8px 8px 0; border-color: var(--border); background: var(--bg); }
+}
 
 /* Sidebar ------------------------------------------------------------ */
 #sidebar > * { transition: opacity 0.2s var(--ease); }
@@ -167,9 +184,24 @@ body.side-closed #sidebar { margin-left: -272px; }
 }
 .chat:hover { background: var(--hover); color: var(--text); }
 .chat.current { color: var(--text); }
+/* A project's chats hang under it on a thin guide line. */
+.group-head { display: flex; align-items: center; gap: 8px; width: calc(100% - 16px); margin: 1px 8px; padding: 7px 10px; border-radius: 9px; font-size: 14px; color: var(--text-2); text-align: left; transition: background 0.14s, color 0.14s; }
+.group-head:hover { background: var(--hover); color: var(--text); }
+.group-head > svg:first-child { width: 16px; height: 16px; flex: none; color: var(--text-3); }
+.group-head:hover > svg:first-child { color: var(--accent); }
+.group-head .gname { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.group-head .gcount { font-size: 11.5px; color: var(--text-3); font-variant-numeric: tabular-nums; opacity: 0; transition: opacity 0.2s; }
+.group.folded .group-head .gcount { opacity: 1; }
+.group-head > svg:last-child { width: 13px; height: 13px; flex: none; margin-left: auto; color: var(--text-3); opacity: 0; transition: opacity 0.14s, transform 0.28s var(--spring); }
+.group-head:hover > svg:last-child, .group.folded .group-head > svg:last-child { opacity: 1; }
+.group.folded .group-head > svg:last-child { transform: rotate(-90deg); }
+.group-body { margin: 0 0 4px 26px; padding: 1px 0; border-left: 1px solid var(--border-strong); }
+.group-body .chat { width: calc(100% - 16px); margin-left: 8px; }
+.group.folded .group-body { display: none; }
+.group-label { padding: 14px 18px 4px; font-size: 12px; font-weight: 500; color: var(--text-3); }
 /* One highlight for the current chat, gliding to whichever row it is. */
 #chats { position: relative; isolation: isolate; }
-#chat-pill { position: absolute; left: 8px; right: 8px; top: 0; z-index: -1; border-radius: 9px; background: var(--pressed); pointer-events: none; opacity: 0; transition: transform 0.42s cubic-bezier(0.32, 0.72, 0, 1), height 0.42s cubic-bezier(0.32, 0.72, 0, 1), opacity 0.2s; }
+#chat-pill { position: absolute; left: 0; top: 0; z-index: -1; border-radius: 9px; background: color-mix(in srgb, var(--accent) 12%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 48%, transparent); pointer-events: none; opacity: 0; transition: transform 0.42s cubic-bezier(0.32, 0.72, 0, 1), width 0.42s cubic-bezier(0.32, 0.72, 0, 1), height 0.42s cubic-bezier(0.32, 0.72, 0, 1), opacity 0.2s; }
 #chat-pill.on { opacity: 1; }
 #chat-pill.still { transition: opacity 0.2s; }
 .chat .open { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; padding: 7px 10px; text-align: left; color: inherit; text-decoration: none; }
@@ -422,7 +454,7 @@ pre code { display: block; padding: 2px 16px 14px; overflow-x: auto; font-size: 
   transition: border-color 0.15s, box-shadow 0.15s;
   cursor: text;
 }
-#composer:focus-within { border-color: color-mix(in srgb, var(--text) 30%, transparent); }
+#composer:focus-within { border-color: color-mix(in srgb, var(--accent) 60%, transparent); }
 #input, #input::placeholder { font: 400 16px/1.5 var(--sans); letter-spacing: normal; }
 #input {
   display: block; width: 100%; resize: none; border: 0; outline: 0;
@@ -543,8 +575,8 @@ body { animation: fade 0.3s var(--ease) both; }
 
 /* The composer lifts a little when you are in it. */
 #composer { transition: border-color 0.2s, box-shadow 0.25s var(--ease), transform 0.25s var(--ease); }
-#composer:focus-within { box-shadow: 0 6px 28px rgba(0, 0, 0, 0.22), 0 0 0 4px color-mix(in srgb, var(--text) 5%, transparent); }
-:root[data-theme="light"] #composer:focus-within { box-shadow: 0 6px 28px rgba(60, 50, 30, 0.1), 0 0 0 4px rgba(31, 30, 29, 0.04); }
+#composer:focus-within { box-shadow: 0 6px 28px rgba(0, 0, 0, 0.22), 0 0 0 4px color-mix(in srgb, var(--accent) 14%, transparent); }
+:root[data-theme="light"] #composer:focus-within { box-shadow: 0 6px 28px rgba(60, 50, 30, 0.1), 0 0 0 4px color-mix(in srgb, var(--accent) 12%, transparent); }
 #composer.sent { animation: nudge 0.32s var(--ease); }
 
 /* Arrivals. */
@@ -644,8 +676,8 @@ body.empty:not(.on-page) #greeting::after { animation: greet-shine 1.9s cubic-be
    enough to catch it; unset, the light is far away. */
 :root { --spot: color-mix(in srgb, var(--accent) 95%, transparent); --spot-fill: color-mix(in srgb, var(--accent) 9%, transparent); }
 :root[data-theme="light"] { --spot: color-mix(in srgb, var(--accent) 62%, transparent); --spot-fill: color-mix(in srgb, var(--accent) 5%, transparent); }
-#composer, .suggestion, .tool, .attachment, .card, .tile, .usage-card, .setting-row, pre, .user, .browser-list, .ask { position: relative; isolation: isolate; }
-#composer::before, .suggestion::before, .tool::before, .attachment::before, .card::before, .tile::before, .usage-card::before, .setting-row::before, pre::before, .user::before, .browser-list::before, .ask::before {
+#composer, .suggestion, .tool, .attachment, .card, .tile, .usage-card, .setting-row, .assistant pre, .user, .browser-list, .ask { position: relative; isolation: isolate; }
+#composer::before, .suggestion::before, .tool::before, .attachment::before, .card::before, .tile::before, .usage-card::before, .setting-row::before, .assistant pre::before, .user::before, .browser-list::before, .ask::before {
   content: ""; position: absolute; inset: -1px; z-index: 1; border-radius: inherit; padding: 1px; pointer-events: none;
   background: radial-gradient(260px circle at var(--x, -9999px) var(--y, -9999px), var(--spot), transparent 70%);
   -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
@@ -653,16 +685,19 @@ body.empty:not(.on-page) #greeting::after { animation: greet-shine 1.9s cubic-be
 }
 /* The usage numbers only glimmer. */
 .tile, .usage-card { --spot: color-mix(in srgb, var(--accent) 38%, transparent); --spot-fill: color-mix(in srgb, var(--accent) 3%, transparent); }
-/* These clip to inside their border, so their light runs just inside it. */
-.tool::before, pre::before, .browser-list::before { inset: 0; }
-#composer::after, .suggestion::after, .tool::after, .attachment::after, .card::after, .tile::after, .usage-card::after, .setting-row::after, pre::after, .user::after, .browser-list::after, .ask::after {
+/* These clip to inside their border, so their light runs just inside it.
+   Only a reply's code blocks catch the light: they clip rather than
+   scroll, and a light inside a box that scrolls would scroll away with
+   its text, as it did in the import prompt. */
+.tool::before, .assistant pre::before, .browser-list::before { inset: 0; }
+#composer::after, .suggestion::after, .tool::after, .attachment::after, .card::after, .tile::after, .usage-card::after, .setting-row::after, .assistant pre::after, .user::after, .browser-list::after, .ask::after {
   content: ""; position: absolute; inset: 0; z-index: -1; border-radius: inherit; pointer-events: none;
   background: radial-gradient(420px circle at var(--x, -9999px) var(--y, -9999px), var(--spot-fill), transparent 65%);
   opacity: 0; transition: opacity 0.3s var(--ease);
 }
-#composer:hover::after, .suggestion:hover::after, .tool:hover::after, .attachment:hover::after, .card:hover::after, .tile:hover::after, .usage-card:hover::after, .setting-row:hover::after, pre:hover::after, .user:hover::after, .browser-list:hover::after, .ask:hover::after { opacity: 1; }
+#composer:hover::after, .suggestion:hover::after, .tool:hover::after, .attachment:hover::after, .card:hover::after, .tile:hover::after, .usage-card:hover::after, .setting-row:hover::after, .assistant pre:hover::after, .user:hover::after, .browser-list:hover::after, .ask:hover::after { opacity: 1; }
 @media (hover: none), (prefers-reduced-motion: reduce) {
-  #composer::before, .suggestion::before, .tool::before, .attachment::before, .card::before, .tile::before, .usage-card::before, .setting-row::before, pre::before, .user::before, .browser-list::before, .ask::before, #composer::after, .suggestion::after, .tool::after, .attachment::after, .card::after, .tile::after, .usage-card::after, .setting-row::after, pre::after, .user::after, .browser-list::after, .ask::after { display: none; }
+  #composer::before, .suggestion::before, .tool::before, .attachment::before, .card::before, .tile::before, .usage-card::before, .setting-row::before, .assistant pre::before, .user::before, .browser-list::before, .ask::before, #composer::after, .suggestion::after, .tool::after, .attachment::after, .card::after, .tile::after, .usage-card::after, .setting-row::after, .assistant pre::after, .user::after, .browser-list::after, .ask::after { display: none; }
 }
 ::view-transition-group(dock) { animation-duration: 0.42s; animation-timing-function: cubic-bezier(0.3, 0, 0, 1); }
 ::view-transition-old(root), ::view-transition-new(root) { animation-duration: 0.22s; }
@@ -923,6 +958,18 @@ button.item-row:hover { background: var(--hover); }
 .field input.mono { font-family: var(--mono); font-size: 13.5px; }
 .form-error { color: var(--del); font-size: 13px; min-height: 18px; margin: -4px 0 8px; }
 .dialog-buttons { display: flex; justify-content: flex-end; gap: 8px; margin-top: 6px; }
+/* Folder suggestions, hanging under the field that asked for them. */
+.suggest { position: fixed; z-index: 50; max-height: 248px; overflow-y: auto; padding: 5px; background: var(--surface); border: 1px solid var(--border-strong); border-radius: 12px; box-shadow: var(--shadow); animation: pop 0.14s cubic-bezier(0.2, 0, 0, 1); }
+.suggest[hidden] { display: none; }
+.suggest-row { display: flex; align-items: center; gap: 9px; padding: 7px 10px; border-radius: 8px; font: 13.5px var(--mono); color: var(--text-3); cursor: pointer; white-space: nowrap; overflow: hidden; }
+.suggest-row svg { width: 15px; height: 15px; flex: none; }
+.suggest-row .path { display: flex; min-width: 0; }
+.suggest-row .where { flex: none; }
+.suggest-row .name { color: var(--text-2); overflow: hidden; text-overflow: ellipsis; }
+.suggest-row .name b { color: var(--text); font-weight: 600; }
+.suggest-row.sel { background: var(--hover); }
+.suggest-row.sel svg { color: var(--accent); }
+.suggest-row.sel .name { color: var(--text); }
 .dialog-buttons .spacer { flex: 1; }
 .btn.danger { color: var(--del); }
 
@@ -1227,7 +1274,6 @@ button.item-row:hover { background: var(--hover); }
 <div id="help" class="overlay" hidden><div class="dialog" role="dialog" aria-label="Keyboard shortcuts"><div class="inner" id="help-body"></div></div></div>
 <div id="phone" class="overlay" hidden><div class="dialog" role="dialog" aria-label="Open on your phone"><div class="inner" id="phone-body"></div></div></div>
 <div id="form" class="overlay" hidden><div class="dialog" role="dialog"><div class="inner" id="form-body"></div></div></div>
-<datalist id="folders"></datalist>
 <div id="tip" role="tooltip"></div>
 <div id="toast" role="status"></div>
 
@@ -3158,6 +3204,7 @@ function markSide() {
 // A form in a dialog: new or edited project, a new host.
 function openForm(html, onSubmit) {
   closeMenu();
+  dropSuggestions();
   const body = $("#form-body");
   body.innerHTML = `<form>${html}<div class="form-error"></div></form>`;
   showOverlay($("#form"));
@@ -3178,8 +3225,99 @@ function openForm(html, onSubmit) {
   });
   return form;
 }
-function closeForm() { hideOverlay($("#form")); input.focus(); }
+function closeForm() { hideOverlay($("#form")); dropSuggestions(); input.focus(); }
+// A form's folder suggestions go with the form.
+const dropSuggestions = () => document.querySelectorAll(".suggest").forEach((node) => node.remove());
 $("#form").addEventListener("mousedown", (e) => { if (e.target.id === "form") closeForm(); });
+
+// Folder suggestions under a path field, as a shell completes: ~/D
+// offers Desktop, Documents, Downloads. Tab or Enter takes one and
+// shows what is inside it; Escape puts the list away. The list hangs
+// off the page, not the dialog, so the dialog's scrolling cannot cut
+// it short.
+function suggestFolders(field) {
+  const list = el("div", "suggest");
+  list.setAttribute("role", "listbox");
+  list.hidden = true;
+  document.body.appendChild(list);
+  let found = [], sel = -1, timer = 0, asked = 0;
+
+  const place = () => {
+    const r = field.getBoundingClientRect();
+    list.style.left = `${r.left}px`;
+    list.style.top = `${r.bottom + 6}px`;
+    list.style.width = `${r.width}px`;
+  };
+  const close = () => { list.hidden = true; sel = -1; field.setAttribute("aria-expanded", "false"); };
+  const mark = () => {
+    [...list.children].forEach((row, i) => row.classList.toggle("sel", i === sel));
+    if (sel >= 0) reveal(list, list.children[sel], false, 4);
+  };
+  const take = (i) => {
+    field.value = found[i] + "/";
+    field.setSelectionRange(field.value.length, field.value.length);
+    ask(0);
+  };
+  const draw = () => {
+    list.textContent = "";
+    if (!found.length || document.activeElement !== field) { close(); return; }
+    // What was typed after the last slash, to bold in each name.
+    const typed = field.value.slice(field.value.lastIndexOf("/") + 1);
+    found.forEach((d, i) => {
+      const cut = d.lastIndexOf("/") + 1;
+      const name = d.slice(cut);
+      const row = el("div", "suggest-row", `${icon("folder")}<span class="path"><span class="where"></span><span class="name"><b></b><span></span></span></span>`);
+      row.setAttribute("role", "option");
+      row.querySelector(".where").textContent = d.slice(0, cut);
+      row.querySelector("b").textContent = name.slice(0, typed.length);
+      row.querySelector(".name > span").textContent = name.slice(typed.length);
+      row.onmousedown = (e) => { e.preventDefault(); take(i); };
+      row.onmousemove = () => { if (sel !== i) { sel = i; mark(); } };
+      list.appendChild(row);
+    });
+    place();
+    list.hidden = false;
+    field.setAttribute("aria-expanded", "true");
+    mark();
+  };
+  const ask = (wait = 90) => {
+    clearTimeout(timer);
+    timer = setTimeout(async () => {
+      const mine = ++asked;
+      const { dirs } = await command("dirs", field.value).catch(() => ({ dirs: [] }));
+      if (mine !== asked) return;  // a later keystroke already asked
+      found = dirs;
+      sel = -1;
+      draw();
+    }, wait);
+  };
+
+  field.addEventListener("input", () => ask());
+  field.addEventListener("focus", () => ask(0));
+  field.addEventListener("blur", close);
+  field.addEventListener("keydown", (e) => {
+    if (list.hidden) return;
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      if (e.key === "ArrowDown") sel = sel + 1 < found.length ? sel + 1 : 0;
+      else sel = sel <= 0 ? found.length - 1 : sel - 1;
+      mark();
+    } else if (e.key === "Tab" && !e.shiftKey) {
+      e.preventDefault();
+      take(sel >= 0 ? sel : 0);
+    } else if (e.key === "Enter" && sel >= 0) {
+      e.preventDefault();
+      e.stopPropagation();
+      take(sel);
+    } else if (e.key === "Escape") {
+      // The list goes; the dialog stays.
+      e.preventDefault();
+      e.stopPropagation();
+      close();
+    }
+  });
+  window.addEventListener("resize", () => { if (!list.hidden) place(); });
+}
 
 function projectForm(p) {
   const editing = !!p;
@@ -3187,7 +3325,7 @@ function projectForm(p) {
     <h2>${editing ? "Edit project" : "New project"}</h2>
     <p class="sub">${editing ? "" : "Chats in a project run in its folder, with its instructions."}</p>
     <label class="field"><span>Name</span><input name="label" placeholder="Name it after the codebase" autocomplete="off"></label>
-    <label class="field"><span>Folder</span><input name="path" class="mono" list="folders" autocomplete="off" spellcheck="false"><small>A folder on the computer Flash runs on. Tab through the suggestions as you type.</small></label>
+    <label class="field"><span>Folder</span><input name="path" class="mono" autocomplete="off" spellcheck="false" role="combobox" aria-autocomplete="list" aria-expanded="false"><small>A folder on the computer Flash runs on. Tab takes a suggestion and shows what is inside it.</small></label>
     <label class="field"><span>Instructions</span><textarea name="instructions" rows="4" placeholder="Optional. Conventions, commands to run, what to avoid."></textarea></label>
     <div class="dialog-buttons">${editing ? '<button type="button" class="btn danger" data-delete>Delete</button><span class="spacer"></span>' : ""}
       <button type="button" class="btn" data-cancel>Cancel</button><button type="submit" class="btn primary">${editing ? "Save" : "Create project"}</button></div>`,
@@ -3213,16 +3351,7 @@ function projectForm(p) {
     showProjects();
     toast("Project removed. Its folder and chats are untouched.");
   };
-  let timer = null;
-  const suggestFolders = () => {
-    clearTimeout(timer);
-    timer = setTimeout(async () => {
-      const { dirs } = await command("dirs", form.path.value).catch(() => ({ dirs: [] }));
-      $("#folders").innerHTML = dirs.map((d) => `<option value="${esc(d)}/"></option>`).join("");
-    }, 120);
-  };
-  form.path.addEventListener("input", suggestFolders);
-  suggestFolders();
+  suggestFolders(form.path);
   if (!editing) { form.label.focus(); }
 }
 
@@ -3446,7 +3575,7 @@ const TILTS = ".card, .tile, .theme-card .preview";
 // is told where it is, relative to itself. Once a frame at most, again
 // when the chat scrolls under a still pointer, and only for a mouse: a
 // finger has nothing to hover.
-const LIT = "#composer, .suggestion, .tool, .attachment, .card, .tile, .usage-card, .setting-row, pre, .user, .browser-list, .ask";
+const LIT = "#composer, .suggestion, .tool, .attachment, .card, .tile, .usage-card, .setting-row, .assistant pre, .user, .browser-list, .ask";
 (() => {
   if (!matchMedia("(hover: hover) and (pointer: fine)").matches) return;
   const REACH = 260;
@@ -3630,6 +3759,18 @@ function connect() {
 let shownChats = null;
 let renamingChat = null;   // a sidebar row being renamed in place
 
+// Which projects' chats are folded away in the sidebar, per browser.
+function foldedProjects() {
+  try { return new Set(JSON.parse(pref("folded-projects", "[]"))); } catch (_) { return new Set(); }
+}
+
+function foldProject(id) {
+  const folded = foldedProjects();
+  if (folded.has(id)) folded.delete(id); else folded.add(id);
+  savePref("folded-projects", JSON.stringify([...folded]));
+  renderChats();
+}
+
 // Moves the current chat's highlight to its row: gliding from the last
 // one, or appearing in place when there was none.
 function placePill(nav) {
@@ -3637,9 +3778,11 @@ function placePill(nav) {
   if (!pill) { pill = el("div"); pill.id = "chat-pill"; nav.prepend(pill); }
   const row = nav.querySelector(".chat.current");
   const was = pill.classList.contains("on");
-  if (!row) { pill.classList.remove("on"); return; }
+  // In a folded project there is no row to show it on.
+  if (!row || !row.offsetParent) { pill.classList.remove("on"); return; }
   pill.classList.toggle("still", !was || calm.matches);
-  pill.style.transform = `translateY(${row.offsetTop}px)`;
+  pill.style.transform = `translate(${row.offsetLeft}px, ${row.offsetTop}px)`;
+  pill.style.width = `${row.offsetWidth}px`;
   pill.style.height = `${row.offsetHeight}px`;
   pill.classList.add("on");
 }
@@ -3668,10 +3811,38 @@ function renderChats() {
   const nav = $("#chats");
   // Where each row was, so a chat that moves up the list can glide there.
   const was = new Map([...nav.querySelectorAll(".chat")].map((row) => [row.dataset.chat, row.getBoundingClientRect().top]));
-  nav.querySelectorAll(".chat").forEach((row) => row.remove());
+  [...nav.children].forEach((node) => { if (node.id !== "chat-pill") node.remove(); });
   const before = shownChats;
   shownChats = new Set();
+  // Chats in a project go under it, the project with the latest chat
+  // first; the rest follow under Chats.
+  const groups = new Map();
+  const loose = [];
   for (const id of visibleChats()) {
+    const p = chats.get(id).project && projectOf(chats.get(id).project);
+    if (p) { if (!groups.has(p.id)) groups.set(p.id, []); groups.get(p.id).push(id); } else loose.push(id);
+  }
+  const folded = foldedProjects();
+  const places = [];
+  for (const [pid, ids] of groups) {
+    const p = projectOf(pid);
+    const group = el("div", "group" + (folded.has(pid) ? " folded" : ""));
+    const head = el("button", "group-head", `${icon("folder")}<span class="gname"></span><span class="gcount"></span>${icon("chevDown")}`);
+    head.type = "button";
+    head.querySelector(".gname").textContent = p.name;
+    head.querySelector(".gcount").textContent = ids.length;
+    head.setAttribute("aria-expanded", !folded.has(pid));
+    head.onclick = () => foldProject(pid);
+    head.ondblclick = () => openProject(pid);
+    head.dataset.tip = "Double-click to open the project";
+    const body = el("div", "group-body");
+    group.append(head, body);
+    nav.appendChild(group);
+    for (const id of ids) places.push([id, body]);
+  }
+  if (groups.size && loose.length) nav.appendChild(el("div", "group-label", "Chats"));
+  for (const id of loose) places.push([id, nav]);
+  for (const [id, holder] of places) {
     const chat = chats.get(id);
     shownChats.add(id);
     const fresh = before && !before.has(id);
@@ -3681,12 +3852,6 @@ function renderChats() {
     open.href = `/c/${id}`;
     open.draggable = false;
     open.firstChild.textContent = chat.title;
-    const project = chat.project && projectOf(chat.project);
-    if (project) {
-      const pill = el("span", "proj");
-      pill.textContent = project.name;
-      open.prepend(pill);
-    }
     open.onclick = (e) => {
       // With a modifier, the browser opens the link as it would any other.
       if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
@@ -3703,13 +3868,13 @@ function renderChats() {
       button("", "x", "Delete chat", "Alt Shift D", () => deleteChat(id)),
     );
     row.appendChild(acts);
-    nav.appendChild(row);
+    holder.appendChild(row);
   }
   placePill(nav);
   // Folded, the label still says how many are in there.
   $("#recents-btn .count").textContent = shownChats.size || "";
   if (calm.matches) return;
-  for (const row of nav.children) {
+  for (const row of nav.querySelectorAll(".chat")) {
     const before = was.get(row.dataset.chat);
     const shift = before === undefined ? 0 : before - row.getBoundingClientRect().top;
     if (Math.abs(shift) > 1) {
