@@ -57,6 +57,7 @@ from . import (
     memory,
     skills,
     updater,
+    voice,
     workspace,
 )
 from .dashes import DashGuard
@@ -118,6 +119,11 @@ TITLE_CHARS = 48
 MAX_BODY_BYTES = 1_000_000
 # An upload arrives as base64 in JSON: a third bigger than the file.
 MAX_UPLOAD_BODY = workspace.MAX_UPLOAD_BYTES * 4 // 3 + 64_000
+# Voice from the page arrives as base64 16 kHz 16-bit mono audio, up to
+# the longest turn the terminal's voice mode would record.
+MAX_VOICE_BODY = (
+    int(voice.MAX_TURN_SECONDS) * voice.SAMPLE_RATE * 2 * 4 // 3 + 64_000
+)
 # The most attachments one message carries.
 MAX_ATTACHMENTS = 10
 
@@ -238,6 +244,9 @@ class Chat:
     # running turn's next step; a "queue" one becomes the next turn.
     pending: list[dict] = field(default_factory=list)
     stop: threading.Event = field(default_factory=threading.Event)
+    # The turn running now came from voice mode: its reply is heard, so
+    # the model is asked to keep it short and plain.
+    heard: bool = False
     created: float = field(default_factory=time.time)
     updated: float = field(default_factory=time.time)
     project: str = ""
@@ -621,6 +630,10 @@ class Session:
     def __init__(self, hub: Optional[Hub] = None) -> None:
         self.hub = hub or Hub()
         self.lan = False
+        # The voice models are being downloaded for the page: the first
+        # use's pair, or one model picked in Settings, (kind, name).
+        self.voice_setup = False
+        self.voice_job: Optional[tuple[str, str]] = None
         # The link's token and the browsers signed in with it. A server
         # restarted after an update takes over the old one's (Server).
         self.access = Access()
@@ -731,6 +744,82 @@ class Session:
                 "update": self.updates.snapshot(),
             },
         }
+
+    # Voice ---------------------------------------------------------
+
+    def set_up_voice(self) -> None:
+        """Download the voice models, once, telling every page how far
+        along it is."""
+
+        with self._lock:
+            if self.voice_setup or self.voice_job:
+                return
+            self.voice_setup = True
+
+        def run() -> None:
+            said: dict[str, int] = {}
+
+            def progress(label: str, percent: int) -> None:
+                if said.get(label) != percent:
+                    said[label] = percent
+                    self.hub.publish({
+                        "type": "voice-setup", "label": label,
+                        "percent": percent,
+                    })
+
+            why = ""
+            try:
+                why = voice.ensure_models(progress)
+            finally:
+                with self._lock:
+                    self.voice_setup = False
+                self.hub.publish(
+                    {"type": "voice-setup", "done": True, "error": why}
+                )
+
+        threading.Thread(target=run, daemon=True).start()
+
+    def fetch_voice_model(self, kind: str, name: str) -> None:
+        """Download one voice model picked in Settings and, once it is
+        in, make it the one in use. Pages follow along through
+        "voice-model" events."""
+
+        from . import ai  # deferred: ai imports half of Flash
+
+        with self._lock:
+            if self.voice_setup or self.voice_job:
+                raise ValueError("A voice model is already downloading.")
+            self.voice_job = (kind, name)
+
+        def run() -> None:
+            said: list[int] = [-1]
+
+            def progress(label: str, percent: int) -> None:
+                if said[0] != percent:
+                    said[0] = percent
+                    self.hub.publish({
+                        "type": "voice-model", "kind": kind, "name": name,
+                        "label": label, "percent": percent,
+                    })
+
+            why = ""
+            try:
+                fetch = (voice.download_listening if kind == "listening"
+                         else voice.download_voice)
+                why = fetch(name, progress)
+                if not why:
+                    ai.set_config_var(VOICE_SETTINGS[kind], name)
+            except Exception as exc:  # noqa: BLE001
+                why = str(exc)
+            finally:
+                with self._lock:
+                    self.voice_job = None
+                self.hub.publish({
+                    "type": "voice-model", "kind": kind, "name": name,
+                    "done": True, "error": why,
+                })
+
+        threading.Thread(target=run, daemon=True).start()
 
     # Sub-agents ----------------------------------------------------
 
@@ -903,7 +992,7 @@ class Session:
 
     def send(
         self, chat: Chat, text: str, wake: bool = False, mode: str = "",
-        files: Optional[list] = None,
+        files: Optional[list] = None, heard: bool = False,
     ) -> dict:
         """Start a turn on a thread of its own and return at once.
 
@@ -934,6 +1023,7 @@ class Session:
             else:
                 chat.stop.clear()
                 chat.queued = True
+                chat.heard = heard
                 waiting = False
 
         if waiting:
@@ -1314,7 +1404,7 @@ def run_turn(
     with capture_tool_output(_sink(session, chat)), \
             answer_from(session.answerer(chat)):
         ai._fit_and_compact(ai.console, client, chat.messages)
-        prompt = ai._session_system_prompt()
+        prompt = ai._session_system_prompt(heard=chat.heard)
         if found is not None:
             prompt = f"{prompt}\n\n{project_prompt(found)}".strip()
         system = ai._message("system", prompt)
@@ -1627,6 +1717,44 @@ def scene_data(name: str) -> Optional[dict]:
     }
 
 
+# The two kinds of voice model Settings manages: which catalogue, how to
+# tell one is in, which setting names the one in use, how to remove one.
+VOICE_KINDS = {
+    "listening": ("LISTENING", "listening_installed", "vosk_model",
+                  "remove_listening"),
+    "speaking": ("SPEAKING", "voice_installed", "piper_voice",
+                 "remove_voice"),
+}
+VOICE_SETTINGS = {
+    "listening": "VOICE_VOSK_MODEL", "speaking": "VOICE_PIPER_VOICE",
+}
+
+
+def voice_models(session: "Session") -> dict:
+    """Every voice model Settings offers, and where each one stands."""
+
+    def listed(kind: str) -> list[dict]:
+        offered, installed, setting, _ = VOICE_KINDS[kind]
+        in_use = getattr(voice, setting)()
+        return [
+            {
+                "name": c.name, "size": c.size, "label": c.label,
+                "installed": getattr(voice, installed)(c.name),
+                "current": c.name == in_use,
+            }
+            for c in getattr(voice, offered)
+        ]
+
+    job = session.voice_job
+    return {
+        "listening": listed("listening"),
+        "speaking": listed("speaking"),
+        "downloading": {"kind": job[0], "name": job[1]} if job else None,
+        "missing": voice.web_missing(),
+        "install": voice.INSTALL_HINT,
+    }
+
+
 def _extension_info(ext: "extensions.Extension") -> dict:
     return {
         "name": ext.name,
@@ -1866,6 +1994,42 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
         if name == "sign-out-others" and session.relink is not None:
             session.relink()
         return {"signed_out": len(gone), "you": bool(browser in gone)}
+
+    if name == "voice-status":
+        return {
+            "missing": voice.web_missing(),
+            "ready": voice.models_present(),
+            "install": voice.INSTALL_HINT,
+        }
+
+    if name == "voice-setup":
+        # The models download once, on a thread; the page follows along
+        # through "voice-setup" events.
+        if voice.models_present():
+            return {"ready": True}
+        session.set_up_voice()
+        return {"ready": False}
+
+    if name == "voice-models":
+        return voice_models(session)
+
+    if name in ("voice-model", "voice-model-remove"):
+        kind = str(body.get("kind") or "")
+        if kind not in VOICE_KINDS:
+            raise ValueError("pick listening or speaking")
+        offered, installed, setting, remove = VOICE_KINDS[kind]
+        if arg not in {c.name for c in getattr(voice, offered)}:
+            raise ValueError(f"{arg!r} is not a model Flash offers")
+        if name == "voice-model-remove":
+            if arg == getattr(voice, setting)():
+                raise ValueError("That one is in use. Pick another first.")
+            getattr(voice, remove)(arg)
+            return voice_models(session)
+        if getattr(voice, installed)(arg):
+            ai.set_config_var(VOICE_SETTINGS[kind], arg)
+            return voice_models(session)
+        session.fetch_voice_model(kind, arg)
+        return voice_models(session)
 
     if name == "lan":
         if session.switch_lan is None:
@@ -2250,9 +2414,10 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         length = int(self.headers.get("Content-Length") or 0)
-        limit = (
-            MAX_UPLOAD_BODY if url.path == "/api/upload" else MAX_BODY_BYTES
-        )
+        limit = {
+            "/api/upload": MAX_UPLOAD_BODY,
+            "/api/voice/hear": MAX_VOICE_BODY,
+        }.get(url.path, MAX_BODY_BYTES)
         if length > limit:
             self._json(
                 {"error": "too large"}, HTTPStatus.REQUEST_ENTITY_TOO_LARGE
@@ -2281,6 +2446,7 @@ class Handler(BaseHTTPRequestHandler):
                 chat, str(body.get("text", "")),
                 mode=str(body.get("mode") or ""),
                 files=[str(f) for f in body.get("files") or []],
+                heard=bool(body.get("voice")),
             )
             return {"chat": chat.id, **sent}
 
@@ -2292,6 +2458,31 @@ class Handler(BaseHTTPRequestHandler):
             except (ValueError, TypeError):
                 raise ValueError("that upload did not arrive whole") from None
             return workspace.keep_upload(str(body.get("name") or ""), data)
+
+        if path == "/api/voice/hear":
+            try:
+                pcm = base64.b64decode(
+                    str(body.get("data") or ""), validate=True
+                )
+            except (ValueError, TypeError):
+                raise ValueError(
+                    "that recording did not arrive whole"
+                ) from None
+            text, why = voice.transcribe(pcm)
+            if why:
+                raise ValueError(why)
+            return {
+                "text": text,
+                **voice.voice_command(text, str(body.get("speaking") or "")),
+            }
+
+        if path == "/api/voice/say":
+            wav, why = voice.synthesize(
+                voice.speakable(str(body.get("text") or ""))
+            )
+            if why:
+                raise ValueError(why)
+            return {"audio": base64.b64encode(wav).decode("ascii")}
 
         if path == "/api/answer":
             return {

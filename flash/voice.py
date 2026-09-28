@@ -7,14 +7,20 @@ state through callbacks so the CLI keeps one voice for its output.
 """
 
 import array
+import io
 import json
+import logging
 import math
 import os
 import re
+import shutil
 import sys
 import threading
+import unicodedata
+import wave
 import zipfile
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 from urllib.error import URLError
 from urllib.request import Request, urlopen
@@ -133,6 +139,36 @@ BLOCK_FRAMES = 1600  # 100 ms of audio per read
 
 MAX_TURN_SECONDS = 120.0
 
+
+@dataclass(frozen=True)
+class Choice:
+    """A model Settings offers: its name, download size, and who it suits."""
+
+    name: str
+    size: int
+    label: str
+
+
+# What Settings offers to listen with, lightest first. Sizes are the
+# downloads, measured from the servers that host them.
+LISTENING = (
+    Choice(DEFAULT_VOSK_MODEL, 41_205_931,
+           "Small and quick, for weaker machines"),
+    Choice("vosk-model-en-us-0.22-lgraph", 130_557_655,
+           "Balanced, noticeably more accurate"),
+    Choice("vosk-model-en-us-0.22", 1_913_365_522,
+           "Most accurate, for strong machines"),
+)
+
+# And to speak with.
+SPEAKING = (
+    Choice("en_US-amy-low", 63_104_526, "Amy, fastest, for weaker machines"),
+    Choice(DEFAULT_PIPER_VOICE, 63_201_294, "Amy, balanced"),
+    Choice("en_US-lessac-high", 113_895_201, "Lessac, clearest"),
+    Choice("en_US-ryan-high", 120_786_792,
+           "Ryan, clearest, for strong machines"),
+)
+
 DOWNLOAD_TIMEOUT = 30
 DOWNLOAD_CHUNK = 1 << 16
 
@@ -140,21 +176,30 @@ Progress = Callable[[str, int], None]
 State = Callable[[str], None]
 
 
-def vosk_model_dir() -> Path:
-    """Where the unpacked Vosk model lives once downloaded."""
+def vosk_model_dir(name: str = "") -> Path:
+    """Where an unpacked Vosk model lives once downloaded."""
 
-    return MODELS_DIR / vosk_model()
+    return MODELS_DIR / (name or vosk_model())
 
 
-def piper_paths() -> tuple[Path, Path]:
-    """The Piper voice's network and its config file."""
+def piper_paths(name: str = "") -> tuple[Path, Path]:
+    """A Piper voice's network and its config file."""
 
-    onnx = MODELS_DIR / f"{piper_voice()}.onnx"
+    onnx = MODELS_DIR / f"{name or piper_voice()}.onnx"
 
     return onnx, onnx.with_suffix(".onnx.json")
 
 
-def _piper_urls() -> tuple[str, str]:
+def listening_installed(name: str) -> bool:
+    return (vosk_model_dir(name) / "am").is_dir()
+
+
+def voice_installed(name: str) -> bool:
+    onnx, config = piper_paths(name)
+    return onnx.is_file() and config.is_file()
+
+
+def _piper_urls(name: str = "") -> tuple[str, str]:
     """The download addresses for the configured Piper voice.
 
     A voice is named locale-speaker-quality ("en_US-amy-medium"), and
@@ -163,7 +208,7 @@ def _piper_urls() -> tuple[str, str]:
     name that is not shaped like a voice.
     """
 
-    name = piper_voice()
+    name = name or piper_voice()
     locale, speaker, quality = name.split("-", 2)
     language = locale.split("_")[0].lower()
     base = f"{PIPER_BASE}/{language}/{locale}/{speaker}/{quality}/{name}.onnx"
@@ -201,6 +246,16 @@ def missing_packages() -> list[str]:
             missing.append(package)
 
     return missing
+
+
+def web_missing() -> list[str]:
+    """What voice in the web UI still needs installed.
+
+    Listening and speaking only: the browser has the microphone and the
+    speakers, so sounddevice is the terminal's business, not the page's.
+    """
+
+    return [p for p in missing_packages() if p != "sounddevice"]
 
 
 def _download(url: str, out: Path, label: str, on_progress: Progress) -> str:
@@ -266,51 +321,72 @@ def ensure_models(on_progress: Progress) -> str:
     if models_present():
         return ""
 
+    return (download_listening(vosk_model(), on_progress)
+            or download_voice(piper_voice(), on_progress))
+
+
+def download_listening(name: str, on_progress: Progress) -> str:
+    """Fetch and unpack the Vosk model NAME. Returns "" once it is in."""
+
+    if listening_installed(name):
+        return ""
+
     MODELS_DIR.mkdir(parents=True, exist_ok=True)
+    archive = MODELS_DIR / f"{name}.zip"
+    why = _download(
+        f"{VOSK_BASE}/{name}.zip", archive, "listening model", on_progress,
+    )
+    if why:
+        return why
 
-    if not (vosk_model_dir() / "am").is_dir():
-        name = vosk_model()
-        archive = MODELS_DIR / f"{name}.zip"
-        why = _download(
-            f"{VOSK_BASE}/{name}.zip",
-            archive,
-            "listening model",
-            on_progress,
+    why = _unpack(archive, MODELS_DIR)
+    if why:
+        return why
+
+    if not listening_installed(name):
+        return (
+            f"{name} did not unpack into {vosk_model_dir(name)}. Check the "
+            "model name in VOICE_VOSK_MODEL."
         )
-        if why:
-            return why
-
-        why = _unpack(archive, MODELS_DIR)
-        if why:
-            return why
-
-        if not (vosk_model_dir() / "am").is_dir():
-            return (
-                f"{name} did not unpack into "
-                f"{vosk_model_dir()}. Check the model name in "
-                "VOICE_VOSK_MODEL."
-            )
-
-    onnx, config = piper_paths()
-
-    if not onnx.is_file() or not config.is_file():
-        try:
-            onnx_url, config_url = _piper_urls()
-        except ValueError:
-            return (
-                f"'{piper_voice()}' is not a Piper voice name. Use "
-                "one shaped like en_US-amy-medium."
-            )
-
-        why = _download(onnx_url, onnx, "voice", on_progress)
-        if why:
-            return why
-
-        why = _download(config_url, config, "voice settings", on_progress)
-        if why:
-            return why
-
     return ""
+
+
+def download_voice(name: str, on_progress: Progress) -> str:
+    """Fetch the Piper voice NAME, network and settings. Returns "" once
+    it is in."""
+
+    if voice_installed(name):
+        return ""
+
+    try:
+        onnx_url, config_url = _piper_urls(name)
+    except ValueError:
+        return (
+            f"'{name}' is not a Piper voice name. Use one shaped like "
+            "en_US-amy-medium."
+        )
+
+    onnx, config = piper_paths(name)
+    MODELS_DIR.mkdir(parents=True, exist_ok=True)
+    return (_download(onnx_url, onnx, "voice", on_progress)
+            or _download(config_url, config, "voice settings", on_progress))
+
+
+def remove_listening(name: str) -> None:
+    """Delete the Vosk model NAME, which must be one Settings offers."""
+
+    if name not in {c.name for c in LISTENING}:
+        raise ValueError(f"{name!r} is not a listening model Flash offers")
+    shutil.rmtree(vosk_model_dir(name), ignore_errors=True)
+
+
+def remove_voice(name: str) -> None:
+    """Delete the Piper voice NAME, which must be one Settings offers."""
+
+    if name not in {c.name for c in SPEAKING}:
+        raise ValueError(f"{name!r} is not a voice Flash offers")
+    for path in piper_paths(name):
+        path.unlink(missing_ok=True)
 
 
 _listener = None
@@ -568,6 +644,10 @@ def _load_speaker():
     if _speaker is None or _speaker[0] != onnx:
         from piper import PiperVoice
 
+        # A sound the voice lacks is dropped either way; Piper saying so
+        # in the terminal, once per sound, only gets in the way.
+        logging.getLogger("piper").setLevel(logging.ERROR)
+
         settings = json.loads(config.read_text(encoding="utf-8"))
         rate = int(settings.get("audio", {}).get("sample_rate", 22050))
         _speaker = (onnx, PiperVoice.load(str(onnx)), rate)
@@ -575,8 +655,48 @@ def _load_speaker():
     return _speaker[1], _speaker[2]
 
 
+# Symbols a voice cannot say as written, with the words it can. Longer
+# ones first, so "->" is not read as "-" then ">".
+_SAID_AS = (
+    ("->", " to "), ("=>", " to "), ("\u2192", " to "), ("\u21d2", " to "),
+    (">=", " at least "), ("\u2265", " at least "),
+    ("<=", " at most "), ("\u2264", " at most "),
+    ("!=", " is not "), ("\u2260", " is not "), ("==", " equals "),
+    ("&&", " and "), ("||", " or "), ("&", " and "),
+    ("\u00b1", " plus or minus "), ("\u00d7", " times "),
+    ("\u00f7", " divided by "), ("\u00b0", " degrees "),
+    ("\u2044", " over "),
+    ("+", " plus "), ("=", " equals "), ("@", " at "),
+)
+# Marks from code and Markdown, said as a pause, not spelled out.
+# Brackets above all: Piper takes [[ ... ]] as raw phonemes, and reads
+# whatever is inside as sounds its voice may not have.
+_UNSAID = re.compile(r"[\[\]{}<>|`*#^~_\\\u2022\u2023\u25e6]+")
+
+
+def fit_for_voice(text: str) -> str:
+    """TEXT in words a voice can say.
+
+    Code, paths, and symbols come through otherwise as sounds the voice
+    has none of: Piper drops them with a warning, and what is left comes
+    out garbled.
+    """
+
+    # Compatibility forms first: ² as 2, ﬁ as fi, a full-width letter
+    # as itself.
+    text = unicodedata.normalize("NFKC", text or "")
+    for mark, words in _SAID_AS:
+        text = text.replace(mark, words)
+    text = _UNSAID.sub(" ", text)
+    return " ".join(text.split())
+
+
 def _pcm_chunks(voice, text: str):
     """Yield raw 16-bit audio for `text`, across Piper's two APIs."""
+
+    text = fit_for_voice(text)
+    if not text:
+        return
 
     if hasattr(voice, "synthesize_stream_raw"):
         yield from voice.synthesize_stream_raw(text)
@@ -655,6 +775,105 @@ def _abort(stream) -> None:
         pass
 
 
+# The page asks for both from threads of its own; loading a model twice
+# at once would only waste the memory of one, and Piper is not promised
+# to be safe to call from two threads together.
+_models_lock = threading.Lock()
+
+
+def transcribe(pcm: bytes) -> tuple[str, str]:
+    """What was said in PCM: 16 kHz mono 16-bit audio, as the web page
+    records it. Returns `(text, "")`, or `("", reason)` when the listening
+    model cannot be used."""
+
+    try:
+        import vosk
+    except Exception:  # noqa: BLE001
+        return "", INSTALL_HINT
+
+    try:
+        with _models_lock:
+            model = _load_listener()
+    except Exception as exc:  # noqa: BLE001
+        return "", f"could not load the listening model: {exc}"
+
+    recognizer = vosk.KaldiRecognizer(model, SAMPLE_RATE)
+    block = BLOCK_FRAMES * 2
+    for start in range(0, len(pcm) - len(pcm) % 2, block):
+        recognizer.AcceptWaveform(pcm[start:start + block])
+
+    try:
+        result = json.loads(recognizer.FinalResult())
+    except ValueError:
+        return "", "the listening model returned nothing usable."
+
+    return str(result.get("text") or "").strip(), ""
+
+
+def synthesize(text: str) -> tuple[bytes, str]:
+    """TEXT spoken, as a WAV file the web page can play. Returns
+    `(wav, "")`, or `(b"", reason)` when the voice cannot be used."""
+
+    text = (text or "").strip()
+    if not text:
+        return b"", ""
+
+    try:
+        with _models_lock:
+            voice, rate = _load_speaker()
+            pcm = b"".join(chunk or b"" for chunk in _pcm_chunks(voice, text))
+    except ImportError:
+        return b"", INSTALL_HINT
+    except Exception as exc:  # noqa: BLE001
+        return b"", f"could not speak the reply: {exc}"
+
+    out = io.BytesIO()
+    with wave.open(out, "wb") as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(rate)
+        wav.writeframes(pcm)
+    return out.getvalue(), ""
+
+
+def speakable(line: str) -> str:
+    """One line of a reply, as the page reads it off the screen, made fit
+    to hear: an address is said as "a link", not spelled out, and emojis
+    are left unsaid."""
+
+    return " ".join(_EMOJI.sub("", _URL.sub("a link", line or "")).split())
+
+
+# Said to a paused session, these wake it; said as a whole turn, these
+# pause it. Matched on the words alone, like the exit phrases.
+RESUME_WORD = "resume"
+PAUSE_PHRASES = {"pause", "pause voice", "pause voice mode", "hold on"}
+
+
+def _words(text: str) -> list[str]:
+    return re.sub(r"[^a-z' ]", "", (text or "").lower()).split()
+
+
+def voice_command(text: str, speaking: str = "") -> dict:
+    """What a turn of speech asks of voice mode, beyond being a message.
+
+    `speaking` is the line Flash was reading out when it was heard: said
+    over a reply, "interrupt" cuts it off, but not when the word came
+    from the reply itself, echoing back through the microphone.
+    """
+
+    words = _words(text)
+    return {
+        "exit": is_exit_phrase(text),
+        "pause": " ".join(words) in PAUSE_PHRASES,
+        "resume": RESUME_WORD in words,
+        "interrupt": _heard_interruption(text)
+        and not _heard_interruption(speaking),
+        # Only the interrupt word, with nothing playing to cut off.
+        "alone": " ".join(words) == interrupt_word(),
+    }
+
+
 CODE_ONLY = "That reply is code. It is on screen."
 CUT_SHORT = "The rest is on screen."
 
@@ -662,6 +881,12 @@ _FENCE = re.compile(r"```.*?```", re.DOTALL)
 _IMAGE = re.compile(r"!\[[^\]]*\]\([^)]*\)")
 _LINK = re.compile(r"\[([^\]]+)\]\([^)]*\)")
 _URL = re.compile(r"<?https?://\S+>?")
+# Pictographs, dingbats, flags, and the joiners and selectors that knit
+# them together: seen on screen, never read out.
+_EMOJI = re.compile(
+    "[\U0001F000-\U0001FAFF\u2600-\u27BF\u2B00-\u2BFF"
+    "\uFE0E\uFE0F\u200D\u20E3\U000E0020-\U000E007F]"
+)
 _TABLE = re.compile(r"^\s*\|.*$", re.MULTILINE)
 _RULE = re.compile(r"^\s*([-*_]\s*){3,}$", re.MULTILINE)
 _HEADING = re.compile(r"^\s{0,3}#{1,6}\s*", re.MULTILINE)
@@ -685,7 +910,7 @@ def for_speech(text: str, limit: int = 0) -> str:
     # the reader can finish on screen.
     limit = limit or max_speech_chars()
 
-    stripped = _FENCE.sub(" ", text or "")
+    stripped = _EMOJI.sub("", _FENCE.sub(" ", text or ""))
     stripped = _IMAGE.sub(" ", stripped)
     stripped = _LINK.sub(r"\1", stripped)
     stripped = _URL.sub("a link", stripped)

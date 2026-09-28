@@ -157,12 +157,12 @@ VOICE_PROMPT = """
 
 === Voice Mode ===
 The user is speaking to you, and your reply is read back to them out loud.
-Keep it short and plain: whole sentences, no code blocks, tables, or long
-lists unless they ask for one, because only the prose is spoken and the
-rest is silently dropped. What they said reached you through speech
-recognition, so expect missing punctuation and the occasional misheard
-word; ask when a name, path, or command sounds wrong rather than acting on
-a guess.""".rstrip()
+Keep it short: two or three sentences unless they ask for more. Plain whole
+sentences, no code blocks, tables, lists, or emojis unless they ask for
+one, because only the prose is spoken and the rest is silently dropped.
+What they said reached you through speech recognition, so expect missing
+punctuation and the occasional misheard word; ask when a name, path, or
+command sounds wrong rather than acting on a guess.""".rstrip()
 
 
 class FlashError(Exception):
