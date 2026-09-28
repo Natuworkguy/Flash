@@ -312,9 +312,8 @@ body.empty #suggestions { display: flex; flex-wrap: wrap; justify-content: cente
 .pending-row .icon-btn svg { width: 14px; height: 14px; }
 .user {
   max-width: min(85%, 600px);
-  background: color-mix(in srgb, var(--accent) 88%, #000);
-  color: #fff;
-  border: 1px solid transparent;
+  background: var(--surface);
+  border: 1px solid var(--border);
   padding: 10px 16px; border-radius: 20px 20px 6px 20px;
   white-space: pre-wrap; word-wrap: break-word;
 }
@@ -677,8 +676,8 @@ body.empty:not(.on-page) #greeting::after { animation: greet-shine 1.9s cubic-be
    enough to catch it; unset, the light is far away. */
 :root { --spot: color-mix(in srgb, var(--accent) 95%, transparent); --spot-fill: color-mix(in srgb, var(--accent) 9%, transparent); }
 :root[data-theme="light"] { --spot: color-mix(in srgb, var(--accent) 62%, transparent); --spot-fill: color-mix(in srgb, var(--accent) 5%, transparent); }
-#composer, .suggestion, .tool, .attachment, .card, .tile, .usage-card, .setting-row, pre, .user, .browser-list, .ask { position: relative; isolation: isolate; }
-#composer::before, .suggestion::before, .tool::before, .attachment::before, .card::before, .tile::before, .usage-card::before, .setting-row::before, pre::before, .user::before, .browser-list::before, .ask::before {
+#composer, .suggestion, .tool, .attachment, .card, .tile, .usage-card, .setting-row, .assistant pre, .user, .browser-list, .ask { position: relative; isolation: isolate; }
+#composer::before, .suggestion::before, .tool::before, .attachment::before, .card::before, .tile::before, .usage-card::before, .setting-row::before, .assistant pre::before, .user::before, .browser-list::before, .ask::before {
   content: ""; position: absolute; inset: -1px; z-index: 1; border-radius: inherit; padding: 1px; pointer-events: none;
   background: radial-gradient(260px circle at var(--x, -9999px) var(--y, -9999px), var(--spot), transparent 70%);
   -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
@@ -686,16 +685,19 @@ body.empty:not(.on-page) #greeting::after { animation: greet-shine 1.9s cubic-be
 }
 /* The usage numbers only glimmer. */
 .tile, .usage-card { --spot: color-mix(in srgb, var(--accent) 38%, transparent); --spot-fill: color-mix(in srgb, var(--accent) 3%, transparent); }
-/* These clip to inside their border, so their light runs just inside it. */
-.tool::before, pre::before, .browser-list::before { inset: 0; }
-#composer::after, .suggestion::after, .tool::after, .attachment::after, .card::after, .tile::after, .usage-card::after, .setting-row::after, pre::after, .user::after, .browser-list::after, .ask::after {
+/* These clip to inside their border, so their light runs just inside it.
+   Only a reply's code blocks catch the light: they clip rather than
+   scroll, and a light inside a box that scrolls would scroll away with
+   its text, as it did in the import prompt. */
+.tool::before, .assistant pre::before, .browser-list::before { inset: 0; }
+#composer::after, .suggestion::after, .tool::after, .attachment::after, .card::after, .tile::after, .usage-card::after, .setting-row::after, .assistant pre::after, .user::after, .browser-list::after, .ask::after {
   content: ""; position: absolute; inset: 0; z-index: -1; border-radius: inherit; pointer-events: none;
   background: radial-gradient(420px circle at var(--x, -9999px) var(--y, -9999px), var(--spot-fill), transparent 65%);
   opacity: 0; transition: opacity 0.3s var(--ease);
 }
-#composer:hover::after, .suggestion:hover::after, .tool:hover::after, .attachment:hover::after, .card:hover::after, .tile:hover::after, .usage-card:hover::after, .setting-row:hover::after, pre:hover::after, .user:hover::after, .browser-list:hover::after, .ask:hover::after { opacity: 1; }
+#composer:hover::after, .suggestion:hover::after, .tool:hover::after, .attachment:hover::after, .card:hover::after, .tile:hover::after, .usage-card:hover::after, .setting-row:hover::after, .assistant pre:hover::after, .user:hover::after, .browser-list:hover::after, .ask:hover::after { opacity: 1; }
 @media (hover: none), (prefers-reduced-motion: reduce) {
-  #composer::before, .suggestion::before, .tool::before, .attachment::before, .card::before, .tile::before, .usage-card::before, .setting-row::before, pre::before, .user::before, .browser-list::before, .ask::before, #composer::after, .suggestion::after, .tool::after, .attachment::after, .card::after, .tile::after, .usage-card::after, .setting-row::after, pre::after, .user::after, .browser-list::after, .ask::after { display: none; }
+  #composer::before, .suggestion::before, .tool::before, .attachment::before, .card::before, .tile::before, .usage-card::before, .setting-row::before, .assistant pre::before, .user::before, .browser-list::before, .ask::before, #composer::after, .suggestion::after, .tool::after, .attachment::after, .card::after, .tile::after, .usage-card::after, .setting-row::after, .assistant pre::after, .user::after, .browser-list::after, .ask::after { display: none; }
 }
 ::view-transition-group(dock) { animation-duration: 0.42s; animation-timing-function: cubic-bezier(0.3, 0, 0, 1); }
 ::view-transition-old(root), ::view-transition-new(root) { animation-duration: 0.22s; }
@@ -3573,7 +3575,7 @@ const TILTS = ".card, .tile, .theme-card .preview";
 // is told where it is, relative to itself. Once a frame at most, again
 // when the chat scrolls under a still pointer, and only for a mouse: a
 // finger has nothing to hover.
-const LIT = "#composer, .suggestion, .tool, .attachment, .card, .tile, .usage-card, .setting-row, pre, .user, .browser-list, .ask";
+const LIT = "#composer, .suggestion, .tool, .attachment, .card, .tile, .usage-card, .setting-row, .assistant pre, .user, .browser-list, .ask";
 (() => {
   if (!matchMedia("(hover: hover) and (pointer: fine)").matches) return;
   const REACH = 260;
