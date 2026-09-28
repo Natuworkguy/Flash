@@ -32,9 +32,10 @@ class TestHosts:
     def test_this_computer_is_always_first(self):
         listed = workspace.hosts()
 
-        assert listed == [
-            {"name": "This computer", "url": "http://localhost:11434"}
-        ]
+        assert listed == [{
+            "name": "This computer", "url": "http://localhost:11434",
+            "saved": False,
+        }]
 
     def test_add_and_remove(self):
         workspace.add_host("Studio", "10.0.0.5")
@@ -62,7 +63,7 @@ class TestHosts:
     def test_an_unsaved_current_host_is_shown(self):
         listed = workspace.hosts("192.168.1.9:11434")
 
-        assert listed[-1] == {"name": "Current", "url":
+        assert listed[-1] == {"name": "Current", "saved": False, "url":
                               "http://192.168.1.9:11434"}
 
     def test_health(self):
@@ -166,3 +167,40 @@ class TestChats:
         (folder / "0123abcd.json").write_text("{broken")
 
         assert workspace.load_chats() == []
+
+
+class TestThisComputer:
+    @pytest.mark.parametrize("current", [
+        "http://127.0.0.1:11434", "127.0.0.1:11434", "http://[::1]:11434",
+        "localhost:11434",
+    ])
+    def test_a_loopback_host_is_this_computer_not_another(self, current):
+        listed = workspace.hosts(current)
+
+        assert [h["name"] for h in listed] == ["This computer"]
+        assert workspace.listed_url(current) == workspace.LOCAL_HOST
+
+    def test_another_port_is_another_server(self):
+        listed = workspace.hosts("127.0.0.1:9000")
+
+        assert [h["name"] for h in listed] == ["This computer", "Current"]
+
+    def test_only_saved_hosts_are_marked_saved(self):
+        workspace.add_host("Studio", "10.0.0.5")
+
+        saved = {h["name"]: h["saved"] for h in workspace.hosts("10.0.0.9")}
+
+        assert saved == {
+            "This computer": False, "Studio": True, "Current": False,
+        }
+
+    def test_this_computer_is_never_saved_under_another_name(self):
+        workspace.add_host("Loopback", "127.0.0.1:11434")
+
+        assert [h["name"] for h in workspace.hosts()] == ["This computer"]
+
+    def test_removing_matches_however_it_was_written(self):
+        workspace.add_host("Studio", "http://10.0.0.5:11434/")
+
+        assert workspace.remove_host("10.0.0.5")
+        assert [h["name"] for h in workspace.hosts()] == ["This computer"]

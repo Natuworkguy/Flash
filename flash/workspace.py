@@ -28,6 +28,10 @@ from .paths import FLASH_DIR
 LOCAL_HOST = "http://localhost:11434"
 LOCAL_NAME = "This computer"
 
+# Names for this computer. An OLLAMA_HOST of 127.0.0.1 is the same
+# server as localhost, not a second host to list, switch to, or remove.
+LOOPBACK = frozenset({"localhost", "127.0.0.1", "::1"})
+
 HOST_CHECK_SECONDS = 1.5
 
 MAX_NAME = 60
@@ -94,35 +98,67 @@ def normalize_host(url: str) -> str:
     return f"{parsed.scheme}://{host}:{port}"
 
 
+def host_key(url: str) -> str:
+    """Which server URL means, for telling hosts apart: every name for
+    this computer on a port counts as the same one. Only for comparing;
+    the URL Flash connects to is never rewritten, since localhost and
+    127.0.0.1 can reach different sockets."""
+
+    try:
+        url = normalize_host(url)
+    except WorkspaceError:
+        return url
+    parsed = urlparse(url)
+    if (parsed.hostname or "") in LOOPBACK:
+        return f"{parsed.scheme}://localhost:{parsed.port}"
+    return url
+
+
 def hosts(current: str = "") -> list[dict]:
-    """The saved hosts, this computer first, plus CURRENT if unsaved."""
+    """The saved hosts, this computer first, plus CURRENT if unsaved.
+
+    `saved` marks the ones in hosts.json: only those can be removed.
+    """
 
     saved = [
         h for h in _read("hosts.json", [])
         if isinstance(h, dict) and h.get("url")
     ]
-    listed = [{"name": LOCAL_NAME, "url": LOCAL_HOST}]
-    seen = {LOCAL_HOST}
+    listed = [{"name": LOCAL_NAME, "url": LOCAL_HOST, "saved": False}]
+    seen = {host_key(LOCAL_HOST)}
 
     for entry in saved:
         try:
             url = normalize_host(entry["url"])
         except WorkspaceError:
             continue
-        if url in seen:
+        if host_key(url) in seen:
             continue
-        seen.add(url)
-        listed.append({"name": str(entry.get("name") or url), "url": url})
+        seen.add(host_key(url))
+        listed.append({
+            "name": str(entry.get("name") or url), "url": url, "saved": True,
+        })
 
     if current:
         try:
             url = normalize_host(current)
         except WorkspaceError:
             url = ""
-        if url and url not in seen:
-            listed.append({"name": "Current", "url": url})
+        if url and host_key(url) not in seen:
+            listed.append({"name": "Current", "url": url, "saved": False})
 
     return listed
+
+
+def listed_url(current: str) -> str:
+    """The URL CURRENT goes by in hosts(), so the page can tell which
+    entry is in use: 127.0.0.1 shows up as This computer's."""
+
+    key = host_key(current)
+    return next(
+        (h["url"] for h in hosts(current) if host_key(h["url"]) == key),
+        current,
+    )
 
 
 def add_host(name: str, url: str) -> dict:
@@ -132,9 +168,10 @@ def add_host(name: str, url: str) -> dict:
     with _lock:
         saved = [
             h for h in _read("hosts.json", [])
-            if isinstance(h, dict) and h.get("url") != url
+            if isinstance(h, dict)
+            and host_key(str(h.get("url") or "")) != host_key(url)
         ]
-        if url != LOCAL_HOST:
+        if host_key(url) != host_key(LOCAL_HOST):
             saved.append({"name": name, "url": url})
         _write("hosts.json", saved)
 
@@ -151,7 +188,8 @@ def remove_host(url: str) -> bool:
         saved = _read("hosts.json", [])
         kept = [
             h for h in saved
-            if isinstance(h, dict) and h.get("url") != url
+            if isinstance(h, dict)
+            and host_key(str(h.get("url") or "")) != host_key(url)
         ]
         if len(kept) == len(saved):
             return False
@@ -386,7 +424,9 @@ def keep_file(source: str) -> dict:
 
 
 def kept_file(file_id: str) -> Optional[tuple[Path, str]]:
-    """The stored copy of a shown file, and its type, or None."""
+    """The stored copy of a shown file, and its type, or None. That is
+    a file the agent showed, or one the user attached that a browser
+    can show, like a photo."""
 
     if not FILE_ID_RE.match(file_id or ""):
         return None
@@ -394,7 +434,75 @@ def kept_file(file_id: str) -> Optional[tuple[Path, str]]:
         path = store() / "files" / f"{file_id}{suffix}"
         if path.is_file():
             return path, mime
+    uploaded = upload_path(file_id)
+    if uploaded is not None and uploaded.suffix.lower() in SHOWN_TYPES:
+        return uploaded, SHOWN_TYPES[uploaded.suffix.lower()]
     return None
+
+
+# --- Files the user attached --------------------------------------------
+
+MAX_UPLOAD_BYTES = 20 * 1024 * 1024
+_UNSAFE_NAME = re.compile(r"[^\w.\- ]+")
+
+
+def upload_path(file_id: str) -> Optional[Path]:
+    """Where a file the user attached is kept, or None."""
+
+    if not FILE_ID_RE.match(file_id or ""):
+        return None
+    try:
+        kept = [p for p in (store() / "uploads" / file_id).iterdir()
+                if p.is_file()]
+    except OSError:
+        return None
+    return kept[0] if len(kept) == 1 else None
+
+
+def upload_info(file_id: str) -> Optional[dict]:
+    """What the page shows for an attached file, and its path."""
+
+    path = upload_path(file_id)
+    if path is None:
+        return None
+    suffix = path.suffix.lower()
+    mime = SHOWN_TYPES.get(suffix, "application/octet-stream")
+    return {
+        "id": file_id,
+        "name": path.name,
+        "size": path.stat().st_size,
+        "mime": mime,
+        "kind": (
+            "image" if mime.startswith("image/")
+            else "pdf" if suffix == ".pdf" else "file"
+        ),
+        "path": str(path),
+    }
+
+
+def keep_upload(name: str, data: bytes) -> dict:
+    """Keep a file the user attached in the page, and describe it.
+
+    Under its own name, in a folder of its own, so the model's tools
+    can open it by a real path and the name still says what it is.
+    Nothing is run or unpacked: it is only written down.
+    """
+
+    if not data:
+        raise WorkspaceError("that file is empty")
+    if len(data) > MAX_UPLOAD_BYTES:
+        raise WorkspaceError(
+            f"that file is over {MAX_UPLOAD_BYTES // (1024 * 1024)} MB"
+        )
+    clean = _UNSAFE_NAME.sub("_", Path(name or "").name).strip(" .")[:100]
+    clean = clean or "upload"
+    file_id = uuid.uuid4().hex[:16]
+    folder = store() / "uploads" / file_id
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / clean).write_bytes(data)
+    info = upload_info(file_id) or {}
+    info.pop("path", None)
+    return info
 
 
 # --- Chats ---------------------------------------------------------------

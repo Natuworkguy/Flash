@@ -184,9 +184,11 @@ When a task matches a skill under === Skills === below, call skill_view on
 Your temporary scratch directory is: {SCRATCH_DIR}
 It will be deleted when the program exits. Use it for temporary files, but do
   not assume it will persist across runs.
-Always use the scratch directory for temporary files, and never write to
-  the user's home directory, other directories, or the current working
-  directory unless explicitly asked.
+Always use the scratch directory for temporary files, including dummy,
+  sample, and test files the user asks for, and write them by their full
+  path there. Never write them to the user's home directory, other
+  directories, or the current working directory unless the user names
+  that place.
 """.strip()
 
 now = datetime.now()  # noqa: DTZ005
