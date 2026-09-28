@@ -923,6 +923,18 @@ button.item-row:hover { background: var(--hover); }
 .field input.mono { font-family: var(--mono); font-size: 13.5px; }
 .form-error { color: var(--del); font-size: 13px; min-height: 18px; margin: -4px 0 8px; }
 .dialog-buttons { display: flex; justify-content: flex-end; gap: 8px; margin-top: 6px; }
+/* Folder suggestions, hanging under the field that asked for them. */
+.suggest { position: fixed; z-index: 50; max-height: 248px; overflow-y: auto; padding: 5px; background: var(--surface); border: 1px solid var(--border-strong); border-radius: 12px; box-shadow: var(--shadow); animation: pop 0.14s cubic-bezier(0.2, 0, 0, 1); }
+.suggest[hidden] { display: none; }
+.suggest-row { display: flex; align-items: center; gap: 9px; padding: 7px 10px; border-radius: 8px; font: 13.5px var(--mono); color: var(--text-3); cursor: pointer; white-space: nowrap; overflow: hidden; }
+.suggest-row svg { width: 15px; height: 15px; flex: none; }
+.suggest-row .path { display: flex; min-width: 0; }
+.suggest-row .where { flex: none; }
+.suggest-row .name { color: var(--text-2); overflow: hidden; text-overflow: ellipsis; }
+.suggest-row .name b { color: var(--text); font-weight: 600; }
+.suggest-row.sel { background: var(--hover); }
+.suggest-row.sel svg { color: var(--accent); }
+.suggest-row.sel .name { color: var(--text); }
 .dialog-buttons .spacer { flex: 1; }
 .btn.danger { color: var(--del); }
 
@@ -1227,7 +1239,6 @@ button.item-row:hover { background: var(--hover); }
 <div id="help" class="overlay" hidden><div class="dialog" role="dialog" aria-label="Keyboard shortcuts"><div class="inner" id="help-body"></div></div></div>
 <div id="phone" class="overlay" hidden><div class="dialog" role="dialog" aria-label="Open on your phone"><div class="inner" id="phone-body"></div></div></div>
 <div id="form" class="overlay" hidden><div class="dialog" role="dialog"><div class="inner" id="form-body"></div></div></div>
-<datalist id="folders"></datalist>
 <div id="tip" role="tooltip"></div>
 <div id="toast" role="status"></div>
 
@@ -3158,6 +3169,7 @@ function markSide() {
 // A form in a dialog: new or edited project, a new host.
 function openForm(html, onSubmit) {
   closeMenu();
+  dropSuggestions();
   const body = $("#form-body");
   body.innerHTML = `<form>${html}<div class="form-error"></div></form>`;
   showOverlay($("#form"));
@@ -3178,8 +3190,99 @@ function openForm(html, onSubmit) {
   });
   return form;
 }
-function closeForm() { hideOverlay($("#form")); input.focus(); }
+function closeForm() { hideOverlay($("#form")); dropSuggestions(); input.focus(); }
+// A form's folder suggestions go with the form.
+const dropSuggestions = () => document.querySelectorAll(".suggest").forEach((node) => node.remove());
 $("#form").addEventListener("mousedown", (e) => { if (e.target.id === "form") closeForm(); });
+
+// Folder suggestions under a path field, as a shell completes: ~/D
+// offers Desktop, Documents, Downloads. Tab or Enter takes one and
+// shows what is inside it; Escape puts the list away. The list hangs
+// off the page, not the dialog, so the dialog's scrolling cannot cut
+// it short.
+function suggestFolders(field) {
+  const list = el("div", "suggest");
+  list.setAttribute("role", "listbox");
+  list.hidden = true;
+  document.body.appendChild(list);
+  let found = [], sel = -1, timer = 0, asked = 0;
+
+  const place = () => {
+    const r = field.getBoundingClientRect();
+    list.style.left = `${r.left}px`;
+    list.style.top = `${r.bottom + 6}px`;
+    list.style.width = `${r.width}px`;
+  };
+  const close = () => { list.hidden = true; sel = -1; field.setAttribute("aria-expanded", "false"); };
+  const mark = () => {
+    [...list.children].forEach((row, i) => row.classList.toggle("sel", i === sel));
+    if (sel >= 0) reveal(list, list.children[sel], false, 4);
+  };
+  const take = (i) => {
+    field.value = found[i] + "/";
+    field.setSelectionRange(field.value.length, field.value.length);
+    ask(0);
+  };
+  const draw = () => {
+    list.textContent = "";
+    if (!found.length || document.activeElement !== field) { close(); return; }
+    // What was typed after the last slash, to bold in each name.
+    const typed = field.value.slice(field.value.lastIndexOf("/") + 1);
+    found.forEach((d, i) => {
+      const cut = d.lastIndexOf("/") + 1;
+      const name = d.slice(cut);
+      const row = el("div", "suggest-row", `${icon("folder")}<span class="path"><span class="where"></span><span class="name"><b></b><span></span></span></span>`);
+      row.setAttribute("role", "option");
+      row.querySelector(".where").textContent = d.slice(0, cut);
+      row.querySelector("b").textContent = name.slice(0, typed.length);
+      row.querySelector(".name > span").textContent = name.slice(typed.length);
+      row.onmousedown = (e) => { e.preventDefault(); take(i); };
+      row.onmousemove = () => { if (sel !== i) { sel = i; mark(); } };
+      list.appendChild(row);
+    });
+    place();
+    list.hidden = false;
+    field.setAttribute("aria-expanded", "true");
+    mark();
+  };
+  const ask = (wait = 90) => {
+    clearTimeout(timer);
+    timer = setTimeout(async () => {
+      const mine = ++asked;
+      const { dirs } = await command("dirs", field.value).catch(() => ({ dirs: [] }));
+      if (mine !== asked) return;  // a later keystroke already asked
+      found = dirs;
+      sel = -1;
+      draw();
+    }, wait);
+  };
+
+  field.addEventListener("input", () => ask());
+  field.addEventListener("focus", () => ask(0));
+  field.addEventListener("blur", close);
+  field.addEventListener("keydown", (e) => {
+    if (list.hidden) return;
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      if (e.key === "ArrowDown") sel = sel + 1 < found.length ? sel + 1 : 0;
+      else sel = sel <= 0 ? found.length - 1 : sel - 1;
+      mark();
+    } else if (e.key === "Tab" && !e.shiftKey) {
+      e.preventDefault();
+      take(sel >= 0 ? sel : 0);
+    } else if (e.key === "Enter" && sel >= 0) {
+      e.preventDefault();
+      e.stopPropagation();
+      take(sel);
+    } else if (e.key === "Escape") {
+      // The list goes; the dialog stays.
+      e.preventDefault();
+      e.stopPropagation();
+      close();
+    }
+  });
+  window.addEventListener("resize", () => { if (!list.hidden) place(); });
+}
 
 function projectForm(p) {
   const editing = !!p;
@@ -3187,7 +3290,7 @@ function projectForm(p) {
     <h2>${editing ? "Edit project" : "New project"}</h2>
     <p class="sub">${editing ? "" : "Chats in a project run in its folder, with its instructions."}</p>
     <label class="field"><span>Name</span><input name="label" placeholder="Name it after the codebase" autocomplete="off"></label>
-    <label class="field"><span>Folder</span><input name="path" class="mono" list="folders" autocomplete="off" spellcheck="false"><small>A folder on the computer Flash runs on. Tab through the suggestions as you type.</small></label>
+    <label class="field"><span>Folder</span><input name="path" class="mono" autocomplete="off" spellcheck="false" role="combobox" aria-autocomplete="list" aria-expanded="false"><small>A folder on the computer Flash runs on. Tab takes a suggestion and shows what is inside it.</small></label>
     <label class="field"><span>Instructions</span><textarea name="instructions" rows="4" placeholder="Optional. Conventions, commands to run, what to avoid."></textarea></label>
     <div class="dialog-buttons">${editing ? '<button type="button" class="btn danger" data-delete>Delete</button><span class="spacer"></span>' : ""}
       <button type="button" class="btn" data-cancel>Cancel</button><button type="submit" class="btn primary">${editing ? "Save" : "Create project"}</button></div>`,
@@ -3213,16 +3316,7 @@ function projectForm(p) {
     showProjects();
     toast("Project removed. Its folder and chats are untouched.");
   };
-  let timer = null;
-  const suggestFolders = () => {
-    clearTimeout(timer);
-    timer = setTimeout(async () => {
-      const { dirs } = await command("dirs", form.path.value).catch(() => ({ dirs: [] }));
-      $("#folders").innerHTML = dirs.map((d) => `<option value="${esc(d)}/"></option>`).join("");
-    }, 120);
-  };
-  form.path.addEventListener("input", suggestFolders);
-  suggestFolders();
+  suggestFolders(form.path);
   if (!editing) { form.label.focus(); }
 }
 
