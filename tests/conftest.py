@@ -1,8 +1,11 @@
 # pylint: disable=C0114,C0116
 
+import os
+
 import pytest
 
 from flash import (
+    ai,
     extensions,
     learning,
     memory,
@@ -10,6 +13,7 @@ from flash import (
     skills,
     terminal,
     tools,
+    voice,
     workspace,
 )
 
@@ -50,6 +54,14 @@ def isolated_home(tmp_path_factory, monkeypatch):
     monkeypatch.setattr(skills, "FLASH_DIR", home / ".flash")
     # The web UI's saved hosts, projects, and chats.
     monkeypatch.setattr(workspace, "FLASH_DIR", home / ".flash")
+    # Voice settings and models too: the developer's own picks, loaded
+    # from ~/.flash.env when ai was imported, would otherwise decide
+    # which model a test expects. And a setting a test saves lands in
+    # the temp home, never in the developer's real env file.
+    for name in [n for n in os.environ if n.startswith("VOICE_")]:
+        monkeypatch.delenv(name)
+    monkeypatch.setattr(voice, "MODELS_DIR", home / ".flash" / "models")
+    monkeypatch.setattr(ai, "ENV_PATH", str(home / ".flash.env"))
     learning.refresh()
     learning.reset()
     yield home
