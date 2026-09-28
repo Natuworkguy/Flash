@@ -2470,6 +2470,237 @@ class TestAddresses:
         assert b"<html" in body.lower()
 
 
+class TestVoice:
+    def test_what_the_browser_recorded_is_heard(self, server, monkeypatch):
+        got = []
+
+        def transcribe(pcm):
+            got.append(pcm)
+            return "stop voice", ""
+
+        monkeypatch.setattr(web.voice, "transcribe", transcribe)
+        audio = b"\x01\x02" * 800
+
+        status, body = request(server, "POST", "/api/voice/hear", {
+            "data": base64.b64encode(audio).decode(),
+        })
+
+        assert status == 200
+        said = json.loads(body)
+        assert said["text"] == "stop voice" and said["exit"] is True
+        assert said["interrupt"] is False and said["resume"] is False
+        assert got == [audio]
+
+    def test_an_interruption_is_told_from_the_replys_own_echo(
+        self, server, monkeypatch,
+    ):
+        monkeypatch.setattr(web.voice, "transcribe",
+                            lambda pcm: ("interrupt", ""))
+
+        def heard(speaking):
+            return json.loads(request(server, "POST", "/api/voice/hear", {
+                "data": "", "speaking": speaking,
+            })[1])
+
+        assert heard("Now the tests run.")["interrupt"] is True
+        assert heard("Say interrupt to stop me.")["interrupt"] is False
+
+    def test_a_turn_from_voice_asks_for_a_short_reply(self, monkeypatch):
+        FakeClient.scripts = [[part("Short."), part(done=True)],
+                              [part("Long."), part(done=True)]]
+        seen = []
+        monkeypatch.setattr(ai, "_session_system_prompt",
+                            lambda heard=False: seen.append(heard) or "")
+        session = web.Session()
+        chat = session.new_chat()
+
+        session.send(chat, "what time is it", heard=True)
+        wait_for(lambda: not chat.busy and not chat.queued)
+        session.send(chat, "and now in writing")
+        wait_for(lambda: not chat.busy and not chat.queued
+                 and len(FakeClient.requests) == 2)
+
+        assert seen == [True, False]
+
+    def test_a_voice_that_cannot_listen_says_why(self, server, monkeypatch):
+        monkeypatch.setattr(web.voice, "transcribe",
+                            lambda pcm: ("", "no listening model"))
+
+        status, body = request(server, "POST", "/api/voice/hear",
+                               {"data": ""})
+
+        assert status == 400
+        assert json.loads(body)["error"] == "no listening model"
+        assert request(server, "POST", "/api/voice/hear",
+                       {"data": "not base64!"})[0] == 400
+
+    def test_a_long_turn_fits_but_no_more(self, server, monkeypatch):
+        monkeypatch.setattr(web.voice, "transcribe", lambda pcm: ("hi", ""))
+        minute = base64.b64encode(b"\x00" * web.voice.SAMPLE_RATE * 2 * 60)
+
+        ok, _ = request(server, "POST", "/api/voice/hear",
+                        {"data": minute.decode()})
+        assert ok == 200
+        assert len(minute) > web.MAX_BODY_BYTES
+
+        # Anywhere else, the ordinary limit still holds. Refused on the
+        # length it claims, before anything is read.
+        port = server.port
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.putrequest("POST", "/api/voice/say")
+        for name, value in (
+            ("Host", f"127.0.0.1:{port}"), ("X-Flash-Token", server.token),
+            ("Content-Type", "application/json"),
+            ("Content-Length", str(web.MAX_BODY_BYTES + 1)),
+        ):
+            conn.putheader(name, value)
+        conn.endheaders(b"{}")
+        response = conn.getresponse()
+        response.read()
+        conn.close()
+        assert response.status == 413
+
+    def test_a_reply_is_spoken_as_wav(self, server, monkeypatch):
+        monkeypatch.setattr(web.voice, "synthesize",
+                            lambda text: (b"RIFF" + text.encode(), ""))
+
+        status, body = request(server, "POST", "/api/voice/say",
+                               {"text": "done"})
+
+        assert status == 200
+        assert base64.b64decode(json.loads(body)["audio"]) == b"RIFFdone"
+
+    def test_the_voice_needs_are_reported(self, monkeypatch):
+        monkeypatch.setattr(web.voice, "web_missing", lambda: ["vosk"])
+        monkeypatch.setattr(web.voice, "models_present", lambda: False)
+
+        said = web.command(web.Session(), {"name": "voice-status"})
+
+        assert said["missing"] == ["vosk"] and said["ready"] is False
+        assert "vosk" in said["install"]
+
+    def test_a_spoken_line_says_links_as_links(self, server, monkeypatch):
+        said = []
+        monkeypatch.setattr(web.voice, "synthesize",
+                            lambda text: (said.append(text) or b"RIFF", ""))
+
+        request(server, "POST", "/api/voice/say",
+                {"text": "Read  https://x.dev/a  now."})
+
+        assert said == ["Read a link now."]
+
+    def test_settings_lists_the_models_and_where_each_stands(
+        self, monkeypatch,
+    ):
+        monkeypatch.setattr(web.voice, "listening_installed",
+                            lambda name: name == web.voice.DEFAULT_VOSK_MODEL)
+        monkeypatch.setattr(web.voice, "voice_installed", lambda name: False)
+        monkeypatch.setattr(web.voice, "web_missing", lambda: [])
+
+        listed = web.command(web.Session(), {"name": "voice-models"})
+
+        first = listed["listening"][0]
+        assert first["installed"] and first["current"]
+        assert first["size"] == 41_205_931 and "weaker" in first["label"]
+        assert not any(v["installed"] for v in listed["speaking"])
+        assert listed["downloading"] is None
+
+    def test_picking_an_installed_model_uses_it(self, monkeypatch):
+        saved = {}
+        monkeypatch.setattr(ai, "set_config_var",
+                            lambda name, value: saved.update({name: value}))
+        monkeypatch.setattr(web.voice, "voice_installed", lambda name: True)
+
+        web.command(web.Session(), {
+            "name": "voice-model", "arg": "en_US-ryan-high",
+            "kind": "speaking",
+        })
+
+        assert saved == {"VOICE_PIPER_VOICE": "en_US-ryan-high"}
+
+    def test_picking_a_missing_model_downloads_then_uses_it(
+        self, monkeypatch,
+    ):
+        saved = {}
+        monkeypatch.setattr(ai, "set_config_var",
+                            lambda name, value: saved.update({name: value}))
+        monkeypatch.setattr(web.voice, "listening_installed", lambda n: False)
+
+        def fetch(name, progress):
+            progress("listening model", 40)
+            progress("listening model", 100)
+            return ""
+
+        monkeypatch.setattr(web.voice, "download_listening", fetch)
+        session = web.Session()
+        drain = events_of(session)
+
+        web.command(session, {
+            "name": "voice-model", "arg": "vosk-model-en-us-0.22",
+            "kind": "listening",
+        })
+        wait_for(lambda: session.voice_job is None)
+        time.sleep(0.05)
+
+        told = [e for e in drain() if e["type"] == "voice-model"]
+        assert [e.get("percent") for e in told[:2]] == [40, 100]
+        assert told[-1]["done"] is True and told[-1]["error"] == ""
+        assert saved == {"VOICE_VOSK_MODEL": "vosk-model-en-us-0.22"}
+
+    def test_what_settings_refuses(self, monkeypatch):
+        session = web.Session()
+        in_use = web.voice.vosk_model()
+
+        with pytest.raises(ValueError, match="in use"):
+            web.command(session, {
+                "name": "voice-model-remove", "arg": in_use,
+                "kind": "listening",
+            })
+        with pytest.raises(ValueError, match="not a model Flash offers"):
+            web.command(session, {
+                "name": "voice-model", "arg": "../../x",
+                "kind": "listening",
+            })
+        with pytest.raises(ValueError, match="listening or speaking"):
+            web.command(session, {
+                "name": "voice-model", "arg": in_use, "kind": "other",
+            })
+
+    def test_the_models_download_once_with_progress(self, monkeypatch):
+        gate = threading.Event()
+
+        def fetch(progress):
+            progress("voice", 50)
+            progress("voice", 50)
+            progress("voice", 100)
+            gate.wait(2)
+            return ""
+
+        monkeypatch.setattr(web.voice, "models_present", lambda: False)
+        monkeypatch.setattr(web.voice, "ensure_models", fetch)
+        session = web.Session()
+        drain = events_of(session)
+
+        first = web.command(session, {"name": "voice-setup"})
+        again = web.command(session, {"name": "voice-setup"})
+        gate.set()
+        wait_for(lambda: not session.voice_setup)
+        time.sleep(0.05)
+
+        assert first == again == {"ready": False}
+        told = [e for e in drain() if e["type"] == "voice-setup"]
+        assert [e.get("percent") for e in told[:2]] == [50, 100]
+        assert told[-1]["done"] is True and told[-1]["error"] == ""
+        assert len(told) == 3
+
+    def test_ready_models_need_no_download(self, monkeypatch):
+        monkeypatch.setattr(web.voice, "models_present", lambda: True)
+
+        assert web.command(web.Session(), {"name": "voice-setup"}) == {
+            "ready": True,
+        }
+
+
 class TestAttachments:
     def upload(self, server, name, data):
         return request(server, "POST", "/api/upload", {

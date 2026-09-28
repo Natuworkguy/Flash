@@ -522,3 +522,197 @@ def test_the_speaker_is_reloaded_when_the_voice_changes(
 
     assert _load_speaker()[1] == 22050  # nosec B101
     assert loaded[1] == 16000  # nosec B101
+
+
+# --- For the web UI: audio in from the browser, speech out as WAV ----------
+
+
+def test_transcribe_reads_what_the_browser_recorded(monkeypatch):
+    _fake_audio(monkeypatch)
+    recorded = _pcm(3000) * 3 + b"\x01"  # a stray odd byte is dropped
+
+    text, why = voice.transcribe(recorded)
+
+    assert (text, why) == ("run the tests", "")  # nosec B101
+
+
+def test_transcribe_explains_a_missing_package(monkeypatch):
+    monkeypatch.setitem(sys.modules, "vosk", None)
+
+    text, why = voice.transcribe(_pcm(3000))
+
+    assert text == ""  # nosec B101
+    assert "vosk" in why  # nosec B101
+
+
+@pytest.mark.parametrize("streaming", [True, False])
+def test_synthesize_hands_back_a_wav(monkeypatch, tmp_path, streaming):
+    import io
+    import wave
+
+    _fake_piper(monkeypatch, tmp_path, streaming=streaming)
+    monkeypatch.setattr(voice, "_speaker", None)
+
+    audio, why = voice.synthesize("all done")
+
+    assert why == ""  # nosec B101
+    with wave.open(io.BytesIO(audio)) as wav:
+        assert wav.getframerate() == 16000  # nosec B101
+        assert wav.getnchannels() == 1  # nosec B101
+        assert wav.readframes(8) == _pcm(1000, 8)  # nosec B101
+
+
+def test_synthesize_says_nothing_about_nothing():
+    assert voice.synthesize("   ") == (b"", "")  # nosec B101
+
+
+def test_synthesize_explains_a_missing_package(monkeypatch, tmp_path):
+    monkeypatch.setattr(voice, "MODELS_DIR", tmp_path)
+    onnx = tmp_path / f"{voice.piper_voice()}.onnx"
+    onnx.write_bytes(b"x")
+    onnx.with_suffix(".onnx.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(voice, "_speaker", None)
+    monkeypatch.setitem(sys.modules, "piper", None)
+
+    audio, why = voice.synthesize("hello")
+
+    assert audio == b""  # nosec B101
+    assert "piper" in why  # nosec B101
+
+
+def test_a_line_is_made_fit_to_hear():
+    assert voice.speakable(  # nosec B101
+        "See  https://example.com/docs\n for more."
+    ) == "See a link for more."
+
+
+@pytest.mark.parametrize("catalogue", [voice.LISTENING, voice.SPEAKING])
+def test_settings_offers_the_defaults_lightest_first(catalogue):
+    names = [c.name for c in catalogue]
+    sizes = [c.size for c in catalogue]
+
+    assert sizes == sorted(sizes)  # nosec B101
+    assert voice.DEFAULT_VOSK_MODEL in names or (  # nosec B101
+        voice.DEFAULT_PIPER_VOICE in names
+    )
+    assert all(c.label for c in catalogue)  # nosec B101
+
+
+def test_one_model_downloads_by_name(tmp_path, monkeypatch):
+    monkeypatch.setattr(voice, "MODELS_DIR", tmp_path)
+    fetched = []
+
+    def fetch(url, out, label, on_progress):
+        fetched.append(url)
+        if url.endswith(".zip"):
+            with zipfile.ZipFile(out, "w") as bundle:
+                bundle.writestr("vosk-model-en-us-0.22-lgraph/am/x", "x")
+        else:
+            out.write_text("{}")
+        on_progress(label, 100)
+        return ""
+
+    monkeypatch.setattr(voice, "_download", fetch)
+
+    assert voice.download_listening(  # nosec B101
+        "vosk-model-en-us-0.22-lgraph", lambda *_: None
+    ) == ""
+    assert voice.download_voice(  # nosec B101
+        "en_US-ryan-high", lambda *_: None
+    ) == ""
+    assert voice.listening_installed(  # nosec B101
+        "vosk-model-en-us-0.22-lgraph"
+    )
+    assert voice.voice_installed("en_US-ryan-high")  # nosec B101
+    assert fetched[1].endswith(  # nosec B101
+        "/en/en_US/ryan/high/en_US-ryan-high.onnx"
+    )
+
+    voice.remove_listening("vosk-model-en-us-0.22-lgraph")
+    voice.remove_voice("en_US-ryan-high")
+
+    assert not voice.listening_installed(  # nosec B101
+        "vosk-model-en-us-0.22-lgraph"
+    )
+    assert not voice.voice_installed("en_US-ryan-high")  # nosec B101
+
+
+def test_only_offered_models_can_be_removed(tmp_path, monkeypatch):
+    monkeypatch.setattr(voice, "MODELS_DIR", tmp_path)
+
+    with pytest.raises(ValueError):
+        voice.remove_listening("../../somewhere")
+    with pytest.raises(ValueError):
+        voice.remove_voice("not-a-voice")
+
+
+def test_the_web_needs_no_sounddevice(monkeypatch):
+    monkeypatch.setattr(
+        voice, "missing_packages",
+        lambda: ["vosk", "sounddevice"],
+    )
+
+    assert voice.web_missing() == ["vosk"]  # nosec B101
+
+
+def test_emojis_are_left_unsaid():
+    said = voice.speakable(
+        "Done \u2705 all good \U0001F389\U0001F44D\U0001F3FD!"
+    )
+    shipped = for_speech("Shipped \U0001F680 today.")
+
+    assert said == "Done all good !"  # nosec B101
+    assert "\U0001F680" not in shipped  # nosec B101
+
+
+@pytest.mark.parametrize("said, asks", [
+    ("interrupt", {"interrupt": True, "alone": True}),
+    ("stop talking please", {"interrupt": True, "alone": False}),
+    ("pause", {"pause": True}),
+    ("hold on", {"pause": True}),
+    ("uh resume", {"resume": True}),
+    ("stop voice", {"exit": True}),
+    ("resume the download", {"resume": True, "pause": False, "exit": False}),
+    ("fix the flaky test", {"interrupt": False, "pause": False,
+                            "resume": False, "exit": False}),
+])
+def test_what_speech_asks_of_voice_mode(said, asks):
+    got = voice.voice_command(said)
+
+    assert {k: got[k] for k in asks} == asks  # nosec B101
+
+
+def test_the_reply_saying_the_word_is_not_an_interruption():
+    got = voice.voice_command("interrupt", speaking="Say interrupt to stop.")
+
+    assert got["interrupt"] is False  # nosec B101
+
+
+@pytest.mark.parametrize("written, said", [
+    ("is_expired >= now", "is expired at least now"),
+    ("Nested [[1, 2]] list", "Nested 1, 2 list"),
+    ("`npm i` | grep x && go", "npm i grep x and go"),
+    ("C++ -> fast", "C plus plus to fast"),
+    ("x\u00b2 = \u00bd", "x2 equals 1 over 2"),
+    ("a != b \u2192 c", "a is not b to c"),
+    ("\u2022 one \u2022 two", "one two"),
+    ("plain words.", "plain words."),
+])
+def test_text_is_made_sayable(written, said):
+    assert voice.fit_for_voice(written) == said  # nosec B101
+
+
+def test_what_reaches_piper_is_sayable(monkeypatch, tmp_path):
+    import logging
+
+    _fake_piper(monkeypatch, tmp_path, streaming=True)
+    monkeypatch.setattr(voice, "_speaker", None)
+    heard = []
+    voice_obj, _rate = _load_speaker()
+    voice_obj.synthesize_stream_raw = lambda text: heard.append(text) or []
+
+    list(voice._pcm_chunks(voice_obj, "Nested [[ae]] is_ok"))
+
+    assert heard == ["Nested ae is ok"]  # nosec B101
+    # Piper's own complaints about sounds it lacks stay out of the way.
+    assert logging.getLogger("piper").level == logging.ERROR  # nosec B101
