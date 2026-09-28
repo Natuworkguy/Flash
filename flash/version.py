@@ -1,4 +1,4 @@
-__version__ = "0.5.8"
+__version__ = "0.5.9"
 
 REPO = "Natuworkguy/Flash"
 REPO_URL = f"https://github.com/{REPO}"

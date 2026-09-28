@@ -1,5 +1,6 @@
 """Tests for the web UI's server: its locks, its API, and its turns."""
 
+import base64
 import http.client
 import json
 import os
@@ -105,6 +106,21 @@ class TestTurns:
         assert chat.messages[-1] == {"role": "assistant", "content": "Hello."}
         stats = next(e for e in seen if e["type"] == "stats")
         assert (stats["tokens"], stats["rate"]) == (4, 10.0)
+
+    def test_a_streamed_reply_comes_without_dashes(self):
+        FakeClient.scripts = [[
+            part("It works \u2014"), part(" mostly, pages 1\u2013"),
+            part("3."), part(done=True, tokens=4),
+        ]]
+        session = web.Session()
+        drain = events_of(session)
+        chat = session.new_chat()
+
+        run(session, chat, "hi")
+
+        shown = "".join(e["text"] for e in drain() if e["type"] == "token")
+        assert shown == "It works, mostly, pages 1-3."
+        assert chat.messages[-1]["content"] == shown
 
     def test_the_first_message_names_the_chat(self):
         FakeClient.scripts = [[part("ok", done=True)]]
@@ -802,7 +818,9 @@ class TestCookie:
         cookie = request.last.getheader("Set-Cookie")
 
         assert status == 200
-        assert cookie.startswith(cookie_of(server) + ";")
+        # A key of this browser's own, not the link's token.
+        assert cookie.startswith(server.cookie_name + "=")
+        assert server.token not in cookie
         assert "HttpOnly" in cookie
         assert "SameSite=Strict" in cookie
         assert "Expires" not in cookie and "Max-Age" not in cookie
@@ -889,6 +907,192 @@ class TestCookie:
         finally:
             first.server_close()
             second.server_close()
+
+
+MAC_CHROME = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/140.0 Safari/537.36"
+)
+
+
+def sign_in(srv, agent=MAC_CHROME):
+    """Open the link as a browser would, and give back its cookie."""
+
+    status, _ = request(srv, "GET", f"/?token={srv.token}", token=False,
+                        headers={"User-Agent": agent})
+    assert status == 200
+    return request.last.getheader("Set-Cookie").split(";")[0]
+
+
+def as_browser(srv, jar, name, arg=""):
+    status, body = request(srv, "POST", "/api/command",
+                           {"name": name, "arg": arg}, token=False,
+                           headers={"Cookie": jar})
+    return status, json.loads(body)
+
+
+class TestSignedInBrowsers:
+    def test_the_cookie_alone_carries_a_browser_on(self, server):
+        jar = sign_in(server)
+
+        assert request(server, "GET", "/", token=False,
+                       headers={"Cookie": jar})[0] == 200
+        assert request(server, "GET", "/api/state", token=False,
+                       headers={"Cookie": jar})[0] == 200
+        # A reload is the same browser, not another one.
+        assert request.last.getheader("Set-Cookie") is None
+        _, listed = as_browser(server, jar, "browsers")
+        assert len(listed["browsers"]) == 1
+
+    def test_each_browser_is_listed_and_knows_which_is_itself(self, server):
+        mac = sign_in(server)
+        sign_in(server, "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac "
+                        "OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) "
+                        "Version/18.0 Mobile/15E148 Safari/604.1")
+
+        _, listed = as_browser(server, mac, "browsers")
+        first, second = listed["browsers"]
+
+        assert first["current"] and first["device"] == "Chrome on macOS"
+        assert not first["phone"] and first["here"]
+        assert not second["current"] and second["device"] == "Safari on iPhone"
+        assert second["phone"]
+        assert all(len(b["id"]) == 8 for b in listed["browsers"])
+        assert server.token not in json.dumps(listed)
+
+    def test_signing_out_a_browser_locks_it_out_and_says_why(self, server):
+        kept, other = sign_in(server), sign_in(server)
+        _, listed = as_browser(server, kept, "browsers")
+        other_id = next(b["id"] for b in listed["browsers"]
+                        if not b["current"])
+
+        status, result = as_browser(server, kept, "sign-out", other_id)
+
+        assert status == 200 and result == {"signed_out": 1, "you": False}
+        assert request(server, "GET", "/api/state", token=False,
+                       headers={"Cookie": other})[0] == 403
+        status, page = request(server, "GET", "/", token=False,
+                               headers={"Cookie": other})
+        assert status == 403 and b"This browser was signed out" in page
+        assert request(server, "GET", "/api/state", token=False,
+                       headers={"Cookie": kept})[0] == 200
+
+    def test_signing_out_ends_that_browsers_event_stream(self, server):
+        kept, other = sign_in(server), sign_in(server)
+        port = server.port
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request("GET", "/api/events",
+                     headers={"Host": f"127.0.0.1:{port}", "Cookie": other})
+        stream = conn.getresponse()
+        assert stream.fp.readline() == b": connected\n"
+        wait_for(lambda: len(server.session.hub.owners()) == 1)
+        _, listed = as_browser(server, kept, "browsers")
+        watching = [b for b in listed["browsers"] if b["active"]]
+        assert len(watching) == 1 and not watching[0]["current"]
+
+        as_browser(server, kept, "sign-out", watching[0]["id"])
+
+        while stream.fp.readline():
+            pass  # the announcement of the change, then the end
+        conn.close()
+        wait_for(lambda: not server.session.hub.owners())
+
+    def test_signing_out_everywhere_else_also_ends_the_link(self, server):
+        kept, other = sign_in(server), sign_in(server)
+        old = server.token
+        told = []
+        server.session.relink = lambda: told.append(server.token)
+
+        status, result = as_browser(server, kept, "sign-out-others")
+
+        assert status == 200 and result == {"signed_out": 1, "you": False}
+        assert server.token != old and told == [server.token]
+        assert request(server, "GET", f"/?token={old}", token=False)[0] == 403
+        assert request(server, "GET", "/api/state", token=False,
+                       headers={"Cookie": other})[0] == 403
+        assert request(server, "GET", "/api/state", token=False,
+                       headers={"Cookie": kept})[0] == 200
+        assert request(server, "GET", f"/?token={server.token}",
+                       token=False)[0] == 200
+
+    def test_a_browser_can_sign_itself_out(self, server):
+        jar = sign_in(server)
+        _, listed = as_browser(server, jar, "browsers")
+
+        _, result = as_browser(server, jar, "sign-out",
+                               listed["browsers"][0]["id"])
+
+        assert result == {"signed_out": 1, "you": True}
+        assert request(server, "GET", "/api/state", token=False,
+                       headers={"Cookie": jar})[0] == 403
+
+    def test_a_cookie_holding_the_token_is_signed_in_properly(self, server):
+        # What a page opened before this version still has.
+        status, _ = request(server, "GET", "/", token=False,
+                            headers={"Cookie": cookie_of(server)})
+        cookie = request.last.getheader("Set-Cookie")
+
+        assert status == 200
+        assert cookie.startswith(server.cookie_name + "=")
+        assert server.token not in cookie
+
+    def test_too_many_browsers_drops_the_stalest(self, monkeypatch):
+        monkeypatch.setattr(web, "MAX_BROWSERS", 2)
+        access = web.Access()
+        first = access.sign_in("127.0.0.1", "")
+        time.sleep(0.01)
+        second = access.sign_in("127.0.0.1", "")
+        time.sleep(0.01)
+        access.browser(first, "127.0.0.1")
+        access.sign_in("127.0.0.1", "")
+
+        assert access.browser(first, "127.0.0.1") is not None
+        assert access.browser(second, "127.0.0.1") is None
+        assert access.signed_out(second)
+
+    def test_a_restart_keeps_who_was_signed_in(self, monkeypatch):
+        access = web.Access()
+        key = access.sign_in("192.168.1.9", "Firefox/130.0 (Windows NT 10)")
+        access.hand_over()
+
+        kept = web.Access.kept()
+
+        assert kept.token == access.token
+        assert kept.browser(key, "192.168.1.9") is not None
+        assert web.TOKEN_ENV not in os.environ
+        assert web.BROWSERS_ENV not in os.environ
+
+    def test_a_mangled_hand_over_starts_clean(self, monkeypatch):
+        monkeypatch.setenv(web.TOKEN_ENV, "kept-token-from-before-1234")
+        monkeypatch.setenv(web.BROWSERS_ENV, "{not json")
+
+        kept = web.Access.kept()
+
+        assert kept.token == "kept-token-from-before-1234"
+        assert kept.listing("", set()) == []
+
+    def test_an_odd_token_is_refused_not_a_crash(self, server):
+        status, _ = request(server, "GET", "/api/state", token=False,
+                            headers={"X-Flash-Token": "café"})
+
+        assert status == 403
+
+    @pytest.mark.parametrize("agent, device", [
+        ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+         "(KHTML, like Gecko) Chrome/140.0 Safari/537.36 Edg/140.0",
+         "Edge on Windows"),
+        ("Mozilla/5.0 (X11; Linux x86_64; rv:130.0) Gecko/20100101 "
+         "Firefox/130.0", "Firefox on Linux"),
+        ("Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 "
+         "(KHTML, like Gecko) Chrome/140.0 Mobile Safari/537.36",
+         "Chrome on Android"),
+        ("Mozilla/5.0 (iPad; CPU OS 18_0 like Mac OS X) AppleWebKit/605.1.15 "
+         "(KHTML, like Gecko) CriOS/140.0 Mobile/15E148 Safari/604.1",
+         "Chrome on iPad"),
+        ("curl/8.7.1", "Unknown browser"),
+    ])
+    def test_describing_a_browser(self, agent, device):
+        assert web.describe_agent(agent) == device
 
 
 class TestStreamsEnd:
@@ -1839,3 +2043,500 @@ class TestExtensionsInThePage:
             web.command(session, {
                 "name": "extension-remove", "arg": "weather",
             })
+
+
+class TestRemovingHosts:
+    def test_the_host_in_use_cannot_be_removed(self, monkeypatch):
+        web.workspace.add_host("Studio", "10.0.0.5")
+        monkeypatch.setattr(ai.Config, "host", "http://10.0.0.5:11434")
+
+        with pytest.raises(ValueError, match="in use"):
+            web.command(web.Session(), {
+                "name": "host-remove", "arg": "http://10.0.0.5:11434",
+            })
+
+    def test_another_saved_host_can(self, monkeypatch):
+        web.workspace.add_host("Studio", "10.0.0.5")
+        monkeypatch.setattr(ai.Config, "host", "http://127.0.0.1:11434")
+
+        result = web.command(web.Session(), {
+            "name": "host-remove", "arg": "http://10.0.0.5:11434",
+        })
+
+        assert result == {"removed": True}
+        listed = web.command(web.Session(), {"name": "hosts"})
+        assert [h["name"] for h in listed["hosts"]] == ["This computer"]
+        # 127.0.0.1 is this computer, and the page is told so.
+        assert listed["current"] == web.workspace.LOCAL_HOST
+
+    def test_status_names_a_loopback_host_this_computer(self, monkeypatch):
+        monkeypatch.setattr(ai.Config, "host", "http://127.0.0.1:11434")
+
+        shown = web.status(ai)
+
+        assert shown["host_name"] == "This computer"
+        assert shown["host_url"] == web.workspace.LOCAL_HOST
+
+
+class TestQueueAndSteer:
+    def held(self, gate, *parts):
+        """A reply that waits on GATE, so a turn stays running."""
+
+        def script():
+            gate.wait(5)
+            yield from parts
+
+        return script
+
+    def settle(self, session, chat):
+        wait_for(lambda: not (chat.busy or chat.queued or chat.pending))
+
+    def test_queued_messages_run_in_order_after_the_turn(self):
+        gate = threading.Event()
+        FakeClient.scripts = [
+            self.held(gate, part("First answer."), part(done=True)),
+            [part("Second answer."), part(done=True)],
+            [part("Third answer."), part(done=True)],
+        ]
+        session = web.Session()
+        chat = session.new_chat()
+
+        session.send(chat, "one")
+        wait_for(lambda: chat.busy)
+        assert session.send(chat, "two")["pending"]
+        session.send(chat, "three")
+
+        # Waiting, not yet in the conversation.
+        assert [p["text"] for p in chat.pending] == ["two", "three"]
+        assert [e["text"] for e in chat.log if e["type"] == "user"] == [
+            "one"
+        ]
+
+        gate.set()
+        self.settle(session, chat)
+
+        said = [
+            (e["type"], e["text"]) for e in chat.log
+            if e["type"] in ("user", "assistant")
+        ]
+        assert said == [
+            ("user", "one"), ("assistant", "First answer."),
+            ("user", "two"), ("assistant", "Second answer."),
+            ("user", "three"), ("assistant", "Third answer."),
+        ]
+
+    def test_a_steer_reaches_the_model_at_the_next_step(self):
+        gate = threading.Event()
+        FakeClient.scripts = [
+            self.held(gate, part(calls=[call("get_os")]), part(done=True)),
+            [part("Using Rust instead."), part(done=True)],
+        ]
+        session = web.Session()
+        chat = session.new_chat()
+
+        session.send(chat, "write it in python")
+        wait_for(lambda: chat.busy)
+        session.send(chat, "actually, use rust", mode="steer")
+        gate.set()
+        self.settle(session, chat)
+
+        second = FakeClient.requests[1]["messages"][-1]
+        assert second["role"] == "user"
+        assert second["content"].endswith("actually, use rust")
+        assert web.STEER_NOTE in second["content"]
+        steered = [e for e in chat.log if e.get("steer")]
+        assert [e["text"] for e in steered] == ["actually, use rust"]
+        # Shown after the tool it followed, before the answer to it.
+        kinds = [e["type"] for e in chat.log]
+        answer = next(
+            i for i, e in enumerate(chat.log)
+            if e["type"] == "assistant" and e["text"]
+        )
+        assert kinds.index("result") < chat.log.index(steered[0]) < answer
+        # It was part of this turn, not a turn of its own.
+        assert len(FakeClient.requests) == 2
+
+    def test_a_steer_the_turn_never_reached_runs_next(self):
+        gate = threading.Event()
+        FakeClient.scripts = [
+            self.held(gate, part("Done already."), part(done=True)),
+            [part("Adding the tests."), part(done=True)],
+        ]
+        session = web.Session()
+        chat = session.new_chat()
+
+        session.send(chat, "fix it")
+        wait_for(lambda: chat.busy)
+        session.send(chat, "and add tests", mode="steer")
+        gate.set()
+        self.settle(session, chat)
+
+        assert [e["text"] for e in chat.log if e["type"] == "user"] == [
+            "fix it", "and add tests",
+        ]
+        assert chat.log[-2]["text"] == "Adding the tests."
+
+    def test_stopping_hands_waiting_messages_back(self):
+        gate = threading.Event()
+        FakeClient.scripts = [
+            self.held(gate, part("Working."), part(done=True)),
+        ]
+        session = web.Session()
+        chat = session.new_chat()
+
+        session.send(chat, "go")
+        wait_for(lambda: chat.busy)
+        session.send(chat, "then this")
+        result = web.command(session, {"name": "stop", "chat": chat.id})
+        gate.set()
+        wait_for(lambda: not chat.busy)
+        time.sleep(0.1)
+
+        assert result == {"restored": ["then this"], "files": []}
+        assert chat.pending == []
+        assert len(FakeClient.requests) == 1
+
+    def test_a_waiting_message_can_change_mode_or_go(self):
+        gate = threading.Event()
+        FakeClient.scripts = [
+            self.held(gate, part("Working."), part(done=True)),
+        ]
+        session = web.Session()
+        chat = session.new_chat()
+        session.send(chat, "go")
+        wait_for(lambda: chat.busy)
+        first = session.send(chat, "a")["pending"]
+        second = session.send(chat, "b")["pending"]
+
+        web.command(session, {"name": "pending-mode", "chat": chat.id,
+                              "arg": first, "mode": "steer"})
+        left = web.command(session, {"name": "pending-remove",
+                                     "chat": chat.id, "arg": second})
+
+        assert left["pending"] == [
+            {"id": first, "text": "a", "mode": "steer", "files": []}
+        ]
+        with pytest.raises(ValueError, match="already been sent"):
+            web.command(session, {"name": "pending-remove",
+                                  "chat": chat.id, "arg": second})
+        FakeClient.scripts.append([part("Steered."), part(done=True)])
+        gate.set()
+        self.settle(session, chat)
+
+
+class TestSwitchingLan:
+    def test_the_server_reopens_with_the_same_port_token_and_chats(
+        self, monkeypatch
+    ):
+        # The network side on loopback: a test never opens a real port.
+        monkeypatch.setattr(web, "LAN_HOST", "127.0.0.1")
+        monkeypatch.setattr(web, "SWITCH_DELAY", 0.01)
+        monkeypatch.setattr(web, "announce", lambda server: None)
+        first = web.Server(0)
+        chat = first.session.new_chat()
+        said(first.session, "Kept across the switch", "still here")
+        web._attach(first, standalone=True)
+        running = []
+        threading.Thread(
+            target=web._serve, args=(first, True, running), daemon=True,
+        ).start()
+        wait_for(lambda: running)
+
+        try:
+            result = web.command(first.session, {"name": "lan", "arg": "on"})
+            wait_for(lambda: running[0] is not first)
+            now = running[0]
+
+            assert result == {"lan": True, "switching": True}
+            assert now.lan is True and now.session.lan is True
+            assert now.port == first.port
+            assert now.token == first.token
+            assert now.session is first.session
+            status, body = request(now, "GET", "/api/state?lite=1")
+            assert status == 200
+            titles = [c["title"] for c in json.loads(body)["chats"]]
+            assert "Kept across the switch" in titles
+            assert json.loads(body)["status"]["lan"] is True
+            assert chat.id in now.session.chats
+            # Asking for what it already is changes nothing.
+            again = web.command(now.session, {"name": "lan", "arg": "on"})
+            assert again == {"lan": True, "switching": False}
+        finally:
+            running[0].shutdown()
+            running[0].server_close()
+
+    def test_only_a_server_that_can_reopen_offers_it(self):
+        with pytest.raises(ValueError, match="cannot reopen"):
+            web.command(web.Session(), {"name": "lan", "arg": "on"})
+
+    def test_a_restart_keeps_the_current_choice(self, monkeypatch):
+        ran = {}
+        monkeypatch.setattr(web.os, "execv",
+                            lambda path, argv: ran.update(argv=argv))
+        monkeypatch.setattr(web.sys, "argv", ["flash", "--web"])
+        monkeypatch.setattr(web, "LAN_HOST", "127.0.0.1")
+        server = web.Server(0, lan=True)
+        try:
+            web._restart(server)
+        finally:
+            server.server_close()
+            os.environ.pop(web.TOKEN_ENV, None)
+
+        assert ran["argv"][3:] == ["--web", "--lan", "--no-open"]
+
+
+class TestSlowHosts:
+    def test_a_host_that_never_answers_is_not_waited_on(self, monkeypatch):
+        release = threading.Event()
+
+        class Silent:
+            def __init__(self, host=None):
+                pass
+
+            def list(self):
+                release.wait(5)
+                return SimpleNamespace(models=[])
+
+        monkeypatch.setattr(web.ollama, "Client", Silent)
+        monkeypatch.setattr(web, "MODEL_LIST_SECONDS", 0.1)
+        started = time.monotonic()
+        try:
+            result = web.command(web.Session(), {"name": "model"})
+        finally:
+            release.set()
+
+        assert time.monotonic() - started < 1
+        assert result["models"] == [] and result["reachable"] is False
+
+    def test_a_host_that_answers_lists_its_models(self, monkeypatch):
+        class Up:
+            def __init__(self, host=None):
+                pass
+
+            def list(self):
+                return SimpleNamespace(models=[
+                    SimpleNamespace(model="b"), SimpleNamespace(model="a"),
+                ])
+
+        monkeypatch.setattr(web.ollama, "Client", Up)
+
+        result = web.command(web.Session(), {"name": "model"})
+
+        assert result["models"] == ["a", "b"] and result["reachable"]
+
+    def test_switching_to_a_down_host_does_not_ask_it_for_models(
+        self, monkeypatch
+    ):
+        asked = []
+
+        class Tracked:
+            def __init__(self, host=None):
+                pass
+
+            def list(self):
+                asked.append(True)
+                return SimpleNamespace(models=[])
+
+        monkeypatch.setattr(web.ollama, "Client", Tracked)
+        monkeypatch.setattr(web.workspace, "host_up", lambda url: False)
+        monkeypatch.setattr(ai, "set_config_var", lambda *a: None)
+        monkeypatch.setattr(ai, "forget_model_facts", lambda: None)
+
+        result = web.command(web.Session(), {
+            "name": "host", "arg": "10.0.0.9",
+        })
+
+        assert result["up"] is False and result["models"] == []
+        assert asked == []
+
+
+class TestBackgrounds:
+    def test_a_scene_goes_to_the_page_as_a_palette_and_pixels(self):
+        from flash import background
+
+        scene = web.scene_data("sunset")
+        loaded = background.load(background.find("sunset"))
+
+        assert scene["title"] == loaded.name
+        assert (scene["width"], scene["height"]) == (
+            loaded.width, loaded.height,
+        )
+        assert len(scene["pixels"]) == loaded.width * loaded.height
+        # Every pixel names its colour through the palette, in order.
+        assert scene["palette"][scene["pixels"][0]] == loaded.rows[0][0]
+        assert scene["palette"][scene["pixels"][-1]] == loaded.rows[-1][-1]
+        assert web.scene_data("no-such-scene") is None
+        assert web.scene_data("") is None
+
+    def test_the_bundled_scenes_are_listed(self):
+        listed = web.command(web.Session(), {"name": "backgrounds"})
+
+        names = [s["name"] for s in listed["scenes"]]
+        assert {"forest", "midnight", "reef", "sunset"} <= set(names)
+
+    def test_picking_one_is_the_terminal_setting_too(self, monkeypatch):
+        saved = {}
+        monkeypatch.setattr(ai, "set_config_var",
+                            lambda name, value: saved.update({name: value}))
+        monkeypatch.setattr(ai, "unset_config_var",
+                            lambda name: saved.update({name: None}))
+
+        chosen = web.command(web.Session(), {
+            "name": "background", "arg": "reef",
+        })
+        assert chosen["background"] == "reef"
+        assert chosen["scene"]["name"] == "reef"
+        assert saved == {"BACKGROUND": "reef"}
+
+        off = web.command(web.Session(), {"name": "background", "arg": "off"})
+        assert off == {"background": "", "scene": None}
+        assert saved == {"BACKGROUND": None}
+
+        with pytest.raises(ValueError, match="No background"):
+            web.command(web.Session(), {"name": "background", "arg": "x"})
+
+    def test_the_scene_rides_with_the_full_state_only(self, monkeypatch):
+        monkeypatch.setattr(ai.Config, "background", "forest")
+        session = web.Session()
+
+        assert session.state()["scene"]["name"] == "forest"
+        assert session.state(lite=True)["scene"] is None
+        assert session.state(lite=True)["status"]["background"] == "forest"
+
+
+class TestAnExtensionsBackground:
+    def test_removing_the_extension_takes_its_scene_away(
+        self, tmp_path, monkeypatch
+    ):
+        source = tmp_path / "scenery"
+        (source / "scenes").mkdir(parents=True)
+        (source / "flash-extension.json").write_text(json.dumps({
+            "name": "scenery", "backgrounds": "scenes",
+        }))
+        (source / "scenes" / "dunes.scene").write_text(
+            "name: Dunes\npalette:\n  . #c2a060\n  o #402010\npixels:\n"
+            + "\n".join(["..oo" * 6] * 6) + "\n"
+        )
+        session = web.Session()
+        preview = web.command(session, {
+            "name": "extension-preview", "arg": f"path@{source}",
+        })
+        web.command(session, {
+            "name": "extension-install", "arg": preview["id"],
+        })
+        monkeypatch.setattr(ai.Config, "background", "dunes")
+        assert web.status(ai)["background"] == "dunes"
+        assert web.scene_data("dunes")["title"] == "Dunes"
+        seen = events_of(session)
+
+        web.command(session, {
+            "name": "extension-remove", "arg": "scenery",
+        })
+
+        # Open pages hear about it, and there is no scene to show now.
+        assert "status" in types(seen())
+        assert web.status(ai)["background"] == ""
+        assert web.command(session, {"name": "background-scene"}) == {
+            "scene": None,
+        }
+
+
+class TestAddresses:
+    @pytest.mark.parametrize("path", [
+        "/", "/c/0123abcd", "/p/89abcdef", "/projects", "/settings",
+        "/settings/usage", "/settings/memory", "/skills", "/extensions",
+        "/c/0123abcd/",
+    ])
+    def test_every_view_has_the_page(self, server, path):
+        status, body = request(server, "GET", path)
+
+        assert status == 200
+        assert b"<!doctype html>" in body[:200].lower()
+        assert "flash_" in request.last.getheader("Set-Cookie")
+
+    @pytest.mark.parametrize("path", [
+        "/c/not-an-id", "/c/0123ABCD", "/settings/secret", "/c",
+        "/index.html", "/c/0123abcd/extra",
+    ])
+    def test_anything_else_is_not_found(self, server, path):
+        assert request(server, "GET", path)[0] == 404
+
+    def test_a_chat_address_without_the_token_is_the_expired_page(
+        self, server
+    ):
+        status, body = request(server, "GET", "/c/0123abcd", token=False)
+
+        assert status == 403
+        assert b"<html" in body.lower()
+
+
+class TestAttachments:
+    def upload(self, server, name, data):
+        return request(server, "POST", "/api/upload", {
+            "name": name, "data": base64.b64encode(data).decode(),
+        })
+
+    def test_an_image_upload_is_kept_and_shown(self, server):
+        status, body = self.upload(server, "../../dot.png", PNG)
+        meta = json.loads(body)
+
+        assert status == 200
+        # The name loses its path: it cannot climb out of its folder.
+        assert meta["name"] == "dot.png"
+        assert meta["kind"] == "image" and meta["size"] == len(PNG)
+        assert "path" not in meta
+        status, served = request(server, "GET", f"/api/files/{meta['id']}")
+        assert status == 200 and served == PNG
+
+    def test_other_files_are_kept_but_not_served(self, server):
+        status, body = self.upload(server, "notes.txt", b"hello")
+        meta = json.loads(body)
+
+        assert status == 200 and meta["kind"] == "file"
+        assert request(server, "GET", f"/api/files/{meta['id']}")[0] == 404
+
+    def test_a_bad_upload_says_why(self, server):
+        status, body = request(server, "POST", "/api/upload",
+                               {"name": "x.png", "data": "not base64!"})
+        assert status == 400
+        status, body = self.upload(server, "empty.txt", b"")
+        assert status == 400 and b"empty" in body
+        assert request(server, "POST", "/api/upload", {
+            "name": "x", "data": "aGk=",
+        }, token=False)[0] == 403
+
+    def test_the_model_gets_the_image_and_the_files_path(self):
+        image = web.workspace.keep_upload("chart.png", PNG)
+        doc = web.workspace.keep_upload("data.csv", b"a,b\n1,2\n")
+        FakeClient.scripts = [[part("Got them."), part(done=True)]]
+        session = web.Session()
+        chat = session.new_chat()
+
+        session.send(chat, "what is this?", files=[image["id"], doc["id"]])
+        wait_for(lambda: not (chat.busy or chat.queued))
+
+        sent = FakeClient.requests[-1]["messages"][-1]
+        assert sent["images"] == [
+            web.workspace.upload_info(image["id"])["path"]
+        ]
+        assert "Attached file:" in sent["content"]
+        assert sent["content"].endswith("data.csv")
+        shown = next(e for e in chat.log if e["type"] == "user")
+        assert [f["name"] for f in shown["files"]] == ["chart.png", "data.csv"]
+        assert all("path" not in f for f in shown["files"])
+
+    def test_an_image_alone_still_asks_something(self):
+        image = web.workspace.keep_upload("cat.jpg", b"\xff\xd8\xff fake")
+        FakeClient.scripts = [[part("A cat."), part(done=True)]]
+        session = web.Session()
+        chat = session.new_chat()
+
+        session.send(chat, "", files=[image["id"]])
+        wait_for(lambda: not (chat.busy or chat.queued))
+
+        sent = FakeClient.requests[-1]["messages"][-1]
+        assert sent["content"] == ai.DEFAULT_IMAGE_PROMPT
+        assert chat.title == "cat.jpg"
+
+    def test_unknown_ids_are_dropped(self):
+        assert web.attachments(["0123456789abcdef", "../x"]) == []

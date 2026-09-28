@@ -17,10 +17,12 @@ to name this machine, which stops a DNS rebinding attack; and a
 request from a page has to come from this server's own origin.
 """
 
+import base64
 import io
 import ipaddress
 import json
 import os
+import re
 import secrets
 import socket
 import sys
@@ -47,6 +49,7 @@ from rich.text import Text
 
 from . import agent as subagents
 from . import (
+    background,
     checkpoint,
     context,
     extensions,
@@ -56,6 +59,8 @@ from . import (
     updater,
     workspace,
 )
+from .dashes import DashGuard
+from .sysprompt import model_sees_images
 from .theme import (
     ACCENT,
     DIM,
@@ -82,6 +87,13 @@ PAGE = WEB_DIR / "index.html"
 # Flash.
 HTML_SANDBOX = "sandbox allow-scripts allow-forms allow-popups allow-modals"
 
+# The addresses the page answers to. Each serves the same page, which
+# opens whatever the address names: a chat, a project, a settings tab.
+PAGE_PATHS = re.compile(
+    r"^/(?:c/[0-9a-f]{8}|p/[0-9a-f]{8}|projects|skills|extensions"
+    r"|settings(?:/(?:general|usage|memory|security))?)?/?$"
+)
+
 STATIC = {"orbit.woff2": "font/woff2", "logo-icon.svg": "image/svg+xml"}
 
 # KaTeX, which turns the math in replies into MathML for the browser to
@@ -104,6 +116,10 @@ ASK_POLL_SECONDS = 0.25
 TITLE_CHARS = 48
 
 MAX_BODY_BYTES = 1_000_000
+# An upload arrives as base64 in JSON: a third bigger than the file.
+MAX_UPLOAD_BODY = workspace.MAX_UPLOAD_BYTES * 4 // 3 + 64_000
+# The most attachments one message carries.
+MAX_ATTACHMENTS = 10
 
 # Sub-agents: how often the watcher looks for finished ones, and how many
 # times in a row it may wake a chat before waiting for the person, the
@@ -134,6 +150,16 @@ code{font-size:13px}</style></head><body><div>
 in your terminal, or run <code>flash --web</code> again.</p>
 </div></body></html>"""
 
+# For a browser signed out from Settings, Security.
+SIGNED_OUT_PAGE = EXPIRED_PAGE.replace(
+    "<h1>This link has expired</h1>", "<h1>This browser was signed out</h1>"
+).replace(
+    "Flash makes a new link each time it starts. Open the one it printed\n"
+    "in your terminal, or run <code>flash --web</code> again.",
+    "Someone signed it out from Flash's settings. To use Flash here again,\n"
+    "open the link Flash printed in your terminal.",
+)
+
 
 # --- Events --------------------------------------------------------------
 
@@ -148,19 +174,20 @@ class Hub:
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
-        self._queues: list[Queue] = []
+        # Each open stream, and the signed-in browser it belongs to ("" for
+        # one opened with the link's token itself).
+        self._queues: dict[Queue, str] = {}
         self.seq = 0
 
-    def subscribe(self) -> Queue:
+    def subscribe(self, owner: str = "") -> Queue:
         queue: Queue = Queue()
         with self._lock:
-            self._queues.append(queue)
+            self._queues[queue] = owner
         return queue
 
     def unsubscribe(self, queue: Queue) -> None:
         with self._lock:
-            if queue in self._queues:
-                self._queues.remove(queue)
+            self._queues.pop(queue, None)
 
     def close(self) -> None:
         """End every open stream now, rather than at its next ping."""
@@ -168,6 +195,20 @@ class Hub:
         with self._lock:
             for queue in self._queues:
                 queue.put(None)
+
+    def end(self, owners) -> None:
+        """End the streams of browsers just signed out."""
+
+        with self._lock:
+            for queue, owner in self._queues.items():
+                if owner and owner in owners:
+                    queue.put(None)
+
+    def owners(self) -> set:
+        """The browsers with a stream open: the ones watching right now."""
+
+        with self._lock:
+            return set(self._queues.values())
 
     def publish(self, event: dict) -> dict:
         with self._lock:
@@ -192,6 +233,10 @@ class Chat:
     thinking: str = ""
     busy: bool = False
     queued: bool = False
+    # Messages sent while a turn was running, oldest first: each is
+    # {"id", "text", "mode"}. A "steer" one goes to the model at the
+    # running turn's next step; a "queue" one becomes the next turn.
+    pending: list[dict] = field(default_factory=list)
     stop: threading.Event = field(default_factory=threading.Event)
     created: float = field(default_factory=time.time)
     updated: float = field(default_factory=time.time)
@@ -203,6 +248,7 @@ class Chat:
             "title": self.title,
             "busy": self.busy,
             "queued": self.queued,
+            "pending": [dict(p) for p in self.pending],
             "log": self.log,
             "partial": self.partial,
             "thinking": self.thinking,
@@ -253,9 +299,197 @@ KEPT = {
 }
 
 
-# Carries the token from a server to the one that replaces it after an
-# update, across the exec that starts the new version.
+# How a steering message reaches the model: marked, so it reads as the
+# user redirecting the work in progress rather than a new request.
+STEER_NOTE = "[Sent while you were working. Take it into account from here.]"
+
+# Carry the token, and the browsers signed in with it, from a server to
+# the one that replaces it after an update, across the exec that starts
+# the new version.
 TOKEN_ENV = "FLASH_WEB_TOKEN"  # nosec B105 -- a variable name
+BROWSERS_ENV = "FLASH_WEB_BROWSERS"
+
+# The most browsers kept signed in at once: past it, the one seen least
+# recently is signed out. And how much of a browser's own description
+# is kept.
+MAX_BROWSERS = 50
+AGENT_CHARS = 300
+
+
+class Access:
+    """Who may use Flash.
+
+    The link Flash prints carries a token. A browser that opens it is
+    signed in: it gets a cookie of its own, a random key recorded here,
+    so each browser can be signed out by itself. A new token ends the
+    link, and with it the way back in for a browser signed out.
+    """
+
+    def __init__(
+        self,
+        token: str = "",  # nosec B107 -- empty means make a new one
+        browsers: Optional[dict] = None,
+    ) -> None:
+        self._lock = threading.Lock()
+        self.token = token if len(token) >= 16 else secrets.token_urlsafe(24)
+        # key -> {id, agent, address, since, seen}. The key is the
+        # cookie's secret; the id is what the page may see and name.
+        self._browsers: dict[str, dict] = dict(browsers or {})
+        # Keys signed out, so their browser is told why it is locked out.
+        self._gone: set[str] = set()
+
+    @classmethod
+    def kept(cls) -> "Access":
+        """What a restart handed over, or a fresh start without it."""
+
+        token = os.environ.pop(TOKEN_ENV, "")
+        try:
+            browsers = json.loads(os.environ.pop(BROWSERS_ENV, "") or "{}")
+        except ValueError:
+            browsers = {}
+        if not token or not isinstance(browsers, dict):
+            browsers = {}
+        return cls(token, {
+            key: value for key, value in browsers.items()
+            if isinstance(value, dict) and value.get("id")
+        })
+
+    def hand_over(self) -> None:
+        """Leave all this where the restarted Flash will look for it."""
+
+        os.environ[TOKEN_ENV] = self.token
+        with self._lock:
+            os.environ[BROWSERS_ENV] = json.dumps(self._browsers)
+
+    def token_matches(self, given: Optional[str]) -> bool:
+        if not given:
+            return False
+        return secrets.compare_digest(
+            given.encode("utf-8", "replace"), self.token.encode()
+        )
+
+    def browser(self, key: str, address: str) -> Optional[dict]:
+        """The signed-in browser holding KEY, now marked as seen."""
+
+        if not key:
+            return None
+        with self._lock:
+            found = self._browsers.get(key)
+            if found is not None:
+                found["seen"] = time.time()
+                found["address"] = address
+            return found
+
+    def signed_out(self, key: str) -> bool:
+        with self._lock:
+            return key in self._gone
+
+    def sign_in(self, address: str, agent: str) -> str:
+        """Sign a browser in, and give back the key for its cookie."""
+
+        key = secrets.token_urlsafe(24)
+        now = time.time()
+        with self._lock:
+            self._browsers[key] = {
+                "id": secrets.token_hex(4),
+                "agent": agent[:AGENT_CHARS],
+                "address": address,
+                "since": now,
+                "seen": now,
+            }
+            while len(self._browsers) > MAX_BROWSERS:
+                stalest = min(
+                    self._browsers, key=lambda k: self._browsers[k]["seen"]
+                )
+                self._drop(stalest)
+        return key
+
+    def _drop(self, key: str) -> None:
+        del self._browsers[key]
+        self._gone.add(key)
+
+    def sign_out(self, browser_id: str) -> list[str]:
+        """Sign out the browser the page knows as BROWSER_ID."""
+
+        with self._lock:
+            keys = [
+                k for k, b in self._browsers.items() if b["id"] == browser_id
+            ]
+            for key in keys:
+                self._drop(key)
+        return keys
+
+    def sign_out_others(self, keep: str) -> list[str]:
+        """Sign out every browser but KEEP's, and end the link.
+
+        A browser that still had the old link could otherwise just open
+        it again. The one asking stays signed in by its cookie.
+        """
+
+        with self._lock:
+            keys = [k for k in self._browsers if k != keep]
+            for key in keys:
+                self._drop(key)
+            self.token = secrets.token_urlsafe(24)
+        return keys
+
+    def listing(self, current: str, watching: set) -> list[dict]:
+        """The signed-in browsers, as the page shows them, newest first."""
+
+        with self._lock:
+            items = list(self._browsers.items())
+        shown = [
+            {
+                "id": b["id"],
+                "device": describe_agent(b.get("agent", "")),
+                "phone": _is_phone(b.get("agent", "")),
+                "address": b.get("address", ""),
+                "here": _is_loopback(b.get("address", "")),
+                "since": b.get("since", 0),
+                "seen": b.get("seen", 0),
+                "current": key == current,
+                "active": key in watching,
+            }
+            for key, b in items
+        ]
+        shown.sort(key=lambda b: (not b["current"], -b["since"]))
+        return shown
+
+
+# Checked in order: several browsers name the ones they are built on.
+_BROWSER_NAMES = (
+    ("Edg/", "Edge"), ("OPR/", "Opera"), ("Vivaldi/", "Vivaldi"),
+    ("SamsungBrowser/", "Samsung Internet"), ("Firefox/", "Firefox"),
+    ("FxiOS/", "Firefox"), ("CriOS/", "Chrome"), ("EdgiOS/", "Edge"),
+    ("Chrome/", "Chrome"), ("Safari/", "Safari"),
+)
+_SYSTEM_NAMES = (
+    ("iPhone", "iPhone"), ("iPad", "iPad"), ("Android", "Android"),
+    ("Windows", "Windows"), ("CrOS", "ChromeOS"), ("Mac OS X", "macOS"),
+    ("Macintosh", "macOS"), ("Linux", "Linux"),
+)
+
+
+def describe_agent(agent: str) -> str:
+    """ "Firefox on Windows", from what a browser says it is."""
+
+    name = next((n for mark, n in _BROWSER_NAMES if mark in agent), "")
+    system = next((n for mark, n in _SYSTEM_NAMES if mark in agent), "")
+    if name and system:
+        return f"{name} on {system}"
+    return name or system or "Unknown browser"
+
+
+def _is_phone(agent: str) -> bool:
+    return any(mark in agent for mark in ("iPhone", "Android", "Mobile"))
+
+
+def _is_loopback(address: str) -> bool:
+    try:
+        return ipaddress.ip_address(address).is_loopback
+    except ValueError:
+        return False
+
 
 # The most of an update's output the page is sent: the end is what
 # explains a failure.
@@ -387,6 +621,12 @@ class Session:
     def __init__(self, hub: Optional[Hub] = None) -> None:
         self.hub = hub or Hub()
         self.lan = False
+        # The link's token and the browsers signed in with it. A server
+        # restarted after an update takes over the old one's (Server).
+        self.access = Access()
+        # Tells whoever started Flash its new link, once the old one is
+        # ended. Set by whatever runs the server (see _attach).
+        self.relink: Optional[Callable[[], None]] = None
         self.updates = Updates(self.hub)
         # An extension fetched and shown, waiting for the user's yes:
         # (id, checkout, source). One at a time.
@@ -395,6 +635,9 @@ class Session:
         # installed now. Only a server that owns its process can: one
         # beside a terminal session would take the session down with it.
         self.restart: Optional[Callable[[], None]] = None
+        # Opens the server again listening on the network, or not. Set
+        # by whatever runs the server (see _attach).
+        self.switch_lan: Optional[Callable[[bool], None]] = None
         self.chats: dict[str, Chat] = {
             data["id"]: Chat.restore(data)
             for data in workspace.load_chats()
@@ -443,6 +686,7 @@ class Session:
 
     def clear_chat(self, chat: Chat) -> None:
         chat.stop.set()
+        self.unqueue(chat)
         chat.messages.clear()
         chat.log.clear()
         chat.partial = chat.thinking = ""
@@ -476,10 +720,14 @@ class Session:
             "seq": self.hub.seq,
             "chats": summaries,
             "projects": [asdict(p) for p in workspace.projects()],
+            # The picture behind a new chat, drawn by the page: sent
+            # with the whole state only, not with every quick refresh.
+            "scene": None if lite else scene_data(ai.Config.background or ""),
             # The words the loader cycles through, the terminal's own.
             "words": [s["now"] for s in ai._load_thinking_states()],
             "status": {
                 **status(ai), "lan": self.lan,
+                "can_switch_lan": self.switch_lan is not None,
                 "update": self.updates.snapshot(),
             },
         }
@@ -529,6 +777,11 @@ class Session:
 
     def close(self) -> None:
         self._stop_watching.set()
+
+    def reopen(self) -> None:
+        """Carry on under a new server after a LAN switch."""
+
+        self._stop_watching.clear()
 
     def agent_list(self, chat_id: str) -> list[dict]:
         """What a chat's sub-agents are doing, for the page's menu."""
@@ -648,61 +901,162 @@ class Session:
 
     # Turns ---------------------------------------------------------
 
-    def send(self, chat: Chat, text: str, wake: bool = False) -> None:
+    def send(
+        self, chat: Chat, text: str, wake: bool = False, mode: str = "",
+        files: Optional[list] = None,
+    ) -> dict:
         """Start a turn on a thread of its own and return at once.
 
-        WAKE is a turn nobody typed: a sub-agent finished, and the model
-        is woken to report back. The page shows a note, not a message.
+        While one is already running, the message waits in the chat's
+        pending list instead: MODE "steer" hands it to the model at the
+        running turn's next step, and anything else makes it the next
+        turn. WAKE is a turn nobody typed: a sub-agent finished, and the
+        model is woken to report back. It never waits in line.
         """
 
         text = text.strip()
-        if not text:
-            return
+        attached = attachments(files)
+        if not text and not attached:
+            return {}
+
+        with self._lock:
+            if chat.busy or chat.queued:
+                if wake:
+                    return {}
+                item = {
+                    "id": uuid.uuid4().hex[:8],
+                    "text": text,
+                    "mode": "steer" if mode == "steer" else "queue",
+                    "files": attached,
+                }
+                chat.pending.append(item)
+                waiting = True
+            else:
+                chat.stop.clear()
+                chat.queued = True
+                waiting = False
+
+        if waiting:
+            self._publish_pending(chat)
+            return {"pending": item["id"]}
+
+        self._begin(chat, text, wake, attached)
+        threading.Thread(
+            target=self._run, args=(chat, text, attached), daemon=True
+        ).start()
+        return {}
+
+    def _begin(
+        self, chat: Chat, text: str, wake: bool = False,
+        files: Optional[list] = None,
+    ) -> None:
+        """Put a turn's message in the chat, as its turn starts."""
 
         if wake:
             self.emit(chat, {"type": "note", "text": WAKE_TEXT})
-        else:
-            self.wakes[chat.id] = 0
-            if chat.title == "New chat":
-                chat.title = " ".join(text.split())[:TITLE_CHARS] or chat.title
-                self.hub.publish({"type": "chats", "chat": chat.id})
-            self.emit(chat, {"type": "user", "text": text})
+            return
+        self.wakes[chat.id] = 0
+        if chat.title == "New chat":
+            named = text or (files[0]["name"] if files else "")
+            chat.title = " ".join(named.split())[:TITLE_CHARS] or chat.title
+            self.hub.publish({"type": "chats", "chat": chat.id})
+        event: dict = {"type": "user", "text": text}
+        if files:
+            event["files"] = files
+        self.emit(chat, event)
 
-        chat.stop.clear()
+    def _publish_pending(self, chat: Chat) -> None:
+        self.hub.publish({
+            "type": "pending", "chat": chat.id,
+            "pending": [dict(p) for p in chat.pending],
+        })
+
+    def take_steers(self, chat: Chat) -> list[dict]:
+        """The steering messages waiting for this turn, taken off the
+        list and shown in the chat where the model reads them."""
+
+        with self._lock:
+            steers = [p for p in chat.pending if p["mode"] == "steer"]
+            chat.pending = [p for p in chat.pending if p["mode"] != "steer"]
+        if not steers:
+            return []
+        self._publish_pending(chat)
+        for item in steers:
+            event: dict = {"type": "user", "text": item["text"],
+                           "steer": True}
+            if item.get("files"):
+                event["files"] = item["files"]
+            self.emit(chat, event)
+        return steers
+
+    def _take_next(self, chat: Chat) -> Optional[dict]:
+        """The next waiting message to run as a turn, if any. A steer
+        the turn ended before it could read comes first: it is older.
+        Stopping emptied the list, so anything here was sent after it,
+        and runs. Called with the lock held."""
+
+        if not chat.pending:
+            return None
+        item = chat.pending.pop(0)
         chat.queued = True
-        threading.Thread(
-            target=self._run, args=(chat, text), daemon=True
-        ).start()
+        chat.stop.clear()
+        return item
 
-    def _run(self, chat: Chat, text: str) -> None:
+    def unqueue(self, chat: Chat) -> list[dict]:
+        """Drop every waiting message, handing back the messages."""
+
+        with self._lock:
+            items, chat.pending = chat.pending, []
+        if items:
+            self._publish_pending(chat)
+        return items
+
+    def _run(
+        self, chat: Chat, text: str, files: Optional[list] = None,
+    ) -> None:
         # A local backend runs one generation at a time, and this turn
         # is the one somebody is now waiting on.
         learning.cancel()
 
-        with self.turn_lock:
-            chat.queued = False
-            chat.busy = True
-            self.emit(chat, {"type": "busy", "busy": True})
-            try:
-                found = (
-                    workspace.project(chat.project) if chat.project else None
+        # One runner per chat, so its waiting messages go in the order
+        # they were sent. The lock is let go between turns, so another
+        # chat is not held up behind a long queue.
+        following: Optional[dict] = {"text": text, "files": files or []}
+        while following is not None:
+            text, files = following["text"], following.get("files") or []
+            with self.turn_lock:
+                chat.queued = False
+                chat.busy = True
+                self.emit(chat, {"type": "busy", "busy": True})
+                try:
+                    found = (
+                        workspace.project(chat.project)
+                        if chat.project else None
+                    )
+                    if chat.stop.is_set():
+                        self.emit(chat, {"type": "note", "text": "Stopped."})
+                    else:
+                        with inside(found.path if found else None):
+                            run_turn(self, chat, text, found, files)
+                except Exception as exc:  # noqa: BLE001
+                    self.emit(chat, {
+                        "type": "error",
+                        "text": f"{exc.__class__.__name__}: {exc}",
+                    })
+                finally:
+                    with self._lock:
+                        following = self._take_next(chat)
+                        chat.busy = False
+                    chat.partial = chat.thinking = ""
+                    self.save(chat)
+                    self.emit(chat, {"type": "busy", "busy": False})
+                    self.hub.publish({"type": "status"})
+            if following is not None:
+                self._publish_pending(chat)
+                self._begin(
+                    chat, following["text"], False,
+                    following.get("files") or [],
                 )
-                if chat.stop.is_set():
-                    self.emit(chat, {"type": "note", "text": "Stopped."})
-                else:
-                    with inside(found.path if found else None):
-                        run_turn(self, chat, text, found)
-            except Exception as exc:  # noqa: BLE001
-                self.emit(chat, {
-                    "type": "error",
-                    "text": f"{exc.__class__.__name__}: {exc}",
-                })
-            finally:
-                chat.busy = False
-                chat.partial = chat.thinking = ""
-                self.save(chat)
-                self.emit(chat, {"type": "busy", "busy": False})
-                self.hub.publish({"type": "status"})
 
 
 # --- A turn --------------------------------------------------------------
@@ -730,7 +1084,9 @@ def stream_reply(
     from . import ai  # deferred: ai imports half of Flash
 
     out = Streamed()
-    content: list[str] = []
+    # The prompt asks for no dashes; this makes sure of it, a
+    # token at a time.
+    content = DashGuard()
     thinking: list[str] = []
 
     parts = client.chat(
@@ -757,8 +1113,8 @@ def stream_reply(
                 thinking.append(thought)
                 chat.thinking += thought
                 session.emit(chat, {"type": "thinking", "text": thought})
+            text = content.feed(text) if text else ""
             if text:
-                content.append(text)
                 chat.partial += text
                 session.emit(chat, {"type": "token", "text": text})
 
@@ -774,7 +1130,11 @@ def stream_reply(
         if close is not None:
             close()
 
-    out.content = "".join(content)
+    rest = content.flush()
+    if rest:
+        chat.partial += rest
+        session.emit(chat, {"type": "token", "text": rest})
+    out.content = content.text()
     out.thinking = "".join(thinking)
     return out
 
@@ -875,11 +1235,45 @@ def project_prompt(found: "workspace.Project") -> str:
     return "\n".join(lines)
 
 
+def attachments(files: Optional[list]) -> list[dict]:
+    """The files a message carries, as the page shows them: those that
+    are really there, and no more than MAX_ATTACHMENTS."""
+
+    found = []
+    for file_id in (files or [])[:MAX_ATTACHMENTS]:
+        info = workspace.upload_info(str(file_id))
+        if info is not None:
+            info.pop("path", None)
+            found.append(info)
+    return found
+
+
+def outgoing(ai, text: str, files: Optional[list]) -> tuple[str, list]:
+    """What the model gets for a message with attachments: its images
+    alongside it, and any other file named by path, for its tools to
+    open."""
+
+    images: list[str] = []
+    notes: list[str] = []
+    for meta in files or []:
+        info = workspace.upload_info(meta.get("id", ""))
+        if info is None:
+            continue
+        if info["kind"] == "image":
+            images.append(info["path"])
+        else:
+            notes.append(f"Attached file: {info['path']}")
+    asked = text or (ai.DEFAULT_IMAGE_PROMPT if images else "")
+    content = "\n\n".join(part for part in (asked, "\n".join(notes)) if part)
+    return content, images
+
+
 def run_turn(
     session: Session,
     chat: Chat,
     text: str,
     found: "Optional[workspace.Project]" = None,
+    files: Optional[list] = None,
 ) -> None:
     """One exchange, with as many tool rounds as it takes.
 
@@ -908,8 +1302,14 @@ def run_turn(
     # its own sub-agents and never another chat's.
     owned = session.owned(chat.id)
     news, delivered = subagents.notices(owned) if owned else ("", [])
-    content = "\n\n".join(part for part in (news, text) if part)
-    chat.messages.append(ai._message("user", content))
+    said, images = outgoing(ai, text, files)
+    if images and not model_sees_images(ai.Config.host, ai.Config.model):
+        session.emit(chat, {"type": "note", "text": (
+            f"{ai.Config.model} reports no vision support; the image is "
+            "sent anyway, but expect an error."
+        )})
+    content = "\n\n".join(part for part in (news, said) if part)
+    chat.messages.append(ai._message("user", content, images or None))
 
     with capture_tool_output(_sink(session, chat)), \
             answer_from(session.answerer(chat)):
@@ -975,6 +1375,14 @@ def run_turn(
                 convo.append(
                     ai._message("user", ai.TOOL_IMAGE_NOTE, images)
                 )
+
+            # Whatever the user sent to steer this turn, read before the
+            # model decides its next step.
+            for steer in session.take_steers(chat):
+                said, shown = outgoing(ai, steer["text"], steer.get("files"))
+                convo.append(ai._message(
+                    "user", f"{STEER_NOTE}\n{said}", shown or None,
+                ))
 
             if chat.stop.is_set():
                 reply = Streamed(stopped=True)
@@ -1115,16 +1523,26 @@ def status(ai) -> dict:
     host = ai.Config.host
     named = next(
         (h["name"] for h in workspace.hosts(host)
-         if h["url"] == _normal(host)),
+         if workspace.host_key(h["url"]) == workspace.host_key(host)),
         host,
     )
     return {
         "version": __version__,
         "model": ai.Config.model or "",
         "host": host,
+        # The entry in the host list that is in use, by the URL the list
+        # gives it: 127.0.0.1 is listed as This computer's localhost.
+        "host_url": workspace.listed_url(host),
         "host_name": named,
         "auto": bool(ai.Config.no_command_confirmation),
         "compact": bool(ai.Config.auto_compact),
+        # The scene actually in effect: a name that no longer finds one,
+        # because the extension that brought it was removed, is none.
+        "background": (
+            ai.Config.background
+            if ai.Config.background and background.find(ai.Config.background)
+            else ""
+        ),
         "cwd": str(Path.cwd()),
         "folder": Path.cwd().name,
         "home": str(Path.home()),
@@ -1147,16 +1565,66 @@ def context_share(ai, chat: Chat) -> int:
     return min(100, round(100 * context.total_tokens(chat.messages) / budget))
 
 
-def list_models(ai) -> list[str]:
-    try:
-        listed = ollama.Client(host=ai.Config.host).list()
-    except Exception:  # noqa: BLE001
-        return []
-    models = getattr(listed, "models", None) or []
+# How long the page waits for a host to list its models. One that has
+# not answered by then is reported as not answering, rather than
+# holding the model menu shut until the connection gives up.
+MODEL_LIST_SECONDS = 4.0
+
+
+def list_models(ai) -> Optional[list[str]]:
+    """The models on the current host, or None if it did not answer."""
+
+    found: dict = {}
+
+    def ask() -> None:
+        try:
+            found["listed"] = ollama.Client(host=ai.Config.host).list()
+        except Exception:  # noqa: BLE001
+            found["failed"] = True
+
+    # On a thread of its own, so a host that never answers costs this
+    # long and no longer; the thread gives up when the connection does.
+    asking = threading.Thread(target=ask, daemon=True)
+    asking.start()
+    asking.join(MODEL_LIST_SECONDS)
+    if "listed" not in found:
+        return None
+
+    models = getattr(found["listed"], "models", None) or []
     return sorted(
         str(getattr(m, "model", "") or "") for m in models
         if getattr(m, "model", "")
     )
+
+
+def scene_data(name: str) -> Optional[dict]:
+    """A background scene as the page draws it: its palette, and every
+    pixel as an index into that palette, row by row. None when there is
+    no such scene, or it cannot be read."""
+
+    path = background.find(name) if name else None
+    if path is None:
+        return None
+    try:
+        scene = background.load(path)
+    except background.SceneError:
+        return None
+
+    palette: list[str] = []
+    index: dict[str, int] = {}
+    pixels: list[int] = []
+    for row in scene.rows:
+        for colour in row:
+            if colour not in index:
+                index[colour] = len(palette)
+                palette.append(colour)
+            pixels.append(index[colour])
+
+    return {
+        "name": path.stem, "title": scene.name,
+        "width": scene.width, "height": scene.height,
+        "palette": palette, "pixels": pixels,
+    }
 
 
 def _extension_info(ext: "extensions.Extension") -> dict:
@@ -1242,11 +1710,15 @@ def _install_staged(session: Session, staged_id: str) -> dict:
     finally:
         _discard_staged(session)
 
+    session.hub.publish({"type": "status"})
     return _extension_info(ext)
 
 
-def command(session: Session, body: dict) -> dict:
-    """The page's commands: models, modes, chats, undo."""
+def command(session: Session, body: dict, browser: str = "") -> dict:
+    """The page's commands: models, modes, chats, undo.
+
+    BROWSER is the key of the signed-in browser asking, if it is one.
+    """
 
     from . import ai  # deferred: ai imports half of Flash
 
@@ -1273,8 +1745,29 @@ def command(session: Session, body: dict) -> dict:
         return {}
 
     if name == "stop":
-        session.chat(chat_id).stop.set()
-        return {}
+        chat = session.chat(chat_id)
+        chat.stop.set()
+        # What was waiting goes back to the page, to send again or not.
+        items = session.unqueue(chat)
+        return {
+            "restored": [item["text"] for item in items],
+            "files": [f for item in items for f in item.get("files") or []],
+        }
+
+    if name in ("pending-remove", "pending-mode"):
+        chat = session.chat(chat_id)
+        with session._lock:
+            found = next((p for p in chat.pending if p["id"] == arg), None)
+            if found is None:
+                raise ValueError("That message has already been sent.")
+            if name == "pending-remove":
+                chat.pending.remove(found)
+            else:
+                found["mode"] = (
+                    "steer" if body.get("mode") == "steer" else "queue"
+                )
+        session._publish_pending(chat)
+        return {"pending": [dict(p) for p in chat.pending]}
 
     if name == "update-check":
         session.updates.check()
@@ -1354,7 +1847,58 @@ def command(session: Session, body: dict) -> dict:
     if name == "extension-remove":
         if not extensions.remove(arg):
             raise ValueError(f"No extension called {arg!r}.")
+        # Its scenes, commands and prompt text went with it.
+        session.hub.publish({"type": "status"})
         return {"removed": arg}
+
+    if name == "browsers":
+        return {"browsers": session.access.listing(
+            browser, session.hub.owners()
+        )}
+
+    if name in ("sign-out", "sign-out-others"):
+        gone = (
+            session.access.sign_out(arg) if name == "sign-out"
+            else session.access.sign_out_others(browser)
+        )
+        session.hub.end(set(gone))
+        session.hub.publish({"type": "browsers"})
+        if name == "sign-out-others" and session.relink is not None:
+            session.relink()
+        return {"signed_out": len(gone), "you": bool(browser in gone)}
+
+    if name == "lan":
+        if session.switch_lan is None:
+            raise ValueError("This Flash cannot reopen its server.")
+        on = arg in ("on", "1", "true")
+        if on == session.lan:
+            return {"lan": on, "switching": False}
+        session.switch_lan(on)
+        return {"lan": on, "switching": True}
+
+    if name == "backgrounds":
+        listed = [scene_data(n) for n in background.names()]
+        return {
+            "current": ai.Config.background or "",
+            "scenes": [scene for scene in listed if scene],
+        }
+
+    if name == "background-scene":
+        return {"scene": scene_data(ai.Config.background or "")}
+
+    if name == "background":
+        if arg.lower() in ("", "off", "none"):
+            ai.unset_config_var("BACKGROUND")
+            session.hub.publish({"type": "status"})
+            return {"background": "", "scene": None}
+        scene = scene_data(arg)
+        if scene is None:
+            raise ValueError(f"No background called {arg!r}.")
+        # The same setting /background writes, so the terminal and the
+        # page show the same scene.
+        ai.set_config_var("BACKGROUND", scene["name"])
+        session.hub.publish({"type": "status"})
+        return {"background": scene["name"], "scene": scene}
 
     if name == "compact-setting":
         on = arg in ("on", "1", "true")
@@ -1375,25 +1919,34 @@ def command(session: Session, body: dict) -> dict:
         if arg:
             ai.set_config_var("MODEL", arg)
             session.hub.publish({"type": "status"})
-        return {"model": ai.Config.model or "", "models": list_models(ai)}
+        models = list_models(ai)
+        return {"model": ai.Config.model or "", "models": models or [],
+                "reachable": models is not None}
 
     if name == "hosts":
         return {"hosts": workspace.hosts_with_health(ai.Config.host),
-                "current": _normal(ai.Config.host)}
+                "current": workspace.listed_url(ai.Config.host)}
 
     if name == "host":
         url = workspace.normalize_host(arg)
         ai.set_config_var("OLLAMA_HOST", url)
         ai.forget_model_facts()
         session.hub.publish({"type": "status"})
-        return {"host": url, "models": list_models(ai),
-                "up": workspace.host_up(url)}
+        # The quick check first: a host that is down has no models to
+        # list, and asking would only make the switch wait.
+        up = workspace.host_up(url)
+        return {"host": url, "host_url": workspace.listed_url(url),
+                "models": (list_models(ai) or []) if up else [], "up": up}
 
     if name == "host-add":
         added = workspace.add_host(str(body.get("label") or ""), arg)
         return {**added, "up": workspace.host_up(added["url"])}
 
     if name == "host-remove":
+        if workspace.host_key(arg) == workspace.host_key(ai.Config.host):
+            raise ValueError(
+                "That host is in use. Switch to another one first."
+            )
         return {"removed": workspace.remove_host(arg)}
 
     if name == "project-new":
@@ -1492,6 +2045,8 @@ class Handler(BaseHTTPRequestHandler):
 
     server: "Server"
     protocol_version = "HTTP/1.1"
+    # The key of the signed-in browser asking, once it is known.
+    browser = ""
 
     def log_message(self, *args: Any) -> None:
         """Quiet: the terminal running the server is not a log."""
@@ -1556,14 +2111,20 @@ class Handler(BaseHTTPRequestHandler):
         if not self._same_site():
             return False
 
-        for given in (
+        # A signed-in browser, by its cookie. Anything else has to show
+        # the token: in the link, a header, or a cookie from before
+        # browsers were signed in one by one.
+        access = self.server.session.access
+        cookie = self._cookie()
+        if access.browser(cookie, self.client_address[0]) is not None:
+            self.browser = cookie
+            return True
+        self.browser = ""
+        return any(access.token_matches(given) for given in (
             self.headers.get("X-Flash-Token"),
             query.get("token", [""])[0],
-            self._cookie(),
-        ):
-            if given and secrets.compare_digest(given, self.server.token):
-                return True
-        return False
+            cookie,
+        ))
 
     # Responses ------------------------------------------------------
 
@@ -1577,12 +2138,19 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(status)
         for name, value in (headers or {}).items():
             self.send_header(name, value)
+        if self.server.closing.is_set():
+            # A server replaced after a LAN switch still answers what
+            # arrives on a connection the browser kept open, then hangs
+            # up, so the browser's next request reaches the new one.
+            self.send_header("Connection", "close")
         self.send_header("Content-Type", kind)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Referrer-Policy", "no-referrer")
         self.end_headers()
+        if self.server.closing.is_set():
+            self.close_connection = True
         self.wfile.write(body)
 
     def _json(self, value: Any, status: int = HTTPStatus.OK) -> None:
@@ -1594,7 +2162,9 @@ class Handler(BaseHTTPRequestHandler):
     def _refuse_page(self) -> None:
         """A page, not JSON, for a person who opened a stale link."""
 
-        self._send(HTTPStatus.FORBIDDEN, EXPIRED_PAGE.encode(),
+        gone = self.server.session.access.signed_out(self._cookie())
+        page = SIGNED_OUT_PAGE if gone else EXPIRED_PAGE
+        self._send(HTTPStatus.FORBIDDEN, page.encode(),
                    "text/html; charset=utf-8")
 
     # Routes ---------------------------------------------------------
@@ -1613,25 +2183,33 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         if not self._authorized(query):
-            if url.path == "/":
+            if PAGE_PATHS.match(url.path):
                 self._refuse_page()
             else:
                 self._refuse()
             return
 
-        if url.path == "/":
-            # The page, and a cookie holding the token: HttpOnly so no
-            # script can read it, SameSite=Strict so no other site's
-            # request carries it, and no expiry, so it goes when the
-            # browser closes. A new server makes a new token, which the
-            # old cookie no longer matches.
-            cookie = (
-                f"{self.server.cookie_name}={self.server.token}; Path=/; "
-                "HttpOnly; SameSite=Strict"
-            )
+        if PAGE_PATHS.match(url.path):
+            # The page. Opened with the token rather than as a signed-in
+            # browser, it signs this browser in: a cookie with a key of
+            # its own, HttpOnly so no script can read it, SameSite=Strict
+            # so no other site's request carries it, and no expiry, so it
+            # goes when the browser closes. A new server knows none of
+            # the old keys.
+            headers = {}
+            if not self.browser:
+                key = self.server.session.access.sign_in(
+                    self.client_address[0],
+                    self.headers.get("User-Agent", ""),
+                )
+                headers["Set-Cookie"] = (
+                    f"{self.server.cookie_name}={key}; Path=/; "
+                    "HttpOnly; SameSite=Strict"
+                )
+                self.server.session.hub.publish({"type": "browsers"})
             self._send(
                 HTTPStatus.OK, PAGE.read_bytes(), "text/html; charset=utf-8",
-                {"Set-Cookie": cookie},
+                headers,
             )
         elif url.path == "/api/state":
             self._json(self.server.session.state(
@@ -1672,7 +2250,10 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         length = int(self.headers.get("Content-Length") or 0)
-        if length > MAX_BODY_BYTES:
+        limit = (
+            MAX_UPLOAD_BODY if url.path == "/api/upload" else MAX_BODY_BYTES
+        )
+        if length > limit:
             self._json(
                 {"error": "too large"}, HTTPStatus.REQUEST_ENTITY_TOO_LARGE
             )
@@ -1696,8 +2277,21 @@ class Handler(BaseHTTPRequestHandler):
             chat = (
                 session.chat(chat_id) if chat_id else session.new_chat()
             )
-            session.send(chat, str(body.get("text", "")))
-            return {"chat": chat.id}
+            sent = session.send(
+                chat, str(body.get("text", "")),
+                mode=str(body.get("mode") or ""),
+                files=[str(f) for f in body.get("files") or []],
+            )
+            return {"chat": chat.id, **sent}
+
+        if path == "/api/upload":
+            try:
+                data = base64.b64decode(
+                    str(body.get("data") or ""), validate=True
+                )
+            except (ValueError, TypeError):
+                raise ValueError("that upload did not arrive whole") from None
+            return workspace.keep_upload(str(body.get("name") or ""), data)
 
         if path == "/api/answer":
             return {
@@ -1707,7 +2301,7 @@ class Handler(BaseHTTPRequestHandler):
             }
 
         if path == "/api/command":
-            return command(session, body)
+            return command(session, body, self.browser)
 
         raise ValueError(f"unknown endpoint {path}")
 
@@ -1741,7 +2335,11 @@ class Handler(BaseHTTPRequestHandler):
     def _events(self) -> None:
         """A Server-Sent Events stream of everything that happens."""
 
-        queue = self.server.session.hub.subscribe()
+        hub = self.server.session.hub
+        queue = hub.subscribe(self.browser)
+        if self.browser:
+            # Settings, Security shows which browsers are watching.
+            hub.publish({"type": "browsers"})
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", "text/event-stream")
         self.send_header("Cache-Control", "no-store")
@@ -1771,7 +2369,9 @@ class Handler(BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError, OSError):
             pass
         finally:
-            self.server.session.hub.unsubscribe(queue)
+            hub.unsubscribe(queue)
+            if self.browser and not self.server.closing.is_set():
+                hub.publish({"type": "browsers"})
 
 
 class Server(ThreadingHTTPServer):
@@ -1787,20 +2387,33 @@ class Server(ThreadingHTTPServer):
         # call server_close() from inside its own __init__.
         self.closing = threading.Event()
         super().__init__((LAN_HOST if lan else HOST, port), Handler)
-        # A restart after an update keeps the token, so an open page
-        # carries on signed in rather than being locked out.
-        kept = os.environ.pop(TOKEN_ENV, "")
-        self.token = kept if len(kept) >= 16 else secrets.token_urlsafe(24)
         # Cookies ignore the port, so two servers on one machine each
         # need a name of their own.
         self.cookie_name = f"flash_{self.server_address[1]}"
-        self.session = session or Session()
+        # One reopened after a LAN switch carries its session's access
+        # on. A restart after an update keeps the token and who was
+        # signed in, so an open page carries on rather than being
+        # locked out.
+        if session is None:
+            session = Session()
+            session.access = Access.kept()
+        self.session = session
         self.session.lan = lan
         self.lan = lan
+        # A LAN switch in progress: the server that replaces this one,
+        # once it is listening, and whether to leave the session open.
+        self.swapping = False
+        self.swapped = threading.Event()
+        self.replacement: Optional[Server] = None
+        self.keep_session = False
 
     @property
     def port(self) -> int:
         return self.server_address[1]
+
+    @property
+    def token(self) -> str:
+        return self.session.access.token
 
     def handle_error(self, request, client_address) -> None:
         """Say nothing when a browser simply hangs up.
@@ -1834,7 +2447,8 @@ class Server(ThreadingHTTPServer):
     def server_close(self) -> None:
         self.closing.set()
         self.session.hub.close()
-        self.session.close()
+        if not self.keep_session:
+            self.session.close()
         super().server_close()
 
 
@@ -1922,9 +2536,11 @@ def announce(server: "Server") -> None:
     ))
 
 
-def _listen(port: int, lan: bool) -> "Server":
+def _listen(
+    port: int, lan: bool, session: Optional[Session] = None,
+) -> "Server":
     try:
-        return Server(port, lan=lan)
+        return Server(port, session=session, lan=lan)
     except OSError as exc:
         raise OSError(
             f"could not listen on port {port} ({exc.strerror}); pass "
@@ -1940,18 +2556,94 @@ def _restart(server: "Server") -> None:
     """Start this `flash --web` again as the version now installed.
 
     exec replaces the process in place: the same port, the same
-    arguments, and through TOKEN_ENV the same token, so an open page
-    reloads straight into the new version. No second tab opens.
+    arguments, and through TOKEN_ENV and BROWSERS_ENV the same token and
+    signed-in browsers, so an open page reloads straight into the new
+    version. No second tab opens.
     """
 
-    os.environ[TOKEN_ENV] = server.token
-    args = list(sys.argv[1:])
+    server.session.access.hand_over()
+    # As it is now, which a LAN switch may have changed since it began.
+    args = [a for a in sys.argv[1:] if a != "--lan"]
+    if server.lan:
+        args.append("--lan")
     if "--no-open" not in args:
         args.append("--no-open")
     console.print(Text("Restarting to finish the update.", style=DIM))
     os.execv(  # nosec B606 -- this same interpreter, running Flash again
         sys.executable, [sys.executable, "-m", "flash", *args]
     )
+
+
+# How long a LAN switch waits, so the page hears the answer first.
+SWITCH_DELAY = 0.4
+
+
+def _switch_lan(server: "Server", lan: bool) -> None:
+    """Open SERVER again, listening on the network or only here.
+
+    Which interfaces a server listens on is fixed when it opens, so this
+    closes it and opens another on the same port, with the same token
+    and the same session: chats, running turns, and open pages all
+    carry on, and the pages reconnect by themselves. If the new one
+    cannot listen, the old choice is opened again instead.
+    """
+
+    server.swapping = True
+    server.keep_session = True
+    server.shutdown()
+    server.server_close()
+    server.session.reopen()
+
+    for choice in (lan, server.lan):
+        try:
+            server.replacement = Server(
+                server.port, session=server.session, lan=choice,
+            )
+            break
+        except OSError:
+            pass
+
+    server.swapped.set()
+    if server.replacement is not None:
+        announce(server.replacement)
+
+
+def _attach(server: "Server", standalone: bool) -> None:
+    """Give the page its handles on the process running SERVER."""
+
+    global _background
+
+    session = server.session
+    session.relink = lambda: announce(server)
+    session.switch_lan = lambda on: threading.Timer(
+        SWITCH_DELAY, _switch_lan, (server, on),
+    ).start()
+    if standalone:
+        if os.name != "nt":
+            # Windows cannot replace a running Flash at all: its update
+            # finishes after this one quits, so there is nothing to
+            # restart.
+            session.restart = lambda: _restart(server)
+            session.updates.can_restart = True
+    else:
+        _background = server
+
+
+def _serve(server: "Server", standalone: bool, running: list) -> None:
+    """Serve until stopped, carrying on through LAN switches. RUNNING
+    holds the server serving now, for whoever has to close it."""
+
+    running[:] = [server]
+    while True:
+        server.serve_forever(poll_interval=0.5)
+        if not server.swapping:
+            return
+        server.swapped.wait()
+        if server.replacement is None:
+            return
+        server = server.replacement
+        running[:] = [server]
+        _attach(server, standalone)
 
 
 def serve(
@@ -1963,22 +2655,19 @@ def serve(
     announce(server)
     console.print(Text("Ctrl+C stops it.", style=DIM))
 
-    if os.name != "nt":
-        # Windows cannot replace a running Flash at all: its update
-        # finishes after this one quits, so there is nothing to restart.
-        server.session.restart = lambda: _restart(server)
-        server.session.updates.can_restart = True
+    _attach(server, standalone=True)
     server.session.updates.check_in_background()
 
     if open_browser:
         webbrowser.open(server.url)
 
+    running = [server]
     try:
-        server.serve_forever(poll_interval=0.5)
+        _serve(server, True, running)
     except KeyboardInterrupt:
         console.print(Text("Stopped.", style=DIM))
     finally:
-        server.server_close()
+        running[0].server_close()
 
 
 # The server /web started from inside a terminal session, if any.
@@ -1994,20 +2683,17 @@ def start_background(
     which interfaces a server listens on is fixed when it opens.
     """
 
-    global _background
-
     if _background is not None and _background.lan == lan:
         return _background
 
     stop_background()
-    _background = _listen(DEFAULT_PORT if port is None else port, lan)
-    _background.session.updates.check_in_background()
+    server = _listen(DEFAULT_PORT if port is None else port, lan)
+    _attach(server, standalone=False)
+    server.session.updates.check_in_background()
     threading.Thread(
-        target=_background.serve_forever,
-        kwargs={"poll_interval": 0.5},
-        daemon=True,
+        target=_serve, args=(server, False, []), daemon=True,
     ).start()
-    return _background
+    return server
 
 
 def stop_background() -> bool:

@@ -125,6 +125,14 @@ def test_runs_to_completion_without_tool_calls(monkeypatch):
     assert entry.rounds == 1  # nosec B101
 
 
+def test_a_report_comes_without_dashes(monkeypatch):
+    _wire(monkeypatch, [_reply("Found it \u2014 line 12.")])
+
+    entry = _finish(agent.start("find it"))
+
+    assert entry.result == "Found it, line 12."  # nosec B101
+
+
 def test_tool_output_becomes_steps_not_terminal_output(monkeypatch, capsys):
     _wire(monkeypatch, [
         _reply("", ("get_date", {})),
