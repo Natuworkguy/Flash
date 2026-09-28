@@ -166,7 +166,12 @@ body.side-closed #sidebar { margin-left: -272px; }
   color: var(--text-2); font-size: 14px;
 }
 .chat:hover { background: var(--hover); color: var(--text); }
-.chat.current { background: var(--pressed); color: var(--text); }
+.chat.current { color: var(--text); }
+/* One highlight for the current chat, gliding to whichever row it is. */
+#chats { position: relative; isolation: isolate; }
+#chat-pill { position: absolute; left: 8px; right: 8px; top: 0; z-index: -1; border-radius: 9px; background: var(--pressed); pointer-events: none; opacity: 0; transition: transform 0.42s cubic-bezier(0.32, 0.72, 0, 1), height 0.42s cubic-bezier(0.32, 0.72, 0, 1), opacity 0.2s; }
+#chat-pill.on { opacity: 1; }
+#chat-pill.still { transition: opacity 0.2s; }
 .chat .open { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; padding: 7px 10px; text-align: left; color: inherit; text-decoration: none; }
 .chat .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; transition: color 0.14s; }
 .chat:hover .name { color: var(--text-3); }
@@ -513,6 +518,9 @@ button.doc:hover { border-color: var(--border-strong); }
 #send:active { transform: scale(0.94); }
 #send:disabled { opacity: 0.35; cursor: default; }
 #send.stop { background: var(--invert-bg); color: var(--invert-text); }
+.shock { position: fixed; z-index: 60; width: 34px; height: 34px; margin: -17px 0 0 -17px; border-radius: 11px; border: 2px solid var(--accent); pointer-events: none; animation: shock 0.6s cubic-bezier(0.2, 0, 0, 1) forwards; }
+.shock.second { animation-delay: 0.08s; opacity: 0; border-width: 1px; }
+@keyframes shock { 0% { opacity: 0.9; transform: scale(0.8); } 100% { opacity: 0; transform: scale(2.8); border-radius: 22px; } }
 #send.stop svg { width: 13px; height: 13px; }
 .fine { text-align: center; font-size: 12px; color: var(--text-3); margin-top: 10px; }
 body.empty .fine { display: none; }
@@ -541,6 +549,11 @@ body { animation: fade 0.3s var(--ease) both; }
 
 /* Arrivals. */
 .user-wrap { animation: bubble 0.38s var(--spring) both; transform-origin: bottom right; }
+[data-reply].landed { position: relative; }
+[data-reply].landed::after { content: ""; position: absolute; inset: -6px -12px; pointer-events: none; border-radius: 12px;
+  background: linear-gradient(105deg, transparent 35%, color-mix(in srgb, var(--accent) 16%, transparent) 50%, transparent 65%) 0 0 / 300% 100% no-repeat;
+  animation: sweep 1.1s cubic-bezier(0.3, 0, 0.2, 1) forwards; }
+@keyframes sweep { from { background-position: 100% 0; } to { background-position: 0 0; opacity: 0; } }
 .block.turn:not(.user-wrap), .thinking, .tool, .ask, .note, .error, .thought { animation: rise 0.32s var(--ease) both; }
 .streaming .thinking, .streaming .block { animation: none; }
 body.empty #greeting { animation: rise-far 0.55s var(--ease) both; }
@@ -609,6 +622,48 @@ html[data-nav="back"]::view-transition-new(content) { animation: nav-in-left 0.4
 body.working .glow { opacity: 0.32; }
 body.working .shell::after { opacity: 0.9; }
 @keyframes turn { to { --turn: 360deg; } }
+/* A glint of light runs once across the greeting each time the
+   welcome screen appears: a copy of its words laid over them, clear
+   but for a moving band, so the words underneath keep their own colour
+   and shadow. */
+#greeting { position: relative; --shine: #ffe2b8; }
+:root[data-theme="light"] #greeting { --shine: #d98a55; }
+#greeting::after {
+  content: attr(data-text); position: absolute; top: 0; left: 0; right: 0; pointer-events: none;
+  color: transparent; text-shadow: none;
+  background: linear-gradient(100deg, transparent 10%, var(--shine) 50%, transparent 56%) 0 0 / 250% 100% no-repeat;
+  -webkit-background-clip: text; background-clip: text;
+}
+/* Starts whenever the welcome screen does, once the greeting has risen. */
+body.empty:not(.on-page) #greeting::after { animation: greet-shine 1.9s cubic-bezier(0.45, 0, 0.25, 1) 0.55s both; }
+@keyframes greet-shine { from { background-position: 100% 0; } to { background-position: 0% 0; } }
+
+/* A light that follows the pointer: every border near the cursor
+   catches it, and the one under it glows faintly inside. --x and --y
+   are the pointer relative to each, set by the page on the ones near
+   enough to catch it; unset, the light is far away. */
+:root { --spot: color-mix(in srgb, var(--accent) 95%, transparent); --spot-fill: color-mix(in srgb, var(--accent) 9%, transparent); }
+:root[data-theme="light"] { --spot: color-mix(in srgb, var(--accent) 62%, transparent); --spot-fill: color-mix(in srgb, var(--accent) 5%, transparent); }
+#composer, .suggestion, .tool, .attachment, .card, .tile, .usage-card, .setting-row, pre, .user, .browser-list, .ask { position: relative; isolation: isolate; }
+#composer::before, .suggestion::before, .tool::before, .attachment::before, .card::before, .tile::before, .usage-card::before, .setting-row::before, pre::before, .user::before, .browser-list::before, .ask::before {
+  content: ""; position: absolute; inset: -1px; z-index: 1; border-radius: inherit; padding: 1px; pointer-events: none;
+  background: radial-gradient(260px circle at var(--x, -9999px) var(--y, -9999px), var(--spot), transparent 70%);
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor; mask-composite: exclude;
+}
+/* The usage numbers only glimmer. */
+.tile, .usage-card { --spot: color-mix(in srgb, var(--accent) 38%, transparent); --spot-fill: color-mix(in srgb, var(--accent) 3%, transparent); }
+/* These clip to inside their border, so their light runs just inside it. */
+.tool::before, pre::before, .browser-list::before { inset: 0; }
+#composer::after, .suggestion::after, .tool::after, .attachment::after, .card::after, .tile::after, .usage-card::after, .setting-row::after, pre::after, .user::after, .browser-list::after, .ask::after {
+  content: ""; position: absolute; inset: 0; z-index: -1; border-radius: inherit; pointer-events: none;
+  background: radial-gradient(420px circle at var(--x, -9999px) var(--y, -9999px), var(--spot-fill), transparent 65%);
+  opacity: 0; transition: opacity 0.3s var(--ease);
+}
+#composer:hover::after, .suggestion:hover::after, .tool:hover::after, .attachment:hover::after, .card:hover::after, .tile:hover::after, .usage-card:hover::after, .setting-row:hover::after, pre:hover::after, .user:hover::after, .browser-list:hover::after, .ask:hover::after { opacity: 1; }
+@media (hover: none), (prefers-reduced-motion: reduce) {
+  #composer::before, .suggestion::before, .tool::before, .attachment::before, .card::before, .tile::before, .usage-card::before, .setting-row::before, pre::before, .user::before, .browser-list::before, .ask::before, #composer::after, .suggestion::after, .tool::after, .attachment::after, .card::after, .tile::after, .usage-card::after, .setting-row::after, pre::after, .user::after, .browser-list::after, .ask::after { display: none; }
+}
 ::view-transition-group(dock) { animation-duration: 0.42s; animation-timing-function: cubic-bezier(0.3, 0, 0, 1); }
 ::view-transition-old(root), ::view-transition-new(root) { animation-duration: 0.22s; }
 html.theme-switch #log, html.theme-switch #dock { view-transition-name: none; }
@@ -757,6 +812,8 @@ body.page-projects #dock, body.page-settings #dock, body.page-tool #dock { displ
 .theme-card { display: flex; flex-direction: column; gap: 9px; text-align: left; color: var(--text-3); font-size: 13.5px; font-weight: 500; animation: rise-far 0.42s var(--ease) both; animation-delay: calc(var(--i, 0) * 0.05s); }
 .theme-card .preview { position: relative; aspect-ratio: 16 / 10; border-radius: 12px; border: 1px solid var(--border-strong); overflow: hidden; transition: box-shadow 0.2s, border-color 0.2s, transform 0.28s var(--spring); }
 .theme-card:hover .preview { transform: translateY(-2px); }
+/* Under the pointer the lean follows it closely; let go, it springs back. */
+.tilting { transition: transform 0.12s ease-out, box-shadow 0.2s, border-color 0.2s !important; will-change: transform; }
 .theme-card:active .preview { transform: scale(0.98); }
 .theme-card.on { color: var(--text); }
 .theme-card.on .preview { border-color: transparent; box-shadow: 0 0 0 2px var(--accent); }
@@ -1072,7 +1129,7 @@ button.item-row:hover { background: var(--hover); }
 }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
-  .glow, .shell::after { display: none; }
+  .glow, .shell::after, #greeting::after { display: none; }
   #log, #dock { view-transition-name: none; }
   .slide { opacity: 1; }
 }
@@ -3339,6 +3396,18 @@ function scheduleStream() {
 let follow = true;
 const nearBottom = () => logEl.scrollHeight - logEl.scrollTop - logEl.clientHeight < 100;
 
+// Two rings out from the send button, the second a beat behind.
+function shockwave(from) {
+  if (calm.matches) return;
+  const r = from.getBoundingClientRect();
+  for (const cls of ["shock", "shock second"]) {
+    const ring = document.body.appendChild(el("span", cls));
+    ring.style.left = `${r.left + r.width / 2}px`;
+    ring.style.top = `${r.top + r.height / 2}px`;
+    setTimeout(() => ring.remove(), 800);
+  }
+}
+
 function toBottom(force, smooth) {
   if (!force && !follow) return;
   follow = true;
@@ -3353,6 +3422,54 @@ function keepUp() {
 }
 
 function readingUp() { follow = false; }
+
+// Cards lean toward the pointer, a few degrees, as if under a hand.
+const TILTS = ".card, .tile, .theme-card .preview";
+(() => {
+  if (!matchMedia("(hover: hover) and (pointer: fine)").matches || calm.matches) return;
+  let card = null;
+  const settle = () => { if (card) { card.classList.remove("tilting"); card.style.transform = ""; card = null; } };
+  document.addEventListener("pointermove", (e) => {
+    const over = e.target.closest && e.target.closest(TILTS);
+    if (over !== card) settle();
+    if (!over) return;
+    card = over;
+    const r = over.getBoundingClientRect();
+    const px = (e.clientX - r.left) / r.width - 0.5, py = (e.clientY - r.top) / r.height - 0.5;
+    over.classList.add("tilting");
+    over.style.transform = `perspective(700px) rotateX(${(-py * 7).toFixed(2)}deg) rotateY(${(px * 7).toFixed(2)}deg) translateY(-2px)`;
+  }, { passive: true });
+  document.documentElement.addEventListener("mouseleave", settle);
+})();
+
+// The pointer, for the light that follows it: each lit thing near it
+// is told where it is, relative to itself. Once a frame at most, again
+// when the chat scrolls under a still pointer, and only for a mouse: a
+// finger has nothing to hover.
+const LIT = "#composer, .suggestion, .tool, .attachment, .card, .tile, .usage-card, .setting-row, pre, .user, .browser-list, .ask";
+(() => {
+  if (!matchMedia("(hover: hover) and (pointer: fine)").matches) return;
+  const REACH = 260;
+  let x = -9999, y = -9999, queued = false, lit = new Set();
+  const place = () => {
+    queued = false;
+    // Every rectangle first, then every write, so the page is laid out
+    // once a frame rather than once a node.
+    const near = [];
+    for (const node of document.querySelectorAll(LIT)) {
+      const r = node.getBoundingClientRect();
+      if (x > r.left - REACH && x < r.right + REACH && y > r.top - REACH && y < r.bottom + REACH) near.push([node, x - r.left, y - r.top]);
+    }
+    const now = new Set(near.map(([node]) => node));
+    for (const node of lit) if (!now.has(node)) { node.style.removeProperty("--x"); node.style.removeProperty("--y"); }
+    for (const [node, lx, ly] of near) { node.style.setProperty("--x", lx + "px"); node.style.setProperty("--y", ly + "px"); }
+    lit = now;
+  };
+  const again = () => { if (!queued) { queued = true; requestAnimationFrame(place); } };
+  document.addEventListener("pointermove", (e) => { if (e.pointerType === "mouse") { x = e.clientX; y = e.clientY; again(); } }, { passive: true });
+  document.documentElement.addEventListener("mouseleave", () => { x = y = -9999; again(); });
+  logEl.addEventListener("scroll", again, { passive: true });
+})();
 logEl.addEventListener("wheel", (e) => { if (e.deltaY < 0) readingUp(); }, { passive: true });
 // A press on the log itself, not on anything in it, is its scrollbar.
 logEl.addEventListener("mousedown", (e) => { if (e.target === logEl) readingUp(); });
@@ -3413,6 +3530,11 @@ function apply(event) {
         drawStreaming();
         updateSend();
         arrived(entry);
+        if (entry.type === "assistant" && drawCtx.lastReply && !calm.matches) {
+          const reply = drawCtx.lastReply;
+          reply.classList.add("landed");
+          setTimeout(() => reply.classList.remove("landed"), 1200);
+        }
       } else if (event.type === "ask") {
         toast(`“${chat.title}” needs your permission`);
       }
@@ -3508,6 +3630,20 @@ function connect() {
 let shownChats = null;
 let renamingChat = null;   // a sidebar row being renamed in place
 
+// Moves the current chat's highlight to its row: gliding from the last
+// one, or appearing in place when there was none.
+function placePill(nav) {
+  let pill = nav.querySelector("#chat-pill");
+  if (!pill) { pill = el("div"); pill.id = "chat-pill"; nav.prepend(pill); }
+  const row = nav.querySelector(".chat.current");
+  const was = pill.classList.contains("on");
+  if (!row) { pill.classList.remove("on"); return; }
+  pill.classList.toggle("still", !was || calm.matches);
+  pill.style.transform = `translateY(${row.offsetTop}px)`;
+  pill.style.height = `${row.offsetHeight}px`;
+  pill.classList.add("on");
+}
+
 // Recents folds away, and stays that way in this browser until opened.
 function foldRecents(fold, instant) {
   const list = $("#chats");
@@ -3531,8 +3667,8 @@ function renderChats() {
   if (renamingChat) return;
   const nav = $("#chats");
   // Where each row was, so a chat that moves up the list can glide there.
-  const was = new Map([...nav.children].map((row) => [row.dataset.chat, row.getBoundingClientRect().top]));
-  nav.textContent = "";
+  const was = new Map([...nav.querySelectorAll(".chat")].map((row) => [row.dataset.chat, row.getBoundingClientRect().top]));
+  nav.querySelectorAll(".chat").forEach((row) => row.remove());
   const before = shownChats;
   shownChats = new Set();
   for (const id of visibleChats()) {
@@ -3569,6 +3705,7 @@ function renderChats() {
     row.appendChild(acts);
     nav.appendChild(row);
   }
+  placePill(nav);
   // Folded, the label still says how many are in there.
   $("#recents-btn .count").textContent = shownChats.size || "";
   if (calm.matches) return;
@@ -3624,6 +3761,7 @@ function greet() {
   const when = hour < 5 ? "Up late" : hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
   const inProject = projectOf(viewProject);
   $("#greeting").innerHTML = esc(when) + (inProject ? `<span class="in">in ${esc(inProject.name)}</span>` : "");
+  $("#greeting").dataset.text = when;
   const name = inProject ? inProject.name : info.folder || "this project";
   const ideas = [
     ["Explain the codebase", `Explain how ${name} is put together, and where I should start reading.`],
@@ -3786,6 +3924,7 @@ async function send(text, mode = "steer") {
   if (text) sent.push(text);
   sentAt = -1;
   flash($("#send"), "launch", 420);
+  shockwave($("#send"));
   flash($("#composer"), "sent", 340);
   buzz();
   follow = true;
