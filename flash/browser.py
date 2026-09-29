@@ -15,6 +15,7 @@ last action actually did.
 
 import atexit
 import json
+import re
 from pathlib import Path
 from typing import Any, Optional
 from urllib.parse import urlparse
@@ -82,6 +83,65 @@ def resolve_target(
     return path.resolve().as_uri(), ""
 
 
+# A headless browser draws no pointer, so the agent's is drawn into the
+# page: the Flash cursor, following every move of Playwright's mouse, so
+# a screenshot shows where it pointed and what it clicked. It lives in a
+# closed shadow root with pointer-events off: nothing on the page can
+# style it, find it, or be blocked by it.
+_CURSOR_JS = """
+(() => {
+  if (window.__flashCursor) return;
+  const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24"'
+    + ' viewBox="0 0 32 32" style="display:block;overflow:visible;'
+    + 'filter:drop-shadow(0 1px 1.2px rgba(0,0,0,.4))"><path'
+    + ' d="M4 3 23.7 18.2 13.2 20.4 6.1 28.4Z" fill="#d97757"'
+    + ' stroke="#fff" stroke-width="1.8" stroke-linejoin="round"'
+    + ' paint-order="stroke"/></svg>';
+  let host = null, x = 0, y = 0, shown = false, pressed = false;
+  const place = () => {
+    if (!host) return;
+    host.style.display = shown ? 'block' : 'none';
+    host.style.transform = 'translate(' + (x - 3) + 'px,' + (y - 2) + 'px)'
+      + (pressed ? ' scale(0.84)' : '');
+  };
+  const make = () => {
+    const root = document.documentElement;
+    if (!root || (host && host.isConnected)) return;
+    host = document.createElement('flash-cursor');
+    host.style.cssText = 'position:fixed;left:0;top:0;width:24px;'
+      + 'height:24px;z-index:2147483647;pointer-events:none;'
+      + 'transform-origin:3px 2px;display:none;';
+    host.attachShadow({mode: 'closed'}).innerHTML = svg;
+    root.appendChild(host);
+    place();
+  };
+  window.__flashCursor = (nx, ny) => {
+    x = nx; y = ny; shown = true; make(); place();
+  };
+  addEventListener('mousemove', (e) => {
+    window.__flashCursor(e.clientX, e.clientY);
+    if (window.__flashMoved) window.__flashMoved(e.clientX, e.clientY);
+  }, true);
+  addEventListener('mousedown', () => { pressed = true; place(); }, true);
+  addEventListener('mouseup', () => { pressed = false; place(); }, true);
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', make);
+  } else {
+    make();
+  }
+})();
+"""
+
+
+def _point(text: str) -> Optional[tuple[float, float]]:
+    """An "x,y" the model typed, in the page's pixels, or None."""
+
+    numbers = re.findall(r"-?\d+(?:\.\d+)?", text or "")
+    if len(numbers) < 2:
+        return None
+    return float(numbers[0]), float(numbers[1])
+
+
 def _watch(page, problems: list[str]) -> None:
     """Record the page's own errors so a broken render explains itself."""
 
@@ -127,8 +187,12 @@ def capture(
     height: int,
     full_page: bool,
     wait_ms: int,
+    mouse: Optional[tuple[float, float]] = None,
 ) -> tuple[list[str], str]:
     """Render `url` to `out` as a PNG.
+
+    With `mouse`, the pointer is moved there first, so the picture shows
+    what hovering does, with the Flash cursor where it rests.
 
     Returns `(problems, "")` on success, where `problems` are errors the
     page itself reported, or `([], reason)` when no screenshot was taken.
@@ -154,12 +218,17 @@ def capture(
                     viewport={"width": width, "height": height},
                 )
                 _watch(page, problems)
+                page.add_init_script(_CURSOR_JS)
                 page.goto(
                     url,
                     wait_until="load",
                     timeout=NAVIGATION_TIMEOUT_MS,
                 )
                 _settle(page, wait_ms)
+                if mouse is not None:
+                    page.mouse.move(*mouse)
+                    # Long enough for a hover's transition to show.
+                    page.wait_for_timeout(HOVER_SETTLE_MS)
                 page.screenshot(path=str(out), full_page=full_page)
             finally:
                 browser.close()
@@ -192,6 +261,14 @@ def _launch_reason(exc: Exception) -> str:
 # A click on a button that never appears should fail fast; only a whole
 # navigation is worth waiting the longer time for.
 ACTION_TIMEOUT_MS = 5000
+
+# After the mouse arrives somewhere, before the picture: a hover's own
+# transition is usually done by then.
+HOVER_SETTLE_MS = 300
+
+# How many steps a move or a drag is made in: enough that the page sees
+# the pointer travel, as it would a hand's, and not jump.
+MOUSE_STEPS = 12
 
 # A page can carry hundreds of links. Enough of them to work with beats a
 # list the model has to wade through.
@@ -253,6 +330,27 @@ class _Session:
         self.browser = browser
         self.page: Any = None
         self.problems: list[str] = []
+        # Where the agent's pointer is, in the page's pixels, once it has
+        # moved: drawn again on a page it navigated to.
+        self.mouse: Optional[tuple[float, float]] = None
+
+    def moved(self, x: float, y: float) -> None:
+        self.mouse = (x, y)
+
+    def redraw_cursor(self) -> None:
+        """Put the cursor back where the pointer is, on a page that was
+        loaded since it last moved and so has not drawn it yet."""
+
+        if self.mouse is None or self.page is None:
+            return
+        try:
+            self.page.evaluate(
+                "([x, y]) => window.__flashCursor"
+                " && window.__flashCursor(x, y)",
+                list(self.mouse),
+            )
+        except Exception:  # noqa: BLE001, S110
+            pass
 
     def drain(self) -> list[str]:
         """Hand over the errors seen since the last time we asked."""
@@ -323,6 +421,8 @@ def open_page(url: str, *, width: int, height: int, wait_ms: int) -> str:
         page.set_default_timeout(ACTION_TIMEOUT_MS)
         session.page = page
         _watch(page, session.problems)
+        page.expose_function("__flashMoved", session.moved)
+        page.add_init_script(_CURSOR_JS)
         page.goto(url, wait_until="load", timeout=NAVIGATION_TIMEOUT_MS)
         _settle(page, wait_ms)
     except PlaywrightError as exc:
@@ -370,6 +470,8 @@ def interact(
         _settle(page, wait_ms, ACTION_TIMEOUT_MS)
     except (PageProblem, PlaywrightError) as exc:
         return "", _first_line(exc)
+    finally:
+        _session.redraw_cursor()
 
     return note, ""
 
@@ -529,9 +631,66 @@ def _locate(page, selector: str):
 
 
 def _act_click(page, selector: str, value: str) -> str:
+    # No selector, a point: a click where the model sees something in the
+    # screenshot that no selector names, like a spot on a canvas.
+    if not selector:
+        spot = _point(value)
+        if spot is None:
+            raise PageProblem(
+                "click needs a selector, or a point as value: \"x,y\" in "
+                "the screenshot's pixels."
+            )
+        page.mouse.move(*spot, steps=MOUSE_STEPS)
+        page.mouse.click(*spot)
+
+        return f"Clicked at {_spot(spot)}."
+
     _locate(page, selector).click(timeout=ACTION_TIMEOUT_MS)
 
     return f"Clicked {selector}."
+
+
+def _spot(point: tuple[float, float]) -> str:
+    return f"{point[0]:g},{point[1]:g}"
+
+
+def _act_move(page, selector: str, value: str) -> str:
+    """Move the pointer onto an element, or to a point, and leave it."""
+
+    if selector:
+        _locate(page, selector).hover(timeout=ACTION_TIMEOUT_MS)
+
+        return f"Moved the mouse onto {selector}."
+
+    spot = _point(value)
+    if spot is None:
+        raise PageProblem(
+            "move needs a selector, or a point as value: \"x,y\" in the "
+            "screenshot's pixels."
+        )
+    page.mouse.move(*spot, steps=MOUSE_STEPS)
+
+    return f"Moved the mouse to {_spot(spot)}."
+
+
+def _act_drag(page, selector: str, value: str) -> str:
+    """Press at one point, move to another, let go: a slider, a canvas,
+    something dragged into place."""
+
+    numbers = re.findall(r"-?\d+(?:\.\d+)?", value or "")
+    if len(numbers) < 4:
+        raise PageProblem(
+            "drag needs two points as value: \"x1,y1 x2,y2\" in the "
+            "screenshot's pixels, from where to where."
+        )
+    start = (float(numbers[0]), float(numbers[1]))
+    end = (float(numbers[2]), float(numbers[3]))
+    page.mouse.move(*start, steps=MOUSE_STEPS)
+    page.mouse.down()
+    page.mouse.move(*end, steps=MOUSE_STEPS)
+    page.mouse.up()
+
+    return f"Dragged from {_spot(start)} to {_spot(end)}."
 
 
 def _act_fill(page, selector: str, value: str) -> str:
@@ -645,6 +804,8 @@ def _act_reload(page, selector: str, value: str) -> str:
 
 _ACTIONS = {
     "click": _act_click,
+    "move": _act_move,
+    "drag": _act_drag,
     "fill": _act_fill,
     "press": _act_press,
     "hover": _act_hover,
