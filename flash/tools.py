@@ -140,7 +140,8 @@ To hand the user a Markdown or text document (a report, plan, README,
   quoting the words it is about.
 To make a 3D model (an object, a prop, a room, a layout), use the
   make_3d_model tool: it builds the model from parts such as boxes,
-  cylinders, spheres, lathed profiles, and extruded outlines, saves a
+  cylinders, spheres, lathed profiles, extruded outlines, and blocky
+  text for any words, logos, or signs, saves a
   .glb, and shows it in a 3D viewer. Use send_3d_model to show a .glb,
   .stl, or .obj file that already exists.
 When you make an image, PDF, web page, or document for the user, send it
@@ -3568,7 +3569,9 @@ tools: list[dict[str, Any]] = [
                 "so a part rests on it when its position's y is half its "
                 "height. Every shape is centred on its position. Build "
                 "the object from many parts, sized in proportion to the "
-                "real thing. The result gives the model's overall size, "
+                "real thing and coloured like it. Anything with words on "
+                "it (a logo, a sign, a title) gets a text part for them. "
+                "The result gives the model's overall size, "
                 "and a picture of it when you can see images: check both "
                 "and fix what is off. To revise, call again with the "
                 "whole changed list and the same path."
@@ -3608,10 +3611,32 @@ tools: list[dict[str, Any]] = [
                                         "pieces); extrude (points "
                                         "[[x,z],...], an outline seen "
                                         "from above, raised to height: "
-                                        "walls, letters, gears, "
-                                        "L-shapes); mesh (vertices "
+                                        "walls, floor plans, gears, "
+                                        "L-shapes); text (text, height "
+                                        "of a capital, depth: words in a "
+                                        "blocky pixel font, reading "
+                                        "along X and facing +Z, lines "
+                                        "split by \\n: logos, signs, "
+                                        "names; never stand a box in "
+                                        "for a letter); mesh (vertices "
                                         "[[x,y,z],...] and faces, each a "
                                         "list of vertex indices from 0)."
+                                    ),
+                                },
+                                "text": {
+                                    "type": "string",
+                                    "description": (
+                                        "For text: the words. A-Z, "
+                                        "0-9, spaces, and . , ! ? - : "
+                                        "' & /."
+                                    ),
+                                },
+                                "depth": {
+                                    "type": "number",
+                                    "description": (
+                                        "For text: how thick the "
+                                        "letters are; one block of the "
+                                        "font (height / 7) by default."
                                     ),
                                 },
                                 "name": {

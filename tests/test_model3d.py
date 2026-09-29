@@ -70,6 +70,7 @@ def test_normals_agree_with_the_faces_they_light():
         {"shape": "box"}, {"shape": "sphere"}, {"shape": "cylinder"},
         {"shape": "cone"}, {"shape": "torus"},
         {"shape": "lathe", "points": [[0.2, 0], [0.5, 0.5], [0.1, 1]]},
+        {"shape": "text", "text": "Hi!"},
     ):
         geo = model3d.Part(0, spec).geometry
         for i in range(0, len(geo.indices), 3):
@@ -80,6 +81,61 @@ def test_normals_agree_with_the_faces_they_light():
             )
             normal = geo.normals[a]
             assert sum(f * n for f, n in zip(face, normal)) >= 0, spec
+
+
+def _pixels(char):
+    return sum(row.count("#") for row in model3d.FONT[char])
+
+
+def test_text_is_one_closed_block_to_a_pixel_of_the_font():
+    part = model3d.Part(0, {"shape": "text", "text": "minecraft",
+                            "height": 7, "depth": 2})
+    blocks = sum(_pixels(c) for c in "MINECRAFT")
+
+    # Closed and facing out, whatever blocks touch.
+    assert _volume(part.geometry) == pytest.approx(blocks * 2)
+    low = [min(p[i] for p in part.geometry.positions) for i in range(3)]
+    high = [max(p[i] for p in part.geometry.positions) for i in range(3)]
+    # Nine letters, a block of space between each; centred.
+    widths = sum(len(model3d.FONT[c][0]) for c in "MINECRAFT") + 8
+    assert high[0] - low[0] == pytest.approx(widths)
+    assert high[1] - low[1] == pytest.approx(7)
+    assert low[0] == pytest.approx(-high[0])
+    assert (low[2], high[2]) == pytest.approx((-1, 1))
+
+
+def test_touching_blocks_share_no_hidden_faces():
+    part = model3d.Part(0, {"shape": "text", "text": "-"})
+
+    # Three blocks in a row: each keeps its front, back, top and bottom
+    # (4 faces, 8 triangles), and only the two ends of the run show.
+    assert part.geometry.triangles == 3 * 4 + 3 * 4 + 2 * 2
+
+
+def test_text_lines_stack_centred():
+    one = model3d.Part(0, {"shape": "text", "text": "AB", "height": 7})
+    two = model3d.Part(0, {"shape": "text", "text": "AB\nC", "height": 7})
+
+    tall = max(p[1] for p in two.geometry.positions) - \
+        min(p[1] for p in two.geometry.positions)
+    assert tall == pytest.approx(7 + 2 + 7)
+    assert _volume(two.geometry) == pytest.approx(
+        _volume(one.geometry) + _pixels("C") * 1,
+    )
+
+
+def test_text_says_which_letters_the_font_lacks():
+    with pytest.raises(model3d.ModelError, match=r"no '#' '@'"):
+        model3d.Part(0, {"shape": "text", "text": "a@b#"})
+    with pytest.raises(model3d.ModelError, match="needs text"):
+        model3d.Part(0, {"shape": "text", "text": "  "})
+
+
+def test_every_glyph_is_seven_rows_of_one_width():
+    for char, rows in model3d.FONT.items():
+        assert len(rows) == model3d.FONT_ROWS, char
+        assert len({len(r) for r in rows}) == 1, char
+        assert set("".join(rows)) <= {"#", "."}, char
 
 
 def test_a_mesh_takes_polygons_and_checks_its_indices():
