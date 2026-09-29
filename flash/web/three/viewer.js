@@ -6,7 +6,9 @@
 (function () {
   "use strict";
 
-  const SKY = [1, 0.7, 1];  // where the camera starts, looking at the model
+  // Where the camera starts: in front (glTF faces +Z), a little right
+  // and above, so a front reads straight on and the model still has depth.
+  const SKY = [0.45, 0.5, 1];
 
   function parse(T, data, suffix) {
     return new Promise((resolve, reject) => {
@@ -81,7 +83,8 @@
     });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
     renderer.outputColorSpace = THREE.SRGBColorSpace;
-    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    // Neutral keeps a colour the colour it was given; ACES bleaches greys.
+    renderer.toneMapping = THREE.NeutralToneMapping;
     renderer.toneMappingExposure = 1;
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
@@ -95,6 +98,9 @@
     const pmrem = new THREE.PMREMGenerator(renderer);
     const environment = pmrem.fromScene(new T.RoomEnvironment(), 0.04).texture;
     scene.environment = environment;
+    // Soft enough that a face turned to the viewer shows about its own
+    // colour, rather than a paler one.
+    scene.environmentIntensity = 0.5;
     pmrem.dispose();
 
     model.traverse((node) => {
@@ -109,7 +115,7 @@
     const centre = box.getCenter(new THREE.Vector3());
     const radius = Math.max(size.length() / 2, 1e-3);
 
-    const sun = new THREE.DirectionalLight(0xffffff, 1.6);
+    const sun = new THREE.DirectionalLight(0xffffff, 1.0);
     sun.position.set(centre.x + radius * 1.5, box.max.y + radius * 3, centre.z + radius * 2);
     sun.target.position.copy(centre);
     sun.castShadow = true;
@@ -121,7 +127,7 @@
     sun.shadow.bias = -0.0005;
     sun.shadow.normalBias = radius * 0.004;
     scene.add(sun, sun.target);
-    scene.add(new THREE.HemisphereLight(0xffffff, 0x888888, 0.4));
+    scene.add(new THREE.HemisphereLight(0xffffff, 0x666666, 0.25));
 
     const light = opts.light !== undefined ? opts.light
       : document.documentElement.dataset.theme === "light";
@@ -156,7 +162,7 @@
       const high = THREE.MathUtils.degToRad(camera.fov / 2);
       const wide = Math.atan(Math.tan(high) * camera.aspect);
       const fit = radius / Math.sin(Math.min(high, wide));
-      camera.position.copy(centre).addScaledVector(toward, fit * 0.95);
+      camera.position.copy(centre).addScaledVector(toward, fit * 1.1);
       controls.target.copy(centre);
       camera.lookAt(centre);
       controls.update();

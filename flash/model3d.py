@@ -1,10 +1,11 @@
 """3D models the agent builds out of parts.
 
 The model describes a model as a list of parts, each a shape (a box, a
-sphere, a cylinder, a lathed profile, an extruded outline, or a mesh of
-its own) with a place, a turn, a size and a colour. This turns that list
-into a binary glTF (.glb) file: one file that the web UI's viewer, Blender,
-Windows' 3D Viewer and every game engine open as it is.
+sphere, a cylinder, a lathed profile, an extruded outline, blocky text,
+or a mesh of its own) with a place, a turn, a size and a colour. This
+turns that list into a binary glTF (.glb) file: one file that the web
+UI's viewer, Blender, Windows' 3D Viewer and every game engine open as
+it is.
 
 Pure Python on purpose, with no numpy or trimesh to install, since a
 model of a few hundred parts is a few hundred thousand floats at most.
@@ -21,7 +22,7 @@ from typing import Any, Optional
 # Every shape is built around the origin, Y up, in metres, as glTF has it.
 SHAPES = (
     "box", "sphere", "cylinder", "cone", "torus", "plane", "lathe",
-    "extrude", "mesh",
+    "extrude", "mesh", "text",
 )
 MODEL_SUFFIXES = (".glb", ".stl", ".obj")
 
@@ -203,23 +204,26 @@ def _fraction(value: Any, what: str, fallback: float) -> float:
 # --- The shapes -----------------------------------------------------------
 
 
-def _box(part: dict) -> Geometry:
-    sx, sy, sz = _vector(part.get("size"), "size", (1.0, 1.0, 1.0),
-                         positive=True)
-    x, y, z = sx / 2, sy / 2, sz / 2
-    geo = Geometry()
-    # Each face as its normal and two edges, walked counter-clockwise.
-    faces = (
-        ((1, 0, 0), (0, 0, -1), (0, 1, 0)),
-        ((-1, 0, 0), (0, 0, 1), (0, 1, 0)),
-        ((0, 1, 0), (1, 0, 0), (0, 0, -1)),
-        ((0, -1, 0), (1, 0, 0), (0, 0, 1)),
-        ((0, 0, 1), (1, 0, 0), (0, 1, 0)),
-        ((0, 0, -1), (-1, 0, 0), (0, 1, 0)),
-    )
-    half = (x, y, z)
-    for normal, u, v in faces:
-        centre = tuple(normal[i] * half[i] for i in range(3))
+# A box's faces, each as its normal and two edges, walked
+# counter-clockwise as seen from outside.
+_BOX_FACES = (
+    ((1, 0, 0), (0, 0, -1), (0, 1, 0)),
+    ((-1, 0, 0), (0, 0, 1), (0, 1, 0)),
+    ((0, 1, 0), (1, 0, 0), (0, 0, -1)),
+    ((0, -1, 0), (1, 0, 0), (0, 0, 1)),
+    ((0, 0, 1), (1, 0, 0), (0, 1, 0)),
+    ((0, 0, -1), (-1, 0, 0), (0, 1, 0)),
+)
+
+
+def _add_box(geo: Geometry, middle, half, hidden=()) -> None:
+    """A box around MIDDLE, HALF its size each way, leaving out the
+    faces whose normals are in HIDDEN, where another box touches it."""
+
+    for normal, u, v in _BOX_FACES:
+        if normal in hidden:
+            continue
+        centre = tuple(middle[i] + normal[i] * half[i] for i in range(3))
         corners = []
         for a, b in ((-1, -1), (1, -1), (1, 1), (-1, 1)):
             corners.append(tuple(
@@ -229,6 +233,132 @@ def _box(part: dict) -> Geometry:
         first = [geo.vertex(c, normal) for c in corners]
         geo.triangle(first[0], first[1], first[2])
         geo.triangle(first[0], first[2], first[3])
+
+
+def _box(part: dict) -> Geometry:
+    sx, sy, sz = _vector(part.get("size"), "size", (1.0, 1.0, 1.0),
+                         positive=True)
+    geo = Geometry()
+    _add_box(geo, (0, 0, 0), (sx / 2, sy / 2, sz / 2))
+    return geo
+
+
+# A blocky 5x7 font for the text shape, "#" for a block, drawn top row
+# first. Narrow marks are narrower rows.
+FONT = {
+    "A": (".###.", "#...#", "#...#", "#####", "#...#", "#...#", "#...#"),
+    "B": ("####.", "#...#", "#...#", "####.", "#...#", "#...#", "####."),
+    "C": (".###.", "#...#", "#....", "#....", "#....", "#...#", ".###."),
+    "D": ("####.", "#...#", "#...#", "#...#", "#...#", "#...#", "####."),
+    "E": ("#####", "#....", "#....", "####.", "#....", "#....", "#####"),
+    "F": ("#####", "#....", "#....", "####.", "#....", "#....", "#...."),
+    "G": (".###.", "#...#", "#....", "#.###", "#...#", "#...#", ".###."),
+    "H": ("#...#", "#...#", "#...#", "#####", "#...#", "#...#", "#...#"),
+    "I": ("###", ".#.", ".#.", ".#.", ".#.", ".#.", "###"),
+    "J": ("..###", "...#.", "...#.", "...#.", "#..#.", "#..#.", ".##.."),
+    "K": ("#...#", "#..#.", "#.#..", "##...", "#.#..", "#..#.", "#...#"),
+    "L": ("#....", "#....", "#....", "#....", "#....", "#....", "#####"),
+    "M": ("#...#", "##.##", "#.#.#", "#.#.#", "#...#", "#...#", "#...#"),
+    "N": ("#...#", "##..#", "#.#.#", "#..##", "#...#", "#...#", "#...#"),
+    "O": (".###.", "#...#", "#...#", "#...#", "#...#", "#...#", ".###."),
+    "P": ("####.", "#...#", "#...#", "####.", "#....", "#....", "#...."),
+    "Q": (".###.", "#...#", "#...#", "#...#", "#.#.#", "#..#.", ".##.#"),
+    "R": ("####.", "#...#", "#...#", "####.", "#.#..", "#..#.", "#...#"),
+    "S": (".####", "#....", "#....", ".###.", "....#", "....#", "####."),
+    "T": ("#####", "..#..", "..#..", "..#..", "..#..", "..#..", "..#.."),
+    "U": ("#...#", "#...#", "#...#", "#...#", "#...#", "#...#", ".###."),
+    "V": ("#...#", "#...#", "#...#", "#...#", "#...#", ".#.#.", "..#.."),
+    "W": ("#...#", "#...#", "#...#", "#.#.#", "#.#.#", "##.##", "#...#"),
+    "X": ("#...#", "#...#", ".#.#.", "..#..", ".#.#.", "#...#", "#...#"),
+    "Y": ("#...#", "#...#", ".#.#.", "..#..", "..#..", "..#..", "..#.."),
+    "Z": ("#####", "....#", "...#.", "..#..", ".#...", "#....", "#####"),
+    "0": (".###.", "#...#", "#..##", "#.#.#", "##..#", "#...#", ".###."),
+    "1": ("..#..", ".##..", "..#..", "..#..", "..#..", "..#..", ".###."),
+    "2": (".###.", "#...#", "....#", "...#.", "..#..", ".#...", "#####"),
+    "3": ("####.", "....#", "....#", ".###.", "....#", "....#", "####."),
+    "4": ("...#.", "..##.", ".#.#.", "#..#.", "#####", "...#.", "...#."),
+    "5": ("#####", "#....", "####.", "....#", "....#", "#...#", ".###."),
+    "6": (".###.", "#....", "#....", "####.", "#...#", "#...#", ".###."),
+    "7": ("#####", "....#", "...#.", "..#..", ".#...", ".#...", ".#..."),
+    "8": (".###.", "#...#", "#...#", ".###.", "#...#", "#...#", ".###."),
+    "9": (".###.", "#...#", "#...#", ".####", "....#", "....#", ".###."),
+    " ": ("...",) * 7,
+    ".": (".", ".", ".", ".", ".", ".", "#"),
+    ",": (".", ".", ".", ".", ".", "#", "#"),
+    "!": ("#", "#", "#", "#", "#", ".", "#"),
+    "?": (".###.", "#...#", "....#", "...#.", "..#..", ".....", "..#.."),
+    "-": ("...", "...", "...", "###", "...", "...", "..."),
+    ":": (".", "#", ".", ".", ".", "#", "."),
+    "'": ("#", "#", ".", ".", ".", ".", "."),
+    "&": (".##..", "#..#.", "#.#..", ".#...", "#.#.#", "#..#.", ".##.#"),
+    "/": ("....#", "...#.", "...#.", "..#..", ".#...", ".#...", "#...."),
+}
+FONT_ROWS = 7
+MAX_TEXT = 200
+
+
+def _text(part: dict) -> Geometry:
+    """Words in blocks, one block to a pixel of the font, reading along
+    X and facing +Z: a logo, a sign, a name over a door."""
+
+    words = str(part.get("text") or "").upper()
+    if not words.strip():
+        raise ModelError("a text part needs text")
+    if len(words) > MAX_TEXT:
+        raise ModelError(f"a text part can have at most {MAX_TEXT} letters")
+    unknown = sorted({c for c in words if c not in FONT and c != "\n"})
+    if unknown:
+        raise ModelError(
+            f"the font has no {' '.join(repr(c) for c in unknown)}; it has "
+            "A-Z, 0-9, spaces and . , ! ? - : ' & /"
+        )
+    # The height of a capital, and the block that makes it.
+    height = _number(part.get("height", part.get("size", 1)), "height",
+                     positive=True)
+    block = height / FONT_ROWS
+    depth = _number(part.get("depth", block), "depth", positive=True)
+
+    # Each line as columns of blocks, a column of space between letters.
+    lines = []
+    for line in words.split("\n"):
+        columns: list[str] = []
+        for n, char in enumerate(line):
+            if n:
+                columns.append("." * FONT_ROWS)
+            rows = FONT[char]
+            for x in range(len(rows[0])):
+                columns.append("".join(row[x] for row in rows))
+        lines.append(columns)
+    widest = max(len(columns) for columns in lines)
+    # Lines two blocks apart, each centred.
+    tall = len(lines) * (FONT_ROWS + 2) - 2
+    filled = set()
+    for k, columns in enumerate(lines):
+        left = (widest - len(columns)) // 2
+        top = tall - 1 - k * (FONT_ROWS + 2)
+        for x, column in enumerate(columns):
+            for y, pixel in enumerate(column):
+                if pixel == "#":
+                    filled.add((left + x, top - y))
+    if not filled:
+        raise ModelError("a text part needs at least one letter")
+
+    geo = Geometry()
+    half = (block / 2, block / 2, depth / 2)
+    for x, y in filled:
+        hidden = tuple(
+            normal for normal, step in (
+                ((1, 0, 0), (1, 0)), ((-1, 0, 0), (-1, 0)),
+                ((0, 1, 0), (0, 1)), ((0, -1, 0), (0, -1)),
+            )
+            if (x + step[0], y + step[1]) in filled
+        )
+        middle = (
+            (x + 0.5 - widest / 2) * block,
+            (y + 0.5 - tall / 2) * block,
+            0.0,
+        )
+        _add_box(geo, middle, half, hidden)
     return geo
 
 
@@ -517,6 +647,7 @@ _BUILDERS = {
     "lathe": _lathe,
     "extrude": _extrude,
     "mesh": _mesh,
+    "text": _text,
 }
 
 
