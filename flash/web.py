@@ -1483,6 +1483,7 @@ def run_turn(
         convo = [system, *chat.messages]
         keep_from = len(convo)
         tool_count = 0
+        nudged = 0
         reply = Streamed()
 
         for _round in range(ai.Config.max_tool_rounds):
@@ -1490,7 +1491,18 @@ def run_turn(
             tokens += reply.tokens
             generating += reply.seconds
 
-            if reply.stopped or not reply.calls:
+            if reply.stopped:
+                break
+            if not reply.calls:
+                # It said what it would do next and stopped short of
+                # doing it: keep what it said, and tell it to go on.
+                if (offered and nudged < ai.MAX_PROMISE_NUDGES
+                        and ai.unkept_promise(reply.content)):
+                    nudged += 1
+                    _finish_reply(session, chat, reply)
+                    convo.append(ai._message("assistant", reply.content))
+                    convo.append(ai.promise_nudge())
+                    continue
                 break
 
             _finish_reply(session, chat, reply)

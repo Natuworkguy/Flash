@@ -987,6 +987,58 @@ def _tool_limit_message() -> dict:
     }
 
 
+# A reply that ends by saying what it will do next, with no tool call
+# to do it: the model saw something to fix (in a render, a test run, a
+# screenshot) and wrote the plan down instead of carrying it out. The
+# turn would end there with nothing done, so Flash asks it to go on.
+_PROMISE = re.compile(
+    r"\b(?:I['’]ll|I will|I['’]m going to|I am going to|let me|"
+    r"let['’]s)\s+"
+    # Waiting on a sub-agent or the user is a right place to stop.
+    r"(?!know\b|be\b|leave\b|keep\b|stop\b|wait\b|report\b|notify\b"
+    r"|let you\b|get back\b|check back\b|update you\b|tell you\b)"
+    r"[a-z]+",
+    re.IGNORECASE,
+)
+# Offers and questions leave the next move to the user, rightly.
+_OFFER = re.compile(
+    r"\b(?:if you(?:['’]d)? (?:like|want|prefer)|would you like|"
+    r"want me to|shall I|should I|let me know|happy to|just say|"
+    r"can also|could also)\b",
+    re.IGNORECASE,
+)
+_SENTENCE_END = re.compile(r"(?<=[.!?:])\s+")
+MAX_PROMISE_NUDGES = 2
+PROMISE_NOTE = (
+    "Your last reply said what you would do next, but it called no "
+    "tool, so nothing was done and your turn would end there. Do it now "
+    "with the tools, and keep going until it is finished and checked. "
+    "If you have decided not to, say why in one line instead."
+)
+
+
+def unkept_promise(text: str) -> bool:
+    """Whether a reply ends promising work it did not start."""
+
+    paragraphs = [p for p in re.split(r"\n\s*\n", text.strip()) if p]
+    if not paragraphs:
+        return False
+    # Only how it ends counts: "I'll" early on is usually a summary of
+    # what was done, while the last words are what happens next.
+    sentences = _SENTENCE_END.split(paragraphs[-1].strip())
+    tail = " ".join(sentences[-2:])
+    if tail.rstrip().endswith("?") or _OFFER.search(tail):
+        return False
+    return bool(_PROMISE.search(tail))
+
+
+def promise_nudge() -> dict:
+    """Flash telling the model to do what it just said it would. A
+    system message, so it is not kept in the history after the turn."""
+
+    return {"role": "system", "content": PROMISE_NOTE}
+
+
 def _response_parts(response) -> tuple[str, str, list]:
     message = getattr(response, "message", None)
 
@@ -1332,6 +1384,40 @@ def _chat_retry_until_response(
         }]
 
     return final, thinking, tool_calls, None
+
+
+def _chat_until_acted(
+    console: Console,
+    client: "ollama.Client",
+    convo: list,
+    tools_arg,
+    nudged: list,
+    *,
+    is_image: bool = False,
+    turn: Optional[Turn] = None,
+    bar: Optional[Callable[[], str]] = None,
+) -> tuple[str, str, list, Optional[str]]:
+    """`_chat_retry_until_response`, except that a reply promising work
+    it made no tool call for is shown, and the model is told to do it,
+    up to MAX_PROMISE_NUDGES times a turn. CONVO grows by that reply
+    and the nudge; NUDGED, a one-item list, counts the turn's nudges."""
+
+    while True:
+        final, thinking, tool_calls, err = _chat_retry_until_response(
+            console, client, convo, tools_arg,
+            is_image=is_image, turn=turn, bar=bar,
+        )
+        if (err or tool_calls or not tools_arg
+                or nudged[0] >= MAX_PROMISE_NUDGES
+                or not unkept_promise(final)):
+            return final, thinking, tool_calls, err
+        nudged[0] += 1
+        _render_thinking(thinking)
+        _render_markdown(console, final)
+        convo.append(_message("assistant", final))
+        convo.append(promise_nudge())
+        # Any picture went with the call just made.
+        is_image = False
 
 
 def _context_ceiling() -> Optional[int]:
@@ -2928,13 +3014,24 @@ def main() -> None:
             def bar() -> Text:
                 return _bar_text(messages)
 
-            final, thinking, tool_calls, err = _chat_retry_until_response(
-                console, client, [system_message] + messages, offered,
+            nudged = [0]
+            first = [system_message] + messages
+            final, thinking, tool_calls, err = _chat_until_acted(
+                console, client, first, offered, nudged,
                 is_image=bool(pending_images), turn=turn, bar=bar,
+            )
+            if err and not nudged[0]:
+                _print_backend_error(err)
+                messages.pop()
+                continue
+            # A reply that promised work and was told to do it stays in
+            # the history, as the user saw it; the nudge does not.
+            messages.extend(
+                m for m in first[1 + len(messages):]
+                if m.get("role") != "system"
             )
             if err:
                 _print_backend_error(err)
-                messages.pop()
                 continue
 
             subagents.mark_delivered(delivered_ids)
@@ -3009,9 +3106,9 @@ def main() -> None:
                         _message("user", TOOL_IMAGE_NOTE, tool_images)
                     )
 
-                final, thinking, tool_calls, err = _chat_retry_until_response(
-                    console, client, tool_messages, offered, turn=turn,
-                    is_image=bool(tool_images), bar=bar,
+                final, thinking, tool_calls, err = _chat_until_acted(
+                    console, client, tool_messages, offered, nudged,
+                    turn=turn, is_image=bool(tool_images), bar=bar,
                 )
                 if err:
                     tool_error = err

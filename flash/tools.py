@@ -2636,7 +2636,9 @@ def _model_preview(model_path: Path) -> str:
     note = (
         "A picture of it, as the user's viewer first shows it (from the "
         "front right, above), is attached, so judge the shape from what "
-        "you can see there."
+        "you can see there. If anything is wrong in it (a part hidden, "
+        "floating, or out of place), fix it now by calling the tool "
+        "again, before you write your reply."
     )
     if problems:
         note += " The viewer reported: " + "; ".join(
