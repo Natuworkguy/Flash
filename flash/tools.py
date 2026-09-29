@@ -61,6 +61,7 @@ from .theme import (
     plural,
     remote_answer,
     tool_diff,
+    tool_document,
     tool_file,
     tool_line,
     tool_result,
@@ -120,9 +121,15 @@ To hand the user a finished PDF, use the send_pdf tool with its path.
 To hand the user a finished web page, use the send_html tool with its
   path. It opens in their browser, or beside the chat in the web UI.
   Screenshot it first and send it once it looks right.
-When you make an image, PDF, or web page for the user, send it with the
-  matching tool as soon as it is finished, without being asked: that is
-  how they see it.
+To hand the user a Markdown or text document (a report, plan, README,
+  notes), use the send_document tool with its path. In the web UI it
+  opens beside the chat, where they can edit it and comment on it; their
+  comments reach you as a message that quotes each passage. To flag
+  unfinished work, a gap, or a question in it, pass comments, each
+  quoting the words it is about.
+When you make an image, PDF, web page, or document for the user, send it
+  with the matching tool as soon as it is finished, without being asked:
+  that is how they see it.
 To see how a web page actually renders, use the screenshot tool on the
   .html file you wrote or on a URL. It runs a headless browser and
   attaches the picture, so it is the only way to check a page you built;
@@ -2407,6 +2414,163 @@ def send_html(path: str, caption: str = "") -> str:
     )
 
 
+DOCUMENT_SUFFIXES = (".md", ".markdown", ".txt")
+MAX_DOCUMENT_BYTES = 2 * 1024 * 1024
+MAX_DOC_COMMENTS = 20
+MAX_QUOTE_CHARS = 300
+MAX_NOTE_CHARS = 1000
+
+_MD_LINK = re.compile(r"!?\[([^\]]*)\]\([^)]*\)")
+_MD_LINE_MARK = re.compile(
+    r"^[ \t]*(?:#{1,6}[ \t]+|>[ \t]?|[-*+][ \t]+|\d+[.)][ \t]+)", re.M
+)
+_MD_INLINE_MARK = re.compile(r"</?u>|\*\*|__|~~|`|(?<!\w)[*_]|[*_](?!\w)")
+_MD_ESCAPE = re.compile(r"\\([\\`*_~\[\]#>|.+-])")
+
+
+def _plain(text: str) -> str:
+    """Text as the page shows it: Markdown's marks gone, spaces single.
+
+    A comment quotes words as they read, and the model may copy them
+    from the file with their marks or without, so both are compared
+    this way."""
+
+    text = _MD_LINK.sub(r"\1", text)
+    text = _MD_LINE_MARK.sub("", text)
+    text = _MD_INLINE_MARK.sub("", text)
+    text = _MD_ESCAPE.sub(r"\1", text)
+    return " ".join(text.split())
+
+
+def _doc_comments(
+    raw: Any, text: str,
+) -> tuple[list[dict], list[str]]:
+    """The comments the model left on a document, cleaned, and a line
+    for each one whose quote is not in the document.
+
+    A quote that is not found still goes: the page shows it as a note
+    on the whole document."""
+
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw) if raw.strip() else []
+        except json.JSONDecodeError:
+            return [], ["comments was not a list; none were added"]
+    if isinstance(raw, dict):
+        raw = [raw]
+    if not isinstance(raw, list):
+        return [], ["comments was not a list; none were added"]
+
+    plain_text = _plain(text)
+    flat_text = " ".join(text.split())
+    comments: list[dict] = []
+    missing: list[str] = []
+    for item in raw[:MAX_DOC_COMMENTS]:
+        if not isinstance(item, dict):
+            continue
+        quote = str(item.get("quote") or "").strip()[:MAX_QUOTE_CHARS]
+        note = str(
+            item.get("note") or item.get("comment") or item.get("text") or ""
+        ).strip()[:MAX_NOTE_CHARS]
+        if not note:
+            continue
+        comments.append({"quote": quote, "note": note})
+        if quote and " ".join(quote.split()) not in flat_text and (
+            _plain(quote) not in plain_text
+        ):
+            missing.append(
+                f'comment {len(comments)} quotes "{quote[:60]}", which is '
+                "not in the document word for word, so it shows without "
+                "a place"
+            )
+    return comments, missing
+
+
+def send_document(
+    path: str, caption: str = "", comments: Any = None,
+) -> str:
+    """Put a Markdown or text document in front of the user, with any
+    comments the model left on its passages."""
+
+    tool_line(f"SendDocument({path})")
+
+    doc = Path(path).expanduser()
+    problem = ""
+    size = 0
+    if not doc.is_file():
+        problem = f"no file at {doc}"
+    elif doc.suffix.lower() not in DOCUMENT_SUFFIXES:
+        problem = f"{doc.name} is not a .md or .txt file"
+    else:
+        try:
+            size = doc.stat().st_size
+            doc.read_bytes().decode("utf-8")
+        except OSError as exc:
+            problem = f"could not read {doc}: {exc}"
+        except UnicodeDecodeError:
+            problem = f"{doc.name} is not UTF-8 text"
+        else:
+            if size > MAX_DOCUMENT_BYTES:
+                problem = (
+                    f"{doc.name} is {size // 1024} KB; the limit is "
+                    f"{MAX_DOCUMENT_BYTES // (1024 * 1024)} MB"
+                )
+
+    if problem:
+        result = f"Error: {problem}."
+        tool_result(result, style=ERROR)
+        return result
+
+    kilobytes = max(1, round(size / 1024))
+    note = caption.strip()
+    label = f"{doc.name} ({kilobytes} KB)" + (f": {note}" if note else "")
+    left, missing = _doc_comments(
+        comments, doc.read_text(encoding="utf-8")
+    )
+    count = len(left)
+    if count:
+        label += f", {count} comment{'' if count == 1 else 's'}"
+    unplaced = f" To fix: {'; '.join(missing)}." if missing else ""
+    pinned = (
+        f" Your {count} comment{'' if count == 1 else 's'} show"
+        f"{'s' if count == 1 else ''} on the passages quoted."
+        if count else ""
+    )
+
+    shown = tool_document(str(doc), left) if left else tool_file(str(doc))
+    if shown:
+        tool_result(label)
+        return (
+            f"Sent {doc.name} ({kilobytes} KB) to the user's screen, "
+            f"beside the chat.{pinned} They can edit it there, and "
+            "saving writes the file. Their comments come to you as a "
+            f"message quoting each passage.{unplaced}"
+        )
+
+    problem = _open_with_spinner(doc)
+    tool_result(label + (f" ({problem})" if problem else ""))
+    console.print(
+        Text(f"{' ' * RESULT_INDENT}{_display_path(doc)}", style=DIM)
+    )
+    # The app it opens in has no place for them: they print under it.
+    for item in left:
+        where = f'"{item["quote"]}": ' if item["quote"] else ""
+        console.print(
+            Text(f"{' ' * RESULT_INDENT}{where}{item['note']}", style=DIM)
+        )
+
+    if problem:
+        return (
+            f"Could not open {doc.name}: {problem}. Its path is on "
+            "screen; tell the user where the file is."
+        )
+    return (
+        f"Sent {doc.name} ({kilobytes} KB). It opened in the user's "
+        "default app for it, with its path on screen"
+        + (", and your comments printed under it." if left else ".")
+    )
+
+
 DEFAULT_SCREENSHOT_WIDTH = 1280
 DEFAULT_SCREENSHOT_HEIGHT = 800
 MIN_SCREENSHOT_SIDE = 200
@@ -3092,6 +3256,64 @@ tools: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "send_document",
+            "description": (
+                "Show a Markdown or text document (.md, .markdown, .txt) "
+                "to the user: a report, plan, README, or notes you wrote. "
+                "In the web UI it opens beside the chat, rendered, where "
+                "they can edit it and comment on passages; their comments "
+                "reach you as a message quoting each one. Write the file "
+                "first; this only shows it. To flag something for them in "
+                "it (unfinished work, a gap to fill, an open question, an "
+                "assumption to check), add comments pinned to passages."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Path to the document.",
+                    },
+                    "caption": {
+                        "type": "string",
+                        "description": (
+                            "Optional single line shown with it."
+                        ),
+                    },
+                    "comments": {
+                        "type": "array",
+                        "description": (
+                            "Optional notes for the user, each pinned to "
+                            "a passage: what is unfinished, missing, or "
+                            "needs their decision there."
+                        ),
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "quote": {
+                                    "type": "string",
+                                    "description": (
+                                        "A few words from the document, "
+                                        "exactly as they read, marking "
+                                        "the passage."
+                                    ),
+                                },
+                                "note": {
+                                    "type": "string",
+                                    "description": "What to tell them.",
+                                },
+                            },
+                            "required": ["quote", "note"],
+                        },
+                    },
+                },
+                "required": ["path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "view_image",
             "description": (
                 "Look at an image file on disk (.png, .jpg, .jpeg, .webp, "
@@ -3693,6 +3915,7 @@ FUNCTIONS = {
     "send_image": send_image,
     "send_pdf": send_pdf,
     "send_html": send_html,
+    "send_document": send_document,
     "screenshot": screenshot,
     "open_page": open_page,
     "interact": interact,
