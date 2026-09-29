@@ -107,6 +107,13 @@ STATIC.update({
     if path.is_file() and path.suffix in KATEX_TYPES
 })
 
+# three.js and Flash's viewer on it, which draw the 3D models the agent
+# makes: shipped with Flash too, and loaded only once a model is opened.
+STATIC.update({
+    path.relative_to(WEB_DIR).as_posix(): KATEX_TYPES[path.suffix]
+    for path in sorted((WEB_DIR / "three").glob("*.js"))
+})
+
 # How often an idle event stream says it is still there. Proxies and
 # some browsers drop a stream that has been silent for a minute.
 PING_SECONDS = 15

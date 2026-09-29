@@ -588,6 +588,26 @@ class TestFont:
         ]
         assert (web.WEB_DIR / "katex" / "LICENSE.txt").is_file()
 
+    def test_three_js_is_served_for_3d_models(self, server):
+        port = server.port
+        for name in ("three.min.js", "viewer.js"):
+            conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+            conn.request("GET", f"/static/three/{name}",
+                         headers={"Host": f"127.0.0.1:{port}"})
+            response = conn.getresponse()
+            body = response.read()
+            conn.close()
+
+            assert response.status == 200
+            assert response.getheader("Content-Type").startswith(
+                "text/javascript"
+            )
+            assert body
+        page = web.PAGE.read_bytes()
+        assert b"/static/three/three.min.js" in page
+        assert b"/static/three/viewer.js" in page
+        assert (web.WEB_DIR / "three" / "LICENSE.txt").is_file()
+
     def test_but_nothing_else_is(self, server):
         assert request(server, "GET", "/static/index.html",
                        token=False)[0] == 403
@@ -1360,6 +1380,36 @@ class TestShownFiles:
         policy = headers.getheader("Content-Security-Policy")
         assert policy.startswith("sandbox")
         assert "allow-same-origin" not in policy
+
+    def test_in_the_web_ui_a_3d_model_goes_to_the_page(
+        self, server, tmp_path, monkeypatch
+    ):
+        monkeypatch.setattr(tools, "model_sees_images", lambda *_: False)
+        opened = []
+        monkeypatch.setattr(tools, "_open_with_spinner",
+                            lambda path: opened.append(path) or "")
+        target = tmp_path / "chair.glb"
+        FakeClient.scripts = [
+            [part(calls=[call("make_3d_model", path=str(target), parts=[
+                {"shape": "box", "size": [0.5, 0.05, 0.5],
+                 "position": [0, 0.45, 0]},
+            ])]), part(done=True)],
+            [part("There it is."), part(done=True)],
+        ]
+        session = web.Session()
+        chat = session.new_chat()
+
+        run(session, chat, "make me a chair")
+
+        shown = [e for e in chat.log if e["type"] == "file"]
+        assert [(f["name"], f["kind"], f["mime"]) for f in shown] == [
+            ("chair.glb", "model", "model/gltf-binary"),
+        ]
+        assert opened == []
+        status, body = request(server, "GET", f"/api/files/{shown[0]['id']}")
+        assert status == 200
+        assert body == target.read_bytes()
+        assert request.last.getheader("Content-Type") == "model/gltf-binary"
 
     def test_send_document_checks_what_it_is_given(self, tmp_path):
         wrong = tmp_path / "page.html"
