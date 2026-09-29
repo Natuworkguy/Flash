@@ -288,7 +288,7 @@ def test_ensure_models_downloads_what_is_missing(tmp_path, monkeypatch):
     monkeypatch.setattr(voice, "MODELS_DIR", tmp_path)
     asked = []
 
-    def fake_download(url, out, label, on_progress):
+    def fake_download(url, out, label, on_progress, stop=None):
         asked.append(label)
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_bytes(b"downloaded")
@@ -320,7 +320,9 @@ def test_ensure_models_reports_a_failed_download(tmp_path, monkeypatch):
     monkeypatch.setattr(
         voice,
         "_download",
-        lambda url, out, label, on_progress: f"could not download {label}",
+        lambda url, out, label, on_progress, stop=None: (
+            f"could not download {label}"
+        ),
     )
 
     why = ensure_models(lambda label, percent: None)
@@ -602,7 +604,7 @@ def test_one_model_downloads_by_name(tmp_path, monkeypatch):
     monkeypatch.setattr(voice, "MODELS_DIR", tmp_path)
     fetched = []
 
-    def fetch(url, out, label, on_progress):
+    def fetch(url, out, label, on_progress, stop=None):
         fetched.append(url)
         if url.endswith(".zip"):
             with zipfile.ZipFile(out, "w") as bundle:
@@ -635,6 +637,60 @@ def test_one_model_downloads_by_name(tmp_path, monkeypatch):
         "vosk-model-en-us-0.22-lgraph"
     )
     assert not voice.voice_installed("en_US-ryan-high")  # nosec B101
+
+
+class _Slow:
+    """A download that sends a chunk each time it is read, forever."""
+
+    headers = {"Content-Length": str(1 << 30)}
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_exc):
+        return False
+
+    def read(self, _size):
+        return b"x" * 1024
+
+
+def test_a_download_can_be_called_off(tmp_path, monkeypatch):
+    monkeypatch.setattr(voice, "urlopen", lambda *_a, **_kw: _Slow())
+    stop = threading.Event()
+    out = tmp_path / "model.onnx"
+    seen = []
+
+    def progress(label, percent):
+        seen.append(percent)
+        if len(seen) == 3:
+            stop.set()
+
+    why = voice._download("https://x/model.onnx", out, "voice", progress,
+                          stop)
+
+    assert why == voice.CANCELLED  # nosec B101
+    assert len(seen) == 3  # nosec B101
+    # Nothing of it is left: not the file, not its part.
+    assert list(tmp_path.iterdir()) == []  # nosec B101
+
+
+def test_a_voice_called_off_between_its_files_leaves_neither(
+    tmp_path, monkeypatch,
+):
+    monkeypatch.setattr(voice, "MODELS_DIR", tmp_path)
+
+    def fetch(url, out, label, on_progress, stop=None):
+        if label == "voice":
+            out.write_bytes(b"network")
+            return ""
+        return voice.CANCELLED
+
+    monkeypatch.setattr(voice, "_download", fetch)
+
+    why = voice.download_voice("en_US-ryan-high", lambda *_: None)
+
+    assert why == voice.CANCELLED  # nosec B101
+    assert list(tmp_path.iterdir()) == []  # nosec B101
 
 
 def test_only_offered_models_can_be_removed(tmp_path, monkeypatch):

@@ -6,6 +6,9 @@
 <meta name="referrer" content="no-referrer">
 <meta name="theme-color" content="#262624">
 <title>Flash</title>
+<!-- The Flash cursor is on before the first paint, or the system arrow
+     shows until the page's script runs. -->
+<script>try { if (localStorage.getItem("flash-cursor") === "flash") document.documentElement.classList.add("flash-cursor"); } catch (_) { /* per viewer only */ }</script>
 <link rel="icon" type="image/svg+xml" href="/static/logo-icon.svg">
 <style>
 @font-face {
@@ -83,7 +86,17 @@ body {
   -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
 }
-button { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; }
+button { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: var(--pointer, pointer); }
+/* The Flash cursor, from Settings: the arrow at the heart of the Cursor
+   logo, turned to point up and left, in Flash orange. Over something to
+   click it deepens a shade; text fields keep their I-beam. */
+html.flash-cursor {
+  --arrow: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 32 32'%3E%3Cfilter id='s' x='-0.2' y='-0.2' width='1.4' height='1.4'%3E%3CfeDropShadow dx='0' dy='1' stdDeviation='0.9' flood-opacity='0.35'/%3E%3C/filter%3E%3Cpath filter='url(%23s)' d='M4 3 23.7 18.2 13.2 20.4 6.1 28.4Z' fill='%23d97757' stroke='white' stroke-width='1.8' stroke-linejoin='round' paint-order='stroke'/%3E%3C/svg%3E") 3 2, default;
+  --pointer: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 32 32'%3E%3Cfilter id='s' x='-0.2' y='-0.2' width='1.4' height='1.4'%3E%3CfeDropShadow dx='0' dy='1' stdDeviation='0.9' flood-opacity='0.35'/%3E%3C/filter%3E%3Cpath filter='url(%23s)' d='M4 3 23.7 18.2 13.2 20.4 6.1 28.4Z' fill='%23b9532f' stroke='white' stroke-width='1.8' stroke-linejoin='round' paint-order='stroke'/%3E%3C/svg%3E") 3 2, pointer;
+  cursor: var(--arrow);
+}
+html.flash-cursor a[href], html.flash-cursor label, html.flash-cursor summary, html.flash-cursor select { cursor: var(--pointer); }
+html.flash-cursor :is(input:not([type="checkbox"]):not([type="radio"]):not([type="range"]), textarea, [contenteditable="true"], [contenteditable="plaintext-only"]) { cursor: text; }
 svg.i { width: 18px; height: 18px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.75; stroke-linecap: round; stroke-linejoin: round; }
 :focus { outline: none; }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 8px; }
@@ -317,6 +330,23 @@ body.empty #suggestions { display: flex; flex-wrap: wrap; justify-content: cente
   padding: 10px 16px; border-radius: 20px 20px 6px 20px;
   white-space: pre-wrap; word-wrap: break-word;
 }
+.sent-comments { width: min(460px, 88%); border: 1px solid var(--border); border-radius: 18px 18px 6px 18px; background: var(--surface); overflow: hidden; box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04); }
+.sent-comments .head { width: 100%; display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-bottom: 1px solid var(--border); text-align: left; color: var(--text); }
+.sent-comments button.head { transition: background 0.12s; }
+.sent-comments button.head:hover { background: var(--hover); }
+.sent-comments .badge { width: 32px; height: 32px; flex: none; border-radius: 9px; display: grid; place-items: center; background: color-mix(in srgb, var(--warn) 14%, transparent); color: var(--warn); }
+.sent-comments .badge svg { width: 16px; height: 16px; }
+.sent-comments .words { flex: 1; min-width: 0; display: flex; flex-direction: column; line-height: 1.3; }
+.sent-comments .name { font-weight: 600; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sent-comments .meta { font-size: 12.5px; color: var(--text-3); }
+.sent-comments .chev svg { width: 16px; height: 16px; color: var(--text-3); }
+.sent-comments .items { list-style: none; margin: 0; padding: 4px 14px; }
+.sent-comments .items li { padding: 10px 0; }
+.sent-comments .items li + li { border-top: 1px solid var(--border); }
+.sent-comments .where { display: block; margin-bottom: 4px; font: 600 11px/1.3 var(--mono); color: var(--text-3); }
+.sent-comments .where:empty { display: none; }
+.sent-comments q { display: block; padding-left: 9px; border-left: 3px solid var(--warn); font-size: 13px; line-height: 1.45; color: var(--text-3); quotes: none; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; }
+.sent-comments p { margin: 6px 0 0; font-size: 14.5px; line-height: 1.5; white-space: pre-wrap; word-wrap: break-word; }
 .assistant { font-size: 16px; line-height: 1.72; color: var(--text); word-wrap: break-word; }
 .assistant > :first-child { margin-top: 0; }
 .assistant > :last-child { margin-bottom: 0; }
@@ -446,7 +476,7 @@ pre code { display: block; padding: 2px 16px 14px; overflow-x: auto; font-size: 
 body.voice-on .shell, body.voice-on #suggestions, body.voice-on #pending { display: none !important; }
 #voice { display: flex; align-items: center; gap: 16px; padding: 14px 14px 14px 16px; border: 1px solid var(--border-strong); border-radius: 22px; background: var(--surface); box-shadow: var(--composer-shadow); animation: pop 0.2s var(--ease); }
 #voice[hidden] { display: none; }
-.voice-orb { --lvl: 0; position: relative; flex: none; width: 58px; height: 58px; border-radius: 50%; cursor: pointer;
+.voice-orb { --lvl: 0; position: relative; flex: none; width: 58px; height: 58px; border-radius: 50%; cursor: var(--pointer, pointer);
   background: radial-gradient(circle at 34% 30%, #ffe1bd 0%, #f0a36f 30%, var(--accent) 62%, color-mix(in srgb, var(--accent) 55%, #000) 100%);
   box-shadow: 0 0 calc(8px + var(--lvl) * 44px) color-mix(in srgb, var(--accent) 55%, transparent);
   transform: scale(calc(1 + var(--lvl) * 0.22)); transition: transform 0.08s linear, box-shadow 0.08s linear, filter 0.3s; }
@@ -480,7 +510,7 @@ body.voice-on .shell, body.voice-on #suggestions, body.voice-on #pending { displ
 .vm-what small { font: 12px var(--mono); color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .vm-act { flex: none; display: flex; align-items: center; gap: 6px; }
 .vm-act .btn.small { padding: 5px 12px; font-size: 13px; }
-.vm-act .btn:disabled { opacity: 0.5; cursor: default; }
+.vm-act .btn:disabled { opacity: 0.5; cursor: var(--arrow, default); }
 .vm-tag { font-size: 12px; font-weight: 500; color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); padding: 3px 9px; border-radius: 999px; }
 .vm-progress { font: 12.5px var(--mono); color: var(--text-2); }
 .vm-row.current .vm-what b { color: var(--text); }
@@ -538,7 +568,7 @@ body.empty:not(.on-page) #project-btn { display: inline-flex; }
 /* What goes with the next message, above the box. */
 #tray { display: flex; flex-wrap: wrap; gap: 8px; margin: -2px 0 12px; }
 #tray[hidden] { display: none; }
-.tray-item { position: relative; height: 64px; border-radius: 12px; border: 1px solid var(--border); background: var(--hover); animation: bubble 0.3s var(--spring) both; cursor: default; }
+.tray-item { position: relative; height: 64px; border-radius: 12px; border: 1px solid var(--border); background: var(--hover); animation: bubble 0.3s var(--spring) both; cursor: var(--arrow, default); }
 .tray-item.shot { width: 64px; overflow: hidden; }
 .tray-item.shot img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .tray-item.doc { display: flex; align-items: center; gap: 10px; max-width: 240px; padding: 0 30px 0 10px; }
@@ -579,7 +609,10 @@ body.empty:not(.on-page) #project-btn { display: inline-flex; }
 .user-files .doc .name { font-size: 13.5px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .user-files .doc .meta { font-size: 12px; color: var(--text-3); }
 button.doc:hover { border-color: var(--border-strong); }
-#model-btn { margin-left: auto; border-color: transparent; max-width: 55%; }
+#model-btn { margin-left: auto; border-color: transparent; max-width: 55%; min-width: 0; flex: 0 1 auto; overflow: hidden; }
+/* Short of room, the model's name gives way; nothing else in the row
+   does, so the send button stays inside the box. */
+.composer-row > :not(#model-btn):not(#context) { flex-shrink: 0; }
 #model-btn span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #model-btn svg { width: 14px; height: 14px; margin-right: -2px; }
 #context { font-size: 12px; color: var(--text-3); padding: 0 4px; }
@@ -591,11 +624,8 @@ button.doc:hover { border-color: var(--border-strong); }
 }
 #send svg { width: 17px; height: 17px; stroke-width: 2.2; }
 #send:active { transform: scale(0.94); }
-#send:disabled { opacity: 0.35; cursor: default; }
+#send:disabled { opacity: 0.35; cursor: var(--arrow, default); }
 #send.stop { background: var(--invert-bg); color: var(--invert-text); }
-.shock { position: fixed; z-index: 60; width: 34px; height: 34px; margin: -17px 0 0 -17px; border-radius: 11px; border: 2px solid var(--accent); pointer-events: none; animation: shock 0.6s cubic-bezier(0.2, 0, 0, 1) forwards; }
-.shock.second { animation-delay: 0.08s; opacity: 0; border-width: 1px; }
-@keyframes shock { 0% { opacity: 0.9; transform: scale(0.8); } 100% { opacity: 0; transform: scale(2.8); border-radius: 22px; } }
 #send.stop svg { width: 13px; height: 13px; }
 .fine { text-align: center; font-size: 12px; color: var(--text-3); margin-top: 10px; }
 body.empty .fine { display: none; }
@@ -865,7 +895,15 @@ body.page-projects #dock, body.page-settings #dock, body.page-tool #dock { displ
 .browser-empty { padding: 18px 16px; color: var(--text-3); font-size: 14px; }
 .btn.danger { color: var(--del); border-color: color-mix(in srgb, var(--del) 40%, transparent); white-space: nowrap; }
 .btn.danger:hover { background: color-mix(in srgb, var(--del) 10%, transparent); }
-.btn.danger.arm { background: var(--del); color: #fff; border-color: transparent; }
+.btn.danger.solid { background: var(--del); color: #fff; border-color: transparent; }
+.btn.danger.solid:hover { background: color-mix(in srgb, var(--del) 88%, #000); }
+/* Asking before something that cannot be undone: a small card by the
+   button that asked, until it is answered. */
+.confirm-pop { position: fixed; z-index: 80; width: min(300px, calc(100vw - 24px)); padding: 14px 14px 12px; border-radius: 14px; border: 1px solid var(--border-strong); background: var(--surface); box-shadow: var(--shadow); animation: pop 0.14s var(--ease); transform-origin: var(--from, top right); }
+.confirm-pop b { display: block; font-size: 14.5px; font-weight: 600; color: var(--text); margin-bottom: 4px; }
+.confirm-pop p { margin: 0; font-size: 13.5px; line-height: 1.45; color: var(--text-2); }
+.confirm-pop .row { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
+.confirm-pop .btn { padding: 6px 13px; font-size: 13px; }
 .setting-row { display: flex; align-items: center; justify-content: space-between; gap: 20px; max-width: 620px; padding: 14px 16px; border: 1px solid var(--border); border-radius: 14px; background: var(--surface); text-align: left; width: 100%; }
 .setting-row .what b { display: block; font-size: 14.5px; font-weight: 500; color: var(--text); margin-bottom: 3px; }
 .setting-row .what span { font-size: 13px; color: var(--text-3); line-height: 1.45; }
@@ -873,8 +911,8 @@ body.page-projects #dock, body.page-settings #dock, body.page-tool #dock { displ
 .switch::after { content: ""; position: absolute; top: 2px; left: 2px; width: 18px; height: 18px; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3); transition: transform 0.28s var(--spring); }
 .setting-row[aria-checked="true"] .switch { background: var(--accent); }
 .setting-row[aria-checked="true"] .switch::after { transform: translateX(16px); }
-.setting-row.static { cursor: default; }
-.setting-row[disabled] { opacity: 0.6; cursor: default; }
+.setting-row.static { cursor: var(--arrow, default); }
+.setting-row[disabled] { opacity: 0.6; cursor: var(--arrow, default); }
 .lan-warn { font-size: 13px !important; color: var(--text-3); margin-top: 10px !important; }
 #phone .dialog-buttons { justify-content: center; margin-top: 16px; }
 .setting-row .side { flex: none; display: flex; align-items: center; }
@@ -882,7 +920,7 @@ body.page-projects #dock, body.page-settings #dock, body.page-tool #dock { displ
 @keyframes spin { to { transform: rotate(360deg); } }
 .update-extra { max-width: 620px; margin-top: 10px; }
 .update-extra .note { font: 12.5px/1.55 var(--mono); color: var(--del); white-space: pre-wrap; margin: 0 0 8px; }
-.update-log summary { cursor: pointer; font-size: 12.5px; color: var(--text-3); padding: 4px 2px; }
+.update-log summary { cursor: var(--pointer, pointer); font-size: 12.5px; color: var(--text-3); padding: 4px 2px; }
 .update-log pre { margin: 6px 0 0; max-height: 220px; overflow: auto; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--code-bg); font: 11.5px/1.5 var(--mono); color: var(--text-2); white-space: pre-wrap; }
 #settings-btn { position: relative; }
 #settings-btn.has-update::after { content: ""; position: absolute; left: 25px; top: 7px; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 2px var(--side-bg, var(--bg)); animation: pop 0.3s var(--spring) both; }
@@ -1004,7 +1042,7 @@ button.item-row:hover { background: var(--hover); }
 /* Folder suggestions, hanging under the field that asked for them. */
 .suggest { position: fixed; z-index: 50; max-height: 248px; overflow-y: auto; padding: 5px; background: var(--surface); border: 1px solid var(--border-strong); border-radius: 12px; box-shadow: var(--shadow); animation: pop 0.14s cubic-bezier(0.2, 0, 0, 1); }
 .suggest[hidden] { display: none; }
-.suggest-row { display: flex; align-items: center; gap: 9px; padding: 7px 10px; border-radius: 8px; font: 13.5px var(--mono); color: var(--text-3); cursor: pointer; white-space: nowrap; overflow: hidden; }
+.suggest-row { display: flex; align-items: center; gap: 9px; padding: 7px 10px; border-radius: 8px; font: 13.5px var(--mono); color: var(--text-3); cursor: var(--pointer, pointer); white-space: nowrap; overflow: hidden; }
 .suggest-row svg { width: 15px; height: 15px; flex: none; }
 .suggest-row .path { display: flex; min-width: 0; }
 .suggest-row .where { flex: none; }
@@ -1056,14 +1094,21 @@ button.item-row:hover { background: var(--hover); }
   border-left: 1px solid transparent;
   transition: width 0.46s var(--apple), border-color 0.46s var(--apple);
 }
-#viewer.open { width: min(46vw, 780px); border-left-color: var(--border); }
+#viewer.open { width: var(--viewer-w, min(46vw, 780px)); border-left-color: var(--border); }
 #viewer .pane {
-  position: absolute; top: 0; right: 0; bottom: 0; width: min(46vw, 780px);
+  position: absolute; top: 0; right: 0; bottom: 0; width: var(--viewer-w, min(46vw, 780px));
   display: flex; flex-direction: column; background: var(--bg);
   transform: translateX(48px); opacity: 0;
   transition: transform 0.46s var(--apple), opacity 0.3s var(--ease);
 }
 #viewer.open .pane { transform: none; opacity: 1; }
+/* The panel's left edge drags to make it wider or narrower. */
+.viewer-resize { position: absolute; top: 0; bottom: 0; left: 0; z-index: 5; width: 10px; cursor: col-resize; touch-action: none; outline: 0; }
+.viewer-resize::after { content: ""; position: absolute; top: 0; bottom: 0; left: 0; width: 2px; background: var(--accent); opacity: 0; transition: opacity 0.15s var(--ease); }
+.viewer-resize:hover::after, .viewer-resize:focus-visible::after, #viewer.resizing .viewer-resize::after { opacity: 1; transition-delay: 0.08s; }
+#viewer.resizing, #viewer.resizing .pane { transition: none; }
+body.resizing-viewer { cursor: col-resize; user-select: none; }
+body.resizing-viewer iframe { pointer-events: none; }
 .viewer-bar {
   height: 56px; flex: none; display: flex; align-items: center; gap: 10px;
   padding: 0 10px 0 16px; border-bottom: 1px solid var(--border);
@@ -1074,12 +1119,99 @@ button.item-row:hover { background: var(--hover); }
 #viewer-title { font-weight: 600; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #viewer-size { font-size: 12px; color: var(--text-3); }
 .viewer-bar a.icon-btn { text-decoration: none; }
+.viewer-editing { display: flex; gap: 6px; margin-right: 6px; flex: none; }
+.viewer-editing[hidden] { display: none; }
 #viewer-body { flex: 1; min-height: 0; position: relative; background: var(--code-bg); }
 #viewer-body iframe { width: 100%; height: 100%; border: 0; display: block; background: var(--code-bg); }
 #viewer-body iframe.page { background: #fff; }
 #viewer-body .image { position: absolute; inset: 0; overflow: auto; display: grid; place-items: center; padding: 20px; cursor: zoom-in; }
 #viewer-body .image img { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: 8px; box-shadow: var(--shadow); animation: rise-far 0.45s var(--apple) both; }
 #viewer-body .image.actual { place-items: start; cursor: zoom-out; }
+
+/* A document, set like a page: a readable column, generous margins. */
+#viewer-body .doc-scroll { position: absolute; inset: 0; overflow: auto; background: var(--bg); display: flex; flex-direction: column; }
+#viewer-body:has(.doc-foot:not([hidden])) .doc-scroll { bottom: var(--foot, 220px); }
+.doc { width: 100%; max-width: 720px; margin: 0 auto; padding: 36px 40px 72px; font-size: 16px; line-height: 1.75; color: var(--text); animation: rise 0.3s var(--ease) both; }
+.doc.assistant h1 { font-size: 1.85em; letter-spacing: -0.02em; margin: 0 0 0.6em; line-height: 1.2; }
+.doc.assistant h2 { font-size: 1.35em; margin: 1.8em 0 0.6em; padding-bottom: 0.3em; border-bottom: 1px solid var(--border); }
+.doc.assistant h3 { font-size: 1.12em; margin: 1.5em 0 0.5em; }
+.doc.assistant > :first-child { margin-top: 0; }
+.doc.assistant table { margin: 0 0 1em; }
+.doc.assistant img { max-width: 100%; }
+.doc-plain { white-space: pre-wrap; font: 14px/1.65 var(--mono); }
+.doc-error { color: var(--del); }
+::highlight(doc-comment) { background-color: color-mix(in srgb, var(--warn) 30%, transparent); }
+/* Flash's comments: its own colour, and a line under, so they read as
+   notes from it and not the user's. */
+::highlight(doc-note) { background-color: color-mix(in srgb, var(--accent) 16%, transparent); text-decoration: underline 2px color-mix(in srgb, var(--accent) 75%, transparent); text-underline-offset: 4px; }
+.note-pop .who { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; font-size: 12px; font-weight: 600; color: var(--accent); }
+.note-pop .who .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); }
+.note-pop p { margin: 0 0 4px; font-size: 14px; line-height: 1.5; white-space: pre-wrap; }
+.doc-thumb { display: grid; place-items: center; color: var(--accent); }
+.doc-thumb svg { width: 22px; height: 22px; }
+
+/* Commenting: a button by the selection, then a small box to write in. */
+.doc-comment-btn { position: fixed; z-index: 60; display: inline-flex; align-items: center; gap: 6px; padding: 6px 11px; border-radius: 9px; font-size: 13px; font-weight: 500; color: var(--invert-text); background: var(--invert-bg); box-shadow: var(--shadow); animation: pop 0.14s var(--ease); }
+.doc-comment-btn svg { width: 14px; height: 14px; }
+.doc-comment-box { position: fixed; z-index: 60; width: 280px; padding: 12px; border-radius: 12px; border: 1px solid var(--border-strong); background: var(--surface); box-shadow: var(--shadow); animation: pop 0.16s var(--ease); }
+.doc-comment-box blockquote { margin: 0 0 8px; padding-left: 10px; border-left: 3px solid var(--warn); font-size: 12.5px; color: var(--text-3); max-height: 60px; overflow: hidden; }
+.doc-comment-box textarea { width: 100%; resize: vertical; min-height: 64px; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--bg); color: var(--text); font: 14px/1.45 var(--sans); outline: 0; }
+.doc-comment-box textarea:focus { border-color: var(--border-strong); }
+.doc-comment-box .row { display: flex; align-items: center; gap: 6px; margin-top: 8px; }
+.doc-comment-box .hint { flex: 1; font-size: 11.5px; color: var(--text-3); }
+
+/* The comments waiting to go, at the foot of the panel. */
+.doc-foot { position: absolute; left: 0; right: 0; bottom: 0; height: var(--foot, 220px); display: flex; flex-direction: column; border-top: 1px solid var(--border); background: var(--surface); }
+.doc-foot[hidden] { display: none; }
+.doc-foot-head { display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--border); }
+.doc-foot-head b { font-size: 13.5px; }
+.doc-foot-head .spacer, .doc-editbar .spacer { flex: 1; }
+/* The footer reads as a chat: Flash on the left, the user in bubbles
+   on the right, each under the passage it is about. */
+.doc-comments { list-style: none; margin: 0; padding: 12px 14px 16px; overflow: auto; flex: 1; display: flex; flex-direction: column; gap: 14px; }
+.doc-comments li { display: flex; flex-direction: column; align-items: flex-start; max-width: 100%; animation: rise 0.22s var(--ease) both; }
+.doc-comments li.mine { align-items: flex-end; }
+.doc-comments li.lost .about { opacity: 0.55; }
+.doc-comments .who { display: flex; align-items: center; gap: 6px; margin-bottom: 3px; font-size: 12px; font-weight: 600; color: var(--accent); }
+.doc-comments .who .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); }
+.doc-comments .about { display: flex; align-items: baseline; gap: 6px; max-width: 88%; margin-bottom: 5px; padding: 2px 0; font-size: 12px; color: var(--text-3); text-align: left; }
+.doc-comments button.about:hover q { color: var(--text-2); }
+.doc-comments .where { flex: none; font: 600 11px/1.3 var(--mono); }
+.doc-comments .where:empty { display: none; }
+.doc-comments q { min-width: 0; padding-left: 7px; border-left: 2px solid var(--warn); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; quotes: none; }
+.doc-comments li.theirs q { border-left-color: var(--accent); }
+.doc-comments .said { margin: 0; max-width: 92%; font-size: 14px; line-height: 1.55; color: var(--text); white-space: pre-wrap; word-wrap: break-word; }
+.doc-comments .replying { margin-bottom: 4px; font-size: 11.5px; color: var(--accent); }
+.doc-comments .bubble { margin: 0; max-width: 85%; padding: 8px 13px; border-radius: 16px 16px 5px 16px; border: 1px solid var(--border); background: var(--bg); font-size: 14px; line-height: 1.5; color: var(--text); white-space: pre-wrap; word-wrap: break-word; cursor: text; }
+.doc-comments .acts { display: flex; align-items: center; gap: 2px; margin-top: 4px; opacity: 0; transition: opacity 0.15s var(--ease); }
+.doc-comments li.theirs .acts { opacity: 1; gap: 4px; }
+.doc-comments li:hover .acts, .doc-comments .acts:focus-within { opacity: 1; }
+.doc-comments .acts .icon-btn { width: 26px; height: 26px; }
+.doc-comments .acts .icon-btn svg { width: 14px; height: 14px; }
+.doc-comments .acts .btn { height: 26px; padding: 0 10px; font-size: 12.5px; }
+.doc-comments .bubble-edit { width: 85%; resize: none; padding: 8px 13px; border-radius: 16px 16px 5px 16px; border: 1px solid var(--accent); background: var(--bg); color: var(--text); font: 14px/1.5 var(--sans); outline: 0; box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent); }
+.doc-comments .edit-acts { display: flex; align-items: center; gap: 6px; margin-top: 6px; }
+.doc-comments .edit-acts .hint { font-size: 11.5px; color: var(--text-3); margin-right: 4px; }
+.doc-comments .edit-acts .btn { height: 26px; padding: 0 10px; font-size: 12.5px; }
+
+/* Editing in place: the page itself, with a toolbar for the formatting. */
+.doc-editbar { position: sticky; top: 0; z-index: 2; display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--border); background: var(--surface); font-size: 13.5px; color: var(--text-2); }
+.doc-tools { display: flex; align-items: center; gap: 2px; flex-wrap: wrap; min-width: 0; }
+.doc-editbar .doc-block { width: 112px; }
+.doc-tools .sep { width: 1px; height: 18px; background: var(--border-strong); margin: 0 5px; }
+.doc-tool { width: 30px; height: 30px; border-radius: 7px; display: grid; place-items: center; color: var(--text-2); font: 600 14px/1 var(--sans); transition: background 0.12s, color 0.12s; }
+.doc-tool svg { width: 16px; height: 16px; }
+.doc-tool:hover { background: var(--hover); color: var(--text); }
+.doc-tool.on { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); }
+.doc-tool.t-italic { font-style: italic; font-family: Georgia, serif; }
+.doc-tool.t-underline { text-decoration: underline; text-underline-offset: 3px; }
+.doc-tool.t-strikeThrough { text-decoration: line-through; }
+.doc-block { height: 30px; padding: 0 26px 0 9px; margin-right: 4px; border-radius: 7px; border: 1px solid var(--border); background: var(--bg); color: var(--text); font: 13px var(--sans); cursor: var(--pointer, pointer); }
+.doc-editable { outline: 0; caret-color: var(--accent); cursor: text; }
+.doc-editable:empty::before { content: "Start writing"; color: var(--text-3); }
+.doc-editable u, .doc u { text-underline-offset: 3px; }
+.doc-editable .code-head { user-select: none; }
+.doc-link-box input { width: 100%; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--bg); color: var(--text); font: 13.5px var(--mono); outline: 0; }
 #viewer-body .image.actual img { max-width: none; max-height: none; }
 
 /* Search ------------------------------------------------------------- */
@@ -1144,7 +1276,7 @@ button.item-row:hover { background: var(--hover); }
 #palette-input { flex: 1; height: 54px; border: 0; outline: 0; background: transparent; color: var(--text); font: 16px var(--sans); }
 #palette-input::placeholder { color: var(--text-3); font: 16px var(--sans); }
 #palette-list { max-height: 52vh; overflow-y: auto; padding: 6px; }
-.row { display: flex; align-items: center; gap: 12px; padding: 9px 12px; border-radius: 10px; cursor: pointer; font-size: 14px; color: var(--text-2); }
+.row { display: flex; align-items: center; gap: 12px; padding: 9px 12px; border-radius: 10px; cursor: var(--pointer, pointer); font-size: 14px; color: var(--text-2); }
 .row .group { font-size: 12px; color: var(--text-3); width: 44px; flex: none; }
 .row .label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .row .keys { display: none; gap: 4px; color: var(--text-3); }
@@ -1208,6 +1340,7 @@ button.item-row:hover { background: var(--hover); }
 @media (max-width: 800px) {
   #viewer, #viewer.open { position: fixed; inset: 0; z-index: 55; width: 100%; border: 0; pointer-events: none; }
   #viewer .pane { width: 100%; transform: translateX(100%); opacity: 1; }
+  .viewer-resize { display: none; }
   #viewer.open { pointer-events: auto; }
   #viewer.open .pane { transform: none; }
   #sidebar { position: fixed; z-index: 50; height: 100%; box-shadow: var(--shadow); }
@@ -1296,10 +1429,13 @@ button.item-row:hover { background: var(--hover); }
   </main>
 
   <aside id="viewer" aria-label="File" aria-hidden="true">
+    <div class="viewer-resize" role="separator" aria-orientation="vertical" aria-label="Resize the panel" tabindex="0" data-tip="Drag to resize, double-click to reset"></div>
     <div class="pane">
       <header class="viewer-bar">
         <span class="kind" id="viewer-kind"></span>
         <div class="names"><div id="viewer-title"></div><div id="viewer-size"></div></div>
+        <span class="viewer-editing" id="viewer-editing" hidden><button type="button" class="btn small" id="viewer-cancel" data-keys="Esc">Cancel</button><button type="button" class="btn small primary" id="viewer-save" data-keys="⌘S">Save</button></span>
+        <button class="icon-btn" id="viewer-edit" hidden data-tip="Edit" aria-label="Edit"></button>
         <a class="icon-btn" id="viewer-download" data-tip="Download" aria-label="Download"></a>
         <a class="icon-btn" id="viewer-open" target="_blank" rel="noopener" data-tip="Open in a new tab" aria-label="Open in a new tab"></a>
         <button class="icon-btn" id="viewer-close" data-tip="Close" data-keys="Esc" aria-label="Close"></button>
@@ -1372,6 +1508,11 @@ const ICON = {
   clip: '<path d="m21.4 11.1-9.2 9.2a6 6 0 0 1-8.5-8.5l9.2-9.2a4 4 0 0 1 5.7 5.7l-9.2 9.2a2 2 0 0 1-2.8-2.8l8.5-8.5"/>',
   slash: '<path d="M15 4 9 20"/>',
   voice: '<path d="M4 10v4M8 6.5v11M12 3.5v17M16 6.5v11M20 10v4"/>',
+  bullets: '<path d="M9 6h11M9 12h11M9 18h11"/><circle cx="4.5" cy="6" r="1" fill="currentColor"/><circle cx="4.5" cy="12" r="1" fill="currentColor"/><circle cx="4.5" cy="18" r="1" fill="currentColor"/>',
+  numbers: '<path d="M10 6h10M10 12h10M10 18h10"/><path d="M4 4.5h1.5V9M4 9h3M4 14.5c.4-.6 1-1 1.7-1 .9 0 1.5.6 1.5 1.3 0 1.2-3.2 2.2-3.2 4.2h3.3"/>',
+  quote: '<path d="M7 7H4.5A1.5 1.5 0 0 0 3 8.5V12h4v5M17 7h-2.5A1.5 1.5 0 0 0 13 8.5V12h4v5"/>',
+  link: '<path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/>',
+  code: '<path d="m8 7-5 5 5 5M16 7l5 5-5 5"/>',
   image: '<rect x="3" y="4" width="18" height="16" rx="3"/><circle cx="9" cy="10" r="1.6"/><path d="m21 16-5.5-5.5L6 20"/>',
   server: '<rect x="3" y="4" width="18" height="7" rx="2"/><rect x="3" y="13" width="18" height="7" rx="2"/><path d="M7 7.5h.01M7 16.5h.01"/>',
   more: '<circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/>',
@@ -1567,14 +1708,21 @@ const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&
 
 function inline(text) {
   const codes = [];
-  let s = text.replace(/`([^`\n]+)`/g, (_, c) => { codes.push(c); return `\u0000${codes.length - 1}\u0000`; });
+  const kept = [];
+  // A backslash keeps the next mark as itself: \* is an asterisk, not
+  // emphasis. The editor writes these for marks typed as text.
+  let s = text.replace(/\\([\\`*_~\[\]#>|.+-])/g, (_, c) => { kept.push(c); return `\u0001${kept.length - 1}\u0001`; });
+  s = s.replace(/`([^`\n]+)`/g, (_, c) => { codes.push(c); return `\u0000${codes.length - 1}\u0000`; });
   s = esc(s);
+  // Underline has no Markdown of its own: <u>, as GitHub reads it too.
+  s = s.replace(/&lt;u&gt;(.+?)&lt;\/u&gt;/g, "<u>$1</u>");
   s = s.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, (_, t, u) => `<a href="${u}" target="_blank" rel="noopener noreferrer">${t}</a>`);
   s = s.replace(/(^|[\s(])(https?:\/\/[^\s<)]+[^\s<).,;:!?])/g, (_, p, u) => `${p}<a href="${u}" target="_blank" rel="noopener noreferrer">${u}</a>`);
   s = s.replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>").replace(/__([^_\n]+)__/g, "<strong>$1</strong>");
   s = s.replace(/(^|[^*\w])\*([^*\n]+)\*(?!\w)/g, "$1<em>$2</em>").replace(/(^|[^_\w])_([^_\n]+)_(?!\w)/g, "$1<em>$2</em>");
   s = s.replace(/~~([^~\n]+)~~/g, "<del>$1</del>");
-  return s.replace(/\u0000(\d+)\u0000/g, (_, i) => `<code>${esc(codes[+i])}</code>`);
+  s = s.replace(/\u0000(\d+)\u0000/g, (_, i) => `<code>${esc(codes[+i])}</code>`);
+  return s.replace(/\u0001(\d+)\u0001/g, (_, i) => esc(kept[+i]));
 }
 
 const codeBlock = (lang, body) =>
@@ -1910,7 +2058,9 @@ function fileSize(bytes) {
   return `${(bytes / (1024 * 1024)).toFixed(bytes < 10 * 1024 * 1024 ? 1 : 0)} MB`;
 }
 const fileUrl = (entry, download) => `/api/files/${encodeURIComponent(entry.id)}${download ? "?download=1" : ""}`;
-const fileKind = (entry) => (entry.kind === "pdf" ? "PDF" : entry.kind === "html" ? "HTML" : (entry.mime || "image/").split("/")[1].toUpperCase());
+const fileKind = (entry) => (entry.kind === "pdf" ? "PDF" : entry.kind === "html" ? "HTML"
+  : entry.kind === "doc" ? (/\.txt$/i.test(entry.name) ? "Text" : "Markdown")
+  : (entry.mime || "image/").split("/")[1].toUpperCase());
 
 function attachment(entry) {
   const card = el("button", "block attachment");
@@ -1918,10 +2068,12 @@ function attachment(entry) {
   card.dataset.file = entry.id;
   const thumb = entry.kind === "image"
     ? `<img alt="" loading="lazy" src="${fileUrl(entry)}">`
+    : entry.kind === "doc" ? `<span class="doc-thumb">${icon("file")}</span>`
     : `<span class="badge">${fileKind(entry)}</span>`;
   card.innerHTML = `<span class="thumb">${thumb}</span><span class="info"><div class="name"></div>` +
-    `<div class="meta">${fileKind(entry)} · ${fileSize(entry.size)}</div></span><span class="chev">${icon("chevRight")}</span>`;
+    `<div class="meta"></div></span><span class="chev">${icon("chevRight")}</span>`;
   card.querySelector(".name").textContent = entry.name;
+  card.querySelector(".meta").textContent = attachmentMeta(entry);
   card.onclick = () => openViewer(entry);
   return card;
 }
@@ -1936,7 +2088,11 @@ function openViewer(entry) {
   viewing = lastViewed = entry;
   $("#viewer-title").textContent = entry.name;
   $("#viewer-size").textContent = `${fileKind(entry)} · ${fileSize(entry.size)}`;
-  $("#viewer-kind").innerHTML = icon({ pdf: "file", html: "globe" }[entry.kind] || "image");
+  $("#viewer-kind").innerHTML = icon({ pdf: "file", html: "globe", doc: "file" }[entry.kind] || "image");
+  $("#viewer-edit").hidden = entry.kind !== "doc";
+  $("#viewer-editing").hidden = true;
+  if (openDoc && openDoc.onSelect) document.removeEventListener("selectionchange", openDoc.onSelect);
+  openDoc = null;
   const download = $("#viewer-download");
   download.href = fileUrl(entry, true);
   download.setAttribute("download", entry.name);
@@ -1956,6 +2112,8 @@ function openViewer(entry) {
     frame.title = entry.name;
     frame.src = fileUrl(entry) + "#view=FitH";
     body.appendChild(frame);
+  } else if (entry.kind === "doc") {
+    openDocument(entry, body);
   } else {
     const holder = el("div", "image");
     const img = el("img");
@@ -1973,12 +2131,735 @@ function openViewer(entry) {
   markOpenCard();
 }
 
+// ---------------------------------------------------------------------------
+// Documents: Markdown or text Flash sent, read like a page, edited in
+// place, and commented on. Select a passage to comment on it; the
+// comments go to Flash together, each quoting what it is about.
+
+let openDoc = null;   // { entry, text, comments, editing, markdown, body }
+
+async function openDocument(entry, body) {
+  const doc = { entry, text: "", comments: [], editing: false, markdown: !/\.txt$/i.test(entry.name), body };
+  // Flash's own comments, sent with the document: what is unfinished or
+  // needs a decision. Dismissed ones stay dismissed in this browser.
+  const gone = dismissedNotes()[entry.id] || [];
+  doc.notes = (entry.comments || []).map((c, i) => ({ i, quote: String(c.quote || ""), note: String(c.note || ""), range: null })).filter((n) => n.note && !gone.includes(n.i));
+  openDoc = doc;
+  body.innerHTML = `<div class="doc-scroll"><article class="doc"></article></div><div class="doc-foot" hidden></div>`;
+  try {
+    const response = await fetch(fileUrl(entry), { credentials: "same-origin" });
+    if (!response.ok) throw new Error(response.statusText);
+    doc.text = await response.text();
+  } catch (error) {
+    body.querySelector(".doc").innerHTML = `<p class="doc-error">Could not open ${esc(entry.name)}: ${esc(error.message)}</p>`;
+    return;
+  }
+  if (openDoc !== doc) return;
+  drawDocument(doc);
+}
+
+function drawDocument(doc) {
+  const article = doc.body.querySelector(".doc");
+  if (!article) return;
+  if (doc.markdown) {
+    article.className = "doc assistant";
+    article.innerHTML = markdown(doc.text);
+  } else {
+    article.className = "doc doc-plain";
+    article.textContent = doc.text;
+  }
+  article.onmouseup = () => setTimeout(() => offerComment(doc), 0);
+  article.onkeyup = (e) => { if (e.shiftKey) offerComment(doc); };
+  markComments(doc);
+  drawComments(doc);
+}
+
+// Where a quote sits in the document's text now, as a range, or null if
+// an edit took it away.
+// The page's text as read, with where each text node starts in it.
+function pageText(root) {
+  const walk = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  const spans = [];
+  let text = "";
+  for (let n = walk.nextNode(); n; n = walk.nextNode()) {
+    if (n.parentElement.closest(".code-head, .copy-code")) continue;
+    spans.push({ node: n, from: text.length });
+    text += n.nodeValue;
+  }
+  return { text, spans };
+}
+
+// Whitespace is loose in a selection, so it is loose in the search: a
+// selection across two list items has a line break the page's text
+// nodes do not.
+const quotePattern = (quote) => quote.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\s+/g, "\\s*");
+
+// Every place a quote appears: a phrase can be on the page more than
+// once, and a comment is about one of them.
+function quoteMatches(text, quote) {
+  const pattern = quotePattern(quote);
+  if (!pattern) return [];
+  const re = new RegExp(pattern, "g");
+  const found = [];
+  for (let m = re.exec(text); m; m = re.exec(text)) found.push(m);
+  return found;
+}
+
+// Which of a quote's places a selection is: how many come before it.
+function quoteIndex(root, quote, range) {
+  const { text, spans } = pageText(root);
+  const probe = document.createRange();
+  let start = text.length;
+  for (const s of spans) {
+    if (s.node === range.startContainer) { start = s.from + range.startOffset; break; }
+    probe.selectNodeContents(s.node);
+    if (probe.comparePoint(range.startContainer, range.startOffset) <= 0) { start = s.from; break; }
+  }
+  return quoteMatches(text, quote).filter((m) => m.index < start).length;
+}
+
+function findQuote(root, quote, nth = 0) {
+  const { text, spans } = pageText(root);
+  const all = quoteMatches(text, quote);
+  if (!all.length) return null;
+  const found = all[Math.min(nth, all.length - 1)];
+  const at = (offset, closing) => {
+    for (let i = spans.length - 1; i >= 0; i--) {
+      const s = spans[i];
+      if (closing ? offset > s.from : offset >= s.from) return [s.node, Math.min(offset - s.from, s.node.nodeValue.length)];
+    }
+    return [spans[0].node, 0];
+  };
+  const range = document.createRange();
+  range.setStart(...at(found.index, false));
+  range.setEnd(...at(found.index + found[0].length, true));
+  return range;
+}
+
+// Where a comment's passage is in the file itself, as line and column,
+// so Flash goes straight to it. The page shows Markdown without its
+// marks, so the search lets them sit anywhere between the words:
+// "see docs" is found as "see [docs](https://...)".
+const MD_MARK = /(?:[*_~`\\[]|<\/?u>|\]\([^)\s]*\))*/.source;
+const MD_GAP = /(?:[\s*_~`\\#>|+\-[\]]|\d+[.)]|<\/?u>|\]\([^)\s]*\))+/.source;
+
+function commentSpot(doc, c) {
+  const words = c.quote.trim();
+  if (!words) return null;
+  let pattern;
+  if (doc.markdown) {
+    pattern = words.split(/(\s+)/).filter(Boolean).map((part) => (/^\s/.test(part) ? MD_GAP
+      : [...part].map((ch) => ch.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join(MD_MARK))).join("");
+  } else pattern = quotePattern(words);
+  const all = [...doc.text.matchAll(new RegExp(pattern, "g"))];
+  if (!all.length) return null;
+  const m = all[Math.min(c.nth || 0, all.length - 1)];
+  const place = (i) => {
+    const before = doc.text.slice(0, i);
+    return [before.split("\n").length, i - before.lastIndexOf("\n")];
+  };
+  const [line, col] = place(m.index);
+  const [endLine, endCol] = place(m.index + m[0].length - 1);
+  return { line, col, endLine, endCol };
+}
+
+const spotLabel = (s) => (s.line === s.endLine ? `Line ${s.line}, columns ${s.col}-${s.endCol}` : `Lines ${s.line}-${s.endLine}, from ${s.line}:${s.col} to ${s.endLine}:${s.endCol}`);
+
+function markComments(doc) {
+  if (!window.CSS || !CSS.highlights) return;
+  const article = doc.body.querySelector(".doc");
+  const ranges = doc.comments.map((c) => (c.range = findQuote(article, c.quote, c.nth))).filter(Boolean);
+  if (ranges.length) CSS.highlights.set("doc-comment", new Highlight(...ranges));
+  else CSS.highlights.delete("doc-comment");
+  const notes = (doc.notes || []).map((n) => (n.range = n.quote ? findQuote(article, n.quote) || findQuote(article, plainQuote(n.quote)) : null)).filter(Boolean);
+  if (notes.length) CSS.highlights.set("doc-note", new Highlight(...notes));
+  else CSS.highlights.delete("doc-note");
+}
+
+// Flash quotes a passage as it wrote it, sometimes with its Markdown
+// marks: the page's text has none.
+const plainQuote = (q) => q.replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1").replace(/^[ \t]*(?:#{1,6}[ \t]+|>[ \t]?|[-*+][ \t]+|\d+[.)][ \t]+)/gm, "")
+  .replace(/<\/?u>|\*\*|__|~~|`/g, "").replace(/\\([\\`*_~[\]#>|.+-])/g, "$1");
+
+function dismissedNotes() {
+  try { const kept = JSON.parse(pref("dismissed-notes", "{}")); return kept && typeof kept === "object" ? kept : {}; } catch (_) { return {}; }
+}
+function dismissNote(doc, n) {
+  const kept = dismissedNotes();
+  kept[doc.entry.id] = [...(kept[doc.entry.id] || []), n.i];
+  // Only the newest documents' dismissals are worth keeping.
+  const ids = Object.keys(kept);
+  for (const id of ids.slice(0, Math.max(0, ids.length - 200))) delete kept[id];
+  savePref("dismissed-notes", JSON.stringify(kept));
+  doc.notes = doc.notes.filter((x) => x !== n);
+  dropCommentUi();
+  markComments(doc);
+  drawComments(doc);
+  const card = messagesEl.querySelector(`.attachment[data-file="${doc.entry.id}"] .meta`);
+  if (card) card.textContent = attachmentMeta(doc.entry);
+}
+
+// Answering one of Flash's comments: a comment of the user's own on the
+// same passage, sent with the rest, saying which note it answers.
+function replyToNote(doc, n, from) {
+  const article = doc.body.querySelector(".doc");
+  const quote = n.range ? n.range.toString().trim() : n.quote;
+  const nth = n.range ? quoteIndex(article, quote, n.range) : 0;
+  writeComment(doc, quote, (from || article).getBoundingClientRect(), nth, n.note);
+}
+
+// A click on a passage Flash commented on shows what it said.
+function showNote(doc, n) {
+  dropCommentUi();
+  const box = el("div", "doc-comment-box note-pop", `<div class="who"><span class="dot"></span>Flash</div><p></p><div class="row"><span class="hint"></span><button type="button" class="btn small" data-dismiss>Dismiss</button><button type="button" class="btn small primary" data-reply>Reply</button></div>`);
+  box.querySelector("p").textContent = n.note;
+  const r = n.range.getBoundingClientRect();
+  placeFloat(box, r);
+  document.body.appendChild(box);
+  fitFloat(box, r);
+  box.querySelector("[data-dismiss]").onclick = () => dismissNote(doc, n);
+  box.querySelector("[data-reply]").onclick = () => replyToNote(doc, n, n.range);
+}
+
+// A passage selected in the document: a button beside it to comment.
+function offerComment(doc) {
+  dropCommentUi();
+  if (doc.editing || openDoc !== doc) return;
+  const selection = getSelection();
+  if (!selection || !selection.rangeCount) return;
+  const article = doc.body.querySelector(".doc");
+  if (selection.isCollapsed) {
+    const hit = (doc.notes || []).find((n) => n.range && article.contains(selection.anchorNode) && n.range.isPointInRange(selection.anchorNode, selection.anchorOffset));
+    if (hit) showNote(doc, hit);
+    return;
+  }
+  const range = selection.getRangeAt(0);
+  if (!article.contains(range.commonAncestorContainer)) return;
+  // The selection's own text keeps the breaks between blocks, which
+  // the range's does not, so a passage across lines is found in the file.
+  const quote = selection.toString().trim();
+  if (!quote) return;
+  const r = range.getBoundingClientRect();
+  const button = el("button", "doc-comment-btn", `${icon("edit")}<span>Comment</span>`);
+  button.type = "button";
+  placeFloat(button, r);
+  button.onmousedown = (e) => e.preventDefault();
+  const nth = quoteIndex(article, quote, range);
+  button.onclick = () => writeComment(doc, quote, r, nth);
+  document.body.appendChild(button);
+}
+
+function placeFloat(node, r) {
+  node.style.left = `${Math.max(12, Math.min(innerWidth - 12 - 280, r.left))}px`;
+  node.style.top = `${Math.min(innerHeight - 60, r.bottom + 8)}px`;
+}
+
+function fitFloat(node, r) {
+  if (node.getBoundingClientRect().bottom <= innerHeight - 8) return;
+  node.style.top = `${Math.max(8, r.top - node.offsetHeight - 8)}px`;
+}
+
+function dropCommentUi() { document.querySelectorAll(".doc-comment-btn, .doc-comment-box").forEach((n) => n.remove()); }
+
+function writeComment(doc, quote, r, nth = 0, replyTo = "") {
+  dropCommentUi();
+  const box = el("div", "doc-comment-box", `<blockquote></blockquote><textarea rows="3" placeholder="${replyTo ? "Reply to Flash" : "Add a comment for Flash"}"></textarea><div class="row"><span class="hint">Enter adds \u00b7 Ctrl Enter sends all</span><button type="button" class="btn small" data-cancel>Cancel</button><button type="button" class="btn small primary" data-add>Add</button></div>`);
+  box.querySelector("blockquote").textContent = quote.length > 160 ? `${quote.slice(0, 160)}…` : quote;
+  placeFloat(box, r);
+  document.body.appendChild(box);
+  fitFloat(box, r);
+  const field = box.querySelector("textarea");
+  field.focus();
+  const add = (andSend) => {
+    const text = field.value.trim();
+    if (!text) {
+      // Nothing typed, but the ones before it can still go.
+      if (andSend && doc.comments.length) { dropCommentUi(); sendComments(doc); return; }
+      field.focus();
+      return;
+    }
+    doc.comments.push({ id: Math.random().toString(36).slice(2, 9), quote, nth, text, replyTo });
+    doc.toNewest = true;
+    getSelection().removeAllRanges();
+    dropCommentUi();
+    markComments(doc);
+    drawComments(doc);
+    if (andSend) sendComments(doc);
+  };
+  box.querySelector("[data-add]").onclick = () => add(false);
+  box.querySelector("[data-cancel]").onclick = dropCommentUi;
+  field.addEventListener("keydown", (e) => {
+    e.stopPropagation();
+    if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); add(true); }
+    else if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); add(false); }
+    if (e.key === "Escape") { e.preventDefault(); dropCommentUi(); }
+  });
+}
+
+function drawComments(doc) {
+  const foot = doc.body.querySelector(".doc-foot");
+  if (!foot) return;
+  const notes = doc.notes || [];
+  const was = foot.querySelector(".doc-comments");
+  const scrolled = was ? was.scrollTop : 0;
+  foot.hidden = !doc.comments.length && !notes.length;
+  foot.textContent = "";
+  if (foot.hidden) return;
+  const mine = doc.comments.length;
+  const head = el("div", "doc-foot-head", `<b></b><span class="spacer"></span>${mine ? `<button type="button" class="btn small" data-clear>Clear</button><button type="button" class="btn small primary with-icon" data-send>${icon("up")}<span>Send to Flash</span></button>` : ""}`);
+  head.querySelector("b").textContent = [notes.length ? `${notes.length} from Flash` : "", mine ? `${mine} comment${mine === 1 ? "" : "s"}` : ""].filter(Boolean).join(" \u00b7 ");
+  if (mine) {
+    head.querySelector("[data-clear]").onclick = () => { doc.comments = []; markComments(doc); drawComments(doc); };
+    const go = head.querySelector("[data-send]");
+    go.onclick = () => sendComments(doc);
+    go.dataset.tip = "Send them all to Flash";
+    go.dataset.keys = "Ctrl Shift Enter";
+  }
+  foot.appendChild(head);
+  const list = foot.appendChild(el("ol", "doc-comments"));
+  const scrollTo = (range) => {
+    const box = doc.body.querySelector(".doc-scroll");
+    const rect = range.getBoundingClientRect(), frame = box.getBoundingClientRect();
+    box.scrollBy({ top: rect.top - frame.top - frame.height * 0.3, behavior: calm.matches ? "auto" : "smooth" });
+  };
+  // A thread, as the chat is: Flash's comments on the left as its
+  // replies are, the user's on the right in bubbles. Each says above it
+  // which passage it is on; a click there shows the passage.
+  const about = (item, quote, range, where) => {
+    const tag = item.appendChild(el(range ? "button" : "div", "about", `<span class="where"></span><q></q>`));
+    tag.querySelector(".where").textContent = where;
+    tag.querySelector("q").textContent = quote;
+    if (range) { tag.type = "button"; tag.title = "Show it in the document"; tag.onclick = () => scrollTo(range); }
+    else tag.title = "The passage is not in the document now";
+    return tag;
+  };
+  for (const n of notes) {
+    const item = list.appendChild(el("li", "theirs" + (n.quote && !n.range ? " lost" : ""), `<span class="who"><span class="dot"></span>Flash</span>`));
+    if (n.quote) about(item, n.range ? n.range.toString() : n.quote, n.range, "");
+    item.appendChild(el("p", "said")).textContent = n.note;
+    const acts = item.appendChild(el("div", "acts"));
+    const reply = acts.appendChild(el("button", "btn small", "Reply"));
+    reply.type = "button";
+    reply.onclick = () => { if (n.range) scrollTo(n.range); replyToNote(doc, n, item); };
+    acts.appendChild(button("icon-btn", "x", "Dismiss", "", () => dismissNote(doc, n)));
+  }
+  for (const c of doc.comments) {
+    const item = list.appendChild(el("li", "mine" + (c.range ? "" : " lost")));
+    const spot = commentSpot(doc, c);
+    about(item, c.quote, c.range, spot ? (spot.line === spot.endLine ? `Line ${spot.line}` : `Lines ${spot.line}-${spot.endLine}`) : "");
+    if (c.replyTo) item.appendChild(el("span", "replying")).textContent = "Replying to Flash";
+    const bubble = item.appendChild(el("p", "bubble"));
+    bubble.textContent = c.text;
+    bubble.title = "Double-click to edit";
+    bubble.ondblclick = () => editComment(doc, c, item);
+    const acts = item.appendChild(el("div", "acts"));
+    acts.append(
+      button("icon-btn", "edit", "Edit", "", () => editComment(doc, c, item)),
+      button("icon-btn", "x", "Remove", "", () => {
+        doc.comments = doc.comments.filter((x) => x !== c);
+        markComments(doc);
+        drawComments(doc);
+      }),
+    );
+  }
+  // Where the reader was, or at the newest, as a chat is, when that is
+  // one they just added.
+  list.scrollTop = doc.toNewest ? list.scrollHeight : scrolled;
+  doc.toNewest = false;
+}
+
+// A comment not sent yet can be rewritten where it sits: its bubble
+// becomes a box to type in. Enter keeps the change, Esc drops it.
+function editComment(doc, c, item) {
+  if (item.classList.contains("editing")) return;
+  item.classList.add("editing");
+  const bubble = item.querySelector(".bubble");
+  const acts = item.querySelector(".acts");
+  const field = el("textarea", "bubble-edit");
+  field.value = c.text;
+  field.rows = 1;
+  field.setAttribute("aria-label", "Edit your comment");
+  const row = el("div", "edit-acts", `<span class="hint">Enter saves \u00b7 Ctrl Enter sends all</span><button type="button" class="btn small" data-cancel>Cancel</button><button type="button" class="btn small primary" data-save>Save</button>`);
+  bubble.replaceWith(field);
+  acts.replaceWith(row);
+  const fit = () => { field.style.height = "auto"; field.style.height = `${Math.min(field.scrollHeight, 160)}px`; };
+  const save = row.querySelector("[data-save]");
+  const done = (keep, andSend) => {
+    const text = field.value.trim();
+    if (keep && text) c.text = text;
+    drawComments(doc);
+    if (andSend) sendComments(doc);
+  };
+  field.addEventListener("input", () => { fit(); save.disabled = !field.value.trim(); });
+  field.addEventListener("keydown", (e) => {
+    e.stopPropagation();
+    if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && !e.isComposing) { e.preventDefault(); if (field.value.trim()) done(true, true); }
+    else if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); if (field.value.trim()) done(true); }
+    else if (e.key === "Escape") { e.preventDefault(); done(false); }
+  });
+  row.querySelector("[data-cancel]").onclick = () => done(false);
+  save.onclick = () => done(true);
+  fit();
+  field.focus();
+  field.setSelectionRange(field.value.length, field.value.length);
+  item.scrollIntoView({ block: "nearest", behavior: calm.matches ? "auto" : "smooth" });
+}
+
+// Ctrl Shift Enter, or /comments: the open document's comments, all
+// at once.
+function sendOpenComments() {
+  if (!openDoc || !openDoc.comments.length) { toast("No comments waiting to send"); return; }
+  sendComments(openDoc);
+}
+
+// The comments go to Flash as one message, each quoting its passage. An
+// edit still open is saved first, so they are about what Flash will read.
+async function sendComments(doc) {
+  if (!doc.comments.length) return;
+  if (doc.editing && !(await saveDocument(doc))) return;
+  const where = doc.entry.path ? `${doc.entry.name} (${doc.entry.path})` : doc.entry.name;
+  const lines = [`Comments on ${where}, with the line and column each one is about in the file as it is now:`];
+  doc.comments.forEach((c, i) => {
+    const quote = c.quote.replace(/\s+/g, " ");
+    const spot = commentSpot(doc, c);
+    const on = `on "${quote.length > 300 ? `${quote.slice(0, 300)}…` : quote}"`;
+    const said = c.replyTo ? `Replying to your comment "${c.replyTo.replace(/\s+/g, " ").slice(0, 200)}": ${c.text}` : c.text;
+    lines.push("", `${i + 1}. ${spot ? `${spotLabel(spot)}, ${on}` : on[0].toUpperCase() + on.slice(1)}:`, `   ${said.replace(/\n/g, "\n   ")}`);
+  });
+  doc.comments = [];
+  markComments(doc);
+  drawComments(doc);
+  await send(lines.join("\n"));
+  toast("Comments sent to Flash");
+}
+
+// Editing: the page itself turns editable, like a word processor, with
+// a toolbar for the formatting. Nobody types Markdown: it is only what
+// the file on disk holds, for Flash to read, and saving writes it back.
+
+const DOC_TOOLS = [
+  ["bold", "B", "Bold", "\u2318B"], ["italic", "I", "Italic", "\u2318I"], ["underline", "U", "Underline", "\u2318U"], ["strikeThrough", "S", "Strikethrough", ""],
+  null,
+  ["insertUnorderedList", "bullets", "Bulleted list", "- then space"], ["insertOrderedList", "numbers", "Numbered list", "1. then space"],
+  ["blockquote", "quote", "Quote", "> then space"], ["code", "code", "Code", ""], ["link", "link", "Link", ""],
+];
+
+function editDocument(doc) {
+  if (doc.editing) return;
+  dropCommentUi();
+  doc.editing = true;
+  $("#viewer-edit").hidden = true;
+  $("#viewer-editing").hidden = false;
+  const scroll = doc.body.querySelector(".doc-scroll");
+  scroll.innerHTML = `<div class="doc-editbar"><div class="doc-tools" role="toolbar" aria-label="Formatting"></div></div><article class="doc doc-editable"></article>`;
+  const article = scroll.querySelector(".doc");
+  const tools = scroll.querySelector(".doc-tools");
+  if (doc.markdown) {
+    article.className = "doc assistant doc-editable";
+    article.innerHTML = markdown(doc.text);
+    // A code block's label and Copy button, and rendered math, are not
+    // text to type into: they stay whole.
+    article.querySelectorAll(".code-head, math").forEach((n) => { n.contentEditable = "false"; });
+    const block = el("select", "doc-block");
+    block.setAttribute("aria-label", "Text style");
+    block.innerHTML = `<option value="p">Text</option><option value="h1">Title</option><option value="h2">Heading</option><option value="h3">Subheading</option>`;
+    block.onmousedown = block.onfocus = () => saveEditorSelection(doc);
+    block.onchange = () => { restoreEditorSelection(doc); document.execCommand("formatBlock", false, `<${block.value}>`); article.focus(); markTools(doc); };
+    tools.appendChild(block);
+    for (const tool of DOC_TOOLS) {
+      if (!tool) { tools.appendChild(el("span", "sep")); continue; }
+      const [cmd, face, tip, keys] = tool;
+      const b = el("button", `doc-tool t-${cmd}`, ICON[face] ? icon(face) : face);
+      b.type = "button";
+      b.dataset.cmd = cmd;
+      b.dataset.tip = tip;
+      if (keys) b.dataset.keys = keys;
+      b.setAttribute("aria-label", tip);
+      b.onmousedown = (e) => e.preventDefault();   // keeps the selection
+      b.onclick = () => formatDocument(doc, cmd, b);
+      tools.appendChild(b);
+    }
+  } else {
+    article.className = "doc doc-plain doc-editable";
+    article.textContent = doc.text;
+    scroll.querySelector(".doc-editbar").remove();
+  }
+  article.contentEditable = doc.markdown ? "true" : "plaintext-only";
+  article.spellcheck = true;
+  document.execCommand("styleWithCSS", false, false);
+  document.execCommand("defaultParagraphSeparator", false, "p");
+  article.focus();
+  doc.startedAs = editorText(doc);
+  const cancel = async () => {
+    if (editorText(doc) !== doc.startedAs && !(await confirmPop($("#viewer-cancel"), { title: "Discard your changes?", text: "What you changed since you started editing is lost. The file stays as it was.", yes: "Discard" }))) return;
+    if (doc.editing) stopEditing(doc);
+  };
+  $("#viewer-cancel").onclick = cancel;
+  $("#viewer-save").onclick = () => saveDocument(doc);
+  article.addEventListener("keydown", (e) => {
+    e.stopPropagation();
+    const mod = e.metaKey || e.ctrlKey;
+    if (mod && e.key.toLowerCase() === "s") { e.preventDefault(); saveDocument(doc); }
+    else if (mod && e.key.toLowerCase() === "k" && doc.markdown) { e.preventDefault(); formatDocument(doc, "link"); }
+    else if (e.key === "Escape") { e.preventDefault(); cancel(); }
+  });
+  if (doc.markdown) article.addEventListener("input", (e) => autoFormat(doc, e));
+  doc.onSelect = () => markTools(doc);
+  document.addEventListener("selectionchange", doc.onSelect);
+}
+
+const editorOf = (doc) => doc.body.querySelector(".doc-editable");
+const editorText = (doc) => { const a = editorOf(doc); return !a ? doc.text : doc.markdown ? toMarkdown(a) : a.innerText; };
+
+function saveEditorSelection(doc) {
+  const sel = getSelection();
+  doc.savedRange = sel.rangeCount && editorOf(doc).contains(sel.anchorNode) ? sel.getRangeAt(0).cloneRange() : null;
+}
+function restoreEditorSelection(doc) {
+  if (!doc.savedRange) return;
+  const sel = getSelection();
+  sel.removeAllRanges();
+  sel.addRange(doc.savedRange);
+}
+
+// The toolbar shows what the text at the cursor already is.
+function markTools(doc) {
+  const article = editorOf(doc);
+  const sel = getSelection();
+  if (!article || !sel.rangeCount || !article.contains(sel.anchorNode)) return;
+  const node = sel.anchorNode.nodeType === 1 ? sel.anchorNode : sel.anchorNode.parentElement;
+  for (const b of doc.body.querySelectorAll(".doc-tool")) {
+    const cmd = b.dataset.cmd;
+    let on = false;
+    if (cmd === "blockquote") on = !!node.closest("blockquote");
+    else if (cmd === "code") on = !!node.closest("code");
+    else if (cmd === "link") on = !!node.closest("a");
+    else { try { on = document.queryCommandState(cmd); } catch (_) { on = false; } }
+    b.classList.toggle("on", on);
+  }
+  const block = node.closest("h1, h2, h3, h4, p, li, blockquote, pre");
+  const select = doc.body.querySelector(".doc-block");
+  if (select) select.value = block && /^H[1-3]$/.test(block.tagName) ? block.tagName.toLowerCase() : "p";
+}
+
+function formatDocument(doc, cmd, from) {
+  const article = editorOf(doc);
+  article.focus();
+  const sel = getSelection();
+  const node = sel.anchorNode && (sel.anchorNode.nodeType === 1 ? sel.anchorNode : sel.anchorNode.parentElement);
+  if (cmd === "blockquote") {
+    document.execCommand("formatBlock", false, node && node.closest("blockquote") ? "<p>" : "<blockquote>");
+  } else if (cmd === "code") {
+    const inCode = node && node.closest("code");
+    if (inCode && !inCode.closest("pre")) {
+      inCode.replaceWith(document.createTextNode(inCode.textContent));
+    } else if (sel.rangeCount && !sel.isCollapsed) {
+      const code = document.createElement("code");
+      code.textContent = sel.toString();
+      const range = sel.getRangeAt(0);
+      range.deleteContents();
+      range.insertNode(code);
+    }
+  } else if (cmd === "link") {
+    askLink(doc, from);
+    return;
+  } else {
+    document.execCommand(cmd, false, null);
+  }
+  markTools(doc);
+}
+
+// A link: the address, asked for in a small box by the toolbar.
+function askLink(doc, from) {
+  saveEditorSelection(doc);
+  dropCommentUi();
+  const sel = getSelection();
+  const node = sel.anchorNode && (sel.anchorNode.nodeType === 1 ? sel.anchorNode : sel.anchorNode.parentElement);
+  const existing = node && node.closest("a");
+  const box = el("div", "doc-comment-box doc-link-box", `<input type="url" placeholder="https://" spellcheck="false"><div class="row"><span class="hint">Enter to link</span>${existing ? '<button type="button" class="btn small" data-unlink>Remove</button>' : ""}<button type="button" class="btn small primary" data-apply>Link</button></div>`);
+  const anchor = (from || editorOf(doc)).getBoundingClientRect();
+  placeFloat(box, anchor);
+  document.body.appendChild(box);
+  const field = box.querySelector("input");
+  field.value = existing ? existing.getAttribute("href") : "";
+  field.focus();
+  const apply = () => {
+    let url = field.value.trim();
+    if (url && !/^https?:\/\//i.test(url)) url = `https://${url}`;
+    dropCommentUi();
+    restoreEditorSelection(doc);
+    editorOf(doc).focus();
+    if (!url) return;
+    if (getSelection().isCollapsed && !existing) {
+      const a = document.createElement("a");
+      a.href = url;
+      a.textContent = url;
+      getSelection().getRangeAt(0).insertNode(a);
+    } else document.execCommand("createLink", false, url);
+    markTools(doc);
+  };
+  box.querySelector("[data-apply]").onclick = apply;
+  const unlink = box.querySelector("[data-unlink]");
+  if (unlink) unlink.onclick = () => { dropCommentUi(); restoreEditorSelection(doc); document.execCommand("unlink"); };
+  field.addEventListener("keydown", (e) => {
+    e.stopPropagation();
+    if (e.key === "Enter") { e.preventDefault(); apply(); }
+    if (e.key === "Escape") { e.preventDefault(); dropCommentUi(); restoreEditorSelection(doc); }
+  });
+}
+
+// Typing "- ", "1. ", "# " or "> " at the start of a line formats it,
+// the way a word processor does, and the marks themselves go away.
+function autoFormat(doc, e) {
+  if (e.inputType !== "insertText" || e.data !== " ") return;
+  const sel = getSelection();
+  if (!sel.rangeCount || !sel.isCollapsed) return;
+  const node = sel.anchorNode;
+  const block = (node.nodeType === 1 ? node : node.parentElement).closest("p, div, li, h1, h2, h3, h4");
+  if (!block || block.closest("pre")) return;
+  const before = document.createRange();
+  before.setStart(block, 0);
+  before.setEnd(sel.anchorNode, sel.anchorOffset);
+  const typed = before.toString().replace(/\u00a0/g, " ");
+  const rules = { "- ": ["insertUnorderedList"], "* ": ["insertUnorderedList"], "1. ": ["insertOrderedList"], "# ": ["formatBlock", "<h1>"], "## ": ["formatBlock", "<h2>"], "### ": ["formatBlock", "<h3>"], "> ": ["formatBlock", "<blockquote>"] };
+  const rule = rules[typed];
+  if (!rule || block.tagName === "LI") return;
+  before.deleteContents();
+  // An emptied line has nowhere for the cursor to sit, and the format
+  // would land on the line above: keep a <br> in it, the cursor there.
+  if (!block.textContent) block.innerHTML = "<br>";
+  const caret = document.createRange();
+  caret.setStart(block, 0);
+  sel.removeAllRanges();
+  sel.addRange(caret);
+  document.execCommand(rule[0], false, rule[1] || null);
+  markTools(doc);
+}
+
+function stopEditing(doc) {
+  doc.editing = false;
+  if (doc.onSelect) document.removeEventListener("selectionchange", doc.onSelect);
+  dropCommentUi();
+  $("#viewer-edit").hidden = false;
+  $("#viewer-editing").hidden = true;
+  doc.body.querySelector(".doc-scroll").innerHTML = `<article class="doc"></article>`;
+  drawDocument(doc);
+}
+
+async function saveDocument(doc) {
+  if (!editorOf(doc)) return true;
+  const text = editorText(doc);
+  try {
+    const saved = await command("document-save", doc.entry.id, current, { text });
+    doc.text = text;
+    doc.entry.size = saved.size;
+    $("#viewer-size").textContent = `${fileKind(doc.entry)} \u00b7 ${fileSize(saved.size)}`;
+    const card = messagesEl.querySelector(`.attachment[data-file="${doc.entry.id}"] .meta`);
+    if (card) card.textContent = attachmentMeta(doc.entry);
+    stopEditing(doc);
+    toast(saved.path ? `Saved to ${shortPath(saved.path)}` : "Saved");
+    return true;
+  } catch (error) { showFailure(error); return false; }
+}
+
+// The edited page, back into Markdown: what the file holds, and what
+// Flash reads. It writes only what the renderer reads back the same way.
+function toMarkdown(root) {
+  const escapeText = (t) => t.replace(/\u00a0/g, " ").replace(/([\\`*~[\]|])/g, "\\$1").replace(/(?<![A-Za-z0-9])_|_(?![A-Za-z0-9])/g, "\\_");
+  const wrap = (mark, inner, close = mark) => {
+    const lead = inner.match(/^\s*/)[0], tail = inner.match(/\s*$/)[0];
+    const body = inner.trim();
+    return body ? `${lead}${mark}${body}${close}${tail}` : inner;
+  };
+  const inlineOf = (node) => {
+    let out = "";
+    for (const child of node.childNodes) {
+      if (child.nodeType === 3) { out += escapeText(child.nodeValue.replace(/\s+/g, " ")); continue; }
+      if (child.nodeType !== 1) continue;
+      const tag = child.tagName;
+      if (tag === "MATH") {
+        const tex = (child.querySelector('annotation[encoding="application/x-tex"]') || {}).textContent || child.textContent;
+        out += child.getAttribute("display") === "block" ? `$$${tex}$$` : `$${tex}$`;
+      } else if (tag === "BR") out += " ";
+      else if (tag === "STRONG" || tag === "B") out += wrap("**", inlineOf(child));
+      else if (tag === "EM" || tag === "I") out += wrap("*", inlineOf(child));
+      else if (tag === "U") out += wrap("<u>", inlineOf(child), "</u>");
+      else if (tag === "S" || tag === "DEL" || tag === "STRIKE") out += wrap("~~", inlineOf(child));
+      else if (tag === "CODE") out += `\`${child.textContent.replace(/`/g, "'")}\``;
+      else if (tag === "A") { const href = child.getAttribute("href") || ""; const text = inlineOf(child).trim(); out += /^https?:/i.test(href) ? (text === href ? href : `[${text || href}](${href})`) : text; }
+      else if (child.classList.contains("code-head")) continue;
+      else out += inlineOf(child);
+    }
+    return out;
+  };
+  // A paragraph that starts like a heading, list, or quote is kept as
+  // text by escaping its first mark.
+  const plainStart = (line) => line.replace(/^(\s*)(#{1,6}\s|>|[-+]\s|(\d+)([.)])\s)/, (m, sp, mark, num, dot) => (num ? `${sp}${num}\\${dot} ` : `${sp}\\${mark}`));
+  const listOf = (listEl, depth) => {
+    const lines = [];
+    let n = 1;
+    for (const li of listEl.children) {
+      if (li.tagName !== "LI") continue;
+      const marker = listEl.tagName === "OL" ? `${n++}. ` : "- ";
+      const nested = [];
+      const own = document.createElement("div");
+      for (const c of li.childNodes) {
+        if (c.nodeType === 1 && (c.tagName === "UL" || c.tagName === "OL")) nested.push(c);
+        else own.appendChild(c.cloneNode(true));
+      }
+      lines.push(`${"  ".repeat(depth)}${marker}${inlineOf(own).trim()}`);
+      for (const sub of nested) lines.push(...listOf(sub, depth + 1));
+    }
+    return lines;
+  };
+  const blocksOf = (node) => {
+    const blocks = [];
+    let loose = "";
+    const flush = () => { if (loose.trim()) blocks.push(plainStart(loose.trim())); loose = ""; };
+    for (const child of node.childNodes) {
+      if (child.nodeType === 3) { loose += escapeText(child.nodeValue.replace(/\s+/g, " ")); continue; }
+      if (child.nodeType !== 1) continue;
+      const tag = child.tagName;
+      if (/^H[1-6]$/.test(tag)) { flush(); const text = inlineOf(child).trim(); if (text) blocks.push(`${"#".repeat(+tag[1])} ${text}`); }
+      else if (tag === "P" || tag === "DIV") {
+        flush();
+        if (child.querySelector("p, ul, ol, h1, h2, h3, blockquote, pre, table")) blocks.push(...blocksOf(child));
+        else { const text = inlineOf(child).trim(); if (text) blocks.push(plainStart(text)); }
+      } else if (tag === "UL" || tag === "OL") { flush(); const items = listOf(child, 0); if (items.length) blocks.push(items.join("\n")); }
+      else if (tag === "BLOCKQUOTE") { flush(); const inner = blocksOf(child).join("\n\n"); if (inner) blocks.push(inner.split("\n").map((l) => `> ${l}`.trimEnd()).join("\n")); }
+      else if (tag === "PRE") {
+        flush();
+        const lang = ((child.querySelector(".code-head span") || {}).textContent || "").trim();
+        const code = (child.querySelector("code") || child).textContent.replace(/\n$/, "");
+        blocks.push(`\`\`\`${lang}\n${code}\n\`\`\``);
+      } else if (tag === "TABLE") {
+        flush();
+        const rows = [...child.querySelectorAll("tr")].map((tr) => `| ${[...tr.children].map((cell) => inlineOf(cell).trim()).join(" | ")} |`);
+        if (rows.length) {
+          const cols = child.querySelector("tr").children.length;
+          rows.splice(1, 0, `|${" --- |".repeat(cols)}`);
+          blocks.push(rows.join("\n"));
+        }
+      } else if (tag === "HR") { flush(); blocks.push("---"); }
+      else if (tag === "BR") { flush(); }
+      else loose += inlineOf({ childNodes: [child] });
+    }
+    flush();
+    return blocks;
+  };
+  return blocksOf(root).join("\n\n") + "\n";
+}
+
 function closeViewer() {
   const viewer = $("#viewer");
   if (!viewer.classList.contains("open")) return false;
   viewer.classList.remove("open");
   viewer.setAttribute("aria-hidden", "true");
   viewing = null;
+  if (openDoc && openDoc.onSelect) document.removeEventListener("selectionchange", openDoc.onSelect);
+  openDoc = null;
+  dropCommentUi();
+  if (window.CSS && CSS.highlights) CSS.highlights.delete("doc-comment");
   markOpenCard();
   // Emptied once it has slid away, so a PDF is not left loaded.
   setTimeout(() => { if (!viewing) $("#viewer-body").textContent = ""; }, 480);
@@ -2014,7 +2895,51 @@ function replyActions(text) {
   return row;
 }
 
+// Comments sent from a document are a message Flash reads as text. In
+// the chat they show as what they are: the file, and each passage with
+// its note and where it is. Not a message to copy or edit.
+const COMMENTS_HEAD = /^Comments on (.+), with the line and column each one is about in the file as it is now:\n\n/;
+
+function parseComments(text) {
+  const head = COMMENTS_HEAD.exec(text || "");
+  if (!head) return null;
+  const named = /^(.*?) \((.+)\)$/.exec(head[1]);
+  const items = text.slice(head[0].length).split(/\n\n(?=\d+\. )/).map((part) => {
+    const m = /^\d+\. (?:(.*?), on|On) "(.*)":\n([\s\S]*)$/.exec(part);
+    return m && { where: m[1] || "", quote: m[2], note: m[3].replace(/^ {3}/gm, "") };
+  });
+  if (!items.length || items.some((i) => !i)) return null;
+  return { name: named ? named[1] : head[1], path: named ? named[2] : "", items };
+}
+
+function commentsBlock(sent, text, steered) {
+  const wrap = el("div", "block user-wrap turn comments-wrap");
+  if (steered) wrap.appendChild(el("div", "steer-tag", `${icon("steer")}<span>Steered mid-turn</span>`));
+  const card = wrap.appendChild(el("div", "sent-comments"));
+  // The file, if this chat still has it, opens from the card.
+  const chat = chats.get(current);
+  const file = chat && [...chat.log].reverse().find((e) => e.type === "file" && (sent.path ? e.path === sent.path : e.name === sent.name));
+  const head = card.appendChild(el(file ? "button" : "div", "head", `<span class="badge">${icon("file")}</span><span class="words"><span class="name"></span><span class="meta"></span></span>${file ? `<span class="chev">${icon("chevRight")}</span>` : ""}`));
+  head.querySelector(".name").textContent = sent.name;
+  head.querySelector(".meta").textContent = `${sent.items.length} comment${sent.items.length === 1 ? "" : "s"}`;
+  head.title = sent.path || sent.name;
+  if (file) { head.type = "button"; head.onclick = () => openViewer(file); }
+  const list = card.appendChild(el("ol", "items"));
+  for (const item of sent.items) {
+    const li = list.appendChild(el("li", "", `<span class="where"></span><q></q><p></p>`));
+    li.querySelector(".where").textContent = item.where.split(",")[0];
+    li.querySelector(".where").title = item.where;
+    li.querySelector("q").textContent = item.quote;
+    li.querySelector("p").textContent = item.note;
+  }
+  wrap.dataset.raw = text;
+  wrap.tabIndex = -1;
+  return wrap;
+}
+
 function userBlock(text, steered, files) {
+  const sent = !(files && files.length) && parseComments(text);
+  if (sent) return commentsBlock(sent, text, steered);
   const wrap = el("div", "block user-wrap turn");
   if (steered) wrap.appendChild(el("div", "steer-tag", `${icon("steer")}<span>Steered mid-turn</span>`));
   if (files && files.length) wrap.appendChild(sentFiles(files));
@@ -2029,6 +2954,14 @@ function userBlock(text, steered, files) {
 }
 
 const extOf = (name) => (name.includes(".") ? name.split(".").pop().toUpperCase().slice(0, 5) : "File");
+
+// What a file card says under the name: its kind, its size, and how
+// many of Flash's comments on it are still open.
+function attachmentMeta(entry) {
+  const gone = (dismissedNotes()[entry.id] || []).length;
+  const open = Math.max(0, (entry.comments || []).length - gone);
+  return `${fileKind(entry)} \u00b7 ${fileSize(entry.size)}` + (open ? ` \u00b7 ${open} from Flash` : "");
+}
 
 // Photos show as themselves and open in the panel; a PDF opens there
 // too; any other file is a chip with its name.
@@ -2170,6 +3103,8 @@ function drawChat() {
 // Projects pages -----------------------------------------------------------
 
 function drawPage() {
+  // A file belongs to its chat: a page that is not a chat has no panel.
+  closeViewer();
   document.body.classList.remove("empty");
   document.body.classList.add("on-page");
   document.body.classList.toggle("page-projects", view === "projects");
@@ -2381,6 +3316,19 @@ function drawGeneral(body) {
   body.insertAdjacentHTML("beforeend", `<h2 class="settings-section settings-gap">Background</h2><p class="settings-sub">A pixel-art scene behind a new chat, the same ones <code>/background</code> shows in the terminal. Add your own as <code>.scene</code> files in <code>~/.flash/backgrounds</code>.</p><div class="scene-grid" role="radiogroup" aria-label="Background"></div>`);
   drawSceneCards(body.querySelector(".scene-grid"));
 
+  body.insertAdjacentHTML("beforeend", `<h2 class="settings-section settings-gap">Cursor</h2>`);
+  const pointer = el("button", "setting-row", `<span class="what"><b>Flash cursor</b><span>An orange arrow in place of the system pointer, in this browser.</span></span><span class="switch" aria-hidden="true"></span>`);
+  pointer.type = "button";
+  pointer.setAttribute("role", "switch");
+  pointer.setAttribute("aria-checked", document.documentElement.classList.contains("flash-cursor"));
+  pointer.onclick = () => {
+    const on = pointer.getAttribute("aria-checked") !== "true";
+    pointer.setAttribute("aria-checked", on);
+    document.documentElement.classList.toggle("flash-cursor", on);
+    savePref("cursor", on ? "flash" : "system");
+  };
+  body.appendChild(pointer);
+
   body.insertAdjacentHTML("beforeend", `<h2 class="settings-section settings-gap">Conversation</h2><p class="settings-sub">What happens when a chat outgrows the model's context window. The last three exchanges always stay word for word.</p>`);
   const row = el("button", "setting-row", `<span class="what"><b>Summarize old messages</b><span>Have the model condense what no longer fits into a summary it keeps reading. Off, the oldest messages are dropped instead, which is faster and never loses detail from the ones kept.</span></span><span class="switch" aria-hidden="true"></span>`);
   row.type = "button";
@@ -2402,6 +3350,21 @@ function drawGeneral(body) {
 
   body.insertAdjacentHTML("beforeend", `<h2 class="settings-section settings-gap">Updates</h2><p class="settings-sub">New versions come from the Flash repository on GitHub, the same as /update in the terminal.</p><div class="updates-box"></div>`);
   renderUpdates(body.querySelector(".updates-box"));
+
+  body.insertAdjacentHTML("beforeend", `<h2 class="settings-section settings-gap">Restart</h2>`);
+  const again = el("div", "setting-row static", `<span class="what"><b>Restart Flash</b><span></span></span><span class="side"></span>`);
+  const can = !!(info.update || {}).can_restart;
+  again.querySelector(".what span").textContent = can
+    ? "Starts the server again, with a new link, and picks up any change to Flash's code. This page comes back by itself; signed-in browsers stay signed in. Ctrl Alt Shift R does the same."
+    : "This Flash can't restart itself from the page: it was started from a terminal chat, or runs on Windows. Quit it where it runs and start it again.";
+  const go = el("button", "btn", "Restart");
+  go.type = "button";
+  go.disabled = !can;
+  go.onclick = async () => {
+    if (await confirmPop(go, { title: "Restart Flash?", text: "The server starts again with a new link, and the old link stops working. This page reconnects by itself.", yes: "Restart", danger: false })) restartServer();
+  };
+  again.querySelector(".side").appendChild(go);
+  body.appendChild(again);
 }
 
 // Skills --------------------------------------------------------------------
@@ -2707,7 +3670,7 @@ async function drawVoiceModels(box = document.querySelector(".voice-models")) {
       row.querySelector("b").innerHTML = `${fmtBytes(m.size)} <span class="vm-dot">&bull;</span> ${esc(m.label)}`;
       row.querySelector("small").textContent = m.name;
       const act = row.querySelector(".vm-act");
-      if (fetching) { act.innerHTML = `<span class="vm-progress">Downloading</span>`; continue; }
+      if (fetching) { downloadingSlot(act, "Downloading"); continue; }
       if (m.current) { act.innerHTML = `<span class="vm-tag">In use</span>`; continue; }
       const pick = el("button", "btn small", m.installed ? "Use" : "Download");
       pick.type = "button";
@@ -2719,25 +3682,44 @@ async function drawVoiceModels(box = document.querySelector(".voice-models")) {
       };
       act.appendChild(pick);
       if (m.installed) {
-        const drop = button("icon-btn", "x", `Remove, freeing ${fmtBytes(m.size)}`, "", () => confirmed(drop, async () => {
+        const drop = button("icon-btn", "x", `Remove, freeing ${fmtBytes(m.size)}`, "", async () => {
+          if (!(await confirmPop(drop, { title: kind === "listening" ? "Remove this listening model?" : "Remove this voice?", text: `Deletes ${m.name} and frees ${fmtBytes(m.size)}. You can download it again later.`, yes: "Remove" }))) return;
           try { await command("voice-model-remove", m.name, null, { kind }); drawVoiceModels(box); } catch (error) { showFailure(error); }
-        }));
+        });
         act.appendChild(drop);
       }
     }
   }
 }
 
+// A download under way: how far along, and a way to call it off.
+function downloadingSlot(slot, said) {
+  let progress = slot.querySelector(".vm-progress");
+  if (!progress) {
+    slot.textContent = "";
+    progress = slot.appendChild(el("span", "vm-progress"));
+    const stop = slot.appendChild(el("button", "btn small", "Cancel"));
+    stop.type = "button";
+    stop.onclick = async () => {
+      stop.disabled = true;
+      stop.textContent = "Cancelling";
+      try { await command("voice-cancel"); } catch (error) { stop.disabled = false; stop.textContent = "Cancel"; showFailure(error); }
+    };
+  }
+  progress.textContent = said;
+}
+
 function voiceModelEvent(event) {
   const box = document.querySelector(".voice-models");
   if (event.done) {
-    if (event.error) toast(`Could not download ${event.name}: ${event.error}`);
+    if (event.cancelled) toast(`Stopped downloading ${event.name}`);
+    else if (event.error) toast(`Could not download ${event.name}: ${event.error}`);
     else toast(`${event.name} is ready and in use`);
     if (box) drawVoiceModels(box);
     return;
   }
   const slot = box && box.querySelector(`.vm-row[data-key="${CSS.escape(`${event.kind}:${event.name}`)}"] .vm-act`);
-  if (slot) slot.innerHTML = `<span class="vm-progress">${esc(event.label)} ${event.percent}%</span>`;
+  if (slot) downloadingSlot(slot, `${event.label} ${event.percent}%`);
 }
 
 // LAN ----------------------------------------------------------------------
@@ -2762,15 +3744,9 @@ function renderLan(box = document.querySelector(".lan-box")) {
   box.appendChild(row);
 }
 
-let lanConfirm = 0;
-
 async function switchLan(on, from) {
-  // From a phone, turning it off ends the page it is on: ask twice.
-  if (!on && remotePage() && Date.now() - lanConfirm > 4000) {
-    lanConfirm = Date.now();
-    toast("This page is on your network, so it will disconnect. Click again to turn it off.");
-    return false;
-  }
+  // From a phone, turning it off ends the page it is on: ask first.
+  if (!on && remotePage() && !(await confirmPop(from && from.querySelector(".switch"), { title: "Turn off network access?", text: "This page is open over your network, so it disconnects, and only this computer can open Flash until it is turned back on.", yes: "Turn off" }))) return false;
   if (from) { from.setAttribute("aria-checked", on); from.disabled = true; }
   try {
     const result = await command("lan", on ? "on" : "off");
@@ -2887,6 +3863,32 @@ async function startUpdate() {
 async function restartFlash() {
   try { info.update = await command("update-restart"); onUpdate(); }
   catch (error) { showFailure(error); }
+}
+
+// Ctrl Alt Shift R: Flash's server starts again, with a new link, and
+// this page comes back in on it. Three keys held at once, so not by
+// accident. The terminal prints the new link too.
+let restartingServer = false;
+async function restartServer() {
+  if (restartingServer) return;
+  let r;
+  try { r = await command("server-restart"); } catch (error) { showFailure(error); return; }
+  restartingServer = true;
+  toast("Restarting Flash\u2026");
+  const back = `${location.pathname}?token=${encodeURIComponent(r.token)}`;
+  // The old server is gone within half a second; the new one answers
+  // once Python has started, a second or two later.
+  await new Promise((resolve) => setTimeout(resolve, 900));
+  const started = Date.now();
+  while (Date.now() - started < 60000) {
+    try {
+      const up = await fetch(`/api/state?lite=1&token=${encodeURIComponent(r.token)}`, { credentials: "same-origin" });
+      if (up.ok) { location.replace(back); return; }
+    } catch (_) { /* not listening yet */ }
+    await new Promise((resolve) => setTimeout(resolve, 400));
+  }
+  restartingServer = false;
+  toast("Flash did not come back. Start it again in your terminal.");
 }
 
 // The server goes away and comes back as the new version, with the same
@@ -3050,7 +4052,9 @@ async function drawSecurity(body) {
   const row = el("div", "setting-row static", `<span class="what"><b>Sign out all other browsers</b><span>They lose access at once. Flash also makes a new link, so the old link and QR code stop working. The new one shows in the terminal Flash runs in.</span></span><span class="side"></span>`);
   const others = el("button", "btn danger", "Sign out others");
   others.type = "button";
-  others.onclick = () => confirmed(others, signOutOthers);
+  others.onclick = async () => {
+    if (await confirmPop(others, { title: "Sign out all other browsers?", text: "They lose access at once, and the old link and QR code stop working. The new link shows in the terminal Flash runs in.", yes: "Sign out others" })) signOutOthers();
+  };
   row.querySelector(".side").appendChild(others);
   body.appendChild(row);
   await renderBrowsers(body.querySelector(".browser-list"));
@@ -3079,25 +4083,73 @@ async function renderBrowsers(list = document.querySelector(".browser-list")) {
     out.type = "button";
     // Signing this browser out is the one that cannot be undone from
     // here, so it asks twice.
-    out.onclick = () => (b.current ? confirmed(out, () => signOut(b)) : signOut(b));
+    out.onclick = async () => {
+      if (b.current && !(await confirmPop(out, { title: "Sign out this browser?", text: "This page closes, and getting back in takes Flash's link again.", yes: "Sign out" }))) return;
+      signOut(b);
+    };
     row.appendChild(out);
     list.appendChild(row);
   }
 }
 
 // The first press arms the button, a second within four seconds acts.
-function confirmed(b, action) {
-  if (b.classList.contains("arm")) {
-    clearTimeout(b.disarm);
-    b.classList.remove("arm");
-    b.textContent = b.dataset.label;
-    action();
-    return;
-  }
-  b.dataset.label = b.textContent;
-  b.classList.add("arm");
-  b.textContent = "Click again to confirm";
-  b.disarm = setTimeout(() => { b.classList.remove("arm"); b.textContent = b.dataset.label; }, 4000);
+// Asks before something that cannot be undone, in a card by ANCHOR
+// (or mid-window without one). Resolves true for yes; Cancel, Esc, or a
+// click anywhere else is no. It waits as long as it takes.
+let confirmOpen = null;
+function confirmPop(anchor, { title, text = "", yes = "Confirm", danger = true }) {
+  if (confirmOpen) confirmOpen(false);
+  return new Promise((resolve) => {
+    const pop = el("div", "confirm-pop", `<b></b><p></p><div class="row"><button type="button" class="btn small" data-no>Cancel</button><button type="button" class="btn small ${danger ? "danger solid" : "primary"}" data-yes></button></div>`);
+    pop.setAttribute("role", "alertdialog");
+    pop.setAttribute("aria-modal", "false");
+    pop.querySelector("b").textContent = title;
+    const words = pop.querySelector("p");
+    if (text) words.textContent = text; else words.remove();
+    pop.querySelector("[data-yes]").textContent = yes;
+    document.body.appendChild(pop);
+    // Under the button, its right edges lined up; above it when there is
+    // no room below; never past the window's edge.
+    const w = pop.offsetWidth, h = pop.offsetHeight;
+    const r = anchor && anchor.isConnected ? anchor.getBoundingClientRect() : null;
+    let left = r ? r.right - w : (innerWidth - w) / 2;
+    let top = r ? r.bottom + 8 : (innerHeight - h) / 2;
+    if (r && top + h > innerHeight - 8) { top = r.top - h - 8; pop.style.setProperty("--from", "bottom right"); }
+    pop.style.left = `${Math.max(12, Math.min(innerWidth - w - 12, left))}px`;
+    pop.style.top = `${Math.max(12, top)}px`;
+    const back = document.activeElement;
+    const done = (answer) => {
+      if (confirmOpen !== done) return;
+      confirmOpen = null;
+      removeEventListener("mousedown", outside, true);
+      removeEventListener("keydown", keys, true);
+      removeEventListener("resize", no);
+      removeEventListener("scroll", no, true);
+      pop.remove();
+      if (back && back.isConnected && !answer) back.focus({ preventScroll: true });
+      resolve(answer);
+    };
+    const no = () => done(false);
+    const outside = (e) => { if (!pop.contains(e.target)) done(false); };
+    const keys = (e) => {
+      if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); done(false); }
+      else if (e.key === "Tab") {
+        // Round the two buttons, not out into the page behind.
+        e.preventDefault();
+        const [a, b] = pop.querySelectorAll("button");
+        (document.activeElement === a ? b : a).focus();
+      }
+    };
+    confirmOpen = done;
+    pop.querySelector("[data-no]").onclick = no;
+    pop.querySelector("[data-yes]").onclick = () => done(true);
+    addEventListener("mousedown", outside, true);
+    addEventListener("keydown", keys, true);
+    addEventListener("resize", no);
+    // It is pinned where its button was: once that moves, it goes.
+    addEventListener("scroll", no, true);
+    pop.querySelector("[data-yes]").focus({ preventScroll: true });
+  });
 }
 
 async function signOut(b) {
@@ -3717,6 +4769,7 @@ async function startVoice() {
 
 function endVoice() {
   if (!voice.on) return;
+  if (voice.state === "setup") command("voice-cancel").catch(() => {});
   voice.on = false;
   if (voice.source) { try { voice.source.stop(); } catch (_) { /* already over */ } }
   if (voice.turn) voice.turn.finish(null);
@@ -3734,7 +4787,7 @@ function endVoice() {
 function voiceSetupEvent(event) {
   if (!voice.on || voice.state !== "setup") return;
   if (event.done) { if (voice.setup) voice.setup(event.error || ""); return; }
-  setVoice("setup", `Downloading the ${event.label}: ${event.percent}%`);
+  setVoice("setup", `Downloading the ${event.label}: ${event.percent}%. End voice mode to cancel.`);
 }
 
 // One turn of listening: resolves to the audio, 16 kHz 16-bit, once the
@@ -4064,18 +5117,6 @@ $("#voice .voice-orb").onclick = () => {
 $("#voice .voice-end").innerHTML = icon("x");
 $("#voice .voice-end").onclick = endVoice;
 
-// Two rings out from the send button, the second a beat behind.
-function shockwave(from) {
-  if (calm.matches) return;
-  const r = from.getBoundingClientRect();
-  for (const cls of ["shock", "shock second"]) {
-    const ring = document.body.appendChild(el("span", cls));
-    ring.style.left = `${r.left + r.width / 2}px`;
-    ring.style.top = `${r.top + r.height / 2}px`;
-    setTimeout(() => ring.remove(), 800);
-  }
-}
-
 function toBottom(force, smooth) {
   if (!force && !follow) return;
   follow = true;
@@ -4283,6 +5324,7 @@ function connect() {
     if (loading) buffered.push(event); else apply(event);
   };
   source.onerror = async () => {
+    if (restartingServer) return;
     // Refused rather than unreachable: Flash restarted with a new token,
     // or this browser was signed out.
     // Loading the page again shows why, instead of retrying forever.
@@ -4631,7 +5673,6 @@ async function send(text, mode = "steer") {
   if (text) sent.push(text);
   sentAt = -1;
   flash($("#send"), "launch", 420);
-  shockwave($("#send"));
   flash($("#composer"), "sent", 340);
   buzz();
   follow = true;
@@ -4687,7 +5728,9 @@ function renderPending() {
     const steer = item.mode === "steer";
     const row = el("div", `pending-row${steer ? " steer" : ""}`, `<span class="ico">${icon(steer ? "steer" : "clock")}</span><span class="text"></span>`);
     const n = (item.files || []).length;
-    const said = [item.text, n ? `${n} ${n === 1 ? "file" : "files"}` : ""].filter(Boolean).join(" · ");
+    const comments = parseComments(item.text);
+    const words = comments ? `${comments.items.length} comment${comments.items.length === 1 ? "" : "s"} on ${comments.name}` : item.text;
+    const said = [words, n ? `${n} ${n === 1 ? "file" : "files"}` : ""].filter(Boolean).join(" · ");
     row.querySelector(".text").textContent = said;
     row.querySelector(".text").title = said;
     const mode = el("button", "mode", steer ? "Steers at the next step" : "Runs after this turn");
@@ -5133,6 +6176,7 @@ function retry() { const last = lastOf("user"); if (last) send(last.text); else 
 function editLast(text, files) {
   const last = text === undefined ? lastOf("user") || {} : {};
   const value = text ?? last.text ?? "";
+  if (parseComments(value)) { toast("Comments are sent from the document. Open it to add more."); return; }
   files = files ?? last.files ?? [];
   if (!value && !files.length) { toast("Nothing to edit"); return; }
   reattach(files);
@@ -5438,6 +6482,8 @@ const ACTIONS = [
   { label: "Light or dark", keys: "Alt T", slash: "/theme", run: toggleTheme },
   { label: "Open on your phone", keys: "", slash: "/phone", run: () => openPhone() },
   { label: "Keyboard shortcuts", keys: "?", slash: "/help", run: () => openHelp() },
+  { label: "Send the document's comments to Flash", keys: "Ctrl Shift Enter", slash: "/comments", run: sendOpenComments },
+  { label: "Restart the server with a new link", keys: "Ctrl Alt Shift R", slash: "/restart", run: restartServer },
 ];
 
 function runSlash(text) {
@@ -5714,6 +6760,12 @@ const HELP = [
     [["Alt C"], "Copy last reply"], [["Alt Shift C"], "Copy last code block"], [["Alt Z"], "Undo file changes"],
     [["Alt L"], "Clear chat"], [["Alt Shift D"], "Delete chat"], [["Alt T"], "Light or dark"],
     [["Ctrl B"], "Sidebar"], [["Ctrl O"], "Expand tool output"], [["F2"], "Rename chat"],
+    [["Ctrl Alt Shift R"], "Restart the server with a new link (the real Ctrl on a Mac)"],
+  ]],
+  ["Documents", [
+    [["Ctrl Shift Enter"], "Send your comments to Flash"],
+    [["Ctrl Enter"], "Add or save a comment and send them all"],
+    [["Ctrl S"], "Save your edits"], [["Esc"], "Stop editing"],
   ]],
   ["Permission", [
     [["Y", "Enter"], "Allow"], [["N", "Esc"], "Deny"], [["Alt Y", "Alt N"], "Answer while typing"],
@@ -5836,6 +6888,16 @@ $("#phone-btn").onclick = () => openPhone();
 $("#settings-btn").onclick = () => showSettings();
 $("#jump").onclick = () => toBottom(true, true);
 
+// A code block in a document copies the same way as one in a reply.
+$("#viewer-body").addEventListener("click", (e) => {
+  const copyButton = e.target.closest("[data-copy]");
+  if (copyButton) copy(copyButton.closest("pre").querySelector("code").textContent, "code", copyButton);
+});
+// A click anywhere else puts away the comment button or box.
+document.addEventListener("mousedown", (e) => {
+  if (!e.target.closest(".doc-comment-btn, .doc-comment-box")) dropCommentUi();
+});
+
 messagesEl.addEventListener("click", (e) => {
   const copyButton = e.target.closest("[data-copy]");
   if (copyButton) { copy(copyButton.closest("pre").querySelector("code").textContent, "code", copyButton); return; }
@@ -5848,6 +6910,10 @@ const typing = () => { const a = document.activeElement; return a && (a.tagName 
 window.addEventListener("keydown", (e) => {
   const mod = e.ctrlKey || e.metaKey;
   hideTip();
+  // The real Ctrl, on a Mac too: Cmd Shift R is the browser's own reload.
+  if (e.ctrlKey && e.altKey && e.shiftKey && !e.metaKey && e.code === "KeyR") { e.preventDefault(); restartServer(); return; }
+  // Shift too: Ctrl Enter alone queues a message in the box.
+  if (mod && e.shiftKey && e.key === "Enter" && openDoc && !openDoc.editing && openDoc.comments.length) { e.preventDefault(); sendComments(openDoc); return; }
 
   // An overlay on its way out counts as closed, so a key pressed during
   // its exit (Ctrl K straight after Esc) is not swallowed.
@@ -5933,6 +6999,54 @@ $("#recents-btn i").innerHTML = icon("chevDown");
 $("#recents-btn").onclick = () => foldRecents($("#recents-btn").getAttribute("aria-expanded") === "true");
 foldRecents(pref("recents", "open") === "folded", true);
 $("#viewer-download").innerHTML = icon("download");
+$("#viewer-edit").innerHTML = icon("edit");
+
+// The panel is as wide as it was last dragged, within what leaves the
+// chat room to read. Double-click puts it back.
+const VIEWER_MIN = 340, CHAT_MIN = 320;
+const viewerEl = $("#viewer"), viewerHandle = $(".viewer-resize");
+function setViewerWidth(px) {
+  const chatLeft = viewerEl.previousElementSibling.getBoundingClientRect().left;
+  const room = Math.max(VIEWER_MIN, viewerEl.getBoundingClientRect().right - chatLeft - CHAT_MIN);
+  const width = Math.round(Math.min(room, Math.max(VIEWER_MIN, px)));
+  viewerEl.style.setProperty("--viewer-w", `${width}px`);
+  return width;
+}
+const keptWidth = +pref("viewer-width", 0);
+if (keptWidth) viewerEl.style.setProperty("--viewer-w", `${keptWidth}px`);
+viewerHandle.addEventListener("pointerdown", (e) => {
+  if (e.button !== 0) return;
+  e.preventDefault();
+  viewerHandle.setPointerCapture(e.pointerId);
+  viewerEl.classList.add("resizing");
+  document.body.classList.add("resizing-viewer");
+  dropCommentUi();
+  const right = viewerEl.getBoundingClientRect().right;
+  let width = viewerEl.getBoundingClientRect().width;
+  const move = (ev) => { width = setViewerWidth(right - ev.clientX); };
+  const done = () => {
+    viewerHandle.removeEventListener("pointermove", move);
+    viewerEl.classList.remove("resizing");
+    document.body.classList.remove("resizing-viewer");
+    savePref("viewer-width", width);
+  };
+  viewerHandle.addEventListener("pointermove", move);
+  viewerHandle.addEventListener("pointerup", done, { once: true });
+  viewerHandle.addEventListener("pointercancel", done, { once: true });
+});
+viewerHandle.ondblclick = () => {
+  viewerEl.style.removeProperty("--viewer-w");
+  savePref("viewer-width", "");
+};
+viewerHandle.addEventListener("keydown", (e) => {
+  const step = { ArrowLeft: 32, ArrowRight: -32 }[e.key];
+  if (!step) return;
+  e.preventDefault();
+  savePref("viewer-width", setViewerWidth(viewerEl.getBoundingClientRect().width + step));
+});
+// A smaller window still leaves the chat its room.
+addEventListener("resize", () => { if (viewerEl.style.getPropertyValue("--viewer-w") && viewerEl.classList.contains("open")) setViewerWidth(viewerEl.getBoundingClientRect().width); });
+$("#viewer-edit").onclick = () => { if (openDoc) editDocument(openDoc); };
 $("#viewer-open").innerHTML = icon("external");
 $("#viewer-close").innerHTML = icon("x");
 $("#viewer-close").onclick = closeViewer;

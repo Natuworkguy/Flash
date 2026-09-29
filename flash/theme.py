@@ -329,6 +329,20 @@ def tool_file(path: str) -> bool:
     return True
 
 
+def tool_document(path: str, comments: list[dict]) -> bool:
+    """Hand a document to whoever is drawing, with the agent's comments
+    on it: each a quote from the document and a note about it.
+
+    True when something took it, as with `tool_file`.
+    """
+
+    sink = _sink()
+    if sink is None:
+        return False
+    sink("document", json.dumps({"path": path, "comments": comments}), "")
+    return True
+
+
 def tool_plan(steps: list[dict]) -> bool:
     """Hand the plan's checklist to whoever is drawing, as its steps.
 

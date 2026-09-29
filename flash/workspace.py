@@ -380,8 +380,18 @@ SHOWN_TYPES = {
     ".webp": "image/webp",
     ".bmp": "image/bmp",
     ".pdf": "application/pdf",
+    # Documents: read, edited, and commented on beside the chat.
+    # Markdown goes out as plain text: a browser shows that in a tab,
+    # where text/markdown would only download.
+    ".md": "text/plain; charset=utf-8",
+    ".markdown": "text/plain; charset=utf-8",
+    ".txt": "text/plain; charset=utf-8",
 }
+DOCUMENT_TYPES = (".md", ".markdown", ".txt")
 MAX_SHOWN_BYTES = 50 * 1024 * 1024
+# A document is edited in the page as text, so it stays a size a browser
+# edits comfortably.
+MAX_DOCUMENT_BYTES = 2 * 1024 * 1024
 FILE_ID_RE = re.compile(r"^[0-9a-f]{16}$")
 
 
@@ -397,11 +407,12 @@ def keep_file(source: str) -> dict:
     suffix = path.suffix.lower()
     if suffix not in SHOWN_TYPES:
         raise WorkspaceError(
-            f"{path.name} is not an image, a PDF, or a web page"
+            f"{path.name} is not an image, a PDF, a web page, or a document"
         )
 
     size = path.stat().st_size
-    if size > MAX_SHOWN_BYTES:
+    document = suffix in DOCUMENT_TYPES
+    if size > (MAX_DOCUMENT_BYTES if document else MAX_SHOWN_BYTES):
         raise WorkspaceError(f"{path.name} is too large to show")
 
     file_id = uuid.uuid4().hex[:16]
@@ -409,8 +420,12 @@ def keep_file(source: str) -> dict:
     folder.mkdir(parents=True, exist_ok=True)
     kept = folder / f"{file_id}{suffix}"
     kept.write_bytes(path.read_bytes())
+    if document:
+        # Where it came from, so an edit made in the page lands in the
+        # real file too, not only in this copy.
+        _write(f"files/{file_id}.source.json", {"source": str(path.resolve())})
 
-    return {
+    info = {
         "id": file_id,
         "name": path.name,
         "size": size,
@@ -418,9 +433,44 @@ def keep_file(source: str) -> dict:
         "kind": (
             "pdf" if suffix == ".pdf"
             else "html" if SHOWN_TYPES[suffix] == "text/html"
+            else "doc" if document
             else "image"
         ),
     }
+    if document:
+        info["path"] = str(path.resolve())
+    return info
+
+
+def save_document(file_id: str, text: str) -> dict:
+    """Save a document the user edited in the page: into the kept copy,
+    and into the file it came from, where that still exists.
+
+    Returns where it went: {"size", "path"}, the path "" when only the
+    copy could be written.
+    """
+
+    kept = kept_file(file_id)
+    if kept is None or kept[0].suffix.lower() not in DOCUMENT_TYPES:
+        raise WorkspaceError("no such document")
+    data = (text or "").encode("utf-8")
+    if len(data) > MAX_DOCUMENT_BYTES:
+        raise WorkspaceError("that document is too large to save")
+
+    path = kept[0]
+    path.write_bytes(data)
+    record = _read(f"files/{file_id}.source.json", {})
+    if not isinstance(record, dict):
+        record = {}
+    source = str(record.get("source") or "")
+    written = ""
+    if source and Path(source).is_file():
+        try:
+            Path(source).write_bytes(data)
+            written = source
+        except OSError as exc:
+            raise WorkspaceError(f"could not save {source}: {exc}") from exc
+    return {"size": len(data), "path": written}
 
 
 def kept_file(file_id: str) -> Optional[tuple[Path, str]]:
@@ -435,8 +485,11 @@ def kept_file(file_id: str) -> Optional[tuple[Path, str]]:
         if path.is_file():
             return path, mime
     uploaded = upload_path(file_id)
-    if uploaded is not None and uploaded.suffix.lower() in SHOWN_TYPES:
-        return uploaded, SHOWN_TYPES[uploaded.suffix.lower()]
+    # An upload is served back only as a picture, a PDF, or a page: a
+    # text file the user attached is the model's to read, not the page's.
+    suffix = uploaded.suffix.lower() if uploaded is not None else ""
+    if suffix in SHOWN_TYPES and suffix not in DOCUMENT_TYPES:
+        return uploaded, SHOWN_TYPES[suffix]
     return None
 
 

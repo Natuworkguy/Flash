@@ -22,6 +22,7 @@ import zipfile
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Optional
 from urllib.error import URLError
 from urllib.request import Request, urlopen
 
@@ -258,8 +259,23 @@ def web_missing() -> list[str]:
     return [p for p in missing_packages() if p != "sounddevice"]
 
 
-def _download(url: str, out: Path, label: str, on_progress: Progress) -> str:
-    """Stream `url` to `out`, reporting percent complete as it goes."""
+# What a download returns when it was called off: not a failure to
+# report, and nothing of it is left on disk.
+CANCELLED = "cancelled"
+
+
+class _Stopped(Exception):
+    """The download was called off between chunks."""
+
+
+def _download(
+    url: str, out: Path, label: str, on_progress: Progress,
+    stop: Optional[threading.Event] = None,
+) -> str:
+    """Stream `url` to `out`, reporting percent complete as it goes.
+
+    Setting `stop` calls it off at the next chunk, a moment at most, and
+    it returns CANCELLED with the part it had deleted."""
 
     out.parent.mkdir(parents=True, exist_ok=True)
     part = out.with_suffix(out.suffix + ".part")
@@ -274,6 +290,8 @@ def _download(url: str, out: Path, label: str, on_progress: Progress) -> str:
 
             with part.open("wb") as handle:
                 while True:
+                    if stop is not None and stop.is_set():
+                        raise _Stopped
                     chunk = response.read(DOWNLOAD_CHUNK)
                     if not chunk:
                         break
@@ -284,6 +302,9 @@ def _download(url: str, out: Path, label: str, on_progress: Progress) -> str:
                     on_progress(label, percent)
 
         part.replace(out)
+    except _Stopped:
+        part.unlink(missing_ok=True)
+        return CANCELLED
     except (URLError, OSError, ValueError) as exc:
         part.unlink(missing_ok=True)
         return f"could not download {label}: {exc}"
@@ -310,7 +331,9 @@ def _unpack(archive: Path, into: Path) -> str:
     return ""
 
 
-def ensure_models(on_progress: Progress) -> str:
+def ensure_models(
+    on_progress: Progress, stop: Optional[threading.Event] = None,
+) -> str:
     """Download whatever voice mode is missing. Returns "" when ready.
 
     Both models are large enough that the download is worth showing, so
@@ -321,11 +344,13 @@ def ensure_models(on_progress: Progress) -> str:
     if models_present():
         return ""
 
-    return (download_listening(vosk_model(), on_progress)
-            or download_voice(piper_voice(), on_progress))
+    return (download_listening(vosk_model(), on_progress, stop)
+            or download_voice(piper_voice(), on_progress, stop))
 
 
-def download_listening(name: str, on_progress: Progress) -> str:
+def download_listening(
+    name: str, on_progress: Progress, stop: Optional[threading.Event] = None,
+) -> str:
     """Fetch and unpack the Vosk model NAME. Returns "" once it is in."""
 
     if listening_installed(name):
@@ -335,6 +360,7 @@ def download_listening(name: str, on_progress: Progress) -> str:
     archive = MODELS_DIR / f"{name}.zip"
     why = _download(
         f"{VOSK_BASE}/{name}.zip", archive, "listening model", on_progress,
+        stop,
     )
     if why:
         return why
@@ -351,7 +377,9 @@ def download_listening(name: str, on_progress: Progress) -> str:
     return ""
 
 
-def download_voice(name: str, on_progress: Progress) -> str:
+def download_voice(
+    name: str, on_progress: Progress, stop: Optional[threading.Event] = None,
+) -> str:
     """Fetch the Piper voice NAME, network and settings. Returns "" once
     it is in."""
 
@@ -368,8 +396,13 @@ def download_voice(name: str, on_progress: Progress) -> str:
 
     onnx, config = piper_paths(name)
     MODELS_DIR.mkdir(parents=True, exist_ok=True)
-    return (_download(onnx_url, onnx, "voice", on_progress)
-            or _download(config_url, config, "voice settings", on_progress))
+    why = (_download(onnx_url, onnx, "voice", on_progress, stop)
+           or _download(config_url, config, "voice settings", on_progress,
+                        stop))
+    # Called off between its two files: no voice without its settings.
+    if why == CANCELLED:
+        onnx.unlink(missing_ok=True)
+    return why
 
 
 def remove_listening(name: str) -> None:
