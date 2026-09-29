@@ -16,6 +16,7 @@ FLASH (**F**ast **L**ocal **A**gent **SH**ell) CLI is an AI-powered command-line
   - Manually execute shell commands using the `!` prefix.
 - **`flash://` Links**: Open Flash from a browser or another app with a prompt ready to go (`flash://?prompt=What+is+Python`).
 - **Image Recognition**: Send a local image to a vision-capable model with `/image <path> [prompt]`, or let the AI open one itself with its `view_image` tool.
+- **3D Models**: Ask for a chair, a vase, or a floor plan and the AI builds it with its `make_3d_model` tool out of boxes, cylinders, spheres, lathed profiles, and extruded outlines, saved as a `.glb` that opens in Blender and every game engine. In the web UI it appears in a 3D viewer beside the chat that you can turn, zoom, and download; a vision model also gets a render of it, so it can see a leg floating off the table and fix it. `send_3d_model` shows an existing `.glb`, `.stl`, or `.obj`.
 - **Page Screenshots**: The AI renders a page it built in a headless browser with its `screenshot` tool and looks at the result, so it can see a broken layout instead of guessing from the HTML.
 - **Page Control**: The AI opens a page with `open_page` and then clicks buttons, fills forms, presses keys, and runs JavaScript on it with `interact`, seeing a fresh screenshot, the page's elements, and its console errors after every step, so it can debug what a page *does*, not just how it looks.
 - **Voice Mode**: `/voice on` downloads a Vosk speech model and a Piper voice, then lets you talk to Flash and hear its replies, with typing still available at any time.
@@ -514,7 +515,10 @@ lists them all:
 **Files** the agent makes come to you. It sends a picture with
 `send_image` and a PDF with `send_pdf`. In the browser, the file slides
 out in a panel on the right, with its name and size across the top and
-buttons to download it or open it in a tab. A card stays in the chat to
+buttons to download it or open it in a tab. A 3D model from
+`make_3d_model` or `send_3d_model` opens there in a viewer: drag to turn
+it, scroll to zoom, right-drag to pan, with buttons to reset the view,
+stop it spinning, and see its wireframe. A card stays in the chat to
 open it again, and `Alt V` shows or hides the panel. Each file is kept
 as a copy in `~/.flash/web/files`, so a chat still shows its files
 after the originals are gone. In the terminal, a PDF opens in your PDF

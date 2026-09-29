@@ -386,8 +386,14 @@ SHOWN_TYPES = {
     ".md": "text/plain; charset=utf-8",
     ".markdown": "text/plain; charset=utf-8",
     ".txt": "text/plain; charset=utf-8",
+    # 3D models: turned and zoomed in the page's own viewer, which reads
+    # them as data. Nothing in one runs.
+    ".glb": "model/gltf-binary",
+    ".stl": "model/stl",
+    ".obj": "model/obj",
 }
 DOCUMENT_TYPES = (".md", ".markdown", ".txt")
+MODEL_TYPES = (".glb", ".stl", ".obj")
 MAX_SHOWN_BYTES = 50 * 1024 * 1024
 # A document is edited in the page as text, so it stays a size a browser
 # edits comfortably.
@@ -407,7 +413,8 @@ def keep_file(source: str) -> dict:
     suffix = path.suffix.lower()
     if suffix not in SHOWN_TYPES:
         raise WorkspaceError(
-            f"{path.name} is not an image, a PDF, a web page, or a document"
+            f"{path.name} is not an image, a PDF, a web page, a document, "
+            "or a 3D model"
         )
 
     size = path.stat().st_size
@@ -434,6 +441,7 @@ def keep_file(source: str) -> dict:
             "pdf" if suffix == ".pdf"
             else "html" if SHOWN_TYPES[suffix] == "text/html"
             else "doc" if document
+            else "model" if suffix in MODEL_TYPES
             else "image"
         ),
     }
@@ -485,8 +493,9 @@ def kept_file(file_id: str) -> Optional[tuple[Path, str]]:
         if path.is_file():
             return path, mime
     uploaded = upload_path(file_id)
-    # An upload is served back only as a picture, a PDF, or a page: a
-    # text file the user attached is the model's to read, not the page's.
+    # An upload is served back only as a picture, a PDF, a page, or a
+    # 3D model: a text file the user attached is the model's to read,
+    # not the page's.
     suffix = uploaded.suffix.lower() if uploaded is not None else ""
     if suffix in SHOWN_TYPES and suffix not in DOCUMENT_TYPES:
         return uploaded, SHOWN_TYPES[suffix]
@@ -527,7 +536,9 @@ def upload_info(file_id: str) -> Optional[dict]:
         "mime": mime,
         "kind": (
             "image" if mime.startswith("image/")
-            else "pdf" if suffix == ".pdf" else "file"
+            else "pdf" if suffix == ".pdf"
+            else "model" if suffix in MODEL_TYPES
+            else "file"
         ),
         "path": str(path),
     }

@@ -28,7 +28,15 @@ from rich.live import Live
 from rich.text import Text
 
 from . import agent as subagents
-from . import checkpoint, editor, extensions, learning, plan, skills
+from . import (
+    checkpoint,
+    editor,
+    extensions,
+    learning,
+    model3d,
+    plan,
+    skills,
+)
 from .browser import (
     ACTIONS,
     MAX_ELEMENTS,
@@ -130,6 +138,11 @@ To hand the user a Markdown or text document (a report, plan, README,
   comments reach you as a message that quotes each passage. To flag
   unfinished work, a gap, or a question in it, pass comments, each
   quoting the words it is about.
+To make a 3D model (an object, a prop, a room, a layout), use the
+  make_3d_model tool: it builds the model from parts such as boxes,
+  cylinders, spheres, lathed profiles, and extruded outlines, saves a
+  .glb, and shows it in a 3D viewer. Use send_3d_model to show a .glb,
+  .stl, or .obj file that already exists.
 When you make an image, PDF, web page, or document for the user, send it
   with the matching tool as soon as it is finished, without being asked:
   that is how they see it.
@@ -2419,6 +2432,7 @@ def send_html(path: str, caption: str = "") -> str:
 
 DOCUMENT_SUFFIXES = (".md", ".markdown", ".txt")
 MAX_DOCUMENT_BYTES = 2 * 1024 * 1024
+MAX_MODEL_BYTES = 50 * 1024 * 1024
 MAX_DOC_COMMENTS = 20
 MAX_QUOTE_CHARS = 300
 MAX_NOTE_CHARS = 1000
@@ -2571,6 +2585,187 @@ def send_document(
         f"Sent {doc.name} ({kilobytes} KB). It opened in the user's "
         "default app for it, with its path on screen"
         + (", and your comments printed under it." if left else ".")
+    )
+
+
+MODEL_PREVIEW_WIDTH = 900
+MODEL_PREVIEW_HEIGHT = 700
+MODEL_PREVIEW_WAIT_MS = 1500
+_model_count = 0
+
+
+def _model_preview(model_path: Path) -> str:
+    """Draw the model the way the web UI will, and attach the picture
+    for the model to judge. Returns a line for its tool result."""
+
+    global _model_count
+
+    if not model_sees_images(OLLAMA_HOST, MODEL_NAME):
+        return (
+            f"The active model ({MODEL_NAME}) has no vision, so there is "
+            "no picture of it; check the numbers above against what you "
+            "meant to build."
+        )
+
+    web = Path(__file__).parent / "web" / "three"
+    try:
+        page = model3d.preview_page(
+            model_path.read_bytes(), model_path.suffix.lower(),
+            (web / "viewer.js").read_text(encoding="utf-8"),
+            (web / "three.min.js").read_text(encoding="utf-8"),
+        )
+    except OSError as exc:
+        return f"No picture of it: {exc}."
+
+    _model_count += 1
+    html = Path(SCRATCH_DIR) / f"model-{_model_count}.html"
+    out = Path(SCRATCH_DIR) / f"model-{_model_count}.png"
+    html.write_text(page, encoding="utf-8")
+    problems, why = capture(
+        html.resolve().as_uri(), out,
+        width=MODEL_PREVIEW_WIDTH, height=MODEL_PREVIEW_HEIGHT,
+        full_page=False, wait_ms=MODEL_PREVIEW_WAIT_MS,
+    )
+    if why:
+        tool_result(f"No preview: {why}", style=WARN)
+        return f"No picture of it: {why}"
+
+    data = out.read_bytes()
+    _pending_images.append(data)
+    note = (
+        "A picture of it, as the user's viewer first shows it (from the "
+        "front right, above), is attached, so judge the shape from what "
+        "you can see there."
+    )
+    if problems:
+        note += " The viewer reported: " + "; ".join(
+            problems[:MAX_PAGE_PROBLEMS]
+        )
+    return note
+
+
+def _show_model(model_path: Path, label: str) -> str:
+    """Put a model in front of the user. Returns how it went."""
+
+    if tool_file(str(model_path)):
+        tool_result(label)
+        return (
+            "It is on the user's screen beside the chat, in a 3D viewer "
+            "they can turn, zoom, and download it from."
+        )
+
+    problem = _open_with_spinner(model_path)
+    tool_result(label + (f" ({problem})" if problem else ""))
+    console.print(
+        Text(f"{' ' * RESULT_INDENT}{_display_path(model_path)}", style=DIM)
+    )
+    if problem:
+        return (
+            f"Could not open it: {problem}. Its path is on screen; tell "
+            "the user where the file is and that the web UI (flash --web) "
+            "shows 3D models."
+        )
+    return (
+        "It opened in the user's default 3D viewer, with its path on "
+        "screen."
+    )
+
+
+def make_3d_model(
+    path: str, parts: Any, title: str = "", caption: str = "",
+) -> str:
+    """Build a 3D model out of simple parts, save it as a .glb file,
+    and show it to the user."""
+
+    model_path = Path(path).expanduser()
+    if model_path.suffix.lower() != ".glb":
+        model_path = model_path.with_name(model_path.name + ".glb")
+    tool_line(f"Make3DModel({model_path})")
+
+    problem = ""
+    if model_path.is_dir():
+        problem = f"{model_path} is a directory, not a file"
+    elif model_path.exists():
+        try:
+            with open(model_path, "rb") as handle:
+                if not model3d.is_glb(handle.read(12)):
+                    problem = (
+                        f"{model_path.name} already exists and is not a "
+                        ".glb model, so it was left alone; pick another "
+                        "path"
+                    )
+        except OSError as exc:
+            problem = f"could not read {model_path}: {exc}"
+    if problem:
+        result = f"Error: {problem}."
+        tool_result(result, style=ERROR)
+        return result
+
+    try:
+        built = model3d.build_parts(parts)
+        data = model3d.to_glb(built, str(title or "").strip())
+    except model3d.ModelError as exc:
+        result = f"Error: {exc}. Nothing was written."
+        tool_result(result, style=ERROR)
+        return result
+
+    checkpoint.record(model_path)
+    try:
+        model_path.parent.mkdir(parents=True, exist_ok=True)
+        model_path.write_bytes(data)
+    except OSError as exc:
+        result = f"Error: could not write {model_path}: {exc}"
+        tool_result(result, style=ERROR)
+        return result
+
+    kilobytes = max(1, round(len(data) / 1024))
+    note = caption.strip()
+    count = len(built)
+    label = (
+        f"{model_path.name} ({count} part{plural(count)}, {kilobytes} KB)"
+        + (f": {note}" if note else "")
+    )
+    shown = _show_model(model_path, label)
+    return (
+        f"Saved {model_path} ({kilobytes} KB).\n"
+        f"{model3d.describe(built)}\n{shown}\n{_model_preview(model_path)}"
+        "\nTo change it, call make_3d_model again with the whole list "
+        "of parts, changed, and the same path."
+    )
+
+
+def send_3d_model(path: str, caption: str = "") -> str:
+    """Put a 3D model file someone else made in front of the user."""
+
+    tool_line(f"Send3DModel({path})")
+
+    model_path = Path(path).expanduser()
+    size = 0
+    if not model_path.is_file():
+        problem = f"no file at {model_path}"
+    else:
+        problem = model3d.check_model_file(model_path) or ""
+        if not problem:
+            size = model_path.stat().st_size
+            if size > MAX_MODEL_BYTES:
+                problem = (
+                    f"{model_path.name} is {size // (1024 * 1024)} MB; the "
+                    f"limit is {MAX_MODEL_BYTES // (1024 * 1024)} MB"
+                )
+    if problem:
+        result = f"Error: {problem}."
+        tool_result(result, style=ERROR)
+        return result
+
+    kilobytes = max(1, round(size / 1024))
+    note = caption.strip()
+    label = f"{model_path.name} ({kilobytes} KB)" + (
+        f": {note}" if note else ""
+    )
+    shown = _show_model(model_path, label)
+    return (
+        f"Sent {model_path.name} ({kilobytes} KB). {shown}\n"
+        f"{_model_preview(model_path)}"
     )
 
 
@@ -3363,6 +3558,216 @@ tools: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "make_3d_model",
+            "description": (
+                "Build a 3D model out of parts, save it as a .glb file, "
+                "and show it to the user in a 3D viewer they can turn and "
+                "zoom (beside the chat in the web UI). Use it for any "
+                "object, prop, scene, or layout the user wants to see in "
+                "3D. Y is up, units are metres, and the ground is y = 0, "
+                "so a part rests on it when its position's y is half its "
+                "height. Every shape is centred on its position. Build "
+                "the object from many parts, sized in proportion to the "
+                "real thing. The result gives the model's overall size, "
+                "and a picture of it when you can see images: check both "
+                "and fix what is off. To revise, call again with the "
+                "whole changed list and the same path."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": (
+                            "Where to save it, ending in .glb, such as "
+                            "chair.glb."
+                        ),
+                    },
+                    "parts": {
+                        "type": "array",
+                        "description": "The parts, each one shape.",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "shape": {
+                                    "type": "string",
+                                    "enum": list(model3d.SHAPES),
+                                    "description": (
+                                        "box (size [x,y,z]); sphere "
+                                        "(radius); cylinder (radius, "
+                                        "height, or radius_top and "
+                                        "radius_bottom for a taper); cone "
+                                        "(radius, height, point up); "
+                                        "torus (radius to the tube's "
+                                        "centre, tube; lies flat like a "
+                                        "ring on a table); plane (size "
+                                        "[x,z], facing up); lathe (points "
+                                        "[[radius,y],...] from bottom to "
+                                        "top, spun round the Y axis: "
+                                        "vases, bottles, lamps, chess "
+                                        "pieces); extrude (points "
+                                        "[[x,z],...], an outline seen "
+                                        "from above, raised to height: "
+                                        "walls, letters, gears, "
+                                        "L-shapes); mesh (vertices "
+                                        "[[x,y,z],...] and faces, each a "
+                                        "list of vertex indices from 0)."
+                                    ),
+                                },
+                                "name": {
+                                    "type": "string",
+                                    "description": (
+                                        "What the part is, like "
+                                        "'left front leg'."
+                                    ),
+                                },
+                                "size": {
+                                    "type": "array",
+                                    "items": {"type": "number"},
+                                },
+                                "radius": {"type": "number"},
+                                "radius_top": {"type": "number"},
+                                "radius_bottom": {"type": "number"},
+                                "height": {"type": "number"},
+                                "tube": {"type": "number"},
+                                "points": {
+                                    "type": "array",
+                                    "items": {
+                                        "type": "array",
+                                        "items": {"type": "number"},
+                                    },
+                                },
+                                "vertices": {
+                                    "type": "array",
+                                    "items": {
+                                        "type": "array",
+                                        "items": {"type": "number"},
+                                    },
+                                },
+                                "faces": {
+                                    "type": "array",
+                                    "items": {
+                                        "type": "array",
+                                        "items": {"type": "integer"},
+                                    },
+                                },
+                                "segments": {
+                                    "type": "integer",
+                                    "description": (
+                                        "How smooth a round shape is, "
+                                        "3 to 128. 6 makes a hexagonal "
+                                        "prism of a cylinder."
+                                    ),
+                                },
+                                "position": {
+                                    "type": "array",
+                                    "items": {"type": "number"},
+                                    "description": (
+                                        "[x, y, z] of the shape's centre."
+                                    ),
+                                },
+                                "rotation": {
+                                    "type": "array",
+                                    "items": {"type": "number"},
+                                    "description": (
+                                        "[x, y, z] turns in degrees, "
+                                        "about the shape's centre. "
+                                        "[90, 0, 0] lays a cylinder on "
+                                        "its side along Z; [0, 0, 90] "
+                                        "along X."
+                                    ),
+                                },
+                                "scale": {
+                                    "type": "array",
+                                    "items": {"type": "number"},
+                                    "description": (
+                                        "[x, y, z] stretch, such as a "
+                                        "sphere made an egg."
+                                    ),
+                                },
+                                "color": {
+                                    "type": "string",
+                                    "description": (
+                                        "A hex code like #c0392b, or a "
+                                        "common name."
+                                    ),
+                                },
+                                "metalness": {
+                                    "type": "number",
+                                    "description": "0 (default) to 1.",
+                                },
+                                "roughness": {
+                                    "type": "number",
+                                    "description": (
+                                        "0 (mirror) to 1 (chalk); "
+                                        "default 0.6."
+                                    ),
+                                },
+                                "opacity": {
+                                    "type": "number",
+                                    "description": (
+                                        "1 (default) to 0; below 1 for "
+                                        "glass or water."
+                                    ),
+                                },
+                                "emissive": {
+                                    "type": "string",
+                                    "description": (
+                                        "A colour it glows, for lamps "
+                                        "and screens."
+                                    ),
+                                },
+                            },
+                            "required": ["shape"],
+                        },
+                    },
+                    "title": {
+                        "type": "string",
+                        "description": "Optional name for the model.",
+                    },
+                    "caption": {
+                        "type": "string",
+                        "description": (
+                            "Optional single line shown with it."
+                        ),
+                    },
+                },
+                "required": ["path", "parts"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "send_3d_model",
+            "description": (
+                "Show a 3D model file that already exists (.glb, .stl, or "
+                ".obj), such as one a script made or the user has, in a "
+                "3D viewer they can turn and zoom (beside the chat in the "
+                "web UI). For a model you build yourself, use "
+                "make_3d_model, which shows it too."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Path to the .glb, .stl, or .obj.",
+                    },
+                    "caption": {
+                        "type": "string",
+                        "description": (
+                            "Optional single line shown with it."
+                        ),
+                    },
+                },
+                "required": ["path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "view_image",
             "description": (
                 "Look at an image file on disk (.png, .jpg, .jpeg, .webp, "
@@ -3983,6 +4388,8 @@ FUNCTIONS = {
     "send_pdf": send_pdf,
     "send_html": send_html,
     "send_document": send_document,
+    "make_3d_model": make_3d_model,
+    "send_3d_model": send_3d_model,
     "screenshot": screenshot,
     "open_page": open_page,
     "interact": interact,
