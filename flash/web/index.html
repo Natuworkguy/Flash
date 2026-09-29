@@ -6,9 +6,6 @@
 <meta name="referrer" content="no-referrer">
 <meta name="theme-color" content="#262624">
 <title>Flash</title>
-<!-- The Flash cursor is on before the first paint, or the system arrow
-     shows until the page's script runs. -->
-<script>try { if (localStorage.getItem("flash-cursor") === "flash") document.documentElement.classList.add("flash-cursor"); } catch (_) { /* per viewer only */ }</script>
 <link rel="icon" type="image/svg+xml" href="/static/logo-icon.svg">
 <style>
 @font-face {
@@ -86,17 +83,7 @@ body {
   -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
 }
-button { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: var(--pointer, pointer); }
-/* The Flash cursor, from Settings: the arrow at the heart of the Cursor
-   logo, turned to point up and left, in Flash orange. Over something to
-   click it deepens a shade; text fields keep their I-beam. */
-html.flash-cursor {
-  --arrow: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 32 32'%3E%3Cfilter id='s' x='-0.2' y='-0.2' width='1.4' height='1.4'%3E%3CfeDropShadow dx='0' dy='1' stdDeviation='0.9' flood-opacity='0.35'/%3E%3C/filter%3E%3Cpath filter='url(%23s)' d='M4 3 23.7 18.2 13.2 20.4 6.1 28.4Z' fill='%23d97757' stroke='white' stroke-width='1.8' stroke-linejoin='round' paint-order='stroke'/%3E%3C/svg%3E") 3 2, default;
-  --pointer: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 32 32'%3E%3Cfilter id='s' x='-0.2' y='-0.2' width='1.4' height='1.4'%3E%3CfeDropShadow dx='0' dy='1' stdDeviation='0.9' flood-opacity='0.35'/%3E%3C/filter%3E%3Cpath filter='url(%23s)' d='M4 3 23.7 18.2 13.2 20.4 6.1 28.4Z' fill='%23b9532f' stroke='white' stroke-width='1.8' stroke-linejoin='round' paint-order='stroke'/%3E%3C/svg%3E") 3 2, pointer;
-  cursor: var(--arrow);
-}
-html.flash-cursor a[href], html.flash-cursor label, html.flash-cursor summary, html.flash-cursor select { cursor: var(--pointer); }
-html.flash-cursor :is(input:not([type="checkbox"]):not([type="radio"]):not([type="range"]), textarea, [contenteditable="true"], [contenteditable="plaintext-only"]) { cursor: text; }
+button { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; }
 svg.i { width: 18px; height: 18px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.75; stroke-linecap: round; stroke-linejoin: round; }
 :focus { outline: none; }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 8px; }
@@ -476,7 +463,7 @@ pre code { display: block; padding: 2px 16px 14px; overflow-x: auto; font-size: 
 body.voice-on .shell, body.voice-on #suggestions, body.voice-on #pending { display: none !important; }
 #voice { display: flex; align-items: center; gap: 16px; padding: 14px 14px 14px 16px; border: 1px solid var(--border-strong); border-radius: 22px; background: var(--surface); box-shadow: var(--composer-shadow); animation: pop 0.2s var(--ease); }
 #voice[hidden] { display: none; }
-.voice-orb { --lvl: 0; position: relative; flex: none; width: 58px; height: 58px; border-radius: 50%; cursor: var(--pointer, pointer);
+.voice-orb { --lvl: 0; position: relative; flex: none; width: 58px; height: 58px; border-radius: 50%; cursor: pointer;
   background: radial-gradient(circle at 34% 30%, #ffe1bd 0%, #f0a36f 30%, var(--accent) 62%, color-mix(in srgb, var(--accent) 55%, #000) 100%);
   box-shadow: 0 0 calc(8px + var(--lvl) * 44px) color-mix(in srgb, var(--accent) 55%, transparent);
   transform: scale(calc(1 + var(--lvl) * 0.22)); transition: transform 0.08s linear, box-shadow 0.08s linear, filter 0.3s; }
@@ -510,7 +497,7 @@ body.voice-on .shell, body.voice-on #suggestions, body.voice-on #pending { displ
 .vm-what small { font: 12px var(--mono); color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .vm-act { flex: none; display: flex; align-items: center; gap: 6px; }
 .vm-act .btn.small { padding: 5px 12px; font-size: 13px; }
-.vm-act .btn:disabled { opacity: 0.5; cursor: var(--arrow, default); }
+.vm-act .btn:disabled { opacity: 0.5; cursor: default; }
 .vm-tag { font-size: 12px; font-weight: 500; color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); padding: 3px 9px; border-radius: 999px; }
 .vm-progress { font: 12.5px var(--mono); color: var(--text-2); }
 .vm-row.current .vm-what b { color: var(--text); }
@@ -568,7 +555,7 @@ body.empty:not(.on-page) #project-btn { display: inline-flex; }
 /* What goes with the next message, above the box. */
 #tray { display: flex; flex-wrap: wrap; gap: 8px; margin: -2px 0 12px; }
 #tray[hidden] { display: none; }
-.tray-item { position: relative; height: 64px; border-radius: 12px; border: 1px solid var(--border); background: var(--hover); animation: bubble 0.3s var(--spring) both; cursor: var(--arrow, default); }
+.tray-item { position: relative; height: 64px; border-radius: 12px; border: 1px solid var(--border); background: var(--hover); animation: bubble 0.3s var(--spring) both; cursor: default; }
 .tray-item.shot { width: 64px; overflow: hidden; }
 .tray-item.shot img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .tray-item.doc { display: flex; align-items: center; gap: 10px; max-width: 240px; padding: 0 30px 0 10px; }
@@ -624,7 +611,7 @@ button.doc:hover { border-color: var(--border-strong); }
 }
 #send svg { width: 17px; height: 17px; stroke-width: 2.2; }
 #send:active { transform: scale(0.94); }
-#send:disabled { opacity: 0.35; cursor: var(--arrow, default); }
+#send:disabled { opacity: 0.35; cursor: default; }
 #send.stop { background: var(--invert-bg); color: var(--invert-text); }
 #send.stop svg { width: 13px; height: 13px; }
 .fine { text-align: center; font-size: 12px; color: var(--text-3); margin-top: 10px; }
@@ -911,8 +898,8 @@ body.page-projects #dock, body.page-settings #dock, body.page-tool #dock { displ
 .switch::after { content: ""; position: absolute; top: 2px; left: 2px; width: 18px; height: 18px; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3); transition: transform 0.28s var(--spring); }
 .setting-row[aria-checked="true"] .switch { background: var(--accent); }
 .setting-row[aria-checked="true"] .switch::after { transform: translateX(16px); }
-.setting-row.static { cursor: var(--arrow, default); }
-.setting-row[disabled] { opacity: 0.6; cursor: var(--arrow, default); }
+.setting-row.static { cursor: default; }
+.setting-row[disabled] { opacity: 0.6; cursor: default; }
 .lan-warn { font-size: 13px !important; color: var(--text-3); margin-top: 10px !important; }
 #phone .dialog-buttons { justify-content: center; margin-top: 16px; }
 .setting-row .side { flex: none; display: flex; align-items: center; }
@@ -920,7 +907,7 @@ body.page-projects #dock, body.page-settings #dock, body.page-tool #dock { displ
 @keyframes spin { to { transform: rotate(360deg); } }
 .update-extra { max-width: 620px; margin-top: 10px; }
 .update-extra .note { font: 12.5px/1.55 var(--mono); color: var(--del); white-space: pre-wrap; margin: 0 0 8px; }
-.update-log summary { cursor: var(--pointer, pointer); font-size: 12.5px; color: var(--text-3); padding: 4px 2px; }
+.update-log summary { cursor: pointer; font-size: 12.5px; color: var(--text-3); padding: 4px 2px; }
 .update-log pre { margin: 6px 0 0; max-height: 220px; overflow: auto; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--code-bg); font: 11.5px/1.5 var(--mono); color: var(--text-2); white-space: pre-wrap; }
 #settings-btn { position: relative; }
 #settings-btn.has-update::after { content: ""; position: absolute; left: 25px; top: 7px; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 2px var(--side-bg, var(--bg)); animation: pop 0.3s var(--spring) both; }
@@ -1042,7 +1029,7 @@ button.item-row:hover { background: var(--hover); }
 /* Folder suggestions, hanging under the field that asked for them. */
 .suggest { position: fixed; z-index: 50; max-height: 248px; overflow-y: auto; padding: 5px; background: var(--surface); border: 1px solid var(--border-strong); border-radius: 12px; box-shadow: var(--shadow); animation: pop 0.14s cubic-bezier(0.2, 0, 0, 1); }
 .suggest[hidden] { display: none; }
-.suggest-row { display: flex; align-items: center; gap: 9px; padding: 7px 10px; border-radius: 8px; font: 13.5px var(--mono); color: var(--text-3); cursor: var(--pointer, pointer); white-space: nowrap; overflow: hidden; }
+.suggest-row { display: flex; align-items: center; gap: 9px; padding: 7px 10px; border-radius: 8px; font: 13.5px var(--mono); color: var(--text-3); cursor: pointer; white-space: nowrap; overflow: hidden; }
 .suggest-row svg { width: 15px; height: 15px; flex: none; }
 .suggest-row .path { display: flex; min-width: 0; }
 .suggest-row .where { flex: none; }
@@ -1088,6 +1075,34 @@ button.item-row:hover { background: var(--hover); }
 .attachment .name { font-weight: 500; font-size: 14.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .attachment .meta { font-size: 12.5px; color: var(--text-3); }
 .attachment .chev svg { width: 16px; height: 16px; color: var(--text-3); }
+
+/* The agent's browser: a window onto its newest step in the chat, and
+   the whole run, step by step, in the panel. */
+.browser-card { display: flex; flex-direction: column; width: min(440px, 100%); padding: 0; border-radius: 14px; border: 1px solid var(--border); background: var(--surface); overflow: hidden; text-align: left; transition: border-color 0.15s var(--ease), box-shadow 0.15s var(--ease); animation: rise 0.28s var(--ease) both; }
+.browser-card:hover { border-color: var(--border-strong); }
+.browser-card.open { border-color: var(--accent); }
+.browser-card .shot { display: block; aspect-ratio: 16 / 9; background: var(--code-bg); border-bottom: 1px solid var(--border); overflow: hidden; }
+.browser-card .shot img { width: 100%; height: 100%; object-fit: cover; object-position: top left; display: block; }
+.browser-card .bar { display: flex; align-items: center; gap: 10px; padding: 9px 12px; }
+.browser-card .globe svg { width: 16px; height: 16px; color: var(--accent); display: block; }
+.browser-card .info { flex: 1; min-width: 0; display: flex; flex-direction: column; line-height: 1.3; }
+.browser-card .name { font-weight: 500; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.browser-card .meta { font-size: 12.5px; color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.browser-card .chev svg { width: 16px; height: 16px; color: var(--text-3); display: block; }
+.browser-view { position: absolute; inset: 0; display: flex; flex-direction: column; background: var(--code-bg); }
+.browser-bar { display: flex; align-items: center; gap: 4px; padding: 8px 10px; border-bottom: 1px solid var(--border); background: var(--surface); }
+.browser-bar .icon-btn { width: 30px; height: 30px; }
+.browser-bar [data-prev] svg { transform: scaleX(-1); }
+.browser-bar .icon-btn:disabled { opacity: 0.35; cursor: default; }
+.browser-bar .url { flex: 1; min-width: 0; margin-left: 4px; padding: 6px 12px; border-radius: 999px; background: var(--bg); border: 1px solid var(--border); font: 12.5px var(--mono); color: var(--text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.browser-bar .live { display: inline-flex; align-items: center; gap: 6px; margin-left: 6px; font-size: 12px; font-weight: 600; color: var(--accent); }
+.browser-bar .live[hidden] { display: none; }
+.browser-bar .live::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); animation: pulse-dot 1.4s var(--ease) infinite; }
+@keyframes pulse-dot { 50% { opacity: 0.35; } }
+.browser-shot { flex: 1; min-height: 0; overflow: auto; padding: 14px; }
+.browser-shot img { display: block; width: 100%; height: auto; border-radius: 8px; box-shadow: var(--shadow); background: #fff; }
+.browser-step { padding: 9px 14px; border-top: 1px solid var(--border); background: var(--surface); font-size: 13px; color: var(--text-2); }
+.browser-step:empty { display: none; }
 
 #viewer {
   flex: none; width: 0; overflow: hidden; position: relative;
@@ -1206,7 +1221,7 @@ body.resizing-viewer iframe { pointer-events: none; }
 .doc-tool.t-italic { font-style: italic; font-family: Georgia, serif; }
 .doc-tool.t-underline { text-decoration: underline; text-underline-offset: 3px; }
 .doc-tool.t-strikeThrough { text-decoration: line-through; }
-.doc-block { height: 30px; padding: 0 26px 0 9px; margin-right: 4px; border-radius: 7px; border: 1px solid var(--border); background: var(--bg); color: var(--text); font: 13px var(--sans); cursor: var(--pointer, pointer); }
+.doc-block { height: 30px; padding: 0 26px 0 9px; margin-right: 4px; border-radius: 7px; border: 1px solid var(--border); background: var(--bg); color: var(--text); font: 13px var(--sans); cursor: pointer; }
 .doc-editable { outline: 0; caret-color: var(--accent); cursor: text; }
 .doc-editable:empty::before { content: "Start writing"; color: var(--text-3); }
 .doc-editable u, .doc u { text-underline-offset: 3px; }
@@ -1276,7 +1291,7 @@ body.resizing-viewer iframe { pointer-events: none; }
 #palette-input { flex: 1; height: 54px; border: 0; outline: 0; background: transparent; color: var(--text); font: 16px var(--sans); }
 #palette-input::placeholder { color: var(--text-3); font: 16px var(--sans); }
 #palette-list { max-height: 52vh; overflow-y: auto; padding: 6px; }
-.row { display: flex; align-items: center; gap: 12px; padding: 9px 12px; border-radius: 10px; cursor: var(--pointer, pointer); font-size: 14px; color: var(--text-2); }
+.row { display: flex; align-items: center; gap: 12px; padding: 9px 12px; border-radius: 10px; cursor: pointer; font-size: 14px; color: var(--text-2); }
 .row .group { font-size: 12px; color: var(--text-3); width: 44px; flex: none; }
 .row .label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .row .keys { display: none; gap: 4px; color: var(--text-3); }
@@ -2078,11 +2093,104 @@ function attachment(entry) {
   return card;
 }
 
+// ---------------------------------------------------------------------------
+// The agent's browser. Every page it opens is a run; every step in it, a
+// frame, a picture taken after the step, with the Flash cursor where the
+// agent's pointer was. A run is one card in the chat, at its newest
+// frame, and the panel plays it live beside the chat as it goes.
+
+const browserFrames = (run) => ((chats.get(current) || { log: [] }).log).filter((e) => e.type === "browser" && e.run === run);
+const hostOf = (url) => { try { const u = new URL(url); return u.protocol === "file:" ? u.pathname.split("/").pop() : u.host; } catch (_) { return url; } };
+
+function browserCard(entry) {
+  const frames = browserFrames(entry.run);
+  const card = el("button", "block browser-card");
+  card.type = "button";
+  card.dataset.run = entry.run;
+  card.innerHTML = `<span class="shot"><img alt=""></span><span class="bar"><span class="globe">${icon("globe")}</span><span class="info"><span class="name"></span><span class="meta"></span></span><span class="chev">${icon("chevRight")}</span></span>`;
+  card.querySelector("img").src = fileUrl(entry);
+  card.querySelector(".name").textContent = entry.title || hostOf(entry.url) || "Browser";
+  const steps = frames.length;
+  card.querySelector(".meta").textContent = [hostOf(entry.url), steps > 1 ? `${steps} steps` : "", entry.note].filter(Boolean).join(" · ");
+  card.title = entry.url;
+  card.onclick = () => openBrowser(entry.run);
+  return card;
+}
+
+// One card a run: a newer frame replaces it, at the newer place.
+function drawBrowserFrame(entry) {
+  messagesEl.querySelectorAll(`.browser-card[data-run="${CSS.escape(entry.run)}"]`).forEach((n) => n.remove());
+  messagesEl.appendChild(browserCard(entry));
+  markOpenCard();
+}
+
+// The panel shows frame AT of RUN, the newest when AT is left out, and
+// keeps up with new frames while it is on the newest.
+function openBrowser(run, at) {
+  const frames = browserFrames(run);
+  if (!frames.length) return;
+  const i = Math.max(0, Math.min(frames.length - 1, at ?? frames.length - 1));
+  const frame = frames[i];
+  const viewer = $("#viewer");
+  const already = viewer.classList.contains("open");
+  if (openDoc && openDoc.onSelect) document.removeEventListener("selectionchange", openDoc.onSelect);
+  openDoc = null;
+  viewing = lastViewed = { id: `browser:${run}`, kind: "browser", run, at: i, follow: i === frames.length - 1 };
+  $("#viewer-title").textContent = frame.title || hostOf(frame.url) || "Browser";
+  $("#viewer-size").textContent = `Flash's browser · step ${i + 1} of ${frames.length}`;
+  $("#viewer-kind").innerHTML = icon("globe");
+  $("#viewer-edit").hidden = true;
+  $("#viewer-editing").hidden = true;
+  const download = $("#viewer-download");
+  download.href = fileUrl(frame, true);
+  download.setAttribute("download", `${hostOf(frame.url) || "browser"}-step-${i + 1}.png`);
+  $("#viewer-open").href = /^https?:/i.test(frame.url) ? frame.url : fileUrl(frame);
+  const body = $("#viewer-body");
+  let view = body.querySelector(`.browser-view[data-run="${CSS.escape(run)}"]`);
+  if (!view) {
+    body.textContent = "";
+    view = body.appendChild(el("div", "browser-view", `<div class="browser-bar"><button type="button" class="icon-btn" data-prev aria-label="Previous step" data-tip="Previous step">${icon("chevRight")}</button><button type="button" class="icon-btn" data-next aria-label="Next step" data-tip="Next step">${icon("chevRight")}</button><span class="url"></span><span class="live" hidden>Live</span></div><div class="browser-shot"><img alt=""></div><div class="browser-step"></div>`));
+    view.dataset.run = run;
+  }
+  view.querySelector(".url").textContent = frame.url;
+  view.querySelector(".url").title = frame.url;
+  const img = view.querySelector("img");
+  img.alt = `Step ${i + 1}: ${frame.note || frame.url}`;
+  img.src = fileUrl(frame);
+  view.querySelector(".browser-step").textContent = frame.note || "";
+  const chat = chats.get(current);
+  view.querySelector(".live").hidden = !(viewing.follow && chat && chat.busy);
+  const prev = view.querySelector("[data-prev]"), next = view.querySelector("[data-next]");
+  prev.disabled = i === 0;
+  next.disabled = i === frames.length - 1;
+  prev.onclick = () => openBrowser(run, i - 1);
+  next.onclick = () => openBrowser(run, i + 1);
+  viewer.setAttribute("aria-hidden", "false");
+  if (!already) {
+    void viewer.offsetWidth;
+    viewer.classList.add("open");
+  }
+  markOpenCard();
+}
+
+// A new frame, live: the panel follows it when it is on this run's
+// newest, and a run just started opens in the panel by itself, so the
+// user watches the agent work, unless the panel holds something else or
+// the screen is too narrow to have it beside the chat.
+function browserArrived(entry) {
+  const onRun = viewing && viewing.kind === "browser" && viewing.run === entry.run;
+  if (onRun) { if (viewing.follow) openBrowser(entry.run); return; }
+  const first = browserFrames(entry.run).length === 1;
+  const free = !viewing || viewing.kind === "browser";
+  if (first && free && innerWidth > 800) openBrowser(entry.run);
+}
+
 // The panel: pops out from the right with the file's name and size on top.
 let viewing = null;
 let lastViewed = null;
 
 function openViewer(entry) {
+  if (entry.kind === "browser") { openBrowser(entry.run, entry.at); return; }
   const viewer = $("#viewer");
   const already = viewer.classList.contains("open");
   viewing = lastViewed = entry;
@@ -2876,6 +2984,9 @@ function markOpenCard() {
   messagesEl.querySelectorAll(".attachment").forEach((card) => {
     card.style.borderColor = viewing && card.dataset.file === viewing.id ? "var(--accent)" : "";
   });
+  messagesEl.querySelectorAll(".browser-card").forEach((card) => {
+    card.classList.toggle("open", !!viewing && viewing.kind === "browser" && card.dataset.run === viewing.run);
+  });
 }
 
 function statsText(entry) {
@@ -3027,6 +3138,7 @@ function drawEntry(entry, ctx) {
     }
     case "tool": ctx.tool = toolCard(entry.label); messagesEl.appendChild(ctx.tool); break;
     case "file": messagesEl.appendChild(attachment(entry)); break;
+    case "browser": drawBrowserFrame(entry); break;
     case "result": if (ctx.tool) addResult(ctx.tool, entry.text, entry.error, entry.warn); break;
     case "diff": if (ctx.tool) addDiff(ctx.tool, entry.text); break;
     case "plan": if (ctx.tool) addPlan(ctx.tool, entry.steps || []); break;
@@ -3062,7 +3174,10 @@ function drawChat() {
   // A file belongs to its chat: the panel does not follow to another.
   const chatNow = chats.get(current);
   const files = chatNow ? chatNow.log.filter((e) => e.type === "file") : [];
-  if (viewing && !files.some((f) => f.id === viewing.id)) closeViewer();
+  const stays = viewing && (viewing.kind === "browser"
+    ? chatNow && chatNow.log.some((e) => e.type === "browser" && e.run === viewing.run)
+    : files.some((f) => f.id === viewing.id));
+  if (viewing && !stays) closeViewer();
   lastViewed = files.length ? files[files.length - 1] : null;
   document.body.classList.remove("on-page", "page-projects", "page-project", "page-settings", "page-tool");
   const chat = chats.get(current);
@@ -3315,19 +3430,6 @@ function drawGeneral(body) {
 
   body.insertAdjacentHTML("beforeend", `<h2 class="settings-section settings-gap">Background</h2><p class="settings-sub">A pixel-art scene behind a new chat, the same ones <code>/background</code> shows in the terminal. Add your own as <code>.scene</code> files in <code>~/.flash/backgrounds</code>.</p><div class="scene-grid" role="radiogroup" aria-label="Background"></div>`);
   drawSceneCards(body.querySelector(".scene-grid"));
-
-  body.insertAdjacentHTML("beforeend", `<h2 class="settings-section settings-gap">Cursor</h2>`);
-  const pointer = el("button", "setting-row", `<span class="what"><b>Flash cursor</b><span>An orange arrow in place of the system pointer, in this browser.</span></span><span class="switch" aria-hidden="true"></span>`);
-  pointer.type = "button";
-  pointer.setAttribute("role", "switch");
-  pointer.setAttribute("aria-checked", document.documentElement.classList.contains("flash-cursor"));
-  pointer.onclick = () => {
-    const on = pointer.getAttribute("aria-checked") !== "true";
-    pointer.setAttribute("aria-checked", on);
-    document.documentElement.classList.toggle("flash-cursor", on);
-    savePref("cursor", on ? "flash" : "system");
-  };
-  body.appendChild(pointer);
 
   body.insertAdjacentHTML("beforeend", `<h2 class="settings-section settings-gap">Conversation</h2><p class="settings-sub">What happens when a chat outgrows the model's context window. The last three exchanges always stay word for word.</p>`);
   const row = el("button", "setting-row", `<span class="what"><b>Summarize old messages</b><span>Have the model condense what no longer fits into a summary it keeps reading. Off, the oldest messages are dropped instead, which is faster and never loses detail from the ones kept.</span></span><span class="switch" aria-hidden="true"></span>`);
@@ -5218,6 +5320,8 @@ function apply(event) {
       else { chat.partial = ""; chat.thinking = ""; refreshContext(); }
       renderChats();
       if (here) { drawStreaming(); updateSend(); }
+      // The browser in the panel is live only while the turn runs.
+      if (here && viewing && viewing.kind === "browser") openBrowser(viewing.run, viewing.at);
       break;
     case "cleared":
       chat.log = []; chat.partial = ""; chat.thinking = "";
@@ -5241,6 +5345,7 @@ function apply(event) {
         drawStreaming();
         updateSend();
         arrived(entry);
+        if (entry.type === "browser") browserArrived(entry);
         if (entry.type === "assistant" && drawCtx.lastReply && !calm.matches) {
           const reply = drawCtx.lastReply;
           reply.classList.add("landed");

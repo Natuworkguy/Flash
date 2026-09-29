@@ -15,6 +15,7 @@ import sys
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from datetime import datetime
 from html.parser import HTMLParser
@@ -56,10 +57,12 @@ from .theme import (
     ELLIPSIS,
     ERROR,
     WARN,
+    capturing,
     console,
     glimmer,
     plural,
     remote_answer,
+    tool_browser,
     tool_diff,
     tool_document,
     tool_file,
@@ -2580,6 +2583,31 @@ MAX_SCREENSHOT_WAIT_MS = 20000
 MAX_PAGE_PROBLEMS = 5
 
 _screenshot_count = 0
+# Each page opened, and each one-off screenshot, is a run of its own: the
+# web UI shows one live browser per run, its frames in order. Random, not
+# counted, so a chat that outlives a restart never mixes two runs up.
+_browser_run = ""
+
+
+def _new_browser_run() -> None:
+    global _browser_run
+    _browser_run = os.urandom(4).hex()
+
+
+def _show_browser(path: Path, url: str, title: str, note: str) -> None:
+    """Show the user the frame just taken, where there is a screen for it."""
+
+    tool_browser(str(path), run=_browser_run, url=url, title=title,
+                 note=note)
+
+
+def _mouse_point(value: Any) -> Optional[tuple[float, float]]:
+    """A point the model gave for the mouse, as "x,y", or None."""
+
+    numbers = re.findall(r"-?\d+(?:\.\d+)?", str(value or ""))
+    if len(numbers) < 2:
+        return None
+    return float(numbers[0]), float(numbers[1])
 
 
 def _clamp(value: Any, low: int, high: int, fallback: int) -> int:
@@ -2604,6 +2632,7 @@ def screenshot(
     height: Any = DEFAULT_SCREENSHOT_HEIGHT,
     full_page: Any = False,
     wait_ms: Any = DEFAULT_SCREENSHOT_WAIT_MS,
+    mouse: Any = "",
 ) -> str:
     """Render a page in a headless browser and attach the picture."""
 
@@ -2620,6 +2649,9 @@ def screenshot(
     shape = f"{view_width}x{view_height}"
     if whole_page:
         shape += " full page"
+    pointer = _mouse_point(mouse)
+    if pointer is not None:
+        shape += f", mouse at {pointer[0]:g},{pointer[1]:g}"
     tool_line(f"Screenshot({target}, {shape})")
 
     url, why = resolve_target(target)
@@ -2647,6 +2679,7 @@ def screenshot(
         height=view_height,
         full_page=whole_page,
         wait_ms=settle_ms,
+        mouse=pointer,
     )
 
     if why:
@@ -2659,6 +2692,8 @@ def screenshot(
 
     kilobytes = max(1, round(len(data) / 1024))
     tool_result(f"{shape} ({kilobytes} KB) {out.name}")
+    _new_browser_run()
+    _show_browser(out, url, "", f"Screenshot at {shape}")
 
     if problems:
         for problem in problems[:MAX_PAGE_PROBLEMS]:
@@ -2686,7 +2721,9 @@ def screenshot(
     return result
 
 
-def _page_report(headline: str, *, full_page: bool = False) -> str:
+def _page_report(
+    headline: str, *, full_page: bool = False, step: str = "",
+) -> str:
     """Show the model the page it just acted on.
 
     Every open_page and interact call ends here, because an action the
@@ -2703,27 +2740,32 @@ def _page_report(headline: str, *, full_page: bool = False) -> str:
     if url:
         lines.append(f"Page: {title or 'untitled'} - {url}")
 
-    if model_sees_images(OLLAMA_HOST, MODEL_NAME):
+    sees = model_sees_images(OLLAMA_HOST, MODEL_NAME)
+    # The picture is for the model when it has eyes, and for the user
+    # whenever there is a screen beside the chat to show the browser on.
+    if sees or capturing():
         _screenshot_count += 1
         out = Path(SCRATCH_DIR) / f"page-{_screenshot_count}.png"
         why = page_snapshot(out, full_page=bool(full_page))
+        if not why:
+            _show_browser(out, url, title, step or headline.split("\n")[0])
 
-        if why:
-            lines.append(f"No screenshot of the page: {why}")
-            tool_result(why, style=WARN)
-        else:
-            data = out.read_bytes()
-            _pending_images.append(data)
-            kilobytes = max(1, round(len(data) / 1024))
-            tool_result(f"{out.name} ({kilobytes} KB)")
-            lines.append(
-                "A screenshot of the page as it stands is attached to this "
-                "tool result, so judge it from what you can see there."
-            )
-    else:
+    if not sees:
         lines.append(
             f"The active model ({MODEL_NAME}) has no vision, so there is no "
             "screenshot. Work from the element list and from eval."
+        )
+    elif why:
+        lines.append(f"No screenshot of the page: {why}")
+        tool_result(why, style=WARN)
+    else:
+        data = out.read_bytes()
+        _pending_images.append(data)
+        kilobytes = max(1, round(len(data) / 1024))
+        tool_result(f"{out.name} ({kilobytes} KB)")
+        lines.append(
+            "A screenshot of the page as it stands is attached to this "
+            "tool result, so judge it from what you can see there."
         )
 
     found, why = page_elements()
@@ -2792,10 +2834,17 @@ def open_page(
         tool_result(result, style=ERROR)
         return result
 
+    _new_browser_run()
     return _page_report(
-        f"Opened {url} at {shape}. The browser stays open, so use the "
-        "interact tool to click, type, or run JavaScript on this page, and "
-        "close it when you are done."
+        step=(
+            f"Opened {Path(urllib.parse.urlparse(url).path).name or url} "
+            f"at {shape}"
+        ),
+        headline=(
+            f"Opened {url} at {shape}. The browser stays open, so use the "
+            "interact tool to click, type, or run JavaScript on this page, "
+            "and close it when you are done."
+        ),
     )
 
 
@@ -3402,6 +3451,15 @@ tools: list[dict[str, Any]] = [
                         "minimum": 0,
                         "maximum": MAX_SCREENSHOT_WAIT_MS,
                     },
+                    "mouse": {
+                        "type": "string",
+                        "description": (
+                            "Optional point to rest the mouse on before "
+                            "the picture, as \"x,y\" in the viewport's "
+                            "pixels, to see a hover state. The pointer "
+                            "shows in the picture as an orange arrow."
+                        ),
+                    },
                 },
                 "required": ["target"],
             },
@@ -3474,12 +3532,15 @@ tools: list[dict[str, Any]] = [
                 "Do one thing to the page open_page opened, then look at "
                 "the result: click a button, fill a field, press a key, "
                 "choose an option, scroll, wait for something to appear, "
-                "or run JavaScript against the live page. The page keeps "
-                "its state between calls, so work through a flow one call "
-                "at a time. Every call reports where the page is now, its "
-                "numbered elements, and the errors it threw, with a "
-                "screenshot attached, so this is how you debug what a page "
-                "actually does rather than what its source says."
+                "or run JavaScript against the live page. The mouse can "
+                "also move, click, and drag at points in the screenshot, "
+                "for what no selector names, such as a canvas or a map; "
+                "the pointer shows in each screenshot as an orange arrow. "
+                "The page keeps its state between calls, so work through a "
+                "flow one call at a time. Every call reports where the page "
+                "is now, its numbered elements, and the errors it threw, "
+                "with a screenshot attached, so this is how you debug what "
+                "a page actually does rather than what its source says."
             ),
             "parameters": {
                 "type": "object",
@@ -3487,9 +3548,13 @@ tools: list[dict[str, Any]] = [
                     "action": {
                         "type": "string",
                         "description": (
-                            "What to do: 'click', 'fill' (type value into "
-                            "a field), 'press' (send a key such as Enter or "
-                            "Tab), 'hover', 'select' (choose value in a "
+                            "What to do: 'click' (an element, or with no "
+                            "selector the point \"x,y\" in value), 'move' "
+                            "(the mouse onto an element or to a point, and "
+                            "leave it there), 'drag' (value \"x1,y1 "
+                            "x2,y2\"), 'fill' (type value into a field), "
+                            "'press' (send a key such as Enter or Tab), "
+                            "'hover', 'select' (choose value in a "
                             "dropdown), 'scroll', 'wait', 'eval' (run the "
                             "JavaScript in value and return its result), "
                             "'back', 'reload', or 'close' (shut the "
@@ -3514,8 +3579,10 @@ tools: list[dict[str, Any]] = [
                         "description": (
                             "The text to type for fill, the key for press, "
                             "the option for select, the JavaScript for "
-                            "eval, or 'top', 'bottom', or a number of "
-                            "pixels for scroll."
+                            "eval, 'top', 'bottom', or a number of pixels "
+                            "for scroll, or a point for click, move, and "
+                            "drag, in the screenshot's pixels from its "
+                            "top-left corner."
                         ),
                     },
                     "wait_ms": {

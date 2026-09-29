@@ -329,6 +329,26 @@ def tool_file(path: str) -> bool:
     return True
 
 
+def tool_browser(
+    path: str, *, run: str, url: str, title: str = "", note: str = "",
+) -> bool:
+    """Hand whoever is drawing a picture of the agent's browser as it
+    stands: one frame of RUN, a page opened and acted on in turn, taken
+    after NOTE, the action that got it there.
+
+    True when something took it: the web UI, which shows the browser
+    live beside the chat. False in the terminal, which has no picture.
+    """
+
+    sink = _sink()
+    if sink is None:
+        return False
+    sink("browser", json.dumps({
+        "path": path, "run": run, "url": url, "title": title, "note": note,
+    }), "")
+    return True
+
+
 def tool_document(path: str, comments: list[dict]) -> bool:
     """Hand a document to whoever is drawing, with the agent's comments
     on it: each a quote from the document and a note about it.

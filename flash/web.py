@@ -304,7 +304,7 @@ class Ask:
 # The rest (tokens, status) only matter to a page that is watching.
 KEPT = {
     "user", "assistant", "tool", "result", "diff", "ask", "answered",
-    "error", "stats", "note", "thought", "file", "plan",
+    "error", "stats", "note", "thought", "file", "plan", "browser",
 }
 
 
@@ -1274,6 +1274,20 @@ def _sink(session: Session, chat: Chat):
             session.emit(chat, {"type": "diff", "text": text})
         elif kind == "plan":
             session.emit(chat, {"type": "plan", "steps": json.loads(text)})
+        elif kind == "browser":
+            # A frame of the agent's browser: kept like any file shown,
+            # so the chat still has it after a restart.
+            shown = json.loads(text)
+            try:
+                kept = workspace.keep_file(shown["path"])
+            except (workspace.WorkspaceError, OSError):
+                return
+            session.emit(chat, {
+                "type": "browser", **kept, "run": str(shown["run"]),
+                "url": str(shown.get("url") or ""),
+                "title": str(shown.get("title") or ""),
+                "note": str(shown.get("note") or ""),
+            })
         elif kind in ("file", "document"):
             shown = json.loads(text) if kind == "document" else {"path": text}
             try:
