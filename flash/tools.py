@@ -208,11 +208,16 @@ When a task matches a skill under === Skills === below, call skill_view on
 Your temporary scratch directory is: {SCRATCH_DIR}
 It will be deleted when the program exits. Use it for temporary files, but do
   not assume it will persist across runs.
-Always use the scratch directory for temporary files, including dummy,
-  sample, and test files the user asks for, and write them by their full
-  path there. Never write them to the user's home directory, other
-  directories, or the current working directory unless the user names
-  that place.
+Always use the scratch directory for temporary files, including test
+  scripts, and dummy, sample, and test files the user asks for, and write
+  them by their full path there. Never write them to the user's home
+  directory, other directories, or the current working directory unless
+  the user names that place.
+Save a finished file the user asked for (a picture, chart, PDF, document,
+  page, 3D model, or a script for them to keep) in their Downloads folder
+  by its full path, unless they name another place or it is a change to
+  the project you are working in. Find that folder's path once with a
+  shell command before the first such write.
 """.strip()
 
 now = datetime.now()  # noqa: DTZ005
@@ -3584,8 +3589,9 @@ tools: list[dict[str, Any]] = [
                     "path": {
                         "type": "string",
                         "description": (
-                            "Where to save it, ending in .glb, such as "
-                            "chair.glb."
+                            "Full path to save it at, ending in .glb: in "
+                            "the user's Downloads folder, as chair.glb "
+                            "there, unless they named another place."
                         ),
                     },
                     "parts": {
