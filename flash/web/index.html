@@ -1093,6 +1093,9 @@ button.item-row:hover { background: var(--hover); }
 .spark-preview { border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; margin: 12px 0 4px; font-size: 13.5px; color: var(--text-2); }
 .spark-preview b { color: var(--text); }
 .spark-preview p { margin: 6px 0 0; }
+.read-aloud.on { color: var(--accent); }
+.spark-report .when .read-aloud { margin-left: auto; width: 26px; height: 26px; }
+.spark-report .when .read-aloud svg { width: 13px; height: 13px; }
 .field select { width: 100%; font: 14.5px var(--sans); color: var(--text); background: var(--bg); border: 1px solid var(--border-strong); border-radius: 10px; padding: 9px 12px; outline: 0; }
 
 .ext-preview { margin: 14px 0 6px; padding: 12px 14px; border: 1px solid var(--border); border-radius: 12px; background: var(--code-bg); }
@@ -1619,6 +1622,8 @@ const ICON = {
   up: '<path d="M12 19V5M5 12l7-7 7 7"/>',
   down: '<path d="M12 5v14M19 12l-7 7-7-7"/>',
   stop: '<rect x="5" y="5" width="14" height="14" rx="2.5" fill="currentColor" stroke="none"/>',
+  play: '<path d="M8 5.5v13a1 1 0 0 0 1.5.86l10.5-6.5a1 1 0 0 0 0-1.72L9.5 4.64A1 1 0 0 0 8 5.5Z" fill="currentColor" stroke="none"/>',
+  halt: '<rect x="6.5" y="6.5" width="11" height="11" rx="2" fill="currentColor" stroke="none"/>',
   copy: '<rect x="9" y="9" width="12" height="12" rx="2.5"/><path d="M5 15a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2"/>',
   check: '<path d="M20 6 9 17l-5-5"/>',
   retry: '<path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/>',
@@ -1786,6 +1791,8 @@ const voice = { on: false, state: "", ctx: null, stream: null, level: 0, turn: n
 let view = "chat";         // "chat" | "projects" | "project" | "settings" | "skills" | "sparks" | "extensions"
 let viewProject = null;    // the project page shown, or the project a new chat starts in
 let viewSpark = null;      // the spark a new chat is with, before its first message
+const reading = { key: null, stop: null };  // what the play button is reading
+let ownVoice = null;       // whether Flash's own voice is here: null until asked
 let sparkList = [];        // each spark's id, name, handle and colour, for badges
 const sparkOf = (id) => (id && sparkList.find((s) => s.id === id)) || null;
 
@@ -3212,6 +3219,7 @@ function replyActions(text) {
   const row = el("div", "actions");
   row.append(
     button("icon-btn", "copy", "Copy", "Alt C", (b) => copy(text, "reply", b)),
+    readButton(`reply:${text}`, () => row.closest(".block") && row.closest(".block").querySelector(".assistant")),
     button("icon-btn", "retry", "Retry", "Alt R", retry),
   );
   return row;
@@ -4013,6 +4021,9 @@ function fillSpark(box, spark, again = false) {
     card.querySelector(".when").textContent = `${when(report.at)} · ${ago(report.at)}`;
     if (!report.read) card.querySelector(".when").appendChild(el("span", "made-by", "New"));
     card.querySelector(".body").innerHTML = markdown(report.text);
+    const play = readButton(`report:${spark.id}:${report.at}`, () => card.querySelector(".body"));
+    play.classList.add("small");
+    card.querySelector(".when").appendChild(play);
     if (report.steps.length) {
       const steps = el("details", "", `<summary>${report.steps.length} step${report.steps.length === 1 ? "" : "s"}</summary><ol></ol>`);
       for (const step of report.steps) steps.querySelector("ol").appendChild(el("li")).textContent = step;
@@ -5804,13 +5815,123 @@ function markSpoken(range) {
 const unmarkSpoken = () => { if (window.CSS && CSS.highlights) CSS.highlights.delete("speaking"); };
 
 // A line of speech, made on this computer, ready to play.
-function makeSpeech(line) {
+function makeSpeech(line, ctx = voice.ctx) {
   return api("/api/voice/say", { text: line }).then((r) => {
     const raw = atob(r.audio);
     const bytes = new Uint8Array(raw.length);
     for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
-    return voice.ctx.decodeAudioData(bytes.buffer);
+    return ctx.decodeAudioData(bytes.buffer);
   });
+}
+
+// Reading aloud ---------------------------------------------------------------
+// The play button under a reply, and under a spark's report. It reads
+// in Flash's own voice, the one voice mode and the terminal speak with,
+// when that is set up on this computer, and in the browser's otherwise.
+// One thing is read at a time, a sentence at a time, each marked as it
+// is said.
+
+
+async function haveOwnVoice() {
+  if (ownVoice === null) {
+    try { const st = await command("voice-status", "", null); ownVoice = !st.missing.length && !!st.ready; }
+    catch (_) { ownVoice = false; }
+  }
+  return ownVoice;
+}
+
+function markPlaying(key, on) {
+  document.querySelectorAll(".read-aloud").forEach((b) => {
+    if (b.dataset.key !== key) return;
+    b.innerHTML = icon(on ? "halt" : "play");
+    b.dataset.tip = on ? "Stop reading" : "Read aloud";
+    b.setAttribute("aria-label", b.dataset.tip);
+    b.classList.toggle("on", on);
+  });
+}
+
+function stopReading() {
+  if (reading.stop) reading.stop();
+}
+
+// A play button for what NODE() finds, known by KEY across redraws.
+function readButton(key, node) {
+  const b = button("icon-btn read-aloud", reading.key === key ? "halt" : "play", reading.key === key ? "Stop reading" : "Read aloud", "", () => readAloudNode(key, node()));
+  b.dataset.key = key;
+  b.classList.toggle("on", reading.key === key);
+  return b;
+}
+
+async function readAloudNode(key, node) {
+  if (reading.key === key) { stopReading(); return; }
+  stopReading();
+  if (voice.on) { toast("Voice mode is on, and reads replies itself"); return; }
+  const parts = node ? sentencesOf(node) : [];
+  if (!parts.length) { toast("There is nothing to read aloud in that"); return; }
+  let stopped = false;
+  let finish = () => {};
+  reading.key = key;
+  markPlaying(key, true);
+  // Only one in the chat scrolls to keep the sentence in view: a report
+  // sits in a window of its own.
+  const inChat = messagesEl.contains(node);
+  const mark = (range) => {
+    if (!range || !node.isConnected) return;
+    if (inChat) markSpoken(range);
+    else if (window.CSS && CSS.highlights) CSS.highlights.set("speaking", new Highlight(range));
+  };
+  const done = () => {
+    finish();
+    unmarkSpoken();
+    if (reading.key === key) { reading.key = null; reading.stop = null; }
+    markPlaying(key, false);
+  };
+  reading.stop = () => { stopped = true; done(); };
+
+  if (await haveOwnVoice()) {
+    const ctx = new AudioContext();
+    let source = null;
+    finish = () => {
+      try { if (source) source.stop(); } catch (_) { /* already over */ }
+      ctx.close().catch(() => {});
+    };
+    // The next sentence is made while this one plays.
+    let next = makeSpeech(parts[0].text, ctx);
+    for (let i = 0; i < parts.length; i++) {
+      let audio;
+      try { audio = await next; } catch (error) { if (!stopped) { toast(error.message); done(); } return; }
+      if (stopped) return;
+      next = i + 1 < parts.length ? makeSpeech(parts[i + 1].text, ctx) : null;
+      if (next) next.catch(() => {});
+      mark(parts[i].range);
+      await new Promise((resolve) => {
+        source = ctx.createBufferSource();
+        source.buffer = audio;
+        source.connect(ctx.destination);
+        source.onended = resolve;
+        source.start();
+      });
+      if (stopped) return;
+    }
+    done();
+  } else if ("speechSynthesis" in window) {
+    finish = () => speechSynthesis.cancel();
+    for (const part of parts) {
+      mark(part.range);
+      await new Promise((resolve) => {
+        const said = new SpeechSynthesisUtterance(part.text);
+        said.onend = said.onerror = resolve;
+        // A browser with no voice to speak in may never say it finished.
+        setTimeout(resolve, 4000 + part.text.length * 90);
+        speechSynthesis.speak(said);
+      });
+      if (stopped) return;
+    }
+    done();
+  } else {
+    done();
+    toast("This browser cannot read aloud");
+  }
 }
 
 function playSpeech(audio) {
