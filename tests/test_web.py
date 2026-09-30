@@ -3361,9 +3361,12 @@ class TestMentions:
         replies = [e for e in events if e["type"] == "assistant"]
         assert replies[-1]["spark"] == scout.id
         assert chat.log[-2]["spark"] == scout.id
-        assert chat.messages[-1]["content"].startswith(
-            "[Scout (@scout-spark), one of the user's sparks]"
+        note = chat.messages[-1]
+        assert note["role"] == "system"
+        assert note["content"].startswith(
+            "[Spark called] The user @mentioned Scout (@scout-spark)"
         )
+        assert note["content"].endswith("Two new bugs.")
         # Only the spark spoke: Flash's review has nothing of its own.
         assert reviewed == []
 
@@ -3388,7 +3391,60 @@ class TestMentions:
         second = FakeClient.requests[1]["messages"]
         assert "You are Price Watch" in second[0]["content"]
         # The second hears what the first said, marked as the first's.
-        assert second[-1]["content"].startswith("[Scout (@scout-spark)")
+        assert len(second) == 2
+        assert "Already answered by others" in second[1]["content"]
+        assert "Scout (@scout-spark)" in second[1]["content"]
+        assert "Issues are quiet." in second[1]["content"]
+
+    def test_a_mentioned_spark_is_shown_a_bit_of_the_chat(self):
+        from flash import sparks
+
+        sparks.create("Scout", "Watch the issues.")
+        FakeClient.scripts = [
+            [part("Hello."), part(done=True)],
+            [part("Nothing new."), part(done=True)],
+        ]
+        session = web.Session()
+        chat = session.new_chat()
+
+        run(session, chat, "I am working on the login page.")
+        run(session, chat, "@scout any bugs about that?")
+
+        guest = FakeClient.requests[1]["messages"]
+        assert [m["role"] for m in guest] == ["system", "user"]
+        shown = guest[1]["content"]
+        assert "User: I am working on the login page." in shown
+        assert "Flash: Hello." in shown
+        assert shown.endswith("@scout any bugs about that?")
+
+    def test_flash_then_sees_the_spark_was_called_but_not_its_work(self):
+        from flash import sparks
+
+        sparks.create("Scout", "Watch the issues.")
+        FakeClient.scripts = [
+            [part(calls=[call("fetch", url="https://example.com")]),
+             part(done=True)],
+            [part("Issue 12 is a crash."), part(done=True)],
+            [part("I can fix that crash."), part(done=True)],
+        ]
+        monkeypatch_fetch = tools.FUNCTIONS["fetch"]
+        tools.FUNCTIONS["fetch"] = lambda **kw: "(page)"
+        try:
+            session = web.Session()
+            chat = session.new_chat()
+            run(session, chat, "@scout anything new?")
+            run(session, chat, "Flash, can you fix what Scout found?")
+        finally:
+            tools.FUNCTIONS["fetch"] = monkeypatch_fetch
+
+        flash_saw = FakeClient.requests[2]["messages"]
+        notes = [m for m in flash_saw if m["role"] == "system"
+                 and m["content"].startswith("[Spark called]")]
+        assert len(notes) == 1
+        assert "using fetch" in notes[0]["content"]
+        assert notes[0]["content"].endswith("Issue 12 is a crash.")
+        # The spark's own tool calls are its work, not Flash's history.
+        assert not any(m["role"] == "tool" for m in flash_saw)
 
     def test_no_mention_is_flash_as_ever(self):
         FakeClient.scripts = [[part("Hello."), part(done=True)]]

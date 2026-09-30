@@ -1569,6 +1569,11 @@ def _respond(
     from . import tools as flash_tools
 
     kit = sparks.ChatKit(spark) if spark is not None else None
+    # Whose chat it is: Flash's, or the spark it is with.
+    owner = sparks.find(chat.spark) if chat.spark else None
+    host_name = owner.name if owner else "Flash"
+    # The tools a guest used, for the note the chat keeps.
+    used: list[str] = []
     # A spark answers on its own model, the one it was given.
     model = (
         sparks.model_of(spark, ai.Config.model or "") if spark is not None
@@ -1591,9 +1596,8 @@ def _respond(
                 flash_tools.CURRENT_DATE_PROMPT, project=False,
             )
             if guest:
-                host = sparks.find(chat.spark) if chat.spark else None
                 prompt += "\n\n" + sparks.MENTIONED_PROMPT.format(
-                    host=host.name if host else "Flash",
+                    host=host_name,
                 )
         else:
             prompt = ai._session_system_prompt(heard=chat.heard)
@@ -1606,7 +1610,20 @@ def _respond(
         offered = flash_tools.turn_tools()
         if kit is not None:
             offered = kit.offer(offered)
-        convo = [system, *chat.messages]
+        if guest:
+            # A bit of the conversation, not all of it, and as a
+            # transcript: whose words are whose stays plain, and a small
+            # model is not asked to read a long chat that is not its own.
+            asked = next(
+                (m for m in reversed(chat.messages) if m["role"] == "user"),
+                {},
+            )
+            convo = [system, {
+                **asked, "role": "user",
+                "content": sparks.guest_view(chat.messages, host_name),
+            }]
+        else:
+            convo = [system, *chat.messages]
         keep_from = len(convo)
         tool_count = 0
         nudged = 0
@@ -1649,6 +1666,8 @@ def _respond(
             })
 
             for name, args in named:
+                if name != "reason":
+                    used.append(name)
                 if chat.stop.is_set():
                     output = "Stopped by the user before this ran."
                 elif name == "reason":
@@ -1708,12 +1727,18 @@ def _respond(
     else:
         _finish_reply(session, chat, reply, spark)
 
-    chat.messages.extend(ai._worth_keeping(convo, keep_from))
-    if reply.content:
-        chat.messages.append(ai._message(
-            "assistant",
-            sparks.said_by(spark, reply.content) if guest else reply.content,
-        ))
+    if guest:
+        # Whoever the chat is with sees a spark was called, and what it
+        # said and did, as a note: not as a reply of its own, and not
+        # with the spark's tool calls in its history.
+        if reply.content:
+            chat.messages.append(ai._message(
+                "system", sparks.called_note(spark, reply.content, used),
+            ))
+    else:
+        chat.messages.extend(ai._worth_keeping(convo, keep_from))
+        if reply.content:
+            chat.messages.append(ai._message("assistant", reply.content))
 
     session.emit(chat, {
         "type": "stats",

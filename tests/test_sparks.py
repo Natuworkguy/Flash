@@ -806,12 +806,56 @@ def test_an_address_or_a_path_is_not_a_mention(text):
     assert sparks.mentioned(text) == []
 
 
-def test_a_spark_reply_is_marked_as_its_own():
+def test_a_spark_answer_is_kept_as_a_note_of_who_did_what():
     made = sparks.create("Scout", "Watch the issues.")
 
-    assert sparks.said_by(made, "Hi.") == (
-        "[Scout (@scout-spark), one of the user's sparks]\nHi."
+    note = sparks.called_note(
+        made, "Two new bugs.", ["fetch", "fetch", "grep"],
     )
+
+    assert note == (
+        "[Spark called] The user @mentioned Scout (@scout-spark), one of "
+        "their sparks, in this chat. It answered, using fetch, grep:\n"
+        "Two new bugs."
+    )
+
+
+def test_a_mentioned_spark_sees_the_latest_of_the_chat():
+    history = [
+        {"role": "user", "content": f"old question {i}"} for i in range(20)
+    ] + [
+        {"role": "assistant", "content": "", "tool_calls": [{}]},
+        {"role": "tool", "content": "a long tool output", "tool_name": "x"},
+        {"role": "assistant", "content": "word " * 1000},
+        {"role": "user", "content": "@scout what do you think?"},
+    ]
+
+    shown = sparks.guest_view(history, "Flash")
+
+    assert "latest 12 messages" in shown
+    # The latest 12: questions 9 to 19, and Flash's reply.
+    assert "old question 19" in shown and "old question 9" in shown
+    assert "old question 8" not in shown
+    assert "tool output" not in shown
+    assert "Flash: word word" in shown and "[...]" in shown
+    assert shown.endswith(
+        "The user now says, to you:\n@scout what do you think?"
+    )
+
+
+def test_a_second_spark_sees_what_the_first_said():
+    first = sparks.create("Scout", "Watch the issues.")
+    history = [
+        {"role": "user", "content": "@scout @fixer status?"},
+        {"role": "system",
+         "content": sparks.called_note(first, "Issue 12 is open.", [])},
+    ]
+
+    shown = sparks.guest_view(history, "Flash")
+
+    assert "The user now says, to you:\n@scout @fixer status?" in shown
+    assert "Already answered by others it named" in shown
+    assert "Issue 12 is open." in shown
 
 
 # --- Approvals, stopping, hand-offs, watching, sharing ---------------------
