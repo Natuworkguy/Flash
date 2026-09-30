@@ -265,6 +265,21 @@ def test_the_page_turns_always_on_on_and_off(monkeypatch):
     assert "always" in web.command(session, {"name": "sparks"})
 
 
+def test_settings_can_ask_without_changing_anything(monkeypatch):
+    calls = []
+    monkeypatch.setattr(keepalive, "turn_on", lambda: calls.append("on"))
+    monkeypatch.setattr(keepalive, "turn_off", lambda: calls.append("off"))
+    session = web.Session()
+
+    asked = web.command(session, {"name": "sparks-always", "arg": ""})
+
+    assert calls == []
+    assert asked["always"]["installed"] is False
+    with pytest.raises(ValueError, match="on or off"):
+        web.command(session, {"name": "sparks-always", "arg": "sideways"})
+    assert calls == []
+
+
 def test_the_page_hears_why_always_on_failed(monkeypatch):
     def refuse():
         raise keepalive.KeepAliveError("launchd said no")

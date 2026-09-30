@@ -1049,8 +1049,7 @@ button.item-row:hover { background: var(--hover); }
 .spark-report .teach input { flex: 1; min-width: 0; font: 13.5px var(--sans); color: var(--text); background: var(--surface); border: 1px solid var(--border-strong); border-radius: 9px; padding: 6px 10px; outline: 0; }
 .spark-quiet { font-size: 12.5px; color: var(--text-3); margin-top: 10px; }
 .field small [data-handle] { font: 500 12px var(--mono); color: var(--text-2); }
-.spark-always { max-width: none; margin-bottom: 16px; }
-.spark-always .what span.on { color: var(--text-2); }
+.mem-path .link-btn { font: inherit; padding: 0 4px; text-decoration: underline; text-underline-offset: 2px; }
 .field.check { display: flex; align-items: flex-start; gap: 10px; cursor: pointer; }
 .field.check input { margin-top: 3px; accent-color: var(--accent); }
 .field.check span { margin: 0; font-weight: 400; color: var(--text-2); }
@@ -3611,6 +3610,14 @@ function drawGeneral(body) {
   };
   body.appendChild(row);
 
+  body.insertAdjacentHTML("beforeend", `<h2 class="settings-section settings-gap">Sparks</h2><p class="settings-sub">Agents that keep working on a goal, on a schedule. Make and read them on the Sparks page.</p>`);
+  const always = el("button", "setting-row sparks-always-row", `<span class="what"><b>Keep working when Flash is closed</b><span></span></span><span class="switch" aria-hidden="true"></span>`);
+  always.type = "button";
+  always.setAttribute("role", "switch");
+  always.onclick = () => setSparksAlways(always.getAttribute("aria-checked") !== "true", always);
+  body.appendChild(always);
+  fillAlwaysRow(always);
+
   body.insertAdjacentHTML("beforeend", `<h2 class="settings-section settings-gap">Voice models</h2><p class="settings-sub">What voice mode listens and speaks with. Both run on this computer, so pick lighter ones for a weaker machine.</p><div class="voice-models"></div>`);
   drawVoiceModels(body.querySelector(".voice-models"));
 
@@ -3748,14 +3755,6 @@ async function drawSparks(body, again = false) {
   add.onclick = () => sparkForm();
   body.querySelector(".mem-head").appendChild(add);
   sparksAlways = r.always;
-  const always = el("button", "setting-row spark-always", `<span class="what"><b>Keep working when Flash is closed</b><span></span></span><span class="switch" aria-hidden="true"></span>`);
-  always.type = "button";
-  always.setAttribute("role", "switch");
-  always.setAttribute("aria-checked", !!r.always.installed);
-  always.querySelector(".what span").textContent = alwaysWords(r.always);
-  always.querySelector(".what span").classList.toggle("on", r.always.installed);
-  always.onclick = () => setSparksAlways(always.getAttribute("aria-checked") !== "true", always);
-  body.querySelector(".mem-head").after(always);
   const host = body.querySelector(".host");
   if (!r.sparks.length) {
     host.innerHTML = `<div class="mem-empty"><b>No sparks yet</b>Give one a goal like “every morning, check my repo for new issues and tell me which look like bugs”. Or ask Flash in a chat to make one.</div>`;
@@ -3779,9 +3778,25 @@ async function drawSparks(body, again = false) {
   });
   host.appendChild(grid);
   const working = r.sparks.filter((s) => s.status === "working").length;
-  body.querySelector(".mem-path").textContent = `${r.sparks.length} spark${r.sparks.length === 1 ? "" : "s"}${working ? ` · ${working} working` : ""} · saved in ~/.flash/sparks`;
+  const where = body.querySelector(".mem-path");
+  where.textContent = `${r.sparks.length} spark${r.sparks.length === 1 ? "" : "s"}${working ? ` · ${working} working` : ""} · ${r.always.installed ? "working with Flash closed too" : "working while Flash is open"} · `;
+  const change = el("button", "link-btn", "change in Settings");
+  change.type = "button";
+  change.onclick = () => showSettings("general");
+  where.appendChild(change);
 }
 const drawSparksPage = () => toolPage("Sparks", drawSparks);
+
+// The switch in Settings: on or off, and what that means right now.
+function showAlways(row, a) {
+  row.setAttribute("aria-checked", !!a.installed);
+  row.querySelector(".what span").textContent = alwaysWords(a);
+}
+
+async function fillAlwaysRow(row) {
+  try { sparksAlways = (await command("sparks-always", "", null)).always; } catch (error) { showFailure(error); return; }
+  if (row.isConnected && !row.disabled) showAlways(row, sparksAlways);
+}
 
 async function setSparksAlways(on, row) {
   if (row) { row.setAttribute("aria-checked", on); row.disabled = true; }
@@ -3793,7 +3808,7 @@ async function setSparksAlways(on, row) {
     if (row) row.setAttribute("aria-checked", !on);
     showFailure(error);
   }
-  if (row) row.disabled = false;
+  if (row) { row.disabled = false; showAlways(row, sparksAlways); }
   sparksChanged();
 }
 
@@ -3946,6 +3961,8 @@ function sparksChanged() {
   refreshLite();
   clearTimeout(sparksTimer);
   sparksTimer = setTimeout(async () => {
+    const always = document.querySelector(".sparks-always-row");
+    if (always && !always.disabled) fillAlwaysRow(always);
     if (view === "sparks") {
       const body = messagesEl.querySelector(".tab-body");
       const editing = body && body.contains(document.activeElement) && /TEXTAREA|INPUT/.test(document.activeElement.tagName);

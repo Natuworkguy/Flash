@@ -1842,7 +1842,7 @@ def make_spark(
         result += (
             " Sparks only work while Flash is open right now. Offer to "
             "keep them working with it closed: /sparks always on in the "
-            "terminal, or the switch on the Sparks page."
+            "terminal, or Settings in the web UI."
         )
     tool_result(result)
     return result

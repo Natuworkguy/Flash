@@ -315,7 +315,7 @@ change files in autonomous mode.
 #### Always on
 
 Out of the box, sparks work while a Flash is open. `/sparks always on`
-(or the switch on the web UI's Sparks page) keeps them working with the
+(or the switch under Sparks in the web UI's Settings) keeps them working with the
 terminal and browser both closed: Flash registers `flash --sparks`, a
 Flash with no window that only runs sparks, to start at login, and
 starts it right away. No administrator rights are needed.
