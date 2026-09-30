@@ -66,6 +66,8 @@ def isolated_home(tmp_path_factory, monkeypatch):
         monkeypatch.delenv(name)
     monkeypatch.setattr(voice, "MODELS_DIR", home / ".flash" / "models")
     monkeypatch.setattr(ai, "ENV_PATH", str(home / ".flash.env"))
+    # A shift reads autonomous mode from the env file: the temp one.
+    monkeypatch.setattr(sparks, "ENV_PATH", str(home / ".flash.env"))
     learning.refresh()
     learning.reset()
     yield home
