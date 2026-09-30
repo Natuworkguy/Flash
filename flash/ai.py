@@ -1873,8 +1873,14 @@ def _new_spark() -> None:
         f"Which project does it work on? ({', '.join(names)}; Enter for "
         "none)"
     ) if names else ""
+    model = _ask_spark_model()
+    if not model:
+        console.print(Text("  No spark made: it needs a model.", style=DIM))
+        return
     try:
-        spark = sparks.create(name, goal, boundaries, every, project)
+        spark = sparks.create(
+            name, goal, boundaries, every, project, model=model,
+        )
     except sparks.SparkError as exc:
         warn(str(exc))
         return
@@ -1894,12 +1900,25 @@ def _new_spark() -> None:
         _sparks_always("on")
 
 
+def _ask_spark_model() -> str:
+    """The model a spark runs on, picked the way /model picks: from this
+    machine's list, or typed when there is no list to pick from."""
+
+    console.print(Text("  Which model does it run on?", style=DIM))
+    picked = pick_model(ollama.Client(host=Config.host), Config.model or "")
+    if picked:
+        console.print(Text(f"  {picked}", style=ACCENT))
+        return picked
+    example = f" (for example {Config.model})" if Config.model else ""
+    return _ask_line(f"Model name{example}:")
+
+
 def _show_spark(spark: "sparks.Spark") -> None:
     head = Text(f"\n{_bubble()} ", style=spark.colour)
     head.append(spark.name, style=f"bold {spark.colour}")
     found = sparks.project_of(spark)
-    head.append(f"  {spark.handle} · every "
-                f"{sparks.every_words(spark.every)}"
+    head.append(f"  {spark.handle} · on {sparks.model_of(spark) or 'no model'}"
+                f" · every {sparks.every_words(spark.every)}"
                 f"{f' · in {found.name}' if found else ''}"
                 f" · {_spark_state(spark)}"
                 f" · {spark.runs} shift{'' if spark.runs == 1 else 's'}\n",
@@ -2073,11 +2092,12 @@ def _sparks_command(arg: str) -> None:
             console.echo(code + "\n")
             return
         if action == "add" and rest:
-            spark = sparks.add_from(rest)
+            spark = sparks.add_from(rest, model=Config.model or "")
             console.print(Text(
                 f"Added {spark.name} ({spark.handle}), every "
-                f"{sparks.every_words(spark.every)}. /sparks "
-                f"{_spark_key(spark)} to read it.", style=DIM,
+                f"{sparks.every_words(spark.every)}, on {spark.model}. "
+                f"/sparks model {_spark_key(spark)} to give it another.",
+                style=DIM,
             ))
             return
         if action == "templates":
@@ -2106,6 +2126,19 @@ def _sparks_command(arg: str) -> None:
                 f"{spark.name} starts a shift when {spark.watch} changes."
                 if spark.watch else f"{spark.name} watches nothing now.",
                 style=DIM,
+            ))
+            return
+        if action == "model" and key:
+            spark = sparks.find(key)
+            if spark is None:
+                warn(f"No spark called {key!r}.")
+                return
+            model = extra or _ask_spark_model()
+            if not model:
+                return
+            spark = sparks.update(spark.id, model=model)
+            console.print(Text(
+                f"{spark.name} runs on {spark.model} now.", style=DIM,
             ))
             return
         if action == "project" and key and extra:
@@ -2147,6 +2180,7 @@ def _sparks_command(arg: str) -> None:
             "| every <name> <30m|2h|daily> | project <name> <project|none> "
             "| approve|deny|stop|share <name> | add <code|template> "
             "| templates | goal <name> <text> | watch <name> <folder|none> "
+            "| model <name> [model] "
             "| always on|off]"
         )
         return

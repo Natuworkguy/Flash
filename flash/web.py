@@ -1235,8 +1235,10 @@ def stream_reply(
     client: Any,
     messages: list,
     tools_arg: Optional[list],
+    model: str = "",
 ) -> Streamed:
-    """One model call, sent to the page a token at a time."""
+    """One model call, sent to the page a token at a time. MODEL is
+    Flash's unless given: a spark answers on its own."""
 
     from . import ai  # deferred: ai imports half of Flash
 
@@ -1247,7 +1249,7 @@ def stream_reply(
     thinking: list[str] = []
 
     parts = client.chat(
-        model=ai.Config.model,
+        model=model or ai.Config.model,
         messages=messages,
         tools=tools_arg,
         options=ai._chat_options(),
@@ -1475,13 +1477,6 @@ def run_turn(
 
     from . import ai  # deferred: ai imports half of Flash
 
-    if not ai.Config.model:
-        session.emit(chat, {
-            "type": "error",
-            "text": "No model is set. Pick one with Alt+M or /model.",
-        })
-        return
-
     # Who answers: a spark the message @mentions, each in turn, or else
     # the chat's own, a spark or Flash.
     own = sparks.find(chat.spark) if chat.spark else None
@@ -1492,6 +1487,19 @@ def run_turn(
         })
         return
     speakers: list = sparks.mentioned(text) or [own]
+
+    # Each needs a model to answer on: Flash its own, a spark the one it
+    # was given, or Flash's.
+    if not all(
+        sparks.model_of(s, ai.Config.model or "") if s is not None
+        else ai.Config.model
+        for s in speakers
+    ):
+        session.emit(chat, {
+            "type": "error",
+            "text": "No model is set. Pick one with Alt+M or /model.",
+        })
+        return
 
     client = ollama.Client(host=ai.Config.host)
 
@@ -1561,6 +1569,11 @@ def _respond(
     from . import tools as flash_tools
 
     kit = sparks.ChatKit(spark) if spark is not None else None
+    # A spark answers on its own model, the one it was given.
+    model = (
+        sparks.model_of(spark, ai.Config.model or "") if spark is not None
+        else ai.Config.model
+    ) or ""
     started = time.monotonic()
     tokens = 0
     generating = 0.0
@@ -1574,7 +1587,7 @@ def _respond(
             # The chat's project, not the spark's, is added below, and
             # the turn runs in its folder.
             prompt = sparks.chat_prompt(
-                spark, ai.Config.host, ai.Config.model,
+                spark, ai.Config.host, model,
                 flash_tools.CURRENT_DATE_PROMPT, project=False,
             )
             if guest:
@@ -1600,7 +1613,9 @@ def _respond(
         reply = Streamed()
 
         for _round in range(ai.Config.max_tool_rounds):
-            reply = stream_reply(session, chat, client, convo, offered)
+            reply = stream_reply(
+                session, chat, client, convo, offered, model,
+            )
             tokens += reply.tokens
             generating += reply.seconds
 
@@ -1683,7 +1698,7 @@ def _respond(
             # Out of tool rounds: one more call, with no tools, for the
             # answer from what the tools found.
             convo.append(ai._tool_limit_message())
-            reply = stream_reply(session, chat, client, convo, None)
+            reply = stream_reply(session, chat, client, convo, None, model)
             tokens += reply.tokens
             generating += reply.seconds
 
@@ -1704,7 +1719,7 @@ def _respond(
         "type": "stats",
         # When, and on what: the settings page counts days and models.
         "at": round(time.time()),
-        "model": ai.Config.model or "",
+        "model": model,
         "tokens": tokens,
         "rate": round(tokens / generating, 1) if generating else 0,
         "seconds": round(time.monotonic() - started, 1),
@@ -2469,12 +2484,13 @@ def _spark_command(name: str, arg: str, body: dict) -> dict:
                 str(body.get("every") or ""),
                 str(body.get("project") or ""),
                 str(body.get("watch") or ""),
+                str(body.get("model") or ""),
             )
         elif name == "spark-update":
             # The new name comes as "rename": "name" names the command.
             fields = {"rename": "name", "goal": "goal", "every": "every",
                       "boundaries": "boundaries", "project": "project",
-                      "watch": "watch"}
+                      "watch": "watch", "model": "model"}
             spark = sparks.update(arg, **{
                 field: str(body[key])
                 for key, field in fields.items() if key in body
@@ -2492,7 +2508,10 @@ def _spark_command(name: str, arg: str, body: dict) -> dict:
         elif name == "spark-code":
             return {"template": sparks.read_code(arg)}
         elif name == "spark-add":
-            spark = sparks.add_from(arg, str(body.get("project") or ""))
+            spark = sparks.add_from(
+                arg, str(body.get("project") or ""),
+                str(body.get("model") or ""),
+            )
         elif name == "spark-templates":
             return {"templates": sparks.TEMPLATES}
         elif name in ("spark-pause", "spark-resume"):
