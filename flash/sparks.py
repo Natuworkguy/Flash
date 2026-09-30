@@ -66,6 +66,16 @@ MAX_REPORTS = 40
 MAX_STEPS = 40
 MAX_SHIFT_ROUNDS = 12
 
+# Chat: how much of it is kept, how much of it the spark rereads, and
+# how long it may work on one answer.
+MESSAGE_CHARS = 4000
+MAX_CHAT = 80
+CHAT_CONTEXT = 20
+MAX_CHAT_ROUNDS = 8
+# An answer still "on its way" after this long belongs to a Flash that
+# quit while making it.
+REPLY_STALE_SECONDS = 600
+
 # How often a spark may run. Every shift is a full agent run against the
 # model, so the floor keeps a spark from hogging it.
 MIN_EVERY_MINUTES = 15
@@ -147,6 +157,81 @@ ROUND_LIMIT_MESSAGE = (
 )
 
 
+CHAT_PROMPT = """
+=== You are a spark, talking with the user ===
+You are {name} ({handle}), a spark: an agent that works on one standing
+goal for this user, on a schedule, every {every}. Right now the user is
+talking to you directly, between your shifts.
+
+Your goal:
+{goal}
+
+Stay inside these boundaries, whatever you are asked:
+{boundaries}
+
+What the user has told you about how to do this (always follow it):
+{lessons}
+
+Your notes, written by you for your next shift:
+{notes}
+
+Your recent reports, newest last:
+{reports}
+
+How to talk:
+- Answer as yourself, in the first person: short, plain, friendly.
+- Answer from what you know. When they want something checked now, use
+  your tools and say what you found.
+- When they tell you how to do your job differently, call learn, so
+  every later shift follows it.
+- When they give you a new goal or a new schedule, call set_goal or
+  set_schedule, then say what changed.
+- When something here matters to your next shift, call keep_notes.
+""".strip()
+
+CHAT_LAST_WORD = (
+    "You have used every tool round this answer gets. Answer the user "
+    "now from what you have. Do not call any more tools."
+)
+
+
+def _tool(name: str, description: str, param: str, about: str) -> dict:
+    return {
+        "type": "function",
+        "function": {
+            "name": name,
+            "description": description,
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    param: {"type": "string", "description": about},
+                },
+                "required": [param],
+            },
+        },
+    }
+
+
+CHAT_TOOLS = [
+    _tool(
+        "learn",
+        "Keep a lesson from the user about how to do your job. Every "
+        "later shift reads it and follows it.",
+        "lesson", "The lesson, as one short instruction to yourself.",
+    ),
+    _tool(
+        "set_goal",
+        "Replace your standing goal, when the user gives you a new one.",
+        "goal", "The whole new goal.",
+    ),
+    _tool(
+        "set_schedule",
+        "Change how often your shifts run, when the user asks.",
+        "every", "How often: 30m, 2h, daily, weekly. At least 15m.",
+    ),
+]
+
+
 class SparkError(ValueError):
     """A spark that could not be made or found as asked."""
 
@@ -162,6 +247,17 @@ class Report:
     read: bool = False
     steps: list[str] = field(default_factory=list)
     feedback: str = ""
+
+
+@dataclass
+class Message:
+    """One line of a chat with a spark: the user's or the spark's."""
+
+    at: float
+    who: str  # "you" or "spark"
+    text: str
+    steps: list[str] = field(default_factory=list)
+    failed: bool = False
 
 
 @dataclass
@@ -186,10 +282,21 @@ class Spark:
     runs: int = 0
     # A shift asked for now, ahead of the schedule, even while paused.
     asked: bool = False
+    chat: list[Message] = field(default_factory=list)
+    # When the answer being made now was started, or 0; and what it is
+    # doing meanwhile.
+    replying: float = 0.0
+    reply_activity: str = ""
 
     @property
     def handle(self) -> str:
         return handle_of(self.name)
+
+    @property
+    def answering(self) -> bool:
+        return bool(self.replying) and (
+            time.time() - self.replying < REPLY_STALE_SECONDS
+        )
 
     @property
     def unread(self) -> int:
@@ -198,6 +305,7 @@ class Spark:
     def to_dict(self) -> dict:
         data = asdict(self)
         data["handle"] = self.handle
+        data["answering"] = self.answering
         data["unread"] = self.unread
         return data
 
@@ -298,6 +406,12 @@ def _from_dict(data: dict) -> Spark:
         for r in data.get("reports") or []
         if isinstance(r, dict)
     ]
+    message_fields = {f.name for f in fields(Message)}
+    kept["chat"] = [
+        Message(**{k: v for k, v in m.items() if k in message_fields})
+        for m in data.get("chat") or []
+        if isinstance(m, dict)
+    ]
     return Spark(**kept)
 
 
@@ -315,6 +429,73 @@ def _save(spark: Spark) -> None:
     temp = folder / f".{spark.id}.tmp"
     temp.write_text(json.dumps(data, indent=2), encoding="utf-8")
     os.replace(temp, _path(spark.id))
+
+
+_depth = threading.local()
+
+
+@contextlib.contextmanager
+def _held():
+    """This process's lock, and the same across processes.
+
+    A spark's file is read, changed, and written whole. The keeper
+    started at login and an open Flash can both do that to one spark at
+    once, a shift finishing while you chat with it, and without this
+    one write would lose the other's change. Reentrant, so a change
+    made while one is held does not wait on itself.
+    """
+
+    with _lock:
+        if getattr(_depth, "n", 0):
+            _depth.n += 1
+            try:
+                yield
+            finally:
+                _depth.n -= 1
+            return
+        handle = _lock_edits()
+        _depth.n = 1
+        try:
+            yield
+        finally:
+            _depth.n = 0
+            if handle is not None:
+                with contextlib.suppress(OSError):
+                    handle.close()  # closing it lets the lock go
+
+
+def _lock_edits():
+    try:
+        sparks_dir().mkdir(parents=True, exist_ok=True)
+        handle = open(sparks_dir() / ".edit.lock", "a+b")  # held till done
+    except OSError:
+        return None
+    try:
+        if os.name == "nt":
+            import msvcrt
+
+            handle.seek(0)
+            while True:
+                try:
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
+                    break
+                except OSError:
+                    continue  # LK_LOCK gives up after ten seconds
+        else:
+            import fcntl
+
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+    except OSError:
+        handle.close()
+        return None
+    return handle
+
+
+def _spark_files() -> list[Path]:
+    # Not the dotfiles beside them: the keeper's heartbeat is JSON too.
+    return [
+        p for p in sparks_dir().glob("*.json") if not p.name.startswith(".")
+    ]
 
 
 def _changed() -> None:
@@ -340,7 +521,7 @@ def all_sparks() -> list[Spark]:
     if not folder.is_dir():
         return []
     with _lock:
-        found = [_load(p) for p in folder.glob("*.json")]
+        found = [_load(p) for p in _spark_files()]
     return sorted((s for s in found if s), key=lambda s: s.created)
 
 
@@ -367,7 +548,7 @@ def _must_find(key: str) -> Spark:
 
 
 def _edit(key: str, change: Callable[[Spark], None]) -> Spark:
-    with _lock:
+    with _held():
         spark = _must_find(key)
         change(spark)
         _save(spark)
@@ -388,7 +569,7 @@ def create(
         raise SparkError("A spark needs a goal.")
     minutes = parse_every(every)
 
-    with _lock:
+    with _held():
         taken = {s.handle for s in all_sparks()}
         if handle_of(name) in taken:
             raise SparkError(f"There is already a spark called {name}.")
@@ -436,7 +617,7 @@ def update(key: str, **changes) -> Spark:
 
 
 def remove(key: str) -> Spark:
-    with _lock:
+    with _held():
         spark = _must_find(key)
         _path(spark.id).unlink(missing_ok=True)
     _changed()
@@ -540,14 +721,107 @@ def _prompt(spark: Spark, host: str, model: str, date_prompt: str) -> str:
     return "\n\n".join(part for part in parts if part)
 
 
-def _set_activity(spark_id: str, activity: str) -> None:
-    with _lock:
+def _set_activity(
+    spark_id: str, activity: str, what: str = "activity",
+) -> None:
+    with _held():
         spark = find(spark_id)
         if spark is None:
             return
-        spark.activity = activity
+        setattr(spark, what, activity)
         _save(spark)
     _changed()
+
+
+def _work(
+    spark: Spark,
+    messages: list[dict],
+    own: dict[str, Callable[[dict], str]],
+    own_tools: list[dict],
+    steps: list[str],
+    doing: Callable[[str], None],
+    rounds: int,
+    last_word: str,
+    client=None,
+) -> str:
+    """One agent run for SPARK: the model and its tools, back and forth,
+    until it answers. OWN are the tools only a spark has, each answered
+    here; the rest are a sub-agent's. What it ran lands in STEPS, and
+    DOING hears what it is up to. Its last reply, without dashes."""
+
+    from . import tools as flash_tools  # deferred: avoids a module cycle
+
+    model = flash_tools.MODEL_NAME
+    if not model:
+        raise RuntimeError("no model is set, so it could not run")
+    host = flash_tools.OLLAMA_HOST or subagents.OLLAMA_HOST_DEFAULT
+    client = client or ollama.Client(host=host)
+    allowed = subagents.allowed_tool_names()
+    schemas = [
+        t for t in flash_tools.tools if t["function"]["name"] in allowed
+    ] + own_tools
+
+    def record(kind: str, text: str, style: str) -> None:
+        if kind == "line":
+            steps.append(text)
+            del steps[:-MAX_STEPS]
+            doing(f"Running {text}")
+        elif kind == "result" and style == ERROR and steps:
+            steps[-1] += " (failed)"
+
+    final = ""
+    tool_calls: list = []
+    with capture_tool_output(record):
+        for _ in range(rounds):
+            doing("Thinking")
+            response = client.chat(
+                model=model, messages=messages, tools=schemas,
+                options=subagents.chat_options(),
+            )
+            message = getattr(response, "message", None)
+            final = getattr(message, "content", "") or ""
+            tool_calls = list(getattr(message, "tool_calls", None) or [])
+            if not tool_calls:
+                break
+
+            calls = [subagents._tool_call_name_args(c) for c in tool_calls]
+            messages.append({
+                "role": "assistant",
+                "content": final,
+                "tool_calls": [
+                    {"function": {"name": n, "arguments": a}}
+                    for n, a in calls
+                ],
+            })
+            for name, args in calls:
+                result = _call(name, args, allowed, steps, own)
+                messages.append({
+                    "role": "tool",
+                    "content": flash_tools.trim_tool_output(result, name),
+                    "tool_name": name,
+                })
+
+    if tool_calls:
+        doing("Writing")
+        messages.append({"role": "system", "content": last_word})
+        response = client.chat(
+            model=model, messages=messages,
+            options=subagents.chat_options(),
+        )
+        final = getattr(
+            getattr(response, "message", None), "content", ""
+        ) or ""
+
+    return undash(final).strip()
+
+
+def _keeping_notes(notes: list[str], steps: list[str]):
+    def keep(args: dict) -> str:
+        notes[0] = str(args.get("notes", "")).strip()
+        steps.append("Kept notes")
+        return "(notes kept)"
+
+    return keep
 
 
 def shift(spark_id: str, client=None) -> Optional[Report]:
@@ -559,7 +833,7 @@ def shift(spark_id: str, client=None) -> Optional[Report]:
 
     from . import tools as flash_tools  # deferred: avoids a module cycle
 
-    with _lock:
+    with _held():
         spark = find(spark_id)
         if spark is None or spark.status == WORKING:
             return None
@@ -571,82 +845,26 @@ def shift(spark_id: str, client=None) -> Optional[Report]:
     steps: list[str] = []
     notes = [spark.notes]
 
-    def record(kind: str, text: str, style: str) -> None:
-        if kind == "line":
-            steps.append(text)
-            del steps[:-MAX_STEPS]
-            _set_activity(spark.id, f"Running {text}")
-        elif kind == "result" and style == ERROR and steps:
-            steps[-1] += " (failed)"
-
     try:
-        model = flash_tools.MODEL_NAME
-        if not model:
+        if not flash_tools.MODEL_NAME:
             raise RuntimeError("no model is set, so it could not run")
-        host = flash_tools.OLLAMA_HOST or subagents.OLLAMA_HOST_DEFAULT
-        client = client or ollama.Client(host=host)
-        allowed = subagents.allowed_tool_names()
-        schemas = [
-            t for t in flash_tools.tools
-            if t["function"]["name"] in allowed
-        ] + [KEEP_NOTES_TOOL]
         messages: list[dict] = [
             {
                 "role": "system",
                 "content": _prompt(
-                    spark, host, model, flash_tools.CURRENT_DATE_PROMPT
+                    spark,
+                    flash_tools.OLLAMA_HOST or subagents.OLLAMA_HOST_DEFAULT,
+                    flash_tools.MODEL_NAME, flash_tools.CURRENT_DATE_PROMPT,
                 ),
             },
             {"role": "user", "content": "Start your shift."},
         ]
-
-        final = ""
-        tool_calls: list = []
-        with capture_tool_output(record):
-            for _ in range(MAX_SHIFT_ROUNDS):
-                _set_activity(spark.id, "Thinking")
-                response = client.chat(
-                    model=model, messages=messages, tools=schemas,
-                    options=subagents.chat_options(),
-                )
-                message = getattr(response, "message", None)
-                final = getattr(message, "content", "") or ""
-                tool_calls = list(getattr(message, "tool_calls", None) or [])
-                if not tool_calls:
-                    break
-
-                calls = [
-                    subagents._tool_call_name_args(c)
-                    for c in tool_calls
-                ]
-                messages.append({
-                    "role": "assistant",
-                    "content": final,
-                    "tool_calls": [
-                        {"function": {"name": n, "arguments": a}}
-                        for n, a in calls
-                    ],
-                })
-                for name, args in calls:
-                    result = _call(name, args, allowed, steps, notes)
-                    messages.append({
-                        "role": "tool",
-                        "content": flash_tools.trim_tool_output(result, name),
-                        "tool_name": name,
-                    })
-
-        if tool_calls:
-            _set_activity(spark.id, "Writing its report")
-            messages.append({"role": "system", "content": ROUND_LIMIT_MESSAGE})
-            response = client.chat(
-                model=model, messages=messages,
-                options=subagents.chat_options(),
-            )
-            final = getattr(
-                getattr(response, "message", None), "content", ""
-            ) or ""
-
-        text = undash(final).strip()
+        text = _work(
+            spark, messages, {"keep_notes": _keeping_notes(notes, steps)},
+            [KEEP_NOTES_TOOL], steps,
+            lambda doing: _set_activity(spark.id, doing),
+            MAX_SHIFT_ROUNDS, ROUND_LIMIT_MESSAGE, client,
+        )
         quiet = not text or text.strip(" .").upper() == NOTHING_NEW
         report = Report(
             at=time.time(),
@@ -660,7 +878,7 @@ def shift(spark_id: str, client=None) -> Optional[Report]:
             failed=True, steps=steps,
         )
 
-    with _lock:
+    with _held():
         spark = find(spark_id)
         if spark is None:
             return report  # removed mid-shift: nowhere to file it
@@ -680,20 +898,179 @@ def shift(spark_id: str, client=None) -> Optional[Report]:
 
 def _call(
     name: str, args: dict, allowed: tuple[str, ...],
-    steps: list[str], notes: list[str],
+    steps: list[str], own: dict[str, Callable[[dict], str]],
 ) -> str:
     from . import tools as flash_tools  # deferred: avoids a module cycle
 
-    if name == "keep_notes":
-        notes[0] = str(args.get("notes", "")).strip()
-        steps.append("Kept notes")
-        return "(notes kept)"
+    if name in own:
+        return own[name](args)
     if name == "reason":
         return "(noted)"
     if name not in allowed:
         steps.append(f"{name}() (not allowed)")
         return f"Unknown tool: {name}. Available: {', '.join(allowed)}."
     return flash_tools.run_tool((name, args))
+
+
+# --- Chat ----------------------------------------------------------------
+
+
+def _chat_prompt(spark: Spark, host: str, model: str, date: str) -> str:
+    lessons = "\n".join(f"- {lesson}" for lesson in spark.lessons)
+    reports = "\n\n".join(
+        f"[{time.strftime('%a %d %b %H:%M', time.localtime(r.at))}] "
+        f"{r.text}"
+        for r in [r for r in spark.reports if not r.quiet][-5:]
+    )
+    body = CHAT_PROMPT.format(
+        name=spark.name,
+        handle=spark.handle,
+        every=every_words(spark.every),
+        goal=spark.goal,
+        boundaries=spark.boundaries or "(none beyond your usual care)",
+        lessons=lessons or "(nothing yet)",
+        notes=spark.notes or "(none yet)",
+        reports=reports or "(none yet: you have not reported anything)",
+    )
+    parts = [get_model_system_prompt(host, model), body, date]
+    return "\n\n".join(part for part in parts if part)
+
+
+def ask(key: str, text: str) -> Spark:
+    """Put what the user said in SPARK's chat, and mark it answering.
+
+    The answer is answer()'s to make. Refused while the last answer is
+    still on its way, so the two never cross.
+    """
+
+    text = str(text or "").strip()[:MESSAGE_CHARS]
+    if not text:
+        raise SparkError("Say something first.")
+
+    def change(spark: Spark) -> None:
+        if spark.answering:
+            raise SparkError(f"{spark.name} is still answering.")
+        spark.chat.append(Message(at=time.time(), who="you", text=text))
+        del spark.chat[:-MAX_CHAT]
+        spark.replying = time.time()
+        spark.reply_activity = "Thinking"
+
+    return _edit(key, change)
+
+
+def answer(spark_id: str, client=None) -> Optional[Message]:
+    """SPARK_ID's answer to the chat so far, made now on this thread and
+    put in its chat. None if the spark is gone."""
+
+    from . import tools as flash_tools  # deferred: avoids a module cycle
+
+    spark = find(spark_id)
+    if spark is None:
+        return None
+
+    steps: list[str] = []
+    notes = [spark.notes]
+    lessons: list[str] = []
+    changes: dict = {}
+
+    def learn(args: dict) -> str:
+        lesson = " ".join(str(args.get("lesson", "")).split())
+        if not lesson:
+            return "Error: the lesson was empty."
+        lessons.append(lesson[:LESSON_CHARS])
+        steps.append("Learned something")
+        return "(kept: every later shift will follow it)"
+
+    def set_goal(args: dict) -> str:
+        goal = str(args.get("goal", "")).strip()[:GOAL_CHARS]
+        if not goal:
+            return "Error: the goal was empty."
+        changes["goal"] = goal
+        steps.append("Changed its goal")
+        return "(goal changed)"
+
+    def set_schedule(args: dict) -> str:
+        try:
+            changes["every"] = parse_every(args.get("every", ""))
+        except SparkError as exc:
+            return f"Error: {exc}"
+        steps.append(f"Now works every {every_words(changes['every'])}")
+        return f"(now every {every_words(changes['every'])})"
+
+    own = {
+        "keep_notes": _keeping_notes(notes, steps), "learn": learn,
+        "set_goal": set_goal, "set_schedule": set_schedule,
+    }
+    host = flash_tools.OLLAMA_HOST or subagents.OLLAMA_HOST_DEFAULT
+    try:
+        if not flash_tools.MODEL_NAME:
+            raise RuntimeError("no model is set, so it could not run")
+        messages: list[dict] = [{
+            "role": "system",
+            "content": _chat_prompt(
+                spark, host, flash_tools.MODEL_NAME,
+                flash_tools.CURRENT_DATE_PROMPT,
+            ),
+        }] + [
+            {
+                "role": "user" if m.who == "you" else "assistant",
+                "content": m.text,
+            }
+            for m in spark.chat[-CHAT_CONTEXT:]
+            if not m.failed
+        ]
+        text = _work(
+            spark, messages, own, [KEEP_NOTES_TOOL, *CHAT_TOOLS], steps,
+            lambda doing: _set_activity(spark.id, doing, "reply_activity"),
+            MAX_CHAT_ROUNDS, CHAT_LAST_WORD, client,
+        )
+        reply = Message(
+            at=time.time(), who="spark",
+            text=text or "(I have nothing to say to that.)", steps=steps,
+        )
+    except Exception as e:  # noqa: BLE001
+        reply = Message(
+            at=time.time(), who="spark", steps=steps, failed=True,
+            text=f"I could not answer: {e.__class__.__name__}: {e}",
+        )
+
+    with _held():
+        spark = find(spark_id)
+        if spark is None:
+            return reply
+        spark.chat.append(reply)
+        del spark.chat[:-MAX_CHAT]
+        spark.replying = 0.0
+        spark.reply_activity = ""
+        spark.notes = notes[0][:NOTES_CHARS]
+        spark.lessons.extend(lessons)
+        del spark.lessons[:-MAX_LESSONS]
+        if "goal" in changes:
+            spark.goal = changes["goal"]
+        if "every" in changes:
+            spark.every = changes["every"]
+            if spark.last_run:
+                spark.next_run = spark.last_run + spark.every * 60
+        _save(spark)
+    _changed()
+    return reply
+
+
+def say(key: str, text: str, client=None) -> Optional[Message]:
+    """Say TEXT to a spark and wait for its answer: the terminal's way."""
+
+    return answer(ask(key, text).id, client)
+
+
+def say_later(key: str, text: str) -> Spark:
+    """Say TEXT to a spark; its answer arrives in its chat later. The
+    web UI's way, which hears of it as any other change."""
+
+    spark = ask(key, text)
+    threading.Thread(
+        target=answer, args=(spark.id,), daemon=True, name="spark-chat",
+    ).start()
+    return spark
 
 
 # --- The keeper ----------------------------------------------------------
@@ -832,7 +1209,7 @@ def _signature() -> tuple:
     try:
         return tuple(sorted(
             (p.name, p.stat().st_mtime_ns, p.stat().st_size)
-            for p in sparks_dir().glob("*.json")
+            for p in _spark_files()
         ))
     except OSError:
         return ()

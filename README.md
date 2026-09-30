@@ -24,7 +24,7 @@ FLASH (**F**ast **L**ocal **A**gent **SH**ell) CLI is an AI-powered command-line
 - **Knows What Just Broke**: With `/hook install`, Flash sees the commands you run in VS Code's terminal and whether they failed, so "why did that fail?" works without pasting anything.
 - **VS Code Aware**: Run from VS Code's terminal, Flash opens its edits as side-by-side diffs while it waits for your yes, clears them away once you have answered, and opens files at the line it's talking about.
 - **Async Sub-agents**: The AI can spawn background sub-agents with the `agent` tool to work on independent pieces of a task at the same time, then collect each one's answer with `agent_result` once it's needed.
-- **Sparks**: Agents that don't stop when the chat does. Give a spark a name, a standing goal, how often to work, and the lines it must not cross ("every morning, check my repo for new issues and tell me which look like bugs; never comment on anything"), and it works on it, even with Flash closed if you turn on `/sparks always on`, keeps its own notes between shifts, and files a report when there is something to say. Tell it what to do differently and every later shift remembers. Each one is a little bubble with eyes in the web UI that bounces while it works and sleeps while paused.
+- **Sparks**: Agents that don't stop when the chat does. Give a spark a name, a standing goal, how often to work, and the lines it must not cross ("every morning, check my repo for new issues and tell me which look like bugs; never comment on anything"), and it works on it, even with Flash closed if you turn on `/sparks always on`, keeps its own notes between shifts, and files a report when there is something to say. Chat with one to ask what it has found, change its goal, or tell it what to do differently, and every later shift remembers. Each one is a little bubble with eyes in the web UI that bounces while it works and sleeps while paused.
 - **Context Management**: Automatic history trimming to stay within token limits.
 - **Markdown Support**: Rich formatting for AI responses in the terminal.
 
@@ -152,7 +152,7 @@ python run.py
 - `/agents`: Watch sub-agents work live. `/agents <id>` shows one in full,
   with its answer once it is done.
 - `/sparks [new|<name>]`: List your sparks, make one, or read one's
-  reports. `/sparks teach <name> <lesson>`, `run`, `pause`, `resume`,
+  reports. `/sparks chat <name> [message]` talks with one. `/sparks teach <name> <lesson>`, `run`, `pause`, `resume`,
   `every <name> <30m|2h|daily>` and `remove` look after them.
   `/sparks always on|off` keeps them working with Flash closed.
 - `/clear`: Clear the conversation history.
@@ -308,7 +308,14 @@ as news. New reports show up at your prompt (`● Scout has news ·
 ```
 
 A lesson like that, or feedback typed under a report in the web UI, is
-kept and read by every later shift. Sparks live in `~/.flash/sparks`,
+kept and read by every later shift.
+
+You can also just talk to a spark: `/sparks chat scout` in the terminal
+(an empty line ends it), or the chat box in its window in the web UI.
+It answers as itself, from its goal, its notes and its reports, and can
+use its tools to check something now. Tell it how to do its job
+differently and it keeps that as a lesson; give it a new goal or
+schedule and it changes them. Sparks live in `~/.flash/sparks`,
 one JSON file each. Like sub-agents, they can only run commands or
 change files in autonomous mode.
 
