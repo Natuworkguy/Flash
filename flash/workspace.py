@@ -579,6 +579,13 @@ def _chat_file(chat_id: str) -> Optional[Path]:
     return store() / "chats" / f"{chat_id}.json"
 
 
+def chat_saved(chat_id: str) -> bool:
+    """Whether a chat has a file, open in this process or not."""
+
+    path = _chat_file(chat_id)
+    return path is not None and path.exists()
+
+
 def save_chat(saved: dict) -> None:
     path = _chat_file(saved.get("id", ""))
     if path is None:
