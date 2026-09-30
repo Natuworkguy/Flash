@@ -340,7 +340,11 @@ it used, and what it answered, as a note in its history rather than as
 a reply of its own, so the next message without a mention can pick up
 from what the spark said. Tell it how to do its job
 differently and it keeps that as a lesson; give it a new goal or
-schedule and it changes them. Sparks live in `~/.flash/sparks`,
+schedule and it changes them. Ask it for real work ("actually, can you
+check the login page?") and it takes the job on with its `take_on`
+tool: a shift starts at once, does that job first, and when it is done
+the report comes back into the chat you asked in, marked as from its
+shift (or to its reports, from the terminal). Sparks live in `~/.flash/sparks`,
 one JSON file each. Like sub-agents, they can only run commands or
 change files in autonomous mode.
 

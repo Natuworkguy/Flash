@@ -1154,6 +1154,7 @@ button.item-row:hover { background: var(--hover); }
 .speaker { display: flex; align-items: center; gap: 8px; margin: 18px 0 -4px; font-size: 13.5px; }
 .speaker .name { font-weight: 600; color: color-mix(in srgb, var(--c) 70%, var(--text)); }
 .speaker .handle { font: 12px var(--mono); color: var(--text-3); }
+.speaker .from { font-size: 11.5px; color: var(--text-3); padding: 1px 8px; border-radius: 999px; border: 1px solid var(--border); }
 .menu .item .handle { margin-left: auto; font: 12px var(--mono); color: var(--text-3); }
 .spark-approval { border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent); background: color-mix(in srgb, var(--accent) 8%, var(--bg)); border-radius: 14px; padding: 12px 14px; margin: 4px 0 14px; animation: rise 0.26s var(--ease) both; }
 .spark-approval .want { font-weight: 600; font-size: 14px; margin-bottom: 8px; }
@@ -3396,11 +3397,13 @@ function sentFiles(files) {
 
 // Who is speaking, above a reply from a spark that was @mentioned into
 // this chat: the chat's own voice needs no name.
-function speakerTag(sparkId) {
+function speakerTag(sparkId, fromShift = false) {
   const chat = chats.get(current);
   const sp = sparkOf(sparkId);
-  if (!sp || (chat && chat.spark === sparkId)) return null;
+  // In its own chat it needs no name, but a report from its shift does.
+  if (!sp || (chat && chat.spark === sparkId && !fromShift)) return null;
   const tag = el("div", "speaker", `<span class="name"></span><span class="handle"></span>`);
+  if (fromShift) tag.appendChild(el("span", "from", "report from its shift"));
   tag.prepend(sparkAvatar({ ...sp, unread: 0 }, 20));
   tag.querySelector(".name").textContent = sp.name;
   tag.querySelector(".handle").textContent = sp.handle;
@@ -3410,7 +3413,7 @@ function speakerTag(sparkId) {
 
 function assistantBlock(entry) {
   const frag = document.createDocumentFragment();
-  const tag = entry.spark && entry.text && entry.text.trim() ? speakerTag(entry.spark) : null;
+  const tag = entry.spark && entry.text && entry.text.trim() ? speakerTag(entry.spark, !!entry.shift) : null;
   if (tag) frag.appendChild(tag);
   if (entry.thinking && entry.thinking.trim()) frag.appendChild(thinkingBlock(entry.thinking, false));
   if (entry.text && entry.text.trim()) {

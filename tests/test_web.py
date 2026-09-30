@@ -3526,3 +3526,79 @@ def test_a_mentioned_spark_knows_its_status(monkeypatch):
     system = FakeClient.requests[0]["messages"][0]["content"]
     assert "=== Your status right now ===" in system
     assert "Paused: no shifts run" in system
+
+
+class TestSparkJobs:
+    @pytest.fixture(autouse=True)
+    def spark_prompt(self, monkeypatch):
+        from flash import sparks
+
+        monkeypatch.setattr(sparks, "get_model_system_prompt", lambda h, m: "")
+        monkeypatch.setattr(tools, "MODEL_NAME", "flash-test")
+
+    class Shift:
+        """A model for a shift, which does not stream."""
+
+        def __init__(self, text):
+            self.text = text
+
+        def chat(self, **kwargs):
+            return SimpleNamespace(message=SimpleNamespace(
+                content=self.text, tool_calls=[],
+            ))
+
+    def test_a_job_asked_for_in_a_chat_comes_back_to_it(self):
+        from flash import sparks
+
+        spark = sparks.create("Scout", "Watch the issues.")
+        FakeClient.scripts = [
+            [part(calls=[call("take_on", job="Sum up this week.")]),
+             part(done=True)],
+            [part("On it."), part(done=True)],
+        ]
+        session = web.Session()
+        chat = session.new_chat(spark=spark.id)
+        run(session, chat, "Actually, can you sum up this week?")
+
+        assert sparks.find(spark.id).inbox[0]["chat"] == chat.id
+        sparks.shift(spark.id, client=self.Shift("Three new issues."))
+        session.post_spark_reports()
+
+        posted = chat.log[-1]
+        assert posted["type"] == "assistant" and posted["shift"] is True
+        assert posted["text"] == "Three new issues."
+        assert posted["spark"] == spark.id
+        note = chat.messages[-1]
+        assert note["role"] == "system"
+        assert "finished the job the user gave it" in note["content"]
+        # Once only.
+        session.post_spark_reports()
+        assert sum(1 for e in chat.log if e.get("shift")) == 1
+
+    def test_a_chat_mid_reply_gets_it_after(self):
+        from flash import sparks
+
+        spark = sparks.create("Scout", "Watch the issues.")
+        session = web.Session()
+        chat = session.new_chat()
+        sparks.take_on(spark.id, "Check the login page.", chat=chat.id)
+        sparks.shift(spark.id, client=self.Shift("It loads fine."))
+        chat.busy = True
+
+        session.post_spark_reports()
+        assert not any(e["type"] == "assistant" for e in chat.log)
+
+        chat.busy = False
+        session.post_spark_reports()
+        assert chat.log[-1]["text"] == "It loads fine."
+
+    def test_a_report_for_a_chat_that_is_gone_is_let_go(self):
+        from flash import sparks
+
+        spark = sparks.create("Scout", "Watch the issues.")
+        sparks.take_on(spark.id, "Check.", chat="deadbeef")
+        sparks.shift(spark.id, client=self.Shift("Checked."))
+
+        web.Session().post_spark_reports()
+
+        assert sparks.to_post() == []

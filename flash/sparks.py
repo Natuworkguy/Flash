@@ -211,6 +211,11 @@ How to talk:
 - When they give you a new goal or a new schedule, call set_goal or
   set_schedule, then say what changed.
 - When something here matters to your next shift, call keep_notes.
+- When they ask you to do something that takes real work ("actually,
+  can you..."), call take_on with the job: it runs in a shift of yours
+  now, in the background, with all your tools, and your report on it
+  comes back to them. Then tell them you are on it. A quick look you
+  can do here and now needs no shift.
 """.strip()
 
 CHAT_LAST_WORD = (
@@ -256,6 +261,32 @@ CHAT_TOOLS = [
 ]
 
 
+TAKE_ON_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "take_on",
+        "description": (
+            "Take on a job the user asks you for in this chat: it runs in "
+            "a shift of yours that starts now, in the background, with all "
+            "your tools, and your report on it comes back to the user here."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "job": {
+                    "type": "string",
+                    "description": (
+                        "The job, in full, as the shift will need it: what "
+                        "to do, where, and what to report."
+                    ),
+                },
+            },
+            "required": ["job"],
+        },
+    },
+}
+
+
 class SparkError(ValueError):
     """A spark that could not be made or found as asked."""
 
@@ -273,6 +304,10 @@ class Report:
     feedback: str = ""
     # It stopped to ask: the user's yes or no carries it on.
     approval: bool = False
+    # Web chats that gave it a job, for the report to be posted into,
+    # and the ones it has been posted into so far.
+    chats: list[str] = field(default_factory=list)
+    posted: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -1280,16 +1315,71 @@ NOT_RUN = (
 )
 
 
+def take_on(key: str, job: str, chat: str = "") -> Spark:
+    """A job the user gave SPARK in a chat, for a shift that starts now.
+    CHAT is the web chat it came from, for the report to go back to."""
+
+    job = str(job or "").strip()[:GOAL_CHARS]
+    if not job:
+        raise SparkError("Say what the job is.")
+
+    def give(spark: Spark) -> None:
+        spark.inbox.append({
+            "from": "the user", "text": job, "at": time.time(),
+            "job": True, "chat": chat,
+        })
+        del spark.inbox[:-MAX_INBOX]
+        spark.asked = True
+
+    spark = _edit(key, give)
+    wake()
+    return spark
+
+
+def to_post() -> list[tuple[Spark, Report, str]]:
+    """Each report of a job given in a web chat, with the chat, not yet
+    posted into it."""
+
+    return [
+        (spark, report, chat)
+        for spark in all_sparks()
+        for report in spark.reports
+        for chat in report.chats
+        if chat not in report.posted
+    ]
+
+
+def posted(spark_id: str, report_at: float, chat: str) -> None:
+    """Note that a report is in CHAT now, or that CHAT is gone."""
+
+    def change(spark: Spark) -> None:
+        for report in spark.reports:
+            if report.at == report_at and chat not in report.posted:
+                report.posted.append(chat)
+
+    with contextlib.suppress(SparkError):
+        _edit(spark_id, change)
+
+
 def _opening(why: str, inbox: list) -> str:
     """What a shift is told first: to start, and why it started now."""
 
     parts = ["Start your shift."]
     if why:
         parts.append(f"It started early because: {why}")
-    if inbox:
+    jobs = [item for item in inbox if item.get("job")]
+    handed = [item for item in inbox if not item.get("job")]
+    if jobs:
+        parts.append(
+            "The user asked you, in a chat, to do this. Do it first, then "
+            "your goal if there is time, and report on it whatever else "
+            "you find:\n"
+            + "\n".join(f"- {item.get('text', '')}" for item in jobs)
+        )
+    if handed:
         parts.append("Handed to you by other sparks:\n" + "\n".join(
             f"- From {item.get('from', 'a spark')}: {item.get('text', '')}"
-            for item in inbox
+            for item in handed
         ))
     return "\n\n".join(parts)
 
@@ -1309,15 +1399,28 @@ def shift(spark_id: str, client=None) -> Optional[Report]:
         if spark is None or spark.status == WORKING or spark.waiting:
             return None
         resuming = dict(spark.pending) if spark.pending else None
-        why, inbox = spark.why, list(spark.inbox)
+        if resuming:
+            # What was handed to it while it waited is for the next
+            # shift: this one carries on from where it stopped.
+            why, inbox = "", []
+        else:
+            why, inbox = spark.why, list(spark.inbox)
+            spark.why, spark.inbox = "", []
         spark.status = WORKING
         spark.activity = "Starting"
         spark.stop_asked = False
-        spark.why, spark.inbox, spark.pending = "", [], {}
+        spark.pending = {}
         _save(spark)
     _changed()
 
     steps: list[str] = list(resuming["steps"]) if resuming else []
+    # The web chats that gave it a job this shift, for its report.
+    chats = list(resuming.get("chats", [])) if resuming else list(
+        dict.fromkeys(i["chat"] for i in inbox if i.get("chat"))
+    )
+    has_job = bool(chats) or any(i.get("job") for i in inbox) or bool(
+        resuming and resuming.get("job")
+    )
     notes = [resuming["notes"] if resuming else spark.notes]
     messages: list[dict] = list(resuming["messages"]) if resuming else []
     own = {
@@ -1390,6 +1493,9 @@ def shift(spark_id: str, client=None) -> Optional[Report]:
                 ),
             )
         quiet = not text or text.strip(" .").upper() == NOTHING_NEW
+        if quiet and has_job:
+            # A job asked for is answered, even with nothing to show.
+            text, quiet = "Done, with nothing to report on it.", False
         report = Report(
             at=time.time(),
             text="Nothing new this shift." if quiet else text,
@@ -1402,6 +1508,7 @@ def shift(spark_id: str, client=None) -> Optional[Report]:
             "detail": detail, "later": [list(c) for c in need.later],
             "messages": messages, "steps": steps, "notes": notes[0],
             "at": time.time(), "answer": "", "why": "",
+            "chats": chats, "job": has_job,
         }
         report = Report(
             at=time.time(), text=f"Waiting for your approval: {label}.",
@@ -1419,6 +1526,9 @@ def shift(spark_id: str, client=None) -> Optional[Report]:
             failed=True, steps=steps,
         )
 
+    # The chats that asked get the report: the asking too, so they know
+    # it waits on the user.
+    report.chats = chats
     with _held():
         spark = find(spark_id)
         if spark is None:
@@ -1427,7 +1537,9 @@ def shift(spark_id: str, client=None) -> Optional[Report]:
         del spark.reports[:-MAX_REPORTS]
         spark.notes = notes[0][:NOTES_CHARS]
         spark.activity = ""
-        spark.asked = False
+        # Anything handed over while it worked is still to do: another
+        # shift soon, not at its next time.
+        spark.asked = bool(spark.inbox or spark.why)
         spark.stop_asked = False
         if pending:
             # The rest of the shift waits on the user, and so does the
@@ -1625,10 +1737,13 @@ class ChatKit:
     lose them or have its own undone.
     """
 
-    schemas = [KEEP_NOTES_TOOL, HAND_OFF_TOOL, *CHAT_TOOLS]
+    schemas = [KEEP_NOTES_TOOL, HAND_OFF_TOOL, TAKE_ON_TOOL, *CHAT_TOOLS]
 
-    def __init__(self, spark: Spark) -> None:
+    def __init__(self, spark: Spark, chat: str = "") -> None:
         self.spark_id = spark.id
+        # The web chat it is talking in, for a job's report to come back
+        # to; "" in the terminal, where it goes to its reports.
+        self.chat = chat
         self.notes = [spark.notes]
         self.first_notes = spark.notes
         self.lessons: list[str] = []
@@ -1639,7 +1754,22 @@ class ChatKit:
             "set_goal": self._set_goal,
             "set_schedule": self._set_schedule,
             "hand_off": _handing_off(spark),
+            "take_on": self._take_on,
         }
+
+    def _take_on(self, args: dict) -> str:
+        try:
+            take_on(self.spark_id, str(args.get("job", "")), self.chat)
+        except SparkError as exc:
+            return f"Error: {exc}"
+        job = " ".join(str(args.get("job", "")).split())
+        tool_line(f"TakeOn({job[:120]})")
+        where = "in this chat" if self.chat else "in your reports"
+        tool_result(f"A shift starts now; the report comes back {where}")
+        return (
+            f"(taken on: a shift starts now, and your report on it comes "
+            f"back {where})"
+        )
 
     def offer(self, tools: list[dict]) -> list[dict]:
         """Of TOOLS, the ones a spark may use here, and its own."""
@@ -1735,11 +1865,20 @@ def mentioned(text: str) -> list[Spark]:
     return found
 
 
-def called_note(spark: Spark, text: str, used: list[str]) -> str:
+def called_note(
+    spark: Spark, text: str, used: list[str], shift: bool = False,
+) -> str:
     """What a conversation keeps of a spark's answer in it: who was
     called, what it did, and what it said. Kept as a note, not as a
-    reply, so whoever the chat is with sees it was not theirs."""
+    reply, so whoever the chat is with sees it was not theirs. SHIFT:
+    the report of a job the user gave it in this chat, done since."""
 
+    if shift:
+        return (
+            f"{CALLED} {spark.name} ({spark.handle}), one of the user's "
+            "sparks, finished the job the user gave it in this chat, in a "
+            f"shift of its own. Its report:\n{text}"
+        )
     tools = f", using {', '.join(dict.fromkeys(used))}" if used else ""
     return (
         f"{CALLED} The user @mentioned {spark.name} ({spark.handle}), one "
