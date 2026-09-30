@@ -86,6 +86,8 @@ def no_spark_keeper(monkeypatch):
     """
 
     monkeypatch.setattr(sparks, "start", lambda: None)
+    # Nor does a web session an earlier test made hear its sparks change.
+    monkeypatch.setattr(sparks, "_listeners", [])
     yield
     # A test that ran the keeper lets its lock go with it.
     sparks._give_floor()

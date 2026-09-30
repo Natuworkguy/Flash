@@ -1380,3 +1380,92 @@ def test_its_status_is_in_what_it_is_told_in_a_chat(model):
     system = client.calls[0]["messages"][0]["content"]
     assert "=== Your status right now ===" in system
     assert "You have not run a shift yet" in system
+
+
+# --- Jobs taken on in a chat -------------------------------------------------
+
+
+def test_a_job_taken_on_runs_next_and_reports_back_to_its_chat(model):
+    made = sparks.create("Scout", "Watch the issues.", every="daily")
+    sparks._edit(made.id, lambda s: setattr(s, "next_run", time.time() + 9e5))
+
+    sparks.take_on("scout", "Check issue 12 on the tracker.", chat="c1")
+
+    assert [s.id for s in sparks.due()] == [made.id]
+    client = FakeClient([_reply("Issue 12 is fixed upstream.")])
+    report = sparks.shift(made.id, client=client)
+    opening = client.calls[0]["messages"][1]["content"]
+    assert "The user asked you, in a chat, to do this" in opening
+    assert "Check issue 12 on the tracker." in opening
+    assert report.chats == ["c1"] and not report.quiet
+    assert [(s.id, r.at, c) for s, r, c in sparks.to_post()] == [
+        (made.id, report.at, "c1"),
+    ]
+    sparks.posted(made.id, report.at, "c1")
+    assert sparks.to_post() == []
+
+
+def test_a_job_with_nothing_to_say_still_answers(model):
+    made = sparks.create("Scout", "Watch the issues.")
+    sparks.take_on(made.id, "Look for anything about login.", chat="c1")
+
+    report = sparks.shift(made.id, client=FakeClient([
+        _reply(sparks.NOTHING_NEW),
+    ]))
+
+    assert not report.quiet
+    assert report.text == "Done, with nothing to report on it."
+
+
+def test_a_job_that_needs_approval_still_reports_back(model, fake_shell):
+    made = sparks.create("Scout", "Keep the repo current.")
+    sparks.take_on(made.id, "Pull the latest.", chat="c1")
+    asking = sparks.shift(made.id, client=FakeClient([
+        _reply("", ("shell", {"command": "git pull"})),
+    ]))
+    assert asking.approval and asking.chats == ["c1"]
+
+    sparks.answer_step(made.id, True)
+    done = sparks.shift(made.id, client=FakeClient([_reply("Pulled.")]))
+
+    assert done.chats == ["c1"] and done.text == "Pulled."
+
+
+def test_what_is_handed_over_while_it_waits_is_kept_for_later(
+    model, fake_shell,
+):
+    made = sparks.create("Scout", "Keep the repo current.")
+    sparks.shift(made.id, client=FakeClient([
+        _reply("", ("shell", {"command": "git pull"})),
+    ]))
+    sparks.take_on(made.id, "Also check the tags.", chat="c2")
+    sparks.answer_step(made.id, True)
+
+    resumed = sparks.shift(made.id, client=FakeClient([_reply("Pulled.")]))
+
+    assert resumed.chats == []
+    kept = sparks.find(made.id)
+    assert kept.inbox and kept.inbox[0]["text"] == "Also check the tags."
+    assert kept.asked
+    later = FakeClient([_reply("Tags are fine.")])
+    report = sparks.shift(made.id, client=later)
+    assert "Also check the tags." in later.calls[0]["messages"][1]["content"]
+    assert report.chats == ["c2"]
+
+
+def test_a_spark_takes_on_a_job_when_asked_in_a_chat(model):
+    made = sparks.create("Scout", "Watch the issues.")
+    client = FakeClient([
+        _reply("", ("take_on", {"job": "Summarise this week's issues."})),
+        _reply("On it: I will report back."),
+    ])
+
+    reply = sparks.say(made.id, "Actually, can you sum up this week?", client)
+
+    assert "TakeOn(Summarise this week's issues.)" in reply.steps
+    kept = sparks.find(made.id)
+    # From the terminal, there is no web chat: it goes to its reports.
+    assert kept.inbox[0]["job"] and kept.inbox[0]["chat"] == ""
+    assert kept.asked
+    names = {t["function"]["name"] for t in client.calls[0]["tools"]}
+    assert "take_on" in names

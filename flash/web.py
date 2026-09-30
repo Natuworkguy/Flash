@@ -141,6 +141,8 @@ MAX_ATTACHMENTS = 10
 # times in a row it may wake a chat before waiting for the person, the
 # same limit the terminal keeps.
 WATCH_SECONDS = 0.5
+# How many watch ticks apart it looks for a spark's report to post.
+SPARK_POST_TICKS = 20
 MAX_WAKES_IN_A_ROW = 3
 WAKE_TEXT = "A sub-agent finished. Flash is reading what it found."
 
@@ -691,6 +693,8 @@ class Session:
         self.agents: dict[str, str] = {}
         self.wakes: dict[str, int] = {}
         self._watching: Optional[threading.Thread] = None
+        # One at a time, so a report is never posted twice.
+        self._posting = threading.Lock()
         self._stop_watching = threading.Event()
 
     # Chats ---------------------------------------------------------
@@ -901,6 +905,47 @@ class Session:
         """A spark started, finished, or was changed: the page redraws."""
 
         self.hub.publish({"type": "sparks"})
+        self.post_spark_reports()
+
+    def post_spark_reports(self) -> None:
+        """Put each report of a job given in a chat into that chat: as
+        the spark's, and, for whoever the chat is with, as a note that
+        it came. A chat mid-turn gets it once the turn is over."""
+
+        from . import ai  # deferred: ai imports half of Flash
+
+        # Marking one posted is a change to the spark, which calls this
+        # again from inside itself: that call, or one on another thread
+        # meanwhile, leaves it to the one already posting, and the next
+        # look picks up anything it missed.
+        if not self._posting.acquire(blocking=False):
+            return
+        try:
+            self._post_spark_reports(ai)
+        finally:
+            self._posting.release()
+
+    def _post_spark_reports(self, ai) -> None:
+        for spark, report, chat_id in sparks.to_post():
+            chat = self.chats.get(chat_id)
+            if chat is None:
+                # Gone, unless another Flash has it open to post it in.
+                if not workspace.chat_saved(chat_id):
+                    sparks.posted(spark.id, report.at, chat_id)
+                continue
+            if chat.busy or chat.queued:
+                continue
+            self.emit(chat, {
+                "type": "assistant", "text": report.text,
+                "thinking": "", "spark": spark.id, "shift": True,
+            })
+            chat.messages.append(ai._message(
+                "system", sparks.called_note(
+                    spark, report.text, [], shift=True,
+                ),
+            ))
+            self.save(chat)
+            sparks.posted(spark.id, report.at, chat_id)
 
     def owned(self, chat_id: str) -> set:
         return {a for a, c in list(self.agents.items()) if c == chat_id}
@@ -914,7 +959,13 @@ class Session:
         """
 
         running = None
+        ticks = 0
         while not self._stop_watching.wait(WATCH_SECONDS):
+            ticks += 1
+            if ticks % SPARK_POST_TICKS == 0:
+                # A report filed by the keeper in another Flash, which
+                # this one hears of by looking.
+                self.post_spark_reports()
             now = subagents.running_count()
             if now != running:
                 running = now
@@ -1208,6 +1259,9 @@ class Session:
                     self.save(chat)
                     self.emit(chat, {"type": "busy", "busy": False})
                     self.hub.publish({"type": "status"})
+            # A spark's report that came in while the turn ran.
+            if following is None:
+                self.post_spark_reports()
             if following is not None:
                 self._publish_pending(chat)
                 self._begin(
@@ -1568,7 +1622,7 @@ def _respond(
     from . import ai  # deferred: ai imports half of Flash
     from . import tools as flash_tools
 
-    kit = sparks.ChatKit(spark) if spark is not None else None
+    kit = sparks.ChatKit(spark, chat.id) if spark is not None else None
     # Whose chat it is: Flash's, or the spark it is with.
     owner = sparks.find(chat.spark) if chat.spark else None
     host_name = owner.name if owner else "Flash"
