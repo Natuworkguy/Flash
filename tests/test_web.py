@@ -107,6 +107,62 @@ class TestTurns:
         stats = next(e for e in seen if e["type"] == "stats")
         assert (stats["tokens"], stats["rate"]) == (4, 10.0)
 
+    def test_a_reply_that_promises_work_is_told_to_do_it(self):
+        FakeClient.scripts = [
+            [part(calls=[call("get_date")]), part(done=True)],
+            # It sees the problem and says what it will do, then stops.
+            [part("Wait, the block covers the text. I'll move the logo "
+                  "text forward."), part(done=True)],
+            [part(calls=[call("get_date")]), part(done=True)],
+            [part("Fixed: the text is in front now."), part(done=True)],
+        ]
+        session = web.Session()
+        drain = events_of(session)
+        chat = session.new_chat()
+
+        run(session, chat, "make the minecraft logo")
+
+        said = [e["text"] for e in drain()
+                if e["type"] == "assistant" and e["text"]]
+        assert said[-2:] == [
+            "Wait, the block covers the text. I'll move the logo text "
+            "forward.",
+            "Fixed: the text is in front now.",
+        ]
+        # The model was told to go on, right after its promise.
+        sent = FakeClient.requests[-1]["messages"]
+        at = sent.index({"role": "system", "content": ai.PROMISE_NOTE})
+        assert "I'll move the logo" in sent[at - 1]["content"]
+        assert len(FakeClient.requests) == 4
+        # The history keeps what the user saw, not Flash's nudge.
+        kept = [m.get("content") for m in chat.messages]
+        assert ai.PROMISE_NOTE not in kept
+        assert kept[-1] == "Fixed: the text is in front now."
+        assert any("I'll move the logo" in (c or "") for c in kept)
+
+    def test_a_model_that_keeps_promising_is_let_go(self):
+        promise = [part("I'll fix it."), part(done=True)]
+        FakeClient.scripts = [promise, promise, promise]
+        session = web.Session()
+        chat = session.new_chat()
+
+        run(session, chat, "fix it")
+
+        # Asked twice, then its word is taken as the answer.
+        assert len(FakeClient.requests) == 1 + ai.MAX_PROMISE_NUDGES
+        assert chat.messages[-1]["content"] == "I'll fix it."
+
+    def test_an_offer_is_not_a_promise(self):
+        FakeClient.scripts = [
+            [part("Done. I'll add a roof if you'd like."), part(done=True)],
+        ]
+        session = web.Session()
+        chat = session.new_chat()
+
+        run(session, chat, "make a house")
+
+        assert len(FakeClient.requests) == 1
+
     def test_a_streamed_reply_comes_without_dashes(self):
         FakeClient.scripts = [[
             part("It works \u2014"), part(" mostly, pages 1\u2013"),
@@ -588,6 +644,26 @@ class TestFont:
         ]
         assert (web.WEB_DIR / "katex" / "LICENSE.txt").is_file()
 
+    def test_three_js_is_served_for_3d_models(self, server):
+        port = server.port
+        for name in ("three.min.js", "viewer.js"):
+            conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+            conn.request("GET", f"/static/three/{name}",
+                         headers={"Host": f"127.0.0.1:{port}"})
+            response = conn.getresponse()
+            body = response.read()
+            conn.close()
+
+            assert response.status == 200
+            assert response.getheader("Content-Type").startswith(
+                "text/javascript"
+            )
+            assert body
+        page = web.PAGE.read_bytes()
+        assert b"/static/three/three.min.js" in page
+        assert b"/static/three/viewer.js" in page
+        assert (web.WEB_DIR / "three" / "LICENSE.txt").is_file()
+
     def test_but_nothing_else_is(self, server):
         assert request(server, "GET", "/static/index.html",
                        token=False)[0] == 403
@@ -898,6 +974,14 @@ class TestCookie:
 
         assert response.status == 415
         assert server.session.chats == {}
+
+    def test_a_port_in_use_says_so(self):
+        first = web.Server(0)
+        try:
+            with pytest.raises(OSError, match="could not listen on port"):
+                web._listen(first.port, lan=False)
+        finally:
+            first.server_close()
 
     def test_each_server_has_its_own_token(self):
         first, second = web.Server(0), web.Server(0)
@@ -1352,6 +1436,204 @@ class TestShownFiles:
         policy = headers.getheader("Content-Security-Policy")
         assert policy.startswith("sandbox")
         assert "allow-same-origin" not in policy
+
+    def test_in_the_web_ui_a_3d_model_goes_to_the_page(
+        self, server, tmp_path, monkeypatch
+    ):
+        monkeypatch.setattr(tools, "model_sees_images", lambda *_: False)
+        opened = []
+        monkeypatch.setattr(tools, "_open_with_spinner",
+                            lambda path: opened.append(path) or "")
+        target = tmp_path / "chair.glb"
+        FakeClient.scripts = [
+            [part(calls=[call("make_3d_model", path=str(target), parts=[
+                {"shape": "box", "size": [0.5, 0.05, 0.5],
+                 "position": [0, 0.45, 0]},
+            ])]), part(done=True)],
+            [part("There it is."), part(done=True)],
+        ]
+        session = web.Session()
+        chat = session.new_chat()
+
+        run(session, chat, "make me a chair")
+
+        shown = [e for e in chat.log if e["type"] == "file"]
+        assert [(f["name"], f["kind"], f["mime"]) for f in shown] == [
+            ("chair.glb", "model", "model/gltf-binary"),
+        ]
+        assert opened == []
+        status, body = request(server, "GET", f"/api/files/{shown[0]['id']}")
+        assert status == 200
+        assert body == target.read_bytes()
+        assert request.last.getheader("Content-Type") == "model/gltf-binary"
+
+    def test_send_document_checks_what_it_is_given(self, tmp_path):
+        wrong = tmp_path / "page.html"
+        wrong.write_text("<p>x</p>")
+        binary = tmp_path / "notes.txt"
+        binary.write_bytes(b"\xff\xfe\x00junk")
+
+        assert "not a .md or .txt file" in tools.send_document(str(wrong))
+        assert "not UTF-8 text" in tools.send_document(str(binary))
+        assert "no file" in tools.send_document(str(tmp_path / "gone.md"))
+
+    def test_in_the_terminal_a_document_opens_in_its_app(
+        self, tmp_path, monkeypatch
+    ):
+        doc = tmp_path / "plan.md"
+        doc.write_text("# Plan")
+        opened = []
+        monkeypatch.setattr(tools, "_open_with_spinner",
+                            lambda path: opened.append(path) or "")
+
+        reply = tools.send_document(str(doc))
+
+        assert opened == [doc]
+        assert "default app" in reply
+
+    def test_in_the_web_ui_a_document_goes_to_the_page(self, tmp_path):
+        doc = tmp_path / "plan.md"
+        doc.write_text("# Plan\n\nShip it.")
+        FakeClient.scripts = [
+            [part(calls=[call("send_document", path=str(doc))]),
+             part(done=True)],
+            [part("There it is."), part(done=True)],
+        ]
+        session = web.Session()
+        chat = session.new_chat()
+
+        run(session, chat, "write me a plan")
+
+        shown = [e for e in chat.log if e["type"] == "file"]
+        assert [(f["name"], f["kind"]) for f in shown] == [("plan.md", "doc")]
+        assert shown[0]["path"] == str(doc.resolve())
+        tool_said = [m for m in chat.messages if m.get("role") == "tool"]
+        assert "comments come to you" in tool_said[0]["content"]
+
+    def test_flash_can_comment_on_a_document_it_sends(self, tmp_path):
+        doc = tmp_path / "plan.md"
+        doc.write_text("# Plan\n\n**Budget**: TBD\n\n- Record the demo\n")
+        comments = [
+            # Quoted with its Markdown marks, or as it reads: both are in.
+            {"quote": "**Budget**: TBD", "note": "Needs a number."},
+            {"quote": "Record the demo", "note": "Not done yet."},
+            {"quote": "Hire a designer", "note": "Not in the file."},
+            {"quote": "", "note": "A note on the whole document."},
+            {"quote": "no note here"},
+        ]
+        FakeClient.scripts = [
+            [part(calls=[call("send_document", path=str(doc),
+                              comments=comments)]),
+             part(done=True)],
+            [part("There it is."), part(done=True)],
+        ]
+        session = web.Session()
+        chat = session.new_chat()
+
+        run(session, chat, "write me a plan")
+
+        shown = [e for e in chat.log if e["type"] == "file"][0]
+        assert [c["note"] for c in shown["comments"]] == [
+            "Needs a number.", "Not done yet.", "Not in the file.",
+            "A note on the whole document.",
+        ]
+        tool_said = [m for m in chat.messages if m.get("role") == "tool"]
+        said = tool_said[0]["content"]
+        assert "Your 4 comments show" in said
+        assert 'comment 3 quotes "Hire a designer"' in said
+        assert "Record the demo" not in said
+
+    def test_comments_as_a_json_string_still_arrive(self, tmp_path):
+        doc = tmp_path / "plan.md"
+        doc.write_text("Ship it.")
+        from flash.theme import capture_tool_output
+        sent = []
+        with capture_tool_output(
+            lambda kind, text, style: sent.append((kind, text))
+        ):
+            tools.send_document(
+                str(doc), comments='[{"quote": "Ship it", "comment": "When?"}]'
+            )
+
+        shown = json.loads([t for k, t in sent if k == "document"][0])
+        assert shown["comments"] == [{"quote": "Ship it", "note": "When?"}]
+
+    def test_in_the_terminal_comments_print_under_the_document(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        doc = tmp_path / "plan.md"
+        doc.write_text("Ship it.")
+        monkeypatch.setattr(tools, "_open_with_spinner", lambda path: "")
+
+        reply = tools.send_document(
+            str(doc), comments=[{"quote": "Ship it", "note": "When?"}]
+        )
+
+        assert '"Ship it": When?' in capsys.readouterr().out
+        assert "comments printed under it" in reply
+
+    def test_a_document_is_served_as_text(self, server, tmp_path):
+        doc = tmp_path / "plan.md"
+        doc.write_text("# Plan <script>x</script>")
+        kept = web.workspace.keep_file(str(doc))
+
+        status, body = request(server, "GET", f"/api/files/{kept['id']}")
+
+        assert status == 200 and body == b"# Plan <script>x</script>"
+        assert request.last.getheader("Content-Type").startswith(
+            "text/plain"
+        )
+        assert request.last.getheader("X-Content-Type-Options") == "nosniff"
+
+    def test_an_edit_saves_to_the_file_and_is_told_next_turn(
+        self, tmp_path,
+    ):
+        doc = tmp_path / "plan.md"
+        doc.write_text("# Plan")
+        kept = web.workspace.keep_file(str(doc))
+        FakeClient.scripts = [[part("Noted."), part(done=True)]]
+        session = web.Session()
+        chat = session.new_chat()
+
+        saved = web.command(session, {
+            "name": "document-save", "arg": kept["id"], "chat": chat.id,
+            "text": "# Plan\n\nMine now.",
+        })
+        run(session, chat, "what changed?")
+
+        assert saved == {"size": 17, "path": str(doc.resolve())}
+        assert doc.read_text() == "# Plan\n\nMine now."
+        assert web.workspace.kept_file(kept["id"])[0].read_text() == (
+            "# Plan\n\nMine now."
+        )
+        told = FakeClient.requests[-1]["messages"][-1]["content"]
+        assert f"edited {doc.resolve()}" in told
+        assert told.endswith("what changed?")
+        # Told once, not on every turn after.
+        assert session.edited == {}
+
+    def test_a_copy_outlives_its_file(self, tmp_path):
+        doc = tmp_path / "scratch.md"
+        doc.write_text("draft")
+        kept = web.workspace.keep_file(str(doc))
+        doc.unlink()
+
+        saved = web.workspace.save_document(kept["id"], "kept anyway")
+
+        assert saved == {"size": 11, "path": ""}
+        assert web.workspace.kept_file(kept["id"])[0].read_text() == (
+            "kept anyway"
+        )
+
+    def test_only_documents_are_saved(self, tmp_path):
+        page = tmp_path / "site.html"
+        page.write_text("<p>x</p>")
+        kept = web.workspace.keep_file(str(page))
+
+        with pytest.raises(web.workspace.WorkspaceError):
+            web.workspace.save_document(kept["id"], "<script>")
+        with pytest.raises(web.workspace.WorkspaceError):
+            web.workspace.save_document("../../etc", "x")
 
     def test_an_svg_is_never_kept(self, tmp_path):
         page = tmp_path / "page.svg"
@@ -1867,6 +2149,39 @@ class TestUpdates:
 
         assert result["state"] == "restarting"
         assert restarted.wait(2)
+
+    def test_the_page_can_restart_the_server_with_a_new_link(
+        self, monkeypatch
+    ):
+        monkeypatch.setattr(web, "RESTART_DELAY", 0.01)
+        session = web.Session()
+        key = session.access.sign_in("127.0.0.1", "test")
+        old = session.access.token
+        why = []
+        restarted = threading.Event()
+        session.restart = lambda *said: (why.extend(said), restarted.set())
+
+        result = web.command(session, {"name": "server-restart"})
+
+        assert restarted.wait(2)
+        assert result["token"] == session.access.token != old
+        assert not session.access.token_matches(old)
+        assert "new link" in why[0]
+        # This browser stays signed in through it.
+        assert session.access.browser(key, "127.0.0.1") is not None
+
+    def test_a_server_restart_is_refused_when_it_cannot_be_done(self):
+        with pytest.raises(ValueError, match="terminal session"):
+            web.command(web.Session(), {"name": "server-restart"})
+        session = web.Session()
+        session.restart = lambda *said: None
+        old = session.access.token
+        session.new_chat().busy = True
+
+        with pytest.raises(ValueError, match="Wait for the reply"):
+            web.command(session, {"name": "server-restart"})
+        # Refused, so the link still works.
+        assert session.access.token == old
 
     def test_a_restarted_server_keeps_its_token(self, monkeypatch):
         monkeypatch.setenv(web.TOKEN_ENV, "kept-token-from-before-1234")
@@ -2626,7 +2941,7 @@ class TestVoice:
                             lambda name, value: saved.update({name: value}))
         monkeypatch.setattr(web.voice, "listening_installed", lambda n: False)
 
-        def fetch(name, progress):
+        def fetch(name, progress, stop=None):
             progress("listening model", 40)
             progress("listening model", 100)
             return ""
@@ -2646,6 +2961,42 @@ class TestVoice:
         assert [e.get("percent") for e in told[:2]] == [40, 100]
         assert told[-1]["done"] is True and told[-1]["error"] == ""
         assert saved == {"VOICE_VOSK_MODEL": "vosk-model-en-us-0.22"}
+
+    def test_a_download_can_be_cancelled(self, monkeypatch):
+        saved = {}
+        monkeypatch.setattr(ai, "set_config_var",
+                            lambda name, value: saved.update({name: value}))
+        monkeypatch.setattr(web.voice, "listening_installed", lambda n: False)
+        started = threading.Event()
+
+        def fetch(name, progress, stop=None):
+            progress("listening model", 10)
+            started.set()
+            stop.wait(5)
+            return web.voice.CANCELLED if stop.is_set() else ""
+
+        monkeypatch.setattr(web.voice, "download_listening", fetch)
+        session = web.Session()
+        drain = events_of(session)
+
+        web.command(session, {
+            "name": "voice-model", "arg": "vosk-model-en-us-0.22",
+            "kind": "listening",
+        })
+        started.wait(5)
+        said = web.command(session, {"name": "voice-cancel"})
+        wait_for(lambda: session.voice_job is None)
+        time.sleep(0.05)
+
+        assert said == {"cancelling": True}
+        told = [e for e in drain() if e["type"] == "voice-model"][-1]
+        assert told["done"] and told["cancelled"] and told["error"] == ""
+        # Not the model in use: it never arrived.
+        assert saved == {}
+        # With nothing running, there is nothing to call off.
+        assert web.command(session, {"name": "voice-cancel"}) == {
+            "cancelling": False
+        }
 
     def test_what_settings_refuses(self, monkeypatch):
         session = web.Session()
@@ -2669,7 +3020,7 @@ class TestVoice:
     def test_the_models_download_once_with_progress(self, monkeypatch):
         gate = threading.Event()
 
-        def fetch(progress):
+        def fetch(progress, stop=None):
             progress("voice", 50)
             progress("voice", 50)
             progress("voice", 100)

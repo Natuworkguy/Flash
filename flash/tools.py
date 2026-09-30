@@ -15,6 +15,7 @@ import sys
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from datetime import datetime
 from html.parser import HTMLParser
@@ -27,7 +28,15 @@ from rich.live import Live
 from rich.text import Text
 
 from . import agent as subagents
-from . import checkpoint, editor, extensions, learning, plan, skills
+from . import (
+    checkpoint,
+    editor,
+    extensions,
+    learning,
+    model3d,
+    plan,
+    skills,
+)
 from .browser import (
     ACTIONS,
     MAX_ELEMENTS,
@@ -56,11 +65,14 @@ from .theme import (
     ELLIPSIS,
     ERROR,
     WARN,
+    capturing,
     console,
     glimmer,
     plural,
     remote_answer,
+    tool_browser,
     tool_diff,
+    tool_document,
     tool_file,
     tool_line,
     tool_result,
@@ -120,9 +132,21 @@ To hand the user a finished PDF, use the send_pdf tool with its path.
 To hand the user a finished web page, use the send_html tool with its
   path. It opens in their browser, or beside the chat in the web UI.
   Screenshot it first and send it once it looks right.
-When you make an image, PDF, or web page for the user, send it with the
-  matching tool as soon as it is finished, without being asked: that is
-  how they see it.
+To hand the user a Markdown or text document (a report, plan, README,
+  notes), use the send_document tool with its path. In the web UI it
+  opens beside the chat, where they can edit it and comment on it; their
+  comments reach you as a message that quotes each passage. To flag
+  unfinished work, a gap, or a question in it, pass comments, each
+  quoting the words it is about.
+To make a 3D model (an object, a prop, a room, a layout), use the
+  make_3d_model tool: it builds the model from parts such as boxes,
+  cylinders, spheres, lathed profiles, extruded outlines, and blocky
+  text for any words, logos, or signs, saves a
+  .glb, and shows it in a 3D viewer. Use send_3d_model to show a .glb,
+  .stl, or .obj file that already exists.
+When you make an image, PDF, web page, or document for the user, send it
+  with the matching tool as soon as it is finished, without being asked:
+  that is how they see it.
 To see how a web page actually renders, use the screenshot tool on the
   .html file you wrote or on a URL. It runs a headless browser and
   attaches the picture, so it is the only way to check a page you built;
@@ -184,11 +208,16 @@ When a task matches a skill under === Skills === below, call skill_view on
 Your temporary scratch directory is: {SCRATCH_DIR}
 It will be deleted when the program exits. Use it for temporary files, but do
   not assume it will persist across runs.
-Always use the scratch directory for temporary files, including dummy,
-  sample, and test files the user asks for, and write them by their full
-  path there. Never write them to the user's home directory, other
-  directories, or the current working directory unless the user names
-  that place.
+Always use the scratch directory for temporary files, including test
+  scripts, and dummy, sample, and test files the user asks for, and write
+  them by their full path there. Never write them to the user's home
+  directory, other directories, or the current working directory unless
+  the user names that place.
+Save a finished file the user asked for (a picture, chart, PDF, document,
+  page, 3D model, or a script for them to keep) in their Downloads folder
+  by its full path, unless they name another place or it is a change to
+  the project you are working in. Find that folder's path once with a
+  shell command before the first such write.
 """.strip()
 
 now = datetime.now()  # noqa: DTZ005
@@ -2407,6 +2436,347 @@ def send_html(path: str, caption: str = "") -> str:
     )
 
 
+DOCUMENT_SUFFIXES = (".md", ".markdown", ".txt")
+MAX_DOCUMENT_BYTES = 2 * 1024 * 1024
+MAX_MODEL_BYTES = 50 * 1024 * 1024
+MAX_DOC_COMMENTS = 20
+MAX_QUOTE_CHARS = 300
+MAX_NOTE_CHARS = 1000
+
+_MD_LINK = re.compile(r"!?\[([^\]]*)\]\([^)]*\)")
+_MD_LINE_MARK = re.compile(
+    r"^[ \t]*(?:#{1,6}[ \t]+|>[ \t]?|[-*+][ \t]+|\d+[.)][ \t]+)", re.M
+)
+_MD_INLINE_MARK = re.compile(r"</?u>|\*\*|__|~~|`|(?<!\w)[*_]|[*_](?!\w)")
+_MD_ESCAPE = re.compile(r"\\([\\`*_~\[\]#>|.+-])")
+
+
+def _plain(text: str) -> str:
+    """Text as the page shows it: Markdown's marks gone, spaces single.
+
+    A comment quotes words as they read, and the model may copy them
+    from the file with their marks or without, so both are compared
+    this way."""
+
+    text = _MD_LINK.sub(r"\1", text)
+    text = _MD_LINE_MARK.sub("", text)
+    text = _MD_INLINE_MARK.sub("", text)
+    text = _MD_ESCAPE.sub(r"\1", text)
+    return " ".join(text.split())
+
+
+def _doc_comments(
+    raw: Any, text: str,
+) -> tuple[list[dict], list[str]]:
+    """The comments the model left on a document, cleaned, and a line
+    for each one whose quote is not in the document.
+
+    A quote that is not found still goes: the page shows it as a note
+    on the whole document."""
+
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw) if raw.strip() else []
+        except json.JSONDecodeError:
+            return [], ["comments was not a list; none were added"]
+    if isinstance(raw, dict):
+        raw = [raw]
+    if not isinstance(raw, list):
+        return [], ["comments was not a list; none were added"]
+
+    plain_text = _plain(text)
+    flat_text = " ".join(text.split())
+    comments: list[dict] = []
+    missing: list[str] = []
+    for item in raw[:MAX_DOC_COMMENTS]:
+        if not isinstance(item, dict):
+            continue
+        quote = str(item.get("quote") or "").strip()[:MAX_QUOTE_CHARS]
+        note = str(
+            item.get("note") or item.get("comment") or item.get("text") or ""
+        ).strip()[:MAX_NOTE_CHARS]
+        if not note:
+            continue
+        comments.append({"quote": quote, "note": note})
+        if quote and " ".join(quote.split()) not in flat_text and (
+            _plain(quote) not in plain_text
+        ):
+            missing.append(
+                f'comment {len(comments)} quotes "{quote[:60]}", which is '
+                "not in the document word for word, so it shows without "
+                "a place"
+            )
+    return comments, missing
+
+
+def send_document(
+    path: str, caption: str = "", comments: Any = None,
+) -> str:
+    """Put a Markdown or text document in front of the user, with any
+    comments the model left on its passages."""
+
+    tool_line(f"SendDocument({path})")
+
+    doc = Path(path).expanduser()
+    problem = ""
+    size = 0
+    if not doc.is_file():
+        problem = f"no file at {doc}"
+    elif doc.suffix.lower() not in DOCUMENT_SUFFIXES:
+        problem = f"{doc.name} is not a .md or .txt file"
+    else:
+        try:
+            size = doc.stat().st_size
+            doc.read_bytes().decode("utf-8")
+        except OSError as exc:
+            problem = f"could not read {doc}: {exc}"
+        except UnicodeDecodeError:
+            problem = f"{doc.name} is not UTF-8 text"
+        else:
+            if size > MAX_DOCUMENT_BYTES:
+                problem = (
+                    f"{doc.name} is {size // 1024} KB; the limit is "
+                    f"{MAX_DOCUMENT_BYTES // (1024 * 1024)} MB"
+                )
+
+    if problem:
+        result = f"Error: {problem}."
+        tool_result(result, style=ERROR)
+        return result
+
+    kilobytes = max(1, round(size / 1024))
+    note = caption.strip()
+    label = f"{doc.name} ({kilobytes} KB)" + (f": {note}" if note else "")
+    left, missing = _doc_comments(
+        comments, doc.read_text(encoding="utf-8")
+    )
+    count = len(left)
+    if count:
+        label += f", {count} comment{'' if count == 1 else 's'}"
+    unplaced = f" To fix: {'; '.join(missing)}." if missing else ""
+    pinned = (
+        f" Your {count} comment{'' if count == 1 else 's'} show"
+        f"{'s' if count == 1 else ''} on the passages quoted."
+        if count else ""
+    )
+
+    shown = tool_document(str(doc), left) if left else tool_file(str(doc))
+    if shown:
+        tool_result(label)
+        return (
+            f"Sent {doc.name} ({kilobytes} KB) to the user's screen, "
+            f"beside the chat.{pinned} They can edit it there, and "
+            "saving writes the file. Their comments come to you as a "
+            f"message quoting each passage.{unplaced}"
+        )
+
+    problem = _open_with_spinner(doc)
+    tool_result(label + (f" ({problem})" if problem else ""))
+    console.print(
+        Text(f"{' ' * RESULT_INDENT}{_display_path(doc)}", style=DIM)
+    )
+    # The app it opens in has no place for them: they print under it.
+    for item in left:
+        where = f'"{item["quote"]}": ' if item["quote"] else ""
+        console.print(
+            Text(f"{' ' * RESULT_INDENT}{where}{item['note']}", style=DIM)
+        )
+
+    if problem:
+        return (
+            f"Could not open {doc.name}: {problem}. Its path is on "
+            "screen; tell the user where the file is."
+        )
+    return (
+        f"Sent {doc.name} ({kilobytes} KB). It opened in the user's "
+        "default app for it, with its path on screen"
+        + (", and your comments printed under it." if left else ".")
+    )
+
+
+MODEL_PREVIEW_WIDTH = 900
+MODEL_PREVIEW_HEIGHT = 700
+MODEL_PREVIEW_WAIT_MS = 1500
+_model_count = 0
+
+
+def _model_preview(model_path: Path) -> str:
+    """Draw the model the way the web UI will, and attach the picture
+    for the model to judge. Returns a line for its tool result."""
+
+    global _model_count
+
+    if not model_sees_images(OLLAMA_HOST, MODEL_NAME):
+        return (
+            f"The active model ({MODEL_NAME}) has no vision, so there is "
+            "no picture of it; check the numbers above against what you "
+            "meant to build."
+        )
+
+    web = Path(__file__).parent / "web" / "three"
+    try:
+        page = model3d.preview_page(
+            model_path.read_bytes(), model_path.suffix.lower(),
+            (web / "viewer.js").read_text(encoding="utf-8"),
+            (web / "three.min.js").read_text(encoding="utf-8"),
+        )
+    except OSError as exc:
+        return f"No picture of it: {exc}."
+
+    _model_count += 1
+    html = Path(SCRATCH_DIR) / f"model-{_model_count}.html"
+    out = Path(SCRATCH_DIR) / f"model-{_model_count}.png"
+    html.write_text(page, encoding="utf-8")
+    problems, why = capture(
+        html.resolve().as_uri(), out,
+        width=MODEL_PREVIEW_WIDTH, height=MODEL_PREVIEW_HEIGHT,
+        full_page=False, wait_ms=MODEL_PREVIEW_WAIT_MS,
+    )
+    if why:
+        tool_result(f"No preview: {why}", style=WARN)
+        return f"No picture of it: {why}"
+
+    data = out.read_bytes()
+    _pending_images.append(data)
+    note = (
+        "A picture of it, as the user's viewer first shows it (from the "
+        "front right, above), is attached, so judge the shape from what "
+        "you can see there. If anything is wrong in it (a part hidden, "
+        "floating, or out of place), fix it now by calling the tool "
+        "again, before you write your reply."
+    )
+    if problems:
+        note += " The viewer reported: " + "; ".join(
+            problems[:MAX_PAGE_PROBLEMS]
+        )
+    return note
+
+
+def _show_model(model_path: Path, label: str) -> str:
+    """Put a model in front of the user. Returns how it went."""
+
+    if tool_file(str(model_path)):
+        tool_result(label)
+        return (
+            "It is on the user's screen beside the chat, in a 3D viewer "
+            "they can turn, zoom, and download it from."
+        )
+
+    problem = _open_with_spinner(model_path)
+    tool_result(label + (f" ({problem})" if problem else ""))
+    console.print(
+        Text(f"{' ' * RESULT_INDENT}{_display_path(model_path)}", style=DIM)
+    )
+    if problem:
+        return (
+            f"Could not open it: {problem}. Its path is on screen; tell "
+            "the user where the file is and that the web UI (flash --web) "
+            "shows 3D models."
+        )
+    return (
+        "It opened in the user's default 3D viewer, with its path on "
+        "screen."
+    )
+
+
+def make_3d_model(
+    path: str, parts: Any, title: str = "", caption: str = "",
+) -> str:
+    """Build a 3D model out of simple parts, save it as a .glb file,
+    and show it to the user."""
+
+    model_path = Path(path).expanduser()
+    if model_path.suffix.lower() != ".glb":
+        model_path = model_path.with_name(model_path.name + ".glb")
+    tool_line(f"Make3DModel({model_path})")
+
+    problem = ""
+    if model_path.is_dir():
+        problem = f"{model_path} is a directory, not a file"
+    elif model_path.exists():
+        try:
+            with open(model_path, "rb") as handle:
+                if not model3d.is_glb(handle.read(12)):
+                    problem = (
+                        f"{model_path.name} already exists and is not a "
+                        ".glb model, so it was left alone; pick another "
+                        "path"
+                    )
+        except OSError as exc:
+            problem = f"could not read {model_path}: {exc}"
+    if problem:
+        result = f"Error: {problem}."
+        tool_result(result, style=ERROR)
+        return result
+
+    try:
+        built = model3d.build_parts(parts)
+        data = model3d.to_glb(built, str(title or "").strip())
+    except model3d.ModelError as exc:
+        result = f"Error: {exc}. Nothing was written."
+        tool_result(result, style=ERROR)
+        return result
+
+    checkpoint.record(model_path)
+    try:
+        model_path.parent.mkdir(parents=True, exist_ok=True)
+        model_path.write_bytes(data)
+    except OSError as exc:
+        result = f"Error: could not write {model_path}: {exc}"
+        tool_result(result, style=ERROR)
+        return result
+
+    kilobytes = max(1, round(len(data) / 1024))
+    note = caption.strip()
+    count = len(built)
+    label = (
+        f"{model_path.name} ({count} part{plural(count)}, {kilobytes} KB)"
+        + (f": {note}" if note else "")
+    )
+    shown = _show_model(model_path, label)
+    return (
+        f"Saved {model_path} ({kilobytes} KB).\n"
+        f"{model3d.describe(built)}\n{shown}\n{_model_preview(model_path)}"
+        "\nTo change it, call make_3d_model again with the whole list "
+        "of parts, changed, and the same path."
+    )
+
+
+def send_3d_model(path: str, caption: str = "") -> str:
+    """Put a 3D model file someone else made in front of the user."""
+
+    tool_line(f"Send3DModel({path})")
+
+    model_path = Path(path).expanduser()
+    size = 0
+    if not model_path.is_file():
+        problem = f"no file at {model_path}"
+    else:
+        problem = model3d.check_model_file(model_path) or ""
+        if not problem:
+            size = model_path.stat().st_size
+            if size > MAX_MODEL_BYTES:
+                problem = (
+                    f"{model_path.name} is {size // (1024 * 1024)} MB; the "
+                    f"limit is {MAX_MODEL_BYTES // (1024 * 1024)} MB"
+                )
+    if problem:
+        result = f"Error: {problem}."
+        tool_result(result, style=ERROR)
+        return result
+
+    kilobytes = max(1, round(size / 1024))
+    note = caption.strip()
+    label = f"{model_path.name} ({kilobytes} KB)" + (
+        f": {note}" if note else ""
+    )
+    shown = _show_model(model_path, label)
+    return (
+        f"Sent {model_path.name} ({kilobytes} KB). {shown}\n"
+        f"{_model_preview(model_path)}"
+    )
+
+
 DEFAULT_SCREENSHOT_WIDTH = 1280
 DEFAULT_SCREENSHOT_HEIGHT = 800
 MIN_SCREENSHOT_SIDE = 200
@@ -2416,6 +2786,31 @@ MAX_SCREENSHOT_WAIT_MS = 20000
 MAX_PAGE_PROBLEMS = 5
 
 _screenshot_count = 0
+# Each page opened, and each one-off screenshot, is a run of its own: the
+# web UI shows one live browser per run, its frames in order. Random, not
+# counted, so a chat that outlives a restart never mixes two runs up.
+_browser_run = ""
+
+
+def _new_browser_run() -> None:
+    global _browser_run
+    _browser_run = os.urandom(4).hex()
+
+
+def _show_browser(path: Path, url: str, title: str, note: str) -> None:
+    """Show the user the frame just taken, where there is a screen for it."""
+
+    tool_browser(str(path), run=_browser_run, url=url, title=title,
+                 note=note)
+
+
+def _mouse_point(value: Any) -> Optional[tuple[float, float]]:
+    """A point the model gave for the mouse, as "x,y", or None."""
+
+    numbers = re.findall(r"-?\d+(?:\.\d+)?", str(value or ""))
+    if len(numbers) < 2:
+        return None
+    return float(numbers[0]), float(numbers[1])
 
 
 def _clamp(value: Any, low: int, high: int, fallback: int) -> int:
@@ -2440,6 +2835,7 @@ def screenshot(
     height: Any = DEFAULT_SCREENSHOT_HEIGHT,
     full_page: Any = False,
     wait_ms: Any = DEFAULT_SCREENSHOT_WAIT_MS,
+    mouse: Any = "",
 ) -> str:
     """Render a page in a headless browser and attach the picture."""
 
@@ -2456,6 +2852,9 @@ def screenshot(
     shape = f"{view_width}x{view_height}"
     if whole_page:
         shape += " full page"
+    pointer = _mouse_point(mouse)
+    if pointer is not None:
+        shape += f", mouse at {pointer[0]:g},{pointer[1]:g}"
     tool_line(f"Screenshot({target}, {shape})")
 
     url, why = resolve_target(target)
@@ -2483,6 +2882,7 @@ def screenshot(
         height=view_height,
         full_page=whole_page,
         wait_ms=settle_ms,
+        mouse=pointer,
     )
 
     if why:
@@ -2495,6 +2895,8 @@ def screenshot(
 
     kilobytes = max(1, round(len(data) / 1024))
     tool_result(f"{shape} ({kilobytes} KB) {out.name}")
+    _new_browser_run()
+    _show_browser(out, url, "", f"Screenshot at {shape}")
 
     if problems:
         for problem in problems[:MAX_PAGE_PROBLEMS]:
@@ -2522,7 +2924,9 @@ def screenshot(
     return result
 
 
-def _page_report(headline: str, *, full_page: bool = False) -> str:
+def _page_report(
+    headline: str, *, full_page: bool = False, step: str = "",
+) -> str:
     """Show the model the page it just acted on.
 
     Every open_page and interact call ends here, because an action the
@@ -2539,27 +2943,32 @@ def _page_report(headline: str, *, full_page: bool = False) -> str:
     if url:
         lines.append(f"Page: {title or 'untitled'} - {url}")
 
-    if model_sees_images(OLLAMA_HOST, MODEL_NAME):
+    sees = model_sees_images(OLLAMA_HOST, MODEL_NAME)
+    # The picture is for the model when it has eyes, and for the user
+    # whenever there is a screen beside the chat to show the browser on.
+    if sees or capturing():
         _screenshot_count += 1
         out = Path(SCRATCH_DIR) / f"page-{_screenshot_count}.png"
         why = page_snapshot(out, full_page=bool(full_page))
+        if not why:
+            _show_browser(out, url, title, step or headline.split("\n")[0])
 
-        if why:
-            lines.append(f"No screenshot of the page: {why}")
-            tool_result(why, style=WARN)
-        else:
-            data = out.read_bytes()
-            _pending_images.append(data)
-            kilobytes = max(1, round(len(data) / 1024))
-            tool_result(f"{out.name} ({kilobytes} KB)")
-            lines.append(
-                "A screenshot of the page as it stands is attached to this "
-                "tool result, so judge it from what you can see there."
-            )
-    else:
+    if not sees:
         lines.append(
             f"The active model ({MODEL_NAME}) has no vision, so there is no "
             "screenshot. Work from the element list and from eval."
+        )
+    elif why:
+        lines.append(f"No screenshot of the page: {why}")
+        tool_result(why, style=WARN)
+    else:
+        data = out.read_bytes()
+        _pending_images.append(data)
+        kilobytes = max(1, round(len(data) / 1024))
+        tool_result(f"{out.name} ({kilobytes} KB)")
+        lines.append(
+            "A screenshot of the page as it stands is attached to this "
+            "tool result, so judge it from what you can see there."
         )
 
     found, why = page_elements()
@@ -2628,10 +3037,17 @@ def open_page(
         tool_result(result, style=ERROR)
         return result
 
+    _new_browser_run()
     return _page_report(
-        f"Opened {url} at {shape}. The browser stays open, so use the "
-        "interact tool to click, type, or run JavaScript on this page, and "
-        "close it when you are done."
+        step=(
+            f"Opened {Path(urllib.parse.urlparse(url).path).name or url} "
+            f"at {shape}"
+        ),
+        headline=(
+            f"Opened {url} at {shape}. The browser stays open, so use the "
+            "interact tool to click, type, or run JavaScript on this page, "
+            "and close it when you are done."
+        ),
     )
 
 
@@ -3092,6 +3508,299 @@ tools: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "send_document",
+            "description": (
+                "Show a Markdown or text document (.md, .markdown, .txt) "
+                "to the user: a report, plan, README, or notes you wrote. "
+                "In the web UI it opens beside the chat, rendered, where "
+                "they can edit it and comment on passages; their comments "
+                "reach you as a message quoting each one. Write the file "
+                "first; this only shows it. To flag something for them in "
+                "it (unfinished work, a gap to fill, an open question, an "
+                "assumption to check), add comments pinned to passages."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Path to the document.",
+                    },
+                    "caption": {
+                        "type": "string",
+                        "description": (
+                            "Optional single line shown with it."
+                        ),
+                    },
+                    "comments": {
+                        "type": "array",
+                        "description": (
+                            "Optional notes for the user, each pinned to "
+                            "a passage: what is unfinished, missing, or "
+                            "needs their decision there."
+                        ),
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "quote": {
+                                    "type": "string",
+                                    "description": (
+                                        "A few words from the document, "
+                                        "exactly as they read, marking "
+                                        "the passage."
+                                    ),
+                                },
+                                "note": {
+                                    "type": "string",
+                                    "description": "What to tell them.",
+                                },
+                            },
+                            "required": ["quote", "note"],
+                        },
+                    },
+                },
+                "required": ["path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "make_3d_model",
+            "description": (
+                "Build a 3D model out of parts, save it as a .glb file, "
+                "and show it to the user in a 3D viewer they can turn and "
+                "zoom (beside the chat in the web UI). Use it for any "
+                "object, prop, scene, or layout the user wants to see in "
+                "3D. Y is up, units are metres, and the ground is y = 0, "
+                "so a part rests on it when its position's y is half its "
+                "height. Every shape is centred on its position. Build "
+                "the object from many parts, sized in proportion to the "
+                "real thing and coloured like it. Anything with words on "
+                "it (a logo, a sign, a title) gets a text part for them. "
+                "The result gives the model's overall size, "
+                "and a picture of it when you can see images: check both "
+                "and fix what is off. To revise, call again with the "
+                "whole changed list and the same path."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": (
+                            "Full path to save it at, ending in .glb: in "
+                            "the user's Downloads folder, as chair.glb "
+                            "there, unless they named another place."
+                        ),
+                    },
+                    "parts": {
+                        "type": "array",
+                        "description": "The parts, each one shape.",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "shape": {
+                                    "type": "string",
+                                    "enum": list(model3d.SHAPES),
+                                    "description": (
+                                        "box (size [x,y,z]); sphere "
+                                        "(radius); cylinder (radius, "
+                                        "height, or radius_top and "
+                                        "radius_bottom for a taper); cone "
+                                        "(radius, height, point up); "
+                                        "torus (radius to the tube's "
+                                        "centre, tube; lies flat like a "
+                                        "ring on a table); plane (size "
+                                        "[x,z], facing up); lathe (points "
+                                        "[[radius,y],...] from bottom to "
+                                        "top, spun round the Y axis: "
+                                        "vases, bottles, lamps, chess "
+                                        "pieces); extrude (points "
+                                        "[[x,z],...], an outline seen "
+                                        "from above, raised to height: "
+                                        "walls, floor plans, gears, "
+                                        "L-shapes); text (text, height "
+                                        "of a capital, depth: words in a "
+                                        "blocky pixel font, reading "
+                                        "along X and facing +Z, lines "
+                                        "split by \\n: logos, signs, "
+                                        "names; never stand a box in "
+                                        "for a letter); mesh (vertices "
+                                        "[[x,y,z],...] and faces, each a "
+                                        "list of vertex indices from 0)."
+                                    ),
+                                },
+                                "text": {
+                                    "type": "string",
+                                    "description": (
+                                        "For text: the words. A-Z, "
+                                        "0-9, spaces, and . , ! ? - : "
+                                        "' & /."
+                                    ),
+                                },
+                                "depth": {
+                                    "type": "number",
+                                    "description": (
+                                        "For text: how thick the "
+                                        "letters are; one block of the "
+                                        "font (height / 7) by default."
+                                    ),
+                                },
+                                "name": {
+                                    "type": "string",
+                                    "description": (
+                                        "What the part is, like "
+                                        "'left front leg'."
+                                    ),
+                                },
+                                "size": {
+                                    "type": "array",
+                                    "items": {"type": "number"},
+                                },
+                                "radius": {"type": "number"},
+                                "radius_top": {"type": "number"},
+                                "radius_bottom": {"type": "number"},
+                                "height": {"type": "number"},
+                                "tube": {"type": "number"},
+                                "points": {
+                                    "type": "array",
+                                    "items": {
+                                        "type": "array",
+                                        "items": {"type": "number"},
+                                    },
+                                },
+                                "vertices": {
+                                    "type": "array",
+                                    "items": {
+                                        "type": "array",
+                                        "items": {"type": "number"},
+                                    },
+                                },
+                                "faces": {
+                                    "type": "array",
+                                    "items": {
+                                        "type": "array",
+                                        "items": {"type": "integer"},
+                                    },
+                                },
+                                "segments": {
+                                    "type": "integer",
+                                    "description": (
+                                        "How smooth a round shape is, "
+                                        "3 to 128. 6 makes a hexagonal "
+                                        "prism of a cylinder."
+                                    ),
+                                },
+                                "position": {
+                                    "type": "array",
+                                    "items": {"type": "number"},
+                                    "description": (
+                                        "[x, y, z] of the shape's centre."
+                                    ),
+                                },
+                                "rotation": {
+                                    "type": "array",
+                                    "items": {"type": "number"},
+                                    "description": (
+                                        "[x, y, z] turns in degrees, "
+                                        "about the shape's centre. "
+                                        "[90, 0, 0] lays a cylinder on "
+                                        "its side along Z; [0, 0, 90] "
+                                        "along X."
+                                    ),
+                                },
+                                "scale": {
+                                    "type": "array",
+                                    "items": {"type": "number"},
+                                    "description": (
+                                        "[x, y, z] stretch, such as a "
+                                        "sphere made an egg."
+                                    ),
+                                },
+                                "color": {
+                                    "type": "string",
+                                    "description": (
+                                        "A hex code like #c0392b, or a "
+                                        "common name."
+                                    ),
+                                },
+                                "metalness": {
+                                    "type": "number",
+                                    "description": "0 (default) to 1.",
+                                },
+                                "roughness": {
+                                    "type": "number",
+                                    "description": (
+                                        "0 (mirror) to 1 (chalk); "
+                                        "default 0.6."
+                                    ),
+                                },
+                                "opacity": {
+                                    "type": "number",
+                                    "description": (
+                                        "1 (default) to 0; below 1 for "
+                                        "glass or water."
+                                    ),
+                                },
+                                "emissive": {
+                                    "type": "string",
+                                    "description": (
+                                        "A colour it glows, for lamps "
+                                        "and screens."
+                                    ),
+                                },
+                            },
+                            "required": ["shape"],
+                        },
+                    },
+                    "title": {
+                        "type": "string",
+                        "description": "Optional name for the model.",
+                    },
+                    "caption": {
+                        "type": "string",
+                        "description": (
+                            "Optional single line shown with it."
+                        ),
+                    },
+                },
+                "required": ["path", "parts"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "send_3d_model",
+            "description": (
+                "Show a 3D model file that already exists (.glb, .stl, or "
+                ".obj), such as one a script made or the user has, in a "
+                "3D viewer they can turn and zoom (beside the chat in the "
+                "web UI). For a model you build yourself, use "
+                "make_3d_model, which shows it too."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Path to the .glb, .stl, or .obj.",
+                    },
+                    "caption": {
+                        "type": "string",
+                        "description": (
+                            "Optional single line shown with it."
+                        ),
+                    },
+                },
+                "required": ["path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "view_image",
             "description": (
                 "Look at an image file on disk (.png, .jpg, .jpeg, .webp, "
@@ -3180,6 +3889,15 @@ tools: list[dict[str, Any]] = [
                         "minimum": 0,
                         "maximum": MAX_SCREENSHOT_WAIT_MS,
                     },
+                    "mouse": {
+                        "type": "string",
+                        "description": (
+                            "Optional point to rest the mouse on before "
+                            "the picture, as \"x,y\" in the viewport's "
+                            "pixels, to see a hover state. The pointer "
+                            "shows in the picture as an orange arrow."
+                        ),
+                    },
                 },
                 "required": ["target"],
             },
@@ -3252,12 +3970,15 @@ tools: list[dict[str, Any]] = [
                 "Do one thing to the page open_page opened, then look at "
                 "the result: click a button, fill a field, press a key, "
                 "choose an option, scroll, wait for something to appear, "
-                "or run JavaScript against the live page. The page keeps "
-                "its state between calls, so work through a flow one call "
-                "at a time. Every call reports where the page is now, its "
-                "numbered elements, and the errors it threw, with a "
-                "screenshot attached, so this is how you debug what a page "
-                "actually does rather than what its source says."
+                "or run JavaScript against the live page. The mouse can "
+                "also move, click, and drag at points in the screenshot, "
+                "for what no selector names, such as a canvas or a map; "
+                "the pointer shows in each screenshot as an orange arrow. "
+                "The page keeps its state between calls, so work through a "
+                "flow one call at a time. Every call reports where the page "
+                "is now, its numbered elements, and the errors it threw, "
+                "with a screenshot attached, so this is how you debug what "
+                "a page actually does rather than what its source says."
             ),
             "parameters": {
                 "type": "object",
@@ -3265,9 +3986,13 @@ tools: list[dict[str, Any]] = [
                     "action": {
                         "type": "string",
                         "description": (
-                            "What to do: 'click', 'fill' (type value into "
-                            "a field), 'press' (send a key such as Enter or "
-                            "Tab), 'hover', 'select' (choose value in a "
+                            "What to do: 'click' (an element, or with no "
+                            "selector the point \"x,y\" in value), 'move' "
+                            "(the mouse onto an element or to a point, and "
+                            "leave it there), 'drag' (value \"x1,y1 "
+                            "x2,y2\"), 'fill' (type value into a field), "
+                            "'press' (send a key such as Enter or Tab), "
+                            "'hover', 'select' (choose value in a "
                             "dropdown), 'scroll', 'wait', 'eval' (run the "
                             "JavaScript in value and return its result), "
                             "'back', 'reload', or 'close' (shut the "
@@ -3292,8 +4017,10 @@ tools: list[dict[str, Any]] = [
                         "description": (
                             "The text to type for fill, the key for press, "
                             "the option for select, the JavaScript for "
-                            "eval, or 'top', 'bottom', or a number of "
-                            "pixels for scroll."
+                            "eval, 'top', 'bottom', or a number of pixels "
+                            "for scroll, or a point for click, move, and "
+                            "drag, in the screenshot's pixels from its "
+                            "top-left corner."
                         ),
                     },
                     "wait_ms": {
@@ -3693,6 +4420,9 @@ FUNCTIONS = {
     "send_image": send_image,
     "send_pdf": send_pdf,
     "send_html": send_html,
+    "send_document": send_document,
+    "make_3d_model": make_3d_model,
+    "send_3d_model": send_3d_model,
     "screenshot": screenshot,
     "open_page": open_page,
     "interact": interact,
