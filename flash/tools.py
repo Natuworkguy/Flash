@@ -36,6 +36,7 @@ from . import (
     model3d,
     plan,
     skills,
+    sparks,
 )
 from .browser import (
     ACTIONS,
@@ -1789,6 +1790,54 @@ def agent_result(agent_id: str, wait_seconds: Any = None) -> str:
         return f"Sub-agent {agent_id} failed: {entry.result}"
 
     return entry.result
+
+
+def make_spark(
+    name: str, goal: str, every: Any = "", boundaries: str = ""
+) -> str:
+    """Make a spark: an agent that works on GOAL on a schedule."""
+
+    tool_line(f"MakeSpark({name}, every {every or 'hour'})")
+
+    try:
+        minutes = sparks.parse_every(every)
+    except sparks.SparkError as exc:
+        tool_result(str(exc), style=ERROR)
+        return f"Error: {exc}"
+
+    # It goes on working after this conversation is over, so it is the
+    # person's to agree to, as a command would be.
+    if not NO_COMMAND_CONFIRMATION:
+        notify_needs_input()
+        question = (
+            f"Make a spark called {name} that works on this every "
+            f"{sparks.every_words(minutes)}?\n{goal}"
+        )
+        answer = remote_answer(question)
+        if answer is None:
+            prompt = Text("  ⎿  ", style=DIM)
+            prompt.append("Make this spark? ", style=DIM)
+            prompt.append("y", style=f"bold {ACCENT}")
+            prompt.append("/n ", style=DIM)
+            console.print(prompt, end="")
+            answer = typed()
+        if answer != "y":
+            tool_result("Blocked by user", style=WARN)
+            return "Blocked by user"
+
+    try:
+        spark = sparks.create(name, goal, boundaries, minutes)
+    except sparks.SparkError as exc:
+        tool_result(str(exc), style=ERROR)
+        return f"Error: {exc}"
+
+    result = (
+        f"Made {spark.name} ({spark.handle}). Its first shift starts now, "
+        f"then every {sparks.every_words(spark.every)} while Flash runs. "
+        "Its reports are under /sparks, or Sparks in the web UI."
+    )
+    tool_result(result)
+    return result
 
 
 def get_date() -> str:
@@ -4304,6 +4353,55 @@ tools: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "make_spark",
+            "description": (
+                "Make a spark: an agent that keeps working on a standing "
+                "goal on a schedule, for as long as Flash runs, and "
+                "reports back to the user. Use it only when the user "
+                "asks for something ongoing or recurring (watch this, "
+                "check that every morning, keep an eye on), never for a "
+                "task that can be done now. The user is asked first."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": (
+                            "A short, friendly name, one or two words, "
+                            "e.g. Scout or Price Watch."
+                        ),
+                    },
+                    "goal": {
+                        "type": "string",
+                        "description": (
+                            "The standing goal, written so the spark "
+                            "needs nothing else: what to check or do, "
+                            "where, and what counts as worth reporting."
+                        ),
+                    },
+                    "every": {
+                        "type": "string",
+                        "description": (
+                            "How often it works, e.g. 30m, 2h, daily. "
+                            f"At least {sparks.MIN_EVERY_MINUTES}m."
+                        ),
+                    },
+                    "boundaries": {
+                        "type": "string",
+                        "description": (
+                            "What it must never do, from what the user "
+                            "said, e.g. never push, only read."
+                        ),
+                    },
+                },
+                "required": ["name", "goal"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "skill_view",
             "description": (
                 "Read one of your saved skills: the procedure for a kind "
@@ -4440,6 +4538,7 @@ FUNCTIONS = {
     "skill_manage": skill_manage_tool,
     "agent": agent_tool,
     "agent_result": agent_result,
+    "make_spark": make_spark,
     "open_in_editor": open_in_editor,
 }
 

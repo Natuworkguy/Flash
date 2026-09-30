@@ -33,6 +33,7 @@ from . import (
     learning,
     plan,
     skills,
+    sparks,
     terminal,
 )
 from .cli import parse_args
@@ -84,6 +85,7 @@ from .theme import (
     SPARKLE,
     WARN,
     ScreenConsole,
+    can_encode,
     clear_collapsed,
     confirm,
     console,
@@ -1799,6 +1801,215 @@ def _skills_command(arg: str) -> None:
     console.print(body)
 
 
+def _note_sparks() -> None:
+    """Point at a spark's report the first time it is waiting."""
+
+    for spark, report in sparks.news():
+        note = Text(f"  {_bubble()} ", style=spark.colour)
+        note.append(spark.name, style=f"bold {spark.colour}")
+        verb = "could not finish a shift" if report.failed else "has news"
+        note.append(f" {verb} · /sparks {_spark_key(spark)}", style=DIM)
+        console.print(note)
+
+
+def _spark_key(spark: "sparks.Spark") -> str:
+    """What to type after /sparks to mean SPARK: its handle, bare."""
+
+    return spark.handle[1:].removesuffix("-spark")
+
+
+def _bubble() -> str:
+    return "●" if can_encode("●") else "o"
+
+
+def _spark_state(spark: "sparks.Spark") -> str:
+    if spark.status == sparks.WORKING:
+        return f"working{': ' + spark.activity if spark.activity else ''}"
+    if spark.paused:
+        return "paused"
+    wait = int((spark.next_run - time.time()) // 60)
+    state = "starting soon" if wait <= 0 else (
+        f"next shift in {wait}m" if wait < 120 else
+        f"next shift in {wait // 60}h"
+    )
+    if spark.status == sparks.FAILED:
+        state = f"last shift failed · {state}"
+    return state
+
+
+def _ask_line(question: str) -> str:
+    """One line of free text, typed at a dim QUESTION."""
+
+    console.print(Text(f"  {question} ", style=DIM), end="")
+    try:
+        answer = input()
+    except EOFError:
+        answer = ""
+    console.keep(answer + "\n")
+    return answer.strip()
+
+
+def _new_spark() -> None:
+    console.print(Text(
+        "  A spark works on one goal on a schedule, while Flash runs, and "
+        "reports back.", style=DIM,
+    ))
+    name = _ask_line("Name it:")
+    goal = _ask_line("What should it keep doing?") if name else ""
+    if not name or not goal:
+        console.print(Text("  No spark made.", style=DIM))
+        return
+    every = _ask_line("How often? (30m, 2h, daily; Enter for hourly)")
+    boundaries = _ask_line("Anything it must never do? (Enter for none)")
+    try:
+        spark = sparks.create(name, goal, boundaries, every)
+    except sparks.SparkError as exc:
+        warn(str(exc))
+        return
+    line = Text(f"  {_bubble()} ", style=spark.colour)
+    line.append(spark.name, style=f"bold {spark.colour}")
+    line.append(
+        f" {spark.handle} is on it, every "
+        f"{sparks.every_words(spark.every)}.", style=DIM,
+    )
+    console.print(line)
+
+
+def _show_spark(spark: "sparks.Spark") -> None:
+    head = Text(f"\n{_bubble()} ", style=spark.colour)
+    head.append(spark.name, style=f"bold {spark.colour}")
+    head.append(f"  {spark.handle} · every "
+                f"{sparks.every_words(spark.every)} · {_spark_state(spark)}"
+                f" · {spark.runs} shift{'' if spark.runs == 1 else 's'}\n",
+                style=DIM)
+    head.append("\nGoal\n", style="bold")
+    head.append(f"  {spark.goal}\n")
+    if spark.boundaries:
+        head.append("\nBoundaries\n", style="bold")
+        head.append(f"  {spark.boundaries}\n")
+    if spark.lessons:
+        head.append("\nWhat you have taught it\n", style="bold")
+        for number, lesson in enumerate(spark.lessons, start=1):
+            head.append(f"  {number}. {lesson}\n", style=DIM)
+    console.print(head)
+
+    shown = [r for r in spark.reports if not r.quiet][-3:]
+    quiet = sum(1 for r in spark.reports if r.quiet)
+    if not shown:
+        console.print(Text(
+            "No reports yet." if not spark.runs else
+            f"Nothing to report yet ({quiet} quiet shift"
+            f"{'' if quiet == 1 else 's'}).", style=DIM,
+        ))
+    for report in shown:
+        when = time.strftime("%a %H:%M", time.localtime(report.at))
+        title = Text(f"Report · {when}", style="bold")
+        if not report.read:
+            title.append("  new", style=ACCENT)
+        console.print(title)
+        console.print(Markdown(report.text, code_theme="monokai"))
+        if report.feedback:
+            console.print(Text(f"  You said: {report.feedback}", style=DIM))
+        console.print()
+    console.print(Text(
+        f"/sparks teach {_spark_key(spark)} <what to do differently> · "
+        "run · pause · resume · every · remove", style=DIM,
+    ))
+    sparks.mark_read(spark.id)
+
+
+def _sparks_command(arg: str) -> None:
+    """/sparks and its actions: new, run, pause, resume, teach, every,
+    remove, or a spark's name to read its reports."""
+
+    action, _, rest = arg.partition(" ")
+    action = action.lower()
+    rest = rest.strip()
+    key, _, extra = rest.partition(" ")
+    extra = extra.strip()
+
+    try:
+        if action == "new":
+            _new_spark()
+            return
+        if action == "run" and key:
+            spark = sparks.run_now(key)
+            console.print(Text(f"{spark.name} starts a shift now.", DIM))
+            return
+        if action in ("pause", "resume") and key:
+            spark = sparks.set_paused(key, action == "pause")
+            console.print(Text(f"{spark.name} {action}d.", style=DIM))
+            return
+        if action in ("teach", "feedback", "tell") and key and extra:
+            spark = sparks.teach(key, extra)
+            console.print(Text(
+                f"{spark.name} will keep that in mind from its next shift.",
+                style=DIM,
+            ))
+            return
+        if action == "unteach" and key and extra.isdigit():
+            spark = sparks.forget_lesson(key, int(extra))
+            console.print(Text(f"{spark.name} let that go.", style=DIM))
+            return
+        if action == "every" and key and extra:
+            spark = sparks.update(key, every=extra)
+            console.print(Text(
+                f"{spark.name} now works every "
+                f"{sparks.every_words(spark.every)}.", style=DIM,
+            ))
+            return
+        if action in ("remove", "rm", "delete") and key:
+            spark = sparks.find(key)
+            if spark and confirm(f"Remove {spark.name} and its reports?"):
+                sparks.remove(spark.id)
+                console.print(Text(f"{spark.name} is gone.", style=DIM))
+            elif spark is None:
+                warn(f"No spark called {key!r}.")
+            return
+        if action and not rest:
+            spark = sparks.find(action)
+            if spark:
+                _show_spark(spark)
+                return
+    except sparks.SparkError as exc:
+        warn(str(exc))
+        return
+
+    if action:
+        warn(
+            "Usage: /sparks [new | <name> | run|pause|resume|remove <name> "
+            "| teach <name> <lesson> | every <name> <30m|2h|daily>]"
+        )
+        return
+
+    found = sparks.all_sparks()
+    if not found:
+        console.print(Text(
+            "No sparks yet. A spark keeps working on one goal on a "
+            "schedule and reports back. /sparks new to make one, or ask "
+            "Flash: \"make a spark that checks my repo for new issues "
+            "every morning\".", style=DIM,
+        ))
+        return
+
+    body = Text()
+    body.append("\nSparks\n\n", style="bold")
+    width = max(len(spark.name) for spark in found) + 2
+    for spark in found:
+        body.append(f"  {_bubble()} ", style=spark.colour)
+        body.append(f"{spark.name:<{width}}", style=f"bold {spark.colour}")
+        body.append(_spark_state(spark), style=DIM)
+        if spark.unread:
+            body.append(f"  {spark.unread} new", style=ACCENT)
+        body.append(f"\n     {spark.goal.splitlines()[0][:70]}\n", style=DIM)
+    body.append(
+        "\n  They work while Flash runs, here or in the web UI. "
+        "/sparks <name> to read one's reports, /sparks new to make "
+        "another.\n", style=DIM,
+    )
+    console.print(body)
+
+
 def _hook_command(arg: str) -> None:
     """/hook, /hook install, /hook remove: the VS Code terminal hook."""
 
@@ -2489,6 +2700,9 @@ def main() -> None:
 
     client = ollama.Client(host=Config.host)
 
+    # Sparks work for as long as Flash is open.
+    sparks.start()
+
     _clear_screen()
 
     messages: list = []
@@ -2555,6 +2769,7 @@ def main() -> None:
             else:
                 if not banner_showing:
                     _note_learning()
+                    _note_sparks()
                 try:
                     uin = read_line(
                         Config.prompt,
@@ -2715,6 +2930,10 @@ def main() -> None:
 
             if uin == "/skills" or uin.startswith("/skills "):
                 _skills_command(uin[len("/skills"):].strip())
+                continue
+
+            if uin == "/sparks" or uin.startswith("/sparks "):
+                _sparks_command(uin[len("/sparks"):].strip())
                 continue
 
             if uin == "/background" or uin.startswith("/background "):
@@ -3053,6 +3272,7 @@ def main() -> None:
                 _render_stats(turn)
                 _note_running_agents()
                 _note_learning()
+                _note_sparks()
                 notify_reply_ready()
                 listening_on = _speak_reply(final, heard)
                 messages.append(_message("assistant", final))
@@ -3152,6 +3372,7 @@ def main() -> None:
             _render_stats(turn)
             _note_running_agents()
             _note_learning()
+            _note_sparks()
             notify_reply_ready()
             listening_on = _speak_reply(followup, heard)
             messages.extend(_worth_keeping(tool_messages, keep_from))
