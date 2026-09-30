@@ -1049,6 +1049,11 @@ button.item-row:hover { background: var(--hover); }
 .spark-report .teach input { flex: 1; min-width: 0; font: 13.5px var(--sans); color: var(--text); background: var(--surface); border: 1px solid var(--border-strong); border-radius: 9px; padding: 6px 10px; outline: 0; }
 .spark-quiet { font-size: 12.5px; color: var(--text-3); margin-top: 10px; }
 .field small [data-handle] { font: 500 12px var(--mono); color: var(--text-2); }
+.spark-always { max-width: none; margin-bottom: 16px; }
+.spark-always .what span.on { color: var(--text-2); }
+.field.check { display: flex; align-items: flex-start; gap: 10px; cursor: pointer; }
+.field.check input { margin-top: 3px; accent-color: var(--accent); }
+.field.check span { margin: 0; font-weight: 400; color: var(--text-2); }
 .field select { width: 100%; font: 14.5px var(--sans); color: var(--text); background: var(--bg); border: 1px solid var(--border-strong); border-radius: 10px; padding: 9px 12px; outline: 0; }
 
 .ext-preview { margin: 14px 0 6px; padding: 12px 14px; border: 1px solid var(--border); border-radius: 12px; background: var(--code-bg); }
@@ -3719,6 +3724,16 @@ function sparkState(spark) {
   return spark.status === "failed" ? `Last shift failed · ${next}` : next;
 }
 
+// Whether sparks keep working with Flash closed: what the page last heard.
+let sparksAlways = { installed: false, running: false, here: false };
+
+function alwaysWords(a) {
+  if (!a.installed) return "Off: sparks work while Flash is open, in the terminal or here. On, Flash starts a keeper of its own at login, so they keep working with everything closed and send a notification when they have news.";
+  if (a.running) return "On: a keeper started at login is doing the work, and keeps doing it with Flash closed.";
+  if (a.here) return "On: this Flash is doing the work right now, and the keeper started at login takes over when it closes.";
+  return "On, but the keeper is not running yet. It starts at your next login.";
+}
+
 const sparkHandle = (name) => `@${name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "spark"}-spark`;
 
 // AGAIN: a redraw for news, which should not replay the cards' entrance.
@@ -3732,6 +3747,15 @@ async function drawSparks(body, again = false) {
   add.type = "button";
   add.onclick = () => sparkForm();
   body.querySelector(".mem-head").appendChild(add);
+  sparksAlways = r.always;
+  const always = el("button", "setting-row spark-always", `<span class="what"><b>Keep working when Flash is closed</b><span></span></span><span class="switch" aria-hidden="true"></span>`);
+  always.type = "button";
+  always.setAttribute("role", "switch");
+  always.setAttribute("aria-checked", !!r.always.installed);
+  always.querySelector(".what span").textContent = alwaysWords(r.always);
+  always.querySelector(".what span").classList.toggle("on", r.always.installed);
+  always.onclick = () => setSparksAlways(always.getAttribute("aria-checked") !== "true", always);
+  body.querySelector(".mem-head").after(always);
   const host = body.querySelector(".host");
   if (!r.sparks.length) {
     host.innerHTML = `<div class="mem-empty"><b>No sparks yet</b>Give one a goal like “every morning, check my repo for new issues and tell me which look like bugs”. Or ask Flash in a chat to make one.</div>`;
@@ -3758,6 +3782,20 @@ async function drawSparks(body, again = false) {
   body.querySelector(".mem-path").textContent = `${r.sparks.length} spark${r.sparks.length === 1 ? "" : "s"}${working ? ` · ${working} working` : ""} · saved in ~/.flash/sparks`;
 }
 const drawSparksPage = () => toolPage("Sparks", drawSparks);
+
+async function setSparksAlways(on, row) {
+  if (row) { row.setAttribute("aria-checked", on); row.disabled = true; }
+  try {
+    const r = await command("sparks-always", on ? "on" : "off", null);
+    sparksAlways = r.always;
+    toast(on ? "Sparks now keep working when Flash is closed" : "Sparks work only while Flash is open");
+  } catch (error) {
+    if (row) row.setAttribute("aria-checked", !on);
+    showFailure(error);
+  }
+  if (row) row.disabled = false;
+  sparksChanged();
+}
 
 async function openSpark(id) {
   let r;
@@ -3873,6 +3911,7 @@ function sparkForm(spark) {
     <label class="field"><span>Goal</span><textarea name="goal" rows="4" placeholder="Check github.com/me/app for new issues. Tell me which look like bugs, and skip ones you have already told me about."></textarea></label>
     <label class="field"><span>How often</span><select name="every">${choices.map(([m, label]) => `<option value="${m}"${m === every ? " selected" : ""}>${label}</option>`).join("")}</select><small>It works while Flash is open, in the terminal or here.</small></label>
     <label class="field"><span>Boundaries</span><textarea name="boundaries" rows="2" placeholder="Only read. Never push, delete, or message anyone."></textarea><small>Lines it must not cross. Running commands and changing files also need autonomous mode, as for sub-agents.</small></label>
+    ${editing || sparksAlways.installed ? "" : `<label class="field check"><input type="checkbox" name="always" checked><span>Keep sparks working when Flash is closed. Flash starts a keeper at login and notifies you of news.</span></label>`}
     <div class="dialog-buttons"><button type="button" class="btn" data-cancel>Cancel</button><button type="submit" class="btn primary">${editing ? "Save" : "Make spark"}</button></div>`,
     async (data) => {
       const fields = { goal: data.goal, every: data.every, boundaries: data.boundaries };
@@ -3885,6 +3924,7 @@ function sparkForm(spark) {
       }
       const made = (await command("spark-create", name, null, fields)).spark;
       toast(`${made.name} is on it`);
+      if (data.always) await setSparksAlways(true);
       if (view !== "sparks") showPage("sparks");
     });
   const handle = form.querySelector("[data-handle]");

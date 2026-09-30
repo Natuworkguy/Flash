@@ -89,6 +89,15 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
         help="with --web, print the link instead of opening a browser",
     )
 
+    parser.add_argument(
+        "--sparks",
+        action="store_true",
+        help=(
+            "keep sparks working with no terminal or browser open; what "
+            "/sparks always on starts at login"
+        ),
+    )
+
     args = parser.parse_args(argv)
     if args.force and not args.update:
         parser.error("--force can only be used with --update")

@@ -24,7 +24,7 @@ FLASH (**F**ast **L**ocal **A**gent **SH**ell) CLI is an AI-powered command-line
 - **Knows What Just Broke**: With `/hook install`, Flash sees the commands you run in VS Code's terminal and whether they failed, so "why did that fail?" works without pasting anything.
 - **VS Code Aware**: Run from VS Code's terminal, Flash opens its edits as side-by-side diffs while it waits for your yes, clears them away once you have answered, and opens files at the line it's talking about.
 - **Async Sub-agents**: The AI can spawn background sub-agents with the `agent` tool to work on independent pieces of a task at the same time, then collect each one's answer with `agent_result` once it's needed.
-- **Sparks**: Agents that don't stop when the chat does. Give a spark a name, a standing goal, how often to work, and the lines it must not cross ("every morning, check my repo for new issues and tell me which look like bugs; never comment on anything"), and it works on it for as long as Flash is open, keeps its own notes between shifts, and files a report when there is something to say. Tell it what to do differently and every later shift remembers. Each one is a little bubble with eyes in the web UI that bounces while it works and sleeps while paused.
+- **Sparks**: Agents that don't stop when the chat does. Give a spark a name, a standing goal, how often to work, and the lines it must not cross ("every morning, check my repo for new issues and tell me which look like bugs; never comment on anything"), and it works on it, even with Flash closed if you turn on `/sparks always on`, keeps its own notes between shifts, and files a report when there is something to say. Tell it what to do differently and every later shift remembers. Each one is a little bubble with eyes in the web UI that bounces while it works and sleeps while paused.
 - **Context Management**: Automatic history trimming to stay within token limits.
 - **Markdown Support**: Rich formatting for AI responses in the terminal.
 
@@ -154,6 +154,7 @@ python run.py
 - `/sparks [new|<name>]`: List your sparks, make one, or read one's
   reports. `/sparks teach <name> <lesson>`, `run`, `pause`, `resume`,
   `every <name> <30m|2h|daily>` and `remove` look after them.
+  `/sparks always on|off` keeps them working with Flash closed.
 - `/clear`: Clear the conversation history.
 - `/undo`: Take back the file changes from the last turn.
 - `/compact`: Summarize the conversation to free up room.
@@ -310,6 +311,34 @@ A lesson like that, or feedback typed under a report in the web UI, is
 kept and read by every later shift. Sparks live in `~/.flash/sparks`,
 one JSON file each. Like sub-agents, they can only run commands or
 change files in autonomous mode.
+
+#### Always on
+
+Out of the box, sparks work while a Flash is open. `/sparks always on`
+(or the switch on the web UI's Sparks page) keeps them working with the
+terminal and browser both closed: Flash registers `flash --sparks`, a
+Flash with no window that only runs sparks, to start at login, and
+starts it right away. No administrator rights are needed.
+
+| System  | How it starts at login |
+| ------- | ---------------------- |
+| Linux   | a systemd user service (`flash-sparks`), or an autostart entry where there is no systemd |
+| macOS   | a launchd agent in `~/Library/LaunchAgents` |
+| Windows | a Task Scheduler task that starts at logon, with no console window |
+
+With Flash closed, a spark with news sends a desktop notification. The
+background keeper and an open Flash never run shifts at the same time:
+whichever holds `~/.flash/sparks/.keeper.lock` does the work, and the
+other takes over when it quits. It reads `~/.flash.env` before every
+shift, so a model you switch to in Flash is the one the next shift uses.
+Ollama has to be reachable for a shift to run; one that cannot reach it
+says so in its report.
+
+`/sparks always off` removes what `on` added, and the background keeper
+stops within a minute. On Linux a systemd user service only runs while
+you are logged in; `loginctl enable-linger` keeps it going after you log
+out. You can also run `flash --sparks` yourself, in a terminal you leave
+open or under your own service manager.
 
 ### Image Recognition
 
