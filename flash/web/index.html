@@ -1076,6 +1076,10 @@ button.item-row:hover { background: var(--hover); }
 .project-sparks { margin-bottom: 26px; }
 .project-sparks button { display: flex; align-items: center; gap: 10px; }
 .project-sparks .name { flex: 1; min-width: 0; text-align: left; }
+.speaker { display: flex; align-items: center; gap: 8px; margin: 18px 0 -4px; font-size: 13.5px; }
+.speaker .name { font-weight: 600; color: color-mix(in srgb, var(--c) 70%, var(--text)); }
+.speaker .handle { font: 12px var(--mono); color: var(--text-3); }
+.menu .item .handle { margin-left: auto; font: 12px var(--mono); color: var(--text-3); }
 .field select { width: 100%; font: 14.5px var(--sans); color: var(--text); background: var(--bg); border: 1px solid var(--border-strong); border-radius: 10px; padding: 9px 12px; outline: 0; }
 
 .ext-preview { margin: 14px 0 6px; padding: 12px 14px; border: 1px solid var(--border); border-radius: 12px; background: var(--code-bg); }
@@ -3294,8 +3298,24 @@ function sentFiles(files) {
   return box;
 }
 
+// Who is speaking, above a reply from a spark that was @mentioned into
+// this chat: the chat's own voice needs no name.
+function speakerTag(sparkId) {
+  const chat = chats.get(current);
+  const sp = sparkOf(sparkId);
+  if (!sp || (chat && chat.spark === sparkId)) return null;
+  const tag = el("div", "speaker", `<span class="name"></span><span class="handle"></span>`);
+  tag.prepend(sparkAvatar({ ...sp, unread: 0 }, 20));
+  tag.querySelector(".name").textContent = sp.name;
+  tag.querySelector(".handle").textContent = sp.handle;
+  tag.style.setProperty("--c", sp.colour);
+  return tag;
+}
+
 function assistantBlock(entry) {
   const frag = document.createDocumentFragment();
+  const tag = entry.spark && entry.text && entry.text.trim() ? speakerTag(entry.spark) : null;
+  if (tag) frag.appendChild(tag);
   if (entry.thinking && entry.thinking.trim()) frag.appendChild(thinkingBlock(entry.thinking, false));
   if (entry.text && entry.text.trim()) {
     const wrap = el("div", "block turn");
@@ -5184,10 +5204,16 @@ function drawStreaming() {
   const waiting = chat && (chat.busy || chat.queued) && !chat.partial && !chat.thinking && !pendingAsk();
   // Put back where it already is, the loader would start its
   // animations over on every event; left alone, it keeps going.
-  if (waiting && streamNode && streamNode.classList.contains("loading") && streamNode === messagesEl.lastElementChild) return;
+  if (waiting && streamNode && streamNode.classList.contains("loading") && streamNode === messagesEl.lastElementChild && (streamNode.dataset.speaker || "") === (chat.speaker || "")) return;
   if (streamNode) { streamNode.remove(); streamNode = null; }
   if (!chat || !(chat.busy || chat.queued)) return;
   streamNode = el("div", "streaming");
+  const tag = chat.speaker ? speakerTag(chat.speaker) : null;
+  if (tag) {
+    // Bouncing while it answers, as on the Sparks page.
+    tag.querySelector(".spark-av").dataset.state = "working";
+    streamNode.appendChild(tag);
+  }
   if (chat.thinking) streamNode.appendChild(thinkingBlock(chat.thinking, true));
   if (chat.partial) {
     const wrap = el("div", "block");
@@ -5205,6 +5231,7 @@ function drawStreaming() {
     streamNode.appendChild(wrap);
   } else if (waiting) {
     streamNode.classList.add("loading");
+    streamNode.dataset.speaker = chat.speaker || "";
     streamNode.appendChild(loaderBlock(chat));
   }
   messagesEl.appendChild(streamNode);
@@ -5847,11 +5874,12 @@ function apply(event) {
     case "pending": chat.pending = event.pending; if (event.chat === current) { renderPending(); updateSend(); } return;
     case "token": chat.partial += event.text; if (here) scheduleStream(); return;
     case "thinking": chat.thinking += event.text; if (here) scheduleStream(); return;
+    case "speaker": chat.speaker = event.spark; if (here) drawStreaming(); return;
     case "busy":
       chat.busy = event.busy;
       if (event.busy) startedWaiting(chat.id); else busySince.delete(chat.id);
       if (event.busy) chat.queued = false;
-      else { chat.partial = ""; chat.thinking = ""; refreshContext(); }
+      else { chat.partial = ""; chat.thinking = ""; chat.speaker = ""; refreshContext(); }
       renderChats();
       if (here) { drawStreaming(); updateSend(); }
       // The browser in the panel is live only while the turn runs.
@@ -7223,15 +7251,22 @@ function showSlash() {
   slashOpen = true;
 }
 
-// Emoji ---------------------------------------------------------------------
+// Emoji and mentions -------------------------------------------------------
 // A colon and a few letters, as in the terminal, offers the emojis named
-// that way: Tab or Enter puts one in. A colon that follows a letter or a
-// digit, as in 12:30 or http:, is not the start of one.
+// that way, and an @ offers your sparks, to bring one into the chat:
+// Tab or Enter puts one in. A colon or an @ that follows a letter or a
+// digit, as in 12:30 or me@home, is not the start of one.
 
-function emojiQuery(field) {
+// What is being typed at the caret that a menu can finish: ":name" for
+// an emoji or "@name" for a spark, with where it starts. Null if neither.
+function suggestable(field) {
   if (field.selectionStart !== field.selectionEnd) return null;
-  const m = field.value.slice(0, field.selectionStart).match(/(?:^|\s):([a-z0-9_+-]{1,32})$/i);
-  return m ? m[1].toLowerCase() : null;
+  const before = field.value.slice(0, field.selectionStart);
+  let m = before.match(/(?:^|\s):([a-z0-9_+-]{1,32})$/i);
+  if (m) return { kind: "emoji", query: m[1].toLowerCase(), cut: m[1].length + 1 };
+  m = before.match(/(?:^|\s)@([a-z0-9-]{0,32})$/i);
+  if (m && sparkList.length) return { kind: "spark", query: m[1].toLowerCase(), cut: m[1].length + 1 };
+  return null;
 }
 
 // The names QUERY starts, shortest first, then the ones it is inside;
@@ -7244,23 +7279,38 @@ function emojiMatches(query) {
   return [...starts, ...within].filter((n) => !seen.has(emojis[n]) && seen.add(emojis[n])).slice(0, 8);
 }
 
+// A spark is mentioned by its handle without "-spark": @scout.
+const mentionOf = (sp) => sp.handle.slice(1).replace(/-spark$/, "");
+
+function suggestionRows(want) {
+  if (want.kind === "emoji") {
+    return emojiMatches(want.query).map((name) => ({ html: `<span class="emo">${emojis[name]}</span><span class="slash">:${esc(name)}:</span>`, insert: emojis[name] }));
+  }
+  const q = want.query.replace(/-spark$/, "");
+  const starts = sparkList.filter((sp) => mentionOf(sp).startsWith(q) || sp.name.toLowerCase().startsWith(q));
+  const within = sparkList.filter((sp) => !starts.includes(sp) && mentionOf(sp).includes(q));
+  return [...starts, ...within].slice(0, 8).map((sp) => ({
+    html: `${sparkAvatar({ ...sp, unread: 0 }, 22).outerHTML}<span class="label">${esc(sp.name)}</span><span class="handle">@${esc(mentionOf(sp))}</span>`,
+    insert: `@${mentionOf(sp)}`,
+  }));
+}
+
 function showEmoji(field, anchor = field) {
-  const query = emojiQuery(field);
-  const names = query ? emojiMatches(query) : [];
-  if (!names.length) { if (emojiField === field) closeMenu(); return; }
-  const rows = names.map((name) => ({ html: `<span class="emo">${emojis[name]}</span><span class="slash">:${esc(name)}:</span>`, name }));
-  openMenu(anchor, rows, (row) => putEmoji(field, row.name), "", true);
+  const want = suggestable(field);
+  const rows = want ? suggestionRows(want) : [];
+  if (!rows.length) { if (emojiField === field) closeMenu(); return; }
+  rows.forEach((row) => { row.cut = want.cut; });
+  openMenu(anchor, rows, (row) => putSuggestion(field, row), "", true);
   menuEl.classList.add("emoji-menu");
   emojiField = field;
   slashOpen = false;
 }
 
-function putEmoji(field, name) {
+function putSuggestion(field, row) {
   const at = field.selectionStart;
-  const from = at - (emojiQuery(field) || "").length - 1;
-  const emoji = emojis[name];
-  field.value = field.value.slice(0, from) + emoji + " " + field.value.slice(at);
-  const caret = from + emoji.length + 1;
+  const from = at - row.cut;
+  field.value = field.value.slice(0, from) + row.insert + " " + field.value.slice(at);
+  const caret = from + row.insert.length + 1;
   field.setSelectionRange(caret, caret);
   closeMenu();
   field.focus();
@@ -7273,7 +7323,7 @@ function emojiKeys(e, field) {
   if (!menuEl || emojiField !== field) return false;
   if (e.key === "ArrowDown") { menuSel = (menuSel + 1) % menuRows.length; menuEl.redraw(); }
   else if (e.key === "ArrowUp") { menuSel = (menuSel - 1 + menuRows.length) % menuRows.length; menuEl.redraw(); }
-  else if ((e.key === "Tab" || e.key === "Enter") && !e.shiftKey && !e.isComposing) putEmoji(field, menuRows[menuSel].name);
+  else if ((e.key === "Tab" || e.key === "Enter") && !e.shiftKey && !e.isComposing) putSuggestion(field, menuRows[menuSel]);
   else if (e.key === "Escape") closeMenu();
   else return false;
   e.preventDefault();

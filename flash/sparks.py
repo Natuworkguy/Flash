@@ -1111,6 +1111,37 @@ class ChatKit:
         return spark
 
 
+# @scout, or @scout-spark, standing on its own: not the middle of an
+# address (me@scout.com), nor the start of a path (@scout/notes.md).
+_MENTION_RE = re.compile(r"(?<![\w@/.])@([a-z0-9][a-z0-9-]*)(?![\w./-])", re.I)
+
+MENTIONED_PROMPT = """
+=== You were mentioned ===
+The user @mentioned you in a conversation they are having with {host}.
+Earlier replies that start with a name in brackets came from that spark;
+the others came from {host}. Answer what the user asked of you, as
+yourself, in this conversation.
+""".strip()
+
+
+def mentioned(text: str) -> list[Spark]:
+    """The sparks TEXT @mentions, in the order it first names them."""
+
+    found: list[Spark] = []
+    for match in _MENTION_RE.finditer(text or ""):
+        spark = find(match.group(1))
+        if spark is not None and all(s.id != spark.id for s in found):
+            found.append(spark)
+    return found
+
+
+def said_by(spark: Spark, text: str) -> str:
+    """A spark's reply as the rest of a conversation keeps it: marked,
+    so no one takes it for their own."""
+
+    return f"[{spark.name} ({spark.handle}), one of the user's sparks]\n{text}"
+
+
 def ask(key: str, text: str) -> Spark:
     """Put what the user said in SPARK's chat, and mark it answering.
 

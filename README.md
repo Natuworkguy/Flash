@@ -324,7 +324,13 @@ in the box and beside the chat in the sidebar. In the terminal,
 `/sparks chat scout` (an empty line ends it). It answers as itself,
 from its goal, its notes and its reports, and can use its tools to
 check something now; in the web UI it can also use the ones that ask
-you first. Tell it how to do its job
+you first.
+
+A spark can also be brought into any other chat in the web UI: type
+`@scout` (an `@` offers your sparks) and that message is for it. It
+answers there, under its own name, in place of Flash; mention two and
+both answer in turn. The next message without a mention goes back to
+whoever the chat is with. Tell it how to do its job
 differently and it keeps that as a lesson; give it a new goal or
 schedule and it changes them. Sparks live in `~/.flash/sparks`,
 one JSON file each. Like sub-agents, they can only run commands or

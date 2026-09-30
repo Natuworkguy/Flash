@@ -3327,3 +3327,107 @@ def test_a_spark_is_edited_from_the_page_with_its_new_name(server):
     assert (kept.name, kept.goal, kept.every) == (
         "Lookout", "Watch the tests.", 120,
     )
+
+
+class TestMentions:
+    @pytest.fixture(autouse=True)
+    def spark_prompt(self, monkeypatch):
+        from flash import sparks
+
+        monkeypatch.setattr(sparks, "get_model_system_prompt", lambda h, m: "")
+
+    def test_a_mentioned_spark_answers_in_a_chat_with_flash(self, monkeypatch):
+        from flash import learning, sparks
+
+        scout = sparks.create("Scout", "Watch the issues.")
+        reviewed = []
+        monkeypatch.setattr(
+            learning, "after_turn", lambda *a, **k: reviewed.append(a)
+        )
+        FakeClient.scripts = [[part("Two new bugs."), part(done=True)]]
+        session = web.Session()
+        chat = session.new_chat()
+        seen = events_of(session)
+
+        run(session, chat, "@scout anything new?")
+
+        system = FakeClient.requests[0]["messages"][0]["content"]
+        assert "You are Scout" in system
+        assert "conversation they are having with Flash" in system
+        events = seen()
+        assert any(
+            e["type"] == "speaker" and e["spark"] == scout.id for e in events
+        )
+        replies = [e for e in events if e["type"] == "assistant"]
+        assert replies[-1]["spark"] == scout.id
+        assert chat.log[-2]["spark"] == scout.id
+        assert chat.messages[-1]["content"].startswith(
+            "[Scout (@scout-spark), one of the user's sparks]"
+        )
+        # Only the spark spoke: Flash's review has nothing of its own.
+        assert reviewed == []
+
+    def test_two_mentioned_sparks_answer_in_turn(self):
+        from flash import sparks
+
+        scout = sparks.create("Scout", "Watch the issues.")
+        watch = sparks.create("Price Watch", "Watch the price.")
+        FakeClient.scripts = [
+            [part("Issues are quiet."), part(done=True)],
+            [part("Price is flat."), part(done=True)],
+        ]
+        session = web.Session()
+        chat = session.new_chat()
+
+        run(session, chat, "@scout @price-watch status?")
+
+        answered = [
+            e.get("spark") for e in chat.log if e["type"] == "assistant"
+        ]
+        assert answered == [scout.id, watch.id]
+        second = FakeClient.requests[1]["messages"]
+        assert "You are Price Watch" in second[0]["content"]
+        # The second hears what the first said, marked as the first's.
+        assert second[-1]["content"].startswith("[Scout (@scout-spark)")
+
+    def test_no_mention_is_flash_as_ever(self):
+        FakeClient.scripts = [[part("Hello."), part(done=True)]]
+        session = web.Session()
+        chat = session.new_chat()
+
+        run(session, chat, "email me@scout about @nobody")
+
+        system = FakeClient.requests[0]["messages"][0]["content"]
+        assert "You are" not in system
+        assert "spark" not in chat.log[-2]
+
+    def test_a_spark_mentioned_in_its_own_chat_is_just_itself(self):
+        from flash import sparks
+
+        scout = sparks.create("Scout", "Watch the issues.")
+        FakeClient.scripts = [[part("Here."), part(done=True)]]
+        session = web.Session()
+        chat = session.new_chat(spark=scout.id)
+
+        run(session, chat, "@scout you there?")
+
+        assert len(FakeClient.requests) == 1
+        system = FakeClient.requests[0]["messages"][0]["content"]
+        assert "You were mentioned" not in system
+        assert chat.messages[-1]["content"] == "Here."
+
+    def test_a_mentioned_spark_can_learn_there_too(self):
+        from flash import sparks
+
+        scout = sparks.create("Scout", "Watch the issues.")
+        FakeClient.scripts = [
+            [part(calls=[call("learn", lesson="Skip docs.")]),
+             part(done=True)],
+            [part("Noted."), part(done=True)],
+        ]
+        session = web.Session()
+        chat = session.new_chat()
+
+        run(session, chat, "@scout skip docs issues from now on")
+
+        assert sparks.find(scout.id).lessons == ["Skip docs."]
