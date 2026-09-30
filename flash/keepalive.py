@@ -114,7 +114,10 @@ def _systemd() -> bool:
 def _exec_line() -> str:
     # The desktop entry spec quotes an argument with a space in it.
     return " ".join(
-        f'"{part}"' if " " in part else part for part in command()
+        f'"{part.as_posix() if isinstance(part, Path) else part}"' 
+        if " " in (part.as_posix() if isinstance(part, Path) else part) else 
+        (part.as_posix() if isinstance(part, Path) else part) 
+        for part in command()
     )
 
 
@@ -181,7 +184,7 @@ def _plist() -> str:
         )
 
     args = "".join(
-        f"\n        <string>{esc(part)}</string>" for part in command()
+        f"\n        <string>{esc(part.as_posix() if isinstance(part, Path) else part)}</string>" for part in command()
     )
     return f"""<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" \
@@ -247,7 +250,7 @@ def _off_macos() -> bool:
 
 
 def _task_line() -> str:
-    return " ".join(f'"{part}"' for part in command())
+    return " ".join(f'"{str(part)}"' for part in command())
 
 
 def _on_windows() -> str:
