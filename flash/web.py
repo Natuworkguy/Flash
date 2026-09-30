@@ -63,6 +63,7 @@ from . import (
     workspace,
 )
 from .dashes import DashGuard
+from .emojis import EMOJIS
 from .sysprompt import model_sees_images
 from .theme import (
     ACCENT,
@@ -760,6 +761,8 @@ class Session:
             "scene": None if lite else scene_data(ai.Config.background or ""),
             # The words the loader cycles through, the terminal's own.
             "words": [s["now"] for s in ai._load_thinking_states()],
+            # What :name in the message box offers, the terminal's list.
+            "emojis": None if lite else EMOJIS,
             "status": {
                 **status(ai), "lan": self.lan,
                 "can_switch_lan": self.switch_lan is not None,
@@ -2370,6 +2373,8 @@ def _spark_command(name: str, arg: str, body: dict) -> dict:
                 arg, str(body.get("lesson") or ""),
                 float(at) if isinstance(at, (int, float)) else None,
             )
+        elif name == "spark-say":
+            spark = sparks.say_later(arg, str(body.get("text") or ""))
         elif name == "spark-unteach":
             spark = sparks.forget_lesson(arg, int(body.get("index") or 0))
         elif name == "spark-remove":

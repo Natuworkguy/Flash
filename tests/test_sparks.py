@@ -497,3 +497,219 @@ def test_a_keeper_no_longer_wanted_stops(monkeypatch):
 
     assert asked == [1]
     assert sparks._floor is None
+
+
+# --- Chat ----------------------------------------------------------------
+
+
+def test_a_spark_answers_in_its_chat(model):
+    made = sparks.create("Scout", "Watch the issues.", "Never push.")
+    sparks.shift(made.id, client=FakeClient([_reply("Issue 12 is a bug.")]))
+    client = FakeClient([_reply("Issue 12 crashes on start.")])
+
+    reply = sparks.say("scout", "What did you find?", client=client)
+
+    assert reply.who == "spark" and reply.text == "Issue 12 crashes on start."
+    kept = sparks.find(made.id)
+    assert [(m.who, m.text) for m in kept.chat] == [
+        ("you", "What did you find?"),
+        ("spark", "Issue 12 crashes on start."),
+    ]
+    assert not kept.answering
+    system = client.calls[0]["messages"][0]["content"]
+    assert "Watch the issues." in system and "Never push." in system
+    assert "Issue 12 is a bug." in system
+    assert client.calls[0]["messages"][-1] == {
+        "role": "user", "content": "What did you find?",
+    }
+    names = {t["function"]["name"] for t in client.calls[0]["tools"]}
+    assert {"learn", "set_goal", "set_schedule", "keep_notes"} <= names
+
+
+def test_the_chat_so_far_goes_back_to_the_model(model):
+    sparks.create("Scout", "Watch the issues.")
+    sparks.say("scout", "Hi", client=FakeClient([_reply("Hello!")]))
+    client = FakeClient([_reply("Still here.")])
+
+    sparks.say("scout", "Still there?", client=client)
+
+    said = [(m["role"], m["content"]) for m in client.calls[0]["messages"][1:]]
+    assert said == [
+        ("user", "Hi"), ("assistant", "Hello!"), ("user", "Still there?"),
+    ]
+
+
+def test_a_spark_learns_and_changes_what_it_is_told_to(model):
+    made = sparks.create("Scout", "Watch the issues.", every="daily")
+    client = FakeClient([
+        _reply(
+            "",
+            ("learn", {"lesson": "Only report crashes."}),
+            ("set_goal", {"goal": "Watch the crash reports."}),
+            ("set_schedule", {"every": "2h"}),
+            ("keep_notes", {"notes": "Switched to crashes."}),
+        ),
+        _reply("Done: crashes only, every 2 hours."),
+    ])
+
+    reply = sparks.say(made.id, "Only crashes, every two hours.", client)
+
+    kept = sparks.find(made.id)
+    assert kept.lessons == ["Only report crashes."]
+    assert kept.goal == "Watch the crash reports."
+    assert kept.every == 120
+    assert kept.notes == "Switched to crashes."
+    assert "Learned something" in reply.steps
+    assert "Changed its goal" in reply.steps
+
+
+def test_a_schedule_too_tight_is_refused_in_chat(model):
+    made = sparks.create("Scout", "Watch the issues.", every="daily")
+    client = FakeClient([
+        _reply("", ("set_schedule", {"every": "1m"})),
+        _reply("I can only go every 15 minutes."),
+    ])
+
+    sparks.say(made.id, "Every minute please.", client)
+
+    assert sparks.find(made.id).every == 1440
+    assert "at most every 15" in client.calls[1]["messages"][-1]["content"]
+
+
+def test_one_message_at_a_time():
+    made = sparks.create("Scout", "Watch the issues.")
+    sparks.ask(made.id, "First")
+
+    with pytest.raises(sparks.SparkError, match="still answering"):
+        sparks.ask(made.id, "Second")
+    with pytest.raises(sparks.SparkError):
+        sparks.ask(made.id, "   ")
+
+
+def test_an_answer_left_by_a_quit_flash_does_not_block_the_chat():
+    made = sparks.create("Scout", "Watch the issues.")
+    sparks.ask(made.id, "First")
+    sparks._edit(made.id, lambda s: setattr(
+        s, "replying", time.time() - sparks.REPLY_STALE_SECONDS - 1
+    ))
+
+    assert not sparks.find(made.id).answering
+    sparks.ask(made.id, "Again")
+
+
+def test_an_answer_without_a_model_says_why(monkeypatch):
+    monkeypatch.setattr(tools, "MODEL_NAME", "")
+    made = sparks.create("Scout", "Watch the issues.")
+
+    reply = sparks.say(made.id, "Hello?")
+
+    assert reply.failed and "no model" in reply.text
+    kept = sparks.find(made.id)
+    assert not kept.answering and len(kept.chat) == 2
+
+
+def test_a_failed_answer_is_not_sent_back_as_history(model):
+    made = sparks.create("Scout", "Watch the issues.")
+    sparks._edit(made.id, lambda s: s.chat.append(sparks.Message(
+        at=time.time(), who="spark", text="I could not answer", failed=True,
+    )))
+    client = FakeClient([_reply("Here now.")])
+
+    sparks.say(made.id, "Hi", client)
+
+    assert all(
+        "could not" not in m["content"]
+        for m in client.calls[0]["messages"][1:]
+    )
+
+
+def test_chat_is_kept_to_its_length(model):
+    made = sparks.create("Scout", "Watch the issues.")
+    sparks._edit(made.id, lambda s: s.chat.extend(
+        sparks.Message(at=i, who="you", text=str(i))
+        for i in range(sparks.MAX_CHAT)
+    ))
+
+    sparks.say(made.id, "Hi", FakeClient([_reply("Hey.")]))
+
+    assert len(sparks.find(made.id).chat) == sparks.MAX_CHAT
+
+
+def test_say_later_answers_on_its_own_thread(model, monkeypatch):
+    made = sparks.create("Scout", "Watch the issues.")
+    monkeypatch.setattr(
+        sparks.ollama, "Client", lambda host: FakeClient([_reply("Later.")])
+    )
+
+    spark = sparks.say_later(made.id, "Hi")
+
+    assert spark.answering
+    deadline = time.time() + 5
+    while sparks.find(made.id).answering and time.time() < deadline:
+        time.sleep(0.02)
+    assert sparks.find(made.id).chat[-1].text == "Later."
+
+
+def test_the_keepers_heartbeat_is_not_a_spark_nor_a_change():
+    sparks.create("Scout", "Watch the issues.")
+    before = sparks._signature()
+    (sparks.sparks_dir() / sparks.HEARTBEAT).write_text("{}")
+
+    assert sparks._signature() == before
+    assert [s.name for s in sparks.all_sparks()] == ["Scout"]
+
+
+def test_writes_from_two_threads_do_not_lose_each_other():
+    made = sparks.create("Scout", "Watch the issues.")
+
+    def teach(n):
+        for i in range(10):
+            sparks.teach(made.id, f"lesson {n}-{i}")
+
+    threads = [threading.Thread(target=teach, args=(n,)) for n in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert len(sparks.find(made.id).lessons) == 20
+
+
+class TestChatElsewhere:
+    def test_the_page_says_something_to_a_spark(self, model, monkeypatch):
+        made = sparks.create("Scout", "Watch the issues.")
+        monkeypatch.setattr(sparks, "say_later", lambda key, text: (
+            sparks.ask(key, text)
+        ))
+
+        got = web.command(web.Session(), {
+            "name": "spark-say", "arg": made.id, "text": "Hi",
+        })["spark"]
+
+        assert got["answering"] and got["chat"][-1]["text"] == "Hi"
+
+    def test_the_page_gets_the_emoji_list(self):
+        from flash.emojis import EMOJIS
+
+        state = web.Session().state()
+
+        assert state["emojis"] == EMOJIS
+        assert "emojis" not in web.Session().state(lite=True) or (
+            web.Session().state(lite=True)["emojis"] is None
+        )
+
+    def test_the_terminal_sends_one_message(self, model, monkeypatch):
+        from flash import ai
+
+        made = sparks.create("Scout", "Watch the issues.")
+        monkeypatch.setattr(
+            sparks.ollama, "Client",
+            lambda host: FakeClient([_reply("Found two.")]),
+        )
+        shown = []
+        monkeypatch.setattr(ai, "_spark_says", lambda s, m: shown.append(m))
+
+        ai._sparks_command("chat scout what did you find?")
+
+        assert [m.text for m in shown] == ["Found two."]
+        assert sparks.find(made.id).chat[0].text == "what did you find?"

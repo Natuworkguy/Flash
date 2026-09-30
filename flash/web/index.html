@@ -1053,6 +1053,33 @@ button.item-row:hover { background: var(--hover); }
 .field.check { display: flex; align-items: flex-start; gap: 10px; cursor: pointer; }
 .field.check input { margin-top: 3px; accent-color: var(--accent); }
 .field.check span { margin: 0; font-weight: 400; color: var(--text-2); }
+.spark-chat { border: 1px solid var(--border); border-radius: 14px; background: var(--bg); overflow: hidden; }
+.spark-chat .thread { max-height: 340px; overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 10px; }
+.spark-chat .thread > .spark-quiet { margin: 2px; }
+.spark-chat .msg { display: flex; gap: 8px; align-items: flex-end; max-width: 88%; min-width: 0; animation: rise 0.22s var(--ease) both; }
+.spark-chat.still .msg { animation: none; }
+.spark-chat .msg.you { align-self: flex-end; }
+.spark-chat .bubble { padding: 8px 12px; border-radius: 16px; font-size: 14px; line-height: 1.45; min-width: 0; overflow-wrap: anywhere; }
+.spark-chat .msg.you .bubble { background: var(--invert-bg); color: var(--invert-text); border-bottom-right-radius: 5px; white-space: pre-wrap; }
+.spark-chat .msg.spark .bubble { background: var(--surface); border: 1px solid var(--border); border-bottom-left-radius: 5px; }
+.spark-chat .msg.failed .bubble { color: var(--del); }
+.spark-chat .bubble > :first-child { margin-top: 0; }
+.spark-chat .bubble > :last-child { margin-bottom: 0; }
+.spark-chat .bubble details { font-size: 12px; color: var(--text-3); margin-top: 6px; }
+.spark-chat .bubble details summary { cursor: pointer; }
+.spark-chat .bubble details ol { margin: 4px 0 0; padding-left: 18px; font: 11.5px/1.6 var(--mono); }
+.spark-chat .say { display: flex; gap: 8px; padding: 10px; border-top: 1px solid var(--border); background: var(--surface); }
+.spark-chat .say input { flex: 1; min-width: 0; font: 14px var(--sans); color: var(--text); background: var(--bg); border: 1px solid var(--border-strong); border-radius: 10px; padding: 7px 11px; outline: 0; }
+.spark-chat .say input:focus { border-color: color-mix(in srgb, var(--text) 35%, transparent); }
+.spark-chat .dots { display: inline-flex; gap: 4px; padding: 5px 2px; vertical-align: middle; }
+.spark-chat .dots i { width: 7px; height: 7px; border-radius: 50%; background: var(--c, var(--text-3)); animation: spark-dot 1.2s ease-in-out infinite; }
+.spark-chat .dots i:nth-child(2) { animation-delay: 0.15s; }
+.spark-chat .dots i:nth-child(3) { animation-delay: 0.3s; }
+.spark-chat .doing { font-size: 12px; color: var(--text-3); margin-left: 8px; }
+@keyframes spark-dot { 0%, 60%, 100% { transform: translateY(0); opacity: 0.45; } 30% { transform: translateY(-4px); opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .spark-chat .dots i { animation: none; } }
+.menu.emoji-menu { z-index: 60; min-width: 220px; }
+.menu .emo { font-size: 18px; width: 24px; text-align: center; flex: none; }
 .field select { width: 100%; font: 14.5px var(--sans); color: var(--text); background: var(--bg); border: 1px solid var(--border-strong); border-radius: 10px; padding: 9px 12px; outline: 0; }
 
 .ext-preview { margin: 14px 0 6px; padding: 12px 14px; border: 1px solid var(--border); border-radius: 12px; background: var(--code-bg); }
@@ -3724,6 +3751,7 @@ function everyWords(minutes) {
 }
 
 function sparkState(spark) {
+  if (spark.answering) return "Answering you";
   if (spark.status === "working") return spark.activity ? `Working: ${spark.activity}` : "Working";
   if (spark.paused) return "Paused";
   const wait = Math.round((spark.next_run - Date.now() / 1000) / 60);
@@ -3819,8 +3847,9 @@ async function openSpark(id) {
   if (!spark) { toast("That spark is gone."); return; }
   const form = openForm(`<div class="spark-detail"></div>`, async () => false);
   fillSpark(form.querySelector(".spark-detail"), spark);
-  // Not the first feedback box, which would scroll past the goal.
-  form.querySelector("[data-cancel]").focus({ preventScroll: true });
+  // The chat box, ready to type in: not the first feedback box, which
+  // would scroll past the goal.
+  form.querySelector(".spark-chat .say input").focus({ preventScroll: true });
   // Opened is read. The ping on its bubble goes with the next redraw.
   if (spark.unread) command("spark-read", id, null).catch(() => {});
 }
@@ -3832,6 +3861,8 @@ function fillSpark(box, spark, again = false) {
     <div data-bounds hidden><div class="spark-sec">Boundaries</div><div class="spark-text"></div></div>
     <div class="spark-actions"></div>
     <div data-lessons hidden><div class="spark-sec">What you have taught it</div><ul class="spark-lessons"></ul></div>
+    <div class="spark-sec">Chat</div>
+    <div class="spark-chat"><div class="thread"></div><div class="say"><input type="text" maxlength="4000" autocomplete="off" data-keep="chat"><button type="button" class="btn small primary">Send</button></div></div>
     <div class="spark-sec">Reports</div><div data-reports></div>
     <div class="dialog-buttons"><button type="button" class="btn" data-cancel>Close</button></div>`;
   box.querySelector(".spark-head").prepend(sparkAvatar({ ...spark, unread: 0 }, 60));
@@ -3877,6 +3908,8 @@ function fillSpark(box, spark, again = false) {
     });
   }
 
+  drawSparkChat(box.querySelector(".spark-chat"), spark, again);
+
   const reports = box.querySelector("[data-reports]");
   const said = spark.reports.filter((r) => !r.quiet).reverse();
   const quiet = spark.reports.length - said.length;
@@ -3899,6 +3932,7 @@ function fillSpark(box, spark, again = false) {
     } else if (!report.failed) {
       const teach = el("div", "teach", `<input type="text" maxlength="400" autocomplete="off"><button type="button" class="btn small">Tell it</button>`);
       const field = teach.querySelector("input");
+      field.dataset.keep = `teach-${report.at}`;
       field.placeholder = `Tell ${spark.name} what to do differently…`;
       const go = async () => {
         const lesson = field.value.trim();
@@ -3913,6 +3947,57 @@ function fillSpark(box, spark, again = false) {
     reports.appendChild(card);
   }
   if (said.length && quiet) reports.appendChild(el("p", "spark-quiet", `And ${quiet} quiet shift${quiet === 1 ? "" : "s"} with nothing new.`));
+}
+
+// A spark's chat: what was said both ways, its answer on the way as
+// three bouncing dots, and a box to say more.
+function drawSparkChat(chat, spark, again) {
+  chat.classList.toggle("still", again);
+  const thread = chat.querySelector(".thread");
+  const face = (state) => sparkAvatar({ ...spark, unread: 0, paused: false, status: state }, 24);
+  if (!spark.chat.length && !spark.answering) {
+    thread.appendChild(el("p", "spark-quiet", `Ask ${esc(spark.name)} what it has found, or tell it what to do differently. It keeps what you teach it.`));
+  }
+  for (const m of spark.chat) {
+    const row = el("div", `msg ${m.who === "you" ? "you" : "spark"}` + (m.failed ? " failed" : ""));
+    if (m.who !== "you") row.appendChild(face("idle"));
+    const bubble = row.appendChild(el("div", "bubble"));
+    if (m.who === "you" || m.failed) bubble.textContent = m.text;
+    else bubble.innerHTML = markdown(m.text);
+    if (m.steps && m.steps.length) {
+      const steps = el("details", "", `<summary>${m.steps.length} step${m.steps.length === 1 ? "" : "s"}</summary><ol></ol>`);
+      for (const step of m.steps) steps.querySelector("ol").appendChild(el("li")).textContent = step;
+      bubble.appendChild(steps);
+    }
+    thread.appendChild(row);
+  }
+  if (spark.answering) {
+    const row = el("div", "msg spark typing");
+    row.appendChild(face("working"));
+    const bubble = row.appendChild(el("div", "bubble", `<span class="dots" aria-label="${esc(spark.name)} is answering"><i></i><i></i><i></i></span><span class="doing"></span>`));
+    bubble.style.setProperty("--c", spark.colour);
+    if (spark.reply_activity && spark.reply_activity !== "Thinking") bubble.querySelector(".doing").textContent = spark.reply_activity;
+    thread.appendChild(row);
+  }
+  requestAnimationFrame(() => { thread.scrollTop = thread.scrollHeight; });
+
+  const field = chat.querySelector(".say input");
+  const send = chat.querySelector(".say button");
+  field.placeholder = `Message ${spark.name}… (: for emoji)`;
+  send.disabled = spark.answering;
+  const go = async () => {
+    const text = field.value.trim();
+    if (!text || send.disabled) return;
+    send.disabled = true;
+    try { await command("spark-say", spark.id, null, { text }); field.value = ""; }
+    catch (error) { send.disabled = false; showFailure(error); }
+  };
+  field.addEventListener("input", () => showEmoji(field));
+  field.addEventListener("keydown", (e) => {
+    if (emojiKeys(e, field)) return;
+    if (e.key === "Enter" && !e.isComposing) { e.preventDefault(); e.stopPropagation(); go(); }
+  });
+  send.onclick = go;
 }
 
 function sparkForm(spark) {
@@ -3970,18 +4055,27 @@ function sparksChanged() {
     }
     const box = $("#form-body .spark-detail");
     if (!box || !isOpen($("#form"))) return;
-    // Not while feedback is half typed.
-    if ([...box.querySelectorAll("input")].some((f) => f.value.trim())) return;
     let r;
     try { r = await command("sparks"); } catch (_) { return; }
     const spark = r.sparks.find((s) => s.id === box.dataset.id);
     if (!box.isConnected) return;
     if (!spark) { closeForm(); return; }
+    // What is half typed, and where the caret was, survive the redraw.
     // Focus in the dialog is what Escape closes it by, so it goes back
     // where it was rather than with the old buttons.
+    const kept = {};
+    let caret = null;
+    box.querySelectorAll("[data-keep]").forEach((f) => {
+      kept[f.dataset.keep] = f.value;
+      if (f === document.activeElement) caret = { key: f.dataset.keep, at: f.selectionStart };
+    });
     const focused = box.contains(document.activeElement) || document.activeElement === document.body;
+    if (emojiField && box.contains(emojiField)) closeMenu();
     fillSpark(box, spark, true);
-    if (focused) box.querySelector("[data-cancel]").focus({ preventScroll: true });
+    box.querySelectorAll("[data-keep]").forEach((f) => { if (kept[f.dataset.keep]) f.value = kept[f.dataset.keep]; });
+    const back = caret && [...box.querySelectorAll("[data-keep]")].find((f) => f.dataset.keep === caret.key);
+    if (back) { back.focus({ preventScroll: true }); back.setSelectionRange(caret.at, caret.at); }
+    else if (focused) box.querySelector("[data-cancel]").focus({ preventScroll: true });
   }, 300);
 }
 
@@ -5841,6 +5935,7 @@ async function loadState() {
   info = state.status;
   projects = state.projects || [];
   if (state.words && state.words.length) words = state.words;
+  if (state.emojis) emojis = state.emojis;
   showScene(state.scene);
   lastSeq = state.seq;
   if (!routed) { routed = true; routeTo(location.pathname); }
@@ -6856,8 +6951,11 @@ let menuEl = null;
 let menuRows = [];
 let menuSel = 0;
 let menuPick = null;
+let emojiField = null;     // the box the open menu is offering emojis for
+let emojis = {};           // :name -> emoji, the terminal's list
 
 function closeMenu() {
+  emojiField = null;
   $("#plus-btn").classList.remove("open");
   if (!menuEl) return;
   const leaving = menuEl;
@@ -7080,6 +7178,64 @@ function showSlash() {
   if (!rows.length) { closeMenu(); slashOpen = false; return; }
   openMenu($("#composer"), rows, (row) => { clearInput(); row.action.run(); }, "", true);
   slashOpen = true;
+}
+
+// Emoji ---------------------------------------------------------------------
+// A colon and a few letters, as in the terminal, offers the emojis named
+// that way: Tab or Enter puts one in. A colon that follows a letter or a
+// digit, as in 12:30 or http:, is not the start of one.
+
+function emojiQuery(field) {
+  if (field.selectionStart !== field.selectionEnd) return null;
+  const m = field.value.slice(0, field.selectionStart).match(/(?:^|\s):([a-z0-9_+-]{1,32})$/i);
+  return m ? m[1].toLowerCase() : null;
+}
+
+// The names QUERY starts, shortest first, then the ones it is inside;
+// one name for each emoji.
+function emojiMatches(query) {
+  const names = Object.keys(emojis);
+  const starts = names.filter((n) => n.startsWith(query)).sort((a, b) => a.length - b.length);
+  const within = names.filter((n) => !n.startsWith(query) && n.includes(query));
+  const seen = new Set();
+  return [...starts, ...within].filter((n) => !seen.has(emojis[n]) && seen.add(emojis[n])).slice(0, 8);
+}
+
+function showEmoji(field, anchor = field) {
+  const query = emojiQuery(field);
+  const names = query ? emojiMatches(query) : [];
+  if (!names.length) { if (emojiField === field) closeMenu(); return; }
+  const rows = names.map((name) => ({ html: `<span class="emo">${emojis[name]}</span><span class="slash">:${esc(name)}:</span>`, name }));
+  openMenu(anchor, rows, (row) => putEmoji(field, row.name), "", true);
+  menuEl.classList.add("emoji-menu");
+  emojiField = field;
+  slashOpen = false;
+}
+
+function putEmoji(field, name) {
+  const at = field.selectionStart;
+  const from = at - (emojiQuery(field) || "").length - 1;
+  const emoji = emojis[name];
+  field.value = field.value.slice(0, from) + emoji + " " + field.value.slice(at);
+  const caret = from + emoji.length + 1;
+  field.setSelectionRange(caret, caret);
+  closeMenu();
+  field.focus();
+  field.dispatchEvent(new Event("input"));
+}
+
+// A key pressed in FIELD while its emoji menu is open: true if it was
+// the menu's to handle.
+function emojiKeys(e, field) {
+  if (!menuEl || emojiField !== field) return false;
+  if (e.key === "ArrowDown") { menuSel = (menuSel + 1) % menuRows.length; menuEl.redraw(); }
+  else if (e.key === "ArrowUp") { menuSel = (menuSel - 1 + menuRows.length) % menuRows.length; menuEl.redraw(); }
+  else if ((e.key === "Tab" || e.key === "Enter") && !e.shiftKey && !e.isComposing) putEmoji(field, menuRows[menuSel].name);
+  else if (e.key === "Escape") closeMenu();
+  else return false;
+  e.preventDefault();
+  e.stopPropagation();
+  return true;
 }
 
 // Search --------------------------------------------------------------------
@@ -7397,9 +7553,10 @@ function autosize() {
   placeJump();
 }
 
-input.addEventListener("input", () => { autosize(); updateSend(); showSlash(); sentAt = -1; });
+input.addEventListener("input", () => { autosize(); updateSend(); showSlash(); showEmoji(input, $("#composer")); sentAt = -1; });
 
 input.addEventListener("keydown", (e) => {
+  if (emojiKeys(e, input)) return;
   if (menuEl && slashOpen) {
     if (e.key === "ArrowDown") { e.preventDefault(); menuSel = (menuSel + 1) % menuRows.length; menuEl.redraw(); return; }
     if (e.key === "ArrowUp") { e.preventDefault(); menuSel = (menuSel - 1 + menuRows.length) % menuRows.length; menuEl.redraw(); return; }

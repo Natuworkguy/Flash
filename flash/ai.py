@@ -1919,10 +1919,64 @@ def _show_spark(spark: "sparks.Spark") -> None:
             console.print(Text(f"  You said: {report.feedback}", style=DIM))
         console.print()
     console.print(Text(
-        f"/sparks teach {_spark_key(spark)} <what to do differently> · "
-        "run · pause · resume · every · remove", style=DIM,
+        f"/sparks chat {_spark_key(spark)} to talk with it · teach · run "
+        "· pause · resume · every · remove", style=DIM,
     ))
     sparks.mark_read(spark.id)
+
+
+def _spark_says(spark: "sparks.Spark", said: "sparks.Message") -> None:
+    head = Text(f"{_bubble()} ", style=spark.colour)
+    head.append(spark.name, style=f"bold {spark.colour}")
+    if said.steps:
+        count = len(said.steps)
+        head.append(f"  {count} step{'' if count == 1 else 's'}", style=DIM)
+    console.print(head)
+    if said.failed:
+        warn(said.text)
+    else:
+        console.print(Markdown(said.text, code_theme="monokai"))
+    console.print()
+
+
+def _chat_with_spark(key: str, first: str) -> None:
+    """/sparks chat <name> [message]: talk with a spark between shifts.
+
+    With a message, that one is sent and answered. Without, it is a
+    conversation until an empty line.
+    """
+
+    spark = sparks.find(key)
+    if spark is None:
+        warn(f"No spark called {key!r}.")
+        return
+    if not first:
+        console.print(Text(
+            f"Talking with {spark.name}. It knows its goal, notes and "
+            "reports, and remembers what you teach it. An empty line "
+            "ends the chat.", style=DIM,
+        ))
+    said = first
+    while True:
+        if not said:
+            said = _ask_line("you ›")
+            if not said:
+                return
+        try:
+            with console.status(
+                f"[{spark.colour}]{spark.name} is thinking{ELLIPSIS}",
+                spinner="dots", spinner_style=spark.colour,
+            ):
+                reply = sparks.say(spark.id, said)
+        except sparks.SparkError as exc:
+            warn(str(exc))
+            return
+        spark = sparks.find(spark.id) or spark
+        if reply is not None:
+            _spark_says(spark, reply)
+        if first:
+            return
+        said = ""
 
 
 def _sparks_command(arg: str) -> None:
@@ -1941,6 +1995,9 @@ def _sparks_command(arg: str) -> None:
             return
         if action == "always":
             _sparks_always(rest.lower())
+            return
+        if action in ("chat", "talk", "ask") and key:
+            _chat_with_spark(key, extra)
             return
         if action == "run" and key:
             spark = sparks.run_now(key)
@@ -1987,8 +2044,9 @@ def _sparks_command(arg: str) -> None:
 
     if action:
         warn(
-            "Usage: /sparks [new | <name> | run|pause|resume|remove <name> "
-            "| teach <name> <lesson> | every <name> <30m|2h|daily>]"
+            "Usage: /sparks [new | <name> | chat <name> [message] "
+            "| run|pause|resume|remove <name> | teach <name> <lesson> "
+            "| every <name> <30m|2h|daily> | always on|off]"
         )
         return
 
