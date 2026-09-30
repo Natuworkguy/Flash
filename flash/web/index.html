@@ -4110,7 +4110,7 @@ function sparkForm(spark, inProjectId = "") {
     <label class="field"><span>Goal</span><textarea name="goal" rows="4" placeholder="Check github.com/me/app for new issues. Tell me which look like bugs, and skip ones you have already told me about."></textarea></label>
     <label class="field"><span>How often</span><select name="every">${choices.map(([m, label]) => `<option value="${m}"${m === every ? " selected" : ""}>${label}</option>`).join("")}</select><small>It works while Flash is open, in the terminal or here.</small></label>
     <label class="field"><span>Project</span><select name="project"><option value="">No project</option>${[...projects].reverse().map((p) => `<option value="${esc(p.id)}"${editing && spark.project === p.id ? " selected" : ""}>${esc(p.name)}</option>`).join("")}</select><small>${projects.length ? "Its shifts work on the project's folder and follow its instructions, and a chat with it starts there." : "Make a project on the Projects page to give it one: a folder, and how to work in it."}</small></label>
-    <label class="field"><span>Watch a folder <em class="count">optional</em></span><input name="watch" class="mono" placeholder="~/Downloads" autocomplete="off" spellcheck="false"><small>A change to its files starts a shift too, besides the schedule, and it is told which files changed.</small></label>
+    <label class="field"><span>Watch a folder <em class="count">optional</em></span><input name="watch" class="mono" placeholder="~/Downloads" autocomplete="off" spellcheck="false" role="combobox" aria-autocomplete="list" aria-expanded="false"><small>A change to its files starts a shift too, besides the schedule, and it is told which files changed. Tab takes a suggestion and shows what is inside it.</small></label>
     <label class="field"><span>Boundaries</span><textarea name="boundaries" rows="2" placeholder="Only read. Never push, delete, or message anyone."></textarea><small>Lines it must not cross. Running commands and changing files also need autonomous mode, as for sub-agents.</small></label>
     ${editing || sparksAlways.installed ? "" : `<label class="field check"><input type="checkbox" name="always" checked><span>Keep sparks working when Flash is closed. Flash starts a keeper at login and notifies you of news.</span></label>`}
     <div class="dialog-buttons"><button type="button" class="btn" data-cancel>Cancel</button><button type="submit" class="btn primary">${editing ? "Save" : "Make spark"}</button></div>`,
@@ -4129,6 +4129,8 @@ function sparkForm(spark, inProjectId = "") {
       if (data.always) await setSparksAlways(true);
       if (view !== "sparks") showPage("sparks");
     });
+  // The folder to watch, suggested as you type, as a project's is.
+  suggestFolders(form.watch);
   const handle = form.querySelector("[data-handle]");
   const named = () => { handle.textContent = sparkHandle(form.sparkname.value || "scout"); };
   form.sparkname.addEventListener("input", named);
