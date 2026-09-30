@@ -2678,6 +2678,12 @@ class Handler(BaseHTTPRequestHandler):
 
 class Server(ThreadingHTTPServer):
     daemon_threads = True
+    # SO_REUSEADDR only lets a restart take back a port its old
+    # connections still hold, on Linux and macOS. On Windows it lets a
+    # second server bind a port another is listening on, and the two
+    # then split its connections; and Windows lets a port be reused
+    # without it anyway.
+    allow_reuse_address = os.name != "nt"
 
     def __init__(
         self,
