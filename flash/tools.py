@@ -1794,7 +1794,7 @@ def agent_result(agent_id: str, wait_seconds: Any = None) -> str:
 
 def make_spark(
     name: str, goal: str, every: Any = "", boundaries: str = "",
-    project: str = "",
+    project: str = "", model: str = "",
 ) -> str:
     """Make a spark: an agent that works on GOAL on a schedule."""
 
@@ -1806,13 +1806,21 @@ def make_spark(
         tool_result(str(exc), style=ERROR)
         return f"Error: {exc}"
 
+    # The model it runs on: the one the user named, else Flash's, named
+    # in the question so it is chosen, not assumed.
+    model = str(model or "").strip() or MODEL_NAME
+    if not model:
+        result = "Error: no model is set. Ask the user which one it runs on."
+        tool_result(result, style=ERROR)
+        return result
+
     # It goes on working after this conversation is over, so it is the
     # person's to agree to, as a command would be.
     if not NO_COMMAND_CONFIRMATION:
         notify_needs_input()
         question = (
             f"Make a spark called {name} that works on this every "
-            f"{sparks.every_words(minutes)}?\n{goal}"
+            f"{sparks.every_words(minutes)}, on {model}?\n{goal}"
         )
         answer = remote_answer(question)
         if answer is None:
@@ -1827,7 +1835,9 @@ def make_spark(
             return "Blocked by user"
 
     try:
-        spark = sparks.create(name, goal, boundaries, minutes, project)
+        spark = sparks.create(
+            name, goal, boundaries, minutes, project, model=model,
+        )
     except sparks.SparkError as exc:
         tool_result(str(exc), style=ERROR)
         return f"Error: {exc}"
@@ -1835,7 +1845,8 @@ def make_spark(
     from . import keepalive  # deferred: only a new spark needs it
 
     result = (
-        f"Made {spark.name} ({spark.handle}). Its first shift starts now, "
+        f"Made {spark.name} ({spark.handle}), on {spark.model}. Its first "
+        "shift starts now, "
         f"then every {sparks.every_words(spark.every)}. Its reports are "
         "under /sparks, or Sparks in the web UI."
     )
@@ -4408,6 +4419,13 @@ tools: list[dict[str, Any]] = [
                         "description": (
                             "Optional: the name of the user's project it "
                             "works on, when the chat is about one."
+                        ),
+                    },
+                    "model": {
+                        "type": "string",
+                        "description": (
+                            "The model it runs on, when the user named "
+                            "one. Leave it out for the one you run on."
                         ),
                     },
                 },
