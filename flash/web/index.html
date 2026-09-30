@@ -1057,8 +1057,12 @@ button.item-row:hover { background: var(--hover); }
    beside the chat in the sidebar. */
 #spark-btn { display: inline-flex; align-items: center; gap: 7px; max-width: 220px; color: var(--text); background: color-mix(in srgb, var(--c, var(--accent)) 14%, transparent); border-color: color-mix(in srgb, var(--c, var(--accent)) 45%, transparent); }
 #spark-btn[hidden] { display: none; }
-#spark-btn .spark-av { --s: 16px; animation: none; box-shadow: none; }
-#spark-btn .spark-av .eye { animation: none; }
+/* The spark lives in its badge: it floats and blinks while it waits,
+   and bounces with its glint circling while it answers. */
+#spark-btn .spark-av { --s: 18px; box-shadow: 0 1px 5px color-mix(in srgb, var(--c) 40%, transparent); animation-name: spark-bob; }
+#spark-btn .spark-av[data-state="working"] { animation: spark-hop 0.95s var(--spring) infinite; }
+@keyframes spark-bob { 50% { transform: translateY(-1px); } }
+@keyframes spark-hop { 0%, 100% { transform: translateY(0) scale(1); } 35% { transform: translateY(-2px) scale(0.95, 1.05); } 65% { transform: translateY(0) scale(1.06, 0.94); } }
 #spark-btn .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #spark-btn .drop { display: inline-flex; margin-right: -4px; padding: 1px; border-radius: 50%; color: var(--text-3); }
 #spark-btn .drop:hover { color: var(--text); background: var(--hover); }
@@ -1066,7 +1070,6 @@ button.item-row:hover { background: var(--hover); }
 .chat .open .spark-av { --s: 14px; animation: none; box-shadow: none; gap: 2px; }
 .chat .open .spark-av .eye { animation: none; }
 .menu .spark-av { --s: 22px; animation: none; }
-#greeting .in .spark-av { --s: 18px; vertical-align: -3px; margin-right: 6px; animation: none; }
 .menu.emoji-menu { z-index: 60; min-width: 220px; }
 .menu .emo { font-size: 18px; width: 24px; text-align: center; flex: none; }
 .field select { width: 100%; font: 14.5px var(--sans); color: var(--text); background: var(--bg); border: 1px solid var(--border-strong); border-radius: 10px; padding: 9px 12px; outline: 0; }
@@ -6125,7 +6128,7 @@ function greet() {
   const when = hour < 5 ? "Up late" : hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
   const inProject = projectOf(viewProject);
   const withSpark = !current && sparkOf(viewSpark);
-  $("#greeting").innerHTML = esc(when) + (withSpark ? `<span class="in">${sparkAvatar({ ...withSpark, unread: 0 }, 18).outerHTML}talking with ${esc(withSpark.name)}</span>` : inProject ? `<span class="in">in ${esc(inProject.name)}</span>` : "");
+  $("#greeting").innerHTML = esc(when) + (withSpark ? `<span class="in">talking with ${esc(withSpark.name)}</span>` : inProject ? `<span class="in">in ${esc(inProject.name)}</span>` : "");
   $("#greeting").dataset.text = when;
   const name = inProject ? inProject.name : info.folder || "this project";
   const ideas = withSpark ? [
@@ -6206,6 +6209,8 @@ function updateSend() {
   send.disabled = (state === "up" && !typed) || (typed && uploading());
   const withSpark = sparkOf(chat ? chat.spark : viewSpark);
   const who = withSpark ? withSpark.name : "Flash";
+  const face = $("#spark-btn .spark-av");
+  if (face) face.dataset.state = busy ? "working" : "idle";
   if (busy && view === "chat") input.placeholder = `Steer ${who}, or Ctrl Enter to queue`;
   else if (input.placeholder.startsWith("Steer")) input.placeholder = `Reply to ${who}`;
 }
@@ -6636,7 +6641,7 @@ function renderSparkBtn() {
   if (!sp) return;
   const fresh = !chat || (!chat.log.length && !chat.busy && !chat.queued);
   b.innerHTML = `<span class="name"></span>${fresh ? `<span class="drop" role="button" aria-label="Chat with Flash instead">${icon("x")}</span>` : ""}`;
-  b.prepend(sparkAvatar({ ...sp, unread: 0 }, 16));
+  b.prepend(sparkAvatar({ ...sp, unread: 0, status: chat && (chat.busy || chat.queued) ? "working" : "idle" }, 18));
   b.querySelector(".name").textContent = sp.name;
   b.style.setProperty("--c", sp.colour);
   b.dataset.tip = fresh ? `Talking with ${sp.name}` : `Open ${sp.name}`;
