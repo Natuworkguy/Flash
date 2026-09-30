@@ -1053,31 +1053,20 @@ button.item-row:hover { background: var(--hover); }
 .field.check { display: flex; align-items: flex-start; gap: 10px; cursor: pointer; }
 .field.check input { margin-top: 3px; accent-color: var(--accent); }
 .field.check span { margin: 0; font-weight: 400; color: var(--text-2); }
-.spark-chat { border: 1px solid var(--border); border-radius: 14px; background: var(--bg); overflow: hidden; }
-.spark-chat .thread { max-height: 340px; overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 10px; }
-.spark-chat .thread > .spark-quiet { margin: 2px; }
-.spark-chat .msg { display: flex; gap: 8px; align-items: flex-end; max-width: 88%; min-width: 0; animation: rise 0.22s var(--ease) both; }
-.spark-chat.still .msg { animation: none; }
-.spark-chat .msg.you { align-self: flex-end; }
-.spark-chat .bubble { padding: 8px 12px; border-radius: 16px; font-size: 14px; line-height: 1.45; min-width: 0; overflow-wrap: anywhere; }
-.spark-chat .msg.you .bubble { background: var(--invert-bg); color: var(--invert-text); border-bottom-right-radius: 5px; white-space: pre-wrap; }
-.spark-chat .msg.spark .bubble { background: var(--surface); border: 1px solid var(--border); border-bottom-left-radius: 5px; }
-.spark-chat .msg.failed .bubble { color: var(--del); }
-.spark-chat .bubble > :first-child { margin-top: 0; }
-.spark-chat .bubble > :last-child { margin-bottom: 0; }
-.spark-chat .bubble details { font-size: 12px; color: var(--text-3); margin-top: 6px; }
-.spark-chat .bubble details summary { cursor: pointer; }
-.spark-chat .bubble details ol { margin: 4px 0 0; padding-left: 18px; font: 11.5px/1.6 var(--mono); }
-.spark-chat .say { display: flex; gap: 8px; padding: 10px; border-top: 1px solid var(--border); background: var(--surface); }
-.spark-chat .say input { flex: 1; min-width: 0; font: 14px var(--sans); color: var(--text); background: var(--bg); border: 1px solid var(--border-strong); border-radius: 10px; padding: 7px 11px; outline: 0; }
-.spark-chat .say input:focus { border-color: color-mix(in srgb, var(--text) 35%, transparent); }
-.spark-chat .dots { display: inline-flex; gap: 4px; padding: 5px 2px; vertical-align: middle; }
-.spark-chat .dots i { width: 7px; height: 7px; border-radius: 50%; background: var(--c, var(--text-3)); animation: spark-dot 1.2s ease-in-out infinite; }
-.spark-chat .dots i:nth-child(2) { animation-delay: 0.15s; }
-.spark-chat .dots i:nth-child(3) { animation-delay: 0.3s; }
-.spark-chat .doing { font-size: 12px; color: var(--text-3); margin-left: 8px; }
-@keyframes spark-dot { 0%, 60%, 100% { transform: translateY(0); opacity: 0.45; } 30% { transform: translateY(-4px); opacity: 1; } }
-@media (prefers-reduced-motion: reduce) { .spark-chat .dots i { animation: none; } }
+/* A chat with a spark: its bubble and name as a badge, in the box and
+   beside the chat in the sidebar. */
+#spark-btn { display: inline-flex; align-items: center; gap: 7px; max-width: 220px; color: var(--text); background: color-mix(in srgb, var(--c, var(--accent)) 14%, transparent); border-color: color-mix(in srgb, var(--c, var(--accent)) 45%, transparent); }
+#spark-btn[hidden] { display: none; }
+#spark-btn .spark-av { --s: 16px; animation: none; box-shadow: none; }
+#spark-btn .spark-av .eye { animation: none; }
+#spark-btn .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#spark-btn .drop { display: inline-flex; margin-right: -4px; padding: 1px; border-radius: 50%; color: var(--text-3); }
+#spark-btn .drop:hover { color: var(--text); background: var(--hover); }
+#spark-btn .drop svg { width: 13px; height: 13px; }
+.chat .open .spark-av { --s: 14px; animation: none; box-shadow: none; gap: 2px; }
+.chat .open .spark-av .eye { animation: none; }
+.menu .spark-av { --s: 22px; animation: none; }
+#greeting .in .spark-av { --s: 18px; vertical-align: -3px; margin-right: 6px; animation: none; }
 .menu.emoji-menu { z-index: 60; min-width: 220px; }
 .menu .emo { font-size: 18px; width: 24px; text-align: center; flex: none; }
 .field select { width: 100%; font: 14.5px var(--sans); color: var(--text); background: var(--bg); border: 1px solid var(--border-strong); border-radius: 10px; padding: 9px 12px; outline: 0; }
@@ -1536,6 +1525,7 @@ body.resizing-viewer iframe { pointer-events: none; }
             <button type="button" class="pill" id="plus-btn" data-tip="Add photos, files and more" aria-label="Add photos, files and more" aria-haspopup="menu"></button>
             <button type="button" class="pill" id="auto-btn" data-tip="Autonomous mode" data-keys="Shift Tab"></button>
             <button type="button" class="pill" id="project-btn" data-tip="Start in a project" aria-haspopup="listbox"></button>
+            <button type="button" class="pill" id="spark-btn" hidden data-tip="Open this spark"></button>
             <button type="button" class="pill" id="agents-btn" hidden data-tip="Sub-agents"><span class="pulse-dot"></span><span id="agents-count"></span></button>
             <span id="context"></span>
             <button type="button" class="pill" id="model-btn" data-tip="Switch model" data-keys="Alt M"><span id="model-name">No model</span><i id="model-chev"></i></button>
@@ -1771,6 +1761,9 @@ const VOICE_LONGEST = 120;       // seconds in one turn, at most
 const voice = { on: false, state: "", ctx: null, stream: null, level: 0, turn: null, tap: null, source: null, cut: false, setup: null, analyser: null };
 let view = "chat";         // "chat" | "projects" | "project" | "settings" | "skills" | "sparks" | "extensions"
 let viewProject = null;    // the project page shown, or the project a new chat starts in
+let viewSpark = null;      // the spark a new chat is with, before its first message
+let sparkList = [];        // each spark's id, name, handle and colour, for badges
+const sparkOf = (id) => (id && sparkList.find((s) => s.id === id)) || null;
 
 // Addresses. Every view has one, so a chat can be reloaded, bookmarked,
 // opened in a new tab, or left with Back. The server answers each with
@@ -1797,6 +1790,7 @@ function routeTo(path) {
   let m;
   current = null;
   viewProject = null;
+  viewSpark = null;
   view = "chat";
   if ((m = path.match(/^\/c\/([0-9a-f]{8})\/?$/))) {
     if (chats.has(m[1])) { current = m[1]; viewProject = chats.get(m[1]).project || null; }
@@ -3390,8 +3384,11 @@ function drawChat() {
   const inProject = projectOf(chat ? chat.project : viewProject);
   $("#crumb").hidden = !inProject;
   if (inProject) $("#crumb").textContent = inProject.name;
-  input.placeholder = empty ? (inProject ? `Message Flash in ${inProject.name}` : "Message Flash") : "Reply to Flash";
+  const withSpark = sparkOf(chat ? chat.spark : viewSpark);
+  const who = withSpark ? withSpark.name : "Flash";
+  input.placeholder = empty ? (inProject ? `Message ${who} in ${inProject.name}` : `Message ${who}`) : `Reply to ${who}`;
   renderProjectBtn();
+  renderSparkBtn();
   renderPending();
   syncUrl();
   greet();
@@ -3847,9 +3844,8 @@ async function openSpark(id) {
   if (!spark) { toast("That spark is gone."); return; }
   const form = openForm(`<div class="spark-detail"></div>`, async () => false);
   fillSpark(form.querySelector(".spark-detail"), spark);
-  // The chat box, ready to type in: not the first feedback box, which
-  // would scroll past the goal.
-  form.querySelector(".spark-chat .say input").focus({ preventScroll: true });
+  // Not the first feedback box, which would scroll past the goal.
+  form.querySelector("[data-cancel]").focus({ preventScroll: true });
   // Opened is read. The ping on its bubble goes with the next redraw.
   if (spark.unread) command("spark-read", id, null).catch(() => {});
 }
@@ -3861,8 +3857,6 @@ function fillSpark(box, spark, again = false) {
     <div data-bounds hidden><div class="spark-sec">Boundaries</div><div class="spark-text"></div></div>
     <div class="spark-actions"></div>
     <div data-lessons hidden><div class="spark-sec">What you have taught it</div><ul class="spark-lessons"></ul></div>
-    <div class="spark-sec">Chat</div>
-    <div class="spark-chat"><div class="thread"></div><div class="say"><input type="text" maxlength="4000" autocomplete="off" data-keep="chat"><button type="button" class="btn small primary">Send</button></div></div>
     <div class="spark-sec">Reports</div><div data-reports></div>
     <div class="dialog-buttons"><button type="button" class="btn" data-cancel>Close</button></div>`;
   box.querySelector(".spark-head").prepend(sparkAvatar({ ...spark, unread: 0 }, 60));
@@ -3885,6 +3879,7 @@ function fillSpark(box, spark, again = false) {
     return b;
   };
   const working = spark.status === "working";
+  act("Chat", async () => startSparkChat(spark.id), "btn small primary");
   act(working ? "Working…" : "Run now", async () => { await command("spark-run", spark.id, null); toast(`${spark.name} is starting a shift`); }).disabled = working;
   act(spark.paused ? "Resume" : "Pause", async () => { await command(spark.paused ? "spark-resume" : "spark-pause", spark.id, null); });
   act("Edit", async () => sparkForm(spark));
@@ -3907,8 +3902,6 @@ function fillSpark(box, spark, again = false) {
       list.appendChild(item);
     });
   }
-
-  drawSparkChat(box.querySelector(".spark-chat"), spark, again);
 
   const reports = box.querySelector("[data-reports]");
   const said = spark.reports.filter((r) => !r.quiet).reverse();
@@ -3947,57 +3940,6 @@ function fillSpark(box, spark, again = false) {
     reports.appendChild(card);
   }
   if (said.length && quiet) reports.appendChild(el("p", "spark-quiet", `And ${quiet} quiet shift${quiet === 1 ? "" : "s"} with nothing new.`));
-}
-
-// A spark's chat: what was said both ways, its answer on the way as
-// three bouncing dots, and a box to say more.
-function drawSparkChat(chat, spark, again) {
-  chat.classList.toggle("still", again);
-  const thread = chat.querySelector(".thread");
-  const face = (state) => sparkAvatar({ ...spark, unread: 0, paused: false, status: state }, 24);
-  if (!spark.chat.length && !spark.answering) {
-    thread.appendChild(el("p", "spark-quiet", `Ask ${esc(spark.name)} what it has found, or tell it what to do differently. It keeps what you teach it.`));
-  }
-  for (const m of spark.chat) {
-    const row = el("div", `msg ${m.who === "you" ? "you" : "spark"}` + (m.failed ? " failed" : ""));
-    if (m.who !== "you") row.appendChild(face("idle"));
-    const bubble = row.appendChild(el("div", "bubble"));
-    if (m.who === "you" || m.failed) bubble.textContent = m.text;
-    else bubble.innerHTML = markdown(m.text);
-    if (m.steps && m.steps.length) {
-      const steps = el("details", "", `<summary>${m.steps.length} step${m.steps.length === 1 ? "" : "s"}</summary><ol></ol>`);
-      for (const step of m.steps) steps.querySelector("ol").appendChild(el("li")).textContent = step;
-      bubble.appendChild(steps);
-    }
-    thread.appendChild(row);
-  }
-  if (spark.answering) {
-    const row = el("div", "msg spark typing");
-    row.appendChild(face("working"));
-    const bubble = row.appendChild(el("div", "bubble", `<span class="dots" aria-label="${esc(spark.name)} is answering"><i></i><i></i><i></i></span><span class="doing"></span>`));
-    bubble.style.setProperty("--c", spark.colour);
-    if (spark.reply_activity && spark.reply_activity !== "Thinking") bubble.querySelector(".doing").textContent = spark.reply_activity;
-    thread.appendChild(row);
-  }
-  requestAnimationFrame(() => { thread.scrollTop = thread.scrollHeight; });
-
-  const field = chat.querySelector(".say input");
-  const send = chat.querySelector(".say button");
-  field.placeholder = `Message ${spark.name}… (: for emoji)`;
-  send.disabled = spark.answering;
-  const go = async () => {
-    const text = field.value.trim();
-    if (!text || send.disabled) return;
-    send.disabled = true;
-    try { await command("spark-say", spark.id, null, { text }); field.value = ""; }
-    catch (error) { send.disabled = false; showFailure(error); }
-  };
-  field.addEventListener("input", () => showEmoji(field));
-  field.addEventListener("keydown", (e) => {
-    if (emojiKeys(e, field)) return;
-    if (e.key === "Enter" && !e.isComposing) { e.preventDefault(); e.stopPropagation(); go(); }
-  });
-  send.onclick = go;
 }
 
 function sparkForm(spark) {
@@ -5936,6 +5878,7 @@ async function loadState() {
   projects = state.projects || [];
   if (state.words && state.words.length) words = state.words;
   if (state.emojis) emojis = state.emojis;
+  sparkList = state.sparks || [];
   showScene(state.scene);
   lastSeq = state.seq;
   if (!routed) { routed = true; routeTo(location.pathname); }
@@ -5958,10 +5901,11 @@ function refreshLite() {
     if (!state) return;
     info = state.status;
     projects = state.projects || [];
+    sparkList = state.sparks || [];
     const ids = state.chats.map((c) => c.id);
     for (const c of state.chats) {
       const known = chats.get(c.id);
-      if (known) Object.assign(known, { title: c.title, busy: c.busy, queued: c.queued, pending: c.pending || [], project: c.project, updated: c.updated });
+      if (known) Object.assign(known, { title: c.title, busy: c.busy, queued: c.queued, pending: c.pending || [], project: c.project, spark: c.spark, updated: c.updated });
       else chats.set(c.id, { ...c, log: [], partial: "", thinking: "" });
     }
     for (const id of [...chats.keys()]) if (!ids.includes(id)) chats.delete(id);
@@ -5973,6 +5917,7 @@ function refreshLite() {
     if (!["chat", "settings", "skills", "sparks", "extensions"].includes(view) && !editing && $("#form").hidden) drawPage();
     renderChats();
     renderInfo();
+    renderSparkBtn();
     const chat = chats.get(current);
     if (chat && !$("#title input")) { $("#title").textContent = chat.title; document.title = chat.title === "New chat" ? "Flash" : `${chat.title} · Flash`; }
   }, 60);
@@ -6098,6 +6043,12 @@ function renderChats() {
     open.href = `/c/${id}`;
     open.draggable = false;
     open.firstChild.textContent = chat.title;
+    const withSpark = sparkOf(chat.spark);
+    if (withSpark) {
+      const badge = sparkAvatar({ ...withSpark, unread: 0 }, 14);
+      badge.title = `With ${withSpark.name}`;
+      open.prepend(badge);
+    }
     open.onclick = (e) => {
       // With a modifier, the browser opens the link as it would any other.
       if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
@@ -6173,10 +6124,16 @@ function greet() {
   const hour = new Date().getHours();
   const when = hour < 5 ? "Up late" : hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
   const inProject = projectOf(viewProject);
-  $("#greeting").innerHTML = esc(when) + (inProject ? `<span class="in">in ${esc(inProject.name)}</span>` : "");
+  const withSpark = !current && sparkOf(viewSpark);
+  $("#greeting").innerHTML = esc(when) + (withSpark ? `<span class="in">${sparkAvatar({ ...withSpark, unread: 0 }, 18).outerHTML}talking with ${esc(withSpark.name)}</span>` : inProject ? `<span class="in">in ${esc(inProject.name)}</span>` : "");
   $("#greeting").dataset.text = when;
   const name = inProject ? inProject.name : info.folder || "this project";
-  const ideas = [
+  const ideas = withSpark ? [
+    ["What's new?", "What have you found since your last report?"],
+    ["What are you working on?", "What are you working on right now, and what's next?"],
+    ["Check now", "Check on your goal right now and tell me what you see."],
+    ["Change your focus", "From now on, "],
+  ] : [
     ["Explain the codebase", `Explain how ${name} is put together, and where I should start reading.`],
     ["Find a bug", `Find the most likely bug in ${name} and show me the fix.`],
     ["Write tests", "Write tests for the code I changed most recently."],
@@ -6247,8 +6204,10 @@ function updateSend() {
   send.dataset.keys = tip[1];
   send.setAttribute("aria-label", { stop: "Stop", steer: "Steer", voice: "Voice mode" }[state] || "Send");
   send.disabled = (state === "up" && !typed) || (typed && uploading());
-  if (busy && view === "chat") input.placeholder = "Steer Flash, or Ctrl Enter to queue";
-  else if (input.placeholder.startsWith("Steer")) input.placeholder = "Reply to Flash";
+  const withSpark = sparkOf(chat ? chat.spark : viewSpark);
+  const who = withSpark ? withSpark.name : "Flash";
+  if (busy && view === "chat") input.placeholder = `Steer ${who}, or Ctrl Enter to queue`;
+  else if (input.placeholder.startsWith("Steer")) input.placeholder = `Reply to ${who}`;
 }
 
 // A notice grows out of a small capsule, springs to its width, and
@@ -6348,14 +6307,14 @@ async function send(text, mode = "steer") {
   updateSend();
   // The chat has to exist here before anything is said in it, or its
   // first events would arrive for a chat this page has never seen.
-  if (!current) await createChat(viewProject || "");
+  if (!current) await createChat(viewProject || "", viewSpark || "");
   // From voice mode, the reply will be heard: the model is told so.
   await api("/api/send", { chat: current, text, files, voice: voice.on }).catch(showFailure);
 }
 
-async function createChat(project = "") {
-  const { chat: id } = await command("new", "", null, { project });
-  if (!chats.has(id)) chats.set(id, { id, title: "New chat", busy: false, queued: false, log: [], partial: "", thinking: "", project, updated: Date.now() / 1000 });
+async function createChat(project = "", spark = "") {
+  const { chat: id } = await command("new", "", null, { project, spark });
+  if (!chats.has(id)) chats.set(id, { id, title: "New chat", busy: false, queued: false, log: [], partial: "", thinking: "", project, spark, updated: Date.now() / 1000 });
   if (!order.includes(id)) order.push(id);
   current = id;
   view = "chat";
@@ -6533,6 +6492,7 @@ function openPlus() {
   if (navigator.clipboard && navigator.clipboard.read) rows.push({ html: `${icon("copy")}<span class="label">Paste an image</span>`, act: pasteImage });
   rows.push({ header: true, rule: true, html: "" });
   rows.push({ html: `${icon("book")}<span class="label">Use a skill</span><span class="desc">${icon("chevRight")}</span>`, act: openSkillPicker });
+  rows.push({ html: `${icon("spark")}<span class="label">Sparks</span><span class="desc">${icon("chevRight")}</span>`, act: openSparkPicker });
   if (!input.value.trim()) rows.push({ html: `${icon("slash")}<span class="label">Commands</span>`, act: () => { input.value = "/"; autosize(); input.focus(); showSlash(); } });
   openPlusMenu(rows, (row) => { Promise.resolve(row.act()).catch(showFailure); }, "");
 }
@@ -6665,6 +6625,23 @@ function renderProjectBtn() {
   b.classList.toggle("on", !!p);
 }
 
+// The badge on a chat with a spark: its bubble and name. It opens the
+// spark's window; on a new chat nothing has been said in, its x makes
+// it a chat with Flash again.
+function renderSparkBtn() {
+  const chat = chats.get(current);
+  const sp = sparkOf(chat ? chat.spark : viewSpark);
+  const b = $("#spark-btn");
+  b.hidden = !sp;
+  if (!sp) return;
+  const fresh = !chat || (!chat.log.length && !chat.busy && !chat.queued);
+  b.innerHTML = `<span class="name"></span>${fresh ? `<span class="drop" role="button" aria-label="Chat with Flash instead">${icon("x")}</span>` : ""}`;
+  b.prepend(sparkAvatar({ ...sp, unread: 0 }, 16));
+  b.querySelector(".name").textContent = sp.name;
+  b.style.setProperty("--c", sp.colour);
+  b.dataset.tip = fresh ? `Talking with ${sp.name}` : `Open ${sp.name}`;
+}
+
 function openProjectPicker() {
   const rows = [{ header: true, html: "Start this chat in" }];
   rows.push({ html: `<span class="label">No project</span>`, project: "", current: !viewProject });
@@ -6693,10 +6670,38 @@ async function newChat() {
   view = "chat";
   current = null;
   viewProject = null;
+  viewSpark = null;
   renderChats();
   morph(drawChat);
   input.focus();
   if (innerWidth <= 800) closeSide();
+}
+
+// A new chat with a spark, on the main screen: from its window on the
+// Sparks page, or from + in the box. Like any new chat, it is made when
+// the first message is sent.
+function startSparkChat(id) {
+  if (isOpen($("#form"))) closeForm();
+  closeMenu();
+  view = "chat";
+  current = null;
+  viewProject = null;
+  viewSpark = id;
+  renderChats();
+  morph(drawChat);
+  input.focus();
+  if (innerWidth <= 800) closeSide();
+}
+
+async function openSparkPicker() {
+  let list;
+  try { list = (await command("sparks")).sparks; } catch (error) { showFailure(error); return; }
+  const rows = [{ header: true, html: "Chat with a spark" }];
+  for (const sp of list) {
+    rows.push({ html: `${sparkAvatar({ ...sp, unread: 0 }, 22).outerHTML}<span class="stack"><span class="label">${esc(sp.name)}</span><span class="sub">${esc(sp.handle)} · ${esc(sparkState(sp))}</span></span>`, spark: sp.id });
+  }
+  rows.push({ html: `${icon("plus")}<span class="label">${list.length ? "All sparks…" : "No sparks yet. Make one…"}</span>`, browse: true, cls: "add" });
+  openPlusMenu(rows, (row) => (row.browse ? showPage("sparks") : startSparkChat(row.spark)), "");
 }
 
 function switchTo(id, nav) {
@@ -7606,6 +7611,12 @@ $("#plus-btn").onclick = () => (menuEl && !slashOpen ? closeMenu() : openPlus())
 $("#agents-btn").onclick = () => (menuEl ? closeMenu() : openAgents());
 $("#model-btn").onclick = () => (menuEl && !slashOpen ? closeMenu() : openModels());
 $("#project-btn").onclick = () => (menuEl && !slashOpen ? closeMenu() : openProjectPicker());
+$("#spark-btn").onclick = (e) => {
+  const chat = chats.get(current);
+  const id = chat ? chat.spark : viewSpark;
+  if (e.target.closest(".drop")) { viewSpark = null; drawChat(); input.focus(); return; }
+  if (id) openSpark(id);
+};
 $("#projects-btn").onclick = showProjects;
 $("#skills-btn").onclick = () => showPage("skills");
 $("#sparks-btn").onclick = () => showPage("sparks");

@@ -260,6 +260,8 @@ class Chat:
     created: float = field(default_factory=time.time)
     updated: float = field(default_factory=time.time)
     project: str = ""
+    # The spark this chat is with, if any: it answers instead of Flash.
+    spark: str = ""
 
     def summary(self) -> dict:
         return {
@@ -272,6 +274,7 @@ class Chat:
             "partial": self.partial,
             "thinking": self.thinking,
             "project": self.project,
+            "spark": self.spark,
             "updated": self.updated,
         }
 
@@ -286,6 +289,7 @@ class Chat:
             "created": self.created,
             "updated": self.updated,
             "project": self.project,
+            "spark": self.spark,
         }
 
     @classmethod
@@ -298,6 +302,7 @@ class Chat:
             created=float(data.get("created") or time.time()),
             updated=float(data.get("updated") or time.time()),
             project=str(data.get("project") or ""),
+            spark=str(data.get("spark") or ""),
         )
 
 
@@ -690,10 +695,15 @@ class Session:
 
     # Chats ---------------------------------------------------------
 
-    def new_chat(self, project: str = "") -> Chat:
+    def new_chat(self, project: str = "", spark: str = "") -> Chat:
         if project and workspace.project(project) is None:
             raise KeyError(project)
-        chat = Chat(id=uuid.uuid4().hex[:8], project=project)
+        if spark:
+            found = sparks.find(spark)
+            if found is None:
+                raise ValueError("That spark is not here any more.")
+            spark = found.id
+        chat = Chat(id=uuid.uuid4().hex[:8], project=project, spark=spark)
         with self._lock:
             self.chats[chat.id] = chat
         self.emit(chat, {"type": "chats"})
@@ -763,6 +773,12 @@ class Session:
             "words": [s["now"] for s in ai._load_thinking_states()],
             # What :name in the message box offers, the terminal's list.
             "emojis": None if lite else EMOJIS,
+            # Enough of each spark to draw its badge on a chat with it.
+            "sparks": [
+                {"id": s.id, "name": s.name, "handle": s.handle,
+                 "colour": s.colour}
+                for s in sparks.all_sparks()
+            ],
             "status": {
                 **status(ai), "lan": self.lan,
                 "can_switch_lan": self.switch_lan is not None,
@@ -1456,6 +1472,17 @@ def run_turn(
         })
         return
 
+    # A chat with a spark: the spark answers, in its own voice and with
+    # its own tools, and keeps what it learns here.
+    spark = sparks.find(chat.spark) if chat.spark else None
+    if chat.spark and spark is None:
+        session.emit(chat, {
+            "type": "error",
+            "text": "That spark is not here any more, so nobody can answer.",
+        })
+        return
+    kit = sparks.ChatKit(spark) if spark else None
+
     client = ollama.Client(host=ai.Config.host)
     started = time.monotonic()
     tokens = 0
@@ -1483,13 +1510,21 @@ def run_turn(
     with capture_tool_output(_sink(session, chat)), \
             answer_from(session.answerer(chat)):
         ai._fit_and_compact(ai.console, client, chat.messages)
-        prompt = ai._session_system_prompt(heard=chat.heard)
+        if spark is not None:
+            prompt = sparks.chat_prompt(
+                spark, ai.Config.host, ai.Config.model,
+                flash_tools.CURRENT_DATE_PROMPT,
+            )
+        else:
+            prompt = ai._session_system_prompt(heard=chat.heard)
         if found is not None:
             prompt = f"{prompt}\n\n{project_prompt(found)}".strip()
         system = ai._message("system", prompt)
         checkpoint.start_turn(ai._turn_label(text))
 
         offered = flash_tools.turn_tools()
+        if kit is not None:
+            offered = kit.offer(offered)
         convo = [system, *chat.messages]
         keep_from = len(convo)
         tool_count = 0
@@ -1506,7 +1541,10 @@ def run_turn(
             if not reply.calls:
                 # It said what it would do next and stopped short of
                 # doing it: keep what it said, and tell it to go on.
-                if (offered and nudged < ai.MAX_PROMISE_NUDGES
+                # Not for a spark: "I'll only tell you about crashes" is
+                # about its next shifts, not this turn.
+                if (offered and kit is None
+                        and nudged < ai.MAX_PROMISE_NUDGES
                         and ai.unkept_promise(reply.content)):
                     nudged += 1
                     _finish_reply(session, chat, reply)
@@ -1538,6 +1576,11 @@ def run_turn(
                         "text": str(args.get("thought", "")).strip(),
                     })
                     output = "(noted)"
+                elif kit is not None and name in kit.tools:
+                    output = kit.tools[name](args)
+                    tool_count += 1
+                elif kit is not None and name not in sparks.chat_tool_names():
+                    output = f"Unknown tool: {name}."
                 else:
                     before = {e.id for e in subagents.list_all()}
                     output = flash_tools.run_tool((name, args))
@@ -1600,7 +1643,10 @@ def run_turn(
     if delivered and not reply.stopped:
         subagents.mark_delivered(delivered)
 
-    if not reply.stopped:
+    if kit is not None:
+        # What it learned, and any goal or schedule it was given.
+        kit.apply()
+    elif not reply.stopped:
         learning.after_turn(
             chat.messages, tool_count,
             host=ai.Config.host, model=ai.Config.model or "",
@@ -1947,7 +1993,9 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
     chat_id = str(body.get("chat", "") or "")
 
     if name == "new":
-        return {"chat": session.new_chat(str(body.get("project") or "")).id}
+        return {"chat": session.new_chat(
+            str(body.get("project") or ""), str(body.get("spark") or ""),
+        ).id}
 
     if name == "delete":
         session.delete_chat(chat_id)
@@ -2373,8 +2421,6 @@ def _spark_command(name: str, arg: str, body: dict) -> dict:
                 arg, str(body.get("lesson") or ""),
                 float(at) if isinstance(at, (int, float)) else None,
             )
-        elif name == "spark-say":
-            spark = sparks.say_later(arg, str(body.get("text") or ""))
         elif name == "spark-unteach":
             spark = sparks.forget_lesson(arg, int(body.get("index") or 0))
         elif name == "spark-remove":

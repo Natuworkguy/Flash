@@ -145,7 +145,7 @@ def test_a_shift_files_its_report_and_keeps_its_notes(model):
 
     assert report.text == "Issue 12 looks like a bug."
     assert not report.quiet and not report.read
-    assert "Kept notes" in report.steps
+    assert "KeepNotes()" in report.steps
     kept = sparks.find(made.id)
     assert kept.notes == "Seen issue 12."
     assert kept.runs == 1 and kept.unread == 1
@@ -559,8 +559,9 @@ def test_a_spark_learns_and_changes_what_it_is_told_to(model):
     assert kept.goal == "Watch the crash reports."
     assert kept.every == 120
     assert kept.notes == "Switched to crashes."
-    assert "Learned something" in reply.steps
-    assert "Changed its goal" in reply.steps
+    assert "Learn(Only report crashes.)" in reply.steps
+    assert "SetGoal(Watch the crash reports.)" in reply.steps
+    assert "SetSchedule(every 2 hours)" in reply.steps
 
 
 def test_a_schedule_too_tight_is_refused_in_chat(model):
@@ -635,21 +636,6 @@ def test_chat_is_kept_to_its_length(model):
     assert len(sparks.find(made.id).chat) == sparks.MAX_CHAT
 
 
-def test_say_later_answers_on_its_own_thread(model, monkeypatch):
-    made = sparks.create("Scout", "Watch the issues.")
-    monkeypatch.setattr(
-        sparks.ollama, "Client", lambda host: FakeClient([_reply("Later.")])
-    )
-
-    spark = sparks.say_later(made.id, "Hi")
-
-    assert spark.answering
-    deadline = time.time() + 5
-    while sparks.find(made.id).answering and time.time() < deadline:
-        time.sleep(0.02)
-    assert sparks.find(made.id).chat[-1].text == "Later."
-
-
 def test_the_keepers_heartbeat_is_not_a_spark_nor_a_change():
     sparks.create("Scout", "Watch the issues.")
     before = sparks._signature()
@@ -676,18 +662,6 @@ def test_writes_from_two_threads_do_not_lose_each_other():
 
 
 class TestChatElsewhere:
-    def test_the_page_says_something_to_a_spark(self, model, monkeypatch):
-        made = sparks.create("Scout", "Watch the issues.")
-        monkeypatch.setattr(sparks, "say_later", lambda key, text: (
-            sparks.ask(key, text)
-        ))
-
-        got = web.command(web.Session(), {
-            "name": "spark-say", "arg": made.id, "text": "Hi",
-        })["spark"]
-
-        assert got["answering"] and got["chat"][-1]["text"] == "Hi"
-
     def test_the_page_gets_the_emoji_list(self):
         from flash.emojis import EMOJIS
 
@@ -713,3 +687,15 @@ class TestChatElsewhere:
 
         assert [m.text for m in shown] == ["Found two."]
         assert sparks.find(made.id).chat[0].text == "what did you find?"
+
+
+def test_a_lesson_told_twice_is_kept_once(model):
+    made = sparks.create("Scout", "Watch the issues.")
+    sparks.teach(made.id, "Be brief.")
+    sparks.teach(made.id, "be brief.")
+    sparks.say(made.id, "Keep it brief", FakeClient([
+        _reply("", ("learn", {"lesson": "Be brief."})),
+        _reply("Will do."),
+    ]))
+
+    assert sparks.find(made.id).lessons == ["Be brief."]

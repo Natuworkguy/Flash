@@ -40,7 +40,7 @@ from . import agent as subagents
 from .dashes import undash
 from .paths import FLASH_DIR
 from .sysprompt import get_model_system_prompt
-from .theme import ERROR, capture_tool_output
+from .theme import ERROR, capture_tool_output, tool_line, tool_result
 
 # The bubbles a spark is drawn as, one picked for each new spark. Bright
 # enough to read on both a dark and a light page.
@@ -637,6 +637,15 @@ def set_paused(key: str, paused: bool) -> Spark:
     return spark
 
 
+def _add_lesson(spark: Spark, lesson: str) -> None:
+    """LESSON on SPARK's list, once: told the same thing twice, it keeps
+    it once."""
+
+    if lesson.casefold() not in (known.casefold() for known in spark.lessons):
+        spark.lessons.append(lesson)
+        del spark.lessons[:-MAX_LESSONS]
+
+
 def teach(key: str, lesson: str, report_at: Optional[float] = None) -> Spark:
     """Keep LESSON for every later shift, and hang it on a report."""
 
@@ -645,8 +654,7 @@ def teach(key: str, lesson: str, report_at: Optional[float] = None) -> Spark:
         raise SparkError("Say what it should do differently.")
 
     def change(spark: Spark) -> None:
-        spark.lessons.append(lesson)
-        del spark.lessons[:-MAX_LESSONS]
+        _add_lesson(spark, lesson)
         for report in spark.reports:
             if report_at is not None and report.at == report_at:
                 report.feedback = lesson
@@ -815,10 +823,10 @@ def _work(
     return undash(final).strip()
 
 
-def _keeping_notes(notes: list[str], steps: list[str]):
+def _keeping_notes(notes: list[str]):
     def keep(args: dict) -> str:
         notes[0] = str(args.get("notes", "")).strip()
-        steps.append("Kept notes")
+        tool_line("KeepNotes()")
         return "(notes kept)"
 
     return keep
@@ -860,7 +868,7 @@ def shift(spark_id: str, client=None) -> Optional[Report]:
             {"role": "user", "content": "Start your shift."},
         ]
         text = _work(
-            spark, messages, {"keep_notes": _keeping_notes(notes, steps)},
+            spark, messages, {"keep_notes": _keeping_notes(notes)},
             [KEEP_NOTES_TOOL], steps,
             lambda doing: _set_activity(spark.id, doing),
             MAX_SHIFT_ROUNDS, ROUND_LIMIT_MESSAGE, client,
@@ -913,9 +921,23 @@ def _call(
 
 
 # --- Chat ----------------------------------------------------------------
+#
+# A spark can be talked to between shifts: in the web UI as a chat of its
+# own on the main screen, in the terminal with /sparks chat. Either way it
+# answers as itself, with what it knows, and ChatKit is what lets it
+# learn from what it is told and change its own goal or schedule.
+
+# The tools a spark has in a chat, beside its own: a sub-agent's, all of
+# them, since the user is there to answer the ones that ask first.
+def chat_tool_names() -> tuple[str, ...]:
+    from . import tools as flash_tools  # deferred: avoids a module cycle
+
+    return flash_tools.SUBAGENT_TOOL_NAMES
 
 
-def _chat_prompt(spark: Spark, host: str, model: str, date: str) -> str:
+def chat_prompt(spark: Spark, host: str, model: str, date: str) -> str:
+    """The system prompt for talking with SPARK."""
+
     lessons = "\n".join(f"- {lesson}" for lesson in spark.lessons)
     reports = "\n\n".join(
         f"[{time.strftime('%a %d %b %H:%M', time.localtime(r.at))}] "
@@ -934,6 +956,90 @@ def _chat_prompt(spark: Spark, host: str, model: str, date: str) -> str:
     )
     parts = [get_model_system_prompt(host, model), body, date]
     return "\n\n".join(part for part in parts if part)
+
+
+class ChatKit:
+    """A spark's own tools in a chat, and what they changed.
+
+    Changes are kept here while the answer is made, and written to the
+    spark in one go by apply(), so a shift finishing meanwhile does not
+    lose them or have its own undone.
+    """
+
+    schemas = [KEEP_NOTES_TOOL, *CHAT_TOOLS]
+
+    def __init__(self, spark: Spark) -> None:
+        self.spark_id = spark.id
+        self.notes = [spark.notes]
+        self.first_notes = spark.notes
+        self.lessons: list[str] = []
+        self.changes: dict = {}
+        self.tools: dict[str, Callable[[dict], str]] = {
+            "keep_notes": _keeping_notes(self.notes),
+            "learn": self._learn,
+            "set_goal": self._set_goal,
+            "set_schedule": self._set_schedule,
+        }
+
+    def offer(self, tools: list[dict]) -> list[dict]:
+        """Of TOOLS, the ones a spark may use here, and its own."""
+
+        names = chat_tool_names()
+        return [
+            t for t in tools if t["function"]["name"] in names
+        ] + self.schemas
+
+    def _learn(self, args: dict) -> str:
+        lesson = " ".join(str(args.get("lesson", "")).split())
+        if not lesson:
+            return "Error: the lesson was empty."
+        self.lessons.append(lesson[:LESSON_CHARS])
+        tool_line(f"Learn({lesson})")
+        tool_result("Kept: every later shift will follow it")
+        return "(kept: every later shift will follow it)"
+
+    def _set_goal(self, args: dict) -> str:
+        goal = str(args.get("goal", "")).strip()[:GOAL_CHARS]
+        if not goal:
+            return "Error: the goal was empty."
+        self.changes["goal"] = goal
+        tool_line(f"SetGoal({goal})")
+        return "(goal changed)"
+
+    def _set_schedule(self, args: dict) -> str:
+        try:
+            every = parse_every(args.get("every", ""))
+        except SparkError as exc:
+            return f"Error: {exc}"
+        self.changes["every"] = every
+        tool_line(f"SetSchedule(every {every_words(every)})")
+        return f"(now every {every_words(every)})"
+
+    def apply(self, add: Optional[Message] = None) -> Optional[Spark]:
+        """Write what changed to the spark, with ADD put in its chat."""
+
+        with _held():
+            spark = find(self.spark_id)
+            if spark is None:
+                return None
+            if add is not None:
+                spark.chat.append(add)
+                del spark.chat[:-MAX_CHAT]
+                spark.replying = 0.0
+                spark.reply_activity = ""
+            if self.notes[0] != self.first_notes:
+                spark.notes = self.notes[0][:NOTES_CHARS]
+            for lesson in self.lessons:
+                _add_lesson(spark, lesson)
+            if "goal" in self.changes:
+                spark.goal = self.changes["goal"]
+            if "every" in self.changes:
+                spark.every = self.changes["every"]
+                if spark.last_run:
+                    spark.next_run = spark.last_run + spark.every * 60
+            _save(spark)
+        _changed()
+        return spark
 
 
 def ask(key: str, text: str) -> Spark:
@@ -960,7 +1066,7 @@ def ask(key: str, text: str) -> Spark:
 
 def answer(spark_id: str, client=None) -> Optional[Message]:
     """SPARK_ID's answer to the chat so far, made now on this thread and
-    put in its chat. None if the spark is gone."""
+    put in its chat: the terminal's chat. None if the spark is gone."""
 
     from . import tools as flash_tools  # deferred: avoids a module cycle
 
@@ -969,45 +1075,14 @@ def answer(spark_id: str, client=None) -> Optional[Message]:
         return None
 
     steps: list[str] = []
-    notes = [spark.notes]
-    lessons: list[str] = []
-    changes: dict = {}
-
-    def learn(args: dict) -> str:
-        lesson = " ".join(str(args.get("lesson", "")).split())
-        if not lesson:
-            return "Error: the lesson was empty."
-        lessons.append(lesson[:LESSON_CHARS])
-        steps.append("Learned something")
-        return "(kept: every later shift will follow it)"
-
-    def set_goal(args: dict) -> str:
-        goal = str(args.get("goal", "")).strip()[:GOAL_CHARS]
-        if not goal:
-            return "Error: the goal was empty."
-        changes["goal"] = goal
-        steps.append("Changed its goal")
-        return "(goal changed)"
-
-    def set_schedule(args: dict) -> str:
-        try:
-            changes["every"] = parse_every(args.get("every", ""))
-        except SparkError as exc:
-            return f"Error: {exc}"
-        steps.append(f"Now works every {every_words(changes['every'])}")
-        return f"(now every {every_words(changes['every'])})"
-
-    own = {
-        "keep_notes": _keeping_notes(notes, steps), "learn": learn,
-        "set_goal": set_goal, "set_schedule": set_schedule,
-    }
+    kit = ChatKit(spark)
     host = flash_tools.OLLAMA_HOST or subagents.OLLAMA_HOST_DEFAULT
     try:
         if not flash_tools.MODEL_NAME:
             raise RuntimeError("no model is set, so it could not run")
         messages: list[dict] = [{
             "role": "system",
-            "content": _chat_prompt(
+            "content": chat_prompt(
                 spark, host, flash_tools.MODEL_NAME,
                 flash_tools.CURRENT_DATE_PROMPT,
             ),
@@ -1020,7 +1095,7 @@ def answer(spark_id: str, client=None) -> Optional[Message]:
             if not m.failed
         ]
         text = _work(
-            spark, messages, own, [KEEP_NOTES_TOOL, *CHAT_TOOLS], steps,
+            spark, messages, kit.tools, kit.schemas, steps,
             lambda doing: _set_activity(spark.id, doing, "reply_activity"),
             MAX_CHAT_ROUNDS, CHAT_LAST_WORD, client,
         )
@@ -1034,25 +1109,7 @@ def answer(spark_id: str, client=None) -> Optional[Message]:
             text=f"I could not answer: {e.__class__.__name__}: {e}",
         )
 
-    with _held():
-        spark = find(spark_id)
-        if spark is None:
-            return reply
-        spark.chat.append(reply)
-        del spark.chat[:-MAX_CHAT]
-        spark.replying = 0.0
-        spark.reply_activity = ""
-        spark.notes = notes[0][:NOTES_CHARS]
-        spark.lessons.extend(lessons)
-        del spark.lessons[:-MAX_LESSONS]
-        if "goal" in changes:
-            spark.goal = changes["goal"]
-        if "every" in changes:
-            spark.every = changes["every"]
-            if spark.last_run:
-                spark.next_run = spark.last_run + spark.every * 60
-        _save(spark)
-    _changed()
+    kit.apply(add=reply)
     return reply
 
 
@@ -1060,17 +1117,6 @@ def say(key: str, text: str, client=None) -> Optional[Message]:
     """Say TEXT to a spark and wait for its answer: the terminal's way."""
 
     return answer(ask(key, text).id, client)
-
-
-def say_later(key: str, text: str) -> Spark:
-    """Say TEXT to a spark; its answer arrives in its chat later. The
-    web UI's way, which hears of it as any other change."""
-
-    spark = ask(key, text)
-    threading.Thread(
-        target=answer, args=(spark.id,), daemon=True, name="spark-chat",
-    ).start()
-    return spark
 
 
 # --- The keeper ----------------------------------------------------------
