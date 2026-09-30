@@ -2468,17 +2468,33 @@ def _spark_command(name: str, arg: str, body: dict) -> dict:
                 str(body.get("boundaries") or ""),
                 str(body.get("every") or ""),
                 str(body.get("project") or ""),
+                str(body.get("watch") or ""),
             )
         elif name == "spark-update":
             # The new name comes as "rename": "name" names the command.
             fields = {"rename": "name", "goal": "goal", "every": "every",
-                      "boundaries": "boundaries", "project": "project"}
+                      "boundaries": "boundaries", "project": "project",
+                      "watch": "watch"}
             spark = sparks.update(arg, **{
                 field: str(body[key])
                 for key, field in fields.items() if key in body
             })
         elif name == "spark-run":
             spark = sparks.run_now(arg)
+        elif name in ("spark-approve", "spark-deny"):
+            spark = sparks.answer_step(
+                arg, name == "spark-approve", str(body.get("why") or ""),
+            )
+        elif name == "spark-stop":
+            spark = sparks.stop(arg)
+        elif name == "spark-share":
+            return {"code": sparks.share_code(arg)}
+        elif name == "spark-code":
+            return {"template": sparks.read_code(arg)}
+        elif name == "spark-add":
+            spark = sparks.add_from(arg, str(body.get("project") or ""))
+        elif name == "spark-templates":
+            return {"templates": sparks.TEMPLATES}
         elif name in ("spark-pause", "spark-resume"):
             spark = sparks.set_paused(arg, name == "spark-pause")
         elif name == "spark-read":
