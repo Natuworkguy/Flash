@@ -3509,3 +3509,20 @@ def test_a_spark_answers_in_a_chat_on_its_own_model(monkeypatch):
     ]
     stats = [e["model"] for e in chat.log if e["type"] == "stats"]
     assert stats == ["qwen3:8b", "flash-test"]
+
+
+def test_a_mentioned_spark_knows_its_status(monkeypatch):
+    from flash import sparks
+
+    monkeypatch.setattr(sparks, "get_model_system_prompt", lambda h, m: "")
+    spark = sparks.create("Scout", "Watch the issues.")
+    sparks.set_paused(spark.id, True)
+    FakeClient.scripts = [[part("I am paused."), part(done=True)]]
+    session = web.Session()
+    chat = session.new_chat()
+
+    run(session, chat, "@scout what are you up to?")
+
+    system = FakeClient.requests[0]["messages"][0]["content"]
+    assert "=== Your status right now ===" in system
+    assert "Paused: no shifts run" in system

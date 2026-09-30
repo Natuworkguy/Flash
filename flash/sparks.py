@@ -39,7 +39,7 @@ import ollama
 
 from . import agent as subagents
 from .dashes import undash
-from .paths import FLASH_DIR
+from .paths import ENV_PATH, FLASH_DIR
 from .sysprompt import get_model_system_prompt
 from .theme import (
     ERROR,
@@ -1085,16 +1085,29 @@ def describe(name: str, args: dict) -> tuple[str, str]:
     return name, json.dumps(args, ensure_ascii=False)[:1200]
 
 
-def _asks_first(name: str) -> bool:
-    """Whether a step waits for the user's yes: the ones Flash asks
-    about in a chat, unless autonomous mode is on."""
+def autonomous() -> bool:
+    """Whether autonomous mode is on, as the user last set it.
+
+    From the env file, not this process's memory: the user may have
+    switched it in another Flash, the terminal while this one serves the
+    web UI say, and this one would not know. Only when the file does not
+    say does this process's own setting count.
+    """
+
+    from dotenv import dotenv_values
 
     from . import tools as flash_tools  # deferred: avoids a module cycle
 
-    return (
-        not flash_tools.NO_COMMAND_CONFIRMATION
-        and name in flash_tools.CONFIRMED_TOOL_NAMES
-    )
+    try:
+        saved = dotenv_values(ENV_PATH).get("NO_COMMAND_CONFIRMATION")
+    except OSError:
+        saved = None
+    if saved is None or not str(saved).strip():
+        return bool(flash_tools.NO_COMMAND_CONFIRMATION)
+    try:
+        return int(str(saved).strip()) > 0
+    except ValueError:
+        return bool(flash_tools.NO_COMMAND_CONFIRMATION)
 
 
 HAND_OFF_TOOL = {
@@ -1311,10 +1324,14 @@ def shift(spark_id: str, client=None) -> Optional[Report]:
         "keep_notes": _keeping_notes(notes),
         "hand_off": _handing_off(spark),
     }
-    names = subagents.allowed_tool_names()
-    if not flash_tools.NO_COMMAND_CONFIRMATION:
-        # The ones that ask first too: a shift waits for the answer.
-        names = flash_tools.SUBAGENT_TOOL_NAMES
+    # Every tool a sub-agent has, the ones that ask first too: in
+    # autonomous mode they run, and otherwise the shift waits for the
+    # user's answer.
+    names = flash_tools.SUBAGENT_TOOL_NAMES
+    auto = autonomous()
+
+    def gate(name: str) -> bool:
+        return not auto and name in flash_tools.CONFIRMED_TOOL_NAMES
 
     def record(kind: str, text: str, style: str) -> None:
         if kind == "line":
@@ -1357,13 +1374,21 @@ def shift(spark_id: str, client=None) -> Optional[Report]:
                 {"role": "system", "content": prompt},
                 {"role": "user", "content": _opening(why, inbox)},
             ]
-        text = _work(
-            spark, messages, own, [KEEP_NOTES_TOOL, HAND_OFF_TOOL], steps,
-            lambda doing: _set_activity(spark.id, doing),
-            MAX_SHIFT_ROUNDS, ROUND_LIMIT_MESSAGE, client,
-            names=names, gate=_asks_first,
-            stopping=lambda: bool(getattr(find(spark.id), "stop_asked", 0)),
-        )
+        # In autonomous mode a tool that asks is told yes, the answer
+        # the user gave by switching it on, however stale this process's
+        # own setting is: nobody is here to answer, and asking would wait
+        # forever.
+        with answer_from(lambda question: "y") if auto \
+                else contextlib.nullcontext():
+            text = _work(
+                spark, messages, own, [KEEP_NOTES_TOOL, HAND_OFF_TOOL],
+                steps, lambda doing: _set_activity(spark.id, doing),
+                MAX_SHIFT_ROUNDS, ROUND_LIMIT_MESSAGE, client,
+                names=names, gate=gate,
+                stopping=lambda: bool(
+                    getattr(find(spark.id), "stop_asked", 0)
+                ),
+            )
         quiet = not text or text.strip(" .").upper() == NOTHING_NEW
         report = Report(
             at=time.time(),
@@ -1494,6 +1519,75 @@ def chat_tool_names() -> tuple[str, ...]:
     return flash_tools.SUBAGENT_TOOL_NAMES
 
 
+def _until(when: float) -> str:
+    minutes = int((when - time.time()) // 60)
+    if minutes <= 0:
+        return "any moment now"
+    if minutes < 90:
+        return f"in {minutes} minutes"
+    if minutes < 2880:
+        return f"in about {round(minutes / 60)} hours"
+    return f"in about {round(minutes / 1440)} days"
+
+
+def status_block(spark: Spark) -> str:
+    """SPARK as it is right now, for it to know when it is talked to:
+    what it is doing, when it last worked and next will, and what it is
+    set up with."""
+
+    if spark.status == WORKING:
+        doing = "In the middle of a shift"
+        if spark.activity:
+            doing += f" ({spark.activity})"
+        if spark.stop_asked:
+            doing += "; the user asked it to stop at its next step"
+    elif spark.waiting:
+        detail = " ".join(str(spark.pending.get("detail", "")).split())
+        doing = (
+            "Stopped part way through a shift, waiting for the user to "
+            f"approve a step: {spark.pending.get('label', 'a step')}"
+            + (f" ({detail[:200]})" if detail else "")
+            + ". You cannot approve it yourself: if they want it, they "
+            f"press Approve in your window, or type /sparks approve "
+            f"{spark.handle[1:].removesuffix('-spark')}."
+        )
+    elif spark.status == WAITING:
+        doing = "About to carry on with a step the user just answered"
+    elif spark.paused:
+        doing = "Paused: no shifts run until the user resumes you"
+    else:
+        doing = "Idle, between shifts"
+
+    lines = ["=== Your status right now ===", f"- {doing}."]
+    if spark.last_run:
+        last = next((r for r in reversed(spark.reports)), None)
+        how = " and it failed" if last and last.failed else ""
+        lines.append(f"- Last shift: {_since(spark.last_run)}{how}.")
+    else:
+        lines.append("- You have not run a shift yet.")
+    if not spark.paused and not spark.waiting and spark.status != WORKING:
+        when = "right away" if spark.asked else _until(spark.next_run)
+        lines.append(f"- Next shift: {when}.")
+    lines.append(
+        f"- Shifts so far: {spark.runs}. Reports the user has not read: "
+        f"{spark.unread}."
+    )
+    if spark.inbox:
+        lines.append(
+            f"- Handed to you by other sparks, for your next shift: "
+            f"{len(spark.inbox)} note{'' if len(spark.inbox) == 1 else 's'}."
+        )
+    lines.append(f"- You run on the model {model_of(spark) or '(none set)'}.")
+    found = project_of(spark)
+    if found:
+        lines.append(f"- You work on the project {found.name}.")
+    if spark.watch:
+        lines.append(
+            f"- A change in {spark.watch} starts a shift too."
+        )
+    return "\n".join(lines)
+
+
 def chat_prompt(
     spark: Spark, host: str, model: str, date: str, project: bool = True,
 ) -> str:
@@ -1517,7 +1611,7 @@ def chat_prompt(
         reports=reports or "(none yet: you have not reported anything)",
     )
     parts = [
-        get_model_system_prompt(host, model), body,
+        get_model_system_prompt(host, model), body, status_block(spark),
         project_block(spark) if project else "", team_block(spark), date,
     ]
     return "\n\n".join(part for part in parts if part)
