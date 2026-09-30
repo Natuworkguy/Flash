@@ -24,6 +24,7 @@ FLASH (**F**ast **L**ocal **A**gent **SH**ell) CLI is an AI-powered command-line
 - **Knows What Just Broke**: With `/hook install`, Flash sees the commands you run in VS Code's terminal and whether they failed, so "why did that fail?" works without pasting anything.
 - **VS Code Aware**: Run from VS Code's terminal, Flash opens its edits as side-by-side diffs while it waits for your yes, clears them away once you have answered, and opens files at the line it's talking about.
 - **Async Sub-agents**: The AI can spawn background sub-agents with the `agent` tool to work on independent pieces of a task at the same time, then collect each one's answer with `agent_result` once it's needed.
+- **Sparks**: Agents that don't stop when the chat does. Give a spark a name, a standing goal, how often to work, and the lines it must not cross ("every morning, check my repo for new issues and tell me which look like bugs; never comment on anything"), and it works on it for as long as Flash is open, keeps its own notes between shifts, and files a report when there is something to say. Tell it what to do differently and every later shift remembers. Each one is a little bubble with eyes in the web UI that bounces while it works and sleeps while paused.
 - **Context Management**: Automatic history trimming to stay within token limits.
 - **Markdown Support**: Rich formatting for AI responses in the terminal.
 
@@ -150,6 +151,9 @@ python run.py
   Code's terminal (zsh and bash).
 - `/agents`: Watch sub-agents work live. `/agents <id>` shows one in full,
   with its answer once it is done.
+- `/sparks [new|<name>]`: List your sparks, make one, or read one's
+  reports. `/sparks teach <name> <lesson>`, `run`, `pause`, `resume`,
+  `every <name> <30m|2h|daily>` and `remove` look after them.
 - `/clear`: Clear the conversation history.
 - `/undo`: Take back the file changes from the last turn.
 - `/compact`: Summarize the conversation to free up room.
@@ -274,6 +278,38 @@ Sub-agents keep running after a reply, and `/agents` watches all of them
 update in place (Ctrl+C goes back to the prompt). They cannot talk to you,
 so they get no tool that asks first: `shell` and `write` are only theirs
 in autonomous mode (`/auto on`).
+
+### Sparks
+
+A sub-agent does one job and is gone. A spark keeps a job. Make one with
+`/sparks new`, from the Sparks page in the web UI, or just by asking
+("make a spark that checks the price of this every six hours and tells
+me if it drops under $900"): Flash calls its `make_spark` tool and asks
+you first.
+
+Each spark has:
+
+- a **name** and a handle to go with it (`Scout` is `@scout-spark`),
+- a **goal**, the standing assignment it works toward,
+- a **schedule**, from every 15 minutes to weekly,
+- **boundaries**, what it must never do whatever the goal seems to need.
+
+For as long as Flash runs, in the terminal or as `flash --web`, sparks
+that are due work one at a time. A shift reads the goal, the notes the
+spark kept for itself last time, its last report, and everything you
+have taught it; works with the same tools a sub-agent gets; then either
+files a report or, when nothing is new, a quiet one that doesn't count
+as news. New reports show up at your prompt (`● Scout has news ·
+/sparks scout`) and as a count beside Sparks in the web UI's sidebar.
+
+```text
+/sparks teach scout Only tell me about issues labelled bug.
+```
+
+A lesson like that, or feedback typed under a report in the web UI, is
+kept and read by every later shift. Sparks live in `~/.flash/sparks`,
+one JSON file each. Like sub-agents, they can only run commands or
+change files in autonomous mode.
 
 ### Image Recognition
 

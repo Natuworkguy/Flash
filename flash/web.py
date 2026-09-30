@@ -56,6 +56,7 @@ from . import (
     learning,
     memory,
     skills,
+    sparks,
     updater,
     voice,
     workspace,
@@ -91,7 +92,7 @@ HTML_SANDBOX = "sandbox allow-scripts allow-forms allow-popups allow-modals"
 # The addresses the page answers to. Each serves the same page, which
 # opens whatever the address names: a chat, a project, a settings tab.
 PAGE_PATHS = re.compile(
-    r"^/(?:c/[0-9a-f]{8}|p/[0-9a-f]{8}|projects|skills|extensions"
+    r"^/(?:c/[0-9a-f]{8}|p/[0-9a-f]{8}|projects|skills|sparks|extensions"
     r"|settings(?:/(?:general|usage|memory|security))?)?/?$"
 )
 
@@ -870,6 +871,11 @@ class Session:
         if self._watching is None:
             self._watching = threading.Thread(target=self._watch, daemon=True)
             self._watching.start()
+
+    def sparks_changed(self) -> None:
+        """A spark started, finished, or was changed: the page redraws."""
+
+        self.hub.publish({"type": "sparks"})
 
     def owned(self, chat_id: str) -> set:
         return {a for a, c in list(self.agents.items()) if c == chat_id}
@@ -1719,6 +1725,7 @@ def status(ai) -> dict:
         "home": str(Path.home()),
         "learning": learning.running(),
         "agents": subagents.running_count(),
+        "sparks_unread": sparks.unread_total(),
     }
 
 
@@ -2054,6 +2061,12 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
         learning.refresh()
         return {"message": message}
 
+    if name == "sparks":
+        return {"sparks": [s.to_dict() for s in sparks.all_sparks()]}
+
+    if name.startswith("spark-"):
+        return _spark_command(name, arg, body)
+
     if name == "extensions":
         return {
             "extensions": [_extension_info(e) for e in extensions.installed()],
@@ -2310,6 +2323,45 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
         return {"share": context_share(ai, session.chat(chat_id))}
 
     raise ValueError(f"unknown command {name!r}")
+
+
+def _spark_command(name: str, arg: str, body: dict) -> dict:
+    """The Sparks page: make, change, run, teach, and read them."""
+
+    try:
+        if name == "spark-create":
+            spark = sparks.create(
+                arg, str(body.get("goal") or ""),
+                str(body.get("boundaries") or ""),
+                str(body.get("every") or ""),
+            )
+        elif name == "spark-update":
+            fields = ("name", "goal", "boundaries", "every")
+            spark = sparks.update(
+                arg, **{k: str(body[k]) for k in fields if k in body}
+            )
+        elif name == "spark-run":
+            spark = sparks.run_now(arg)
+        elif name in ("spark-pause", "spark-resume"):
+            spark = sparks.set_paused(arg, name == "spark-pause")
+        elif name == "spark-read":
+            spark = sparks.mark_read(arg)
+        elif name == "spark-teach":
+            at = body.get("at")
+            spark = sparks.teach(
+                arg, str(body.get("lesson") or ""),
+                float(at) if isinstance(at, (int, float)) else None,
+            )
+        elif name == "spark-unteach":
+            spark = sparks.forget_lesson(arg, int(body.get("index") or 0))
+        elif name == "spark-remove":
+            spark = sparks.remove(arg)
+            return {"removed": spark.id}
+        else:
+            raise ValueError(f"unknown command {name!r}")
+    except (sparks.SparkError, OSError) as exc:
+        raise ValueError(str(exc)) from None
+    return {"spark": spark.to_dict()}
 
 
 # --- HTTP ----------------------------------------------------------------
@@ -2931,6 +2983,10 @@ def _attach(server: "Server", standalone: bool) -> None:
 
     session = server.session
     session.relink = lambda: announce(server)
+    # Sparks work for as long as the server runs, and the page hears of
+    # every shift they start and finish.
+    sparks.on_change(session.sparks_changed)
+    sparks.start()
     session.switch_lan = lambda on: threading.Timer(
         SWITCH_DELAY, _switch_lan, (server, on),
     ).start()

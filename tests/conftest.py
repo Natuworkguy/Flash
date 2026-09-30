@@ -11,6 +11,7 @@ from flash import (
     memory,
     repl_input,
     skills,
+    sparks,
     terminal,
     tools,
     voice,
@@ -52,6 +53,9 @@ def isolated_home(tmp_path_factory, monkeypatch):
     # both have to come from the temp home too.
     monkeypatch.setattr(memory, "MEMORY_PATH", home / ".flash_memory.md")
     monkeypatch.setattr(skills, "FLASH_DIR", home / ".flash")
+    # Sparks, and what this session has already pointed out about them.
+    monkeypatch.setattr(sparks, "FLASH_DIR", home / ".flash")
+    monkeypatch.setattr(sparks, "_told", set())
     # The web UI's saved hosts, projects, and chats.
     monkeypatch.setattr(workspace, "FLASH_DIR", home / ".flash")
     # Voice settings and models too: the developer's own picks, loaded
@@ -68,6 +72,18 @@ def isolated_home(tmp_path_factory, monkeypatch):
     extensions.reload()
     learning.refresh()
     learning.reset()
+
+
+@pytest.fixture(autouse=True)
+def no_spark_keeper(monkeypatch):
+    """No test starts the thread that runs sparks' shifts.
+
+    ai.main() and the web server start it, and once running it would
+    outlive the test and work on sparks a later test makes. A test runs
+    a shift itself, with sparks.shift.
+    """
+
+    monkeypatch.setattr(sparks, "start", lambda: None)
 
 
 @pytest.fixture(autouse=True)

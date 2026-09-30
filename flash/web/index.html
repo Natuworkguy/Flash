@@ -988,6 +988,69 @@ button.item-row:hover { background: var(--hover); }
 .skill-read > :first-child { margin-top: 0; }
 .field .count { float: right; font-size: 11.5px; color: var(--text-3); font-weight: 400; }
 .field textarea.mono { font: 12.5px/1.55 var(--mono); }
+/* Sparks: little bubbles with eyes, one per always-on agent. They float
+   while they wait, bounce with a glint circling them while they work,
+   and sleep when paused. */
+.spark-av { --c: var(--accent); --s: 36px; position: relative; flex: none; width: var(--s); height: var(--s); border-radius: 50%;
+  display: inline-flex; align-items: center; justify-content: center; gap: calc(var(--s) * 0.17);
+  background: radial-gradient(circle at 32% 26%, color-mix(in srgb, #fff 75%, var(--c)) 0 10%, var(--c) 50%, color-mix(in srgb, var(--c) 64%, #000) 100%);
+  box-shadow: 0 4px 12px color-mix(in srgb, var(--c) 32%, transparent), inset 0 calc(var(--s) * -0.08) calc(var(--s) * 0.16) color-mix(in srgb, var(--c) 70%, #000);
+  animation: spark-float 3.4s ease-in-out infinite; animation-delay: calc(var(--i, 0) * -0.8s); }
+.spark-av .eye { width: max(3px, calc(var(--s) * 0.11)); height: calc(var(--s) * 0.21); margin-top: calc(var(--s) * -0.06); border-radius: 999px; background: #1b1a19;
+  animation: spark-blink 5s infinite; animation-delay: calc(var(--i, 0) * -1.3s); }
+.spark-av[data-state="working"] { animation: spark-bounce 0.95s var(--spring) infinite; }
+.spark-av[data-state="working"] .eye { animation: spark-look 2.2s ease-in-out infinite; }
+.spark-av[data-state="working"]::after { content: ""; position: absolute; top: 50%; left: 50%; width: 6px; height: 6px; margin: -3px; border-radius: 50%;
+  background: #fff; box-shadow: 0 0 6px 1px var(--c); animation: spark-orbit 1.3s linear infinite; }
+.spark-av[data-state="paused"] { animation: none; filter: saturate(0.3) brightness(0.9); }
+.spark-av[data-state="paused"] .eye { height: max(2px, calc(var(--s) * 0.05)); margin-top: 0; animation: none; }
+.spark-av[data-state="failed"] .eye { height: calc(var(--s) * 0.12); animation: none; }
+.spark-av .ping { position: absolute; top: -1px; right: -1px; width: calc(var(--s) * 0.3); height: calc(var(--s) * 0.3); min-width: 9px; min-height: 9px; border-radius: 50%; background: var(--accent); border: 2px solid var(--surface); }
+@keyframes spark-float { 50% { transform: translateY(-2px); } }
+@keyframes spark-bounce { 0%, 100% { transform: translateY(0) scale(1); } 35% { transform: translateY(-4px) scale(0.95, 1.05); } 65% { transform: translateY(0) scale(1.06, 0.94); } }
+@keyframes spark-blink { 0%, 93%, 100% { transform: scaleY(1); } 95% { transform: scaleY(0.1); } }
+@keyframes spark-look { 0%, 100% { transform: translateX(0); } 30% { transform: translateX(-2px); } 70% { transform: translateX(2px); } }
+@keyframes spark-orbit { from { transform: rotate(0deg) translateX(calc(var(--s) * 0.66)); } to { transform: rotate(360deg) translateX(calc(var(--s) * 0.66)); } }
+@media (prefers-reduced-motion: reduce) { .spark-av, .spark-av .eye, .spark-av::after { animation: none !important; } }
+#sparks-btn .count { margin-left: auto; font-size: 11.5px; font-weight: 600; min-width: 18px; padding: 0 6px; line-height: 18px; border-radius: 999px; text-align: center; background: var(--accent); color: var(--accent-text); }
+#sparks-btn .count:empty { display: none; }
+.spark-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 12px; }
+.spark-card { display: flex; gap: 14px; align-items: flex-start; padding: 16px; text-align: left; border: 1px solid var(--border); border-radius: 16px; background: var(--surface);
+  transition: border-color 0.15s, transform 0.15s; animation: rise 0.3s var(--ease) both; animation-delay: calc(var(--i, 0) * 0.04s); min-width: 0; }
+.spark-card:hover { border-color: var(--border-strong); transform: translateY(-1px); }
+.spark-card .main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.spark-card .name { font-weight: 600; font-size: 15px; color: var(--text); }
+.spark-card .handle, .spark-head .handle { font: 12px var(--mono); color: var(--text-3); }
+.spark-card .state { font-size: 12.5px; color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.spark-card .state.working { color: var(--text-2); }
+.spark-card .goal { font-size: 13.5px; color: var(--text-2); line-height: 1.45; margin-top: 4px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.spark-head { display: flex; align-items: center; gap: 16px; margin-bottom: 14px; }
+.spark-head h2 { margin: 0; font-size: 19px; }
+.spark-head .meta { font-size: 12.5px; color: var(--text-3); margin-top: 3px; }
+.spark-sec { margin: 16px 0 6px; font-size: 12.5px; font-weight: 600; color: var(--text-2); }
+.spark-text { font-size: 14px; color: var(--text); white-space: pre-wrap; line-height: 1.5; }
+.spark-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 14px 0 4px; }
+.spark-lessons { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 6px; }
+.spark-lessons li { display: flex; align-items: flex-start; gap: 8px; font-size: 13.5px; color: var(--text-2); padding: 7px 8px 7px 12px; border-radius: 10px; background: var(--hover); }
+.spark-lessons li span { flex: 1; }
+.spark-lessons .icon-btn { width: 24px; height: 24px; }
+.spark-lessons .icon-btn svg { width: 13px; height: 13px; }
+.spark-report { border: 1px solid var(--border); border-radius: 14px; padding: 12px 14px; margin-top: 10px; background: var(--bg); animation: rise 0.26s var(--ease) both; }
+.spark-report.failed { border-color: color-mix(in srgb, var(--del) 40%, transparent); }
+.spark-report .when { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-3); margin-bottom: 6px; }
+.spark-report .body { font-size: 14px; }
+.spark-report .body > :first-child { margin-top: 0; }
+.spark-report .body > :last-child { margin-bottom: 0; }
+.spark-report details { margin-top: 8px; font-size: 12.5px; color: var(--text-3); }
+.spark-report details summary { cursor: pointer; }
+.spark-report details ol { margin: 6px 0 0; padding-left: 20px; font: 12px/1.6 var(--mono); }
+.spark-report .said { margin-top: 10px; font-size: 13px; color: var(--text-3); }
+.spark-report .teach { display: flex; gap: 8px; margin-top: 10px; }
+.spark-report .teach input { flex: 1; min-width: 0; font: 13.5px var(--sans); color: var(--text); background: var(--surface); border: 1px solid var(--border-strong); border-radius: 9px; padding: 6px 10px; outline: 0; }
+.spark-quiet { font-size: 12.5px; color: var(--text-3); margin-top: 10px; }
+.field small [data-handle] { font: 500 12px var(--mono); color: var(--text-2); }
+.field select { width: 100%; font: 14.5px var(--sans); color: var(--text); background: var(--bg); border: 1px solid var(--border-strong); border-radius: 10px; padding: 9px 12px; outline: 0; }
+
 .ext-preview { margin: 14px 0 6px; padding: 12px 14px; border: 1px solid var(--border); border-radius: 12px; background: var(--code-bg); }
 .ext-preview .name { font: 600 14px var(--mono); }
 .ext-preview ul { margin: 8px 0 0; padding-left: 18px; font-size: 13.5px; color: var(--text-2); }
@@ -1398,6 +1461,7 @@ body.resizing-viewer iframe { pointer-events: none; }
     <button class="side-row" id="search-btn" data-tip="Search chats" data-keys="Alt F"></button>
     <button class="side-row" id="projects-btn" data-tip="Projects" data-keys="Alt P"></button>
     <button class="side-row" id="skills-btn" data-tip="Skills"></button>
+    <button class="side-row" id="sparks-btn" data-tip="Sparks"></button>
     <button class="side-row" id="extensions-btn" data-tip="Extensions"></button>
     <button class="side-label" id="recents-btn" type="button" aria-expanded="true" aria-controls="chats"><span>Recents</span><span class="count"></span><i></i></button>
     <nav id="chats"></nav>
@@ -1518,6 +1582,7 @@ const ICON = {
   chevRight: '<path d="m9 6 6 6-6 6"/>',
   chevDown: '<path d="m6 9 6 6 6-6"/>',
   bolt: '<path d="M13 2 4 14h7l-1 8 9-12h-7Z"/>',
+  spark: '<circle cx="10" cy="13" r="7"/><path d="M8 11.5v2M12 11.5v2"/><path d="M19 2.5v4M17 4.5h4"/>',
   phone: '<rect x="6" y="2" width="12" height="20" rx="3"/><path d="M11 18h2"/>',
   keyboard: '<rect x="2" y="5" width="20" height="14" rx="3"/><path d="M6 9h.01M10 9h.01M14 9h.01M18 9h.01M7 15h10"/>',
   sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>',
@@ -1673,7 +1738,7 @@ const VOICE_PATIENCE = 8;        // seconds with no speech before pausing
 const VOICE_LONGEST = 120;       // seconds in one turn, at most
 
 const voice = { on: false, state: "", ctx: null, stream: null, level: 0, turn: null, tap: null, source: null, cut: false, setup: null, analyser: null };
-let view = "chat";         // "chat" | "projects" | "project" | "settings" | "skills" | "extensions"
+let view = "chat";         // "chat" | "projects" | "project" | "settings" | "skills" | "sparks" | "extensions"
 let viewProject = null;    // the project page shown, or the project a new chat starts in
 
 // Addresses. Every view has one, so a chat can be reloaded, bookmarked,
@@ -1711,7 +1776,7 @@ function routeTo(path) {
   } else if ((m = path.match(/^\/settings(?:\/(general|usage|memory|security))?\/?$/))) {
     view = "settings";
     settingsTab = m[1] || "general";
-  } else if ((m = path.match(/^\/(projects|skills|extensions)\/?$/))) {
+  } else if ((m = path.match(/^\/(projects|skills|sparks|extensions)\/?$/))) {
     view = m[1];
   } else if (path !== "/") {
     replaceUrl = true;
@@ -3322,11 +3387,11 @@ function drawPage() {
   document.body.classList.toggle("page-projects", view === "projects");
   document.body.classList.toggle("page-project", view === "project");
   document.body.classList.toggle("page-settings", view === "settings");
-  document.body.classList.toggle("page-tool", view === "skills" || view === "extensions");
+  document.body.classList.toggle("page-tool", view === "skills" || view === "sparks" || view === "extensions");
   messagesEl.textContent = "";
   streamNode = null;
   $("#crumb").hidden = true;
-  const pages = { projects: drawProjects, settings: drawSettings, skills: drawSkillsPage, extensions: drawExtensionsPage };
+  const pages = { projects: drawProjects, settings: drawSettings, skills: drawSkillsPage, sparks: drawSparksPage, extensions: drawExtensionsPage };
   (pages[view] || drawProject)();
   renderPending();
   syncUrl();
@@ -3620,6 +3685,248 @@ function toolPage(title, draw) {
 }
 const drawSkillsPage = () => toolPage("Skills", drawSkills);
 const drawExtensionsPage = () => toolPage("Extensions", drawExtensions);
+
+// Sparks ---------------------------------------------------------------------
+// Agents that keep working on one goal, on a schedule, for as long as Flash
+// runs, and report back. Each is drawn as a bubble with eyes: floating while
+// it waits, bouncing while it works, asleep while paused.
+
+const EVERY_CHOICES = [[15, "Every 15 minutes"], [30, "Every 30 minutes"], [60, "Every hour"], [120, "Every 2 hours"], [360, "Every 6 hours"], [720, "Every 12 hours"], [1440, "Every day"], [10080, "Every week"]];
+
+function sparkAvatar(spark, size = 36, i = 0) {
+  const av = el("span", "spark-av", `<i class="eye"></i><i class="eye"></i>`);
+  av.dataset.state = spark.status === "working" ? "working" : spark.paused ? "paused" : spark.status === "failed" ? "failed" : "idle";
+  av.style.setProperty("--c", spark.colour);
+  av.style.setProperty("--s", `${size}px`);
+  av.style.setProperty("--i", i);
+  av.setAttribute("aria-hidden", "true");
+  if (spark.unread) av.appendChild(el("span", "ping"));
+  return av;
+}
+
+function everyWords(minutes) {
+  for (const [size, unit] of [[10080, "week"], [1440, "day"], [60, "hour"]]) {
+    if (minutes % size === 0) { const n = minutes / size; return n === 1 ? unit : `${n} ${unit}s`; }
+  }
+  return `${minutes} minutes`;
+}
+
+function sparkState(spark) {
+  if (spark.status === "working") return spark.activity ? `Working: ${spark.activity}` : "Working";
+  if (spark.paused) return "Paused";
+  const wait = Math.round((spark.next_run - Date.now() / 1000) / 60);
+  const next = wait <= 0 ? "Starting soon" : wait < 120 ? `Next shift in ${wait} min` : wait < 2880 ? `Next shift in ${Math.round(wait / 60)} h` : `Next shift in ${Math.round(wait / 1440)} d`;
+  return spark.status === "failed" ? `Last shift failed · ${next}` : next;
+}
+
+const sparkHandle = (name) => `@${name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "spark"}-spark`;
+
+// AGAIN: a redraw for news, which should not replay the cards' entrance.
+async function drawSparks(body, again = false) {
+  let r;
+  try { r = await command("sparks"); } catch (error) { showFailure(error); return; }
+  if (!body.isConnected) return;
+  body.innerHTML = `<div class="mem-head"><p class="sub">Agents that keep working on one goal, on a schedule, for as long as Flash is running, and report back. Tell one what to do differently and it remembers.</p></div><div class="host"></div><div class="mem-path"></div>`;
+  if (again) body.style.animation = "none";
+  const add = el("button", "btn primary with-icon", `${icon("plus")}<span>New spark</span>`);
+  add.type = "button";
+  add.onclick = () => sparkForm();
+  body.querySelector(".mem-head").appendChild(add);
+  const host = body.querySelector(".host");
+  if (!r.sparks.length) {
+    host.innerHTML = `<div class="mem-empty"><b>No sparks yet</b>Give one a goal like “every morning, check my repo for new issues and tell me which look like bugs”. Or ask Flash in a chat to make one.</div>`;
+    return;
+  }
+  const grid = el("div", "spark-grid");
+  r.sparks.forEach((spark, i) => {
+    const card = el("button", "spark-card", `<span class="main"><span class="name"></span><span class="handle"></span><span class="state"></span><span class="goal"></span></span>`);
+    card.type = "button";
+    card.style.setProperty("--i", i);
+    if (again) card.style.animation = "none";
+    card.prepend(sparkAvatar(spark, 44, i));
+    card.querySelector(".name").textContent = spark.name;
+    card.querySelector(".handle").textContent = `${spark.handle} · every ${everyWords(spark.every)}`;
+    const state = card.querySelector(".state");
+    state.textContent = spark.unread ? `${spark.unread} new report${spark.unread === 1 ? "" : "s"} · ${sparkState(spark)}` : sparkState(spark);
+    state.classList.toggle("working", spark.status === "working");
+    card.querySelector(".goal").textContent = spark.goal;
+    card.onclick = () => openSpark(spark.id);
+    grid.appendChild(card);
+  });
+  host.appendChild(grid);
+  const working = r.sparks.filter((s) => s.status === "working").length;
+  body.querySelector(".mem-path").textContent = `${r.sparks.length} spark${r.sparks.length === 1 ? "" : "s"}${working ? ` · ${working} working` : ""} · saved in ~/.flash/sparks`;
+}
+const drawSparksPage = () => toolPage("Sparks", drawSparks);
+
+async function openSpark(id) {
+  let r;
+  try { r = await command("sparks"); } catch (error) { showFailure(error); return; }
+  const spark = r.sparks.find((s) => s.id === id);
+  if (!spark) { toast("That spark is gone."); return; }
+  const form = openForm(`<div class="spark-detail"></div>`, async () => false);
+  fillSpark(form.querySelector(".spark-detail"), spark);
+  // Not the first feedback box, which would scroll past the goal.
+  form.querySelector("[data-cancel]").focus({ preventScroll: true });
+  // Opened is read. The ping on its bubble goes with the next redraw.
+  if (spark.unread) command("spark-read", id, null).catch(() => {});
+}
+
+function fillSpark(box, spark, again = false) {
+  box.dataset.id = spark.id;
+  box.innerHTML = `<div class="spark-head"><div><h2></h2><div class="handle"></div><div class="meta"></div></div></div>
+    <div class="spark-sec">Goal</div><div class="spark-text" data-goal></div>
+    <div data-bounds hidden><div class="spark-sec">Boundaries</div><div class="spark-text"></div></div>
+    <div class="spark-actions"></div>
+    <div data-lessons hidden><div class="spark-sec">What you have taught it</div><ul class="spark-lessons"></ul></div>
+    <div class="spark-sec">Reports</div><div data-reports></div>
+    <div class="dialog-buttons"><button type="button" class="btn" data-cancel>Close</button></div>`;
+  box.querySelector(".spark-head").prepend(sparkAvatar({ ...spark, unread: 0 }, 60));
+  box.querySelector("h2").textContent = spark.name;
+  box.querySelector(".handle").textContent = spark.handle;
+  box.querySelector(".meta").textContent = `Every ${everyWords(spark.every)} · ${sparkState(spark)} · ${spark.runs} shift${spark.runs === 1 ? "" : "s"}`;
+  box.querySelector("[data-goal]").textContent = spark.goal;
+  if (spark.boundaries) {
+    box.querySelector("[data-bounds]").hidden = false;
+    box.querySelector("[data-bounds] .spark-text").textContent = spark.boundaries;
+  }
+  box.querySelector("[data-cancel]").onclick = closeForm;
+
+  const act = (label, run, cls = "btn small") => {
+    const b = el("button", cls);
+    b.type = "button";
+    b.textContent = label;
+    b.onclick = async () => { try { await run(b); } catch (error) { showFailure(error); } };
+    box.querySelector(".spark-actions").appendChild(b);
+    return b;
+  };
+  const working = spark.status === "working";
+  act(working ? "Working…" : "Run now", async () => { await command("spark-run", spark.id, null); toast(`${spark.name} is starting a shift`); }).disabled = working;
+  act(spark.paused ? "Resume" : "Pause", async () => { await command(spark.paused ? "spark-resume" : "spark-pause", spark.id, null); });
+  act("Edit", async () => sparkForm(spark));
+  act("Delete", async (b) => {
+    if (!b.classList.contains("sure")) { b.classList.add("sure"); b.textContent = "Delete it?"; return; }
+    await command("spark-remove", spark.id, null);
+    closeForm();
+    toast(`${spark.name} is gone`);
+  }, "btn small danger");
+
+  if (spark.lessons.length) {
+    box.querySelector("[data-lessons]").hidden = false;
+    const list = box.querySelector(".spark-lessons");
+    spark.lessons.forEach((lesson, i) => {
+      const item = el("li", "", `<span></span>`);
+      item.querySelector("span").textContent = lesson;
+      item.appendChild(button("icon-btn", "x", "Forget this", "", async () => {
+        try { await command("spark-unteach", spark.id, null, { index: i + 1 }); } catch (error) { showFailure(error); }
+      }));
+      list.appendChild(item);
+    });
+  }
+
+  const reports = box.querySelector("[data-reports]");
+  const said = spark.reports.filter((r) => !r.quiet).reverse();
+  const quiet = spark.reports.length - said.length;
+  if (!said.length) {
+    reports.appendChild(el("p", "spark-quiet", spark.runs ? `Nothing to report yet. ${quiet} quiet shift${quiet === 1 ? "" : "s"}.` : working ? "Working on its first shift." : "Its first shift starts soon."));
+  }
+  for (const report of said) {
+    const card = el("div", "spark-report" + (report.failed ? " failed" : ""), `<div class="when"></div><div class="body assistant"></div>`);
+    if (again) card.style.animation = "none";
+    card.querySelector(".when").textContent = `${when(report.at)} · ${ago(report.at)}`;
+    if (!report.read) card.querySelector(".when").appendChild(el("span", "made-by", "New"));
+    card.querySelector(".body").innerHTML = markdown(report.text);
+    if (report.steps.length) {
+      const steps = el("details", "", `<summary>${report.steps.length} step${report.steps.length === 1 ? "" : "s"}</summary><ol></ol>`);
+      for (const step of report.steps) steps.querySelector("ol").appendChild(el("li")).textContent = step;
+      card.appendChild(steps);
+    }
+    if (report.feedback) {
+      card.appendChild(el("div", "said")).textContent = `You said: ${report.feedback}`;
+    } else if (!report.failed) {
+      const teach = el("div", "teach", `<input type="text" maxlength="400" autocomplete="off"><button type="button" class="btn small">Tell it</button>`);
+      const field = teach.querySelector("input");
+      field.placeholder = `Tell ${spark.name} what to do differently…`;
+      const go = async () => {
+        const lesson = field.value.trim();
+        if (!lesson) return;
+        try { await command("spark-teach", spark.id, null, { lesson, at: report.at }); field.value = ""; toast(`${spark.name} will remember that`); }
+        catch (error) { showFailure(error); }
+      };
+      field.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); go(); } });
+      teach.querySelector("button").onclick = go;
+      card.appendChild(teach);
+    }
+    reports.appendChild(card);
+  }
+  if (said.length && quiet) reports.appendChild(el("p", "spark-quiet", `And ${quiet} quiet shift${quiet === 1 ? "" : "s"} with nothing new.`));
+}
+
+function sparkForm(spark) {
+  const editing = !!spark;
+  const every = editing ? spark.every : 60;
+  const choices = EVERY_CHOICES.some(([m]) => m === every) ? EVERY_CHOICES : [...EVERY_CHOICES, [every, `Every ${everyWords(every)}`]].sort((a, b) => a[0] - b[0]);
+  const form = openForm(`
+    <h2>${editing ? "Edit spark" : "New spark"}</h2>
+    <p class="sub">${editing ? "" : "An agent that keeps working on one goal, on a schedule, while Flash runs, and reports back."}</p>
+    <label class="field"><span>Name</span><input name="sparkname" maxlength="24" placeholder="Scout" autocomplete="off"><small>Its handle: <b data-handle>@scout-spark</b></small></label>
+    <label class="field"><span>Goal</span><textarea name="goal" rows="4" placeholder="Check github.com/me/app for new issues. Tell me which look like bugs, and skip ones you have already told me about."></textarea></label>
+    <label class="field"><span>How often</span><select name="every">${choices.map(([m, label]) => `<option value="${m}"${m === every ? " selected" : ""}>${label}</option>`).join("")}</select><small>It works while Flash is open, in the terminal or here.</small></label>
+    <label class="field"><span>Boundaries</span><textarea name="boundaries" rows="2" placeholder="Only read. Never push, delete, or message anyone."></textarea><small>Lines it must not cross. Running commands and changing files also need autonomous mode, as for sub-agents.</small></label>
+    <div class="dialog-buttons"><button type="button" class="btn" data-cancel>Cancel</button><button type="submit" class="btn primary">${editing ? "Save" : "Make spark"}</button></div>`,
+    async (data) => {
+      const fields = { goal: data.goal, every: data.every, boundaries: data.boundaries };
+      const name = data.sparkname.trim();
+      if (editing) {
+        await command("spark-update", spark.id, null, { ...fields, name });
+        toast(`Saved ${name}`);
+        await openSpark(spark.id);
+        return false;
+      }
+      const made = (await command("spark-create", name, null, fields)).spark;
+      toast(`${made.name} is on it`);
+      if (view !== "sparks") showPage("sparks");
+    });
+  const handle = form.querySelector("[data-handle]");
+  const named = () => { handle.textContent = sparkHandle(form.sparkname.value || "scout"); };
+  form.sparkname.addEventListener("input", named);
+  if (editing) {
+    form.sparkname.value = spark.name;
+    form.goal.value = spark.goal;
+    form.boundaries.value = spark.boundaries;
+  }
+  named();
+  form.querySelector("[data-cancel]").onclick = editing ? () => openSpark(spark.id) : closeForm;
+}
+
+// A spark started, finished, or changed. Shifts report every step, so
+// this waits for a quiet moment before fetching.
+let sparksTimer = null;
+function sparksChanged() {
+  refreshLite();
+  clearTimeout(sparksTimer);
+  sparksTimer = setTimeout(async () => {
+    if (view === "sparks") {
+      const body = messagesEl.querySelector(".tab-body");
+      const editing = body && body.contains(document.activeElement) && /TEXTAREA|INPUT/.test(document.activeElement.tagName);
+      if (body && !editing) drawSparks(body, true);
+    }
+    const box = $("#form-body .spark-detail");
+    if (!box || !isOpen($("#form"))) return;
+    // Not while feedback is half typed.
+    if ([...box.querySelectorAll("input")].some((f) => f.value.trim())) return;
+    let r;
+    try { r = await command("sparks"); } catch (_) { return; }
+    const spark = r.sparks.find((s) => s.id === box.dataset.id);
+    if (!box.isConnected) return;
+    if (!spark) { closeForm(); return; }
+    // Focus in the dialog is what Escape closes it by, so it goes back
+    // where it was rather than with the old buttons.
+    const focused = box.contains(document.activeElement) || document.activeElement === document.body;
+    fillSpark(box, spark, true);
+    if (focused) box.querySelector("[data-cancel]").focus({ preventScroll: true });
+  }, 300);
+}
 
 function redrawSettingsTab(name) {
   if (view === name) drawPage(); else showPage(name);
@@ -4567,6 +4874,7 @@ async function importMemory() {
 function markSide() {
   $("#projects-btn").classList.toggle("active", view === "projects" || view === "project");
   $("#skills-btn").classList.toggle("active", view === "skills");
+  $("#sparks-btn").classList.toggle("active", view === "sparks");
   $("#extensions-btn").classList.toggle("active", view === "extensions");
   $("#settings-btn").classList.toggle("active", view === "settings");
 }
@@ -5400,6 +5708,7 @@ function apply(event) {
   if (event.type === "update") { info.update = event.update; onUpdate(); return; }
   if (event.type === "voice-setup") { voiceSetupEvent(event); return; }
   if (event.type === "voice-model") { voiceModelEvent(event); return; }
+  if (event.type === "sparks") { sparksChanged(); return; }
   if (event.type === "browsers") { if (view === "settings" && settingsTab === "security") renderBrowsers(); return; }
 
   const chat = chats.get(event.chat);
@@ -5509,7 +5818,7 @@ function refreshLite() {
     // Not while something on the page is being edited: redrawing it
     // would throw away what is half typed.
     const editing = messagesEl.contains(document.activeElement) && /TEXTAREA|INPUT/.test(document.activeElement.tagName);
-    if (!["chat", "settings", "skills", "extensions"].includes(view) && !editing && $("#form").hidden) drawPage();
+    if (!["chat", "settings", "skills", "sparks", "extensions"].includes(view) && !editing && $("#form").hidden) drawPage();
     renderChats();
     renderInfo();
     const chat = chats.get(current);
@@ -5674,6 +5983,8 @@ function renderAgents() {
   const btn = $("#agents-btn");
   btn.hidden = !count;
   $("#agents-count").textContent = `${count} agent${count === 1 ? "" : "s"} working`;
+  const unread = $("#sparks-btn .count");
+  if (unread) unread.textContent = info.sparks_unread || "";
 }
 
 // What this chat's sub-agents are doing: a menu over the pill.
@@ -6661,6 +6972,7 @@ const ACTIONS = [
   { label: "Settings and usage", keys: "Alt ,", slash: "/settings", run: () => showSettings() },
   { label: "Update Flash", keys: "", slash: "/update", run: () => { showSettings("general"); checkUpdates(); } },
   { label: "Skills", keys: "", slash: "/skills", run: () => showPage("skills") },
+  { label: "Sparks", keys: "", slash: "/sparks", run: () => showPage("sparks") },
   { label: "Background", keys: "", slash: "/background", run: () => showSettings("general") },
   { label: "Extensions", keys: "", slash: "/extensions", run: () => showPage("extensions") },
   { label: "Import memory from another AI", keys: "", slash: "/import", run: () => { showSettings("memory"); importMemory(); } },
@@ -7082,6 +7394,7 @@ $("#model-btn").onclick = () => (menuEl && !slashOpen ? closeMenu() : openModels
 $("#project-btn").onclick = () => (menuEl && !slashOpen ? closeMenu() : openProjectPicker());
 $("#projects-btn").onclick = showProjects;
 $("#skills-btn").onclick = () => showPage("skills");
+$("#sparks-btn").onclick = () => showPage("sparks");
 $("#extensions-btn").onclick = () => showPage("extensions");
 $("#crumb").onclick = () => { const c = chats.get(current); const id = c ? c.project : viewProject; if (id) openProject(id, "back"); };
 $("#title").onclick = rename;
@@ -7195,6 +7508,7 @@ $("#top-new").innerHTML = icon("compose");
 $("#new-chat .plus").innerHTML = icon("plus");
 $("#projects-btn").innerHTML = icon("folder") + "<span>Projects</span>";
 $("#skills-btn").innerHTML = icon("book") + "<span>Skills</span>";
+$("#sparks-btn").innerHTML = icon("spark") + "<span>Sparks</span><span class=\"count\"></span>";
 $("#extensions-btn").innerHTML = icon("puzzle") + "<span>Extensions</span>";
 $("#search-btn").innerHTML = icon("search") + "<span>Search</span>";
 $("#recents-btn i").innerHTML = icon("chevDown");
