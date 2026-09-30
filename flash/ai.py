@@ -1861,8 +1861,15 @@ def _new_spark() -> None:
         return
     every = _ask_line("How often? (30m, 2h, daily; Enter for hourly)")
     boundaries = _ask_line("Anything it must never do? (Enter for none)")
+    from . import workspace
+
+    names = [p.name for p in workspace.projects()]
+    project = _ask_line(
+        f"Which project does it work on? ({', '.join(names)}; Enter for "
+        "none)"
+    ) if names else ""
     try:
-        spark = sparks.create(name, goal, boundaries, every)
+        spark = sparks.create(name, goal, boundaries, every, project)
     except sparks.SparkError as exc:
         warn(str(exc))
         return
@@ -1885,8 +1892,11 @@ def _new_spark() -> None:
 def _show_spark(spark: "sparks.Spark") -> None:
     head = Text(f"\n{_bubble()} ", style=spark.colour)
     head.append(spark.name, style=f"bold {spark.colour}")
+    found = sparks.project_of(spark)
     head.append(f"  {spark.handle} · every "
-                f"{sparks.every_words(spark.every)} · {_spark_state(spark)}"
+                f"{sparks.every_words(spark.every)}"
+                f"{f' · in {found.name}' if found else ''}"
+                f" · {_spark_state(spark)}"
                 f" · {spark.runs} shift{'' if spark.runs == 1 else 's'}\n",
                 style=DIM)
     head.append("\nGoal\n", style="bold")
@@ -2018,6 +2028,14 @@ def _sparks_command(arg: str) -> None:
             spark = sparks.forget_lesson(key, int(extra))
             console.print(Text(f"{spark.name} let that go.", style=DIM))
             return
+        if action == "project" and key and extra:
+            spark = sparks.update(key, project=extra)
+            found = sparks.project_of(spark)
+            console.print(Text(
+                f"{spark.name} works on {found.name} now." if found else
+                f"{spark.name} has no project now.", style=DIM,
+            ))
+            return
         if action == "every" and key and extra:
             spark = sparks.update(key, every=extra)
             console.print(Text(
@@ -2046,7 +2064,8 @@ def _sparks_command(arg: str) -> None:
         warn(
             "Usage: /sparks [new | <name> | chat <name> [message] "
             "| run|pause|resume|remove <name> | teach <name> <lesson> "
-            "| every <name> <30m|2h|daily> | always on|off]"
+            "| every <name> <30m|2h|daily> | project <name> <project|none> "
+            "| always on|off]"
         )
         return
 
@@ -2067,6 +2086,9 @@ def _sparks_command(arg: str) -> None:
         body.append(f"  {_bubble()} ", style=spark.colour)
         body.append(f"{spark.name:<{width}}", style=f"bold {spark.colour}")
         body.append(_spark_state(spark), style=DIM)
+        found = sparks.project_of(spark)
+        if found:
+            body.append(f" · in {found.name}", style=DIM)
         if spark.unread:
             body.append(f"  {spark.unread} new", style=ACCENT)
         body.append(f"\n     {spark.goal.splitlines()[0][:70]}\n", style=DIM)

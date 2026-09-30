@@ -283,6 +283,8 @@ class Spark:
     # A shift asked for now, ahead of the schedule, even while paused.
     asked: bool = False
     chat: list[Message] = field(default_factory=list)
+    # The project it works on, by its ID in the web UI's projects, or "".
+    project: str = ""
     # When the answer being made now was started, or 0; and what it is
     # doing meanwhile.
     replying: float = 0.0
@@ -306,6 +308,9 @@ class Spark:
         data = asdict(self)
         data["handle"] = self.handle
         data["answering"] = self.answering
+        found = project_of(self)
+        data["project"] = found.id if found else ""
+        data["project_name"] = found.name if found else ""
         data["unread"] = self.unread
         return data
 
@@ -556,8 +561,59 @@ def _edit(key: str, change: Callable[[Spark], None]) -> Spark:
     return spark
 
 
+# --- Projects ------------------------------------------------------------
+#
+# A spark can be given a project, one of the web UI's: a folder, with
+# instructions for working in it. Its shifts are told where the folder
+# is and read the instructions, and a chat with it starts in the
+# project. A shift does not move the process into the folder, as a web
+# chat does for its turn, since the keeper shares the process with
+# whatever else is running; it is told to use full paths instead.
+
+
+def project_of(spark: Spark):
+    """SPARK's project, or None: none given, or the project is gone."""
+
+    if not spark.project:
+        return None
+    from . import workspace  # deferred: only a spark with one needs it
+
+    return workspace.project(spark.project)
+
+
+def resolve_project(key: str) -> str:
+    """The ID of the project KEY names, by ID or by name; "" for none."""
+
+    key = " ".join(str(key or "").split())
+    if key.lower() in ("", "none", "no project", "-"):
+        return ""
+    from . import workspace  # deferred: only a spark with one needs it
+
+    for found in workspace.projects():
+        if key == found.id or key.casefold() == found.name.casefold():
+            return found.id
+    raise SparkError(f"No project called {key!r}.")
+
+
+def project_block(spark: Spark) -> str:
+    """What a shift is told about SPARK's project, or ""."""
+
+    found = project_of(spark)
+    if found is None:
+        return ""
+    lines = [
+        f"=== Your project: {found.name} ===",
+        f"You work on the project in {found.path}. Relative paths do not "
+        "start there, so give full paths, and cd into it first in shell "
+        "commands.",
+    ]
+    if found.instructions:
+        lines += ["", found.instructions]
+    return "\n".join(lines)
+
+
 def create(
-    name: str, goal: str, boundaries: str = "", every="",
+    name: str, goal: str, boundaries: str = "", every="", project: str = "",
 ) -> Spark:
     """Make a spark. Its first shift runs as soon as the keeper looks."""
 
@@ -568,6 +624,7 @@ def create(
     if not goal:
         raise SparkError("A spark needs a goal.")
     minutes = parse_every(every)
+    project = resolve_project(project)
 
     with _held():
         taken = {s.handle for s in all_sparks()}
@@ -580,6 +637,7 @@ def create(
             boundaries=str(boundaries or "").strip()[:BOUNDARY_CHARS],
             every=minutes,
             colour=COLOURS[len(taken) % len(COLOURS)],
+            project=project,
         )
         _save(spark)
     _changed()
@@ -604,6 +662,8 @@ def update(key: str, **changes) -> Spark:
             spark.every = parse_every(changes["every"])
             if spark.last_run:
                 spark.next_run = spark.last_run + spark.every * 60
+        if "project" in changes:
+            spark.project = resolve_project(changes["project"])
         if "name" in changes:
             name = " ".join(str(changes["name"] or "").split())[:NAME_CHARS]
             if not name:
@@ -725,7 +785,10 @@ def _prompt(spark: Spark, host: str, model: str, date_prompt: str) -> str:
         since=_since(spark.last_run),
         nothing_new=NOTHING_NEW,
     )
-    parts = [get_model_system_prompt(host, model), body, date_prompt]
+    parts = [
+        get_model_system_prompt(host, model), body, project_block(spark),
+        date_prompt,
+    ]
     return "\n\n".join(part for part in parts if part)
 
 
@@ -935,8 +998,11 @@ def chat_tool_names() -> tuple[str, ...]:
     return flash_tools.SUBAGENT_TOOL_NAMES
 
 
-def chat_prompt(spark: Spark, host: str, model: str, date: str) -> str:
-    """The system prompt for talking with SPARK."""
+def chat_prompt(
+    spark: Spark, host: str, model: str, date: str, project: bool = True,
+) -> str:
+    """The system prompt for talking with SPARK. PROJECT False leaves its
+    project out, for a web chat that adds the project itself."""
 
     lessons = "\n".join(f"- {lesson}" for lesson in spark.lessons)
     reports = "\n\n".join(
@@ -954,7 +1020,10 @@ def chat_prompt(spark: Spark, host: str, model: str, date: str) -> str:
         notes=spark.notes or "(none yet)",
         reports=reports or "(none yet: you have not reported anything)",
     )
-    parts = [get_model_system_prompt(host, model), body, date]
+    parts = [
+        get_model_system_prompt(host, model), body,
+        project_block(spark) if project else "", date,
+    ]
     return "\n\n".join(part for part in parts if part)
 
 

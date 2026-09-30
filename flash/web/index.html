@@ -1072,6 +1072,10 @@ button.item-row:hover { background: var(--hover); }
 .menu .spark-av { --s: 22px; animation: none; }
 .menu.emoji-menu { z-index: 60; min-width: 220px; }
 .menu .emo { font-size: 18px; width: 24px; text-align: center; flex: none; }
+.section-label .link-btn { float: right; margin-top: -3px; }
+.project-sparks { margin-bottom: 26px; }
+.project-sparks button { display: flex; align-items: center; gap: 10px; }
+.project-sparks .name { flex: 1; min-width: 0; text-align: left; }
 .field select { width: 100%; font: 14.5px var(--sans); color: var(--text); background: var(--bg); border: 1px solid var(--border-strong); border-radius: 10px; padding: 9px 12px; outline: 0; }
 
 .ext-preview { margin: 14px 0 6px; padding: 12px 14px; border: 1px solid var(--border); border-radius: 12px; background: var(--code-bg); }
@@ -3516,6 +3520,30 @@ function drawProject() {
   drawNotes();
   page.appendChild(panel);
 
+  // The sparks working on it: each opens its window, and a new one can
+  // be made here, already given the project.
+  const itsSparks = sparkList.filter((sp) => sp.project === p.id);
+  const sparkHead = el("div", "section-label", "Sparks");
+  const addSpark = el("button", "link-btn", "New spark");
+  addSpark.type = "button";
+  addSpark.onclick = () => sparkForm(null, p.id);
+  sparkHead.appendChild(addSpark);
+  page.appendChild(sparkHead);
+  if (itsSparks.length) {
+    const listEl = el("div", "chat-list project-sparks");
+    itsSparks.forEach((sp, i) => {
+      const row = el("button", "", `<span class="name"></span><span class="when">${esc(sp.handle)}</span>`);
+      row.type = "button";
+      row.prepend(sparkAvatar({ ...sp, unread: 0 }, 20, i));
+      row.querySelector(".name").textContent = sp.name;
+      row.onclick = () => openSpark(sp.id);
+      listEl.appendChild(row);
+    });
+    page.appendChild(listEl);
+  } else {
+    page.appendChild(el("p", "page-empty", "No sparks work on this project yet. A spark keeps at one goal here on a schedule, like checking the build every morning."));
+  }
+
   const inProject = [...chats.values()].filter((c) => c.project === p.id && c.log.length).sort(byRecent);
   if (inProject.length) {
     page.appendChild(el("div", "section-label", "Chats"));
@@ -3796,7 +3824,7 @@ async function drawSparks(body, again = false) {
     if (again) card.style.animation = "none";
     card.prepend(sparkAvatar(spark, 44, i));
     card.querySelector(".name").textContent = spark.name;
-    card.querySelector(".handle").textContent = `${spark.handle} · every ${everyWords(spark.every)}`;
+    card.querySelector(".handle").textContent = `${spark.handle} · every ${everyWords(spark.every)}${spark.project_name ? ` · in ${spark.project_name}` : ""}`;
     const state = card.querySelector(".state");
     state.textContent = spark.unread ? `${spark.unread} new report${spark.unread === 1 ? "" : "s"} · ${sparkState(spark)}` : sparkState(spark);
     state.classList.toggle("working", spark.status === "working");
@@ -3865,7 +3893,7 @@ function fillSpark(box, spark, again = false) {
   box.querySelector(".spark-head").prepend(sparkAvatar({ ...spark, unread: 0 }, 60));
   box.querySelector("h2").textContent = spark.name;
   box.querySelector(".handle").textContent = spark.handle;
-  box.querySelector(".meta").textContent = `Every ${everyWords(spark.every)} · ${sparkState(spark)} · ${spark.runs} shift${spark.runs === 1 ? "" : "s"}`;
+  box.querySelector(".meta").textContent = `Every ${everyWords(spark.every)}${spark.project_name ? ` · in ${spark.project_name}` : ""} · ${sparkState(spark)} · ${spark.runs} shift${spark.runs === 1 ? "" : "s"}`;
   box.querySelector("[data-goal]").textContent = spark.goal;
   if (spark.boundaries) {
     box.querySelector("[data-bounds]").hidden = false;
@@ -3945,7 +3973,7 @@ function fillSpark(box, spark, again = false) {
   if (said.length && quiet) reports.appendChild(el("p", "spark-quiet", `And ${quiet} quiet shift${quiet === 1 ? "" : "s"} with nothing new.`));
 }
 
-function sparkForm(spark) {
+function sparkForm(spark, inProjectId = "") {
   const editing = !!spark;
   const every = editing ? spark.every : 60;
   const choices = EVERY_CHOICES.some(([m]) => m === every) ? EVERY_CHOICES : [...EVERY_CHOICES, [every, `Every ${everyWords(every)}`]].sort((a, b) => a[0] - b[0]);
@@ -3955,14 +3983,16 @@ function sparkForm(spark) {
     <label class="field"><span>Name</span><input name="sparkname" maxlength="24" placeholder="Scout" autocomplete="off"><small>Its handle: <b data-handle>@scout-spark</b></small></label>
     <label class="field"><span>Goal</span><textarea name="goal" rows="4" placeholder="Check github.com/me/app for new issues. Tell me which look like bugs, and skip ones you have already told me about."></textarea></label>
     <label class="field"><span>How often</span><select name="every">${choices.map(([m, label]) => `<option value="${m}"${m === every ? " selected" : ""}>${label}</option>`).join("")}</select><small>It works while Flash is open, in the terminal or here.</small></label>
+    <label class="field"><span>Project</span><select name="project"><option value="">No project</option>${[...projects].reverse().map((p) => `<option value="${esc(p.id)}"${editing && spark.project === p.id ? " selected" : ""}>${esc(p.name)}</option>`).join("")}</select><small>${projects.length ? "Its shifts work on the project's folder and follow its instructions, and a chat with it starts there." : "Make a project on the Projects page to give it one: a folder, and how to work in it."}</small></label>
     <label class="field"><span>Boundaries</span><textarea name="boundaries" rows="2" placeholder="Only read. Never push, delete, or message anyone."></textarea><small>Lines it must not cross. Running commands and changing files also need autonomous mode, as for sub-agents.</small></label>
     ${editing || sparksAlways.installed ? "" : `<label class="field check"><input type="checkbox" name="always" checked><span>Keep sparks working when Flash is closed. Flash starts a keeper at login and notifies you of news.</span></label>`}
     <div class="dialog-buttons"><button type="button" class="btn" data-cancel>Cancel</button><button type="submit" class="btn primary">${editing ? "Save" : "Make spark"}</button></div>`,
     async (data) => {
-      const fields = { goal: data.goal, every: data.every, boundaries: data.boundaries };
+      const fields = { goal: data.goal, every: data.every, boundaries: data.boundaries, project: data.project || "" };
       const name = data.sparkname.trim();
       if (editing) {
-        await command("spark-update", spark.id, null, { ...fields, name });
+        // Not "name": that is the command's own.
+        await command("spark-update", spark.id, null, { ...fields, rename: name });
         toast(`Saved ${name}`);
         await openSpark(spark.id);
         return false;
@@ -3979,6 +4009,8 @@ function sparkForm(spark) {
     form.sparkname.value = spark.name;
     form.goal.value = spark.goal;
     form.boundaries.value = spark.boundaries;
+  } else if (inProjectId) {
+    form.project.value = inProjectId;
   }
   named();
   form.querySelector("[data-cancel]").onclick = editing ? () => openSpark(spark.id) : closeForm;
@@ -6690,7 +6722,8 @@ function startSparkChat(id) {
   closeMenu();
   view = "chat";
   current = null;
-  viewProject = null;
+  const sp = sparkOf(id);
+  viewProject = sp && projectOf(sp.project) ? sp.project : null;
   viewSpark = id;
   renderChats();
   morph(drawChat);

@@ -703,6 +703,10 @@ class Session:
             if found is None:
                 raise ValueError("That spark is not here any more.")
             spark = found.id
+            # A chat with a spark starts in the spark's project, if it
+            # has one, unless it was asked to start in another.
+            if not project and sparks.project_of(found) is not None:
+                project = found.project
         chat = Chat(id=uuid.uuid4().hex[:8], project=project, spark=spark)
         with self._lock:
             self.chats[chat.id] = chat
@@ -776,7 +780,8 @@ class Session:
             # Enough of each spark to draw its badge on a chat with it.
             "sparks": [
                 {"id": s.id, "name": s.name, "handle": s.handle,
-                 "colour": s.colour}
+                 "colour": s.colour,
+                 "project": s.project if sparks.project_of(s) else ""}
                 for s in sparks.all_sparks()
             ],
             "status": {
@@ -1511,9 +1516,11 @@ def run_turn(
             answer_from(session.answerer(chat)):
         ai._fit_and_compact(ai.console, client, chat.messages)
         if spark is not None:
+            # The chat's project, not the spark's, is added below, and
+            # the turn runs in its folder.
             prompt = sparks.chat_prompt(
                 spark, ai.Config.host, ai.Config.model,
-                flash_tools.CURRENT_DATE_PROMPT,
+                flash_tools.CURRENT_DATE_PROMPT, project=False,
             )
         else:
             prompt = ai._session_system_prompt(heard=chat.heard)
@@ -2403,12 +2410,16 @@ def _spark_command(name: str, arg: str, body: dict) -> dict:
                 arg, str(body.get("goal") or ""),
                 str(body.get("boundaries") or ""),
                 str(body.get("every") or ""),
+                str(body.get("project") or ""),
             )
         elif name == "spark-update":
-            fields = ("name", "goal", "boundaries", "every")
-            spark = sparks.update(
-                arg, **{k: str(body[k]) for k in fields if k in body}
-            )
+            # The new name comes as "rename": "name" names the command.
+            fields = {"rename": "name", "goal": "goal", "every": "every",
+                      "boundaries": "boundaries", "project": "project"}
+            spark = sparks.update(arg, **{
+                field: str(body[key])
+                for key, field in fields.items() if key in body
+            })
         elif name == "spark-run":
             spark = sparks.run_now(arg)
         elif name in ("spark-pause", "spark-resume"):
