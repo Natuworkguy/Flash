@@ -3122,3 +3122,134 @@ class TestAttachments:
 
     def test_unknown_ids_are_dropped(self):
         assert web.attachments(["0123456789abcdef", "../x"]) == []
+
+
+# --- Chats with a spark --------------------------------------------------
+
+
+class TestSparkChats:
+    @pytest.fixture(autouse=True)
+    def spark_prompt(self, monkeypatch):
+        from flash import sparks
+
+        monkeypatch.setattr(sparks, "get_model_system_prompt", lambda h, m: "")
+
+    def _spark(self):
+        from flash import sparks
+
+        return sparks.create(
+            "Scout", "Watch the issues.", "Only read.", "daily"
+        )
+
+    def test_a_chat_is_made_with_a_spark_and_kept_that_way(self):
+        spark = self._spark()
+        session = web.Session()
+
+        chat = session.new_chat(spark="scout")
+
+        assert chat.spark == spark.id
+        assert chat.summary()["spark"] == spark.id
+        assert web.Chat.restore(chat.saved()).spark == spark.id
+        made = web.command(session, {"name": "new", "spark": spark.id})
+        assert session.chat(made["chat"]).spark == spark.id
+
+    def test_a_chat_with_a_spark_that_is_not_there_is_refused(self):
+        with pytest.raises(ValueError, match="not here"):
+            web.Session().new_chat(spark="ghost")
+
+    def test_the_spark_answers_in_its_own_voice_and_keeps_its_lessons(
+        self, monkeypatch
+    ):
+        from flash import learning, sparks
+
+        spark = self._spark()
+        reviewed = []
+        monkeypatch.setattr(
+            learning, "after_turn", lambda *a, **k: reviewed.append(a)
+        )
+        FakeClient.scripts = [
+            [part(calls=[call("learn", lesson="Only crashes.")]),
+             part(done=True)],
+            [part("Got it: crashes only."), part(done=True, tokens=3)],
+        ]
+        session = web.Session()
+        chat = session.new_chat(spark=spark.id)
+        seen = events_of(session)
+
+        run(session, chat, "Only tell me about crashes.")
+
+        first = FakeClient.requests[0]
+        system = first["messages"][0]["content"]
+        assert "You are Scout (@scout-spark)" in system
+        assert "Watch the issues." in system and "Only read." in system
+        offered = {t["function"]["name"] for t in first["tools"]}
+        assert {"learn", "set_goal", "set_schedule", "keep_notes"} <= offered
+        assert "remember" not in offered and "make_spark" not in offered
+        events = seen()
+        assert any(
+            e["type"] == "tool" and e["label"] == "Learn(Only crashes.)"
+            for e in events
+        )
+        assert [e["text"] for e in events if e["type"] == "assistant"][-1] \
+            == "Got it: crashes only."
+        assert sparks.find(spark.id).lessons == ["Only crashes."]
+        # What Flash learns about the user is Flash's, not the spark's.
+        assert reviewed == []
+
+    def test_a_spark_changes_its_goal_when_asked(self):
+        from flash import sparks
+
+        spark = self._spark()
+        FakeClient.scripts = [
+            [part(calls=[
+                call("set_goal", goal="Watch the pull requests."),
+                call("set_schedule", every="2h"),
+            ]), part(done=True)],
+            [part("Done."), part(done=True)],
+        ]
+        session = web.Session()
+        chat = session.new_chat(spark=spark.id)
+
+        run(session, chat, "Watch the PRs instead, every two hours.")
+
+        kept = sparks.find(spark.id)
+        assert kept.goal == "Watch the pull requests."
+        assert kept.every == 120
+
+    def test_a_spark_saying_what_it_will_do_next_shift_is_not_nudged(self):
+        spark = self._spark()
+        FakeClient.scripts = [
+            [part("I'll only tell you about crashes from now on."),
+             part(done=True)],
+        ]
+        session = web.Session()
+        chat = session.new_chat(spark=spark.id)
+
+        run(session, chat, "Only crashes please.")
+
+        assert len(FakeClient.requests) == 1
+
+    def test_a_chat_whose_spark_was_removed_says_so(self):
+        from flash import sparks
+
+        spark = self._spark()
+        session = web.Session()
+        chat = session.new_chat(spark=spark.id)
+        sparks.remove(spark.id)
+        seen = events_of(session)
+
+        run(session, chat, "Hello?")
+
+        errors = [e["text"] for e in seen() if e["type"] == "error"]
+        assert errors and "not here any more" in errors[0]
+        assert FakeClient.requests == []
+
+    def test_the_page_knows_each_spark_for_its_badge(self):
+        spark = self._spark()
+
+        listed = web.Session().state(lite=True)["sparks"]
+
+        assert listed == [{
+            "id": spark.id, "name": "Scout", "handle": "@scout-spark",
+            "colour": spark.colour,
+        }]

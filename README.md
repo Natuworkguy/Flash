@@ -310,10 +310,14 @@ as news. New reports show up at your prompt (`● Scout has news ·
 A lesson like that, or feedback typed under a report in the web UI, is
 kept and read by every later shift.
 
-You can also just talk to a spark: `/sparks chat scout` in the terminal
-(an empty line ends it), or the chat box in its window in the web UI.
-It answers as itself, from its goal, its notes and its reports, and can
-use its tools to check something now. Tell it how to do its job
+You can also just talk to a spark. In the web UI, open it on the Sparks
+page and press Chat, or start a new chat and pick it under + > Sparks:
+the chat is on the main screen like any other, with the spark's badge
+in the box and beside the chat in the sidebar. In the terminal,
+`/sparks chat scout` (an empty line ends it). It answers as itself,
+from its goal, its notes and its reports, and can use its tools to
+check something now; in the web UI it can also use the ones that ask
+you first. Tell it how to do its job
 differently and it keeps that as a lesson; give it a new goal or
 schedule and it changes them. Sparks live in `~/.flash/sparks`,
 one JSON file each. Like sub-agents, they can only run commands or
