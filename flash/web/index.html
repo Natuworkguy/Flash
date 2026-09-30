@@ -994,7 +994,7 @@ button.item-row:hover { background: var(--hover); }
    pet them (five pets quickly, and their eyes turn to hearts). Working,
    they bounce with a glint circling and a star twinkling; asleep, they
    snore z's; waiting on you, they tilt their head at a question mark;
-   after a failed shift, they frown and sweat. A new one pops into being,
+   after a failed shift, they frown. A new one pops into being,
    and one with news jumps for joy. */
 .spark-av { --c: var(--accent); --s: 36px; --ink: #1b1a19; position: relative; flex: none; width: var(--s); height: var(--s); border-radius: 50%;
   display: inline-flex; align-items: center; justify-content: center;
@@ -1045,12 +1045,11 @@ button.item-row:hover { background: var(--hover); }
 .spark-av[data-state="waiting"] .mouth { width: calc(var(--s) * 0.1); height: calc(var(--s) * 0.1); border-radius: 50%; border: 0; background: var(--ink); }
 .spark-av[data-state="waiting"]::before { content: "?"; position: absolute; top: -34%; left: -12%; font: 800 calc(var(--s) * 0.36)/1 var(--sans); color: var(--accent); text-shadow: 0 1px 0 var(--surface); animation: spark-ask 1.2s ease-in-out infinite; }
 
-/* A failed shift: small sad eyes, a frown, a sweat drop. */
+/* A failed shift: small sad eyes and a frown. */
 .spark-av[data-state="failed"] { animation: spark-float 5s ease-in-out infinite; }
 .spark-av[data-state="failed"] .eyes { animation: none; }
 .spark-av[data-state="failed"] .eye { height: calc(var(--s) * 0.12); }
 .spark-av[data-state="failed"] .mouth { margin-top: calc(var(--s) * 0.08); border: max(1.3px, calc(var(--s) * 0.032)) solid var(--ink); border-bottom: 0; border-radius: 999px 999px 0 0; }
-.spark-av[data-state="failed"]::before { content: ""; position: absolute; top: 14%; right: 4%; width: calc(var(--s) * 0.12); height: calc(var(--s) * 0.16); background: #8fd3ff; border-radius: 50% 50% 50% 50% / 60% 60% 40% 40%; clip-path: polygon(50% 0, 100% 60%, 100% 100%, 0 100%, 0 60%); animation: spark-sweat 2.8s ease-in infinite; }
 
 /* New news: the dot beats. */
 .spark-av .ping { position: absolute; top: -1px; right: -1px; width: calc(var(--s) * 0.3); height: calc(var(--s) * 0.3); min-width: 9px; min-height: 9px; border-radius: 50%; background: var(--accent); border: 2px solid var(--surface); animation: spark-ping 1.6s ease-in-out infinite; }
@@ -1081,7 +1080,6 @@ button.item-row:hover { background: var(--hover); }
 @keyframes spark-z { 0% { opacity: 0; transform: translate(0, 0) scale(0.6); } 20% { opacity: 0.9; } 100% { opacity: 0; transform: translate(calc(var(--s) * 0.35), calc(var(--s) * -0.55)) scale(1.2) rotate(12deg); } }
 @keyframes spark-tilt { 0%, 100% { transform: rotate(-9deg); } 50% { transform: rotate(9deg) translateY(-1px); } }
 @keyframes spark-ask { 0%, 100% { transform: translateY(0) rotate(8deg); } 50% { transform: translateY(-3px) rotate(-6deg); } }
-@keyframes spark-sweat { 0% { opacity: 0; transform: translateY(0); } 25% { opacity: 1; } 80% { opacity: 1; transform: translateY(calc(var(--s) * 0.3)); } 100% { opacity: 0; transform: translateY(calc(var(--s) * 0.36)); } }
 @keyframes spark-ping { 0%, 100% { transform: scale(1); box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 60%, transparent); } 15% { transform: scale(1.25); } 30% { transform: scale(0.95); } 45% { transform: scale(1.15); box-shadow: 0 0 0 5px transparent; } }
 @keyframes spark-squish { 0% { transform: scale(1); } 25% { transform: scale(1.18, 0.8); } 50% { transform: scale(0.9, 1.12) translateY(-3px); } 75% { transform: scale(1.05, 0.96); } 100% { transform: scale(1); } }
 @keyframes spark-pop { 0% { opacity: 0; transform: translate(-50%, 0) scale(0.4); } 20% { opacity: 1; transform: translate(calc(-50% + var(--dx, 0px) * 0.3), -60%) scale(1.1); } 100% { opacity: 0; transform: translate(calc(-50% + var(--dx, 0px)), -260%) scale(0.8) rotate(var(--r, 0deg)); } }

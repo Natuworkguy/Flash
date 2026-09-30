@@ -1249,3 +1249,134 @@ def test_the_page_makes_and_changes_a_sparks_model():
 
     assert sparks.find(made["id"]).model == "llama3.1"
     assert added["model"] == "phi4"
+
+
+def test_autonomous_mode_turned_on_in_another_flash_is_heeded(
+    model, fake_shell, monkeypatch, tmp_path,
+):
+    """This Flash still has it off in memory; the one the user switched
+    it on in wrote it to the env file. A shift goes by the file."""
+
+    env = tmp_path / ".flash.env"
+    env.write_text("NO_COMMAND_CONFIRMATION=1\n")
+    monkeypatch.setattr(sparks, "ENV_PATH", str(env))
+    monkeypatch.setattr(tools, "NO_COMMAND_CONFIRMATION", False)
+    made = sparks.create("Scout", "Keep the repo current.")
+
+    report = sparks.shift(made.id, client=FakeClient([
+        _reply("", ("shell", {"command": "git status"})),
+        _reply("Clean."),
+    ]))
+
+    assert not report.approval and report.text == "Clean."
+    assert fake_shell == ["git status"]
+
+
+def test_a_tool_that_asks_is_told_yes_in_autonomous_mode(
+    model, monkeypatch, tmp_path,
+):
+    """The real shell tool, which asks when this process thinks
+    autonomous mode is off. Asking the terminal from a keeper's thread
+    would wait forever."""
+
+    env = tmp_path / ".flash.env"
+    env.write_text("NO_COMMAND_CONFIRMATION=1\n")
+    monkeypatch.setattr(sparks, "ENV_PATH", str(env))
+    monkeypatch.setattr(tools, "NO_COMMAND_CONFIRMATION", False)
+
+    def no_terminal():
+        raise AssertionError("asked the terminal")
+
+    monkeypatch.setattr(tools, "typed", no_terminal)
+    made = sparks.create("Scout", "Say hi.")
+    client = FakeClient([
+        _reply("", ("shell", {"command": "echo hi-from-spark"})),
+        _reply("Said hi."),
+    ])
+
+    sparks.shift(made.id, client=client)
+
+    assert "hi-from-spark" in client.calls[1]["messages"][-1]["content"]
+
+
+def test_autonomous_mode_off_in_the_file_waits_even_if_on_here(
+    model, fake_shell, monkeypatch, tmp_path,
+):
+    env = tmp_path / ".flash.env"
+    env.write_text("NO_COMMAND_CONFIRMATION=0\n")
+    monkeypatch.setattr(sparks, "ENV_PATH", str(env))
+    monkeypatch.setattr(tools, "NO_COMMAND_CONFIRMATION", True)
+    made = sparks.create("Scout", "Keep the repo current.")
+
+    report = sparks.shift(made.id, client=FakeClient([
+        _reply("", ("shell", {"command": "git pull"})),
+    ]))
+
+    assert report.approval and fake_shell == []
+
+
+def test_with_nothing_in_the_file_this_flash_decides(
+    model, fake_shell, monkeypatch, tmp_path,
+):
+    monkeypatch.setattr(sparks, "ENV_PATH", str(tmp_path / "missing.env"))
+    monkeypatch.setattr(tools, "NO_COMMAND_CONFIRMATION", True)
+
+    assert sparks.autonomous() is True
+    monkeypatch.setattr(tools, "NO_COMMAND_CONFIRMATION", False)
+    assert sparks.autonomous() is False
+
+
+# --- Knowing its own status -------------------------------------------------
+
+
+def test_a_spark_talked_to_knows_it_is_idle_and_when_it_works_next(model):
+    made = sparks.create("Scout", "Watch the issues.", every="2h")
+    sparks.shift(made.id, client=FakeClient([_reply("Found one.")]))
+
+    status = sparks.status_block(sparks.find(made.id))
+
+    assert "Idle, between shifts" in status
+    assert "Last shift: 0 minutes ago" in status
+    assert "Next shift: in 119 minutes" in status or \
+        "Next shift: in about 2 hours" in status
+    assert "Shifts so far: 1" in status and "not read: 1" in status
+    assert "You run on the model test-model." in status
+
+
+def test_a_spark_talked_to_knows_what_it_waits_on(model, fake_shell):
+    made = sparks.create("Scout", "Keep the repo current.")
+    sparks.shift(made.id, client=FakeClient([
+        _reply("", ("shell", {"command": "git pull"})),
+    ]))
+
+    status = sparks.status_block(sparks.find(made.id))
+
+    assert "waiting for the user to approve a step: Run a command" in status
+    assert "(git pull)" in status
+    assert "/sparks approve scout" in status
+    assert "Next shift" not in status
+
+
+def test_a_spark_talked_to_knows_it_is_working_or_paused():
+    made = sparks.create("Scout", "Watch the issues.")
+    sparks._edit(made.id, lambda s: (
+        setattr(s, "status", sparks.WORKING),
+        setattr(s, "activity", "Running Fetch(x)"),
+    ))
+    assert "In the middle of a shift (Running Fetch(x))" in \
+        sparks.status_block(sparks.find(made.id))
+
+    sparks._edit(made.id, lambda s: setattr(s, "status", sparks.IDLE))
+    sparks.set_paused(made.id, True)
+    assert "Paused" in sparks.status_block(sparks.find(made.id))
+
+
+def test_its_status_is_in_what_it_is_told_in_a_chat(model):
+    made = sparks.create("Scout", "Watch the issues.", every="daily")
+    client = FakeClient([_reply("Nothing yet.")])
+
+    sparks.say(made.id, "How are you doing?", client)
+
+    system = client.calls[0]["messages"][0]["content"]
+    assert "=== Your status right now ===" in system
+    assert "You have not run a shift yet" in system
