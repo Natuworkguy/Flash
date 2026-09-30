@@ -1,5 +1,6 @@
 # pylint: disable=C0114,C0115,C0116
 
+import json
 import subprocess  # nosec B404
 
 import pytest
@@ -550,6 +551,132 @@ def test_interact_turns_down_an_action_it_does_not_have(monkeypatch):
     _, why = browser.interact("frobnicate")
 
     assert "Unknown action" in why  # nosec B101
+
+
+class _FakeMouse:
+    """Records what the agent did with Playwright's mouse."""
+
+    def __init__(self):
+        self.done = []
+
+    def move(self, x, y, steps=1):
+        self.done.append(("move", x, y))
+
+    def click(self, x, y):
+        self.done.append(("click", x, y))
+
+    def down(self):
+        self.done.append(("down",))
+
+    def up(self):
+        self.done.append(("up",))
+
+
+def test_the_mouse_moves_clicks_and_drags_at_points():
+    page = type("Page", (), {})()
+    page.mouse = _FakeMouse()
+
+    moved = browser._act_move(page, "", "120, 48")
+    clicked = browser._act_click(page, "", "(300,200)")
+    dragged = browser._act_drag(page, "", "10,20 to 400,20")
+
+    assert moved == "Moved the mouse to 120,48."  # nosec B101
+    assert clicked == "Clicked at 300,200."  # nosec B101
+    assert dragged == "Dragged from 10,20 to 400,20."  # nosec B101
+    assert page.mouse.done == [  # nosec B101
+        ("move", 120, 48),
+        ("move", 300, 200), ("click", 300, 200),
+        ("move", 10, 20), ("down",), ("move", 400, 20), ("up",),
+    ]
+
+
+def test_the_mouse_says_what_it_needs():
+    page = type("Page", (), {})()
+    page.mouse = _FakeMouse()
+
+    for act, value, needs in (
+        (browser._act_click, "", "click needs a selector"),
+        (browser._act_move, "somewhere", "move needs a selector"),
+        (browser._act_drag, "10,20", "drag needs two points"),
+    ):
+        with pytest.raises(browser.PageProblem, match=needs):
+            act(page, "", value)
+    assert page.mouse.done == []  # nosec B101
+
+
+def test_screenshot_can_rest_the_mouse_first(tmp_path, monkeypatch):
+    take_pending_images()
+    monkeypatch.setattr(tools, "MODEL_NAME", "")
+    monkeypatch.setattr(tools, "SCRATCH_DIR", str(tmp_path))
+    seen = {}
+
+    def capture(_url, out, **kwargs):
+        seen.update(kwargs)
+        out.write_bytes(b"png")
+        return [], ""
+
+    monkeypatch.setattr(tools, "capture", capture)
+    page = tmp_path / "index.html"
+    page.write_text("<button>hi</button>")
+
+    screenshot(str(page))
+    assert seen["mouse"] is None  # nosec B101
+
+    screenshot(str(page), mouse="40,12")
+    assert seen["mouse"] == (40.0, 12.0)  # nosec B101
+
+
+def test_each_step_is_a_frame_of_one_run_for_the_user(tmp_path, monkeypatch):
+    from flash.theme import capture_tool_output
+
+    take_pending_images()
+    _fake_page(monkeypatch, tmp_path)
+    monkeypatch.setattr(tools, "browser_open", lambda *_a, **_k: "")
+    monkeypatch.setattr(
+        tools, "browser_interact", lambda *_a, **_k: ("Clicked at 5,5.", "")
+    )
+    page = tmp_path / "index.html"
+    page.write_text("<h1>hi</h1>")
+    sent = []
+
+    with capture_tool_output(lambda kind, text, _style: sent.append(
+        (kind, text)
+    )):
+        open_page(str(page))
+        tools.interact("click", value="5,5")
+        open_page(str(page))
+
+    frames = [json.loads(text) for kind, text in sent if kind == "browser"]
+    assert [f["note"] for f in frames] == [  # nosec B101
+        "Opened index.html at 1280x800", "Clicked at 5,5.",
+        "Opened index.html at 1280x800",
+    ]
+    # One run a page opened: a second open_page starts another.
+    assert frames[0]["run"] == frames[1]["run"]  # nosec B101
+    assert frames[1]["run"] != frames[2]["run"]  # nosec B101
+    assert frames[0]["title"] == "Demo"  # nosec B101
+
+
+def test_a_blind_model_still_shows_the_user_its_browser(
+    tmp_path, monkeypatch
+):
+    from flash.theme import capture_tool_output
+
+    take_pending_images()
+    _fake_page(monkeypatch, tmp_path)
+    monkeypatch.setattr(tools, "model_sees_images", lambda *_: False)
+    monkeypatch.setattr(tools, "browser_open", lambda *_a, **_k: "")
+    page = tmp_path / "index.html"
+    page.write_text("<h1>hi</h1>")
+    sent = []
+
+    with capture_tool_output(lambda kind, text, _style: sent.append(kind)):
+        result = open_page(str(page))
+
+    assert "browser" in sent  # nosec B101
+    assert "no vision" in result  # nosec B101
+    # The picture is the user's, not the model's.
+    assert take_pending_images() == []  # nosec B101
 
 
 def test_write_tool_appends_instead_of_replacing(tmp_path, monkeypatch):

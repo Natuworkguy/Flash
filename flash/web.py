@@ -107,6 +107,13 @@ STATIC.update({
     if path.is_file() and path.suffix in KATEX_TYPES
 })
 
+# three.js and Flash's viewer on it, which draw the 3D models the agent
+# makes: shipped with Flash too, and loaded only once a model is opened.
+STATIC.update({
+    path.relative_to(WEB_DIR).as_posix(): KATEX_TYPES[path.suffix]
+    for path in sorted((WEB_DIR / "three").glob("*.js"))
+})
+
 # How often an idle event stream says it is still there. Proxies and
 # some browsers drop a stream that has been silent for a minute.
 PING_SECONDS = 15
@@ -304,7 +311,7 @@ class Ask:
 # The rest (tokens, status) only matter to a page that is watching.
 KEPT = {
     "user", "assistant", "tool", "result", "diff", "ask", "answered",
-    "error", "stats", "note", "thought", "file", "plan",
+    "error", "stats", "note", "thought", "file", "plan", "browser",
 }
 
 
@@ -441,6 +448,13 @@ class Access:
                 self._drop(key)
             self.token = secrets.token_urlsafe(24)
         return keys
+
+    def new_token(self) -> str:
+        """End the link and make another. Signed-in browsers stay."""
+
+        with self._lock:
+            self.token = secrets.token_urlsafe(24)
+            return self.token
 
     def listing(self, current: str, watching: set) -> list[dict]:
         """The signed-in browsers, as the page shows them, newest first."""
@@ -630,10 +644,16 @@ class Session:
     def __init__(self, hub: Optional[Hub] = None) -> None:
         self.hub = hub or Hub()
         self.lan = False
+        # Documents the user edited in the page since each chat's last
+        # turn: chat id -> the paths, told to the model with its next
+        # message so it reads them again rather than writing over them.
+        self.edited: dict[str, list[str]] = {}
         # The voice models are being downloaded for the page: the first
         # use's pair, or one model picked in Settings, (kind, name).
         self.voice_setup = False
         self.voice_job: Optional[tuple[str, str]] = None
+        # Set to call off whichever of those is running.
+        self.voice_stop = threading.Event()
         # The link's token and the browsers signed in with it. A server
         # restarted after an update takes over the old one's (Server).
         self.access = Access()
@@ -647,7 +667,7 @@ class Session:
         # Starts this same `flash --web` again, as whatever version is
         # installed now. Only a server that owns its process can: one
         # beside a terminal session would take the session down with it.
-        self.restart: Optional[Callable[[], None]] = None
+        self.restart: Optional[Callable[..., None]] = None
         # Opens the server again listening on the network, or not. Set
         # by whatever runs the server (see _attach).
         self.switch_lan: Optional[Callable[[bool], None]] = None
@@ -755,6 +775,7 @@ class Session:
             if self.voice_setup or self.voice_job:
                 return
             self.voice_setup = True
+            self.voice_stop.clear()
 
         def run() -> None:
             said: dict[str, int] = {}
@@ -769,13 +790,15 @@ class Session:
 
             why = ""
             try:
-                why = voice.ensure_models(progress)
+                why = voice.ensure_models(progress, self.voice_stop)
             finally:
                 with self._lock:
                     self.voice_setup = False
-                self.hub.publish(
-                    {"type": "voice-setup", "done": True, "error": why}
-                )
+                cancelled = why == voice.CANCELLED
+                self.hub.publish({
+                    "type": "voice-setup", "done": True,
+                    "error": "" if cancelled else why, "cancelled": cancelled,
+                })
 
         threading.Thread(target=run, daemon=True).start()
 
@@ -790,6 +813,7 @@ class Session:
             if self.voice_setup or self.voice_job:
                 raise ValueError("A voice model is already downloading.")
             self.voice_job = (kind, name)
+            self.voice_stop.clear()
 
         def run() -> None:
             said: list[int] = [-1]
@@ -806,7 +830,7 @@ class Session:
             try:
                 fetch = (voice.download_listening if kind == "listening"
                          else voice.download_voice)
-                why = fetch(name, progress)
+                why = fetch(name, progress, self.voice_stop)
                 if not why:
                     ai.set_config_var(VOICE_SETTINGS[kind], name)
             except Exception as exc:  # noqa: BLE001
@@ -814,12 +838,24 @@ class Session:
             finally:
                 with self._lock:
                     self.voice_job = None
+                cancelled = why == voice.CANCELLED
                 self.hub.publish({
                     "type": "voice-model", "kind": kind, "name": name,
-                    "done": True, "error": why,
+                    "done": True, "error": "" if cancelled else why,
+                    "cancelled": cancelled,
                 })
 
         threading.Thread(target=run, daemon=True).start()
+
+    def cancel_voice_download(self) -> bool:
+        """Call off the voice download running, if one is. True when one
+        was: it stops at its next chunk and says so to every page."""
+
+        with self._lock:
+            running = self.voice_setup or self.voice_job is not None
+        if running:
+            self.voice_stop.set()
+        return running
 
     # Sub-agents ----------------------------------------------------
 
@@ -1245,9 +1281,26 @@ def _sink(session: Session, chat: Chat):
             session.emit(chat, {"type": "diff", "text": text})
         elif kind == "plan":
             session.emit(chat, {"type": "plan", "steps": json.loads(text)})
-        elif kind == "file":
+        elif kind == "browser":
+            # A frame of the agent's browser: kept like any file shown,
+            # so the chat still has it after a restart.
+            shown = json.loads(text)
             try:
-                kept = workspace.keep_file(text)
+                kept = workspace.keep_file(shown["path"])
+            except (workspace.WorkspaceError, OSError):
+                return
+            session.emit(chat, {
+                "type": "browser", **kept, "run": str(shown["run"]),
+                "url": str(shown.get("url") or ""),
+                "title": str(shown.get("title") or ""),
+                "note": str(shown.get("note") or ""),
+            })
+        elif kind in ("file", "document"):
+            shown = json.loads(text) if kind == "document" else {"path": text}
+            try:
+                kept = workspace.keep_file(shown["path"])
+                if shown.get("comments"):
+                    kept["comments"] = shown["comments"]
                 session.emit(chat, {"type": "file", **kept})
             except (workspace.WorkspaceError, OSError) as exc:
                 session.emit(chat, {
@@ -1325,6 +1378,17 @@ def project_prompt(found: "workspace.Project") -> str:
     return "\n".join(lines)
 
 
+def edited_note(paths: list[str]) -> str:
+    """What the model is told about documents the user edited by hand."""
+
+    names = ", ".join(paths)
+    return (
+        f"[The user edited {names} in the side panel and saved it. Read "
+        "it again before you change it: their version is the one that "
+        "counts.]"
+    )
+
+
 def attachments(files: Optional[list]) -> list[dict]:
     """The files a message carries, as the page shows them: those that
     are really there, and no more than MAX_ATTACHMENTS."""
@@ -1392,6 +1456,11 @@ def run_turn(
     # its own sub-agents and never another chat's.
     owned = session.owned(chat.id)
     news, delivered = subagents.notices(owned) if owned else ("", [])
+    edited = session.edited.pop(chat.id, [])
+    if edited:
+        news = "\n\n".join(
+            part for part in (news, edited_note(edited)) if part
+        )
     said, images = outgoing(ai, text, files)
     if images and not model_sees_images(ai.Config.host, ai.Config.model):
         session.emit(chat, {"type": "note", "text": (
@@ -1414,6 +1483,7 @@ def run_turn(
         convo = [system, *chat.messages]
         keep_from = len(convo)
         tool_count = 0
+        nudged = 0
         reply = Streamed()
 
         for _round in range(ai.Config.max_tool_rounds):
@@ -1421,7 +1491,18 @@ def run_turn(
             tokens += reply.tokens
             generating += reply.seconds
 
-            if reply.stopped or not reply.calls:
+            if reply.stopped:
+                break
+            if not reply.calls:
+                # It said what it would do next and stopped short of
+                # doing it: keep what it said, and tell it to go on.
+                if (offered and nudged < ai.MAX_PROMISE_NUDGES
+                        and ai.unkept_promise(reply.content)):
+                    nudged += 1
+                    _finish_reply(session, chat, reply)
+                    convo.append(ai._message("assistant", reply.content))
+                    convo.append(ai.promise_nudge())
+                    continue
                 break
 
             _finish_reply(session, chat, reply)
@@ -1918,6 +1999,23 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
         threading.Timer(RESTART_DELAY, session.restart).start()
         return session.updates.snapshot()
 
+    if name == "server-restart":
+        # From the page's shortcut: Flash started again, with a new link.
+        # The page is handed the new token to come back in with.
+        if session.restart is None:
+            raise ValueError(
+                "This Flash runs beside a terminal session. Quit it there "
+                "and start it again."
+            )
+        if any(c.busy or c.queued for c in session.chats.values()):
+            raise ValueError("Wait for the reply to finish first.")
+        token = session.access.new_token()
+        threading.Timer(
+            RESTART_DELAY, session.restart,
+            ("Restarting, as asked from the page. The new link follows.",),
+        ).start()
+        return {"token": token}
+
     if name == "skills":
         return {"skills": [
             {
@@ -2012,6 +2110,9 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
 
     if name == "voice-models":
         return voice_models(session)
+
+    if name == "voice-cancel":
+        return {"cancelling": session.cancel_voice_download()}
 
     if name in ("voice-model", "voice-model-remove"):
         kind = str(body.get("kind") or "")
@@ -2137,6 +2238,16 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
 
     if name == "dirs":
         return {"dirs": workspace.folder_suggestions(arg)}
+
+    if name == "document-save":
+        saved = workspace.save_document(arg, str(body.get("text") or ""))
+        # Told to the model with the chat's next message.
+        where = saved["path"] or arg
+        if chat_id in session.chats:
+            listed = session.edited.setdefault(chat_id, [])
+            if where not in listed:
+                listed.append(where)
+        return saved
 
     if name == "undo":
         message = checkpoint.undo()
@@ -2567,6 +2678,12 @@ class Handler(BaseHTTPRequestHandler):
 
 class Server(ThreadingHTTPServer):
     daemon_threads = True
+    # SO_REUSEADDR only lets a restart take back a port its old
+    # connections still hold, on Linux and macOS. On Windows it lets a
+    # second server bind a port another is listening on, and the two
+    # then split its connections; and Windows lets a port be reused
+    # without it anyway.
+    allow_reuse_address = os.name != "nt"
 
     def __init__(
         self,
@@ -2575,8 +2692,10 @@ class Server(ThreadingHTTPServer):
         lan: bool = False,
     ):
         # Set before binding: a port already in use makes the base class
-        # call server_close() from inside its own __init__.
+        # call server_close() from inside its own __init__, before any of
+        # the rest is set up.
         self.closing = threading.Event()
+        self.keep_session = False
         super().__init__((LAN_HOST if lan else HOST, port), Handler)
         # Cookies ignore the port, so two servers on one machine each
         # need a name of their own.
@@ -2596,7 +2715,6 @@ class Server(ThreadingHTTPServer):
         self.swapping = False
         self.swapped = threading.Event()
         self.replacement: Optional[Server] = None
-        self.keep_session = False
 
     @property
     def port(self) -> int:
@@ -2637,9 +2755,14 @@ class Server(ThreadingHTTPServer):
 
     def server_close(self) -> None:
         self.closing.set()
-        self.session.hub.close()
-        if not self.keep_session:
-            self.session.close()
+        # No session yet when the port could not be had: there is nothing
+        # to close but the socket, and the OSError that says why has to
+        # get out.
+        session = getattr(self, "session", None)
+        if session is not None:
+            session.hub.close()
+            if not self.keep_session:
+                session.close()
         super().server_close()
 
 
@@ -2743,7 +2866,9 @@ def _listen(
 RESTART_DELAY = 0.4
 
 
-def _restart(server: "Server") -> None:
+def _restart(
+    server: "Server", why: str = "Restarting to finish the update.",
+) -> None:
     """Start this `flash --web` again as the version now installed.
 
     exec replaces the process in place: the same port, the same
@@ -2759,7 +2884,7 @@ def _restart(server: "Server") -> None:
         args.append("--lan")
     if "--no-open" not in args:
         args.append("--no-open")
-    console.print(Text("Restarting to finish the update.", style=DIM))
+    console.print(Text(why, style=DIM))
     os.execv(  # nosec B606 -- this same interpreter, running Flash again
         sys.executable, [sys.executable, "-m", "flash", *args]
     )
@@ -2814,7 +2939,7 @@ def _attach(server: "Server", standalone: bool) -> None:
             # Windows cannot replace a running Flash at all: its update
             # finishes after this one quits, so there is nothing to
             # restart.
-            session.restart = lambda: _restart(server)
+            session.restart = lambda *why: _restart(server, *why)
             session.updates.can_restart = True
     else:
         _background = server
