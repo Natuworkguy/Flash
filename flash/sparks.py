@@ -1615,10 +1615,19 @@ _MENTION_RE = re.compile(r"(?<![\w@/.])@([a-z0-9][a-z0-9-]*)(?![\w./-])", re.I)
 MENTIONED_PROMPT = """
 === You were mentioned ===
 The user @mentioned you in a conversation they are having with {host}.
-Earlier replies that start with a name in brackets came from that spark;
-the others came from {host}. Answer what the user asked of you, as
-yourself, in this conversation.
+You are shown its latest part, then what they said to you. Answer that,
+as yourself: the conversation is theirs and {host}'s, so do not answer
+what was said to {host}, and do not speak for it.
 """.strip()
+
+# How much of a conversation a spark @mentioned into it is shown: the
+# latest messages, each cut to a length, so a long chat costs a small
+# model little.
+HISTORY_MESSAGES = 12
+HISTORY_CHARS = 1500
+
+# What starts the note a conversation keeps when a spark answers in it.
+CALLED = "[Spark called]"
 
 
 def mentioned(text: str) -> list[Spark]:
@@ -1632,11 +1641,67 @@ def mentioned(text: str) -> list[Spark]:
     return found
 
 
-def said_by(spark: Spark, text: str) -> str:
-    """A spark's reply as the rest of a conversation keeps it: marked,
-    so no one takes it for their own."""
+def called_note(spark: Spark, text: str, used: list[str]) -> str:
+    """What a conversation keeps of a spark's answer in it: who was
+    called, what it did, and what it said. Kept as a note, not as a
+    reply, so whoever the chat is with sees it was not theirs."""
 
-    return f"[{spark.name} ({spark.handle}), one of the user's sparks]\n{text}"
+    tools = f", using {', '.join(dict.fromkeys(used))}" if used else ""
+    return (
+        f"{CALLED} The user @mentioned {spark.name} ({spark.handle}), one "
+        f"of their sparks, in this chat. It answered{tools}:\n{text}"
+    )
+
+
+def _cut(text: str) -> str:
+    text = " ".join(str(text or "").split())
+    if len(text) > HISTORY_CHARS:
+        text = text[:HISTORY_CHARS].rstrip() + " [...]"
+    return text
+
+
+def guest_view(messages: list[dict], host: str) -> str:
+    """The conversation a spark was @mentioned into, as it is shown to
+    it: the latest part, who said what, then what was said to it, and
+    what any spark called before it answered.
+
+    MESSAGES are the chat's, the user's message to it among them.
+    """
+
+    asked_at = max(
+        (i for i, m in enumerate(messages) if m.get("role") == "user"),
+        default=len(messages),
+    )
+    asked = messages[asked_at]["content"] if asked_at < len(messages) else ""
+
+    def line(message: dict) -> str:
+        role, text = message.get("role"), message.get("content") or ""
+        if not str(text).strip():
+            return ""
+        if role == "user":
+            return f"User: {_cut(text)}"
+        if role == "assistant":
+            return f"{host}: {_cut(text)}"
+        if role == "system" and str(text).startswith(CALLED):
+            return f"({_cut(text[len(CALLED):])})"
+        return ""  # tool results and the like: the work, not the talk
+
+    before = [ln for ln in map(line, messages[:asked_at]) if ln]
+    before = before[-HISTORY_MESSAGES:]
+    after = [ln for ln in map(line, messages[asked_at + 1:]) if ln]
+    parts = []
+    if before:
+        parts.append(
+            f"=== The conversation so far: its latest {len(before)} "
+            "messages ===\n" + "\n\n".join(before)
+            + "\n=== End of the conversation so far ==="
+        )
+    parts.append(f"The user now says, to you:\n{asked}")
+    if after:
+        parts.append(
+            "Already answered by others it named:\n" + "\n\n".join(after)
+        )
+    return "\n\n".join(parts)
 
 
 def ask(key: str, text: str) -> Spark:
