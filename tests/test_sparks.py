@@ -55,6 +55,13 @@ def _reply(content="", *calls):
     ))
 
 
+@pytest.fixture(autouse=True)
+def flash_model(monkeypatch):
+    """Flash has a model, the one a spark runs on when it names none."""
+
+    monkeypatch.setattr(tools, "MODEL_NAME", "flash-model")
+
+
 @pytest.fixture
 def model(monkeypatch):
     monkeypatch.setattr(sparks, "get_model_system_prompt", lambda h, m: "")
@@ -1104,3 +1111,97 @@ class TestTheRestOfIt:
         notify.notify_spark("Scout", "Waiting.", asking=True)
 
         assert calls[0][2] == "Scout needs your approval"
+
+
+# --- Its own model --------------------------------------------------------
+
+
+class RecordingClient(FakeClient):
+    def chat(self, model, messages, tools=None, options=None):
+        self.calls.append({"model": model, "messages": list(messages),
+                           "tools": tools})
+        return self.responses.pop(0)
+
+
+def test_a_spark_runs_on_its_own_model(model):
+    made = sparks.create("Scout", "Watch the issues.", model="qwen3:8b")
+    client = RecordingClient([_reply("Found one.")])
+
+    sparks.shift(made.id, client=client)
+
+    assert client.calls[0]["model"] == "qwen3:8b"
+    assert sparks.find(made.id).to_dict()["model_used"] == "qwen3:8b"
+
+
+def test_a_spark_without_one_runs_on_flashs(model):
+    made = sparks.create("Scout", "Watch the issues.")
+    client = RecordingClient([_reply("Found one.")])
+
+    sparks.shift(made.id, client=client)
+
+    assert client.calls[0]["model"] == "test-model"
+    assert sparks.model_of(made, "web-model") == "web-model"
+
+
+def test_a_spark_gets_a_new_model(model):
+    made = sparks.create("Scout", "Watch the issues.", model="a")
+
+    assert sparks.update(made.id, model="  b  ").model == "b"
+
+
+def test_a_spark_with_a_model_runs_when_flash_has_none(monkeypatch):
+    monkeypatch.setattr(sparks, "get_model_system_prompt", lambda h, m: "")
+    monkeypatch.setattr(tools, "MODEL_NAME", "")
+    made = sparks.create("Scout", "Watch the issues.", model="qwen3:8b")
+
+    report = sparks.shift(made.id, client=RecordingClient([_reply("Hi.")]))
+
+    assert not report.failed and report.text == "Hi."
+
+
+def test_make_spark_names_the_model_it_asks_about():
+    asked = []
+    with capture_tool_output(lambda kind, text, style: None):
+        with answer_from(lambda question: asked.append(question) or "y"):
+            result = tools.make_spark(
+                "Scout", "Watch the issues.", "daily", model="qwen3:8b",
+            )
+
+    assert "on qwen3:8b" in asked[0] and "on qwen3:8b" in result
+    assert sparks.find("scout").model == "qwen3:8b"
+
+
+def test_make_spark_takes_flashs_model_by_default():
+    with capture_tool_output(lambda kind, text, style: None):
+        with answer_from(lambda question: "y"):
+            tools.make_spark("Scout", "Watch the issues.")
+
+    assert sparks.find("scout").model == "flash-model"
+
+
+def test_make_spark_without_any_model_asks_for_one(monkeypatch):
+    monkeypatch.setattr(tools, "MODEL_NAME", "")
+
+    with capture_tool_output(lambda kind, text, style: None):
+        result = tools.make_spark("Scout", "Watch the issues.")
+
+    assert "no model" in result and sparks.all_sparks() == []
+
+
+def test_the_page_makes_and_changes_a_sparks_model():
+    session = web.Session()
+    made = web.command(session, {
+        "name": "spark-create", "arg": "Scout", "goal": "Goal.",
+        "model": "qwen3:8b",
+    })["spark"]
+    assert made["model"] == "qwen3:8b"
+
+    web.command(session, {
+        "name": "spark-update", "arg": made["id"], "model": "llama3.1",
+    })
+    added = web.command(session, {
+        "name": "spark-add", "arg": "Disk Guard", "model": "phi4",
+    })["spark"]
+
+    assert sparks.find(made["id"]).model == "llama3.1"
+    assert added["model"] == "phi4"

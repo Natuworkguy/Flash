@@ -3431,3 +3431,25 @@ class TestMentions:
         run(session, chat, "@scout skip docs issues from now on")
 
         assert sparks.find(scout.id).lessons == ["Skip docs."]
+
+
+def test_a_spark_answers_in_a_chat_on_its_own_model(monkeypatch):
+    from flash import sparks
+
+    monkeypatch.setattr(sparks, "get_model_system_prompt", lambda h, m: "")
+    sparks.create("Scout", "Watch the issues.", model="qwen3:8b")
+    FakeClient.scripts = [
+        [part("Scout here."), part(done=True)],
+        [part("Flash here."), part(done=True)],
+    ]
+    session = web.Session()
+    chat = session.new_chat()
+
+    run(session, chat, "@scout hello")
+    run(session, chat, "and you, Flash?")
+
+    assert [r["model"] for r in FakeClient.requests] == [
+        "qwen3:8b", "flash-test",
+    ]
+    stats = [e["model"] for e in chat.log if e["type"] == "stats"]
+    assert stats == ["qwen3:8b", "flash-test"]

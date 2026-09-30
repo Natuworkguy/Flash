@@ -3871,7 +3871,7 @@ async function drawSparks(body, again = false) {
     if (again) card.style.animation = "none";
     card.prepend(sparkAvatar(spark, 44, i));
     card.querySelector(".name").textContent = spark.name;
-    card.querySelector(".handle").textContent = `${spark.handle} · every ${everyWords(spark.every)}${spark.project_name ? ` · in ${spark.project_name}` : ""}`;
+    card.querySelector(".handle").textContent = `${spark.handle} · every ${everyWords(spark.every)}${spark.project_name ? ` · in ${spark.project_name}` : ""}${spark.model_used ? ` · ${spark.model_used}` : ""}`;
     const state = card.querySelector(".state");
     state.textContent = spark.unread ? `${spark.unread} new report${spark.unread === 1 ? "" : "s"} · ${sparkState(spark)}` : sparkState(spark);
     state.classList.toggle("working", spark.status === "working");
@@ -3942,7 +3942,7 @@ function fillSpark(box, spark, again = false) {
   box.querySelector(".spark-head").prepend(sparkAvatar({ ...spark, unread: 0 }, 60));
   box.querySelector("h2").textContent = spark.name;
   box.querySelector(".handle").textContent = spark.handle;
-  box.querySelector(".meta").textContent = `Every ${everyWords(spark.every)}${spark.project_name ? ` · in ${spark.project_name}` : ""} · ${sparkState(spark)} · ${spark.runs} shift${spark.runs === 1 ? "" : "s"}`;
+  box.querySelector(".meta").textContent = `On ${spark.model_used || "no model"}${spark.model ? "" : " (Flash's)"} · every ${everyWords(spark.every)}${spark.project_name ? ` · in ${spark.project_name}` : ""} · ${sparkState(spark)} · ${spark.runs} shift${spark.runs === 1 ? "" : "s"}`;
   box.querySelector("[data-goal]").textContent = spark.goal;
   if (spark.boundaries) {
     box.querySelector("[data-bounds]").hidden = false;
@@ -4051,6 +4051,35 @@ function fillSpark(box, spark, again = false) {
   if (said.length && quiet) reports.appendChild(el("p", "spark-quiet", `And ${quiet} quiet shift${quiet === 1 ? "" : "s"} with nothing new.`));
 }
 
+// The model a spark runs on, chosen in its form: the host's models in a
+// list, with none picked until one is. A host that does not answer
+// leaves a box to type the name in.
+function modelField(current = "") {
+  return `<label class="field"><span>Model</span><select name="model" required><option value="">Loading the models…</option></select><small>What it thinks with, on every shift and in every chat. A smaller model is quicker and lighter on this computer; a bigger one does harder work.</small></label>`;
+}
+
+async function fillModelField(form, current = "") {
+  const select = form.querySelector("select[name=model]");
+  if (!select) return;
+  let listed = [];
+  try { listed = (await command("model", "", null)).models || []; } catch (_) { listed = []; }
+  if (!select.isConnected) return;
+  if (!listed.length) {
+    const box = el("input");
+    box.name = "model";
+    box.required = true;
+    box.className = "mono";
+    box.placeholder = info.model || "llama3.1";
+    box.value = current;
+    box.autocomplete = "off";
+    select.replaceWith(box);
+    return;
+  }
+  const names = current && !listed.includes(current) ? [current, ...listed] : listed;
+  select.innerHTML = `<option value="">Choose a model…</option>` + names.map((m) => `<option value="${esc(m)}">${esc(m)}${m === info.model ? " (Flash's)" : ""}</option>`).join("");
+  select.value = current;
+}
+
 // A spark as a code to hand on: whoever adds it gets a copy of their own.
 async function shareSpark(spark) {
   let code;
@@ -4080,14 +4109,16 @@ function addSharedSpark() {
     <p class="sub">Paste the code someone shared. You see what it does before anything is added, and you get a copy of your own.</p>
     <textarea name="code" class="spark-code" rows="4" placeholder="flash-spark:…" spellcheck="false"></textarea>
     <div class="spark-preview" hidden></div>
+    ${modelField()}
     <div class="dialog-buttons"><button type="button" class="btn" data-cancel>Cancel</button><button type="submit" class="btn primary" disabled>Add spark</button></div>`,
     async (data) => {
-      const made = (await command("spark-add", data.code.trim(), null)).spark;
+      const made = (await command("spark-add", data.code.trim(), null, { model: data.model || "" })).spark;
       toast(`Added ${made.name}`);
       if (view !== "sparks") showPage("sparks");
     });
   const box = form.querySelector(".preview, .spark-preview");
   const submit = form.querySelector("[type=submit]");
+  fillModelField(form);
   form.querySelector("[data-cancel]").onclick = closeForm;
   let timer = null;
   form.code.addEventListener("input", () => {
@@ -4118,6 +4149,7 @@ function sparkForm(spark, inProjectId = "") {
     <p class="sub">${editing ? "" : "An agent that keeps working on one goal, on a schedule, while Flash runs, and reports back."}</p>
     ${editing ? "" : `<div class="spark-templates"></div>`}
     <label class="field"><span>Name</span><input name="sparkname" maxlength="24" placeholder="Scout" autocomplete="off"><small>Its handle: <b data-handle>@scout-spark</b></small></label>
+    ${modelField()}
     <label class="field"><span>Goal</span><textarea name="goal" rows="4" placeholder="Check github.com/me/app for new issues. Tell me which look like bugs, and skip ones you have already told me about."></textarea></label>
     <label class="field"><span>How often</span><select name="every">${choices.map(([m, label]) => `<option value="${m}"${m === every ? " selected" : ""}>${label}</option>`).join("")}</select><small>It works while Flash is open, in the terminal or here.</small></label>
     <label class="field"><span>Project</span><select name="project"><option value="">No project</option>${[...projects].reverse().map((p) => `<option value="${esc(p.id)}"${editing && spark.project === p.id ? " selected" : ""}>${esc(p.name)}</option>`).join("")}</select><small>${projects.length ? "Its shifts work on the project's folder and follow its instructions, and a chat with it starts there." : "Make a project on the Projects page to give it one: a folder, and how to work in it."}</small></label>
@@ -4126,7 +4158,7 @@ function sparkForm(spark, inProjectId = "") {
     ${editing || sparksAlways.installed ? "" : `<label class="field check"><input type="checkbox" name="always" checked><span>Keep sparks working when Flash is closed. Flash starts a keeper at login and notifies you of news.</span></label>`}
     <div class="dialog-buttons"><button type="button" class="btn" data-cancel>Cancel</button><button type="submit" class="btn primary">${editing ? "Save" : "Make spark"}</button></div>`,
     async (data) => {
-      const fields = { goal: data.goal, every: data.every, boundaries: data.boundaries, project: data.project || "", watch: data.watch || "" };
+      const fields = { goal: data.goal, every: data.every, boundaries: data.boundaries, project: data.project || "", watch: data.watch || "", model: data.model || "" };
       const name = data.sparkname.trim();
       if (editing) {
         // Not "name": that is the command's own.
@@ -4142,6 +4174,8 @@ function sparkForm(spark, inProjectId = "") {
     });
   // The folder to watch, suggested as you type, as a project's is.
   suggestFolders(form.watch);
+  // Chosen, not assumed: a spark from before it had one picks one now.
+  fillModelField(form, editing ? spark.model || "" : "");
   const handle = form.querySelector("[data-handle]");
   const named = () => { handle.textContent = sparkHandle(form.sparkname.value || "scout"); };
   form.sparkname.addEventListener("input", named);

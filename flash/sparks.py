@@ -311,6 +311,9 @@ class Spark:
     chat: list[Message] = field(default_factory=list)
     # The project it works on, by its ID in the web UI's projects, or "".
     project: str = ""
+    # The model it runs on. "" for a spark from before one was chosen,
+    # which runs on whatever Flash is set to.
+    model: str = ""
     # A step that asks first, waiting on the user: what it is, and all
     # a shift needs to carry on from it. {} when nothing waits.
     pending: dict = field(default_factory=dict)
@@ -352,6 +355,7 @@ class Spark:
         data["handle"] = self.handle
         data["answering"] = self.answering
         data["waiting"] = self.waiting
+        data["model_used"] = model_of(self)
         # What waits, as the user sees it: not the conversation behind it.
         data["pending"] = {
             k: self.pending[k] for k in ("label", "detail", "tool", "at")
@@ -620,6 +624,19 @@ def _edit(key: str, change: Callable[[Spark], None]) -> Spark:
 # whatever else is running; it is told to use full paths instead.
 
 
+def model_of(spark: Spark, flash: str = "") -> str:
+    """The model SPARK runs on: its own, or Flash's if it has none.
+    FLASH, when given, is Flash's model as the caller has it."""
+
+    from . import tools as flash_tools  # deferred: avoids a module cycle
+
+    return spark.model or flash or flash_tools.MODEL_NAME or ""
+
+
+def _model_name(model) -> str:
+    return " ".join(str(model or "").split())[:200]
+
+
 def project_of(spark: Spark):
     """SPARK's project, or None: none given, or the project is gone."""
 
@@ -808,7 +825,7 @@ def read_code(code: str) -> dict:
     }
 
 
-def add_from(source: str, project: str = "") -> Spark:
+def add_from(source: str, project: str = "", model: str = "") -> Spark:
     """A spark of your own, copied from a share code or a template named
     SOURCE. A name already taken gets a number."""
 
@@ -824,7 +841,7 @@ def add_from(source: str, project: str = "") -> Spark:
         number += 1
     spark = create(
         name, data["goal"], data.get("boundaries", ""), data["every"],
-        project,
+        project, model=model,
     )
     lessons = data.get("lessons") or []
     if lessons:
@@ -834,7 +851,7 @@ def add_from(source: str, project: str = "") -> Spark:
 
 def create(
     name: str, goal: str, boundaries: str = "", every="", project: str = "",
-    watch: str = "",
+    watch: str = "", model: str = "",
 ) -> Spark:
     """Make a spark. Its first shift runs as soon as the keeper looks."""
 
@@ -861,6 +878,7 @@ def create(
             colour=COLOURS[len(taken) % len(COLOURS)],
             project=project,
             watch=watch,
+            model=_model_name(model),
         )
         _save(spark)
     _changed()
@@ -889,6 +907,8 @@ def update(key: str, **changes) -> Spark:
             spark.project = resolve_project(changes["project"])
         if "watch" in changes:
             spark.watch = _watch_folder(changes["watch"])
+        if "model" in changes:
+            spark.model = _model_name(changes["model"])
         if "name" in changes:
             name = " ".join(str(changes["name"] or "").split())[:NAME_CHARS]
             if not name:
@@ -1164,7 +1184,7 @@ def _work(
 
     from . import tools as flash_tools  # deferred: avoids a module cycle
 
-    model = flash_tools.MODEL_NAME
+    model = model_of(spark)
     if not model:
         raise RuntimeError("no model is set, so it could not run")
     host = flash_tools.OLLAMA_HOST or subagents.OLLAMA_HOST_DEFAULT
@@ -1302,7 +1322,7 @@ def shift(spark_id: str, client=None) -> Optional[Report]:
 
     pending: dict = {}
     try:
-        if not flash_tools.MODEL_NAME:
+        if not model_of(spark):
             raise RuntimeError("no model is set, so it could not run")
         if resuming:
             tool, args = resuming["tool"], resuming["args"]
@@ -1330,7 +1350,7 @@ def shift(spark_id: str, client=None) -> Optional[Report]:
         else:
             host = flash_tools.OLLAMA_HOST or subagents.OLLAMA_HOST_DEFAULT
             prompt = _prompt(
-                spark, host, flash_tools.MODEL_NAME,
+                spark, host, model_of(spark),
                 flash_tools.CURRENT_DATE_PROMPT,
             )
             messages = [
@@ -1655,12 +1675,12 @@ def answer(spark_id: str, client=None) -> Optional[Message]:
     kit = ChatKit(spark)
     host = flash_tools.OLLAMA_HOST or subagents.OLLAMA_HOST_DEFAULT
     try:
-        if not flash_tools.MODEL_NAME:
+        if not model_of(spark):
             raise RuntimeError("no model is set, so it could not run")
         messages: list[dict] = [{
             "role": "system",
             "content": chat_prompt(
-                spark, host, flash_tools.MODEL_NAME,
+                spark, host, model_of(spark),
                 flash_tools.CURRENT_DATE_PROMPT,
             ),
         }] + [

@@ -299,6 +299,9 @@ Each spark has:
 And always:
 
 - a **name** and a handle to go with it (`Scout` is `@scout-spark`),
+- a **model**, chosen when you make it: every shift and every chat with
+  it runs on that one, whatever Flash itself is set to
+  (`/sparks model scout qwen3:8b` changes it),
 - a **goal**, the standing assignment it works toward,
 - a **schedule**, from every 15 minutes to weekly,
 - **boundaries**, what it must never do whatever the goal seems to need.

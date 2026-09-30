@@ -12,6 +12,13 @@ from flash import cli, keepalive, notify, sparks, tools, web
 from flash.theme import answer_from, capture_tool_output
 
 
+@pytest.fixture(autouse=True)
+def flash_model(monkeypatch):
+    """Flash has a model, the one a spark runs on when it names none."""
+
+    monkeypatch.setattr(tools, "MODEL_NAME", "flash-model")
+
+
 @pytest.fixture
 def ran(monkeypatch):
     """The system commands keepalive runs, each a yes."""
