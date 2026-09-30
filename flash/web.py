@@ -1342,15 +1342,21 @@ def _sink(session: Session, chat: Chat):
     return sink
 
 
-def _finish_reply(session: Session, chat: Chat, reply: Streamed) -> None:
-    """Record a reply the page has watched stream in."""
+def _finish_reply(
+    session: Session, chat: Chat, reply: Streamed,
+    spark: "Optional[sparks.Spark]" = None,
+) -> None:
+    """Record a reply the page has watched stream in, and whose it is."""
 
     chat.partial = chat.thinking = ""
-    session.emit(chat, {
+    event = {
         "type": "assistant",
         "text": reply.content,
         "thinking": reply.thinking,
-    })
+    }
+    if spark is not None:
+        event["spark"] = spark.id
+    session.emit(chat, event)
 
 
 def _snippet(flat: str, at: int) -> str:
@@ -1468,7 +1474,6 @@ def run_turn(
     """
 
     from . import ai  # deferred: ai imports half of Flash
-    from . import tools as flash_tools
 
     if not ai.Config.model:
         session.emit(chat, {
@@ -1477,21 +1482,18 @@ def run_turn(
         })
         return
 
-    # A chat with a spark: the spark answers, in its own voice and with
-    # its own tools, and keeps what it learns here.
-    spark = sparks.find(chat.spark) if chat.spark else None
-    if chat.spark and spark is None:
+    # Who answers: a spark the message @mentions, each in turn, or else
+    # the chat's own, a spark or Flash.
+    own = sparks.find(chat.spark) if chat.spark else None
+    if chat.spark and own is None:
         session.emit(chat, {
             "type": "error",
             "text": "That spark is not here any more, so nobody can answer.",
         })
         return
-    kit = sparks.ChatKit(spark) if spark else None
+    speakers: list = sparks.mentioned(text) or [own]
 
     client = ollama.Client(host=ai.Config.host)
-    started = time.monotonic()
-    tokens = 0
-    generating = 0.0
 
     # What this chat's sub-agents have done since, carried in the same
     # message the way the terminal carries it, so the model hears about
@@ -1512,6 +1514,59 @@ def run_turn(
     content = "\n\n".join(part for part in (news, said) if part)
     chat.messages.append(ai._message("user", content, images or None))
 
+    stopped = False
+    flash_spoke = False
+    tools_ran = 0
+    for number, spark in enumerate(speakers):
+        if chat.stop.is_set():
+            break
+        stopped, tools_ran = _respond(
+            session, chat, client, text, found, spark,
+            guest=spark is not None and spark.id != chat.spark,
+            first=number == 0,
+        )
+        flash_spoke = flash_spoke or spark is None
+        if stopped:
+            break
+
+    if delivered and not stopped:
+        subagents.mark_delivered(delivered)
+
+    if flash_spoke and not stopped:
+        learning.after_turn(
+            chat.messages, tools_ran,
+            host=ai.Config.host, model=ai.Config.model or "",
+        )
+
+
+def _respond(
+    session: Session,
+    chat: Chat,
+    client: Any,
+    text: str,
+    found: "Optional[workspace.Project]",
+    spark: "Optional[sparks.Spark]",
+    guest: bool = False,
+    first: bool = True,
+) -> tuple[bool, int]:
+    """One answer to the message just put in CHAT: Flash's, or SPARK's
+    in its own voice and with its own tools, keeping what it learns. A
+    GUEST spark was @mentioned into someone else's chat: its reply is
+    marked as its own. Only the FIRST of a turn's answers marks where
+    /undo goes back to, so it takes back the whole turn. Whether it was
+    stopped, and how many tools ran.
+    """
+
+    from . import ai  # deferred: ai imports half of Flash
+    from . import tools as flash_tools
+
+    kit = sparks.ChatKit(spark) if spark is not None else None
+    started = time.monotonic()
+    tokens = 0
+    generating = 0.0
+    # Who is answering, for the page to put a name on what streams in.
+    session.emit(chat, {"type": "speaker", "spark": spark.id if spark else ""})
+
     with capture_tool_output(_sink(session, chat)), \
             answer_from(session.answerer(chat)):
         ai._fit_and_compact(ai.console, client, chat.messages)
@@ -1522,12 +1577,18 @@ def run_turn(
                 spark, ai.Config.host, ai.Config.model,
                 flash_tools.CURRENT_DATE_PROMPT, project=False,
             )
+            if guest:
+                host = sparks.find(chat.spark) if chat.spark else None
+                prompt += "\n\n" + sparks.MENTIONED_PROMPT.format(
+                    host=host.name if host else "Flash",
+                )
         else:
             prompt = ai._session_system_prompt(heard=chat.heard)
         if found is not None:
             prompt = f"{prompt}\n\n{project_prompt(found)}".strip()
         system = ai._message("system", prompt)
-        checkpoint.start_turn(ai._turn_label(text))
+        if first:
+            checkpoint.start_turn(ai._turn_label(text))
 
         offered = flash_tools.turn_tools()
         if kit is not None:
@@ -1554,13 +1615,13 @@ def run_turn(
                         and nudged < ai.MAX_PROMISE_NUDGES
                         and ai.unkept_promise(reply.content)):
                     nudged += 1
-                    _finish_reply(session, chat, reply)
+                    _finish_reply(session, chat, reply, spark)
                     convo.append(ai._message("assistant", reply.content))
                     convo.append(ai.promise_nudge())
                     continue
                 break
 
-            _finish_reply(session, chat, reply)
+            _finish_reply(session, chat, reply, spark)
 
             named = [ai._tool_call_name_args(call) for call in reply.calls]
             convo.append({
@@ -1630,11 +1691,14 @@ def run_turn(
         chat.partial = chat.thinking = ""
         session.emit(chat, {"type": "note", "text": "Stopped."})
     else:
-        _finish_reply(session, chat, reply)
+        _finish_reply(session, chat, reply, spark)
 
     chat.messages.extend(ai._worth_keeping(convo, keep_from))
     if reply.content:
-        chat.messages.append(ai._message("assistant", reply.content))
+        chat.messages.append(ai._message(
+            "assistant",
+            sparks.said_by(spark, reply.content) if guest else reply.content,
+        ))
 
     session.emit(chat, {
         "type": "stats",
@@ -1647,17 +1711,10 @@ def run_turn(
         "tools": tool_count,
     })
 
-    if delivered and not reply.stopped:
-        subagents.mark_delivered(delivered)
-
     if kit is not None:
         # What it learned, and any goal or schedule it was given.
         kit.apply()
-    elif not reply.stopped:
-        learning.after_turn(
-            chat.messages, tool_count,
-            host=ai.Config.host, model=ai.Config.model or "",
-        )
+    return reply.stopped, tool_count
 
 
 # --- Status and commands -------------------------------------------------

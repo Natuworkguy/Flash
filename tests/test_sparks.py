@@ -774,3 +774,34 @@ def test_flash_can_make_a_spark_for_a_project(project):
             tools.make_spark("Scout", "Watch the build.", "daily", "", "App")
 
     assert sparks.find("scout").project == project.id
+
+
+# --- Mentions ------------------------------------------------------------
+
+
+def test_a_spark_is_mentioned_by_its_name_or_handle():
+    scout = sparks.create("Scout", "Watch the issues.")
+    watch = sparks.create("Price Watch", "Watch the price.")
+
+    got = sparks.mentioned(
+        "@price-watch and @scout-spark, then @Scout again, and @nobody."
+    )
+
+    assert [s.id for s in got] == [watch.id, scout.id]
+
+
+@pytest.mark.parametrize("text", [
+    "mail me@scout", "see @scout/notes.md", "open @scout.py", "scout",
+])
+def test_an_address_or_a_path_is_not_a_mention(text):
+    sparks.create("Scout", "Watch the issues.")
+
+    assert sparks.mentioned(text) == []
+
+
+def test_a_spark_reply_is_marked_as_its_own():
+    made = sparks.create("Scout", "Watch the issues.")
+
+    assert sparks.said_by(made, "Hi.") == (
+        "[Scout (@scout-spark), one of the user's sparks]\nHi."
+    )
