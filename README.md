@@ -336,6 +336,35 @@ schedule and it changes them. Sparks live in `~/.flash/sparks`,
 one JSON file each. Like sub-agents, they can only run commands or
 change files in autonomous mode.
 
+#### Approvals, stopping, and teams
+
+A shift never runs a command or changes a file on its own (unless
+autonomous mode is on). It stops at that step and asks: "Repo Watch
+wants to: Run a command, `git status`". Approve or deny it in the
+spark's window, or with `/sparks approve scout` and `/sparks deny scout
+[why]`, and the shift carries on from exactly where it stopped, told
+why if you said no. Nothing else starts for that spark while it waits.
+A shift that is running can be stopped at its next step: Stop in its
+window, or `/sparks stop scout`.
+
+Sparks work as a team: each knows the others, and can hand one a
+finding or a job with its `hand_off` tool. The other starts a shift
+soon, told what it was handed and by whom.
+
+#### Triggers, templates and sharing
+
+Besides its schedule, a spark can watch a folder: when files in it
+change, a shift starts, told which files (the form's "Watch a folder",
+or `/sparks watch scout ~/Downloads`).
+
+The new-spark form starts from a template if you like, among them
+Morning Brief, Repo Watch, Test Runner, Disk Guard, Dependency Check
+and Page Watch (`/sparks templates`, `/sparks add "Repo Watch"`). Any
+spark can be shared as a code (Share in its window, or `/sparks share
+scout`): whoever adds it with Add shared, or `/sparks add <code>`, sees
+its goal and boundaries first and gets a copy of their own, with its
+lessons but none of its reports or notes.
+
 #### Always on
 
 Out of the box, sparks work while a Flash is open. `/sparks always on`

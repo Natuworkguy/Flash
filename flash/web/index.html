@@ -1080,6 +1080,19 @@ button.item-row:hover { background: var(--hover); }
 .speaker .name { font-weight: 600; color: color-mix(in srgb, var(--c) 70%, var(--text)); }
 .speaker .handle { font: 12px var(--mono); color: var(--text-3); }
 .menu .item .handle { margin-left: auto; font: 12px var(--mono); color: var(--text-3); }
+.spark-approval { border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent); background: color-mix(in srgb, var(--accent) 8%, var(--bg)); border-radius: 14px; padding: 12px 14px; margin: 4px 0 14px; animation: rise 0.26s var(--ease) both; }
+.spark-approval .want { font-weight: 600; font-size: 14px; margin-bottom: 8px; }
+.spark-approval pre { margin: 0 0 10px; padding: 9px 11px; max-height: 180px; overflow: auto; border-radius: 9px; background: var(--code-bg); font: 12px/1.55 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+.spark-approval .row { display: flex; gap: 8px; align-items: center; }
+.spark-approval input { flex: 1; min-width: 0; font: 13.5px var(--sans); color: var(--text); background: var(--surface); border: 1px solid var(--border-strong); border-radius: 9px; padding: 6px 10px; outline: 0; }
+.spark-card .state.asking { color: var(--accent); font-weight: 500; }
+.spark-templates { display: flex; flex-wrap: wrap; gap: 6px; margin: -4px 0 16px; }
+.spark-templates .chip-btn { font-size: 12.5px; padding: 5px 10px; border-radius: 999px; border: 1px solid var(--border-strong); color: var(--text-2); }
+.spark-templates .chip-btn:hover, .spark-templates .chip-btn.on { background: var(--hover); color: var(--text); }
+.spark-code { width: 100%; font: 12px/1.5 var(--mono); color: var(--text); background: var(--bg); border: 1px solid var(--border-strong); border-radius: 10px; padding: 9px 12px; resize: vertical; overflow-wrap: anywhere; outline: 0; }
+.spark-preview { border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; margin: 12px 0 4px; font-size: 13.5px; color: var(--text-2); }
+.spark-preview b { color: var(--text); }
+.spark-preview p { margin: 6px 0 0; }
 .field select { width: 100%; font: 14.5px var(--sans); color: var(--text); background: var(--bg); border: 1px solid var(--border-strong); border-radius: 10px; padding: 9px 12px; outline: 0; }
 
 .ext-preview { margin: 14px 0 6px; padding: 12px 14px; border: 1px solid var(--border); border-radius: 12px; background: var(--code-bg); }
@@ -3787,7 +3800,7 @@ function sparkAvatar(spark, size = 36, i = 0) {
   av.style.setProperty("--s", `${size}px`);
   av.style.setProperty("--i", i);
   av.setAttribute("aria-hidden", "true");
-  if (spark.unread) av.appendChild(el("span", "ping"));
+  if (spark.unread || spark.waiting) av.appendChild(el("span", "ping"));
   return av;
 }
 
@@ -3799,6 +3812,7 @@ function everyWords(minutes) {
 }
 
 function sparkState(spark) {
+  if (spark.waiting) return "Waiting for your approval";
   if (spark.answering) return "Answering you";
   if (spark.status === "working") return spark.activity ? `Working: ${spark.activity}` : "Working";
   if (spark.paused) return "Paused";
@@ -3826,10 +3840,15 @@ async function drawSparks(body, again = false) {
   if (!body.isConnected) return;
   body.innerHTML = `<div class="mem-head"><p class="sub">Agents that keep working on one goal, on a schedule, for as long as Flash is running, and report back. Tell one what to do differently and it remembers.</p></div><div class="host"></div><div class="mem-path"></div>`;
   if (again) body.style.animation = "none";
+  const buttons = el("div", "buttons");
+  const shared = el("button", "btn with-icon", `${icon("download")}<span>Add shared</span>`);
+  shared.type = "button";
+  shared.onclick = () => addSharedSpark();
   const add = el("button", "btn primary with-icon", `${icon("plus")}<span>New spark</span>`);
   add.type = "button";
   add.onclick = () => sparkForm();
-  body.querySelector(".mem-head").appendChild(add);
+  buttons.append(shared, add);
+  body.querySelector(".mem-head").appendChild(buttons);
   sparksAlways = r.always;
   const host = body.querySelector(".host");
   if (!r.sparks.length) {
@@ -3848,6 +3867,7 @@ async function drawSparks(body, again = false) {
     const state = card.querySelector(".state");
     state.textContent = spark.unread ? `${spark.unread} new report${spark.unread === 1 ? "" : "s"} · ${sparkState(spark)}` : sparkState(spark);
     state.classList.toggle("working", spark.status === "working");
+    state.classList.toggle("asking", !!spark.waiting);
     card.querySelector(".goal").textContent = spark.goal;
     card.onclick = () => openSpark(spark.id);
     grid.appendChild(card);
@@ -3906,6 +3926,7 @@ function fillSpark(box, spark, again = false) {
   box.innerHTML = `<div class="spark-head"><div><h2></h2><div class="handle"></div><div class="meta"></div></div></div>
     <div class="spark-sec">Goal</div><div class="spark-text" data-goal></div>
     <div data-bounds hidden><div class="spark-sec">Boundaries</div><div class="spark-text"></div></div>
+    <div data-watch hidden><div class="spark-sec">Watching</div><div class="spark-text"></div></div>
     <div class="spark-actions"></div>
     <div data-lessons hidden><div class="spark-sec">What you have taught it</div><ul class="spark-lessons"></ul></div>
     <div class="spark-sec">Reports</div><div data-reports></div>
@@ -3919,7 +3940,28 @@ function fillSpark(box, spark, again = false) {
     box.querySelector("[data-bounds]").hidden = false;
     box.querySelector("[data-bounds] .spark-text").textContent = spark.boundaries;
   }
+  if (spark.watch) {
+    box.querySelector("[data-watch]").hidden = false;
+    box.querySelector("[data-watch] .spark-text").textContent = `${spark.watch}: a change there starts a shift.`;
+  }
   box.querySelector("[data-cancel]").onclick = closeForm;
+
+  // A step it stopped at, for a yes or a no.
+  if (spark.waiting) {
+    const card = el("div", "spark-approval", `<div class="want"></div><pre></pre><div class="row"><input type="text" maxlength="400" autocomplete="off" data-keep="why" placeholder="Why not? (optional, it hears this)"><button type="button" class="btn small" data-no>Deny</button><button type="button" class="btn small primary" data-yes>Approve</button></div>`);
+    card.querySelector(".want").textContent = `${spark.name} wants to: ${spark.pending.label || "take a step"}`;
+    const detail = card.querySelector("pre");
+    if (spark.pending.detail) detail.textContent = spark.pending.detail; else detail.remove();
+    const decide = async (yes) => {
+      try {
+        await command(yes ? "spark-approve" : "spark-deny", spark.id, null, { why: card.querySelector("input").value });
+        toast(yes ? `${spark.name} carries on` : `${spark.name} carries on without it`);
+      } catch (error) { showFailure(error); }
+    };
+    card.querySelector("[data-yes]").onclick = () => decide(true);
+    card.querySelector("[data-no]").onclick = () => decide(false);
+    box.querySelector(".spark-actions").before(card);
+  }
 
   const act = (label, run, cls = "btn small") => {
     const b = el("button", cls);
@@ -3931,9 +3973,14 @@ function fillSpark(box, spark, again = false) {
   };
   const working = spark.status === "working";
   act("Chat", async () => startSparkChat(spark.id), "btn small primary");
-  act(working ? "Working…" : "Run now", async () => { await command("spark-run", spark.id, null); toast(`${spark.name} is starting a shift`); }).disabled = working;
+  if (working || spark.waiting) {
+    act(working ? "Stop" : "Call off", async () => { await command("spark-stop", spark.id, null); toast(working ? `${spark.name} stops at its next step` : `${spark.name} called off that shift`); });
+  } else {
+    act("Run now", async () => { await command("spark-run", spark.id, null); toast(`${spark.name} is starting a shift`); });
+  }
   act(spark.paused ? "Resume" : "Pause", async () => { await command(spark.paused ? "spark-resume" : "spark-pause", spark.id, null); });
   act("Edit", async () => sparkForm(spark));
+  act("Share", async () => shareSpark(spark));
   act("Delete", async (b) => {
     if (!b.classList.contains("sure")) { b.classList.add("sure"); b.textContent = "Delete it?"; return; }
     await command("spark-remove", spark.id, null);
@@ -3973,7 +4020,7 @@ function fillSpark(box, spark, again = false) {
     }
     if (report.feedback) {
       card.appendChild(el("div", "said")).textContent = `You said: ${report.feedback}`;
-    } else if (!report.failed) {
+    } else if (!report.failed && !report.approval) {
       const teach = el("div", "teach", `<input type="text" maxlength="400" autocomplete="off"><button type="button" class="btn small">Tell it</button>`);
       const field = teach.querySelector("input");
       field.dataset.keep = `teach-${report.at}`;
@@ -3993,6 +4040,64 @@ function fillSpark(box, spark, again = false) {
   if (said.length && quiet) reports.appendChild(el("p", "spark-quiet", `And ${quiet} quiet shift${quiet === 1 ? "" : "s"} with nothing new.`));
 }
 
+// A spark as a code to hand on: whoever adds it gets a copy of their own.
+async function shareSpark(spark) {
+  let code;
+  try { code = (await command("spark-share", spark.id, null)).code; } catch (error) { showFailure(error); return; }
+  const form = openForm(`
+    <h2>Share ${esc(spark.name)}</h2>
+    <p class="sub">Anyone with Flash can add a copy with Add shared on their Sparks page, or <code>/sparks add</code> in the terminal. It carries the goal, schedule, boundaries and what you taught it; not its reports or notes.</p>
+    <textarea class="spark-code" rows="4" readonly></textarea>
+    <div class="dialog-buttons"><button type="button" class="btn" data-cancel>Close</button><button type="button" class="btn primary" data-copy>Copy</button></div>`, async () => false);
+  const box = form.querySelector(".spark-code");
+  box.value = code;
+  box.focus();
+  box.select();
+  form.querySelector("[data-cancel]").onclick = () => openSpark(spark.id);
+  form.querySelector("[data-copy]").onclick = async () => {
+    try { await navigator.clipboard.writeText(code); toast("Copied"); }
+    catch (_) { box.select(); document.execCommand("copy"); toast("Copied"); }
+  };
+}
+
+// A shared spark, looked over before it is added: what it would do, and
+// what it must never do.
+function addSharedSpark() {
+  let preview = null;
+  const form = openForm(`
+    <h2>Add a shared spark</h2>
+    <p class="sub">Paste the code someone shared. You see what it does before anything is added, and you get a copy of your own.</p>
+    <textarea name="code" class="spark-code" rows="4" placeholder="flash-spark:…" spellcheck="false"></textarea>
+    <div class="spark-preview" hidden></div>
+    <div class="dialog-buttons"><button type="button" class="btn" data-cancel>Cancel</button><button type="submit" class="btn primary" disabled>Add spark</button></div>`,
+    async (data) => {
+      const made = (await command("spark-add", data.code.trim(), null)).spark;
+      toast(`Added ${made.name}`);
+      if (view !== "sparks") showPage("sparks");
+    });
+  const box = form.querySelector(".preview, .spark-preview");
+  const submit = form.querySelector("[type=submit]");
+  form.querySelector("[data-cancel]").onclick = closeForm;
+  let timer = null;
+  form.code.addEventListener("input", () => {
+    clearTimeout(timer);
+    timer = setTimeout(async () => {
+      const code = form.code.value.trim();
+      submit.disabled = true;
+      box.hidden = !code;
+      if (!code) return;
+      try { preview = (await command("spark-code", code, null)).template; }
+      catch (error) { box.textContent = error.message; return; }
+      box.innerHTML = `<b></b> · every ${esc(everyWords(preview.every))}<p class="goal"></p><p class="bounds"></p><p class="taught"></p>`;
+      box.querySelector("b").textContent = preview.name;
+      box.querySelector(".goal").textContent = preview.goal;
+      box.querySelector(".bounds").textContent = preview.boundaries ? `Never: ${preview.boundaries}` : "No boundaries: add your own after, with Edit.";
+      box.querySelector(".taught").textContent = preview.lessons.length ? `Taught ${preview.lessons.length} thing${preview.lessons.length === 1 ? "" : "s"}: ${preview.lessons.join(" · ")}` : "";
+      submit.disabled = false;
+    }, 150);
+  });
+}
+
 function sparkForm(spark, inProjectId = "") {
   const editing = !!spark;
   const every = editing ? spark.every : 60;
@@ -4000,15 +4105,17 @@ function sparkForm(spark, inProjectId = "") {
   const form = openForm(`
     <h2>${editing ? "Edit spark" : "New spark"}</h2>
     <p class="sub">${editing ? "" : "An agent that keeps working on one goal, on a schedule, while Flash runs, and reports back."}</p>
+    ${editing ? "" : `<div class="spark-templates"></div>`}
     <label class="field"><span>Name</span><input name="sparkname" maxlength="24" placeholder="Scout" autocomplete="off"><small>Its handle: <b data-handle>@scout-spark</b></small></label>
     <label class="field"><span>Goal</span><textarea name="goal" rows="4" placeholder="Check github.com/me/app for new issues. Tell me which look like bugs, and skip ones you have already told me about."></textarea></label>
     <label class="field"><span>How often</span><select name="every">${choices.map(([m, label]) => `<option value="${m}"${m === every ? " selected" : ""}>${label}</option>`).join("")}</select><small>It works while Flash is open, in the terminal or here.</small></label>
     <label class="field"><span>Project</span><select name="project"><option value="">No project</option>${[...projects].reverse().map((p) => `<option value="${esc(p.id)}"${editing && spark.project === p.id ? " selected" : ""}>${esc(p.name)}</option>`).join("")}</select><small>${projects.length ? "Its shifts work on the project's folder and follow its instructions, and a chat with it starts there." : "Make a project on the Projects page to give it one: a folder, and how to work in it."}</small></label>
+    <label class="field"><span>Watch a folder <em class="count">optional</em></span><input name="watch" class="mono" placeholder="~/Downloads" autocomplete="off" spellcheck="false"><small>A change to its files starts a shift too, besides the schedule, and it is told which files changed.</small></label>
     <label class="field"><span>Boundaries</span><textarea name="boundaries" rows="2" placeholder="Only read. Never push, delete, or message anyone."></textarea><small>Lines it must not cross. Running commands and changing files also need autonomous mode, as for sub-agents.</small></label>
     ${editing || sparksAlways.installed ? "" : `<label class="field check"><input type="checkbox" name="always" checked><span>Keep sparks working when Flash is closed. Flash starts a keeper at login and notifies you of news.</span></label>`}
     <div class="dialog-buttons"><button type="button" class="btn" data-cancel>Cancel</button><button type="submit" class="btn primary">${editing ? "Save" : "Make spark"}</button></div>`,
     async (data) => {
-      const fields = { goal: data.goal, every: data.every, boundaries: data.boundaries, project: data.project || "" };
+      const fields = { goal: data.goal, every: data.every, boundaries: data.boundaries, project: data.project || "", watch: data.watch || "" };
       const name = data.sparkname.trim();
       if (editing) {
         // Not "name": that is the command's own.
@@ -4029,8 +4136,32 @@ function sparkForm(spark, inProjectId = "") {
     form.sparkname.value = spark.name;
     form.goal.value = spark.goal;
     form.boundaries.value = spark.boundaries;
-  } else if (inProjectId) {
-    form.project.value = inProjectId;
+    form.watch.value = spark.watch || "";
+  } else {
+    if (inProjectId) form.project.value = inProjectId;
+    // A template fills the form in, to change before it is made.
+    command("spark-templates", "", null).then(({ templates }) => {
+      const row = form.querySelector(".spark-templates");
+      if (!row) return;
+      row.appendChild(el("span", "sub", "Start from:"));
+      for (const t of templates) {
+        const chip = el("button", "chip-btn");
+        chip.type = "button";
+        chip.textContent = t.name;
+        chip.title = t.blurb;
+        chip.onclick = () => {
+          row.querySelectorAll(".chip-btn").forEach((c) => c.classList.toggle("on", c === chip));
+          form.sparkname.value = t.name;
+          form.goal.value = t.goal;
+          form.boundaries.value = t.boundaries;
+          if (![...form.every.options].some((o) => +o.value === t.every)) form.every.add(new Option(`Every ${everyWords(t.every)}`, t.every));
+          form.every.value = String(t.every);
+          named();
+          form.goal.focus();
+        };
+        row.appendChild(chip);
+      }
+    }).catch(() => {});
   }
   named();
   form.querySelector("[data-cancel]").onclick = editing ? () => openSpark(spark.id) : closeForm;

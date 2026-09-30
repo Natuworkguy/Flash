@@ -805,3 +805,302 @@ def test_a_spark_reply_is_marked_as_its_own():
     assert sparks.said_by(made, "Hi.") == (
         "[Scout (@scout-spark), one of the user's sparks]\nHi."
     )
+
+
+# --- Approvals, stopping, hand-offs, watching, sharing ---------------------
+
+
+@pytest.fixture
+def fake_shell(monkeypatch):
+    ran = []
+
+    def shell(command, timeout=None):
+        ran.append(command)
+        return f"(ran {command})"
+
+    monkeypatch.setitem(tools.FUNCTIONS, "shell", shell)
+    return ran
+
+
+def test_a_step_that_asks_first_waits_for_the_user(model, fake_shell):
+    made = sparks.create("Scout", "Keep the repo current.")
+    client = FakeClient([
+        _reply("", ("shell", {"command": "git pull"}),
+               ("keep_notes", {"notes": "pulled"})),
+    ])
+
+    report = sparks.shift(made.id, client=client)
+
+    assert report.approval and "Run a command" in report.text
+    kept = sparks.find(made.id)
+    assert kept.waiting and kept.status == sparks.WAITING
+    assert kept.pending["detail"] == "git pull"
+    assert fake_shell == []
+    assert sparks.due() == [] and sparks.unread_total() == 2
+    names = {t["function"]["name"] for t in client.calls[0]["tools"]}
+    assert "shell" in names and "hand_off" in names
+    # Waiting, it does not start again, even when it is its time.
+    assert sparks.shift(made.id) is None
+
+
+def test_a_yes_carries_the_shift_on_from_that_step(model, fake_shell):
+    made = sparks.create("Scout", "Keep the repo current.")
+    sparks.shift(made.id, client=FakeClient([
+        _reply("", ("shell", {"command": "git pull"}),
+               ("keep_notes", {"notes": "pulled"})),
+    ]))
+
+    sparks.answer_step("scout", True)
+    assert [s.id for s in sparks.due()] == [made.id]
+    client = FakeClient([_reply("Pulled two commits.")])
+    report = sparks.shift(made.id, client=client)
+
+    assert fake_shell == ["git pull"]
+    assert report.text == "Pulled two commits."
+    said = client.calls[0]["messages"]
+    assert said[-2] == {
+        "role": "tool", "tool_name": "shell", "content": "(ran git pull)",
+    }
+    assert said[-1]["content"] == sparks.NOT_RUN
+    kept = sparks.find(made.id)
+    assert kept.status == sparks.IDLE and kept.pending == {}
+    assert kept.runs == 1 and sparks.unread_total() == 1
+
+
+def test_a_no_carries_it_on_without_the_step(model, fake_shell):
+    made = sparks.create("Scout", "Keep the repo current.")
+    sparks.shift(made.id, client=FakeClient([
+        _reply("", ("shell", {"command": "rm -rf build"})),
+    ]))
+
+    sparks.answer_step(made.id, False, "too risky")
+    client = FakeClient([_reply("Left the build alone.")])
+    sparks.shift(made.id, client=client)
+
+    assert fake_shell == []
+    told = client.calls[0]["messages"][-1]["content"]
+    assert "said no" in told and "too risky" in told
+    assert "(you said no)" in sparks.find(made.id).reports[-1].steps[-1]
+
+
+def test_in_autonomous_mode_nothing_waits(model, fake_shell, monkeypatch):
+    monkeypatch.setattr(tools, "NO_COMMAND_CONFIRMATION", True)
+    made = sparks.create("Scout", "Keep the repo current.")
+
+    report = sparks.shift(made.id, client=FakeClient([
+        _reply("", ("shell", {"command": "git status"})),
+        _reply("Clean."),
+    ]))
+
+    assert fake_shell == ["git status"] and report.text == "Clean."
+
+
+def test_there_is_nothing_to_answer_when_nothing_waits():
+    made = sparks.create("Scout", "Watch the issues.")
+
+    with pytest.raises(sparks.SparkError, match="not waiting"):
+        sparks.answer_step(made.id, True)
+
+
+def test_a_shift_stops_at_its_next_step_when_asked(model):
+    made = sparks.create("Scout", "Watch the issues.")
+
+    class Stopping(FakeClient):
+        def chat(self, model, messages, tools=None, options=None):
+            sparks.stop(made.id)
+            return super().chat(model, messages, tools, options)
+
+    report = sparks.shift(made.id, client=Stopping([
+        _reply("", ("keep_notes", {"notes": "x"})),
+        _reply("never reached"),
+    ]))
+
+    assert report.text.startswith("Stopped")
+    kept = sparks.find(made.id)
+    assert kept.status == sparks.IDLE and not kept.stop_asked
+    with pytest.raises(sparks.SparkError, match="not working"):
+        sparks.stop(made.id)
+
+
+def test_a_waiting_shift_can_be_called_off(model, fake_shell):
+    made = sparks.create("Scout", "Keep the repo current.")
+    sparks.shift(made.id, client=FakeClient([
+        _reply("", ("shell", {"command": "git pull"})),
+    ]))
+
+    sparks.stop(made.id)
+
+    kept = sparks.find(made.id)
+    assert kept.status == sparks.IDLE and kept.pending == {}
+    assert "Called off" in kept.reports[-1].text
+    assert sparks.unread_total() == 0
+
+
+def test_a_spark_hands_work_to_another(model):
+    scout = sparks.create("Scout", "Watch the issues.")
+    fixer = sparks.create("Fixer", "Fix the bugs you are handed.")
+    first = FakeClient([
+        _reply("", ("hand_off", {"spark": "fixer", "note": "Issue 12."})),
+        _reply("Handed issue 12 to Fixer."),
+    ])
+
+    sparks.shift(scout.id, client=first)
+
+    assert "Fixer (@fixer-spark)" in first.calls[0]["messages"][0]["content"]
+    kept = sparks.find(fixer.id)
+    assert kept.asked and kept.inbox[0]["from"] == "Scout"
+    second = FakeClient([_reply("On it.")])
+    sparks.shift(fixer.id, client=second)
+    opening = second.calls[0]["messages"][1]["content"]
+    assert "From Scout: Issue 12." in opening
+    assert sparks.find(fixer.id).inbox == []
+
+
+def test_a_spark_cannot_hand_work_to_itself(model):
+    made = sparks.create("Scout", "Watch the issues.")
+    client = FakeClient([
+        _reply("", ("hand_off", {"spark": "scout", "note": "Me."})),
+        _reply("Done."),
+    ])
+
+    sparks.shift(made.id, client=client)
+
+    assert "no other spark" in client.calls[1]["messages"][-1]["content"]
+
+
+def test_a_watched_folder_that_changes_starts_a_shift(tmp_path):
+    folder = tmp_path / "inbox"
+    folder.mkdir()
+    (folder / "a.txt").write_text("one")
+    made = sparks.create("Scout", "Sort the inbox.", watch=str(folder))
+    sparks._watched.clear()
+
+    assert sparks.watch_tick() == []  # the first look only learns it
+    (folder / "b.txt").write_text("two")
+    (folder / "a.txt").write_text("changed")
+    os.utime(folder / "a.txt", (1, 1))
+    started = sparks.watch_tick(now=time.time() + 3600)
+
+    assert [s.id for s in started] == [made.id]
+    kept = sparks.find(made.id)
+    assert kept.asked and "a.txt, b.txt" in kept.why
+    # Its opening tells the shift why it started.
+    assert "files changed" in sparks._opening(kept.why, [])
+
+
+def test_a_watch_waits_for_a_shift_just_run(tmp_path):
+    folder = tmp_path / "inbox"
+    folder.mkdir()
+    made = sparks.create("Scout", "Sort the inbox.", watch=str(folder))
+    sparks._edit(made.id, lambda s: setattr(s, "last_run", time.time()))
+    sparks._watched.clear()
+    sparks.watch_tick()
+    (folder / "new.txt").write_text("x")
+
+    assert sparks.watch_tick() == []
+    assert sparks.watch_tick(now=time.time() + 3600) != []
+
+
+def test_a_watch_must_be_a_folder(tmp_path):
+    with pytest.raises(sparks.SparkError, match="not a folder"):
+        sparks.create("Scout", "Goal.", watch=str(tmp_path / "missing"))
+
+
+def test_a_shared_spark_is_added_as_a_copy():
+    made = sparks.create("Scout", "Watch the issues.", "Only read.", "2h")
+    sparks.teach(made.id, "Skip docs.")
+
+    code = sparks.share_code("scout")
+    seen = sparks.read_code(code)
+    copy = sparks.add_from(code)
+
+    assert code.startswith(sparks.SHARE_PREFIX)
+    assert seen == {
+        "name": "Scout", "goal": "Watch the issues.",
+        "boundaries": "Only read.", "every": 120, "lessons": ["Skip docs."],
+    }
+    assert copy.name == "Scout 2" and copy.id != made.id
+    assert sparks.find(copy.id).lessons == ["Skip docs."]
+
+
+@pytest.mark.parametrize("code", [
+    "hello", "flash-spark:%%%", "flash-spark:" + "e30",
+])
+def test_a_bad_share_code_is_refused(code):
+    with pytest.raises(sparks.SparkError):
+        sparks.read_code(code)
+
+
+def test_a_template_makes_a_spark():
+    made = sparks.add_from("repo watch")
+
+    assert made.name == "Repo Watch" and made.every == 120
+    assert "Never commit" in made.boundaries
+    assert len(sparks.TEMPLATES) >= 5
+
+
+class TestTheRestOfIt:
+    def test_the_page_answers_stops_shares_and_adds(self, model, fake_shell):
+        session = web.Session()
+        made = sparks.create("Scout", "Keep the repo current.")
+        sparks.shift(made.id, client=FakeClient([
+            _reply("", ("shell", {"command": "git pull"})),
+        ]))
+
+        got = web.command(session, {
+            "name": "spark-deny", "arg": made.id, "why": "not now",
+        })["spark"]
+        assert got["pending"] == {} or got["status"] == sparks.WAITING
+        assert sparks.find(made.id).pending["why"] == "not now"
+        code = web.command(session, {"name": "spark-share", "arg": "scout"})
+        preview = web.command(session, {
+            "name": "spark-code", "arg": code["code"],
+        })["template"]
+        assert preview["name"] == "Scout"
+        added = web.command(
+            session, {"name": "spark-add", "arg": code["code"]},
+        )
+        assert added["spark"]["name"] == "Scout 2"
+        listed = web.command(session, {"name": "spark-templates"})
+        assert listed["templates"] == sparks.TEMPLATES
+
+    def test_the_page_sees_what_waits_but_not_the_conversation(
+        self, model, fake_shell
+    ):
+        made = sparks.create("Scout", "Keep the repo current.")
+        sparks.shift(made.id, client=FakeClient([
+            _reply("", ("shell", {"command": "git pull"})),
+        ]))
+
+        shown = sparks.find(made.id).to_dict()
+
+        assert shown["waiting"] is True
+        assert shown["pending"]["label"] == "Run a command"
+        assert "messages" not in shown["pending"]
+
+    def test_the_terminal_approves(self, model, fake_shell):
+        from flash import ai
+
+        made = sparks.create("Scout", "Keep the repo current.")
+        sparks.shift(made.id, client=FakeClient([
+            _reply("", ("shell", {"command": "git pull"})),
+        ]))
+
+        ai._sparks_command("approve scout")
+
+        assert sparks.find(made.id).pending["answer"] == "yes"
+
+    def test_a_notification_says_it_asks(self, monkeypatch):
+        from flash import notify
+
+        calls = []
+        monkeypatch.setattr(notify, "_Notification", None)
+        monkeypatch.setattr(notify.sys, "platform", "linux")
+        monkeypatch.setattr(notify.shutil, "which", lambda name: name)
+        monkeypatch.setattr(
+            notify.subprocess, "run", lambda args, **kw: calls.append(args)
+        )
+
+        notify.notify_spark("Scout", "Waiting.", asking=True)
+
+        assert calls[0][2] == "Scout needs your approval"

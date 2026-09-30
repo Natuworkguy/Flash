@@ -22,6 +22,7 @@ whichever Flash is open, or, with sparks always on, in a Flash of its
 own that the operating system starts at login.
 """
 
+import base64
 import contextlib
 import json
 import os
@@ -40,7 +41,13 @@ from . import agent as subagents
 from .dashes import undash
 from .paths import FLASH_DIR
 from .sysprompt import get_model_system_prompt
-from .theme import ERROR, capture_tool_output, tool_line, tool_result
+from .theme import (
+    ERROR,
+    answer_from,
+    capture_tool_output,
+    tool_line,
+    tool_result,
+)
 
 # The bubbles a spark is drawn as, one picked for each new spark. Bright
 # enough to read on both a dark and a light page.
@@ -89,6 +96,20 @@ TICK_SECONDS = 5.0
 IDLE = "idle"
 WORKING = "working"
 FAILED = "failed"
+# Stopped part way, until the user says yes or no to a step that asks.
+WAITING = "waiting"
+
+MAX_INBOX = 20
+# How often, in ticks, a spark's watched folder is looked at, the most
+# files looked at in one, and how long after a shift a change waits.
+WATCH_EVERY_TICKS = 3
+WATCH_FILES = 5000
+WATCH_SETTLE_SECONDS = 60
+# Folders a watch never looks inside: nobody's edits, only tools'.
+WATCH_SKIP = {
+    ".git", "node_modules", "__pycache__", ".venv", "venv", ".tox",
+    ".mypy_cache", ".pytest_cache", "dist", "build", ".next",
+}
 
 # A shift that has nothing to say answers with this, and its report is
 # kept without being called news.
@@ -120,6 +141,9 @@ This shift runs every {every}; the last one was {since}.
 
 How to work:
 - Do what the goal asks now, with your tools. Do not only plan.
+- A step that runs a command or changes a file waits for the user to
+  say yes before it runs. Ask for it only when the goal needs it: the
+  shift pauses there, and carries on with their answer.
 - Call keep_notes with anything the next shift has to know: what you
   have already seen or reported, what you are waiting on. Your notes are
   replaced, not added to, so keep what still matters.
@@ -247,6 +271,8 @@ class Report:
     read: bool = False
     steps: list[str] = field(default_factory=list)
     feedback: str = ""
+    # It stopped to ask: the user's yes or no carries it on.
+    approval: bool = False
 
 
 @dataclass
@@ -285,6 +311,17 @@ class Spark:
     chat: list[Message] = field(default_factory=list)
     # The project it works on, by its ID in the web UI's projects, or "".
     project: str = ""
+    # A step that asks first, waiting on the user: what it is, and all
+    # a shift needs to carry on from it. {} when nothing waits.
+    pending: dict = field(default_factory=dict)
+    # The user asked the shift running now to stop.
+    stop_asked: bool = False
+    # A folder whose changes start a shift, besides the schedule.
+    watch: str = ""
+    # Why the next shift starts early, for it to be told.
+    why: str = ""
+    # What other sparks handed it, for its next shift: {from, text, at}.
+    inbox: list = field(default_factory=list)
     # When the answer being made now was started, or 0; and what it is
     # doing meanwhile.
     replying: float = 0.0
@@ -304,10 +341,22 @@ class Spark:
     def unread(self) -> int:
         return sum(1 for r in self.reports if not r.read and not r.quiet)
 
+    @property
+    def waiting(self) -> bool:
+        """Stopped on a step that asks, the user not having answered."""
+
+        return self.status == WAITING and not self.pending.get("answer")
+
     def to_dict(self) -> dict:
         data = asdict(self)
         data["handle"] = self.handle
         data["answering"] = self.answering
+        data["waiting"] = self.waiting
+        # What waits, as the user sees it: not the conversation behind it.
+        data["pending"] = {
+            k: self.pending[k] for k in ("label", "detail", "tool", "at")
+            if k in self.pending
+        }
         found = project_of(self)
         data["project"] = found.id if found else ""
         data["project_name"] = found.name if found else ""
@@ -612,8 +661,180 @@ def project_block(spark: Spark) -> str:
     return "\n".join(lines)
 
 
+def _watch_folder(path: str) -> str:
+    """PATH as a folder to watch, in full; "" for none."""
+
+    path = str(path or "").strip()
+    if not path:
+        return ""
+    folder = Path(os.path.expanduser(path)).resolve()
+    if not folder.is_dir():
+        raise SparkError(f"{path} is not a folder on this computer.")
+    return str(folder)
+
+
+# --- Templates and sharing -----------------------------------------------
+#
+# A spark worth having is worth passing on. A template is a spark with
+# nothing of anyone's in it: a name, a goal, a schedule, boundaries, and
+# the lessons it was taught. Flash comes with a few, and any spark can be
+# shared as a code to paste, which gives whoever adds it a copy of their
+# own, looked over first.
+
+TEMPLATES = [
+    {
+        "name": "Morning Brief",
+        "blurb": "The news on your topics, every morning",
+        "goal": (
+            "Search the web for the most important news of the last day on "
+            "the topics I care about, and give me a brief of five bullets "
+            "at most, each with its link. My topics are in your lessons; "
+            "if there are none, ask me for them in your report."
+        ),
+        "every": 1440,
+        "boundaries": (
+            "Only read and search. Never sign up for or buy anything."
+        ),
+    },
+    {
+        "name": "Repo Watch",
+        "blurb": "What changed in a git repo, and what is left undone",
+        "goal": (
+            "In my project's git repository, fetch from the remote and tell "
+            "me about new commits on the main branch since your last report, "
+            "and about uncommitted changes that have sat for more than a day."
+        ),
+        "every": 120,
+        "boundaries": (
+            "Only read. Never commit, push, pull, reset, stash, or change a "
+            "file."
+        ),
+    },
+    {
+        "name": "Test Runner",
+        "blurb": "Tells you when passing tests start failing",
+        "goal": (
+            "Run my project's tests. Tell me when a test that passed before "
+            "fails now, with its name, the error, and the likely cause. Keep "
+            "the list of what passed in your notes."
+        ),
+        "every": 360,
+        "boundaries": (
+            "Only run the tests. Never change code or install anything."
+        ),
+    },
+    {
+        "name": "Disk Guard",
+        "blurb": "Warns before a disk fills up",
+        "goal": (
+            "Check the free space on each mounted disk. When one has less "
+            "than 10% free, tell me, with the biggest folders in my home "
+            "folder."
+        ),
+        "every": 1440,
+        "boundaries": "Never delete, move, or empty anything.",
+    },
+    {
+        "name": "Dependency Check",
+        "blurb": "Outdated packages, and which ones matter",
+        "goal": (
+            "Find my project's outdated dependencies, with the tool it uses "
+            "(npm outdated, pip list --outdated, and so on), and tell me "
+            "which have security fixes or major new versions."
+        ),
+        "every": 10080,
+        "boundaries": "Only read. Never install, upgrade, or remove anything.",
+    },
+    {
+        "name": "Page Watch",
+        "blurb": "Tells you when a web page changes",
+        "goal": (
+            "Fetch the page at the address in your lessons and tell me when "
+            "what it says has changed since last time, and how. Keep what it "
+            "said in your notes. If there is no address, ask me for one."
+        ),
+        "every": 360,
+        "boundaries": "Only read. Never fill in or submit anything.",
+    },
+]
+
+SHARE_PREFIX = "flash-spark:"
+
+
+def share_code(key: str) -> str:
+    """SPARK as a code to paste somewhere: its template, no more."""
+
+    spark = _must_find(key)
+    data = {
+        "v": 1, "name": spark.name, "goal": spark.goal,
+        "boundaries": spark.boundaries, "every": spark.every,
+        "lessons": spark.lessons,
+    }
+    packed = base64.urlsafe_b64encode(
+        json.dumps(data, ensure_ascii=False).encode("utf-8")
+    ).decode("ascii")
+    return SHARE_PREFIX + packed.rstrip("=")
+
+
+def read_code(code: str) -> dict:
+    """What a share code holds, checked, to show before adding it."""
+
+    code = "".join(str(code or "").split())
+    if not code.startswith(SHARE_PREFIX):
+        raise SparkError(
+            f"That is not a spark's code: they start {SHARE_PREFIX}"
+        )
+    packed = code[len(SHARE_PREFIX):]
+    try:
+        data = json.loads(base64.urlsafe_b64decode(
+            packed + "=" * (-len(packed) % 4)
+        ).decode("utf-8"))
+    except (ValueError, UnicodeDecodeError):
+        raise SparkError("That code is not whole. Copy all of it.") from None
+    if not isinstance(data, dict) or not str(data.get("goal") or "").strip():
+        raise SparkError("That code holds no spark.")
+    lessons = data.get("lessons") or []
+    return {
+        "name": " ".join(str(data.get("name") or "Spark").split())[
+            :NAME_CHARS],
+        "goal": str(data["goal"]).strip()[:GOAL_CHARS],
+        "boundaries": str(data.get("boundaries") or "").strip()[
+            :BOUNDARY_CHARS],
+        "every": parse_every(data.get("every") or DEFAULT_EVERY_MINUTES),
+        "lessons": [
+            " ".join(str(lesson).split())[:LESSON_CHARS]
+            for lesson in lessons[:MAX_LESSONS] if str(lesson).strip()
+        ] if isinstance(lessons, list) else [],
+    }
+
+
+def add_from(source: str, project: str = "") -> Spark:
+    """A spark of your own, copied from a share code or a template named
+    SOURCE. A name already taken gets a number."""
+
+    found = next(
+        (t for t in TEMPLATES
+         if t["name"].casefold() == str(source).strip().casefold()),
+        None,
+    )
+    data = dict(found) if found else read_code(source)
+    name, number = data["name"], 2
+    while find(handle_of(name)) is not None:
+        name = f"{data['name'][:NAME_CHARS - 3]} {number}"
+        number += 1
+    spark = create(
+        name, data["goal"], data.get("boundaries", ""), data["every"],
+        project,
+    )
+    lessons = data.get("lessons") or []
+    if lessons:
+        spark = _edit(spark.id, lambda s: s.lessons.extend(lessons))
+    return spark
+
+
 def create(
     name: str, goal: str, boundaries: str = "", every="", project: str = "",
+    watch: str = "",
 ) -> Spark:
     """Make a spark. Its first shift runs as soon as the keeper looks."""
 
@@ -625,6 +846,7 @@ def create(
         raise SparkError("A spark needs a goal.")
     minutes = parse_every(every)
     project = resolve_project(project)
+    watch = _watch_folder(watch)
 
     with _held():
         taken = {s.handle for s in all_sparks()}
@@ -638,6 +860,7 @@ def create(
             every=minutes,
             colour=COLOURS[len(taken) % len(COLOURS)],
             project=project,
+            watch=watch,
         )
         _save(spark)
     _changed()
@@ -664,6 +887,8 @@ def update(key: str, **changes) -> Spark:
                 spark.next_run = spark.last_run + spark.every * 60
         if "project" in changes:
             spark.project = resolve_project(changes["project"])
+        if "watch" in changes:
+            spark.watch = _watch_folder(changes["watch"])
         if "name" in changes:
             name = " ".join(str(changes["name"] or "").split())[:NAME_CHARS]
             if not name:
@@ -743,7 +968,10 @@ def mark_read(key: str) -> Spark:
 
 
 def unread_total() -> int:
-    return sum(s.unread for s in all_sparks())
+    """What the Sparks badge counts: new reports, and steps waiting on a
+    yes or a no."""
+
+    return sum(s.unread + (1 if s.waiting else 0) for s in all_sparks())
 
 
 # --- News, for the terminal ---------------------------------------------
@@ -787,7 +1015,7 @@ def _prompt(spark: Spark, host: str, model: str, date_prompt: str) -> str:
     )
     parts = [
         get_model_system_prompt(host, model), body, project_block(spark),
-        date_prompt,
+        team_block(spark), date_prompt,
     ]
     return "\n\n".join(part for part in parts if part)
 
@@ -804,6 +1032,115 @@ def _set_activity(
     _changed()
 
 
+class NeedsApproval(Exception):
+    """A shift reached a step that asks first: it stops, to carry on
+    with the user's answer. LATER are the calls after it, not run."""
+
+    def __init__(self, name: str, args: dict, later: list) -> None:
+        super().__init__(name)
+        # Not "args": an exception's own, which it makes a tuple.
+        self.name, self.arguments, self.later = name, args, later
+
+
+class Stopped(Exception):
+    """The user asked the shift to stop."""
+
+
+def describe(name: str, args: dict) -> tuple[str, str]:
+    """A step that asks first, as the user is asked it: what it wants,
+    and the detail to judge it by."""
+
+    path = str(args.get("file_path") or args.get("path") or "")
+    if name == "shell":
+        return "Run a command", str(args.get("command", ""))
+    if name == "write":
+        body = str(args.get("content", ""))
+        cut = body[:1200] + ("\n..." if len(body) > 1200 else "")
+        return f"Write {path}", cut
+    if name in ("edit", "multi_edit"):
+        return f"Change {path}", json.dumps(
+            {k: v for k, v in args.items() if k not in ("file_path", "path")},
+            ensure_ascii=False, indent=1,
+        )[:1200]
+    return name, json.dumps(args, ensure_ascii=False)[:1200]
+
+
+def _asks_first(name: str) -> bool:
+    """Whether a step waits for the user's yes: the ones Flash asks
+    about in a chat, unless autonomous mode is on."""
+
+    from . import tools as flash_tools  # deferred: avoids a module cycle
+
+    return (
+        not flash_tools.NO_COMMAND_CONFIRMATION
+        and name in flash_tools.CONFIRMED_TOOL_NAMES
+    )
+
+
+HAND_OFF_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "hand_off",
+        "description": (
+            "Hand something to another of the user's sparks: a finding it "
+            "should act on, or work that is its job, not yours. It starts "
+            "a shift soon and is given your note."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "spark": {
+                    "type": "string",
+                    "description": "Its name or handle, from the list.",
+                },
+                "note": {
+                    "type": "string",
+                    "description": "What it needs to know, on its own.",
+                },
+            },
+            "required": ["spark", "note"],
+        },
+    },
+}
+
+
+def _handing_off(spark: Spark) -> Callable[[dict], str]:
+    def hand(args: dict) -> str:
+        note = " ".join(str(args.get("note", "")).split())[:LESSON_CHARS * 2]
+        target = find(str(args.get("spark", "")))
+        if target is None or target.id == spark.id:
+            return "Error: no other spark by that name."
+        if not note:
+            return "Error: the note was empty."
+
+        def give(other: Spark) -> None:
+            other.inbox.append({"from": spark.name, "text": note,
+                                "at": time.time()})
+            del other.inbox[:-MAX_INBOX]
+            other.asked = True
+
+        _edit(target.id, give)
+        wake()
+        tool_line(f"HandOff({target.name})")
+        tool_result(note)
+        return f"(handed to {target.name}: it starts a shift soon)"
+
+    return hand
+
+
+def team_block(spark: Spark) -> str:
+    """The other sparks, for SPARK to hand work to; "" if there are none."""
+
+    others = [s for s in all_sparks() if s.id != spark.id]
+    if not others:
+        return ""
+    lines = ["=== The other sparks: hand_off sends one work ==="]
+    for other in others:
+        first = other.goal.splitlines()[0][:120]
+        lines.append(f"- {other.name} ({other.handle}): {first}")
+    return "\n".join(lines)
+
+
 def _work(
     spark: Spark,
     messages: list[dict],
@@ -814,11 +1151,16 @@ def _work(
     rounds: int,
     last_word: str,
     client=None,
+    names: Optional[tuple[str, ...]] = None,
+    gate: Optional[Callable[[str], bool]] = None,
+    stopping: Optional[Callable[[], bool]] = None,
 ) -> str:
     """One agent run for SPARK: the model and its tools, back and forth,
     until it answers. OWN are the tools only a spark has, each answered
-    here; the rest are a sub-agent's. What it ran lands in STEPS, and
-    DOING hears what it is up to. Its last reply, without dashes."""
+    here; NAMES the rest it may call, a sub-agent's by default. What it
+    ran lands in STEPS, and DOING hears what it is up to. A call GATE
+    says asks first raises NeedsApproval, and STOPPING raises Stopped
+    between steps. Its last reply, without dashes."""
 
     from . import tools as flash_tools  # deferred: avoids a module cycle
 
@@ -827,7 +1169,7 @@ def _work(
         raise RuntimeError("no model is set, so it could not run")
     host = flash_tools.OLLAMA_HOST or subagents.OLLAMA_HOST_DEFAULT
     client = client or ollama.Client(host=host)
-    allowed = subagents.allowed_tool_names()
+    allowed = names if names is not None else subagents.allowed_tool_names()
     schemas = [
         t for t in flash_tools.tools if t["function"]["name"] in allowed
     ] + own_tools
@@ -844,6 +1186,8 @@ def _work(
     tool_calls: list = []
     with capture_tool_output(record):
         for _ in range(rounds):
+            if stopping is not None and stopping():
+                raise Stopped()
             doing("Thinking")
             response = client.chat(
                 model=model, messages=messages, tools=schemas,
@@ -864,7 +1208,9 @@ def _work(
                     for n, a in calls
                 ],
             })
-            for name, args in calls:
+            for at, (name, args) in enumerate(calls):
+                if gate is not None and name in allowed and gate(name):
+                    raise NeedsApproval(name, args, calls[at + 1:])
                 result = _call(name, args, allowed, steps, own)
                 messages.append({
                     "role": "tool",
@@ -895,52 +1241,131 @@ def _keeping_notes(notes: list[str]):
     return keep
 
 
+NOT_RUN = (
+    "Not run: it came after a step that waited for the user's approval. "
+    "Call it again if you still need it."
+)
+
+
+def _opening(why: str, inbox: list) -> str:
+    """What a shift is told first: to start, and why it started now."""
+
+    parts = ["Start your shift."]
+    if why:
+        parts.append(f"It started early because: {why}")
+    if inbox:
+        parts.append("Handed to you by other sparks:\n" + "\n".join(
+            f"- From {item.get('from', 'a spark')}: {item.get('text', '')}"
+            for item in inbox
+        ))
+    return "\n\n".join(parts)
+
+
 def shift(spark_id: str, client=None) -> Optional[Report]:
     """Run one shift of SPARK_ID now, on this thread, and file its report.
 
-    A paused spark still runs when asked to. None if the spark is gone
-    or already working.
+    A paused spark still runs when asked to. One that waits on a step
+    the user has answered carries on from that step. None if the spark
+    is gone, already working, or waiting on an answer.
     """
 
     from . import tools as flash_tools  # deferred: avoids a module cycle
 
     with _held():
         spark = find(spark_id)
-        if spark is None or spark.status == WORKING:
+        if spark is None or spark.status == WORKING or spark.waiting:
             return None
+        resuming = dict(spark.pending) if spark.pending else None
+        why, inbox = spark.why, list(spark.inbox)
         spark.status = WORKING
         spark.activity = "Starting"
+        spark.stop_asked = False
+        spark.why, spark.inbox, spark.pending = "", [], {}
         _save(spark)
     _changed()
 
-    steps: list[str] = []
-    notes = [spark.notes]
+    steps: list[str] = list(resuming["steps"]) if resuming else []
+    notes = [resuming["notes"] if resuming else spark.notes]
+    messages: list[dict] = list(resuming["messages"]) if resuming else []
+    own = {
+        "keep_notes": _keeping_notes(notes),
+        "hand_off": _handing_off(spark),
+    }
+    names = subagents.allowed_tool_names()
+    if not flash_tools.NO_COMMAND_CONFIRMATION:
+        # The ones that ask first too: a shift waits for the answer.
+        names = flash_tools.SUBAGENT_TOOL_NAMES
 
+    def record(kind: str, text: str, style: str) -> None:
+        if kind == "line":
+            steps.append(text)
+
+    pending: dict = {}
     try:
         if not flash_tools.MODEL_NAME:
             raise RuntimeError("no model is set, so it could not run")
-        messages: list[dict] = [
-            {
-                "role": "system",
-                "content": _prompt(
-                    spark,
-                    flash_tools.OLLAMA_HOST or subagents.OLLAMA_HOST_DEFAULT,
-                    flash_tools.MODEL_NAME, flash_tools.CURRENT_DATE_PROMPT,
-                ),
-            },
-            {"role": "user", "content": "Start your shift."},
-        ]
+        if resuming:
+            tool, args = resuming["tool"], resuming["args"]
+            if resuming.get("answer") == "yes":
+                # Said yes to already: asked again, it is a yes.
+                with capture_tool_output(record), \
+                        answer_from(lambda question: "y"):
+                    result = flash_tools.run_tool((tool, args))
+            else:
+                result = (
+                    "The user said no to this step"
+                    + (f": {resuming['why']}" if resuming.get("why") else "")
+                    + ". Do not try it again this shift. Carry on without "
+                    "it, or say in your report what you would need."
+                )
+                steps.append(f"{resuming['label']} (you said no)")
+            messages.append({
+                "role": "tool", "tool_name": tool,
+                "content": flash_tools.trim_tool_output(str(result), tool),
+            })
+            messages.extend(
+                {"role": "tool", "tool_name": later, "content": NOT_RUN}
+                for later, _ in resuming.get("later", [])
+            )
+        else:
+            host = flash_tools.OLLAMA_HOST or subagents.OLLAMA_HOST_DEFAULT
+            prompt = _prompt(
+                spark, host, flash_tools.MODEL_NAME,
+                flash_tools.CURRENT_DATE_PROMPT,
+            )
+            messages = [
+                {"role": "system", "content": prompt},
+                {"role": "user", "content": _opening(why, inbox)},
+            ]
         text = _work(
-            spark, messages, {"keep_notes": _keeping_notes(notes)},
-            [KEEP_NOTES_TOOL], steps,
+            spark, messages, own, [KEEP_NOTES_TOOL, HAND_OFF_TOOL], steps,
             lambda doing: _set_activity(spark.id, doing),
             MAX_SHIFT_ROUNDS, ROUND_LIMIT_MESSAGE, client,
+            names=names, gate=_asks_first,
+            stopping=lambda: bool(getattr(find(spark.id), "stop_asked", 0)),
         )
         quiet = not text or text.strip(" .").upper() == NOTHING_NEW
         report = Report(
             at=time.time(),
             text="Nothing new this shift." if quiet else text,
             quiet=quiet, read=quiet, steps=steps,
+        )
+    except NeedsApproval as need:
+        label, detail = describe(need.name, need.arguments)
+        pending = {
+            "tool": need.name, "args": need.arguments, "label": label,
+            "detail": detail, "later": [list(c) for c in need.later],
+            "messages": messages, "steps": steps, "notes": notes[0],
+            "at": time.time(), "answer": "", "why": "",
+        }
+        report = Report(
+            at=time.time(), text=f"Waiting for your approval: {label}.",
+            steps=steps, approval=True,
+        )
+    except Stopped:
+        report = Report(
+            at=time.time(), text="Stopped, as you asked, before it finished.",
+            steps=steps, read=True,
         )
     except Exception as e:  # noqa: BLE001
         report = Report(
@@ -956,15 +1381,66 @@ def shift(spark_id: str, client=None) -> Optional[Report]:
         spark.reports.append(report)
         del spark.reports[:-MAX_REPORTS]
         spark.notes = notes[0][:NOTES_CHARS]
-        spark.status = FAILED if report.failed else IDLE
         spark.activity = ""
         spark.asked = False
-        spark.runs += 1
-        spark.last_run = report.at
-        spark.next_run = report.at + spark.every * 60
+        spark.stop_asked = False
+        if pending:
+            # The rest of the shift waits on the user, and so does the
+            # schedule: nothing new starts over a question.
+            spark.status = WAITING
+            spark.pending = pending
+        else:
+            spark.status = FAILED if report.failed else IDLE
+            spark.runs += 1
+            spark.last_run = report.at
+            spark.next_run = report.at + spark.every * 60
         _save(spark)
     _changed()
     return report
+
+
+def answer_step(key: str, yes: bool, why: str = "") -> Spark:
+    """The user's answer to the step SPARK waits on: its shift carries
+    on with it, soon."""
+
+    def change(spark: Spark) -> None:
+        if not spark.waiting:
+            raise SparkError(f"{spark.name} is not waiting on anything.")
+        spark.pending["answer"] = "yes" if yes else "no"
+        spark.pending["why"] = " ".join(str(why or "").split())[:LESSON_CHARS]
+        spark.asked = True
+        for report in spark.reports:
+            if report.approval:
+                report.read = True
+
+    spark = _edit(key, change)
+    wake()
+    return spark
+
+
+def stop(key: str) -> Spark:
+    """Stop SPARK's shift: the one running, at its next step, or the one
+    waiting on an answer, now."""
+
+    def change(spark: Spark) -> None:
+        if spark.status == WAITING:
+            spark.pending = {}
+            spark.status = IDLE
+            spark.reports.append(Report(
+                at=time.time(), read=True,
+                text="Called off while it waited for your approval.",
+            ))
+            for report in spark.reports:
+                if report.approval:
+                    report.read = True
+            spark.last_run = time.time()
+            spark.next_run = spark.last_run + spark.every * 60
+        elif spark.status == WORKING:
+            spark.stop_asked = True
+        else:
+            raise SparkError(f"{spark.name} is not working on anything.")
+
+    return _edit(key, change)
 
 
 def _call(
@@ -1022,7 +1498,7 @@ def chat_prompt(
     )
     parts = [
         get_model_system_prompt(host, model), body,
-        project_block(spark) if project else "", date,
+        project_block(spark) if project else "", team_block(spark), date,
     ]
     return "\n\n".join(part for part in parts if part)
 
@@ -1035,7 +1511,7 @@ class ChatKit:
     lose them or have its own undone.
     """
 
-    schemas = [KEEP_NOTES_TOOL, *CHAT_TOOLS]
+    schemas = [KEEP_NOTES_TOOL, HAND_OFF_TOOL, *CHAT_TOOLS]
 
     def __init__(self, spark: Spark) -> None:
         self.spark_id = spark.id
@@ -1048,6 +1524,7 @@ class ChatKit:
             "learn": self._learn,
             "set_goal": self._set_goal,
             "set_schedule": self._set_schedule,
+            "hand_off": _handing_off(spark),
         }
 
     def offer(self, tools: list[dict]) -> list[dict]:
@@ -1251,8 +1728,10 @@ def due(now: Optional[float] = None) -> list[Spark]:
     now = time.time() if now is None else now
     return [
         s for s in all_sparks()
-        if s.status != WORKING
-        and (s.asked or (not s.paused and s.next_run <= now))
+        if s.status != WORKING and not s.waiting
+        and (s.asked or (
+            s.status != WAITING and not s.paused and s.next_run <= now
+        ))
     ]
 
 
@@ -1361,6 +1840,68 @@ def _signature() -> tuple:
         return ()
 
 
+_watched: dict[str, tuple[str, dict]] = {}
+
+
+def _snapshot(folder: str) -> dict:
+    """Each file under FOLDER and when it last changed, up to a limit."""
+
+    seen: dict = {}
+    for root, dirs, files in os.walk(folder):
+        dirs[:] = [
+            d for d in dirs if d not in WATCH_SKIP and not d.startswith(".")
+        ]
+        for name in files:
+            path = os.path.join(root, name)
+            with contextlib.suppress(OSError):
+                seen[path] = os.stat(path).st_mtime_ns
+            if len(seen) >= WATCH_FILES:
+                return seen
+    return seen
+
+
+def _changes(before: dict, now: dict, folder: str) -> list[str]:
+    changed = [
+        p for p in now.keys() | before.keys() if before.get(p) != now.get(p)
+    ]
+    return sorted(os.path.relpath(p, folder) for p in changed)
+
+
+def watch_tick(now: Optional[float] = None) -> list[Spark]:
+    """Start a shift of each spark whose watched folder changed. The
+    first look at a folder only learns it. The sparks it started."""
+
+    now = time.time() if now is None else now
+    started = []
+    for spark in all_sparks():
+        if not spark.watch or not os.path.isdir(spark.watch):
+            _watched.pop(spark.id, None)
+            continue
+        folder = spark.watch
+        known = _watched.get(spark.id)
+        if known is None or known[0] != folder:
+            _watched[spark.id] = (folder, _snapshot(folder))
+            continue
+        if spark.paused or spark.status in (WORKING, WAITING) or spark.asked:
+            continue
+        if now - spark.last_run < WATCH_SETTLE_SECONDS:
+            continue  # the changes wait, to be seen after it settles
+        latest = _snapshot(folder)
+        changed = _changes(known[1], latest, folder)
+        if not changed:
+            continue
+        _watched[spark.id] = (folder, latest)
+        shown = ", ".join(changed[:8])
+        more = f", and {len(changed) - 8} more" if len(changed) > 8 else ""
+
+        def ask(s: Spark, shown=shown, more=more) -> None:
+            s.why = f"files changed in {folder}: {shown}{more}"
+            s.asked = True
+
+        started.append(_edit(spark.id, ask))
+    return started
+
+
 def _keep(
     always: bool = False,
     prepare: Optional[Callable[[], None]] = None,
@@ -1394,6 +1935,9 @@ def _keep(
                 if spark.status == WORKING:
                     _edit(spark.id, lambda s: setattr(s, "status", IDLE))
         if holding:
+            if ticks % WATCH_EVERY_TICKS == 0:
+                with contextlib.suppress(OSError):
+                    watch_tick()
             for spark in due():
                 _safe_shift(spark.id, prepare, announce)
 

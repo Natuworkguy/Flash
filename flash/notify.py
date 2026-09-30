@@ -59,14 +59,18 @@ def notify_needs_input() -> None:
     notify(_APP_NAME, "Waiting for your approval to run a command.")
 
 
-def notify_spark(name: str, text: str, failed: bool = False) -> None:
+def notify_spark(
+    name: str, text: str, failed: bool = False, asking: bool = False,
+) -> None:
     """Tell the user a spark has news, from the keeper that runs while
     Flash is closed. With nothing of Flash open this is the only way
     they hear of it, so unlike the others it tries every desktop: the
     built-in notifier on macOS and notify-send on Linux too."""
 
     title = (
-        f"{name} could not finish a shift" if failed else f"{name} has news"
+        f"{name} needs your approval" if asking
+        else f"{name} could not finish a shift" if failed
+        else f"{name} has news"
     )
     line = next((ln.strip() for ln in text.splitlines() if ln.strip()), "")
     message = line[:160] or "Open Flash to read it."

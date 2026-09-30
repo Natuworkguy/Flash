@@ -1807,7 +1807,10 @@ def _note_sparks() -> None:
     for spark, report in sparks.news():
         note = Text(f"  {_bubble()} ", style=spark.colour)
         note.append(spark.name, style=f"bold {spark.colour}")
-        verb = "could not finish a shift" if report.failed else "has news"
+        verb = (
+            "needs your approval" if report.approval
+            else "could not finish a shift" if report.failed else "has news"
+        )
         note.append(f" {verb} · /sparks {_spark_key(spark)}", style=DIM)
         console.print(note)
 
@@ -1823,6 +1826,8 @@ def _bubble() -> str:
 
 
 def _spark_state(spark: "sparks.Spark") -> str:
+    if spark.waiting:
+        return "waiting for your approval"
     if spark.status == sparks.WORKING:
         return f"working{': ' + spark.activity if spark.activity else ''}"
     if spark.paused:
@@ -1904,6 +1909,22 @@ def _show_spark(spark: "sparks.Spark") -> None:
     if spark.boundaries:
         head.append("\nBoundaries\n", style="bold")
         head.append(f"  {spark.boundaries}\n")
+    if spark.watch:
+        head.append("\nWatching\n", style="bold")
+        head.append(f"  {spark.watch}: a change there starts a shift\n")
+    if spark.waiting:
+        head.append("\nWaiting for your approval\n", style=f"bold {ACCENT}")
+        head.append(f"  {spark.pending.get('label', '')}\n")
+        detail = str(spark.pending.get("detail", "")).strip()
+        if detail:
+            head.append(
+                "".join(f"    {line}\n" for line in detail.splitlines()[:12]),
+                style=DIM,
+            )
+        head.append(
+            f"  /sparks approve {_spark_key(spark)} · /sparks deny "
+            f"{_spark_key(spark)} [why]\n", style=DIM,
+        )
     if spark.lessons:
         head.append("\nWhat you have taught it\n", style="bold")
         for number, lesson in enumerate(spark.lessons, start=1):
@@ -2028,6 +2049,65 @@ def _sparks_command(arg: str) -> None:
             spark = sparks.forget_lesson(key, int(extra))
             console.print(Text(f"{spark.name} let that go.", style=DIM))
             return
+        if action in ("approve", "yes", "allow") and key:
+            spark = sparks.answer_step(key, True)
+            console.print(Text(f"{spark.name} carries on.", style=DIM))
+            return
+        if action in ("deny", "no") and key:
+            spark = sparks.answer_step(key, False, extra)
+            console.print(Text(
+                f"{spark.name} carries on without it.", style=DIM,
+            ))
+            return
+        if action == "stop" and key:
+            spark = sparks.stop(key)
+            console.print(Text(f"{spark.name} stops.", style=DIM))
+            return
+        if action == "share" and key:
+            code = sparks.share_code(key)
+            console.print(Text(
+                "Anyone with Flash can add a copy with /sparks add, or Add "
+                "shared on the web UI's Sparks page. It carries the goal, "
+                "schedule, boundaries and lessons, no reports.", style=DIM,
+            ))
+            console.echo(code + "\n")
+            return
+        if action == "add" and rest:
+            spark = sparks.add_from(rest)
+            console.print(Text(
+                f"Added {spark.name} ({spark.handle}), every "
+                f"{sparks.every_words(spark.every)}. /sparks "
+                f"{_spark_key(spark)} to read it.", style=DIM,
+            ))
+            return
+        if action == "templates":
+            body = Text("\nTemplates\n\n", style="bold")
+            for template in sparks.TEMPLATES:
+                body.append(f"  {template['name']:<18}", style=ACCENT)
+                body.append(
+                    f"{template['blurb']}, every "
+                    f"{sparks.every_words(template['every'])}\n", style=DIM,
+                )
+            body.append(
+                "\n  /sparks add <template> makes one, to change with "
+                "/sparks goal and /sparks every.\n", style=DIM,
+            )
+            console.print(body)
+            return
+        if action == "goal" and key and extra:
+            spark = sparks.update(key, goal=extra)
+            console.print(Text(f"{spark.name} has a new goal.", style=DIM))
+            return
+        if action == "watch" and key and extra:
+            spark = sparks.update(
+                key, watch="" if extra.lower() == "none" else extra,
+            )
+            console.print(Text(
+                f"{spark.name} starts a shift when {spark.watch} changes."
+                if spark.watch else f"{spark.name} watches nothing now.",
+                style=DIM,
+            ))
+            return
         if action == "project" and key and extra:
             spark = sparks.update(key, project=extra)
             found = sparks.project_of(spark)
@@ -2065,6 +2145,8 @@ def _sparks_command(arg: str) -> None:
             "Usage: /sparks [new | <name> | chat <name> [message] "
             "| run|pause|resume|remove <name> | teach <name> <lesson> "
             "| every <name> <30m|2h|daily> | project <name> <project|none> "
+            "| approve|deny|stop|share <name> | add <code|template> "
+            "| templates | goal <name> <text> | watch <name> <folder|none> "
             "| always on|off]"
         )
         return
@@ -2120,9 +2202,15 @@ def _keep_sparks() -> None:
     ))
 
     def announce(spark: "sparks.Spark", report: "sparks.Report") -> None:
-        notify_spark(spark.name, report.text, failed=report.failed)
+        notify_spark(
+            spark.name, report.text, failed=report.failed,
+            asking=report.approval,
+        )
         stamp = time.strftime("%Y-%m-%d %H:%M")
-        what = "a shift failed" if report.failed else "filed a report"
+        what = (
+            "asks for your approval" if report.approval
+            else "a shift failed" if report.failed else "filed a report"
+        )
         console.print(Text(f"{stamp} {spark.name}: {what}", DIM))
 
     from . import keepalive
