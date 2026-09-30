@@ -2069,14 +2069,18 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
         }
 
     if name == "sparks-always":
+        # No arg: only how it stands, for the switch in Settings.
+        if arg not in ("", "on", "off"):
+            raise ValueError("sparks-always takes on or off")
+        how = ""
         try:
-            how = (
-                keepalive.turn_on() if arg == "on"
-                else keepalive.turn_off() and ""
-            )
+            if arg == "on":
+                how = keepalive.turn_on()
+            elif arg == "off":
+                keepalive.turn_off()
         except keepalive.KeepAliveError as exc:
             raise ValueError(str(exc)) from None
-        return {"always": keepalive.status(), "how": how or ""}
+        return {"always": keepalive.status(), "how": how}
 
     if name.startswith("spark-"):
         return _spark_command(name, arg, body)
