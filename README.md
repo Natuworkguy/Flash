@@ -290,6 +290,13 @@ you first.
 
 Each spark has:
 
+- optionally, a **project** from the web UI's Projects: its shifts work
+  on that folder and follow the project's instructions, a chat with it
+  starts in the project, and the project's page lists it. Pick one in
+  the spark's form, or with `/sparks project scout <project|none>`.
+
+And always:
+
 - a **name** and a handle to go with it (`Scout` is `@scout-spark`),
 - a **goal**, the standing assignment it works toward,
 - a **schedule**, from every 15 minutes to weekly,

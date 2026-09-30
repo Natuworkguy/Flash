@@ -1793,7 +1793,8 @@ def agent_result(agent_id: str, wait_seconds: Any = None) -> str:
 
 
 def make_spark(
-    name: str, goal: str, every: Any = "", boundaries: str = ""
+    name: str, goal: str, every: Any = "", boundaries: str = "",
+    project: str = "",
 ) -> str:
     """Make a spark: an agent that works on GOAL on a schedule."""
 
@@ -1826,7 +1827,7 @@ def make_spark(
             return "Blocked by user"
 
     try:
-        spark = sparks.create(name, goal, boundaries, minutes)
+        spark = sparks.create(name, goal, boundaries, minutes, project)
     except sparks.SparkError as exc:
         tool_result(str(exc), style=ERROR)
         return f"Error: {exc}"
@@ -4400,6 +4401,13 @@ tools: list[dict[str, Any]] = [
                         "description": (
                             "What it must never do, from what the user "
                             "said, e.g. never push, only read."
+                        ),
+                    },
+                    "project": {
+                        "type": "string",
+                        "description": (
+                            "Optional: the name of the user's project it "
+                            "works on, when the chat is about one."
                         ),
                     },
                 },

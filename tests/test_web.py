@@ -3251,5 +3251,79 @@ class TestSparkChats:
 
         assert listed == [{
             "id": spark.id, "name": "Scout", "handle": "@scout-spark",
-            "colour": spark.colour,
+            "colour": spark.colour, "project": "",
         }]
+
+
+class TestSparkProjects:
+    @pytest.fixture
+    def project(self, tmp_path):
+        from flash import workspace
+
+        folder = tmp_path / "app"
+        folder.mkdir()
+        return workspace.create_project("App", str(folder), "Use pnpm.")
+
+    def test_a_chat_with_a_spark_starts_in_its_project(self, project):
+        from flash import sparks
+
+        spark = sparks.create("Scout", "Watch the build.", project="App")
+        session = web.Session()
+
+        assert session.new_chat(spark=spark.id).project == project.id
+        other = session.new_chat(project="", spark=spark.id)
+        assert other.project == project.id
+
+    def test_its_project_is_told_once_and_the_turn_runs_there(
+        self, project, monkeypatch
+    ):
+        from flash import sparks
+
+        monkeypatch.setattr(sparks, "get_model_system_prompt", lambda h, m: "")
+        spark = sparks.create("Scout", "Watch the build.", project="App")
+        where = []
+
+        def reply():
+            where.append(os.getcwd())
+            return [part("Hi."), part(done=True)]
+
+        FakeClient.scripts = [reply]
+        session = web.Session()
+        chat = session.new_chat(spark=spark.id)
+
+        run(session, chat, "Hello")
+
+        system = FakeClient.requests[0]["messages"][0]["content"]
+        assert system.count("Use pnpm.") == 1
+        assert "=== Project: App ===" in system
+        assert where == [project.path]
+
+    def test_the_page_knows_each_sparks_project(self, project):
+        from flash import sparks
+
+        sparks.create("Scout", "Watch the build.", project="App")
+
+        listed = web.Session().state(lite=True)["sparks"]
+        assert listed[0]["project"] == project.id
+        made = web.command(web.Session(), {
+            "name": "spark-create", "arg": "Other", "goal": "Goal.",
+            "project": project.id,
+        })["spark"]
+        assert made["project_name"] == "App"
+
+
+def test_a_spark_is_edited_from_the_page_with_its_new_name(server):
+    from flash import sparks
+
+    spark = sparks.create("Scout", "Watch the build.")
+
+    status, body = request(server, "POST", "/api/command", {
+        "name": "spark-update", "arg": spark.id,
+        "rename": "Lookout", "goal": "Watch the tests.", "every": "120",
+    })
+
+    assert status == 200, body
+    kept = sparks.find(spark.id)
+    assert (kept.name, kept.goal, kept.every) == (
+        "Lookout", "Watch the tests.", 120,
+    )

@@ -699,3 +699,78 @@ def test_a_lesson_told_twice_is_kept_once(model):
     ]))
 
     assert sparks.find(made.id).lessons == ["Be brief."]
+
+
+# --- Projects ------------------------------------------------------------
+
+
+@pytest.fixture
+def project(tmp_path):
+    from flash import workspace
+
+    folder = tmp_path / "app"
+    folder.mkdir()
+    return workspace.create_project("App", str(folder), "Run make test.")
+
+
+def test_a_spark_can_work_on_a_project(model, project):
+    made = sparks.create("Scout", "Watch the build.", project="app")
+
+    assert made.project == project.id
+    assert sparks.find(made.id).to_dict()["project_name"] == "App"
+    client = FakeClient([_reply(sparks.NOTHING_NEW)])
+    sparks.shift(made.id, client=client)
+    system = client.calls[0]["messages"][0]["content"]
+    assert "=== Your project: App ===" in system
+    assert project.path in system and "Run make test." in system
+
+
+def test_a_project_is_named_by_name_or_id_or_none(project):
+    made = sparks.create("Scout", "Watch the build.", project=project.id)
+
+    assert sparks.update(made.id, project="none").project == ""
+    assert sparks.update(made.id, project="APP").project == project.id
+    with pytest.raises(sparks.SparkError, match="No project"):
+        sparks.update(made.id, project="Nope")
+    with pytest.raises(sparks.SparkError, match="No project"):
+        sparks.create("Other", "Goal.", project="Nope")
+
+
+def test_a_spark_whose_project_went_has_none(model, project):
+    from flash import workspace
+
+    made = sparks.create("Scout", "Watch the build.", project="App")
+    workspace.delete_project(project.id)
+
+    kept = sparks.find(made.id)
+    assert sparks.project_of(kept) is None
+    assert kept.to_dict()["project"] == ""
+    assert sparks.project_block(kept) == ""
+
+
+def test_a_chat_prompt_can_leave_the_project_to_the_web(project):
+    made = sparks.create("Scout", "Watch the build.", project="App")
+
+    assert "Your project" in sparks.chat_prompt(made, "h", "m", "")
+    assert "Your project" not in sparks.chat_prompt(
+        made, "h", "m", "", project=False,
+    )
+
+
+def test_the_terminal_gives_a_spark_a_project(project):
+    from flash import ai
+
+    made = sparks.create("Scout", "Watch the build.")
+
+    ai._sparks_command("project scout App")
+    assert sparks.find(made.id).project == project.id
+    ai._sparks_command("project scout none")
+    assert sparks.find(made.id).project == ""
+
+
+def test_flash_can_make_a_spark_for_a_project(project):
+    with capture_tool_output(lambda kind, text, style: None):
+        with answer_from(lambda question: "y"):
+            tools.make_spark("Scout", "Watch the build.", "daily", "", "App")
+
+    assert sparks.find("scout").project == project.id
