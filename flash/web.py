@@ -53,6 +53,7 @@ from . import (
     checkpoint,
     context,
     extensions,
+    keepalive,
     learning,
     memory,
     skills,
@@ -2062,7 +2063,20 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
         return {"message": message}
 
     if name == "sparks":
-        return {"sparks": [s.to_dict() for s in sparks.all_sparks()]}
+        return {
+            "sparks": [s.to_dict() for s in sparks.all_sparks()],
+            "always": keepalive.status(),
+        }
+
+    if name == "sparks-always":
+        try:
+            how = (
+                keepalive.turn_on() if arg == "on"
+                else keepalive.turn_off() and ""
+            )
+        except keepalive.KeepAliveError as exc:
+            raise ValueError(str(exc)) from None
+        return {"always": keepalive.status(), "how": how or ""}
 
     if name.startswith("spark-"):
         return _spark_command(name, arg, body)

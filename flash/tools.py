@@ -1831,11 +1831,19 @@ def make_spark(
         tool_result(str(exc), style=ERROR)
         return f"Error: {exc}"
 
+    from . import keepalive  # deferred: only a new spark needs it
+
     result = (
         f"Made {spark.name} ({spark.handle}). Its first shift starts now, "
-        f"then every {sparks.every_words(spark.every)} while Flash runs. "
-        "Its reports are under /sparks, or Sparks in the web UI."
+        f"then every {sparks.every_words(spark.every)}. Its reports are "
+        "under /sparks, or Sparks in the web UI."
     )
+    if not keepalive.installed():
+        result += (
+            " Sparks only work while Flash is open right now. Offer to "
+            "keep them working with it closed: /sparks always on in the "
+            "terminal, or the switch on the Sparks page."
+        )
     tool_result(result)
     return result
 

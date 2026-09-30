@@ -16,8 +16,10 @@ and every later shift reads every lesson, so "only tell me about the
 ones labelled bug" is said once.
 
 Each spark is one JSON file in ~/.flash/sparks, written whole on every
-change. One keeper thread runs the shifts one at a time: the model is
-usually local, and two shifts at once would only make both slow.
+change. One keeper runs the shifts one at a time: the model is usually
+local, and two shifts at once would only make both slow. It runs inside
+whichever Flash is open, or, with sparks always on, in a Flash of its
+own that the operating system starts at login.
 """
 
 import contextlib
@@ -70,8 +72,9 @@ MIN_EVERY_MINUTES = 15
 MAX_EVERY_MINUTES = 7 * 24 * 60
 DEFAULT_EVERY_MINUTES = 60
 
-# How often the keeper looks for a spark that is due.
-TICK_SECONDS = 20.0
+# How often the keeper looks for a spark that is due, and for one that
+# another Flash changed.
+TICK_SECONDS = 5.0
 
 IDLE = "idle"
 WORKING = "working"
@@ -181,6 +184,8 @@ class Spark:
     last_run: float = 0.0
     next_run: float = 0.0
     runs: int = 0
+    # A shift asked for now, ahead of the schedule, even while paused.
+    asked: bool = False
 
     @property
     def handle(self) -> str:
@@ -664,6 +669,7 @@ def shift(spark_id: str, client=None) -> Optional[Report]:
         spark.notes = notes[0][:NOTES_CHARS]
         spark.status = FAILED if report.failed else IDLE
         spark.activity = ""
+        spark.asked = False
         spark.runs += 1
         spark.last_run = report.at
         spark.next_run = report.at + spark.every * 60
@@ -691,27 +697,50 @@ def _call(
 
 
 # --- The keeper ----------------------------------------------------------
+#
+# Every Flash that is open runs a keeper, and so does `flash --sparks`,
+# the one the operating system starts at login when sparks are always
+# on (see flash/keepalive.py). Only one of them may run shifts, or two
+# would run the same spark at once: whichever holds the lock on
+# .keeper.lock does, and the rest keep trying for it, so when the one
+# holding it quits, another carries on. The holder also writes
+# .keeper.json every tick, which is how anyone can tell a keeper is
+# running and whether it is the always-on one.
+#
+# Every keeper, holding the lock or not, watches the folder: a spark
+# another process changed is news for this one's page too.
 
 _keeper: Optional[threading.Thread] = None
 _nudge = threading.Event()
-_asked: list[str] = []
+_floor = None  # the open lock file, while this process holds it
+
+HEARTBEAT = ".keeper.json"
+LOCK = ".keeper.lock"
+
+# A heartbeat older than this belongs to a keeper that is gone.
+STALE_SECONDS = TICK_SECONDS * 4
+
+# How many ticks apart an always-on keeper checks it is still wanted.
+CHECK_EVERY_TICKS = 12
 
 
 def due(now: Optional[float] = None) -> list[Spark]:
     now = time.time() if now is None else now
     return [
         s for s in all_sparks()
-        if not s.paused and s.status != WORKING and s.next_run <= now
+        if s.status != WORKING
+        and (s.asked or (not s.paused and s.next_run <= now))
     ]
 
 
 def run_now(key: str) -> Spark:
-    """Put a spark's next shift ahead of its schedule."""
+    """Put a spark's next shift ahead of its schedule.
 
-    spark = _must_find(key)
-    with _lock:
-        if spark.id not in _asked:
-            _asked.append(spark.id)
+    Asked for in its file, so the keeper doing the work hears of it
+    whichever process that is.
+    """
+
+    spark = _edit(key, lambda s: setattr(s, "asked", True))
     wake()
     return spark
 
@@ -720,29 +749,156 @@ def wake() -> None:
     _nudge.set()
 
 
-def _keep() -> None:
-    # A spark left "working" belongs to a Flash that quit mid-shift.
-    for spark in all_sparks():
-        if spark.status == WORKING:
-            _edit(spark.id, lambda s: setattr(s, "status", IDLE))
+def _take_floor() -> bool:
+    """Whether this process holds the keeper's lock, taking it if free."""
 
-    while True:
+    global _floor
+
+    if _floor is not None:
+        return True
+    folder = sparks_dir()
+    try:
+        folder.mkdir(parents=True, exist_ok=True)
+        handle = open(folder / LOCK, "a+b")  # held open while it holds
+    except OSError:
+        return False
+    try:
+        if os.name == "nt":
+            import msvcrt
+
+            handle.seek(0)
+            msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        handle.close()
+        return False
+    _floor = handle
+    return True
+
+
+def _give_floor() -> None:
+    global _floor
+
+    if _floor is None:
+        return
+    handle, _floor = _floor, None  # the beat stops with it
+    with contextlib.suppress(OSError):
+        (sparks_dir() / HEARTBEAT).unlink(missing_ok=True)
+        handle.close()  # closing it lets the lock go
+
+
+def _beat(always: bool) -> None:
+    """Say a keeper is here for as long as this process holds the lock,
+    on a thread of its own, since one shift can outlast many ticks."""
+
+    beat = {"pid": os.getpid(), "always": always, "since": time.time()}
+    held = _floor
+
+    def keep_beating() -> None:
+        while _floor is held and held is not None:
+            beat["beat"] = time.time()
+            with contextlib.suppress(OSError):
+                temp = sparks_dir() / ".keeper.tmp"
+                temp.write_text(json.dumps(beat), encoding="utf-8")
+                os.replace(temp, sparks_dir() / HEARTBEAT)
+            time.sleep(TICK_SECONDS)
+
+    threading.Thread(target=keep_beating, daemon=True).start()
+
+
+def keeper() -> Optional[dict]:
+    """The keeper running shifts now, if any: its pid, whether it is the
+    always-on one, and since when."""
+
+    try:
+        beat = json.loads(
+            (sparks_dir() / HEARTBEAT).read_text(encoding="utf-8")
+        )
+    except (OSError, ValueError):
+        return None
+    if not isinstance(beat, dict):
+        return None
+    if time.time() - float(beat.get("beat") or 0) > STALE_SECONDS:
+        return None
+    return beat
+
+
+def _signature() -> tuple:
+    """What the folder holds, cheaply: enough to see that it changed."""
+
+    try:
+        return tuple(sorted(
+            (p.name, p.stat().st_mtime_ns, p.stat().st_size)
+            for p in sparks_dir().glob("*.json")
+        ))
+    except OSError:
+        return ()
+
+
+def _keep(
+    always: bool = False,
+    prepare: Optional[Callable[[], None]] = None,
+    announce: Optional[Callable[[Spark, Report], None]] = None,
+    stop: Optional[threading.Event] = None,
+    wanted: Optional[Callable[[], bool]] = None,
+) -> None:
+    """The keeper's loop, until STOP is set or WANTED says no.
+
+    ALWAYS marks the keeper started at login. PREPARE runs before each
+    shift, to pick up settings changed since; ANNOUNCE hears each report
+    worth telling someone about. WANTED is asked now and then, so a
+    keeper whose login entry was taken away does not run on until
+    logout.
+    """
+
+    seen = _signature()
+    holding = False
+    ticks = 0
+    while stop is None or not stop.is_set():
+        ticks += 1
+        if wanted is not None and ticks % CHECK_EVERY_TICKS == 0:
+            if not wanted():
+                break
+        if not holding and _take_floor():
+            holding = True
+            _beat(always)
+            # A spark left working belongs to a keeper that quit mid-shift:
+            # holding the lock, this one knows no other is running it.
+            for spark in all_sparks():
+                if spark.status == WORKING:
+                    _edit(spark.id, lambda s: setattr(s, "status", IDLE))
+        if holding:
+            for spark in due():
+                _safe_shift(spark.id, prepare, announce)
+
+        now = _signature()
+        if now != seen:
+            seen = now
+            _changed()
+
         _nudge.wait(TICK_SECONDS)
         _nudge.clear()
-        with _lock:
-            asked = list(_asked)
-            _asked.clear()
-        for spark_id in asked:
-            _safe_shift(spark_id)
-        for spark in due():
-            _safe_shift(spark.id)
+    if holding:
+        _give_floor()
 
 
-def _safe_shift(spark_id: str) -> None:
+def _safe_shift(
+    spark_id: str,
+    prepare: Optional[Callable[[], None]] = None,
+    announce: Optional[Callable[[Spark, Report], None]] = None,
+) -> None:
     # A disk that fails mid-shift costs that shift, not the keeper: the
     # rest go on, and this one is tried again when it next comes due.
     with contextlib.suppress(OSError):
-        shift(spark_id)
+        if prepare is not None:
+            prepare()
+        report = shift(spark_id)
+        spark = find(spark_id)
+        if announce and report and spark and not report.quiet:
+            announce(spark, report)
 
 
 def start() -> None:
@@ -755,3 +911,23 @@ def start() -> None:
             return
         _keeper = threading.Thread(target=_keep, daemon=True, name="sparks")
         _keeper.start()
+
+
+def serve(
+    prepare: Optional[Callable[[], None]] = None,
+    announce: Optional[Callable[[Spark, Report], None]] = None,
+    wanted: Optional[Callable[[], bool]] = None,
+) -> None:
+    """Keep sparks working with nothing else open: `flash --sparks`.
+
+    Runs until interrupted, or until WANTED says it is not any more.
+    Started at login when sparks are always on, it waits its turn while
+    an open Flash holds the lock.
+    """
+
+    try:
+        _keep(
+            always=True, prepare=prepare, announce=announce, wanted=wanted,
+        )
+    finally:
+        _give_floor()

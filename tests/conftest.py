@@ -84,6 +84,24 @@ def no_spark_keeper(monkeypatch):
     """
 
     monkeypatch.setattr(sparks, "start", lambda: None)
+    yield
+    # A test that ran the keeper lets its lock go with it.
+    sparks._give_floor()
+
+
+@pytest.fixture(autouse=True)
+def no_login_service(monkeypatch):
+    """No test registers a real service or starts a real keeper.
+
+    Every system command keepalive runs goes through _ok, and the one
+    process it starts itself through _spawn: both do nothing here. A
+    test that wants to see what they were asked to do patches them.
+    """
+
+    from flash import keepalive
+
+    monkeypatch.setattr(keepalive, "_ok", lambda args: False)
+    monkeypatch.setattr(keepalive, "_spawn", lambda: None)
 
 
 @pytest.fixture(autouse=True)

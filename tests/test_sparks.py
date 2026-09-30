@@ -1,5 +1,13 @@
 # pylint: disable=C0114,C0115,C0116
 
+import json
+import os
+import subprocess  # nosec B404
+import sys
+import threading
+import time
+from pathlib import Path
+
 import pytest
 
 from flash import sparks, tools, web
@@ -344,3 +352,148 @@ class TestWeb:
         sparks.shift(made.id, client=FakeClient([_reply("Found one.")]))
 
         assert web.Session().state(lite=True)["status"]["sparks_unread"] == 1
+
+
+# --- The keeper, across processes ----------------------------------------
+
+
+def test_run_now_is_asked_for_in_the_file_even_while_paused(model):
+    made = sparks.create("Scout", "Watch the issues.")
+    sparks.set_paused(made.id, True)
+
+    sparks.run_now("scout")
+
+    assert sparks.find(made.id).asked
+    assert [s.id for s in sparks.due()] == [made.id]
+    sparks.shift(made.id, client=FakeClient([_reply("Found one.")]))
+    assert not sparks.find(made.id).asked
+    assert sparks.due() == []
+
+
+_REPO = Path(__file__).resolve().parent.parent
+
+
+def _other_flash_env() -> dict:
+    """Another Flash's environment: the same packages, the test's home."""
+
+    home = str(sparks.FLASH_DIR.parent)
+    return {
+        **os.environ, "HOME": home, "USERPROFILE": home,
+        "PYTHONPATH": os.pathsep.join(p for p in sys.path if p),
+    }
+
+
+def test_only_one_process_holds_the_keeper_lock():
+    sparks.sparks_dir().mkdir(parents=True)
+    assert sparks._take_floor()
+    # Held already, asking again in this process is a yes.
+    assert sparks._take_floor()
+
+    other = subprocess.run(
+        [sys.executable, "-c",
+         "from flash import sparks; print(sparks._take_floor())"],
+        capture_output=True, text=True, check=True,
+        env=_other_flash_env(), cwd=_REPO,
+    )
+    assert other.stdout.strip() == "False"
+
+    sparks._give_floor()
+    freed = subprocess.run(
+        [sys.executable, "-c",
+         "from flash import sparks; print(sparks._take_floor())"],
+        capture_output=True, text=True, check=True,
+        env=_other_flash_env(), cwd=_REPO,
+    )
+    assert freed.stdout.strip() == "True"
+
+
+def test_the_keeper_runs_what_is_due_and_says_it_is_there(monkeypatch):
+    made = sparks.create("Scout", "Watch the issues.")
+    ran, heard = [], []
+    stop = threading.Event()
+
+    def fake_shift(spark_id):
+        ran.append(spark_id)
+        report = sparks.Report(at=time.time(), text="Found one.")
+        sparks._edit(spark_id, lambda s: (
+            s.reports.append(report),
+            setattr(s, "next_run", time.time() + 3600),
+        ))
+        return report
+
+    monkeypatch.setattr(sparks, "shift", fake_shift)
+    monkeypatch.setattr(sparks, "TICK_SECONDS", 0.05)
+    keeper = threading.Thread(target=sparks._keep, kwargs={
+        "always": True, "stop": stop,
+        "announce": lambda spark, report: heard.append(spark.name),
+    })
+    keeper.start()
+    try:
+        deadline = time.time() + 5
+        while not (ran and sparks.keeper()) and time.time() < deadline:
+            time.sleep(0.02)
+        beat = sparks.keeper()
+        assert ran == [made.id]
+        assert heard == ["Scout"]
+        assert beat["always"] and beat["pid"] == os.getpid()
+    finally:
+        stop.set()
+        sparks.wake()
+        keeper.join(5)
+
+    assert sparks.keeper() is None
+    assert sparks._floor is None
+
+
+def test_a_quiet_report_is_not_announced(monkeypatch):
+    made = sparks.create("Scout", "Watch the issues.")
+    heard = []
+    monkeypatch.setattr(sparks, "shift", lambda spark_id: sparks.Report(
+        at=time.time(), text="Nothing new.", quiet=True, read=True,
+    ))
+
+    sparks._safe_shift(made.id, announce=lambda s, r: heard.append(s))
+
+    assert heard == []
+
+
+def test_a_keeper_elsewhere_changing_a_spark_is_news_here(monkeypatch):
+    made = sparks.create("Scout", "Watch the issues.")
+    before = sparks._signature()
+    time.sleep(0.01)
+
+    sparks.teach(made.id, "Be brief.")
+
+    assert sparks._signature() != before
+
+
+def test_a_stale_heartbeat_is_no_keeper():
+    sparks.sparks_dir().mkdir(parents=True)
+    (sparks.sparks_dir() / sparks.HEARTBEAT).write_text(json.dumps({
+        "pid": 1, "always": True, "since": 0, "beat": time.time() - 3600,
+    }))
+
+    assert sparks.keeper() is None
+
+
+def test_prepare_runs_before_each_shift(monkeypatch):
+    made = sparks.create("Scout", "Watch the issues.")
+    order = []
+    monkeypatch.setattr(
+        sparks, "shift", lambda spark_id: order.append("shift")
+    )
+
+    sparks._safe_shift(made.id, prepare=lambda: order.append("prepare"))
+
+    assert order == ["prepare", "shift"]
+
+
+def test_a_keeper_no_longer_wanted_stops(monkeypatch):
+    asked = []
+    monkeypatch.setattr(sparks, "TICK_SECONDS", 0.01)
+    monkeypatch.setattr(sparks, "CHECK_EVERY_TICKS", 2)
+
+    sparks._keep(always=True, wanted=lambda: asked.append(1) and False)
+
+    assert asked == [1]
+    assert sparks._floor is None

@@ -9,6 +9,9 @@ on current Python/Windows builds from inside its own toast thread.
 """
 
 import os
+import shutil
+import subprocess  # nosec B404
+import sys
 
 _APP_NAME = "Flash CLI"
 
@@ -54,3 +57,43 @@ def notify_needs_input() -> None:
     """Notify the user that Flash is waiting for command approval."""
 
     notify(_APP_NAME, "Waiting for your approval to run a command.")
+
+
+def notify_spark(name: str, text: str, failed: bool = False) -> None:
+    """Tell the user a spark has news, from the keeper that runs while
+    Flash is closed. With nothing of Flash open this is the only way
+    they hear of it, so unlike the others it tries every desktop: the
+    built-in notifier on macOS and notify-send on Linux too."""
+
+    title = (
+        f"{name} could not finish a shift" if failed else f"{name} has news"
+    )
+    line = next((ln.strip() for ln in text.splitlines() if ln.strip()), "")
+    message = line[:160] or "Open Flash to read it."
+
+    if _Notification is not None:
+        notify(title, message)
+        return
+
+    if sys.platform == "darwin":
+        def quoted(value: str) -> str:
+            escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+            return f'"{escaped}"'
+
+        args = [
+            "osascript", "-e",
+            f"display notification {quoted(message)} "
+            f"with title {quoted(title)}",
+        ]
+    elif shutil.which("notify-send"):
+        args = ["notify-send", "--app-name=Flash", title, message]
+    else:
+        return
+
+    try:
+        subprocess.run(  # nosec B603 -- fixed program, text as arguments
+            args, check=False, timeout=10,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+    except Exception:  # noqa: BLE001, S110  # nosec B110
+        pass

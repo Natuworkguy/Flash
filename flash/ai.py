@@ -43,7 +43,7 @@ from .images import resolve_image_path
 from .latex import render_latex
 from .memory import forget_memory, list_memory
 from .models import fetch_if_missing, pick_model
-from .notify import notify_reply_ready
+from .notify import notify_reply_ready, notify_spark
 from .paths import ENV_PATH
 from .repl_input import (
     EXPAND,
@@ -1874,6 +1874,13 @@ def _new_spark() -> None:
     )
     console.print(line)
 
+    from . import keepalive
+
+    if not keepalive.installed() and confirm(
+        "Keep sparks working when Flash is closed too?"
+    ):
+        _sparks_always("on")
+
 
 def _show_spark(spark: "sparks.Spark") -> None:
     head = Text(f"\n{_bubble()} ", style=spark.colour)
@@ -1931,6 +1938,9 @@ def _sparks_command(arg: str) -> None:
     try:
         if action == "new":
             _new_spark()
+            return
+        if action == "always":
+            _sparks_always(rest.lower())
             return
         if action == "run" and key:
             spark = sparks.run_now(key)
@@ -2002,12 +2012,101 @@ def _sparks_command(arg: str) -> None:
         if spark.unread:
             body.append(f"  {spark.unread} new", style=ACCENT)
         body.append(f"\n     {spark.goal.splitlines()[0][:70]}\n", style=DIM)
+    from . import keepalive
+
+    body.append(f"\n  {_always_words(keepalive.status())}\n", style=DIM)
     body.append(
-        "\n  They work while Flash runs, here or in the web UI. "
-        "/sparks <name> to read one's reports, /sparks new to make "
+        "  /sparks <name> to read one's reports, /sparks new to make "
         "another.\n", style=DIM,
     )
     console.print(body)
+
+
+def _keep_sparks() -> None:
+    """`flash --sparks`: the keeper alone, until stopped.
+
+    What the system starts at login when sparks are always on, and just
+    as happy run by hand. It reads the env file before every shift, so a
+    model picked in an open Flash is the one the next shift uses.
+    """
+
+    # Started at login, the working folder is wherever the system chose,
+    # which on Windows is System32. A spark's relative paths mean home.
+    os.chdir(Path.home())
+    found = len(sparks.all_sparks())
+    console.print(Text(
+        f"Keeping {found} spark{'' if found == 1 else 's'} working. "
+        "Ctrl+C stops it.", style=DIM,
+    ))
+
+    def announce(spark: "sparks.Spark", report: "sparks.Report") -> None:
+        notify_spark(spark.name, report.text, failed=report.failed)
+        stamp = time.strftime("%Y-%m-%d %H:%M")
+        what = "a shift failed" if report.failed else "filed a report"
+        console.print(Text(f"{stamp} {spark.name}: {what}", DIM))
+
+    from . import keepalive
+
+    # Started for always on, it goes when always on does. Run by hand
+    # with always on off, it runs until stopped.
+    wanted = keepalive.installed if keepalive.installed() else None
+    try:
+        sparks.serve(
+            prepare=refresh_config, announce=announce, wanted=wanted,
+        )
+    except KeyboardInterrupt:
+        console.print(Text("Stopped.", style=DIM))
+
+
+def _sparks_always(arg: str) -> None:
+    """/sparks always [on|off]: keep them working when Flash is closed."""
+
+    from . import keepalive
+
+    try:
+        if arg in ("on", "yes", "enable"):
+            how = keepalive.turn_on()
+            console.print(Text(
+                f"Sparks are always on, through {how}. They keep working "
+                "with Flash closed and tell you when they have news.",
+                style=DIM,
+            ))
+            return
+        if arg in ("off", "no", "disable"):
+            if keepalive.turn_off():
+                console.print(Text(
+                    "Sparks work only while Flash is open again.", style=DIM,
+                ))
+            else:
+                console.print(Text("Sparks were not always on.", style=DIM))
+            return
+    except keepalive.KeepAliveError as exc:
+        warn(str(exc))
+        return
+
+    if arg:
+        warn("Usage: /sparks always [on|off]")
+        return
+    console.print(Text(_always_words(keepalive.status()), style=DIM))
+
+
+def _always_words(state: dict) -> str:
+    if not state["installed"]:
+        return (
+            "Sparks work while Flash is open. /sparks always on keeps "
+            "them working when it is closed."
+        )
+    if state["running"]:
+        return "Always on: working in the background, with Flash closed too."
+    if state["here"]:
+        return (
+            "Always on. An open Flash is doing the work right now; the "
+            "background keeper takes over when it closes."
+        )
+    return (
+        "Always on, but the background keeper is not running. It starts "
+        "at your next login, or run /sparks always on to start it now."
+    )
 
 
 def _hook_command(arg: str) -> None:
@@ -2673,6 +2772,10 @@ def main() -> None:
         or args.extension_list
     ):
         sys.exit(0 if _handle_extension_flags(args) else 1)
+
+    if args.sparks:
+        _keep_sparks()
+        return
 
     if args.web:
         from . import web  # only the web UI needs the server
