@@ -1753,5 +1753,5 @@ def test_the_page_reads_set_times_back_before_saving():
     assert read["at"] == "30 8 * * 1"
     assert read["schedule"] == "at 8:30am on Mondays"
     assert read["next"] == sparks.cron.next_after("30 8 * * 1", time.time())
-    with pytest.raises(sparks.SparkError):
+    with pytest.raises(ValueError, match="at most every 15"):
         web.command(session, {"name": "spark-schedule", "arg": "*/5 * * * *"})
