@@ -1696,6 +1696,14 @@ EMAIL_TOOLS: list[dict[str, Any]] = [
                         "type": "string",
                         "description": "Optional folder. Default INBOX.",
                     },
+                    "account": {
+                        "type": "string",
+                        "description": (
+                            "Optional: one of the user's email addresses, "
+                            "to check that account only. Left out, every "
+                            "connected account is checked."
+                        ),
+                    },
                 },
             },
         },
@@ -1718,6 +1726,13 @@ EMAIL_TOOLS: list[dict[str, Any]] = [
                     "folder": {
                         "type": "string",
                         "description": "Optional folder. Default INBOX.",
+                    },
+                    "account": {
+                        "type": "string",
+                        "description": (
+                            "The account it is in, as check_inbox showed. "
+                            "Needed when more than one is connected."
+                        ),
                     },
                 },
                 "required": ["uid"],
@@ -1764,6 +1779,14 @@ EMAIL_TOOLS: list[dict[str, Any]] = [
                     "cc": {
                         "type": "string",
                         "description": "Optional: who else it goes to.",
+                    },
+                    "account": {
+                        "type": "string",
+                        "description": (
+                            "Which of the user's addresses it is sent from. "
+                            "On a reply, the account the email is in. Left "
+                            "out, the first one connected."
+                        ),
                     },
                 },
                 "required": ["body"],
@@ -1933,14 +1956,17 @@ def _truthy(value: Any) -> bool:
 
 def check_inbox(
     unread_only: Any = False, query: str = "", limit: Any = 0,
-    folder: str = "INBOX",
+    folder: str = "INBOX", account: str = "",
 ) -> str:
-    """The newest emails, newest first, without marking any read."""
+    """The newest emails, newest first, without marking any read: from
+    ACCOUNT, or from every connected account."""
 
     unread = _truthy(unread_only)
     what = "unread" if unread else "newest"
+    account = str(account or "").strip()
     tool_line(
         f"CheckInbox({what}"
+        + (f", {account}" if account else "")
         + (f", {query!r}" if str(query or "").strip() else "")
         + (f", {folder}" if folder and folder != "INBOX" else "") + ")"
     )
@@ -1948,41 +1974,58 @@ def check_inbox(
         limit = int(limit or 0) or mail.LIST_LIMIT
     except (TypeError, ValueError):
         limit = mail.LIST_LIMIT
+    problems: list = []
     try:
-        found = mail.inbox(unread, str(query or ""), limit, folder or "INBOX")
+        found = mail.inbox(
+            unread, str(query or ""), limit, folder or "INBOX", account,
+            problems,
+        )
     except mail.MailError as exc:
         tool_result(str(exc), style=ERROR)
         return f"Error: {exc}"
+    trouble = [f"Could not check {who}: {why}" for who, why in problems]
+    for line in trouble:
+        tool_result(line, style=WARN)
     if not found:
         said = "No unread email." if unread else "No email found."
         tool_result(said)
-        return said
+        return "\n".join([said, *trouble])
     tool_result(f"{len(found)} email{plural(len(found))}")
+    # Which account each is in matters once there is more than one: a
+    # uid is only that account's.
+    several = len({item["account"] for item in found}) > 1 or (
+        not account and len(mail.addresses()) > 1
+    )
     lines = [
         f"{len(found)} email{plural(len(found))}, newest first. read_email "
-        "with a uid reads one; nothing here was marked read. When you tell "
-        "the user about one, link it, as [its subject](its link), so they "
-        "can open it."
+        "with a uid"
+        + (" and its account" if several else "")
+        + " reads one; nothing here was marked read. When you tell the "
+        "user about one, link it, as [its subject](its link), so they can "
+        "open it.",
+        *trouble,
     ]
     for item in found:
         count = item["attachments"]
         clip = f" [{count} attached]" if count else ""
         unread = " (unread)" if item["unread"] else ""
         subject = item["subject"] or "(no subject)"
+        where = f" · in {item['account']}" if several else ""
         lines.append(
-            f"- uid {item['uid']}{unread} · {item['date']} · "
+            f"- uid {item['uid']}{unread}{where} · {item['date']} · "
             f"{item['from']}\n  {subject}{clip}: {item['snippet']}"
             + (f"\n  link: {item['link']}" if item.get("link") else "")
         )
     return "\n".join(lines)
 
 
-def read_email(uid: Any = "", folder: str = "INBOX") -> str:
-    """One email in full, by its uid from check_inbox. It stays unread."""
+def read_email(uid: Any = "", folder: str = "INBOX", account: str = "") -> str:
+    """One email in full, by its uid from check_inbox and the account it
+    is in. It stays unread."""
 
-    tool_line(f"ReadEmail({uid})")
+    tool_line(f"ReadEmail({uid}{f', {account}' if account else ''})")
     try:
-        found = mail.read(str(uid), folder or "INBOX")
+        found = mail.read(str(uid), folder or "INBOX", str(account or ""))
     except mail.MailError as exc:
         tool_result(str(exc), style=ERROR)
         return f"Error: {exc}"
@@ -1991,8 +2034,8 @@ def read_email(uid: Any = "", folder: str = "INBOX") -> str:
     if len(body) > mail.BODY_CHARS:
         body = body[:mail.BODY_CHARS] + "\n[... the rest is cut]"
     head = [
-        f"uid: {found['uid']}", f"From: {found['from']}",
-        f"To: {found['to']}",
+        f"uid: {found['uid']}", f"Account: {found['account']}",
+        f"From: {found['from']}", f"To: {found['to']}",
     ]
     if found["cc"]:
         head.append(f"Cc: {found['cc']}")
@@ -2006,14 +2049,16 @@ def read_email(uid: Any = "", folder: str = "INBOX") -> str:
 
 def send_email(
     to: str = "", subject: str = "", body: str = "", reply_to: Any = "",
-    cc: str = "",
+    cc: str = "", account: str = "",
 ) -> str:
-    """Send an email, or reply to one by its uid. Always asks first."""
+    """Send an email from ACCOUNT, or reply to one by its uid in ACCOUNT.
+    Always asks first."""
 
+    account = str(account or "").strip()
     try:
-        original = mail.read(str(reply_to)) if str(reply_to or "").strip() \
-            else None
-        message = mail.compose(to, subject, body, original, cc)
+        original = mail.read(str(reply_to), account=account) \
+            if str(reply_to or "").strip() else None
+        message = mail.compose(to, subject, body, original, cc, account)
     except mail.MailError as exc:
         tool_line(f"SendEmail({to or reply_to})")
         tool_result(str(exc), style=ERROR)
@@ -2021,7 +2066,7 @@ def send_email(
 
     tool_line(f"SendEmail({message['To']})")
     preview = (
-        f"To: {message['To']}"
+        f"From: {message['From']}\nTo: {message['To']}"
         + (f"\nCc: {message['Cc']}" if message.get("Cc") else "")
         + f"\nSubject: {message['Subject']}\n\n"
         + message.get_content().strip()

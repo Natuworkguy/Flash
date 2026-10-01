@@ -1880,15 +1880,18 @@ def _ask_line(question: str) -> str:
 
 
 def _email_command(arg: str) -> None:
-    """/email: connect the user's email, test it, look, or disconnect."""
+    """/email: connect the user's email accounts, test them, look, or
+    disconnect one."""
 
     from . import mail
 
-    action = arg.split(" ", 1)[0].lower()
+    action, _, rest = arg.partition(" ")
+    action = action.lower()
+    which = rest.strip()
     try:
-        if action in ("", "status"):
-            now = mail.settings()
-            if not now["configured"]:
+        if action in ("", "status", "list"):
+            accounts = mail.settings()["accounts"]
+            if not accounts:
                 console.print(Text(
                     "  Email is not connected. /email connect sets it up, "
                     "with an app password: Flash and your sparks can then "
@@ -1896,20 +1899,39 @@ def _email_command(arg: str) -> None:
                     style=DIM,
                 ))
                 return
-            console.print(Text(
-                f"  Connected as {now['address']} (IMAP {now['imap']}, "
-                f"SMTP {now['smtp']}). /email test, /email inbox, or "
-                "/email disconnect.", style=DIM,
-            ))
+            body = Text()
+            for account in accounts:
+                body.append(f"  {account['address']}", style=ACCENT)
+                body.append(
+                    f"  IMAP {account['imap']} · SMTP {account['smtp']}"
+                    + ("" if account["has_password"] else " · no password")
+                    + "\n", style=DIM,
+                )
+            body.append(
+                "  /email connect adds another. /email test, inbox or "
+                "disconnect, with an address for just that one.",
+                style=DIM,
+            )
+            console.print(body)
             return
-        if action in ("connect", "setup", "set"):
+        if action in ("connect", "add", "setup", "set"):
             _email_connect()
             return
         if action == "test":
-            console.print(Text(f"  {mail.test()}", style=DIM))
+            for address in [which] if which else mail.addresses():
+                try:
+                    console.print(Text(f"  {mail.test(address)}", DIM))
+                except mail.MailError as exc:
+                    warn(f"  {address}: {exc}")
+            if not which and not mail.addresses():
+                warn(f"  {mail.NOT_SET_UP}")
             return
         if action == "inbox":
-            found = mail.inbox(limit=10)
+            problems: list = []
+            found = mail.inbox(limit=10, account=which, problems=problems)
+            for who, why in problems:
+                warn(f"  Could not check {who}: {why}")
+            several = not which and len(mail.addresses()) > 1
             if not found:
                 console.print(Text("  The inbox is empty.", style=DIM))
             for item in found:
@@ -1920,19 +1942,34 @@ def _email_command(arg: str) -> None:
                 line.append(f"{item['date']:<17}", style=DIM)
                 line.append(f"{item['from'][:28]:<30}")
                 line.append(item["subject"] or "(no subject)", style=DIM)
+                if several:
+                    line.append(f"  {item['account']}", style=DIM)
                 console.print(line)
             return
-        if action in ("disconnect", "off", "forget"):
-            mail.forget()
+        if action in ("disconnect", "off", "forget", "remove"):
+            connected = [a["address"] for a in mail.settings()["accounts"]]
+            if not which and len(connected) > 1:
+                warn(
+                    "  Which one? /email disconnect <address>, one of "
+                    f"{', '.join(connected)}."
+                )
+                return
+            which = which or (connected[0] if connected else "")
+            if not which:
+                warn(f"  {mail.NOT_SET_UP}")
+                return
+            mail.forget(which)
             console.print(Text(
-                "  Email disconnected: the address and password are gone.",
-                style=DIM,
+                f"  {which} disconnected: its password is gone.", style=DIM,
             ))
             return
     except mail.MailError as exc:
         warn(f"  {exc}")
         return
-    warn("Usage: /email [connect | test | inbox | disconnect]")
+    warn(
+        "Usage: /email [connect | test [address] | inbox [address] | "
+        "disconnect [address]]"
+    )
 
 
 def _email_connect() -> None:
@@ -1940,6 +1977,12 @@ def _email_connect() -> None:
 
     from . import mail
 
+    connected = mail.addresses()
+    if connected:
+        console.print(Text(
+            f"  Connected already: {', '.join(connected)}. This adds "
+            "another, or changes one by its address.", style=DIM,
+        ))
     console.print(Text(
         "  Flash reads your email over IMAP and sends it over SMTP. Use an "
         "app password, made in your account's security settings, never "
@@ -1965,7 +2008,7 @@ def _email_connect() -> None:
     smtp = _ask_line(f"SMTP server? (Enter for {smtp_host}:{smtp_port})")
     mail.save(address, password, imap, smtp)
     try:
-        said = mail.test()
+        said = mail.test(address)
     except mail.MailError as exc:
         warn(
             f"  Saved, but it did not work yet: {exc} /email connect "
