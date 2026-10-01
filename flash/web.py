@@ -2381,15 +2381,19 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
         }
 
     if name == "spark-rounds":
-        # No arg: only what it is, for the box in Settings.
+        # No arg: only what it is, for the box in Settings. "limited"
+        # puts the limit back on at the number it had.
         try:
-            rounds = (
-                sparks.set_shift_rounds(arg) if arg else sparks.shift_rounds()
-            )
+            if arg == "limited":
+                sparks.set_shift_rounds_unlimited(False)
+            elif arg:
+                sparks.set_shift_rounds(arg)
         except sparks.SparkError as exc:
             raise ValueError(str(exc)) from None
         return {
-            "rounds": rounds, "least": sparks.SHIFT_ROUNDS_MIN,
+            "rounds": sparks.shift_rounds_number(),
+            "unlimited": sparks.shift_rounds_unlimited(),
+            "least": sparks.SHIFT_ROUNDS_MIN,
             "most": sparks.SHIFT_ROUNDS_MAX,
             "default": sparks.SHIFT_ROUNDS_DEFAULT,
         }
