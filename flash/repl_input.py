@@ -55,8 +55,6 @@ COMMANDS = [
     ("/unset", "remove an env var (/unset NAME)"),
     ("/refresh", "reload config from the env file"),
     ("/memory", f"show saved memory, numbered ({MEMORY_PATH})"),
-    ("/soul", "who Flash is, in your words (/soul edit|clear)"),
-    ("/heartbeat", "a checklist Flash checks every half hour (on|off|edit)"),
     ("/forget", "delete one memory by its 1-based index (/forget N)"),
     ("/skills", "procedures Flash has learned (/skills show|remove <name>)"),
     ("/plan", "show the checklist the model is working through"),
