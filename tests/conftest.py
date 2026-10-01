@@ -55,6 +55,9 @@ def isolated_home(tmp_path_factory, monkeypatch):
     monkeypatch.setattr(skills, "FLASH_DIR", home / ".flash")
     # Sparks, and what this session has already pointed out about them.
     monkeypatch.setattr(sparks, "FLASH_DIR", home / ".flash")
+    from flash import soul
+
+    monkeypatch.setattr(soul, "FLASH_DIR", home / ".flash")
     monkeypatch.setattr(sparks, "_told", set())
     # The web UI's saved hosts, projects, and chats.
     monkeypatch.setattr(workspace, "FLASH_DIR", home / ".flash")

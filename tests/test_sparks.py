@@ -1304,7 +1304,9 @@ class TestTheRestOfIt:
         )
         assert added["spark"]["name"] == "Scout 2"
         listed = web.command(session, {"name": "spark-templates"})
-        assert listed["templates"] == sparks.TEMPLATES
+        assert listed["templates"] == [
+            sparks.filled(t) for t in sparks.TEMPLATES
+        ]
 
     def test_the_page_sees_what_waits_but_not_the_conversation(
         self, model, fake_shell

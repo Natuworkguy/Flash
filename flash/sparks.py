@@ -83,6 +83,8 @@ MAX_STEPS = 40
 # its report or the user stops it; the number is kept for when the limit
 # goes back on.
 SHIFT_ROUNDS_DEFAULT = 12
+# The spark that works through HEARTBEAT.md: a template like any other.
+HEARTBEAT_NAME = "Heartbeat"
 SHIFT_ROUNDS_MIN = 1
 SHIFT_ROUNDS_MAX = 100
 
@@ -845,9 +847,92 @@ TEMPLATES = [
         "every": 360,
         "boundaries": "Only read. Never fill in or submit anything.",
     },
+    {
+        "name": HEARTBEAT_NAME,
+        "title": "Check-in",
+        "blurb": "Works through your checklist, speaks up only when needed",
+        "goal": (
+            "Read the checklist in {heartbeat} and follow it strictly, item "
+            "by item. Do not make up tasks or repeat ones from earlier "
+            "shifts that the checklist no longer asks for. If nothing on it "
+            "needs attention right now, reply with exactly NOTHING NEW."
+        ),
+        "every": 30,
+        "boundaries": (
+            "Only what the checklist asks. Ask before anything it does not "
+            "say to do."
+        ),
+    },
 ]
 
 SHARE_PREFIX = "flash-spark:"
+
+# What a new heartbeat checklist starts as.
+HEARTBEAT_STARTER = """# Heartbeat
+
+Flash reads this every half hour and works through it. If nothing here
+needs attention, it stays quiet; otherwise it tells you. Keep it short:
+a few things worth checking often.
+
+- Check whether any of my repos under ~/code have uncommitted changes
+  older than a day, and tell me which.
+- If the disk is more than 90% full, tell me what is taking the room.
+"""
+
+
+def heartbeat_path() -> Path:
+    """The checklist the heartbeat works through, OpenClaw's
+    HEARTBEAT.md."""
+
+    return FLASH_DIR / "HEARTBEAT.md"
+
+
+def filled(template: dict) -> dict:
+    """TEMPLATE with where its files are: the heartbeat's checklist."""
+
+    return {
+        **template,
+        "goal": template["goal"].replace("{heartbeat}", str(heartbeat_path())),
+    }
+
+
+def heartbeat_spark() -> Optional[Spark]:
+    return next((s for s in all_sparks() if s.name == HEARTBEAT_NAME), None)
+
+
+def set_heartbeat(on: bool, model: str = "") -> Optional[Spark]:
+    """Start the heartbeat, a spark working through HEARTBEAT.md every
+    half hour, or stop it. Returns it, or None once stopped."""
+
+    found = heartbeat_spark()
+    if not on:
+        if found is not None:
+            remove(found.id)
+        return None
+    if found is not None:
+        return set_paused(found.id, False) if found.paused else found
+    return add_from(HEARTBEAT_NAME, model=model)
+
+
+def read_heartbeat() -> str:
+    try:
+        return heartbeat_path().read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return ""
+
+
+def write_heartbeat(text: str) -> None:
+    """Keep TEXT as the heartbeat's checklist."""
+
+    text = str(text or "").replace("\r\n", "\n").strip()
+    if len(text) > GOAL_CHARS * 3:
+        raise SparkError(
+            f"Keep the checklist under {GOAL_CHARS * 3} characters: the "
+            "heartbeat reads all of it every half hour."
+        )
+    path = heartbeat_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text + "\n" if text else "", encoding="utf-8")
 
 
 def share_code(key: str) -> str:
@@ -911,6 +996,8 @@ def add_from(
         None,
     )
     data = dict(found) if found else read_code(source)
+    if found:
+        data = filled(found)
     name, number = data["name"], 2
     while find(handle_of(name)) is not None:
         name = f"{data['name'][:NAME_CHARS - 3]} {number}"
@@ -941,6 +1028,11 @@ def create(
     minutes = parse_every(every)
     project = resolve_project(project)
     watch = _watch_folder(watch)
+    # A heartbeat with no checklist yet gets one to start from.
+    checklist = heartbeat_path()
+    if str(checklist) in goal and not checklist.exists():
+        checklist.parent.mkdir(parents=True, exist_ok=True)
+        checklist.write_text(HEARTBEAT_STARTER, encoding="utf-8")
 
     with _held():
         taken = {s.handle for s in all_sparks()}
