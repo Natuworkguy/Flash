@@ -2668,7 +2668,33 @@ def keeper() -> Optional[dict]:
         return None
     if time.time() - float(beat.get("beat") or 0) > STALE_SECONDS:
         return None
+    # Gone since its last beat: no keeper, though the beat looks fresh.
+    if not alive(beat.get("pid")):
+        return None
     return beat
+
+
+def alive(pid) -> bool:
+    """Whether process PID is running. Unknowable on Windows from here
+    without risk, so there it is taken to be."""
+
+    try:
+        pid = int(pid)
+    except (TypeError, ValueError):
+        return False
+    if pid <= 0:
+        return False
+    if os.name == "nt":
+        return True
+    try:
+        os.kill(pid, 0)  # signal 0: asks, and sends nothing
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+    return True
 
 
 def _signature() -> tuple:
@@ -2762,16 +2788,25 @@ def _code_stamp() -> tuple:
 _RUNNING_CODE = _code_stamp()
 
 
+def _fingerprint(stamp: tuple) -> str:
+    return hashlib.sha256(repr(stamp).encode("utf-8")).hexdigest()[:16]
+
+
 def code_identity() -> dict:
     """Which Flash this process is: where its code is, and a short
     fingerprint of that code as it loaded it."""
 
     return {
         "code": str(Path(__file__).resolve().parent),
-        "stamp": hashlib.sha256(
-            repr(_RUNNING_CODE).encode("utf-8")
-        ).hexdigest()[:16],
+        "stamp": _fingerprint(_RUNNING_CODE),
     }
+
+
+def disk_stamp() -> str:
+    """The fingerprint of this Flash's code as it is on disk now, which
+    a process started now would run."""
+
+    return _fingerprint(_code_stamp())
 
 
 def _keep(
