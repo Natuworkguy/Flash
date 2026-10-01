@@ -24,6 +24,7 @@ own that the operating system starts at login.
 
 import base64
 import contextlib
+import hashlib
 import itertools
 import json
 import os
@@ -2635,7 +2636,10 @@ def _beat(always: bool) -> None:
     """Say a keeper is here for as long as this process holds the lock,
     on a thread of its own, since one shift can outlast many ticks."""
 
-    beat = {"pid": os.getpid(), "always": always, "since": time.time()}
+    beat = {
+        "pid": os.getpid(), "always": always, "since": time.time(),
+        **code_identity(),
+    }
     held = _floor
 
     def keep_beating() -> None:
@@ -2756,6 +2760,18 @@ def _code_stamp() -> tuple:
 
 # The code this process runs: what it loaded at start.
 _RUNNING_CODE = _code_stamp()
+
+
+def code_identity() -> dict:
+    """Which Flash this process is: where its code is, and a short
+    fingerprint of that code as it loaded it."""
+
+    return {
+        "code": str(Path(__file__).resolve().parent),
+        "stamp": hashlib.sha256(
+            repr(_RUNNING_CODE).encode("utf-8")
+        ).hexdigest()[:16],
+    }
 
 
 def _keep(

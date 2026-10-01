@@ -2504,6 +2504,13 @@ def _sparks_always(arg: str) -> None:
 
 
 def _always_words(state: dict) -> str:
+    if state.get("other"):
+        return (
+            f"Your sparks are being run by {state['other']}, so their "
+            "shifts use its code and its tools, not this one's. "
+            "/sparks always off, then /sparks always on, runs them on this "
+            "one."
+        )
     if not state["installed"]:
         return (
             "Sparks work while Flash is open. /sparks always on keeps "

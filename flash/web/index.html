@@ -924,6 +924,12 @@ body.page-projects #dock, body.page-settings #dock, body.page-tool #dock { displ
 .email-buttons, .email-form .buttons { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
 .email-buttons .primary { margin-left: auto; }
 .email-form { max-width: 460px; }
+.other-keeper { display: flex; align-items: center; gap: 12px; padding: 12px 14px; margin: 0 0 16px; border-radius: var(--radius); border: 1px solid color-mix(in srgb, var(--warn) 45%, transparent); background: color-mix(in srgb, var(--warn) 9%, transparent); font-size: 13.5px; }
+.other-keeper .ico { color: var(--warn); display: grid; flex: none; }
+.other-keeper .ico svg { width: 18px; height: 18px; }
+.other-keeper .words { flex: 1; min-width: 0; }
+.other-keeper .btn { flex: none; }
+@media (max-width: 560px) { .other-keeper { flex-wrap: wrap; } }
 .needs-email { font-size: 13px; color: var(--warn); margin: -4px 0 14px; }
 .needs-email .link-btn { display: inline; font-size: inherit; padding: 0; color: var(--text); text-decoration: underline; text-underline-offset: 2px; }
 .email-servers { margin: 0 0 14px; }
@@ -4426,7 +4432,28 @@ function renderSparkAsk() {
 // Whether sparks keep working with Flash closed: what the page last heard.
 let sparksAlways = { installed: false, running: false, here: false };
 
+// Another Flash's keeper runs the sparks: its code, its tools. One
+// press puts this one in its place.
+function otherKeeperBanner(a) {
+  const banner = el("div", "other-keeper", `<span class="ico">${icon("alert")}</span><span class="words"></span>`);
+  banner.querySelector(".words").textContent = `Your sparks are being run by ${a.other}, so their shifts use its code and tools, not this one's.`;
+  const fix = el("button", "btn", "Run them on this Flash");
+  fix.type = "button";
+  fix.onclick = async () => {
+    fix.disabled = true;
+    try {
+      await command("sparks-always", "off", null);
+      sparksAlways = (await command("sparks-always", "on", null)).always;
+      toast("Your sparks run on this Flash now");
+      banner.remove();
+    } catch (error) { showFailure(error); fix.disabled = false; }
+  };
+  banner.appendChild(fix);
+  return banner;
+}
+
 function alwaysWords(a) {
+  if (a.other) return `Your sparks are being run by ${a.other}, so their shifts use its code and its tools, not this one's. Switch this off and on again to run them on this one.`;
   if (!a.installed) return "Off: sparks work while Flash is open, in the terminal or here. On, Flash starts a keeper of its own at login, so they keep working with everything closed and send a notification when they have news.";
   if (a.running) return "On: a keeper started at login is doing the work, and keeps doing it with Flash closed.";
   if (a.here) return "On: this Flash is doing the work right now, and the keeper started at login takes over when it closes.";
@@ -4453,6 +4480,7 @@ async function drawSparks(body, again = false) {
   body.querySelector(".mem-head").appendChild(buttons);
   sparksAlways = r.always;
   const host = body.querySelector(".host");
+  if (r.always.other) host.before(otherKeeperBanner(r.always));
   if (!r.sparks.length) {
     host.innerHTML = `<div class="mem-empty"><b>No sparks yet</b>Give one a goal like “every morning, check my repo for new issues and tell me which look like bugs”. Or ask Flash in a chat to make one.</div>`;
     return;

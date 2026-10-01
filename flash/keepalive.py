@@ -41,11 +41,21 @@ def _host() -> str:
     return "macos" if sys.platform == "darwin" else "linux"
 
 
+def _checkout_script() -> Optional[Path]:
+    """run.py, when this Flash runs from a clone of its repository."""
+
+    script = Path(__file__).resolve().parent.parent / "run.py"
+    return script if script.is_file() else None
+
+
 def command() -> list[str]:
     """What the system runs: this Python, this Flash, keeper only.
 
     This interpreter rather than whatever `flash` is on PATH at login: a
-    pipx install's is the one with Flash's packages in it.
+    pipx install's is the one with Flash's packages in it. And this
+    Flash: run from a clone, its run.py, since `-m flash` from the home
+    folder would load whatever other Flash that Python has installed,
+    and every shift would run on that one's code instead.
     """
 
     python = Path(sys.executable)
@@ -53,6 +63,9 @@ def command() -> list[str]:
         quiet = python.with_name("pythonw.exe")
         if quiet.is_file():
             python = quiet
+    script = _checkout_script()
+    if script is not None:
+        return [str(python), str(script), "--sparks"]
     return [str(python), "-m", "flash", "--sparks"]
 
 
@@ -347,4 +360,22 @@ def status() -> dict:
         # An open Flash doing the work meanwhile: the always-on keeper
         # waits for its turn while one is.
         "here": bool(beat) and not (beat or {}).get("always"),
+        # The keeper doing the work is another Flash than this one, in
+        # words ("another Flash, at ..."), or "" when it is this one or
+        # none is running.
+        "other": _other(beat),
     }
+
+
+def _other(beat: Optional[dict]) -> str:
+    if not beat or beat.get("pid") == os.getpid():
+        return ""
+    ours = sparks.code_identity()
+    if not beat.get("code"):
+        # From before keepers said which Flash they are: older, then.
+        return "an older Flash"
+    if beat["code"] != ours["code"]:
+        return f"another Flash, at {beat['code']}"
+    if beat.get("stamp") != ours["stamp"]:
+        return "this Flash as it was before its last update"
+    return ""
