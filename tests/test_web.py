@@ -3692,3 +3692,115 @@ def test_the_page_reads_and_sets_the_rounds_a_shift_gets():
     assert changed["rounds"] == 20
     with pytest.raises(ValueError):
         web.command(session, {"name": "spark-rounds", "arg": "500"})
+
+
+# --- Screen recordings ---------------------------------------------------
+
+
+class TestScreenRecordings:
+    STILL = b"\xff\xd8\xff\xe0fake-jpeg"
+
+    def _upload(self, monkeypatch, narration=b"", heard=None):
+        import base64
+
+        from flash import workspace
+
+        said = iter(heard or [])
+        monkeypatch.setattr(
+            web.voice, "transcribe",
+            lambda pcm: (next(said), "") if heard is not None
+            else ("", "no listening model"),
+        )
+        body = {
+            "name": "screen-recording.webm",
+            "data": base64.b64encode(b"webm-bytes").decode(),
+            "narration": base64.b64encode(narration).decode(),
+            "stills": [
+                {"data": base64.b64encode(self.STILL).decode(), "at": at}
+                for at in (0, 4.2, 9.5)
+            ],
+        }
+        stills, self.unheard = web.recording_stills(body)
+        return workspace.keep_upload(body["name"], b"webm-bytes", stills)
+
+    def test_a_recording_is_kept_with_its_stills(self, monkeypatch):
+        from flash import workspace
+
+        kept = self._upload(monkeypatch)
+
+        assert kept["kind"] == "video" and kept["stills"] == 3
+        stills = workspace.recording_stills(kept["id"])
+        assert [s["at"] for s in stills] == [0, 4.2, 9.5]
+        assert all(s["said"] == "" for s in stills)
+        # The folder still holds the one file it is named by.
+        assert workspace.upload_info(kept["id"])["name"] == (
+            "screen-recording.webm"
+        )
+
+    def test_what_was_said_over_each_step_goes_with_it(self, monkeypatch):
+        from flash import workspace
+
+        # Twelve seconds of 16 kHz 16-bit audio.
+        pcm = b"\x00\x01" * 16_000 * 12
+        kept = self._upload(
+            monkeypatch, pcm, ["open settings", "click privacy", "done"],
+        )
+
+        said = [s["said"] for s in workspace.recording_stills(kept["id"])]
+        assert said == ["open settings", "click privacy", "done"]
+
+    def test_the_model_sees_the_stills_and_is_asked_to_learn_it(
+        self, monkeypatch,
+    ):
+        from flash import workspace
+
+        pcm = b"\x00\x01" * 16_000 * 12
+        kept = self._upload(monkeypatch, pcm, ["open settings", "", "done"])
+
+        content, images = web.outgoing(ai, "", [{"id": kept["id"]}])
+
+        assert content.startswith(web.RECORDING_PROMPT)
+        assert len(images) == 3
+        assert images == [
+            s["path"] for s in workspace.recording_stills(kept["id"])
+        ]
+        assert '1. at 0:00, the user saying: "open settings"' in content
+        assert "2. at 0:04\n" in content
+        assert "skill_manage" in content
+
+    def test_words_typed_with_it_are_the_ask(self, monkeypatch):
+        kept = self._upload(monkeypatch)
+
+        content, _ = web.outgoing(
+            ai, "This is how I file expenses", [{"id": kept["id"]}],
+        )
+
+        assert content.startswith("This is how I file expenses")
+        assert web.RECORDING_PROMPT not in content
+        # Typed or not, it is told to keep what it learns as a skill.
+        assert "skill_manage" in content
+
+    def test_narration_with_nothing_to_hear_it_says_why(self, monkeypatch):
+        pcm = b"\x00\x01" * 16_000 * 12
+
+        self._upload(monkeypatch, pcm)
+
+        assert self.unheard == "no listening model"
+
+    def test_a_bad_still_is_left_out(self):
+        stills, _ = web.recording_stills({
+            "stills": [{"data": "%%%", "at": 1}, {"data": "", "at": 2}],
+        })
+
+        assert stills == []
+
+
+def test_a_recording_sent_untyped_names_its_chat_for_what_it_is():
+    session = web.Session()
+    chat = session.new_chat()
+
+    session._begin(chat, "", files=[
+        {"id": "x", "name": "screen-recording-2026.webm", "kind": "video"},
+    ])
+
+    assert chat.title == "Screen recording"
