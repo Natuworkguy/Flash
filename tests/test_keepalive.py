@@ -19,6 +19,18 @@ def flash_model(monkeypatch):
     monkeypatch.setattr(tools, "MODEL_NAME", "flash-model")
 
 
+# Before the fixture below swaps it out, for the test of the real one.
+REAL_CHECKOUT_SCRIPT = keepalive._checkout_script
+
+
+@pytest.fixture(autouse=True)
+def installed_flash(monkeypatch):
+    """Flash as installed (pipx, pip), unless a test says it is a clone:
+    the suite itself runs from one."""
+
+    monkeypatch.setattr(keepalive, "_checkout_script", lambda: None)
+
+
 @pytest.fixture
 def ran(monkeypatch):
     """The system commands keepalive runs, each a yes."""
@@ -115,6 +127,16 @@ class TestLinux:
         assert not keepalive.turn_off()
 
 
+def test_a_clone_keeps_its_own_code_running(monkeypatch, tmp_path):
+    # `-m flash` from the home folder would load whatever Flash that
+    # Python has installed, not this clone.
+    script = tmp_path / "run.py"
+    monkeypatch.setattr(keepalive, "_host", lambda: "linux")
+    monkeypatch.setattr(keepalive, "_checkout_script", lambda: script)
+
+    assert keepalive.command() == [sys.executable, str(script), "--sparks"]
+
+
 def test_a_python_with_a_space_in_its_path_is_quoted(monkeypatch):
     monkeypatch.setattr(keepalive, "_host", lambda: "linux")
     monkeypatch.setattr(
@@ -178,7 +200,7 @@ class TestStatus:
 
         assert keepalive.status() == {
             "installed": False, "running": False, "since": None,
-            "here": False,
+            "here": False, "other": "",
         }
 
     def test_on_and_running(self, monkeypatch):
@@ -196,6 +218,76 @@ class TestStatus:
         state = keepalive.status()
 
         assert state["here"] and not state["running"]
+
+
+class TestAnotherFlash:
+    """The keeper doing the work is told apart from this Flash."""
+
+    def _beat(self, **fields):
+        sparks.sparks_dir().mkdir(parents=True, exist_ok=True)
+        (sparks.sparks_dir() / sparks.HEARTBEAT).write_text(json.dumps({
+            "pid": 1, "always": True, "since": time.time(),
+            "beat": time.time(), **fields,
+        }))
+
+    def test_this_flash_is_not_another(self):
+        self._beat(**sparks.code_identity())
+
+        assert keepalive.status()["other"] == ""
+
+    def test_one_from_before_keepers_said_is_older(self):
+        self._beat()
+
+        assert keepalive.status()["other"] == "an older Flash"
+
+    def test_one_elsewhere_is_named_by_its_folder(self):
+        self._beat(code="/opt/pipx/venvs/flash/flash", stamp="x")
+
+        assert keepalive.status()["other"] == (
+            "another Flash, at /opt/pipx/venvs/flash/flash"
+        )
+
+    def test_this_one_from_before_an_update(self):
+        self._beat(code=sparks.code_identity()["code"], stamp="old")
+
+        assert keepalive.status()["other"] == (
+            "this Flash as it was before its last update"
+        )
+
+    def test_the_keeper_says_which_flash_it_is(self, monkeypatch):
+        monkeypatch.setattr(sparks, "TICK_SECONDS", 0.01)
+        monkeypatch.setattr(sparks, "CHECK_EVERY_TICKS", 2)
+
+        assert sparks._take_floor()
+        try:
+            sparks._beat(always=True)
+            deadline = time.time() + 3
+            while sparks.keeper() is None and time.time() < deadline:
+                time.sleep(0.01)
+            beat = sparks.keeper()
+        finally:
+            sparks._give_floor()
+
+        assert beat["code"] == sparks.code_identity()["code"]
+        assert beat["stamp"] == sparks.code_identity()["stamp"]
+
+    def test_the_words_say_how_to_fix_it(self):
+        from flash import ai
+
+        said = ai._always_words({
+            "installed": True, "running": True, "here": False,
+            "other": "an older Flash",
+        })
+
+        assert said.startswith("Your sparks are being run by an older Flash")
+        assert "/sparks always on" in said
+
+
+def test_the_real_clone_is_found_by_its_run_py():
+    script = REAL_CHECKOUT_SCRIPT()
+
+    assert script is not None and script.name == "run.py"
+    assert (script.parent / "flash" / "keepalive.py").is_file()
 
 
 class TestNotify:
