@@ -924,6 +924,8 @@ body.page-projects #dock, body.page-settings #dock, body.page-tool #dock { displ
 .email-buttons, .email-form .buttons { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
 .email-buttons .primary { margin-left: auto; }
 .email-form { max-width: 460px; }
+.needs-email { font-size: 13px; color: var(--warn); margin: -4px 0 14px; }
+.needs-email .link-btn { display: inline; font-size: inherit; padding: 0; color: var(--text); text-decoration: underline; text-underline-offset: 2px; }
 .email-servers { margin: 0 0 14px; }
 .email-servers summary { cursor: pointer; font-size: 13px; color: var(--text-2); margin-bottom: 10px; }
 .settings-gap { margin-top: 34px; }
@@ -4827,6 +4829,22 @@ function addSharedSpark() {
   });
 }
 
+// A template that works on email, picked while email is not connected:
+// a line under the templates says so, with the way to connect it.
+async function needsEmail(row, needs) {
+  row.parentElement.querySelector(".needs-email")?.remove();
+  if (!needs) return;
+  let e;
+  try { e = (await command("email")).email; } catch (_) { return; }
+  if (e.configured || !row.isConnected) return;
+  const note = el("p", "needs-email", "This spark works on your email, which is not connected yet. ");
+  const go = el("button", "link-btn", "Connect it in Settings");
+  go.type = "button";
+  go.onclick = () => { closeForm(); showSettings("email"); };
+  note.appendChild(go);
+  row.after(note);
+}
+
 // "At set times": the box for them shows with the choice, and says back
 // what it read and when that next comes round, or why it cannot.
 function setTimesField(form) {
@@ -4928,6 +4946,7 @@ function sparkForm(spark, inProjectId = "", template = "") {
         chip.title = t.blurb;
         chip.onclick = () => {
           row.querySelectorAll(".chip-btn").forEach((c) => c.classList.toggle("on", c === chip));
+          needsEmail(row, t.needs === "email");
           form.sparkname.value = t.name;
           form.title.value = t.title || "";
           form.goal.value = t.goal;

@@ -915,6 +915,8 @@ TEMPLATES = [
     {
         "name": "Inbox",
         "title": "Inbox keeper",
+        # Shown, when it is not, before one is made.
+        "needs": "email",
         "blurb": "Sorts your email, says what needs you, drafts replies",
         "goal": (
             "Check my email with check_inbox for what has come in since "
@@ -1687,6 +1689,27 @@ def _ask_model(
     raise AssertionError("unreachable")
 
 
+_EMAIL_WORDS = re.compile(
+    r"e-?mail|inbox|check_inbox|read_email|send_email", re.IGNORECASE,
+)
+
+
+def _about_email(spark: Spark) -> bool:
+    """Whether SPARK's job has to do with the user's email."""
+
+    return bool(_EMAIL_WORDS.search(
+        "\n".join([spark.goal, spark.boundaries, *spark.lessons])
+    ))
+
+
+def needs_email(spark: Spark) -> bool:
+    """Whether SPARK can only do its job with the user's email."""
+
+    return bool(re.search(
+        r"check_inbox|read_email|send_email", spark.goal,
+    ))
+
+
 def _work(
     spark: Spark,
     messages: list[dict],
@@ -1716,9 +1739,14 @@ def _work(
     host = flash_tools.OLLAMA_HOST or subagents.OLLAMA_HOST_DEFAULT
     client = client or ollama.Client(host=host)
     allowed = names if names is not None else subagents.allowed_tool_names()
+    offered = flash_tools.available_tools()
+    if not flash_tools.mail.configured() and _about_email(spark):
+        # Its job is email, which is not connected: it gets the tools
+        # anyway, so it is told so when it reaches for them, and says
+        # so, rather than reporting that its tools are missing.
+        offered = offered + flash_tools.EMAIL_TOOLS
     schemas = [
-        t for t in flash_tools.available_tools()
-        if t["function"]["name"] in allowed
+        t for t in offered if t["function"]["name"] in allowed
     ] + own_tools
 
     def record(kind: str, text: str, style: str) -> None:
@@ -2713,30 +2741,61 @@ def watch_tick(now: Optional[float] = None) -> list[Spark]:
     return started
 
 
+def _code_stamp() -> tuple:
+    """Flash's own code as it is on disk now: every module's name, size
+    and time, to tell an update by."""
+
+    here = Path(__file__).resolve().parent
+    stamp = []
+    for path in sorted(here.rglob("*.py")):
+        with contextlib.suppress(OSError):
+            found = path.stat()
+            stamp.append((str(path), found.st_size, found.st_mtime_ns))
+    return tuple(stamp)
+
+
+# The code this process runs: what it loaded at start.
+_RUNNING_CODE = _code_stamp()
+
+
 def _keep(
     always: bool = False,
     prepare: Optional[Callable[[], None]] = None,
     announce: Optional[Callable[[Spark, Report], None]] = None,
     stop: Optional[threading.Event] = None,
     wanted: Optional[Callable[[], bool]] = None,
-) -> None:
+    renew: bool = False,
+) -> bool:
     """The keeper's loop, until STOP is set or WANTED says no.
 
     ALWAYS marks the keeper started at login. PREPARE runs before each
     shift, to pick up settings changed since; ANNOUNCE hears each report
     worth telling someone about. WANTED is asked now and then, so a
     keeper whose login entry was taken away does not run on until
-    logout.
+    logout. RENEW ends it, between shifts, once Flash's code on disk is
+    not what it is running: True then, for it to start again on the new
+    code. A keeper that runs from login would otherwise run every shift
+    on the Flash it started with, whatever has been updated since.
     """
 
     seen = _signature()
     holding = False
     ticks = 0
+    # The code seen at the last look: an update is acted on once it has
+    # held still for a look, not while its files are still being written.
+    looked = _RUNNING_CODE
     while stop is None or not stop.is_set():
         ticks += 1
         if wanted is not None and ticks % CHECK_EVERY_TICKS == 0:
             if not wanted():
                 break
+        if renew and ticks % CHECK_EVERY_TICKS == 0:
+            now_code = _code_stamp()
+            if now_code != _RUNNING_CODE and now_code == looked:
+                if holding:
+                    _give_floor()
+                return True
+            looked = now_code
         if not holding and _take_floor():
             holding = True
             _beat(always)
@@ -2761,6 +2820,7 @@ def _keep(
         _nudge.clear()
     if holding:
         _give_floor()
+    return False
 
 
 def _safe_shift(
@@ -2795,17 +2855,19 @@ def serve(
     prepare: Optional[Callable[[], None]] = None,
     announce: Optional[Callable[[Spark, Report], None]] = None,
     wanted: Optional[Callable[[], bool]] = None,
-) -> None:
+) -> bool:
     """Keep sparks working with nothing else open: `flash --sparks`.
 
     Runs until interrupted, or until WANTED says it is not any more.
     Started at login when sparks are always on, it waits its turn while
-    an open Flash holds the lock.
+    an open Flash holds the lock. True when it ended because Flash was
+    updated, to be started again on the new code.
     """
 
     try:
-        _keep(
+        return _keep(
             always=True, prepare=prepare, announce=announce, wanted=wanted,
+            renew=True,
         )
     finally:
         _give_floor()

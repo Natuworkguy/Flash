@@ -73,8 +73,9 @@ APP_PASSWORD_HELP = {
 }
 
 NOT_SET_UP = (
-    "Email is not set up. The user can connect it with /email in the "
-    "terminal, or in Settings > Email in the web UI."
+    "Email is not set up yet, so nothing can be read or sent. Tell the "
+    "user to connect it: Settings > Email in the web UI, or /email "
+    "connect in the terminal."
 )
 
 
