@@ -921,9 +921,11 @@ TEMPLATES = [
         "blurb": "Sorts your email, says what needs you, drafts replies",
         "goal": (
             "Check my email with check_inbox for what has come in since "
-            "your last shift (keep the newest uid you have seen in your "
-            "notes, and skip anything at or below it). Read the ones that "
-            "matter with read_email. Sort each new email: needs me, worth "
+            "your last shift: it covers every account I have connected. "
+            "Keep the newest uid you have seen in each account in your "
+            "notes, and skip anything at or below it. Read the ones that "
+            "matter with read_email, giving the account each is in. Sort "
+            "each new email: needs me, worth "
             "knowing, or ignorable (newsletters, receipts, notifications). "
             "Report the ones that need me first, one line each: who, what "
             "they want, and by when, with the email's subject as a link to "
@@ -1323,6 +1325,9 @@ def describe(name: str, args: dict) -> tuple[str, str]:
             f"Send an email to {to}" if to else
             f"Reply to email {reply}" if reply else "Send an email"
         )
+        sender = str(args.get("account") or "").strip()
+        if sender:
+            label += f", from {sender}"
         subject = str(args.get("subject") or "").strip()
         body = str(args.get("body") or "")
         cut = body[:1200] + ("\n..." if len(body) > 1200 else "")

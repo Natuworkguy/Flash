@@ -1,6 +1,7 @@
 # pylint: disable=C0114,C0115,C0116
 
 import imaplib
+import json
 import os
 import stat
 import sys
@@ -149,13 +150,13 @@ def server(monkeypatch):
 
 def test_nothing_is_set_up_at_first():
     assert not mail.configured()
-    assert mail.settings()["address"] == ""
+    assert mail.settings() == {"accounts": [], "configured": False}
     with pytest.raises(mail.MailError, match="not set up"):
         mail.inbox()
 
 
 def test_a_known_provider_gets_its_servers():
-    shown = mail.save("me@gmail.com", "pw")
+    shown = mail.save("me@gmail.com", "pw")["accounts"][0]
 
     assert shown["imap"] == "imap.gmail.com:993"
     assert shown["smtp"] == "smtp.gmail.com:465"
@@ -167,17 +168,17 @@ def test_a_known_provider_gets_its_servers():
 
 def test_servers_can_be_set_by_hand():
     shown = mail.save("me@work.example", "pw", "mail.work.example",
-                      "smtp.work.example:587")
+                      "smtp.work.example:587")["accounts"][0]
 
     assert shown["imap"] == "mail.work.example:993"
     assert shown["smtp"] == "smtp.work.example:587"
 
 
 def test_the_password_is_never_shown_and_kept_private():
-    shown = mail.save("me@gmail.com", "abcd efgh ijkl mnop")
+    shown = mail.save("me@gmail.com", "abcd efgh ijkl mnop")["accounts"][0]
 
     assert "password" not in shown and shown["has_password"]
-    assert mail._load()["password"] == "abcdefghijklmnop"
+    assert mail._raw_accounts()[0]["password"] == "abcdefghijklmnop"
     if sys.platform != "win32":
         mode = stat.S_IMODE(os.stat(mail._path()).st_mode)
         assert mode == 0o600
@@ -186,8 +187,9 @@ def test_the_password_is_never_shown_and_kept_private():
 def test_no_password_keeps_the_saved_one_for_the_same_address():
     mail.save("me@gmail.com", "first")
     mail.save("me@gmail.com", None, "", "")
-    assert mail._load()["password"] == "first"
+    assert mail._raw_accounts()[0]["password"] == "first"
 
+    mail.forget()
     mail.save("other@gmail.com", None)
     assert not mail.configured()
 
@@ -394,7 +396,11 @@ def test_the_settings_page_connects_and_disconnects(server):
             "password": "wrong",
         })
 
-    gone = web.command(session, {"name": "email-forget"})
+    with pytest.raises(ValueError, match="which address"):
+        web.command(session, {"name": "email-forget"})
+    gone = web.command(session, {
+        "name": "email-forget", "address": "me@gmail.com",
+    })
     assert not gone["email"]["configured"]
 
 
@@ -446,3 +452,132 @@ def test_the_inbox_spark_is_told_to_link_what_it_mentions():
     inbox = next(t for t in sparks.TEMPLATES if t["name"] == "Inbox")
 
     assert "[subject](link)" in inbox["goal"]
+
+
+# --- Several accounts ----------------------------------------------------
+
+
+@pytest.fixture
+def two(server):
+    """A Gmail and a work address, both on the fake server."""
+
+    mail.save("me@work.example", FakeIMAP.password)
+    return server
+
+
+def test_a_file_from_when_there_was_one_account_still_reads(monkeypatch):
+    path = mail._path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"address": "me@gmail.com", "password": "p"}))
+
+    assert mail.addresses() == ["me@gmail.com"]
+    mail.save("me@work.example", "q")
+    assert mail.addresses() == ["me@gmail.com", "me@work.example"]
+    assert "accounts" in json.loads(path.read_text())
+
+
+def test_accounts_are_added_changed_and_removed_one_at_a_time(two):
+    assert mail.addresses() == ["me@gmail.com", "me@work.example"]
+
+    mail.save("ME@work.example", None, "mail.work.example")
+    shown = {a["address"]: a for a in mail.settings()["accounts"]}
+    assert shown["me@work.example"]["imap"] == "mail.work.example:993"
+    assert len(shown) == 2
+
+    mail.forget("me@gmail.com")
+    assert mail.addresses() == ["me@work.example"]
+    with pytest.raises(mail.MailError, match="not connected"):
+        mail.forget("nobody@example.com")
+
+
+def test_the_inbox_covers_every_account_saying_which(two):
+    found = mail.inbox()
+
+    assert {m["account"] for m in found} == {
+        "me@gmail.com", "me@work.example",
+    }
+    assert len(found) == 6
+    ats = [m["at"] for m in found]
+    assert ats == sorted(ats, reverse=True)
+
+
+def test_one_account_can_be_checked_alone(two):
+    found = mail.inbox(account="me@work.example")
+
+    assert {m["account"] for m in found} == {"me@work.example"}
+    with pytest.raises(mail.MailError, match="not one of the connected"):
+        mail.inbox(account="nobody@example.com")
+
+
+def test_an_account_that_fails_does_not_cost_the_others(two, monkeypatch):
+    mail.save("me@work.example", "wrong")
+    problems = []
+
+    found = mail.inbox(problems=problems)
+
+    assert {m["account"] for m in found} == {"me@gmail.com"}
+    assert problems[0][0] == "me@work.example"
+    assert "app password" in problems[0][1]
+
+
+def test_a_uid_needs_its_account_once_there_are_several(two):
+    with pytest.raises(mail.MailError, match="which account"):
+        mail.read("9")
+
+    assert mail.read("9", account="me@work.example")["account"] == (
+        "me@work.example"
+    )
+
+
+def test_a_reply_goes_from_the_account_it_came_to(two):
+    original = mail.read("9", account="me@work.example")
+
+    message = mail.compose(body="Signed.", reply_to=original)
+    sent = mail.send(message)
+
+    assert message["From"] == "me@work.example"
+    assert sent == "bo@example.com"
+    assert FakeSMTP.sent[-1]["From"] == "me@work.example"
+
+
+def test_check_inbox_names_each_emails_account(two):
+    said = tools.check_inbox()
+
+    assert "with a uid and its account" in said
+    assert " · in me@work.example · " in said
+    assert " · in me@gmail.com · " in said
+
+
+def test_check_inbox_says_which_account_it_could_not_check(two):
+    mail.save("me@work.example", "wrong")
+
+    said = tools.check_inbox()
+
+    assert "Could not check me@work.example:" in said
+    assert "- uid 9" in said
+
+
+def test_send_email_says_who_it_is_from(two):
+    asked = []
+    with answer_from(lambda q: asked.append(q) or "n"):
+        tools.send_email(
+            "a@example.com", "Hi", "Hello", account="me@work.example",
+        )
+
+    assert asked[0].startswith("Send this email?\nFrom: me@work.example")
+
+
+def test_the_settings_page_tests_and_removes_one_account(two):
+    session = web.Session()
+
+    tested = web.command(session, {
+        "name": "email-test", "address": "me@work.example",
+    })
+    assert tested["said"].startswith("Connected as me@work.example")
+
+    left = web.command(session, {
+        "name": "email-forget", "address": "me@work.example",
+    })
+    assert [a["address"] for a in left["email"]["accounts"]] == [
+        "me@gmail.com"
+    ]
