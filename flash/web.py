@@ -2573,6 +2573,7 @@ def _spark_command(name: str, arg: str, body: dict) -> dict:
                 str(body.get("watch") or ""),
                 str(body.get("model") or ""),
                 str(body.get("title") or ""),
+                bool(body.get("paused")),
             )
         elif name == "spark-update":
             # The new name comes as "rename": "name" names the command.
@@ -2599,7 +2600,7 @@ def _spark_command(name: str, arg: str, body: dict) -> dict:
         elif name == "spark-add":
             spark = sparks.add_from(
                 arg, str(body.get("project") or ""),
-                str(body.get("model") or ""),
+                str(body.get("model") or ""), bool(body.get("paused")),
             )
         elif name == "spark-templates":
             return {"templates": sparks.TEMPLATES}

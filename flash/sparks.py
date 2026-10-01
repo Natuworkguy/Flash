@@ -880,7 +880,9 @@ def read_code(code: str) -> dict:
     }
 
 
-def add_from(source: str, project: str = "", model: str = "") -> Spark:
+def add_from(
+    source: str, project: str = "", model: str = "", paused: bool = False,
+) -> Spark:
     """A spark of your own, copied from a share code or a template named
     SOURCE. A name already taken gets a number."""
 
@@ -896,7 +898,7 @@ def add_from(source: str, project: str = "", model: str = "") -> Spark:
         number += 1
     spark = create(
         name, data["goal"], data.get("boundaries", ""), data["every"],
-        project, model=model, title=data.get("title", ""),
+        project, model=model, title=data.get("title", ""), paused=paused,
     )
     lessons = data.get("lessons") or []
     if lessons:
@@ -906,9 +908,10 @@ def add_from(source: str, project: str = "", model: str = "") -> Spark:
 
 def create(
     name: str, goal: str, boundaries: str = "", every="", project: str = "",
-    watch: str = "", model: str = "", title: str = "",
+    watch: str = "", model: str = "", title: str = "", paused: bool = False,
 ) -> Spark:
-    """Make a spark. Its first shift runs as soon as the keeper looks."""
+    """Make a spark. Its first shift runs as soon as the keeper looks;
+    made PAUSED, as soon as it is resumed."""
 
     name = " ".join(str(name or "").split())[:NAME_CHARS]
     goal = str(goal or "").strip()[:GOAL_CHARS]
@@ -935,6 +938,7 @@ def create(
             project=project,
             watch=watch,
             model=_model_name(model),
+            paused=bool(paused),
         )
         _save(spark)
     _changed()

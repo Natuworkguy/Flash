@@ -3257,6 +3257,16 @@ class TestSparkChats:
             "next_run": spark.next_run, "pending": {},
         }]
 
+    def test_a_spark_is_made_paused_from_the_page(self):
+        session = web.Session()
+
+        made = web.command(session, {
+            "name": "spark-create", "arg": "Scout",
+            "goal": "Watch the issues.", "model": "m", "paused": True,
+        })["spark"]
+
+        assert made["paused"] is True and made["name"] == "Scout"
+
     def test_the_roster_sees_a_spark_waiting_and_its_title(self):
         from flash import sparks
 
