@@ -1708,6 +1708,9 @@ body.resizing-viewer iframe { pointer-events: none; }
   max-width: calc(100vw - 32px);
 }
 #toast span { overflow: hidden; text-overflow: ellipsis; }
+/* Its Markdown: code as code, and links that can be clicked while it shows. */
+#toast code { font: 12.5px var(--mono); padding: 1px 5px; border-radius: 5px; background: color-mix(in srgb, var(--invert-text) 16%, transparent); }
+#toast a { color: inherit; text-decoration: underline; text-underline-offset: 2px; pointer-events: auto; }
 
 @keyframes pulse { 50% { opacity: 0.3; } }
 @keyframes shine { from { background-position: 100% 0; } to { background-position: -100% 0; } }
@@ -7677,8 +7680,11 @@ function toast(text) {
   const t = $("#toast");
   clearTimeout(toast.timer);
   t.getAnimations().forEach((a) => a.cancel());
-  t.innerHTML = "<span></span>";
-  t.firstChild.textContent = text;
+  // Markdown, as a reply's is drawn: inline() escapes it first, so a
+  // message from the server cannot put markup of its own on the page.
+  t.innerHTML = `<span>${inline(String(text ?? ""))}</span>`;
+  // One with a link stays up long enough to click it.
+  const linked = !!t.querySelector("a");
   t.style.width = "";
   t.style.opacity = "1";
   const wide = t.offsetWidth;
@@ -7698,7 +7704,7 @@ function toast(text) {
       [{ width: wide + "px", opacity: 1 }, { width: "38px", opacity: 0, transform: "translateX(-50%) scale(0.9)" }],
       { duration: 360, delay: 90, easing: "cubic-bezier(0.32, 0.72, 0, 1)", fill: "forwards" },
     ).finished.then(() => { t.style.opacity = "0"; t.getAnimations().forEach((a) => a.cancel()); }, () => {});
-  }, 2000);
+  }, linked ? 6000 : 2000);
 }
 const showFailure = (error) => toast(error.message || String(error));
 
