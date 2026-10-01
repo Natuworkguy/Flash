@@ -1667,8 +1667,9 @@ EMAIL_TOOLS: list[dict[str, Any]] = [
             "name": "check_inbox",
             "description": (
                 "List the user's newest emails, newest first: who from, "
-                "the subject, the first lines, and each one's uid. Nothing "
-                "is marked read, moved or deleted."
+                "the subject, the first lines, each one's uid, and a link "
+                "that opens it for the user. Nothing is marked read, moved "
+                "or deleted."
             ),
             "parameters": {
                 "type": "object",
@@ -1959,7 +1960,9 @@ def check_inbox(
     tool_result(f"{len(found)} email{plural(len(found))}")
     lines = [
         f"{len(found)} email{plural(len(found))}, newest first. read_email "
-        "with a uid reads one; nothing here was marked read."
+        "with a uid reads one; nothing here was marked read. When you tell "
+        "the user about one, link it, as [its subject](its link), so they "
+        "can open it."
     ]
     for item in found:
         count = item["attachments"]
@@ -1969,6 +1972,7 @@ def check_inbox(
         lines.append(
             f"- uid {item['uid']}{unread} · {item['date']} · "
             f"{item['from']}\n  {subject}{clip}: {item['snippet']}"
+            + (f"\n  link: {item['link']}" if item.get("link") else "")
         )
     return "\n".join(lines)
 
@@ -1993,6 +1997,8 @@ def read_email(uid: Any = "", folder: str = "INBOX") -> str:
     if found["cc"]:
         head.append(f"Cc: {found['cc']}")
     head += [f"Date: {found['date']}", f"Subject: {found['subject']}"]
+    if found.get("link"):
+        head.append(f"Link, to give the user: {found['link']}")
     if found["attachments"]:
         head.append(f"Attachments: {', '.join(found['attachments'])}")
     return "\n".join(head) + f"\n\n{body}"

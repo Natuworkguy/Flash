@@ -28,6 +28,7 @@ from email.utils import getaddresses, make_msgid, parseaddr
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Optional
+from urllib.parse import quote
 
 from .paths import FLASH_DIR
 
@@ -198,6 +199,36 @@ def _account() -> dict:
         "smtp_host": data.get("smtp_host") or smtp_host,
         "smtp_port": int(data.get("smtp_port") or smtp_port),
     }
+
+
+# --- Links ---------------------------------------------------------------
+
+# Gmail opens one message from a link that searches for its Message-ID,
+# in whichever of the browser's Google accounts has this address.
+GMAIL_HOSTS = {"imap.gmail.com"}
+
+
+def link(message_id: str, account: Optional[dict] = None) -> str:
+    """A link that opens the message with MESSAGE_ID, or "" without one.
+
+    Gmail's web inbox, for a Gmail account. Anything else gets a
+    message: link, which Apple Mail opens to that message, as any app
+    that registered for message: links does.
+    """
+
+    found = message_id.strip().strip("<>").strip()
+    if not found:
+        return ""
+    account = account if account is not None else _load()
+    host = str(account.get("imap_host") or servers_for(
+        str(account.get("address") or ""))[0])
+    if host in GMAIL_HOSTS:
+        who = quote(str(account.get("address") or ""), safe="@")
+        return (
+            f"https://mail.google.com/mail/?authuser={who}"
+            f"#search/rfc822msgid%3A{quote(found, safe='')}"
+        )
+    return f"message:%3C{quote(found, safe='@')}%3E"
 
 
 # --- Reading -------------------------------------------------------------
@@ -407,6 +438,7 @@ def inbox(
             "unread": b"\\Seen" not in flags,
             "snippet": " ".join(text.split())[:SNIPPET_CHARS],
             "attachments": len(attached),
+            "link": link(_header(message, "Message-ID"), account),
         })
     found.sort(key=lambda m: int(m["uid"] or 0), reverse=True)
     return found
@@ -442,6 +474,7 @@ def read(uid: str, folder: str = "INBOX") -> dict:
         "subject": _header(message, "Subject"),
         "date": _date(message),
         "message_id": _header(message, "Message-ID"),
+        "link": link(_header(message, "Message-ID"), account),
         "references": _header(message, "References"),
         "reply_to": _header(message, "Reply-To"),
         "unread": b"\\Seen" not in flags,

@@ -396,3 +396,53 @@ def test_the_settings_page_connects_and_disconnects(server):
 
     gone = web.command(session, {"name": "email-forget"})
     assert not gone["email"]["configured"]
+
+
+# --- Links ---------------------------------------------------------------
+
+
+def test_a_gmail_link_opens_that_message_in_that_account():
+    account = {"address": "me@gmail.com", "imap_host": "imap.gmail.com"}
+
+    url = mail.link("<contract-1@example.com>", account)
+
+    assert url == (
+        "https://mail.google.com/mail/?authuser=me@gmail.com"
+        "#search/rfc822msgid%3Acontract-1%40example.com"
+    )
+
+
+def test_other_mail_gets_a_link_for_the_mail_app():
+    account = {"address": "me@icloud.com"}
+
+    assert mail.link("<a+b/c@mx.example>", account) == (
+        "message:%3Ca%2Bb%2Fc@mx.example%3E"
+    )
+
+
+def test_a_message_with_no_id_has_no_link():
+    assert mail.link("", {"address": "me@gmail.com"}) == ""
+
+
+def test_the_inbox_and_a_read_carry_links(server):
+    found = {m["uid"]: m for m in mail.inbox()}
+
+    assert found["9"]["link"].endswith(
+        "rfc822msgid%3Acontract-1%40example.com"
+    )
+    assert mail.read("9")["link"] == found["9"]["link"]
+
+
+def test_the_tools_hand_the_links_on(server):
+    listed = tools.check_inbox()
+    read = tools.read_email("9")
+
+    assert "  link: https://mail.google.com/mail/" in listed
+    assert "[its subject](its link)" in listed
+    assert "Link, to give the user: https://mail.google.com/" in read
+
+
+def test_the_inbox_spark_is_told_to_link_what_it_mentions():
+    inbox = next(t for t in sparks.TEMPLATES if t["name"] == "Inbox")
+
+    assert "[subject](link)" in inbox["goal"]

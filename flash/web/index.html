@@ -2114,6 +2114,8 @@ function inline(text) {
   // Underline has no Markdown of its own: <u>, as GitHub reads it too.
   s = s.replace(/&lt;u&gt;(.+?)&lt;\/u&gt;/g, "<u>$1</u>");
   s = s.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, (_, t, u) => `<a href="${u}" target="_blank" rel="noopener noreferrer">${t}</a>`);
+  // An email's link, for the mail app: message:<id>, the id percent-encoded.
+  s = s.replace(/\[([^\]]+)\]\((message:[A-Za-z0-9%@._+\-=~]+)\)/g, (_, t, u) => `<a href="${u}" class="mail-link">${t}</a>`);
   s = s.replace(/(^|[\s(])(https?:\/\/[^\s<)]+[^\s<).,;:!?])/g, (_, p, u) => `${p}<a href="${u}" target="_blank" rel="noopener noreferrer">${u}</a>`);
   s = s.replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>").replace(/__([^_\n]+)__/g, "<strong>$1</strong>");
   s = s.replace(/(^|[^*\w])\*([^*\n]+)\*(?!\w)/g, "$1<em>$2</em>").replace(/(^|[^_\w])_([^_\n]+)_(?!\w)/g, "$1<em>$2</em>");
