@@ -39,6 +39,7 @@ from typing import Optional
 import ollama
 
 from . import agent as subagents
+from . import cron
 from .dashes import undash
 from .paths import ENV_PATH, FLASH_DIR
 from .sysprompt import get_model_system_prompt
@@ -155,7 +156,7 @@ Your notes from last time, written by you for you:
 Your last report:
 {last}
 
-This shift runs every {every}; the last one was {since}.
+This shift runs {every}; the last one was {since}.
 
 How to work:
 - Do what the goal asks now, with your tools. Do not only plan.
@@ -202,7 +203,7 @@ ROUND_LIMIT_MESSAGE = (
 CHAT_PROMPT = """
 === You are a spark, talking with the user ===
 You are {name} ({handle}){titled}, a spark: an agent that works on one standing
-goal for this user, on a schedule, every {every}. Right now the user is
+goal for this user, on a schedule ({every}). Right now the user is
 talking to you directly, between your shifts.
 
 Your goal:
@@ -274,7 +275,8 @@ CHAT_TOOLS = [
     _tool(
         "set_schedule",
         "Change how often your shifts run, when the user asks.",
-        "every", "How often: 30m, 2h, daily, weekly. At least 15m.",
+        "every", "How often: 30m, 2h, daily, weekly (at least 15m), or set "
+        "times: 9am weekdays, mon 8:30, the 1st at 9am, or a cron line.",
     ),
 ]
 
@@ -352,6 +354,9 @@ class Spark:
     title: str = ""
     boundaries: str = ""
     every: int = DEFAULT_EVERY_MINUTES
+    # Set times instead of every so often: a cron line, "0 9 * * 1-5",
+    # in local time. "" runs it every EVERY minutes.
+    at: str = ""
     colour: str = COLOURS[0]
     created: float = field(default_factory=time.time)
     paused: bool = False
@@ -422,6 +427,7 @@ class Spark:
         data["project"] = found.id if found else ""
         data["project_name"] = found.name if found else ""
         data["unread"] = self.unread
+        data["schedule"] = schedule_words(self)
         return data
 
 
@@ -454,34 +460,95 @@ _WORDS = {
 _EVERY_RE = re.compile(r"^(?:every\s+)?(\d+(?:\.\d+)?)?\s*([a-z]+)$")
 
 
+def _read_every(text) -> Optional[int]:
+    """Minutes from "30m", "2 hours", "daily" or 45; None if TEXT is not
+    a length of time."""
+
+    if isinstance(text, (int, float)) and not isinstance(text, bool):
+        return int(text)
+    words = str(text or "").strip().lower()
+    if not words:
+        return DEFAULT_EVERY_MINUTES
+    if words.isdigit():
+        return int(words)
+    if words in _WORDS or words.removeprefix("every ") in _WORDS:
+        return _WORDS[words.removeprefix("every ")]
+    match = _EVERY_RE.match(words)
+    if not match or match.group(2) not in _UNITS:
+        return None
+    return int(float(match.group(1) or 1) * _UNITS[match.group(2)])
+
+
 def parse_every(text) -> int:
     """Minutes between shifts, from "30m", "2 hours", "daily" or 45."""
 
-    if isinstance(text, (int, float)) and not isinstance(text, bool):
-        minutes = int(text)
-    else:
-        words = str(text or "").strip().lower()
-        if not words:
-            return DEFAULT_EVERY_MINUTES
-        if words.isdigit():
-            minutes = int(words)
-        elif words in _WORDS or words.removeprefix("every ") in _WORDS:
-            minutes = _WORDS[words.removeprefix("every ")]
-        else:
-            match = _EVERY_RE.match(words)
-            if not match or match.group(2) not in _UNITS:
-                raise SparkError(
-                    f"Could not read {text!r} as a schedule. Try 30m, 2h, "
-                    "daily, or weekly."
-                )
-            count = float(match.group(1) or 1)
-            minutes = int(count * _UNITS[match.group(2)])
-
+    minutes = _read_every(text)
+    if minutes is None:
+        raise SparkError(
+            f"Could not read {text!r} as a schedule. Try 30m, 2h, "
+            "daily, or weekly."
+        )
     if minutes < MIN_EVERY_MINUTES:
         raise SparkError(
             f"A spark runs at most every {MIN_EVERY_MINUTES} minutes."
         )
     return min(minutes, MAX_EVERY_MINUTES)
+
+
+def parse_schedule(text) -> tuple[int, str]:
+    """(minutes, at) for a spark's schedule, from every so often ("30m",
+    "daily") or set times ("9am weekdays", "mon 8:30", a cron line). AT
+    is "" for every so often; for set times, MINUTES is how often they
+    come round at their busiest."""
+
+    if _read_every(text) is not None:
+        return parse_every(text), ""
+    try:
+        expr = cron.parse(text)
+    except cron.CronError as exc:
+        raise SparkError(
+            f"Could not read {text!r} as a schedule ({exc}). Try 30m, 2h, "
+            "daily, or set times: 9am weekdays, mon 8:30, or a cron line."
+        ) from None
+    gap = cron.shortest_gap(expr, time.time()) / 60
+    if gap < MIN_EVERY_MINUTES:
+        raise SparkError(
+            f"A spark runs at most every {MIN_EVERY_MINUTES} minutes."
+        )
+    return int(min(gap, MAX_EVERY_MINUTES)), expr
+
+
+def schedule_words(spark) -> str:
+    """How SPARK's schedule reads: "every 2 hours", "at 9am on weekdays".
+    SPARK is a spark, or a template's dict."""
+
+    at = spark.get("at", "") if isinstance(spark, dict) else spark.at
+    every = spark["every"] if isinstance(spark, dict) else spark.every
+    return cron.words(at) if at else f"every {every_words(every)}"
+
+
+def next_shift(spark: Spark, after: float) -> float:
+    """When SPARK's next shift is due, its last having ended at AFTER."""
+
+    if spark.at:
+        try:
+            when = cron.next_after(spark.at, after)
+        except cron.CronError:
+            when = None
+        if when is not None:
+            return when
+    return after + spark.every * 60
+
+
+def _schedule(spark: Spark, every: int, at: str) -> None:
+    """Put SPARK on a new schedule, its next shift moved to match."""
+
+    spark.every, spark.at = every, at
+    if at:
+        # Set times wait for the next of them, not for one long gone.
+        spark.next_run = next_shift(spark, time.time())
+    elif spark.last_run:
+        spark.next_run = next_shift(spark, spark.last_run)
 
 
 def every_words(minutes: int) -> str:
@@ -860,6 +927,8 @@ def share_code(key: str) -> str:
         "boundaries": spark.boundaries, "every": spark.every,
         "lessons": spark.lessons,
     }
+    if spark.at:
+        data["at"] = spark.at
     packed = base64.urlsafe_b64encode(
         json.dumps(data, ensure_ascii=False).encode("utf-8")
     ).decode("ascii")
@@ -884,7 +953,7 @@ def read_code(code: str) -> dict:
     if not isinstance(data, dict) or not str(data.get("goal") or "").strip():
         raise SparkError("That code holds no spark.")
     lessons = data.get("lessons") or []
-    return {
+    read = {
         "name": " ".join(str(data.get("name") or "Spark").split())[
             :NAME_CHARS],
         "title": _title(data.get("title")),
@@ -892,11 +961,14 @@ def read_code(code: str) -> dict:
         "boundaries": str(data.get("boundaries") or "").strip()[
             :BOUNDARY_CHARS],
         "every": parse_every(data.get("every") or DEFAULT_EVERY_MINUTES),
+        "at": parse_schedule(data["at"])[1] if data.get("at") else "",
         "lessons": [
             " ".join(str(lesson).split())[:LESSON_CHARS]
             for lesson in lessons[:MAX_LESSONS] if str(lesson).strip()
         ] if isinstance(lessons, list) else [],
     }
+    read["schedule"] = schedule_words(read)
+    return read
 
 
 def add_from(
@@ -916,7 +988,8 @@ def add_from(
         name = f"{data['name'][:NAME_CHARS - 3]} {number}"
         number += 1
     spark = create(
-        name, data["goal"], data.get("boundaries", ""), data["every"],
+        name, data["goal"], data.get("boundaries", ""),
+        data.get("at") or data["every"],
         project, model=model, title=data.get("title", ""), paused=paused,
     )
     lessons = data.get("lessons") or []
@@ -938,7 +1011,7 @@ def create(
         raise SparkError("A spark needs a name.")
     if not goal:
         raise SparkError("A spark needs a goal.")
-    minutes = parse_every(every)
+    minutes, at = parse_schedule(every)
     project = resolve_project(project)
     watch = _watch_folder(watch)
 
@@ -953,12 +1026,16 @@ def create(
             goal=goal,
             boundaries=str(boundaries or "").strip()[:BOUNDARY_CHARS],
             every=minutes,
+            at=at,
             colour=COLOURS[len(taken) % len(COLOURS)],
             project=project,
             watch=watch,
             model=_model_name(model),
             paused=bool(paused),
         )
+        if at:
+            # Its first shift is at its first set time, not now.
+            spark.next_run = next_shift(spark, time.time())
         _save(spark)
     _changed()
     wake()
@@ -979,9 +1056,7 @@ def update(key: str, **changes) -> Spark:
                 str(changes["boundaries"] or "").strip()[:BOUNDARY_CHARS]
             )
         if "every" in changes:
-            spark.every = parse_every(changes["every"])
-            if spark.last_run:
-                spark.next_run = spark.last_run + spark.every * 60
+            _schedule(spark, *parse_schedule(changes["every"]))
         if "project" in changes:
             spark.project = resolve_project(changes["project"])
         if "watch" in changes:
@@ -1164,7 +1239,7 @@ def _prompt(spark: Spark, host: str, model: str, date_prompt: str) -> str:
         lessons=lessons or "(nothing yet)",
         notes=spark.notes or "(none yet)",
         last=last or "(none yet)",
-        every=every_words(spark.every),
+        every=schedule_words(spark),
         since=_since(spark.last_run),
         nothing_new=NOTHING_NEW,
     )
@@ -1731,7 +1806,7 @@ def shift(spark_id: str, client=None) -> Optional[Report]:
             spark.status = FAILED if report.failed else IDLE
             spark.runs += 1
             spark.last_run = report.at
-            spark.next_run = report.at + spark.every * 60
+            spark.next_run = next_shift(spark, report.at)
         _save(spark)
     _changed()
     return report
@@ -1772,7 +1847,7 @@ def stop(key: str) -> Spark:
                 if report.approval:
                     report.read = True
             spark.last_run = time.time()
-            spark.next_run = spark.last_run + spark.every * 60
+            spark.next_run = next_shift(spark, spark.last_run)
         elif spark.status == WORKING:
             spark.stop_asked = True
         else:
@@ -1897,7 +1972,7 @@ def chat_prompt(
         name=spark.name,
         handle=spark.handle,
         titled=_titled(spark),
-        every=every_words(spark.every),
+        every=schedule_words(spark),
         goal=spark.goal,
         boundaries=spark.boundaries or "(none beyond your usual care)",
         lessons=lessons or "(nothing yet)",
@@ -1980,12 +2055,13 @@ class ChatKit:
 
     def _set_schedule(self, args: dict) -> str:
         try:
-            every = parse_every(args.get("every", ""))
+            every, at = parse_schedule(args.get("every", ""))
         except SparkError as exc:
             return f"Error: {exc}"
-        self.changes["every"] = every
-        tool_line(f"SetSchedule(every {every_words(every)})")
-        return f"(now every {every_words(every)})"
+        self.changes["every"] = (every, at)
+        words = schedule_words({"every": every, "at": at})
+        tool_line(f"SetSchedule({words})")
+        return f"(now {words})"
 
     def apply(self, add: Optional[Message] = None) -> Optional[Spark]:
         """Write what changed to the spark, with ADD put in its chat."""
@@ -2006,9 +2082,7 @@ class ChatKit:
             if "goal" in self.changes:
                 spark.goal = self.changes["goal"]
             if "every" in self.changes:
-                spark.every = self.changes["every"]
-                if spark.last_run:
-                    spark.next_run = spark.last_run + spark.every * 60
+                _schedule(spark, *self.changes["every"])
             _save(spark)
         _changed()
         return spark

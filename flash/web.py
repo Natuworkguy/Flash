@@ -2734,6 +2734,17 @@ def _spark_command(name: str, arg: str, body: dict) -> dict:
             )
         elif name == "spark-templates":
             return {"templates": sparks.TEMPLATES}
+        elif name == "spark-schedule":
+            # A schedule as the form's box reads it, before it is saved.
+            every, at = sparks.parse_schedule(arg)
+            schedule = {"every": every, "at": at}
+            return {
+                **schedule, "schedule": sparks.schedule_words(schedule),
+                "next": sparks.next_shift(
+                    sparks.Spark(id="", name="", goal="", **schedule),
+                    time.time(),
+                ),
+            }
         elif name in ("spark-pause", "spark-resume"):
             spark = sparks.set_paused(arg, name == "spark-pause")
         elif name == "spark-read":

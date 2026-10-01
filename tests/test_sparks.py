@@ -257,6 +257,88 @@ def test_changing_the_schedule_moves_the_next_shift(model):
     assert changed.next_run == pytest.approx(changed.last_run + 86400)
 
 
+# --- Set times ----------------------------------------------------------
+
+
+def test_a_spark_at_set_times_waits_for_the_first_of_them():
+    before = time.time()
+    made = sparks.create("Brief", "The morning news.", every="9am weekdays")
+
+    assert made.at == "0 9 * * 1-5"
+    assert made.every == 1440
+    assert made.next_run == sparks.cron.next_after(made.at, before)
+    assert sparks.schedule_words(made) == "at 9am on weekdays"
+    assert made.to_dict()["schedule"] == "at 9am on weekdays"
+    assert sparks.due(now=made.next_run - 60) == []
+    assert [s.id for s in sparks.due(now=made.next_run)] == [made.id]
+
+
+def test_every_so_often_still_reads_as_it_did():
+    made = sparks.create("Scout", "Look around.", every="2h")
+
+    assert (made.every, made.at) == (120, "")
+    assert sparks.schedule_words(made) == "every 2 hours"
+
+
+def test_set_times_too_close_together_are_refused():
+    with pytest.raises(sparks.SparkError, match="at most every 15"):
+        sparks.create("Busy", "Goal.", every="*/5 * * * *")
+
+
+def test_set_times_that_cannot_be_read_say_so():
+    with pytest.raises(sparks.SparkError, match="set times"):
+        sparks.create("Odd", "Goal.", every="whenever it rains")
+
+
+def test_after_a_shift_the_next_is_at_the_next_set_time(model):
+    made = sparks.create("Brief", "The morning news.", every="noon daily")
+
+    report = sparks.shift(made.id, client=FakeClient([_reply("News.")]))
+
+    kept = sparks.find(made.id)
+    assert kept.next_run == sparks.cron.next_after("0 12 * * *", report.at)
+    assert "This shift runs at noon every day" in sparks._prompt(
+        kept, "", "m", "",
+    )
+
+
+def test_moving_to_set_times_and_back(model):
+    made = sparks.create("Scout", "Watch the issues.")
+    sparks.shift(made.id, client=FakeClient([_reply("Found one.")]))
+
+    timed = sparks.update(made.id, every="mon 8:30")
+    assert timed.at == "30 8 * * 1"
+    assert timed.next_run == pytest.approx(
+        sparks.cron.next_after(timed.at, time.time()), abs=60,
+    )
+
+    back = sparks.update(made.id, every="2h")
+    assert back.at == ""
+    assert back.next_run == pytest.approx(back.last_run + 7200)
+
+
+def test_a_spark_sets_its_own_times_in_a_chat(model):
+    made = sparks.create("Scout", "Watch the issues.")
+    kit = sparks.ChatKit(made)
+
+    said = kit.tools["set_schedule"]({"every": "weekdays at 9am"})
+    kit.apply()
+
+    assert said == "(now at 9am on weekdays)"
+    assert sparks.find(made.id).at == "0 9 * * 1-5"
+
+
+def test_set_times_travel_in_a_share_code():
+    made = sparks.create("Brief", "The morning news.", every="9am weekdays")
+
+    seen = sparks.read_code(sparks.share_code(made.id))
+    copy = sparks.add_from(sparks.share_code(made.id))
+
+    assert seen["at"] == "0 9 * * 1-5"
+    assert seen["schedule"] == "at 9am on weekdays"
+    assert copy.at == "0 9 * * 1-5"
+
+
 def test_a_spark_left_working_by_a_quit_flash_is_let_go(monkeypatch):
     made = sparks.create("Scout", "Watch the issues.")
     sparks._edit(made.id, lambda s: setattr(s, "status", sparks.WORKING))
@@ -1081,7 +1163,8 @@ def test_a_shared_spark_is_added_as_a_copy():
     assert code.startswith(sparks.SHARE_PREFIX)
     assert seen == {
         "name": "Scout", "title": "", "goal": "Watch the issues.",
-        "boundaries": "Only read.", "every": 120, "lessons": ["Skip docs."],
+        "boundaries": "Only read.", "every": 120, "at": "",
+        "lessons": ["Skip docs."], "schedule": "every 2 hours",
     }
     assert copy.name == "Scout 2" and copy.id != made.id
     assert sparks.find(copy.id).lessons == ["Skip docs."]
@@ -1660,3 +1743,15 @@ def test_a_spark_takes_on_a_job_when_asked_in_a_chat(model):
     assert kept.asked
     names = {t["function"]["name"] for t in client.calls[0]["tools"]}
     assert "take_on" in names
+
+
+def test_the_page_reads_set_times_back_before_saving():
+    session = web.Session()
+
+    read = web.command(session, {"name": "spark-schedule", "arg": "mon 8:30"})
+
+    assert read["at"] == "30 8 * * 1"
+    assert read["schedule"] == "at 8:30am on Mondays"
+    assert read["next"] == sparks.cron.next_after("30 8 * * 1", time.time())
+    with pytest.raises(sparks.SparkError):
+        web.command(session, {"name": "spark-schedule", "arg": "*/5 * * * *"})
