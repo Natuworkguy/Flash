@@ -1218,6 +1218,54 @@ def test_the_round_limit_is_read_from_the_settings_file(monkeypatch):
     assert sparks.shift_rounds() == 30
 
 
+def test_with_no_limit_a_shift_calls_tools_until_it_is_done():
+    sparks.set_shift_rounds(3)
+    assert sparks.set_shift_rounds("unlimited") is None
+    made = sparks.create("Scout", "Watch the issues.")
+    client = FakeClient(
+        [_reply("", ("keep_notes", {"notes": "n"}))] * 25
+        + [_reply("Went through all of it.")]
+    )
+
+    sparks.shift(made.id, client=client)
+
+    # Every round it asked for, and no last word forced on it.
+    assert len(client.calls) == 26
+    assert all(call["tools"] is not None for call in client.calls)
+    assert sparks.find(made.id).reports[-1].text == "Went through all of it."
+
+
+def test_the_limit_comes_back_at_the_number_it_had():
+    sparks.set_shift_rounds(30)
+    sparks.set_shift_rounds_unlimited(True)
+    assert sparks.shift_rounds() is None
+    assert sparks.shift_rounds_number() == 30
+
+    assert sparks.set_shift_rounds_unlimited(False) == 30
+    # Setting a number puts the limit back on too.
+    sparks.set_shift_rounds("off")
+    assert sparks.set_shift_rounds(8) == 8 and sparks.shift_rounds() == 8
+
+
+def test_a_shift_with_no_limit_still_stops_when_asked():
+    sparks.set_shift_rounds("unlimited")
+    made = sparks.create("Scout", "Watch the issues.")
+
+    class Endless:
+        calls = 0
+
+        def chat(self, **kwargs):
+            Endless.calls += 1
+            if Endless.calls == 5:
+                sparks.stop(made.id)
+            return _reply("", ("keep_notes", {"notes": "n"}))
+
+    report = sparks.shift(made.id, client=Endless())
+
+    assert report.text.startswith("Stopped")
+    assert Endless.calls == 5
+
+
 @pytest.mark.parametrize("value", ["0", "101", "lots", ""])
 def test_the_round_limit_must_be_a_sensible_number(value):
     with pytest.raises(sparks.SparkError):

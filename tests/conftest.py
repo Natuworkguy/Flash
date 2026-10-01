@@ -82,6 +82,7 @@ def fresh_shift_rounds(monkeypatch):
     process's environment too."""
 
     monkeypatch.delenv("SPARK_SHIFT_ROUNDS", raising=False)
+    monkeypatch.delenv("SPARK_SHIFT_UNLIMITED", raising=False)
 
 
 @pytest.fixture(autouse=True)

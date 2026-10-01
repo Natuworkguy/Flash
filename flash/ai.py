@@ -2064,10 +2064,16 @@ def _sparks_command(arg: str) -> None:
                 sparks.set_shift_rounds(rest)
             rounds = sparks.shift_rounds()
             console.print(Text(
+                "A shift has no limit on tools: it works until it writes "
+                "its report, or you /sparks stop it. "
+                if rounds is None else
                 f"A shift gets {rounds} round{'' if rounds == 1 else 's'} of "
-                "tools, then writes its report from what it has. "
+                "tools, then writes its report from what it has. ",
+                style=DIM,
+            ).append(
                 f"/sparks rounds <{sparks.SHIFT_ROUNDS_MIN}-"
-                f"{sparks.SHIFT_ROUNDS_MAX}> changes it.", style=DIM,
+                f"{sparks.SHIFT_ROUNDS_MAX}|unlimited> changes it.",
+                style=DIM,
             ))
             return
         if action in ("chat", "talk", "ask") and key:
@@ -2239,7 +2245,7 @@ def _sparks_command(arg: str) -> None:
             "| approve|deny|stop|share <name> | add <code|template> [paused] "
             "| templates | goal <name> <text> | watch <name> <folder|none> "
             "| model <name> [model] | title <name> <title|none> "
-            "| rounds [number] "
+            "| rounds [number|unlimited] "
             "| always on|off]"
         )
         return

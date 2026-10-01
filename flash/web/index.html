@@ -918,6 +918,7 @@ body.page-projects #dock, body.page-settings #dock, body.page-tool #dock { displ
 .setting-row { display: flex; align-items: center; justify-content: space-between; gap: 20px; max-width: 620px; padding: 14px 16px; border: 1px solid var(--border); border-radius: 14px; background: var(--surface); text-align: left; width: 100%; }
 /* Two in a row under one heading: apart, not touching. */
 .setting-row + .setting-row { margin-top: 10px; }
+.setting-row[hidden] { display: none; }
 .setting-row .what b { display: block; font-size: 14.5px; font-weight: 500; color: var(--text); margin-bottom: 3px; }
 .setting-row .what span { font-size: 13px; color: var(--text-3); line-height: 1.45; }
 .switch { position: relative; flex: none; width: 38px; height: 22px; border-radius: 999px; background: color-mix(in srgb, var(--text) 18%, transparent); transition: background 0.2s; }
@@ -3926,10 +3927,14 @@ function drawGeneral(body) {
   body.appendChild(always);
   fillAlwaysRow(always);
 
-  // How far a shift may go before it writes its report.
+  // How far a shift may go before it writes its report, if at all.
+  const limit = el("button", "setting-row spark-limit-row", `<span class="what"><b>Limit tool rounds per shift</b><span></span></span><span class="switch" aria-hidden="true"></span>`);
+  limit.type = "button";
+  limit.setAttribute("role", "switch");
+  body.appendChild(limit);
   const rounds = el("div", "setting-row static spark-rounds-row", `<span class="what"><b>Tool rounds per shift</b><span>How many rounds of tools a spark gets each shift before it writes its report from what it has. More lets it finish bigger jobs in one go; fewer keeps a model that goes round in circles from running on. Each round can use several tools.</span></span><span class="side"><span class="stepper"><button type="button" class="icon-btn" data-less aria-label="Fewer">−</button><input type="number" inputmode="numeric" aria-label="Tool rounds per shift"><button type="button" class="icon-btn" data-more aria-label="More">+</button></span></span>`);
   body.appendChild(rounds);
-  fillRoundsRow(rounds);
+  fillRoundsRow(rounds, limit);
 
   body.insertAdjacentHTML("beforeend", `<h2 class="settings-section settings-gap">Voice models</h2><p class="settings-sub">What voice mode listens and speaks with. Both run on this computer, so pick lighter ones for a weaker machine.</p><div class="voice-models"></div>`);
   drawVoiceModels(body.querySelector(".voice-models"));
@@ -4447,10 +4452,29 @@ const drawSparksPage = () => toolPage("Sparks", drawSparks);
 
 // The box in Settings for how many rounds of tools a shift gets: typed,
 // or stepped, and saved a moment after the last change.
-async function fillRoundsRow(row) {
+async function fillRoundsRow(row, limit) {
   const field = row.querySelector("input");
   let r;
   try { r = await command("spark-rounds", "", null); } catch (error) { showFailure(error); return; }
+  // On, the number below is the limit; off, a shift calls tools until it
+  // is done or stopped, and the number waits for the limit to come back.
+  const showLimit = (unlimited) => {
+    limit.setAttribute("aria-checked", !unlimited);
+    limit.querySelector(".what span").textContent = unlimited
+      ? "Off: a shift calls as many tools as it needs, until it writes its report or you stop it. A model that goes round in circles runs on until you do, ahead of your other sparks."
+      : "On: each shift gets the rounds below, then writes its report from what it has.";
+    row.hidden = unlimited;
+  };
+  showLimit(r.unlimited);
+  limit.onclick = async () => {
+    const unlimited = limit.getAttribute("aria-checked") === "true";
+    showLimit(unlimited);
+    try {
+      r = await command("spark-rounds", unlimited ? "unlimited" : "limited", null);
+      showLimit(r.unlimited);
+      toast(r.unlimited ? "Shifts have no limit on tools now" : `Each shift gets ${r.rounds} round${r.rounds === 1 ? "" : "s"} of tools`);
+    } catch (error) { showLimit(!unlimited); showFailure(error); }
+  };
   field.min = r.least;
   field.max = r.most;
   field.value = r.rounds;
@@ -4463,7 +4487,7 @@ async function fillRoundsRow(row) {
       const want = Math.max(r.least, Math.min(r.most, Math.round(Number(field.value) || saved)));
       field.value = want;
       if (want === saved) return;
-      try { saved = (await command("spark-rounds", String(want), null)).rounds; toast(`Each shift gets ${saved} round${saved === 1 ? "" : "s"} of tools`); }
+      try { r = await command("spark-rounds", String(want), null); saved = r.rounds; showLimit(r.unlimited); toast(`Each shift gets ${saved} round${saved === 1 ? "" : "s"} of tools`); }
       catch (error) { field.value = saved; showFailure(error); }
     }, 500);
   };

@@ -3693,6 +3693,11 @@ def test_the_page_reads_and_sets_the_rounds_a_shift_gets():
     with pytest.raises(ValueError):
         web.command(session, {"name": "spark-rounds", "arg": "500"})
 
+    off = web.command(session, {"name": "spark-rounds", "arg": "unlimited"})
+    back = web.command(session, {"name": "spark-rounds", "arg": "limited"})
+    assert off["unlimited"] is True and off["rounds"] == 20
+    assert back["unlimited"] is False and back["rounds"] == 20
+
 
 # --- Screen recordings ---------------------------------------------------
 
