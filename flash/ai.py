@@ -1889,7 +1889,10 @@ def _new_spark() -> None:
     if not name or not goal:
         console.print(Text("  No spark made.", style=DIM))
         return
-    every = _ask_line("How often? (30m, 2h, daily; Enter for hourly)")
+    every = _ask_line(
+        "How often? (30m, 2h, daily, or set times like 9am weekdays; "
+        "Enter for hourly)"
+    )
     boundaries = _ask_line("Anything it must never do? (Enter for none)")
     from . import workspace
 
@@ -1918,8 +1921,8 @@ def _new_spark() -> None:
     line.append(
         f" {spark.handle} is paused: /sparks resume {_spark_key(spark)} "
         "starts it." if spark.paused else
-        f" {spark.handle} is on it, every "
-        f"{sparks.every_words(spark.every)}.", style=DIM,
+        f" {spark.handle} is on it, {sparks.schedule_words(spark)}.",
+        style=DIM,
     )
     console.print(line)
 
@@ -1951,7 +1954,7 @@ def _show_spark(spark: "sparks.Spark") -> None:
         head.append(f"  {spark.title}", style=spark.colour)
     found = sparks.project_of(spark)
     head.append(f"  {spark.handle} · on {sparks.model_of(spark) or 'no model'}"
-                f" · every {sparks.every_words(spark.every)}"
+                f" · {sparks.schedule_words(spark)}"
                 f"{f' · in {found.name}' if found else ''}"
                 f" · {_spark_state(spark)}"
                 f" · {spark.runs} shift{'' if spark.runs == 1 else 's'}\n",
@@ -2069,7 +2072,7 @@ def _chat_with_spark(key: str, first: str) -> None:
 
 def _sparks_command(arg: str) -> None:
     """/sparks and its actions: new, run, pause, resume, teach, every,
-    remove, or a spark's name to read its reports."""
+    at, remove, or a spark's name to read its reports."""
 
     action, _, rest = arg.partition(" ")
     action = action.lower()
@@ -2170,8 +2173,8 @@ def _sparks_command(arg: str) -> None:
                 model=Config.model or "", paused=paused,
             )
             console.print(Text(
-                f"Added {spark.name} ({spark.handle}), every "
-                f"{sparks.every_words(spark.every)}, on {spark.model}"
+                f"Added {spark.name} ({spark.handle}), "
+                f"{sparks.schedule_words(spark)}, on {spark.model}"
                 f"{', paused' if spark.paused else ''}. "
                 f"/sparks model {_spark_key(spark)} to give it another"
                 f"{', /sparks resume to start it' if spark.paused else ''}.",
@@ -2183,8 +2186,8 @@ def _sparks_command(arg: str) -> None:
             for template in sparks.TEMPLATES:
                 body.append(f"  {template['name']:<18}", style=ACCENT)
                 body.append(
-                    f"{template['blurb']}, every "
-                    f"{sparks.every_words(template['every'])}\n", style=DIM,
+                    f"{template['blurb']}, "
+                    f"{sparks.schedule_words(template)}\n", style=DIM,
                 )
             body.append(
                 "\n  /sparks add <template> makes one, to change with "
@@ -2237,11 +2240,12 @@ def _sparks_command(arg: str) -> None:
                 f"{spark.name} has no project now.", style=DIM,
             ))
             return
-        if action == "every" and key and extra:
+        if action in ("every", "at") and key and extra:
             spark = sparks.update(key, every=extra)
+            nxt = time.strftime("%a %H:%M", time.localtime(spark.next_run))
             console.print(Text(
-                f"{spark.name} now works every "
-                f"{sparks.every_words(spark.every)}.", style=DIM,
+                f"{spark.name} now works {sparks.schedule_words(spark)}"
+                + (f": next on {nxt}." if spark.at else "."), style=DIM,
             ))
             return
         if action in ("remove", "rm", "delete") and key:
@@ -2266,7 +2270,8 @@ def _sparks_command(arg: str) -> None:
             "Usage: /sparks [new | <name> | chat <name> [message] "
             "| run|pause|resume|remove <name> | teach <name> <lesson> "
             "| like <name> | dislike <name> [why] "
-            "| every <name> <30m|2h|daily> | project <name> <project|none> "
+            "| every <name> <30m|2h|daily> | at <name> <9am weekdays|cron> "
+            "| project <name> <project|none> "
             "| approve|deny|stop|share <name> | add <code|template> [paused] "
             "| templates | goal <name> <text> | watch <name> <folder|none> "
             "| model <name> [model] | title <name> <title|none> "
