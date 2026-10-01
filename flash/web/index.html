@@ -2103,6 +2103,13 @@ function savePref(key, value) { try { localStorage.setItem("flash-" + key, value
 
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
+// Bold, italics and strike-through, in text already escaped.
+function emphasis(s) {
+  s = s.replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>").replace(/__([^_\n]+)__/g, "<strong>$1</strong>");
+  s = s.replace(/(^|[^*\w])\*([^*\n]+)\*(?!\w)/g, "$1<em>$2</em>").replace(/(^|[^_\w])_([^_\n]+)_(?!\w)/g, "$1<em>$2</em>");
+  return s.replace(/~~([^~\n]+)~~/g, "<del>$1</del>");
+}
+
 function inline(text) {
   const codes = [];
   const kept = [];
@@ -2113,13 +2120,19 @@ function inline(text) {
   s = esc(s);
   // Underline has no Markdown of its own: <u>, as GitHub reads it too.
   s = s.replace(/&lt;u&gt;(.+?)&lt;\/u&gt;/g, "<u>$1</u>");
-  s = s.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, (_, t, u) => `<a href="${u}" target="_blank" rel="noopener noreferrer">${t}</a>`);
+  // Links are set aside as they are made, so emphasis further down never
+  // reaches into one: an underscore in an address is not italics.
+  const links = [];
+  const link = (html) => { links.push(html); return `\u0002${links.length - 1}\u0002`; };
+  // Link text may hold brackets of its own, one deep, as an email's
+  // subject often does: [[owner/repo] Run failed](url).
+  const label = String.raw`((?:[^\[\]\n]|\[[^\[\]\n]*\])+)`;
+  s = s.replace(new RegExp(String.raw`\[${label}\]\((https?:\/\/[^\s)]+)\)`, "g"), (_, t, u) => link(`<a href="${u}" target="_blank" rel="noopener noreferrer">${emphasis(t)}</a>`));
   // An email's link, for the mail app: message:<id>, the id percent-encoded.
-  s = s.replace(/\[([^\]]+)\]\((message:[A-Za-z0-9%@._+\-=~]+)\)/g, (_, t, u) => `<a href="${u}" class="mail-link">${t}</a>`);
-  s = s.replace(/(^|[\s(])(https?:\/\/[^\s<)]+[^\s<).,;:!?])/g, (_, p, u) => `${p}<a href="${u}" target="_blank" rel="noopener noreferrer">${u}</a>`);
-  s = s.replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>").replace(/__([^_\n]+)__/g, "<strong>$1</strong>");
-  s = s.replace(/(^|[^*\w])\*([^*\n]+)\*(?!\w)/g, "$1<em>$2</em>").replace(/(^|[^_\w])_([^_\n]+)_(?!\w)/g, "$1<em>$2</em>");
-  s = s.replace(/~~([^~\n]+)~~/g, "<del>$1</del>");
+  s = s.replace(new RegExp(String.raw`\[${label}\]\((message:[A-Za-z0-9%@._+\-=~]+)\)`, "g"), (_, t, u) => link(`<a href="${u}" class="mail-link">${emphasis(t)}</a>`));
+  s = s.replace(/(^|[\s(])(https?:\/\/[^\s<)]+[^\s<).,;:!?])/g, (_, p, u) => `${p}${link(`<a href="${u}" target="_blank" rel="noopener noreferrer">${u}</a>`)}`);
+  s = emphasis(s);
+  s = s.replace(/\u0002(\d+)\u0002/g, (_, i) => links[+i]);
   s = s.replace(/\u0000(\d+)\u0000/g, (_, i) => `<code>${esc(codes[+i])}</code>`);
   return s.replace(/\u0001(\d+)\u0001/g, (_, i) => esc(kept[+i]));
 }
