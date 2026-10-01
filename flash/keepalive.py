@@ -21,6 +21,7 @@ import os
 import shutil
 import subprocess  # nosec B404
 import sys
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -370,12 +371,108 @@ def status() -> dict:
 def _other(beat: Optional[dict]) -> str:
     if not beat or beat.get("pid") == os.getpid():
         return ""
-    ours = sparks.code_identity()
     if not beat.get("code"):
         # From before keepers said which Flash they are: older, then.
         return "an older Flash"
-    if beat["code"] != ours["code"]:
+    if beat["code"] != sparks.code_identity()["code"]:
         return f"another Flash, at {beat['code']}"
-    if beat.get("stamp") != ours["stamp"]:
+    # This Flash's code, but is it as it is now? Measured against the
+    # disk, not this process, which may be the one behind.
+    if beat.get("stamp") != sparks.disk_stamp():
         return "this Flash as it was before its last update"
     return ""
+
+
+# How long a takeover waits for the keeper it replaced to go, and for
+# this Flash to take its place.
+TAKEOVER_SECONDS = 15.0
+TAKEOVER_STEP = 0.25
+
+
+def _command_line(pid: int) -> str:
+    """How process PID was started, or "" if that cannot be read."""
+
+    if os.name == "nt":
+        found = _run([
+            "powershell", "-NoProfile", "-Command",
+            f"(Get-CimInstance Win32_Process -Filter 'ProcessId={pid}')"
+            ".CommandLine",
+        ])
+    else:
+        found = _run(["ps", "-o", "command=", "-p", str(pid)])
+    return found.stdout.strip() if found.returncode == 0 else ""
+
+
+def _headless_keeper(pid: int) -> bool:
+    """Whether PID is a `flash --sparks` keeper: nothing open on screen,
+    so stopping it loses nobody's work but a shift's."""
+
+    line = _command_line(pid)
+    return "--sparks" in line and ("flash" in line or "run.py" in line)
+
+
+def _stop_process(pid: int) -> None:
+    if os.name == "nt":
+        _run(["taskkill", "/PID", str(pid), "/F"])
+    else:
+        import signal
+
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except OSError:
+            pass
+
+
+def _wait_for(done, seconds: float) -> bool:
+    until = time.monotonic() + seconds
+    while time.monotonic() < until:
+        if done():
+            return True
+        time.sleep(TAKEOVER_STEP)
+    return done()
+
+
+def take_over() -> dict:
+    """Have this Flash run the sparks, in place of another that does.
+
+    Always on is set up again from this Flash, which replaces the keeper
+    the system started. A keeper the system did not start, a stray
+    `flash --sparks`, is stopped. A Flash open on someone's screen is
+    not: that is theirs to close, and a KeepAliveError says so. Waits
+    for the change, and returns status() once it shows.
+    """
+
+    beat = sparks.keeper()
+    if not _other(beat):
+        return status()
+    pid = int(beat.get("pid") or 0)
+    headless = beat.get("always") or _headless_keeper(pid)
+    if not headless:
+        raise KeepAliveError(
+            f"Your sparks are being run by a Flash that is open, in "
+            f"process {pid}: {_other(beat)}. Close it, and this one takes "
+            "over."
+        )
+    if installed():
+        turn_off()
+    turn_on()
+    replaced = _wait_for(lambda: sparks.keeper() is None or int(
+        (sparks.keeper() or {}).get("pid") or 0
+    ) != pid, TAKEOVER_SECONDS / 2)
+    if not replaced and sparks.alive(pid) and _headless_keeper(pid):
+        # Not the system's to stop: started by hand, or left over from
+        # an older Flash's always on.
+        _stop_process(pid)
+
+    def ours() -> bool:
+        holder = sparks.keeper()
+        return holder is not None and not _other(holder)
+
+    if not _wait_for(ours, TAKEOVER_SECONDS) and _other(sparks.keeper()):
+        still = _other(sparks.keeper())
+        raise KeepAliveError(
+            f"{still[:1].upper()}{still[1:]} is still running your sparks. "
+            "Quitting it, or restarting this computer, lets this one take "
+            "over."
+        )
+    return status()

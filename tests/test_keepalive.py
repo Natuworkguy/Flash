@@ -280,7 +280,96 @@ class TestAnotherFlash:
         })
 
         assert said.startswith("Your sparks are being run by an older Flash")
-        assert "/sparks always on" in said
+        assert "/sparks takeover" in said
+
+
+class TestTakeOver:
+    OTHER = {"pid": 4242, "always": False, "code": "/opt/old/flash",
+             "stamp": "x"}
+
+    @pytest.fixture(autouse=True)
+    def quick(self, monkeypatch):
+        monkeypatch.setattr(keepalive, "TAKEOVER_SECONDS", 0.2)
+        monkeypatch.setattr(keepalive, "TAKEOVER_STEP", 0.01)
+        self.done = []
+        monkeypatch.setattr(keepalive, "installed", lambda: True)
+        monkeypatch.setattr(
+            keepalive, "turn_off", lambda: self.done.append("off"),
+        )
+        monkeypatch.setattr(
+            keepalive, "turn_on", lambda: self.done.append("on") or "x",
+        )
+
+    def test_nothing_to_do_when_this_flash_runs_them(self, monkeypatch):
+        monkeypatch.setattr(sparks, "keeper", lambda: None)
+
+        assert keepalive.take_over()["other"] == ""
+        assert self.done == []
+
+    def test_an_open_flash_is_never_stopped(self, monkeypatch):
+        monkeypatch.setattr(sparks, "keeper", lambda: dict(self.OTHER))
+        monkeypatch.setattr(keepalive, "_headless_keeper", lambda pid: False)
+        stopped = []
+        monkeypatch.setattr(keepalive, "_stop_process", stopped.append)
+
+        with pytest.raises(keepalive.KeepAliveError, match="Close it"):
+            keepalive.take_over()
+        assert stopped == [] and self.done == []
+
+    def test_the_system_keeper_is_set_up_again_from_here(self, monkeypatch):
+        beats = [dict(self.OTHER, always=True)]
+        monkeypatch.setattr(
+            sparks, "keeper",
+            lambda: beats[0] if "on" not in self.done else None,
+        )
+        stopped = []
+        monkeypatch.setattr(keepalive, "_stop_process", stopped.append)
+
+        state = keepalive.take_over()
+
+        assert self.done == ["off", "on"]
+        assert stopped == []
+        assert state["other"] == ""
+
+    def test_a_stray_keeper_still_holding_on_is_stopped(self, monkeypatch):
+        stopped = []
+        monkeypatch.setattr(
+            sparks, "keeper",
+            lambda: None if stopped else dict(self.OTHER),
+        )
+        monkeypatch.setattr(sparks, "alive", lambda pid: not stopped)
+        monkeypatch.setattr(keepalive, "_headless_keeper", lambda pid: True)
+        monkeypatch.setattr(keepalive, "_stop_process", stopped.append)
+
+        keepalive.take_over()
+
+        assert stopped == [4242]
+        assert self.done == ["off", "on"]
+
+    def test_one_that_will_not_go_says_so(self, monkeypatch):
+        monkeypatch.setattr(sparks, "keeper", lambda: dict(self.OTHER))
+        monkeypatch.setattr(sparks, "alive", lambda pid: True)
+        monkeypatch.setattr(keepalive, "_headless_keeper", lambda pid: True)
+        monkeypatch.setattr(keepalive, "_stop_process", lambda pid: None)
+
+        with pytest.raises(keepalive.KeepAliveError, match="still running"):
+            keepalive.take_over()
+
+
+def test_a_beat_from_a_process_that_is_gone_is_no_keeper(monkeypatch):
+    _beat(always=True)
+    monkeypatch.setattr(sparks, "alive", lambda pid: False)
+
+    assert sparks.keeper() is None
+
+
+def test_a_running_process_is_alive_and_a_made_up_one_is_not():
+    import os
+
+    assert sparks.alive(os.getpid())
+    if os.name != "nt":
+        assert not sparks.alive(2 ** 22 + 12345)
+    assert not sparks.alive(None) and not sparks.alive(0)
 
 
 def test_the_real_clone_is_found_by_its_run_py():

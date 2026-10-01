@@ -2431,6 +2431,12 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
             raise ValueError(str(exc)) from None
         return {"always": keepalive.status(), "how": how}
 
+    if name == "sparks-takeover":
+        try:
+            return {"always": keepalive.take_over()}
+        except keepalive.KeepAliveError as exc:
+            raise ValueError(str(exc)) from None
+
     if name.startswith("spark-"):
         return _spark_command(name, arg, body)
 
