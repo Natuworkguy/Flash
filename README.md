@@ -287,7 +287,11 @@ A sub-agent does one job and is gone. A spark keeps a job. Make one with
 `/sparks new`, from the Sparks page in the web UI, or just by asking
 ("make a spark that checks the price of this every six hours and tells
 me if it drops under $900"): Flash calls its `make_spark` tool and asks
-you first.
+you first. A spark can also be made paused, to set up now and start
+later: tick "Make it paused" in its form (or in Add shared), answer `n`
+to "Start it now?" in `/sparks new`, add a template or code with
+`/sparks add <template|code> paused`, or ask Flash for one paused.
+Nothing runs until you resume it, and then its first shift starts.
 
 Each spark has:
 

@@ -306,6 +306,19 @@ def test_make_spark_makes_one_once_agreed(monkeypatch):
     assert made.every == 1440 and made.boundaries == "Only read."
 
 
+def test_make_spark_can_make_one_paused():
+    asked = []
+    with capture_tool_output(lambda kind, text, style: None):
+        with answer_from(lambda question: asked.append(question) or "y"):
+            result = tools.make_spark(
+                "Scout", "Watch the issues.", "daily", paused=True,
+            )
+
+    assert "paused until you resume it" in asked[0]
+    assert "It is paused" in result and "starts now" not in result
+    assert sparks.find("scout").paused
+
+
 def test_make_spark_refuses_a_schedule_too_tight():
     with capture_tool_output(lambda kind, text, style: None):
         result = tools.make_spark("Scout", "Watch.", "1m")
@@ -1102,6 +1115,23 @@ def test_a_spark_has_a_title_it_knows_and_shares():
 def test_a_bad_share_code_is_refused(code):
     with pytest.raises(sparks.SparkError):
         sparks.read_code(code)
+
+
+def test_a_spark_made_paused_waits_until_resumed():
+    made = sparks.create("Scout", "Watch the issues.", paused=True)
+
+    assert made.paused
+    assert sparks.due(now=time.time() + 10 ** 6) == []
+
+    sparks.set_paused(made.id, False)
+    assert [s.id for s in sparks.due()] == [made.id]
+
+
+def test_a_template_or_shared_spark_can_be_added_paused():
+    made = sparks.add_from("repo watch", paused=True)
+    copy = sparks.add_from(sparks.share_code(made.id))
+
+    assert made.paused and not copy.paused
 
 
 def test_a_template_makes_a_spark():

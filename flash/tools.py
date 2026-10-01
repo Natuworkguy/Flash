@@ -1794,11 +1794,16 @@ def agent_result(agent_id: str, wait_seconds: Any = None) -> str:
 
 def make_spark(
     name: str, goal: str, every: Any = "", boundaries: str = "",
-    project: str = "", model: str = "",
+    project: str = "", model: str = "", paused: Any = False,
 ) -> str:
-    """Make a spark: an agent that works on GOAL on a schedule."""
+    """Make a spark: an agent that works on GOAL on a schedule. PAUSED
+    makes it without starting it, to resume when the user wants."""
 
-    tool_line(f"MakeSpark({name}, every {every or 'hour'})")
+    paused = paused is True or str(paused).strip().lower() in ("true", "yes")
+    tool_line(
+        f"MakeSpark({name}, every {every or 'hour'}"
+        f"{', paused' if paused else ''})"
+    )
 
     try:
         minutes = sparks.parse_every(every)
@@ -1820,7 +1825,8 @@ def make_spark(
         notify_needs_input()
         question = (
             f"Make a spark called {name} that works on this every "
-            f"{sparks.every_words(minutes)}, on {model}?\n{goal}"
+            f"{sparks.every_words(minutes)}, on {model}"
+            f"{', paused until you resume it' if paused else ''}?\n{goal}"
         )
         answer = remote_answer(question)
         if answer is None:
@@ -1837,6 +1843,7 @@ def make_spark(
     try:
         spark = sparks.create(
             name, goal, boundaries, minutes, project, model=model,
+            paused=paused,
         )
     except sparks.SparkError as exc:
         tool_result(str(exc), style=ERROR)
@@ -1844,11 +1851,15 @@ def make_spark(
 
     from . import keepalive  # deferred: only a new spark needs it
 
+    every_words = sparks.every_words(spark.every)
     result = (
-        f"Made {spark.name} ({spark.handle}), on {spark.model}. Its first "
-        "shift starts now, "
-        f"then every {sparks.every_words(spark.every)}. Its reports are "
-        "under /sparks, or Sparks in the web UI."
+        f"Made {spark.name} ({spark.handle}), on {spark.model}. " + (
+            "It is paused: nothing runs until the user resumes it "
+            f"(/sparks resume {spark.name}, or Resume in its window), "
+            f"then every {every_words}. "
+            if spark.paused else
+            f"Its first shift starts now, then every {every_words}. "
+        ) + "Its reports are under /sparks, or Sparks in the web UI."
     )
     if not keepalive.installed():
         result += (
@@ -4426,6 +4437,14 @@ tools: list[dict[str, Any]] = [
                         "description": (
                             "The model it runs on, when the user named "
                             "one. Leave it out for the one you run on."
+                        ),
+                    },
+                    "paused": {
+                        "type": "boolean",
+                        "description": (
+                            "True to make it without starting it, when "
+                            "the user wants it set up now and started "
+                            "later. It runs once they resume it."
                         ),
                     },
                 },
