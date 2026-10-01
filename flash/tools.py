@@ -1755,7 +1755,9 @@ EMAIL_TOOLS: list[dict[str, Any]] = [
                         "type": "string",
                         "description": (
                             "Who it goes to. Leave it out on a reply to "
-                            "answer the sender."
+                            "answer the sender, and otherwise to send it "
+                            "to the user's own default address (\"email "
+                            "me this\")."
                         ),
                     },
                     "subject": {
@@ -1785,7 +1787,7 @@ EMAIL_TOOLS: list[dict[str, Any]] = [
                         "description": (
                             "Which of the user's addresses it is sent from. "
                             "On a reply, the account the email is in. Left "
-                            "out, the first one connected."
+                            "out, the user's default address."
                         ),
                     },
                 },
