@@ -8,6 +8,7 @@ from flash import (
     ai,
     extensions,
     learning,
+    mail,
     memory,
     repl_input,
     skills,
@@ -55,6 +56,8 @@ def isolated_home(tmp_path_factory, monkeypatch):
     monkeypatch.setattr(skills, "FLASH_DIR", home / ".flash")
     # Sparks, and what this session has already pointed out about them.
     monkeypatch.setattr(sparks, "FLASH_DIR", home / ".flash")
+    # The user's email settings, and the password in them.
+    monkeypatch.setattr(mail, "FLASH_DIR", home / ".flash")
     monkeypatch.setattr(sparks, "_told", set())
     # The web UI's saved hosts, projects, and chats.
     monkeypatch.setattr(workspace, "FLASH_DIR", home / ".flash")

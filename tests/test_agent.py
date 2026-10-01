@@ -99,7 +99,16 @@ def test_confirmed_tools_are_withheld_outside_autonomous_mode(monkeypatch):
 
 def test_autonomous_mode_gets_every_subagent_tool(monkeypatch):
     monkeypatch.setattr(tools, "NO_COMMAND_CONFIRMATION", True)
+    monkeypatch.setattr(tools.mail, "configured", lambda: True)
     assert agent.allowed_tool_names() == tools.SUBAGENT_TOOL_NAMES  # nosec
+
+
+def test_email_tools_wait_for_email_to_be_set_up(monkeypatch):
+    monkeypatch.setattr(tools, "NO_COMMAND_CONFIRMATION", True)
+    monkeypatch.setattr(tools.mail, "configured", lambda: False)
+    names = agent.allowed_tool_names()
+    assert "check_inbox" not in names  # nosec B101
+    assert "read" in names  # nosec B101
 
 
 def test_only_allowed_schemas_are_sent(monkeypatch):
