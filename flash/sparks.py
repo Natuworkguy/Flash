@@ -912,6 +912,30 @@ TEMPLATES = [
         "every": 360,
         "boundaries": "Only read. Never fill in or submit anything.",
     },
+    {
+        "name": "Inbox",
+        "title": "Inbox keeper",
+        "blurb": "Sorts your email, says what needs you, drafts replies",
+        "goal": (
+            "Check my email with check_inbox for what has come in since "
+            "your last shift (keep the newest uid you have seen in your "
+            "notes, and skip anything at or below it). Read the ones that "
+            "matter with read_email. Sort each new email: needs me, worth "
+            "knowing, or ignorable (newsletters, receipts, notifications). "
+            "Report the ones that need me first, one line each: who, what "
+            "they want, and by when; then the worth-knowing ones in a line "
+            "or two; then how many you skipped. When one needs a reply you "
+            "can write from what you know, draft it with send_email as a "
+            "reply to its uid: I approve each one before it goes. If "
+            "nothing new needs me, reply NOTHING NEW."
+        ),
+        "every": 30,
+        "boundaries": (
+            "Never delete, move, archive or mark email. Never sign up, "
+            "unsubscribe, click links, or buy anything. Never send an email "
+            "except as a reply I can approve."
+        ),
+    },
 ]
 
 SHARE_PREFIX = "flash-spark:"
@@ -1287,6 +1311,17 @@ def describe(name: str, args: dict) -> tuple[str, str]:
         body = str(args.get("content", ""))
         cut = body[:1200] + ("\n..." if len(body) > 1200 else "")
         return f"Write {path}", cut
+    if name == "send_email":
+        to = str(args.get("to") or "").strip()
+        reply = str(args.get("reply_to") or "").strip()
+        label = (
+            f"Send an email to {to}" if to else
+            f"Reply to email {reply}" if reply else "Send an email"
+        )
+        subject = str(args.get("subject") or "").strip()
+        body = str(args.get("body") or "")
+        cut = body[:1200] + ("\n..." if len(body) > 1200 else "")
+        return label, (f"Subject: {subject}\n\n" if subject else "") + cut
     if name in ("edit", "multi_edit"):
         return f"Change {path}", json.dumps(
             {k: v for k, v in args.items() if k not in ("file_path", "path")},
@@ -1682,7 +1717,8 @@ def _work(
     client = client or ollama.Client(host=host)
     allowed = names if names is not None else subagents.allowed_tool_names()
     schemas = [
-        t for t in flash_tools.tools if t["function"]["name"] in allowed
+        t for t in flash_tools.available_tools()
+        if t["function"]["name"] in allowed
     ] + own_tools
 
     def record(kind: str, text: str, style: str) -> None:
@@ -1878,11 +1914,15 @@ def shift(spark_id: str, client=None) -> Optional[Report]:
     # Every tool a sub-agent has, the ones that ask first too: in
     # autonomous mode they run, and otherwise the shift waits for the
     # user's answer.
-    names = flash_tools.SUBAGENT_TOOL_NAMES
+    names = flash_tools.SPARK_TOOL_NAMES
     auto = autonomous()
 
     def gate(name: str) -> bool:
-        return not auto and name in flash_tools.CONFIRMED_TOOL_NAMES
+        # Sending email asks every time; the rest only out of
+        # autonomous mode.
+        return name in flash_tools.ALWAYS_ASK_TOOL_NAMES or (
+            not auto and name in flash_tools.CONFIRMED_TOOL_NAMES
+        )
 
     def record(kind: str, text: str, style: str) -> None:
         if kind == "line":
@@ -2077,7 +2117,7 @@ def _call(
 def chat_tool_names() -> tuple[str, ...]:
     from . import tools as flash_tools  # deferred: avoids a module cycle
 
-    return flash_tools.SUBAGENT_TOOL_NAMES
+    return flash_tools.SPARK_TOOL_NAMES
 
 
 def _until(when: float) -> str:

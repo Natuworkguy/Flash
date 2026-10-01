@@ -912,6 +912,20 @@ body.page-projects #dock, body.page-settings #dock, body.page-tool #dock { displ
 @keyframes grow { from { transform: scaleX(0); } }
 .settings-section { font-size: 15px; font-weight: 600; margin: 0 0 4px; }
 .settings-sub { color: var(--text-3); font-size: 14px; margin: 0 0 16px; }
+.email-card { display: flex; gap: 14px; align-items: flex-start; padding: 16px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); }
+.email-icon { width: 36px; height: 36px; border-radius: 10px; flex: none; display: grid; place-items: center; background: var(--hover); color: var(--text-2); }
+.email-icon svg { width: 18px; height: 18px; }
+.email-card .what { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.email-card .what b { font-weight: 600; overflow-wrap: anywhere; }
+.email-card .servers { font: 12px var(--mono); color: var(--text-3); overflow-wrap: anywhere; }
+.email-card .said { font-size: 13px; color: var(--text-3); }
+.email-card .said.good { color: var(--add); }
+.email-card .said.bad { color: var(--del); }
+.email-buttons, .email-form .buttons { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+.email-buttons .primary { margin-left: auto; }
+.email-form { max-width: 460px; }
+.email-servers { margin: 0 0 14px; }
+.email-servers summary { cursor: pointer; font-size: 13px; color: var(--text-2); margin-bottom: 10px; }
 .settings-gap { margin-top: 34px; }
 .browser-list { max-width: 620px; border: 1px solid var(--border); border-radius: 14px; background: var(--surface); overflow: hidden; }
 .browser-row { display: flex; align-items: center; gap: 14px; padding: 13px 16px; }
@@ -1851,6 +1865,7 @@ const ICON = {
   halt: '<rect x="6.5" y="6.5" width="11" height="11" rx="2" fill="currentColor" stroke="none"/>',
   copy: '<rect x="9" y="9" width="12" height="12" rx="2.5"/><path d="M5 15a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2"/>',
   check: '<path d="M20 6 9 17l-5-5"/>',
+  mail: '<rect x="2" y="4" width="20" height="16" rx="2"/><path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7"/>',
   retry: '<path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/>',
   edit: '<path d="M17 3a2.8 2.8 0 0 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/>',
   x: '<path d="M18 6 6 18M6 6l12 12"/>',
@@ -2054,7 +2069,7 @@ function routeTo(path) {
   } else if ((m = path.match(/^\/p\/([0-9a-f]{8})\/?$/))) {
     if (projectOf(m[1])) { view = "project"; viewProject = m[1]; }
     else { view = "projects"; replaceUrl = true; }
-  } else if ((m = path.match(/^\/settings(?:\/(general|usage|memory|security))?\/?$/))) {
+  } else if ((m = path.match(/^\/settings(?:\/(general|usage|memory|email|security))?\/?$/))) {
     view = "settings";
     settingsTab = m[1] || "general";
   } else if ((m = path.match(/^\/(projects|skills|sparks|extensions)\/?$/))) {
@@ -2322,6 +2337,7 @@ function button(cls, iconName, tip, keys, onClick) {
 function toolIcon(label) {
   const name = label.split("(")[0].toLowerCase();
   if (/bash|shell/.test(name)) return "terminal";
+  if (/inbox|email/.test(name)) return "mail";
   if (/read|glob|grep|recall|skillview/.test(name)) return "file";
   if (/edit|write/.test(name)) return "edit";
   if (/web|fetch|page|screenshot|interact/.test(name)) return "globe";
@@ -3880,7 +3896,7 @@ function drawSettings() {
   $("#title").textContent = "Settings";
   document.title = "Settings · Flash";
   const page = el("div", "page settings");
-  page.innerHTML = `<div class="page-head"><h1>Settings</h1></div><div class="tabs" role="tablist"><span class="thumb"></span><button type="button" role="tab" data-tab="general">General</button><button type="button" role="tab" data-tab="usage">Usage</button><button type="button" role="tab" data-tab="memory">Memory</button><button type="button" role="tab" data-tab="security">Security</button></div><div class="tab-body"></div>`;
+  page.innerHTML = `<div class="page-head"><h1>Settings</h1></div><div class="tabs" role="tablist"><span class="thumb"></span><button type="button" role="tab" data-tab="general">General</button><button type="button" role="tab" data-tab="usage">Usage</button><button type="button" role="tab" data-tab="memory">Memory</button><button type="button" role="tab" data-tab="email">Email</button><button type="button" role="tab" data-tab="security">Security</button></div><div class="tab-body"></div>`;
   messagesEl.appendChild(page);
   const tabs = page.querySelector(".tabs");
   const thumb = tabs.querySelector(".thumb");
@@ -3902,7 +3918,7 @@ function drawSettings() {
     const old = page.querySelector(".tab-body");
     const body = el("div", "tab-body");
     old.replaceWith(body);
-    ({ general: drawGeneral, usage: drawUsage, memory: drawMemory, security: drawSecurity })[tab](body);
+    ({ general: drawGeneral, usage: drawUsage, memory: drawMemory, email: drawEmail, security: drawSecurity })[tab](body);
   };
   tabs.onclick = (e) => {
     const b = e.target.closest("button");
@@ -4846,7 +4862,7 @@ function setTimesField(form) {
   });
 }
 
-function sparkForm(spark, inProjectId = "") {
+function sparkForm(spark, inProjectId = "", template = "") {
   const editing = !!spark;
   const every = editing ? spark.every : 60;
   const atTimes = editing && !!spark.at;
@@ -4923,6 +4939,8 @@ function sparkForm(spark, inProjectId = "") {
           form.goal.focus();
         };
         row.appendChild(chip);
+        // Opened for one template, it starts filled in from it.
+        if (template && t.name === template) chip.click();
       }
     }).catch(() => {});
   }
@@ -5767,6 +5785,99 @@ function when(seconds) {
   return d.toDateString() === new Date().toDateString()
     ? `at ${d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`
     : d.toLocaleDateString([], { month: "short", day: "numeric" });
+}
+
+// Settings > Email: the user's email, for Flash and the sparks to read,
+// and to send from with their yes each time.
+async function drawEmail(body) {
+  let e;
+  try { e = (await command("email")).email; } catch (error) { showFailure(error); return; }
+  if (!body.isConnected) return;
+  body.innerHTML = `<h2 class="settings-section">Email</h2><p class="settings-sub">Connect your email, and Flash and your sparks can look through your inbox, read what matters, and send email you approve first, every time. Looking never marks anything read, moves it, or deletes it.</p><div class="email-body"></div>`;
+  const host = body.querySelector(".email-body");
+  if (e.configured) drawEmailConnected(host, e); else drawEmailForm(host, e);
+}
+
+function drawEmailConnected(host, e) {
+  host.innerHTML = `<div class="email-card"><span class="email-icon">${icon("mail")}</span><span class="what"><b></b><span class="servers"></span><span class="said"></span></span></div><div class="buttons email-buttons"></div>`;
+  host.querySelector("b").textContent = e.address;
+  host.querySelector(".servers").textContent = `IMAP ${e.imap} · SMTP ${e.smtp}`;
+  const said = host.querySelector(".said");
+  const buttons = host.querySelector(".email-buttons");
+  const test = el("button", "btn", "Test");
+  test.type = "button";
+  test.onclick = async () => {
+    test.disabled = true;
+    said.className = "said";
+    said.textContent = "Connecting…";
+    try { said.textContent = (await command("email-test")).said; said.classList.add("good"); }
+    catch (error) { said.textContent = error.message; said.classList.add("bad"); }
+    test.disabled = false;
+  };
+  const change = el("button", "btn", "Change");
+  change.type = "button";
+  change.onclick = () => drawEmailForm(host, e);
+  const inbox = el("button", "btn primary with-icon", `${icon("plus")}<span>Inbox spark</span>`);
+  inbox.type = "button";
+  inbox.dataset.tip = "A spark that sorts your email every 30 minutes, says what needs you, and drafts replies for you to approve";
+  inbox.onclick = () => { showPage("sparks"); sparkForm(null, "", "Inbox"); };
+  const off = el("button", "btn danger", "Disconnect");
+  off.type = "button";
+  off.onclick = async () => {
+    try { const r = await command("email-forget"); drawEmailForm(host, r.email); toast("Email disconnected"); }
+    catch (error) { showFailure(error); }
+  };
+  buttons.append(test, change, off, inbox);
+  test.onclick();
+}
+
+function drawEmailForm(host, e) {
+  host.innerHTML = `<form class="email-form" autocomplete="off">
+    <label class="field"><span>Email address</span><input name="address" type="email" placeholder="you@gmail.com" required></label>
+    <label class="field"><span>App password</span><input name="password" type="password" class="mono" placeholder="${e.has_password ? "Saved: leave blank to keep it" : "xxxx xxxx xxxx xxxx"}"${e.has_password ? "" : " required"}><small class="pw-help">An app password from your account's security settings, never your account's own. Kept in <code>~/.flash/email.json</code>, readable only by you.</small></label>
+    <details class="email-servers"><summary>Servers</summary>
+      <label class="field"><span>IMAP (reading)</span><input name="imap" class="mono" placeholder="imap.gmail.com:993"></label>
+      <label class="field"><span>SMTP (sending)</span><input name="smtp" class="mono" placeholder="smtp.gmail.com:465"><small>Filled in for Gmail, Outlook, iCloud, Yahoo, AOL, Fastmail and Zoho. Port 465 is SSL; any other uses STARTTLS.</small></label>
+    </details>
+    <div class="form-error"></div>
+    <div class="buttons"><button type="submit" class="btn primary">Connect</button></div>
+  </form>`;
+  const form = host.querySelector("form");
+  const error = form.querySelector(".form-error");
+  form.address.value = e.address || "";
+  if (e.address) { form.imap.value = e.imap; form.smtp.value = e.smtp; }
+  const helpFor = { "gmail.com": "https://myaccount.google.com/apppasswords", "googlemail.com": "https://myaccount.google.com/apppasswords", "icloud.com": "https://account.apple.com/account/manage", "me.com": "https://account.apple.com/account/manage", "yahoo.com": "https://login.yahoo.com/account/security", "fastmail.com": "https://app.fastmail.com/settings/security/apps" };
+  const help = form.querySelector(".pw-help");
+  const plain = help.innerHTML;
+  // The provider's servers, as placeholders: what is used if left blank.
+  const servers = { "gmail.com": ["imap.gmail.com:993", "smtp.gmail.com:465"], "googlemail.com": ["imap.gmail.com:993", "smtp.gmail.com:465"], "outlook.com": ["outlook.office365.com:993", "smtp.office365.com:587"], "hotmail.com": ["outlook.office365.com:993", "smtp.office365.com:587"], "live.com": ["outlook.office365.com:993", "smtp.office365.com:587"], "msn.com": ["outlook.office365.com:993", "smtp.office365.com:587"], "icloud.com": ["imap.mail.me.com:993", "smtp.mail.me.com:587"], "me.com": ["imap.mail.me.com:993", "smtp.mail.me.com:587"], "mac.com": ["imap.mail.me.com:993", "smtp.mail.me.com:587"], "yahoo.com": ["imap.mail.yahoo.com:993", "smtp.mail.yahoo.com:465"], "aol.com": ["imap.aol.com:993", "smtp.aol.com:465"], "fastmail.com": ["imap.fastmail.com:993", "smtp.fastmail.com:465"], "zoho.com": ["imap.zoho.com:993", "smtp.zoho.com:465"] };
+  const hint = () => {
+    const domain = (form.address.value.split("@")[1] || "").trim().toLowerCase();
+    const link = helpFor[domain];
+    help.innerHTML = plain + (link ? ` <a href="${link}" target="_blank" rel="noopener">Make one</a>.` : "");
+    const [imap, smtp] = servers[domain] || (domain.includes(".") ? [`imap.${domain}:993`, `smtp.${domain}:465`] : ["imap.example.com:993", "smtp.example.com:465"]);
+    form.imap.placeholder = imap;
+    form.smtp.placeholder = smtp;
+  };
+  form.address.addEventListener("input", hint);
+  hint();
+  form.onsubmit = async (ev) => {
+    ev.preventDefault();
+    const submit = form.querySelector("[type=submit]");
+    submit.disabled = true;
+    submit.textContent = "Connecting…";
+    error.textContent = "";
+    try {
+      const r = await command("email-save", "", null, { address: form.address.value, password: form.password.value, imap: form.imap.value, smtp: form.smtp.value });
+      toast(r.said);
+      drawEmailConnected(host, r.email);
+    } catch (err) {
+      error.textContent = err.message;
+      submit.disabled = false;
+      submit.textContent = "Connect";
+    }
+  };
+  if (!e.address) form.address.focus();
 }
 
 async function drawMemory(body) {

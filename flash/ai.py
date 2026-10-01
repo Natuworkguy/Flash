@@ -1879,6 +1879,105 @@ def _ask_line(question: str) -> str:
     return answer.strip()
 
 
+def _email_command(arg: str) -> None:
+    """/email: connect the user's email, test it, look, or disconnect."""
+
+    from . import mail
+
+    action = arg.split(" ", 1)[0].lower()
+    try:
+        if action in ("", "status"):
+            now = mail.settings()
+            if not now["configured"]:
+                console.print(Text(
+                    "  Email is not connected. /email connect sets it up, "
+                    "with an app password: Flash and your sparks can then "
+                    "read your inbox, and send email you approve.",
+                    style=DIM,
+                ))
+                return
+            console.print(Text(
+                f"  Connected as {now['address']} (IMAP {now['imap']}, "
+                f"SMTP {now['smtp']}). /email test, /email inbox, or "
+                "/email disconnect.", style=DIM,
+            ))
+            return
+        if action in ("connect", "setup", "set"):
+            _email_connect()
+            return
+        if action == "test":
+            console.print(Text(f"  {mail.test()}", style=DIM))
+            return
+        if action == "inbox":
+            found = mail.inbox(limit=10)
+            if not found:
+                console.print(Text("  The inbox is empty.", style=DIM))
+            for item in found:
+                line = Text("  ")
+                line.append(
+                    f"{CURSOR} " if item["unread"] else "  ", style=ACCENT,
+                )
+                line.append(f"{item['date']:<17}", style=DIM)
+                line.append(f"{item['from'][:28]:<30}")
+                line.append(item["subject"] or "(no subject)", style=DIM)
+                console.print(line)
+            return
+        if action in ("disconnect", "off", "forget"):
+            mail.forget()
+            console.print(Text(
+                "  Email disconnected: the address and password are gone.",
+                style=DIM,
+            ))
+            return
+    except mail.MailError as exc:
+        warn(f"  {exc}")
+        return
+    warn("Usage: /email [connect | test | inbox | disconnect]")
+
+
+def _email_connect() -> None:
+    import getpass
+
+    from . import mail
+
+    console.print(Text(
+        "  Flash reads your email over IMAP and sends it over SMTP. Use an "
+        "app password, made in your account's security settings, never "
+        "your account's own. It is kept in ~/.flash/email.json, readable "
+        "only by you.", style=DIM,
+    ))
+    address = _ask_line("Email address:")
+    if not address:
+        console.print(Text("  Not connected.", style=DIM))
+        return
+    imap_host, imap_port, smtp_host, smtp_port = mail.servers_for(address)
+    help_link = mail.APP_PASSWORD_HELP.get(imap_host)
+    if help_link:
+        console.print(Text(f"  Make an app password at {help_link}", DIM))
+    try:
+        password = getpass.getpass("  App password (hidden): ")
+    except (EOFError, KeyboardInterrupt):
+        password = ""
+    if not password.strip():
+        console.print(Text("  Not connected.", style=DIM))
+        return
+    imap = _ask_line(f"IMAP server? (Enter for {imap_host}:{imap_port})")
+    smtp = _ask_line(f"SMTP server? (Enter for {smtp_host}:{smtp_port})")
+    mail.save(address, password, imap, smtp)
+    try:
+        said = mail.test()
+    except mail.MailError as exc:
+        warn(
+            f"  Saved, but it did not work yet: {exc} /email connect "
+            "tries again."
+        )
+        return
+    console.print(Text(
+        f"  {said} The Inbox spark template (/sparks add Inbox) keeps an "
+        "eye on it for you.", style=DIM,
+    ))
+
+
 def _new_spark() -> None:
     console.print(Text(
         "  A spark works on one goal on a schedule, while Flash runs, and "
@@ -3359,6 +3458,10 @@ def main() -> None:
 
             if uin == "/skills" or uin.startswith("/skills "):
                 _skills_command(uin[len("/skills"):].strip())
+                continue
+
+            if uin == "/email" or uin.startswith("/email "):
+                _email_command(uin[len("/email"):].strip())
                 continue
 
             if uin == "/sparks" or uin.startswith("/sparks "):
