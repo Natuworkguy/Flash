@@ -467,6 +467,24 @@ pre code { display: block; padding: 2px 16px 14px; overflow-x: auto; font-size: 
 
 /* Voice mode: the box gives way to an orb that listens and speaks. */
 body.voice-on .shell, body.voice-on #suggestions, body.voice-on #pending { display: none !important; }
+#recording { display: flex; align-items: center; gap: 12px; margin: 0 0 10px; padding: 10px 12px 10px 16px; border: 1px solid color-mix(in srgb, #ff4d5e 45%, var(--border-strong)); border-radius: 16px; background: color-mix(in srgb, #ff4d5e 7%, var(--surface)); animation: pop 0.2s var(--ease); }
+#recording[hidden] { display: none; }
+#recording .rec-dot { flex: none; width: 10px; height: 10px; border-radius: 50%; background: #ff4d5e; box-shadow: 0 0 0 0 #ff4d5e80; animation: rec-beat 1.4s ease-out infinite; }
+#recording .rec-words { flex: 1; min-width: 0; display: flex; flex-direction: column; line-height: 1.3; }
+#recording .rec-words b { font-size: 13.5px; font-weight: 600; }
+#recording .rec-meta { font-size: 12px; color: var(--text-3); font-variant-numeric: tabular-nums; }
+#recording .rec-mic { display: inline-flex; align-items: center; gap: 2px; height: 16px; }
+#recording .rec-mic[hidden] { display: none; }
+#recording .rec-mic i { width: 3px; border-radius: 2px; background: var(--text-2); height: calc(4px + var(--v, 0) * 12px); transition: height 0.08s; }
+@keyframes rec-beat { 0% { box-shadow: 0 0 0 0 #ff4d5e80; } 70%, 100% { box-shadow: 0 0 0 8px #ff4d5e00; } }
+.tray-item.clip { width: 96px; overflow: hidden; }
+.tray-item.clip img { width: 100%; height: 100%; object-fit: cover; display: block; filter: brightness(0.82); }
+.tray-item.clip .length { position: absolute; left: 6px; bottom: 5px; display: inline-flex; align-items: center; gap: 3px; padding: 1px 6px 1px 4px; border-radius: 999px; font: 600 11px var(--sans); color: #fff; background: #0009; }
+.tray-item.clip .length svg { width: 10px; height: 10px; }
+.user-files .clip { position: relative; display: block; width: 220px; border-radius: 14px; overflow: hidden; border: 1px solid var(--border); background: #000; }
+.user-files .clip video { display: block; width: 100%; max-height: 160px; }
+.user-files .clip .tag { position: absolute; left: 8px; top: 8px; padding: 2px 8px; border-radius: 999px; font: 600 11px var(--sans); color: #fff; background: #000a; pointer-events: none; }
+#viewer-body video { display: block; max-width: 100%; max-height: 100%; margin: auto; border-radius: 10px; background: #000; }
 #voice { display: flex; align-items: center; gap: 16px; padding: 14px 14px 14px 16px; border: 1px solid var(--border-strong); border-radius: 22px; background: var(--surface); box-shadow: var(--composer-shadow); animation: pop 0.2s var(--ease); }
 #voice[hidden] { display: none; }
 .voice-orb { --lvl: 0; position: relative; flex: none; width: 58px; height: 58px; border-radius: 50%; cursor: pointer;
@@ -1707,6 +1725,13 @@ body.resizing-viewer iframe { pointer-events: none; }
       <div class="col">
         <div id="hero"><h1 id="greeting">Good evening</h1></div>
         <div id="pending" hidden aria-label="Waiting messages"></div>
+        <div id="recording" hidden role="group" aria-label="Screen recording">
+          <span class="rec-dot" aria-hidden="true"></span>
+          <span class="rec-words"><b>Recording your screen</b><span class="rec-meta"></span></span>
+          <span class="rec-mic" hidden></span>
+          <button type="button" class="btn small" data-rec-discard>Discard</button>
+          <button type="button" class="btn small primary" data-rec-stop>Stop</button>
+        </div>
         <div id="spark-ask" hidden aria-live="polite"></div>
         <div id="voice" hidden role="group" aria-label="Voice mode">
           <button type="button" class="voice-orb" aria-label="Voice"><span></span></button>
@@ -1784,6 +1809,9 @@ const ICON = {
   book: '<path d="M12 7v14"/><path d="M3 18a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h5a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-6a3 3 0 0 0-3 3 3 3 0 0 0-3-3z"/>',
   puzzle: '<path d="M15.39 4.39a1 1 0 0 0 1.68-.474 2.5 2.5 0 1 1 3.014 3.015 1 1 0 0 0-.474 1.68l1.683 1.682a2.414 2.414 0 0 1 0 3.414L19.61 15.39a1 1 0 0 1-1.68-.474 2.5 2.5 0 1 0-3.014 3.015 1 1 0 0 1 .474 1.68l-1.683 1.682a2.414 2.414 0 0 1-3.414 0L8.61 19.61a1 1 0 0 0-1.68.474 2.5 2.5 0 1 1-3.014-3.015 1 1 0 0 0 .474-1.68l-1.683-1.682a2.414 2.414 0 0 1 0-3.414L4.39 8.61a1 1 0 0 1 1.68.474 2.5 2.5 0 1 0 3.014-3.015 1 1 0 0 1-.474-1.68l1.683-1.682a2.414 2.414 0 0 1 3.414 0z"/>',
   monitor: '<rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/>',
+  record: '<rect x="2" y="3" width="20" height="14" rx="2"/><circle cx="12" cy="10" r="3.2" fill="currentColor" stroke="none"/><path d="M8 21h8M12 17v4"/>',
+  mic: '<rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0M12 17v4M8 21h8"/>',
+
   settings: '<path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/>',
   panel: '<rect x="3" y="3" width="18" height="18" rx="3"/><path d="M9 3v18"/>',
   plus: '<path d="M12 5v14M5 12h14"/>',
@@ -2533,6 +2561,11 @@ function openViewer(entry) {
     openDocument(entry, body);
   } else if (entry.kind === "model") {
     openModel(entry, body);
+  } else if (entry.kind === "video") {
+    const clip = el("video");
+    clip.controls = true;
+    clip.src = fileUrl(entry);
+    body.appendChild(clip);
   } else {
     const holder = el("div", "image");
     const img = el("img");
@@ -3470,6 +3503,12 @@ function sentFiles(files) {
   const images = files.filter((f) => f.kind === "image").length;
   const box = el("div", "user-files" + (images > 1 ? " many" : ""));
   for (const f of files) {
+    if (f.kind === "video") {
+      const clip = box.appendChild(el("div", "clip", `<video controls preload="metadata" playsinline></video><span class="tag"></span>`));
+      clip.querySelector("video").src = fileUrl(f);
+      clip.querySelector(".tag").textContent = f.stills ? `Screen recording · ${f.stills} steps` : "Screen recording";
+      continue;
+    }
     if (f.kind === "image") {
       const shot = box.appendChild(el("button", "shot"));
       shot.type = "button";
@@ -7375,9 +7414,14 @@ function renderTray() {
 }
 
 function trayItem(item) {
-  const node = el("div", `tray-item ${item.image ? "shot" : "doc"}`);
+  const node = el("div", `tray-item ${item.recording ? "clip" : item.image ? "shot" : "doc"}`);
   node.title = `${item.name} · ${fileSize(item.size)}`;
-  if (item.image) {
+  if (item.recording) {
+    const img = node.appendChild(el("img"));
+    img.alt = "Screen recording";
+    img.src = item.url;
+    node.appendChild(el("span", "length", `${icon("play")}${clock(item.seconds)}`));
+  } else if (item.image) {
     const img = node.appendChild(el("img"));
     img.alt = item.name;
     img.src = item.url;
@@ -7430,6 +7474,10 @@ function openPlus() {
   ];
   if (matchMedia("(pointer: coarse)").matches) rows.push({ html: `${icon("camera")}<span class="label">Take a photo</span>`, act: () => pickFiles("image/*", "environment") });
   if (navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia) rows.push({ html: `${icon("monitor")}<span class="label">Take a screenshot</span>`, act: screenshot });
+  if (canRecordScreen()) {
+    rows.push({ html: `${icon("record")}<span class="label">Record your screen</span>`, act: () => recordScreen(false) });
+    rows.push({ html: `${icon("mic")}<span class="label">Record and narrate</span>`, act: () => recordScreen(true) });
+  }
   if (navigator.clipboard && navigator.clipboard.read) rows.push({ html: `${icon("copy")}<span class="label">Paste an image</span>`, act: pasteImage });
   rows.push({ header: true, rule: true, html: "" });
   rows.push({ html: `${icon("book")}<span class="label">Use a skill</span><span class="desc">${icon("chevRight")}</span>`, act: openSkillPicker });
@@ -7481,6 +7529,223 @@ async function screenshot() {
     stream.getTracks().forEach((t) => t.stop());
   }
 }
+
+// Screen recordings -------------------------------------------------------
+// The user shows Flash how they do something. While the screen is
+// recorded, the page catches a still each time it changes and settles,
+// and, narrated, keeps what the microphone hears; the recording goes
+// with the next message, the stills and what was said over each one go
+// to the model, which works out the procedure and saves it as a skill.
+
+const REC_LONGEST = 4 * 60;          // seconds a recording may run
+const REC_BITS = 600_000;            // its video bitrate: four minutes fit in an upload
+const REC_LOOK_MS = 600;             // how often the screen is looked at for change
+const REC_SETTLE_MS = 900;           // how long it must hold still to count as a step
+const REC_STILL_WIDTH = 1280;        // the stills' width, at most
+const REC_MAX_STILLS = 16;
+let recording = null;
+
+const canRecordScreen = () => !!(navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia && window.MediaRecorder);
+const clock = (seconds) => `${Math.floor(seconds / 60)}:${String(Math.floor(seconds % 60)).padStart(2, "0")}`;
+
+// A small picture of the screen, in colour, to tell one moment from
+// another: two colours as bright as each other are still two colours.
+function screenPrint(video, canvas) {
+  const ctx = canvas.getContext("2d", { willReadFrequently: true });
+  ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+  return ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+}
+
+// How much of the screen changed between two prints, from 0 to 1: the
+// share of its points that changed plainly, so a menu opening counts
+// however little of the screen it covers.
+function printsDiffer(a, b) {
+  if (!a || !b) return 1;
+  let changed = 0;
+  for (let i = 0; i < a.length; i += 4) {
+    if (Math.abs(a[i] - b[i]) > 24 || Math.abs(a[i + 1] - b[i + 1]) > 24 || Math.abs(a[i + 2] - b[i + 2]) > 24) changed++;
+  }
+  return changed / (a.length / 4);
+}
+
+async function stillOf(video) {
+  const scale = Math.min(1, REC_STILL_WIDTH / video.videoWidth);
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.round(video.videoWidth * scale);
+  canvas.height = Math.round(video.videoHeight * scale);
+  canvas.getContext("2d").drawImage(video, 0, 0, canvas.width, canvas.height);
+  return new Promise((done) => canvas.toBlob(done, "image/jpeg", 0.72));
+}
+
+async function recordScreen(narrate) {
+  if (recording) return;
+  let screen;
+  try {
+    screen = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: 15 }, audio: false });
+  } catch (err) {
+    if (err.name !== "NotAllowedError" && err.name !== "AbortError") toast(`No recording: ${err.message}`);
+    return;
+  }
+  let mic = null;
+  if (narrate) {
+    try { mic = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } }); }
+    catch (_) { toast("No microphone, so the recording goes without your words"); }
+  }
+  const video = el("video");
+  video.muted = true;
+  video.srcObject = screen;
+  try { await video.play(); } catch (_) { /* it plays once there is a frame */ }
+
+  const tracks = [...screen.getVideoTracks(), ...(mic ? mic.getAudioTracks() : [])];
+  const type = ["video/webm;codecs=vp9,opus", "video/webm;codecs=vp8,opus", "video/webm"].find((t) => MediaRecorder.isTypeSupported(t)) || "";
+  const recorder = new MediaRecorder(new MediaStream(tracks), { mimeType: type, videoBitsPerSecond: REC_BITS });
+  const rec = { screen, mic, video, recorder, chunks: [], bytes: 0, started: performance.now(), stills: [], print: null, pending: null, quietSince: 0, timer: 0, pcm: [], audio: null, discarded: false };
+  recording = rec;
+  recorder.ondataavailable = (e) => {
+    if (!e.data.size) return;
+    rec.chunks.push(e.data);
+    rec.bytes += e.data.size;
+    // Kept under what one upload can carry.
+    if (rec.bytes > MAX_UPLOAD - 1_500_000) stopRecording();
+  };
+  recorder.onstop = () => finishRecording(rec);
+  recorder.start(1000);
+  // Ending the share from the browser's own bar ends the recording.
+  screen.getVideoTracks()[0].addEventListener("ended", () => stopRecording());
+
+  // The microphone, at the rate the listening model hears, for what was
+  // said over each step.
+  if (mic) {
+    try {
+      const ctx = new AudioContext();
+      const source = ctx.createMediaStreamSource(mic);
+      const node = ctx.createScriptProcessor(4096, 1, 1);
+      node.onaudioprocess = (e) => {
+        const samples = e.inputBuffer.getChannelData(0);
+        const ratio = ctx.sampleRate / VOICE_RATE;
+        const out = new Int16Array(Math.floor(samples.length / ratio));
+        let level = 0;
+        for (let i = 0; i < out.length; i++) {
+          const from = Math.floor(i * ratio), to = Math.min(samples.length, Math.floor((i + 1) * ratio));
+          let total = 0;
+          for (let j = from; j < to; j++) total += samples[j];
+          const value = total / Math.max(1, to - from);
+          level = Math.max(level, Math.abs(value));
+          out[i] = Math.max(-32768, Math.min(32767, Math.round(value * 32767)));
+        }
+        rec.pcm.push(out);
+        rec.level = Math.min(1, level * 3);
+      };
+      source.connect(node);
+      node.connect(ctx.destination);
+      rec.audio = ctx;
+    } catch (_) { rec.audio = null; }
+  }
+
+  // Each look: has the screen changed, and has it settled since? A
+  // settled change is a step, and its still is kept.
+  const canvas = Object.assign(document.createElement("canvas"), { width: 160, height: 90 });
+  rec.timer = setInterval(async () => {
+    if (!video.videoWidth) return;
+    const now = performance.now();
+    const print = screenPrint(video, canvas);
+    if (!rec.stills.length) { rec.print = print; await keepStill(rec, now); return; }
+    const moving = printsDiffer(print, rec.last) > 0.002;
+    rec.last = print;
+    if (moving) { rec.quietSince = now; return; }
+    if (now - rec.quietSince >= REC_SETTLE_MS && printsDiffer(print, rec.print) > 0.004) {
+      rec.print = print;
+      await keepStill(rec, now);
+    }
+    showRecording(rec);
+  }, REC_LOOK_MS);
+  rec.ticker = setInterval(() => {
+    showRecording(rec);
+    if ((performance.now() - rec.started) / 1000 >= REC_LONGEST) stopRecording();
+  }, 250);
+  const bar = $("#recording");
+  bar.hidden = false;
+  bar.querySelector(".rec-mic").hidden = !mic;
+  if (mic) bar.querySelector(".rec-mic").innerHTML = "<i></i><i></i><i></i><i></i>";
+  showRecording(rec);
+}
+
+async function keepStill(rec, now) {
+  const blob = await stillOf(rec.video);
+  if (blob) rec.stills.push({ blob, at: (now - rec.started) / 1000 });
+}
+
+function showRecording(rec) {
+  const seconds = (performance.now() - rec.started) / 1000;
+  const bar = $("#recording");
+  const steps = rec.stills.length;
+  bar.querySelector(".rec-meta").textContent = `${clock(seconds)} of ${clock(REC_LONGEST)} · ${steps} step${steps === 1 ? "" : "s"} caught${rec.mic ? " · narrating" : ""}`;
+  if (rec.mic) bar.querySelectorAll(".rec-mic i").forEach((bit, n) => bit.style.setProperty("--v", Math.max(0, (rec.level || 0) - n * 0.12).toFixed(2)));
+}
+
+function stopRecording(discard = false) {
+  const rec = recording;
+  if (!rec) return;
+  rec.discarded = rec.discarded || discard;
+  clearInterval(rec.timer);
+  clearInterval(rec.ticker);
+  if (rec.recorder.state !== "inactive") rec.recorder.stop();
+  else finishRecording(rec);
+}
+
+// Stopped: the last moment is a step too, the stills are thinned to what
+// the model can take, and it all goes in the tray to send.
+async function finishRecording(rec) {
+  if (rec.finished) return;
+  rec.finished = true;
+  const seconds = (performance.now() - rec.started) / 1000;
+  if (!rec.discarded && rec.video.videoWidth) await keepStill(rec, performance.now());
+  rec.screen.getTracks().forEach((t) => t.stop());
+  if (rec.mic) rec.mic.getTracks().forEach((t) => t.stop());
+  if (rec.audio) rec.audio.close().catch(() => {});
+  recording = null;
+  $("#recording").hidden = true;
+  if (rec.discarded) { toast("Recording discarded"); return; }
+  if (!rec.chunks.length) { toast("Nothing was recorded"); return; }
+  if (attached.length >= MAX_ATTACHED) { toast(`Up to ${MAX_ATTACHED} files go with one message`); return; }
+
+  let stills = rec.stills;
+  if (stills.length > REC_MAX_STILLS) {
+    // The first and the last, and the rest evenly between.
+    const keep = new Set([0, stills.length - 1]);
+    for (let n = 1; keep.size < REC_MAX_STILLS; n++) keep.add(Math.round(n * (stills.length - 1) / (REC_MAX_STILLS - 1)));
+    stills = stills.filter((_, i) => keep.has(i));
+  }
+  const file = new File(rec.chunks, `screen-recording-${stamp()}.webm`, { type: "video/webm" });
+  const item = { name: file.name, size: file.size, recording: true, seconds, uploading: true, url: stills.length ? URL.createObjectURL(stills[0].blob) : "" };
+  attached.push(item);
+  renderTray();
+  updateSend();
+  if (!input.value.trim()) input.placeholder = "Say what it shows, or just send it to teach Flash";
+  input.focus();
+
+  let narration = "";
+  if (rec.pcm.length) {
+    const pcm = new Int16Array(rec.pcm.reduce((n, part) => n + part.length, 0));
+    let at = 0;
+    for (const part of rec.pcm) { pcm.set(part, at); at += part.length; }
+    narration = base64Of(new Uint8Array(pcm.buffer));
+  }
+  try {
+    const sent = { name: item.name, data: await readBase64(file), narration, stills: [] };
+    for (const still of stills) sent.stills.push({ data: await readBase64(still.blob), at: Math.round(still.at * 10) / 10 });
+    const kept = await api("/api/upload", sent);
+    Object.assign(item, { id: kept.id, name: kept.name, kind: kept.kind, uploading: false });
+    if (kept.unheard) toast("Your words were not written down: voice mode's listening model is not set up (Settings > Voice models). The steps still go.");
+  } catch (err) {
+    if (attached.includes(item)) { toast(`The recording did not upload: ${err.message}`); unattach(item); }
+    return;
+  }
+  if (attached.includes(item)) { renderTray(); updateSend(); }
+}
+
+$("#recording [data-rec-stop]").onclick = () => stopRecording();
+$("#recording [data-rec-discard]").onclick = () => stopRecording(true);
 
 // For a phone or a tablet, where there is no Ctrl V to press.
 async function pasteImage() {

@@ -129,6 +129,21 @@ TITLE_CHARS = 48
 MAX_BODY_BYTES = 1_000_000
 # An upload arrives as base64 in JSON: a third bigger than the file.
 MAX_UPLOAD_BODY = workspace.MAX_UPLOAD_BYTES * 4 // 3 + 64_000
+# A screen recording carries its stills, and what the user said over it
+# as 16 kHz 16-bit audio, besides the video.
+MAX_NARRATION_BYTES = 16_000 * 2 * 60 * 5
+MAX_RECORDING_BODY = (
+    workspace.MAX_UPLOAD_BYTES
+    + workspace.MAX_STILLS * workspace.MAX_STILL_BYTES
+    + MAX_NARRATION_BYTES
+) * 4 // 3 + 64_000
+# What a recording sent with nothing typed asks for.
+RECORDING_PROMPT = (
+    "This is a screen recording of me doing something I want you to be "
+    "able to do. Work out the procedure from it, step by step, and save "
+    "it as a skill with skill_manage so you can do it for me next time. "
+    "Ask me about anything you cannot tell from it."
+)
 # Voice from the page arrives as base64 16 kHz 16-bit mono audio, up to
 # the longest turn the terminal's voice mode would record.
 MAX_VOICE_BODY = (
@@ -1173,7 +1188,13 @@ class Session:
             return
         self.wakes[chat.id] = 0
         if chat.title == "New chat":
-            named = text or (files[0]["name"] if files else "")
+            # Untyped, a recording names its chat for what it is, not by
+            # its file's name.
+            first = files[0] if files else {}
+            named = text or (
+                "Screen recording" if first.get("kind") == "video"
+                else first.get("name", "")
+            )
             chat.title = " ".join(named.split())[:TITLE_CHARS] or chat.title
             self.hub.publish({"type": "chats", "chat": chat.id})
         event: dict = {"type": "user", "text": text}
@@ -1503,22 +1524,96 @@ def attachments(files: Optional[list]) -> list[dict]:
     return found
 
 
+def recording_stills(body: dict) -> tuple[list[dict], str]:
+    """A screen recording's stills from the page, each with what the
+    user said from its moment to the next one's, when they narrated and
+    the listening model is there to hear it; and, when it is not, why
+    their words could not be heard."""
+
+    stills = []
+    for still in (body.get("stills") or [])[:workspace.MAX_STILLS]:
+        try:
+            jpeg = base64.b64decode(str(still.get("data") or ""),
+                                    validate=True)
+            at = max(0.0, float(still.get("at") or 0))
+        except (ValueError, TypeError, AttributeError):
+            continue
+        if jpeg:
+            stills.append({"jpeg": jpeg, "at": at, "said": ""})
+    try:
+        pcm = base64.b64decode(str(body.get("narration") or ""),
+                               validate=True)[:MAX_NARRATION_BYTES]
+    except (ValueError, TypeError):
+        pcm = b""
+    if not stills or len(pcm) < voice.SAMPLE_RATE:  # under half a second
+        return stills, ""
+    per_second = voice.SAMPLE_RATE * 2
+    for number, still in enumerate(stills):
+        start = int(still["at"] * per_second) & ~1
+        end = (
+            int(stills[number + 1]["at"] * per_second) & ~1
+            if number + 1 < len(stills) else len(pcm)
+        )
+        if end - start < per_second // 2:
+            continue
+        said, why = voice.transcribe(pcm[start:end])
+        if why:
+            # No listening model: the stills go without the words.
+            return stills, why
+        still["said"] = said
+    return stills, ""
+
+
+def recording_note(info: dict) -> str:
+    """What the model is told of a screen recording it is shown the
+    stills of."""
+
+    stills = workspace.recording_stills(info["id"])
+    lines = [
+        f"Attached screen recording: {info['path']}. The images with "
+        f"this message are {len(stills)} stills from it, in order, each "
+        "caught as the screen changed:"
+    ]
+    for number, still in enumerate(stills, start=1):
+        at = int(still["at"])
+        line = f"{number}. at {at // 60}:{at % 60:02d}"
+        if still["said"]:
+            line += f", the user saying: \"{still['said']}\""
+        lines.append(line)
+    lines.append(
+        "If it shows how the user does something, work out the steps "
+        "from it and save them as a skill with skill_manage, so you can "
+        "do it for them; ask about anything the stills do not show."
+    )
+    return "\n".join(lines)
+
+
 def outgoing(ai, text: str, files: Optional[list]) -> tuple[str, list]:
     """What the model gets for a message with attachments: its images
-    alongside it, and any other file named by path, for its tools to
-    open."""
+    alongside it, a screen recording's stills with what was said over
+    them, and any other file named by path, for its tools to open."""
 
     images: list[str] = []
     notes: list[str] = []
+    recorded = False
     for meta in files or []:
         info = workspace.upload_info(meta.get("id", ""))
         if info is None:
             continue
         if info["kind"] == "image":
             images.append(info["path"])
+        elif info["kind"] == "video" and info.get("stills"):
+            recorded = True
+            images.extend(
+                s["path"] for s in workspace.recording_stills(info["id"])
+            )
+            notes.append(recording_note(info))
         else:
             notes.append(f"Attached file: {info['path']}")
-    asked = text or (ai.DEFAULT_IMAGE_PROMPT if images else "")
+    asked = text or (
+        RECORDING_PROMPT if recorded
+        else ai.DEFAULT_IMAGE_PROMPT if images else ""
+    )
     content = "\n\n".join(part for part in (asked, "\n".join(notes)) if part)
     return content, images
 
@@ -2859,7 +2954,7 @@ class Handler(BaseHTTPRequestHandler):
 
         length = int(self.headers.get("Content-Length") or 0)
         limit = {
-            "/api/upload": MAX_UPLOAD_BODY,
+            "/api/upload": MAX_RECORDING_BODY,
             "/api/voice/hear": MAX_VOICE_BODY,
         }.get(url.path, MAX_BODY_BYTES)
         if length > limit:
@@ -2901,7 +2996,12 @@ class Handler(BaseHTTPRequestHandler):
                 )
             except (ValueError, TypeError):
                 raise ValueError("that upload did not arrive whole") from None
-            return workspace.keep_upload(str(body.get("name") or ""), data)
+            stills, unheard = recording_stills(body)
+            kept = workspace.keep_upload(
+                str(body.get("name") or ""), data, stills or None,
+            )
+            # Narrated, but nothing to hear it with: the page says so.
+            return {**kept, "unheard": unheard} if unheard else kept
 
         if path == "/api/voice/hear":
             try:

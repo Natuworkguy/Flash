@@ -391,6 +391,9 @@ SHOWN_TYPES = {
     ".glb": "model/gltf-binary",
     ".stl": "model/stl",
     ".obj": "model/obj",
+    # Screen recordings the user made in the page, played back there.
+    ".webm": "video/webm",
+    ".mp4": "video/mp4",
 }
 DOCUMENT_TYPES = (".md", ".markdown", ".txt")
 MODEL_TYPES = (".glb", ".stl", ".obj")
@@ -506,6 +509,10 @@ def kept_file(file_id: str) -> Optional[tuple[Path, str]]:
 
 MAX_UPLOAD_BYTES = 20 * 1024 * 1024
 _UNSAFE_NAME = re.compile(r"[^\w.\- ]+")
+# A screen recording's stills: how many, and how big each.
+MAX_STILLS = 16
+MAX_STILL_BYTES = 1024 * 1024
+STILLS = "stills"
 
 
 def upload_path(file_id: str) -> Optional[Path]:
@@ -536,20 +543,52 @@ def upload_info(file_id: str) -> Optional[dict]:
         "mime": mime,
         "kind": (
             "image" if mime.startswith("image/")
+            else "video" if mime.startswith("video/")
             else "pdf" if suffix == ".pdf"
             else "model" if suffix in MODEL_TYPES
             else "file"
         ),
         "path": str(path),
+        **({"stills": len(recording_stills(file_id))}
+           if mime.startswith("video/") else {}),
     }
 
 
-def keep_upload(name: str, data: bytes) -> dict:
+def recording_stills(file_id: str) -> list[dict]:
+    """A screen recording's stills, in order: each {path, at, said}, AT
+    its time in seconds and SAID what the user said from there to the
+    next one, if they narrated."""
+
+    path = upload_path(file_id)
+    if path is None:
+        return []
+    folder = path.parent / STILLS
+    try:
+        index = json.loads((folder / "index.json").read_text("utf-8"))
+    except (OSError, ValueError):
+        return []
+    stills = []
+    for item in index if isinstance(index, list) else []:
+        still = folder / str(item.get("file", ""))
+        if still.parent == folder and still.is_file():
+            stills.append({
+                "path": str(still), "at": float(item.get("at") or 0),
+                "said": str(item.get("said") or ""),
+            })
+    return stills
+
+
+def keep_upload(
+    name: str, data: bytes, stills: Optional[list] = None,
+) -> dict:
     """Keep a file the user attached in the page, and describe it.
 
     Under its own name, in a folder of its own, so the model's tools
     can open it by a real path and the name still says what it is.
-    Nothing is run or unpacked: it is only written down.
+    Nothing is run or unpacked: it is only written down. A screen
+    recording comes with STILLS, the moments the page caught as the
+    screen changed: each {"jpeg": bytes, "at": seconds, "said": text},
+    kept beside it for the model to see.
     """
 
     if not data:
@@ -564,6 +603,21 @@ def keep_upload(name: str, data: bytes) -> dict:
     folder = store() / "uploads" / file_id
     folder.mkdir(parents=True, exist_ok=True)
     (folder / clean).write_bytes(data)
+    if stills:
+        kept = folder / STILLS
+        kept.mkdir()
+        index = []
+        for number, still in enumerate(stills[:MAX_STILLS], start=1):
+            jpeg = still.get("jpeg") or b""
+            if not jpeg or len(jpeg) > MAX_STILL_BYTES:
+                continue
+            file = f"{number:02d}.jpg"
+            (kept / file).write_bytes(jpeg)
+            index.append({
+                "file": file, "at": round(float(still.get("at") or 0), 1),
+                "said": " ".join(str(still.get("said") or "").split()),
+            })
+        (kept / "index.json").write_text(json.dumps(index), "utf-8")
     info = upload_info(file_id) or {}
     info.pop("path", None)
     return info
