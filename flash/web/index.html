@@ -511,6 +511,13 @@ body.voice-on .shell, body.voice-on #suggestions, body.voice-on #pending { displ
 .vm-head b { font-size: 14px; font-weight: 600; color: var(--text); }
 .vm-head span { font-size: 13px; color: var(--text-3); }
 .vm-list { border: 1px solid var(--border); border-radius: 14px; background: var(--surface); overflow: hidden; }
+.vm-styles { display: flex; flex-wrap: wrap; gap: 8px; align-items: stretch; margin-bottom: 4px; }
+.vm-style { flex: 1 1 140px; display: flex; flex-direction: column; gap: 3px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); text-align: left; transition: border-color 0.15s, background 0.15s; }
+.vm-style:hover { border-color: var(--border-strong); }
+.vm-style b { font-size: 13.5px; font-weight: 600; color: var(--text); }
+.vm-style span { font-size: 12px; color: var(--text-3); line-height: 1.35; }
+.vm-style.on { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, var(--surface)); }
+.vm-hear { align-self: center; }
 .vm-row { display: flex; align-items: center; gap: 12px; padding: 11px 12px 11px 14px; }
 .vm-row + .vm-row { border-top: 1px solid var(--border); }
 .vm-mark { width: 16px; flex: none; color: var(--accent); display: grid; place-items: center; }
@@ -5140,6 +5147,7 @@ async function drawVoiceModels(box = document.querySelector(".voice-models")) {
   if (!box.isConnected) return;
   box.textContent = "";
   if (r.missing.length) box.appendChild(el("p", "vm-missing")).textContent = r.install;
+  drawVoiceStyles(box, r);
   for (const [kind, title, sub] of VOICE_GROUPS) {
     box.insertAdjacentHTML("beforeend", `<div class="vm-head"><b>${title}</b><span>${sub}</span></div>`);
     const list = box.appendChild(el("div", "vm-list"));
@@ -5170,6 +5178,45 @@ async function drawVoiceModels(box = document.querySelector(".voice-models")) {
       }
     }
   }
+}
+
+// How the voice delivers what it says: warm, lively, calm, or plain, and
+// a line to hear it by.
+const VOICE_SAMPLE = "Hi! I'm Flash. Oh, you're working late tonight? Let's get this done together.";
+function drawVoiceStyles(box, r) {
+  box.insertAdjacentHTML("beforeend", `<div class="vm-head"><b>How it speaks</b><span>The same voice, delivered differently.</span></div>`);
+  const row = box.appendChild(el("div", "vm-styles"));
+  row.setAttribute("role", "radiogroup");
+  row.setAttribute("aria-label", "How it speaks");
+  for (const s of r.styles) {
+    const [name, what] = s.label.split(": ");
+    const chip = row.appendChild(el("button", "vm-style" + (s.current ? " on" : ""), `<b></b><span></span>`));
+    chip.type = "button";
+    chip.setAttribute("role", "radio");
+    chip.setAttribute("aria-checked", s.current);
+    chip.querySelector("b").textContent = name;
+    chip.querySelector("span").textContent = what || "";
+    chip.onclick = async () => {
+      if (s.current) return;
+      try { await command("voice-style", s.name); drawVoiceModels(box); toast(`Flash speaks ${name.toLowerCase()} now`); }
+      catch (error) { showFailure(error); }
+    };
+  }
+  const hear = el("button", "btn small with-icon vm-hear", `${icon("play")}<span>Hear it</span>`);
+  hear.type = "button";
+  hear.disabled = !(r.speaking || []).some((m) => m.current && m.installed);
+  hear.dataset.tip = hear.disabled ? "Download a voice first" : "Hear the voice in this style";
+  hear.onclick = async () => {
+    hear.disabled = true;
+    const ctx = new AudioContext();
+    try {
+      const audio = await makeSpeech(VOICE_SAMPLE, ctx);
+      await new Promise((done) => { const src = ctx.createBufferSource(); src.buffer = audio; src.connect(ctx.destination); src.onended = done; src.start(); });
+    } catch (error) { showFailure(error); }
+    ctx.close().catch(() => {});
+    hear.disabled = false;
+  };
+  row.appendChild(hear);
 }
 
 // A download under way: how far along, and a way to call it off.
@@ -6602,6 +6649,7 @@ async function readAloudNode(key, node) {
       mark(part.range);
       await new Promise((resolve) => {
         const said = new SpeechSynthesisUtterance(part.text);
+        browserVoice(said, part.text);
         said.onend = said.onerror = resolve;
         // A browser with no voice to speak in may never say it finished.
         setTimeout(resolve, 4000 + part.text.length * 90);
@@ -6615,6 +6663,28 @@ async function readAloudNode(key, node) {
     toast("This browser cannot read aloud");
   }
 }
+
+// The browser's own voice, when Flash's is not set up: its most natural
+// one in the page's language, said in the chosen style as near as a
+// browser goes (pace and pitch).
+const BROWSER_STYLES = { warm: [0.96, 1.04], lively: [1.06, 1.12], calm: [0.88, 0.98], plain: [1, 1] };
+const NATURAL = /natural|neural|online|premium|enhanced|samantha|ava|serena|google (uk|us) english/i;
+const ROBOTIC = /espeak|compact|novelty|whisper|zarvox|bad news|bells|trinoids/i;
+let pickedVoice;
+function browserVoice(said, text) {
+  if (pickedVoice === undefined) {
+    const lang = (navigator.language || "en").slice(0, 2);
+    const voices = speechSynthesis.getVoices().filter((v) => v.lang.startsWith(lang) && !ROBOTIC.test(v.name));
+    pickedVoice = voices.find((v) => NATURAL.test(v.name)) || voices.find((v) => v.default) || voices[0] || null;
+    // The list can arrive late: look again once it does.
+    if (!speechSynthesis.getVoices().length) pickedVoice = undefined;
+  }
+  if (pickedVoice) said.voice = pickedVoice;
+  const [rate, pitch] = BROWSER_STYLES[info.voice_style] || BROWSER_STYLES.warm;
+  said.rate = rate * (/\?\s*$/.test(text) ? 0.97 : /!\s*$/.test(text) ? 1.04 : 1);
+  said.pitch = pitch * (/\?\s*$/.test(text) ? 1.05 : 1);
+}
+if ("speechSynthesis" in window) speechSynthesis.addEventListener?.("voiceschanged", () => { pickedVoice = undefined; });
 
 function playSpeech(audio) {
   return new Promise((resolve) => {

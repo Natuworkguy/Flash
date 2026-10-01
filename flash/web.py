@@ -2024,6 +2024,7 @@ def status(ai) -> dict:
         "host_name": named,
         "auto": bool(ai.Config.no_command_confirmation),
         "compact": bool(ai.Config.auto_compact),
+        "voice_style": voice.voice_style(),
         # The scene actually in effect: a name that no longer finds one,
         # because the extension that brought it was removed, is none.
         "background": (
@@ -2151,6 +2152,12 @@ def voice_models(session: "Session") -> dict:
         "downloading": {"kind": job[0], "name": job[1]} if job else None,
         "missing": voice.web_missing(),
         "install": voice.INSTALL_HINT,
+        # How the voice delivers what it says.
+        "styles": [
+            {"name": name, "label": style.label,
+             "current": name == voice.voice_style()}
+            for name, style in voice.STYLES.items()
+        ],
     }
 
 
@@ -2470,6 +2477,12 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
         return {"ready": False}
 
     if name == "voice-models":
+        return voice_models(session)
+
+    if name == "voice-style":
+        if arg not in voice.STYLES:
+            raise ValueError(f"{arg!r} is not a voice style")
+        ai.set_config_var("VOICE_STYLE", arg)
         return voice_models(session)
 
     if name == "voice-cancel":

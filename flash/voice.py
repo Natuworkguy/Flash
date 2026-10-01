@@ -91,6 +91,13 @@ def piper_voice() -> str:
     return _setting("VOICE_PIPER_VOICE", DEFAULT_PIPER_VOICE)
 
 
+def voice_style() -> str:
+    """How Flash's voice delivers what it says: one of STYLES."""
+
+    style = _setting("VOICE_STYLE", DEFAULT_STYLE).lower()
+    return style if style in STYLES else DEFAULT_STYLE
+
+
 def silence_seconds() -> float:
     """How long a pause has to be before a spoken turn counts as over."""
 
@@ -165,9 +172,49 @@ LISTENING = (
 SPEAKING = (
     Choice("en_US-amy-low", 63_104_526, "Amy, fastest, for weaker machines"),
     Choice(DEFAULT_PIPER_VOICE, 63_201_294, "Amy, balanced"),
+    # Every medium voice is the same size of model.
+    Choice("en_US-kristin-medium", 63_201_294, "Kristin, warm and gentle"),
+    Choice("en_US-hfc_female-medium", 63_201_294,
+           "HFC, bright and friendly"),
     Choice("en_US-lessac-high", 113_895_201, "Lessac, clearest"),
     Choice("en_US-ryan-high", 120_786_792,
            "Ryan, clearest, for strong machines"),
+)
+
+# How the voice delivers a reply: its pace (Piper's length scale, above 1
+# slower), how much its intonation and voice vary from the flat reading
+# (noise scale), how much its rhythm does (noise width), and the breath
+# between sentences, in seconds. "plain" is Piper's own reading, as Flash
+# spoke before it had styles.
+
+
+@dataclass(frozen=True)
+class Style:
+    label: str
+    pace: float = 1.0
+    feeling: float = 0.0
+    rhythm: float = 0.0
+    breath: float = 0.0
+
+
+STYLES = {
+    "warm": Style("Warm: unhurried and friendly, with room to breathe",
+                  pace=1.06, feeling=0.74, rhythm=0.9, breath=0.32),
+    "lively": Style("Lively: brighter and quicker, with more bounce",
+                    pace=0.95, feeling=0.86, rhythm=1.0, breath=0.22),
+    "calm": Style("Calm: slow, soft and even",
+                  pace=1.16, feeling=0.6, rhythm=0.72, breath=0.45),
+    "plain": Style("Plain: the voice's own reading"),
+}
+DEFAULT_STYLE = "warm"
+
+# A sentence's own shape on top of the style: a question lifts and takes
+# its time, an exclamation comes a little quicker and more alive, and a
+# trailing-off sentence leaves a longer pause after it.
+# Where one sentence ends and the next starts: a mark, maybe a closing
+# quote or bracket, then a space; not the point in "3.5".
+_SENTENCE_BREAK = re.compile(
+    r"(?<=[.!?\u2026][\"')\]])\s+|(?<=[.!?\u2026])\s+"
 )
 
 DOWNLOAD_TIMEOUT = 30
@@ -724,18 +771,76 @@ def fit_for_voice(text: str) -> str:
     return " ".join(text.split())
 
 
-def _pcm_chunks(voice, text: str):
-    """Yield raw 16-bit audio for `text`, across Piper's two APIs."""
+def sentences(text: str) -> list[str]:
+    """TEXT in sentences, each with the mark that ends it."""
+
+    return [s.strip() for s in _SENTENCE_BREAK.split(text or "") if s.strip()]
+
+
+def delivery(sentence: str, style: Style) -> tuple[dict, float]:
+    """How SENTENCE is said in STYLE: Piper's settings for it, and the
+    seconds of quiet after it. Empty settings leave the voice's own."""
+
+    if not style.feeling:
+        return {}, 0.0
+    pace, feeling, breath = style.pace, style.feeling, style.breath
+    end = sentence.rstrip("\"')] ")
+    if end.endswith("?"):
+        pace *= 1.04
+        feeling += 0.04
+    elif end.endswith("!"):
+        pace *= 0.95
+        feeling += 0.08
+    elif end.endswith(("...", "\u2026")):
+        pace *= 1.06
+        breath *= 1.6
+    return {
+        "length_scale": round(pace, 3),
+        "noise_scale": round(feeling, 3),
+        "noise_w": style.rhythm,
+    }, breath
+
+
+def _pcm_chunks(voice, text: str, rate: int = 22050):
+    """Yield raw 16-bit audio for `text`, across Piper's two APIs: a
+    sentence at a time, each said as the voice style has it, with a
+    breath after it."""
 
     text = fit_for_voice(text)
     if not text:
         return
 
+    style = STYLES[voice_style()]
+    if not style.feeling:
+        yield from _said(voice, text, {})
+        return
+    for sentence in sentences(text):
+        settings, breath = delivery(sentence, style)
+        yield from _said(voice, sentence, settings)
+        if breath:
+            yield b"\x00\x00" * int(rate * breath)
+
+
+def _said(voice, text: str, settings: dict):
+    """TEXT in VOICE, with SETTINGS, in whichever API this Piper has."""
+
     if hasattr(voice, "synthesize_stream_raw"):
-        yield from voice.synthesize_stream_raw(text)
+        yield from voice.synthesize_stream_raw(text, **settings)
         return
 
-    for chunk in voice.synthesize(text):
+    config = None
+    if settings:
+        try:
+            from piper import SynthesisConfig
+        except ImportError:  # a Piper without it reads in its own way
+            SynthesisConfig = None
+        if SynthesisConfig is not None:
+            config = SynthesisConfig(
+                length_scale=settings["length_scale"],
+                noise_scale=settings["noise_scale"],
+                noise_w_scale=settings["noise_w"],
+            )
+    for chunk in voice.synthesize(text, syn_config=config):
         audio = getattr(chunk, "audio_int16_bytes", None)
         yield audio if audio is not None else bytes(chunk)
 
@@ -774,7 +879,7 @@ def speak(text: str) -> tuple[str, bool]:
             dtype="int16",
             channels=1,
         ) as stream:
-            for chunk in _pcm_chunks(voice, text):
+            for chunk in _pcm_chunks(voice, text, rate):
                 for start in range(0, len(chunk or b""), slice_bytes):
                     if barge.heard.is_set():
                         interrupted = True
@@ -854,7 +959,9 @@ def synthesize(text: str) -> tuple[bytes, str]:
     try:
         with _models_lock:
             voice, rate = _load_speaker()
-            pcm = b"".join(chunk or b"" for chunk in _pcm_chunks(voice, text))
+            pcm = b"".join(
+                chunk or b"" for chunk in _pcm_chunks(voice, text, rate)
+            )
     except ImportError:
         return b"", INSTALL_HINT
     except Exception as exc:  # noqa: BLE001
