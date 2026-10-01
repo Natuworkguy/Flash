@@ -1916,6 +1916,8 @@ def _ask_spark_model() -> str:
 def _show_spark(spark: "sparks.Spark") -> None:
     head = Text(f"\n{_bubble()} ", style=spark.colour)
     head.append(spark.name, style=f"bold {spark.colour}")
+    if spark.title:
+        head.append(f"  {spark.title}", style=spark.colour)
     found = sparks.project_of(spark)
     head.append(f"  {spark.handle} · on {sparks.model_of(spark) or 'no model'}"
                 f" · every {sparks.every_words(spark.every)}"
@@ -2118,6 +2120,16 @@ def _sparks_command(arg: str) -> None:
             spark = sparks.update(key, goal=extra)
             console.print(Text(f"{spark.name} has a new goal.", style=DIM))
             return
+        if action == "title" and key and extra:
+            spark = sparks.update(
+                key, title="" if extra.lower() == "none" else extra,
+            )
+            console.print(Text(
+                f"{spark.name} is your {spark.title} now."
+                if spark.title else f"{spark.name} has no title now.",
+                style=DIM,
+            ))
+            return
         if action == "watch" and key and extra:
             spark = sparks.update(
                 key, watch="" if extra.lower() == "none" else extra,
@@ -2180,7 +2192,7 @@ def _sparks_command(arg: str) -> None:
             "| every <name> <30m|2h|daily> | project <name> <project|none> "
             "| approve|deny|stop|share <name> | add <code|template> "
             "| templates | goal <name> <text> | watch <name> <folder|none> "
-            "| model <name> [model] "
+            "| model <name> [model] | title <name> <title|none> "
             "| always on|off]"
         )
         return
@@ -2207,7 +2219,10 @@ def _sparks_command(arg: str) -> None:
             body.append(f" · in {found.name}", style=DIM)
         if spark.unread:
             body.append(f"  {spark.unread} new", style=ACCENT)
-        body.append(f"\n     {spark.goal.splitlines()[0][:70]}\n", style=DIM)
+        body.append(
+            f"\n     {spark.title + ': ' if spark.title else ''}"
+            f"{spark.goal.splitlines()[0][:70]}\n", style=DIM,
+        )
     from . import keepalive
 
     body.append(f"\n  {_always_words(keepalive.status())}\n", style=DIM)
