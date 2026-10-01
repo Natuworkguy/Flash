@@ -258,7 +258,9 @@ class Config:
         cls.no_command_confirmation = bool(
             _int_env("NO_COMMAND_CONFIRMATION", 0, minimum=0)
         )
-        cls.system_one = bool(_int_env("SYSTEM_ONE", 0, minimum=0))
+        # On only with a model to ask: "none" is how the picker says off.
+        cls.system_one = bool(_int_env("SYSTEM_ONE", 0, minimum=0)) and \
+            bool((os.getenv("SYSTEM_ONE_MODEL") or "").strip())
         cls.show_stats = bool(_int_env("SHOW_STATS", 1, minimum=0))
         cls.voice = bool(_int_env("VOICE", 0, minimum=0))
         cls.background = (os.getenv("BACKGROUND") or "").strip()
@@ -2031,34 +2033,46 @@ def _email_command(arg: str) -> None:
     )
 
 
-SYSTEM_ONE_USAGE = "Usage: /systemone [on | off | model [name]]"
+SYSTEM_ONE_USAGE = "Usage: /systemone [on | off | model [name | none]]"
 
 
-def _system_one_ready(name: str) -> bool:
-    """Whether the server can run System One on NAME, saying why not.
+def _system_one_said_on(name: str) -> None:
+    Config.refresh()
+    console.print(Text(
+        f"System One on, with {name}.", style=f"bold {ACCENT}",
+    ))
+    if not Config.no_command_confirmation:
+        console.print(Text(
+            "  It starts work when autonomous mode does: Shift+Tab or "
+            "/auto on.", style=DIM,
+        ))
 
-    Checks the Ollama version first, since a server older than 0.35 has
-    no System One at all, then offers to download NAME if it is not
-    there.
-    """
+
+def _system_one_pick(name: str) -> None:
+    """Put NAME to work as System One, offering to download it first
+    when the server does not have it."""
 
     try:
-        version = systemone.check(Config.host)
+        systemone.check(Config.host)
+        if systemone.capable(Config.host, name) is None and not \
+                fetch_if_missing(ollama.Client(host=Config.host), name):
+            warn("  System One is as it was.")
+            return
+        name = systemone.choose(Config.host, name)
     except systemone.SystemOneError as exc:
         warn(f"  {exc}")
-        return False
-
-    console.print(Text(
-        f"  Ollama v{version} has System One.", style=DIM,
-    ))
-    return fetch_if_missing(ollama.Client(host=Config.host), name)
+        warn("  System One is as it was.")
+        return
+    _system_one_said_on(name)
 
 
 def _system_one_status() -> None:
     on = systemone.enabled()
     body = Text("  System One ")
     body.append("on" if on else "off", style=f"bold {ACCENT}" if on else DIM)
-    body.append(f"  model {systemone.model()}\n", style=DIM)
+    body.append(
+        f"  model {systemone.model() or 'none picked'}\n", style=DIM,
+    )
     if on and not Config.no_command_confirmation:
         body.append(
             "  It waits for autonomous mode (Shift+Tab or /auto on): "
@@ -2080,9 +2094,36 @@ def _system_one_status() -> None:
             f"{systemone.MIN_VERSION_TEXT}+.\n", style=DIM,
         )
     body.append(
-        "  /systemone on|off, /systemone model <name> to pick another "
-        "(" + ", ".join(n for n, _ in systemone.KNOWN_MODELS) + ").",
+        "  /systemone on|off, /systemone model to see the System One "
+        "models on this machine, /systemone model <name|none> to pick.",
         style=DIM,
+    )
+    console.print(body)
+
+
+def _system_one_models() -> None:
+    """The System One models on this Ollama, the one in use marked."""
+
+    try:
+        systemone.check(Config.host)
+        found = systemone.scan(Config.host)
+    except systemone.SystemOneError as exc:
+        warn(f"  {exc}")
+        return
+    if not found:
+        console.print(Text(f"  {systemone.no_models(Config.host)}", DIM))
+        return
+    current = systemone.model() if systemone.enabled() else ""
+    body = Text()
+    for name in found:
+        body.append(f"  {name}", style=ACCENT)
+        if systemone.same_model(name, current):
+            body.append("  in use", style=f"bold {ACCENT}")
+        body.append("\n")
+    body.append(f"  none{'  in use' if not current else ''}\n", style=DIM)
+    body.append(
+        "  /systemone model <name> picks one, /systemone model none "
+        "switches System One off.", style=DIM,
     )
     console.print(body)
 
@@ -2099,20 +2140,16 @@ def _system_one_command(arg: str) -> None:
         return
 
     if action in ("on", "enable", "true", "1"):
-        if not _system_one_ready(systemone.model()):
+        if systemone.model():
+            _system_one_pick(systemone.model())
+            return
+        try:
+            name = systemone.turn_on(Config.host)
+        except systemone.SystemOneError as exc:
+            warn(f"  {exc}")
             warn("  System One stays off.")
             return
-        systemone.set_enabled(True)
-        Config.refresh()
-        console.print(Text(
-            f"System One on, with {systemone.model()}.",
-            style=f"bold {ACCENT}",
-        ))
-        if not Config.no_command_confirmation:
-            console.print(Text(
-                "  It starts work when autonomous mode does: Shift+Tab or "
-                "/auto on.", style=DIM,
-            ))
+        _system_one_said_on(name)
         return
 
     if action in ("off", "disable", "false", "0"):
@@ -2123,34 +2160,11 @@ def _system_one_command(arg: str) -> None:
 
     if action == "model":
         if not rest:
-            body = Text()
-            current = systemone.model()
-            for name, note in systemone.KNOWN_MODELS:
-                body.append(f"  {name:<12}", style=ACCENT)
-                body.append(note, style=DIM)
-                if name == current:
-                    body.append("  in use", style=f"bold {ACCENT}")
-                body.append("\n")
-            if current not in dict(systemone.KNOWN_MODELS):
-                body.append(f"  {current:<12}", style=ACCENT)
-                body.append("in use\n", style=f"bold {ACCENT}")
-            body.append(
-                "  /systemone model <name> picks one; any model trained for "
-                "System One works.", style=DIM,
-            )
-            console.print(body)
-            return
-        if systemone.enabled() and not _system_one_ready(rest):
-            warn(f"  System One stays on {systemone.model()}.")
-            return
-        try:
-            name = systemone.set_model(rest)
-        except systemone.SystemOneError as exc:
-            warn(f"  {exc}")
-            return
-        console.print(Text(
-            f"System One model set to {name}.", style=DIM,
-        ))
+            _system_one_models()
+        elif systemone.is_none(rest):
+            _system_one_command("off")
+        else:
+            _system_one_pick(rest)
         return
 
     warn(SYSTEM_ONE_USAGE)
