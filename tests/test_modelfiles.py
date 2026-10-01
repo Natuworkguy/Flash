@@ -9,7 +9,7 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 MODELS = ROOT / "models"
 MODELFILES = sorted(MODELS.glob("*.Modelfile"))
-FLAGSHIP = MODELS / "flash-onyx-2.5.Modelfile"
+FLAGSHIP = MODELS / "flash-onyx-2.6.Modelfile"
 
 # The recap at the foot of the prompt repeats the rules above it by
 # design, so the duplication check stops where it starts.
