@@ -1597,6 +1597,61 @@ def team_block(spark: Spark) -> str:
     return "\n".join(lines)
 
 
+# A model that says to try again: too many requests at once (Ollama's
+# cloud runs only so many for an account, so a chat with a spark can
+# take its own shift's turn), a rate limit, or a server briefly down. A
+# shift waits these out rather than failing part way through.
+RETRY_STATUSES = {429, 500, 502, 503, 504}
+RETRY_WORDS = re.compile(
+    r"too many|concurrent|rate.?limit|overloaded|busy|try again|"
+    r"temporarily|unavailable|timed? ?out",
+    re.IGNORECASE,
+)
+RETRY_WAITS = (2, 5, 10, 20, 30)
+RETRY_STEP_SECONDS = 0.5
+
+
+def _passing(error: Exception) -> bool:
+    """Whether ERROR, from the model, is worth asking again after."""
+
+    if isinstance(error, (ConnectionError, TimeoutError)):
+        return True
+    if isinstance(error, ollama.ResponseError):
+        return (
+            getattr(error, "status_code", None) in RETRY_STATUSES
+            or bool(RETRY_WORDS.search(str(error)))
+        )
+    return False
+
+
+def _pause(seconds: float, stopping: Optional[Callable[[], bool]]) -> None:
+    """Wait SECONDS, a little at a time, so Stop still stops."""
+
+    until = time.monotonic() + seconds
+    while time.monotonic() < until:
+        if stopping is not None and stopping():
+            raise Stopped()
+        time.sleep(min(RETRY_STEP_SECONDS, until - time.monotonic()))
+
+
+def _ask_model(
+    client, doing: Callable[[str], None],
+    stopping: Optional[Callable[[], bool]], **request,
+):
+    """client.chat(**REQUEST), asked again after a refusal that says to
+    try again, up to len(RETRY_WAITS) times."""
+
+    for wait in (*RETRY_WAITS, None):
+        try:
+            return client.chat(**request)
+        except Exception as error:  # re-raised unless it is passing
+            if wait is None or not _passing(error):
+                raise
+            doing(f"The model is busy, trying again in {wait}s")
+            _pause(wait, stopping)
+    raise AssertionError("unreachable")
+
+
 def _work(
     spark: Spark,
     messages: list[dict],
@@ -1647,7 +1702,8 @@ def _work(
             if stopping is not None and stopping():
                 raise Stopped()
             doing("Thinking")
-            response = client.chat(
+            response = _ask_model(
+                client, doing, stopping,
                 model=model, messages=messages, tools=schemas,
                 options=subagents.chat_options(),
             )
@@ -1679,7 +1735,8 @@ def _work(
     if tool_calls:
         doing("Writing")
         messages.append({"role": "system", "content": last_word})
-        response = client.chat(
+        response = _ask_model(
+            client, doing, stopping,
             model=model, messages=messages,
             options=subagents.chat_options(),
         )
