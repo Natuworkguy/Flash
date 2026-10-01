@@ -34,6 +34,7 @@ from . import (
     editor,
     extensions,
     learning,
+    mail,
     model3d,
     plan,
     skills,
@@ -307,7 +308,9 @@ def init(config, ):
 # The page tools cap themselves too, and their element list is only useful
 # whole: a trim through the middle of it takes away the very numbers the
 # next click has to name.
-_SELF_LIMITING_TOOLS = {"read", "open_page", "interact"}
+_SELF_LIMITING_TOOLS = {
+    "read", "open_page", "interact", "check_inbox", "read_email",
+}
 
 
 def trim_tool_output(text: str, name: str = "") -> str:
@@ -1657,13 +1660,131 @@ EDITOR_TOOLS: list[dict[str, Any]] = [
     },
 ]
 
+EMAIL_TOOLS: list[dict[str, Any]] = [
+    {
+        "type": "function",
+        "function": {
+            "name": "check_inbox",
+            "description": (
+                "List the user's newest emails, newest first: who from, "
+                "the subject, the first lines, and each one's uid. Nothing "
+                "is marked read, moved or deleted."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "unread_only": {
+                        "type": "boolean",
+                        "description": "True for unread emails only.",
+                    },
+                    "query": {
+                        "type": "string",
+                        "description": (
+                            "Optional words to find in them: a name, an "
+                            "address, a subject."
+                        ),
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": (
+                            f"How many, at most {mail.MAX_LIST}. "
+                            f"Default {mail.LIST_LIMIT}."
+                        ),
+                    },
+                    "folder": {
+                        "type": "string",
+                        "description": "Optional folder. Default INBOX.",
+                    },
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "read_email",
+            "description": (
+                "Read one email in full, by its uid from check_inbox. It "
+                "stays unread if it was."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "uid": {
+                        "type": "string",
+                        "description": "Its uid, from check_inbox.",
+                    },
+                    "folder": {
+                        "type": "string",
+                        "description": "Optional folder. Default INBOX.",
+                    },
+                },
+                "required": ["uid"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "send_email",
+            "description": (
+                "Send an email from the user's address, or reply to one "
+                "by its uid. The user sees it and says yes or no first, "
+                "every time. Write it as the user would, in their name."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "to": {
+                        "type": "string",
+                        "description": (
+                            "Who it goes to. Leave it out on a reply to "
+                            "answer the sender."
+                        ),
+                    },
+                    "subject": {
+                        "type": "string",
+                        "description": (
+                            "The subject. Leave it out on a reply for "
+                            "Re: and the original's."
+                        ),
+                    },
+                    "body": {
+                        "type": "string",
+                        "description": "The whole email, in plain text.",
+                    },
+                    "reply_to": {
+                        "type": "string",
+                        "description": (
+                            "The uid of the email this answers, to thread "
+                            "it as a reply."
+                        ),
+                    },
+                    "cc": {
+                        "type": "string",
+                        "description": "Optional: who else it goes to.",
+                    },
+                },
+                "required": ["body"],
+            },
+        },
+    },
+]
+
+
+def available_tools() -> list[dict[str, Any]]:
+    """The built-in tools that can work right now: email's only once it
+    is set up, so a model is not offered tools that can only fail."""
+
+    return tools + (EMAIL_TOOLS if mail.configured() else [])
+
 
 def turn_tools() -> list[dict[str, Any]]:
     """The tools offered on this turn: the editor's only inside VS Code,
     and whatever the installed extensions add."""
 
     return (
-        tools
+        available_tools()
         + (EDITOR_TOOLS if editor.available() else [])
         + extensions.tool_schemas(frozenset(FUNCTIONS))
     )
@@ -1800,6 +1921,129 @@ def agent_result(agent_id: str, wait_seconds: Any = None) -> str:
         return f"Sub-agent {agent_id} failed: {entry.result}"
 
     return entry.result
+
+
+# --- Email ----------------------------------------------------------------
+
+
+def _truthy(value: Any) -> bool:
+    return value is True or str(value).strip().lower() in ("true", "yes", "1")
+
+
+def check_inbox(
+    unread_only: Any = False, query: str = "", limit: Any = 0,
+    folder: str = "INBOX",
+) -> str:
+    """The newest emails, newest first, without marking any read."""
+
+    unread = _truthy(unread_only)
+    what = "unread" if unread else "newest"
+    tool_line(
+        f"CheckInbox({what}"
+        + (f", {query!r}" if str(query or "").strip() else "")
+        + (f", {folder}" if folder and folder != "INBOX" else "") + ")"
+    )
+    try:
+        limit = int(limit or 0) or mail.LIST_LIMIT
+    except (TypeError, ValueError):
+        limit = mail.LIST_LIMIT
+    try:
+        found = mail.inbox(unread, str(query or ""), limit, folder or "INBOX")
+    except mail.MailError as exc:
+        tool_result(str(exc), style=ERROR)
+        return f"Error: {exc}"
+    if not found:
+        said = "No unread email." if unread else "No email found."
+        tool_result(said)
+        return said
+    tool_result(f"{len(found)} email{plural(len(found))}")
+    lines = [
+        f"{len(found)} email{plural(len(found))}, newest first. read_email "
+        "with a uid reads one; nothing here was marked read."
+    ]
+    for item in found:
+        count = item["attachments"]
+        clip = f" [{count} attached]" if count else ""
+        unread = " (unread)" if item["unread"] else ""
+        subject = item["subject"] or "(no subject)"
+        lines.append(
+            f"- uid {item['uid']}{unread} · {item['date']} · "
+            f"{item['from']}\n  {subject}{clip}: {item['snippet']}"
+        )
+    return "\n".join(lines)
+
+
+def read_email(uid: Any = "", folder: str = "INBOX") -> str:
+    """One email in full, by its uid from check_inbox. It stays unread."""
+
+    tool_line(f"ReadEmail({uid})")
+    try:
+        found = mail.read(str(uid), folder or "INBOX")
+    except mail.MailError as exc:
+        tool_result(str(exc), style=ERROR)
+        return f"Error: {exc}"
+    tool_result(found["subject"] or "(no subject)")
+    body = found["body"] or "(no text)"
+    if len(body) > mail.BODY_CHARS:
+        body = body[:mail.BODY_CHARS] + "\n[... the rest is cut]"
+    head = [
+        f"uid: {found['uid']}", f"From: {found['from']}",
+        f"To: {found['to']}",
+    ]
+    if found["cc"]:
+        head.append(f"Cc: {found['cc']}")
+    head += [f"Date: {found['date']}", f"Subject: {found['subject']}"]
+    if found["attachments"]:
+        head.append(f"Attachments: {', '.join(found['attachments'])}")
+    return "\n".join(head) + f"\n\n{body}"
+
+
+def send_email(
+    to: str = "", subject: str = "", body: str = "", reply_to: Any = "",
+    cc: str = "",
+) -> str:
+    """Send an email, or reply to one by its uid. Always asks first."""
+
+    try:
+        original = mail.read(str(reply_to)) if str(reply_to or "").strip() \
+            else None
+        message = mail.compose(to, subject, body, original, cc)
+    except mail.MailError as exc:
+        tool_line(f"SendEmail({to or reply_to})")
+        tool_result(str(exc), style=ERROR)
+        return f"Error: {exc}"
+
+    tool_line(f"SendEmail({message['To']})")
+    preview = (
+        f"To: {message['To']}"
+        + (f"\nCc: {message['Cc']}" if message.get("Cc") else "")
+        + f"\nSubject: {message['Subject']}\n\n"
+        + message.get_content().strip()
+    )
+    tool_result(preview)
+
+    # Asked every time, autonomous mode or not: an email cannot be taken
+    # back, and it goes out in the user's name.
+    notify_needs_input()
+    answer = remote_answer(f"Send this email?\n{preview}")
+    if answer is None:
+        prompt = Text(f"  {BRANCH}  ", style=DIM)
+        prompt.append("Send this email? ", style=DIM)
+        prompt.append("y", style=f"bold {ACCENT}")
+        prompt.append("/n ", style=DIM)
+        console.print(prompt, end="")
+        answer = typed()
+    if answer != "y":
+        tool_result("Not sent: the user said no", style=WARN)
+        return "Not sent: the user said no. Do not send it again."
+
+    try:
+        sent_to = mail.send(message)
+    except mail.MailError as exc:
+        tool_result(str(exc), style=ERROR)
+        return f"Error: {exc}"
+    tool_result(f"Sent to {sent_to}")
+    return f"Sent to {sent_to}."
 
 
 def ask_spark(spark: str = "", question: str = "") -> str:
@@ -4706,6 +4950,9 @@ FUNCTIONS = {
     "make_spark": make_spark,
     "ask_spark": ask_spark,
     "give_spark": give_spark,
+    "check_inbox": check_inbox,
+    "read_email": read_email,
+    "send_email": send_email,
     "open_in_editor": open_in_editor,
 }
 
@@ -4717,7 +4964,15 @@ FUNCTIONS = {
 SUBAGENT_TOOL_NAMES = (
     "shell", "glob", "grep", "read", "write", "edit", "multi_edit",
     "web_search", "fetch", "get_os", "get_date", "reason",
+    "check_inbox", "read_email",
 )
+
+# A spark's tools: a sub-agent's, and sending email, which it asks the
+# user about in its window, as it does any step that asks.
+SPARK_TOOL_NAMES = SUBAGENT_TOOL_NAMES + ("send_email",)
+
+# Tools that ask every time, autonomous mode or not.
+ALWAYS_ASK_TOOL_NAMES = ("send_email",)
 
 # Tools that stop for a y/n unless autonomous mode is on. A sub-agent has
 # no terminal to ask from, so it only gets these in autonomous mode.

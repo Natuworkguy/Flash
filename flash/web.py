@@ -2684,6 +2684,9 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
         learning.refresh()
         return {"entries": memory.list_memory(), "text": text}
 
+    if name.startswith("email"):
+        return _email_command(name, body)
+
     if name == "memory-forget":
         try:
             memory.forget_memory(int(arg))
@@ -2695,6 +2698,32 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
     if name == "context":
         return context_use(ai, session.chat(chat_id))
 
+    raise ValueError(f"unknown command {name!r}")
+
+
+def _email_command(name: str, body: dict) -> dict:
+    """Settings > Email: connect the user's email, test it, disconnect."""
+
+    from . import mail
+
+    try:
+        if name == "email":
+            return {"email": mail.settings()}
+        if name == "email-save":
+            # A blank password keeps the one already saved.
+            password = str(body.get("password") or "")
+            mail.save(
+                str(body.get("address") or ""), password or None,
+                str(body.get("imap") or ""), str(body.get("smtp") or ""),
+            )
+            return {"email": mail.settings(), "said": mail.test()}
+        if name == "email-test":
+            return {"email": mail.settings(), "said": mail.test()}
+        if name == "email-forget":
+            mail.forget()
+            return {"email": mail.settings()}
+    except mail.MailError as exc:
+        raise ValueError(str(exc)) from None
     raise ValueError(f"unknown command {name!r}")
 
 

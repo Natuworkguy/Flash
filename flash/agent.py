@@ -118,12 +118,15 @@ def allowed_tool_names() -> tuple[str, ...]:
 
     from . import tools as flash_tools  # deferred: avoids a module cycle
 
-    if flash_tools.NO_COMMAND_CONFIRMATION:
-        return flash_tools.SUBAGENT_TOOL_NAMES
+    # Only tools that can work now: email's once it is set up.
+    available = {t["function"]["name"] for t in flash_tools.available_tools()}
 
     return tuple(
         name for name in flash_tools.SUBAGENT_TOOL_NAMES
-        if name not in flash_tools.CONFIRMED_TOOL_NAMES
+        if name in available and (
+            flash_tools.NO_COMMAND_CONFIRMATION
+            or name not in flash_tools.CONFIRMED_TOOL_NAMES
+        )
     )
 
 
@@ -204,7 +207,7 @@ def _run(entry: SubAgent) -> None:
         client = ollama.Client(host=host)
         allowed = allowed_tool_names()
         schemas = [
-            t for t in flash_tools.tools
+            t for t in flash_tools.available_tools()
             if t["function"]["name"] in allowed
         ]
         messages: list[dict] = [
