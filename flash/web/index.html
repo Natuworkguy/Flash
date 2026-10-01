@@ -4441,19 +4441,23 @@ function otherKeeperBanner(a) {
   fix.type = "button";
   fix.onclick = async () => {
     fix.disabled = true;
+    fix.textContent = "Taking over…";
     try {
-      await command("sparks-always", "off", null);
-      sparksAlways = (await command("sparks-always", "on", null)).always;
+      sparksAlways = (await command("sparks-takeover", "", null)).always;
       toast("Your sparks run on this Flash now");
       banner.remove();
-    } catch (error) { showFailure(error); fix.disabled = false; }
+    } catch (error) {
+      banner.querySelector(".words").textContent = error.message;
+      fix.textContent = "Try again";
+      fix.disabled = false;
+    }
   };
   banner.appendChild(fix);
   return banner;
 }
 
 function alwaysWords(a) {
-  if (a.other) return `Your sparks are being run by ${a.other}, so their shifts use its code and its tools, not this one's. Switch this off and on again to run them on this one.`;
+  if (a.other) return `Your sparks are being run by ${a.other}, so their shifts use its code and its tools, not this one's. Run them on this Flash from the Sparks page.`;
   if (!a.installed) return "Off: sparks work while Flash is open, in the terminal or here. On, Flash starts a keeper of its own at login, so they keep working with everything closed and send a notification when they have news.";
   if (a.running) return "On: a keeper started at login is doing the work, and keeps doing it with Flash closed.";
   if (a.here) return "On: this Flash is doing the work right now, and the keeper started at login takes over when it closes.";

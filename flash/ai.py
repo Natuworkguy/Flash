@@ -2186,6 +2186,16 @@ def _sparks_command(arg: str) -> None:
         if action == "always":
             _sparks_always(rest.lower())
             return
+        if action == "takeover":
+            from . import keepalive
+
+            try:
+                state = keepalive.take_over()
+            except keepalive.KeepAliveError as exc:
+                warn(str(exc))
+                return
+            console.print(Text(_always_words(state), style=DIM))
+            return
         if action == "rounds":
             if rest:
                 sparks.set_shift_rounds(rest)
@@ -2508,8 +2518,7 @@ def _always_words(state: dict) -> str:
         return (
             f"Your sparks are being run by {state['other']}, so their "
             "shifts use its code and its tools, not this one's. "
-            "/sparks always off, then /sparks always on, runs them on this "
-            "one."
+            "/sparks takeover runs them on this one."
         )
     if not state["installed"]:
         return (
