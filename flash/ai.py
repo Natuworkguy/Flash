@@ -164,7 +164,15 @@ sentences, no code blocks, tables, lists, or emojis unless they ask for
 one, because only the prose is spoken and the rest is silently dropped.
 What they said reached you through speech recognition, so expect missing
 punctuation and the occasional misheard word; ask when a name, path, or
-command sounds wrong rather than acting on a guess.""".rstrip()
+command sounds wrong rather than acting on a guess.
+
+Sound like a warm, friendly person talking, not a document being read:
+contractions, everyday words, and a little feeling where it fits ("Oh,
+nice!", "Hmm, let me think.", "Ah, I see what happened."). Mix short
+sentences with longer ones. Your punctuation is how your voice sounds: a
+question mark lifts it, an exclamation mark brightens it, and a full stop
+lets it rest, so use them as you would speaking. Do not open with stock
+phrases like "Certainly!" or "Great question"; just answer, kindly.""".rstrip()
 
 
 class FlashError(Exception):
@@ -2873,6 +2881,32 @@ def _voice_input() -> Optional[str]:
     return heard
 
 
+def voice_styles() -> list[str]:
+    from . import voice  # deferred: voice pulls in audio on demand
+
+    return list(voice.STYLES)
+
+
+def _voice_style(name: str) -> None:
+    """Show the voice's styles, or pick one."""
+
+    from . import voice  # deferred: voice pulls in audio on demand
+
+    if name:
+        if name not in voice.STYLES:
+            warn(f"No style called {name!r}. Try {', '.join(voice.STYLES)}.")
+            return
+        set_config_var("VOICE_STYLE", name)
+    body = Text("\nHow Flash's voice speaks\n\n", style="bold")
+    for style_name, style in voice.STYLES.items():
+        current = style_name == voice.voice_style()
+        body.append("  ● " if current else "    ", style=ACCENT)
+        body.append(f"{style_name:<8}", style=ACCENT if current else "")
+        body.append(f"{style.label.split(': ', 1)[-1]}\n", style=DIM)
+    body.append("\n  /voice style <name> picks one.\n", style=DIM)
+    console.print(body)
+
+
 def _speak_reply(text: str, heard: bool = True) -> bool:
     """Read a finished reply aloud when the turn was spoken to us.
 
@@ -3321,8 +3355,13 @@ def main() -> None:
                     _set_voice(True)
                 elif arg in ("off", "disable", "false", "0"):
                     _set_voice(False)
+                elif arg == "style" or arg.startswith("style "):
+                    _voice_style(arg[len("style"):].strip())
                 else:
-                    warn("Usage: /voice [on|off|toggle]")
+                    warn(
+                        "Usage: /voice [on|off|toggle|style "
+                        f"[{'|'.join(voice_styles())}]]"
+                    )
                 continue
 
             if uin == "/set" or uin.startswith("/set "):

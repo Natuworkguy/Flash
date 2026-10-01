@@ -240,10 +240,12 @@ def _fake_piper(monkeypatch, tmp_path, *, streaming: bool):
         def load(path):
             loaded = _Voice()
             if streaming:
-                loaded.synthesize_stream_raw = lambda text: [_pcm(1000, 8)]
+                loaded.synthesize_stream_raw = (
+                    lambda text, **settings: [_pcm(1000, 8)]
+                )
             return loaded
 
-        def synthesize(self, text):
+        def synthesize(self, text, syn_config=None):
             return [_Chunk()]
 
     piper = types.ModuleType("piper")
@@ -262,7 +264,9 @@ def test_speak_plays_audio_through_both_piper_apis(
 
     assert why == ""  # nosec B101
     assert interrupted is False  # nosec B101
-    assert stream.written == [_pcm(1000, 8)]  # nosec B101
+    assert stream.written[0] == _pcm(1000, 8)  # nosec B101
+    # Then the breath a warm voice takes after a sentence: quiet.
+    assert all(not any(chunk) for chunk in stream.written[1:])  # nosec B101
 
 
 def test_speak_says_nothing_about_an_empty_reply(monkeypatch):
@@ -765,10 +769,110 @@ def test_what_reaches_piper_is_sayable(monkeypatch, tmp_path):
     monkeypatch.setattr(voice, "_speaker", None)
     heard = []
     voice_obj, _rate = _load_speaker()
-    voice_obj.synthesize_stream_raw = lambda text: heard.append(text) or []
+    voice_obj.synthesize_stream_raw = (
+        lambda text, **settings: heard.append(text) or []
+    )
 
     list(voice._pcm_chunks(voice_obj, "Nested [[ae]] is_ok"))
 
     assert heard == ["Nested ae is ok"]  # nosec B101
     # Piper's own complaints about sounds it lacks stay out of the way.
     assert logging.getLogger("piper").level == logging.ERROR  # nosec B101
+
+
+# --- How the voice delivers it -------------------------------------------
+
+
+class _Heard:
+    """A Piper of either kind that keeps what it was asked to say, and
+    how."""
+
+    def __init__(self, streaming):
+        self.said = []
+        if streaming:
+            self.synthesize_stream_raw = self._raw
+
+    def _raw(self, text, **settings):
+        self.said.append((text, settings))
+        return [b"\x01\x00" * 10]
+
+    def synthesize(self, text, syn_config=None):
+        self.said.append((text, syn_config))
+        return [types.SimpleNamespace(audio_int16_bytes=b"\x01\x00" * 10)]
+
+
+def test_sentences_end_where_a_sentence_ends():
+    said = voice.sentences(
+        'Oh, nice! It costs 3.50 now. Did it work? Well... "Done." Okay'
+    )
+
+    assert said == [  # nosec B101
+        "Oh, nice!", "It costs 3.50 now.", "Did it work?", "Well...",
+        '"Done."', "Okay",
+    ]
+
+
+def test_each_sentence_gets_its_own_shape():
+    warm = voice.STYLES["warm"]
+
+    told, _ = voice.delivery("Here it is.", warm)
+    asked, _ = voice.delivery("Is it here?", warm)
+    glad, _ = voice.delivery("It is here!", warm)
+    _, trailing = voice.delivery("Well...", warm)
+
+    assert asked["length_scale"] > told["length_scale"]  # nosec B101
+    assert glad["length_scale"] < told["length_scale"]  # nosec B101
+    assert glad["noise_scale"] > told["noise_scale"]  # nosec B101
+    assert trailing > warm.breath  # nosec B101
+    plain = voice.delivery("Here.", voice.STYLES["plain"])
+    assert plain == ({}, 0.0)  # nosec B101
+
+
+def test_the_warm_voice_breathes_between_sentences(monkeypatch):
+    monkeypatch.setenv("VOICE_STYLE", "warm")
+    piper_voice = _Heard(streaming=True)
+
+    audio = b"".join(
+        voice._pcm_chunks(piper_voice, "Hi there! All done.", 100)
+    )
+
+    assert [text for text, _ in piper_voice.said] == [  # nosec B101
+        "Hi there!", "All done.",
+    ]
+    assert all(s["noise_scale"] for _, s in piper_voice.said)  # nosec B101
+    # Two sentences of 20 bytes each, and 0.32 s of quiet after each at
+    # 100 samples a second.
+    assert len(audio) == 2 * 20 + 2 * 32 * 2  # nosec B101
+
+
+def test_the_newer_piper_is_handed_the_style_as_its_config(monkeypatch):
+    piper = types.ModuleType("piper")
+    piper.SynthesisConfig = lambda **kw: kw
+    monkeypatch.setitem(sys.modules, "piper", piper)
+    monkeypatch.setenv("VOICE_STYLE", "lively")
+    piper_voice = _Heard(streaming=False)
+
+    list(voice._pcm_chunks(piper_voice, "Ready?", 100))
+
+    [(text, config)] = piper_voice.said
+    assert text == "Ready?"  # nosec B101
+    assert config["noise_w_scale"] == 1.0  # nosec B101
+    assert config["length_scale"] < 1  # nosec B101
+
+
+def test_plain_reads_as_the_voice_always_did(monkeypatch):
+    monkeypatch.setenv("VOICE_STYLE", "plain")
+    piper_voice = _Heard(streaming=True)
+
+    audio = b"".join(
+        voice._pcm_chunks(piper_voice, "Hi there! All done.", 100)
+    )
+
+    assert piper_voice.said == [("Hi there! All done.", {})]  # nosec B101
+    assert len(audio) == 20  # nosec B101
+
+
+def test_an_unknown_style_falls_back_to_warm(monkeypatch):
+    monkeypatch.setenv("VOICE_STYLE", "shouty")
+
+    assert voice.voice_style() == "warm"  # nosec B101
