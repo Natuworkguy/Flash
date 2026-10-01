@@ -26,6 +26,7 @@ from rich.text import Text
 
 from . import agent as subagents
 from . import (
+    awake,
     background,
     checkpoint,
     context,
@@ -1837,7 +1838,12 @@ def _spark_state(spark: "sparks.Spark") -> str:
         f"next shift in {wait}m" if wait < 120 else
         f"next shift in {wait // 60}h"
     )
-    if spark.status == sparks.FAILED:
+    if spark.status == sparks.FAILED and spark.retries:
+        state = (
+            "could not reach its model · trying again "
+            f"{'soon' if wait <= 0 else f'in {wait}m'}"
+        )
+    elif spark.status == sparks.FAILED:
         state = f"last shift failed · {state}"
     return state
 
@@ -3103,6 +3109,8 @@ def main() -> None:
         screen_redrawn(painted)
 
     while True:
+        # Between turns: nothing to keep the computer awake for.
+        awake.let_go("terminal")
         try:
             pending_images: Optional[list[str]] = None
             heard = False
@@ -3577,6 +3585,7 @@ def main() -> None:
             )
 
             checkpoint.start_turn(_turn_label(uin))
+            awake.hold("terminal")
             clear_collapsed()
             # A local backend runs one generation at a time, and this
             # turn is the one the user is waiting on.
