@@ -1070,8 +1070,18 @@ button.item-row:hover { background: var(--hover); }
 #sparks-btn.busy svg { color: var(--working); filter: drop-shadow(0 0 4px color-mix(in srgb, var(--working) 60%, transparent)); }
 /* The team, in the sidebar: each spark's face, name and title, and what
    it is doing. Bots, not conversations, as Grok Bot has it. */
-#spark-roster { flex: none; max-height: 34vh; overflow-y: auto; padding: 4px 0 2px; }
+#spark-roster { flex: none; max-height: 34vh; overflow-y: auto; padding: 4px 0 2px; transition: max-height 0.32s var(--ease), opacity 0.2s var(--ease), padding 0.32s var(--ease); }
 #spark-roster:empty { display: none; }
+/* It folds away, as Recents does: a chevron in the Sparks row. */
+#spark-roster.folded { max-height: 0; opacity: 0; padding: 0; overflow: hidden; }
+#spark-roster.folded.gone { visibility: hidden; }
+#sparks-btn .fold { display: grid; place-items: center; width: 20px; height: 20px; margin: -2px -4px -2px 2px; border-radius: 6px; color: var(--text-3); opacity: 0; transition: opacity 0.14s, background 0.14s, color 0.14s; }
+#sparks-btn .fold[hidden] { display: none; }
+#sparks-btn .fold svg { width: 13px; height: 13px; transition: transform 0.28s var(--spring); }
+#sparks-btn .fold:hover { color: var(--text); background: var(--hover); }
+#sparks-btn:hover .fold, #sparks-btn .fold:focus-visible, #sparks-btn .fold[aria-expanded="false"] { opacity: 1; }
+#sparks-btn .fold[aria-expanded="false"] svg { transform: rotate(-90deg); }
+#sparks-btn .count:empty + .fold { margin-left: auto; }
 .spark-mate { display: flex; align-items: center; gap: 10px; width: calc(100% - 16px); margin: 0 8px; padding: 6px 10px 6px 12px; border-radius: 9px; text-align: left; color: var(--text-2); transition: background 0.12s, color 0.12s; }
 .spark-mate:hover, .spark-mate.current { background: var(--hover); color: var(--text); }
 .spark-mate .spark-av { --s: 24px; }
@@ -3999,6 +4009,8 @@ function renderRoster() {
   const open = chats.get(current);
   const here = open ? open.spark : viewSpark;
   $("#sparks-btn").classList.toggle("busy", sparkList.some((sp) => sp.status === "working" || sp.answering));
+  const fold = $("#sparks-btn .fold");
+  if (fold) fold.hidden = !sparkList.length;
   box.replaceChildren(...sparkList.map((sp, i) => {
     const [kind, doing] = sparkPresence(sp);
     const row = el("button", "spark-mate" + (sp.id === here && view === "chat" ? " current" : ""), `<span class="stack"><span class="who"></span><span class="doing"></span></span>`);
@@ -4018,6 +4030,24 @@ function renderRoster() {
     };
     return row;
   }));
+}
+
+// The roster folds away, and stays that way in this browser until opened.
+function foldRoster(fold, instant) {
+  const box = $("#spark-roster");
+  const b = $("#sparks-btn .fold");
+  b.setAttribute("aria-expanded", !fold);
+  b.setAttribute("aria-label", fold ? "Show your sparks" : "Hide your sparks");
+  b.dataset.tip = fold ? "Show your sparks" : "Hide your sparks";
+  savePref("roster", fold ? "folded" : "open");
+  clearTimeout(box.hiding);
+  if (instant) box.style.transition = "none";
+  box.classList.toggle("folded", fold);
+  // Hidden once folded, so its buttons are out of the Tab order.
+  if (!fold) box.classList.remove("gone");
+  else if (instant) box.classList.add("gone");
+  else box.hiding = setTimeout(() => box.classList.add("gone"), 320);
+  if (instant) { void box.offsetWidth; box.style.transition = ""; }
 }
 
 // In a chat with a spark that is waiting on you, its approval card sits
@@ -8357,7 +8387,19 @@ $("#top-new").innerHTML = icon("compose");
 $("#new-chat .plus").innerHTML = icon("plus");
 $("#projects-btn").innerHTML = icon("folder") + "<span>Projects</span>";
 $("#skills-btn").innerHTML = icon("book") + "<span>Skills</span>";
-$("#sparks-btn").innerHTML = icon("spark") + "<span>Sparks</span><span class=\"count\"></span>";
+$("#sparks-btn").innerHTML = icon("spark") + "<span>Sparks</span><span class=\"count\"></span><span class=\"fold\" role=\"button\" tabindex=\"0\" hidden>" + icon("chevDown") + "</span>";
+// The chevron folds the roster; the rest of the row opens the page.
+$("#sparks-btn .fold").addEventListener("click", (e) => {
+  e.stopPropagation();
+  foldRoster(e.currentTarget.getAttribute("aria-expanded") === "true");
+});
+$("#sparks-btn .fold").addEventListener("keydown", (e) => {
+  if (e.key !== "Enter" && e.key !== " ") return;
+  e.preventDefault();
+  e.stopPropagation();
+  foldRoster(e.currentTarget.getAttribute("aria-expanded") === "true");
+});
+foldRoster(pref("roster", "open") === "folded", true);
 $("#extensions-btn").innerHTML = icon("puzzle") + "<span>Extensions</span>";
 $("#search-btn").innerHTML = icon("search") + "<span>Search</span>";
 $("#recents-btn i").innerHTML = icon("chevDown");
