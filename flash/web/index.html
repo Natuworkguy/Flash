@@ -225,29 +225,6 @@ body.side-closed #sidebar { margin-left: -272px; }
 }
 .chat .rename { flex: 1; min-width: 0; margin: 3px 4px; padding: 3px 6px; font: inherit; color: var(--text); background: var(--surface); border: 1px solid color-mix(in srgb, var(--text) 30%, transparent); border-radius: 7px; outline: none; }
 .chat .live { flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); margin-right: 12px; animation: pulse 1.2s ease-in-out infinite; }
-/* Tasks a chat started, as Cowork's Dispatch lists them: under it, each
-   with where it stands. */
-.tasks { margin: 0 0 4px 26px; padding: 1px 0; border-left: 1px dashed var(--border-strong); }
-.tasks .chat { width: calc(100% - 16px); margin-left: 8px; }
-.tasks .chat .name { font-size: 13px; }
-.task-state { flex: none; display: inline-flex; align-items: center; gap: 5px; margin-right: 10px; font-size: 11px; color: var(--text-3); white-space: nowrap; }
-.task-state::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
-.task-state.running { color: var(--working); }
-.task-state.running::before { animation: pulse 1.2s ease-in-out infinite; }
-.task-state.asking { color: var(--accent); }
-.task-state.done { color: #3fb56d; }
-.task-state.failed { color: var(--del); }
-.tasks .chat:hover .task-state { display: none; }
-.task-card { border: 1px solid var(--border); border-radius: 14px; padding: 12px 14px; margin: 14px 0; background: var(--surface); animation: rise 0.26s var(--ease) both; }
-.task-card.failed, .task-card.stopped { border-color: color-mix(in srgb, var(--del) 40%, transparent); }
-.task-card .top { display: flex; align-items: center; gap: 10px; font-size: 13.5px; }
-.task-card .top b { flex: 1; min-width: 0; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.task-card .body { margin-top: 8px; font-size: 14px; max-height: 260px; overflow: auto; }
-.task-card .body > :first-child { margin-top: 0; }
-.task-card .body > :last-child { margin-bottom: 0; }
-.task-from { display: flex; align-items: center; gap: 10px; margin: 6px 0 14px; padding: 9px 12px; border-radius: 12px; font-size: 13px; color: var(--text-2); background: var(--hover); }
-.task-from > span:not(.task-state) { flex: 1; min-width: 0; }
-.task-from .task-state { margin-right: 0; }
 .side-foot { margin-top: auto; padding: 8px 0 12px; border-top: 1px solid var(--border); }
 .side-foot .side-row svg { color: var(--text-3); }
 .side-sep { height: 1px; background: var(--border); margin: 6px 12px; }
@@ -3519,7 +3496,6 @@ function drawEntry(entry, ctx) {
     case "answered": { const card = messagesEl.querySelector(`[data-ask="${entry.id}"]`); if (card) settleAsk(card, entry.answer); break; }
     case "error": { const node = el("div", "block error", icon("alert") + "<span></span>"); node.lastChild.textContent = entry.text; messagesEl.appendChild(node); break; }
     case "note": messagesEl.appendChild(el("div", "block note")).textContent = entry.text; break;
-    case "task": messagesEl.appendChild(taskCard(entry)); break;
     case "stats": {
       const reply = ctx.lastReply;
       const text = statsText(entry);
@@ -3532,59 +3508,6 @@ function drawEntry(entry, ctx) {
       break;
     }
   }
-}
-
-// Tasks ----------------------------------------------------------------------
-// Flash hands work to tasks, as Cowork's Dispatch does: each a chat of its
-// own, under the one that started it in the sidebar, whose result comes
-// back to that chat as a card.
-
-const TASK_WORDS = { running: "Running", asking: "Needs your answer", done: "Done", failed: "Error", stopped: "Stopped" };
-
-function taskStateOf(chat) {
-  if (chat.task === "running" && !chat.busy) return ["running", "Waiting its turn"];
-  return [chat.task, TASK_WORDS[chat.task] || ""];
-}
-
-function taskCard(entry) {
-  const card = el("div", `task-card ${entry.state}`, `<div class="top"><span class="task-state ${entry.state}"></span><b></b><button type="button" class="btn small">Open task</button></div><div class="body assistant"></div>`);
-  card.querySelector(".task-state").textContent = TASK_WORDS[entry.state] || "";
-  card.querySelector("b").textContent = entry.title;
-  card.querySelector(".body").innerHTML = markdown(entry.text || "*It said nothing.*");
-  card.querySelector("button").onclick = () => (chats.has(entry.task) ? switchTo(entry.task) : toast("That task's chat is gone."));
-  return card;
-}
-
-// Above a task's own chat: where it came from, and the way back.
-function taskFrom(chat) {
-  const parent = chats.get(chat.parent);
-  const [state, words] = taskStateOf(chat);
-  const box = el("div", "task-from", `<span class="task-state ${state}"></span><span></span>`);
-  box.firstChild.textContent = words;
-  box.children[1].textContent = parent ? `A task Flash started from “${parent.title}”. Its result goes back there.` : "A task Flash started from a chat that is gone now.";
-  if (parent) {
-    const back = el("button", "btn small", "Back to it");
-    back.type = "button";
-    back.onclick = () => switchTo(parent.id);
-    box.appendChild(back);
-  }
-  return box;
-}
-
-// A chat the page has not seen: a task Flash just started, say. Its
-// events wait here until it is fetched whole, then play over it.
-const unseenChats = new Map();
-async function fetchChat(id) {
-  if (unseenChats.has(id)) return;
-  unseenChats.set(id, []);
-  let r = null;
-  try { r = await api("/api/state?chat=" + encodeURIComponent(id)); } catch (_) { r = null; }
-  const waiting = unseenChats.get(id) || [];
-  unseenChats.delete(id);
-  if (!r || !r.chat) { refreshLite(); return; }
-  if (!chats.has(id)) chats.set(id, { ...r.chat, partial: r.chat.partial || "", thinking: r.chat.thinking || "" });
-  for (const event of waiting) if (event.seq > r.seq) applyToChat(event);
-  refreshLite();
 }
 
 // The newest reply keeps its actions showing, as chat apps do.
@@ -3615,7 +3538,6 @@ function drawChat() {
   const empty = !chat || (!chat.log.length && !chat.busy && !chat.queued);
   document.body.classList.toggle("empty", empty);
   if (!empty) {
-    if (chat.parent) messagesEl.appendChild(taskFrom(chat));
     chat.log.forEach((entry, index) => { drawCtx.index = index; drawEntry(entry, drawCtx); });
     markLatest();
     drawStreaming();
@@ -3899,19 +3821,6 @@ function drawGeneral(body) {
   };
   body.appendChild(row);
 
-  // As Cowork does: a long turn, task or shift is not cut off by sleep.
-  const awakeRow = el("button", "setting-row", `<span class="what"><b>Keep the computer awake while Flash works</b><span>While a chat, a task or a spark's shift is working, the computer does not go to sleep. The screen still dims and locks as usual, and it sleeps again once Flash is done.</span></span><span class="switch" aria-hidden="true"></span>`);
-  awakeRow.type = "button";
-  awakeRow.setAttribute("role", "switch");
-  awakeRow.setAttribute("aria-checked", info.awake !== false);
-  awakeRow.onclick = async () => {
-    const on = awakeRow.getAttribute("aria-checked") !== "true";
-    awakeRow.setAttribute("aria-checked", on);
-    try { info.awake = (await command("awake-setting", on ? "on" : "off")).awake; }
-    catch (error) { awakeRow.setAttribute("aria-checked", !on); showFailure(error); }
-  };
-  body.appendChild(awakeRow);
-
   body.insertAdjacentHTML("beforeend", `<h2 class="settings-section settings-gap">Sparks</h2><p class="settings-sub">Agents that keep working on a goal, on a schedule. Make and read them on the Sparks page.</p>`);
   const always = el("button", "setting-row sparks-always-row", `<span class="what"><b>Keep working when Flash is closed</b><span></span></span><span class="switch" aria-hidden="true"></span>`);
   always.type = "button";
@@ -4089,9 +3998,6 @@ function sparkState(spark) {
   if (spark.paused) return "Paused";
   const wait = Math.round((spark.next_run - Date.now() / 1000) / 60);
   const next = wait <= 0 ? "Starting soon" : wait < 120 ? `Next shift in ${wait} min` : wait < 2880 ? `Next shift in ${Math.round(wait / 60)} h` : `Next shift in ${Math.round(wait / 1440)} d`;
-  // It could not reach its model, and tries again soon, as Cowork's
-  // scheduled tasks do.
-  if (spark.status === "failed" && spark.retries) return `Couldn't reach its model · trying again ${wait <= 0 ? "soon" : `in ${wait} min`}`;
   return spark.status === "failed" ? `Last shift failed · ${next}` : next;
 }
 
@@ -4101,7 +4007,6 @@ function sparkPresence(spark) {
   if (spark.status === "working") return ["working", spark.activity ? spark.activity : "Working"];
   if (spark.answering) return ["working", "Answering you"];
   if (spark.paused) return ["paused", "Paused"];
-  if (spark.status === "failed" && spark.retries) return ["failed", "Couldn't reach its model"];
   if (spark.status === "failed") return ["failed", "Last shift failed"];
   return ["idle", spark.unread ? `${spark.unread} new report${spark.unread === 1 ? "" : "s"}` : "Ready"];
 }
@@ -6565,15 +6470,6 @@ function apply(event) {
   if (event.type === "sparks") { sparksChanged(); return; }
   if (event.type === "browsers") { if (view === "settings" && settingsTab === "security") renderBrowsers(); return; }
 
-  if (event.chat && !chats.has(event.chat)) {
-    if (unseenChats.has(event.chat)) unseenChats.get(event.chat).push(event);
-    else { fetchChat(event.chat); unseenChats.get(event.chat).push(event); }
-    return;
-  }
-  applyToChat(event);
-}
-
-function applyToChat(event) {
   const chat = chats.get(event.chat);
   if (!chat) { if (event.chat) refreshLite(); return; }
   const here = event.chat === current && view === "chat";
@@ -6676,8 +6572,8 @@ function refreshLite() {
     const ids = state.chats.map((c) => c.id);
     for (const c of state.chats) {
       const known = chats.get(c.id);
-      if (known) Object.assign(known, { title: c.title, busy: c.busy, queued: c.queued, pending: c.pending || [], project: c.project, spark: c.spark, updated: c.updated, parent: c.parent, task: c.task });
-      else fetchChat(c.id);
+      if (known) Object.assign(known, { title: c.title, busy: c.busy, queued: c.queued, pending: c.pending || [], project: c.project, spark: c.spark, updated: c.updated });
+      else chats.set(c.id, { ...c, log: [], partial: "", thinking: "" });
     }
     for (const id of [...chats.keys()]) if (!ids.includes(id)) chats.delete(id);
     order = ids;
@@ -6780,19 +6676,7 @@ function renderChats() {
   // first; the rest follow under Chats.
   const groups = new Map();
   const loose = [];
-  // A task goes under the chat that started it, while that is listed.
-  const listed = new Set(visibleChats());
-  const tasksOf = new Map();
-  for (const id of listed) {
-    const parent = chats.get(id).parent;
-    if (parent && listed.has(parent)) {
-      if (!tasksOf.has(parent)) tasksOf.set(parent, []);
-      tasksOf.get(parent).push(id);
-    }
-  }
-  for (const list of tasksOf.values()) list.sort((a, b) => chats.get(a).created - chats.get(b).created);
   for (const id of visibleChats()) {
-    if (chats.get(id).parent && listed.has(chats.get(id).parent)) continue;
     const p = chats.get(id).project && projectOf(chats.get(id).project);
     if (p) { if (!groups.has(p.id)) groups.set(p.id, []); groups.get(p.id).push(id); } else loose.push(id);
   }
@@ -6816,18 +6700,7 @@ function renderChats() {
   }
   if (groups.size && loose.length) nav.appendChild(el("div", "group-label", "Chats"));
   for (const id of loose) places.push([id, nav]);
-  // Each chat's tasks right after it, in a list of their own.
-  for (let n = 0; n < places.length; n++) {
-    const [id, holder] = places[n];
-    const under = tasksOf.get(id);
-    if (!under || !under.length) continue;
-    const list = el("div", "tasks");
-    list.dataset.parent = id;
-    places.splice(n + 1, 0, ...under.map((tid) => [tid, list, holder]));
-    n += under.length;
-  }
-  for (const [id, holder, outer] of places) {
-    if (outer && !holder.isConnected) outer.appendChild(holder);
+  for (const [id, holder] of places) {
     const chat = chats.get(id);
     shownChats.add(id);
     const fresh = before && !before.has(id);
@@ -6852,10 +6725,7 @@ function renderChats() {
     };
     open.ondblclick = () => renameInSide(id, row);
     row.appendChild(open);
-    if (chat.parent && chat.task) {
-      const [state, words] = taskStateOf(chat);
-      row.appendChild(el("span", `task-state ${state}`, esc(words)));
-    } else if (chat.busy || chat.queued) row.appendChild(el("span", "live"));
+    if (chat.busy || chat.queued) row.appendChild(el("span", "live"));
     const acts = el("span", "acts");
     acts.append(
       button("", "edit", "Rename", "", () => renameInSide(id, row)),
@@ -6868,10 +6738,6 @@ function renderChats() {
   // Folded, the label still says how many are in there.
   $("#recents-btn .count").textContent = shownChats.size || "";
   renderRoster();
-  // The open task's own header follows where it stands.
-  const head = messagesEl.querySelector(".task-from");
-  const open = chats.get(current);
-  if (head && open && open.parent && view === "chat") head.replaceWith(taskFrom(open));
   if (calm.matches) return;
   for (const row of nav.querySelectorAll(".chat")) {
     const before = was.get(row.dataset.chat);

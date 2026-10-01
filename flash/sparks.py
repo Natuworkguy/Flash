@@ -38,7 +38,6 @@ from typing import Optional
 import ollama
 
 from . import agent as subagents
-from . import awake
 from .dashes import undash
 from .paths import ENV_PATH, FLASH_DIR
 from .sysprompt import get_model_system_prompt
@@ -72,11 +71,6 @@ NOTES_CHARS = 4000
 
 MAX_LESSONS = 30
 MAX_REPORTS = 40
-# A shift that cannot reach its model tries again after this many
-# minutes, then this many, and so on, before it is filed as failed: a
-# laptop just awake, its VPN or Ollama not up yet. As Cowork's
-# scheduled tasks re-run.
-RETRY_MINUTES = (5, 15, 30)
 # How many of its rated reports a shift is shown, and how much of each.
 MAX_RATED = 6
 RATED_CHARS = 280
@@ -383,9 +377,6 @@ class Spark:
     # doing meanwhile.
     replying: float = 0.0
     reply_activity: str = ""
-    # Shifts in a row that could not reach the model, each tried again
-    # after RETRY_MINUTES: 0 once one gets through.
-    retries: int = 0
 
     @property
     def handle(self) -> str:
@@ -1484,28 +1475,7 @@ def _opening(why: str, inbox: list) -> str:
     return "\n\n".join(parts)
 
 
-def unreachable(error: BaseException) -> bool:
-    """Whether ERROR is the model not being there, rather than the
-    shift going wrong: no connection, or none in time."""
-
-    if isinstance(error, (ConnectionError, TimeoutError)):
-        return True
-    names = {kind.__name__ for kind in type(error).__mro__}
-    if names & {"ConnectError", "ConnectTimeout", "ReadTimeout",
-                "TimeoutException", "NetworkError"}:
-        return True
-    return "failed to connect" in str(error).lower()
-
-
 def shift(spark_id: str, client=None) -> Optional[Report]:
-    """Run one shift of SPARK_ID now, on this thread, and file its report,
-    with the computer kept awake while it works."""
-
-    with awake.working(f"spark:{spark_id}"):
-        return _shift(spark_id, client)
-
-
-def _shift(spark_id: str, client=None) -> Optional[Report]:
     """Run one shift of SPARK_ID now, on this thread, and file its report.
 
     A paused spark still runs when asked to. One that waits on a step
@@ -1535,8 +1505,6 @@ def _shift(spark_id: str, client=None) -> Optional[Report]:
     _changed()
 
     steps: list[str] = list(resuming["steps"]) if resuming else []
-    # It could not reach its model at all: tried again soon, not filed.
-    cut_off = False
     # The web chats that gave it a job this shift, for its report.
     chats = list(resuming.get("chats", [])) if resuming else list(
         dict.fromkeys(i["chat"] for i in inbox if i.get("chat"))
@@ -1648,7 +1616,6 @@ def _shift(spark_id: str, client=None) -> Optional[Report]:
             text=f"This shift failed: {e.__class__.__name__}: {e}",
             failed=True, steps=steps,
         )
-        cut_off = unreachable(e)
 
     # The chats that asked get the report: the asking too, so they know
     # it waits on the user.
@@ -1657,22 +1624,6 @@ def _shift(spark_id: str, client=None) -> Optional[Report]:
         spark = find(spark_id)
         if spark is None:
             return report  # removed mid-shift: nowhere to file it
-        if cut_off and not resuming and spark.retries < len(RETRY_MINUTES):
-            # Nothing to report yet: it tries again soon, with whatever
-            # it was handed still to do.
-            wait = RETRY_MINUTES[spark.retries]
-            spark.retries += 1
-            spark.inbox = inbox + spark.inbox
-            spark.why = spark.why or why
-            spark.status = FAILED
-            spark.activity = ""
-            spark.stop_asked = False
-            spark.asked = False
-            spark.next_run = time.time() + wait * 60
-            _save(spark)
-            _changed()
-            return report
-        spark.retries = 0
         spark.reports.append(report)
         del spark.reports[:-MAX_REPORTS]
         spark.notes = notes[0][:NOTES_CHARS]
