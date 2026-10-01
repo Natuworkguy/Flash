@@ -641,7 +641,15 @@ button.doc:hover { border-color: var(--border-strong); }
 .composer-row > :not(#model-btn):not(#context) { flex-shrink: 0; }
 #model-btn span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #model-btn svg { width: 14px; height: 14px; margin-right: -2px; }
-#context { font-size: 12px; color: var(--text-3); padding: 0 4px; }
+#context { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-3); padding: 0 4px; font-variant-numeric: tabular-nums; cursor: default; }
+#context[hidden] { display: none; }
+#context .ctx-track { width: 44px; height: 5px; border-radius: 99px; background: var(--border); overflow: hidden; }
+#context .ctx-fill { display: block; height: 100%; width: 0; border-radius: inherit; background: var(--accent); transition: width 0.5s var(--ease), background 0.3s; }
+#context.warn .ctx-fill { background: var(--warn); }
+#context.warn .ctx-pct { color: var(--warn); }
+#context.full .ctx-fill { background: var(--del); }
+#context.full .ctx-pct { color: var(--del); }
+@media (max-width: 480px) { #context .ctx-track { width: 28px; } }
 #send {
   width: 34px; height: 34px; border-radius: 11px; flex: none;
   display: grid; place-items: center;
@@ -1764,7 +1772,7 @@ body.resizing-viewer iframe { pointer-events: none; }
             <button type="button" class="pill" id="project-btn" data-tip="Start in a project" aria-haspopup="listbox"></button>
             <button type="button" class="pill" id="spark-btn" hidden data-tip="Open this spark"></button>
             <button type="button" class="pill" id="agents-btn" hidden data-tip="Sub-agents"><span class="pulse-dot"></span><span id="agents-count"></span></button>
-            <span id="context"></span>
+            <span id="context" role="meter" aria-label="Context used" aria-valuemin="0" aria-valuemax="100" hidden><span class="ctx-track"><span class="ctx-fill"></span></span><span class="ctx-pct"></span></span>
             <button type="button" class="pill" id="model-btn" data-tip="Switch model" data-keys="Alt M"><span id="model-name">No model</span><i id="model-chev"></i></button>
             <button type="submit" id="send" data-tip="Send" data-keys="Enter" aria-label="Send" disabled></button>
           </div>
@@ -7255,12 +7263,32 @@ function typeIn(text) {
   tick();
 }
 
+// The context bar under the composer: how much of the room this chat's
+// history gets is in use. Past it, older messages are summarized.
+const CONTEXT_WARN = 75, CONTEXT_FULL = 90;
+
+function showContext(use) {
+  const box = $("#context");
+  if (!use || !use.used) { box.hidden = true; return; }
+  const share = Math.max(0, Math.min(100, use.share || 0));
+  box.hidden = false;
+  box.classList.toggle("warn", share >= CONTEXT_WARN && share < CONTEXT_FULL);
+  box.classList.toggle("full", share >= CONTEXT_FULL);
+  // Any use at all shows a sliver, so a chat never reads as empty.
+  box.querySelector(".ctx-fill").style.width = `${share ? Math.max(4, share) : 0}%`;
+  box.querySelector(".ctx-pct").textContent = `${share}%`;
+  const n = (x) => Number(x || 0).toLocaleString();
+  const room = use.window ? ` · ${Math.round(use.window / 1024)}K window` : "";
+  box.dataset.tip = `Context: ${n(use.used)} of ${n(use.budget)} tokens${room}` +
+    (share >= CONTEXT_FULL ? ". Older messages get summarized soon." : "");
+  box.setAttribute("aria-valuenow", share);
+}
+
 async function refreshContext() {
   const chat = chats.get(current);
-  if (!chat || !chat.log.length) { $("#context").textContent = ""; return; }
+  if (!chat || !chat.log.length) { showContext(null); return; }
   try {
-    const { share } = await command("context");
-    $("#context").textContent = share >= 50 ? `${share}% of context` : "";
+    showContext(await command("context"));
   } catch (_) { /* the chat went away */ }
 }
 

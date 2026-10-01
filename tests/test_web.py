@@ -3829,3 +3829,39 @@ def test_the_page_picks_how_the_voice_speaks(monkeypatch):
 def test_voice_mode_asks_for_warm_words():
     assert "warm, friendly person" in ai.VOICE_PROMPT
     assert "question mark lifts it" in ai.VOICE_PROMPT
+
+
+class TestContextBar:
+    def test_an_empty_chat_uses_none(self, monkeypatch):
+        monkeypatch.setattr(ai, "_context_limit", lambda: 8192)
+        session = web.Session()
+        chat = session.new_chat()
+
+        use = web.command(session, {"name": "context", "chat": chat.id})
+
+        assert use == {"share": 0, "used": 0, "budget": 100_000,
+                       "window": 8192}
+
+    def test_it_counts_the_history_against_the_budget(self, monkeypatch):
+        monkeypatch.setattr(ai, "_context_limit", lambda: None)
+        monkeypatch.setattr(ai, "_history_budget", lambda: 1000)
+        session = web.Session()
+        chat = session.new_chat()
+        chat.messages = [{"role": "user", "content": "x" * 2000}]
+
+        use = web.command(session, {"name": "context", "chat": chat.id})
+
+        assert 0 < use["used"]
+        assert use["share"] == min(100, round(100 * use["used"] / 1000))
+        assert use["window"] == 0
+
+    def test_it_never_reads_above_full(self, monkeypatch):
+        monkeypatch.setattr(ai, "_context_limit", lambda: None)
+        monkeypatch.setattr(ai, "_history_budget", lambda: 100)
+        session = web.Session()
+        chat = session.new_chat()
+        chat.messages = [{"role": "user", "content": "x" * 100_000}]
+
+        use = web.command(session, {"name": "context", "chat": chat.id})
+
+        assert use["share"] == 100
