@@ -49,8 +49,10 @@
   /* Apple's sheet curve: away fast, then a long, soft settle. */
   --apple: cubic-bezier(0.32, 0.72, 0, 1);
   color-scheme: dark;
+  --working: #9b7bff;
 }
 :root[data-theme="light"] {
+  --working: #7a55f0;
   --bg: #faf9f5;
   --sidebar: #f3f1ea;
   --surface: #ffffff;
@@ -998,28 +1000,31 @@ button.item-row:hover { background: var(--hover); }
    and one with news jumps for joy. */
 .spark-av { --c: var(--accent); --s: 36px; --ink: #1b1a19; position: relative; flex: none; width: var(--s); height: var(--s); border-radius: 50%;
   display: inline-flex; align-items: center; justify-content: center;
-  background: radial-gradient(circle at 32% 26%, color-mix(in srgb, #fff 78%, var(--c)) 0 10%, var(--c) 50%, color-mix(in srgb, var(--c) 64%, #000) 100%);
-  box-shadow: 0 4px 12px color-mix(in srgb, var(--c) 32%, transparent), inset 0 calc(var(--s) * -0.08) calc(var(--s) * 0.16) color-mix(in srgb, var(--c) 70%, #000);
+  background: linear-gradient(160deg, color-mix(in srgb, #fff 22%, var(--c)), var(--c) 55%, color-mix(in srgb, var(--c) 86%, #000));
+  box-shadow: 0 3px 10px color-mix(in srgb, var(--c) 26%, transparent);
   animation: spark-float 3.4s ease-in-out infinite; animation-delay: calc(var(--i, 0) * -0.8s); }
-.spark-av .face { display: flex; flex-direction: column; align-items: center; margin-top: calc(var(--s) * -0.03); pointer-events: none; }
+.spark-av .face { display: flex; flex-direction: column; align-items: center; margin-top: calc(var(--s) * -0.03); pointer-events: none; transform: rotate(-6deg); }
 .spark-av .eyes { display: flex; gap: calc(var(--s) * 0.18); animation: spark-glance 11s ease-in-out infinite; animation-delay: calc(var(--i, 0) * -2.7s); }
 .spark-av .eye { position: relative; width: max(2.5px, calc(var(--s) * 0.12)); height: calc(var(--s) * 0.2); border-radius: 999px; background: var(--ink);
   animation: spark-blink 5.2s infinite; animation-delay: calc(var(--i, 0) * -1.3s); transition: height 0.15s, border-radius 0.15s; }
 /* The shine in each eye. */
 .spark-av .eye::after { content: ""; position: absolute; top: 14%; right: 10%; width: 42%; height: 26%; border-radius: 50%; background: #fff; opacity: 0.95; }
 .spark-av .mouth { margin-top: calc(var(--s) * 0.05); width: calc(var(--s) * 0.17); height: calc(var(--s) * 0.08); border: max(1.3px, calc(var(--s) * 0.032)) solid var(--ink); border-top: 0; border-radius: 0 0 999px 999px; transition: all 0.18s var(--spring); }
-.spark-av .cheek { position: absolute; top: 55%; width: calc(var(--s) * 0.17); height: calc(var(--s) * 0.1); border-radius: 50%; background: #ff6f93; opacity: 0.45; filter: blur(0.4px); pointer-events: none; transition: opacity 0.2s; }
+.spark-av .cheek { position: absolute; top: 53%; width: calc(var(--s) * 0.18); height: calc(var(--s) * 0.1); border-radius: 50%; background: #ff6f93; opacity: 0.55; filter: blur(0.4px); pointer-events: none; transition: opacity 0.2s; }
 .spark-av .cheek.l { left: 13%; }
 .spark-av .cheek.r { right: 13%; }
-.spark-av.tiny .mouth, .spark-av.tiny .cheek, .spark-av.tiny .eye::after { display: none; }
+/* At rest it has no mouth, only eyes and blush: the mouth comes out
+   to grin, focus, snore, wonder or frown. */
+.spark-av[data-state="idle"] .mouth { opacity: 0; transform: scale(0.4); }
+.spark-av.tiny .mouth, .spark-av.tiny .cheek, .spark-av.tiny .eye::after, .spark-av.tiny .acc { display: none; }
 .spark-av.tiny .face { margin-top: 0; }
 
 /* Hovered: a happy squint, a big grin, rosier cheeks and a wiggle. */
-:is(.spark-av:hover, .spark-card:hover .spark-av, #spark-btn:hover .spark-av, .project-sparks button:hover .spark-av, .spark-head .spark-av:hover):is([data-state="idle"], [data-state="waiting"]) { animation: spark-happy 0.9s var(--spring) infinite; }
-:is(.spark-av:hover, .spark-card:hover .spark-av, #spark-btn:hover .spark-av, .project-sparks button:hover .spark-av, .spark-head .spark-av:hover):is([data-state="idle"], [data-state="waiting"]) .eye { height: calc(var(--s) * 0.09); background: transparent; border: max(1.3px, calc(var(--s) * 0.035)) solid var(--ink); border-bottom: 0; border-radius: 999px 999px 0 0; animation: none; }
-:is(.spark-av:hover, .spark-card:hover .spark-av, #spark-btn:hover .spark-av, .project-sparks button:hover .spark-av, .spark-head .spark-av:hover):is([data-state="idle"], [data-state="waiting"]) .eye::after { display: none; }
-:is(.spark-av:hover, .spark-card:hover .spark-av, #spark-btn:hover .spark-av, .project-sparks button:hover .spark-av, .spark-head .spark-av:hover):is([data-state="idle"], [data-state="waiting"]) .mouth { width: calc(var(--s) * 0.24); height: calc(var(--s) * 0.13); background: radial-gradient(circle at 50% 110%, #ff7f9c 0 38%, var(--ink) 40%); border: 0; }
-:is(.spark-av:hover, .spark-card:hover .spark-av, #spark-btn:hover .spark-av, .project-sparks button:hover .spark-av, .spark-head .spark-av:hover) .cheek { opacity: 0.8; }
+:is(.spark-av:hover, .spark-card:hover .spark-av, #spark-btn:hover .spark-av, .project-sparks button:hover .spark-av, .spark-head .spark-av:hover, .spark-mate:hover .spark-av):is([data-state="idle"], [data-state="waiting"]) { animation: spark-happy 0.9s var(--spring) infinite; }
+:is(.spark-av:hover, .spark-card:hover .spark-av, #spark-btn:hover .spark-av, .project-sparks button:hover .spark-av, .spark-head .spark-av:hover, .spark-mate:hover .spark-av):is([data-state="idle"], [data-state="waiting"]) .eye { height: calc(var(--s) * 0.09); background: transparent; border: max(1.3px, calc(var(--s) * 0.035)) solid var(--ink); border-bottom: 0; border-radius: 999px 999px 0 0; animation: none; }
+:is(.spark-av:hover, .spark-card:hover .spark-av, #spark-btn:hover .spark-av, .project-sparks button:hover .spark-av, .spark-head .spark-av:hover, .spark-mate:hover .spark-av):is([data-state="idle"], [data-state="waiting"]) .eye::after { display: none; }
+:is(.spark-av:hover, .spark-card:hover .spark-av, #spark-btn:hover .spark-av, .project-sparks button:hover .spark-av, .spark-head .spark-av:hover, .spark-mate:hover .spark-av):is([data-state="idle"], [data-state="waiting"]) .mouth { opacity: 1; transform: none; width: calc(var(--s) * 0.24); height: calc(var(--s) * 0.13); background: radial-gradient(circle at 50% 110%, #ff7f9c 0 38%, var(--ink) 40%); border: 0; }
+:is(.spark-av:hover, .spark-card:hover .spark-av, #spark-btn:hover .spark-av, .project-sparks button:hover .spark-av, .spark-head .spark-av:hover, .spark-mate:hover .spark-av) .cheek { opacity: 0.8; }
 
 /* Working: a bounce, darting eyes, an "o" of focus, a glint going round
    and a star twinkling. */
@@ -1050,6 +1055,31 @@ button.item-row:hover { background: var(--hover); }
 .spark-av[data-state="failed"] .eyes { animation: none; }
 .spark-av[data-state="failed"] .eye { height: calc(var(--s) * 0.12); }
 .spark-av[data-state="failed"] .mouth { margin-top: calc(var(--s) * 0.08); border: max(1.3px, calc(var(--s) * 0.032)) solid var(--ink); border-bottom: 0; border-radius: 999px 999px 0 0; }
+
+/* Each has an accessory of its own, so a team reads at a glance:
+   an antenna, a sprout, a bow, a halo, ears or a party hat. */
+.spark-av .acc { position: absolute; left: 50%; top: 0; width: 0; height: 0; pointer-events: none; }
+.spark-av .acc::before, .spark-av .acc::after { content: ""; position: absolute; }
+.spark-av .acc[data-acc="0"]::before { left: calc(var(--s) * -0.025); top: calc(var(--s) * -0.16); width: calc(var(--s) * 0.05); height: calc(var(--s) * 0.18); border-radius: 999px; background: color-mix(in srgb, var(--c) 70%, #000); }
+.spark-av .acc[data-acc="0"]::after { left: calc(var(--s) * -0.08); top: calc(var(--s) * -0.26); width: calc(var(--s) * 0.16); height: calc(var(--s) * 0.16); border-radius: 50%; background: color-mix(in srgb, #fff 45%, var(--c)); box-shadow: 0 0 6px color-mix(in srgb, var(--c) 60%, transparent); animation: spark-bulb 2.6s ease-in-out infinite; }
+.spark-av .acc[data-acc="1"]::before, .spark-av .acc[data-acc="1"]::after { top: calc(var(--s) * -0.16); width: calc(var(--s) * 0.2); height: calc(var(--s) * 0.12); border-radius: 100% 0; background: #6fcf7f; }
+.spark-av .acc[data-acc="1"]::before { left: calc(var(--s) * -0.2); transform: rotate(-20deg); transform-origin: right bottom; }
+.spark-av .acc[data-acc="1"]::after { left: 0; border-radius: 0 100%; transform: rotate(20deg); transform-origin: left bottom; }
+.spark-av .acc[data-acc="2"] { left: 74%; top: 8%; }
+.spark-av .acc[data-acc="2"]::before, .spark-av .acc[data-acc="2"]::after { top: calc(var(--s) * -0.07); width: calc(var(--s) * 0.15); height: calc(var(--s) * 0.14); background: #ff7aa8; border-radius: 50% 30% 30% 50%; }
+.spark-av .acc[data-acc="2"]::before { left: calc(var(--s) * -0.15); transform: rotate(-12deg); }
+.spark-av .acc[data-acc="2"]::after { left: 0; border-radius: 30% 50% 50% 30%; transform: rotate(12deg); }
+.spark-av .acc[data-acc="3"]::before { left: calc(var(--s) * -0.24); top: calc(var(--s) * -0.2); width: calc(var(--s) * 0.48); height: calc(var(--s) * 0.13); box-sizing: border-box; border-radius: 50%; border: max(1.5px, calc(var(--s) * 0.045)) solid #ffd166; box-shadow: 0 0 6px #ffd16688; animation: spark-halo 3s ease-in-out infinite; }
+.spark-av .acc[data-acc="4"]::before, .spark-av .acc[data-acc="4"]::after { top: calc(var(--s) * -0.07); width: calc(var(--s) * 0.26); height: calc(var(--s) * 0.26); background: color-mix(in srgb, var(--c) 88%, #000); clip-path: polygon(50% 0, 100% 100%, 0 100%); }
+.spark-av .acc[data-acc="4"]::before { left: calc(var(--s) * -0.42); transform: rotate(-24deg); }
+.spark-av .acc[data-acc="4"]::after { left: calc(var(--s) * 0.16); transform: rotate(24deg); }
+.spark-av .acc[data-acc="5"]::before { left: calc(var(--s) * -0.02); top: calc(var(--s) * -0.24); width: calc(var(--s) * 0.26); height: calc(var(--s) * 0.3); clip-path: polygon(50% 0, 100% 100%, 0 100%); background: repeating-linear-gradient(135deg, #ffd166 0 calc(var(--s) * 0.05), #ff7aa8 0 calc(var(--s) * 0.1)); transform: rotate(16deg); }
+.spark-av .acc[data-acc="5"]::after { left: calc(var(--s) * 0.1); top: calc(var(--s) * -0.3); width: calc(var(--s) * 0.09); height: calc(var(--s) * 0.09); border-radius: 50%; background: #fff; }
+@keyframes spark-bulb { 0%, 100% { filter: brightness(1); } 50% { filter: brightness(1.35); } }
+@keyframes spark-halo { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-1.5px); } }
+
+/* At work, a purple glow around it, as a Grok Bot's computer shows. */
+.spark-av[data-state="working"] { box-shadow: 0 0 0 2px var(--surface), 0 0 0 3.5px var(--working), 0 0 14px color-mix(in srgb, var(--working) 55%, transparent); }
 
 /* New news: the dot beats. */
 .spark-av .ping { position: absolute; top: -1px; right: -1px; width: calc(var(--s) * 0.3); height: calc(var(--s) * 0.3); min-width: 9px; min-height: 9px; border-radius: 50%; background: var(--accent); border: 2px solid var(--surface); animation: spark-ping 1.6s ease-in-out infinite; }
@@ -1088,6 +1118,41 @@ button.item-row:hover { background: var(--hover); }
 @media (prefers-reduced-motion: reduce) { .spark-av, .spark-av *, .spark-av::before, .spark-av::after { animation: none !important; transition: none !important; } .spark-av .pop { display: none; } }
 #sparks-btn .count { margin-left: auto; font-size: 11.5px; font-weight: 600; min-width: 18px; padding: 0 6px; line-height: 18px; border-radius: 999px; text-align: center; background: var(--accent); color: var(--accent-text); }
 #sparks-btn .count:empty { display: none; }
+/* While any spark is at work, its icon turns purple. */
+#sparks-btn.busy svg { color: var(--working); filter: drop-shadow(0 0 4px color-mix(in srgb, var(--working) 60%, transparent)); }
+/* The team, in the sidebar: each spark's face, name and title, and what
+   it is doing. Bots, not conversations, as Grok Bot has it. */
+#spark-roster { flex: none; max-height: 34vh; overflow-y: auto; padding: 4px 0 2px; }
+#spark-roster:empty { display: none; }
+.spark-mate { display: flex; align-items: center; gap: 10px; width: calc(100% - 16px); margin: 0 8px; padding: 6px 10px 6px 12px; border-radius: 9px; text-align: left; color: var(--text-2); transition: background 0.12s, color 0.12s; }
+.spark-mate:hover, .spark-mate.current { background: var(--hover); color: var(--text); }
+.spark-mate .spark-av { --s: 24px; }
+.spark-mate .stack { flex: 1; min-width: 0; display: flex; flex-direction: column; line-height: 1.25; }
+.spark-mate .who { font-size: 13.5px; font-weight: 500; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.spark-mate .doing { font-size: 11.5px; color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.spark-mate .doing.working { color: var(--working); }
+.spark-mate .doing.asking { color: var(--accent); font-weight: 500; }
+.spark-mate .dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); }
+.spark-card .title, .spark-head .title { font-size: 13px; font-weight: 500; color: color-mix(in srgb, var(--c) 65%, var(--text)); }
+.spark-card .meta { font-size: 11.5px; color: var(--text-3); margin-top: 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.spark-status { display: inline-flex; align-items: center; gap: 6px; margin-top: 8px; padding: 3px 10px 3px 8px; border-radius: 999px; font-size: 12px; font-weight: 500; color: var(--text-2); background: var(--hover); }
+.spark-status::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--text-3); }
+.spark-status.working { color: var(--working); background: color-mix(in srgb, var(--working) 14%, transparent); }
+.spark-status.working::before { background: var(--working); animation: pulse 1.2s ease-in-out infinite; }
+.spark-status.waiting { color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent); }
+.spark-status.waiting::before { background: var(--accent); }
+.spark-status.idle::before { background: #5fcf86; }
+.spark-status.failed { color: var(--del); }
+.spark-status.failed::before { background: var(--del); }
+/* A chat with a spark that is waiting on you: its approval card, above
+   the box, as a Grok Bot shows one in its chat. */
+#spark-ask { margin: 0 0 10px; }
+#spark-ask[hidden] { display: none; }
+#spark-ask .spark-approval { margin: 0; display: flex; flex-direction: column; gap: 8px; }
+#spark-ask .top { display: flex; align-items: center; gap: 10px; font-size: 14px; }
+#spark-ask .top b { font-weight: 600; }
+#spark-ask .top .sub { color: var(--text-3); font-size: 12.5px; }
+#spark-ask pre { margin: 0; max-height: 120px; }
 .spark-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 12px; }
 .spark-card { display: flex; gap: 14px; align-items: flex-start; padding: 16px; text-align: left; border: 1px solid var(--border); border-radius: 16px; background: var(--surface);
   transition: border-color 0.15s, transform 0.15s; animation: rise 0.3s var(--ease) both; animation-delay: calc(var(--i, 0) * 0.04s); min-width: 0; }
@@ -1098,7 +1163,8 @@ button.item-row:hover { background: var(--hover); }
 .spark-card .state { font-size: 12.5px; color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .spark-card .state.working { color: var(--text-2); }
 .spark-card .goal { font-size: 13.5px; color: var(--text-2); line-height: 1.45; margin-top: 4px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
-.spark-head { display: flex; align-items: center; gap: 16px; margin-bottom: 14px; }
+.spark-head { display: flex; align-items: center; gap: 18px; margin: -6px -6px 16px; padding: 18px 18px 16px; border-radius: 16px;
+  background: radial-gradient(120% 140% at 0% 0%, color-mix(in srgb, var(--c) 26%, transparent), transparent 60%), color-mix(in srgb, var(--c) 6%, var(--surface)); }
 .spark-head h2 { margin: 0; font-size: 19px; }
 .spark-head .meta { font-size: 12.5px; color: var(--text-3); margin-top: 3px; }
 .spark-sec { margin: 16px 0 6px; font-size: 12.5px; font-weight: 600; color: var(--text-2); }
@@ -1585,6 +1651,7 @@ body.resizing-viewer iframe { pointer-events: none; }
     <button class="side-row" id="projects-btn" data-tip="Projects" data-keys="Alt P"></button>
     <button class="side-row" id="skills-btn" data-tip="Skills"></button>
     <button class="side-row" id="sparks-btn" data-tip="Sparks"></button>
+    <div id="spark-roster" aria-label="Your sparks"></div>
     <button class="side-row" id="extensions-btn" data-tip="Extensions"></button>
     <button class="side-label" id="recents-btn" type="button" aria-expanded="true" aria-controls="chats"><span>Recents</span><span class="count"></span><i></i></button>
     <nav id="chats"></nav>
@@ -1615,6 +1682,7 @@ body.resizing-viewer iframe { pointer-events: none; }
       <div class="col">
         <div id="hero"><h1 id="greeting">Good evening</h1></div>
         <div id="pending" hidden aria-label="Waiting messages"></div>
+        <div id="spark-ask" hidden aria-live="polite"></div>
         <div id="voice" hidden role="group" aria-label="Voice mode">
           <button type="button" class="voice-orb" aria-label="Voice"><span></span></button>
           <div class="voice-say"><b class="voice-state">Listening</b><span class="voice-hint"></span></div>
@@ -3406,7 +3474,7 @@ function speakerTag(sparkId, fromShift = false) {
   if (fromShift) tag.appendChild(el("span", "from", "report from its shift"));
   tag.prepend(sparkAvatar({ ...sp, unread: 0 }, 20));
   tag.querySelector(".name").textContent = sp.name;
-  tag.querySelector(".handle").textContent = sp.handle;
+  tag.querySelector(".handle").textContent = sp.title || sp.handle;
   tag.style.setProperty("--c", sp.colour);
   return tag;
 }
@@ -3879,8 +3947,20 @@ const drawExtensionsPage = () => toolPage("Extensions", drawExtensions);
 
 const EVERY_CHOICES = [[15, "Every 15 minutes"], [30, "Every 30 minutes"], [60, "Every hour"], [120, "Every 2 hours"], [360, "Every 6 hours"], [720, "Every 12 hours"], [1440, "Every day"], [10080, "Every week"]];
 
+// Which accessory a spark wears: its own, the same wherever it is drawn.
+// In team order, so the first six all differ; one the page does not know
+// yet goes by its ID.
+const ACCESSORIES = 6;
+function accessoryOf(id) {
+  const at = sparkList.findIndex((sp) => sp.id === id);
+  if (at >= 0) return at % ACCESSORIES;
+  let n = 0;
+  for (const ch of String(id || "")) n = (n * 31 + ch.charCodeAt(0)) >>> 0;
+  return n % ACCESSORIES;
+}
+
 function sparkAvatar(spark, size = 36, i = 0) {
-  const av = el("span", "spark-av", `<i class="face"><i class="eyes"><i class="eye"></i><i class="eye"></i></i><i class="mouth"></i></i><i class="cheek l"></i><i class="cheek r"></i>`);
+  const av = el("span", "spark-av", `<i class="acc" data-acc="${accessoryOf(spark.id)}"></i><i class="face"><i class="eyes"><i class="eye"></i><i class="eye"></i></i><i class="mouth"></i></i><i class="cheek l"></i><i class="cheek r"></i>`);
   av.dataset.state = spark.status === "working" ? "working" : spark.waiting ? "waiting" : spark.paused ? "paused" : spark.status === "failed" ? "failed" : "idle";
   // Too small for a mouth and cheeks to read: eyes are enough.
   av.classList.toggle("tiny", size < 20);
@@ -3964,6 +4044,78 @@ function sparkState(spark) {
   return spark.status === "failed" ? `Last shift failed · ${next}` : next;
 }
 
+// What it is doing, in a word or two, and the class that colours it.
+function sparkPresence(spark) {
+  if (spark.waiting) return ["waiting", "Needs your approval"];
+  if (spark.status === "working") return ["working", spark.activity ? spark.activity : "Working"];
+  if (spark.answering) return ["working", "Answering you"];
+  if (spark.paused) return ["paused", "Paused"];
+  if (spark.status === "failed") return ["failed", "Last shift failed"];
+  return ["idle", spark.unread ? `${spark.unread} new report${spark.unread === 1 ? "" : "s"}` : "Ready"];
+}
+
+// The team, in the sidebar, as Grok Bot lists its bots: each face, name,
+// and title or what it is doing now. A spark opens its latest chat, or a
+// new one.
+function renderRoster() {
+  const box = $("#spark-roster");
+  if (!box) return;
+  const open = chats.get(current);
+  const here = open ? open.spark : viewSpark;
+  $("#sparks-btn").classList.toggle("busy", sparkList.some((sp) => sp.status === "working" || sp.answering));
+  box.replaceChildren(...sparkList.map((sp, i) => {
+    const [kind, doing] = sparkPresence(sp);
+    const row = el("button", "spark-mate" + (sp.id === here && view === "chat" ? " current" : ""), `<span class="stack"><span class="who"></span><span class="doing"></span></span>`);
+    row.type = "button";
+    row.prepend(sparkAvatar({ ...sp, unread: 0 }, 24, i));
+    row.querySelector(".who").textContent = sp.name;
+    const line = row.querySelector(".doing");
+    line.textContent = kind === "idle" && !sp.unread ? sp.title || sp.handle : doing;
+    line.classList.toggle("working", kind === "working");
+    line.classList.toggle("asking", kind === "waiting");
+    if (sp.unread && kind !== "waiting") row.appendChild(el("span", "dot"));
+    row.dataset.tip = `${sp.name}${sp.title ? ` · ${sp.title}` : ""}`;
+    row.onclick = () => {
+      const latest = [...chats.values()].filter((c) => c.spark === sp.id && (c.log.length || c.busy || c.queued || c.title !== "New chat")).sort(byRecent)[0];
+      if (latest) switchTo(latest.id); else startSparkChat(sp.id);
+      if (innerWidth <= 800) closeSide();
+    };
+    return row;
+  }));
+}
+
+// In a chat with a spark that is waiting on you, its approval card sits
+// above the box, so the answer is given where the talk is.
+function renderSparkAsk() {
+  const box = $("#spark-ask");
+  const chat = chats.get(current);
+  const sp = view === "chat" ? sparkOf(chat ? chat.spark : viewSpark) : null;
+  if (!sp || !sp.waiting) { box.hidden = true; box.replaceChildren(); delete box.dataset.for; return; }
+  const key = `${sp.id}:${sp.pending && sp.pending.label}:${sp.pending && sp.pending.detail}`;
+  if (!box.hidden && box.dataset.for === key) return;
+  box.dataset.for = key;
+  box.hidden = false;
+  const card = el("div", "spark-approval", `<div class="top"><span class="stack"><b></b><div class="sub">Its shift is paused until you answer</div></span></div><pre></pre><div class="row"><input type="text" maxlength="400" autocomplete="off" placeholder="Why not? (optional, it hears this)"><button type="button" class="btn small" data-no>Deny</button><button type="button" class="btn small primary" data-yes>Approve</button></div>`);
+  card.style.setProperty("--c", sp.colour);
+  card.querySelector(".top").prepend(sparkAvatar({ ...sp, unread: 0 }, 30));
+  card.querySelector("b").textContent = `${sp.name} wants to: ${(sp.pending && sp.pending.label) || "take a step"}`;
+  const detail = card.querySelector("pre");
+  if (sp.pending && sp.pending.detail) detail.textContent = sp.pending.detail; else detail.remove();
+  const decide = async (yes) => {
+    card.querySelectorAll("button").forEach((b) => { b.disabled = true; });
+    try {
+      await command(yes ? "spark-approve" : "spark-deny", sp.id, null, { why: card.querySelector("input").value });
+      toast(yes ? `${sp.name} carries on` : `${sp.name} carries on without it`);
+    } catch (error) {
+      card.querySelectorAll("button").forEach((b) => { b.disabled = false; });
+      showFailure(error);
+    }
+  };
+  card.querySelector("[data-yes]").onclick = () => decide(true);
+  card.querySelector("[data-no]").onclick = () => decide(false);
+  box.replaceChildren(card);
+}
+
 // Whether sparks keep working with Flash closed: what the page last heard.
 let sparksAlways = { installed: false, running: false, here: false };
 
@@ -4000,7 +4152,8 @@ async function drawSparks(body, again = false) {
   }
   const grid = el("div", "spark-grid");
   r.sparks.forEach((spark, i) => {
-    const card = el("button", "spark-card", `<span class="main"><span class="name"></span><span class="handle"></span><span class="state"></span><span class="goal"></span></span>`);
+    const card = el("button", "spark-card", `<span class="main"><span class="name"></span><span class="title"></span><span class="state"></span><span class="goal"></span><span class="meta"></span></span>`);
+    card.style.setProperty("--c", spark.colour);
     card.type = "button";
     card.style.setProperty("--i", i);
     if (again) card.style.animation = "none";
@@ -4013,7 +4166,9 @@ async function drawSparks(body, again = false) {
     seenUnread.set(spark.id, spark.unread);
     card.prepend(face);
     card.querySelector(".name").textContent = spark.name;
-    card.querySelector(".handle").textContent = `${spark.handle} · every ${everyWords(spark.every)}${spark.project_name ? ` · in ${spark.project_name}` : ""}${spark.model_used ? ` · ${spark.model_used}` : ""}`;
+    const title = card.querySelector(".title");
+    if (spark.title) title.textContent = spark.title; else title.remove();
+    card.querySelector(".meta").textContent = `${spark.handle} · every ${everyWords(spark.every)}${spark.project_name ? ` · in ${spark.project_name}` : ""}${spark.model_used ? ` · ${spark.model_used}` : ""}`;
     const state = card.querySelector(".state");
     state.textContent = spark.unread ? `${spark.unread} new report${spark.unread === 1 ? "" : "s"} · ${sparkState(spark)}` : sparkState(spark);
     state.classList.toggle("working", spark.status === "working");
@@ -4073,7 +4228,7 @@ async function openSpark(id) {
 
 function fillSpark(box, spark, again = false) {
   box.dataset.id = spark.id;
-  box.innerHTML = `<div class="spark-head"><div><h2></h2><div class="handle"></div><div class="meta"></div></div></div>
+  box.innerHTML = `<div class="spark-head"><div><h2></h2><div class="title"></div><div class="handle"></div><div class="meta"></div><div class="spark-status"></div></div></div>
     <div class="spark-sec">Goal</div><div class="spark-text" data-goal></div>
     <div data-bounds hidden><div class="spark-sec">Boundaries</div><div class="spark-text"></div></div>
     <div data-watch hidden><div class="spark-sec">Watching</div><div class="spark-text"></div></div>
@@ -4081,10 +4236,17 @@ function fillSpark(box, spark, again = false) {
     <div data-lessons hidden><div class="spark-sec">What you have taught it</div><ul class="spark-lessons"></ul></div>
     <div class="spark-sec">Reports</div><div data-reports></div>
     <div class="dialog-buttons"><button type="button" class="btn" data-cancel>Close</button></div>`;
-  box.querySelector(".spark-head").prepend(sparkAvatar({ ...spark, unread: 0 }, 60));
+  box.querySelector(".spark-head").prepend(sparkAvatar({ ...spark, unread: 0 }, 64));
+  box.querySelector(".spark-head").style.setProperty("--c", spark.colour);
   box.querySelector("h2").textContent = spark.name;
+  const titled = box.querySelector(".spark-head .title");
+  if (spark.title) titled.textContent = spark.title; else titled.remove();
+  const [kind, doing] = sparkPresence(spark);
+  const pill = box.querySelector(".spark-status");
+  pill.classList.add(kind);
+  pill.textContent = kind === "idle" ? "Ready" : doing;
   box.querySelector(".handle").textContent = spark.handle;
-  box.querySelector(".meta").textContent = `On ${spark.model_used || "no model"}${spark.model ? "" : " (Flash's)"} · every ${everyWords(spark.every)}${spark.project_name ? ` · in ${spark.project_name}` : ""} · ${sparkState(spark)} · ${spark.runs} shift${spark.runs === 1 ? "" : "s"}`;
+  box.querySelector(".spark-head .meta").textContent = `On ${spark.model_used || "no model"}${spark.model ? "" : " (Flash's)"} · every ${everyWords(spark.every)}${spark.project_name ? ` · in ${spark.project_name}` : ""} · ${sparkState(spark)} · ${spark.runs} shift${spark.runs === 1 ? "" : "s"}`;
   box.querySelector("[data-goal]").textContent = spark.goal;
   if (spark.boundaries) {
     box.querySelector("[data-bounds]").hidden = false;
@@ -4291,6 +4453,7 @@ function sparkForm(spark, inProjectId = "") {
     <p class="sub">${editing ? "" : "An agent that keeps working on one goal, on a schedule, while Flash runs, and reports back."}</p>
     ${editing ? "" : `<div class="spark-templates"></div>`}
     <label class="field"><span>Name</span><input name="sparkname" maxlength="24" placeholder="Scout" autocomplete="off"><small>Its handle: <b data-handle>@scout-spark</b></small></label>
+    <label class="field"><span>Title <em class="count">optional</em></span><input name="title" maxlength="40" placeholder="Repo watcher" autocomplete="off"><small>Its job, as a teammate's: shown under its name, and it knows it.</small></label>
     ${modelField()}
     <label class="field"><span>Goal</span><textarea name="goal" rows="4" placeholder="Check github.com/me/app for new issues. Tell me which look like bugs, and skip ones you have already told me about."></textarea></label>
     <label class="field"><span>How often</span><select name="every">${choices.map(([m, label]) => `<option value="${m}"${m === every ? " selected" : ""}>${label}</option>`).join("")}</select><small>It works while Flash is open, in the terminal or here.</small></label>
@@ -4300,7 +4463,7 @@ function sparkForm(spark, inProjectId = "") {
     ${editing || sparksAlways.installed ? "" : `<label class="field check"><input type="checkbox" name="always" checked><span>Keep sparks working when Flash is closed. Flash starts a keeper at login and notifies you of news.</span></label>`}
     <div class="dialog-buttons"><button type="button" class="btn" data-cancel>Cancel</button><button type="submit" class="btn primary">${editing ? "Save" : "Make spark"}</button></div>`,
     async (data) => {
-      const fields = { goal: data.goal, every: data.every, boundaries: data.boundaries, project: data.project || "", watch: data.watch || "", model: data.model || "" };
+      const fields = { goal: data.goal, every: data.every, boundaries: data.boundaries, project: data.project || "", watch: data.watch || "", model: data.model || "", title: data.title || "" };
       const name = data.sparkname.trim();
       if (editing) {
         // Not "name": that is the command's own.
@@ -4323,6 +4486,7 @@ function sparkForm(spark, inProjectId = "") {
   form.sparkname.addEventListener("input", named);
   if (editing) {
     form.sparkname.value = spark.name;
+    form.title.value = spark.title || "";
     form.goal.value = spark.goal;
     form.boundaries.value = spark.boundaries;
     form.watch.value = spark.watch || "";
@@ -4341,6 +4505,7 @@ function sparkForm(spark, inProjectId = "") {
         chip.onclick = () => {
           row.querySelectorAll(".chip-btn").forEach((c) => c.classList.toggle("on", c === chip));
           form.sparkname.value = t.name;
+          form.title.value = t.title || "";
           form.goal.value = t.goal;
           form.boundaries.value = t.boundaries;
           if (![...form.every.options].some((o) => +o.value === t.every)) form.every.add(new Option(`Every ${everyWords(t.every)}`, t.every));
@@ -6538,7 +6703,7 @@ function renderChats() {
     open.firstChild.textContent = chat.title;
     const withSpark = sparkOf(chat.spark);
     if (withSpark) {
-      const badge = sparkAvatar({ ...withSpark, unread: 0 }, 14);
+      const badge = sparkAvatar({ ...withSpark, unread: 0, status: "idle", waiting: false, paused: false }, 14);
       badge.title = `With ${withSpark.name}`;
       open.prepend(badge);
     }
@@ -6563,6 +6728,7 @@ function renderChats() {
   placePill(nav);
   // Folded, the label still says how many are in there.
   $("#recents-btn .count").textContent = shownChats.size || "";
+  renderRoster();
   if (calm.matches) return;
   for (const row of nav.querySelectorAll(".chat")) {
     const before = was.get(row.dataset.chat);
@@ -7124,6 +7290,8 @@ function renderProjectBtn() {
 // spark's window; on a new chat nothing has been said in, its x makes
 // it a chat with Flash again.
 function renderSparkBtn() {
+  renderRoster();
+  renderSparkAsk();
   const chat = chats.get(current);
   const sp = sparkOf(chat ? chat.spark : viewSpark);
   const b = $("#spark-btn");

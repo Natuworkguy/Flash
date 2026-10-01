@@ -63,6 +63,7 @@ COLOURS = (
 )
 
 NAME_CHARS = 24
+TITLE_CHARS = 40
 GOAL_CHARS = 2000
 BOUNDARY_CHARS = 1000
 LESSON_CHARS = 400
@@ -117,7 +118,7 @@ NOTHING_NEW = "NOTHING NEW"
 
 SPARK_PROMPT = """
 === You are a spark ===
-You are {name} ({handle}), a spark: an agent that works on one standing
+You are {name} ({handle}){titled}, a spark: an agent that works on one standing
 goal for this user, on a schedule, while they get on with other things.
 This is one of your shifts. Nobody is watching it and nobody can answer
 a question, so work on your own, then write your report.
@@ -183,7 +184,7 @@ ROUND_LIMIT_MESSAGE = (
 
 CHAT_PROMPT = """
 === You are a spark, talking with the user ===
-You are {name} ({handle}), a spark: an agent that works on one standing
+You are {name} ({handle}){titled}, a spark: an agent that works on one standing
 goal for this user, on a schedule, every {every}. Right now the user is
 talking to you directly, between your shifts.
 
@@ -328,6 +329,8 @@ class Spark:
     id: str
     name: str
     goal: str
+    # Its job title, as a teammate's: "Repo watcher". "" for none.
+    title: str = ""
     boundaries: str = ""
     every: int = DEFAULT_EVERY_MINUTES
     colour: str = COLOURS[0]
@@ -401,6 +404,15 @@ class Spark:
         data["project_name"] = found.name if found else ""
         data["unread"] = self.unread
         return data
+
+
+def _titled(spark: Spark) -> str:
+    # What follows the name in "You are Scout (@scout-spark), ...".
+    return f", the user's {spark.title}" if spark.title else ""
+
+
+def _title(text) -> str:
+    return " ".join(str(text or "").split())[:TITLE_CHARS]
 
 
 def handle_of(name: str) -> str:
@@ -736,6 +748,7 @@ def _watch_folder(path: str) -> str:
 TEMPLATES = [
     {
         "name": "Morning Brief",
+        "title": "News editor",
         "blurb": "The news on your topics, every morning",
         "goal": (
             "Search the web for the most important news of the last day on "
@@ -750,6 +763,7 @@ TEMPLATES = [
     },
     {
         "name": "Repo Watch",
+        "title": "Repo watcher",
         "blurb": "What changed in a git repo, and what is left undone",
         "goal": (
             "In my project's git repository, fetch from the remote and tell "
@@ -764,6 +778,7 @@ TEMPLATES = [
     },
     {
         "name": "Test Runner",
+        "title": "Test keeper",
         "blurb": "Tells you when passing tests start failing",
         "goal": (
             "Run my project's tests. Tell me when a test that passed before "
@@ -777,6 +792,7 @@ TEMPLATES = [
     },
     {
         "name": "Disk Guard",
+        "title": "Disk custodian",
         "blurb": "Warns before a disk fills up",
         "goal": (
             "Check the free space on each mounted disk. When one has less "
@@ -788,6 +804,7 @@ TEMPLATES = [
     },
     {
         "name": "Dependency Check",
+        "title": "Dependency auditor",
         "blurb": "Outdated packages, and which ones matter",
         "goal": (
             "Find my project's outdated dependencies, with the tool it uses "
@@ -799,6 +816,7 @@ TEMPLATES = [
     },
     {
         "name": "Page Watch",
+        "title": "Page watcher",
         "blurb": "Tells you when a web page changes",
         "goal": (
             "Fetch the page at the address in your lessons and tell me when "
@@ -818,7 +836,8 @@ def share_code(key: str) -> str:
 
     spark = _must_find(key)
     data = {
-        "v": 1, "name": spark.name, "goal": spark.goal,
+        "v": 1, "name": spark.name, "title": spark.title,
+        "goal": spark.goal,
         "boundaries": spark.boundaries, "every": spark.every,
         "lessons": spark.lessons,
     }
@@ -849,6 +868,7 @@ def read_code(code: str) -> dict:
     return {
         "name": " ".join(str(data.get("name") or "Spark").split())[
             :NAME_CHARS],
+        "title": _title(data.get("title")),
         "goal": str(data["goal"]).strip()[:GOAL_CHARS],
         "boundaries": str(data.get("boundaries") or "").strip()[
             :BOUNDARY_CHARS],
@@ -876,7 +896,7 @@ def add_from(source: str, project: str = "", model: str = "") -> Spark:
         number += 1
     spark = create(
         name, data["goal"], data.get("boundaries", ""), data["every"],
-        project, model=model,
+        project, model=model, title=data.get("title", ""),
     )
     lessons = data.get("lessons") or []
     if lessons:
@@ -886,7 +906,7 @@ def add_from(source: str, project: str = "", model: str = "") -> Spark:
 
 def create(
     name: str, goal: str, boundaries: str = "", every="", project: str = "",
-    watch: str = "", model: str = "",
+    watch: str = "", model: str = "", title: str = "",
 ) -> Spark:
     """Make a spark. Its first shift runs as soon as the keeper looks."""
 
@@ -907,6 +927,7 @@ def create(
         spark = Spark(
             id=uuid.uuid4().hex[:8],
             name=name,
+            title=_title(title),
             goal=goal,
             boundaries=str(boundaries or "").strip()[:BOUNDARY_CHARS],
             every=minutes,
@@ -922,7 +943,7 @@ def create(
 
 
 def update(key: str, **changes) -> Spark:
-    """Change a spark's goal, boundaries, schedule, or name."""
+    """Change a spark's goal, boundaries, schedule, name, or title."""
 
     def change(spark: Spark) -> None:
         if "goal" in changes:
@@ -944,6 +965,8 @@ def update(key: str, **changes) -> Spark:
             spark.watch = _watch_folder(changes["watch"])
         if "model" in changes:
             spark.model = _model_name(changes["model"])
+        if "title" in changes:
+            spark.title = _title(changes["title"])
         if "name" in changes:
             name = " ".join(str(changes["name"] or "").split())[:NAME_CHARS]
             if not name:
@@ -1059,6 +1082,7 @@ def _prompt(spark: Spark, host: str, model: str, date_prompt: str) -> str:
     body = SPARK_PROMPT.format(
         name=spark.name,
         handle=spark.handle,
+        titled=_titled(spark),
         goal=spark.goal,
         boundaries=spark.boundaries or "(none beyond your usual care)",
         lessons=lessons or "(nothing yet)",
@@ -1715,6 +1739,7 @@ def chat_prompt(
     body = CHAT_PROMPT.format(
         name=spark.name,
         handle=spark.handle,
+        titled=_titled(spark),
         every=every_words(spark.every),
         goal=spark.goal,
         boundaries=spark.boundaries or "(none beyond your usual care)",

@@ -3251,8 +3251,34 @@ class TestSparkChats:
 
         assert listed == [{
             "id": spark.id, "name": "Scout", "handle": "@scout-spark",
-            "colour": spark.colour, "project": "",
+            "title": "", "colour": spark.colour, "project": "",
+            "status": "idle", "paused": False, "waiting": False,
+            "answering": False, "unread": 0, "activity": "",
+            "next_run": spark.next_run, "pending": {},
         }]
+
+    def test_the_roster_sees_a_spark_waiting_and_its_title(self):
+        from flash import sparks
+
+        spark = sparks.create("Scout", "Tidy up.", title="Janitor")
+
+        def wait(s):
+            s.status = sparks.WAITING
+            s.pending = {
+                "label": "Run a command", "detail": "rm -r build",
+                "messages": [{"role": "user", "content": "secret"}],
+            }
+
+        sparks._edit(spark.id, wait)
+
+        listed = web.Session().state(lite=True)["sparks"][0]
+
+        assert listed["title"] == "Janitor"
+        assert listed["waiting"] is True
+        # What waits, as the card shows it: not the shift behind it.
+        assert listed["pending"] == {
+            "label": "Run a command", "detail": "rm -r build",
+        }
 
 
 class TestSparkProjects:
