@@ -153,7 +153,7 @@ python run.py
 - `/agents`: Watch sub-agents work live. `/agents <id>` shows one in full,
   with its answer once it is done.
 - `/sparks [new|<name>]`: List your sparks, make one, or read one's
-  reports. `/sparks chat <name> [message]` talks with one. `/sparks teach <name> <lesson>`, `run`, `pause`, `resume`,
+  reports. `/sparks chat <name> [message]` talks with one. `/sparks teach <name> <lesson>`, `like <name>`, `dislike <name> [why]`, `run`, `pause`, `resume`,
   `every <name> <30m|2h|daily>`, `title <name> <title>` and `remove` look after them.
   `/sparks always on|off` keeps them working with Flash closed.
 - `/clear`: Clear the conversation history.
@@ -327,6 +327,13 @@ as news. New reports show up at your prompt (`● Scout has news ·
 
 A lesson like that, or feedback typed under a report in the web UI, is
 kept and read by every later shift.
+
+Reports can also be liked or disliked, with the thumbs on each one in
+the web UI or `/sparks like scout` and `/sparks dislike scout [why]`
+(for its latest report). Every shift is shown its last few rated
+reports, liked and disliked, with anything you said about them, and
+told to do more of the one and less of the other. A dislike in the web
+UI asks what was wrong with it; what you say is kept as a lesson.
 
 You can also just talk to a spark. In the web UI, open it on the Sparks
 page and press Chat, or start a new chat and pick it under + > Sparks:

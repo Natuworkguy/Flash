@@ -71,6 +71,9 @@ NOTES_CHARS = 4000
 
 MAX_LESSONS = 30
 MAX_REPORTS = 40
+# How many of its rated reports a shift is shown, and how much of each.
+MAX_RATED = 6
+RATED_CHARS = 280
 MAX_STEPS = 40
 MAX_SHIFT_ROUNDS = 12
 
@@ -131,6 +134,11 @@ Stay inside these boundaries, whatever the goal seems to need:
 
 What the user has told you about how to do this (always follow it):
 {lessons}
+
+How the user rated your recent reports. Do more of what they liked and
+less of what they did not: what you looked at, how much you said, how
+you said it.
+{rated}
 
 Your notes from last time, written by you for you:
 {notes}
@@ -303,6 +311,8 @@ class Report:
     read: bool = False
     steps: list[str] = field(default_factory=list)
     feedback: str = ""
+    # What the user thought of it: 1 liked, -1 disliked, 0 not said.
+    rating: int = 0
     # It stopped to ask: the user's yes or no carries it on.
     approval: bool = False
     # Web chats that gave it a job, for the report to be posted into,
@@ -1030,6 +1040,58 @@ def teach(key: str, lesson: str, report_at: Optional[float] = None) -> Spark:
     return _edit(key, change)
 
 
+def rate(key: str, report_at: float, rating: int) -> Spark:
+    """Like (1) or dislike (-1) the report made at REPORT_AT, or take
+    that back (0). Later shifts are shown what was liked and what not."""
+
+    try:
+        rating = int(rating)
+    except (TypeError, ValueError):
+        rating = 2
+    if rating not in (-1, 0, 1):
+        raise SparkError("A report is liked (1), disliked (-1), or 0.")
+
+    def change(spark: Spark) -> None:
+        for report in spark.reports:
+            if report.at == report_at and not report.quiet:
+                report.rating = rating
+                report.read = True
+                return
+        raise SparkError(f"{spark.name} has no such report.")
+
+    return _edit(key, change)
+
+
+def rate_latest(key: str, rating: int) -> tuple[Spark, Report]:
+    """Rate SPARK's latest report with something in it."""
+
+    spark = _must_find(key)
+    said = [r for r in spark.reports if not r.quiet and not r.failed]
+    if not said:
+        raise SparkError(f"{spark.name} has no report to rate yet.")
+    spark = rate(spark.id, said[-1].at, rating)
+    return spark, next(r for r in spark.reports if r.at == said[-1].at)
+
+
+def rated_block(spark: Spark) -> str:
+    """The reports the user liked or disliked, newest last, for a shift
+    to learn from."""
+
+    rated = [r for r in spark.reports if r.rating][-MAX_RATED:]
+    if not rated:
+        return "(none rated yet)"
+    lines = []
+    for report in rated:
+        text = " ".join(report.text.split())
+        if len(text) > RATED_CHARS:
+            text = text[:RATED_CHARS].rstrip() + "…"
+        line = f"- {'Liked' if report.rating > 0 else 'Disliked'}: {text}"
+        if report.feedback:
+            line += f"\n  They said: {report.feedback}"
+        lines.append(line)
+    return "\n".join(lines)
+
+
 def forget_lesson(key: str, index: int) -> Spark:
     """Drop lesson INDEX, counted from 1."""
 
@@ -1087,6 +1149,7 @@ def _prompt(spark: Spark, host: str, model: str, date_prompt: str) -> str:
         name=spark.name,
         handle=spark.handle,
         titled=_titled(spark),
+        rated=rated_block(spark),
         goal=spark.goal,
         boundaries=spark.boundaries or "(none beyond your usual care)",
         lessons=lessons or "(nothing yet)",

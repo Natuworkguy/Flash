@@ -1196,6 +1196,13 @@ button.item-row:hover { background: var(--hover); }
 .read-aloud.on { color: var(--accent); }
 .spark-report .when .read-aloud { margin-left: auto; width: 26px; height: 26px; }
 .spark-report .when .read-aloud svg { width: 13px; height: 13px; }
+/* A like or a dislike, for its later shifts to learn from. */
+.spark-report .rate { display: inline-flex; gap: 2px; }
+.spark-report .rate .icon-btn { width: 26px; height: 26px; }
+.spark-report .rate .icon-btn svg { width: 13px; height: 13px; }
+.spark-report .rate .up.on { color: #3fb56d; background: color-mix(in srgb, #3fb56d 14%, transparent); }
+.spark-report .rate .down.on { color: var(--del); background: color-mix(in srgb, var(--del) 14%, transparent); }
+.spark-report .rate .on svg { fill: currentColor; fill-opacity: 0.18; }
 .field select { width: 100%; font: 14.5px var(--sans); color: var(--text); background: var(--bg); border: 1px solid var(--border-strong); border-radius: 10px; padding: 9px 12px; outline: 0; }
 
 .ext-preview { margin: 14px 0 6px; padding: 12px 14px; border: 1px solid var(--border); border-radius: 12px; background: var(--code-bg); }
@@ -1724,6 +1731,8 @@ const ICON = {
   up: '<path d="M12 19V5M5 12l7-7 7 7"/>',
   down: '<path d="M12 5v14M19 12l-7 7-7-7"/>',
   stop: '<rect x="5" y="5" width="14" height="14" rx="2.5" fill="currentColor" stroke="none"/>',
+  thumbUp: '<path d="M7 10v12"/><path d="M15 5.88 14 10h5.83a2 2 0 0 1 1.92 2.56l-2.33 8A2 2 0 0 1 17.5 22H4a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2h2.76a2 2 0 0 0 1.79-1.11L12 2a3.13 3.13 0 0 1 3 3.88Z"/>',
+  thumbDown: '<path d="M17 14V2"/><path d="M9 18.12 10 14H4.17a2 2 0 0 1-1.92-2.56l2.33-8A2 2 0 0 1 6.5 2H20a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-2.76a2 2 0 0 0-1.79 1.11L12 22a3.13 3.13 0 0 1-3-3.88Z"/>',
   play: '<path d="M8 5.5v13a1 1 0 0 0 1.5.86l10.5-6.5a1 1 0 0 0 0-1.72L9.5 4.64A1 1 0 0 0 8 5.5Z" fill="currentColor" stroke="none"/>',
   halt: '<rect x="6.5" y="6.5" width="11" height="11" rx="2" fill="currentColor" stroke="none"/>',
   copy: '<rect x="9" y="9" width="12" height="12" rx="2.5"/><path d="M5 15a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2"/>',
@@ -4294,6 +4303,36 @@ function fillSpark(box, spark, again = false) {
     const play = readButton(`report:${spark.id}:${report.at}`, () => card.querySelector(".body"));
     play.classList.add("small");
     card.querySelector(".when").appendChild(play);
+    // Liked or not: later shifts are shown which, and do more of the one.
+    if (!report.failed && !report.approval) {
+      const rate = el("span", "rate");
+      for (const [value, cls, name, tip] of [[1, "up", "thumbUp", "Good report: more like this"], [-1, "down", "thumbDown", "Not useful: less like this"]]) {
+        const b = el("button", `icon-btn ${cls}` + (report.rating === value ? " on" : ""), icon(name));
+        b.type = "button";
+        b.dataset.tip = tip;
+        b.setAttribute("aria-label", tip);
+        b.setAttribute("aria-pressed", report.rating === value);
+        b.onclick = async () => {
+          const next = report.rating === value ? 0 : value;
+          try { await command("spark-rate", spark.id, null, { at: report.at, rating: next }); }
+          catch (error) { showFailure(error); return; }
+          report.rating = next;
+          rate.querySelectorAll(".icon-btn").forEach((other) => {
+            const on = other === b && next !== 0;
+            other.classList.toggle("on", on);
+            other.setAttribute("aria-pressed", on);
+          });
+          if (!calm.matches && next) b.animate([{ transform: "scale(1)" }, { transform: "scale(1.3)" }, { transform: "scale(1)" }], { duration: 320, easing: "cubic-bezier(0.34, 1.56, 0.64, 1)" });
+          // A dislike asks what was wrong, which it keeps as a lesson.
+          const why = card.querySelector(".teach input");
+          if (why) why.placeholder = next === -1 ? `What was wrong with it? ${spark.name} learns from this…` : `Tell ${spark.name} what to do differently…`;
+          if (next === -1 && why) why.focus();
+          toast(next === 1 ? `${spark.name} will do more like this` : next === -1 ? `${spark.name} will do less like this` : "Rating taken back");
+        };
+        rate.appendChild(b);
+      }
+      card.querySelector(".when").appendChild(rate);
+    }
     if (report.steps.length) {
       const steps = el("details", "", `<summary>${report.steps.length} step${report.steps.length === 1 ? "" : "s"}</summary><ol></ol>`);
       for (const step of report.steps) steps.querySelector("ol").appendChild(el("li")).textContent = step;
@@ -4305,7 +4344,7 @@ function fillSpark(box, spark, again = false) {
       const teach = el("div", "teach", `<input type="text" maxlength="400" autocomplete="off"><button type="button" class="btn small">Tell it</button>`);
       const field = teach.querySelector("input");
       field.dataset.keep = `teach-${report.at}`;
-      field.placeholder = `Tell ${spark.name} what to do differently…`;
+      field.placeholder = report.rating === -1 ? `What was wrong with it? ${spark.name} learns from this…` : `Tell ${spark.name} what to do differently…`;
       const go = async () => {
         const lesson = field.value.trim();
         if (!lesson) return;
