@@ -3809,3 +3809,23 @@ def test_a_recording_sent_untyped_names_its_chat_for_what_it_is():
     ])
 
     assert chat.title == "Screen recording"
+
+
+def test_the_page_picks_how_the_voice_speaks(monkeypatch):
+    monkeypatch.delenv("VOICE_STYLE", raising=False)
+    session = web.Session()
+
+    listed = web.voice_models(session)["styles"]
+    picked = web.command(session, {"name": "voice-style", "arg": "calm"})
+
+    assert [s["name"] for s in listed] == ["warm", "lively", "calm", "plain"]
+    assert [s["name"] for s in listed if s["current"]] == ["warm"]
+    assert [s["name"] for s in picked["styles"] if s["current"]] == ["calm"]
+    with pytest.raises(ValueError):
+        web.command(session, {"name": "voice-style", "arg": "shouty"})
+    monkeypatch.delenv("VOICE_STYLE", raising=False)
+
+
+def test_voice_mode_asks_for_warm_words():
+    assert "warm, friendly person" in ai.VOICE_PROMPT
+    assert "question mark lifts it" in ai.VOICE_PROMPT
