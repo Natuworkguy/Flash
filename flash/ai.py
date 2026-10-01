@@ -2271,6 +2271,13 @@ def _sparks_command(arg: str) -> None:
                 source.strip() if paused else rest,
                 model=Config.model or "", paused=paused,
             )
+            from . import mail
+
+            if sparks.needs_email(spark) and not mail.configured():
+                warn(
+                    f"  {spark.name} works on your email, which is not "
+                    "connected yet: /email connect sets it up."
+                )
             console.print(Text(
                 f"Added {spark.name} ({spark.handle}), "
                 f"{sparks.schedule_words(spark)}, on {spark.model}"
@@ -2450,11 +2457,18 @@ def _keep_sparks() -> None:
     # with always on off, it runs until stopped.
     wanted = keepalive.installed if keepalive.installed() else None
     try:
-        sparks.serve(
+        updated = sparks.serve(
             prepare=refresh_config, announce=announce, wanted=wanted,
         )
     except KeyboardInterrupt:
         console.print(Text("Stopped.", style=DIM))
+        return
+    if updated:
+        # Flash was updated while it ran: the same keeper, on the new
+        # code, in place of this one.
+        console.print(Text("Flash was updated: starting again.", DIM))
+        again = keepalive.command()
+        os.execv(again[0], again)  # nosec B606 -- this Python, this Flash
 
 
 def _sparks_always(arg: str) -> None:

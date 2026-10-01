@@ -348,3 +348,30 @@ def test_the_login_keeper_goes_when_always_on_does(monkeypatch):
     ai._keep_sparks()
 
     assert served == [keepalive.installed]
+
+
+def test_the_keeper_starts_again_on_new_code(monkeypatch):
+    from flash import ai
+
+    started = []
+    monkeypatch.setattr(sparks, "serve", lambda **kwargs: True)
+    monkeypatch.setattr(
+        ai.os, "execv", lambda path, args: started.append((path, args)),
+    )
+
+    ai._keep_sparks()
+
+    command = keepalive.command()
+    assert started == [(command[0], command)]
+
+
+def test_the_keeper_stopped_by_hand_is_not_started_again(monkeypatch):
+    from flash import ai
+
+    started = []
+    monkeypatch.setattr(sparks, "serve", lambda **kwargs: False)
+    monkeypatch.setattr(ai.os, "execv", lambda *a: started.append(a))
+
+    ai._keep_sparks()
+
+    assert started == []
