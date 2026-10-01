@@ -2614,6 +2614,11 @@ def _spark_command(name: str, arg: str, body: dict) -> dict:
                 arg, str(body.get("lesson") or ""),
                 float(at) if isinstance(at, (int, float)) else None,
             )
+        elif name == "spark-rate":
+            at = body.get("at")
+            if not isinstance(at, (int, float)):
+                raise sparks.SparkError("Which report?")
+            spark = sparks.rate(arg, float(at), body.get("rating"))
         elif name == "spark-unteach":
             spark = sparks.forget_lesson(arg, int(body.get("index") or 0))
         elif name == "spark-remove":

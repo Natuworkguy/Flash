@@ -3267,6 +3267,21 @@ class TestSparkChats:
 
         assert made["paused"] is True and made["name"] == "Scout"
 
+    def test_a_report_is_rated_from_the_page(self):
+        from flash import sparks
+        from flash.sparks import Report
+
+        made = sparks.create("Scout", "Watch the issues.")
+        sparks._edit(made.id, lambda s: s.reports.append(
+            Report(at=5.0, text="Two new issues."),
+        ))
+
+        rated = web.command(web.Session(), {
+            "name": "spark-rate", "arg": made.id, "at": 5.0, "rating": 1,
+        })["spark"]
+
+        assert rated["reports"][0]["rating"] == 1
+
     def test_the_roster_sees_a_spark_waiting_and_its_title(self):
         from flash import sparks
 
