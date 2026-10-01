@@ -77,6 +77,14 @@ def isolated_home(tmp_path_factory, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def fresh_shift_rounds(monkeypatch):
+    """Rounds a test sets for a shift go with it: setting them writes the
+    process's environment too."""
+
+    monkeypatch.delenv("SPARK_SHIFT_ROUNDS", raising=False)
+
+
+@pytest.fixture(autouse=True)
 def no_spark_keeper(monkeypatch):
     """No test starts the thread that runs sparks' shifts.
 

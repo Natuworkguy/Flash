@@ -75,7 +75,14 @@ MAX_REPORTS = 40
 MAX_RATED = 6
 RATED_CHARS = 280
 MAX_STEPS = 40
-MAX_SHIFT_ROUNDS = 12
+# How many rounds of tools a shift gets before it is told to write its
+# report from what it has: the user's to set (SPARK_SHIFT_ROUNDS), within
+# these bounds. Nobody watches a shift, so it always has one: a small
+# model that loops would otherwise run all night, ahead of every other
+# spark.
+SHIFT_ROUNDS_DEFAULT = 12
+SHIFT_ROUNDS_MIN = 1
+SHIFT_ROUNDS_MAX = 100
 
 # Chat: how much of it is kept, how much of it the spark rereads, and
 # how long it may work on one answer.
@@ -1211,6 +1218,47 @@ def describe(name: str, args: dict) -> tuple[str, str]:
     return name, json.dumps(args, ensure_ascii=False)[:1200]
 
 
+def shift_rounds() -> int:
+    """How many rounds of tools a shift gets, as the user last set it.
+
+    From the env file, as autonomous() is, so a keeper running in the
+    background goes by what was set in another Flash.
+    """
+
+    from dotenv import dotenv_values
+
+    try:
+        saved = dotenv_values(ENV_PATH).get("SPARK_SHIFT_ROUNDS")
+    except OSError:
+        saved = None
+    if saved is None or not str(saved).strip():
+        saved = os.getenv("SPARK_SHIFT_ROUNDS", "")
+    try:
+        rounds = int(str(saved).strip())
+    except ValueError:
+        return SHIFT_ROUNDS_DEFAULT
+    return max(SHIFT_ROUNDS_MIN, min(SHIFT_ROUNDS_MAX, rounds))
+
+
+def set_shift_rounds(value) -> int:
+    """Set how many rounds of tools a shift gets, for every spark."""
+
+    from .envfile import set_env_var
+
+    try:
+        rounds = int(str(value).strip())
+    except ValueError:
+        raise SparkError("Say how many rounds, as a number.") from None
+    if not SHIFT_ROUNDS_MIN <= rounds <= SHIFT_ROUNDS_MAX:
+        raise SparkError(
+            f"A shift gets between {SHIFT_ROUNDS_MIN} and "
+            f"{SHIFT_ROUNDS_MAX} rounds of tools."
+        )
+    os.environ["SPARK_SHIFT_ROUNDS"] = str(rounds)
+    set_env_var(ENV_PATH, "SPARK_SHIFT_ROUNDS", str(rounds))
+    return rounds
+
+
 def autonomous() -> bool:
     """Whether autonomous mode is on, as the user last set it.
 
@@ -1577,7 +1625,7 @@ def shift(spark_id: str, client=None) -> Optional[Report]:
             text = _work(
                 spark, messages, own, [KEEP_NOTES_TOOL, HAND_OFF_TOOL],
                 steps, lambda doing: _set_activity(spark.id, doing),
-                MAX_SHIFT_ROUNDS, ROUND_LIMIT_MESSAGE, client,
+                shift_rounds(), ROUND_LIMIT_MESSAGE, client,
                 names=names, gate=gate,
                 stopping=lambda: bool(
                     getattr(find(spark.id), "stop_asked", 0)

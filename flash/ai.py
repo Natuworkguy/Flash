@@ -2059,6 +2059,17 @@ def _sparks_command(arg: str) -> None:
         if action == "always":
             _sparks_always(rest.lower())
             return
+        if action == "rounds":
+            if rest:
+                sparks.set_shift_rounds(rest)
+            rounds = sparks.shift_rounds()
+            console.print(Text(
+                f"A shift gets {rounds} round{'' if rounds == 1 else 's'} of "
+                "tools, then writes its report from what it has. "
+                f"/sparks rounds <{sparks.SHIFT_ROUNDS_MIN}-"
+                f"{sparks.SHIFT_ROUNDS_MAX}> changes it.", style=DIM,
+            ))
+            return
         if action in ("chat", "talk", "ask") and key:
             _chat_with_spark(key, extra)
             return
@@ -2228,6 +2239,7 @@ def _sparks_command(arg: str) -> None:
             "| approve|deny|stop|share <name> | add <code|template> [paused] "
             "| templates | goal <name> <text> | watch <name> <folder|none> "
             "| model <name> [model] | title <name> <title|none> "
+            "| rounds [number] "
             "| always on|off]"
         )
         return

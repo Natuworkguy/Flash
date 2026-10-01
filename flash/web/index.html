@@ -911,6 +911,11 @@ body.page-projects #dock, body.page-settings #dock, body.page-tool #dock { displ
 .lan-warn { font-size: 13px !important; color: var(--text-3); margin-top: 10px !important; }
 #phone .dialog-buttons { justify-content: center; margin-top: 16px; }
 .setting-row .side { flex: none; display: flex; align-items: center; }
+.stepper { display: inline-flex; align-items: center; border: 1px solid var(--border-strong); border-radius: 10px; overflow: hidden; background: var(--bg); }
+.stepper .icon-btn { width: 30px; height: 32px; border-radius: 0; font-size: 16px; color: var(--text-2); }
+.stepper input { width: 44px; height: 32px; border: 0; background: transparent; color: var(--text); font: 600 14px var(--sans); text-align: center; outline: 0; -moz-appearance: textfield; appearance: textfield; }
+.stepper input::-webkit-inner-spin-button, .stepper input::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+.stepper:focus-within { border-color: var(--accent); }
 .spin { width: 18px; height: 18px; border-radius: 50%; border: 2px solid color-mix(in srgb, var(--text) 18%, transparent); border-top-color: var(--accent); animation: spin 0.8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 .update-extra { max-width: 620px; margin-top: 10px; }
@@ -3882,6 +3887,11 @@ function drawGeneral(body) {
   body.appendChild(always);
   fillAlwaysRow(always);
 
+  // How far a shift may go before it writes its report.
+  const rounds = el("div", "setting-row static spark-rounds-row", `<span class="what"><b>Tool rounds per shift</b><span>How many rounds of tools a spark gets each shift before it writes its report from what it has. More lets it finish bigger jobs in one go; fewer keeps a model that goes round in circles from running on. Each round can use several tools.</span></span><span class="side"><span class="stepper"><button type="button" class="icon-btn" data-less aria-label="Fewer">−</button><input type="number" inputmode="numeric" aria-label="Tool rounds per shift"><button type="button" class="icon-btn" data-more aria-label="More">+</button></span></span>`);
+  body.appendChild(rounds);
+  fillRoundsRow(rounds);
+
   body.insertAdjacentHTML("beforeend", `<h2 class="settings-section settings-gap">Voice models</h2><p class="settings-sub">What voice mode listens and speaks with. Both run on this computer, so pick lighter ones for a weaker machine.</p><div class="voice-models"></div>`);
   drawVoiceModels(body.querySelector(".voice-models"));
 
@@ -4395,6 +4405,34 @@ async function drawSparks(body, again = false) {
   where.appendChild(change);
 }
 const drawSparksPage = () => toolPage("Sparks", drawSparks);
+
+// The box in Settings for how many rounds of tools a shift gets: typed,
+// or stepped, and saved a moment after the last change.
+async function fillRoundsRow(row) {
+  const field = row.querySelector("input");
+  let r;
+  try { r = await command("spark-rounds", "", null); } catch (error) { showFailure(error); return; }
+  field.min = r.least;
+  field.max = r.most;
+  field.value = r.rounds;
+  field.title = `${r.least} to ${r.most}; ${r.default} unless you change it`;
+  let saved = r.rounds;
+  let timer = null;
+  const save = () => {
+    clearTimeout(timer);
+    timer = setTimeout(async () => {
+      const want = Math.max(r.least, Math.min(r.most, Math.round(Number(field.value) || saved)));
+      field.value = want;
+      if (want === saved) return;
+      try { saved = (await command("spark-rounds", String(want), null)).rounds; toast(`Each shift gets ${saved} round${saved === 1 ? "" : "s"} of tools`); }
+      catch (error) { field.value = saved; showFailure(error); }
+    }, 500);
+  };
+  field.addEventListener("input", save);
+  field.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); field.blur(); } });
+  row.querySelector("[data-less]").onclick = () => { field.value = Math.max(r.least, (Number(field.value) || saved) - 1); save(); };
+  row.querySelector("[data-more]").onclick = () => { field.value = Math.min(r.most, (Number(field.value) || saved) + 1); save(); };
+}
 
 // The switch in Settings: on or off, and what that means right now.
 function showAlways(row, a) {

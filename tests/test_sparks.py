@@ -1191,6 +1191,39 @@ def test_the_latest_report_is_rated_from_the_terminal():
     assert made.id == spark.id
 
 
+def test_a_shift_gets_as_many_tool_rounds_as_the_user_set(monkeypatch):
+    monkeypatch.delenv("SPARK_SHIFT_ROUNDS", raising=False)
+    assert sparks.shift_rounds() == sparks.SHIFT_ROUNDS_DEFAULT
+
+    assert sparks.set_shift_rounds("3") == 3
+    made = sparks.create("Scout", "Watch the issues.")
+    client = FakeClient(
+        [_reply("", ("keep_notes", {"notes": "n"}))] * 3
+        + [_reply("Found nothing worth saying.")]
+    )
+
+    sparks.shift(made.id, client=client)
+
+    # Three rounds of tools, then the last word with none offered.
+    assert len(client.calls) == 4
+    assert client.calls[-1]["tools"] is None
+    assert sparks.find(made.id).reports[-1].text.startswith("Found nothing")
+
+
+def test_the_round_limit_is_read_from_the_settings_file(monkeypatch):
+    sparks.set_shift_rounds(30)
+    monkeypatch.setenv("SPARK_SHIFT_ROUNDS", "5")
+
+    # Another Flash set 30: the file says so, whatever this one holds.
+    assert sparks.shift_rounds() == 30
+
+
+@pytest.mark.parametrize("value", ["0", "101", "lots", ""])
+def test_the_round_limit_must_be_a_sensible_number(value):
+    with pytest.raises(sparks.SparkError):
+        sparks.set_shift_rounds(value)
+
+
 def test_a_template_makes_a_spark():
     made = sparks.add_from("repo watch")
 
