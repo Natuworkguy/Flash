@@ -10,10 +10,18 @@ from flash import ai, systemone, tools, web
 
 
 class FakeServer:
-    """An Ollama that answers /api/version and /v1/systemone."""
+    """An Ollama that answers /api/version, /api/tags, /api/show and
+    /v1/systemone."""
 
     def __init__(self, version="0.35.0"):
         self.version = version
+        # What it has, and what /api/show says each can do.
+        self.models = {
+            "llama3.1:latest": ["completion", "tools"],
+            "nimble:latest": ["decision"],
+            "Natuworkguy/tev1:0.8b": ["completion", "decision"],
+        }
+        self.shown = []
         self.posts = []
         self.answers = {}
         self.status = 200
@@ -23,6 +31,11 @@ class FakeServer:
     def get(self, url, timeout):
         if self.down:
             raise httpx.ConnectError("refused")
+        if url.endswith("/api/tags"):
+            return httpx.Response(
+                200, json={"models": [{"model": m} for m in self.models]},
+                request=httpx.Request("GET", url),
+            )
         assert url.endswith("/api/version")  # nosec B101
         return httpx.Response(
             200, json={"version": self.version},
@@ -30,6 +43,16 @@ class FakeServer:
         )
 
     def post(self, url, body, timeout):
+        if url.endswith("/api/show"):
+            self.shown.append(body["model"])
+            name = body["model"]
+            found = self.models.get(name, self.models.get(f"{name}:latest"))
+            return httpx.Response(
+                404 if found is None else 200,
+                json={"error": "not found"} if found is None
+                else {"capabilities": found},
+                request=httpx.Request("POST", url),
+            )
         self.posts.append((url, body))
         if self.status != 200:
             return httpx.Response(
@@ -55,6 +78,7 @@ def at_work(monkeypatch, server):
     """System One switched on, in autonomous mode."""
 
     monkeypatch.setenv("SYSTEM_ONE", "1")
+    monkeypatch.setenv("SYSTEM_ONE_MODEL", "nimble")
     monkeypatch.setattr(tools, "NO_COMMAND_CONFIRMATION", True)
     monkeypatch.setattr(tools, "OLLAMA_HOST", "http://localhost:11434")
     return server
@@ -145,7 +169,7 @@ def test_ask_missing_model(server):
     server.error = "model 'nimble' not found"
 
     with pytest.raises(systemone.SystemOneError) as raised:
-        systemone.ask("localhost", {}, {})
+        systemone.ask("localhost", {}, {}, "nimble")
 
     assert "ollama pull nimble" in str(raised.value)  # nosec B101
 
@@ -195,7 +219,8 @@ def test_describe_answers():
          "probabilities": {"0": 0.1, "1": 0.6, "2": "0.3"}},
     )
     assert "Score 0.80" in score  # nosec B101
-    assert "from Routine (0) to Urgent (1)" in score  # nosec B101
+    # Scored from 0 to one less than the number of levels.
+    assert "from Routine (0) to Urgent (2)" in score  # nosec B101
     assert "most likely Soon" in score  # nosec B101
 
 
@@ -205,6 +230,7 @@ def test_describe_answers():
 def test_active_needs_autonomous_mode(monkeypatch):
     monkeypatch.setattr(tools, "NO_COMMAND_CONFIRMATION", False)
     monkeypatch.setenv("SYSTEM_ONE", "1")
+    monkeypatch.setenv("SYSTEM_ONE_MODEL", "nimble")
     assert systemone.enabled() and not systemone.active()  # nosec B101
 
     monkeypatch.setattr(tools, "NO_COMMAND_CONFIRMATION", True)
@@ -224,8 +250,70 @@ def test_settings_saved_to_the_env_file(isolated_home):
         systemone.set_model("two words")
 
 
-def test_default_model():
+def test_no_model_until_one_is_picked(monkeypatch):
+    monkeypatch.setenv("SYSTEM_ONE", "1")
+
+    assert systemone.model() == ""  # nosec B101
+    # On, with no model, is off: None is how the picker says it.
+    assert not systemone.enabled()  # nosec B101
+
+
+def test_same_model():
+    assert systemone.same_model("nimble", "nimble:latest")  # nosec B101
+    assert not systemone.same_model("nimble", "tev1")  # nosec B101
+    assert not systemone.same_model("", "")  # nosec B101
+
+
+# --- Scanning ----------------------------------------------------------------
+
+
+def test_scan_finds_the_decision_models(server):
+    found = systemone.scan("localhost")
+
+    assert found == ["Natuworkguy/tev1:0.8b", "nimble:latest"]  # nosec B101
+    assert sorted(server.shown) == sorted(server.models)  # nosec B101
+
+
+def test_scan_finds_none(server):
+    server.models = {"llama3.1:latest": ["completion"]}
+
+    assert systemone.scan("localhost") == []  # nosec B101
+    assert "ollama pull nimble" in systemone.no_models("x")  # nosec B101
+
+
+def test_capable(server):
+    assert systemone.capable("localhost", "nimble") is True  # nosec B101
+    assert systemone.capable("localhost", "llama3.1") is False  # nosec B101
+    assert systemone.capable("localhost", "gone") is None  # nosec B101
+
+
+def test_choose_checks_before_saving(server):
+    with pytest.raises(systemone.SystemOneError, match="not a System One"):
+        systemone.choose("localhost", "llama3.1:latest")
+    with pytest.raises(systemone.SystemOneError, match="ollama pull gone"):
+        systemone.choose("localhost", "gone")
+    assert not systemone.enabled()  # nosec B101
+
+    assert systemone.choose("localhost", "nimble") == "nimble"  # nosec B101
+    assert systemone.enabled() and systemone.model() == "nimble"  # nosec B101
+
+    assert systemone.choose("localhost", "None") == ""  # nosec B101
+    assert not systemone.enabled()  # nosec B101
+    # The pick is kept, for switching it back on.
     assert systemone.model() == "nimble"  # nosec B101
+
+
+def test_turn_on_takes_the_first_found(server):
+    found = systemone.turn_on("localhost")
+
+    assert found == "Natuworkguy/tev1:0.8b"  # nosec B101
+
+
+def test_turn_on_with_none_found(server):
+    server.models = {}
+
+    with pytest.raises(systemone.SystemOneError, match="no System One"):
+        systemone.turn_on("localhost")
 
 
 # --- Reviews -----------------------------------------------------------------
@@ -242,6 +330,9 @@ def test_review_asks_both_questions(server):
 
     _, body = server.posts[0]
     assert set(body["questions"]) == {"safe", "on_task"}  # nosec B101
+    # Yes/no questions say what false and true mean.
+    for asked in body["questions"].values():
+        assert set(asked["criteria"]) == {"false", "true"}  # nosec B101
     assert body["state"]["request"] == "List the files here"  # nosec B101
     assert json.loads(body["state"]["arguments"]) == {  # nosec B101
         "command": "ls",
@@ -356,6 +447,7 @@ def test_ask_tool_offered_only_at_work(monkeypatch, server):
     assert "ask_system_one" not in names()  # nosec B101
 
     monkeypatch.setenv("SYSTEM_ONE", "1")
+    monkeypatch.setenv("SYSTEM_ONE_MODEL", "nimble")
     monkeypatch.setattr(tools, "NO_COMMAND_CONFIRMATION", True)
     assert "ask_system_one" in names()  # nosec B101
 
@@ -395,21 +487,50 @@ def test_cli_refuses_an_old_server(server, monkeypatch):
     assert any("0.35+" in w for w in warned)  # nosec B101
 
 
-def test_cli_turns_on(server, monkeypatch):
-    monkeypatch.setattr(ai, "fetch_if_missing", lambda client, name: True)
-
+def test_cli_turns_on(server):
     ai._system_one_command("on")
 
     assert systemone.enabled()  # nosec B101
+    assert systemone.model() == "Natuworkguy/tev1:0.8b"  # nosec B101
 
     ai._system_one_command("off")
     assert not systemone.enabled()  # nosec B101
 
 
 def test_cli_picks_a_model(server):
+    ai._system_one_command("model nimble")
+
+    assert systemone.enabled() and systemone.model() == "nimble"  # nosec B101
+
+    ai._system_one_command("model none")
+    assert not systemone.enabled()  # nosec B101
+
+
+def test_cli_offers_to_download(server, monkeypatch):
+    offered = []
+
+    def fetch(client, name):
+        offered.append(name)
+        server.models["tev1:latest"] = ["decision"]
+        return True
+
+    monkeypatch.setattr(ai, "fetch_if_missing", fetch)
     ai._system_one_command("model tev1")
 
+    assert offered == ["tev1"]  # nosec B101
     assert systemone.model() == "tev1"  # nosec B101
+
+
+def test_cli_lists_the_models_found(server, monkeypatch):
+    printed = []
+    monkeypatch.setattr(ai.console, "print", lambda *a, **k: printed.append(
+        str(a[0]) if a else ""))
+
+    ai._system_one_command("model")
+
+    shown = "".join(printed)
+    assert "nimble:latest" in shown and "tev1:0.8b" in shown  # nosec B101
+    assert "llama3.1" not in shown  # nosec B101
 
 
 def test_web_refuses_an_old_server(server):
@@ -424,21 +545,44 @@ def test_web_refuses_an_old_server(server):
     assert state["version"] == "0.33.1"  # nosec B101
 
 
-def test_web_turns_on_and_picks_a_model(server, monkeypatch):
-    monkeypatch.setattr(web, "is_installed", lambda client, name: True)
+def test_web_lists_models_for_the_menu(server):
+    state = web.command(web.Session(), {
+        "name": "system-one", "arg": "models",
+    })
 
-    state = web.command(web.Session(), {"name": "system-one", "arg": "on"})
-    assert state["on"] is True and state["version"] == "0.35.0"  # nosec B101
-    assert web.status(ai)["system_one"] is True  # nosec B101
+    assert state["models"] == [  # nosec B101
+        "Natuworkguy/tev1:0.8b", "nimble:latest",
+    ]
+    # nimble only judges; tev1 here can chat too.
+    assert state["judge_only"] == ["nimble:latest"]  # nosec B101
+    assert state["model"] == "" and state["on"] is False  # nosec B101
+
+
+def test_web_picks_a_model_and_none(server):
+    state = web.command(web.Session(), {
+        "name": "system-one", "arg": "model", "model": "nimble:latest",
+    })
+    assert state["on"] is True  # nosec B101
+    assert state["model"] == "nimble:latest"  # nosec B101
+    assert web.status(ai)["system_one_model"] == "nimble:latest"  # nosec B101
+    assert ai.Config.system_one is True  # nosec B101
 
     state = web.command(web.Session(), {
-        "name": "system-one", "arg": "model", "model": "tev1",
+        "name": "system-one", "arg": "model", "model": "none",
     })
-    assert state["model"] == "tev1"  # nosec B101
+    assert state["on"] is False and state["model"] == ""  # nosec B101
+    assert web.status(ai)["system_one"] is False  # nosec B101
 
 
-def test_web_wants_the_model_downloaded(server, monkeypatch):
-    monkeypatch.setattr(web, "is_installed", lambda client, name: False)
+def test_web_refuses_a_model_that_is_not_one(server):
+    with pytest.raises(ValueError, match="not a System One model"):
+        web.command(web.Session(), {
+            "name": "system-one", "arg": "model", "model": "llama3.1:latest",
+        })
 
-    with pytest.raises(ValueError, match="ollama pull nimble"):
-        web.command(web.Session(), {"name": "system-one", "arg": "on"})
+
+def test_web_turns_on_with_the_first_found(server):
+    state = web.command(web.Session(), {"name": "system-one", "arg": "on"})
+
+    assert state["on"] is True  # nosec B101
+    assert state["model"] == "Natuworkguy/tev1:0.8b"  # nosec B101
