@@ -49,7 +49,6 @@ from rich.text import Text
 
 from . import agent as subagents
 from . import (
-    awake,
     background,
     checkpoint,
     context,
@@ -265,11 +264,6 @@ class Chat:
     project: str = ""
     # The spark this chat is with, if any: it answers instead of Flash.
     spark: str = ""
-    # A task: the chat that started it, where it stands, and whether its
-    # result has gone back there yet.
-    parent: str = ""
-    task: str = ""
-    reported: bool = False
 
     def summary(self) -> dict:
         return {
@@ -284,9 +278,6 @@ class Chat:
             "project": self.project,
             "spark": self.spark,
             "updated": self.updated,
-            "created": self.created,
-            "parent": self.parent,
-            "task": self.task,
         }
 
     def saved(self) -> dict:
@@ -301,9 +292,6 @@ class Chat:
             "updated": self.updated,
             "project": self.project,
             "spark": self.spark,
-            "parent": self.parent,
-            "task": self.task,
-            "reported": self.reported,
         }
 
     @classmethod
@@ -317,15 +305,6 @@ class Chat:
             updated=float(data.get("updated") or time.time()),
             project=str(data.get("project") or ""),
             spark=str(data.get("spark") or ""),
-            parent=str(data.get("parent") or ""),
-            # One cut short by Flash closing is not carried on: it
-            # reports back that it stopped.
-            task=(
-                TASK_STOPPED
-                if data.get("task") in (TASK_RUNNING, TASK_ASKING)
-                else str(data.get("task") or "")
-            ),
-            reported=bool(data.get("reported")),
         )
 
 
@@ -343,66 +322,12 @@ class Ask:
 KEPT = {
     "user", "assistant", "tool", "result", "diff", "ask", "answered",
     "error", "stats", "note", "thought", "file", "plan", "browser",
-    "task",
 }
 
 
 # How a steering message reaches the model: marked, so it reads as the
 # user redirecting the work in progress rather than a new request.
 STEER_NOTE = "[Sent while you were working. Take it into account from here.]"
-
-# Tasks, as Cowork's Dispatch runs them: Flash hands a piece of work to a
-# chat of its own, which runs in the background and reports back to the
-# chat that started it.
-TASK_TOOL = {
-    "type": "function",
-    "function": {
-        "name": "start_task",
-        "description": (
-            "Hand a piece of work to a task: a chat of its own that runs "
-            "in the background, listed under this one in the sidebar, "
-            "and reports its result back here when it finishes. Use it "
-            "when the user asks for several independent pieces of work, "
-            "or a long job they do not want to watch; start one task per "
-            "piece. Tasks run one after another, after this turn. For "
-            "something quick, just do it yourself."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "title": {
-                    "type": "string",
-                    "description": "A short name for it, a few words.",
-                },
-                "task": {
-                    "type": "string",
-                    "description": (
-                        "The whole brief, written so it needs nothing "
-                        "else from this chat: what to do, where, and "
-                        "what to hand back."
-                    ),
-                },
-            },
-            "required": ["title", "task"],
-        },
-    },
-}
-
-TASK_PROMPT = """
-=== This chat is a task ===
-Flash started this chat from another one, to do the job in the first
-message in the background. Nobody may be watching: work through it on
-your own, and end with a clear result, which goes back to that chat.
-""".strip()
-
-# How long a task waits for a yes or no before going on without it.
-TASK_ASK_SECONDS = 600
-# What a task's result posted back to its chat holds, at most.
-TASK_RESULT_CHARS = 4000
-# A task's states, as the sidebar shows them.
-TASK_RUNNING, TASK_ASKING = "running", "asking"
-TASK_DONE, TASK_FAILED, TASK_STOPPED = "done", "failed", "stopped"
-TASK_ENDED = (TASK_DONE, TASK_FAILED, TASK_STOPPED)
 
 # Carry the token, and the browsers signed in with it, from a server to
 # the one that replaces it after an update, across the exec that starts
@@ -770,9 +695,6 @@ class Session:
         self._watching: Optional[threading.Thread] = None
         # One at a time, so a report is never posted twice.
         self._posting = threading.Lock()
-        # Turns of chats someone is in, waiting for one to finish: a
-        # task waiting on a yes or no lets them go first.
-        self.waiting_turns = 0
         self._stop_watching = threading.Event()
 
     # Chats ---------------------------------------------------------
@@ -794,43 +716,6 @@ class Session:
             self.chats[chat.id] = chat
         self.emit(chat, {"type": "chats"})
         return chat
-
-    def start_task(self, parent: Chat, title: str, brief: str) -> str:
-        """A task for PARENT: a chat of its own, in the same project,
-        that starts on BRIEF as soon as it gets its turn."""
-
-        title = " ".join(str(title or "").split())[:TITLE_CHARS]
-        brief = str(brief or "").strip()
-        if not brief:
-            return "Error: a task needs a brief: what to do."
-        if parent.parent:
-            return (
-                "Error: this chat is itself a task, and a task does not "
-                "start tasks. Do the work here."
-            )
-        child = self.new_chat(parent.project)
-        child.parent = parent.id
-        child.task = TASK_RUNNING
-        child.title = title or "Task"
-        self.send(child, brief)
-        return (
-            f"Started the task \"{child.title}\". It runs in a chat of its "
-            "own, under this one in the sidebar, after this turn, and its "
-            "result comes back here when it is done. Tell the user it is "
-            "on its way; do not wait for it or do it yourself."
-        )
-
-    def one_chat(self, chat_id: str) -> dict:
-        """CHAT_ID as the page draws it, and the event it is up to."""
-
-        chat = self.chats.get(chat_id)
-        return {
-            "seq": self.hub.seq,
-            "chat": chat.summary() if chat is not None else None,
-        }
-
-    def tasks_of(self, chat_id: str) -> list[Chat]:
-        return [c for c in self.chats.values() if c.parent == chat_id]
 
     def chat(self, chat_id: str) -> Chat:
         chat = self.chats.get(chat_id)
@@ -905,7 +790,7 @@ class Session:
                  "status": s.status, "paused": s.paused,
                  "waiting": s.waiting, "answering": s.answering,
                  "unread": s.unread, "activity": s.activity,
-                 "next_run": s.next_run, "retries": s.retries,
+                 "next_run": s.next_run,
                  "pending": {k: s.pending[k] for k in ("label", "detail")
                              if k in s.pending},
                  "project": s.project if sparks.project_of(s) else ""}
@@ -1045,42 +930,8 @@ class Session:
             return
         try:
             self._post_spark_reports(ai)
-            self._post_task_results(ai)
         finally:
             self._posting.release()
-
-    def _post_task_results(self, ai) -> None:
-        """Each finished task's result, into the chat that started it,
-        once that chat is free: a card for the user, and a note for
-        Flash to answer from."""
-
-        for child in list(self.chats.values()):
-            if not child.parent or child.reported:
-                continue
-            if child.task not in TASK_ENDED or child.busy or child.queued:
-                continue
-            parent = self.chats.get(child.parent)
-            if parent is not None and (parent.busy or parent.queued):
-                continue
-            if parent is None:
-                child.reported = True
-                self.save(child)
-                continue
-            result = task_result(child)
-            self.emit(parent, {
-                # "task", not "chat": that names the chat it is in.
-                "type": "task", "task": child.id, "title": child.title,
-                "state": child.task, "text": result,
-            })
-            parent.messages.append(ai._message("system", (
-                f"[Task {child.task}] \"{child.title}\", which you started "
-                f"in a chat of its own, {TASK_WORDS[child.task]}. "
-                f"Its result:\n{result or '(it said nothing)'}"
-            )))
-            self.save(parent)
-            # Last: once it says so, the result is there to see.
-            child.reported = True
-            self.save(child)
 
     def _post_spark_reports(self, ai) -> None:
         for spark, report, chat_id in sparks.to_post():
@@ -1231,13 +1082,7 @@ class Session:
     # Questions -----------------------------------------------------
 
     def answerer(self, chat: Chat):
-        """Ask the page, and wait for it, for the tools on this turn.
-
-        A task waits ten minutes at most, as Cowork's Dispatch does, and
-        less when someone is waiting to talk in another chat: it holds
-        up every other turn while it waits. Either way it goes on
-        without the step, told why.
-        """
+        """Ask the page, and wait for it, for the tools on this turn."""
 
         def ask(question: str) -> str:
             entry = Ask(id=uuid.uuid4().hex[:8], chat=chat.id,
@@ -1246,34 +1091,13 @@ class Session:
             self.emit(chat, {
                 "type": "ask", "id": entry.id, "question": question,
             })
-            if chat.parent:
-                self._task_state(chat, TASK_ASKING)
-            deadline = time.monotonic() + TASK_ASK_SECONDS
-            gave_up = ""
 
             while not entry.done.wait(ASK_POLL_SECONDS):
                 if chat.stop.is_set():
                     entry.answer = "n"
                     break
-                if chat.parent and time.monotonic() > deadline:
-                    gave_up = (
-                        "Nobody answered in ten minutes, so the task went "
-                        "on without it."
-                    )
-                elif chat.parent and self.waiting_turns:
-                    gave_up = (
-                        "You started talking in another chat, so the task "
-                        "went on without it rather than hold that up."
-                    )
-                if gave_up:
-                    entry.answer = "n"
-                    break
 
             self.asks.pop(entry.id, None)
-            if chat.parent:
-                self._task_state(chat, TASK_RUNNING)
-            if gave_up:
-                self.emit(chat, {"type": "note", "text": gave_up})
             answer = entry.answer or "n"
             self.emit(chat, {
                 "type": "answered", "id": entry.id, "answer": answer,
@@ -1289,10 +1113,6 @@ class Session:
         entry.answer = "y" if str(answer).lower().startswith("y") else "n"
         entry.done.set()
         return True
-
-    def _task_state(self, chat: Chat, state: str) -> None:
-        chat.task = state
-        self.hub.publish({"type": "chats", "chat": chat.id})
 
     # Turns ---------------------------------------------------------
 
@@ -1420,19 +1240,7 @@ class Session:
         following: Optional[dict] = {"text": text, "files": files or []}
         while following is not None:
             text, files = following["text"], following.get("files") or []
-            # Someone waiting to talk here goes ahead of a task stopped
-            # on a question: see answerer.
-            someone = not chat.parent
-            if someone:
-                with self._lock:
-                    self.waiting_turns += 1
-            try:
-                self.turn_lock.acquire()
-            finally:
-                if someone:
-                    with self._lock:
-                        self.waiting_turns -= 1
-            try:
+            with self.turn_lock:
                 chat.queued = False
                 chat.busy = True
                 self.emit(chat, {"type": "busy", "busy": True})
@@ -1444,8 +1252,7 @@ class Session:
                     if chat.stop.is_set():
                         self.emit(chat, {"type": "note", "text": "Stopped."})
                     else:
-                        with inside(found.path if found else None), \
-                                awake.working(f"chat:{chat.id}"):
+                        with inside(found.path if found else None):
                             run_turn(self, chat, text, found, files)
                 except Exception as exc:  # noqa: BLE001
                     self.emit(chat, {
@@ -1456,21 +1263,11 @@ class Session:
                     with self._lock:
                         following = self._take_next(chat)
                         chat.busy = False
-                    if chat.parent and chat.task in (
-                        TASK_RUNNING, TASK_ASKING,
-                    ):
-                        # Its first run is over: how it went decides
-                        # what goes back.
-                        chat.task = task_outcome(chat)
-                        self.hub.publish({"type": "chats", "chat": chat.id})
                     chat.partial = chat.thinking = ""
                     self.save(chat)
                     self.emit(chat, {"type": "busy", "busy": False})
                     self.hub.publish({"type": "status"})
-            finally:
-                self.turn_lock.release()
-            # A spark's report, or a task's result, that came in while
-            # the turn ran.
+            # A spark's report that came in while the turn ran.
             if following is None:
                 self.post_spark_reports()
             if following is not None:
@@ -1479,42 +1276,6 @@ class Session:
                     chat, following["text"], False,
                     following.get("files") or [],
                 )
-
-
-# --- Tasks ---------------------------------------------------------------
-
-TASK_WORDS = {
-    TASK_DONE: "is done",
-    TASK_FAILED: "stopped on an error",
-    TASK_STOPPED: "was stopped before it finished",
-}
-
-
-def task_outcome(chat: Chat) -> str:
-    """How a task's run went, from what it left in its chat."""
-
-    if chat.stop.is_set():
-        return TASK_STOPPED
-    for entry in reversed(chat.log):
-        if entry.get("type") == "error":
-            return TASK_FAILED
-        if entry.get("type") == "note" and entry.get("text") == "Stopped.":
-            return TASK_STOPPED
-        if entry.get("type") == "assistant" and entry.get("text", "").strip():
-            return TASK_DONE
-    return TASK_FAILED
-
-
-def task_result(chat: Chat) -> str:
-    """What a task hands back: its last word, or the error it hit."""
-
-    for entry in reversed(chat.log):
-        text = str(entry.get("text") or "").strip()
-        if entry.get("type") in ("assistant", "error") and text:
-            if len(text) > TASK_RESULT_CHARS:
-                text = text[:TASK_RESULT_CHARS].rstrip() + "…"
-            return text
-    return ""
 
 
 # --- A turn --------------------------------------------------------------
@@ -1902,8 +1663,6 @@ def _respond(
                 )
         else:
             prompt = ai._session_system_prompt(heard=chat.heard)
-            if chat.parent:
-                prompt = f"{prompt}\n\n{TASK_PROMPT}"
         if found is not None:
             prompt = f"{prompt}\n\n{project_prompt(found)}".strip()
         system = ai._message("system", prompt)
@@ -1913,11 +1672,6 @@ def _respond(
         offered = flash_tools.turn_tools()
         if kit is not None:
             offered = kit.offer(offered)
-        # Flash hands work to tasks; a task does its own, and a spark
-        # has shifts for that.
-        tasks_offered = kit is None and not chat.parent and bool(offered)
-        if tasks_offered:
-            offered = [*offered, TASK_TOOL]
         if guest:
             # A bit of the conversation, not all of it, and as a
             # transcript: whose words are whose stays plain, and a small
@@ -1988,16 +1742,6 @@ def _respond(
                     output = "(noted)"
                 elif kit is not None and name in kit.tools:
                     output = kit.tools[name](args)
-                    tool_count += 1
-                elif name == "start_task" and tasks_offered:
-                    flash_tools.tool_line(
-                        f"StartTask({str(args.get('title') or 'Task')})"
-                    )
-                    output = session.start_task(
-                        chat, str(args.get("title") or ""),
-                        str(args.get("task") or ""),
-                    )
-                    flash_tools.tool_result(output.split(". ")[0] + ".")
                     tool_count += 1
                 elif kit is not None and name not in sparks.chat_tool_names():
                     output = f"Unknown tool: {name}."
@@ -2185,7 +1929,6 @@ def status(ai) -> dict:
         "host_name": named,
         "auto": bool(ai.Config.no_command_confirmation),
         "compact": bool(ai.Config.auto_compact),
-        "awake": awake.enabled(),
         # The scene actually in effect: a name that no longer finds one,
         # because the extension that brought it was removed, is none.
         "background": (
@@ -2670,12 +2413,6 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
         session.hub.publish({"type": "status"})
         return {"background": scene["name"], "scene": scene}
 
-    if name == "awake-setting":
-        on = arg in ("on", "1", "true")
-        ai.set_config_var("KEEP_AWAKE", "1" if on else "0")
-        session.hub.publish({"type": "status"})
-        return {"awake": on}
-
     if name == "compact-setting":
         on = arg in ("on", "1", "true")
         ai.set_config_var("AUTO_COMPACT", "1" if on else "0")
@@ -3068,10 +2805,6 @@ class Handler(BaseHTTPRequestHandler):
                 HTTPStatus.OK, PAGE.read_bytes(), "text/html; charset=utf-8",
                 headers,
             )
-        elif url.path == "/api/state" and query.get("chat"):
-            # One chat, whole: one the page has not seen yet, such as a
-            # task Flash started.
-            self._json(self.server.session.one_chat(query["chat"][0]))
         elif url.path == "/api/state":
             self._json(self.server.session.state(
                 lite=query.get("lite", [""])[0] == "1"
