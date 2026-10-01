@@ -601,6 +601,45 @@ def test_a_keeper_no_longer_wanted_stops(monkeypatch):
     assert sparks._floor is None
 
 
+def test_a_keeper_started_again_after_flash_is_updated(monkeypatch):
+    monkeypatch.setattr(sparks, "TICK_SECONDS", 0.01)
+    monkeypatch.setattr(sparks, "CHECK_EVERY_TICKS", 1)
+    stamps = iter([sparks._RUNNING_CODE, ("updated",), ("updated",)])
+    monkeypatch.setattr(sparks, "_code_stamp", lambda: next(stamps))
+
+    renewed = sparks._keep(always=True, renew=True)
+
+    assert renewed is True
+    # It gave up the lock, for another keeper to run shifts meanwhile.
+    assert sparks._floor is None
+
+
+def test_an_update_still_being_written_is_waited_for(monkeypatch):
+    monkeypatch.setattr(sparks, "TICK_SECONDS", 0.01)
+    monkeypatch.setattr(sparks, "CHECK_EVERY_TICKS", 1)
+    stamps = iter([("half",), ("whole",), ("whole",)])
+    looks = []
+
+    def stamp():
+        looks.append(1)
+        return next(stamps)
+
+    monkeypatch.setattr(sparks, "_code_stamp", stamp)
+
+    assert sparks._keep(renew=True) is True
+    assert len(looks) == 3
+
+
+def test_a_keeper_in_an_open_flash_is_not_renewed(monkeypatch):
+    stop = threading.Event()
+    monkeypatch.setattr(sparks, "TICK_SECONDS", 0.01)
+    monkeypatch.setattr(sparks, "CHECK_EVERY_TICKS", 1)
+    monkeypatch.setattr(sparks, "_code_stamp", lambda: ("updated",))
+    threading.Timer(0.1, stop.set).start()
+
+    assert sparks._keep(stop=stop) is False
+
+
 # --- Chat ----------------------------------------------------------------
 
 
@@ -1972,3 +2011,34 @@ def test_a_chat_with_a_spark_waits_out_a_busy_model_too(model, no_waiting):
     reply = sparks.say(made.id, "Done yet?", client=client)
 
     assert reply.text == "Not yet: I am mid-shift." and not reply.failed
+
+
+# --- Email, before it is connected -------------------------------------------
+
+
+def test_an_email_spark_is_told_email_is_not_connected(model):
+    made = sparks.add_from("Inbox")
+    client = FakeClient([
+        _reply("", ("check_inbox", {"unread_only": True})),
+        _reply("Email is not connected: connect it in Settings > Email."),
+    ])
+
+    report = sparks.shift(made.id, client=client)
+
+    offered = {t["function"]["name"] for t in client.calls[0]["tools"]}
+    assert {"check_inbox", "read_email", "send_email"} <= offered
+    told = client.calls[1]["messages"][-1]["content"]
+    assert "Email is not set up yet" in told and "Settings > Email" in told
+    assert report.text.startswith("Email is not connected")
+    assert sparks.needs_email(made)
+
+
+def test_other_sparks_are_not_offered_email_tools(model):
+    made = sparks.create("Scout", "Watch the issues.")
+    client = FakeClient([_reply("Nothing.")])
+
+    sparks.shift(made.id, client=client)
+
+    offered = {t["function"]["name"] for t in client.calls[0]["tools"]}
+    assert "check_inbox" not in offered
+    assert not sparks.needs_email(made)
