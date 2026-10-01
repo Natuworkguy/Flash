@@ -1,8 +1,9 @@
 # pylint: disable=C0114,C0115,C0116
 
 from flash import ai, sysprompt
-from flash.stats import Turn, summary
+from flash.stats import Turn, bar, summary
 from flash.sysprompt import get_context_ceiling, get_context_limit
+from flash.theme import BAR_EMPTY, BAR_FULL
 
 NS = 1_000_000_000
 
@@ -70,7 +71,8 @@ def test_summary_leads_with_tokens_and_time():
                        total_duration=35 * NS, prompt_eval_count=2140))
 
     assert _plain(turn, 65536) == (  # nosec B101
-        "  2,552 tokens in 35s   12.5 tok/s   context 3% of 64K"
+        "  2,552 tokens in 35s   12.5 tok/s   context "
+        f"{bar(3.3)} 3% of 64K"
     )
 
 
@@ -97,7 +99,19 @@ def test_summary_spells_out_a_tiny_context_share():
     turn = Turn()
     turn.add(_Response(eval_count=10, prompt_eval_count=100))
 
-    assert "context under 1% of 64K" in _plain(turn, 65536)  # nosec B101
+    assert "under 1% of 64K" in _plain(turn, 65536)  # nosec B101
+
+
+def test_bar_fills_with_the_share():
+    assert bar(0) == BAR_EMPTY * 10  # nosec B101
+    assert bar(42) == BAR_FULL * 4 + BAR_EMPTY * 6  # nosec B101
+    assert bar(100) == BAR_FULL * 10  # nosec B101
+
+
+def test_bar_shows_any_use_and_fills_only_when_full():
+    assert bar(0.2).startswith(BAR_FULL)  # nosec B101
+    assert bar(99.6).endswith(BAR_EMPTY)  # nosec B101
+    assert bar(250) == BAR_FULL * 10  # nosec B101
 
 
 def test_summary_counts_minutes_past_sixty_seconds():

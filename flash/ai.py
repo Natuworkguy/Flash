@@ -62,7 +62,7 @@ from .repl_input import (
     screen_size,
     status_segments,
 )
-from .stats import Turn, elapsed, window
+from .stats import Turn, bar, bar_text, elapsed, window
 from .stats import summary as stats_summary
 from .sysprompt import (
     get_context_ceiling,
@@ -80,6 +80,7 @@ from .theme import (
     DIM,
     DIM_ANSI,
     ELLIPSIS,
+    ERROR,
     MIDDOT,
     RESET_ANSI,
     SPARKLE,
@@ -1616,7 +1617,7 @@ def _status_text(messages: list[dict]) -> str:
         # one, so a reading above the budget is real but says "full"
         # rather than anything the reader can act on.
         share = min(100, round(100 * used / budget))
-        parts.append(f"context {share}%")
+        parts.append(f"context {bar(share)} {share}%")
 
     agents = subagents.running_count()
 
@@ -1635,6 +1636,20 @@ def _status_text(messages: list[dict]) -> str:
     return "   ".join(parts)
 
 
+# Past these shares of the history budget, the context bar turns amber,
+# then red: the conversation is close to being summarized.
+CONTEXT_WARN_PERCENT = 75
+CONTEXT_FULL_PERCENT = 90
+
+
+def _context_style(share: int) -> str:
+    if share >= CONTEXT_FULL_PERCENT:
+        return ERROR
+    if share >= CONTEXT_WARN_PERCENT:
+        return WARN
+    return ACCENT
+
+
 def _render_context(messages: list[dict]) -> None:
     """Show how much room the conversation is using, and what /undo holds."""
 
@@ -1645,7 +1660,9 @@ def _render_context(messages: list[dict]) -> None:
 
     body = Text()
     body.append("history   ", style=DIM)
-    body.append(f"{used} of {budget} tokens ({share}%)\n")
+    body.append_text(bar_text(share, _context_style(share), 20))
+    body.append(" ")
+    body.append(f"{used:,} of {budget:,} tokens ({share}%)\n")
     body.append("messages  ", style=DIM)
     body.append(f"{len(messages)}\n")
     body.append("window    ", style=DIM)

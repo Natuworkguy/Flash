@@ -2048,11 +2048,15 @@ def _normal(url: str) -> str:
         return url
 
 
-def context_share(ai, chat: Chat) -> int:
+def context_use(ai, chat: Chat) -> dict:
+    """How full CHAT's context is, for the bar under the composer: its
+    share of the history budget, and the counts behind it."""
+
     budget = ai._history_budget()
-    if not budget or not chat.messages:
-        return 0
-    return min(100, round(100 * context.total_tokens(chat.messages) / budget))
+    used = context.total_tokens(chat.messages) if chat.messages else 0
+    limit = ai._context_limit() or 0
+    share = min(100, round(100 * used / budget)) if budget and used else 0
+    return {"share": share, "used": used, "budget": budget, "window": limit}
 
 
 # How long the page waits for a host to list its models. One that has
@@ -2681,7 +2685,7 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
         return {"entries": memory.list_memory()}
 
     if name == "context":
-        return {"share": context_share(ai, session.chat(chat_id))}
+        return context_use(ai, session.chat(chat_id))
 
     raise ValueError(f"unknown command {name!r}")
 

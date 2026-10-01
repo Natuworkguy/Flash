@@ -12,7 +12,7 @@ from typing import Optional
 
 from rich.text import Text
 
-from .theme import DIM
+from .theme import ACCENT, BAR_EMPTY, BAR_FULL, DIM
 
 NS_PER_SECOND = 1_000_000_000
 
@@ -113,6 +113,34 @@ class Turn:
         return self.generated / (self.eval_nanoseconds / NS_PER_SECOND)
 
 
+# How wide the context bar is, in cells.
+BAR_CELLS = 10
+
+
+def bar(percent: float, cells: int = BAR_CELLS) -> str:
+    """A share as a bar: 42 -> '████░░░░░░'. Any share at all shows at
+    least one cell, so a conversation that has started never reads as
+    empty, and only a full one fills it."""
+
+    percent = max(0.0, min(100.0, float(percent)))
+    filled = round(cells * percent / 100)
+    if percent > 0:
+        filled = max(1, filled)
+    if percent < 100:
+        filled = min(cells - 1, filled)
+    return BAR_FULL * filled + BAR_EMPTY * (cells - filled)
+
+
+def bar_text(percent: float, style: str, cells: int = BAR_CELLS) -> Text:
+    """bar(), its filled part in STYLE and the rest dim."""
+
+    drawn = bar(percent, cells)
+    filled = len(drawn) - len(drawn.lstrip(BAR_FULL))
+    out = Text(drawn[:filled], style=style)
+    out.append(drawn[filled:], style=DIM)
+    return out
+
+
 def window(limit: int) -> str:
     """A context size the way people say it: 65536 -> '64K'."""
 
@@ -158,6 +186,8 @@ def summary(
             if percent >= MIN_SHOWN_PERCENT
             else f"under {MIN_SHOWN_PERCENT:.0f}%"
         )
-        line.append(f"   context {shown} of {window(limit)}")
+        line.append("   context ")
+        line.append_text(bar_text(percent, ACCENT))
+        line.append(f" {shown} of {window(limit)}")
 
     return line

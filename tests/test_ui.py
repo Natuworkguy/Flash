@@ -10,6 +10,7 @@ from rich.console import Console
 
 from flash import ai, repl_input
 from flash.ai import Config
+from flash.stats import bar
 
 
 def render(call, width=100):
@@ -103,7 +104,7 @@ class TestStatusText:
             [{"role": "user", "content": "x" * 100000}]
         )
 
-        assert "context 100%" in status
+        assert f"context {bar(100)} 100%" in status
 
     def test_the_modes_that_change_what_happens_are_shown(
         self, monkeypatch
