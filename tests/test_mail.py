@@ -150,7 +150,9 @@ def server(monkeypatch):
 
 def test_nothing_is_set_up_at_first():
     assert not mail.configured()
-    assert mail.settings() == {"accounts": [], "configured": False}
+    assert mail.settings() == {
+        "accounts": [], "configured": False, "default": "",
+    }
     with pytest.raises(mail.MailError, match="not set up"):
         mail.inbox()
 
@@ -581,3 +583,70 @@ def test_the_settings_page_tests_and_removes_one_account(two):
     assert [a["address"] for a in left["email"]["accounts"]] == [
         "me@gmail.com"
     ]
+
+
+# --- The default address -------------------------------------------------
+
+
+def test_the_first_account_is_the_default_until_another_is_chosen(two):
+    assert mail.default_address() == "me@gmail.com"
+
+    shown = mail.set_default("ME@work.example")
+
+    assert shown["default"] == "me@work.example"
+    assert mail.default_address() == "me@work.example"
+    with pytest.raises(mail.MailError, match="not connected"):
+        mail.set_default("nobody@example.com")
+
+
+def test_disconnecting_the_default_falls_back_to_the_first(two):
+    mail.set_default("me@work.example")
+    mail.forget("me@work.example")
+
+    assert mail.default_address() == "me@gmail.com"
+    mail.save("me@work.example", FakeIMAP.password)
+    # Added back, it is not the default again by itself.
+    assert mail.default_address() == "me@gmail.com"
+
+
+def test_email_with_no_one_named_goes_to_the_default(two):
+    mail.set_default("me@work.example")
+
+    message = mail.compose(subject="Notes", body="The summary.")
+
+    assert message["To"] == "me@work.example"
+    assert message["From"] == "me@work.example"
+
+
+def test_a_reply_still_goes_to_the_sender_not_the_default(two):
+    mail.set_default("me@gmail.com")
+    original = mail.read("9", account="me@work.example")
+
+    message = mail.compose(body="Signed.", reply_to=original)
+
+    assert message["To"] == "bo@example.com"
+    assert message["From"] == "me@work.example"
+
+
+def test_send_email_with_no_recipient_asks_to_send_it_to_the_default(two):
+    mail.set_default("me@work.example")
+    asked = []
+    with answer_from(lambda q: asked.append(q) or "y"):
+        said = tools.send_email(subject="Notes", body="The summary.")
+
+    assert "To: me@work.example" in asked[0]
+    assert said == "Sent to me@work.example."
+
+
+def test_the_settings_page_picks_the_default(two):
+    session = web.Session()
+
+    got = web.command(session, {
+        "name": "email-default", "address": "me@work.example",
+    })
+
+    assert got["email"]["default"] == "me@work.example"
+    with pytest.raises(ValueError, match="not connected"):
+        web.command(session, {
+            "name": "email-default", "address": "x@example.com",
+        })

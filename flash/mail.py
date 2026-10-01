@@ -135,18 +135,26 @@ def _raw_accounts() -> list[dict]:
     return [data] if data.get("address") else []
 
 
-def _write(accounts: list[dict]) -> None:
+def _write(accounts: list[dict], default: Optional[str] = None) -> None:
+    """Keep ACCOUNTS, and DEFAULT as the default address (None keeps the
+    one there is, while it is still one of them)."""
+
     path = _path()
     if not accounts:
         path.unlink(missing_ok=True)
         return
+    if default is None:
+        default = str(_load().get("default") or "")
+    if not any(_same(a["address"], default) for a in accounts if default):
+        default = ""
     path.parent.mkdir(parents=True, exist_ok=True)
     # Made readable by its owner only before a password goes in.
     path.touch(mode=0o600, exist_ok=True)
     os.chmod(path, 0o600)
-    path.write_text(
-        json.dumps({"accounts": accounts}, indent=1), encoding="utf-8",
-    )
+    data: dict = {"accounts": accounts}
+    if default:
+        data["default"] = default
+    path.write_text(json.dumps(data, indent=1), encoding="utf-8")
 
 
 def _full(raw: dict) -> dict:
@@ -178,12 +186,39 @@ def _shown(raw: dict) -> dict:
 
 
 def settings() -> dict:
-    """Every account, for the settings to show, and whether any works."""
+    """Every account, for the settings to show, whether any works, and
+    which is the default."""
 
     return {
         "accounts": [_shown(a) for a in _raw_accounts()],
         "configured": configured(),
+        "default": default_address(),
     }
+
+
+def default_address() -> str:
+    """The user's default address: the one they chose, or the first
+    connected. Email goes to it when no one else is named, and from it
+    when no account is. "" with none connected."""
+
+    connected = addresses()
+    chosen = str(_load().get("default") or "")
+    for address in connected:
+        if _same(address, chosen):
+            return address
+    return connected[0] if connected else ""
+
+
+def set_default(address: str) -> dict:
+    """Make ADDRESS, one of the connected ones, the default."""
+
+    found = next(
+        (a for a in addresses() if _same(a, str(address or ""))), None,
+    )
+    if found is None:
+        raise MailError(f"{address} is not connected.")
+    _write(_raw_accounts(), found)
+    return settings()
 
 
 def configured() -> bool:
@@ -250,13 +285,13 @@ def forget(address: str = "") -> None:
 
 
 def _account(address: str = "") -> dict:
-    """The account to use: ADDRESS, or with none, the first one."""
+    """The account to use: ADDRESS, or with none, the default one."""
 
     found = [a for a in _raw_accounts() if a.get("password")]
     if not found:
         raise MailError(NOT_SET_UP)
     if not str(address or "").strip():
-        return _full(found[0])
+        address = default_address()
     for raw in found:
         if _same(raw["address"], str(address)):
             return _full(raw)
@@ -650,10 +685,11 @@ def compose(
     to: str = "", subject: str = "", body: str = "",
     reply_to: Optional[dict] = None, cc: str = "", account: str = "",
 ) -> EmailMessage:
-    """The message as it would be sent, from ACCOUNT, or the first one.
+    """The message as it would be sent, from ACCOUNT, or the default one.
     REPLY_TO is the message read() gave for the one being answered: it
     threads the reply, is sent from the account it came to, and fills
-    in who it goes to and its subject when they are left out."""
+    in who it goes to and its subject when they are left out. Anything
+    else with no one to send TO goes to the user's default address."""
 
     account = _account(account or (reply_to or {}).get("account", ""))
     message = EmailMessage()
@@ -670,6 +706,10 @@ def compose(
                 part for part in (reply_to.get("references", ""), original)
                 if part
             )
+    if not str(to or "").strip():
+        # Nobody named: the user's own default address, as "email me
+        # this" means.
+        to = default_address()
     message["To"] = ", ".join(_addresses(to))
     if str(cc or "").strip():
         message["Cc"] = ", ".join(_addresses(cc))

@@ -2726,6 +2726,8 @@ def _email_command(name: str, body: dict) -> dict:
             return {"email": mail.settings(), "said": mail.test(address)}
         if name == "email-test":
             return {"email": mail.settings(), "said": mail.test(address)}
+        if name == "email-default":
+            return {"email": mail.set_default(address)}
         if name == "email-forget":
             if not address:
                 raise ValueError("Say which address to disconnect.")

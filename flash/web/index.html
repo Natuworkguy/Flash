@@ -924,6 +924,9 @@ body.page-projects #dock, body.page-settings #dock, body.page-tool #dock { displ
 .email-buttons, .email-form .buttons { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
 .email-buttons .primary { margin-left: auto; }
 .email-list { display: flex; flex-direction: column; gap: 10px; }
+.email-card .name-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; }
+.default-badge { font-size: 11px; font-weight: 600; letter-spacing: 0.02em; padding: 2px 8px; border-radius: 99px; color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent); }
+.email-default-note { font-size: 12.5px; color: var(--text-3); margin: 10px 0 0; }
 .email-card .what { flex: 1; }
 .email-actions { display: flex; flex-wrap: wrap; gap: 6px; flex: none; align-self: center; }
 .email-form-title { font-size: 14px; font-weight: 600; margin: 0 0 12px; }
@@ -5876,6 +5879,7 @@ function drawEmailAccounts(host, e) {
   host.innerHTML = `<div class="email-list"></div><div class="buttons email-buttons"></div>`;
   const list = host.querySelector(".email-list");
   for (const account of e.accounts) list.appendChild(emailCard(host, account, e));
+  if (e.accounts.length > 1) list.insertAdjacentHTML("afterend", `<p class="email-default-note">Email goes to your default address when nobody else is named ("email me this"), and from it when no account is.</p>`);
   const add = el("button", "btn with-icon", `${icon("plus")}<span>Add another email</span>`);
   add.type = "button";
   add.onclick = () => drawEmailForm(host, null, e);
@@ -5887,8 +5891,10 @@ function drawEmailAccounts(host, e) {
 }
 
 function emailCard(host, account, e) {
-  const card = el("div", "email-card", `<span class="email-icon">${icon("mail")}</span><span class="what"><b></b><span class="servers"></span><span class="said"></span></span><span class="email-actions"></span>`);
+  const card = el("div", "email-card", `<span class="email-icon">${icon("mail")}</span><span class="what"><span class="name-row"><b></b></span><span class="servers"></span><span class="said"></span></span><span class="email-actions"></span>`);
   card.querySelector("b").textContent = account.address;
+  const isDefault = account.address === e.default;
+  if (isDefault && e.accounts.length > 1) card.querySelector(".name-row").insertAdjacentHTML("beforeend", `<span class="default-badge" data-tip="Email goes to it when nobody else is named, and from it when no account is">Default</span>`);
   card.querySelector(".servers").textContent = `IMAP ${account.imap} · SMTP ${account.smtp}`;
   const said = card.querySelector(".said");
   const test = el("button", "btn small", "Test");
@@ -5913,6 +5919,18 @@ function emailCard(host, account, e) {
       drawEmailAccounts(host, r.email);
     } catch (error) { showFailure(error); }
   };
+  if (!isDefault && account.has_password) {
+    const pick = el("button", "btn small", "Make default");
+    pick.type = "button";
+    pick.onclick = async () => {
+      try {
+        const r = await command("email-default", "", null, { address: account.address });
+        toast(`${account.address} is your default email`);
+        drawEmailAccounts(host, r.email);
+      } catch (error) { showFailure(error); }
+    };
+    card.querySelector(".email-actions").append(pick);
+  }
   card.querySelector(".email-actions").append(test, change, off);
   if (account.has_password) test.onclick();
   else { said.textContent = "No password saved: Change adds one."; said.classList.add("bad"); }

@@ -1900,8 +1900,11 @@ def _email_command(arg: str) -> None:
                 ))
                 return
             body = Text()
+            default = mail.default_address()
             for account in accounts:
                 body.append(f"  {account['address']}", style=ACCENT)
+                if account["address"] == default and len(accounts) > 1:
+                    body.append("  default", style=f"bold {ACCENT}")
                 body.append(
                     f"  IMAP {account['imap']} · SMTP {account['smtp']}"
                     + ("" if account["has_password"] else " · no password")
@@ -1909,8 +1912,9 @@ def _email_command(arg: str) -> None:
                 )
             body.append(
                 "  /email connect adds another. /email test, inbox or "
-                "disconnect, with an address for just that one.",
-                style=DIM,
+                "disconnect, with an address for just that one. /email "
+                "default <address> picks the one email goes to and from "
+                "when none is named.", style=DIM,
             )
             console.print(body)
             return
@@ -1946,6 +1950,22 @@ def _email_command(arg: str) -> None:
                     line.append(f"  {item['account']}", style=DIM)
                 console.print(line)
             return
+        if action == "default":
+            if not which:
+                current = mail.default_address() or "not set"
+                console.print(Text(
+                    f"  Your default email is {current}"
+                    ": email goes to it when nobody else is named, and from "
+                    "it when no account is. /email default <address> "
+                    "changes it.", style=DIM,
+                ))
+                return
+            mail.set_default(which)
+            console.print(Text(
+                f"  {mail.default_address()} is your default email now.",
+                style=DIM,
+            ))
+            return
         if action in ("disconnect", "off", "forget", "remove"):
             connected = [a["address"] for a in mail.settings()["accounts"]]
             if not which and len(connected) > 1:
@@ -1968,7 +1988,7 @@ def _email_command(arg: str) -> None:
         return
     warn(
         "Usage: /email [connect | test [address] | inbox [address] | "
-        "disconnect [address]]"
+        "default [address] | disconnect [address]]"
     )
 
 
