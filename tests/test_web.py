@@ -3653,3 +3653,30 @@ class TestSparkJobs:
         web.Session().post_spark_reports()
 
         assert sparks.to_post() == []
+
+
+def test_two_saves_of_one_chat_at_once_both_land():
+    from flash import workspace
+
+    session = web.Session()
+    chat = session.new_chat()
+    chat.log = [{"type": "note", "text": "hi"}]
+    failed = []
+
+    def save():
+        try:
+            for _ in range(50):
+                session.save(chat)
+        except OSError as exc:
+            failed.append(exc)
+
+    threads = [threading.Thread(target=save) for _ in range(4)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert failed == []
+    assert [c["id"] for c in workspace.load_chats()] == [chat.id]
+    folder = workspace.store() / "chats"
+    assert not list(folder.glob("*.partial")) + list(folder.glob(".*.partial"))
