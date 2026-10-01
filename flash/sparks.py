@@ -24,6 +24,7 @@ own that the operating system starts at login.
 
 import base64
 import contextlib
+import itertools
 import json
 import os
 import re
@@ -77,9 +78,10 @@ RATED_CHARS = 280
 MAX_STEPS = 40
 # How many rounds of tools a shift gets before it is told to write its
 # report from what it has: the user's to set (SPARK_SHIFT_ROUNDS), within
-# these bounds. Nobody watches a shift, so it always has one: a small
-# model that loops would otherwise run all night, ahead of every other
-# spark.
+# these bounds. The user may also take the limit off
+# (SPARK_SHIFT_UNLIMITED), and a shift then works until the model writes
+# its report or the user stops it; the number is kept for when the limit
+# goes back on.
 SHIFT_ROUNDS_DEFAULT = 12
 SHIFT_ROUNDS_MIN = 1
 SHIFT_ROUNDS_MAX = 100
@@ -1218,44 +1220,82 @@ def describe(name: str, args: dict) -> tuple[str, str]:
     return name, json.dumps(args, ensure_ascii=False)[:1200]
 
 
-def shift_rounds() -> int:
-    """How many rounds of tools a shift gets, as the user last set it.
+UNLIMITED_WORDS = ("unlimited", "none", "off", "infinite", "no limit", "∞")
 
-    From the env file, as autonomous() is, so a keeper running in the
+
+def _saved(name: str) -> str:
+    """NAME as the env file has it, else as this process does.
+
+    From the file, as autonomous() reads it, so a keeper running in the
     background goes by what was set in another Flash.
     """
 
     from dotenv import dotenv_values
 
     try:
-        saved = dotenv_values(ENV_PATH).get("SPARK_SHIFT_ROUNDS")
+        saved = dotenv_values(ENV_PATH).get(name)
     except OSError:
         saved = None
     if saved is None or not str(saved).strip():
-        saved = os.getenv("SPARK_SHIFT_ROUNDS", "")
+        saved = os.getenv(name, "")
+    return str(saved or "").strip()
+
+
+def shift_rounds_number() -> int:
+    """The number of rounds a shift is limited to, while it is."""
+
     try:
-        rounds = int(str(saved).strip())
+        rounds = int(_saved("SPARK_SHIFT_ROUNDS"))
     except ValueError:
         return SHIFT_ROUNDS_DEFAULT
     return max(SHIFT_ROUNDS_MIN, min(SHIFT_ROUNDS_MAX, rounds))
 
 
-def set_shift_rounds(value) -> int:
-    """Set how many rounds of tools a shift gets, for every spark."""
+def shift_rounds_unlimited() -> bool:
+    return _saved("SPARK_SHIFT_UNLIMITED").lower() in ("1", "true", "on")
 
+
+def shift_rounds() -> Optional[int]:
+    """How many rounds of tools a shift gets, as the user last set it:
+    None for no limit."""
+
+    return None if shift_rounds_unlimited() else shift_rounds_number()
+
+
+def _save_setting(name: str, value: str) -> None:
     from .envfile import set_env_var
 
+    os.environ[name] = value
+    set_env_var(ENV_PATH, name, value)
+
+
+def set_shift_rounds_unlimited(unlimited: bool) -> Optional[int]:
+    """Take the limit off every spark's shifts, or put it back."""
+
+    _save_setting("SPARK_SHIFT_UNLIMITED", "1" if unlimited else "0")
+    return shift_rounds()
+
+
+def set_shift_rounds(value) -> Optional[int]:
+    """Set how many rounds of tools a shift gets, for every spark: a
+    number, which puts the limit back on, or "unlimited", which takes
+    it off."""
+
+    if str(value).strip().lower() in UNLIMITED_WORDS:
+        return set_shift_rounds_unlimited(True)
     try:
         rounds = int(str(value).strip())
     except ValueError:
-        raise SparkError("Say how many rounds, as a number.") from None
+        raise SparkError(
+            "Say how many rounds, as a number, or unlimited."
+        ) from None
     if not SHIFT_ROUNDS_MIN <= rounds <= SHIFT_ROUNDS_MAX:
         raise SparkError(
             f"A shift gets between {SHIFT_ROUNDS_MIN} and "
-            f"{SHIFT_ROUNDS_MAX} rounds of tools."
+            f"{SHIFT_ROUNDS_MAX} rounds of tools, or no limit."
         )
-    os.environ["SPARK_SHIFT_ROUNDS"] = str(rounds)
-    set_env_var(ENV_PATH, "SPARK_SHIFT_ROUNDS", str(rounds))
+    _save_setting("SPARK_SHIFT_ROUNDS", str(rounds))
+    _save_setting("SPARK_SHIFT_UNLIMITED", "0")
     return rounds
 
 
@@ -1355,7 +1395,7 @@ def _work(
     own_tools: list[dict],
     steps: list[str],
     doing: Callable[[str], None],
-    rounds: int,
+    rounds: Optional[int],
     last_word: str,
     client=None,
     names: Optional[tuple[str, ...]] = None,
@@ -1392,7 +1432,9 @@ def _work(
     final = ""
     tool_calls: list = []
     with capture_tool_output(record):
-        for _ in range(rounds):
+        # No limit: it goes until the model has no more tools to call,
+        # or the user stops it.
+        for _ in range(rounds) if rounds is not None else itertools.count():
             if stopping is not None and stopping():
                 raise Stopped()
             doing("Thinking")

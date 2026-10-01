@@ -157,9 +157,11 @@ python run.py
   reports. `/sparks chat <name> [message]` talks with one. `/sparks teach <name> <lesson>`, `like <name>`, `dislike <name> [why]`, `run`, `pause`, `resume`,
   `every <name> <30m|2h|daily>`, `title <name> <title>` and `remove` look after them.
   `/sparks always on|off` keeps them working with Flash closed.
-  `/sparks rounds [1-100]` shows or sets how many rounds of tools a
-  shift gets before it writes its report (12 unless changed; also in
-  Settings in the web UI).
+  `/sparks rounds [1-100|unlimited]` shows or sets how many rounds of
+  tools a shift gets before it writes its report (12 unless changed;
+  also in Settings in the web UI, where the limit can be switched off).
+  With no limit, a shift calls tools until it writes its report or you
+  stop it.
 - `/clear`: Clear the conversation history.
 - `/undo`: Take back the file changes from the last turn.
 - `/compact`: Summarize the conversation to free up room.
