@@ -49,6 +49,7 @@ from .theme import (
 COMMANDS = [
     ("/model", "pick from the models here, or /model <name> to switch"),
     ("/auto", "toggle autonomous command mode (/auto on|off)"),
+    ("/systemone", "a small model that reviews autonomous commands (on|off)"),
     ("/voice", "talk to Flash and hear its replies (/voice on|off)"),
     ("/background", "pixel-art scene behind the prompt (/background <name>)"),
     ("/set", f"set an env var, saved to {ENV_PATH} (/set NAME VALUE)"),

@@ -39,6 +39,7 @@ from . import (
     plan,
     skills,
     sparks,
+    systemone,
 )
 from .browser import (
     ACTIONS,
@@ -1471,6 +1472,34 @@ def reason(thought: str) -> str:
     return "(noted)"
 
 
+def ask_system_one(
+    question: str = "", kind: str = "yes_no", options: Any = None,
+    context: str = "",
+) -> str:
+    """Put the agent's question to System One, and say what it answered."""
+
+    tool_line(f"SystemOne({str(question).strip()})")
+
+    if not systemone.active():
+        result = (
+            "System One is off. It works in autonomous mode, once the "
+            "user turns it on with /systemone on or in Settings."
+        )
+        tool_result(result, style=WARN)
+        return result
+
+    try:
+        answer = systemone.answer_question(
+            OLLAMA_HOST, question, kind, options, context,
+        )
+    except systemone.SystemOneError as exc:
+        tool_result(str(exc), style=ERROR)
+        return f"Error: {exc}"
+
+    tool_result(answer)
+    return f"System One ({systemone.model()}): {answer}"
+
+
 def _plan_steps(steps: Any) -> list[str]:
     """Coerce whatever the model sent into a list of step descriptions.
 
@@ -1797,6 +1826,63 @@ EMAIL_TOOLS: list[dict[str, Any]] = [
     },
 ]
 
+SYSTEM_ONE_TOOLS: list[dict[str, Any]] = [
+    {
+        "type": "function",
+        "function": {
+            "name": "ask_system_one",
+            "description": (
+                "Ask System One, a small, quick model trained to judge, one "
+                "question with a yes/no, a choice, or a score for an "
+                "answer, and get its probabilities back in a moment. Use "
+                "it for a second opinion before a step you are unsure of: "
+                "whether an output looks right, which of a few approaches "
+                "fits, how risky a change is. Put everything it needs in "
+                "context; it sees nothing else of the conversation but the "
+                "user's request. It cannot run tools or write prose."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "question": {
+                        "type": "string",
+                        "description": (
+                            "The question, plainly, e.g. \"Does this test "
+                            "output show every test passing?\""
+                        ),
+                    },
+                    "kind": {
+                        "type": "string",
+                        "enum": list(systemone.ASK_KINDS),
+                        "description": (
+                            "yes_no for a probability of yes; choice to "
+                            "pick one of the options; score to rate on the "
+                            "options as a scale. yes_no when left out."
+                        ),
+                    },
+                    "options": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": (
+                            "For choice, the options to pick from. For "
+                            "score, the levels of the scale, lowest first, "
+                            "e.g. [\"Harmless\", \"Risky\", \"Dangerous\"]."
+                        ),
+                    },
+                    "context": {
+                        "type": "string",
+                        "description": (
+                            "What the question is about: the output, code, "
+                            "text, or facts it should judge from."
+                        ),
+                    },
+                },
+                "required": ["question"],
+            },
+        },
+    },
+]
+
 
 def available_tools() -> list[dict[str, Any]]:
     """The built-in tools that can work right now: email's only once it
@@ -1807,11 +1893,13 @@ def available_tools() -> list[dict[str, Any]]:
 
 def turn_tools() -> list[dict[str, Any]]:
     """The tools offered on this turn: the editor's only inside VS Code,
-    and whatever the installed extensions add."""
+    System One's only while it is at work, and whatever the installed
+    extensions add."""
 
     return (
         available_tools()
         + (EDITOR_TOOLS if editor.available() else [])
+        + (SYSTEM_ONE_TOOLS if systemone.active() else [])
         + extensions.tool_schemas(frozenset(FUNCTIONS))
     )
 
@@ -5007,6 +5095,7 @@ FUNCTIONS = {
     "read_email": read_email,
     "send_email": send_email,
     "open_in_editor": open_in_editor,
+    "ask_system_one": ask_system_one,
 }
 
 # Tools a sub-agent (flash/agent.py) is allowed to call: read/search/shell
@@ -5031,11 +5120,77 @@ ALWAYS_ASK_TOOL_NAMES = ("send_email",)
 # no terminal to ask from, so it only gets these in autonomous mode.
 CONFIRMED_TOOL_NAMES = ("shell", "write", "edit", "multi_edit")
 
+# Tools System One looks over before they run in autonomous mode: every
+# one that would otherwise have stopped for the user's yes. Sending
+# email is not among them, since it asks the user every time anyway.
+REVIEWED_TOOL_NAMES = CONFIRMED_TOOL_NAMES + ("make_spark",)
+
+_REVIEW_LABELS = {
+    "shell": ("Bash", "command"),
+    "write": ("Write", "path"),
+    "edit": ("Edit", "path"),
+    "multi_edit": ("MultiEdit", "path"),
+    "make_spark": ("Spark", "name"),
+}
+
+
+def _reviewed(name: str) -> bool:
+    """Whether a call to NAME is one System One looks over first."""
+
+    if name in REVIEWED_TOOL_NAMES:
+        return True
+    if name in FUNCTIONS:
+        return False
+    found = extensions.find_tool(name, frozenset(FUNCTIONS))
+    return found is not None and bool(found[1].confirm)
+
+
+def _review(name: str, args: dict) -> Optional[str]:
+    """Have System One look over a call. None means go ahead; otherwise
+    what the model is told instead of the call's output."""
+
+    if not _reviewed(name) or not systemone.active():
+        return None
+
+    try:
+        verdict = systemone.review(OLLAMA_HOST, name, args)
+    except systemone.SystemOneError as exc:
+        why = str(exc)
+        verdict = None
+    else:
+        if verdict.allowed:
+            return None
+        why = verdict.reason
+
+    label, key = _REVIEW_LABELS.get(name, (name, ""))
+    shown = str(args.get(key, "")) if key else ""
+    tool_line(f"{label}({shown})" if shown else label)
+
+    if verdict is None:
+        tool_result(f"System One could not review this: {why}", style=ERROR)
+        return (
+            f"Not run: System One reviews this kind of call in autonomous "
+            f"mode, and it could not: {why} Tell the user; they can fix "
+            "that, or turn System One off with /systemone off."
+        )
+
+    tool_result(f"Stopped by System One: {why}", style=WARN)
+    return (
+        f"Not run: System One ({verdict.model}), which reviews calls in "
+        f"autonomous mode, judged that this call {why}. Do not retry it "
+        "as it is. Take a safer way that does what the user asked, or "
+        "stop and ask the user whether to go ahead."
+    )
+
 
 def run_tool(call):
     """Run a tool with arguments"""
 
     name, args = call
+
+    stopped = _review(name, args)
+    if stopped is not None:
+        return stopped
 
     func = FUNCTIONS.get(name)
     if func is None:

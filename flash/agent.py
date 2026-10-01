@@ -24,6 +24,7 @@ from rich.console import Group, RenderableType
 from rich.live import Live
 from rich.text import Text
 
+from . import systemone
 from .dashes import undash
 from .sysprompt import get_model_system_prompt
 from .theme import (
@@ -219,6 +220,8 @@ def _run(entry: SubAgent) -> None:
             },
             {"role": "user", "content": entry.task},
         ]
+        # What System One holds this sub-agent's calls up against.
+        systemone.set_request(entry.task)
 
         final = ""
         tool_calls: list = []
