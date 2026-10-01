@@ -591,9 +591,14 @@ def save_chat(saved: dict) -> None:
     if path is None:
         return
     path.parent.mkdir(parents=True, exist_ok=True)
-    partial = path.with_suffix(".partial")
-    partial.write_text(json.dumps(saved), encoding="utf-8")
-    os.replace(partial, path)
+    # A name of its own: two threads saving one chat at once must not
+    # move each other's half-written file.
+    partial = path.with_name(f".{path.stem}.{uuid.uuid4().hex[:8]}.partial")
+    try:
+        partial.write_text(json.dumps(saved), encoding="utf-8")
+        os.replace(partial, path)
+    finally:
+        partial.unlink(missing_ok=True)
 
 
 def load_chats() -> list[dict]:
