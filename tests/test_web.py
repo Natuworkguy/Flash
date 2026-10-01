@@ -3626,6 +3626,42 @@ class TestSparkJobs:
         session.post_spark_reports()
         assert sum(1 for e in chat.log if e.get("shift")) == 1
 
+    def test_flash_gives_a_spark_a_job_from_its_own_chat(self):
+        from flash import sparks
+
+        spark = sparks.create("Scout", "Watch the issues.")
+        FakeClient.scripts = [
+            [part(calls=[call(
+                "give_spark", spark="scout", job="Check the login page.",
+            )]), part(done=True)],
+            [part("Scout is on it."), part(done=True)],
+        ]
+        session = web.Session()
+        chat = session.new_chat()
+        run(session, chat, "Get Scout to check the login page.")
+
+        given = sparks.find(spark.id).inbox[0]
+        assert given["chat"] == chat.id
+        assert given["text"] == "Check the login page."
+        sparks.shift(spark.id, client=self.Shift("It loads fine."))
+        session.post_spark_reports()
+        assert chat.log[-1]["text"] == "It loads fine."
+
+    def test_flash_knows_the_sparks_it_can_ask(self):
+        from flash import sparks
+
+        sparks.create("Scout", "Watch the issues.")
+        FakeClient.scripts = [[part("Hi."), part(done=True)]]
+        session = web.Session()
+        chat = session.new_chat()
+        run(session, chat, "hi")
+
+        tools_offered = [
+            t["function"]["name"] for t in FakeClient.requests[0]["tools"]
+        ]
+        assert "ask_spark" in tools_offered
+        assert "give_spark" in tools_offered
+
     def test_a_chat_mid_reply_gets_it_after(self):
         from flash import sparks
 

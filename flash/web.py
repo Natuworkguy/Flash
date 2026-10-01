@@ -1840,6 +1840,14 @@ def _respond(
                     tool_count += 1
                 elif kit is not None and name not in sparks.chat_tool_names():
                     output = f"Unknown tool: {name}."
+                elif name == "give_spark":
+                    # Its report comes back to this chat, not only to
+                    # the spark's reports.
+                    output = flash_tools.give_spark(
+                        str(args.get("spark", "")), str(args.get("job", "")),
+                        chat.id,
+                    )
+                    tool_count += 1
                 else:
                     before = {e.id for e in subagents.list_all()}
                     output = flash_tools.run_tool((name, args))

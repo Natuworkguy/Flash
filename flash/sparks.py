@@ -1450,13 +1450,147 @@ def _handing_off(spark: Spark) -> Callable[[dict], str]:
     return hand
 
 
+# --- Asking each other ---------------------------------------------------
+#
+# A spark, or Flash, can ask another spark something and have its answer
+# now: what it found this morning, whether it has seen this already. The
+# one asked answers as itself, from what it knows, with no tools: so an
+# answer is quick, never runs anything, and never asks a third spark,
+# which could ask back. Work goes the other way, by hand_off or take_on.
+
+CONSULT_PROMPT = """
+=== {asker} is asking you ===
+{asker}{who} is asking you something, between your shifts. Answer from
+what you know: your goal, your notes, your reports, and what the user
+has taught you. Be short and specific, as one teammate to another, and
+give the facts it needs (names, numbers, links) rather than a summary
+of them. If you do not know, say so plainly: do not guess, and do not
+offer to look. You have no tools for this answer.
+""".strip()
+
+CONSULT_LAST_WORD = (
+    "Answer now, from what you know. You have no tools for this answer."
+)
+
+ASK_SPARK_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "ask_spark",
+        "description": (
+            "Ask another of the user's sparks something and get its answer "
+            "now: what it has found, what it already reported, whether it "
+            "has seen something. It answers from what it knows, without "
+            "running anything. To give it work instead, use hand_off."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "spark": {
+                    "type": "string",
+                    "description": "Its name or handle, from the list.",
+                },
+                "question": {
+                    "type": "string",
+                    "description": "What to ask, on its own.",
+                },
+            },
+            "required": ["spark", "question"],
+        },
+    },
+}
+
+
+def consult(
+    key: str, question: str, asker: str = "Flash", who: str = "",
+    client=None,
+) -> tuple[Spark, str]:
+    """KEY's answer to QUESTION, made now, from what it knows. ASKER is
+    who asks, by name, and WHO what they are, for the spark to know."""
+
+    from . import tools as flash_tools  # deferred: avoids a module cycle
+
+    question = str(question or "").strip()[:MESSAGE_CHARS]
+    if not question:
+        raise SparkError("Ask it something.")
+    spark = find(str(key or ""))
+    if spark is None:
+        names = ", ".join(s.name for s in all_sparks())
+        raise SparkError(
+            f"There is no spark called {key!r}."
+            + (f" The user's sparks: {names}." if names else
+               " The user has no sparks.")
+        )
+    host = flash_tools.OLLAMA_HOST or subagents.OLLAMA_HOST_DEFAULT
+    prompt = "\n\n".join((
+        chat_prompt(
+            spark, host, model_of(spark), flash_tools.CURRENT_DATE_PROMPT,
+        ),
+        CONSULT_PROMPT.format(asker=asker, who=who),
+    ))
+    messages = [
+        {"role": "system", "content": prompt},
+        {"role": "user", "content": question},
+    ]
+    text = _work(
+        spark, messages, {}, [], [], lambda doing: None, 1,
+        CONSULT_LAST_WORD, client, names=(),
+    )
+    return spark, text or "(It had nothing to say.)"
+
+
+def _asking(spark: Spark) -> Callable[[dict], str]:
+    """ask_spark, for SPARK to ask the others."""
+
+    def ask_one(args: dict) -> str:
+        target = find(str(args.get("spark", "")))
+        if target is not None and target.id == spark.id:
+            return "Error: that is you. Ask another spark."
+        try:
+            other, text = consult(
+                str(args.get("spark", "")), str(args.get("question", "")),
+                asker=spark.name, who=f" ({spark.handle}), another spark",
+            )
+        except SparkError as exc:
+            return f"Error: {exc}"
+        except Exception as e:  # noqa: BLE001
+            return f"Error: it could not answer: {e.__class__.__name__}: {e}"
+        tool_line(f"AskSpark({other.name})")
+        tool_result(text)
+        return f"{other.name} says: {text}"
+
+    return ask_one
+
+
+def roster_block() -> str:
+    """The user's sparks, for Flash to ask or give work to; "" if none."""
+
+    found = all_sparks()
+    if not found:
+        return ""
+    lines = [
+        "=== The user's sparks ===",
+        "Agents that keep working on a goal on a schedule. ask_spark asks "
+        "one something and gets its answer now; give_spark hands one a "
+        "job, done in a shift that starts now, with its report coming "
+        "back to the user.",
+    ]
+    for spark in found:
+        first = spark.goal.splitlines()[0][:120]
+        state = " (paused)" if spark.paused else ""
+        lines.append(f"- {spark.name} ({spark.handle}){state}: {first}")
+    return "\n".join(lines)
+
+
 def team_block(spark: Spark) -> str:
     """The other sparks, for SPARK to hand work to; "" if there are none."""
 
     others = [s for s in all_sparks() if s.id != spark.id]
     if not others:
         return ""
-    lines = ["=== The other sparks: hand_off sends one work ==="]
+    lines = [
+        "=== The other sparks: hand_off sends one work, ask_spark asks "
+        "one something ==="
+    ]
     for other in others:
         first = other.goal.splitlines()[0][:120]
         lines.append(f"- {other.name} ({other.handle}): {first}")
@@ -1682,6 +1816,7 @@ def shift(spark_id: str, client=None) -> Optional[Report]:
     own = {
         "keep_notes": _keeping_notes(notes),
         "hand_off": _handing_off(spark),
+        "ask_spark": _asking(spark),
     }
     # Every tool a sub-agent has, the ones that ask first too: in
     # autonomous mode they run, and otherwise the shift waits for the
@@ -1740,7 +1875,8 @@ def shift(spark_id: str, client=None) -> Optional[Report]:
         with answer_from(lambda question: "y") if auto \
                 else contextlib.nullcontext():
             text = _work(
-                spark, messages, own, [KEEP_NOTES_TOOL, HAND_OFF_TOOL],
+                spark, messages, own,
+                [KEEP_NOTES_TOOL, HAND_OFF_TOOL, ASK_SPARK_TOOL],
                 steps, lambda doing: _set_activity(spark.id, doing),
                 shift_rounds(), ROUND_LIMIT_MESSAGE, client,
                 names=names, gate=gate,
@@ -1994,7 +2130,10 @@ class ChatKit:
     lose them or have its own undone.
     """
 
-    schemas = [KEEP_NOTES_TOOL, HAND_OFF_TOOL, TAKE_ON_TOOL, *CHAT_TOOLS]
+    schemas = [
+        KEEP_NOTES_TOOL, HAND_OFF_TOOL, ASK_SPARK_TOOL, TAKE_ON_TOOL,
+        *CHAT_TOOLS,
+    ]
 
     def __init__(self, spark: Spark, chat: str = "") -> None:
         self.spark_id = spark.id
@@ -2011,6 +2150,7 @@ class ChatKit:
             "set_goal": self._set_goal,
             "set_schedule": self._set_schedule,
             "hand_off": _handing_off(spark),
+            "ask_spark": _asking(spark),
             "take_on": self._take_on,
         }
 

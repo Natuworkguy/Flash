@@ -267,7 +267,10 @@ def build_system_prompt(model_prompt: str = "") -> str:
     model_prompt = model_prompt.strip()
     added = "\n\n".join(
         part
-        for part in (extensions.system_prompt(), learning.prompt_block())
+        for part in (
+            extensions.system_prompt(), learning.prompt_block(),
+            sparks.roster_block(),
+        )
         if part
     )
     flash_prompt = _flash_system_prompt(added) if added else SYSTEM_PROMPT
@@ -1797,6 +1800,46 @@ def agent_result(agent_id: str, wait_seconds: Any = None) -> str:
         return f"Sub-agent {agent_id} failed: {entry.result}"
 
     return entry.result
+
+
+def ask_spark(spark: str = "", question: str = "") -> str:
+    """Ask one of the user's sparks QUESTION, and have its answer now."""
+
+    try:
+        found, answer = sparks.consult(
+            spark, question, asker="Flash",
+            who=", the assistant the user talks to",
+        )
+    except sparks.SparkError as exc:
+        tool_line(f"AskSpark({spark})")
+        tool_result(str(exc), style=ERROR)
+        return f"Error: {exc}"
+    except Exception as e:  # noqa: BLE001
+        tool_line(f"AskSpark({spark})")
+        tool_result(str(e), style=ERROR)
+        return f"Error: it could not answer: {e.__class__.__name__}: {e}"
+    tool_line(f"AskSpark({found.name})")
+    tool_result(answer)
+    return f"{found.name} ({found.handle}) says: {answer}"
+
+
+def give_spark(spark: str = "", job: str = "", chat: str = "") -> str:
+    """Hand one of the user's sparks JOB: a shift of its own starts now,
+    and its report comes back to CHAT, the web chat asking, if any."""
+
+    try:
+        found = sparks.take_on(spark, job, chat)
+    except sparks.SparkError as exc:
+        tool_line(f"GiveSpark({spark})")
+        tool_result(str(exc), style=ERROR)
+        return f"Error: {exc}"
+    where = "in this chat" if chat else "in its reports (/sparks)"
+    tool_line(f"GiveSpark({found.name})")
+    tool_result(f"A shift starts now; the report comes back {where}")
+    return (
+        f"(given to {found.name}: a shift starts now, and its report "
+        f"comes back {where}. Tell the user it is on it.)"
+    )
 
 
 def make_spark(
@@ -4468,6 +4511,62 @@ tools: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "ask_spark",
+            "description": (
+                "Ask one of the user's sparks something and get its answer "
+                "now: what it has found, what it last reported, whether it "
+                "has seen something. It answers from what it knows, "
+                "without running anything. Use it when the user asks what "
+                "a spark found or thinks, or when its work bears on theirs."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "spark": {
+                        "type": "string",
+                        "description": "Its name or handle.",
+                    },
+                    "question": {
+                        "type": "string",
+                        "description": "What to ask, on its own.",
+                    },
+                },
+                "required": ["spark", "question"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "give_spark",
+            "description": (
+                "Give one of the user's sparks a job, when the user asks "
+                "for it to do something or the work is its job: a shift "
+                "of its own starts now, in the background, with all its "
+                "tools, and its report comes back to the user."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "spark": {
+                        "type": "string",
+                        "description": "Its name or handle.",
+                    },
+                    "job": {
+                        "type": "string",
+                        "description": (
+                            "The job, in full, as the shift will need it: "
+                            "what to do, where, and what to report."
+                        ),
+                    },
+                },
+                "required": ["spark", "job"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "skill_view",
             "description": (
                 "Read one of your saved skills: the procedure for a kind "
@@ -4605,6 +4704,8 @@ FUNCTIONS = {
     "agent": agent_tool,
     "agent_result": agent_result,
     "make_spark": make_spark,
+    "ask_spark": ask_spark,
+    "give_spark": give_spark,
     "open_in_editor": open_in_editor,
 }
 

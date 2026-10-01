@@ -1755,3 +1755,120 @@ def test_the_page_reads_set_times_back_before_saving():
     assert read["next"] == sparks.cron.next_after("30 8 * * 1", time.time())
     with pytest.raises(ValueError, match="at most every 15"):
         web.command(session, {"name": "spark-schedule", "arg": "*/5 * * * *"})
+
+
+# --- Asking each other ----------------------------------------------------
+
+
+@pytest.fixture
+def one_client(monkeypatch):
+    """One fake model for every call, the ones made inside a shift too."""
+
+    client = FakeClient([])
+    monkeypatch.setattr(sparks.ollama, "Client", lambda host=None: client)
+    return client
+
+
+def test_a_spark_answers_from_what_it_knows_with_no_tools(model, one_client):
+    sparks.create("Scout", "Watch the issues.")
+    sparks._edit("scout", lambda s: setattr(s, "notes", "Issue 12 is a bug."))
+    one_client.responses = [_reply("Issue 12 is a bug; I reported it.")]
+
+    found, answer = sparks.consult("scout", "Any bugs?", asker="Flash")
+
+    assert found.name == "Scout"
+    assert answer == "Issue 12 is a bug; I reported it."
+    asked = one_client.calls[0]
+    assert asked["tools"] == []
+    system = asked["messages"][0]["content"]
+    assert "=== Flash is asking you ===" in system
+    assert "Issue 12 is a bug." in system
+    assert asked["messages"][1] == {"role": "user", "content": "Any bugs?"}
+
+
+def test_asking_nobody_names_who_there_is():
+    sparks.create("Scout", "Watch the issues.")
+
+    with pytest.raises(sparks.SparkError, match="sparks: Scout"):
+        sparks.consult("ghost", "Hello?")
+    with pytest.raises(sparks.SparkError, match="Ask it something"):
+        sparks.consult("scout", "  ")
+
+
+def test_a_spark_asks_another_mid_shift(model, one_client):
+    sparks.create("Scout", "Watch the issues.")
+    tester = sparks.create("Tester", "Run the tests.")
+    one_client.responses = [
+        _reply("", ("ask_spark", {"spark": "scout", "question": "Bugs?"})),
+        _reply("Issue 12 crashes on login."),  # Scout's answer
+        _reply("", ("keep_notes", {"notes": "Check login."})),
+        _reply("Wrote a test for the login crash."),
+    ]
+
+    report = sparks.shift(tester.id)
+
+    assert report.text == "Wrote a test for the login crash."
+    # Asking in the middle did not cost the shift its record of steps.
+    assert report.steps == ["AskSpark(Scout)", "KeepNotes()"]
+    told = one_client.calls[2]["messages"]
+    assert told[-1]["content"] == "Scout says: Issue 12 crashes on login."
+    asked = one_client.calls[1]["messages"][0]["content"]
+    assert "Tester (@tester-spark), another spark" in asked
+    offered = [t["function"]["name"] for t in one_client.calls[0]["tools"]]
+    assert "ask_spark" in offered
+
+
+def test_a_spark_cannot_ask_itself(model):
+    made = sparks.create("Scout", "Watch the issues.")
+
+    said = sparks._asking(made)({"spark": "scout", "question": "Me?"})
+
+    assert said.startswith("Error: that is you")
+
+
+def test_a_spark_can_ask_another_in_a_chat(model):
+    made = sparks.create("Scout", "Watch the issues.")
+
+    assert "ask_spark" in sparks.ChatKit(made).tools
+    assert sparks.ASK_SPARK_TOOL in sparks.ChatKit.schemas
+
+
+def test_flash_asks_a_spark(model, one_client):
+    sparks.create("Scout", "Watch the issues.")
+    one_client.responses = [_reply("Two new issues today.")]
+
+    said = tools.ask_spark("scout", "What did you find?")
+
+    assert said == "Scout (@scout-spark) says: Two new issues today."
+    system = one_client.calls[0]["messages"][0]["content"]
+    assert "Flash, the assistant the user talks to" in system
+
+
+def test_flash_asking_nobody_is_told_so():
+    assert tools.ask_spark("ghost", "Hello?").startswith(
+        "Error: There is no spark called 'ghost'"
+    )
+
+
+def test_flash_gives_a_spark_a_job():
+    made = sparks.create("Scout", "Watch the issues.")
+
+    said = tools.give_spark("scout", "Check the login page.")
+
+    assert "given to Scout" in said and "in its reports" in said
+    kept = sparks.find(made.id)
+    assert kept.inbox[0]["text"] == "Check the login page."
+    assert kept.inbox[0]["job"] is True
+    assert kept.asked
+
+
+def test_flash_knows_the_users_sparks():
+    assert sparks.roster_block() == ""
+    assert "The user's sparks" not in tools.build_system_prompt()
+
+    sparks.create("Scout", "Watch the issues.\nAnd more.")
+    sparks.set_paused("scout", True)
+
+    block = sparks.roster_block()
+    assert "- Scout (@scout-spark) (paused): Watch the issues." in block
+    assert block in tools.build_system_prompt()
