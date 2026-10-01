@@ -2387,38 +2387,6 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
             "always": keepalive.status(),
         }
 
-    if name == "heartbeat":
-        # On or off, and the checklist; no arg only says how it stands.
-        try:
-            if arg in ("on", "off"):
-                sparks.set_heartbeat(arg == "on", ai.Config.model or "")
-            if "text" in body:
-                sparks.write_heartbeat(str(body.get("text") or ""))
-        except sparks.SparkError as exc:
-            raise ValueError(str(exc)) from None
-        found = sparks.heartbeat_spark()
-        return {
-            "on": found is not None, "path": str(sparks.heartbeat_path()),
-            "text": sparks.read_heartbeat().strip(),
-            "starter": sparks.HEARTBEAT_STARTER.strip(),
-            "every": found.every if found else 30,
-        }
-
-    if name == "soul":
-        # No text: only what it is, for the box in Settings.
-        from . import soul
-
-        if "text" in body:
-            try:
-                soul.write(str(body.get("text") or ""))
-            except ValueError as exc:
-                raise ValueError(str(exc)) from None
-        return {
-            "text": soul.read().strip(), "starter": soul.STARTER.strip(),
-            "limit": soul.SOUL_CHARS, "path": str(soul.soul_path()),
-            "active": bool(soul.prompt_block()),
-        }
-
     if name == "spark-rounds":
         # No arg: only what it is, for the box in Settings. "limited"
         # puts the limit back on at the number it had.
@@ -2761,7 +2729,7 @@ def _spark_command(name: str, arg: str, body: dict) -> dict:
                 str(body.get("model") or ""), bool(body.get("paused")),
             )
         elif name == "spark-templates":
-            return {"templates": [sparks.filled(t) for t in sparks.TEMPLATES]}
+            return {"templates": sparks.TEMPLATES}
         elif name in ("spark-pause", "spark-resume"):
             spark = sparks.set_paused(arg, name == "spark-pause")
         elif name == "spark-read":

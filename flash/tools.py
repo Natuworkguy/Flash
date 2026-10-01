@@ -37,7 +37,6 @@ from . import (
     model3d,
     plan,
     skills,
-    soul,
     sparks,
 )
 from .browser import (
@@ -268,10 +267,7 @@ def build_system_prompt(model_prompt: str = "") -> str:
     model_prompt = model_prompt.strip()
     added = "\n\n".join(
         part
-        for part in (
-            extensions.system_prompt(), learning.prompt_block(),
-            soul.prompt_block(),
-        )
+        for part in (extensions.system_prompt(), learning.prompt_block())
         if part
     )
     flash_prompt = _flash_system_prompt(added) if added else SYSTEM_PROMPT
