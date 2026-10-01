@@ -1872,3 +1872,103 @@ def test_flash_knows_the_users_sparks():
     block = sparks.roster_block()
     assert "- Scout (@scout-spark) (paused): Watch the issues." in block
     assert block in tools.build_system_prompt()
+
+
+# --- A busy model ---------------------------------------------------------
+
+
+class RefusingOnce(FakeClient):
+    """Says it is busy, then answers: as Ollama's cloud does when a chat
+    with the spark has the one request it allows at a time."""
+
+    def __init__(self, responses, error):
+        super().__init__(responses)
+        self.error = error
+
+    def chat(self, model, messages, tools=None, options=None):
+        if self.error is not None:
+            error, self.error = self.error, None
+            self.calls.append({"refused": True})
+            raise error
+        return super().chat(model, messages, tools, options)
+
+
+@pytest.fixture
+def no_waiting(monkeypatch):
+    waited = []
+    monkeypatch.setattr(
+        sparks, "_pause", lambda seconds, stopping: waited.append(seconds),
+    )
+    return waited
+
+
+@pytest.mark.parametrize("error", [
+    sparks.ollama.ResponseError("too many concurrent requests", 429),
+    sparks.ollama.ResponseError("server overloaded, try again", 500),
+    sparks.ollama.ResponseError("upstream unavailable", 503),
+    ConnectionError("Failed to connect to Ollama"),
+])
+def test_a_busy_model_is_waited_out_mid_shift(model, no_waiting, error):
+    made = sparks.create("Brief", "Write the brief.")
+    client = RefusingOnce([_reply("The brief.")], error)
+
+    report = sparks.shift(made.id, client=client)
+
+    assert report.text == "The brief." and not report.failed
+    assert no_waiting == [sparks.RETRY_WAITS[0]]
+
+
+def test_a_model_that_stays_busy_fails_the_shift_in_the_end(
+    model, no_waiting,
+):
+    made = sparks.create("Brief", "Write the brief.")
+
+    class Busy:
+        def chat(self, **kwargs):
+            raise sparks.ollama.ResponseError("too many requests", 429)
+
+    report = sparks.shift(made.id, client=Busy())
+
+    assert report.failed and "too many requests" in report.text
+    assert no_waiting == list(sparks.RETRY_WAITS)
+
+
+def test_a_real_error_is_not_retried(model, no_waiting):
+    made = sparks.create("Brief", "Write the brief.")
+    client = RefusingOnce(
+        [_reply("Never asked.")],
+        sparks.ollama.ResponseError("model 'nope' not found", 404),
+    )
+
+    report = sparks.shift(made.id, client=client)
+
+    assert report.failed and "not found" in report.text
+    assert no_waiting == []
+
+
+def test_stop_still_stops_while_it_waits(model, monkeypatch):
+    made = sparks.create("Brief", "Write the brief.")
+    monkeypatch.setattr(sparks, "RETRY_STEP_SECONDS", 0.01)
+
+    class Busy:
+        def chat(self, **kwargs):
+            sparks._edit(made.id, lambda s: setattr(s, "stop_asked", True))
+            raise sparks.ollama.ResponseError("too many requests", 429)
+
+    started = time.monotonic()
+    report = sparks.shift(made.id, client=Busy())
+
+    assert report.text.startswith("Stopped, as you asked")
+    assert time.monotonic() - started < 1
+
+
+def test_a_chat_with_a_spark_waits_out_a_busy_model_too(model, no_waiting):
+    made = sparks.create("Brief", "Write the brief.")
+    client = RefusingOnce(
+        [_reply("Not yet: I am mid-shift.")],
+        sparks.ollama.ResponseError("too many concurrent requests", 429),
+    )
+
+    reply = sparks.say(made.id, "Done yet?", client=client)
+
+    assert reply.text == "Not yet: I am mid-shift." and not reply.failed
