@@ -111,13 +111,16 @@ def _systemd() -> bool:
     return _ok(["systemctl", "--user", "show-environment"])
 
 
+def _arg(part) -> str:
+    # A path in a command line is written with forward slashes.
+    return part.as_posix() if isinstance(part, Path) else str(part)
+
+
 def _exec_line() -> str:
     # The desktop entry spec quotes an argument with a space in it.
     return " ".join(
-        f'"{part.as_posix() if isinstance(part, Path) else part}"' 
-        if " " in (part.as_posix() if isinstance(part, Path) else part) else 
-        (part.as_posix() if isinstance(part, Path) else part) 
-        for part in command()
+        f'"{arg}"' if " " in arg else arg
+        for arg in map(_arg, command())
     )
 
 
@@ -184,7 +187,7 @@ def _plist() -> str:
         )
 
     args = "".join(
-        f"\n        <string>{esc(part.as_posix() if isinstance(part, Path) else part)}</string>" for part in command()
+        f"\n        <string>{esc(_arg(part))}</string>" for part in command()
     )
     return f"""<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" \
@@ -250,7 +253,7 @@ def _off_macos() -> bool:
 
 
 def _task_line() -> str:
-    return " ".join(f'"{str(part)}"' for part in command())
+    return " ".join(f'"{_arg(part)}"' for part in command())
 
 
 def _on_windows() -> str:
