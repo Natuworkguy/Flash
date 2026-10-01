@@ -1139,8 +1139,8 @@ button.item-row:hover { background: var(--hover); }
 .field small [data-handle] { font: 500 12px var(--mono); color: var(--text-2); }
 .mem-path .link-btn { font: inherit; padding: 0 4px; text-decoration: underline; text-underline-offset: 2px; }
 .field.check { display: flex; align-items: flex-start; gap: 10px; cursor: pointer; }
-.field.check input { margin-top: 3px; accent-color: var(--accent); }
-.field.check span { margin: 0; font-weight: 400; color: var(--text-2); }
+.field.check input { flex: none; width: auto; margin: 3px 0 0; padding: 0; accent-color: var(--accent); }
+.field.check span { flex: 1; margin: 0; font-weight: 400; color: var(--text-2); }
 /* A chat with a spark: its bubble and name as a badge, in the box and
    beside the chat in the sidebar. */
 #spark-btn { display: inline-flex; align-items: center; gap: 7px; max-width: 220px; color: var(--text); background: color-mix(in srgb, var(--c, var(--accent)) 14%, transparent); border-color: color-mix(in srgb, var(--c, var(--accent)) 45%, transparent); }
@@ -4350,10 +4350,11 @@ function addSharedSpark() {
     <textarea name="code" class="spark-code" rows="4" placeholder="flash-spark:…" spellcheck="false"></textarea>
     <div class="spark-preview" hidden></div>
     ${modelField()}
+    <label class="field check"><input type="checkbox" name="paused"><span>Add it paused, to start when you press Resume.</span></label>
     <div class="dialog-buttons"><button type="button" class="btn" data-cancel>Cancel</button><button type="submit" class="btn primary" disabled>Add spark</button></div>`,
     async (data) => {
-      const made = (await command("spark-add", data.code.trim(), null, { model: data.model || "" })).spark;
-      toast(`Added ${made.name}`);
+      const made = (await command("spark-add", data.code.trim(), null, { model: data.model || "", paused: !!data.paused })).spark;
+      toast(made.paused ? `Added ${made.name}, paused` : `Added ${made.name}`);
       if (view !== "sparks") showPage("sparks");
     });
   const box = form.querySelector(".preview, .spark-preview");
@@ -4396,6 +4397,7 @@ function sparkForm(spark, inProjectId = "") {
     <label class="field"><span>Project</span><select name="project"><option value="">No project</option>${[...projects].reverse().map((p) => `<option value="${esc(p.id)}"${editing && spark.project === p.id ? " selected" : ""}>${esc(p.name)}</option>`).join("")}</select><small>${projects.length ? "Its shifts work on the project's folder and follow its instructions, and a chat with it starts there." : "Make a project on the Projects page to give it one: a folder, and how to work in it."}</small></label>
     <label class="field"><span>Watch a folder <em class="count">optional</em></span><input name="watch" class="mono" placeholder="~/Downloads" autocomplete="off" spellcheck="false" role="combobox" aria-autocomplete="list" aria-expanded="false"><small>A change to its files starts a shift too, besides the schedule, and it is told which files changed. Tab takes a suggestion and shows what is inside it.</small></label>
     <label class="field"><span>Boundaries</span><textarea name="boundaries" rows="2" placeholder="Only read. Never push, delete, or message anyone."></textarea><small>Lines it must not cross. Running commands and changing files also need autonomous mode, as for sub-agents.</small></label>
+    ${editing ? "" : `<label class="field check"><input type="checkbox" name="paused"><span>Make it paused. Nothing runs until you press Resume in its window; then it starts its first shift.</span></label>`}
     ${editing || sparksAlways.installed ? "" : `<label class="field check"><input type="checkbox" name="always" checked><span>Keep sparks working when Flash is closed. Flash starts a keeper at login and notifies you of news.</span></label>`}
     <div class="dialog-buttons"><button type="button" class="btn" data-cancel>Cancel</button><button type="submit" class="btn primary">${editing ? "Save" : "Make spark"}</button></div>`,
     async (data) => {
@@ -4408,8 +4410,8 @@ function sparkForm(spark, inProjectId = "") {
         await openSpark(spark.id);
         return false;
       }
-      const made = (await command("spark-create", name, null, fields)).spark;
-      toast(`${made.name} is on it`);
+      const made = (await command("spark-create", name, null, { ...fields, paused: !!data.paused })).spark;
+      toast(made.paused ? `${made.name} is made, paused: Resume starts it` : `${made.name} is on it`);
       if (data.always) await setSparksAlways(true);
       if (view !== "sparks") showPage("sparks");
     });

@@ -1877,9 +1877,13 @@ def _new_spark() -> None:
     if not model:
         console.print(Text("  No spark made: it needs a model.", style=DIM))
         return
+    paused = _ask_line(
+        "Start it now? (Enter for yes, n to make it paused)"
+    ).strip().lower() in ("n", "no")
     try:
         spark = sparks.create(
             name, goal, boundaries, every, project, model=model,
+            paused=paused,
         )
     except sparks.SparkError as exc:
         warn(str(exc))
@@ -1887,6 +1891,8 @@ def _new_spark() -> None:
     line = Text(f"  {_bubble()} ", style=spark.colour)
     line.append(spark.name, style=f"bold {spark.colour}")
     line.append(
+        f" {spark.handle} is paused: /sparks resume {_spark_key(spark)} "
+        "starts it." if spark.paused else
         f" {spark.handle} is on it, every "
         f"{sparks.every_words(spark.every)}.", style=DIM,
     )
@@ -2094,11 +2100,19 @@ def _sparks_command(arg: str) -> None:
             console.echo(code + "\n")
             return
         if action == "add" and rest:
-            spark = sparks.add_from(rest, model=Config.model or "")
+            # "/sparks add Repo Watch paused" adds it without starting it.
+            source, _, last = rest.rpartition(" ")
+            paused = last.lower() == "paused" and bool(source.strip())
+            spark = sparks.add_from(
+                source.strip() if paused else rest,
+                model=Config.model or "", paused=paused,
+            )
             console.print(Text(
                 f"Added {spark.name} ({spark.handle}), every "
-                f"{sparks.every_words(spark.every)}, on {spark.model}. "
-                f"/sparks model {_spark_key(spark)} to give it another.",
+                f"{sparks.every_words(spark.every)}, on {spark.model}"
+                f"{', paused' if spark.paused else ''}. "
+                f"/sparks model {_spark_key(spark)} to give it another"
+                f"{', /sparks resume to start it' if spark.paused else ''}.",
                 style=DIM,
             ))
             return
@@ -2190,7 +2204,7 @@ def _sparks_command(arg: str) -> None:
             "Usage: /sparks [new | <name> | chat <name> [message] "
             "| run|pause|resume|remove <name> | teach <name> <lesson> "
             "| every <name> <30m|2h|daily> | project <name> <project|none> "
-            "| approve|deny|stop|share <name> | add <code|template> "
+            "| approve|deny|stop|share <name> | add <code|template> [paused] "
             "| templates | goal <name> <text> | watch <name> <folder|none> "
             "| model <name> [model] | title <name> <title|none> "
             "| always on|off]"
