@@ -1807,16 +1807,15 @@ def make_spark(
     makes it without starting it, to resume when the user wants."""
 
     paused = paused is True or str(paused).strip().lower() in ("true", "yes")
-    tool_line(
-        f"MakeSpark({name}, every {every or 'hour'}"
-        f"{', paused' if paused else ''})"
-    )
-
     try:
-        minutes = sparks.parse_every(every)
+        minutes, at = sparks.parse_schedule(every)
     except sparks.SparkError as exc:
+        tool_line(f"MakeSpark({name}, {every}{', paused' if paused else ''})")
         tool_result(str(exc), style=ERROR)
         return f"Error: {exc}"
+
+    schedule = sparks.schedule_words({"every": minutes, "at": at})
+    tool_line(f"MakeSpark({name}, {schedule}{', paused' if paused else ''})")
 
     # The model it runs on: the one the user named, else Flash's, named
     # in the question so it is chosen, not assumed.
@@ -1831,8 +1830,8 @@ def make_spark(
     if not NO_COMMAND_CONFIRMATION:
         notify_needs_input()
         question = (
-            f"Make a spark called {name} that works on this every "
-            f"{sparks.every_words(minutes)}, on {model}"
+            f"Make a spark called {name} that works on this "
+            f"{schedule}, on {model}"
             f"{', paused until you resume it' if paused else ''}?\n{goal}"
         )
         answer = remote_answer(question)
@@ -1849,7 +1848,7 @@ def make_spark(
 
     try:
         spark = sparks.create(
-            name, goal, boundaries, minutes, project, model=model,
+            name, goal, boundaries, at or minutes, project, model=model,
             paused=paused,
         )
     except sparks.SparkError as exc:
@@ -1858,14 +1857,19 @@ def make_spark(
 
     from . import keepalive  # deferred: only a new spark needs it
 
-    every_words = sparks.every_words(spark.every)
+    schedule = sparks.schedule_words(spark)
+    first = time.strftime(
+        "%A at %H:%M", time.localtime(spark.next_run)
+    ) if spark.at else ""
     result = (
         f"Made {spark.name} ({spark.handle}), on {spark.model}. " + (
             "It is paused: nothing runs until the user resumes it "
             f"(/sparks resume {spark.name}, or Resume in its window), "
-            f"then every {every_words}. "
+            f"then {schedule}. "
             if spark.paused else
-            f"Its first shift starts now, then every {every_words}. "
+            f"It works {schedule}; its first shift is {first}. "
+            if spark.at else
+            f"Its first shift starts now, then {schedule}. "
         ) + "Its reports are under /sparks, or Sparks in the web UI."
     )
     if not keepalive.installed():
@@ -4421,8 +4425,10 @@ tools: list[dict[str, Any]] = [
                     "every": {
                         "type": "string",
                         "description": (
-                            "How often it works, e.g. 30m, 2h, daily. "
-                            f"At least {sparks.MIN_EVERY_MINUTES}m."
+                            "How often it works, e.g. 30m, 2h, daily "
+                            f"(at least {sparks.MIN_EVERY_MINUTES}m), or at "
+                            "set times, e.g. 9am weekdays, mon 8:30, the "
+                            "1st at 9am, or a cron line."
                         ),
                     },
                     "boundaries": {

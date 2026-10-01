@@ -1342,6 +1342,8 @@ button.item-row:hover { background: var(--hover); }
 .field { display: block; margin: 0 0 14px; text-align: left; }
 .field span { display: block; font-size: 12.5px; font-weight: 500; color: var(--text-2); margin-bottom: 6px; }
 .field small { display: block; font-size: 12px; color: var(--text-3); margin-top: 6px; }
+.field[hidden] { display: none; }
+.field small.bad { color: var(--del); }
 .field input.mono { font-family: var(--mono); font-size: 13.5px; }
 .form-error { color: var(--del); font-size: 13px; min-height: 18px; margin: -4px 0 8px; }
 .dialog-buttons { display: flex; justify-content: flex-end; gap: 8px; margin-top: 6px; }
@@ -4455,7 +4457,7 @@ async function drawSparks(body, again = false) {
     card.querySelector(".name").textContent = spark.name;
     const title = card.querySelector(".title");
     if (spark.title) title.textContent = spark.title; else title.remove();
-    card.querySelector(".meta").textContent = `${spark.handle} · every ${everyWords(spark.every)}${spark.project_name ? ` · in ${spark.project_name}` : ""}${spark.model_used ? ` · ${spark.model_used}` : ""}`;
+    card.querySelector(".meta").textContent = `${spark.handle} · ${spark.schedule}${spark.project_name ? ` · in ${spark.project_name}` : ""}${spark.model_used ? ` · ${spark.model_used}` : ""}`;
     const state = card.querySelector(".state");
     state.textContent = spark.unread ? `${spark.unread} new report${spark.unread === 1 ? "" : "s"} · ${sparkState(spark)}` : sparkState(spark);
     state.classList.toggle("working", spark.status === "working");
@@ -4580,7 +4582,7 @@ function fillSpark(box, spark, again = false) {
   pill.classList.add(kind);
   pill.textContent = kind === "idle" ? "Ready" : doing;
   box.querySelector(".handle").textContent = spark.handle;
-  box.querySelector(".spark-head .meta").textContent = `On ${spark.model_used || "no model"}${spark.model ? "" : " (Flash's)"} · every ${everyWords(spark.every)}${spark.project_name ? ` · in ${spark.project_name}` : ""} · ${sparkState(spark)} · ${spark.runs} shift${spark.runs === 1 ? "" : "s"}`;
+  box.querySelector(".spark-head .meta").textContent = `On ${spark.model_used || "no model"}${spark.model ? "" : " (Flash's)"} · ${spark.schedule}${spark.project_name ? ` · in ${spark.project_name}` : ""} · ${sparkState(spark)} · ${spark.runs} shift${spark.runs === 1 ? "" : "s"}`;
   box.querySelector("[data-goal]").textContent = spark.goal;
   if (spark.boundaries) {
     box.querySelector("[data-bounds]").hidden = false;
@@ -4799,7 +4801,7 @@ function addSharedSpark() {
       if (!code) return;
       try { preview = (await command("spark-code", code, null)).template; }
       catch (error) { box.textContent = error.message; return; }
-      box.innerHTML = `<b></b> · every ${esc(everyWords(preview.every))}<p class="goal"></p><p class="bounds"></p><p class="taught"></p>`;
+      box.innerHTML = `<b></b> · ${esc(preview.schedule)}<p class="goal"></p><p class="bounds"></p><p class="taught"></p>`;
       box.querySelector("b").textContent = preview.name;
       box.querySelector(".goal").textContent = preview.goal;
       box.querySelector(".bounds").textContent = preview.boundaries ? `Never: ${preview.boundaries}` : "No boundaries: add your own after, with Edit.";
@@ -4809,10 +4811,46 @@ function addSharedSpark() {
   });
 }
 
+// "At set times": the box for them shows with the choice, and says back
+// what it read and when that next comes round, or why it cannot.
+function setTimesField(form) {
+  const field = form.querySelector(".at-field");
+  const said = field.querySelector(".at-said");
+  const example = said.innerHTML;
+  let timer = 0;
+  form.every.addEventListener("change", () => {
+    field.hidden = form.every.value !== "at";
+    form.at.required = !field.hidden;
+    if (!field.hidden) form.at.focus();
+  });
+  form.at.required = !field.hidden;
+  form.at.addEventListener("input", () => {
+    clearTimeout(timer);
+    const text = form.at.value.trim();
+    form.at.setCustomValidity("");
+    said.classList.remove("bad");
+    if (!text) { said.innerHTML = example; return; }
+    timer = setTimeout(async () => {
+      try {
+        const read = await command("spark-schedule", text, null);
+        if (form.at.value.trim() !== text) return;
+        const next = new Date(read.next * 1000);
+        said.textContent = `Runs ${read.schedule}. Next: ${next.toLocaleString([], { weekday: "short", day: "numeric", month: "short", hour: "numeric", minute: "2-digit" })}.`;
+      } catch (error) {
+        if (form.at.value.trim() !== text) return;
+        said.textContent = error.message;
+        said.classList.add("bad");
+        form.at.setCustomValidity(error.message);
+      }
+    }, 200);
+  });
+}
+
 function sparkForm(spark, inProjectId = "") {
   const editing = !!spark;
   const every = editing ? spark.every : 60;
-  const choices = EVERY_CHOICES.some(([m]) => m === every) ? EVERY_CHOICES : [...EVERY_CHOICES, [every, `Every ${everyWords(every)}`]].sort((a, b) => a[0] - b[0]);
+  const atTimes = editing && !!spark.at;
+  const choices = atTimes || EVERY_CHOICES.some(([m]) => m === every) ? EVERY_CHOICES : [...EVERY_CHOICES, [every, `Every ${everyWords(every)}`]].sort((a, b) => a[0] - b[0]);
   const form = openForm(`
     <h2>${editing ? "Edit spark" : "New spark"}</h2>
     <p class="sub">${editing ? "" : "An agent that keeps working on one goal, on a schedule, while Flash runs, and reports back."}</p>
@@ -4821,7 +4859,8 @@ function sparkForm(spark, inProjectId = "") {
     <label class="field"><span>Title <em class="count">optional</em></span><input name="title" maxlength="40" placeholder="Repo watcher" autocomplete="off"><small>Its job, as a teammate's: shown under its name, and it knows it.</small></label>
     ${modelField()}
     <label class="field"><span>Goal</span><textarea name="goal" rows="4" placeholder="Check github.com/me/app for new issues. Tell me which look like bugs, and skip ones you have already told me about."></textarea></label>
-    <label class="field"><span>How often</span><select name="every">${choices.map(([m, label]) => `<option value="${m}"${m === every ? " selected" : ""}>${label}</option>`).join("")}</select><small>It works while Flash is open, in the terminal or here.</small></label>
+    <label class="field"><span>How often</span><select name="every">${choices.map(([m, label]) => `<option value="${m}"${!atTimes && m === every ? " selected" : ""}>${label}</option>`).join("")}<option value="at"${atTimes ? " selected" : ""}>At set times…</option></select><small>It works while Flash is open, in the terminal or here.</small></label>
+    <label class="field at-field"${atTimes ? "" : " hidden"}><span>When</span><input name="at" placeholder="9am weekdays" autocomplete="off" spellcheck="false"><small class="at-said">Like <b>9am weekdays</b>, <b>mon, thu 8:30</b>, <b>the 1st at 9am</b>, or a cron line such as <b>0 9 * * 1-5</b>. On this computer's clock.</small></label>
     <label class="field"><span>Project</span><select name="project"><option value="">No project</option>${[...projects].reverse().map((p) => `<option value="${esc(p.id)}"${editing && spark.project === p.id ? " selected" : ""}>${esc(p.name)}</option>`).join("")}</select><small>${projects.length ? "Its shifts work on the project's folder and follow its instructions, and a chat with it starts there." : "Make a project on the Projects page to give it one: a folder, and how to work in it."}</small></label>
     <label class="field"><span>Watch a folder <em class="count">optional</em></span><input name="watch" class="mono" placeholder="~/Downloads" autocomplete="off" spellcheck="false" role="combobox" aria-autocomplete="list" aria-expanded="false"><small>A change to its files starts a shift too, besides the schedule, and it is told which files changed. Tab takes a suggestion and shows what is inside it.</small></label>
     <label class="field"><span>Boundaries</span><textarea name="boundaries" rows="2" placeholder="Only read. Never push, delete, or message anyone."></textarea><small>Lines it must not cross. Running commands and changing files also need autonomous mode, as for sub-agents.</small></label>
@@ -4829,7 +4868,7 @@ function sparkForm(spark, inProjectId = "") {
     ${editing || sparksAlways.installed ? "" : `<label class="field check"><input type="checkbox" name="always" checked><span>Keep sparks working when Flash is closed. Flash starts a keeper at login and notifies you of news.</span></label>`}
     <div class="dialog-buttons"><button type="button" class="btn" data-cancel>Cancel</button><button type="submit" class="btn primary">${editing ? "Save" : "Make spark"}</button></div>`,
     async (data) => {
-      const fields = { goal: data.goal, every: data.every, boundaries: data.boundaries, project: data.project || "", watch: data.watch || "", model: data.model || "", title: data.title || "" };
+      const fields = { goal: data.goal, every: data.every === "at" ? data.at.trim() : data.every, boundaries: data.boundaries, project: data.project || "", watch: data.watch || "", model: data.model || "", title: data.title || "" };
       const name = data.sparkname.trim();
       if (editing) {
         // Not "name": that is the command's own.
@@ -4845,6 +4884,7 @@ function sparkForm(spark, inProjectId = "") {
     });
   // The folder to watch, suggested as you type, as a project's is.
   suggestFolders(form.watch);
+  setTimesField(form);
   // Chosen, not assumed: a spark from before it had one picks one now.
   fillModelField(form, editing ? spark.model || "" : "");
   const handle = form.querySelector("[data-handle]");
@@ -4856,6 +4896,8 @@ function sparkForm(spark, inProjectId = "") {
     form.goal.value = spark.goal;
     form.boundaries.value = spark.boundaries;
     form.watch.value = spark.watch || "";
+    form.at.value = spark.at || "";
+    if (spark.at) form.at.dispatchEvent(new Event("input"));
   } else {
     if (inProjectId) form.project.value = inProjectId;
     // A template fills the form in, to change before it is made.
@@ -4876,6 +4918,7 @@ function sparkForm(spark, inProjectId = "") {
           form.boundaries.value = t.boundaries;
           if (![...form.every.options].some((o) => +o.value === t.every)) form.every.add(new Option(`Every ${everyWords(t.every)}`, t.every));
           form.every.value = String(t.every);
+          form.every.dispatchEvent(new Event("change"));
           named();
           form.goal.focus();
         };
