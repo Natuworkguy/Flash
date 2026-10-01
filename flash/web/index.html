@@ -1078,8 +1078,10 @@ button.item-row:hover { background: var(--hover); }
    it is doing. Bots, not conversations, as Grok Bot has it. */
 #spark-roster { flex: 0 1 auto; min-height: min(84px, 12vh); max-height: 34vh; overflow-y: auto; padding: 4px 0 2px; transition: max-height 0.32s var(--ease), opacity 0.2s var(--ease), padding 0.32s var(--ease); }
 #spark-roster:empty { display: none; }
-/* Squeezed by a short window, it fades out where there is more below. */
+/* Squeezed by a short window, the sparks, and the sidebar itself, fade
+   out where there is more below. */
 #spark-roster.more { -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 22px), transparent); mask-image: linear-gradient(to bottom, #000 calc(100% - 22px), transparent); }
+#sidebar.more { -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 44px), transparent); mask-image: linear-gradient(to bottom, #000 calc(100% - 44px), transparent); }
 /* It folds away, as Recents does: a chevron in the Sparks row. */
 #spark-roster.folded { min-height: 0; max-height: 0; opacity: 0; padding: 0; overflow: hidden; }
 #spark-roster.folded.gone { visibility: hidden; }
@@ -4050,10 +4052,12 @@ function renderRoster() {
   rosterMore();
 }
 
-// Whether the roster has more below than it shows, for its fade.
+// Whether the roster, and the sidebar, have more below than they show,
+// for their fades.
 function rosterMore() {
-  const box = $("#spark-roster");
-  box.classList.toggle("more", box.scrollTop + box.clientHeight < box.scrollHeight - 2);
+  for (const box of [$("#spark-roster"), $("#sidebar")]) {
+    box.classList.toggle("more", box.scrollTop + box.clientHeight < box.scrollHeight - 2);
+  }
 }
 
 // The roster folds away, and stays that way in this browser until opened.
@@ -6675,6 +6679,7 @@ function foldRecents(fold, instant) {
   else if (instant) list.classList.add("gone");
   else list.hiding = setTimeout(() => list.classList.add("gone"), 320);
   if (instant) { void list.offsetWidth; list.style.transition = ""; }
+  setTimeout(rosterMore, instant ? 0 : 340);
 }
 
 function renderChats() {
@@ -6752,6 +6757,7 @@ function renderChats() {
   // Folded, the label still says how many are in there.
   $("#recents-btn .count").textContent = shownChats.size || "";
   renderRoster();
+  rosterMore();
   if (calm.matches) return;
   for (const row of nav.querySelectorAll(".chat")) {
     const before = was.get(row.dataset.chat);
@@ -8456,6 +8462,7 @@ $("#sparks-btn .fold").addEventListener("keydown", (e) => {
 });
 foldRoster(pref("roster", "open") === "folded", true);
 $("#spark-roster").addEventListener("scroll", rosterMore, { passive: true });
+$("#sidebar").addEventListener("scroll", rosterMore, { passive: true });
 addEventListener("resize", rosterMore);
 $("#extensions-btn").innerHTML = icon("puzzle") + "<span>Extensions</span>";
 $("#search-btn").innerHTML = icon("search") + "<span>Search</span>";
