@@ -1134,6 +1134,63 @@ def test_a_template_or_shared_spark_can_be_added_paused():
     assert made.paused and not copy.paused
 
 
+def _with_reports(*texts):
+    made = sparks.create("Scout", "Watch the issues.")
+
+    def fill(spark):
+        spark.reports = [
+            sparks.Report(at=float(n + 1), text=text)
+            for n, text in enumerate(texts)
+        ] + [sparks.Report(at=99.0, text="Nothing new.", quiet=True)]
+
+    sparks._edit(made.id, fill)
+    return made
+
+
+def test_a_report_is_liked_or_disliked_and_its_shifts_are_shown_which():
+    made = _with_reports("Three bugs, with links.", "A wall of text.")
+
+    sparks.rate(made.id, 1.0, 1)
+    sparks.teach(made.id, "Shorter, please.", 2.0)
+    spark = sparks.rate(made.id, 2.0, -1)
+    prompt = sparks._prompt(spark, "h", "m", "")
+
+    assert [r.rating for r in spark.reports] == [1, -1, 0]
+    assert "- Liked: Three bugs, with links." in prompt
+    assert "- Disliked: A wall of text.\n  They said: Shorter, please." in (
+        prompt
+    )
+
+    spark = sparks.rate(made.id, 1.0, 0)
+    assert "Three bugs" not in sparks.rated_block(spark)
+
+
+def test_nothing_rated_says_so():
+    made = _with_reports("One.")
+
+    assert sparks.rated_block(made) == "(none rated yet)"
+
+
+@pytest.mark.parametrize("at, rating", [(1.0, 5), (1.0, "x"), (99.0, 1),
+                                        (7.0, 1)])
+def test_a_rating_must_be_a_like_or_dislike_of_a_real_report(at, rating):
+    made = _with_reports("One.")
+
+    with pytest.raises(sparks.SparkError):
+        sparks.rate(made.id, at, rating)
+
+
+def test_the_latest_report_is_rated_from_the_terminal():
+    made = _with_reports("Old.", "New.")
+
+    spark, report = sparks.rate_latest("scout", -1)
+
+    assert report.text == "New." and report.rating == -1
+    with pytest.raises(sparks.SparkError, match="no report"):
+        sparks.rate_latest(sparks.create("Quiet", "Goal.").id, 1)
+    assert made.id == spark.id
+
+
 def test_a_template_makes_a_spark():
     made = sparks.add_from("repo watch")
 

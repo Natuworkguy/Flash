@@ -1971,14 +1971,19 @@ def _show_spark(spark: "sparks.Spark") -> None:
         title = Text(f"Report · {when}", style="bold")
         if not report.read:
             title.append("  new", style=ACCENT)
+        if report.rating:
+            title.append(
+                "  liked" if report.rating > 0 else "  disliked", style=DIM,
+            )
         console.print(title)
         console.print(Markdown(report.text, code_theme="monokai"))
         if report.feedback:
             console.print(Text(f"  You said: {report.feedback}", style=DIM))
         console.print()
     console.print(Text(
-        f"/sparks chat {_spark_key(spark)} to talk with it · teach · run "
-        "· pause · resume · every · remove", style=DIM,
+        f"/sparks chat {_spark_key(spark)} to talk with it · like · "
+        "dislike [why] · teach · run · pause · resume · every · remove",
+        style=DIM,
     ))
     sparks.mark_read(spark.id)
 
@@ -2069,6 +2074,21 @@ def _sparks_command(arg: str) -> None:
             spark = sparks.teach(key, extra)
             console.print(Text(
                 f"{spark.name} will keep that in mind from its next shift.",
+                style=DIM,
+            ))
+            return
+        if action in ("like", "dislike") and key:
+            # The latest report; a reason with it is kept as a lesson.
+            spark, report = sparks.rate_latest(
+                key, 1 if action == "like" else -1,
+            )
+            if extra:
+                sparks.teach(spark.id, extra, report.at)
+            console.print(Text(
+                f"{spark.name} will do more like that report."
+                if action == "like" else
+                f"{spark.name} will steer away from that report"
+                f"{' and keep what you said' if extra else ''}.",
                 style=DIM,
             ))
             return
@@ -2203,6 +2223,7 @@ def _sparks_command(arg: str) -> None:
         warn(
             "Usage: /sparks [new | <name> | chat <name> [message] "
             "| run|pause|resume|remove <name> | teach <name> <lesson> "
+            "| like <name> | dislike <name> [why] "
             "| every <name> <30m|2h|daily> | project <name> <project|none> "
             "| approve|deny|stop|share <name> | add <code|template> [paused] "
             "| templates | goal <name> <text> | watch <name> <folder|none> "
