@@ -119,45 +119,103 @@ def servers_for(address: str) -> tuple[str, int, str, int]:
     )
 
 
-def settings() -> dict:
-    """What is set, for the settings to show: never the password."""
+# --- Accounts ------------------------------------------------------------
+#
+# Any number of addresses, each with its own app password and servers:
+# a personal Gmail, a work Outlook. Kept as {"accounts": [...]}; a file
+# from when there could be only one, {"address": ...}, reads as a list
+# of that one.
 
+
+def _raw_accounts() -> list[dict]:
     data = _load()
-    address = str(data.get("address") or "")
+    found = data.get("accounts")
+    if isinstance(found, list):
+        return [a for a in found if isinstance(a, dict) and a.get("address")]
+    return [data] if data.get("address") else []
+
+
+def _write(accounts: list[dict]) -> None:
+    path = _path()
+    if not accounts:
+        path.unlink(missing_ok=True)
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    # Made readable by its owner only before a password goes in.
+    path.touch(mode=0o600, exist_ok=True)
+    os.chmod(path, 0o600)
+    path.write_text(
+        json.dumps({"accounts": accounts}, indent=1), encoding="utf-8",
+    )
+
+
+def _full(raw: dict) -> dict:
+    """RAW, as kept, with its provider's servers filled in."""
+
+    address = str(raw.get("address") or "")
     imap_host, imap_port, smtp_host, smtp_port = servers_for(address)
-    imap_host = str(data.get("imap_host") or imap_host)
-    smtp_host = str(data.get("smtp_host") or smtp_host)
-    imap_port = int(data.get("imap_port") or imap_port)
-    smtp_port = int(data.get("smtp_port") or smtp_port)
     return {
         "address": address,
-        "has_password": bool(data.get("password")),
-        "imap": f"{imap_host}:{imap_port}" if address else "",
-        "smtp": f"{smtp_host}:{smtp_port}" if address else "",
+        "password": str(raw.get("password") or ""),
+        "imap_host": str(raw.get("imap_host") or imap_host),
+        "imap_port": int(raw.get("imap_port") or imap_port),
+        "smtp_host": str(raw.get("smtp_host") or smtp_host),
+        "smtp_port": int(raw.get("smtp_port") or smtp_port),
+    }
+
+
+def _shown(raw: dict) -> dict:
+    """One account, for the settings to show: never its password."""
+
+    full = _full(raw)
+    return {
+        "address": full["address"],
+        "has_password": bool(full["password"]),
+        "imap": f"{full['imap_host']}:{full['imap_port']}",
+        "smtp": f"{full['smtp_host']}:{full['smtp_port']}",
+        "help": APP_PASSWORD_HELP.get(full["imap_host"], ""),
+    }
+
+
+def settings() -> dict:
+    """Every account, for the settings to show, and whether any works."""
+
+    return {
+        "accounts": [_shown(a) for a in _raw_accounts()],
         "configured": configured(),
-        "help": APP_PASSWORD_HELP.get(imap_host, ""),
     }
 
 
 def configured() -> bool:
-    data = _load()
-    return bool(data.get("address") and data.get("password"))
+    return any(a.get("password") for a in _raw_accounts())
+
+
+def addresses() -> list[str]:
+    """The connected addresses, in the order they were added."""
+
+    return [str(a["address"]) for a in _raw_accounts() if a.get("password")]
+
+
+def _same(a: str, b: str) -> bool:
+    return a.strip().casefold() == b.strip().casefold()
 
 
 def save(
     address: str, password: Optional[str] = None, imap: str = "",
     smtp: str = "",
 ) -> dict:
-    """Keep ADDRESS, and PASSWORD unless it is None (to keep the old
-    one). IMAP and SMTP are host[:port], or "" for the provider's."""
+    """Add ADDRESS, or change it if it is already here: its PASSWORD
+    unless that is None (to keep the one it has), and IMAP and SMTP as
+    host[:port], or "" for the provider's."""
 
     address = str(address or "").strip()
     name, parsed = parseaddr(address)
     if not parsed or "@" not in parsed or name:
         raise MailError(f"{address!r} is not an email address.")
-    old = _load()
-    data: dict = {"address": parsed}
-    imap_host, imap_port, smtp_host, smtp_port = servers_for(parsed)
+    accounts = _raw_accounts()
+    old = next((a for a in accounts if _same(a["address"], parsed)), None)
+    # Changed, it keeps the address as it was first written.
+    data: dict = {"address": old["address"] if old else parsed}
     if str(imap or "").strip():
         imap_host, imap_port = _server(imap, 993)
         data.update(imap_host=imap_host, imap_port=imap_port)
@@ -165,40 +223,56 @@ def save(
         smtp_host, smtp_port = _server(smtp, 465)
         data.update(smtp_host=smtp_host, smtp_port=smtp_port)
     if password is None:
-        if old.get("address") == parsed:
-            data["password"] = old.get("password", "")
+        data["password"] = (old or {}).get("password", "")
     else:
         # App passwords are shown in groups ("abcd efgh ijkl mnop") and
         # used without the spaces.
         data["password"] = "".join(str(password).split())
-    path = _path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    # Made readable by its owner only before the password goes in.
-    path.touch(mode=0o600, exist_ok=True)
-    os.chmod(path, 0o600)
-    path.write_text(json.dumps(data, indent=1), encoding="utf-8")
+    if old is not None:
+        accounts[accounts.index(old)] = data
+    else:
+        accounts.append(data)
+    _write(accounts)
     return settings()
 
 
-def forget() -> None:
-    """Disconnect: the address and password go."""
+def forget(address: str = "") -> None:
+    """Disconnect ADDRESS: its password goes. With none, every one."""
 
-    _path().unlink(missing_ok=True)
+    if not str(address or "").strip():
+        _path().unlink(missing_ok=True)
+        return
+    accounts = _raw_accounts()
+    kept = [a for a in accounts if not _same(a["address"], address)]
+    if len(kept) == len(accounts):
+        raise MailError(f"{address} is not connected.")
+    _write(kept)
 
 
-def _account() -> dict:
-    data = _load()
-    if not (data.get("address") and data.get("password")):
+def _account(address: str = "") -> dict:
+    """The account to use: ADDRESS, or with none, the first one."""
+
+    found = [a for a in _raw_accounts() if a.get("password")]
+    if not found:
         raise MailError(NOT_SET_UP)
-    imap_host, imap_port, smtp_host, smtp_port = servers_for(data["address"])
-    return {
-        "address": data["address"],
-        "password": data["password"],
-        "imap_host": data.get("imap_host") or imap_host,
-        "imap_port": int(data.get("imap_port") or imap_port),
-        "smtp_host": data.get("smtp_host") or smtp_host,
-        "smtp_port": int(data.get("smtp_port") or smtp_port),
-    }
+    if not str(address or "").strip():
+        return _full(found[0])
+    for raw in found:
+        if _same(raw["address"], str(address)):
+            return _full(raw)
+    raise MailError(
+        f"{address} is not one of the connected email accounts: "
+        f"{', '.join(a['address'] for a in found)}."
+    )
+
+
+def _accounts() -> list[dict]:
+    """Every connected account, filled in."""
+
+    found = [_full(a) for a in _raw_accounts() if a.get("password")]
+    if not found:
+        raise MailError(NOT_SET_UP)
+    return found
 
 
 # --- Links ---------------------------------------------------------------
@@ -219,7 +293,8 @@ def link(message_id: str, account: Optional[dict] = None) -> str:
     found = message_id.strip().strip("<>").strip()
     if not found:
         return ""
-    account = account if account is not None else _load()
+    if account is None:
+        account = _full((_raw_accounts() or [{}])[0])
     host = str(account.get("imap_host") or servers_for(
         str(account.get("address") or ""))[0])
     if host in GMAIL_HOSTS:
@@ -366,6 +441,16 @@ def _header(message, name: str) -> str:
     return " ".join(str(message.get(name, "") or "").split())
 
 
+def _when(message) -> float:
+    """When MESSAGE was sent, as a timestamp; 0 when it does not say."""
+
+    try:
+        when = email.utils.parsedate_to_datetime(message.get("Date", ""))
+    except (TypeError, ValueError, IndexError):
+        return 0.0
+    return when.timestamp() if when is not None else 0.0
+
+
 def _date(message) -> str:
     try:
         when = email.utils.parsedate_to_datetime(message.get("Date", ""))
@@ -402,13 +487,42 @@ def _fetched(data: list) -> list[tuple[bytes, bytes, bytes]]:
 
 def inbox(
     unread: bool = False, query: str = "", limit: int = LIST_LIMIT,
-    folder: str = "INBOX",
+    folder: str = "INBOX", account: str = "",
+    problems: Optional[list] = None,
 ) -> list[dict]:
     """The newest messages in FOLDER, newest first: only UNREAD ones, or
-    ones matching QUERY, if asked. Nothing is marked read."""
+    ones matching QUERY, if asked. Nothing is marked read.
 
-    account = _account()
+    From ACCOUNT, by its address, or with none from every account, each
+    message saying which it is in. An account that cannot be read then
+    goes in PROBLEMS, as (address, why), rather than costing the rest;
+    when none can be, the first one's MailError is raised.
+    """
+
     limit = max(1, min(int(limit or LIST_LIMIT), MAX_LIST))
+    if str(account or "").strip():
+        return _inbox(_account(account), unread, query, limit, folder)
+    found: list[dict] = []
+    failed: list[tuple[str, MailError]] = []
+    every = _accounts()
+    for one in every:
+        try:
+            found += _inbox(one, unread, query, limit, folder)
+        except MailError as exc:
+            failed.append((one["address"], exc))
+    if failed and len(failed) == len(every):
+        raise failed[0][1]
+    if problems is not None:
+        problems.extend((who, str(why)) for who, why in failed)
+    found.sort(key=lambda m: m["at"], reverse=True)
+    return found[:limit]
+
+
+def _inbox(
+    account: dict, unread: bool, query: str, limit: int, folder: str,
+) -> list[dict]:
+    """inbox(), from ACCOUNT alone."""
+
     box = _imap(account)
     try:
         _select(box, folder)
@@ -439,19 +553,26 @@ def inbox(
             "snippet": " ".join(text.split())[:SNIPPET_CHARS],
             "attachments": len(attached),
             "link": link(_header(message, "Message-ID"), account),
+            "account": account["address"],
+            "at": _when(message),
         })
-    found.sort(key=lambda m: int(m["uid"] or 0), reverse=True)
+    found.sort(key=lambda m: (m["at"], int(m["uid"] or 0)), reverse=True)
     return found
 
 
-def read(uid: str, folder: str = "INBOX") -> dict:
-    """The whole of message UID: its headers, its text, and the names of
-    its attachments. It stays unread if it was."""
+def read(uid: str, folder: str = "INBOX", account: str = "") -> dict:
+    """The whole of message UID in ACCOUNT: its headers, its text, and
+    the names of its attachments. It stays unread if it was.
+
+    A uid is only one account's, so with more than one connected, ACCOUNT
+    has to say which.
+    """
 
     uid = str(uid or "").strip()
     if not uid.isdigit():
         raise MailError(f"{uid!r} is not a message's uid.")
-    account = _account()
+    _one_account_or(account)
+    account = _account(account)
     box = _imap(account)
     try:
         _select(box, folder)
@@ -480,13 +601,29 @@ def read(uid: str, folder: str = "INBOX") -> dict:
         "unread": b"\\Seen" not in flags,
         "body": text,
         "attachments": attached,
+        "account": account["address"],
     }
 
 
-def test() -> str:
-    """Log in and look: how many messages wait, or a MailError."""
+def _one_account_or(account: str) -> None:
+    """Refuse a message's uid without its account, when there are
+    several: the same uid is a different message in each."""
 
-    account = _account()
+    if str(account or "").strip():
+        return
+    connected = addresses()
+    if len(connected) > 1:
+        raise MailError(
+            "Say which account the message is in: one of "
+            f"{', '.join(connected)}."
+        )
+
+
+def test(address: str = "") -> str:
+    """Log in to ADDRESS, or the first account, and look: how many
+    messages wait, or a MailError."""
+
+    account = _account(address)
     box = _imap(account)
     try:
         _select(box, "INBOX")
@@ -511,13 +648,14 @@ def _addresses(text: str) -> list[str]:
 
 def compose(
     to: str = "", subject: str = "", body: str = "",
-    reply_to: Optional[dict] = None, cc: str = "",
+    reply_to: Optional[dict] = None, cc: str = "", account: str = "",
 ) -> EmailMessage:
-    """The message as it would be sent. REPLY_TO is the message read()
-    gave for the one being answered: it threads the reply, and fills in
-    who it goes to and its subject when they are left out."""
+    """The message as it would be sent, from ACCOUNT, or the first one.
+    REPLY_TO is the message read() gave for the one being answered: it
+    threads the reply, is sent from the account it came to, and fills
+    in who it goes to and its subject when they are left out."""
 
-    account = _account()
+    account = _account(account or (reply_to or {}).get("account", ""))
     message = EmailMessage()
     message["From"] = account["address"]
     if reply_to:
@@ -548,9 +686,10 @@ def compose(
 
 
 def send(message: EmailMessage) -> str:
-    """Send MESSAGE, as compose() made it. Who it went to."""
+    """Send MESSAGE, as compose() made it, through the account it is
+    from. Who it went to."""
 
-    account = _account()
+    account = _account(str(message["From"] or ""))
     port = account["smtp_port"]
     context = ssl.create_default_context()
     try:

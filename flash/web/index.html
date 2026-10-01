@@ -923,6 +923,12 @@ body.page-projects #dock, body.page-settings #dock, body.page-tool #dock { displ
 .email-card .said.bad { color: var(--del); }
 .email-buttons, .email-form .buttons { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
 .email-buttons .primary { margin-left: auto; }
+.email-list { display: flex; flex-direction: column; gap: 10px; }
+.email-card .what { flex: 1; }
+.email-actions { display: flex; flex-wrap: wrap; gap: 6px; flex: none; align-self: center; }
+.email-form-title { font-size: 14px; font-weight: 600; margin: 0 0 12px; }
+.field input[readonly] { color: var(--text-3); }
+@media (max-width: 640px) { .email-card { flex-wrap: wrap; } .email-actions { width: 100%; padding-left: 50px; } }
 .email-form { max-width: 460px; }
 .other-keeper { display: flex; align-items: center; gap: 12px; padding: 12px 14px; margin: 0 0 16px; border-radius: var(--radius); border: 1px solid color-mix(in srgb, var(--warn) 45%, transparent); background: color-mix(in srgb, var(--warn) 9%, transparent); font-size: 13.5px; }
 .other-keeper .ico { color: var(--warn); display: grid; flex: none; }
@@ -5859,59 +5865,79 @@ async function drawEmail(body) {
   let e;
   try { e = (await command("email")).email; } catch (error) { showFailure(error); return; }
   if (!body.isConnected) return;
-  body.innerHTML = `<h2 class="settings-section">Email</h2><p class="settings-sub">Connect your email, and Flash and your sparks can look through your inbox, read what matters, and send email you approve first, every time. Looking never marks anything read, moves it, or deletes it.</p><div class="email-body"></div>`;
-  const host = body.querySelector(".email-body");
-  if (e.configured) drawEmailConnected(host, e); else drawEmailForm(host, e);
+  body.innerHTML = `<h2 class="settings-section">Email</h2><p class="settings-sub">Connect your email accounts, as many as you use, and Flash and your sparks can look through your inboxes, read what matters, and send email you approve first, every time. Looking never marks anything read, moves it, or deletes it.</p><div class="email-body"></div>`;
+  drawEmailAccounts(body.querySelector(".email-body"), e);
 }
 
-function drawEmailConnected(host, e) {
-  host.innerHTML = `<div class="email-card"><span class="email-icon">${icon("mail")}</span><span class="what"><b></b><span class="servers"></span><span class="said"></span></span></div><div class="buttons email-buttons"></div>`;
-  host.querySelector("b").textContent = e.address;
-  host.querySelector(".servers").textContent = `IMAP ${e.imap} · SMTP ${e.smtp}`;
-  const said = host.querySelector(".said");
-  const buttons = host.querySelector(".email-buttons");
-  const test = el("button", "btn", "Test");
+// Every account, a card each, with its own test, change and disconnect;
+// with none, the form to connect the first.
+function drawEmailAccounts(host, e) {
+  if (!e.accounts.length) { drawEmailForm(host, null, e); return; }
+  host.innerHTML = `<div class="email-list"></div><div class="buttons email-buttons"></div>`;
+  const list = host.querySelector(".email-list");
+  for (const account of e.accounts) list.appendChild(emailCard(host, account, e));
+  const add = el("button", "btn with-icon", `${icon("plus")}<span>Add another email</span>`);
+  add.type = "button";
+  add.onclick = () => drawEmailForm(host, null, e);
+  const inbox = el("button", "btn primary with-icon", `${icon("plus")}<span>Inbox spark</span>`);
+  inbox.type = "button";
+  inbox.dataset.tip = "A spark that sorts your email every 30 minutes, across every account, says what needs you, and drafts replies for you to approve";
+  inbox.onclick = () => { showPage("sparks"); sparkForm(null, "", "Inbox"); };
+  host.querySelector(".email-buttons").append(add, inbox);
+}
+
+function emailCard(host, account, e) {
+  const card = el("div", "email-card", `<span class="email-icon">${icon("mail")}</span><span class="what"><b></b><span class="servers"></span><span class="said"></span></span><span class="email-actions"></span>`);
+  card.querySelector("b").textContent = account.address;
+  card.querySelector(".servers").textContent = `IMAP ${account.imap} · SMTP ${account.smtp}`;
+  const said = card.querySelector(".said");
+  const test = el("button", "btn small", "Test");
   test.type = "button";
   test.onclick = async () => {
     test.disabled = true;
     said.className = "said";
     said.textContent = "Connecting…";
-    try { said.textContent = (await command("email-test")).said; said.classList.add("good"); }
+    try { said.textContent = (await command("email-test", "", null, { address: account.address })).said; said.classList.add("good"); }
     catch (error) { said.textContent = error.message; said.classList.add("bad"); }
     test.disabled = false;
   };
-  const change = el("button", "btn", "Change");
+  const change = el("button", "btn small", "Change");
   change.type = "button";
-  change.onclick = () => drawEmailForm(host, e);
-  const inbox = el("button", "btn primary with-icon", `${icon("plus")}<span>Inbox spark</span>`);
-  inbox.type = "button";
-  inbox.dataset.tip = "A spark that sorts your email every 30 minutes, says what needs you, and drafts replies for you to approve";
-  inbox.onclick = () => { showPage("sparks"); sparkForm(null, "", "Inbox"); };
-  const off = el("button", "btn danger", "Disconnect");
+  change.onclick = () => drawEmailForm(host, account, e);
+  const off = el("button", "btn small danger", "Disconnect");
   off.type = "button";
   off.onclick = async () => {
-    try { const r = await command("email-forget"); drawEmailForm(host, r.email); toast("Email disconnected"); }
-    catch (error) { showFailure(error); }
+    try {
+      const r = await command("email-forget", "", null, { address: account.address });
+      toast(`${account.address} disconnected`);
+      drawEmailAccounts(host, r.email);
+    } catch (error) { showFailure(error); }
   };
-  buttons.append(test, change, off, inbox);
-  test.onclick();
+  card.querySelector(".email-actions").append(test, change, off);
+  if (account.has_password) test.onclick();
+  else { said.textContent = "No password saved: Change adds one."; said.classList.add("bad"); }
+  return card;
 }
 
-function drawEmailForm(host, e) {
+// Connecting an account, or with ACCOUNT, changing that one. E is every
+// account, for Cancel to go back to.
+function drawEmailForm(host, account, e) {
+  const saved = !!(account && account.has_password);
   host.innerHTML = `<form class="email-form" autocomplete="off">
-    <label class="field"><span>Email address</span><input name="address" type="email" placeholder="you@gmail.com" required></label>
-    <label class="field"><span>App password</span><input name="password" type="password" class="mono" placeholder="${e.has_password ? "Saved: leave blank to keep it" : "xxxx xxxx xxxx xxxx"}"${e.has_password ? "" : " required"}><small class="pw-help">An app password from your account's security settings, never your account's own. Kept in <code>~/.flash/email.json</code>, readable only by you.</small></label>
+    <h3 class="email-form-title">${account ? "Change this account" : e.accounts.length ? "Add another email" : "Connect your email"}</h3>
+    <label class="field"><span>Email address</span><input name="address" type="email" placeholder="you@gmail.com" required${account ? " readonly" : ""}></label>
+    <label class="field"><span>App password</span><input name="password" type="password" class="mono" placeholder="${saved ? "Saved: leave blank to keep it" : "xxxx xxxx xxxx xxxx"}"${saved ? "" : " required"}><small class="pw-help">An app password from your account's security settings, never your account's own. Kept in <code>~/.flash/email.json</code>, readable only by you.</small></label>
     <details class="email-servers"><summary>Servers</summary>
       <label class="field"><span>IMAP (reading)</span><input name="imap" class="mono" placeholder="imap.gmail.com:993"></label>
       <label class="field"><span>SMTP (sending)</span><input name="smtp" class="mono" placeholder="smtp.gmail.com:465"><small>Filled in for Gmail, Outlook, iCloud, Yahoo, AOL, Fastmail and Zoho. Port 465 is SSL; any other uses STARTTLS.</small></label>
     </details>
     <div class="form-error"></div>
-    <div class="buttons"><button type="submit" class="btn primary">Connect</button></div>
+    <div class="buttons">${e.accounts.length ? `<button type="button" class="btn" data-cancel>Cancel</button>` : ""}<button type="submit" class="btn primary">${account ? "Save" : "Connect"}</button></div>
   </form>`;
   const form = host.querySelector("form");
   const error = form.querySelector(".form-error");
-  form.address.value = e.address || "";
-  if (e.address) { form.imap.value = e.imap; form.smtp.value = e.smtp; }
+  form.querySelector("[data-cancel]")?.addEventListener("click", () => drawEmailAccounts(host, e));
+  if (account) { form.address.value = account.address; form.imap.value = account.imap; form.smtp.value = account.smtp; }
   const helpFor = { "gmail.com": "https://myaccount.google.com/apppasswords", "googlemail.com": "https://myaccount.google.com/apppasswords", "icloud.com": "https://account.apple.com/account/manage", "me.com": "https://account.apple.com/account/manage", "yahoo.com": "https://login.yahoo.com/account/security", "fastmail.com": "https://app.fastmail.com/settings/security/apps" };
   const help = form.querySelector(".pw-help");
   const plain = help.innerHTML;
@@ -5936,14 +5962,16 @@ function drawEmailForm(host, e) {
     try {
       const r = await command("email-save", "", null, { address: form.address.value, password: form.password.value, imap: form.imap.value, smtp: form.smtp.value });
       toast(r.said);
-      drawEmailConnected(host, r.email);
+      drawEmailAccounts(host, r.email);
     } catch (err) {
       error.textContent = err.message;
       submit.disabled = false;
-      submit.textContent = "Connect";
+      submit.textContent = account ? "Save" : "Connect";
+      // Kept even so, to fix with Change: say so when the list shows.
+      try { e = (await command("email")).email; } catch (_) { /* as it was */ }
     }
   };
-  if (!e.address) form.address.focus();
+  if (account) form.password.focus(); else form.address.focus();
 }
 
 async function drawMemory(body) {

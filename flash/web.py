@@ -2715,18 +2715,21 @@ def _email_command(name: str, body: dict) -> dict:
     try:
         if name == "email":
             return {"email": mail.settings()}
+        address = str(body.get("address") or body.get("arg") or "").strip()
         if name == "email-save":
-            # A blank password keeps the one already saved.
+            # A blank password keeps the one already saved for it.
             password = str(body.get("password") or "")
             mail.save(
-                str(body.get("address") or ""), password or None,
+                address, password or None,
                 str(body.get("imap") or ""), str(body.get("smtp") or ""),
             )
-            return {"email": mail.settings(), "said": mail.test()}
+            return {"email": mail.settings(), "said": mail.test(address)}
         if name == "email-test":
-            return {"email": mail.settings(), "said": mail.test()}
+            return {"email": mail.settings(), "said": mail.test(address)}
         if name == "email-forget":
-            mail.forget()
+            if not address:
+                raise ValueError("Say which address to disconnect.")
+            mail.forget(address)
             return {"email": mail.settings()}
     except mail.MailError as exc:
         raise ValueError(str(exc)) from None
