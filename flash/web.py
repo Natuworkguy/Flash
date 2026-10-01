@@ -58,12 +58,14 @@ from . import (
     memory,
     skills,
     sparks,
+    systemone,
     updater,
     voice,
     workspace,
 )
 from .dashes import DashGuard
 from .emojis import EMOJIS
+from .models import is_installed
 from .sysprompt import model_sees_images
 from .theme import (
     ACCENT,
@@ -1742,6 +1744,9 @@ def _respond(
     # Who is answering, for the page to put a name on what streams in.
     session.emit(chat, {"type": "speaker", "spark": spark.id if spark else ""})
 
+    # What System One holds this turn's tool calls up against.
+    systemone.set_request(text)
+
     with capture_tool_output(_sink(session, chat)), \
             answer_from(session.answerer(chat)):
         ai._fit_and_compact(ai.console, client, chat.messages)
@@ -2031,6 +2036,7 @@ def status(ai) -> dict:
         "host_url": workspace.listed_url(host),
         "host_name": named,
         "auto": bool(ai.Config.no_command_confirmation),
+        "system_one": bool(ai.Config.system_one),
         "compact": bool(ai.Config.auto_compact),
         "voice_style": voice.voice_style(),
         # The scene actually in effect: a name that no longer finds one,
@@ -2097,6 +2103,50 @@ def list_models(ai) -> Optional[list[str]]:
         str(getattr(m, "model", "") or "") for m in models
         if getattr(m, "model", "")
     )
+
+
+def system_one_ready(ai, name: str) -> None:
+    """Raise ValueError saying why the server cannot run System One on
+    NAME: an Ollama older than 0.35, one that does not answer, or NAME
+    not downloaded."""
+
+    try:
+        systemone.check(ai.Config.host)
+    except systemone.SystemOneError as exc:
+        raise ValueError(str(exc)) from None
+    if not name:
+        raise ValueError("Pick a System One model.")
+    # It answered its version just now, so this is not a long wait.
+    if is_installed(ollama.Client(host=ai.Config.host), name) is False:
+        raise ValueError(
+            f"{name} is not on this Ollama. Download it with `ollama pull "
+            f"{name}`, then try again."
+        )
+
+
+def system_one_state(ai) -> dict:
+    """System One's settings, and the server's version, for Settings."""
+
+    state: dict[str, Any] = {
+        "on": systemone.enabled(),
+        "model": systemone.model(),
+        "auto": bool(ai.Config.no_command_confirmation),
+        "known": [
+            {"name": n, "note": note} for n, note in systemone.KNOWN_MODELS
+        ],
+        "least": systemone.MIN_VERSION_TEXT,
+        "counts": systemone.counts(),
+        "version": "",
+        "problem": "",
+        "too_old": False,
+    }
+    try:
+        state["version"] = systemone.check(ai.Config.host)
+    except systemone.TooOld as exc:
+        state.update(version=exc.version, problem=str(exc), too_old=True)
+    except systemone.SystemOneError as exc:
+        state["problem"] = str(exc)
+    return state
 
 
 def scene_data(name: str) -> Optional[dict]:
@@ -2571,6 +2621,29 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
         ai.set_config_var("NO_COMMAND_CONFIRMATION", "1" if on else "0")
         session.hub.publish({"type": "status"})
         return {"auto": on}
+
+    if name == "system-one":
+        # No arg: only what it is, for Settings. "on" checks the server
+        # first, and "model" picks which model answers.
+        if arg in ("on", "1", "true"):
+            system_one_ready(ai, systemone.model())
+            systemone.set_enabled(True)
+        elif arg in ("off", "0", "false"):
+            systemone.set_enabled(False)
+        elif arg == "model":
+            pick = str(body.get("model") or "").strip()
+            if systemone.enabled():
+                system_one_ready(ai, pick)
+            try:
+                systemone.set_model(pick)
+            except systemone.SystemOneError as exc:
+                raise ValueError(str(exc)) from None
+        elif arg:
+            raise ValueError(f"Unknown System One setting {arg!r}.")
+        if arg:
+            ai.Config.refresh()
+            session.hub.publish({"type": "status"})
+        return system_one_state(ai)
 
     if name == "model":
         if arg:

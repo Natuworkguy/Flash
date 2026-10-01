@@ -27,6 +27,7 @@ FLASH (**F**ast **L**ocal **A**gent **SH**ell) CLI is an AI-powered command-line
 - **Async Sub-agents**: The AI can spawn background sub-agents with the `agent` tool to work on independent pieces of a task at the same time, then collect each one's answer with `agent_result` once it's needed.
 - **Teach by Showing**: In the web UI, + > Record your screen (or Record and narrate) records you doing something, then attaches the recording to your message. While it records, the page catches a still each time the screen changes and settles; narrated, it keeps what you say over each step too (written down by voice mode's listening model, when that is set up). Flash sees the stills in order with your words, works out the procedure, and saves it as a skill, so next time you can just ask. Recordings run up to four minutes and play back in the chat.
 - **Sparks**: Agents that don't stop when the chat does. Give a spark a name, a standing goal, how often to work, and the lines it must not cross ("every morning, check my repo for new issues and tell me which look like bugs; never comment on anything"), and it works on it, even with Flash closed if you turn on `/sparks always on`, keeps its own notes between shifts, and files a report when there is something to say. Chat with one to ask what it has found, change its goal, or tell it what to do differently, and every later shift remembers. In the web UI your sparks sit in the sidebar as a team, each with its face, name and job title and what it is doing right now, glowing purple while it works (the chevron beside Sparks folds the list away, and it stays folded); one that needs your approval says so there, and in a chat with it the approval card waits above the box. Each one is a flat circle in its own colour with two oval eyes, and nothing else; what it is doing shows in how it moves: it floats, blinks and glances about while it waits, squints happily when you hover it, bounces with its eyes darting while it works, shuts its eyes and drifts off in z's while paused, tilts its head at a "?" when it needs your approval, and droops its eyes after a failed shift. Pet it and it pops out hearts (five quick pets for heart eyes), a new one pops into being, and one with news jumps for joy. Left to themselves they have lives of their own: they blink when they like (now and then twice), glance about, watch your pointer when it comes near and look right at you when it is on them, and every so often hop, wiggle, roll over, yawn, peek to one side, hum a little ♪ or spot a sparkle; a hop can set the one beside it off too. One waiting on you tries to catch your eye, one whose shift failed sighs, and a sleeping one stirs. With nobody about for a while the idle ones doze off, and they wake with a little start when you come back. None of it runs if your system asks for reduced motion.
+- **System One**: In autonomous mode, a small, quick model ([Ollama v0.35+](https://ollama.com/download)) looks over each command and edit before it runs and stops the ones that look unsafe or off task, and the model can ask it quick yes/no, choice, and score questions for a second opinion. Pick the model with `/systemone model` or in the web UI's Settings.
 - **Context Management**: Automatic history trimming to stay within token limits.
 - **Markdown Support**: Rich formatting for AI responses in the terminal.
 
@@ -146,6 +147,10 @@ python run.py
 - `/help` or `/?`: Display the help message.
 - `/model`: Pick from the models on this machine, or type a name to
   download one. `/model <name>` switches straight to one.
+- `/auto [on|off]`: Toggle autonomous mode: commands and edits run
+  without asking first.
+- `/systemone [on|off|model [name]]`: Show, switch, or pick the model for
+  [System One](#system-one), which reviews autonomous commands.
 - `/skills [show|remove <name>]`: List, read, or delete what Flash has
   learned.
 - `/plan`: Show the checklist the model is working through.
@@ -286,6 +291,46 @@ Sub-agents keep running after a reply, and `/agents` watches all of them
 update in place (Ctrl+C goes back to the prompt). They cannot talk to you,
 so they get no tool that asks first: `shell` and `write` are only theirs
 in autonomous mode (`/auto on`).
+
+### System One
+
+Autonomous mode means nobody says yes or no to a command before it runs.
+System One puts someone back in that seat: a small, quick model, served
+by Ollama's System One endpoint (`POST /v1/systemone`, new in Ollama
+v0.35), that judges in a moment what a big model would take a whole turn
+to.
+
+```bash
+ollama pull nimble   # or tev1, or tev1:0.8b for the lightest
+```
+
+Then `/systemone on` in the terminal, or Settings > General > System One
+in the web UI. Either one checks the server's version first. An Ollama
+older than v0.35 has no System One, so Flash says so and leaves it off
+until you update Ollama. It does nothing outside autonomous mode, where
+you answer each command yourself.
+
+With it on and autonomous mode on, it does two things:
+
+- **Reviews tool calls.** Each call that would have asked you first
+  (`shell`, `write`, `edit`, `multi_edit`, making a spark, and extension
+  tools that ask) is checked before it runs: is it safe to run unchecked,
+  and does it serve what you asked for? One that fails either question is
+  not run. The model is told why, and takes a safer way or asks you.
+  Sub-agents and spark shifts are reviewed the same way, against their
+  task or goal. If System One cannot answer (the server is down, the
+  model is not pulled), the call is not run, rather than slipping through
+  unreviewed.
+- **Answers questions.** The model gets an `ask_system_one` tool for a
+  quick second opinion: a yes/no ("does this output show every test
+  passing?"), a choice between options, or a score on a scale, each
+  answered with probabilities.
+
+`/systemone model <name>` (or the menu in Settings) picks the model:
+`nimble` (9B) judges most carefully, `tev1` (4B) is quicker, and
+`tev1:0.8b` is the lightest. `/systemone` shows how many calls it has
+reviewed and stopped this session, and the status bar reads `auto + S1`
+while it is at work.
 
 ### Sparks
 
