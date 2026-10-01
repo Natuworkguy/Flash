@@ -2285,6 +2285,20 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
             "always": keepalive.status(),
         }
 
+    if name == "spark-rounds":
+        # No arg: only what it is, for the box in Settings.
+        try:
+            rounds = (
+                sparks.set_shift_rounds(arg) if arg else sparks.shift_rounds()
+            )
+        except sparks.SparkError as exc:
+            raise ValueError(str(exc)) from None
+        return {
+            "rounds": rounds, "least": sparks.SHIFT_ROUNDS_MIN,
+            "most": sparks.SHIFT_ROUNDS_MAX,
+            "default": sparks.SHIFT_ROUNDS_DEFAULT,
+        }
+
     if name == "sparks-always":
         # No arg: only how it stands, for the switch in Settings.
         if arg not in ("", "on", "off"):

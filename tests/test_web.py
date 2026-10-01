@@ -3680,3 +3680,15 @@ def test_two_saves_of_one_chat_at_once_both_land():
     assert [c["id"] for c in workspace.load_chats()] == [chat.id]
     folder = workspace.store() / "chats"
     assert not list(folder.glob("*.partial")) + list(folder.glob(".*.partial"))
+
+
+def test_the_page_reads_and_sets_the_rounds_a_shift_gets():
+    session = web.Session()
+
+    now = web.command(session, {"name": "spark-rounds"})
+    changed = web.command(session, {"name": "spark-rounds", "arg": "20"})
+
+    assert now["rounds"] == now["default"] == 12
+    assert changed["rounds"] == 20
+    with pytest.raises(ValueError):
+        web.command(session, {"name": "spark-rounds", "arg": "500"})
