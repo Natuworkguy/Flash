@@ -933,6 +933,13 @@ body.page-projects #dock, body.page-settings #dock, body.page-tool #dock { displ
 .setting-row { display: flex; align-items: center; justify-content: space-between; gap: 20px; max-width: 620px; padding: 14px 16px; border: 1px solid var(--border); border-radius: 14px; background: var(--surface); text-align: left; width: 100%; }
 /* Two in a row under one heading: apart, not touching. */
 .setting-row + .setting-row { margin-top: 10px; }
+.soul-box { max-width: 620px; border: 1px solid var(--border); border-radius: 14px; background: var(--surface); padding: 12px; }
+.soul-box textarea { width: 100%; min-height: 140px; resize: vertical; border: 0; outline: 0; background: transparent; color: var(--text); font: 14px/1.55 var(--sans); }
+.soul-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 6px; }
+.soul-count { font-size: 12px; color: var(--text-3); font-variant-numeric: tabular-nums; }
+.soul-count.over { color: var(--del); }
+.heartbeat-box { margin-top: 10px; }
+.heartbeat-box textarea { min-height: 110px; font: 13px/1.55 var(--mono); }
 .setting-row[hidden] { display: none; }
 .setting-row .what b { display: block; font-size: 14.5px; font-weight: 500; color: var(--text); margin-bottom: 3px; }
 .setting-row .what span { font-size: 13px; color: var(--text-3); line-height: 1.45; }
@@ -3923,6 +3930,10 @@ function drawGeneral(body) {
   body.insertAdjacentHTML("beforeend", `<h2 class="settings-section settings-gap">Background</h2><p class="settings-sub">A pixel-art scene behind a new chat, the same ones <code>/background</code> shows in the terminal. Add your own as <code>.scene</code> files in <code>~/.flash/backgrounds</code>.</p><div class="scene-grid" role="radiogroup" aria-label="Background"></div>`);
   drawSceneCards(body.querySelector(".scene-grid"));
 
+  // Who Flash is, in the user's words: OpenClaw's SOUL.md.
+  body.insertAdjacentHTML("beforeend", `<h2 class="settings-section settings-gap">Soul</h2><p class="settings-sub">Who Flash is, in your words: a name, a personality, a tone, how it treats you. It goes into every conversation, here and in the terminal. Kept in <code>~/.flash/SOUL.md</code>.</p><div class="soul-box"><textarea class="soul-text" rows="7" spellcheck="true" aria-label="Flash's soul"></textarea><div class="soul-foot"><span class="soul-count"></span><button type="button" class="btn small primary" data-soul-save disabled>Save</button></div></div>`);
+  fillSoul(body.querySelector(".soul-box"));
+
   body.insertAdjacentHTML("beforeend", `<h2 class="settings-section settings-gap">Conversation</h2><p class="settings-sub">What happens when a chat outgrows the model's context window. The last three exchanges always stay word for word.</p>`);
   const row = el("button", "setting-row", `<span class="what"><b>Summarize old messages</b><span>Have the model condense what no longer fits into a summary it keeps reading. Off, the oldest messages are dropped instead, which is faster and never loses detail from the ones kept.</span></span><span class="switch" aria-hidden="true"></span>`);
   row.type = "button";
@@ -3943,6 +3954,14 @@ function drawGeneral(body) {
   always.onclick = () => setSparksAlways(always.getAttribute("aria-checked") !== "true", always);
   body.appendChild(always);
   fillAlwaysRow(always);
+
+  // The heartbeat: OpenClaw's HEARTBEAT.md, as a spark.
+  const beat = el("button", "setting-row heartbeat-row", `<span class="what"><b>Heartbeat</b><span>Every half hour, Flash works through the checklist below and only speaks up when something on it needs you.</span></span><span class="switch" aria-hidden="true"></span>`);
+  beat.type = "button";
+  beat.setAttribute("role", "switch");
+  body.appendChild(beat);
+  const checklist = body.appendChild(el("div", "soul-box heartbeat-box", `<textarea rows="6" spellcheck="true" aria-label="Heartbeat checklist"></textarea><div class="soul-foot"><span class="soul-count"></span><button type="button" class="btn small primary" disabled>Save checklist</button></div>`));
+  fillHeartbeat(beat, checklist);
 
   // How far a shift may go before it writes its report, if at all.
   const limit = el("button", "setting-row spark-limit-row", `<span class="what"><b>Limit tool rounds per shift</b><span></span></span><span class="switch" aria-hidden="true"></span>`);
@@ -4466,6 +4485,70 @@ async function drawSparks(body, again = false) {
   where.appendChild(change);
 }
 const drawSparksPage = () => toolPage("Sparks", drawSparks);
+
+// The heartbeat in Settings: on or off, and its checklist to edit.
+async function fillHeartbeat(row, box) {
+  const field = box.querySelector("textarea");
+  const save = box.querySelector("button");
+  const note = box.querySelector(".soul-count");
+  let r;
+  try { r = await command("heartbeat", "", null); } catch (error) { showFailure(error); return; }
+  let saved = r.text;
+  const show = () => {
+    row.setAttribute("aria-checked", r.on);
+    note.textContent = r.path.replace(/^.*[\\/](\.flash[\\/])/, "~/$1");
+    save.disabled = field.value.trim() === saved.trim();
+  };
+  field.value = r.text;
+  field.placeholder = r.starter;
+  field.addEventListener("input", show);
+  row.onclick = async () => {
+    const on = !r.on;
+    try {
+      r = await command("heartbeat", on ? "on" : "off", null);
+      if (on && !saved) { saved = r.text; field.value = r.text; }
+      toast(r.on ? "Heartbeat on: Flash checks in every half hour" : "Heartbeat off");
+      sparksChanged();
+    } catch (error) { showFailure(error); }
+    show();
+  };
+  save.onclick = async () => {
+    save.disabled = true;
+    try { r = await command("heartbeat", "", null, { text: field.value }); saved = r.text; toast("Checklist saved"); }
+    catch (error) { showFailure(error); }
+    show();
+  };
+  show();
+}
+
+// Flash's soul, in Settings: written, counted against its limit, saved.
+async function fillSoul(box) {
+  const field = box.querySelector("textarea");
+  const save = box.querySelector("[data-soul-save]");
+  const count = box.querySelector(".soul-count");
+  let r;
+  try { r = await command("soul", "", null); } catch (error) { showFailure(error); return; }
+  let saved = r.text;
+  field.value = r.text;
+  field.placeholder = "Your name is Ember. You're warm, a little playful, and straight with me. You call me Nathan. Keep it short unless I ask for more.";
+  const show = () => {
+    const n = field.value.trim().length;
+    count.textContent = `${n.toLocaleString()} of ${r.limit.toLocaleString()} characters`;
+    count.classList.toggle("over", n > r.limit);
+    save.disabled = field.value.trim() === saved.trim() || n > r.limit;
+  };
+  field.addEventListener("input", show);
+  save.onclick = async () => {
+    save.disabled = true;
+    try {
+      r = await command("soul", "", null, { text: field.value });
+      saved = r.text;
+      toast(r.active ? "Flash is who you wrote, from the next message on" : "Soul cleared: Flash is itself");
+    } catch (error) { showFailure(error); }
+    show();
+  };
+  show();
+}
 
 // The box in Settings for how many rounds of tools a shift gets: typed,
 // or stepped, and saved a moment after the last change.

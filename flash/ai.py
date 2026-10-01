@@ -5,6 +5,7 @@ import os
 import re
 import shlex
 import shutil
+import subprocess  # nosec B404
 import sys
 import threading
 import time
@@ -2881,6 +2882,106 @@ def _voice_input() -> Optional[str]:
     return heard
 
 
+def _heartbeat_command(arg: str) -> None:
+    """Start or stop the heartbeat, edit its checklist, or show it."""
+
+    path = sparks.heartbeat_path()
+    try:
+        if arg == "on":
+            spark = sparks.set_heartbeat(True, Config.model or "")
+            console.print(Text(
+                f"The heartbeat is on: every "
+                f"{sparks.every_words(spark.every)} it works through "
+                f"{path}, and only speaks up when something needs you. "
+                "/heartbeat edit changes the checklist.", style=DIM,
+            ))
+            return
+        if arg == "off":
+            sparks.set_heartbeat(False)
+            console.print(Text("The heartbeat is off.", style=DIM))
+            return
+    except sparks.SparkError as exc:
+        warn(str(exc))
+        return
+    if arg == "edit":
+        if not path.exists():
+            sparks.write_heartbeat(sparks.HEARTBEAT_STARTER)
+        editor = os.environ.get("VISUAL") or os.environ.get("EDITOR") or (
+            "notepad" if os.name == "nt" else "nano"
+        )
+        try:
+            subprocess.call([*shlex.split(editor), str(path)])  # nosec B603
+        except OSError as exc:
+            warn(f"Could not open {editor}: {exc}. Edit {path} yourself.")
+        return
+    if arg:
+        warn("Usage: /heartbeat [on|off|edit]")
+        return
+    spark = sparks.heartbeat_spark()
+    body = Text("\nHeartbeat\n\n", style="bold")
+    body.append(
+        f"  On, every {sparks.every_words(spark.every)} · "
+        f"{_spark_state(spark)}\n" if spark else
+        "  Off. /heartbeat on starts it: every half hour Flash works "
+        "through a checklist, and only speaks up when something needs "
+        "you.\n", style=DIM,
+    )
+    checklist = sparks.read_heartbeat().strip()
+    if checklist:
+        body.append(f"\n{checklist}\n", style="")
+    body.append(f"\n  {path} · /heartbeat edit changes it\n", style=DIM)
+    console.print(body)
+
+
+def _soul_command(arg: str) -> None:
+    """Show Flash's soul, open it in an editor, or clear it."""
+
+    from . import soul  # deferred: only /soul needs it
+
+    path = soul.soul_path()
+    if arg == "clear":
+        soul.write("")
+        console.print(Text("Flash's soul is cleared: it is itself again.",
+                           style=DIM))
+        return
+    if arg == "edit":
+        if not path.exists():
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(soul.STARTER, encoding="utf-8")
+        editor = os.environ.get("VISUAL") or os.environ.get("EDITOR") or (
+            "notepad" if os.name == "nt" else "nano"
+        )
+        try:
+            subprocess.call([*shlex.split(editor), str(path)])  # nosec B603
+        except OSError as exc:
+            warn(f"Could not open {editor}: {exc}. Edit {path} yourself.")
+            return
+        if len(soul.read()) > soul.SOUL_CHARS:
+            warn(f"Your soul is over {soul.SOUL_CHARS} characters; the rest "
+                 "is left out.")
+        console.print(Text(
+            "Saved. Flash is who it says from the next message on."
+            if soul.prompt_block() else
+            "Nothing written yet, so Flash is itself.", style=DIM,
+        ))
+        return
+    if arg:
+        warn("Usage: /soul [edit|clear]")
+        return
+    written = soul._meant(soul.read())
+    if not written:
+        console.print(Text(
+            f"Flash has no soul written yet. /soul edit writes one at {path}: "
+            "a name, a personality, a tone, how it treats you.", style=DIM,
+        ))
+        return
+    body = Text("\nFlash's soul\n\n", style="bold")
+    body.append(f"{written}\n\n", style="")
+    body.append(f"  {path} · /soul edit changes it, /soul clear removes it\n",
+                style=DIM)
+    console.print(body)
+
+
 def voice_styles() -> list[str]:
     from . import voice  # deferred: voice pulls in audio on demand
 
@@ -3398,6 +3499,14 @@ def main() -> None:
                 forget_model_facts()
                 client = ollama.Client(host=Config.host)
                 console.print(Text("Config refreshed.", style=DIM))
+                continue
+
+            if uin == "/heartbeat" or uin.startswith("/heartbeat "):
+                _heartbeat_command(uin[len("/heartbeat"):].strip().lower())
+                continue
+
+            if uin == "/soul" or uin.startswith("/soul "):
+                _soul_command(uin[len("/soul"):].strip().lower())
                 continue
 
             if uin == "/memory":
