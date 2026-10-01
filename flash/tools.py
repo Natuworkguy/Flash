@@ -25,6 +25,7 @@ from typing import Any, Optional, Union
 
 from ddgs import DDGS
 from rich.live import Live
+from rich.markdown import Markdown
 from rich.text import Text
 
 from . import agent as subagents
@@ -1452,9 +1453,15 @@ def get_os() -> str:
 
 
 def reason(thought: str) -> str:
-    """Show the user a line of reasoning without ending the turn."""
+    """Show the user a line of reasoning without ending the turn, its
+    Markdown drawn: a list as a list, code as code, all of it dim."""
 
-    console.print(Text(f"\n{thought}\n", style=f"italic {DIM}"))
+    console.print()
+    console.print(Markdown(
+        str(thought or "").strip(), code_theme="monokai",
+        style=f"italic {DIM}",
+    ))
+    console.print()
     return "(noted)"
 
 

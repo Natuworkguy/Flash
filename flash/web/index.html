@@ -414,8 +414,16 @@ pre code { display: block; padding: 2px 16px 14px; overflow-x: auto; font-size: 
 .thinking .head:hover { color: var(--text-2); }
 .thinking .head svg { width: 15px; height: 15px; transition: transform 0.15s; }
 .thinking.open .head svg { transform: rotate(90deg); }
-.thinking .body { margin: 6px 0 0 7px; padding-left: 16px; border-left: 1px solid var(--border-strong); color: var(--text-3); font-size: 14px; white-space: pre-wrap; }
-.thought { color: var(--text-3); font-size: 14px; font-style: italic; white-space: pre-wrap; }
+.thinking .body { margin: 6px 0 0 7px; padding-left: 16px; border-left: 1px solid var(--border-strong); color: var(--text-3); font-size: 14px; }
+.thought { color: var(--text-3); font-size: 14px; font-style: italic; }
+/* A thought's Markdown, drawn small and quiet: the reply's typography,
+   in the thought's own size and grey. Emphasis inside the italic reads
+   upright, so it still stands out. */
+:is(.thinking .body, .thought).assistant { font-size: 14px; line-height: 1.6; color: var(--text-3); }
+:is(.thinking .body, .thought).assistant :is(p, ul, ol, pre, blockquote, table) { margin-bottom: 0.6em; }
+:is(.thinking .body, .thought).assistant :is(h1, h2, h3, h4) { font-size: 1em; margin: 0.8em 0 0.3em; color: var(--text-2); }
+:is(.thinking .body, .thought).assistant :is(strong, b, code, a) { color: var(--text-2); }
+.thought.assistant em { font-style: normal; }
 
 .ask { border: 1px solid var(--border-strong); border-radius: 16px; background: var(--surface); padding: 16px; box-shadow: var(--composer-shadow); }
 .ask .q { font-weight: 500; }
@@ -2404,7 +2412,9 @@ function settleAsk(card, value) {
 function thinkingBlock(text, live) {
   const block = el("div", "block thinking" + (live ? " open" : ""));
   block.innerHTML = `<button class="head" type="button">${icon("chevRight")}<span>${live ? "Thinking" : "Thought process"}</span></button>`;
-  slideBox(block).appendChild(el("div", "body")).textContent = text.trim();
+  // Its Markdown drawn, as a reply's is: lists, code and emphasis in a
+  // thought read as what they are.
+  slideBox(block).appendChild(el("div", "body assistant")).innerHTML = markdown(text.trim());
   return block;
 }
 
@@ -3586,8 +3596,8 @@ function drawEntry(entry, ctx) {
       break;
     }
     case "thought": {
-      const block = messagesEl.appendChild(el("div", "block thought"));
-      block.textContent = entry.text;
+      const block = messagesEl.appendChild(el("div", "block thought assistant"));
+      block.innerHTML = markdown(entry.text || "");
       block.dataset.log = ctx.index;
       break;
     }
