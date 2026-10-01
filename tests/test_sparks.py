@@ -1191,6 +1191,54 @@ def test_the_latest_report_is_rated_from_the_terminal():
     assert made.id == spark.id
 
 
+class Unreachable:
+    """A model that is not there."""
+
+    def chat(self, **kwargs):
+        raise ConnectionError("Failed to connect to Ollama.")
+
+
+def test_a_shift_that_cannot_reach_its_model_tries_again_later():
+    made = sparks.create("Scout", "Watch the issues.")
+    sparks.take_on(made.id, "Check the login page.", chat="c1")
+
+    for wait in sparks.RETRY_MINUTES:
+        before = time.time()
+        sparks.shift(made.id, client=Unreachable())
+        spark = sparks.find(made.id)
+        assert spark.reports == []
+        assert spark.status == sparks.FAILED
+        assert spark.next_run >= before + wait * 60
+        # The job it was given is still to do.
+        assert spark.inbox[0]["text"] == "Check the login page."
+
+    sparks.shift(made.id, client=Unreachable())
+    spark = sparks.find(made.id)
+    assert spark.reports[-1].failed and spark.retries == 0
+    assert "Failed to connect" in spark.reports[-1].text
+
+
+def test_a_shift_that_goes_wrong_otherwise_fails_at_once():
+    made = sparks.create("Scout", "Watch the issues.")
+
+    class Broken:
+        def chat(self, **kwargs):
+            raise ValueError("bad reply")
+
+    sparks.shift(made.id, client=Broken())
+
+    assert sparks.find(made.id).reports[-1].failed
+
+
+@pytest.mark.parametrize("error, cut_off", [
+    (ConnectionError("x"), True), (TimeoutError("x"), True),
+    (RuntimeError("Failed to connect to Ollama."), True),
+    (ValueError("bad"), False),
+])
+def test_what_counts_as_not_reaching_the_model(error, cut_off):
+    assert sparks.unreachable(error) is cut_off
+
+
 def test_a_template_makes_a_spark():
     made = sparks.add_from("repo watch")
 

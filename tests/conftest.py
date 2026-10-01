@@ -77,6 +77,14 @@ def isolated_home(tmp_path_factory, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def no_keep_awake(monkeypatch):
+    """No test holds the computer awake: that starts a real inhibitor.
+    tests/test_awake.py tries the holding with a stand-in for it."""
+
+    monkeypatch.setenv("KEEP_AWAKE", "0")
+
+
+@pytest.fixture(autouse=True)
 def no_spark_keeper(monkeypatch):
     """No test starts the thread that runs sparks' shifts.
 
