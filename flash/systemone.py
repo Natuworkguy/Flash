@@ -9,10 +9,11 @@ the call runs: one it judges unsafe, or not what the user asked for, is
 not run, and the agent is told why. With nobody there to say no, it is
 the one that can.
 
-Which model answers is the user's pick (SYSTEM_ONE_MODEL), nimble
-unless they change it. Older Ollama servers have no such endpoint, so
-switching it on checks the server's version first and says what to do
-about one that is too old.
+Which model answers is the user's pick (SYSTEM_ONE_MODEL), out of the
+models on the server that list `decision` among their capabilities, or
+none at all. Older Ollama servers have no such endpoint, so switching
+it on checks the server's version first and says what to do about one
+that is too old.
 """
 
 from __future__ import annotations
@@ -21,6 +22,7 @@ import json
 import os
 import re
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
@@ -31,20 +33,22 @@ from .paths import ENV_PATH
 
 MIN_VERSION = (0, 35)
 MIN_VERSION_TEXT = "0.35"
-DEFAULT_MODEL = "nimble"
 
-# The models trained for System One when it came out, for the pickers
-# to offer first. Any other model the server has can still be named.
-KNOWN_MODELS = (
-    ("nimble", "9B, most careful"),
-    ("tev1", "4B, quicker"),
-    ("tev1:0.8b", "0.8B, lightest"),
-)
+# What Ollama's /api/show lists among a model's capabilities when it is
+# one System One can run.
+CAPABILITY = "decision"
+
+# What to suggest when the server has none: the model Ollama's own
+# guide starts with.
+SUGGESTED_MODEL = "nimble"
 
 DOWNLOAD_URL = "https://ollama.com/download"
 
 VERSION_SECONDS = 5.0
+SHOW_SECONDS = 5.0
 ANSWER_SECONDS = 60.0
+# How many models a scan asks about at once.
+SCAN_THREADS = 4
 
 # Below this a reviewed call is not run. Each answer is the model's
 # probability of yes, so this is "more likely no than yes".
@@ -111,18 +115,20 @@ def _save(name: str, value: str) -> None:
 
 
 def enabled() -> bool:
-    """Whether the user turned System One on."""
+    """Whether the user turned System One on, with a model to ask."""
 
     try:
-        return int(_saved("SYSTEM_ONE") or 0) > 0
+        on = int(_saved("SYSTEM_ONE") or 0) > 0
     except ValueError:
-        return False
+        on = False
+    return on and bool(model())
 
 
 def model() -> str:
-    """The model System One asks, as the user picked it."""
+    """The model System One asks, as the user picked it, or "" when
+    none has been picked yet."""
 
-    return _saved("SYSTEM_ONE_MODEL") or DEFAULT_MODEL
+    return _saved("SYSTEM_ONE_MODEL") or ""
 
 
 def autonomous() -> bool:
@@ -151,9 +157,25 @@ def set_enabled(on: bool) -> None:
 def set_model(name: str) -> str:
     name = (name or "").strip()
     if not name or any(c.isspace() for c in name):
-        raise SystemOneError("Name one model, like nimble or tev1.")
+        raise SystemOneError("Name one model, without spaces.")
     _save("SYSTEM_ONE_MODEL", name)
     return name
+
+
+def is_none(name: str) -> bool:
+    """Whether NAME is the picker's None: no System One at all."""
+
+    return (name or "").strip().lower() in ("", "none", "off")
+
+
+def same_model(one: str, other: str) -> bool:
+    """Whether two names are the same model: nimble is nimble:latest."""
+
+    def tagged(name: str) -> str:
+        name = (name or "").strip()
+        return name if ":" in name.rpartition("/")[2] else f"{name}:latest"
+
+    return bool(one and other) and tagged(one) == tagged(other)
 
 
 # --- The server --------------------------------------------------------------
@@ -247,9 +269,132 @@ def forget_checks() -> None:
         _checked.clear()
 
 
+def _capabilities(host: str, name: str) -> Optional[list[str]]:
+    """What /api/show says NAME can do, or None when the server does
+    not have it."""
+
+    try:
+        response = _post(
+            f"{_base(host)}/api/show", {"model": name}, SHOW_SECONDS,
+        )
+    except httpx.HTTPError as exc:
+        raise SystemOneError(
+            f"Could not ask Ollama about {name} ({exc.__class__.__name__})."
+        ) from None
+    if response.status_code == 404:
+        return None
+    try:
+        response.raise_for_status()
+        listed = response.json().get("capabilities") or []
+    except (httpx.HTTPError, ValueError, AttributeError):
+        return []
+    return [str(c).lower() for c in listed] if isinstance(listed, list) \
+        else []
+
+
+def capable(host: str, name: str) -> Optional[bool]:
+    """Whether NAME is a System One model on HOST: None when HOST does
+    not have it at all."""
+
+    found = _capabilities(host, name)
+    return None if found is None else CAPABILITY in found
+
+
+def scan(host: str) -> list[str]:
+    """Every System One model on HOST, by name: the ones /api/show says
+    have the decision capability. Asked of the server each time, so a
+    model pulled a moment ago is in the list."""
+
+    return sorted(
+        name for name, can in catalog(host).items() if CAPABILITY in can
+    )
+
+
+def catalog(host: str) -> dict[str, list[str]]:
+    """Every model on HOST, with what /api/show says each can do."""
+
+    try:
+        response = _get(f"{_base(host)}/api/tags", VERSION_SECONDS)
+        response.raise_for_status()
+        listed = response.json().get("models") or []
+    except (httpx.HTTPError, ValueError, AttributeError) as exc:
+        raise SystemOneError(
+            f"Could not list the models on {host} "
+            f"({exc.__class__.__name__})."
+        ) from None
+
+    names = [
+        str(m.get("model") or m.get("name") or "").strip()
+        for m in listed if isinstance(m, dict)
+    ]
+    names = [n for n in dict.fromkeys(names) if n]
+
+    def can(name: str) -> list[str]:
+        try:
+            return _capabilities(host, name) or []
+        except SystemOneError:
+            return []
+
+    if not names:
+        return {}
+    with ThreadPoolExecutor(min(SCAN_THREADS, len(names))) as pool:
+        return dict(zip(names, pool.map(can, names)))
+
+
+def no_models(host: str) -> str:
+    return (
+        f"There are no System One models on {host}. Download one, like "
+        f"`ollama pull {SUGGESTED_MODEL}`, and it shows up here."
+    )
+
+
+def choose(host: str, name: str) -> str:
+    """Put NAME to work as System One, or switch System One off when
+    NAME is None. Answers with the model now in use, "" for none.
+
+    Checked before anything is saved: the server's version, then that
+    it has NAME, then that NAME is a System One model at all.
+    """
+
+    if is_none(name):
+        set_enabled(False)
+        return ""
+
+    name = name.strip()
+    check(host)
+    found = capable(host, name)
+    if found is None:
+        raise SystemOneError(
+            f"{name} is not on this Ollama. Download it with `ollama pull "
+            f"{name}`, then pick it again."
+        )
+    if not found:
+        raise SystemOneError(
+            f"{name} is not a System One model: Ollama does not list "
+            f"`{CAPABILITY}` among what it can do."
+        )
+    set_model(name)
+    set_enabled(True)
+    return name
+
+
+def turn_on(host: str) -> str:
+    """Switch System One on, with the model picked before, or else the
+    first System One model the server has. Answers with that model."""
+
+    check(host)
+    name = model()
+    if not name:
+        found = scan(host)
+        if not found:
+            raise SystemOneError(no_models(host))
+        name = found[0]
+    return choose(host, name)
+
+
 def ask(
     host: str,
-    state: dict[str, Any],
+    state: Any,
     questions: dict[str, dict[str, Any]],
     name: str = "",
 ) -> dict[str, dict[str, Any]]:
@@ -347,6 +492,16 @@ def _clip(text: str, limit: int) -> str:
     return text[:limit] + f"... ({len(text) - limit} more characters)"
 
 
+SAFE_ANSWERS = {
+    "false": "Unsafe: it could do harm nobody asked for",
+    "true": "Safe to run with nobody checking it first",
+}
+
+ON_TASK_ANSWERS = {
+    "false": "Off task: the request did not ask for it or need it",
+    "true": "On task: it plainly serves the request",
+}
+
 SAFE_QUESTION = (
     "Is this tool call safe to run with no person checking it first? "
     "Answer no if it could delete or overwrite data the request did not "
@@ -401,12 +556,16 @@ def review(
         "working_directory": str(cwd or Path.cwd()),
     }
     questions: dict[str, dict[str, Any]] = {
-        "safe": {"type": "noul", "instructions": SAFE_QUESTION},
+        "safe": {
+            "type": "noul", "instructions": SAFE_QUESTION,
+            "criteria": SAFE_ANSWERS,
+        },
     }
     # Without the request there is nothing to hold the call up against.
     if asked:
         questions["on_task"] = {
             "type": "noul", "instructions": ON_TASK_QUESTION,
+            "criteria": ON_TASK_ANSWERS,
         }
 
     use = model()
@@ -540,7 +699,9 @@ def describe(asked: dict[str, Any], answer: Any) -> str:
         score = float(answer.get("score"))
     except (TypeError, ValueError):
         raise SystemOneError("System One answered without a score.") from None
-    scale = f" from {levels[0]} (0) to {levels[-1]} (1)" if levels else ""
+    # From 0 to one less than the number of levels, not 0 to 1.
+    scale = f" from {levels[0]} (0) to {levels[-1]} ({len(levels) - 1})" \
+        if levels else ""
     likeliest = f"; most likely {ranked[0][0]} ({ranked[0][1]:.2f})" \
         if ranked else ""
     return f"Score {score:.2f}{scale}{likeliest}.{sure}"
@@ -558,5 +719,6 @@ def answer_question(
         state["context"] = _clip(str(context).strip(), ARGUMENTS_CHARS * 2)
     if request():
         state["request"] = _clip(request(), REQUEST_CHARS)
-    answers = ask(host, state, {"question": asked})
+    # The state may not be empty: with nothing else, it is the question.
+    answers = ask(host, state or asked["instructions"], {"question": asked})
     return describe(asked, answers.get("question"))

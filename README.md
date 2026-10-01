@@ -27,7 +27,7 @@ FLASH (**F**ast **L**ocal **A**gent **SH**ell) CLI is an AI-powered command-line
 - **Async Sub-agents**: The AI can spawn background sub-agents with the `agent` tool to work on independent pieces of a task at the same time, then collect each one's answer with `agent_result` once it's needed.
 - **Teach by Showing**: In the web UI, + > Record your screen (or Record and narrate) records you doing something, then attaches the recording to your message. While it records, the page catches a still each time the screen changes and settles; narrated, it keeps what you say over each step too (written down by voice mode's listening model, when that is set up). Flash sees the stills in order with your words, works out the procedure, and saves it as a skill, so next time you can just ask. Recordings run up to four minutes and play back in the chat.
 - **Sparks**: Agents that don't stop when the chat does. Give a spark a name, a standing goal, how often to work, and the lines it must not cross ("every morning, check my repo for new issues and tell me which look like bugs; never comment on anything"), and it works on it, even with Flash closed if you turn on `/sparks always on`, keeps its own notes between shifts, and files a report when there is something to say. Chat with one to ask what it has found, change its goal, or tell it what to do differently, and every later shift remembers. In the web UI your sparks sit in the sidebar as a team, each with its face, name and job title and what it is doing right now, glowing purple while it works (the chevron beside Sparks folds the list away, and it stays folded); one that needs your approval says so there, and in a chat with it the approval card waits above the box. Each one is a flat circle in its own colour with two oval eyes, and nothing else; what it is doing shows in how it moves: it floats, blinks and glances about while it waits, squints happily when you hover it, bounces with its eyes darting while it works, shuts its eyes and drifts off in z's while paused, tilts its head at a "?" when it needs your approval, and droops its eyes after a failed shift. Pet it and it pops out hearts (five quick pets for heart eyes), a new one pops into being, and one with news jumps for joy. Left to themselves they have lives of their own: they blink when they like (now and then twice), glance about, watch your pointer when it comes near and look right at you when it is on them, and every so often hop, wiggle, roll over, yawn, peek to one side, hum a little ♪ or spot a sparkle; a hop can set the one beside it off too. One waiting on you tries to catch your eye, one whose shift failed sighs, and a sleeping one stirs. With nobody about for a while the idle ones doze off, and they wake with a little start when you come back. None of it runs if your system asks for reduced motion.
-- **System One**: In autonomous mode, a small, quick model ([Ollama v0.35+](https://ollama.com/download)) looks over each command and edit before it runs and stops the ones that look unsafe or off task, and the model can ask it quick yes/no, choice, and score questions for a second opinion. Pick the model with `/systemone model` or in the web UI's Settings.
+- **System One**: In autonomous mode, a small, quick model ([Ollama v0.35+](https://ollama.com/download)) looks over each command and edit before it runs and stops the ones that look unsafe or off task, and the model can ask it quick yes/no, choice, and score questions for a second opinion. Pick its model, or None, with `/systemone model` or in the web UI's model menu, which finds the System One models on the machine.
 - **Context Management**: Automatic history trimming to stay within token limits.
 - **Markdown Support**: Rich formatting for AI responses in the terminal.
 
@@ -301,11 +301,12 @@ v0.35), that judges in a moment what a big model would take a whole turn
 to.
 
 ```bash
-ollama pull nimble   # or tev1, or tev1:0.8b for the lightest
+ollama pull nimble
 ```
 
-Then `/systemone on` in the terminal, or Settings > General > System One
-in the web UI. Either one checks the server's version first. An Ollama
+Then pick it under System One in the web UI's model menu, or run
+`/systemone on` in the terminal (or switch it on in Settings > General >
+System One). Each checks the server's version first. An Ollama
 older than v0.35 has no System One, so Flash says so and leaves it off
 until you update Ollama. It does nothing outside autonomous mode, where
 you answer each command yourself.
@@ -326,11 +327,16 @@ With it on and autonomous mode on, it does two things:
   passing?"), a choice between options, or a score on a scale, each
   answered with probabilities.
 
-`/systemone model <name>` (or the menu in Settings) picks the model:
-`nimble` (9B) judges most carefully, `tev1` (4B) is quicker, and
-`tev1:0.8b` is the lightest. `/systemone` shows how many calls it has
-reviewed and stopped this session, and the status bar reads `auto + S1`
-while it is at work.
+There is no fixed list of System One models: Flash asks the server
+which of its models list `decision` among their capabilities (Ollama's
+`/api/show`), so any one you pull shows up. `/systemone model` lists
+them, and `/systemone model <name>` picks one, offering to download it
+first; `/systemone model none` switches System One off. In the web UI
+they are under System One in the model menu, with None first, and the
+model button shows the one in use beside the chat model. Models that
+can only judge are left out of the chat models above them. `/systemone`
+shows how many calls it has reviewed and stopped this session, and the
+status bar reads `auto + S1` while it is at work.
 
 ### Sparks
 
@@ -732,7 +738,14 @@ any other machine you add, like one with a bigger GPU. The model menu
 (`Alt M`, or `Alt H` to start on the hosts) lists them with a dot showing
 which ones answer. Picking one switches Flash to it and lists the models
 there. The choice is saved as `OLLAMA_HOST`, the same setting the
-terminal uses.
+terminal uses. The menu's three sections (Host, Model, System One) each
+fold away with a click on their name, and stay as you left them.
+
+The model button shows a model's own name, so
+`Natuworkguy/flash-onyx-2.5:31b-cloudbase` reads `flash-onyx-2.5`; the
+menu shows the whole name. On a new chat the button sits in the message
+box; once a chat is going, it fades from the box to the top left of the
+chat, out of the way of what you are writing.
 
 By default the server only listens on this machine. `--lan` listens on
 your network too, prints a QR code in the terminal, and shows one under

@@ -65,7 +65,6 @@ from . import (
 )
 from .dashes import DashGuard
 from .emojis import EMOJIS
-from .models import is_installed
 from .sysprompt import model_sees_images
 from .theme import (
     ACCENT,
@@ -2036,7 +2035,8 @@ def status(ai) -> dict:
         "host_url": workspace.listed_url(host),
         "host_name": named,
         "auto": bool(ai.Config.no_command_confirmation),
-        "system_one": bool(ai.Config.system_one),
+        "system_one": systemone.enabled(),
+        "system_one_model": systemone.model() if systemone.enabled() else "",
         "compact": bool(ai.Config.auto_compact),
         "voice_style": voice.voice_style(),
         # The scene actually in effect: a name that no longer finds one,
@@ -2105,43 +2105,38 @@ def list_models(ai) -> Optional[list[str]]:
     )
 
 
-def system_one_ready(ai, name: str) -> None:
-    """Raise ValueError saying why the server cannot run System One on
-    NAME: an Ollama older than 0.35, one that does not answer, or NAME
-    not downloaded."""
-
-    try:
-        systemone.check(ai.Config.host)
-    except systemone.SystemOneError as exc:
-        raise ValueError(str(exc)) from None
-    if not name:
-        raise ValueError("Pick a System One model.")
-    # It answered its version just now, so this is not a long wait.
-    if is_installed(ollama.Client(host=ai.Config.host), name) is False:
-        raise ValueError(
-            f"{name} is not on this Ollama. Download it with `ollama pull "
-            f"{name}`, then try again."
-        )
-
-
-def system_one_state(ai) -> dict:
-    """System One's settings, and the server's version, for Settings."""
+def system_one_state(ai, models: bool = False) -> dict:
+    """System One's settings and the server's version, for Settings
+    and the model menu. MODELS scans the server for System One models
+    too, which asks it about each model it has."""
 
     state: dict[str, Any] = {
         "on": systemone.enabled(),
-        "model": systemone.model(),
+        # The model in use, "" for None.
+        "model": systemone.model() if systemone.enabled() else "",
         "auto": bool(ai.Config.no_command_confirmation),
-        "known": [
-            {"name": n, "note": note} for n, note in systemone.KNOWN_MODELS
-        ],
         "least": systemone.MIN_VERSION_TEXT,
         "counts": systemone.counts(),
         "version": "",
         "problem": "",
         "too_old": False,
+        "models": [],
+        # The ones that only judge and cannot chat, for the menu to
+        # leave out of the chat models.
+        "judge_only": [],
     }
     try:
         state["version"] = systemone.check(ai.Config.host)
+        if models:
+            found = systemone.catalog(ai.Config.host)
+            state["models"] = sorted(
+                n for n, can in found.items() if systemone.CAPABILITY in can
+            )
+            state["judge_only"] = [
+                n for n in state["models"] if "completion" not in found[n]
+            ]
+            if not state["models"]:
+                state["problem"] = systemone.no_models(ai.Config.host)
     except systemone.TooOld as exc:
         state.update(version=exc.version, problem=str(exc), too_old=True)
     except systemone.SystemOneError as exc:
@@ -2623,26 +2618,27 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
         return {"auto": on}
 
     if name == "system-one":
-        # No arg: only what it is, for Settings. "on" checks the server
-        # first, and "model" picks which model answers.
-        if arg in ("on", "1", "true"):
-            system_one_ready(ai, systemone.model())
-            systemone.set_enabled(True)
-        elif arg in ("off", "0", "false"):
-            systemone.set_enabled(False)
-        elif arg == "model":
-            pick = str(body.get("model") or "").strip()
-            if systemone.enabled():
-                system_one_ready(ai, pick)
-            try:
-                systemone.set_model(pick)
-            except systemone.SystemOneError as exc:
-                raise ValueError(str(exc)) from None
-        elif arg:
-            raise ValueError(f"Unknown System One setting {arg!r}.")
-        if arg:
-            ai.Config.refresh()
-            session.hub.publish({"type": "status"})
+        # No arg: only what it is, for Settings. "models" scans the
+        # server for System One models too, for the model menu. "on"
+        # checks the server first, and "model" picks which model
+        # answers, None switching it off.
+        if arg in ("", "models"):
+            return system_one_state(ai, models=arg == "models")
+        try:
+            if arg in ("on", "1", "true"):
+                systemone.turn_on(ai.Config.host)
+            elif arg in ("off", "0", "false"):
+                systemone.set_enabled(False)
+            elif arg == "model":
+                systemone.choose(
+                    ai.Config.host, str(body.get("model") or ""),
+                )
+            else:
+                raise ValueError(f"Unknown System One setting {arg!r}.")
+        except systemone.SystemOneError as exc:
+            raise ValueError(str(exc)) from None
+        ai.Config.refresh()
+        session.hub.publish({"type": "status"})
         return system_one_state(ai)
 
     if name == "model":

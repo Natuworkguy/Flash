@@ -639,8 +639,20 @@ button.doc:hover { border-color: var(--border-strong); }
 /* Short of room, the model's name gives way; nothing else in the row
    does, so the send button stays inside the box. */
 .composer-row > :not(#model-btn):not(#context) { flex-shrink: 0; }
-#model-btn span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-#model-btn svg { width: 14px; height: 14px; margin-right: -2px; }
+.model-pick .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.model-pick svg { width: 14px; height: 14px; margin-right: -2px; flex: none; }
+/* System One's model, beside the chat model's, while it is on. */
+.model-pick .s1 { flex: none; font-size: 11.5px; padding: 1px 6px; border-radius: 6px; color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
+/* While chatting, the picker leaves the box and waits at the top left
+   of the chat instead, out of the way of what is being written. */
+#model-btn { transition: opacity 0.22s var(--ease), max-width 0.32s var(--ease), padding 0.32s var(--ease); }
+body:not(.empty) #model-btn { opacity: 0; max-width: 0; padding: 0; pointer-events: none; }
+#top-model { max-width: min(46%, 340px); min-width: 0; flex: 0 1 auto; overflow: hidden; color: var(--text-2); opacity: 0; transform: translateY(-4px); pointer-events: none; transition: opacity 0.26s var(--ease) 0.08s, transform 0.26s var(--ease) 0.08s; }
+body:not(.empty):not(.on-page) #top-model { opacity: 1; transform: none; pointer-events: auto; }
+body.empty #top-model, body.on-page #top-model { position: absolute; }
+@media (prefers-reduced-motion: reduce) { #model-btn, #top-model { transition: none; } }
+/* Short of room, the host gives way to the model's own name. */
+@media (max-width: 560px) { .model-pick .host { display: none; } }
 #context { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-3); padding: 0 4px; font-variant-numeric: tabular-nums; cursor: default; }
 #context[hidden] { display: none; }
 #context .ctx-track { width: 44px; height: 5px; border-radius: 99px; background: var(--border); overflow: hidden; }
@@ -982,9 +994,6 @@ body.page-projects #dock, body.page-settings #dock, body.page-tool #dock { displ
 .setting-row.static { cursor: default; }
 .setting-row[disabled] { opacity: 0.6; cursor: default; }
 .setting-row.too-old .what span { color: var(--del); }
-.system-one-model select, .system-one-model input { max-width: 240px; font: 14px var(--sans); color: var(--text); background: var(--bg); border: 1px solid var(--border-strong); border-radius: 10px; padding: 8px 10px; outline: 0; }
-.system-one-model input { width: 160px; font-family: var(--mono); }
-@media (max-width: 560px) { .system-one-model { flex-wrap: wrap; } .system-one-model .side { width: 100%; } .system-one-model select, .system-one-model input { width: 100%; max-width: none; } }
 .lan-warn { font-size: 13px !important; color: var(--text-3); margin-top: 10px !important; }
 #phone .dialog-buttons { justify-content: center; margin-top: 16px; }
 .setting-row .side { flex: none; display: flex; align-items: center; }
@@ -1411,6 +1420,20 @@ button.item-row:hover { background: var(--hover); }
 .menu .item.add { color: var(--text-3); }
 .menu .item.add svg { width: 16px; height: 16px; }
 .menu hr { border: 0; border-top: 1px solid var(--border); margin: 6px 4px; }
+/* A section of the model menu that folds: its name, and what is picked
+   in it, beside a chevron that turns as it opens. */
+.menu .item.section { padding: 7px 10px 5px; font-size: 11.5px; font-weight: 500; color: var(--text-3); gap: 6px; }
+.menu .item.section svg { width: 13px; height: 13px; transition: transform 0.2s var(--ease); }
+.menu .item.section.open svg { transform: rotate(90deg); }
+.menu .item.section .picked { margin-left: auto; font: 11.5px var(--mono); max-width: 60%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.menu .item.section.open .picked { display: none; }
+/* A model's whole name, its own part stronger than where it is from
+   and which build it is. */
+.menu .full { font-family: var(--mono); font-size: 13px; }
+.menu .full .own { color: var(--text); }
+.menu .full .rest { color: var(--text-3); }
+.menu .menu-note code { font: 11.5px var(--mono); }
+.menu .menu-note.bad { color: var(--del); }
 
 /* Files the agent shows: a card in the chat, a panel from the right --- */
 .attachment {
@@ -1776,6 +1799,7 @@ body.resizing-viewer iframe { pointer-events: none; }
     <header id="top">
       <button class="icon-btn when-closed" id="open-side" data-tip="Open sidebar" data-keys="Ctrl B" aria-label="Open sidebar"></button>
       <button class="icon-btn when-closed" id="top-new" data-tip="New chat" data-keys="Alt N" aria-label="New chat"></button>
+      <button type="button" class="pill model-pick" id="top-model" data-tip="Switch model" data-keys="Alt M" tabindex="-1" aria-hidden="true"></button>
       <button id="crumb" hidden data-tip="Open project"></button>
       <button id="title" data-tip="Rename" data-keys="F2">New chat</button>
     </header>
@@ -1813,7 +1837,7 @@ body.resizing-viewer iframe { pointer-events: none; }
             <button type="button" class="pill" id="spark-btn" hidden data-tip="Open this spark"></button>
             <button type="button" class="pill" id="agents-btn" hidden data-tip="Sub-agents"><span class="pulse-dot"></span><span id="agents-count"></span></button>
             <span id="context" role="meter" aria-label="Context used" aria-valuemin="0" aria-valuemax="100" hidden><span class="ctx-track"><span class="ctx-fill"></span></span><span class="ctx-pct"></span></span>
-            <button type="button" class="pill" id="model-btn" data-tip="Switch model" data-keys="Alt M"><span id="model-name">No model</span><i id="model-chev"></i></button>
+            <button type="button" class="pill model-pick" id="model-btn" data-tip="Switch model" data-keys="Alt M"></button>
             <button type="submit" id="send" data-tip="Send" data-keys="Enter" aria-label="Send" disabled></button>
           </div>
         </form>
@@ -4001,14 +4025,12 @@ function drawGeneral(body) {
   };
   body.appendChild(row);
 
-  body.insertAdjacentHTML("beforeend", `<h2 class="settings-section settings-gap">System One</h2><p class="settings-sub">A small, quick model at Flash's side in autonomous mode. It looks over each command and edit before it runs and stops the ones that look unsafe or off task, and it answers Flash's quick yes/no, choice and score questions. Needs Ollama v0.35 or later.</p>`);
+  body.insertAdjacentHTML("beforeend", `<h2 class="settings-section settings-gap">System One</h2><p class="settings-sub">A small, quick model at Flash's side in autonomous mode. It looks over each command and edit before it runs and stops the ones that look unsafe or off task, and it answers Flash's quick yes/no, choice and score questions. Needs Ollama v0.35 or later. Pick which model it is, or None, in the model menu by the message box.</p>`);
   const systemOne = el("button", "setting-row system-one-row", `<span class="what"><b>Review autonomous commands</b><span>Checking this Ollama…</span></span><span class="switch" aria-hidden="true"></span>`);
   systemOne.type = "button";
   systemOne.setAttribute("role", "switch");
   body.appendChild(systemOne);
-  const systemOneModel = el("div", "setting-row static system-one-model", `<span class="what"><b>System One model</b><span>Which model reviews and answers. A smaller one is quicker; a bigger one judges more carefully.</span></span><span class="side"><select aria-label="System One model"></select></span>`);
-  body.appendChild(systemOneModel);
-  fillSystemOne(systemOne, systemOneModel);
+  fillSystemOne(systemOne);
 
   body.insertAdjacentHTML("beforeend", `<h2 class="settings-section settings-gap">Sparks</h2><p class="settings-sub">Agents that keep working on a goal, on a schedule. Make and read them on the Sparks page.</p>`);
   const always = el("button", "setting-row sparks-always-row", `<span class="what"><b>Keep working when Flash is closed</b><span></span></span><span class="switch" aria-hidden="true"></span>`);
@@ -4567,51 +4589,22 @@ async function drawSparks(body, again = false) {
 }
 const drawSparksPage = () => toolPage("Sparks", drawSparks);
 
-// System One's switch and model in Settings. Switching it on asks the
-// server its version first: an Ollama older than 0.35 has no System One,
-// and the row says so, with what to do about it.
-async function fillSystemOne(row, modelRow) {
+// System One's switch in Settings. Its model is picked in the model
+// menu. Switching it on asks the server its version first: an Ollama
+// older than 0.35 has no System One, and the row says so, with what to
+// do about it.
+async function fillSystemOne(row) {
   let r = null;
-  const side = modelRow.querySelector(".side");
   const note = row.querySelector(".what span");
-  const pickModel = async (name) => {
-    name = String(name || "").trim();
-    if (!name || name === r.model) { show(r); return; }
-    try { show(await command("system-one", "model", null, { model: name })); toast(`System One uses ${name} now`); }
-    catch (error) { show(r); showFailure(error); }
-  };
-  // Its own box to type a name in, for a model not on the list.
-  const typeModel = () => {
-    const box = el("input", "mono");
-    box.placeholder = "model name";
-    box.autocomplete = "off";
-    box.setAttribute("aria-label", "System One model");
-    box.onkeydown = (e) => {
-      if (e.key === "Enter") { e.preventDefault(); box.blur(); }
-      if (e.key === "Escape") { box.value = ""; box.blur(); }
-    };
-    box.onblur = () => pickModel(box.value);
-    side.replaceChildren(box);
-    box.focus();
-  };
   const show = (state) => {
     r = state;
     row.setAttribute("aria-checked", !!r.on);
     row.classList.toggle("too-old", !!r.too_old);
     if (r.too_old) note.textContent = `This Ollama is v${r.version}. System One needs v${r.least} or later, so update Ollama to use it.`;
     else if (!r.version) note.textContent = r.problem || "Ollama did not answer.";
-    else if (!r.on) note.textContent = `Off. Ollama v${r.version} is ready for it.`;
-    else if (!r.auto) note.textContent = "On, and waiting for autonomous mode: until then you answer each command yourself.";
-    else note.textContent = `On. ${r.counts.reviewed} reviewed and ${r.counts.stopped} stopped since Flash started.`;
-    const known = r.known.map((k) => k.name);
-    const select = el("select");
-    select.setAttribute("aria-label", "System One model");
-    select.innerHTML = r.known.map((k) => `<option value="${esc(k.name)}">${esc(k.name)} · ${esc(k.note)}</option>`).join("")
-      + (known.includes(r.model) ? "" : `<option value="${esc(r.model)}">${esc(r.model)}</option>`)
-      + `<option value="" data-other>Another model…</option>`;
-    select.value = r.model;
-    select.onchange = () => (select.value ? pickModel(select.value) : typeModel());
-    side.replaceChildren(select);
+    else if (!r.on) note.textContent = `Off. Ollama v${r.version} is ready for it: switch it on, or pick its model in the model menu.`;
+    else if (!r.auto) note.textContent = `On, with ${r.model}, and waiting for autonomous mode: until then you answer each command yourself.`;
+    else note.textContent = `On, with ${r.model}. ${r.counts.reviewed} reviewed and ${r.counts.stopped} stopped since Flash started.`;
   };
   try { show(await command("system-one", "", null)); }
   catch (error) { note.textContent = error.message || String(error); return; }
@@ -4624,8 +4617,9 @@ async function fillSystemOne(row, modelRow) {
     try {
       show(await command("system-one", on ? "on" : "off", null));
       info.system_one = r.on;
+      info.system_one_model = r.model;
       renderInfo();
-      toast(on ? `System One on, with ${r.model}` : "System One off");
+      toast(on ? `System One on, with **${shortModel(r.model)}**` : "System One off");
     } catch (error) {
       row.setAttribute("aria-checked", !on);
       show(r);
@@ -7543,12 +7537,37 @@ async function openAgents() {
   openMenu(anchor, [{ header: true, html: "Sub-agents" }, ...rows], () => {}, "", true);
 }
 
+// A model's own name, without where it came from or which build:
+// "Natuworkguy/flash-onyx-2.5:31b-cloudbase" is "flash-onyx-2.5".
+const shortModel = (name) => String(name || "").split("/").pop().split(":")[0];
+const tagged = (name) => { const n = String(name || ""); return n.split("/").pop().includes(":") ? n : n + ":latest"; };
+const sameModel = (a, b) => !!a && !!b && tagged(a) === tagged(b);
+// The whole name for the menu, its own part picked out.
+function modelParts(name) {
+  name = String(name || "");
+  const slash = name.lastIndexOf("/") + 1;
+  const colon = name.indexOf(":", slash);
+  const own = colon < 0 ? name.slice(slash) : name.slice(slash, colon);
+  const rest = (s) => (s ? `<span class="rest">${esc(s)}</span>` : "");
+  return `<span class="label full">${rest(name.slice(0, slash))}<span class="own">${esc(own)}</span>${rest(colon < 0 ? "" : name.slice(colon))}</span>`;
+}
+
+function renderModelButtons() {
+  const local = !info.host_name || info.host_name === "This computer";
+  const full = info.model || "";
+  const html = `<span class="name">${local ? "" : `<span class="host">${esc(info.host_name)} · </span>`}${esc(shortModel(full) || "No model")}</span>` +
+    (info.system_one && info.system_one_model ? `<span class="s1">${esc(shortModel(info.system_one_model))}</span>` : "") + icon("chevDown");
+  for (const b of document.querySelectorAll(".model-pick")) {
+    b.innerHTML = html;
+    b.dataset.tip = full ? `Switch model · ${full}` + (info.system_one && info.system_one_model ? ` · System One ${info.system_one_model}` : "") : "Switch model";
+  }
+}
+
 function renderInfo() {
   renderAgents();
   syncScene();
   $("#settings-btn").classList.toggle("has-update", !!(info.update && info.update.available && !["updated", "restarting"].includes(info.update.state)));
-  const local = !info.host_name || info.host_name === "This computer";
-  $("#model-name").textContent = (local ? "" : info.host_name + " · ") + (info.model || "No model");
+  renderModelButtons();
   const auto = !!info.auto;
   const autoBtn = $("#auto-btn");
   const was = autoBtn.classList.contains("on");
@@ -8689,6 +8708,7 @@ function openMenu(anchor, rows, pick, emptyText, alignLeft) {
         if (row.html) menuEl.appendChild(el("div", "head-row", row.html));
         return;
       }
+      if (row.rule) menuEl.appendChild(el("hr"));
       const item = el("button", "item" + (row.cls ? " " + row.cls : "") + (i === menuSel ? " sel" : ""));
       items[i] = item;
       item.type = "button";
@@ -8698,6 +8718,8 @@ function openMenu(anchor, rows, pick, emptyText, alignLeft) {
       item.onclick = (e) => {
         const remove = e.target.closest("[data-remove]");
         if (remove) { e.stopPropagation(); removeHost(remove.dataset.remove); return; }
+        // A section's header folds it, with the menu left open.
+        if (row.keep) { pick(row); return; }
         closeMenu();
         pick(row);
       };
@@ -8723,13 +8745,26 @@ function openMenu(anchor, rows, pick, emptyText, alignLeft) {
 
 let modelsLoading = false;
 let modelsReachable = true;
+// System One's side of the menu: the System One models on this host,
+// scanned when the menu opens, and which is in use.
+let systemOne = { loading: false, models: [], model: "", problem: "", too_old: false };
+
+// Which of the menu's sections are folded, kept for this browser.
+const folded = { host: pref("fold-host", "0") === "1", model: pref("fold-model", "0") === "1", s1: pref("fold-s1", "0") === "1" };
+
+// The picker that is showing: in the box on a new chat, at the top of
+// the chat once one is going.
+const modelAnchor = () => (document.body.classList.contains("empty") || document.body.classList.contains("on-page") ? $("#model-btn") : $("#top-model"));
 
 // The menu opens at once with the hosts. The models and the hosts' dots
 // fill in as each answers, so a host that is down never holds it shut.
 async function openModels(focusHosts = false) {
   slashOpen = false;
   modelsLoading = true;
+  // Asked for the hosts, they are opened to.
+  if (focusHosts) folded.host = false;
   const hadModels = models.length > 0;
+  systemOne = { ...systemOne, loading: true };
   drawModelMenu(focusHosts);
   const stillOpen = () => menuEl && !slashOpen && menuEl.dataset.kind === "models";
   command("model").then(
@@ -8745,37 +8780,82 @@ async function openModels(focusHosts = false) {
     info.host_url = r.current;
     if (stillOpen()) drawModelMenu(focusHosts, true);
   }, () => {});
+  command("system-one", "models", null).then(
+    (r) => { systemOne = { ...r, loading: false }; },
+    (error) => { systemOne = { loading: false, models: [], model: "", problem: error.message || String(error) }; },
+  ).finally(() => { if (stillOpen()) drawModelMenu(focusHosts, true); });
 }
+
+// A section's header: its name, and what is picked in it while folded.
+const sectionRow = (key, name, picked, rule) => ({
+  section: key, keep: true, rule, cls: "section" + (folded[key] ? "" : " open"),
+  html: `${icon("chevRight")}<span>${name}</span><span class="picked">${esc(picked)}</span>`,
+});
 
 function drawModelMenu(focusHosts, keepSelection) {
   const active = info.host_url || normalHost(info.host);
   const shown = hosts.length ? hosts : [{ name: "This computer", url: "http://localhost:11434" }];
   if (!shown.some((h) => h.url === active)) shown.push({ name: info.host_name || "Current", url: active });
-  const rows = [{ header: true, html: "Host" }];
-  for (const h of shown) {
-    const health = h.up === undefined ? "" : h.up ? " up" : " down";
-    // Only a saved host can go, and not while it is the one in use.
-    const removable = h.saved && h.url !== active;
-    rows.push({
-      html: `<span class="health${health}"></span><span class="stack"><span class="label">${esc(h.name)}</span><span class="sub">${esc(h.url.replace(/^https?:\/\//, ""))}</span></span>` +
-        (removable ? `<span class="remove" data-remove="${esc(h.url)}" data-tip="Remove host">${icon("x")}</span>` : ""),
-      host: h.url, current: h.url === active,
-    });
+  const activeHost = shown.find((h) => h.url === active);
+  const rows = [sectionRow("host", "Host", activeHost ? activeHost.name : active)];
+  if (!folded.host) {
+    for (const h of shown) {
+      const health = h.up === undefined ? "" : h.up ? " up" : " down";
+      // Only a saved host can go, and not while it is the one in use.
+      const removable = h.saved && h.url !== active;
+      rows.push({
+        html: `<span class="health${health}"></span><span class="stack"><span class="label">${esc(h.name)}</span><span class="sub">${esc(h.url.replace(/^https?:\/\//, ""))}</span></span>` +
+          (removable ? `<span class="remove" data-remove="${esc(h.url)}" data-tip="Remove host">${icon("x")}</span>` : ""),
+        host: h.url, current: h.url === active,
+      });
+    }
+    rows.push({ html: `${icon("plus")}<span class="label">Add host…</span>`, add: true, cls: "add" });
   }
-  rows.push({ html: `${icon("plus")}<span class="label">Add host…</span>`, add: true, cls: "add" });
-  rows.push({ header: true, html: "Model", rule: true });
-  if (modelsLoading && !models.length) rows.push({ header: true, html: '<span class="menu-note">Loading models…</span>' });
-  else if (!modelsReachable && !modelsLoading) rows.push({ header: true, html: '<span class="menu-note">This host is not answering. Pick another above.</span>' });
-  else {
-    for (const m of models) rows.push({ html: `<span class="label">${esc(m)}</span>`, value: m, current: m === info.model });
-    if (!models.length) rows.push({ header: true, html: '<span class="menu-note">No models on this host</span>' });
+  rows.push(sectionRow("model", "Model", shortModel(info.model) || "None", true));
+  if (!folded.model) {
+    if (modelsLoading && !models.length) rows.push({ header: true, html: '<span class="menu-note">Loading models…</span>' });
+    else if (!modelsReachable && !modelsLoading) rows.push({ header: true, html: '<span class="menu-note">This host is not answering. Pick another above.</span>' });
+    else {
+      // A model that can only judge is System One's, below: it cannot chat.
+      const chatty = models.filter((m) => m === info.model || !(systemOne.judge_only || []).includes(m));
+      for (const m of chatty) rows.push({ html: modelParts(m), value: m, current: m === info.model });
+      if (!chatty.length) rows.push({ header: true, html: '<span class="menu-note">No models on this host</span>' });
+    }
+  }
+  const s1 = info.system_one ? info.system_one_model : "";
+  rows.push(sectionRow("s1", "System One", s1 ? shortModel(s1) : "None", true));
+  if (!folded.s1) {
+    // None first: System One is optional, and off unless a model is picked.
+    rows.push({ html: '<span class="label">None</span>', s1: "none", current: !s1 });
+    for (const m of systemOne.models || []) rows.push({ html: modelParts(m), s1: m, current: sameModel(m, s1) });
+    // Picked before, but not found on this host now.
+    if (s1 && !(systemOne.models || []).some((m) => sameModel(m, s1)) && !systemOne.loading) rows.push({ html: modelParts(s1), s1, current: true });
+    if (systemOne.loading && !(systemOne.models || []).length) rows.push({ header: true, html: '<span class="menu-note">Looking for System One models…</span>' });
+    else if (systemOne.problem) rows.push({ header: true, html: `<span class="menu-note${systemOne.too_old ? " bad" : ""}">${inline(systemOne.problem)}</span>` });
   }
   const previous = keepSelection && menuEl ? menuSel : null;
-  openMenu($("#model-btn"), rows, pickModelRow, "");
+  // Drawn again in place, as a section folds or a list fills in: the
+  // old one goes at once rather than shrinking away under the new.
+  const redrawn = keepSelection && menuEl;
+  if (redrawn) { menuEl.remove(); menuEl = null; }
+  const anchor = modelAnchor();
+  openMenu(anchor, rows, pickModelRow, "", anchor.id === "top-model");
+  if (redrawn) menuEl.style.animation = "none";
   menuEl.dataset.kind = "models";
-  if (previous !== null) { menuSel = previous; menuEl.redraw(); }
+  menuEl.classList.add("model-menu");
+  if (previous !== null) { menuSel = Math.min(previous, rows.length - 1); menuEl.redraw(); }
   else if (focusHosts) { menuSel = rows.findIndex((r) => r.host && r.current); menuEl.redraw(); }
   else { const at = rows.findIndex((r) => r.value && r.current); if (at >= 0) { menuSel = at; menuEl.redraw(); } }
+}
+
+async function pickSystemOne(name) {
+  let r;
+  try { r = await command("system-one", "model", null, { model: name }); }
+  catch (error) { showFailure(error); return; }
+  info.system_one = r.on;
+  info.system_one_model = r.model;
+  renderInfo();
+  toast(r.on ? `System One is **${shortModel(r.model)}** now` + (info.auto ? "" : ", once autonomous mode is on") : "System One is off");
 }
 
 function normalHost(url) {
@@ -8785,6 +8865,13 @@ function normalHost(url) {
 }
 
 async function pickModelRow(row) {
+  if (row.section) {
+    folded[row.section] = !folded[row.section];
+    savePref("fold-" + row.section, folded[row.section] ? "1" : "0");
+    drawModelMenu(false, true);
+    return;
+  }
+  if (row.s1) { pickSystemOne(row.s1); input.focus(); return; }
   if (row.add) { hostForm(); return; }
   if (row.host) { if (!row.current) await switchHost(row.host, true); else openModels(true); return; }
   if (row.value) { setModel(row.value); input.focus(); }
@@ -8816,7 +8903,7 @@ async function removeHost(url) {
   drawModelMenu(true, true);
 }
 
-document.addEventListener("mousedown", (e) => { if (menuEl && !menuEl.contains(e.target) && !e.target.closest("#model-btn, #agents-btn, #project-btn, #plus-btn")) { closeMenu(); slashOpen = false; } });
+document.addEventListener("mousedown", (e) => { if (menuEl && !menuEl.contains(e.target) && !e.target.closest(".model-pick, #agents-btn, #project-btn, #plus-btn")) { closeMenu(); slashOpen = false; } });
 
 // Slash commands ------------------------------------------------------------
 
@@ -9327,7 +9414,7 @@ $("#auto-btn").onclick = toggleAuto;
 $("#plus-btn").innerHTML = icon("plus");
 $("#plus-btn").onclick = () => (menuEl && !slashOpen ? closeMenu() : openPlus());
 $("#agents-btn").onclick = () => (menuEl ? closeMenu() : openAgents());
-$("#model-btn").onclick = () => (menuEl && !slashOpen ? closeMenu() : openModels());
+for (const b of document.querySelectorAll(".model-pick")) b.onclick = () => (menuEl && !slashOpen ? closeMenu() : openModels());
 $("#project-btn").onclick = () => (menuEl && !slashOpen ? closeMenu() : openProjectPicker());
 $("#spark-btn").onclick = (e) => {
   const chat = chats.get(current);
@@ -9391,7 +9478,7 @@ window.addEventListener("keydown", (e) => {
       if (at >= 0 && at < menuRows.length) { menuSel = at; menuEl.redraw(); }
       return;
     }
-    if (e.key === "Enter") { e.preventDefault(); const row = menuRows[menuSel]; closeMenu(); if (row) menuPick(row); return; }
+    if (e.key === "Enter") { e.preventDefault(); const row = menuRows[menuSel]; if (row && row.keep) { menuPick(row); return; } closeMenu(); if (row) menuPick(row); return; }
     if (e.key === "Escape") { e.preventDefault(); closeMenu(); input.focus(); return; }
   }
 
@@ -9531,7 +9618,6 @@ $("#settings-btn").innerHTML = icon("settings") + "<span>Settings</span>";
 $("#phone-btn").innerHTML = icon("phone") + "<span>Open on phone</span>";
 $("#jump").innerHTML = icon("down");
 $("#search-ico").innerHTML = icon("search");
-$("#model-chev").outerHTML = icon("chevDown");
 applyTheme(resolveTheme(themeChoice));
 if (innerWidth <= 800 || pref("side", "open") === "closed") document.body.classList.add("side-closed");
 renderInfo();
