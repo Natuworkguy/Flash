@@ -224,11 +224,14 @@ def capture_tool_output(sink: ToolSink) -> Iterator[None]:
     land in the middle of whatever the main loop is drawing.
     """
 
+    # Nested, as a spark asked something mid-shift is, the outer one
+    # gets its sink back when the inner one is done.
+    before = getattr(_capture, "sink", None)
     _capture.sink = sink
     try:
         yield
     finally:
-        _capture.sink = None
+        _capture.sink = before
 
 
 def _sink() -> Optional[ToolSink]:
@@ -248,11 +251,12 @@ def answer_from(answerer: Answerer) -> Iterator[None]:
     going to make.
     """
 
+    before = getattr(_capture, "answerer", None)
     _capture.answerer = answerer
     try:
         yield
     finally:
-        _capture.answerer = None
+        _capture.answerer = before
 
 
 def remote_answer(question: str) -> Optional[str]:
