@@ -1067,11 +1067,33 @@ def test_a_shared_spark_is_added_as_a_copy():
 
     assert code.startswith(sparks.SHARE_PREFIX)
     assert seen == {
-        "name": "Scout", "goal": "Watch the issues.",
+        "name": "Scout", "title": "", "goal": "Watch the issues.",
         "boundaries": "Only read.", "every": 120, "lessons": ["Skip docs."],
     }
     assert copy.name == "Scout 2" and copy.id != made.id
     assert sparks.find(copy.id).lessons == ["Skip docs."]
+
+
+def test_a_spark_has_a_title_it_knows_and_shares():
+    made = sparks.create(
+        "Scout", "Watch the issues.", title="  Repo   watcher ",
+    )
+
+    assert made.title == "Repo watcher"
+    assert "Scout (@scout-spark), the user's Repo watcher, a spark" in (
+        sparks.chat_prompt(made, "h", "m", "")
+    )
+    assert sparks.read_code(sparks.share_code(made.id))["title"] == (
+        "Repo watcher"
+    )
+    assert sparks.add_from(sparks.share_code(made.id)).title == "Repo watcher"
+
+    changed = sparks.update(made.id, title="x" * 99)
+    assert changed.title == "x" * sparks.TITLE_CHARS
+    assert sparks.update(made.id, title="").title == ""
+    assert "You are Scout (@scout-spark), a spark" in sparks.chat_prompt(
+        sparks.find(made.id), "h", "m", "",
+    )
 
 
 @pytest.mark.parametrize("code", [
@@ -1086,6 +1108,7 @@ def test_a_template_makes_a_spark():
     made = sparks.add_from("repo watch")
 
     assert made.name == "Repo Watch" and made.every == 120
+    assert made.title == "Repo watcher"
     assert "Never commit" in made.boundaries
     assert len(sparks.TEMPLATES) >= 5
 

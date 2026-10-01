@@ -25,7 +25,7 @@ FLASH (**F**ast **L**ocal **A**gent **SH**ell) CLI is an AI-powered command-line
 - **Knows What Just Broke**: With `/hook install`, Flash sees the commands you run in VS Code's terminal and whether they failed, so "why did that fail?" works without pasting anything.
 - **VS Code Aware**: Run from VS Code's terminal, Flash opens its edits as side-by-side diffs while it waits for your yes, clears them away once you have answered, and opens files at the line it's talking about.
 - **Async Sub-agents**: The AI can spawn background sub-agents with the `agent` tool to work on independent pieces of a task at the same time, then collect each one's answer with `agent_result` once it's needed.
-- **Sparks**: Agents that don't stop when the chat does. Give a spark a name, a standing goal, how often to work, and the lines it must not cross ("every morning, check my repo for new issues and tell me which look like bugs; never comment on anything"), and it works on it, even with Flash closed if you turn on `/sparks always on`, keeps its own notes between shifts, and files a report when there is something to say. Chat with one to ask what it has found, change its goal, or tell it what to do differently, and every later shift remembers. Each one is a little bubble with a face in the web UI: it breathes, blinks and glances about while it waits, grins when you hover it, bounces with a twinkle while it works, snores z's while paused, tilts its head at a "?" when it needs your approval, and frowns after a failed shift. Pet it and it pops out hearts (five quick pets for heart eyes), a new one pops into being, and one with news jumps for joy.
+- **Sparks**: Agents that don't stop when the chat does. Give a spark a name, a standing goal, how often to work, and the lines it must not cross ("every morning, check my repo for new issues and tell me which look like bugs; never comment on anything"), and it works on it, even with Flash closed if you turn on `/sparks always on`, keeps its own notes between shifts, and files a report when there is something to say. Chat with one to ask what it has found, change its goal, or tell it what to do differently, and every later shift remembers. In the web UI your sparks sit in the sidebar as a team, each with its face, name and job title and what it is doing right now, glowing purple while it works; one that needs your approval says so there, and in a chat with it the approval card waits above the box. Each one is a little bubble with a face, eyes and blush and an accessory of its own (an antenna, a sprout, a bow, a halo, ears or a party hat): it breathes, blinks and glances about while it waits, grins when you hover it, bounces with a twinkle while it works, snores z's while paused, tilts its head at a "?" when it needs your approval, and frowns after a failed shift. Pet it and it pops out hearts (five quick pets for heart eyes), a new one pops into being, and one with news jumps for joy.
 - **Context Management**: Automatic history trimming to stay within token limits.
 - **Markdown Support**: Rich formatting for AI responses in the terminal.
 
@@ -154,7 +154,7 @@ python run.py
   with its answer once it is done.
 - `/sparks [new|<name>]`: List your sparks, make one, or read one's
   reports. `/sparks chat <name> [message]` talks with one. `/sparks teach <name> <lesson>`, `run`, `pause`, `resume`,
-  `every <name> <30m|2h|daily>` and `remove` look after them.
+  `every <name> <30m|2h|daily>`, `title <name> <title>` and `remove` look after them.
   `/sparks always on|off` keeps them working with Flash closed.
 - `/clear`: Clear the conversation history.
 - `/undo`: Take back the file changes from the last turn.
@@ -299,6 +299,9 @@ Each spark has:
 And always:
 
 - a **name** and a handle to go with it (`Scout` is `@scout-spark`),
+- optionally, a **title**, its job as a teammate's ("Repo watcher"):
+  shown under its name, and it knows it
+  (`/sparks title scout Bug triager`),
 - a **model**, chosen when you make it: every shift and every chat with
   it runs on that one, whatever Flash itself is set to
   (`/sparks model scout qwen3:8b` changes it),

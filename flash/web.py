@@ -781,10 +781,18 @@ class Session:
             "words": [s["now"] for s in ai._load_thinking_states()],
             # What :name in the message box offers, the terminal's list.
             "emojis": None if lite else EMOJIS,
-            # Enough of each spark to draw its badge on a chat with it.
+            # Enough of each spark to draw its badge on a chat with it,
+            # and its place in the sidebar's roster: face, name, title,
+            # and what it is doing.
             "sparks": [
                 {"id": s.id, "name": s.name, "handle": s.handle,
-                 "colour": s.colour,
+                 "title": s.title, "colour": s.colour,
+                 "status": s.status, "paused": s.paused,
+                 "waiting": s.waiting, "answering": s.answering,
+                 "unread": s.unread, "activity": s.activity,
+                 "next_run": s.next_run,
+                 "pending": {k: s.pending[k] for k in ("label", "detail")
+                             if k in s.pending},
                  "project": s.project if sparks.project_of(s) else ""}
                 for s in sparks.all_sparks()
             ],
@@ -2564,12 +2572,14 @@ def _spark_command(name: str, arg: str, body: dict) -> dict:
                 str(body.get("project") or ""),
                 str(body.get("watch") or ""),
                 str(body.get("model") or ""),
+                str(body.get("title") or ""),
             )
         elif name == "spark-update":
             # The new name comes as "rename": "name" names the command.
             fields = {"rename": "name", "goal": "goal", "every": "every",
                       "boundaries": "boundaries", "project": "project",
-                      "watch": "watch", "model": "model"}
+                      "watch": "watch", "model": "model",
+                      "title": "title"}
             spark = sparks.update(arg, **{
                 field: str(body[key])
                 for key, field in fields.items() if key in body
