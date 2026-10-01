@@ -13,6 +13,7 @@ from flash import (
     repl_input,
     skills,
     sparks,
+    systemone,
     terminal,
     tools,
     voice,
@@ -71,6 +72,11 @@ def isolated_home(tmp_path_factory, monkeypatch):
     monkeypatch.setattr(ai, "ENV_PATH", str(home / ".flash.env"))
     # A shift reads autonomous mode from the env file: the temp one.
     monkeypatch.setattr(sparks, "ENV_PATH", str(home / ".flash.env"))
+    # System One too, off and on its default model unless a test says.
+    monkeypatch.setattr(systemone, "ENV_PATH", str(home / ".flash.env"))
+    for name in ("SYSTEM_ONE", "SYSTEM_ONE_MODEL"):
+        monkeypatch.delenv(name, raising=False)
+    systemone.forget_checks()
     learning.refresh()
     learning.reset()
     yield home

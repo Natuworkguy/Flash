@@ -34,6 +34,7 @@ from . import (
     plan,
     skills,
     sparks,
+    systemone,
     terminal,
 )
 from .cli import parse_args
@@ -229,6 +230,7 @@ class Config:
     max_output_tokens: int
     num_ctx: str
     no_command_confirmation: bool
+    system_one: bool
     show_stats: bool
     voice: bool
     background: str
@@ -256,6 +258,7 @@ class Config:
         cls.no_command_confirmation = bool(
             _int_env("NO_COMMAND_CONFIRMATION", 0, minimum=0)
         )
+        cls.system_one = bool(_int_env("SYSTEM_ONE", 0, minimum=0))
         cls.show_stats = bool(_int_env("SHOW_STATS", 1, minimum=0))
         cls.voice = bool(_int_env("VOICE", 0, minimum=0))
         cls.background = (os.getenv("BACKGROUND") or "").strip()
@@ -341,6 +344,31 @@ FIRST_PROMPT_ROWS = 3
 HELD_ROWS = MAX_MENU_ROWS
 
 
+# The version of an Ollama found too old for System One when Flash
+# started with it switched on, for the welcome box to say so.
+_system_one_too_old = ""
+
+
+def _check_system_one() -> None:
+    """Make sure the server can run System One, if it is switched on.
+
+    Quick, and once a launch: an unreachable server says nothing here,
+    since the host's own health shows that, and a review will say it.
+    """
+
+    global _system_one_too_old
+
+    _system_one_too_old = ""
+    if not systemone.enabled():
+        return
+    try:
+        systemone.check(Config.host)
+    except systemone.TooOld as exc:
+        _system_one_too_old = exc.version
+    except systemone.SystemOneError:
+        pass
+
+
 def _banner_lines(update_version: Optional[str] = None) -> list:
     """What goes inside the welcome box.
 
@@ -371,6 +399,16 @@ def _banner_lines(update_version: Optional[str] = None) -> list:
     notices = []
     if Config.no_command_confirmation:
         notices.append("autonomous, commands run without confirmation")
+    if systemone.enabled():
+        if _system_one_too_old:
+            notices.append(
+                f"System One needs Ollama v{systemone.MIN_VERSION_TEXT}+, "
+                f"this server is v{_system_one_too_old}"
+            )
+        elif Config.no_command_confirmation:
+            notices.append(
+                f"System One ({systemone.model()}) reviews each command"
+            )
     if Config.voice:
         notices.append("voice on, Enter on an empty line speaks")
     if update_version:
@@ -1625,7 +1663,8 @@ def _status_text(messages: list[dict]) -> str:
         parts.append(f"{agents} agent{'' if agents == 1 else 's'}")
 
     if Config.no_command_confirmation:
-        parts.append("auto")
+        # "auto + S1": autonomous, with System One reviewing each call.
+        parts.append("auto + S1" if Config.system_one else "auto")
 
     if Config.voice:
         parts.append("voice")
@@ -1990,6 +2029,131 @@ def _email_command(arg: str) -> None:
         "Usage: /email [connect | test [address] | inbox [address] | "
         "default [address] | disconnect [address]]"
     )
+
+
+SYSTEM_ONE_USAGE = "Usage: /systemone [on | off | model [name]]"
+
+
+def _system_one_ready(name: str) -> bool:
+    """Whether the server can run System One on NAME, saying why not.
+
+    Checks the Ollama version first, since a server older than 0.35 has
+    no System One at all, then offers to download NAME if it is not
+    there.
+    """
+
+    try:
+        version = systemone.check(Config.host)
+    except systemone.SystemOneError as exc:
+        warn(f"  {exc}")
+        return False
+
+    console.print(Text(
+        f"  Ollama v{version} has System One.", style=DIM,
+    ))
+    return fetch_if_missing(ollama.Client(host=Config.host), name)
+
+
+def _system_one_status() -> None:
+    on = systemone.enabled()
+    body = Text("  System One ")
+    body.append("on" if on else "off", style=f"bold {ACCENT}" if on else DIM)
+    body.append(f"  model {systemone.model()}\n", style=DIM)
+    if on and not Config.no_command_confirmation:
+        body.append(
+            "  It waits for autonomous mode (Shift+Tab or /auto on): "
+            "until then you answer each command yourself.\n", style=DIM,
+        )
+    elif on:
+        tally = systemone.counts()
+        body.append(
+            f"  Reviewing each command and edit before it runs: "
+            f"{tally['reviewed']} reviewed, {tally['stopped']} stopped "
+            "this session. The model can ask it questions too.\n",
+            style=DIM,
+        )
+    else:
+        body.append(
+            "  In autonomous mode, a small model that checks each command "
+            "and edit before it runs, and answers the model's quick "
+            "questions. Needs Ollama v"
+            f"{systemone.MIN_VERSION_TEXT}+.\n", style=DIM,
+        )
+    body.append(
+        "  /systemone on|off, /systemone model <name> to pick another "
+        "(" + ", ".join(n for n, _ in systemone.KNOWN_MODELS) + ").",
+        style=DIM,
+    )
+    console.print(body)
+
+
+def _system_one_command(arg: str) -> None:
+    """/systemone: switch System One on or off, or pick its model."""
+
+    action, _, rest = arg.partition(" ")
+    action = action.lower()
+    rest = rest.strip()
+
+    if action in ("", "status"):
+        _system_one_status()
+        return
+
+    if action in ("on", "enable", "true", "1"):
+        if not _system_one_ready(systemone.model()):
+            warn("  System One stays off.")
+            return
+        systemone.set_enabled(True)
+        Config.refresh()
+        console.print(Text(
+            f"System One on, with {systemone.model()}.",
+            style=f"bold {ACCENT}",
+        ))
+        if not Config.no_command_confirmation:
+            console.print(Text(
+                "  It starts work when autonomous mode does: Shift+Tab or "
+                "/auto on.", style=DIM,
+            ))
+        return
+
+    if action in ("off", "disable", "false", "0"):
+        systemone.set_enabled(False)
+        Config.refresh()
+        console.print(Text("System One off.", style=f"bold {ACCENT}"))
+        return
+
+    if action == "model":
+        if not rest:
+            body = Text()
+            current = systemone.model()
+            for name, note in systemone.KNOWN_MODELS:
+                body.append(f"  {name:<12}", style=ACCENT)
+                body.append(note, style=DIM)
+                if name == current:
+                    body.append("  in use", style=f"bold {ACCENT}")
+                body.append("\n")
+            if current not in dict(systemone.KNOWN_MODELS):
+                body.append(f"  {current:<12}", style=ACCENT)
+                body.append("in use\n", style=f"bold {ACCENT}")
+            body.append(
+                "  /systemone model <name> picks one; any model trained for "
+                "System One works.", style=DIM,
+            )
+            console.print(body)
+            return
+        if systemone.enabled() and not _system_one_ready(rest):
+            warn(f"  System One stays on {systemone.model()}.")
+            return
+        try:
+            name = systemone.set_model(rest)
+        except systemone.SystemOneError as exc:
+            warn(f"  {exc}")
+            return
+        console.print(Text(
+            f"System One model set to {name}.", style=DIM,
+        ))
+        return
+
+    warn(SYSTEM_ONE_USAGE)
 
 
 def _email_connect() -> None:
@@ -2939,6 +3103,11 @@ def _set_auto(on: bool) -> None:
     console.print(
         Text(f"Autonomous mode {state}.", style=f"bold {ACCENT}")
     )
+    if on and systemone.enabled():
+        console.print(Text(
+            f"  System One ({systemone.model()}) reviews each command and "
+            "edit before it runs.", style=DIM,
+        ))
 
 
 def _hard_breaks(text: str) -> str:
@@ -3348,6 +3517,7 @@ def main() -> None:
         )
 
     update = check_for_update()
+    _check_system_one()
 
     backdrop = open_screen(console, update)
 
@@ -3543,6 +3713,10 @@ def main() -> None:
                     _set_auto(False)
                 else:
                     warn("Usage: /auto [on|off|toggle]")
+                continue
+
+            if uin == "/systemone" or uin.startswith("/systemone "):
+                _system_one_command(uin[len("/systemone"):].strip())
                 continue
 
             if uin == "/web" or uin.startswith("/web "):
@@ -3852,6 +4026,10 @@ def main() -> None:
             )
 
             checkpoint.start_turn(_turn_label(uin))
+            # What System One holds this turn's tool calls up against: a
+            # woken turn carries on with what the user last asked.
+            if not woken:
+                systemone.set_request(uin)
             clear_collapsed()
             # A local backend runs one generation at a time, and this
             # turn is the one the user is waiting on.

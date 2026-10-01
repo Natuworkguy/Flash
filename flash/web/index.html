@@ -981,6 +981,10 @@ body.page-projects #dock, body.page-settings #dock, body.page-tool #dock { displ
 .setting-row[aria-checked="true"] .switch::after { transform: translateX(16px); }
 .setting-row.static { cursor: default; }
 .setting-row[disabled] { opacity: 0.6; cursor: default; }
+.setting-row.too-old .what span { color: var(--del); }
+.system-one-model select, .system-one-model input { max-width: 240px; font: 14px var(--sans); color: var(--text); background: var(--bg); border: 1px solid var(--border-strong); border-radius: 10px; padding: 8px 10px; outline: 0; }
+.system-one-model input { width: 160px; font-family: var(--mono); }
+@media (max-width: 560px) { .system-one-model { flex-wrap: wrap; } .system-one-model .side { width: 100%; } .system-one-model select, .system-one-model input { width: 100%; max-width: none; } }
 .lan-warn { font-size: 13px !important; color: var(--text-3); margin-top: 10px !important; }
 #phone .dialog-buttons { justify-content: center; margin-top: 16px; }
 .setting-row .side { flex: none; display: flex; align-items: center; }
@@ -3994,6 +3998,15 @@ function drawGeneral(body) {
   };
   body.appendChild(row);
 
+  body.insertAdjacentHTML("beforeend", `<h2 class="settings-section settings-gap">System One</h2><p class="settings-sub">A small, quick model at Flash's side in autonomous mode. It looks over each command and edit before it runs and stops the ones that look unsafe or off task, and it answers Flash's quick yes/no, choice and score questions. Needs Ollama v0.35 or later.</p>`);
+  const systemOne = el("button", "setting-row system-one-row", `<span class="what"><b>Review autonomous commands</b><span>Checking this Ollama…</span></span><span class="switch" aria-hidden="true"></span>`);
+  systemOne.type = "button";
+  systemOne.setAttribute("role", "switch");
+  body.appendChild(systemOne);
+  const systemOneModel = el("div", "setting-row static system-one-model", `<span class="what"><b>System One model</b><span>Which model reviews and answers. A smaller one is quicker; a bigger one judges more carefully.</span></span><span class="side"><select aria-label="System One model"></select></span>`);
+  body.appendChild(systemOneModel);
+  fillSystemOne(systemOne, systemOneModel);
+
   body.insertAdjacentHTML("beforeend", `<h2 class="settings-section settings-gap">Sparks</h2><p class="settings-sub">Agents that keep working on a goal, on a schedule. Make and read them on the Sparks page.</p>`);
   const always = el("button", "setting-row sparks-always-row", `<span class="what"><b>Keep working when Flash is closed</b><span></span></span><span class="switch" aria-hidden="true"></span>`);
   always.type = "button";
@@ -4550,6 +4563,74 @@ async function drawSparks(body, again = false) {
   where.appendChild(change);
 }
 const drawSparksPage = () => toolPage("Sparks", drawSparks);
+
+// System One's switch and model in Settings. Switching it on asks the
+// server its version first: an Ollama older than 0.35 has no System One,
+// and the row says so, with what to do about it.
+async function fillSystemOne(row, modelRow) {
+  let r = null;
+  const side = modelRow.querySelector(".side");
+  const note = row.querySelector(".what span");
+  const pickModel = async (name) => {
+    name = String(name || "").trim();
+    if (!name || name === r.model) { show(r); return; }
+    try { show(await command("system-one", "model", null, { model: name })); toast(`System One uses ${name} now`); }
+    catch (error) { show(r); showFailure(error); }
+  };
+  // Its own box to type a name in, for a model not on the list.
+  const typeModel = () => {
+    const box = el("input", "mono");
+    box.placeholder = "model name";
+    box.autocomplete = "off";
+    box.setAttribute("aria-label", "System One model");
+    box.onkeydown = (e) => {
+      if (e.key === "Enter") { e.preventDefault(); box.blur(); }
+      if (e.key === "Escape") { box.value = ""; box.blur(); }
+    };
+    box.onblur = () => pickModel(box.value);
+    side.replaceChildren(box);
+    box.focus();
+  };
+  const show = (state) => {
+    r = state;
+    row.setAttribute("aria-checked", !!r.on);
+    row.classList.toggle("too-old", !!r.too_old);
+    if (r.too_old) note.textContent = `This Ollama is v${r.version}. System One needs v${r.least} or later, so update Ollama to use it.`;
+    else if (!r.version) note.textContent = r.problem || "Ollama did not answer.";
+    else if (!r.on) note.textContent = `Off. Ollama v${r.version} is ready for it.`;
+    else if (!r.auto) note.textContent = "On, and waiting for autonomous mode: until then you answer each command yourself.";
+    else note.textContent = `On. ${r.counts.reviewed} reviewed and ${r.counts.stopped} stopped since Flash started.`;
+    const known = r.known.map((k) => k.name);
+    const select = el("select");
+    select.setAttribute("aria-label", "System One model");
+    select.innerHTML = r.known.map((k) => `<option value="${esc(k.name)}">${esc(k.name)} · ${esc(k.note)}</option>`).join("")
+      + (known.includes(r.model) ? "" : `<option value="${esc(r.model)}">${esc(r.model)}</option>`)
+      + `<option value="" data-other>Another model…</option>`;
+    select.value = r.model;
+    select.onchange = () => (select.value ? pickModel(select.value) : typeModel());
+    side.replaceChildren(select);
+  };
+  try { show(await command("system-one", "", null)); }
+  catch (error) { note.textContent = error.message || String(error); return; }
+  row.onclick = async () => {
+    if (row.disabled) return;
+    const on = row.getAttribute("aria-checked") !== "true";
+    row.setAttribute("aria-checked", on);
+    row.disabled = true;
+    if (on) note.textContent = "Checking this Ollama…";
+    try {
+      show(await command("system-one", on ? "on" : "off", null));
+      info.system_one = r.on;
+      renderInfo();
+      toast(on ? `System One on, with ${r.model}` : "System One off");
+    } catch (error) {
+      row.setAttribute("aria-checked", !on);
+      show(r);
+      showFailure(error);
+    }
+    row.disabled = false;
+  };
+}
 
 // The box in Settings for how many rounds of tools a shift gets: typed,
 // or stepped, and saved a moment after the last change.
@@ -7472,7 +7553,9 @@ function renderInfo() {
   autoBtn.innerHTML = icon("bolt") + `<span>${auto ? "Auto" : "Ask first"}</span>`;
   if (auto && !was && autoBtn.dataset.ready) flash(autoBtn, "zap", 520);
   autoBtn.dataset.ready = "1";
-  autoBtn.dataset.tip = auto ? "Runs commands and edits without asking" : "Asks before commands and edits";
+  autoBtn.dataset.tip = auto
+    ? (info.system_one ? "Runs commands and edits once System One has looked them over" : "Runs commands and edits without asking")
+    : "Asks before commands and edits";
   greet();
 }
 

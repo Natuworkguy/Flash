@@ -1932,6 +1932,17 @@ def shift(spark_id: str, client=None) -> Optional[Report]:
         _save(spark)
     _changed()
 
+    # What System One holds this shift's tool calls up against, when it
+    # reviews them: the spark's standing goal, its lines, and its jobs.
+    from . import systemone  # deferred: avoids a module cycle
+
+    systemone.set_request("\n".join(part for part in (
+        f"{spark.name}'s standing goal: {spark.goal}",
+        f"Lines it must not cross: {spark.boundaries}"
+        if spark.boundaries else "",
+        *(f"Job: {i['job']}" for i in inbox if i.get("job")),
+    ) if part))
+
     steps: list[str] = list(resuming["steps"]) if resuming else []
     # The web chats that gave it a job this shift, for its report.
     chats = list(resuming.get("chats", [])) if resuming else list(
