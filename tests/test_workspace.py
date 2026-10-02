@@ -34,7 +34,7 @@ class TestHosts:
 
         assert listed == [{
             "name": "This computer", "url": "http://localhost:11434",
-            "saved": False,
+            "saved": False, "locked": False,
         }]
 
     def test_add_and_remove(self):
@@ -92,6 +92,108 @@ class TestHosts:
 
         assert health["Up"] is True
         assert health["Down"] is False
+
+
+class TestHostKeys:
+    def test_a_key_is_kept_but_never_listed(self):
+        added = workspace.add_host("Studio", "10.0.0.5", "s3cret")
+
+        assert added == {"name": "Studio", "url": "http://10.0.0.5:11434",
+                         "locked": True}
+        listed = workspace.hosts()
+        assert listed[-1]["locked"] is True
+        assert "s3cret" not in repr(listed)
+        assert workspace.api_key("10.0.0.5") == "s3cret"
+
+    def test_the_file_with_keys_is_private(self):
+        workspace.add_host("Studio", "10.0.0.5", "s3cret")
+
+        mode = (workspace.store() / "hosts.json").stat().st_mode & 0o777
+        if os.name != "nt":
+            assert mode == 0o600
+
+    def test_headers_carry_the_key(self):
+        workspace.add_host("Studio", "10.0.0.5", "s3cret")
+
+        assert workspace.auth_headers("http://10.0.0.5:11434") == {
+            "authorization": "Bearer s3cret",
+        }
+        assert workspace.client_options("10.0.0.5") == {
+            "headers": {"authorization": "Bearer s3cret"},
+        }
+        # Another host gets nothing, and a client is made as before.
+        assert workspace.client_options("10.0.0.9") == {}
+
+    def test_the_environment_key_is_the_fallback(self, monkeypatch):
+        monkeypatch.setenv("OLLAMA_API_KEY", "from-env")
+        workspace.add_host("Studio", "10.0.0.5", "s3cret")
+
+        assert workspace.api_key("10.0.0.5") == "s3cret"
+        assert workspace.api_key("10.0.0.9") == "from-env"
+
+    def test_adding_again_without_a_key_drops_it(self):
+        workspace.add_host("Studio", "10.0.0.5", "s3cret")
+        workspace.add_host("Studio", "10.0.0.5")
+
+        assert workspace.api_key("10.0.0.5") == ""
+        assert workspace.hosts()[-1]["locked"] is False
+
+    def test_this_computer_can_have_a_key(self):
+        workspace.add_host("", "localhost:11434", "s3cret")
+
+        listed = workspace.hosts()
+        assert [h["name"] for h in listed] == ["This computer"]
+        assert listed[0]["locked"] is True
+        assert workspace.api_key("127.0.0.1:11434") == "s3cret"
+
+    def test_model_lookups_send_it(self, monkeypatch):
+        from flash import sysprompt
+
+        workspace.add_host("Studio", "10.0.0.5", "s3cret")
+        seen = []
+
+        def urlopen(request, timeout):
+            seen.append(request.get_header("Authorization"))
+            raise OSError("not really there")
+
+        monkeypatch.setattr(sysprompt.urllib.request, "urlopen", urlopen)
+        sysprompt._show("http://10.0.0.5:11434", "llama3.1")
+
+        assert seen == ["Bearer s3cret"]
+
+    def test_a_key_has_no_spaces(self):
+        with pytest.raises(WorkspaceError):
+            workspace.add_host("Studio", "10.0.0.5", "two words")
+
+    def test_a_server_behind_a_key(self):
+        class Guarded(BaseHTTPRequestHandler):
+            def do_GET(self):
+                ok = self.headers.get("Authorization") == "Bearer right"
+                self.send_response(200 if ok else 401)
+                self.end_headers()
+                self.wfile.write(b'{"version":"0.35.0"}' if ok else b"no")
+
+            def log_message(self, *args):
+                pass
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Guarded)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        url = f"127.0.0.1:{server.server_address[1]}"
+        try:
+            assert workspace.host_state(url) == "refused"
+            workspace.add_host("Guarded", url, "wrong")
+            assert workspace.host_state(url) == "refused"
+            workspace.add_host("Guarded", url, "right")
+            assert workspace.host_state(url) == "up"
+            health = {
+                h["name"]: h for h in workspace.hosts_with_health()
+            }
+        finally:
+            server.shutdown()
+            server.server_close()
+
+        assert health["Guarded"]["up"] is True
+        assert health["Guarded"]["refused"] is False
 
 
 class TestProjects:

@@ -24,6 +24,14 @@ def get_system_prompt():
         return f.read().strip()
 
 
+def _auth(host: str) -> dict:
+    """The header with HOST's API key, if it has one."""
+
+    from . import workspace  # deferred: workspace is only needed here
+
+    return workspace.auth_headers(host)
+
+
 def _show_url(host: str) -> str:
     """Build the /api/show URL, tolerating a scheme-less OLLAMA_HOST.
 
@@ -52,7 +60,7 @@ def _show(host: str, model: str) -> dict:
     request = urllib.request.Request(
         _show_url(host),
         data=json.dumps({"model": model}).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
+        headers={"Content-Type": "application/json", **_auth(host)},
         method="POST",
     )
 

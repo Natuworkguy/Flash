@@ -738,7 +738,15 @@ any other machine you add, like one with a bigger GPU. The model menu
 (`Alt M`, or `Alt H` to start on the hosts) lists them with a dot showing
 which ones answer. Picking one switches Flash to it and lists the models
 there. The choice is saved as `OLLAMA_HOST`, the same setting the
-terminal uses. The menu's three sections (Host, Model, System One) each
+terminal uses.
+
+Ollama itself has no API keys, but a server can sit behind a proxy that
+asks for one. Give the key in the API key box when you add the host, and
+Flash sends it with every request to that host (chat, model lookups, and
+System One alike) as `Authorization: Bearer <key>`. It is kept in
+`~/.flash/web/hosts.json`, readable only by you, and never shown again;
+a lock marks the hosts that have one, and a yellow dot one that wants a
+key or turned its key down. Adding the host again replaces its key. The menu's three sections (Host, Model, System One) each
 fold away with a click on their name, and stay as you left them.
 
 The model button shows a model's own name, so

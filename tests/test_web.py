@@ -865,7 +865,7 @@ class TestHostCommands:
                             lambda k, v: saved.update({k: v}))
         monkeypatch.setattr(ai, "forget_model_facts",
                             lambda: forgot.append(True))
-        monkeypatch.setattr(web.workspace, "host_up", lambda url: False)
+        monkeypatch.setattr(web.workspace, "host_state", lambda url: "down")
 
         result = web.command(web.Session(), {"name": "host",
                                              "arg": "10.0.0.5"})
@@ -876,13 +876,13 @@ class TestHostCommands:
         assert result["up"] is False
 
     def test_add_list_remove(self, monkeypatch):
-        monkeypatch.setattr(web.workspace, "host_up", lambda url: True)
+        monkeypatch.setattr(web.workspace, "host_state", lambda url: "up")
         session = web.Session()
 
         added = web.command(session, {"name": "host-add",
                                       "arg": "10.0.0.5", "label": "Studio"})
         assert added == {"name": "Studio", "url": "http://10.0.0.5:11434",
-                         "up": True}
+                         "locked": False, "up": True, "refused": False}
 
         listed = web.command(session, {"name": "hosts"})["hosts"]
         assert [h["name"] for h in listed] == ["This computer", "Studio"]
@@ -890,6 +890,24 @@ class TestHostCommands:
         web.command(session, {"name": "host-remove", "arg": "10.0.0.5"})
         listed = web.command(session, {"name": "hosts"})["hosts"]
         assert [h["name"] for h in listed] == ["This computer"]
+
+    def test_a_host_added_with_a_key(self, monkeypatch):
+        monkeypatch.setattr(web.workspace, "host_state",
+                            lambda url: "refused")
+        session = web.Session()
+
+        added = web.command(session, {
+            "name": "host-add", "arg": "10.0.0.5", "label": "Studio",
+            "key": "s3cret",
+        })
+
+        # The page learns there is a key, and that it was turned down,
+        # but never the key itself.
+        assert added["locked"] is True and added["refused"] is True
+        assert "s3cret" not in json.dumps(added)
+        listed = web.command(session, {"name": "hosts"})
+        assert "s3cret" not in json.dumps(listed)
+        assert web.workspace.api_key("10.0.0.5") == "s3cret"
 
     def test_a_bad_address_is_refused(self):
         with pytest.raises(ValueError):
@@ -2675,7 +2693,7 @@ class TestSlowHosts:
                 return SimpleNamespace(models=[])
 
         monkeypatch.setattr(web.ollama, "Client", Tracked)
-        monkeypatch.setattr(web.workspace, "host_up", lambda url: False)
+        monkeypatch.setattr(web.workspace, "host_state", lambda url: "down")
         monkeypatch.setattr(ai, "set_config_var", lambda *a: None)
         monkeypatch.setattr(ai, "forget_model_facts", lambda: None)
 

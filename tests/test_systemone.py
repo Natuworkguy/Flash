@@ -586,3 +586,20 @@ def test_web_turns_on_with_the_first_found(server):
 
     assert state["on"] is True  # nosec B101
     assert state["model"] == "Natuworkguy/tev1:0.8b"  # nosec B101
+
+
+def test_the_host_key_rides_along(monkeypatch):
+    from flash import workspace
+
+    workspace.add_host("Guarded", "10.0.0.5", "s3cret")
+    seen = {}
+
+    def get(url, timeout, headers):
+        seen["get"] = headers
+        return httpx.Response(200, json={"version": "0.35.0"},
+                              request=httpx.Request("GET", url))
+
+    monkeypatch.setattr(systemone.httpx, "get", get)
+    systemone.server_version("http://10.0.0.5:11434")
+
+    assert seen["get"] == {"authorization": "Bearer s3cret"}  # nosec B101
