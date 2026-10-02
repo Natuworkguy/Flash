@@ -101,6 +101,13 @@ PAGE_PATHS = re.compile(
 
 STATIC = {"orbit.woff2": "font/woff2", "logo-icon.svg": "image/svg+xml"}
 
+# Newsreader, the face the agent writes in: its replies and the
+# documents it sends. Shipped with Flash so it reads the same offline.
+STATIC.update({
+    name: "font/woff2"
+    for name in ("newsreader.woff2", "newsreader-italic.woff2")
+})
+
 # KaTeX, which turns the math in replies into MathML for the browser to
 # draw with its own math font: just the script, shipped with Flash so
 # math renders offline too. Served by exact name, and nothing else.
