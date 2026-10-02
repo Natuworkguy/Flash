@@ -21,7 +21,7 @@ from typing import Any, Optional
 
 import ollama
 
-from . import context, skills
+from . import context, skills, workspace
 from .memory import list_memory
 from .theme import capture_tool_output
 
@@ -336,7 +336,7 @@ def _stream(client, model: str, messages: list, tools: list) -> Any:
 
 def _run(review: Review, messages: list[dict], host: str, model: str):
     try:
-        client = ollama.Client(host=host)
+        client = ollama.Client(host=host, **workspace.client_options(host))
         tools = _schemas(_allowed(review))
         chat = review_messages(review, messages)
         reply = ""

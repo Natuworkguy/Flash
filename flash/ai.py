@@ -37,6 +37,7 @@ from . import (
     sparks,
     systemone,
     terminal,
+    workspace,
 )
 from .cli import parse_args
 from .dashes import undash
@@ -280,6 +281,14 @@ class Config:
 
 
 Config.refresh()
+
+
+def _client() -> "ollama.Client":
+    """A client for the host in use, sending its API key if it has one."""
+
+    return ollama.Client(
+        host=Config.host, **workspace.client_options(Config.host),
+    )
 
 
 def set_config_var(name: str, value: str) -> None:
@@ -2056,7 +2065,7 @@ def _system_one_pick(name: str) -> None:
     try:
         systemone.check(Config.host)
         if systemone.capable(Config.host, name) is None and not \
-                fetch_if_missing(ollama.Client(host=Config.host), name):
+                fetch_if_missing(_client(), name):
             warn("  System One is as it was.")
             return
         name = systemone.choose(Config.host, name)
@@ -2280,7 +2289,7 @@ def _ask_spark_model() -> str:
     machine's list, or typed when there is no list to pick from."""
 
     console.print(Text("  Which model does it run on?", style=DIM))
-    picked = pick_model(ollama.Client(host=Config.host), Config.model or "")
+    picked = pick_model(_client(), Config.model or "")
     if picked:
         console.print(Text(f"  {picked}", style=ACCENT))
         return picked
@@ -3503,7 +3512,7 @@ def main() -> None:
             input("\n\nPress any key to continue ")
             sys.exit(2)
 
-    client = ollama.Client(host=Config.host)
+    client = _client()
 
     # Sparks work for as long as Flash is open.
     sparks.start()
@@ -3705,7 +3714,7 @@ def main() -> None:
 
                 if arg:
                     set_config_var("MODEL", arg)
-                    client = ollama.Client(host=Config.host)
+                    client = _client()
                     console.print(
                         Text(f"Model set to {arg}.", style=DIM)
                     )
@@ -3779,7 +3788,7 @@ def main() -> None:
                     continue
                 name, value = parts
                 set_config_var(name, value)
-                client = ollama.Client(host=Config.host)
+                client = _client()
                 console.print(
                     Text(f"{name} set in {ENV_PATH}.", style=DIM)
                 )
@@ -3791,7 +3800,7 @@ def main() -> None:
                     warn("Usage: /unset NAME")
                     continue
                 if unset_config_var(name):
-                    client = ollama.Client(host=Config.host)
+                    client = _client()
                     console.print(Text(f"{name} unset.", style=DIM))
                 else:
                     console.print(Text(f"{name} was not set.", style=DIM))
@@ -3803,7 +3812,7 @@ def main() -> None:
                 learning.refresh()
                 _extensions_changed()
                 forget_model_facts()
-                client = ollama.Client(host=Config.host)
+                client = _client()
                 console.print(Text("Config refreshed.", style=DIM))
                 continue
 

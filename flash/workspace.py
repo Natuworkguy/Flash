@@ -124,7 +124,15 @@ def hosts(current: str = "") -> list[dict]:
         h for h in _read("hosts.json", [])
         if isinstance(h, dict) and h.get("url")
     ]
-    listed = [{"name": LOCAL_NAME, "url": LOCAL_HOST, "saved": False}]
+    local_key = any(
+        host_key(str(h.get("url") or "")) == host_key(LOCAL_HOST)
+        and str(h.get("key") or "").strip()
+        for h in saved
+    )
+    listed = [{
+        "name": LOCAL_NAME, "url": LOCAL_HOST, "saved": False,
+        "locked": local_key,
+    }]
     seen = {host_key(LOCAL_HOST)}
 
     for entry in saved:
@@ -137,6 +145,8 @@ def hosts(current: str = "") -> list[dict]:
         seen.add(host_key(url))
         listed.append({
             "name": str(entry.get("name") or url), "url": url, "saved": True,
+            # Whether it has a key, never the key: this goes to the page.
+            "locked": bool(str(entry.get("key") or "").strip()),
         })
 
     if current:
@@ -161,9 +171,18 @@ def listed_url(current: str) -> str:
     )
 
 
-def add_host(name: str, url: str) -> dict:
+def add_host(name: str, url: str, key: str = "") -> dict:
+    """Save a host, with the API key its server asks for if it asks.
+
+    A key goes in hosts.json beside the host, readable only by its
+    owner, and never back out to the page.
+    """
+
     url = normalize_host(url)
     name = " ".join((name or "").split())[:MAX_NAME] or urlparse(url).hostname
+    key = (key or "").strip()
+    if any(c.isspace() for c in key):
+        raise WorkspaceError("an API key has no spaces in it")
 
     with _lock:
         saved = [
@@ -171,11 +190,62 @@ def add_host(name: str, url: str) -> dict:
             if isinstance(h, dict)
             and host_key(str(h.get("url") or "")) != host_key(url)
         ]
-        if host_key(url) != host_key(LOCAL_HOST):
-            saved.append({"name": name, "url": url})
+        # This computer is always listed, so a key for it is saved as a
+        # host of its own: the key is the point of adding it.
+        if host_key(url) != host_key(LOCAL_HOST) or key:
+            entry = {"name": name, "url": url}
+            if key:
+                entry["key"] = key
+            saved.append(entry)
         _write("hosts.json", saved)
+        if any(h.get("key") for h in saved if isinstance(h, dict)):
+            _private(store() / "hosts.json")
 
-    return {"name": name, "url": url}
+    return {"name": name, "url": url, "locked": bool(key)}
+
+
+def _private(path: Path) -> None:
+    """Make PATH readable by its owner only, where the system has that."""
+
+    try:
+        os.chmod(path, 0o600)
+    except OSError:
+        pass
+
+
+def api_key(url: str) -> str:
+    """The API key Flash sends to the Ollama at URL: the one saved with
+    the host, else OLLAMA_API_KEY from the environment, else none."""
+
+    wanted = host_key(url)
+    for entry in _read("hosts.json", []):
+        if not isinstance(entry, dict):
+            continue
+        if host_key(str(entry.get("url") or "")) == wanted:
+            key = str(entry.get("key") or "").strip()
+            if key:
+                return key
+    return (os.environ.get("OLLAMA_API_KEY") or "").strip()
+
+
+def auth_headers(url: str) -> dict:
+    """The header that carries URL's API key, or none without one.
+
+    Lower case, as Ollama's client looks for it: given its own, the
+    client leaves it be rather than adding the environment's.
+    """
+
+    key = api_key(url)
+    return {"authorization": f"Bearer {key}"} if key else {}
+
+
+def client_options(host: str) -> dict:
+    """What an ollama.Client for HOST is made with besides the host: the
+    header with HOST's key, when it has one. Nothing otherwise, so a
+    client made without a key is made exactly as before."""
+
+    headers = auth_headers(host)
+    return {"headers": headers} if headers else {}
 
 
 def remove_host(url: str) -> bool:
@@ -197,16 +267,29 @@ def remove_host(url: str) -> bool:
     return True
 
 
+def host_state(url: str, timeout: float = HOST_CHECK_SECONDS) -> str:
+    """How the Ollama at URL answers, quickly: "up", "down", or
+    "refused" when something in front of it wants a key it was not
+    given, or turned down the one it was."""
+
+    try:
+        request = urllib.request.Request(
+            normalize_host(url) + "/api/version", headers=auth_headers(url),
+        )
+        with urllib.request.urlopen(  # nosec B310 -- scheme checked above
+            request, timeout=timeout
+        ) as response:
+            return "up" if response.status == 200 else "down"
+    except urllib.error.HTTPError as exc:
+        return "refused" if exc.code in (401, 403) else "down"
+    except (OSError, ValueError, urllib.error.URLError):
+        return "down"
+
+
 def host_up(url: str, timeout: float = HOST_CHECK_SECONDS) -> bool:
     """Whether an Ollama server answers at URL, quickly."""
 
-    try:
-        with urllib.request.urlopen(  # nosec B310 -- scheme checked above
-            normalize_host(url) + "/api/version", timeout=timeout
-        ) as response:
-            return response.status == 200
-    except (OSError, ValueError, urllib.error.URLError):
-        return False
+    return host_state(url, timeout) == "up"
 
 
 def hosts_with_health(current: str = "") -> list[dict]:
@@ -214,10 +297,10 @@ def hosts_with_health(current: str = "") -> list[dict]:
     the wait rather than their sum."""
 
     listed = hosts(current)
-    results: dict[str, bool] = {}
+    results: dict[str, str] = {}
 
     def check(url: str) -> None:
-        results[url] = host_up(url)
+        results[url] = host_state(url)
 
     threads = [
         threading.Thread(target=check, args=(h["url"],), daemon=True)
@@ -228,7 +311,11 @@ def hosts_with_health(current: str = "") -> list[dict]:
     for thread in threads:
         thread.join(HOST_CHECK_SECONDS + 0.5)
 
-    return [{**h, "up": results.get(h["url"], False)} for h in listed]
+    return [
+        {**h, "up": results.get(h["url"]) == "up",
+         "refused": results.get(h["url"]) == "refused"}
+        for h in listed
+    ]
 
 
 # --- Projects ------------------------------------------------------------

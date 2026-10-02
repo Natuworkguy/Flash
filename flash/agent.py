@@ -24,7 +24,7 @@ from rich.console import Group, RenderableType
 from rich.live import Live
 from rich.text import Text
 
-from . import systemone
+from . import systemone, workspace
 from .dashes import undash
 from .sysprompt import get_model_system_prompt
 from .theme import (
@@ -205,7 +205,7 @@ def _run(entry: SubAgent) -> None:
             raise RuntimeError("MODEL is not set")
 
         host = flash_tools.OLLAMA_HOST or OLLAMA_HOST_DEFAULT
-        client = ollama.Client(host=host)
+        client = ollama.Client(host=host, **workspace.client_options(host))
         allowed = allowed_tool_names()
         schemas = [
             t for t in flash_tools.available_tools()

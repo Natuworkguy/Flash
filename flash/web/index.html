@@ -1434,6 +1434,11 @@ button.item-row:hover { background: var(--hover); }
 .menu .health { width: 7px; height: 7px; border-radius: 50%; background: var(--text-3); flex: none; opacity: 0.6; }
 .menu .health.up { background: var(--add); opacity: 1; }
 .menu .health.down { background: var(--del); opacity: 1; }
+/* Answering, but not to this key: something in front of it wants one. */
+.menu .health.refused { background: var(--warn); opacity: 1; }
+.menu .lock { display: inline-flex; color: var(--text-3); }
+.menu .lock svg { width: 12px; height: 12px; }
+.menu .label .lock { margin-left: 6px; vertical-align: -1px; }
 .menu .sub { font: 11.5px var(--mono); color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .menu .stack { display: flex; flex-direction: column; min-width: 0; flex: 1; line-height: 1.35; }
 .menu .remove { opacity: 0; color: var(--text-3); padding: 2px; border-radius: 6px; display: grid; }
@@ -1941,6 +1946,7 @@ const ICON = {
   retry: '<path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/>',
   edit: '<path d="M17 3a2.8 2.8 0 0 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/>',
   x: '<path d="M18 6 6 18M6 6l12 12"/>',
+  lock: '<rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>',
   chevRight: '<path d="m9 6 6 6-6 6"/>',
   chevDown: '<path d="m6 9 6 6 6-6"/>',
   bolt: '<path d="M13 2 4 14h7l-1 8 9-12h-7Z"/>',
@@ -6456,9 +6462,10 @@ function hostForm() {
     <p class="sub">Another computer running Ollama, like a machine with a bigger GPU.</p>
     <label class="field"><span>Address</span><input name="url" class="mono" placeholder="10.0.0.5:11434" autocomplete="off" spellcheck="false"></label>
     <label class="field"><span>Name</span><input name="label" placeholder="Optional, like Studio" autocomplete="off"></label>
+    <label class="field"><span>API key</span><input name="key" type="password" class="mono" placeholder="Optional" autocomplete="off" spellcheck="false"><small>Only for a server that asks for one, such as an Ollama behind a proxy that checks keys. Sent with every request to this host as a Bearer token, kept on this computer, and never shown again.</small></label>
     <div class="dialog-buttons"><button type="button" class="btn" data-cancel>Cancel</button><button type="submit" class="btn primary">Add and switch</button></div>`,
     async (data) => {
-      const added = await command("host-add", data.url, null, { label: data.label });
+      const added = await command("host-add", data.url, null, { label: data.label, key: data.key });
       hosts = [...hosts.filter((h) => h.url !== added.url), added];
       await switchHost(added.url, false);
     });
@@ -8834,11 +8841,14 @@ function drawModelMenu(focusHosts, keepSelection) {
   const rows = [sectionRow("host", "Host", activeHost ? activeHost.name : active)];
   if (!folded.host) {
     for (const h of shown) {
-      const health = h.up === undefined ? "" : h.up ? " up" : " down";
+      const health = h.up === undefined ? "" : h.up ? " up" : h.refused ? " refused" : " down";
+      // Where it is, or why it will not talk to Flash.
+      const where = h.refused ? (h.locked ? "turned down its key" : "wants an API key") : h.url.replace(/^https?:\/\//, "");
+      const lock = h.locked ? `<span class="lock" data-tip="Sends an API key">${icon("lock")}</span>` : "";
       // Only a saved host can go, and not while it is the one in use.
       const removable = h.saved && h.url !== active;
       rows.push({
-        html: `<span class="health${health}"></span><span class="stack"><span class="label">${esc(h.name)}</span><span class="sub">${esc(h.url.replace(/^https?:\/\//, ""))}</span></span>` +
+        html: `<span class="health${health}"></span><span class="stack"><span class="label">${esc(h.name)}${lock}</span><span class="sub">${esc(where)}</span></span>` +
           (removable ? `<span class="remove" data-remove="${esc(h.url)}" data-tip="Remove host">${icon("x")}</span>` : ""),
         host: h.url, current: h.url === active,
       });
@@ -8848,6 +8858,7 @@ function drawModelMenu(focusHosts, keepSelection) {
   rows.push(sectionRow("model", "Model", shortModel(info.model) || "None", true));
   if (!folded.model) {
     if (modelsLoading && !models.length) rows.push({ header: true, html: '<span class="menu-note">Loading models…</span>' });
+    else if (!modelsReachable && !modelsLoading && activeHost && activeHost.refused) rows.push({ header: true, html: '<span class="menu-note">This host wants an API key. Add it again with its key under Add host.</span>' });
     else if (!modelsReachable && !modelsLoading) rows.push({ header: true, html: '<span class="menu-note">This host is not answering. Pick another above.</span>' });
     else {
       // A model that can only judge is System One's, below: it cannot chat.
@@ -8921,7 +8932,9 @@ async function switchHost(url, reopen) {
     models = result.models || [];
     modelsReachable = !!result.up;
     renderInfo();
-    toast(result.up ? `Switched to ${info.host_name}` : `${info.host_name} is not answering`);
+    // Adding a host again at the same address replaces it, key and all.
+    if (result.refused) toast(known && known.locked ? `${info.host_name} turned down its API key. Add it again under **Add host…** with the right one.` : `${info.host_name} wants an API key. Add it again under **Add host…** with its key.`);
+    else toast(result.up ? `Switched to ${info.host_name}` : `${info.host_name} is not answering`);
     if (reopen) openModels(true);
   } catch (error) { showFailure(error); }
 }

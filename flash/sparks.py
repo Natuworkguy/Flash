@@ -1745,7 +1745,11 @@ def _work(
     if not model:
         raise RuntimeError("no model is set, so it could not run")
     host = flash_tools.OLLAMA_HOST or subagents.OLLAMA_HOST_DEFAULT
-    client = client or ollama.Client(host=host)
+    from . import workspace  # deferred: only a client needs its key
+
+    client = client or ollama.Client(
+        host=host, **workspace.client_options(host),
+    )
     allowed = names if names is not None else subagents.allowed_tool_names()
     offered = flash_tools.available_tools()
     if not flash_tools.mail.configured() and _about_email(spark):
