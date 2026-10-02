@@ -32,6 +32,7 @@ from . import (
     extensions,
     learning,
     plan,
+    serif,
     skills,
     sparks,
     systemone,
@@ -3069,7 +3070,7 @@ def _render_markdown(console: Console, text: str, *, end: str = "\n") -> None:
     trailing cursor dot -- the full reply already arrived in one shot, so
     this is a paced typewriter effect rather than real token streaming."""
 
-    text = render_latex(text)
+    text = render_latex(serif.for_terminal(text))
 
     def render(body: str) -> Markdown:
         return Markdown(body, code_theme="monokai", hyperlinks=True)
