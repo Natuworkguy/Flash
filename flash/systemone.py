@@ -26,6 +26,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
+from urllib.parse import urlparse
 
 import httpx
 
@@ -190,12 +191,21 @@ def _base(host: str) -> str:
     return host.rstrip("/")
 
 
+def _auth(url: str) -> dict:
+    """The header with the API key of the host URL is on, if it has one."""
+
+    from . import workspace  # deferred: workspace is only needed here
+
+    parsed = urlparse(url)
+    return workspace.auth_headers(f"{parsed.scheme}://{parsed.netloc}")
+
+
 def _get(url: str, timeout: float) -> httpx.Response:
-    return httpx.get(url, timeout=timeout)
+    return httpx.get(url, timeout=timeout, headers=_auth(url))
 
 
 def _post(url: str, body: dict, timeout: float) -> httpx.Response:
-    return httpx.post(url, json=body, timeout=timeout)
+    return httpx.post(url, json=body, timeout=timeout, headers=_auth(url))
 
 
 def parse_version(text: str) -> Optional[tuple[int, ...]]:

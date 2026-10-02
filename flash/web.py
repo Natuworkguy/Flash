@@ -1666,7 +1666,7 @@ def run_turn(
         })
         return
 
-    client = ollama.Client(host=ai.Config.host)
+    client = ai._client()
 
     # What this chat's sub-agents have done since, carried in the same
     # message the way the terminal carries it, so the model hears about
@@ -2093,7 +2093,10 @@ def list_models(ai) -> Optional[list[str]]:
 
     def ask() -> None:
         try:
-            found["listed"] = ollama.Client(host=ai.Config.host).list()
+            found["listed"] = ollama.Client(
+                host=ai.Config.host,
+                **workspace.client_options(ai.Config.host),
+            ).list()
         except Exception:  # noqa: BLE001
             found["failed"] = True
 
@@ -2667,13 +2670,20 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
         session.hub.publish({"type": "status"})
         # The quick check first: a host that is down has no models to
         # list, and asking would only make the switch wait.
-        up = workspace.host_up(url)
+        state = workspace.host_state(url)
+        up = state == "up"
         return {"host": url, "host_url": workspace.listed_url(url),
-                "models": (list_models(ai) or []) if up else [], "up": up}
+                "models": (list_models(ai) or []) if up else [], "up": up,
+                "refused": state == "refused"}
 
     if name == "host-add":
-        added = workspace.add_host(str(body.get("label") or ""), arg)
-        return {**added, "up": workspace.host_up(added["url"])}
+        # The key, if the server asks for one, comes in the body rather
+        # than the address, and is never sent back.
+        added = workspace.add_host(
+            str(body.get("label") or ""), arg, str(body.get("key") or ""),
+        )
+        state = workspace.host_state(added["url"])
+        return {**added, "up": state == "up", "refused": state == "refused"}
 
     if name == "host-remove":
         if workspace.host_key(arg) == workspace.host_key(ai.Config.host):
