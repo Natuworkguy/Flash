@@ -673,6 +673,28 @@ class TestFont:
     def test_the_license_ships_beside_it(self):
         assert (web.WEB_DIR / "OFL-orbit.txt").is_file()
 
+    @pytest.mark.parametrize(
+        "name", ["newsreader.woff2", "newsreader-italic.woff2"],
+    )
+    def test_the_reply_face_is_served(self, server, name):
+        port = server.port
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request("GET", f"/static/{name}",
+                     headers={"Host": f"127.0.0.1:{port}"})
+        response = conn.getresponse()
+        body = response.read()
+        conn.close()
+
+        assert response.status == 200
+        assert response.getheader("Content-Type") == "font/woff2"
+        assert body[:4] == b"wOF2"
+
+    def test_its_license_ships_too(self):
+        text = (web.WEB_DIR / "OFL-newsreader.txt").read_text(
+            encoding="utf-8",
+        )
+        assert "SIL Open Font License" in text
+
 
 class TestInTheTerminal:
     def test_lan_flag(self):

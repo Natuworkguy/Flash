@@ -26,6 +26,7 @@ from typing import Optional
 from urllib.error import URLError
 from urllib.request import Request, urlopen
 
+from . import serif
 from .paths import MODELS_DIR
 
 
@@ -1050,7 +1051,10 @@ def for_speech(text: str, limit: int = 0) -> str:
     # the reader can finish on screen.
     limit = limit or max_speech_chars()
 
-    stripped = _EMOJI.sub("", _FENCE.sub(" ", text or ""))
+    # A passage set apart in Newsreader is prose, not code: its words
+    # are read like the rest.
+    text = serif.plain(text or "")
+    stripped = _EMOJI.sub("", _FENCE.sub(" ", text))
     stripped = _IMAGE.sub(" ", stripped)
     stripped = _LINK.sub(r"\1", stripped)
     stripped = _URL.sub("a link", stripped)
