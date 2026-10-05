@@ -82,7 +82,7 @@ def test_images_must_be_png_or_jpeg(tmp_path):
         textures.load_image(tmp_path / "missing.png")
 
 
-# --- On a model -------------------------------------------------------------
+# --- On a model --------------------------------------------------------------
 
 
 def test_a_pattern_paints_the_part():

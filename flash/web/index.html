@@ -1563,6 +1563,34 @@ body.resizing-viewer iframe { pointer-events: none; }
 .model-view .model-tools .hint { padding: 0 8px; font-size: 12px; color: var(--text-3); white-space: nowrap; }
 @media (max-width: 560px) { .model-view .model-tools .hint { display: none; } }
 
+/* A MIDI file: a piano roll, its tracks, and a transport to play it by.
+   The roll fits the whole piece across; the line is where it is. */
+.midi-view { position: absolute; inset: 0; display: flex; flex-direction: column; background: var(--bg); }
+.midi-view .midi-note { margin: auto; padding: 24px; text-align: center; color: var(--text-3); font-size: 13.5px; }
+.midi-view .roll { position: relative; flex: 1; min-height: 140px; margin: 14px 14px 0; border-radius: 12px; overflow: hidden; background: var(--code-bg); border: 1px solid var(--border); cursor: pointer; touch-action: none; }
+.midi-view .roll canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+.midi-view .tracks { display: flex; flex-wrap: wrap; gap: 6px; padding: 10px 14px 0; }
+.midi-view .track { display: inline-flex; align-items: center; gap: 7px; padding: 4px 10px 4px 8px; border-radius: 999px; border: 1px solid var(--border); font-size: 12.5px; color: var(--text-2); background: var(--surface); }
+.midi-view .track i { width: 9px; height: 9px; border-radius: 50%; background: var(--c); flex: none; }
+.midi-view .track small { color: var(--text-3); font-size: 11.5px; }
+.midi-view .track[aria-pressed="false"] { opacity: 0.45; }
+.midi-view .track[aria-pressed="false"] i { background: transparent; box-shadow: inset 0 0 0 1.5px var(--c); }
+.midi-view .transport { display: flex; align-items: center; gap: 10px; padding: 12px 14px 14px; flex-wrap: wrap; }
+.midi-view .play { width: 40px; height: 40px; border-radius: 50%; display: grid; place-items: center; background: var(--accent); color: var(--accent-text); flex: none; transition: transform 0.15s var(--spring); }
+.midi-view .play:active { transform: scale(0.93); }
+.midi-view .play svg { width: 17px; height: 17px; }
+.midi-view .play:not(.on) svg { margin-left: 2px; }
+.midi-view .time { font: 12.5px var(--mono); color: var(--text-2); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.midi-view .scrub { flex: 1; min-width: 120px; accent-color: var(--accent); }
+.midi-view .knobs { display: flex; align-items: center; gap: 6px; margin-left: auto; }
+.midi-view .knobs button { display: inline-flex; align-items: center; gap: 5px; padding: 5px 9px; border-radius: 8px; font-size: 12.5px; color: var(--text-2); }
+.midi-view .knobs button:hover, .midi-view .knobs button[aria-pressed="true"] { background: var(--hover); color: var(--text); }
+.midi-view .knobs svg { width: 14px; height: 14px; }
+.midi-view .knobs select { font: 12.5px var(--sans); color: var(--text-2); background: transparent; border: 1px solid var(--border); border-radius: 8px; padding: 4px 6px; }
+.midi-view .knobs .vol { display: inline-flex; align-items: center; gap: 5px; color: var(--text-3); }
+.midi-view .knobs .vol input { width: 72px; accent-color: var(--accent); }
+@media (max-width: 560px) { .midi-view .knobs { margin-left: 0; width: 100%; justify-content: space-between; } .midi-view .knobs .vol input { width: 60px; } }
+
 /* A document, set like a page: a readable column, generous margins. */
 #viewer-body .doc-scroll { position: absolute; inset: 0; overflow: auto; background: var(--bg); display: flex; flex-direction: column; }
 #viewer-body:has(.doc-foot:not([hidden])) .doc-scroll { bottom: var(--foot, 220px); }
@@ -1939,6 +1967,10 @@ const ICON = {
   thumbUp: '<path d="M7 10v12"/><path d="M15 5.88 14 10h5.83a2 2 0 0 1 1.92 2.56l-2.33 8A2 2 0 0 1 17.5 22H4a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2h2.76a2 2 0 0 0 1.79-1.11L12 2a3.13 3.13 0 0 1 3 3.88Z"/>',
   thumbDown: '<path d="M17 14V2"/><path d="M9 18.12 10 14H4.17a2 2 0 0 1-1.92-2.56l2.33-8A2 2 0 0 1 6.5 2H20a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-2.76a2 2 0 0 0-1.79 1.11L12 22a3.13 3.13 0 0 1-3-3.88Z"/>',
   play: '<path d="M8 5.5v13a1 1 0 0 0 1.5.86l10.5-6.5a1 1 0 0 0 0-1.72L9.5 4.64A1 1 0 0 0 8 5.5Z" fill="currentColor" stroke="none"/>',
+  pause: '<rect x="6.5" y="5" width="4" height="14" rx="1" fill="currentColor" stroke="none"/><rect x="13.5" y="5" width="4" height="14" rx="1" fill="currentColor" stroke="none"/>',
+  music: '<path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/>',
+  loop: '<path d="m17 2 4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="m7 22-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/>',
+  volume: '<path d="M11 5 6 9H2v6h4l5 4V5Z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/>',
   halt: '<rect x="6.5" y="6.5" width="11" height="11" rx="2" fill="currentColor" stroke="none"/>',
   copy: '<rect x="9" y="9" width="12" height="12" rx="2.5"/><path d="M5 15a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2"/>',
   check: '<path d="M20 6 9 17l-5-5"/>',
@@ -2549,6 +2581,7 @@ function fileSize(bytes) {
 const fileUrl = (entry, download) => `/api/files/${encodeURIComponent(entry.id)}${download ? "?download=1" : ""}`;
 const fileKind = (entry) => (entry.kind === "pdf" ? "PDF" : entry.kind === "html" ? "HTML"
   : entry.kind === "model" ? "3D model"
+  : entry.kind === "midi" ? "MIDI"
   : entry.kind === "doc" ? (/\.txt$/i.test(entry.name) ? "Text" : "Markdown")
   : (entry.mime || "image/").split("/")[1].toUpperCase());
 
@@ -2560,6 +2593,7 @@ function attachment(entry) {
     ? `<img alt="" loading="lazy" src="${fileUrl(entry)}">`
     : entry.kind === "doc" ? `<span class="doc-thumb">${icon("file")}</span>`
     : entry.kind === "model" ? `<span class="doc-thumb">${icon("cube")}</span>`
+    : entry.kind === "midi" ? `<span class="doc-thumb">${icon("music")}</span>`
     : `<span class="badge">${fileKind(entry)}</span>`;
   card.innerHTML = `<span class="thumb">${thumb}</span><span class="info"><div class="name"></div>` +
     `<div class="meta"></div></span><span class="chev">${icon("chevRight")}</span>`;
@@ -2625,6 +2659,7 @@ function openBrowser(run, at) {
   let view = body.querySelector(`.browser-view[data-run="${CSS.escape(run)}"]`);
   if (!view) {
     dropModel();
+    dropMidi();
     body.textContent = "";
     view = body.appendChild(el("div", "browser-view", `<div class="browser-bar"><button type="button" class="icon-btn" data-prev aria-label="Previous step" data-tip="Previous step">${icon("chevRight")}</button><button type="button" class="icon-btn" data-next aria-label="Next step" data-tip="Next step">${icon("chevRight")}</button><span class="url"></span><span class="live" hidden>Live</span></div><div class="browser-shot"><img alt=""></div><div class="browser-step"></div>`));
     view.dataset.run = run;
@@ -2673,7 +2708,7 @@ function openViewer(entry) {
   viewing = lastViewed = entry;
   $("#viewer-title").textContent = entry.name;
   $("#viewer-size").textContent = `${fileKind(entry)} · ${fileSize(entry.size)}`;
-  $("#viewer-kind").innerHTML = icon({ pdf: "file", html: "globe", doc: "file", model: "cube" }[entry.kind] || "image");
+  $("#viewer-kind").innerHTML = icon({ pdf: "file", html: "globe", doc: "file", model: "cube", midi: "music" }[entry.kind] || "image");
   $("#viewer-edit").hidden = entry.kind !== "doc";
   $("#viewer-editing").hidden = true;
   if (openDoc && openDoc.onSelect) document.removeEventListener("selectionchange", openDoc.onSelect);
@@ -2684,6 +2719,7 @@ function openViewer(entry) {
   $("#viewer-open").href = fileUrl(entry);
   const body = $("#viewer-body");
   dropModel();
+  dropMidi();
   body.textContent = "";
   if (entry.kind === "html") {
     // Sandboxed twice over: here, and by the header the server sends,
@@ -2702,6 +2738,8 @@ function openViewer(entry) {
     openDocument(entry, body);
   } else if (entry.kind === "model") {
     openModel(entry, body);
+  } else if (entry.kind === "midi") {
+    openMidi(entry, body);
   } else if (entry.kind === "video") {
     const clip = el("video");
     clip.controls = true;
@@ -2751,6 +2789,476 @@ function loadThree() {
 }
 
 // Lets go of the model's GPU memory once the panel shows something else.
+// ---------------------------------------------------------------------------
+// MIDI: a .mid the agent wrote or found, read here into notes and played by
+// a small synth of the page's own, oscillators shaped for each family of
+// instrument and drums made from noise and falling tones. Nothing is
+// fetched, so it plays offline like the rest of the page. The roll draws
+// the whole piece across; click or drag on it to go somewhere.
+
+let midiView = null;
+
+function parseMidi(buffer) {
+  const bytes = new Uint8Array(buffer);
+  const data = new DataView(buffer);
+  const text = (at, n) => String.fromCharCode(...bytes.subarray(at, at + n));
+  if (bytes.length < 14 || text(0, 4) !== "MThd") throw new Error("it is not a MIDI file");
+  const count = data.getUint16(10), division = data.getUint16(12);
+  if (division & 0x8000) throw new Error("it keeps time in SMPTE frames, which this player does not read");
+  let at = 8 + data.getUint32(4);
+  const tempos = [[0, 500000]];
+  const raw = [];
+  const tracks = [];
+  for (let n = 0; n < count && at + 8 <= bytes.length && text(at, 4) === "MTrk"; n++) {
+    const end = Math.min(bytes.length, at + 8 + data.getUint32(at + 4));
+    let p = at + 8, tick = 0, status = 0;
+    const track = { name: "", program: null, drums: false, notes: 0 };
+    const open = new Map();
+    const vlq = () => { let v = 0, b; do { b = bytes[p++]; v = v * 128 + (b & 0x7f); } while (b & 0x80 && p < end); return v; };
+    while (p < end) {
+      tick += vlq();
+      if (bytes[p] & 0x80) status = bytes[p++];
+      const kind = status & 0xf0, ch = status & 0x0f;
+      if (status === 0xff) {
+        const meta = bytes[p++], len = vlq();
+        if (meta === 0x03 && !track.name) track.name = new TextDecoder().decode(bytes.subarray(p, p + len)).trim();
+        if (meta === 0x51 && len === 3) tempos.push([tick, (bytes[p] << 16) | (bytes[p + 1] << 8) | bytes[p + 2]]);
+        p += len;
+      } else if (status === 0xf0 || status === 0xf7) p += vlq();
+      else if (kind === 0xc0) { if (track.program === null) track.program = bytes[p]; p += 1; }
+      else if (kind === 0xd0) p += 1;
+      else {
+        const a = bytes[p], b = bytes[p + 1];
+        p += 2;
+        const key = ch * 128 + a;
+        if (kind === 0x90 && b > 0) {
+          const note = { tick, end: tick, pitch: a, vel: b, ch, track: tracks.length };
+          if (!open.has(key)) open.set(key, []);
+          open.get(key).push(note);
+          raw.push(note);
+          track.notes++;
+          if (ch === 9) track.drums = true;
+        } else if (kind === 0x80 || kind === 0x90) {
+          const note = (open.get(key) || []).shift();
+          if (note) note.end = tick;
+        }
+      }
+    }
+    // A note never let go of holds to the end of its track.
+    for (const list of open.values()) for (const note of list) note.end = Math.max(note.end, tick);
+    tracks.push(track);
+    at = end;
+  }
+  tempos.sort((x, y) => x[0] - y[0]);
+  // Each tempo change, with the seconds it falls at.
+  const marks = [];
+  let total = 0, since = 0, rate = 500000;
+  for (const [when, value] of tempos) {
+    total += (when - since) * rate / division / 1e6;
+    marks.push([when, total, value]);
+    since = when;
+    rate = value;
+  }
+  const seconds = (tick) => {
+    let m = marks[0];
+    for (const x of marks) { if (x[0] > tick) break; m = x; }
+    return m[1] + (tick - m[0]) * m[2] / division / 1e6;
+  };
+  const notes = raw.map((n) => {
+    const t = seconds(n.tick);
+    return { t, d: Math.max(0.03, seconds(n.end) - t), pitch: n.pitch, vel: n.vel, ch: n.ch, track: n.track };
+  }).sort((a, b) => a.t - b.t);
+  const duration = notes.reduce((m, n) => Math.max(m, n.t + n.d), 0);
+  return { notes, tracks, duration, bpm: Math.round(60e6 / tempos.filter((x) => x[0] === 0).pop()[1]) };
+}
+
+// The voices, by General MIDI family of eight programs: piano, bells,
+// organ, guitar, bass, strings, ensemble, brass, reed, pipe, lead, pad.
+const MIDI_FAMILIES = [
+  { wave: "triangle", a: 0.004, d: 1.1, s: 0, r: 0.25, cut: 7, octave: 0.22 },
+  { wave: "sine", a: 0.002, d: 0.8, s: 0, r: 0.5, cut: 0, bell: true },
+  { wave: "square", a: 0.01, d: 0.1, s: 0.85, r: 0.07, cut: 5, octave: 0.3 },
+  { wave: "sawtooth", a: 0.003, d: 0.9, s: 0.08, r: 0.15, cut: 4 },
+  { wave: "sawtooth", a: 0.005, d: 0.4, s: 0.55, r: 0.1, cut: 2.5 },
+  { wave: "sawtooth", a: 0.09, d: 0.3, s: 0.8, r: 0.3, cut: 4, detune: 7 },
+  { wave: "sawtooth", a: 0.07, d: 0.3, s: 0.8, r: 0.35, cut: 3, detune: 10 },
+  { wave: "sawtooth", a: 0.03, d: 0.2, s: 0.75, r: 0.12, cut: 5 },
+  { wave: "square", a: 0.03, d: 0.2, s: 0.7, r: 0.1, cut: 3 },
+  { wave: "triangle", a: 0.04, d: 0.2, s: 0.8, r: 0.12, cut: 0 },
+  { wave: "square", a: 0.005, d: 0.2, s: 0.7, r: 0.1, cut: 8 },
+  { wave: "sawtooth", a: 0.3, d: 0.5, s: 0.8, r: 0.6, cut: 2, detune: 12 },
+];
+// General MIDI's 128 instruments, by program number, to name a track by.
+const GM_NAMES = [
+  "Acoustic Grand Piano", "Bright Piano", "Electric Grand Piano", "Honky-tonk Piano", "Electric Piano", "Electric Piano 2", "Harpsichord", "Clavinet",
+  "Celesta", "Glockenspiel", "Music Box", "Vibraphone", "Marimba", "Xylophone", "Tubular Bells", "Dulcimer",
+  "Drawbar Organ", "Percussive Organ", "Rock Organ", "Church Organ", "Reed Organ", "Accordion", "Harmonica", "Tango Accordion",
+  "Nylon Guitar", "Steel Guitar", "Jazz Guitar", "Clean Guitar", "Muted Guitar", "Overdriven Guitar", "Distortion Guitar", "Guitar Harmonics",
+  "Acoustic Bass", "Fingered Bass", "Picked Bass", "Fretless Bass", "Slap Bass", "Slap Bass 2", "Synth Bass", "Synth Bass 2",
+  "Violin", "Viola", "Cello", "Contrabass", "Tremolo Strings", "Pizzicato Strings", "Harp", "Timpani",
+  "Strings", "Slow Strings", "Synth Strings", "Synth Strings 2", "Choir Aahs", "Voice Oohs", "Synth Voice", "Orchestra Hit",
+  "Trumpet", "Trombone", "Tuba", "Muted Trumpet", "French Horn", "Brass Section", "Synth Brass", "Synth Brass 2",
+  "Soprano Sax", "Alto Sax", "Tenor Sax", "Baritone Sax", "Oboe", "English Horn", "Bassoon", "Clarinet",
+  "Piccolo", "Flute", "Recorder", "Pan Flute", "Blown Bottle", "Shakuhachi", "Whistle", "Ocarina",
+  "Square Lead", "Saw Lead", "Calliope Lead", "Chiff Lead", "Charang", "Voice Lead", "Fifths Lead", "Bass Lead",
+  "New Age Pad", "Warm Pad", "Polysynth", "Choir Pad", "Bowed Pad", "Metallic Pad", "Halo Pad", "Sweep Pad",
+  "Rain", "Soundtrack", "Crystal", "Atmosphere", "Brightness", "Goblins", "Echoes", "Sci-fi",
+  "Sitar", "Banjo", "Shamisen", "Koto", "Kalimba", "Bagpipe", "Fiddle", "Shanai",
+  "Tinkle Bell", "Agogo", "Steel Drums", "Woodblock", "Taiko Drum", "Melodic Tom", "Synth Drum", "Reverse Cymbal",
+  "Guitar Fret Noise", "Breath Noise", "Seashore", "Bird Tweet", "Telephone", "Helicopter", "Applause", "Gunshot",
+];
+const midiFamily = (program) => MIDI_FAMILIES[Math.min(Math.floor((program || 0) / 8), MIDI_FAMILIES.length - 1)];
+
+function midiSynth(ctx, out) {
+  const noise = ctx.createBuffer(1, ctx.sampleRate * 2, ctx.sampleRate);
+  const samples = noise.getChannelData(0);
+  for (let i = 0; i < samples.length; i++) samples[i] = Math.random() * 2 - 1;
+  const hz = (p) => 440 * Math.pow(2, (p - 69) / 12);
+  const voices = new Set();
+
+  const voice = (track, env, sources, until) => {
+    const v = { track, env, sources, until };
+    voices.add(v);
+    sources[0].onended = () => { voices.delete(v); env.disconnect(); };
+    return v;
+  };
+  const envelope = (when, peak, a, d, s, stop, r) => {
+    const env = ctx.createGain();
+    env.gain.setValueAtTime(0, when);
+    env.gain.linearRampToValueAtTime(peak, when + a);
+    env.gain.setTargetAtTime(peak * s, when + a, d / 3);
+    env.gain.setTargetAtTime(0, stop, r / 3);
+    return env;
+  };
+  const osc = (type, freq, when, stop, into, detune = 0) => {
+    const o = ctx.createOscillator();
+    o.type = type;
+    o.frequency.setValueAtTime(freq, when);
+    o.detune.value = detune;
+    o.connect(into);
+    o.start(when);
+    o.stop(stop);
+    return o;
+  };
+  const burst = (when, length, into) => {
+    const src = ctx.createBufferSource();
+    src.buffer = noise;
+    src.connect(into);
+    src.start(when, Math.random() * 0.5, length + 0.05);
+    return src;
+  };
+  const filtered = (type, freq, q, into) => {
+    const f = ctx.createBiquadFilter();
+    f.type = type;
+    f.frequency.value = freq;
+    f.Q.value = q;
+    f.connect(into);
+    return f;
+  };
+
+  function tone(n, when, length, program, gain, track) {
+    const f = midiFamily(program);
+    const peak = Math.pow(n.vel / 127, 1.4) * 0.2 * gain;
+    const stop = when + Math.max(length, f.a + 0.02);
+    const env = envelope(when, peak, f.a, f.d, f.s, stop, f.r);
+    env.connect(out);
+    const into = f.cut ? filtered("lowpass", Math.min(16000, hz(n.pitch) * f.cut + 400), 0.5, env) : env;
+    const end = stop + f.r * 2;
+    const sources = [osc(f.wave, hz(n.pitch), when, end, into, f.detune ? -f.detune : 0)];
+    if (f.detune) sources.push(osc(f.wave, hz(n.pitch), when, end, into, f.detune));
+    if (f.octave) {
+      const soft = ctx.createGain();
+      soft.gain.value = f.octave;
+      soft.connect(into);
+      sources.push(osc("sine", hz(n.pitch) * 2, when, end, soft));
+    }
+    if (f.bell) {
+      const shine = ctx.createGain();
+      shine.gain.setValueAtTime(0.5, when);
+      shine.gain.setTargetAtTime(0, when, 0.05);
+      shine.connect(into);
+      sources.push(osc("sine", hz(n.pitch) * 3.99, when, end, shine));
+    }
+    return voice(track, env, sources, end);
+  }
+
+  // General MIDI's drum keys, made rather than sampled.
+  const TOMS = { 41: 82, 43: 98, 45: 115, 47: 135, 48: 160, 50: 190 };
+  function drum(n, when, gain, track) {
+    const p = n.pitch, v = (n.vel / 127) * 0.55 * gain;
+    let length = 0.08;
+    const env = ctx.createGain();
+    env.connect(out);
+    const sources = [];
+    const fall = (peak, time) => {
+      env.gain.setValueAtTime(peak, when);
+      env.gain.setTargetAtTime(0, when + 0.002, time / 3);
+      length = time * 2;
+    };
+    if (p === 35 || p === 36) {
+      const o = osc("sine", 150, when, when + 0.6, env);
+      o.frequency.exponentialRampToValueAtTime(42, when + 0.13);
+      sources.push(o);
+      fall(v * 1.6, 0.35);
+    } else if (p === 38 || p === 40 || p === 37 || p === 39) {
+      const clap = p === 39;
+      sources.push(burst(when, 0.3, filtered("bandpass", clap ? 1100 : 1800, clap ? 1.5 : 0.7, env)));
+      if (!clap) sources.push(osc("triangle", 190, when, when + 0.15, env));
+      fall(v * (p === 37 ? 0.5 : 1), p === 37 ? 0.05 : clap ? 0.14 : 0.18);
+    } else if (p === 42 || p === 44 || p === 46) {
+      sources.push(burst(when, 0.5, filtered("highpass", 7000, 0.7, env)));
+      fall(v * 0.6, p === 46 ? 0.3 : 0.05);
+    } else if ([49, 52, 55, 57].includes(p)) {
+      sources.push(burst(when, 1.6, filtered("highpass", 5000, 0.5, env)));
+      fall(v * 0.6, 1.1);
+    } else if ([51, 53, 59].includes(p)) {
+      sources.push(burst(when, 0.8, filtered("highpass", 8000, 0.5, env)));
+      sources.push(osc("sine", 4200, when, when + 0.5, env));
+      fall(v * 0.35, 0.5);
+    } else if (TOMS[p]) {
+      const o = osc("sine", TOMS[p], when, when + 0.6, env);
+      o.frequency.exponentialRampToValueAtTime(TOMS[p] * 0.7, when + 0.2);
+      sources.push(o);
+      fall(v * 1.2, 0.3);
+    } else if ([54, 69, 70, 82].includes(p)) {
+      sources.push(burst(when, 0.2, filtered("highpass", 6000, 1, env)));
+      fall(v * 0.5, 0.09);
+    } else {
+      // Cowbells, blocks, bongos, congas: a short knock pitched by key.
+      sources.push(osc("sine", 300 + (p - 56) * 40, when, when + 0.3, env));
+      fall(v * 0.8, 0.1);
+    }
+    return voice(track, env, sources, when + length);
+  }
+
+  return {
+    play(n, when, length, program, gain, drums, track) {
+      return drums ? drum(n, when, gain, track) : tone(n, when, length, program, gain, track);
+    },
+    // Let go of whatever is sounding, of one track or of all.
+    silence(track) {
+      const now = ctx.currentTime;
+      for (const v of [...voices]) {
+        if (track !== undefined && v.track !== track) continue;
+        v.env.gain.cancelScheduledValues(now);
+        v.env.gain.setTargetAtTime(0, now, 0.015);
+        for (const s of v.sources) { try { s.stop(now + 0.08); } catch (_) { /* not started yet */ } }
+        voices.delete(v);
+      }
+    },
+  };
+}
+
+const MIDI_COLORS = ["#e0795a", "#5aa9e6", "#7bc96f", "#c48be8", "#e6c15a", "#5ad1c4", "#e66a9a", "#9aa4b2"];
+
+function dropMidi() {
+  if (!midiView) return;
+  const gone = midiView;
+  midiView = null;
+  gone.dropped = true;
+  if (gone.dispose) gone.dispose();
+}
+
+async function openMidi(entry, body) {
+  const view = body.appendChild(el("div", "midi-view", `<div class="midi-note">Reading the music…</div>`));
+  const state = { dropped: false };
+  midiView = state;
+  let song;
+  try {
+    const response = await fetch(fileUrl(entry));
+    if (!response.ok) throw new Error(`the server answered ${response.status}`);
+    song = parseMidi(await response.arrayBuffer());
+  } catch (error) {
+    view.querySelector(".midi-note").textContent = `Could not read it: ${error.message}.`;
+    return;
+  }
+  if (state.dropped) return;
+  if (!song.notes.length) { view.querySelector(".midi-note").textContent = "It has no notes to play."; return; }
+
+  const shown = song.tracks.map((t, i) => ({ ...t, index: i })).filter((t) => t.notes);
+  const color = new Map(shown.map((t, i) => [t.index, MIDI_COLORS[i % MIDI_COLORS.length]]));
+  const muted = new Set();
+  view.innerHTML = `<div class="roll"><canvas></canvas></div><div class="tracks"></div>
+    <div class="transport"><button type="button" class="play" aria-label="Play">${icon("play")}</button>
+    <span class="time"></span><input class="scrub" type="range" min="0" max="1000" value="0" aria-label="Position">
+    <div class="knobs"><select aria-label="Speed">${[0.5, 0.75, 1, 1.25, 1.5, 2].map((r) => `<option value="${r}"${r === 1 ? " selected" : ""}>${r}×</option>`).join("")}</select>
+    <button type="button" data-loop aria-pressed="false">${icon("loop")}Loop</button>
+    <label class="vol">${icon("volume")}<input type="range" min="0" max="100" value="80" aria-label="Volume"></label></div></div>`;
+  const roll = view.querySelector(".roll"), canvas = roll.querySelector("canvas");
+  const playBtn = view.querySelector(".play"), time = view.querySelector(".time"), scrub = view.querySelector(".scrub");
+  const speed = view.querySelector("select"), loopBtn = view.querySelector("[data-loop]"), vol = view.querySelector(".vol input");
+
+  // One chip a track: its colour, name, and instrument; click to mute.
+  const chips = view.querySelector(".tracks");
+  for (const t of shown) {
+    const chip = el("button", "track", `<i></i><span></span><small></small>`);
+    chip.type = "button";
+    chip.style.setProperty("--c", color.get(t.index));
+    chip.setAttribute("aria-pressed", "true");
+    chip.dataset.tip = "Mute or unmute";
+    chip.querySelector("span").textContent = t.name || `Track ${t.index + 1}`;
+    chip.querySelector("small").textContent = t.drums ? "Drums" : GM_NAMES[t.program || 0];
+    chip.onclick = () => {
+      const on = muted.has(t.index);
+      if (on) muted.delete(t.index); else { muted.add(t.index); if (synth) synth.silence(t.index); }
+      chip.setAttribute("aria-pressed", on);
+      paint();
+    };
+    chips.appendChild(chip);
+  }
+
+  // The roll: melodic notes by pitch, drums in a lane of their own below.
+  const melodic = song.notes.filter((n) => n.ch !== 9);
+  const hasDrums = song.notes.some((n) => n.ch === 9);
+  const low = melodic.length ? Math.min(...melodic.map((n) => n.pitch)) - 2 : 48;
+  const high = melodic.length ? Math.max(...melodic.map((n) => n.pitch)) + 2 : 72;
+  const drumKeys = [...new Set(song.notes.filter((n) => n.ch === 9).map((n) => n.pitch))].sort((a, b) => a - b);
+  let still = null, scale = 1;
+  const layout = () => {
+    scale = devicePixelRatio || 1;
+    canvas.width = Math.max(1, roll.clientWidth * scale);
+    canvas.height = Math.max(1, roll.clientHeight * scale);
+    const w = canvas.width, h = canvas.height;
+    const drumH = hasDrums ? Math.min(h * 0.22, drumKeys.length * 8 * scale + 10 * scale) : 0;
+    const noteH = (h - drumH) / (high - low + 1);
+    const x = (t) => (t / song.duration) * w;
+    const style = getComputedStyle(view);
+    const at = (n) => n.ch === 9
+      ? [x(n.t), h - drumH + (drumKeys.indexOf(n.pitch) + 0.5) * (drumH / drumKeys.length) - 2.5 * scale, Math.max(3 * scale, x(n.d) * 0.6), 5 * scale]
+      : [x(n.t), (high - n.pitch) * noteH, Math.max(2 * scale, x(n.d) - scale), Math.max(2 * scale, noteH - scale)];
+    still = { w, h, x, at, line: style.getPropertyValue("--border").trim() || "#444", label: style.getPropertyValue("--text-3").trim() || "#888", accent: style.getPropertyValue("--accent").trim() || "#d97757", layer: document.createElement("canvas") };
+    still.layer.width = w;
+    still.layer.height = h;
+    const g = still.layer.getContext("2d");
+    g.font = `${10 * scale}px ui-monospace, monospace`;
+    g.textBaseline = "middle";
+    for (let p = low; p <= high; p++) {
+      if (p % 12) continue;
+      const y = (high - p + 0.5) * noteH;
+      g.fillStyle = still.line;
+      g.fillRect(0, y + noteH / 2, w, scale);
+      g.fillStyle = still.label;
+      g.fillText(`C${p / 12 - 1}`, 6 * scale, y);
+    }
+    if (hasDrums) { g.fillStyle = still.line; g.fillRect(0, h - drumH - scale, w, scale); }
+    paint();
+  };
+  const paint = () => {
+    if (!still) return;
+    const g = canvas.getContext("2d");
+    g.clearRect(0, 0, still.w, still.h);
+    g.drawImage(still.layer, 0, 0);
+    const now = position();
+    for (const n of song.notes) {
+      const [nx, ny, nw, nh] = still.at(n);
+      const sounding = n.t <= now && now < n.t + n.d && playing;
+      g.globalAlpha = muted.has(n.track) ? 0.15 : sounding ? 1 : 0.72;
+      g.fillStyle = color.get(n.track);
+      g.beginPath();
+      if (g.roundRect) g.roundRect(nx, ny, nw, nh, Math.min(2 * scale, nh / 2)); else g.rect(nx, ny, nw, nh);
+      g.fill();
+      if (sounding) { g.globalAlpha = 0.9; g.strokeStyle = "#fff"; g.lineWidth = scale; g.stroke(); }
+    }
+    g.globalAlpha = 1;
+    g.fillStyle = still.accent;
+    g.fillRect(Math.min(still.w - 2 * scale, still.x(now)), 0, 2 * scale, still.h);
+    time.textContent = `${clock(now)} / ${clock(song.duration)}`;
+    if (!dragging) scrub.value = Math.round((now / song.duration) * 1000);
+  };
+
+  // Playing: notes are handed to the synth a little ahead of time, so a
+  // busy page never makes one late.
+  let ctx = null, master = null, synth = null;
+  let playing = false, pos = 0, anchor = 0, rate = 1, next = 0, timer = 0, frame = 0, dragging = false;
+  const position = () => (playing ? Math.min(song.duration, pos + (ctx.currentTime - anchor) * rate) : pos);
+  const firstFrom = (s) => { let lo = 0, hi = song.notes.length; while (lo < hi) { const m = (lo + hi) >> 1; if (song.notes[m].t < s) lo = m + 1; else hi = m; } return lo; };
+  const pump = () => {
+    const until = position() + 0.2 * rate;
+    while (next < song.notes.length && song.notes[next].t < until) {
+      const n = song.notes[next++];
+      if (muted.has(n.track)) continue;
+      const when = anchor + (n.t - pos) / rate;
+      if (when < ctx.currentTime - 0.02) continue;
+      const t = song.tracks[n.track];
+      synth.play(n, Math.max(when, ctx.currentTime), n.d / rate, t.program, 1, n.ch === 9, n.track);
+    }
+    if (position() >= song.duration) {
+      if (loopBtn.getAttribute("aria-pressed") === "true") { stop(); pos = 0; start(); }
+      else { stop(); pos = song.duration; paint(); }
+    }
+  };
+  const tick = () => { paint(); if (playing) frame = requestAnimationFrame(tick); };
+  const start = async () => {
+    if (!ctx) {
+      const Audio = window.AudioContext || window.webkitAudioContext;
+      if (!Audio) { toast("This browser cannot play audio"); return; }
+      ctx = new Audio();
+      master = ctx.createGain();
+      master.gain.value = Math.pow(vol.value / 100, 2);
+      const squeeze = ctx.createDynamicsCompressor();
+      master.connect(squeeze);
+      squeeze.connect(ctx.destination);
+      synth = midiSynth(ctx, master);
+    }
+    if (ctx.state === "suspended") await ctx.resume();
+    if (state.dropped) return;
+    if (pos >= song.duration) pos = 0;
+    anchor = ctx.currentTime + 0.05;
+    next = firstFrom(pos);
+    playing = true;
+    playBtn.classList.add("on");
+    playBtn.innerHTML = icon("pause");
+    playBtn.setAttribute("aria-label", "Pause");
+    pump();
+    timer = setInterval(pump, 25);
+    cancelAnimationFrame(frame);
+    frame = requestAnimationFrame(tick);
+  };
+  const stop = () => {
+    if (!playing) return;
+    pos = position();
+    playing = false;
+    clearInterval(timer);
+    cancelAnimationFrame(frame);
+    if (synth) synth.silence();
+    playBtn.classList.remove("on");
+    playBtn.innerHTML = icon("play");
+    playBtn.setAttribute("aria-label", "Play");
+    paint();
+  };
+  const seek = (s) => {
+    const was = playing;
+    stop();
+    pos = Math.max(0, Math.min(song.duration, s));
+    if (was) start(); else paint();
+  };
+  playBtn.onclick = () => (playing ? stop() : start());
+  scrub.oninput = () => { dragging = true; seek((scrub.value / 1000) * song.duration); };
+  scrub.onchange = () => { dragging = false; };
+  speed.onchange = () => { const at = position(); rate = Number(speed.value); seek(at); };
+  loopBtn.onclick = () => loopBtn.setAttribute("aria-pressed", loopBtn.getAttribute("aria-pressed") !== "true");
+  vol.oninput = () => { if (master) master.gain.setTargetAtTime(Math.pow(vol.value / 100, 2), ctx.currentTime, 0.02); };
+  const seekAt = (e) => { const r = roll.getBoundingClientRect(); seek(((e.clientX - r.left) / r.width) * song.duration); };
+  roll.onpointerdown = (e) => { roll.setPointerCapture(e.pointerId); seekAt(e); roll.onpointermove = (m) => seekAt(m); };
+  roll.onpointerup = () => { roll.onpointermove = null; };
+  // Space plays and pauses while the player is open and nothing is typed.
+  const onKey = (e) => {
+    if (e.code !== "Space" || e.target.closest("input, textarea, select, [contenteditable]")) return;
+    e.preventDefault();
+    if (playing) stop(); else start();
+  };
+  document.addEventListener("keydown", onKey);
+  const resized = new ResizeObserver(() => layout());
+  resized.observe(roll);
+  state.dispose = () => {
+    stop();
+    document.removeEventListener("keydown", onKey);
+    resized.disconnect();
+    if (ctx) ctx.close();
+  };
+  layout();
+}
+
 function dropModel() {
   if (!modelView) return;
   const gone = modelView;
@@ -3539,6 +4047,8 @@ function closeViewer() {
   if (window.CSS && CSS.highlights) CSS.highlights.delete("doc-comment");
   markOpenCard();
   // Emptied once it has slid away, so a PDF or a model is not left loaded.
+  // A piece stops at once; the panel empties once it has slid away.
+  dropMidi();
   setTimeout(() => { if (!viewing) { dropModel(); $("#viewer-body").textContent = ""; } }, 480);
   return true;
 }
@@ -3667,8 +4177,8 @@ function sentFiles(files) {
       shot.onclick = () => openViewer(f);
       continue;
     }
-    const viewable = f.kind === "pdf" || f.kind === "model";
-    const chip = box.appendChild(el(viewable ? "button" : "div", "doc", `<span class="badge">${icon(f.kind === "model" ? "cube" : "file")}</span><span class="words"><span class="name"></span><span class="meta"></span></span>`));
+    const viewable = f.kind === "pdf" || f.kind === "model" || f.kind === "midi";
+    const chip = box.appendChild(el(viewable ? "button" : "div", "doc", `<span class="badge">${icon(f.kind === "model" ? "cube" : f.kind === "midi" ? "music" : "file")}</span><span class="words"><span class="name"></span><span class="meta"></span></span>`));
     chip.querySelector(".name").textContent = f.name;
     chip.querySelector(".meta").textContent = `${extOf(f.name)} · ${fileSize(f.size)}`;
     if (viewable) { chip.type = "button"; chip.onclick = () => openViewer(f); }

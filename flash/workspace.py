@@ -478,12 +478,17 @@ SHOWN_TYPES = {
     ".glb": "model/gltf-binary",
     ".stl": "model/stl",
     ".obj": "model/obj",
+    # Music as notes, played by the page's own synth and drawn as a
+    # piano roll. Nothing in one runs.
+    ".mid": "audio/midi",
+    ".midi": "audio/midi",
     # Screen recordings the user made in the page, played back there.
     ".webm": "video/webm",
     ".mp4": "video/mp4",
 }
 DOCUMENT_TYPES = (".md", ".markdown", ".txt")
 MODEL_TYPES = (".glb", ".stl", ".obj")
+MIDI_TYPES = (".mid", ".midi")
 MAX_SHOWN_BYTES = 50 * 1024 * 1024
 # A document is edited in the page as text, so it stays a size a browser
 # edits comfortably.
@@ -504,7 +509,7 @@ def keep_file(source: str) -> dict:
     if suffix not in SHOWN_TYPES:
         raise WorkspaceError(
             f"{path.name} is not an image, a PDF, a web page, a document, "
-            "or a 3D model"
+            "a 3D model, or a MIDI file"
         )
 
     size = path.stat().st_size
@@ -532,6 +537,7 @@ def keep_file(source: str) -> dict:
             else "html" if SHOWN_TYPES[suffix] == "text/html"
             else "doc" if document
             else "model" if suffix in MODEL_TYPES
+            else "midi" if suffix in MIDI_TYPES
             else "image"
         ),
     }
@@ -633,6 +639,7 @@ def upload_info(file_id: str) -> Optional[dict]:
             else "video" if mime.startswith("video/")
             else "pdf" if suffix == ".pdf"
             else "model" if suffix in MODEL_TYPES
+            else "midi" if suffix in MIDI_TYPES
             else "file"
         ),
         "path": str(path),
