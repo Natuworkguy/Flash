@@ -56,6 +56,7 @@ from . import (
     keepalive,
     learning,
     memory,
+    showcase,
     skills,
     sparks,
     systemone,
@@ -1926,6 +1927,8 @@ def _respond(
         "seconds": round(time.monotonic() - started, 1),
         "tools": tool_count,
     })
+    # Counted with the terminal's replies, for Settings > Usage.
+    showcase.record(ai.Config.host, model, tokens, tool_count)
 
     if kit is not None:
         # What it learned, and any goal or schedule it was given.
@@ -2059,6 +2062,8 @@ def status(ai) -> dict:
         "learning": learning.running(),
         "agents": subagents.running_count(),
         "sparks_unread": sparks.unread_total(),
+        # Shown under the box while a reply is on its way.
+        "tips": showcase.web_tips(),
     }
 
 
@@ -2734,6 +2739,9 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
                 "type": "note", "text": message,
             })
         return {"message": message}
+
+    if name == "showcase":
+        return showcase.totals()
 
     if name == "usage":
         return usage(session.chats.values())

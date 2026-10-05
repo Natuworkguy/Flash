@@ -302,6 +302,12 @@ body.empty #dock { flex: 1; display: flex; flex-direction: column; justify-conte
 #greeting .soft { color: var(--text-3); font-weight: 400; }
 #greeting .in { display: block; font: 500 15px/1.4 var(--sans); letter-spacing: 0; color: var(--text-3); margin-top: 8px; }
 #suggestions { display: none; }
+/* The Usage tab's first card: what Flash has done, in the user's numbers. */
+.yours { display: grid; gap: 4px; }
+.yours .big { font: 600 30px/1.1 var(--brand); letter-spacing: -0.02em; color: var(--text); }
+.yours .big small { font: 500 14px var(--sans); letter-spacing: 0; color: var(--text-3); margin-left: 6px; }
+.yours p { margin: 0; text-align: left; font-size: 13.5px; line-height: 1.5; color: var(--text-2); }
+.yours p.note { font-size: 12px; color: var(--text-3); }
 body.empty #suggestions { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin-top: 16px; }
 .suggestion {
   font: 400 13.5px/1 var(--orbit);
@@ -699,6 +705,12 @@ body.empty #top-model, body.on-page #top-model { position: absolute; }
 #send.stop svg { width: 13px; height: 13px; }
 .fine { text-align: center; font-size: 12px; color: var(--text-3); margin-top: 10px; }
 body.empty .fine { display: none; }
+/* While a reply is on its way, a tip takes the line's place. */
+.fine > span { transition: opacity 0.25s var(--ease); }
+.fine > span.fading { opacity: 0; }
+.fine .tip b { font-weight: 500; color: var(--text-2); }
+.fine .tip button { margin-left: 4px; color: var(--accent); font-weight: 500; }
+.fine .tip button:hover { text-decoration: underline; text-underline-offset: 2px; }
 
 /* Motion --------------------------------------------------------------- */
 body { animation: fade 0.3s var(--ease) both; }
@@ -1906,7 +1918,7 @@ body.resizing-viewer iframe { pointer-events: none; }
         </form>
         </div>
         <div id="suggestions"></div>
-        <div class="fine">Flash runs commands on this machine. Check what it asks to do.</div>
+        <div class="fine"><span class="caution">Flash runs commands on this machine. Check what it asks to do.</span><span class="tip" hidden></span></div>
       </div>
     </div>
     <div id="drop" aria-hidden="true"><div class="card"></div></div>
@@ -6402,9 +6414,10 @@ function heatmap(u) {
 }
 
 async function drawUsage(body) {
-  let u;
-  try { u = await command("usage"); } catch (error) { showFailure(error); return; }
+  let u, yours;
+  try { [u, yours] = await Promise.all([command("usage"), command("showcase")]); } catch (error) { showFailure(error); return; }
   if (!body.isConnected) return;
+  body.appendChild(yoursCard(yours));
   const tiles = el("div", "tiles");
   const rows = [
     ["Messages sent", u.messages, fmtCount],
@@ -7079,7 +7092,42 @@ function hostForm() {
 let streamNode = null;
 let streamScheduled = false;
 
+// A tip under the box while a reply is on its way. Each is up for
+// TIP_MS by the clock, as in the terminal, so one turn running into the
+// next keeps its tip instead of starting another.
+const TIP_MS = 30000;
+function drawTip() {
+  const caution = $(".fine .caution"), line = $(".fine .tip");
+  const tips = info.tips || [];
+  const chat = chats.get(current);
+  const busy = view === "chat" && chat && (chat.busy || chat.queued) && tips.length;
+  caution.hidden = !!busy;
+  line.hidden = !busy;
+  if (!busy) { delete line.dataset.at; return; }
+  const at = Math.floor(Date.now() / TIP_MS) % tips.length;
+  if (line.dataset.at === String(at)) return;
+  const first = line.dataset.at === undefined;
+  line.dataset.at = at;
+  const [what, prompt] = tips[at];
+  const fill = () => {
+    line.innerHTML = `<b>Tip</b> · <span></span>`;
+    line.querySelector("span").textContent = what;
+    if (prompt) {
+      const go = el("button", "", "Try it");
+      go.type = "button";
+      go.onclick = () => typeIn(prompt);
+      line.appendChild(go);
+    }
+    line.classList.remove("fading");
+  };
+  if (first || calm.matches) { fill(); return; }
+  line.classList.add("fading");
+  setTimeout(fill, 250);
+}
+setInterval(drawTip, 1000);
+
 function drawStreaming() {
+  drawTip();
   const chat = chats.get(current);
   const waiting = chat && (chat.busy || chat.queued) && !chat.partial && !chat.thinking && !pendingAsk();
   // Put back where it already is, the loader would start its
@@ -8260,6 +8308,24 @@ function greet() {
     chip.onclick = () => typeIn(prompt);
     box.appendChild(chip);
   });
+}
+
+// What Flash has done, across the terminal and the web: how much of it
+// ran on a local model, and roughly what that would cost on a hosted one
+// (with the price it assumes, said).
+function yoursCard(y) {
+  const card = el("div", "usage-card yours");
+  const since = y.since ? new Date(y.since * 1000).toLocaleDateString(undefined, { month: "long", day: "numeric", year: "numeric" }) : "";
+  if (!y.turns) {
+    card.innerHTML = `<div class="big">0<small>replies so far</small></div><p>Replies here and in the terminal are counted together.</p>`;
+    return card;
+  }
+  card.innerHTML = `<div class="big"></div><p class="kept"></p><p class="note"></p>`;
+  card.querySelector(".big").innerHTML = `${esc(fmtCount(y.turns))}<small>repl${y.turns === 1 ? "y" : "ies"}</small>`;
+  card.querySelector(".kept").textContent = `${y.private_share}% on a local model, ${fmtCount(y.private_tokens)} tokens` +
+    (y.saved >= 0.01 ? `, about $${y.saved.toFixed(2)} at hosted-model prices.` : ".");
+  card.querySelector(".note").textContent = `${since ? `Since ${since}, across` : "Across"} the terminal and the web UI.${y.saved >= 0.01 ? ` The estimate assumes $${y.price} per million tokens.` : ""}`;
+  return card;
 }
 
 // Types TEXT into the box quickly, the way a suggestion should land.

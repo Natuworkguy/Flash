@@ -33,6 +33,7 @@ from . import (
     learning,
     plan,
     serif,
+    showcase,
     skills,
     sparks,
     systemone,
@@ -1340,14 +1341,23 @@ def _try_chat(
         # finish while the model is writing, which is exactly when a
         # count frozen at the start of the turn would be wrong.
         line = bar() if bar is not None else None
-
-        if line is None or not line.plain.strip():
-            return spinner
+        rows = [spinner]
 
         # A top-level line rather than more text beside the spinner, so
         # it sits at column zero and reads as the same bar the prompt
         # carries rather than a continuation of the label.
-        return Group(spinner, line)
+        if line is not None and line.plain.strip():
+            rows.append(line)
+
+        tip = showcase.tip_now()
+        if tip:
+            what, how = tip
+            note = Text("  Tip: ", style=f"bold {DIM}")
+            note.append(what + " ", style=DIM)
+            note.append(how, style=ACCENT)
+            rows.append(note)
+
+        return rows[0] if len(rows) == 1 else Group(*rows)
 
     def _rotate():
         while True:
@@ -1756,6 +1766,47 @@ def _render_done(turn: Turn) -> None:
         f"{MIDDOT} done {_clock()}",
         style=DIM,
     ))
+
+
+def _note_showcase(turn: Turn, tools: int) -> None:
+    """Count the reply toward /stats."""
+
+    showcase.record(Config.host, Config.model or "", turn.tokens, tools)
+
+
+def _stats_command() -> None:
+    """/stats: what Flash has done so far, across the terminal and the
+    web UI."""
+
+    found = showcase.totals()
+    if not found["turns"]:
+        console.print(Text(
+            "  No replies counted yet. Ask Flash something, and this is "
+            "where it adds up.", style=DIM,
+        ))
+        return
+    when = time.localtime(found["since"])
+    since = (
+        f"{time.strftime('%B', when)} {when.tm_mday}, {when.tm_year}"
+        if found["since"] else "the start"
+    )
+    body = Text()
+    for label, value in (
+        ("replies", f"{found['turns']:,}"),
+        ("tokens", f"{found['tokens']:,}"),
+        ("tools run", f"{found['tools']:,}"),
+        ("on a local model", f"{found['private_share']}%"),
+    ):
+        body.append(f"  {label + ':':<21}", style=DIM)
+        body.append(f"{value}\n")
+    if found["saved"] >= 0.01:
+        body.append(f"  {'at hosted prices:':<21}", style=DIM)
+        body.append(f"about ${found['saved']:,.2f}")
+        body.append(
+            f" at ${found['price']:g} per million tokens\n", style=DIM,
+        )
+    body.append(f"  since {since}", style=DIM)
+    console.print(body)
 
 
 def _render_stats(turn: Turn) -> None:
@@ -3739,6 +3790,10 @@ def main() -> None:
                     warn("Usage: /auto [on|off|toggle]")
                 continue
 
+            if uin == "/stats":
+                _stats_command()
+                continue
+
             if uin == "/systemone" or uin.startswith("/systemone "):
                 _system_one_command(uin[len("/systemone"):].strip())
                 continue
@@ -4102,6 +4157,7 @@ def main() -> None:
                 _render_markdown(console, final)
                 _render_done(turn)
                 _render_stats(turn)
+                _note_showcase(turn, 0)
                 _note_running_agents()
                 _note_learning()
                 _note_sparks()
@@ -4202,6 +4258,7 @@ def main() -> None:
             _render_markdown(console, followup)
             _render_done(turn)
             _render_stats(turn)
+            _note_showcase(turn, len(tool_outputs))
             _note_running_agents()
             _note_learning()
             _note_sparks()
