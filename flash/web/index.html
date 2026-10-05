@@ -7362,12 +7362,16 @@ function endVoice() {
   if (voice.state === "setup") command("voice-cancel").catch(() => {});
   voice.on = false;
   if (voice.source) { try { voice.source.stop(); } catch (_) { /* already over */ } }
+  // Ended here, before the context closes, so the reading finishes and
+  // takes its mark off what was being said.
+  if (voice.played) voice.played();
+  unmarkSpoken();
   if (voice.turn) voice.turn.finish(null);
   if (voice.tap) voice.tap();
   if (voice.setup) voice.setup("");
   if (voice.stream) voice.stream.getTracks().forEach((t) => t.stop());
   if (voice.ctx) voice.ctx.close().catch(() => {});
-  Object.assign(voice, { ctx: null, stream: null, turn: null, tap: null, source: null, analyser: null, state: "" });
+  Object.assign(voice, { ctx: null, stream: null, turn: null, tap: null, source: null, played: null, analyser: null, state: "" });
   $("#voice").hidden = true;
   document.body.classList.remove("voice-on");
   updateSend();
@@ -7746,7 +7750,15 @@ function playSpeech(audio) {
     const source = voice.ctx.createBufferSource();
     source.buffer = audio;
     source.connect(voice.analyser);
-    source.onended = () => { if (voice.source === source) voice.source = null; resolve(); };
+    const ended = () => {
+      if (voice.source === source) voice.source = null;
+      if (voice.played === ended) voice.played = null;
+      resolve();
+    };
+    source.onended = ended;
+    // For ending voice mode: a context closed while this plays never
+    // says it ended, and the reading would wait on it for good.
+    voice.played = ended;
     voice.source = source;
     source.start();
   });
