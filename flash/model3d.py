@@ -2,7 +2,8 @@
 
 The model describes a model as a list of parts, each a shape (a box, a
 sphere, a cylinder, a lathed profile, an extruded outline, blocky text,
-or a mesh of its own) with a place, a turn, a size and a colour. This
+or a mesh of its own) with a place, a turn, a size, a colour, and if it
+likes a texture: a pattern such as wood or brick, or a picture. This
 turns that list into a binary glTF (.glb) file: one file that the web
 UI's viewer, Blender, Windows' 3D Viewer and every game engine open as
 it is.
@@ -12,12 +13,15 @@ model of a few hundred parts is a few hundred thousand floats at most.
 """
 
 import base64
+import functools
 import json
 import math
 import re
 import struct
 from pathlib import Path
 from typing import Any, Optional
+
+from . import textures
 
 # Every shape is built around the origin, Y up, in metres, as glTF has it.
 SHAPES = (
@@ -53,6 +57,9 @@ _ARRAY_BUFFER = 34962
 _ELEMENT_ARRAY_BUFFER = 34963
 _FLOAT = 5126
 _UNSIGNED_INT = 5125
+_REPEAT = 10497
+_LINEAR = 9729
+_LINEAR_MIPMAP_LINEAR = 9987
 
 
 class ModelError(ValueError):
@@ -60,16 +67,24 @@ class ModelError(ValueError):
 
 
 class Geometry:
-    """Triangles with a normal at every corner, ready to write out."""
+    """Triangles with a normal and a texture coordinate at every corner,
+    ready to write out."""
 
     def __init__(self) -> None:
         self.positions: list[tuple[float, float, float]] = []
         self.normals: list[tuple[float, float, float]] = []
+        self.uvs: list[tuple[float, float]] = []
         self.indices: list[int] = []
 
-    def vertex(self, p, n) -> int:
+    def vertex(self, p, n, uv=None) -> int:
+        """A corner at P facing N. Its texture coordinate, in metres
+        across the surface, is UV, or else taken from the side it faces."""
+
         self.positions.append((float(p[0]), float(p[1]), float(p[2])))
         self.normals.append(_unit(n))
+        self.uvs.append(
+            (float(uv[0]), float(uv[1])) if uv is not None else _box_uv(p, n)
+        )
         return len(self.positions) - 1
 
     def triangle(self, a: int, b: int, c: int) -> None:
@@ -112,6 +127,20 @@ def _unit(v):
     if size == 0:
         return (0.0, 1.0, 0.0)
     return (v[0] / size, v[1] / size, v[2] / size)
+
+
+def _box_uv(p, n) -> tuple[float, float]:
+    """Where P falls on a texture laid flat on the side N mostly faces,
+    in metres: the way a decal goes on a box. Seen from outside, u runs
+    to the right and v down, as an image's rows do, so a picture on a
+    face stands the right way up."""
+
+    axis = max(range(3), key=lambda i: abs(n[i]))
+    if axis == 0:
+        return (-p[2] if n[0] > 0 else p[2], -p[1])
+    if axis == 1:
+        return (p[0], p[2] if n[1] > 0 else -p[2])
+    return (p[0] if n[2] > 0 else -p[0], -p[1])
 
 
 # --- Reading what the model gave ------------------------------------------
@@ -398,7 +427,11 @@ def _sphere(part: dict) -> Geometry:
                 math.cos(polar),
                 math.sin(polar) * math.sin(azimuth),
             )
-            row.append(geo.vertex(tuple(radius * c for c in n), n))
+            # Round the equator and down from the top pole, in metres:
+            # a world map laid on it is a globe.
+            uv = (2 * math.pi * radius * i / around,
+                  math.pi * radius * j / down)
+            row.append(geo.vertex(tuple(radius * c for c in n), n, uv))
         rows.append(row)
     for j in range(down):
         for i in range(around):
@@ -424,6 +457,12 @@ def _revolve(geo: Geometry, profile: list[tuple], around: int) -> None:
         after = profile[min(count - 1, k + 1)]
         dr, dy = after[0] - before[0], after[1] - before[1]
         flat_normals.append((dy, -dr))
+    # Texture coordinates in metres: round the widest part of it, and
+    # down the profile from its top, so a label wraps round a bottle.
+    widest = max(r for r, _ in profile) or 1.0
+    down = [0.0]
+    for k in range(1, count):
+        down.append(down[-1] + math.dist(profile[k - 1], profile[k]))
     rings = []
     for k, (r, y) in enumerate(profile):
         nr, ny = flat_normals[k]
@@ -433,6 +472,7 @@ def _revolve(geo: Geometry, profile: list[tuple], around: int) -> None:
             cos, sin = math.cos(angle), -math.sin(angle)
             ring.append(geo.vertex(
                 (r * cos, y, r * sin), (nr * cos, ny, nr * sin),
+                (widest * angle, down[-1] - down[k]),
             ))
         rings.append(ring)
     for k in range(count - 1):
@@ -500,7 +540,7 @@ def _torus(part: dict) -> Geometry:
                 ring[0] * math.cos(v), math.sin(v), ring[2] * math.cos(v),
             )
             p = tuple(radius * ring[k] + tube * n[k] for k in range(3))
-            row.append(geo.vertex(p, n))
+            row.append(geo.vertex(p, n, (radius * u, tube * v)))
         rows.append(row)
     for j in range(sides):
         for i in range(around):
@@ -651,6 +691,83 @@ _BUILDERS = {
 }
 
 
+# --- Textures ---------------------------------------------------------------
+
+_IMAGE_SUFFIXES = (".png", ".jpg", ".jpeg")
+
+
+@functools.lru_cache(maxsize=64)
+def _pattern(name: str, a: tuple, b: tuple) -> bytes:
+    """A pattern's tile, drawn once for each pair of colours."""
+
+    return textures.draw(name, a, b)
+
+
+class Texture:
+    """What a part's surface is painted with: a pattern or a picture.
+
+    SCALE is how many metres one tile covers, or None to fit a picture
+    once across the part's largest face.
+    """
+
+    def __init__(self, image: bytes, mime: str, scale: Optional[float],
+                 tinted: bool, key: tuple) -> None:
+        self.image = image
+        self.mime = mime
+        self.scale = scale
+        self.tinted = tinted
+        self.key = key
+
+
+def parse_texture(value: Any, color: tuple, color_given: bool) \
+        -> Optional[Texture]:
+    """A part's texture: a pattern's name, a picture's path, or an object
+    with pattern or image, and color2 and scale if it likes."""
+
+    if value in (None, "", False):
+        return None
+    if isinstance(value, str):
+        text = value.strip()
+        is_image = text.lower().endswith(_IMAGE_SUFFIXES) or "/" in text \
+            or "\\" in text
+        value = {"image": text} if is_image else {"pattern": text}
+    if not isinstance(value, dict):
+        raise ModelError(
+            "texture must be a pattern's name, a picture's path, or an "
+            "object with pattern or image"
+        )
+    scale = value.get("scale")
+    if scale is not None:
+        scale = _number(scale, "texture scale", positive=True)
+
+    if value.get("image"):
+        try:
+            data, mime = textures.load_image(value["image"])
+        except textures.TextureError as exc:
+            raise ModelError(str(exc)) from None
+        # A picture shows as it is, unless the part named a colour too,
+        # which then tints it.
+        return Texture(data, mime, scale, color_given,
+                       ("image", str(value["image"]), scale))
+
+    name = str(value.get("pattern") or "").strip().lower()
+    if name not in textures.PATTERNS:
+        raise ModelError(
+            f"texture {name or value!r} is not one of "
+            f"{', '.join(textures.PATTERNS)}, or a .png or .jpg path"
+        )
+    second = value.get("color2")
+    b = parse_color(second) if second else textures.second_color(name, color)
+    try:
+        data = _pattern(name, tuple(color), tuple(b))
+    except textures.TextureError as exc:
+        raise ModelError(str(exc)) from None
+    scale = scale or textures.DEFAULT_SCALE[name]
+    # The pattern is drawn in the part's colours already.
+    return Texture(data, "image/png", scale, False,
+                   ("pattern", name, tuple(color), tuple(b), scale))
+
+
 # --- Placing the parts ----------------------------------------------------
 
 
@@ -709,6 +826,9 @@ class Part:
             self.scale = _vector(spec.get("scale"), "scale",
                                  (1.0, 1.0, 1.0), positive=True)
             self.color = parse_color(spec.get("color"))
+            self.texture = parse_texture(
+                spec.get("texture"), self.color, spec.get("color") is not None,
+            )
             self.metalness = _fraction(spec.get("metalness"), "metalness",
                                        0.0)
             self.roughness = _fraction(spec.get("roughness"), "roughness",
@@ -736,7 +856,21 @@ class Part:
 
     def material_key(self) -> tuple:
         return (self.color, self.metalness, self.roughness, self.opacity,
-                self.emissive, self.two_sided)
+                self.emissive, self.two_sided,
+                self.texture.key if self.texture else None)
+
+    def texture_coordinates(self) -> list[tuple[float, float]]:
+        """Each corner's place on the texture: metres over the tile's
+        size for a pattern, or a picture fitted once across the part."""
+
+        uvs = self.geometry.uvs
+        if self.texture.scale is not None:
+            return [(u / self.texture.scale, v / self.texture.scale)
+                    for u, v in uvs]
+        lows = [min(c[i] for c in uvs) for i in range(2)]
+        spans = [(max(c[i] for c in uvs) - lows[i]) or 1.0 for i in range(2)]
+        return [((u - lows[0]) / spans[0], (v - lows[1]) / spans[1])
+                for u, v in uvs]
 
 
 def build_parts(parts: Any) -> list[Part]:
@@ -778,14 +912,19 @@ def to_glb(parts: list[Part], title: str = "") -> bytes:
     accessors: list[dict] = []
     materials: list[dict] = []
     material_of: dict[tuple, int] = {}
+    images: list[dict] = []
+    texture_of: dict[tuple, int] = {}
     meshes: list[dict] = []
     nodes: list[dict] = []
 
-    def add(data: bytes, target: int) -> int:
-        views.append({
-            "buffer": 0, "byteOffset": len(binary),
-            "byteLength": len(data), "target": target,
-        })
+    def add(data: bytes, target: Optional[int]) -> int:
+        view = {
+            "buffer": 0, "byteOffset": len(binary), "byteLength": len(data),
+        }
+        # A picture's bytes are neither vertices nor indices.
+        if target is not None:
+            view["target"] = target
+        views.append(view)
         binary.extend(_pad(data, b"\x00"))
         return len(views) - 1
 
@@ -812,18 +951,45 @@ def to_glb(parts: list[Part], title: str = "") -> bytes:
             "bufferView": index, "componentType": _UNSIGNED_INT,
             "count": len(geo.indices), "type": "SCALAR",
         })
+        attributes = {
+            "POSITION": len(accessors) - 3, "NORMAL": len(accessors) - 2,
+        }
+        if part.texture is not None:
+            flat = [c for uv in part.texture_coordinates() for c in uv]
+            coords = add(struct.pack(f"<{len(flat)}f", *flat), _ARRAY_BUFFER)
+            accessors.append({
+                "bufferView": coords, "componentType": _FLOAT,
+                "count": len(geo.uvs), "type": "VEC2",
+            })
+            attributes["TEXCOORD_0"] = len(accessors) - 1
+            if part.texture.key not in texture_of:
+                texture_of[part.texture.key] = len(images)
+                images.append({
+                    "bufferView": add(part.texture.image, None),
+                    "mimeType": part.texture.mime,
+                })
 
         key = part.material_key()
         if key not in material_of:
+            # A pattern carries the part's colour in its own pixels, and
+            # a picture shows as it is unless tinted; either way the
+            # colour does not darken it a second time.
+            shown = part.color if (
+                part.texture is None or part.texture.tinted
+            ) else (1.0, 1.0, 1.0)
             material = {
                 "pbrMetallicRoughness": {
                     "baseColorFactor": [
-                        *(_linear(c) for c in part.color), part.opacity,
+                        *(_linear(c) for c in shown), part.opacity,
                     ],
                     "metallicFactor": part.metalness,
                     "roughnessFactor": part.roughness,
                 },
             }
+            if part.texture is not None:
+                material["pbrMetallicRoughness"]["baseColorTexture"] = {
+                    "index": texture_of[part.texture.key],
+                }
             if part.opacity < 1:
                 material["alphaMode"] = "BLEND"
             if part.emissive is not None:
@@ -838,11 +1004,8 @@ def to_glb(parts: list[Part], title: str = "") -> bytes:
         meshes.append({
             "name": part.name,
             "primitives": [{
-                "attributes": {
-                    "POSITION": len(accessors) - 3,
-                    "NORMAL": len(accessors) - 2,
-                },
-                "indices": len(accessors) - 1,
+                "attributes": attributes,
+                "indices": attributes["POSITION"] + 2,
                 "material": material_of[key],
             }],
         })
@@ -867,6 +1030,16 @@ def to_glb(parts: list[Part], title: str = "") -> bytes:
         "bufferViews": views,
         "buffers": [{"byteLength": len(binary)}],
     }
+    if images:
+        # One texture per picture, each repeating across its part.
+        document["images"] = images
+        document["samplers"] = [{
+            "magFilter": _LINEAR, "minFilter": _LINEAR_MIPMAP_LINEAR,
+            "wrapS": _REPEAT, "wrapT": _REPEAT,
+        }]
+        document["textures"] = [
+            {"sampler": 0, "source": i} for i in range(len(images))
+        ]
     json_chunk = _pad(json.dumps(document, separators=(",", ":"))
                       .encode("utf-8"), b" ")
     bin_chunk = bytes(binary)
