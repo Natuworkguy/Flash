@@ -1565,10 +1565,16 @@ body.resizing-viewer iframe { pointer-events: none; }
 
 /* A MIDI file: a piano roll, its tracks, and a transport to play it by.
    The roll fits the whole piece across; the line is where it is. */
-.midi-view { position: absolute; inset: 0; display: flex; flex-direction: column; background: var(--bg); }
+.midi-view { position: absolute; inset: 0; display: flex; flex-direction: column; background: var(--bg); overflow-y: auto; overscroll-behavior: contain; }
 .midi-view .midi-note { margin: auto; padding: 24px; text-align: center; color: var(--text-3); font-size: 13.5px; }
-.midi-view .roll { position: relative; flex: 1; min-height: 140px; margin: 14px 14px 0; border-radius: 12px; overflow: hidden; background: var(--code-bg); border: 1px solid var(--border); cursor: pointer; touch-action: none; }
-.midi-view .roll canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+/* Long or busy pieces scroll across rather than squeezing into the
+   width: the lane is as wide as the piece at the zoom, and the canvas
+   stays put over the part in view. */
+.midi-view .roll { position: relative; flex: 1 0 220px; margin: 14px 14px 0; border-radius: 12px; overflow-x: auto; overflow-y: hidden; background: var(--code-bg); border: 1px solid var(--border); cursor: pointer; touch-action: pan-x pan-y; scrollbar-width: thin; }
+.midi-view .roll .lane { position: relative; height: 100%; min-width: 100%; }
+.midi-view .roll canvas { position: sticky; left: 0; top: 0; width: 100%; height: 100%; display: block; }
+.midi-view .zoom { display: inline-flex; align-items: center; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.midi-view .zoom button { padding: 4px 9px; border-radius: 0; }
 .midi-view .tracks { display: flex; flex-wrap: wrap; gap: 6px; padding: 10px 14px 0; }
 .midi-view .track { display: inline-flex; align-items: center; gap: 7px; padding: 4px 10px 4px 8px; border-radius: 999px; border: 1px solid var(--border); font-size: 12.5px; color: var(--text-2); background: var(--surface); }
 .midi-view .track i { width: 9px; height: 9px; border-radius: 50%; background: var(--c); flex: none; }
@@ -3078,13 +3084,13 @@ async function openMidi(entry, body) {
   const shown = song.tracks.map((t, i) => ({ ...t, index: i })).filter((t) => t.notes);
   const color = new Map(shown.map((t, i) => [t.index, MIDI_COLORS[i % MIDI_COLORS.length]]));
   const muted = new Set();
-  view.innerHTML = `<div class="roll"><canvas></canvas></div><div class="tracks"></div>
+  view.innerHTML = `<div class="roll"><div class="lane"><canvas></canvas></div></div><div class="tracks"></div>
     <div class="transport"><button type="button" class="play" aria-label="Play">${icon("play")}</button>
     <span class="time"></span><input class="scrub" type="range" min="0" max="1000" value="0" aria-label="Position">
-    <div class="knobs"><select aria-label="Speed">${[0.5, 0.75, 1, 1.25, 1.5, 2].map((r) => `<option value="${r}"${r === 1 ? " selected" : ""}>${r}×</option>`).join("")}</select>
+    <div class="knobs"><span class="zoom"><button type="button" data-zoom="-1" aria-label="Zoom out" data-tip="Zoom out">−</button><button type="button" data-zoom="0" data-tip="Fit the whole piece">Fit</button><button type="button" data-zoom="1" aria-label="Zoom in" data-tip="Zoom in">+</button></span><select aria-label="Speed">${[0.5, 0.75, 1, 1.25, 1.5, 2].map((r) => `<option value="${r}"${r === 1 ? " selected" : ""}>${r}×</option>`).join("")}</select>
     <button type="button" data-loop aria-pressed="false">${icon("loop")}Loop</button>
     <label class="vol">${icon("volume")}<input type="range" min="0" max="100" value="80" aria-label="Volume"></label></div></div>`;
-  const roll = view.querySelector(".roll"), canvas = roll.querySelector("canvas");
+  const roll = view.querySelector(".roll"), lane = roll.querySelector(".lane"), canvas = roll.querySelector("canvas");
   const playBtn = view.querySelector(".play"), time = view.querySelector(".time"), scrub = view.querySelector(".scrub");
   const speed = view.querySelector("select"), loopBtn = view.querySelector("[data-loop]"), vol = view.querySelector(".vol input");
 
@@ -3113,23 +3119,37 @@ async function openMidi(entry, body) {
   const low = melodic.length ? Math.min(...melodic.map((n) => n.pitch)) - 2 : 48;
   const high = melodic.length ? Math.max(...melodic.map((n) => n.pitch)) + 2 : 72;
   const drumKeys = [...new Set(song.notes.filter((n) => n.ch === 9).map((n) => n.pitch))].sort((a, b) => a - b);
-  let still = null, scale = 1;
+  // How wide a second is, in CSS pixels. At least READABLE, so a busy
+  // beat's notes stay apart; a piece that fits at that is shown whole.
+  const READABLE = 40;
+  const longest = song.notes.reduce((m, n) => Math.max(m, n.d), 0);
+  // "readable" to start, "whole" once Fit is pressed, "set" once zoomed;
+  // the first two follow the panel as it is resized.
+  let still = null, scale = 1, perSecond = 0, zoom = "readable";
+  const fit = () => Math.max(1, roll.clientWidth) / song.duration;
   const layout = () => {
     scale = devicePixelRatio || 1;
+    if (zoom === "readable") perSecond = Math.max(fit(), READABLE);
+    if (zoom === "whole") perSecond = fit();
+    perSecond = Math.max(fit(), perSecond);
+    lane.style.width = `${Math.ceil(song.duration * perSecond)}px`;
     canvas.width = Math.max(1, roll.clientWidth * scale);
     canvas.height = Math.max(1, roll.clientHeight * scale);
     const w = canvas.width, h = canvas.height;
     const drumH = hasDrums ? Math.min(h * 0.22, drumKeys.length * 8 * scale + 10 * scale) : 0;
     const noteH = (h - drumH) / (high - low + 1);
-    const x = (t) => (t / song.duration) * w;
     const style = getComputedStyle(view);
-    const at = (n) => n.ch === 9
-      ? [x(n.t), h - drumH + (drumKeys.indexOf(n.pitch) + 0.5) * (drumH / drumKeys.length) - 2.5 * scale, Math.max(3 * scale, x(n.d) * 0.6), 5 * scale]
-      : [x(n.t), (high - n.pitch) * noteH, Math.max(2 * scale, x(n.d) - scale), Math.max(2 * scale, noteH - scale)];
-    still = { w, h, x, at, line: style.getPropertyValue("--border").trim() || "#444", label: style.getPropertyValue("--text-3").trim() || "#888", accent: style.getPropertyValue("--accent").trim() || "#d97757", layer: document.createElement("canvas") };
-    still.layer.width = w;
-    still.layer.height = h;
-    const g = still.layer.getContext("2d");
+    still = { w, h, drumH, noteH, line: style.getPropertyValue("--border").trim() || "#444", label: style.getPropertyValue("--text-3").trim() || "#888", accent: style.getPropertyValue("--accent").trim() || "#d97757" };
+    paint();
+  };
+  // Canvas pixels for a time, across the part in view.
+  const xOf = (t) => (t * perSecond - roll.scrollLeft) * scale;
+  const firstFrom = (s) => { let lo = 0, hi = song.notes.length; while (lo < hi) { const m = (lo + hi) >> 1; if (song.notes[m].t < s) lo = m + 1; else hi = m; } return lo; };
+  const paint = () => {
+    if (!still) return;
+    const { w, h, drumH, noteH } = still;
+    const g = canvas.getContext("2d");
+    g.clearRect(0, 0, w, h);
     g.font = `${10 * scale}px ui-monospace, monospace`;
     g.textBaseline = "middle";
     for (let p = low; p <= high; p++) {
@@ -3141,17 +3161,20 @@ async function openMidi(entry, body) {
       g.fillText(`C${p / 12 - 1}`, 6 * scale, y);
     }
     if (hasDrums) { g.fillStyle = still.line; g.fillRect(0, h - drumH - scale, w, scale); }
-    paint();
-  };
-  const paint = () => {
-    if (!still) return;
-    const g = canvas.getContext("2d");
-    g.clearRect(0, 0, still.w, still.h);
-    g.drawImage(still.layer, 0, 0);
+    // Only the notes in view: they are in order of start, so from the
+    // first that could still be sounding at the left edge to the first
+    // that starts past the right.
+    const from = roll.scrollLeft / perSecond, to = (roll.scrollLeft + roll.clientWidth) / perSecond;
     const now = position();
-    for (const n of song.notes) {
-      const [nx, ny, nw, nh] = still.at(n);
-      const sounding = n.t <= now && now < n.t + n.d && playing;
+    for (let i = firstFrom(from - longest); i < song.notes.length; i++) {
+      const n = song.notes[i];
+      if (n.t > to) break;
+      if (n.t + n.d < from) continue;
+      const nx = xOf(n.t);
+      const [ny, nw, nh] = n.ch === 9
+        ? [h - drumH + (drumKeys.indexOf(n.pitch) + 0.5) * (drumH / drumKeys.length) - 2.5 * scale, Math.max(3 * scale, n.d * perSecond * scale * 0.6), 5 * scale]
+        : [(high - n.pitch) * noteH, Math.max(2 * scale, n.d * perSecond * scale - scale), Math.max(2 * scale, noteH - scale)];
+      const sounding = playing && n.t <= now && now < n.t + n.d;
       g.globalAlpha = muted.has(n.track) ? 0.15 : sounding ? 1 : 0.72;
       g.fillStyle = color.get(n.track);
       g.beginPath();
@@ -3161,17 +3184,57 @@ async function openMidi(entry, body) {
     }
     g.globalAlpha = 1;
     g.fillStyle = still.accent;
-    g.fillRect(Math.min(still.w - 2 * scale, still.x(now)), 0, 2 * scale, still.h);
+    g.fillRect(Math.max(0, Math.min(w - 2 * scale, xOf(now))), 0, 2 * scale, h);
     time.textContent = `${clock(now)} / ${clock(song.duration)}`;
     if (!dragging) scrub.value = Math.round((now / song.duration) * 1000);
   };
+  // While it plays, the roll follows the line, unless it was just
+  // scrolled by hand: then it waits a moment before taking over again.
+  let handScrolled = 0, ownScroll = false;
+  const follow = () => {
+    if (performance.now() - handScrolled < 2500) return;
+    const x = position() * perSecond, left = roll.scrollLeft, width = roll.clientWidth;
+    if (x < left || x > left + width * 0.85) { ownScroll = true; roll.scrollLeft = Math.max(0, x - width * 0.15); }
+  };
+  roll.addEventListener("scroll", () => {
+    if (ownScroll) ownScroll = false; else handScrolled = performance.now();
+    paint();
+  }, { passive: true });
+  // Zoom about a point in view, keeping what is under it there.
+  const zoomTo = (want, at = roll.clientWidth / 2) => {
+    const t = (roll.scrollLeft + at) / perSecond;
+    perSecond = Math.min(2000, Math.max(fit(), want));
+    zoom = perSecond <= fit() + 0.01 ? "whole" : "set";
+    layout();
+    ownScroll = true;
+    roll.scrollLeft = Math.max(0, t * perSecond - at);
+  };
+  view.querySelectorAll("[data-zoom]").forEach((b) => {
+    b.onclick = () => {
+      const step = Number(b.dataset.zoom);
+      if (!step) { zoom = "whole"; layout(); ownScroll = true; roll.scrollLeft = 0; return; }
+      zoomTo(perSecond * (step > 0 ? 1.6 : 1 / 1.6));
+    };
+  });
+  // A plain wheel scrolls the roll across; with Ctrl or Cmd, it zooms.
+  roll.addEventListener("wheel", (e) => {
+    if (e.ctrlKey || e.metaKey) {
+      e.preventDefault();
+      zoomTo(perSecond * Math.exp(-e.deltaY * 0.0025), e.clientX - roll.getBoundingClientRect().left);
+      return;
+    }
+    const across = roll.scrollWidth > roll.clientWidth + 1;
+    if (across && Math.abs(e.deltaY) > Math.abs(e.deltaX)) {
+      e.preventDefault();
+      roll.scrollLeft += e.deltaY;
+    }
+  }, { passive: false });
 
   // Playing: notes are handed to the synth a little ahead of time, so a
   // busy page never makes one late.
   let ctx = null, master = null, synth = null;
   let playing = false, pos = 0, anchor = 0, rate = 1, next = 0, timer = 0, frame = 0, dragging = false;
   const position = () => (playing ? Math.min(song.duration, pos + (ctx.currentTime - anchor) * rate) : pos);
-  const firstFrom = (s) => { let lo = 0, hi = song.notes.length; while (lo < hi) { const m = (lo + hi) >> 1; if (song.notes[m].t < s) lo = m + 1; else hi = m; } return lo; };
   const pump = () => {
     const until = position() + 0.2 * rate;
     while (next < song.notes.length && song.notes[next].t < until) {
@@ -3187,7 +3250,7 @@ async function openMidi(entry, body) {
       else { stop(); pos = song.duration; paint(); }
     }
   };
-  const tick = () => { paint(); if (playing) frame = requestAnimationFrame(tick); };
+  const tick = () => { follow(); paint(); if (playing) frame = requestAnimationFrame(tick); };
   const start = async () => {
     if (!ctx) {
       const Audio = window.AudioContext || window.webkitAudioContext;
@@ -3238,9 +3301,40 @@ async function openMidi(entry, body) {
   speed.onchange = () => { const at = position(); rate = Number(speed.value); seek(at); };
   loopBtn.onclick = () => loopBtn.setAttribute("aria-pressed", loopBtn.getAttribute("aria-pressed") !== "true");
   vol.oninput = () => { if (master) master.gain.setTargetAtTime(Math.pow(vol.value / 100, 2), ctx.currentTime, 0.02); };
-  const seekAt = (e) => { const r = roll.getBoundingClientRect(); seek(((e.clientX - r.left) / r.width) * song.duration); };
-  roll.onpointerdown = (e) => { roll.setPointerCapture(e.pointerId); seekAt(e); roll.onpointermove = (m) => seekAt(m); };
-  roll.onpointerup = () => { roll.onpointermove = null; };
+  const seekAt = (e) => {
+    const r = roll.getBoundingClientRect();
+    seek((roll.scrollLeft + e.clientX - r.left) / perSecond);
+    handScrolled = performance.now();
+  };
+  // A mouse drags the line along; a finger scrolls the roll, and a tap
+  // puts the line where it lands. The drag ends with the button, and if
+  // that release never arrives, at the next move with no button held.
+  roll.onpointerdown = (e) => {
+    if (e.pointerType !== "mouse" || e.button !== 0) { roll.dataset.tap = `${e.clientX},${e.clientY}`; return; }
+    if (e.target.closest(".lane") === null) return;
+    // A press on the scrollbar scrolls, rather than seeks.
+    if (e.clientY - roll.getBoundingClientRect().top > roll.clientHeight) return;
+    roll.setPointerCapture(e.pointerId);
+    seekAt(e);
+    const move = (m) => { if (!m.buttons) { done(); return; } seekAt(m); };
+    const done = () => {
+      roll.removeEventListener("pointermove", move);
+      roll.removeEventListener("pointerup", done);
+      roll.removeEventListener("pointercancel", done);
+      roll.removeEventListener("lostpointercapture", done);
+    };
+    roll.addEventListener("pointermove", move);
+    roll.addEventListener("pointerup", done);
+    roll.addEventListener("pointercancel", done);
+    roll.addEventListener("lostpointercapture", done);
+  };
+  roll.addEventListener("pointerup", (e) => {
+    const tap = roll.dataset.tap;
+    delete roll.dataset.tap;
+    if (!tap || e.pointerType === "mouse") return;
+    const [x, y] = tap.split(",").map(Number);
+    if (Math.hypot(e.clientX - x, e.clientY - y) < 8) seekAt(e);
+  });
   // Space plays and pauses while the player is open and nothing is typed.
   const onKey = (e) => {
     if (e.code !== "Space" || e.target.closest("input, textarea, select, [contenteditable]")) return;
@@ -10141,16 +10235,32 @@ viewerHandle.addEventListener("pointerdown", (e) => {
   dropCommentUi();
   const right = viewerEl.getBoundingClientRect().right;
   let width = viewerEl.getBoundingClientRect().width;
-  const move = (ev) => { width = setViewerWidth(right - ev.clientX); };
+  // The drag ends when the button comes up. That release can go missing
+  // (let go over a PDF's frame, outside the window, or with the capture
+  // taken away), and a drag that missed it would follow the pointer with
+  // no button held. So it also ends on losing the capture, on the window
+  // losing focus, and on the first move made with no button down.
+  let over = false;
+  const move = (ev) => {
+    if (!(ev.buttons & 1)) { done(); return; }
+    width = setViewerWidth(right - ev.clientX);
+  };
   const done = () => {
+    if (over) return;
+    over = true;
     viewerHandle.removeEventListener("pointermove", move);
+    for (const kind of ["pointerup", "pointercancel", "lostpointercapture"]) viewerHandle.removeEventListener(kind, done);
+    removeEventListener("pointerup", done, true);
+    removeEventListener("blur", done);
+    if (viewerHandle.hasPointerCapture(e.pointerId)) viewerHandle.releasePointerCapture(e.pointerId);
     viewerEl.classList.remove("resizing");
     document.body.classList.remove("resizing-viewer");
     savePref("viewer-width", width);
   };
   viewerHandle.addEventListener("pointermove", move);
-  viewerHandle.addEventListener("pointerup", done, { once: true });
-  viewerHandle.addEventListener("pointercancel", done, { once: true });
+  for (const kind of ["pointerup", "pointercancel", "lostpointercapture"]) viewerHandle.addEventListener(kind, done);
+  addEventListener("pointerup", done, true);
+  addEventListener("blur", done);
 });
 viewerHandle.ondblclick = () => {
   viewerEl.style.removeProperty("--viewer-w");
