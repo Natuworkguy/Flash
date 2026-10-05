@@ -11,6 +11,7 @@ from flash import (
     mail,
     memory,
     repl_input,
+    showcase,
     skills,
     sparks,
     systemone,
@@ -57,6 +58,9 @@ def isolated_home(tmp_path_factory, monkeypatch):
     monkeypatch.setattr(skills, "FLASH_DIR", home / ".flash")
     # Sparks, and what this session has already pointed out about them.
     monkeypatch.setattr(sparks, "FLASH_DIR", home / ".flash")
+    # The tally of replies, and what tips have been shown.
+    monkeypatch.setattr(showcase, "FLASH_DIR", home / ".flash")
+    monkeypatch.delenv("SHOW_TIPS", raising=False)
     # The user's email settings, and the password in them.
     monkeypatch.setattr(mail, "FLASH_DIR", home / ".flash")
     monkeypatch.setattr(sparks, "_told", set())
