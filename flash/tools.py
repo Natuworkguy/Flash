@@ -40,6 +40,7 @@ from . import (
     skills,
     sparks,
     systemone,
+    textures,
 )
 from .browser import (
     ACTIONS,
@@ -145,7 +146,9 @@ To hand the user a Markdown or text document (a report, plan, README,
 To make a 3D model (an object, a prop, a room, a layout), use the
   make_3d_model tool: it builds the model from parts such as boxes,
   cylinders, spheres, lathed profiles, extruded outlines, and blocky
-  text for any words, logos, or signs, saves a
+  text for any words, logos, or signs, each with a colour and, where the
+  real thing has one, a texture (wood, brick, marble, grass, fabric, or
+  a picture from a file), saves a
   .glb, and shows it in a 3D viewer. Use send_3d_model to show a .glb,
   .stl, or .obj file that already exists.
 When you make an image, PDF, web page, or document for the user, send it
@@ -4095,7 +4098,10 @@ tools: list[dict[str, Any]] = [
                 "so a part rests on it when its position's y is half its "
                 "height. Every shape is centred on its position. Build "
                 "the object from many parts, sized in proportion to the "
-                "real thing and coloured like it. Anything with words on "
+                "real thing and coloured like it. Give a surface a "
+                "texture where the real thing has one: wood grain on a "
+                "table, brick on a wall, grass on a lawn, a picture on a "
+                "poster or a screen. Anything with words on "
                 "it (a logo, a sign, a title) gets a text part for them. "
                 "The result gives the model's overall size, "
                 "and a picture of it when you can see images: check both "
@@ -4243,6 +4249,30 @@ tools: list[dict[str, Any]] = [
                                         "A hex code like #c0392b, or a "
                                         "common name."
                                     ),
+                                },
+                                "texture": {
+                                    "description": (
+                                        "What its surface is painted "
+                                        "with, over its colour. A "
+                                        "pattern's name, drawn in the "
+                                        "part's color: "
+                                        + ", ".join(textures.PATTERNS)
+                                        + " (noise for stone, concrete, "
+                                        "sand or rust). Or the full path "
+                                        "of a .png or .jpg, fitted once "
+                                        "across the part's largest face "
+                                        "(a poster, a screen, a label; "
+                                        "on a sphere, a world map makes "
+                                        "a globe). Or an object: pattern "
+                                        "or image, color2 for a "
+                                        "pattern's second colour (the "
+                                        "mortar, the grain, the other "
+                                        "square), and scale, the metres "
+                                        "one repeat of it covers."
+                                    ),
+                                    # A name or a path, or an object
+                                    # with the fields named above.
+                                    "type": ["string", "object"],
                                 },
                                 "metalness": {
                                     "type": "number",
