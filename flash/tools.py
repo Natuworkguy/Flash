@@ -35,6 +35,7 @@ from . import (
     extensions,
     learning,
     mail,
+    midi,
     model3d,
     plan,
     skills,
@@ -151,6 +152,10 @@ To make a 3D model (an object, a prop, a room, a layout), use the
   a picture from a file), saves a
   .glb, and shows it in a 3D viewer. Use send_3d_model to show a .glb,
   .stl, or .obj file that already exists.
+To make music (a tune, a chord progression, a drum beat), use the
+  make_midi tool: it writes the tracks of notes you give it as a .mid
+  and plays it to the user in a player with a piano roll. Use send_midi
+  to play a .mid file that already exists.
 When you make an image, PDF, web page, or document for the user, send it
   with the matching tool as soon as it is finished, without being asked:
   that is how they see it.
@@ -2476,7 +2481,8 @@ def _draw_inline(
 
 
 def _open_in_viewer(path: Path) -> str:
-    """Hand PATH to whatever the OS shows pictures with.
+    """Hand PATH to whatever the OS opens its kind of file with: a
+    picture, a PDF, a 3D model, a MIDI file.
 
     Returns "" on success, or a short reason it could not be opened.
     """
@@ -2489,14 +2495,14 @@ def _open_in_viewer(path: Path) -> str:
         elif os.name == "nt":
             start = getattr(os, "startfile", None)
             if start is None:
-                return "no image viewer on this system"
+                return "nothing on this system opens it"
             start(str(path))
         else:
             subprocess.run(  # nosec B603 B607
                 ["xdg-open", str(path)], check=True, timeout=10
             )
     except FileNotFoundError:
-        return "no image viewer on this system"
+        return "nothing on this system opens it"
     except (OSError, subprocess.SubprocessError) as exc:
         return f"the viewer failed ({exc.__class__.__name__})"
 
@@ -3297,6 +3303,126 @@ def send_3d_model(path: str, caption: str = "") -> str:
         f"Sent {model_path.name} ({kilobytes} KB). {shown}\n"
         f"{_model_preview(model_path)}"
     )
+
+
+def _show_midi(midi_path: Path, label: str) -> str:
+    """Put a MIDI file in front of the user. Returns how it went."""
+
+    if tool_file(str(midi_path)):
+        tool_result(label)
+        return (
+            "It is on the user's screen beside the chat, in a player that "
+            "plays it and draws it as a piano roll, and they can download "
+            "it from there."
+        )
+
+    problem = _open_with_spinner(midi_path)
+    tool_result(label + (f" ({problem})" if problem else ""))
+    console.print(
+        Text(f"{' ' * RESULT_INDENT}{_display_path(midi_path)}", style=DIM)
+    )
+    if problem:
+        return (
+            f"Could not open it: {problem}. Its path is on screen; tell "
+            "the user where the file is and that the web UI (flash --web) "
+            "plays MIDI files."
+        )
+    return "It opened in the user's default player, with its path on screen."
+
+
+def make_midi(
+    path: str, tracks: Any, tempo: Any = 120, time_signature: str = "4/4",
+    title: str = "", caption: str = "",
+) -> str:
+    """Write a piece of music as a MIDI file from its tracks of notes,
+    and play it to the user."""
+
+    midi_path = Path(path).expanduser()
+    if midi_path.suffix.lower() not in midi.MIDI_SUFFIXES:
+        midi_path = midi_path.with_name(midi_path.name + ".mid")
+    tool_line(f"MakeMIDI({midi_path})")
+
+    problem = ""
+    if midi_path.is_dir():
+        problem = f"{midi_path} is a directory, not a file"
+    elif midi_path.exists():
+        try:
+            with open(midi_path, "rb") as handle:
+                if not midi.is_midi(handle.read(4)):
+                    problem = (
+                        f"{midi_path.name} already exists and is not a MIDI "
+                        "file, so it was left alone; pick another path"
+                    )
+        except OSError as exc:
+            problem = f"could not read {midi_path}: {exc}"
+    if problem:
+        result = f"Error: {problem}."
+        tool_result(result, style=ERROR)
+        return result
+
+    try:
+        built = midi.build_tracks(tracks)
+        data = midi.to_midi(built, tempo, time_signature,
+                            str(title or "").strip())
+    except midi.MidiError as exc:
+        result = f"Error: {exc}. Nothing was written."
+        tool_result(result, style=ERROR)
+        return result
+
+    checkpoint.record(midi_path)
+    try:
+        midi_path.parent.mkdir(parents=True, exist_ok=True)
+        midi_path.write_bytes(data)
+    except OSError as exc:
+        result = f"Error: could not write {midi_path}: {exc}"
+        tool_result(result, style=ERROR)
+        return result
+
+    kilobytes = max(1, round(len(data) / 1024))
+    note = caption.strip()
+    count = len(built)
+    label = (
+        f"{midi_path.name} ({count} track{plural(count)}, {kilobytes} KB)"
+        + (f": {note}" if note else "")
+    )
+    shown = _show_midi(midi_path, label)
+    return (
+        f"Saved {midi_path} ({kilobytes} KB).\n{midi.describe(data)}\n"
+        f"{shown}\nTo change it, call make_midi again with all the tracks, "
+        "changed, and the same path."
+    )
+
+
+def send_midi(path: str, caption: str = "") -> str:
+    """Play the user a MIDI file that already exists, such as one a
+    script wrote."""
+
+    tool_line(f"SendMIDI({path})")
+
+    midi_path = Path(path).expanduser()
+    problem = (
+        midi.check_midi_file(midi_path) if midi_path.is_file()
+        else f"no file at {midi_path}"
+    )
+    summary = ""
+    if not problem:
+        try:
+            data = midi_path.read_bytes()
+            summary = midi.describe(data)
+        except (OSError, midi.MidiError, IndexError, ValueError) as exc:
+            problem = f"{midi_path.name} could not be read as MIDI: {exc}"
+    if problem:
+        result = f"Error: {problem}."
+        tool_result(result, style=ERROR)
+        return result
+
+    kilobytes = max(1, round(len(data) / 1024))
+    note = caption.strip()
+    label = f"{midi_path.name} ({kilobytes} KB)" + (
+        f": {note}" if note else ""
+    )
+    shown = _show_midi(midi_path, label)
+    return f"Sent {midi_path.name} ({kilobytes} KB).\n{summary}\n{shown}"
 
 
 DEFAULT_SCREENSHOT_WIDTH = 1280
@@ -4350,6 +4476,140 @@ tools: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "make_midi",
+            "description": (
+                "Write music as a MIDI file and play it to the user: a "
+                "tune, a chord progression, a drum beat, a backing track, "
+                "a ringtone. In the web UI it opens beside the chat in a "
+                "player that plays it and draws it as a piano roll. Times "
+                "are in beats at the tempo, so 0, 1, 2, 3 are the four "
+                "beats of a 4/4 bar and 4 starts the next. Give each part "
+                "its own track: melody, chords, bass, drums. The result "
+                "gives each track's note count, range, and the length; "
+                "check them against what you meant. To revise, call again "
+                "with all the tracks and the same path."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": (
+                            "Full path to save it at, ending in .mid: in "
+                            "the user's Downloads folder unless they named "
+                            "another place."
+                        ),
+                    },
+                    "tracks": {
+                        "type": "array",
+                        "description": "The tracks, one per instrument.",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "name": {
+                                    "type": "string",
+                                    "description": "Like 'melody' or 'bass'.",
+                                },
+                                "instrument": {
+                                    "type": ["string", "integer"],
+                                    "description": (
+                                        "drums for a drum kit, or a name: "
+                                        "piano, electric piano, organ, "
+                                        "guitar, electric guitar, bass, "
+                                        "synth bass, violin, cello, "
+                                        "strings, choir, trumpet, brass, "
+                                        "sax, clarinet, flute, harp, "
+                                        "marimba, vibraphone, music box, "
+                                        "lead, pad, and more; or a General "
+                                        "MIDI program number 0 to 127. "
+                                        "Piano when left out."
+                                    ),
+                                },
+                                "notes": {
+                                    "type": "array",
+                                    "description": (
+                                        "Each note as [pitch, start, "
+                                        "duration] or [pitch, start, "
+                                        "duration, velocity], start and "
+                                        "duration in beats, velocity 1 to "
+                                        "127 (90 if left out). A pitch is "
+                                        "a name like C4 (middle C), F#3 or "
+                                        "Bb2, or a MIDI number; a list of "
+                                        "pitches is a chord, like "
+                                        "[[\"C4\", \"E4\", \"G4\"], 0, 4]. "
+                                        "On a drums track a pitch is a "
+                                        "sound: kick, snare, clap, hihat, "
+                                        "open hihat, crash, ride, low tom, "
+                                        "mid tom, high tom, tambourine, "
+                                        "cowbell, shaker."
+                                    ),
+                                    "items": {"type": "array"},
+                                },
+                                "volume": {
+                                    "type": "number",
+                                    "description": (
+                                        "0 to 1, the track's level in the "
+                                        "mix; 1 if left out."
+                                    ),
+                                },
+                            },
+                            "required": ["notes"],
+                        },
+                    },
+                    "tempo": {
+                        "type": "number",
+                        "description": "Beats a minute, 20 to 400; 120.",
+                    },
+                    "time_signature": {
+                        "type": "string",
+                        "description": "Like 4/4 (default), 3/4 or 6/8.",
+                    },
+                    "title": {
+                        "type": "string",
+                        "description": "Optional name for the piece.",
+                    },
+                    "caption": {
+                        "type": "string",
+                        "description": (
+                            "Optional single line shown with it."
+                        ),
+                    },
+                },
+                "required": ["path", "tracks"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "send_midi",
+            "description": (
+                "Play the user a MIDI file (.mid or .midi) that already "
+                "exists, such as one a script wrote or the user has, in "
+                "the same player. For music you write yourself, use "
+                "make_midi, which plays it too."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Path to the .mid or .midi file.",
+                    },
+                    "caption": {
+                        "type": "string",
+                        "description": (
+                            "Optional single line shown with it."
+                        ),
+                    },
+                },
+                "required": ["path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "view_image",
             "description": (
                 "Look at an image file on disk (.png, .jpg, .jpeg, .webp, "
@@ -5101,6 +5361,8 @@ FUNCTIONS = {
     "send_document": send_document,
     "make_3d_model": make_3d_model,
     "send_3d_model": send_3d_model,
+    "make_midi": make_midi,
+    "send_midi": send_midi,
     "screenshot": screenshot,
     "open_page": open_page,
     "interact": interact,
