@@ -2691,6 +2691,7 @@ function toolIcon(label) {
   const name = label.split("(")[0].toLowerCase();
   if (/bash|shell/.test(name)) return "terminal";
   if (/inbox|email/.test(name)) return "mail";
+  if (/devtools/.test(name)) return "code";
   if (/read|glob|grep|recall|skillview/.test(name)) return "file";
   if (/edit|write/.test(name)) return "edit";
   if (/web|fetch|page|screenshot|interact/.test(name)) return "globe";

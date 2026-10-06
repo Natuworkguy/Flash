@@ -29,6 +29,7 @@ from rich.markdown import Markdown
 from rich.text import Text
 
 from . import agent as subagents
+from . import browser as page_devtools
 from . import (
     checkpoint,
     editor,
@@ -318,7 +319,8 @@ def init(config, ):
 # whole: a trim through the middle of it takes away the very numbers the
 # next click has to name.
 _SELF_LIMITING_TOOLS = {
-    "read", "open_page", "interact", "check_inbox", "read_email",
+    "read", "open_page", "interact", "devtools", "check_inbox",
+    "read_email",
 }
 
 
@@ -3746,6 +3748,63 @@ def interact(
     return _page_report(note, full_page=bool(full_page))
 
 
+DEVTOOLS_ACTIONS = ("network", "request", "console", "run", "inspect")
+
+
+def devtools(
+    action: str, target: Any = "", value: Any = "", failed_only: Any = False,
+    level: str = "", properties: Any = "",
+) -> str:
+    """A browser's developer tools, for the page open_page has open."""
+
+    action = str(action or "").strip().lower()
+    target = "" if target is None else str(target).strip()
+    value = "" if value is None else str(value)
+    label = {
+        "network": f"network{f' {target}' if target else ''}",
+        "request": f"request #{target.lstrip('#')}",
+        "console": f"console{f' {level}' if level else ''}",
+        "run": f"run {' '.join(value.split())[:60]}",
+        "inspect": f"inspect {target}",
+    }.get(action, action)
+    tool_line(f"Devtools({label})")
+
+    if action not in DEVTOOLS_ACTIONS:
+        result = (
+            f"Error: unknown action {action!r}. Use one of: "
+            + ", ".join(DEVTOOLS_ACTIONS) + "."
+        )
+        tool_result(result, style=ERROR)
+        return result
+    if action == "network":
+        lines, why = page_devtools.network(
+            target or value, _truthy(failed_only),
+        )
+        text = "\n".join(lines)
+    elif action == "request":
+        number = target.lstrip("#") or value.strip().lstrip("#")
+        if not number.isdigit():
+            text, why = "", "request needs a request's number, as target."
+        else:
+            text, why = page_devtools.request(int(number))
+    elif action == "console":
+        lines, why = page_devtools.console(str(level or value or ""))
+        text = "\n".join(lines)
+    elif action == "run":
+        text, why = page_devtools.run_script(value or target)
+    else:
+        wanted = properties if isinstance(properties, list) else [
+            p for p in str(properties or "").split(",") if p.strip()
+        ]
+        text, why = page_devtools.inspect(target or value, wanted)
+    if why:
+        tool_result(why, style=ERROR)
+        return f"Error: {why}"
+    first = text.splitlines()[0] if text else "(nothing)"
+    tool_result(first[:200])
+    return text or "(nothing)"
+
+
 # Tool schema expected by Ollama function calling (OpenAI-style).
 tools: list[dict[str, Any]] = [
     {
@@ -4857,6 +4916,63 @@ tools: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "devtools",
+            "description": (
+                "A browser's developer tools, for the page open_page has "
+                "open. network: the requests it has made since it opened "
+                "(target filters by address or type, failed_only for errors "
+                "and 4xx/5xx). request: one of them in full, its headers and "
+                "response body, by number as target. console: everything it "
+                "logged, warnings and errors too (level narrows it). run: "
+                "JavaScript in the page, as in the console, its value and "
+                "what it logged coming back; await works. inspect: one "
+                "element closely, its attributes, box, computed style and "
+                "HTML (target: an element number, a CSS selector or its "
+                "text; properties: CSS properties to read instead)."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": list(DEVTOOLS_ACTIONS),
+                    },
+                    "target": {
+                        "type": "string",
+                        "description": (
+                            "network: words to filter by. request: its "
+                            "number. inspect: the element."
+                        ),
+                    },
+                    "value": {
+                        "type": "string",
+                        "description": "run: the JavaScript.",
+                    },
+                    "failed_only": {
+                        "type": "boolean",
+                        "description": "network: only those that failed.",
+                    },
+                    "level": {
+                        "type": "string",
+                        "description": (
+                            "console: log, info, warning or error only."
+                        ),
+                    },
+                    "properties": {
+                        "type": "string",
+                        "description": (
+                            "inspect: CSS properties to read, comma "
+                            "separated, e.g. color, z-index."
+                        ),
+                    },
+                },
+                "required": ["action"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "web_search",
             "description": "Search the web and return summarized results.",
             "parameters": {
@@ -5366,6 +5482,7 @@ FUNCTIONS = {
     "screenshot": screenshot,
     "open_page": open_page,
     "interact": interact,
+    "devtools": devtools,
     "web_search": web_search,
     "fetch": fetch,
     "get_os": get_os,
