@@ -132,6 +132,12 @@ def _tagged(name: str) -> str:
     return name if ":" in name.rpartition("/")[2] else f"{name}:latest"
 
 
+def full_name(name: str) -> str:
+    """NAME as Ollama lists it, with its tag: llama3.1 is llama3.1:latest."""
+
+    return _tagged(name.strip())
+
+
 def _listing(client) -> Optional[list]:
     """Everything Ollama holds, or None if it could not be asked.
 

@@ -101,6 +101,8 @@ def fresh_shift_rounds(monkeypatch):
 
     monkeypatch.delenv("SPARK_SHIFT_ROUNDS", raising=False)
     monkeypatch.delenv("SPARK_SHIFT_UNLIMITED", raising=False)
+    # Set, not deleted, so whatever a test sets is taken back after it.
+    monkeypatch.setenv("SPARK_DEFAULT_MODEL", "")
 
 
 @pytest.fixture(autouse=True)

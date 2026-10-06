@@ -2257,9 +2257,13 @@ def make_spark(
     schedule = sparks.schedule_words({"every": minutes, "at": at})
     tool_line(f"MakeSpark({name}, {schedule}{', paused' if paused else ''})")
 
-    # The model it runs on: the one the user named, else Flash's, named
-    # in the question so it is chosen, not assumed.
-    model = str(model or "").strip() or MODEL_NAME
+    # The model it runs on: the one the user named, else the one new
+    # sparks are made on, else Flash's, named in the question so it is
+    # chosen, not assumed.
+    model = str(model or "").strip()
+    fell_back = ""
+    if not model:
+        model, fell_back = sparks.model_for_new(MODEL_NAME)
     if not model:
         result = "Error: no model is set. Ask the user which one it runs on."
         tool_result(result, style=ERROR)
@@ -2312,6 +2316,8 @@ def make_spark(
             f"Its first shift starts now, then {schedule}. "
         ) + "Its reports are under /sparks, or Sparks in the web UI."
     )
+    if fell_back:
+        result += f" Tell the user: {fell_back}"
     if not keepalive.installed():
         result += (
             " Sparks only work while Flash is open right now. Offer to "
@@ -5360,7 +5366,8 @@ tools: list[dict[str, Any]] = [
                         "type": "string",
                         "description": (
                             "The model it runs on, when the user named "
-                            "one. Leave it out for the one you run on."
+                            "one. Leave it out for the one they set for "
+                            "new sparks, or else the one you run on."
                         ),
                     },
                     "paused": {

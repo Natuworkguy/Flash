@@ -10,7 +10,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from flash import ai, tools, web
+from flash import ai, sparks, tools, web
 from flash.cli import parse_args
 
 # --- A model that streams what each test scripts -------------------------
@@ -3789,6 +3789,50 @@ def test_the_page_reads_and_sets_the_rounds_a_shift_gets():
     back = web.command(session, {"name": "spark-rounds", "arg": "limited"})
     assert off["unlimited"] is True and off["rounds"] == 20
     assert back["unlimited"] is False and back["rounds"] == 20
+
+
+def test_the_page_sets_the_model_new_sparks_are_made_on(monkeypatch):
+    monkeypatch.setattr(
+        web, "list_models", lambda ai: ["llama3.1:latest", "qwen3:8b"],
+    )
+    session = web.Session()
+
+    picked = web.command(
+        session, {"name": "spark-default-model", "arg": "qwen3:8b"},
+    )
+    assert picked["spark_default"] == "qwen3:8b"
+    assert picked["spark_default_here"] is True
+    assert picked["spark_model"] == "qwen3:8b"
+    said = web.command(session, {"name": "model"})
+    assert said["spark_default"] == "qwen3:8b"
+
+    back = web.command(
+        session, {"name": "spark-default-model", "arg": "flash"},
+    )
+    assert back["spark_default"] == ""
+    assert back["spark_default_here"] is None
+
+
+def test_the_page_hears_when_the_default_model_is_gone(monkeypatch):
+    monkeypatch.setattr(ai.Config, "model", "llama3.1:latest")
+    monkeypatch.setattr(web, "list_models", lambda ai: ["llama3.1:latest"])
+    sparks.set_default_model("qwen3:8b")
+
+    said = web.command(web.Session(), {"name": "spark-default-model"})
+
+    assert said["spark_default_here"] is False
+    assert said["spark_model"] == "llama3.1:latest"
+    assert "not on this computer" in said["spark_default_note"]
+
+
+def test_the_page_hears_when_no_host_answers(monkeypatch):
+    monkeypatch.setattr(web, "list_models", lambda ai: None)
+    sparks.set_default_model("qwen3:8b")
+
+    said = web.command(web.Session(), {"name": "spark-default-model"})
+
+    assert said["spark_default_here"] is None
+    assert said["spark_model"] == "qwen3:8b"
 
 
 # --- Screen recordings ---------------------------------------------------

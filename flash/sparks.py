@@ -42,6 +42,7 @@ import ollama
 from . import agent as subagents
 from . import audit, cron
 from .dashes import undash
+from .models import full_name, installed_names
 from .paths import ENV_PATH, FLASH_DIR
 from .sysprompt import get_model_system_prompt
 from .theme import (
@@ -2427,6 +2428,102 @@ def set_shift_rounds(value) -> Optional[int]:
     return rounds
 
 
+# The model new sparks are made on, unless they are given another: set
+# in Settings, or with /sparks default. "" for Flash's own model.
+DEFAULT_MODEL_SETTING = "SPARK_DEFAULT_MODEL"
+
+
+def default_model() -> str:
+    return _model_name(_saved(DEFAULT_MODEL_SETTING))
+
+
+def set_default_model(model) -> str:
+    """Make MODEL the one new sparks are made on: "" (or flash, none)
+    for Flash's own, whatever that is when the spark is made."""
+
+    model = _model_name(model)
+    if model.lower() in ("flash", "none", "off", "default"):
+        model = ""
+    _save_setting(DEFAULT_MODEL_SETTING, model)
+    return model
+
+
+def _client():
+    from . import tools as flash_tools  # deferred: avoids a module cycle
+    from . import workspace  # deferred: only a client needs its key
+
+    host = flash_tools.OLLAMA_HOST or subagents.OLLAMA_HOST_DEFAULT
+    return ollama.Client(host=host, **workspace.client_options(host))
+
+
+def models_here(client=None) -> Optional[set[str]]:
+    """The models on this computer, by their full names, or None when
+    Ollama could not be asked, which is not the same as none at all."""
+
+    try:
+        return installed_names(client or _client())
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def is_here(model: str, here: Optional[set[str]]) -> Optional[bool]:
+    """Whether MODEL is among HERE, or None when that is not known."""
+
+    if here is None or not model:
+        return None
+    return full_name(model) in here
+
+
+def model_for_new(
+    flash: str = "", here: Optional[set[str]] = None, look: bool = True,
+) -> tuple[str, str]:
+    """The model a new spark is made on when it is given none, and a
+    word for the user if that is not the default: `(model, note)`. The
+    default, if it is set and still on this computer; Flash's (FLASH,
+    or the one in use) if not. HERE is the models on this computer, or
+    with LOOK they are asked for."""
+
+    from . import tools as flash_tools  # deferred: avoids a module cycle
+
+    chosen = default_model()
+    flash = _model_name(flash) or flash_tools.MODEL_NAME or ""
+    if not chosen:
+        return flash, ""
+    if here is None and look:
+        here = models_here()
+    if is_here(chosen, here) is False:
+        return flash, (
+            f"{chosen}, the model new sparks are made on, is not on this "
+            f"computer any more, so this one is on {flash or 'no model'}. "
+            "Pick another default in Settings, or with /sparks default."
+        )
+    return chosen, ""
+
+
+def _usable_model(spark: Spark, model: str, client) -> tuple[str, str]:
+    """MODEL, or the one to run SPARK on instead when MODEL is no longer
+    on this computer: the default for new sparks, else Flash's. With
+    the reason, for its report. `(model, note)`"""
+
+    from . import tools as flash_tools  # deferred: avoids a module cycle
+
+    here = models_here(client)
+    if is_here(model, here) is not False:
+        return model, ""
+    for instead in (default_model(), flash_tools.MODEL_NAME):
+        if instead and is_here(instead, here):
+            return instead, (
+                f"{model} is not on this computer any more, so this ran "
+                f"on {instead}. Pick another model for {spark.name} to "
+                "keep it on one."
+            )
+    raise RuntimeError(
+        f"{model} is not on this computer any more, and neither is any "
+        f"other model to run on: pull it again, or pick another for "
+        f"{spark.name}"
+    )
+
+
 def autonomous() -> bool:
     """Whether autonomous mode is on, as the user last set it.
 
@@ -2891,6 +2988,9 @@ def _work(
     client = client or ollama.Client(
         host=host, **workspace.client_options(host),
     )
+    model, swapped = _usable_model(spark, model, client)
+    if swapped:
+        doing(swapped)
     allowed = names if names is not None else subagents.allowed_tool_names()
     offered = flash_tools.available_tools()
     if not flash_tools.mail.configured() and _about_email(spark):
@@ -2969,7 +3069,13 @@ def _work(
             getattr(response, "message", None), "content", ""
         ) or ""
 
-    return undash(final).strip()
+    final = undash(final).strip()
+    if swapped:
+        # Said even on a shift with nothing new: the user has a model to
+        # pick, and this is the only place they would hear of it.
+        nothing = not final or final.strip(" .").upper() == NOTHING_NEW
+        final = f"_{swapped}_" if nothing else f"{final}\n\n_{swapped}_"
+    return final
 
 
 def _keeping_notes(notes: list[str]):

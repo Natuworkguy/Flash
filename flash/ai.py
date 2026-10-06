@@ -2340,12 +2340,44 @@ def _ask_spark_model() -> str:
     machine's list, or typed when there is no list to pick from."""
 
     console.print(Text("  Which model does it run on?", style=DIM))
-    picked = pick_model(_client(), Config.model or "")
+    # The default for new sparks leads the list, if it is still here.
+    first, gone = sparks.model_for_new(Config.model or "")
+    if gone:
+        warn(gone)
+    picked = pick_model(_client(), first)
     if picked:
         console.print(Text(f"  {picked}", style=ACCENT))
         return picked
-    example = f" (for example {Config.model})" if Config.model else ""
-    return _ask_line(f"Model name{example}:")
+    example = f" (Enter for {first})" if first else ""
+    return _ask_line(f"Model name{example}:") or first
+
+
+def _default_spark_model(wanted: str) -> None:
+    """/sparks default: the model new sparks are made on, shown, or set
+    to WANTED ("flash" for Flash's own)."""
+
+    if wanted:
+        chosen = sparks.set_default_model(wanted)
+        here = sparks.is_here(chosen, sparks.models_here()) if chosen else None
+        if here is False:
+            warn(
+                f"{chosen} is not on this computer. New sparks are made on "
+                f"{Config.model or 'Flash'}'s model until it is: /model "
+                f"{chosen} downloads it."
+            )
+            return
+    model, gone = sparks.model_for_new(Config.model or "")
+    if gone:
+        warn(gone)
+        return
+    chosen = sparks.default_model()
+    console.print(Text(
+        (f"New sparks are made on {chosen}. " if chosen else
+         f"New sparks are made on Flash's model, {model or 'none yet'}. ")
+        + "/sparks default <model|flash> changes it; /sparks model <name> "
+        "<model> moves one spark.",
+        style=DIM,
+    ))
 
 
 def _show_spark(spark: "sparks.Spark") -> None:
@@ -2535,9 +2567,12 @@ def _teams_command(rest: str) -> None:
         source, _, last = extra.rpartition(" ")
         word = last.lower() if source.strip() else ""
         paused = word != "running"
+        model, gone = sparks.model_for_new(Config.model or "")
+        if gone:
+            warn(gone)
         team = sparks.add_team(
             source.strip() if word in ("running", "paused") else extra,
-            Config.model or "", paused,
+            model, paused,
         )
         console.print(Text(
             f"Added the team {team.name}, with "
@@ -2710,6 +2745,9 @@ def _sparks_command(arg: str) -> None:
                 f"{sparks.SHIFT_ROUNDS_MAX}|unlimited> changes it.",
                 style=DIM,
             ))
+            return
+        if action == "default":
+            _default_spark_model(rest)
             return
         if action in ("chat", "talk", "ask") and key:
             _chat_with_spark(key, extra)
@@ -2967,7 +3005,7 @@ def _sparks_command(arg: str) -> None:
             "| approve|deny|stop|share <name> | add <code|template> [paused] "
             "| templates | goal <name> <text> | watch <name> <folder|none> "
             "| model <name> [model] | title <name> <title|none> "
-            "| rounds [number|unlimited] "
+            "| rounds [number|unlimited] | default [model|flash] "
             "| pause all | resume all | stop all "
             "| teams [new|remove|share|add|templates] | team <name> "
             "<team|none> | lead <name> <lead|none> | budget <name> "
