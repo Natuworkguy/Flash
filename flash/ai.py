@@ -2675,6 +2675,25 @@ def _teams_command(rest: str) -> None:
             style=DIM,
         ))
         return
+    if action in ("pause", "resume") and extra:
+        if action == "pause":
+            team, held = sparks.pause_team(extra)
+            said = (
+                f"Paused {team.name}: no shift starts on its schedule until "
+                f"/sparks teams resume {team.name}. "
+                + (f"{len(held)} spark{'' if len(held) == 1 else 's'} "
+                   "paused; anything running finishes."
+                   if held else "Its sparks were paused already.")
+            )
+        else:
+            team, woke = sparks.resume_team(extra)
+            said = (
+                f"Resumed {team.name}: "
+                + (", ".join(s.name for s in woke) + " back on schedule."
+                   if woke else "nothing it had paused was waiting.")
+            )
+        console.print(Text(said, style=DIM))
+        return
     if action == "templates":
         body = Text()
         for template in sparks.TEAM_TEMPLATES:
@@ -2687,8 +2706,8 @@ def _teams_command(rest: str) -> None:
         console.print(body)
         return
     if action:
-        warn("Usage: /sparks teams [new|remove|share <name> | add "
-             "<code|template> [running] | templates]")
+        warn("Usage: /sparks teams [new|remove|share|pause|resume <name> "
+             "| add <code|template> [running] | templates]")
         return
     found = sparks.teams()
     if not found:
@@ -2712,7 +2731,8 @@ def _teams_command(rest: str) -> None:
             branch(child, depth + 1)
 
     for team in found:
-        body.append(f"{team.name}\n", style=f"bold {team.colour}")
+        body.append(team.name, style=f"bold {team.colour}")
+        body.append("  paused\n" if team.paused else "\n", style=DIM)
         chart = sparks.org_chart(team.id)
         if not chart:
             body.append("  (no sparks yet)\n", style=DIM)

@@ -1787,6 +1787,23 @@ body.all-stopped .org-node, body.all-stopped .spark-card { animation: all-halt 0
 @keyframes tc-in { from { opacity: 0; transform: translate(-10px, 10px) scale(0.97); } }
 @keyframes tc-in-mine { from { opacity: 0; transform: translate(10px, 10px) scale(0.97); } }
 @keyframes tc-pop { from { opacity: 0; transform: scale(0.85); } }
+.team-pause-btn { display: inline-flex; align-items: center; gap: 6px; margin-left: auto; flex: none; padding: 6px 12px 6px 10px; border-radius: 999px; font-size: 13px; font-weight: 500; color: var(--text-2); background: var(--surface); border: 1px solid var(--border); transition: transform 0.2s var(--spring), background 0.15s, border-color 0.15s; }
+.team-pause-btn svg { width: 14px; height: 14px; }
+.team-pause-btn:hover { transform: translateY(-1px); border-color: var(--border-strong); }
+.team-pause-btn.on { color: color-mix(in srgb, var(--t) 70%, var(--text)); border-color: color-mix(in srgb, var(--t) 45%, var(--border)); background: color-mix(in srgb, var(--t) 10%, var(--surface)); }
+.team-pause-btn:disabled { opacity: 0.5; }
+.team-pause-btn + .team-chat-btn { margin-left: 0; }
+.team-paused-chip { display: inline-flex; align-items: center; gap: 4px; width: fit-content; margin-top: 3px; padding: 1px 8px 1px 6px; border-radius: 999px; font-size: 11.5px; font-weight: 600; color: var(--text-3); background: var(--hover); }
+.team-paused-chip svg { width: 10px; height: 10px; }
+/* A paused team rests: its colour drains a little, and its lines and
+   moons stop moving until it is resumed. */
+.team-block.paused { background: color-mix(in srgb, var(--hover) 40%, transparent); }
+.team-block.paused .org, .team-block.paused .team-badge { filter: saturate(0.45); }
+.team-block.paused .team-badge .ring, .team-block.paused .team-badge .moons, .team-block.paused .team-badge .aura,
+.team-block.paused .org-tree li::before, .team-block.paused .org-tree li::after, .team-block.paused .org-tree ul::before { animation-play-state: paused !important; }
+.team-block.paused .team-badge .aura { opacity: 0.2; }
+.team-block.pausing .org-node { animation: all-halt 0.6s var(--ease) both !important; }
+.tc-event.team-news { color: var(--text-3); }
 .team-chat-btn + .team-actions { margin-left: 6px; }
 .team-chat-btn { position: relative; display: inline-flex; align-items: center; gap: 6px; margin-left: auto; flex: none; padding: 6px 12px 6px 10px; border-radius: 999px; font-size: 13px; font-weight: 500; color: color-mix(in srgb, var(--t) 70%, var(--text)); background: color-mix(in srgb, var(--t) 12%, var(--surface)); border: 1px solid color-mix(in srgb, var(--t) 30%, var(--border)); transition: transform 0.2s var(--spring), background 0.15s; }
 .team-chat-btn svg { width: 15px; height: 15px; }
@@ -5747,7 +5764,7 @@ async function tcRefreshTeam() {
   const members = tcMembers();
   const lead = members.find((s) => !members.some((m) => m.id === s.reports_to));
   const working = members.filter((s) => s.status === "working").length;
-  wrap.querySelector(".tc-sub").textContent = `${members.length} spark${members.length === 1 ? "" : "s"}${lead ? ` · ${lead.name} leads` : ""}${working ? ` · ${working} working` : ""}`;
+  wrap.querySelector(".tc-sub").textContent = `${members.length} spark${members.length === 1 ? "" : "s"}${lead ? ` · ${lead.name} leads` : ""}${working ? ` · ${working} working` : ""}${team.paused ? " · paused" : ""}`;
   const faces = wrap.querySelector(".tc-faces");
   faces.textContent = "";
   members.slice(0, 6).forEach((s, i) => {
@@ -5821,13 +5838,15 @@ function tcEntry(entry, fresh) {
   const spark = entry.spark ? tcSpark(entry.spark) : null;
   if (entry.kind === "event") {
     teamChat.lastWho = "";
-    const what = { report: "filed a report", failed: "could not finish a shift", joined: "joined the team", left: "left the team" }[entry.what] || entry.what;
+    const what = !entry.spark ? `${entry.what} the team`
+      : { report: "filed a report", failed: "could not finish a shift", joined: "joined the team", left: "left the team" }[entry.what] || entry.what;
     const row = el("button", `tc-event ${entry.what || ""}${fresh ? " fresh" : ""}`);
     row.type = "button";
     if (spark) { row.style.setProperty("--c", spark.colour); row.appendChild(sparkAvatar(spark, 18)); }
     const words = el("span", "words");
     words.innerHTML = `<b></b> ${esc(what)}<span class="when"> · ${esc(tcClock(entry.at))}</span>`;
-    words.querySelector("b").textContent = entry.name || "A spark";
+    words.querySelector("b").textContent = entry.spark ? entry.name || "A spark" : "You";
+    if (!entry.spark) row.classList.add("team-news");
     row.appendChild(words);
     if (entry.text) {
       const quote = el("span", "quote");
@@ -6026,6 +6045,25 @@ function teamBlock(team, byId, again, ti) {
   if (team.chat_unread) talk.appendChild(el("span", "tc-count", String(Math.min(team.chat_unread, 99))));
   // Outside the dimmed row of actions: it is the one to find.
   actions.before(talk);
+  // The whole team at once: nothing starts on its schedule while paused.
+  const hold = el("button", `team-pause-btn${team.paused ? " on" : ""}`, `${icon(team.paused ? "play" : "pause")}<span>${team.paused ? "Resume" : "Pause"}</span>`);
+  hold.type = "button";
+  hold.dataset.tip = team.paused ? "Put the team back on its schedule" : "Pause every spark on the team: what is running finishes";
+  hold.onclick = async () => {
+    hold.disabled = true;
+    try {
+      const done = await command(team.paused ? "team-resume" : "team-pause", team.id, null);
+      if (!team.paused && !calm.matches) block.classList.add("pausing");
+      toast(team.paused
+        ? `${team.name} is back on schedule${done.changed ? `: ${done.changed} spark${done.changed === 1 ? "" : "s"} woke` : ""}`
+        : `${team.name} is paused: what is running finishes, and nothing starts till Resume`);
+    } catch (error) { hold.disabled = false; showFailure(error); }
+  };
+  talk.before(hold);
+  if (team.paused) {
+    block.classList.add("paused");
+    block.querySelector(".team-title").appendChild(el("span", "team-paused-chip", `${icon("pause")}Paused`));
+  }
   action("share", "Share this team", () => shareTeam(team));
   action("edit", "Rename or recolour", () => teamForm(team));
   action("trash", "Delete the team (its sparks stay)", async (b) => {
