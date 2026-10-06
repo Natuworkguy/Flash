@@ -1,6 +1,7 @@
 # pylint: disable=C0114,C0115,C0116
 
 import json
+import time
 
 import pytest
 
@@ -212,7 +213,7 @@ def test_a_new_month_starts_it_again(model):
     sparks.create("Scout", "Look.")
     sparks.set_budget("scout", True, 1000)
     sparks.spend(sparks.find("scout").id, 1000)
-    sparks._edit("scout", lambda s: s.spent.update(month="1999-01"))
+    sparks._edit("scout", lambda s: s.spent.update(period="1999-01"))
 
     sparks.renew_budgets()
 
@@ -491,3 +492,91 @@ def test_the_terminal_adds_a_team_and_decides_a_hire(monkeypatch):
     assert sparks.find("repo-watch").budget == 50000
     ai._sparks_command("budget repo-watch off")
     assert not sparks.find("repo-watch").budget_on
+
+
+# --- Budget periods ------------------------------------------------------
+
+
+def test_a_budget_counts_by_the_month_unless_told_otherwise(model):
+    spark = sparks.create("Scout", "Look.")
+    assert sparks.period_of(spark) == "month"
+    assert sparks.this_period(spark) == "this month"
+
+    daily = sparks.set_budget("scout", True, "20k", "daily")
+    assert sparks.period_of(daily) == "day"
+    assert sparks.budget_words(daily) == "20,000 tokens a day"
+    assert daily.to_dict()["period_words"] == "today"
+    assert sparks.budget_words(
+        sparks.set_budget("scout", True, None, "hour")
+    ) == "20,000 tokens an hour"
+
+
+def test_a_daily_budget_pauses_and_says_when_it_starts_again(model):
+    sparks.create("Scout", "Look.")
+    sparks.set_budget("scout", True, "1k", "day")
+
+    sparks.spend(sparks.find("scout").id, 1500)
+
+    scout = sparks.find("scout")
+    assert scout.paused
+    said = scout.reports[-1].text
+    assert "1,000 tokens a day for today" in said
+    assert "when the day turns" in said
+    assert "today" in sparks.out_of_budget(scout)
+
+
+def test_a_new_period_starts_a_daily_budget_again(model):
+    sparks.create("Scout", "Look.")
+    sparks.set_budget("scout", True, "1k", "week")
+    sparks.spend(sparks.find("scout").id, 1000)
+    sparks._edit("scout", lambda s: s.spent.update(period="1999-W01"))
+
+    sparks.renew_budgets()
+
+    assert not sparks.find("scout").paused
+
+
+def test_a_spark_from_before_periods_counts_by_the_month(model):
+    spark = sparks.create("Scout", "Look.")
+    month = time.strftime("%Y-%m")
+    sparks._edit(spark.id, lambda s: setattr(
+        s, "spent", {"month": month, "tokens": 700},
+    ))
+
+    assert sparks.used_this_period(sparks.find("scout")) == 700
+
+
+@pytest.mark.parametrize("said, tokens, period", [
+    ("50k", 50000, None), ("50k/day", 50000, "day"),
+    ("50k a week", 50000, "week"), ("2m monthly", 2_000_000, "month"),
+    ("5000 per hour", 5000, "hour"),
+])
+def test_budgets_read_with_their_period(said, tokens, period):
+    assert sparks.parse_budget_with_period(said) == (tokens, period)
+
+
+def test_a_period_that_cannot_be_read_says_so():
+    with pytest.raises(sparks.SparkError, match="hour, day, week or month"):
+        sparks.parse_period("fortnight")
+
+
+def test_the_terminal_sets_a_period(model):
+    from flash import ai
+
+    sparks.create("Scout", "Look.")
+    ai._sparks_command("budget scout 30k/day")
+    assert sparks.budget_words(sparks.find("scout")) == "30,000 tokens a day"
+    ai._sparks_command("budget scout week")
+    assert sparks.budget_words(sparks.find("scout")) == "30,000 tokens a week"
+
+
+def test_the_page_sets_a_period():
+    sparks.create("Scout", "Look.")
+
+    got = web.command(web.Session(), {
+        "name": "spark-budget", "arg": "scout", "on": True,
+        "tokens": "10k", "period": "hour",
+    })
+
+    assert got["spark"]["budget_period"] == "hour"
+    assert got["spark"]["period_words"] == "this hour"

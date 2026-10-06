@@ -2593,28 +2593,40 @@ def _teams_command(rest: str) -> None:
 
 
 def _spark_budget(key: str, extra: str) -> None:
-    """/sparks budget <name> [tokens|off]."""
+    """/sparks budget <name> [tokens [hour|day|week|month] | period | off]."""
 
     if not extra:
         spark = sparks.find(key)
         if spark is None:
             warn(f"No spark called {key!r}.")
             return
-        used = sparks.used_this_month(spark)
+        used = sparks.used_this_period(spark)
+        when = sparks.this_period(spark)
         console.print(Text(
-            f"{spark.name} has used {used:,} tokens this month"
-            + (f", of a budget of {spark.budget:,}." if spark.budget_on
-               else ". It has no budget: /sparks budget "
-               f"{_spark_key(spark)} <tokens> gives it one."),
+            f"{spark.name} has used {used:,} tokens {when}"
+            + (f", of a budget of {sparks.budget_words(spark)}."
+               if spark.budget_on else
+               ". It has no budget: /sparks budget "
+               f"{_spark_key(spark)} <tokens> [hour|day|week|month] gives "
+               "it one."),
             style=DIM,
         ))
         return
     off = extra.lower() in ("off", "none", "no")
-    spark = sparks.set_budget(key, not off, None if off else extra)
+    if off:
+        spark = sparks.set_budget(key, False)
+    elif extra.strip().lower().removeprefix("per ") in sparks._PERIOD_WORDS:
+        # Only the period: what it counts by changes, the number stays.
+        spark = sparks.set_budget(key, True, None, extra)
+    else:
+        tokens, period = sparks.parse_budget_with_period(extra)
+        spark = sparks.set_budget(key, True, tokens, period)
+    turns = {"hour": "the hour", "day": "the day", "week": "the week",
+             "month": "the month"}[sparks.period_of(spark)]
     console.print(Text(
         f"{spark.name}'s budget is off." if off else
-        f"{spark.name} may use {spark.budget:,} tokens a month; it pauses "
-        "itself past that, until the month turns.", style=DIM,
+        f"{spark.name} may use {sparks.budget_words(spark)}; it pauses "
+        f"itself past that, until {turns} turns.", style=DIM,
     ))
 
 
@@ -2927,7 +2939,8 @@ def _sparks_command(arg: str) -> None:
             "| rounds [number|unlimited] "
             "| teams [new|remove|share|add|templates] | team <name> "
             "<team|none> | lead <name> <lead|none> | budget <name> "
-            "<tokens|off> | audit <name> | hires | hire <id> yes|no "
+            "<tokens [hour|day|week|month]|off> | audit <name> | hires "
+            "| hire <id> yes|no "
             "| always on|off]"
         )
         return

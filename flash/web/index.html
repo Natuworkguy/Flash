@@ -1304,9 +1304,24 @@ button.item-row:hover { background: var(--hover); }
   background: radial-gradient(130% 90% at 0% 0%, color-mix(in srgb, var(--t) 11%, transparent), transparent 55%), var(--surface);
   animation: rise 0.35s var(--ease) both; animation-delay: calc(var(--i, 0) * 60ms); }
 .team-head { display: flex; align-items: center; gap: 14px; margin-bottom: 6px; }
-.team-badge { position: relative; width: 38px; height: 38px; flex: none; border-radius: 50%; display: grid; place-items: center; font-weight: 700; font-size: 16px; color: #1b1a19;
+.team-badge { position: relative; width: 38px; height: 38px; flex: none; border-radius: 50%; display: grid; place-items: center; margin: 4px; cursor: pointer;
+  transition: transform 0.25s var(--spring); }
+.team-badge:hover { transform: scale(1.08); }
+.team-badge:active { transform: scale(0.92); }
+.team-badge > * { grid-area: 1 / 1; }
+/* A slow aurora behind it, the colour of the team. */
+.team-badge .aura { position: absolute; inset: -12px; border-radius: 50%; filter: blur(9px); opacity: 0.75; pointer-events: none;
+  background: conic-gradient(from 0deg, transparent, color-mix(in srgb, var(--t) 80%, transparent) 18%, transparent 38%, color-mix(in srgb, var(--t) 55%, white) 58%, transparent 78%);
+  animation: team-orbit 7s linear infinite; }
+.team-badge .letter { position: relative; width: 38px; height: 38px; border-radius: 50%; display: grid; place-items: center; font-weight: 700; font-size: 16px; color: #1b1a19;
   background: radial-gradient(circle at 32% 28%, color-mix(in srgb, var(--t) 55%, white), var(--t)); box-shadow: 0 4px 16px color-mix(in srgb, var(--t) 40%, transparent); }
-.team-badge .ring { position: absolute; inset: -6px; border-radius: 50%; border: 2px dashed color-mix(in srgb, var(--t) 65%, transparent); animation: team-orbit 16s linear infinite; }
+.team-badge .ring { position: absolute; inset: -6px; border-radius: 50%; border: 1.5px dashed color-mix(in srgb, var(--t) 50%, transparent); animation: team-orbit 16s linear infinite reverse; pointer-events: none; }
+/* Its sparks, as moons on the ring. */
+.team-badge .moons { position: absolute; inset: 0; pointer-events: none; }
+.team-badge .moons i { position: absolute; left: 50%; top: 50%; width: 7px; height: 7px; margin: -3.5px; border-radius: 50%; background: var(--c);
+  box-shadow: 0 0 6px var(--c), 0 0 0 1.5px var(--surface); animation: team-moon 9s linear infinite; animation-delay: calc(var(--k) / var(--n) * -9s); }
+.team-badge .burst { position: absolute; left: 50%; top: 50%; width: 6px; height: 6px; margin: -3px; border-radius: 50%; background: var(--c); pointer-events: none;
+  box-shadow: 0 0 8px var(--c); animation: team-burst-bit 0.8s cubic-bezier(0.2, 0.7, 0.3, 1) both; }
 .team-title { display: flex; flex-direction: column; min-width: 0; }
 .team-title b { font-size: 15.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .team-title .count { font-size: 12.5px; color: var(--text-3); }
@@ -1320,13 +1335,14 @@ button.item-row:hover { background: var(--hover); }
 .team-empty { color: var(--text-3); font-size: 13.5px; padding: 8px 4px 0 52px; }
 .team-loose { font-size: 13px; font-weight: 600; color: var(--text-2); margin: 4px 2px 10px; }
 
-.org { overflow-x: auto; padding: 4px 2px 2px; }
+.org { position: relative; overflow-x: auto; padding: 4px 2px 2px; }
 .org-tree, .org-tree ul { display: flex; justify-content: center; list-style: none; margin: 0; padding: 0; position: relative; }
 .org-tree { width: max-content; min-width: 100%; }
 .org-tree ul { padding-top: 22px; }
 .org-tree li { position: relative; display: flex; flex-direction: column; align-items: center; padding: 22px 7px 0; }
 .org-tree li::before, .org-tree li::after { content: ""; position: absolute; top: 0; right: 50%; width: 50%; height: 22px; border-top: 2px solid var(--line);
-  transform-origin: right; animation: org-draw-x 0.45s var(--ease) both; animation-delay: calc(var(--d, 0) * 200ms + 100ms); }
+  transform-origin: right; animation: org-draw-x 0.45s var(--ease) both, org-flow 7s ease-in-out infinite;
+  animation-delay: calc(var(--d, 0) * 200ms + 100ms), calc(var(--d, 0) * 260ms + 2.4s); }
 .org-tree li::after { right: auto; left: 50%; border-left: 2px solid var(--line); transform-origin: left; }
 .org-tree li:only-child::before, .org-tree li:only-child::after { display: none; }
 .org-tree li:only-child { padding-top: 0; }
@@ -1334,15 +1350,26 @@ button.item-row:hover { background: var(--hover); }
 .org-tree li:last-child::before { border-right: 2px solid var(--line); border-radius: 0 12px 0 0; }
 .org-tree li:first-child::after { border-radius: 12px 0 0 0; }
 .org-tree ul::before { content: ""; position: absolute; top: 0; left: 50%; height: 22px; border-left: 2px solid var(--line); margin-left: -1px;
-  transform-origin: top; animation: org-draw-y 0.3s var(--ease) both; animation-delay: calc(var(--d, 0) * 200ms); }
+  transform-origin: top; animation: org-draw-y 0.3s var(--ease) both, org-flow 7s ease-in-out infinite;
+  animation-delay: calc(var(--d, 0) * 200ms), calc(var(--d, 0) * 260ms + 2.27s); }
 .org-tree > li { padding-top: 6px; }
 .org-tree > li::before, .org-tree > li::after { display: none; }
 
-.org-node { --t2: var(--t); position: relative; display: flex; align-items: center; gap: 10px; padding: 10px 14px 10px 10px; width: 210px; text-align: left; border-radius: 14px;
+.org-node { --lift: 0px; position: relative; display: flex; align-items: center; gap: 10px; padding: 10px 14px 10px 10px; width: 210px; text-align: left; border-radius: 14px;
   border: 1px solid var(--border); background: var(--bg);
-  transition: transform 0.2s var(--spring), border-color 0.15s, box-shadow 0.2s;
-  animation: org-pop 0.5s var(--spring) both; animation-delay: calc(var(--d, 0) * 200ms + var(--k, 0) * 40ms + 220ms); }
-.org-node:hover { transform: translateY(-2px); border-color: color-mix(in srgb, var(--t) 55%, var(--border)); box-shadow: 0 8px 22px color-mix(in srgb, var(--t) 20%, transparent); }
+  transform: perspective(700px) rotateX(var(--rx, 0deg)) rotateY(var(--ry, 0deg)) translateY(var(--lift));
+  transition: transform 0.25s var(--ease), border-color 0.15s, box-shadow 0.2s;
+  animation: org-pop 0.5s var(--spring) backwards; animation-delay: calc(var(--d, 0) * 200ms + var(--k, 0) * 40ms + 220ms); }
+.org-node:hover { --lift: -3px; transition: transform 0.08s linear, border-color 0.15s, box-shadow 0.2s; border-color: color-mix(in srgb, var(--t) 55%, var(--border)); box-shadow: 0 12px 26px color-mix(in srgb, var(--t) 22%, transparent); }
+/* A sheen of the team's colour, following the pointer across. */
+.org-node::before { content: ""; position: absolute; inset: 0; border-radius: inherit; pointer-events: none; opacity: 0; transition: opacity 0.2s;
+  background: radial-gradient(120px 70px at var(--gx, 50%) 0%, color-mix(in srgb, var(--t) 26%, transparent), transparent 70%); }
+.org-node:hover::before { opacity: 1; }
+.org-node.got-news { animation: org-got 0.9s var(--spring) backwards; }
+.org-node.got-news::after { content: ""; position: absolute; inset: -1px; border-radius: inherit; pointer-events: none; animation: org-flash 1.1s ease-out both; }
+/* News coming up the lines: a comet of the team's colour. */
+.org .courier { position: absolute; left: 0; top: 0; width: calc(10px * var(--s, 1)); height: calc(10px * var(--s, 1)); margin: calc(-5px * var(--s, 1)) 0 0 calc(-5px * var(--s, 1));
+  border-radius: 50%; pointer-events: none; z-index: 2; background: color-mix(in srgb, var(--c) 60%, white); box-shadow: 0 0 12px 3px color-mix(in srgb, var(--c) 75%, transparent); }
 .org-tree > li > .org-node { border-color: color-mix(in srgb, var(--t) 40%, var(--border)); box-shadow: 0 0 0 3px color-mix(in srgb, var(--t) 9%, transparent); }
 .org-node .face-wrap { display: inline-flex; flex: none; }
 .org-node .words { display: flex; flex-direction: column; min-width: 0; gap: 1px; }
@@ -1354,16 +1381,29 @@ button.item-row:hover { background: var(--hover); }
 /* At work under a lead: a glow climbs the line to it. */
 .org-node .pulse { position: absolute; left: 50%; top: -22px; width: 8px; height: 8px; margin-left: -4px; border-radius: 50%; pointer-events: none;
   background: var(--t); box-shadow: 0 0 10px 3px color-mix(in srgb, var(--t) 70%, transparent); animation: org-pulse 1.7s ease-in infinite; }
-.org-node.joined { animation: org-join 0.9s var(--spring) both !important; }
+.org-node.joined { animation: org-join 0.9s var(--spring) backwards !important; }
 .org-node.joined::after { content: ""; position: absolute; inset: -1px; border-radius: inherit; pointer-events: none; animation: org-flash 1.2s ease-out both; }
 
 /* A team just made: its badge bursts in, and its sparks gather round. */
 .team-block.fresh .team-badge { animation: team-born 0.9s var(--spring) both; }
 .team-block.fresh .team-badge::after { content: ""; position: absolute; inset: -4px; border-radius: 50%; border: 3px solid var(--t); animation: team-burst 1.1s ease-out 0.15s both; }
-.team-block.fresh .org-node { animation: org-gather 0.85s var(--spring) both; animation-delay: calc(var(--d, 0) * 160ms + var(--k, 0) * 90ms + 350ms); }
-.team-block.again:not(.fresh), .team-block.again:not(.fresh) .org-node:not(.joined), .team-block.again:not(.fresh) .org-tree li::before, .team-block.again:not(.fresh) .org-tree li::after, .team-block.again:not(.fresh) .org-tree ul::before { animation: none; }
+.team-block.fresh .org-node { animation: org-gather 0.85s var(--spring) backwards; animation-delay: calc(var(--d, 0) * 160ms + var(--k, 0) * 90ms + 350ms); }
+.team-block.again:not(.fresh), .team-block.again:not(.fresh) .org-node:not(.joined):not(.got-news) { animation: none; }
+/* Drawn again for news: the lines are there already, and only beat. */
+.team-block.again:not(.fresh) .org-tree li::before, .team-block.again:not(.fresh) .org-tree li::after { animation: org-flow 7s ease-in-out infinite; animation-delay: calc(var(--d, 0) * 260ms + 2.4s); }
+.team-block.again:not(.fresh) .org-tree ul::before { animation: org-flow 7s ease-in-out infinite; animation-delay: calc(var(--d, 0) * 260ms + 2.27s); }
+/* Rallied: the team jumps, a level at a time, and its lines flare. */
+.team-block.rally .face-wrap { animation: team-jump 0.75s var(--spring) both; animation-delay: calc(var(--d, 0) * 150ms + var(--k, 0) * 45ms + 120ms); }
+.team-block.rally .org-tree li::before, .team-block.rally .org-tree li::after, .team-block.rally .org-tree ul::before { animation: org-flare 1.2s ease-out both; animation-delay: calc(var(--d, 0) * 150ms + 250ms); }
+.team-block.rally .team-badge .letter { animation: team-born 0.7s var(--spring) both; }
 
 @keyframes team-orbit { to { transform: rotate(360deg); } }
+@keyframes team-moon { from { transform: rotate(0deg) translateX(25px); } to { transform: rotate(360deg) translateX(25px); } }
+@keyframes team-burst-bit { 0% { transform: rotate(var(--a)) translateX(4px) scale(1.2); opacity: 1; } 100% { transform: rotate(var(--a)) translateX(var(--dist)) scale(0.2); opacity: 0; } }
+@keyframes team-jump { 0%, 100% { transform: translateY(0); } 30% { transform: translateY(2px) scale(1.1, 0.88); } 55% { transform: translateY(-16px) scale(0.94, 1.08) rotate(-8deg); } 80% { transform: translateY(1px) scale(1.06, 0.94); } }
+@keyframes org-flow { 0%, 6%, 100% { border-color: var(--line); } 3% { border-color: color-mix(in srgb, var(--t) 90%, white); } }
+@keyframes org-flare { 0% { border-color: var(--line); } 25% { border-color: color-mix(in srgb, var(--t) 70%, white); filter: drop-shadow(0 0 4px var(--t)); } 100% { border-color: var(--line); } }
+@keyframes org-got { 0% { scale: 1; } 30% { scale: 1.06; } 100% { scale: 1; } }
 @keyframes team-wave { 0%, 100% { transform: translateY(0); } 35% { transform: translateY(-7px) scale(1.12); } 65% { transform: translateY(1px) scale(0.96, 1.04); } }
 @keyframes team-born { 0% { transform: scale(0) rotate(-120deg); } 60% { transform: scale(1.22) rotate(12deg); } 100% { transform: none; } }
 @keyframes team-burst { from { transform: scale(0.7); opacity: 1; } to { transform: scale(2.6); opacity: 0; } }
@@ -1376,10 +1416,15 @@ button.item-row:hover { background: var(--hover); }
 @keyframes org-pulse { 0% { transform: translateY(22px) scale(0.4); opacity: 0; } 25% { opacity: 1; } 100% { transform: translateY(-3px) scale(1); opacity: 0; } }
 
 /* What a spark with a budget has used of its month. */
+.budget-row { display: flex; align-items: center; gap: 8px; }
+.field .budget-row input { flex: 1 1 auto; min-width: 90px; width: auto; }
+.budget-row .per { font-size: 13.5px; color: var(--text-3); flex: none; margin: 0; }
+.field .budget-row select { width: auto; flex: 0 0 auto; }
 .budget-meter { display: flex; align-items: center; gap: 7px; margin-top: 4px; font-size: 11.5px; color: var(--text-3); min-width: 0; }
 .budget-meter .bar { width: 56px; height: 4px; border-radius: 99px; background: var(--border); overflow: hidden; flex: none; }
 .budget-meter i { display: block; height: 100%; width: 0; background: var(--add); border-radius: inherit; transition: width 0.6s var(--ease); }
 .budget-meter .said { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.org-node .budget-meter .unit { display: none; }
 .budget-meter.warn i { background: var(--warn); }
 .budget-meter.full i { background: var(--del); }
 .budget-meter.full .said { color: var(--del); }
@@ -1439,8 +1484,9 @@ button.item-row:hover { background: var(--hover); }
   .hire-card .decide input { width: 100%; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .team-block, .team-block .org-node, .team-badge, .team-badge .ring, .team-block .org-tree li::before, .team-block .org-tree li::after, .team-block .org-tree ul::before, .face-wrap, .team-faces i, .hire-card { animation: none !important; }
-  .org-node .pulse { display: none; }
+  .team-block, .team-block .org-node, .team-badge, .team-badge .ring, .team-badge .aura, .team-badge .moons i, .team-badge .letter, .team-block .org-tree li::before, .team-block .org-tree li::after, .team-block .org-tree ul::before, .face-wrap, .team-faces i, .hire-card { animation: none !important; }
+  .org-node .pulse, .team-badge .moons, .org .courier { display: none; }
+  .org-node { transform: none !important; }
 }
 .spark-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 12px; }
 .spark-card { display: flex; gap: 14px; align-items: flex-start; padding: 16px; text-align: left; border: 1px solid var(--border); border-radius: 16px; background: var(--surface);
@@ -5430,7 +5476,7 @@ const FRESH_MS = 2500;
 const TEAM_COLOURS = ["#f2a65a", "#5ab0f2", "#7bd88f", "#c792ea", "#ff7a90", "#ffd166", "#4fd1c5", "#a3b1ff"];
 
 function teamBlock(team, byId, again, ti) {
-  const block = el("section", "team-block", `<header class="team-head"><span class="team-badge"><span class="ring"></span><span class="letter"></span></span><span class="team-title"><b></b><span class="count"></span></span><span class="team-faces"></span><span class="team-actions"></span></header><div class="org"></div>`);
+  const block = el("section", "team-block", `<header class="team-head"><button type="button" class="team-badge" data-tip="Rally the team" aria-label="Rally the team"><span class="aura"></span><span class="ring"></span><span class="letter"></span><span class="moons"></span></button><span class="team-title"><b></b><span class="count"></span></span><span class="team-faces"></span><span class="team-actions"></span></header><div class="org"></div>`);
   block.style.setProperty("--t", team.colour);
   block.style.setProperty("--i", ti);
   if (again) block.classList.add("again");
@@ -5444,12 +5490,23 @@ function teamBlock(team, byId, again, ti) {
   const working = ids.filter((id) => byId.get(id)?.status === "working").length;
   block.querySelector(".count").textContent = `${ids.length} spark${ids.length === 1 ? "" : "s"}${working ? ` · ${working} working` : ""}`;
   const faces = block.querySelector(".team-faces");
-  ids.slice(0, 6).forEach((id, k) => {
+  const moons = block.querySelector(".moons");
+  const orbiting = ids.slice(0, 6);
+  orbiting.forEach((id, k) => {
     const dot = el("i");
     dot.style.setProperty("--c", byId.get(id)?.colour || team.colour);
     dot.style.setProperty("--k", k);
     faces.appendChild(dot);
+    // Its sparks circle the badge, each at its own place on the ring.
+    const moon = el("i");
+    moon.style.setProperty("--c", byId.get(id)?.colour || team.colour);
+    moon.style.setProperty("--k", k);
+    moon.style.setProperty("--n", orbiting.length);
+    moons.appendChild(moon);
   });
+  const badge = block.querySelector(".team-badge");
+  badge.onclick = () => rally(block, team.colour);
+  if (fresh && !again) setTimeout(() => teamBurst(badge, team.colour, 16), 120);
   const actions = block.querySelector(".team-actions");
   const action = (name, tip, run) => {
     const b = button("icon-btn", name, tip, "", run);
@@ -5488,6 +5545,12 @@ function teamBlock(team, byId, again, ti) {
   org.appendChild(tree);
   // Wider than the page, as on a phone: it opens on its lead, centred.
   requestAnimationFrame(() => { org.scrollLeft = (org.scrollWidth - org.clientWidth) / 2; });
+  tree.querySelectorAll(".org-node").forEach(tilt);
+  // News just in, from a spark with a lead: a comet carries it up.
+  const news = [...tree.querySelectorAll(".org-node.has-news")];
+  if (news.length) {
+    setTimeout(() => news.forEach((node, k) => courier(org, node, leadNodeOf(node), team.colour, k * 160)), again ? 150 : 900);
+  }
   return block;
 }
 
@@ -5512,11 +5575,98 @@ function orgNode(spark, depth, fresh) {
   // Just made, a hire say: it pops into being on its team.
   else if (Date.now() / 1000 - (spark.created || 0) < 8 && !fresh) celebrate(face, "born");
   const unread = seenUnread.get(spark.id);
-  if (unread !== undefined && spark.unread > unread) celebrate(face, "cheer");
+  if (unread !== undefined && spark.unread > unread) {
+    celebrate(face, "cheer");
+    if (depth > 0) node.classList.add("has-news");
+  }
   seenUnread.set(spark.id, spark.unread);
   node.onclick = () => openSpark(spark.id);
   node.dataset.tip = `${spark.name}: ${spark.goal.split("\n")[0].slice(0, 120)}`;
   return node;
+}
+
+// The spark a node reports to, as drawn: the node of the list item one
+// level up.
+function leadNodeOf(node) {
+  const up = node.closest("li")?.parentElement?.closest("li");
+  return up ? up.querySelector(":scope > .org-node") : null;
+}
+
+// Sparks of the team's colour flung out from NODE, all ways round.
+function teamBurst(node, colour, count = 14) {
+  if (calm.matches || !node) return;
+  for (let n = 0; n < count; n++) {
+    const bit = el("i", "burst");
+    bit.style.setProperty("--a", `${(360 / count) * n + Math.random() * 18}deg`);
+    bit.style.setProperty("--dist", `${38 + Math.random() * 36}px`);
+    bit.style.setProperty("--c", colour);
+    bit.style.animationDelay = `${Math.round(Math.random() * 90)}ms`;
+    bit.addEventListener("animationend", () => bit.remove());
+    node.appendChild(bit);
+  }
+}
+
+// A comet that runs along the org chart's lines from FROM up to TO: up
+// its stub, across the bar, up into its lead, which lights as it lands.
+function courier(org, from, to, colour, delay = 0) {
+  if (calm.matches || !from || !to || !org.isConnected) return;
+  const box = org.getBoundingClientRect();
+  const a = from.getBoundingClientRect(), b = to.getBoundingClientRect();
+  const x0 = a.left + a.width / 2 - box.left + org.scrollLeft;
+  const y0 = a.top - box.top + org.scrollTop;
+  const x1 = b.left + b.width / 2 - box.left + org.scrollLeft;
+  const y1 = b.bottom - box.top + org.scrollTop;
+  const bar = y0 - 22;
+  const frames = [[x0, y0, 0], [x0, bar, 0.28], [x1, bar, 0.72], [x1, y1, 1]].map(([x, y, offset]) => ({ transform: `translate(${x}px, ${y}px)`, offset }));
+  for (let t = 0; t < 5; t++) {
+    const orb = el("i", "courier");
+    orb.style.setProperty("--c", colour);
+    orb.style.setProperty("--s", 1 - t * 0.17);
+    orb.style.opacity = String(1 - t * 0.2);
+    org.appendChild(orb);
+    const run = orb.animate(frames, { duration: 1150, delay: delay + t * 42, easing: "cubic-bezier(0.55, 0, 0.3, 1)", fill: "both" });
+    run.onfinish = () => {
+      orb.remove();
+      if (t) return;
+      to.classList.remove("got-news");
+      void to.offsetWidth;
+      to.classList.add("got-news");
+      teamBurst(to.querySelector(".face-wrap"), colour, 7);
+    };
+  }
+}
+
+// Clicking a team's badge: the team jumps in a wave down the tree, the
+// badge throws sparks, and a comet runs up every line to its lead.
+function rally(block, colour) {
+  if (calm.matches) return;
+  block.classList.remove("rally");
+  void block.offsetWidth;
+  block.classList.add("rally");
+  teamBurst(block.querySelector(".team-badge"), colour, 20);
+  const org = block.querySelector(".org");
+  block.querySelectorAll(".org-node").forEach((node) => {
+    const d = Number(getComputedStyle(node).getPropertyValue("--d")) || 0;
+    courier(org, node, leadNodeOf(node), colour, 350 + d * 160);
+  });
+  clearTimeout(block.rallyEnd);
+  block.rallyEnd = setTimeout(() => block.classList.remove("rally"), 2400);
+}
+
+// A spark's card leans toward the pointer, as a card in the hand does.
+function tilt(node) {
+  if (calm.matches) return;
+  node.addEventListener("pointermove", (e) => {
+    const r = node.getBoundingClientRect();
+    const x = (e.clientX - r.left) / r.width - 0.5, y = (e.clientY - r.top) / r.height - 0.5;
+    node.style.setProperty("--ry", `${(x * 14).toFixed(2)}deg`);
+    node.style.setProperty("--rx", `${(-y * 14).toFixed(2)}deg`);
+    node.style.setProperty("--gx", `${Math.round((x + 0.5) * 100)}%`);
+  });
+  node.addEventListener("pointerleave", () => {
+    node.style.setProperty("--rx", "0deg");
+    node.style.setProperty("--ry", "0deg");
+  });
 }
 
 // How much of its month a spark with a budget has used.
@@ -5527,10 +5677,13 @@ function budgetMeter(spark) {
   meter.classList.toggle("warn", share >= 75 && share < 100);
   meter.classList.toggle("full", share >= 100);
   const n = (x) => x >= 1e6 ? `${+(x / 1e6).toFixed(1)}M` : x >= 1e3 ? `${Math.round(x / 1e3)}k` : String(x);
-  meter.querySelector(".said").textContent = share >= 100 ? "Budget used" : `${n(spark.used || 0)} / ${n(spark.budget)}`;
+  const unit = { hour: "hour", day: "day", week: "week", month: "month" }[spark.budget_period || "month"];
+  meter.querySelector(".said").innerHTML = share >= 100 ? "Budget used" : `${n(spark.used || 0)} / ${n(spark.budget)}<span class="unit"> a ${unit}</span>`;
+  const per = { hour: "an hour", day: "a day", week: "a week", month: "a month" }[spark.budget_period || "month"];
+  const when = spark.period_words || "this month";
   meter.dataset.tip = share >= 100
-    ? `Used all ${Number(spark.budget).toLocaleString()} tokens of this month's budget: paused till the month turns`
-    : `${Number(spark.used || 0).toLocaleString()} of ${Number(spark.budget).toLocaleString()} tokens used this month`;
+    ? `Used all ${Number(spark.budget).toLocaleString()} tokens of its budget for ${when}: paused till it turns`
+    : `${Number(spark.used || 0).toLocaleString()} of ${Number(spark.budget).toLocaleString()} tokens ${per}, used ${when}`;
   return meter;
 }
 
@@ -6193,8 +6346,8 @@ function sparkForm(spark, inProjectId = "", template = "") {
     <label class="field"><span>Watch a folder <em class="count">optional</em></span><input name="watch" class="mono" placeholder="~/Downloads" autocomplete="off" spellcheck="false" role="combobox" aria-autocomplete="list" aria-expanded="false"><small>A change to its files starts a shift too, besides the schedule, and it is told which files changed. Tab takes a suggestion and shows what is inside it.</small></label>
     <label class="field"><span>Boundaries</span><textarea name="boundaries" rows="2" placeholder="Only read. Never push, delete, or message anyone."></textarea><small>Lines it must not cross. Running commands and changing files also need autonomous mode, as for sub-agents.</small></label>
     <div class="field-pair"><label class="field"><span>Team <em class="count">optional</em></span><select name="team"><option value="">No team</option></select></label><label class="field"><span>Reports to</span><select name="lead" disabled><option value="">No one</option></select></label></div>
-    <label class="field check"><input type="checkbox" name="budget_on"${editing && spark.budget_on ? " checked" : ""}><span>Give it a monthly budget. Past it, it pauses itself until the month turns.</span></label>
-    <label class="field budget-field"${editing && spark.budget_on ? "" : " hidden"}><span>Tokens a month</span><input name="budget" placeholder="200k" autocomplete="off" value="${editing && spark.budget ? spark.budget : ""}"><small>${editing && spark.budget_on ? `${(spark.used || 0).toLocaleString()} used this month. ` : ""}Counted over its shifts, chats and answers: what it reads and what it writes. Like 200000, 200k or 2m.</small></label>
+    <label class="field check"><input type="checkbox" name="budget_on"${editing && spark.budget_on ? " checked" : ""}><span>Give it a budget. Past it, it pauses itself until the hour, day, week or month turns.</span></label>
+    <div class="field budget-field"${editing && spark.budget_on ? "" : " hidden"}><span>Budget</span><div class="budget-row"><input name="budget" placeholder="200k" autocomplete="off" aria-label="Tokens" value="${editing && spark.budget ? spark.budget : ""}"><span class="per">tokens</span><select name="budget_period" aria-label="Every">${[["hour", "an hour"], ["day", "a day"], ["week", "a week"], ["month", "a month"]].map(([v, label]) => `<option value="${v}"${(editing ? spark.budget_period || "month" : "month") === v ? " selected" : ""}>${label}</option>`).join("")}</select></div><small>${editing && spark.budget_on ? `${(spark.used || 0).toLocaleString()} used ${spark.period_words || "this month"}. ` : ""}Counted over its shifts, chats and answers: what it reads and what it writes. Like 200000, 200k or 2m.</small></div>
     ${editing ? "" : `<label class="field check"><input type="checkbox" name="paused"><span>Make it paused. Nothing runs until you press Resume in its window; then it starts its first shift.</span></label>`}
     ${editing || sparksAlways.installed ? "" : `<label class="field check"><input type="checkbox" name="always" checked><span>Keep sparks working when Flash is closed. Flash starts a keeper at login and notifies you of news.</span></label>`}
     <div class="dialog-buttons"><button type="button" class="btn" data-cancel>Cancel</button><button type="submit" class="btn primary">${editing ? "Save" : "Make spark"}</button></div>`,
@@ -6208,8 +6361,9 @@ function sparkForm(spark, inProjectId = "", template = "") {
         if (lead !== (team === (was.team || "") ? was.reports_to || "" : "")) await command("spark-lead", id, null, { lead });
         const on = !!data.budget_on;
         const tokens = (data.budget || "").trim();
-        if (on !== !!was.budget_on || (on && tokens && tokens !== String(was.budget || ""))) {
-          await command("spark-budget", id, null, { on, tokens: on ? tokens : "" });
+        const period = data.budget_period || "month";
+        if (on !== !!was.budget_on || (on && ((tokens && tokens !== String(was.budget || "")) || period !== (was.budget_period || "month")))) {
+          await command("spark-budget", id, null, { on, tokens: on ? tokens : "", period });
         }
       };
       if (editing) {

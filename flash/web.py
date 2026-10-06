@@ -1754,7 +1754,7 @@ def _respond(
     if spark is not None and sparks.over_budget(spark):
         # Its month's tokens are spent: it says so, and asks nothing of
         # the model.
-        reply = Streamed(content=sparks.OUT_OF_BUDGET)
+        reply = Streamed(content=sparks.out_of_budget(spark))
         _finish_reply(session, chat, reply, spark)
         chat.messages.append(ai._message(
             "system" if guest else "assistant",
@@ -2932,6 +2932,7 @@ def _spark_command(name: str, arg: str, body: dict) -> dict:
         elif name == "spark-budget":
             spark = sparks.set_budget(
                 arg, bool(body.get("on")), body.get("tokens") or None,
+                body.get("period") or None,
             )
         elif name == "spark-audit":
             return sparks.audit_log(arg)

@@ -3973,7 +3973,9 @@ class TestSparkBudgets:
 
         run(session, chat, "Hello")
 
-        assert chat.messages[-1]["content"] == sparks.OUT_OF_BUDGET
+        assert chat.messages[-1]["content"] == sparks.out_of_budget(
+            sparks.find("scout")
+        )
         assert FakeClient.requests == []
 
     def test_a_chat_with_a_spark_is_in_its_audit_log(self):

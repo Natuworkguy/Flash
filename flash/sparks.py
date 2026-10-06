@@ -396,12 +396,15 @@ class Spark:
     # on that team it reports to, or "" for none (a lead, or on its own).
     team: str = ""
     reports_to: str = ""
-    # A monthly budget of tokens, only while BUDGET_ON: past it, the spark
-    # pauses itself until the month is out. SPENT is {"month", "tokens"}.
+    # A budget of tokens, only while BUDGET_ON: past it, the spark pauses
+    # itself until its period (BUDGET_PERIOD) is out. SPENT is
+    # {"period", "tokens"}: the period's key, and what it used in it.
     budget_on: bool = False
     budget: int = 0
+    # What the budget counts by: "hour", "day", "week" or "month".
+    budget_period: str = "month"
     spent: dict = field(default_factory=dict)
-    # Paused by its budget, not by the user: it resumes at the new month.
+    # Paused by its budget, not by the user: it resumes at the new period.
     budget_paused: bool = False
 
     @property
@@ -447,7 +450,8 @@ class Spark:
         lead = _load(_path(self.reports_to)) if self.reports_to else None
         data["lead_name"] = lead.name if lead and lead.team == self.team \
             and self.team else ""
-        data["used"] = used_this_month(self)
+        data["used"] = used_this_period(self)
+        data["period_words"] = this_period(self)
         return data
 
 
@@ -1068,27 +1072,68 @@ def _roll_up(spark: Spark, report: "Report") -> None:
 # --- Budgets -------------------------------------------------------------
 #
 # Off unless switched on for a spark. On, the spark has a number of
-# tokens a month, counted over every shift, chat and answer it gives;
-# past it, it pauses itself, and starts again when the month turns. As
-# Paperclip's per-agent budgets do.
+# tokens an hour, a day, a week or a month (the default), counted over
+# every shift, chat and answer it gives; past it, it pauses itself, and
+# starts again when that period turns. As Paperclip's per-agent budgets
+# do.
 
 MIN_BUDGET = 1000
 MAX_BUDGET = 1_000_000_000
-OUT_OF_BUDGET = (
-    "I have used my budget for this month. Raise it or switch it off in "
-    "my settings, and I am back."
-)
+BUDGET_PERIODS = ("hour", "day", "week", "month")
+DEFAULT_BUDGET_PERIOD = "month"
+# Each period: how its key is written, "this ...", and when it turns.
+_PERIODS = {
+    "hour": ("%Y-%m-%dT%H", "this hour", "the hour"),
+    "day": ("%Y-%m-%d", "today", "the day"),
+    "week": ("%G-W%V", "this week", "the week"),
+    "month": ("%Y-%m", "this month", "the month"),
+}
+_PERIOD_WORDS = {
+    "h": "hour", "hr": "hour", "hour": "hour", "hourly": "hour",
+    "hours": "hour", "d": "day", "day": "day", "daily": "day",
+    "days": "day", "w": "week", "wk": "week", "week": "week",
+    "weekly": "week", "weeks": "week", "mo": "month", "month": "month",
+    "monthly": "month", "months": "month",
+}
 
 
-def _month(when: Optional[float] = None) -> str:
-    return time.strftime("%Y-%m", time.localtime(when))
+def period_of(spark: Spark) -> str:
+    period = getattr(spark, "budget_period", "") or DEFAULT_BUDGET_PERIOD
+    return period if period in _PERIODS else DEFAULT_BUDGET_PERIOD
 
 
-def used_this_month(spark: Spark) -> int:
-    """The tokens SPARK has used this month."""
+def parse_period(word) -> str:
+    """A budget period, from "day", "daily", "d", "a week"..."""
+
+    text = str(word or "").strip().lower()
+    for lead in ("per ", "a ", "an ", "each ", "every ", "/"):
+        text = text.removeprefix(lead)
+    found = _PERIOD_WORDS.get(text.strip())
+    if found is None:
+        raise SparkError(
+            f"Could not read {word!r} as a period: hour, day, week or month."
+        )
+    return found
+
+
+def _period_key(period: str, when: Optional[float] = None) -> str:
+    return time.strftime(_PERIODS[period][0], time.localtime(when))
+
+
+def this_period(spark: Spark) -> str:
+    """How SPARK's budget period is said: "today", "this week"..."""
+
+    return _PERIODS[period_of(spark)][1]
+
+
+def used_this_period(spark: Spark) -> int:
+    """The tokens SPARK has used in its budget's period so far: this
+    month, unless its budget counts by the hour, day or week."""
 
     spent = spark.spent or {}
-    if spent.get("month") != _month():
+    # "month" is what a spark from before periods kept its key under.
+    key = spent.get("period", spent.get("month"))
+    if key != _period_key(period_of(spark)):
         return 0
     try:
         return int(spent.get("tokens") or 0)
@@ -1096,13 +1141,33 @@ def used_this_month(spark: Spark) -> int:
         return 0
 
 
+used_this_month = used_this_period  # what it was called first
+
+
 def over_budget(spark: Optional[Spark]) -> bool:
     """Whether SPARK has a budget on and has used all of it."""
 
     return bool(
         spark is not None and spark.budget_on and spark.budget > 0
-        and used_this_month(spark) >= spark.budget
+        and used_this_period(spark) >= spark.budget
     )
+
+
+def out_of_budget(spark: Spark) -> str:
+    """What SPARK says when asked something with its budget spent."""
+
+    return (
+        f"I have used my budget for {this_period(spark)}. Raise it or "
+        "switch it off in my settings, and I am back."
+    )
+
+
+def budget_words(spark: Spark) -> str:
+    """SPARK's budget as it reads: "50,000 tokens a day"."""
+
+    period = period_of(spark)
+    return f"{spark.budget:,} tokens a{'n' if period == 'hour' else ''} " \
+        f"{period}"
 
 
 def parse_budget(value) -> int:
@@ -1125,33 +1190,49 @@ def parse_budget(value) -> int:
     return min(tokens, MAX_BUDGET)
 
 
-def set_budget(key: str, on: bool, tokens=None) -> Spark:
-    """Switch KEY's budget on, with TOKENS a month, or off. A spark the
-    budget paused goes back to work when it is raised past what it has
-    used, or switched off."""
+def parse_budget_with_period(value) -> tuple[int, Optional[str]]:
+    """Tokens and a period, from "50k", "50k/day", "50k a week" or "2m
+    monthly"; the period None when it says none."""
+
+    text = " ".join(str(value or "").replace("/", " / ").split())
+    for joiner in (" / ", " per ", " an ", " a ", " each ", " "):
+        tokens, _, period = text.partition(joiner)
+        if period and period.strip().lower() in _PERIOD_WORDS:
+            return parse_budget(tokens), parse_period(period)
+    return parse_budget(text), None
+
+
+def set_budget(key: str, on: bool, tokens=None, period=None) -> Spark:
+    """Switch KEY's budget on, with TOKENS a PERIOD (an hour, a day, a
+    week or a month), or off. A spark the budget paused goes back to work
+    when it is raised past what it has used, or switched off."""
 
     limit = parse_budget(tokens) if tokens not in (None, "") else None
+    chosen = parse_period(period) if period not in (None, "") else None
 
     def change(spark: Spark) -> None:
         spark.budget_on = bool(on)
         if limit is not None:
             spark.budget = limit
+        if chosen is not None:
+            spark.budget_period = chosen
         if spark.budget_on and spark.budget <= 0:
-            raise SparkError("Say how many tokens a month it may use.")
+            raise SparkError("Say how many tokens it may use.")
         if spark.budget_paused and not over_budget(spark):
             spark.budget_paused = False
             spark.paused = False
             spark.next_run = min(spark.next_run, time.time())
 
     spark = _edit(key, change)
-    log(spark.id, "budget", on=spark.budget_on, tokens=spark.budget)
+    log(spark.id, "budget", on=spark.budget_on, tokens=spark.budget,
+        period=period_of(spark))
     wake()
     return spark
 
 
 def spend(spark_id: str, tokens: int) -> bool:
-    """Count TOKENS against SPARK_ID's month. True when that puts it
-    over its budget: it is paused then, and says so in a report."""
+    """Count TOKENS against SPARK_ID's budget period. True when that puts
+    it over its budget: it is paused then, and says so in a report."""
 
     tokens = max(0, int(tokens or 0))
     if not tokens:
@@ -1161,34 +1242,37 @@ def spend(spark_id: str, tokens: int) -> bool:
         spark = find(spark_id)
         if spark is None:
             return False
-        month = _month()
-        if (spark.spent or {}).get("month") != month:
-            spark.spent = {"month": month, "tokens": 0}
+        key = _period_key(period_of(spark))
+        spent = spark.spent or {}
+        if spent.get("period", spent.get("month")) != key:
+            spark.spent = {"period": key, "tokens": 0}
         spark.spent["tokens"] = int(spark.spent.get("tokens") or 0) + tokens
         over = over_budget(spark)
         if over and not spark.budget_paused:
             spark.paused = True
             spark.budget_paused = True
             paused_now = True
+            turns = _PERIODS[period_of(spark)][2]
             spark.reports.append(Report(
                 at=time.time(),
                 text=(
-                    f"Paused: I used my budget of {spark.budget:,} tokens "
-                    "for this month. I start again when the month turns, "
-                    "or sooner if you raise my budget or switch it off."
+                    f"Paused: I used my budget of {budget_words(spark)} "
+                    f"for {this_period(spark)}. I start again when {turns} "
+                    "turns, or sooner if you raise my budget or switch it "
+                    "off."
                 ),
             ))
             del spark.reports[:-MAX_REPORTS]
         _save(spark)
     if paused_now:
-        log(spark_id, "budget_paused", used=used_this_month(spark),
-            tokens=spark.budget)
+        log(spark_id, "budget_paused", used=used_this_period(spark),
+            tokens=spark.budget, period=period_of(spark))
         _changed()
     return over
 
 
 def renew_budgets() -> None:
-    """Start again the sparks their budget paused, once the month that
+    """Start again the sparks their budget paused, once the period that
     paused them is over."""
 
     for spark in all_sparks():
@@ -1200,7 +1284,8 @@ def renew_budgets() -> None:
 
             with contextlib.suppress(SparkError):
                 _edit(spark.id, change)
-                log(spark.id, "budget_renewed", month=_month())
+                log(spark.id, "budget_renewed", period=period_of(spark),
+                    key=_period_key(period_of(spark)))
 
 
 def _tokens_of(response) -> int:
@@ -1962,8 +2047,8 @@ def set_paused(key: str, paused: bool) -> Spark:
     def change(spark: Spark) -> None:
         if not paused and over_budget(spark):
             raise SparkError(
-                f"{spark.name} has used its budget for this month: raise "
-                "it or switch it off to start it again."
+                f"{spark.name} has used its budget for {this_period(spark)}: "
+                "raise it or switch it off to start it again."
             )
         spark.paused = paused
         spark.budget_paused = False
@@ -2430,7 +2515,9 @@ def consult(
         {"role": "user", "content": question},
     ]
     if over_budget(spark):
-        raise SparkError(f"{spark.name} has used its budget for this month.")
+        raise SparkError(
+            f"{spark.name} has used its budget for {this_period(spark)}."
+        )
     log(spark.id, "asked", by=asker, question=question)
     text = _work(
         spark, messages, {}, [], [], lambda doing: None, 1,
@@ -3082,7 +3169,8 @@ def shift(spark_id: str, client=None) -> Optional[Report]:
             steps=steps, read=True,
         ) if not over_budget(find(spark.id)) else Report(
             at=time.time(), steps=steps, read=True,
-            text="Stopped part way: it used its budget for this month.",
+            text="Stopped part way: it used its budget for "
+            f"{this_period(find(spark.id) or spark)}.",
         )
     except Exception as e:  # noqa: BLE001
         report = Report(
@@ -3574,7 +3662,7 @@ def answer(spark_id: str, client=None) -> Optional[Message]:
             if not m.failed
         ]
         if over_budget(spark):
-            raise RuntimeError(OUT_OF_BUDGET)
+            raise RuntimeError(out_of_budget(spark))
         text = _work(
             spark, messages, kit.tools, kit.schemas, steps,
             lambda doing: _set_activity(spark.id, doing, "reply_activity"),
@@ -3649,8 +3737,8 @@ def run_now(key: str) -> Spark:
     def change(spark: Spark) -> None:
         if over_budget(spark):
             raise SparkError(
-                f"{spark.name} has used its budget for this month: raise it "
-                "or switch it off first."
+                f"{spark.name} has used its budget for {this_period(spark)}: "
+                "raise it or switch it off first."
             )
         spark.asked = True
 
