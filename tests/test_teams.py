@@ -668,3 +668,126 @@ def test_the_page_and_terminal_pause_stop_and_resume_all(monkeypatch):
     ai._sparks_command("teams add Personal Desk running")
     team = sparks.find_team("personal desk")
     assert not any(s.paused for s in sparks.members(team.id))
+
+
+# --- Pausing a team ------------------------------------------------------
+
+
+@pytest.fixture
+def crew():
+    """Crew: Lead, Scout and Writer, all running, and Loner on no team."""
+
+    sparks.create_team("Crew")
+    for name in ("Lead", "Scout", "Writer"):
+        sparks.create(name, f"{name}'s job.")
+        sparks.set_team(name.lower(), "crew")
+    sparks.create("Loner", "Alone.")
+    return sparks.find_team("crew")
+
+
+def test_pausing_a_team_pauses_its_sparks_and_no_others(crew):
+    team, held = sparks.pause_team("crew")
+
+    assert team.paused and sparks.find_team("crew").paused
+    assert sorted(s.name for s in held) == ["Lead", "Scout", "Writer"]
+    assert all(sparks.find(n).paused for n in ("lead", "scout", "writer"))
+    assert not sparks.find("loner").paused
+    assert sparks.due(time.time() + 10 ** 6) == [sparks.find("loner")]
+
+
+def test_resuming_a_team_wakes_only_what_it_paused(crew):
+    sparks.set_paused("scout", True)  # paused on its own first
+    sparks.pause_team("crew")
+
+    team, woke = sparks.resume_team("crew")
+
+    assert not team.paused
+    assert sorted(s.name for s in woke) == ["Lead", "Writer"]
+    assert sparks.find("scout").paused
+
+
+def test_a_team_pause_and_pause_all_leave_each_other_alone(crew):
+    sparks.pause_team("crew")
+    sparks.pause_all()  # only Loner was still running
+
+    sparks.resume_all()
+    assert sparks.find("lead").paused  # still the team's
+    assert not sparks.find("loner").paused
+
+    sparks.resume_team("crew")
+    assert not sparks.find("lead").paused
+
+
+def test_a_spark_joining_a_paused_team_waits_with_it(crew):
+    sparks.pause_team("crew")
+
+    sparks.set_team("loner", "crew")
+    assert sparks.find("loner").paused and sparks.find("loner").team_held
+
+    sparks.set_team("loner", "")
+    assert not sparks.find("loner").paused
+
+
+def test_resuming_one_spark_by_hand_lets_it_go(crew):
+    sparks.pause_team("crew")
+
+    sparks.set_paused("writer", False)
+    sparks.resume_team("crew")
+
+    assert not sparks.find("writer").team_held
+    assert not sparks.find("writer").paused
+
+
+def test_removing_a_paused_team_wakes_its_sparks(crew):
+    sparks.pause_team("crew")
+
+    sparks.remove_team("crew")
+
+    assert not any(s.paused for s in sparks.all_sparks())
+
+
+def test_a_team_pause_is_news_in_its_chat(crew):
+    from flash import teamchat
+
+    sparks.pause_team("crew")
+    sparks.resume_team("crew")
+
+    said = [
+        (e["what"], e.get("spark", ""))
+        for e in teamchat.history("crew")["entries"]
+        if e["kind"] == teamchat.EVENT and e["what"] in ("paused", "resumed")
+    ]
+    assert said == [("paused", ""), ("resumed", "")]
+    block = teamchat.prompt_block(sparks.find("lead"))
+    assert "(The user paused the team)" in block
+
+
+def test_the_page_pauses_and_resumes_a_team(crew):
+    session = web.Session()
+
+    paused = web.command(session, {"name": "team-pause", "arg": crew.id})
+    resumed = web.command(session, {"name": "team-resume", "arg": crew.id})
+
+    assert paused["team"]["paused"] is True and paused["changed"] == 3
+    assert resumed["team"]["paused"] is False and resumed["changed"] == 3
+
+
+def test_the_terminal_pauses_and_resumes_a_team(crew, capsys):
+    from flash import ai
+
+    ai._sparks_command("teams pause crew")
+    assert sparks.find("lead").paused
+    ai._sparks_command("teams")
+    assert "paused" in capsys.readouterr().out
+
+    ai._sparks_command("teams resume crew")
+    assert not sparks.find("lead").paused
+
+
+def test_pausing_a_team_is_not_unread_news(crew):
+    from flash import teamchat
+
+    teamchat.mark_read("crew")
+    sparks.pause_team("crew")
+
+    assert teamchat.unread(crew.id) == 0

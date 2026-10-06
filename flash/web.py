@@ -2938,7 +2938,7 @@ def team_info(team: "sparks.Team") -> dict:
     return {
         "id": team.id, "name": team.name, "colour": team.colour,
         "created": team.created, "chart": sparks.org_chart(team.id),
-        "chat_unread": teamchat.unread(team.id),
+        "chat_unread": teamchat.unread(team.id), "paused": team.paused,
     }
 
 
@@ -2957,6 +2957,12 @@ def _team_command(name: str, arg: str, body: dict) -> dict:
             ))}
         if name == "team-remove":
             return {"team": team_info(sparks.remove_team(arg))}
+        if name in ("team-pause", "team-resume"):
+            team, changed = (
+                sparks.pause_team if name == "team-pause"
+                else sparks.resume_team
+            )(arg)
+            return {"team": team_info(team), "changed": len(changed)}
         if name == "team-chat":
             # The page with the chat open reads what it has not drawn,
             # and, while it is in front of the user, marks it read.

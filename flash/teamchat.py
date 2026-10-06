@@ -164,9 +164,13 @@ def history(team_key: str, since: int = 0) -> dict:
 
 
 def _unread(data: dict) -> int:
+    """What the sparks said since the user looked: not the user's own
+    messages, nor news of what the user did to the team."""
+
     return sum(
         1 for e in data["entries"]
         if e.get("kind") != USER and e.get("at", 0) > data["read"]
+        and not (e.get("kind") == EVENT and not e.get("spark"))
     )
 
 
@@ -255,6 +259,9 @@ def _line(entry: dict, by_id: dict) -> str:
     if kind == USER:
         return f"The user: {text}"
     spark = by_id.get(entry.get("spark", ""))
+    if kind == EVENT and not entry.get("spark"):
+        # News about the team itself, not one of its sparks.
+        return f"(The user {entry.get('what', '')} the team)"
     name = entry.get("name") or (spark.name if spark else "A spark")
     who = f"{name} ({spark.handle})" if spark else name
     if kind == SPARK:

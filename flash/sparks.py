@@ -410,6 +410,9 @@ class Spark:
     # Paused by Pause all or Stop all, not on its own: Resume all wakes
     # these, and leaves the ones paused one by one as they are.
     held: bool = False
+    # Paused because its team was: resuming the team wakes these, and
+    # leaves the ones paused one by one, or by Pause all, as they are.
+    team_held: bool = False
 
     @property
     def handle(self) -> str:
@@ -836,6 +839,9 @@ class Team:
     name: str
     colour: str = COLOURS[0]
     created: float = field(default_factory=time.time)
+    # Paused as a whole: no member's shift starts on its schedule, and a
+    # spark that joins it is paused too, until the team is resumed.
+    paused: bool = False
 
 
 def _teams_path() -> Path:
@@ -946,10 +952,81 @@ def remove_team(key: str) -> Team:
         for spark in all_sparks():
             if spark.team == team.id:
                 spark.team, spark.reports_to = "", ""
+                _release(spark)
                 _save(spark)
                 log(spark.id, "team", team="", was=team.name)
     _changed()
     return team
+
+
+def _hold(spark: Spark) -> bool:
+    """Pause SPARK for its team, unless it is paused already: whether it
+    was."""
+
+    if spark.paused:
+        return False
+    spark.paused = True
+    spark.team_held = True
+    return True
+
+
+def _release(spark: Spark) -> bool:
+    """Wake SPARK if its team's pause is what holds it: whether it did.
+    One over its budget stays paused, by the budget now."""
+
+    if not spark.team_held:
+        return False
+    spark.team_held = False
+    if over_budget(spark):
+        spark.budget_paused = True
+        return False
+    spark.paused = False
+    if spark.next_run < time.time():
+        # Back from a pause, it picks up now rather than at once for
+        # every shift it missed.
+        spark.next_run = time.time()
+    return True
+
+
+def _set_team_paused(key: str, paused: bool) -> tuple[Team, list[Spark]]:
+    with _held():
+        team = _must_find_team(key)
+        found = _read_teams()
+        for one in found:
+            if one.id == team.id:
+                one.paused = paused
+                team = one
+        _write_teams(found)
+        changed = []
+        for spark in members(team.id):
+            if (_hold if paused else _release)(spark):
+                _save(spark)
+                changed.append(spark)
+    for spark in changed:
+        log(spark.id, "paused" if paused else "resumed", team=team.name)
+    from . import teamchat  # deferred: it builds on this module
+
+    with contextlib.suppress(Exception):
+        teamchat.event(team.id, None, "paused" if paused else "resumed")
+    _changed()
+    if not paused:
+        wake()
+    return team, changed
+
+
+def pause_team(key: str) -> tuple[Team, list[Spark]]:
+    """Pause a whole team: no member's shift starts on its schedule
+    until resume_team. A shift running now finishes. The team, and the
+    sparks it paused."""
+
+    return _set_team_paused(key, True)
+
+
+def resume_team(key: str) -> tuple[Team, list[Spark]]:
+    """Wake the sparks pause_team paused. Those paused one by one, by
+    Pause all, or by their budget, stay as they are."""
+
+    return _set_team_paused(key, False)
 
 
 def members(team_id: str) -> list[Spark]:
@@ -986,6 +1063,11 @@ def set_team(key: str, team_key: str = "") -> Spark:
         spark.team = team.id if team else ""
         if spark.team != before:
             spark.reports_to = ""
+            # Out of a paused team, it is its own again; into one, it
+            # waits with the rest.
+            _release(spark)
+            if team is not None and team.paused:
+                _hold(spark)
             for other in all_sparks():
                 if other.reports_to == spark.id and other.id != spark.id:
                     other.reports_to = ""
@@ -2076,6 +2158,7 @@ def set_paused(key: str, paused: bool) -> Spark:
         spark.paused = paused
         spark.budget_paused = False
         spark.held = False
+        spark.team_held = False
         if not paused and spark.next_run < time.time():
             # Back from a pause, it picks up now rather than at once for
             # every shift it missed.
