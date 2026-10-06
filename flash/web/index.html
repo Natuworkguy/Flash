@@ -1685,6 +1685,121 @@ body.all-stopped .org-node, body.all-stopped .spark-card { animation: all-halt 0
 .menu .menu-note.bad { color: var(--del); }
 
 /* Files the agent shows: a card in the chat, a panel from the right --- */
+/* Team chat: a sheet from the right, tinted with the team's colour. */
+.tc-wrap { position: fixed; inset: 0; z-index: 60; }
+.tc-scrim { position: absolute; inset: 0; background: rgba(10, 8, 4, 0.32); opacity: 0; transition: opacity 0.28s; }
+.tc-wrap.open .tc-scrim { opacity: 1; }
+.tc {
+  position: absolute; top: 10px; right: 10px; bottom: 10px; width: min(520px, calc(100% - 20px));
+  display: flex; flex-direction: column; overflow: hidden;
+  background: var(--bg); border: 1px solid var(--border); border-radius: 20px;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.28);
+  transform: translateX(calc(100% + 24px)); transition: transform 0.42s cubic-bezier(0.22, 1, 0.36, 1);
+}
+.tc-wrap { --t: var(--accent); }
+.tc-wrap.open .tc { transform: none; }
+.tc-head {
+  position: relative; display: flex; align-items: center; gap: 12px; padding: 14px 14px 14px 16px;
+  border-bottom: 1px solid var(--border);
+  background: linear-gradient(135deg, color-mix(in srgb, var(--t) 16%, var(--surface)), var(--surface) 70%);
+}
+.tc-badge { width: 40px; height: 40px; border-radius: 13px; flex: none; display: grid; place-items: center; background: var(--t); color: #fff; font: 700 18px/1 var(--sans); box-shadow: 0 6px 16px color-mix(in srgb, var(--t) 40%, transparent); }
+.tc-who { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.tc-who b { font-size: 16px; font-weight: 600; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tc-sub { font-size: 12.5px; color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tc-faces { display: flex; flex-direction: row-reverse; }
+.tc-face { padding: 0; margin-left: -6px; border-radius: 50%; background: var(--surface); box-shadow: 0 0 0 2px var(--surface); transition: transform 0.25s var(--spring); }
+.tc-face:hover { transform: translateY(-3px) scale(1.08); z-index: 1; }
+.tc-log { flex: 1; overflow-y: auto; padding: 16px 16px 8px; display: flex; flex-direction: column; gap: 3px; overscroll-behavior: contain; }
+.tc-loading, .tc-empty { margin: auto; text-align: center; color: var(--text-3); font-size: 14px; max-width: 34ch; display: flex; flex-direction: column; gap: 6px; }
+.tc-empty b { color: var(--text); font-weight: 600; font-size: 15px; }
+.tc-day { align-self: center; margin: 14px 0 8px; font-size: 11.5px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--text-3); }
+.tc-msg { display: flex; gap: 9px; align-items: flex-end; max-width: 100%; margin-top: 10px; }
+.tc-msg.grouped { margin-top: 2px; }
+.tc-msg.mine { justify-content: flex-end; }
+.tc-av { width: 30px; flex: none; align-self: flex-start; }
+.tc-col { min-width: 0; max-width: min(82%, 400px); display: flex; flex-direction: column; gap: 4px; }
+.tc-msg.mine .tc-col { align-items: flex-end; }
+.tc-from { display: flex; align-items: baseline; gap: 7px; padding-left: 2px; font-size: 12.5px; }
+.tc-from b { color: color-mix(in srgb, var(--c) 80%, var(--text)); font-weight: 600; }
+.tc-from .title, .tc-from .when { color: var(--text-3); }
+.tc-bubble {
+  padding: 9px 13px; border-radius: 18px; font-size: 14.5px; line-height: 1.5; overflow-wrap: anywhere;
+  background: color-mix(in srgb, var(--c, var(--accent)) 11%, var(--surface)); color: var(--text);
+  border: 1px solid color-mix(in srgb, var(--c, var(--accent)) 20%, var(--border));
+  border-top-left-radius: 6px;
+}
+.tc-msg.grouped .tc-bubble { border-top-left-radius: 18px; }
+.tc-msg.mine .tc-bubble { background: var(--accent); color: #fff; border-color: transparent; border-radius: 18px; border-bottom-right-radius: 6px; }
+.tc-bubble > :first-child { margin-top: 0; }
+.tc-bubble > :last-child { margin-bottom: 0; }
+.tc-bubble p { margin: 0 0 6px; }
+.tc-bubble pre { max-width: 100%; overflow-x: auto; font-size: 12.5px; }
+.tc-msg.mine .tc-bubble a { color: inherit; }
+.tc-msg.failed .tc-bubble { background: transparent; border-style: dashed; color: var(--text-3); }
+.tc-at { font-weight: 600; color: color-mix(in srgb, var(--c) 78%, var(--text)); background: color-mix(in srgb, var(--c) 16%, transparent); padding: 0 5px; border-radius: 6px; }
+.tc-msg.mine .tc-at { color: #fff; background: rgba(255, 255, 255, 0.22); }
+.tc-steps { font-size: 12px; color: var(--text-3); padding-left: 4px; }
+.tc-steps summary { cursor: pointer; }
+.tc-steps ul { margin: 4px 0 0; padding-left: 18px; font-family: var(--mono, ui-monospace, monospace); font-size: 11.5px; }
+.tc-event {
+  align-self: center; display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 4px 7px;
+  max-width: 92%; margin: 10px 0 4px; padding: 6px 12px; border-radius: 14px; text-align: center;
+  font-size: 12.5px; color: var(--text-2); background: var(--hover); border: 1px solid transparent; cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+.tc-event:hover { border-color: color-mix(in srgb, var(--c, var(--accent)) 40%, var(--border)); background: color-mix(in srgb, var(--c, var(--accent)) 8%, var(--hover)); }
+.tc-event .words b { color: var(--text); font-weight: 600; }
+.tc-event .when { color: var(--text-3); }
+.tc-event .quote { flex-basis: 100%; color: var(--text-3); overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.tc-event.failed .words { color: var(--warn); }
+.tc-typing { display: flex; flex-direction: column; gap: 6px; padding: 4px 16px 8px; }
+.tc-typer { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--text-3); min-width: 0; }
+.tc-typer .words { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tc-typer b { color: color-mix(in srgb, var(--c) 80%, var(--text)); font-weight: 600; }
+.tc-typer .doing { font-family: var(--mono, ui-monospace, monospace); font-size: 11.5px; }
+.tc-dots { display: inline-flex; gap: 3px; padding: 7px 9px; border-radius: 12px; background: color-mix(in srgb, var(--c) 14%, var(--surface)); }
+.tc-dots i { width: 5px; height: 5px; border-radius: 50%; background: var(--c); animation: tc-dot 1.1s infinite ease-in-out; }
+.tc-dots i:nth-child(2) { animation-delay: 0.15s; }
+.tc-dots i:nth-child(3) { animation-delay: 0.3s; }
+@keyframes tc-dot { 0%, 60%, 100% { transform: translateY(0); opacity: 0.45; } 30% { transform: translateY(-4px); opacity: 1; } }
+.tc-compose { position: relative; padding: 8px 12px 12px; border-top: 1px solid var(--border); background: var(--surface); }
+.tc-chips { display: flex; gap: 6px; overflow-x: auto; padding: 2px 2px 8px; scrollbar-width: none; }
+.tc-chips::-webkit-scrollbar { display: none; }
+.tc-chip { flex: none; display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px 4px 7px; border-radius: 999px; font-size: 12.5px; color: var(--text-2); border: 1px solid var(--border); background: var(--bg); transition: border-color 0.15s, transform 0.2s var(--spring); }
+.tc-chip i { width: 9px; height: 9px; border-radius: 50%; background: var(--c); }
+.tc-chip:hover { border-color: var(--c); transform: translateY(-1px); }
+.tc-box { display: flex; align-items: flex-end; gap: 8px; padding: 6px 6px 6px 14px; border: 1px solid var(--border-strong); border-radius: 18px; background: var(--bg); transition: border-color 0.15s, box-shadow 0.15s; }
+.tc-box:focus-within { border-color: color-mix(in srgb, var(--t) 60%, var(--border-strong)); box-shadow: 0 0 0 3px color-mix(in srgb, var(--t) 16%, transparent); }
+.tc-box textarea { flex: 1; min-width: 0; resize: none; border: 0; outline: 0; background: transparent; color: var(--text); font: 14.5px/1.45 var(--sans); padding: 6px 0; max-height: 160px; }
+.tc-send { flex: none; width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center; background: var(--t); color: #fff; transition: transform 0.2s var(--spring), opacity 0.15s; }
+.tc-send svg { width: 17px; height: 17px; }
+.tc-send:disabled { opacity: 0.35; }
+.tc-send:not(:disabled):hover { transform: scale(1.08); }
+.tc-mention { position: absolute; left: 12px; right: 12px; bottom: calc(100% - 4px); padding: 5px; border-radius: 14px; background: var(--surface); border: 1px solid var(--border); box-shadow: 0 12px 30px rgba(0, 0, 0, 0.18); display: flex; flex-direction: column; gap: 2px; }
+.tc-pick { display: flex; align-items: center; gap: 9px; padding: 6px 8px; border-radius: 10px; text-align: left; }
+.tc-pick.on, .tc-pick:hover { background: color-mix(in srgb, var(--c) 12%, var(--hover)); }
+.tc-pick .words { display: flex; flex-direction: column; min-width: 0; font-size: 13px; }
+.tc-pick .words span { font-size: 11.5px; color: var(--text-3); }
+.tc-msg.fresh { animation: tc-in 0.42s cubic-bezier(0.22, 1, 0.36, 1) both; }
+.tc-msg.mine.fresh { animation-name: tc-in-mine; }
+.tc-event.fresh { animation: tc-pop 0.5s var(--spring) both; }
+@keyframes tc-in { from { opacity: 0; transform: translate(-10px, 10px) scale(0.97); } }
+@keyframes tc-in-mine { from { opacity: 0; transform: translate(10px, 10px) scale(0.97); } }
+@keyframes tc-pop { from { opacity: 0; transform: scale(0.85); } }
+.team-chat-btn + .team-actions { margin-left: 6px; }
+.team-chat-btn { position: relative; display: inline-flex; align-items: center; gap: 6px; margin-left: auto; flex: none; padding: 6px 12px 6px 10px; border-radius: 999px; font-size: 13px; font-weight: 500; color: color-mix(in srgb, var(--t) 70%, var(--text)); background: color-mix(in srgb, var(--t) 12%, var(--surface)); border: 1px solid color-mix(in srgb, var(--t) 30%, var(--border)); transition: transform 0.2s var(--spring), background 0.15s; }
+.team-chat-btn svg { width: 15px; height: 15px; }
+.team-chat-btn:hover { transform: translateY(-1px); background: color-mix(in srgb, var(--t) 20%, var(--surface)); }
+.tc-count { position: absolute; top: -3px; right: -3px; min-width: 16px; height: 16px; padding: 0 4px; border-radius: 8px; background: var(--t, var(--accent)); color: #fff; font: 700 10px/16px var(--sans); text-align: center; box-shadow: 0 0 0 2px var(--surface); animation: tc-pop 0.5s var(--spring) both; }
+@media (max-width: 600px) {
+  .tc { top: 0; right: 0; bottom: 0; width: 100%; border-radius: 0; border: 0; }
+  .tc-faces { display: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .tc, .tc-scrim { transition: none; }
+  .tc-msg.fresh, .tc-event.fresh, .tc-count, .tc-dots i { animation: none; }
+}
 .attachment {
   display: flex; align-items: center; gap: 12px; width: min(420px, 100%);
   padding: 10px 14px 10px 10px; text-align: left;
@@ -2190,6 +2305,7 @@ body.resizing-viewer iframe { pointer-events: none; }
 <div id="form" class="overlay" hidden><div class="dialog" role="dialog"><div class="inner" id="form-body"></div></div></div>
 <div id="tip" role="tooltip"></div>
 <div id="toast" role="status"></div>
+<div id="team-chat" class="tc-wrap" hidden><div class="tc-scrim" data-close></div><section class="tc" role="dialog" aria-modal="true" aria-labelledby="tc-name"><header class="tc-head"><span class="tc-badge"><span class="letter"></span></span><span class="tc-who"><b id="tc-name"></b><span class="tc-sub"></span></span><span class="tc-faces"></span><button type="button" class="icon-btn tc-close" data-close aria-label="Close"></button></header><div class="tc-log" aria-live="polite"></div><div class="tc-typing" hidden></div><form class="tc-compose"><div class="tc-chips"></div><div class="tc-box"><textarea rows="1" placeholder="Message the team" aria-label="Message the team"></textarea><button type="submit" class="tc-send" aria-label="Send"></button></div><div class="tc-mention" role="listbox" hidden></div></form></section></div>
 
 <script src="/static/katex/katex.min.js" id="katex" async></script>
 <script>
@@ -2259,6 +2375,7 @@ const ICON = {
   quote: '<path d="M7 7H4.5A1.5 1.5 0 0 0 3 8.5V12h4v5M17 7h-2.5A1.5 1.5 0 0 0 13 8.5V12h4v5"/>',
   link: '<path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/>',
   code: '<path d="m8 7-5 5 5 5M16 7l5 5-5 5"/>',
+  chat: '<path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1.1-4.6A8 8 0 1 1 21 12Z"/><path d="M8.5 12h.01M12 12h.01M15.5 12h.01"/>',
   bell: '<path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/>',
   cube: '<path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><path d="M3.3 7 12 12l8.7-5M12 22V12"/>',
   image: '<rect x="3" y="4" width="18" height="16" rx="3"/><circle cx="9" cy="10" r="1.6"/><path d="m21 16-5.5-5.5L6 20"/>',
@@ -5550,6 +5667,320 @@ const freshTeams = new Map();
 const FRESH_MS = 2500;
 const TEAM_COLOURS = ["#f2a65a", "#5ab0f2", "#7bd88f", "#c792ea", "#ff7a90", "#ffd166", "#4fd1c5", "#a3b1ff"];
 
+// Team chat ----------------------------------------------------------------
+// A team's group chat: the user and its sparks in one room. A message
+// goes to the sparks it @mentions, or to the lead, and a spark can bring
+// a teammate in. The team's news lands in it as it happens.
+
+const teamChat = { id: null, seq: 0, team: null, sparks: new Map(), typing: [], timer: null, drawnDay: "", lastWho: "", loading: false };
+
+function tcSpark(id) { return teamChat.sparks.get(id) || sparkList.find((s) => s.id === id) || null; }
+
+function tcMembers() {
+  return [...teamChat.sparks.values()].filter((s) => teamChat.team && s.team === teamChat.team.id);
+}
+
+// The day a message falls on, as a divider names it.
+function tcDay(at) {
+  const d = new Date(at * 1000);
+  const today = new Date();
+  const yesterday = new Date(Date.now() - 86400000);
+  if (d.toDateString() === today.toDateString()) return "Today";
+  if (d.toDateString() === yesterday.toDateString()) return "Yesterday";
+  return d.toLocaleDateString(undefined, { weekday: "long", month: "short", day: "numeric" });
+}
+
+const tcClock = (at) => new Date(at * 1000).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+
+// @mentions of the team's sparks, drawn as chips in their colours.
+function tcMentions(html) {
+  return html.replace(/(^|[\s(>])@([a-z0-9][a-z0-9-]*)/gi, (whole, before, name) => {
+    const key = name.toLowerCase();
+    const spark = tcMembers().find((s) => s.handle.slice(1).toLowerCase() === key || s.handle.slice(1).toLowerCase() === `${key}-spark` || s.name.toLowerCase() === key);
+    if (!spark) return whole;
+    return `${before}<span class="tc-at" style="--c:${esc(spark.colour)}">@${esc(spark.name)}</span>`;
+  });
+}
+
+async function openTeamChat(teamId) {
+  const wrap = $("#team-chat");
+  clearTimeout(teamChat.timer);
+  Object.assign(teamChat, { id: teamId, seq: 0, typing: [], drawnDay: "", lastWho: "" });
+  const log = wrap.querySelector(".tc-log");
+  log.textContent = "";
+  log.appendChild(el("div", "tc-loading", "Gathering the team…"));
+  wrap.querySelector(".tc-close").innerHTML = icon("x");
+  wrap.querySelector(".tc-send").innerHTML = icon("up");
+  wrap.hidden = false;
+  requestAnimationFrame(() => wrap.classList.add("open"));
+  wrap.querySelectorAll("[data-close]").forEach((b) => { b.onclick = closeTeamChat; });
+  await tcRefreshTeam();
+  if (teamChat.id !== teamId) return;
+  log.textContent = "";
+  await tcFetch(true);
+  tcWireComposer();
+  wrap.querySelector("textarea").focus({ preventScroll: true });
+}
+
+function closeTeamChat() {
+  const wrap = $("#team-chat");
+  wrap.classList.remove("open");
+  clearTimeout(teamChat.timer);
+  teamChat.id = null;
+  setTimeout(() => { if (!teamChat.id) wrap.hidden = true; }, calm.matches ? 0 : 320);
+  if (view === "sparks") sparksChanged();
+}
+
+// The team and its sparks as they are now: the header, and each face.
+async function tcRefreshTeam() {
+  let r;
+  try { r = await command("sparks", "", null); } catch (error) { showFailure(error); return; }
+  if (!teamChat.id) return;
+  teamChat.sparks = new Map(r.sparks.map((s) => [s.id, s]));
+  teamChat.team = r.teams.find((t) => t.id === teamChat.id) || null;
+  if (!teamChat.team) { toast("That team is gone"); closeTeamChat(); return; }
+  const wrap = $("#team-chat");
+  const team = teamChat.team;
+  wrap.style.setProperty("--t", team.colour);
+  wrap.querySelector(".tc-badge .letter").textContent = (team.name.match(/\p{L}|\p{N}/u) || ["?"])[0].toUpperCase();
+  wrap.querySelector("#tc-name").textContent = team.name;
+  const members = tcMembers();
+  const lead = members.find((s) => !members.some((m) => m.id === s.reports_to));
+  const working = members.filter((s) => s.status === "working").length;
+  wrap.querySelector(".tc-sub").textContent = `${members.length} spark${members.length === 1 ? "" : "s"}${lead ? ` · ${lead.name} leads` : ""}${working ? ` · ${working} working` : ""}`;
+  const faces = wrap.querySelector(".tc-faces");
+  faces.textContent = "";
+  members.slice(0, 6).forEach((s, i) => {
+    const b = el("button", "tc-face");
+    b.type = "button";
+    b.dataset.tip = `${s.name}${s.title ? `, ${s.title}` : ""}`;
+    b.appendChild(sparkAvatar(s, 28, i));
+    b.onclick = () => tcInsert(`@${s.handle.slice(1).replace(/-spark$/, "")} `);
+    faces.appendChild(b);
+  });
+  const chips = wrap.querySelector(".tc-chips");
+  chips.textContent = "";
+  members.forEach((s) => {
+    const chip = el("button", "tc-chip");
+    chip.type = "button";
+    chip.style.setProperty("--c", s.colour);
+    chip.innerHTML = `<i></i>@${esc(s.name)}`;
+    chip.onclick = () => tcInsert(`@${s.handle.slice(1).replace(/-spark$/, "")} `);
+    chips.appendChild(chip);
+  });
+  const area = wrap.querySelector("textarea");
+  area.placeholder = members.length
+    ? `Message ${team.name}${lead ? `: ${lead.name} answers, or @mention a spark` : ""}`
+    : `Put a spark on ${team.name} to talk to it`;
+  area.disabled = !members.length;
+}
+
+async function tcFetch(first = false) {
+  if (!teamChat.id || teamChat.loading) return;
+  teamChat.loading = true;
+  let r;
+  try { r = await command("team-chat", teamChat.id, null, { since: teamChat.seq, read: !document.hidden }); }
+  catch (error) { teamChat.loading = false; if (first) showFailure(error); return; }
+  teamChat.loading = false;
+  if (!teamChat.id || r.team !== teamChat.id) return;
+  const log = $("#team-chat .tc-log");
+  const near = log.scrollHeight - log.scrollTop - log.clientHeight < 120;
+  if (first && !r.entries.length) {
+    log.appendChild(el("div", "tc-empty", `<b>This is the start of ${esc(teamChat.team.name)}'s chat.</b><span>Say hello. The lead answers, or @mention a spark to hear from it. Reports and news from the team land here too, and every spark reads the latest of it on its shifts.</span>`));
+  } else if (r.entries.length) {
+    log.querySelector(".tc-empty")?.remove();
+  }
+  r.entries.forEach((entry) => log.appendChild(tcEntry(entry, !first)));
+  teamChat.seq = Math.max(teamChat.seq, r.seq);
+  tcTyping(r.typing);
+  if (first || near || r.entries.some((e) => e.kind === "user")) log.scrollTo({ top: log.scrollHeight, behavior: first || calm.matches ? "auto" : "smooth" });
+  // Someone is typing, maybe in a keeper elsewhere: look again soon.
+  clearTimeout(teamChat.timer);
+  teamChat.timer = setTimeout(() => tcFetch(), r.typing.length ? 1500 : 6000);
+}
+
+function teamChatChanged(teamId, sparksToo = false) {
+  if (!teamChat.id) {
+    if (view === "sparks") sparksChanged();
+    return;
+  }
+  if (teamId !== teamChat.id) return;
+  // A shift changes its spark often: the faces are redrawn once it settles.
+  if (sparksToo) { clearTimeout(teamChat.facesTimer); teamChat.facesTimer = setTimeout(tcRefreshTeam, 1200); }
+  tcFetch();
+}
+
+function tcEntry(entry, fresh) {
+  const day = tcDay(entry.at);
+  const frag = document.createDocumentFragment();
+  if (day !== teamChat.drawnDay) {
+    teamChat.drawnDay = day;
+    teamChat.lastWho = "";
+    frag.appendChild(el("div", "tc-day", `<span>${esc(day)}</span>`));
+  }
+  const spark = entry.spark ? tcSpark(entry.spark) : null;
+  if (entry.kind === "event") {
+    teamChat.lastWho = "";
+    const what = { report: "filed a report", failed: "could not finish a shift", joined: "joined the team", left: "left the team" }[entry.what] || entry.what;
+    const row = el("button", `tc-event ${entry.what || ""}${fresh ? " fresh" : ""}`);
+    row.type = "button";
+    if (spark) { row.style.setProperty("--c", spark.colour); row.appendChild(sparkAvatar(spark, 18)); }
+    const words = el("span", "words");
+    words.innerHTML = `<b></b> ${esc(what)}<span class="when"> · ${esc(tcClock(entry.at))}</span>`;
+    words.querySelector("b").textContent = entry.name || "A spark";
+    row.appendChild(words);
+    if (entry.text) {
+      const quote = el("span", "quote");
+      quote.textContent = entry.text;
+      row.appendChild(quote);
+    }
+    row.onclick = () => { if (spark) openSpark(spark.id); };
+    frag.appendChild(row);
+    return frag;
+  }
+  const mine = entry.kind === "user";
+  const who = mine ? "you" : entry.spark;
+  const grouped = teamChat.lastWho === who;
+  teamChat.lastWho = who;
+  const row = el("div", `tc-msg ${mine ? "mine" : "theirs"}${grouped ? " grouped" : ""}${entry.failed ? " failed" : ""}${fresh ? " fresh" : ""}`);
+  if (spark) row.style.setProperty("--c", spark.colour);
+  if (!mine) {
+    const face = el("span", "tc-av");
+    if (spark && !grouped) face.appendChild(sparkAvatar(spark, 30));
+    row.appendChild(face);
+  }
+  const col = el("div", "tc-col");
+  if (!mine && !grouped) {
+    const head = el("div", "tc-from");
+    head.innerHTML = `<b></b><span class="title"></span><span class="when"></span>`;
+    head.querySelector("b").textContent = entry.name || spark?.name || "A spark";
+    const title = head.querySelector(".title");
+    if (spark?.title) title.textContent = spark.title; else title.remove();
+    head.querySelector(".when").textContent = tcClock(entry.at);
+    col.appendChild(head);
+  }
+  const bubble = el("div", "tc-bubble");
+  bubble.innerHTML = tcMentions(markdown(entry.text || ""));
+  bubble.title = tcClock(entry.at);
+  col.appendChild(bubble);
+  if (entry.steps && entry.steps.length) {
+    const used = el("details", "tc-steps");
+    used.innerHTML = `<summary>Used ${entry.steps.length} tool${entry.steps.length === 1 ? "" : "s"}</summary>`;
+    const list = el("ul");
+    entry.steps.forEach((step) => { const li = el("li"); li.textContent = step; list.appendChild(li); });
+    used.appendChild(list);
+    col.appendChild(used);
+  }
+  row.appendChild(col);
+  frag.appendChild(row);
+  return frag;
+}
+
+function tcTyping(typing) {
+  teamChat.typing = typing || [];
+  const box = $("#team-chat .tc-typing");
+  box.textContent = "";
+  box.hidden = !teamChat.typing.length;
+  teamChat.typing.forEach((t) => {
+    const spark = tcSpark(t.spark);
+    if (!spark) return;
+    const row = el("div", "tc-typer");
+    row.style.setProperty("--c", spark.colour);
+    row.appendChild(sparkAvatar({ ...spark, status: "working" }, 22));
+    const bubble = el("span", "tc-dots", "<i></i><i></i><i></i>");
+    row.appendChild(bubble);
+    const words = el("span", "words");
+    const doing = t.doing && t.doing !== "Thinking" ? t.doing.replace(/^Running /, "") : "";
+    words.innerHTML = `<b></b> ${doing ? "is working: <span class=\"doing\"></span>" : "is typing"}`;
+    words.querySelector("b").textContent = spark.name;
+    if (doing) words.querySelector(".doing").textContent = doing;
+    row.appendChild(words);
+    box.appendChild(row);
+  });
+}
+
+function tcInsert(text) {
+  const area = $("#team-chat textarea");
+  const at = area.selectionStart ?? area.value.length;
+  const before = area.value.slice(0, at);
+  const pad = before && !/\s$/.test(before) ? " " : "";
+  area.value = before + pad + text + area.value.slice(area.selectionEnd ?? at);
+  const end = (before + pad + text).length;
+  area.focus();
+  area.setSelectionRange(end, end);
+  area.dispatchEvent(new Event("input"));
+}
+
+function tcWireComposer() {
+  const form = $("#team-chat .tc-compose");
+  if (form.wired) return;
+  form.wired = true;
+  const area = form.querySelector("textarea");
+  const menu = form.querySelector(".tc-mention");
+  const send = form.querySelector(".tc-send");
+  let picks = [];
+  let at = 0;
+  const grow = () => { area.style.height = "auto"; area.style.height = Math.min(area.scrollHeight, 160) + "px"; send.disabled = !area.value.trim(); };
+  const closeMenu = () => { menu.hidden = true; picks = []; };
+  const choose = (spark) => {
+    const caret = area.selectionStart;
+    const start = area.value.lastIndexOf("@", caret - 1);
+    const handle = spark.handle.slice(1).replace(/-spark$/, "");
+    area.value = area.value.slice(0, start) + `@${handle} ` + area.value.slice(caret);
+    const end = start + handle.length + 2;
+    area.setSelectionRange(end, end);
+    closeMenu();
+    grow();
+  };
+  const drawMenu = () => {
+    menu.textContent = "";
+    picks.forEach((spark, i) => {
+      const item = el("button", `tc-pick${i === at ? " on" : ""}`);
+      item.type = "button";
+      item.setAttribute("role", "option");
+      item.style.setProperty("--c", spark.colour);
+      item.appendChild(sparkAvatar(spark, 20));
+      const words = el("span", "words", `<b></b><span></span>`);
+      words.querySelector("b").textContent = spark.name;
+      words.querySelector("span").textContent = spark.title || spark.handle;
+      item.appendChild(words);
+      item.onmousedown = (e) => { e.preventDefault(); choose(spark); };
+      menu.appendChild(item);
+    });
+    menu.hidden = !picks.length;
+  };
+  area.addEventListener("input", () => {
+    grow();
+    const caret = area.selectionStart;
+    const word = area.value.slice(0, caret).match(/(?:^|\s)@([\w-]*)$/);
+    if (!word) { closeMenu(); return; }
+    const q = word[1].toLowerCase();
+    picks = tcMembers().filter((s) => s.name.toLowerCase().startsWith(q) || s.handle.slice(1).startsWith(q)).slice(0, 6);
+    at = 0;
+    drawMenu();
+  });
+  area.addEventListener("keydown", (e) => {
+    if (!menu.hidden && picks.length) {
+      if (e.key === "ArrowDown" || e.key === "ArrowUp") { e.preventDefault(); at = (at + (e.key === "ArrowDown" ? 1 : picks.length - 1)) % picks.length; drawMenu(); return; }
+      if (e.key === "Enter" || e.key === "Tab") { e.preventDefault(); choose(picks[at]); return; }
+      if (e.key === "Escape") { e.preventDefault(); closeMenu(); return; }
+    }
+    if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); form.requestSubmit(); }
+    if (e.key === "Escape") { e.preventDefault(); closeTeamChat(); }
+  });
+  area.addEventListener("blur", () => setTimeout(closeMenu, 120));
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const text = area.value.trim();
+    if (!text || !teamChat.id) return;
+    area.value = "";
+    grow();
+    try { await command("team-chat-say", teamChat.id, null, { text }); await tcFetch(); }
+    catch (error) { area.value = text; grow(); showFailure(error); }
+  });
+  grow();
+}
+
 function teamBlock(team, byId, again, ti) {
   const block = el("section", "team-block", `<header class="team-head"><button type="button" class="team-badge" data-tip="Rally the team" aria-label="Rally the team"><span class="aura"></span><span class="ring"></span><span class="letter"></span><span class="moons"></span></button><span class="team-title"><b></b><span class="count"></span></span><span class="team-faces"></span><span class="team-actions"></span></header><div class="org"></div>`);
   block.style.setProperty("--t", team.colour);
@@ -5588,6 +6019,13 @@ function teamBlock(team, byId, again, ti) {
     actions.appendChild(b);
     return b;
   };
+  const talk = el("button", "team-chat-btn", `${icon("chat")}<span>Chat</span>`);
+  talk.type = "button";
+  talk.dataset.tip = "The team's group chat";
+  talk.onclick = () => openTeamChat(team.id);
+  if (team.chat_unread) talk.appendChild(el("span", "tc-count", String(Math.min(team.chat_unread, 99))));
+  // Outside the dimmed row of actions: it is the one to find.
+  actions.before(talk);
   action("share", "Share this team", () => shareTeam(team));
   action("edit", "Rename or recolour", () => teamForm(team));
   action("trash", "Delete the team (its sparks stay)", async (b) => {
@@ -6671,6 +7109,7 @@ function sparkForm(spark, inProjectId = "", template = "") {
 let sparksTimer = null;
 function sparksChanged() {
   refreshLite();
+  if (teamChat.id) teamChatChanged(teamChat.id, true);
   clearTimeout(sparksTimer);
   sparksTimer = setTimeout(async () => {
     const always = document.querySelector(".sparks-always-row");
@@ -8848,6 +9287,7 @@ function apply(event) {
   if (event.type === "sparks") { sparksChanged(); return; }
   if (event.type === "browsers") { if (view === "settings" && settingsTab === "security") renderBrowsers(); return; }
   if (event.type === "notify") { notified(event); return; }
+  if (event.type === "team-chat") { teamChatChanged(event.team); return; }
 
   const chat = chats.get(event.chat);
   if (!chat) { if (event.chat) refreshLite(); return; }

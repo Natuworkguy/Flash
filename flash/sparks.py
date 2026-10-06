@@ -992,6 +992,11 @@ def set_team(key: str, team_key: str = "") -> Spark:
                     _save(other)
         _save(spark)
     log(spark.id, "team", team=team.name if team else "")
+    if team is not None and spark.team != before:
+        from . import teamchat  # deferred: it builds on this module
+
+        with contextlib.suppress(Exception):
+            teamchat.event(team.id, spark, "joined")
     _changed()
     return spark
 
@@ -1071,6 +1076,20 @@ def _roll_up(spark: Spark, report: "Report") -> None:
 
     with contextlib.suppress(SparkError):
         _edit(lead.id, give)
+
+
+def _team_news(spark: Spark, report: "Report") -> None:
+    """Put SPARK's report, or its failed shift, in its team's chat."""
+
+    if not spark.team or report.quiet or report.approval:
+        return
+    from . import teamchat  # deferred: it builds on this module
+
+    with contextlib.suppress(Exception):
+        teamchat.event(
+            spark.team, spark, "failed" if report.failed else "report",
+            report.text,
+        )
 
 
 # --- Budgets -------------------------------------------------------------
@@ -2832,8 +2851,19 @@ def _proposing(spark: Spark) -> dict[str, Callable[[dict], str]]:
 
 
 def team_block(spark: Spark) -> str:
-    """SPARK's team and where it stands in it, then the other sparks, for
-    it to hand work to and ask; "" if it is alone."""
+    """SPARK's team and where it stands in it, the latest of its team's
+    chat, then the other sparks, for it to hand work to and ask; "" if
+    it is alone."""
+
+    from . import teamchat  # deferred: it builds on this module
+
+    return "\n\n".join(
+        part for part in (_team_lines(spark), teamchat.prompt_block(spark))
+        if part
+    )
+
+
+def _team_lines(spark: Spark) -> str:
 
     others = [s for s in all_sparks() if s.id != spark.id]
     lines: list[str] = []
@@ -3392,6 +3422,7 @@ def shift(spark_id: str, client=None) -> Optional[Report]:
     _changed()
     if not pending:
         _roll_up(spark, report)
+        _team_news(spark, report)
     return report
 
 
