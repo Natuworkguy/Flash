@@ -2566,6 +2566,29 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
         except keepalive.KeepAliveError as exc:
             raise ValueError(str(exc)) from None
 
+    if name == "notify-limit":
+        # No arg: only what it is, for the row in Settings. "off" stops
+        # them; "4/15" lets the agent send 4 every 15 minutes.
+        from . import notify
+
+        try:
+            if arg == "off":
+                notify.set_limits(0, notify.limits()[1] // 60)
+            elif arg:
+                count, _, minutes = arg.partition("/")
+                notify.set_limits(count, minutes)
+        except notify.LimitError as exc:
+            raise ValueError(str(exc)) from None
+        count, window = notify.limits()
+        return {
+            "count": count, "minutes": window // 60,
+            "words": notify.limit_words(),
+            "default_count": notify.NOTIFY_LIMIT,
+            "default_minutes": notify.NOTIFY_WINDOW // 60,
+            "most": notify.LIMIT_MOST,
+            "most_minutes": notify.WINDOW_MOST_MINUTES,
+        }
+
     if name == "spark-default-model":
         # No arg: only what it is. "flash" makes it Flash's own again.
         if arg:

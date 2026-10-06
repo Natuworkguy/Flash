@@ -1042,6 +1042,8 @@ body.page-projects #dock, body.page-settings #dock, body.page-tool #dock { displ
 .stepper input { width: 44px; height: 32px; border: 0; background: transparent; color: var(--text); font: 600 14px var(--sans); text-align: center; outline: 0; -moz-appearance: textfield; appearance: textfield; }
 .stepper input::-webkit-inner-spin-button, .stepper input::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
 .stepper:focus-within { border-color: var(--accent); }
+.notify-limit { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+.notify-limit .per { font-size: 13px; color: var(--text-3); }
 .spin { width: 18px; height: 18px; border-radius: 50%; border: 2px solid color-mix(in srgb, var(--text) 18%, transparent); border-top-color: var(--accent); animation: spin 0.8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 .update-extra { max-width: 620px; margin-top: 10px; }
@@ -4943,6 +4945,17 @@ function drawGeneral(body) {
   body.appendChild(systemOne);
   fillSystemOne(systemOne);
 
+  body.insertAdjacentHTML("beforeend", `<h2 class="settings-section settings-gap">Notifications</h2><p class="settings-sub">Flash and your sparks can tap you on the shoulder when something can't wait: a pop-up here, or on your desktop when no page is open. Every chat and spark shares one limit.</p>`);
+  const notifyOn = el("button", "setting-row notify-on-row", `<span class="what"><b>Let the agent notify you</b><span></span></span><span class="switch" aria-hidden="true"></span>`);
+  notifyOn.type = "button";
+  notifyOn.setAttribute("role", "switch");
+  body.appendChild(notifyOn);
+  const notifyLimit = el("div", "setting-row static notify-limit-row", `<span class="what"><b>How many, and how often</b><span>At most this many notifications in each stretch of time. A loop that keeps calling the tool is stopped here; what it wanted to say goes in its reply instead.</span></span><span class="side notify-limit"><span class="stepper"><button type="button" class="icon-btn" data-less="count" aria-label="Fewer">−</button><input type="number" inputmode="numeric" data-field="count" aria-label="Notifications"><button type="button" class="icon-btn" data-more="count" aria-label="More">+</button></span><span class="per">every</span><span class="stepper"><button type="button" class="icon-btn" data-less="minutes" aria-label="Shorter">−</button><input type="number" inputmode="numeric" data-field="minutes" aria-label="Minutes"><button type="button" class="icon-btn" data-more="minutes" aria-label="Longer">+</button></span><span class="per">min</span></span>`);
+  body.appendChild(notifyLimit);
+  const browserAsk = el("div", "setting-row static notify-browser-row", `<span class="what"><b>Notifications in this browser</b><span></span></span><span class="side"></span>`);
+  body.appendChild(browserAsk);
+  fillNotifyRows(notifyOn, notifyLimit, browserAsk);
+
   body.insertAdjacentHTML("beforeend", `<h2 class="settings-section settings-gap">Sparks</h2><p class="settings-sub">Agents that keep working on a goal, on a schedule. Make and read them on the Sparks page.</p>`);
   const always = el("button", "setting-row sparks-always-row", `<span class="what"><b>Keep working when Flash is closed</b><span></span></span><span class="switch" aria-hidden="true"></span>`);
   always.type = "button";
@@ -6031,6 +6044,69 @@ async function fillSystemOne(row) {
 
 // The box in Settings for how many rounds of tools a shift gets: typed,
 // or stepped, and saved a moment after the last change.
+// The limit on the agent's notifications, in Settings: a switch, then
+// how many in how many minutes. Off keeps the numbers for when it is
+// back on.
+async function fillNotifyRows(on, row, browserRow) {
+  let r;
+  try { r = await command("notify-limit", "", null); } catch (error) { showFailure(error); return; }
+  const fields = { count: row.querySelector("[data-field=count]"), minutes: row.querySelector("[data-field=minutes]") };
+  let kept = { count: r.count || r.default_count, minutes: r.minutes };
+  const draw = () => {
+    const off = !r.count;
+    on.setAttribute("aria-checked", String(!off));
+    on.querySelector(".what span").textContent = off ? "Off: the agent can't send you notifications. Anything urgent goes in its reply." : r.words;
+    row.hidden = off;
+    fields.count.value = r.count || kept.count;
+    fields.minutes.value = r.minutes;
+  };
+  fields.count.min = 1; fields.count.max = r.most;
+  fields.minutes.min = 1; fields.minutes.max = r.most_minutes;
+  draw();
+  const set = async (arg) => {
+    try { r = await command("notify-limit", arg, null); if (r.count) kept = { count: r.count, minutes: r.minutes }; draw(); toast(r.words); }
+    catch (error) { draw(); showFailure(error); }
+  };
+  on.onclick = () => set(r.count ? "off" : `${kept.count}/${kept.minutes}`);
+  let timer = null;
+  const save = () => {
+    clearTimeout(timer);
+    timer = setTimeout(() => {
+      const count = Math.max(1, Math.min(r.most, Math.round(Number(fields.count.value) || kept.count)));
+      const minutes = Math.max(1, Math.min(r.most_minutes, Math.round(Number(fields.minutes.value) || r.minutes)));
+      fields.count.value = count; fields.minutes.value = minutes;
+      if (count === r.count && minutes === r.minutes) return;
+      set(`${count}/${minutes}`);
+    }, 500);
+  };
+  for (const [name, field] of Object.entries(fields)) {
+    field.addEventListener("input", save);
+    field.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); field.blur(); } });
+    const most = name === "count" ? r.most : r.most_minutes;
+    row.querySelector(`[data-less=${name}]`).onclick = () => { field.value = Math.max(1, (Number(field.value) || 1) - 1); save(); };
+    row.querySelector(`[data-more=${name}]`).onclick = () => { field.value = Math.min(most, (Number(field.value) || 0) + 1); save(); };
+  }
+
+  // Whether this browser shows them while the tab is out of sight.
+  const words = browserRow.querySelector(".what span");
+  const side = browserRow.querySelector(".side");
+  const drawBrowser = () => {
+    side.textContent = "";
+    if (!("Notification" in window)) { words.textContent = "This browser can't show notifications. They still pop up on the page."; return; }
+    const state = Notification.permission;
+    words.textContent = state === "granted" ? "Allowed: with this tab out of sight, they show as the browser's own."
+      : state === "denied" ? "Blocked in this browser's site settings. They still pop up while the page is in front of you."
+      : "Not asked yet. Allow them to hear from the agent while this tab is out of sight.";
+    if (state === "default") {
+      const allow = el("button", "btn small", "Allow");
+      allow.type = "button";
+      allow.onclick = async () => { try { await Notification.requestPermission(); } catch (_) { /* the row says how it stands */ } drawBrowser(); };
+      side.appendChild(allow);
+    }
+  };
+  drawBrowser();
+}
+
 async function fillRoundsRow(row, limit) {
   const field = row.querySelector("input");
   let r;

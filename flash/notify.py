@@ -19,7 +19,7 @@ import time
 from pathlib import Path
 from typing import Optional
 
-from .paths import FLASH_DIR
+from .paths import ENV_PATH, FLASH_DIR
 
 _APP_NAME = "Flash CLI"
 
@@ -121,10 +121,105 @@ def desktop(title: str, message: str) -> None:
 
 # How often the agent may notify the user, whichever chat or spark it
 # is: a few at a time, then a wait, so a loop that calls the tool over
-# and over cannot bury the user's desktop in them.
+# and over cannot bury the user's desktop in them. The user can change
+# how many and in how long, in Settings or with /notify; 0 turns them
+# off. Each one waits NOTIFY_GAP after the last, or less when the limit
+# set asks for them closer together than that.
 NOTIFY_LIMIT = 4
 NOTIFY_WINDOW = 15 * 60
 NOTIFY_GAP = 30
+LIMIT_SETTING = "NOTIFY_LIMIT"
+WINDOW_SETTING = "NOTIFY_WINDOW_MINUTES"
+LIMIT_MOST = 60
+WINDOW_MOST_MINUTES = 24 * 60
+
+
+class LimitError(ValueError):
+    """A limit the user asked for that cannot be set."""
+
+
+def _saved(name: str) -> str:
+    """NAME as the env file has it, else as this process does: from the
+    file, so the keeper's sparks go by what was set in another Flash."""
+
+    from dotenv import dotenv_values
+
+    try:
+        saved = dotenv_values(ENV_PATH).get(name)
+    except OSError:
+        saved = None
+    if saved is None or not str(saved).strip():
+        saved = os.getenv(name, "")
+    return str(saved or "").strip()
+
+
+def limits() -> tuple[int, int]:
+    """How many notifications the agent may send, and in how many
+    seconds: `(count, window)`. A count of 0 means none at all."""
+
+    try:
+        count = int(_saved(LIMIT_SETTING))
+    except ValueError:
+        count = NOTIFY_LIMIT
+    try:
+        minutes = int(_saved(WINDOW_SETTING))
+    except ValueError:
+        minutes = NOTIFY_WINDOW // 60
+    count = max(0, min(LIMIT_MOST, count))
+    minutes = max(1, min(WINDOW_MOST_MINUTES, minutes))
+    return count, minutes * 60
+
+
+def _gap(count: int, window: int) -> int:
+    return min(NOTIFY_GAP, window // max(1, count))
+
+
+def set_limits(count, minutes) -> tuple[int, int]:
+    """Let the agent send COUNT notifications every MINUTES minutes:
+    COUNT 0 (or off) for none. `(count, window)` as they now stand."""
+
+    from .envfile import set_env_var
+
+    word = str(count).strip().lower()
+    try:
+        count = 0 if word in ("off", "none", "no") else int(word)
+        minutes = int(str(minutes).strip().lower().removesuffix("m"))
+    except ValueError:
+        raise LimitError(
+            "Say how many, as a number (0 for none), and in how many "
+            "minutes."
+        ) from None
+    if not 0 <= count <= LIMIT_MOST:
+        raise LimitError(
+            f"The agent can be allowed 0 to {LIMIT_MOST} notifications."
+        )
+    if not 1 <= minutes <= WINDOW_MOST_MINUTES:
+        raise LimitError(
+            f"The limit is counted over 1 to {WINDOW_MOST_MINUTES} minutes."
+        )
+    for name, value in ((LIMIT_SETTING, count), (WINDOW_SETTING, minutes)):
+        os.environ[name] = str(value)
+        set_env_var(ENV_PATH, name, str(value))
+    return limits()
+
+
+def limit_words() -> str:
+    """The limit as the user would say it."""
+
+    count, window = limits()
+    if not count:
+        return "The agent cannot send notifications."
+    minutes = window // 60
+    if minutes % 60 == 0:
+        hours = minutes // 60
+        span = f"{hours} hour{'' if hours == 1 else 's'}"
+    else:
+        span = f"{minutes} minute{'' if minutes == 1 else 's'}"
+    return (
+        f"The agent can send {count} notification{'' if count == 1 else 's'}"
+        f" every {span}."
+    )
+
 
 _sent_lock = threading.Lock()
 
@@ -151,12 +246,15 @@ def wait_to_notify(now: Optional[float] = None) -> int:
     one limit."""
 
     now = time.time() if now is None else now
-    recent = sorted(t for t in _sent_times() if now - t < NOTIFY_WINDOW)
+    count, window = limits()
+    if not count:
+        return window
+    recent = sorted(t for t in _sent_times() if now - t < window)
     waits = [0.0]
     if recent:
-        waits.append(recent[-1] + NOTIFY_GAP - now)
-    if len(recent) >= NOTIFY_LIMIT:
-        waits.append(recent[-NOTIFY_LIMIT] + NOTIFY_WINDOW - now)
+        waits.append(recent[-1] + _gap(count, window) - now)
+    if len(recent) >= count:
+        waits.append(recent[-count] + window - now)
     return max(0, math.ceil(max(waits)))
 
 
@@ -169,7 +267,7 @@ def take_notify_turn(now: Optional[float] = None) -> int:
         wait = wait_to_notify(now)
         if wait:
             return wait
-        kept = [t for t in _sent_times() if now - t < NOTIFY_WINDOW]
+        kept = [t for t in _sent_times() if now - t < limits()[1]]
         try:
             path = _sent_path()
             path.parent.mkdir(parents=True, exist_ok=True)

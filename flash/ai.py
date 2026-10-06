@@ -2352,6 +2352,36 @@ def _ask_spark_model() -> str:
     return _ask_line(f"Model name{example}:") or first
 
 
+def _notify_command(arg: str) -> None:
+    """/notify: how often the agent may send you a notification, shown,
+    or set: `/notify 4 per 15m`, `/notify off`, `/notify on`."""
+
+    from . import notify
+
+    words = arg.lower().replace(" per ", " ").replace(" every ", " ").split()
+    try:
+        if words == ["off"]:
+            notify.set_limits(0, notify.limits()[1] // 60)
+        elif words == ["on"]:
+            count, window = notify.limits()
+            notify.set_limits(
+                count or notify.NOTIFY_LIMIT, window // 60,
+            )
+        elif len(words) == 2:
+            notify.set_limits(words[0], words[1])
+        elif words:
+            warn("Usage: /notify [<count> per <minutes>m | on | off]")
+            return
+    except notify.LimitError as exc:
+        warn(str(exc))
+        return
+    console.print(Text(
+        f"{notify.limit_words()} /notify <count> per <minutes>m changes "
+        "it; /notify off stops them.",
+        style=DIM,
+    ))
+
+
 def _default_spark_model(wanted: str) -> None:
     """/sparks default: the model new sparks are made on, shown, or set
     to WANTED ("flash" for Flash's own)."""
@@ -4109,6 +4139,10 @@ def main() -> None:
 
             if uin == "/stats":
                 _stats_command()
+                continue
+
+            if uin == "/notify" or uin.startswith("/notify "):
+                _notify_command(uin[len("/notify"):].strip())
                 continue
 
             if uin == "/systemone" or uin.startswith("/systemone "):
