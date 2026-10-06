@@ -40,7 +40,7 @@ from typing import Optional
 import ollama
 
 from . import agent as subagents
-from . import cron
+from . import audit, cron
 from .dashes import undash
 from .paths import ENV_PATH, FLASH_DIR
 from .sysprompt import get_model_system_prompt
@@ -392,6 +392,17 @@ class Spark:
     # doing meanwhile.
     replying: float = 0.0
     reply_activity: str = ""
+    # The team it is on, by the team's ID, or "" for none; and the spark
+    # on that team it reports to, or "" for none (a lead, or on its own).
+    team: str = ""
+    reports_to: str = ""
+    # A monthly budget of tokens, only while BUDGET_ON: past it, the spark
+    # pauses itself until the month is out. SPENT is {"month", "tokens"}.
+    budget_on: bool = False
+    budget: int = 0
+    spent: dict = field(default_factory=dict)
+    # Paused by its budget, not by the user: it resumes at the new month.
+    budget_paused: bool = False
 
     @property
     def handle(self) -> str:
@@ -429,6 +440,10 @@ class Spark:
         data["project_name"] = found.name if found else ""
         data["unread"] = self.unread
         data["schedule"] = schedule_words(self)
+        found_team = find_team(self.team) if self.team else None
+        data["team_name"] = found_team.name if found_team else ""
+        data["team_colour"] = found_team.colour if found_team else ""
+        data["used"] = used_this_month(self)
         return data
 
 
@@ -748,6 +763,631 @@ def _edit(key: str, change: Callable[[Spark], None]) -> Spark:
     return spark
 
 
+# --- The audit log -------------------------------------------------------
+#
+# Every spark has a log in ~/.flash/sparks/audit that is only ever added
+# to (see flash/audit.py): what it ran and was told, and what was changed
+# about it. It outlives the spark, so a removed one's record stays.
+
+
+def audit_dir() -> Path:
+    return sparks_dir() / "audit"
+
+
+def log(spark_id: str, kind: str, **fields) -> None:
+    """Add KIND to SPARK_ID's audit log. A log that cannot be written
+    never stops what is being logged."""
+
+    if not spark_id:
+        return
+    with contextlib.suppress(OSError), _held():
+        audit.record(audit_dir(), spark_id, kind, **fields)
+
+
+def audit_log(key: str, limit: Optional[int] = audit.READ_LIMIT) -> dict:
+    """KEY's audit log, newest last, and whether it is intact."""
+
+    spark = find(key)
+    spark_id = spark.id if spark else str(key or "").strip()
+    intact, count = audit.verify(audit_dir(), spark_id)
+    return {
+        "entries": audit.read(audit_dir(), spark_id, limit),
+        "intact": intact, "checked": count,
+        "path": str(audit_dir() / f"{spark_id}.jsonl"),
+    }
+
+
+def audit_export(key: str) -> str:
+    spark = find(key)
+    return audit.raw(audit_dir(), spark.id if spark else str(key or ""))
+
+
+# --- Teams ---------------------------------------------------------------
+#
+# Sparks can be put in teams, and teams kept apart: a team for a project,
+# one for the house. A spark is on one team or on none. Within a team,
+# each spark may report to another, which makes an org chart: a lead
+# hands work down to the sparks that report to it, and what they find
+# comes up to it, to read at its next shift.
+#
+# As Paperclip's org charts are.
+
+TEAM_NAME_CHARS = 32
+MAX_TEAMS = 40
+# How much of a report rolls up to the lead.
+ROLLUP_CHARS = 600
+
+
+@dataclass
+class Team:
+    id: str
+    name: str
+    colour: str = COLOURS[0]
+    created: float = field(default_factory=time.time)
+
+
+def _teams_path() -> Path:
+    return sparks_dir() / ".teams.json"
+
+
+def _read_teams() -> list[Team]:
+    try:
+        data = json.loads(_teams_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    known = {f.name for f in fields(Team)}
+    out = []
+    for item in data if isinstance(data, list) else []:
+        if isinstance(item, dict) and item.get("id") and item.get("name"):
+            out.append(Team(**{k: v for k, v in item.items() if k in known}))
+    return out
+
+
+def _write_teams(found: list[Team]) -> None:
+    folder = sparks_dir()
+    folder.mkdir(parents=True, exist_ok=True)
+    temp = folder / ".teams.tmp"
+    temp.write_text(
+        json.dumps([asdict(t) for t in found], indent=2), encoding="utf-8",
+    )
+    os.replace(temp, _teams_path())
+
+
+def teams() -> list[Team]:
+    """Every team, oldest first."""
+
+    with _lock:
+        return sorted(_read_teams(), key=lambda t: t.created)
+
+
+def find_team(key: str) -> Optional[Team]:
+    """A team by its ID or name, ignoring case."""
+
+    key = str(key or "").strip().casefold()
+    if not key:
+        return None
+    return next(
+        (t for t in teams() if key in (t.id, t.name.casefold())), None,
+    )
+
+
+def _must_find_team(key: str) -> Team:
+    found = find_team(key)
+    if found is None:
+        raise SparkError(f"No team called {key!r}.")
+    return found
+
+
+def _team_name(name) -> str:
+    name = " ".join(str(name or "").split())[:TEAM_NAME_CHARS]
+    if not name:
+        raise SparkError("A team needs a name.")
+    return name
+
+
+def create_team(name: str, colour: str = "") -> Team:
+    name = _team_name(name)
+    with _held():
+        found = _read_teams()
+        if any(t.name.casefold() == name.casefold() for t in found):
+            raise SparkError(f"There is already a team called {name}.")
+        if len(found) >= MAX_TEAMS:
+            raise SparkError(f"There can be at most {MAX_TEAMS} teams.")
+        team = Team(
+            id=uuid.uuid4().hex[:8], name=name,
+            colour=colour if colour in COLOURS
+            else COLOURS[(len(found) + 2) % len(COLOURS)],
+        )
+        _write_teams([*found, team])
+    _changed()
+    return team
+
+
+def update_team(key: str, name: str = "", colour: str = "") -> Team:
+    with _held():
+        found = _read_teams()
+        team = next(
+            (t for t in found if t.id == _must_find_team(key).id), None,
+        )
+        assert team is not None  # nosec B101 -- found above
+        if str(name or "").strip():
+            name = _team_name(name)
+            if any(
+                t.id != team.id and t.name.casefold() == name.casefold()
+                for t in found
+            ):
+                raise SparkError(f"There is already a team called {name}.")
+            team.name = name
+        if colour in COLOURS:
+            team.colour = colour
+        _write_teams(found)
+    _changed()
+    return team
+
+
+def remove_team(key: str) -> Team:
+    """Take a team away. Its sparks stay, on no team."""
+
+    with _held():
+        team = _must_find_team(key)
+        _write_teams([t for t in _read_teams() if t.id != team.id])
+        for spark in all_sparks():
+            if spark.team == team.id:
+                spark.team, spark.reports_to = "", ""
+                _save(spark)
+                log(spark.id, "team", team="", was=team.name)
+    _changed()
+    return team
+
+
+def members(team_id: str) -> list[Spark]:
+    return [s for s in all_sparks() if team_id and s.team == team_id]
+
+
+def reports_of(spark: Spark) -> list[Spark]:
+    """The sparks that report to SPARK."""
+
+    return [
+        s for s in all_sparks()
+        if s.reports_to == spark.id and s.team == spark.team
+    ]
+
+
+def lead_of(spark: Spark) -> Optional[Spark]:
+    """The spark SPARK reports to, if it is still on its team."""
+
+    if not spark.reports_to or not spark.team:
+        return None
+    lead = find(spark.reports_to)
+    return lead if lead is not None and lead.team == spark.team else None
+
+
+def set_team(key: str, team_key: str = "") -> Spark:
+    """Put KEY on TEAM_KEY's team, or on none with "". It reports to no
+    one there until told to, and those that reported to it from its old
+    team now report to no one."""
+
+    team = _must_find_team(team_key) if str(team_key or "").strip() else None
+    with _held():
+        spark = _must_find(key)
+        before = spark.team
+        spark.team = team.id if team else ""
+        if spark.team != before:
+            spark.reports_to = ""
+            for other in all_sparks():
+                if other.reports_to == spark.id and other.id != spark.id:
+                    other.reports_to = ""
+                    _save(other)
+        _save(spark)
+    log(spark.id, "team", team=team.name if team else "")
+    _changed()
+    return spark
+
+
+def set_lead(key: str, lead_key: str = "") -> Spark:
+    """Have KEY report to LEAD_KEY, a spark on its team, or to no one."""
+
+    with _held():
+        spark = _must_find(key)
+        if not str(lead_key or "").strip():
+            spark.reports_to = ""
+            _save(spark)
+            lead = None
+        else:
+            lead = _must_find(lead_key)
+            if lead.id == spark.id:
+                raise SparkError(f"{spark.name} cannot report to itself.")
+            if not spark.team or lead.team != spark.team:
+                raise SparkError(
+                    f"{lead.name} is not on {spark.name}'s team: put them "
+                    "on the same team first."
+                )
+            # No circles: the lead must not already report up to it.
+            up, seen = lead, set()
+            while up is not None and up.id not in seen:
+                if up.id == spark.id:
+                    raise SparkError(
+                        f"{lead.name} already reports to {spark.name}, "
+                        "so it cannot be the other way round too."
+                    )
+                seen.add(up.id)
+                up = lead_of(up)
+            spark.reports_to = lead.id
+            _save(spark)
+    log(spark.id, "reports_to", lead=lead.name if lead else "")
+    _changed()
+    return spark
+
+
+def org_chart(team_id: str) -> list[dict]:
+    """TEAM_ID's sparks as a tree: those reporting to no one at the top,
+    each with its reports under it, as {"id", "reports": [...]}."""
+
+    found = members(team_id)
+    ids = {s.id for s in found}
+    under: dict[str, list[Spark]] = {}
+    for spark in found:
+        lead = spark.reports_to if spark.reports_to in ids else ""
+        under.setdefault(lead, []).append(spark)
+
+    def node(spark: Spark, seen: frozenset) -> dict:
+        return {"id": spark.id, "reports": [
+            node(r, seen | {r.id}) for r in under.get(spark.id, [])
+            if r.id not in seen
+        ]}
+
+    return [node(s, frozenset({s.id})) for s in under.get("", [])]
+
+
+def _roll_up(spark: Spark, report: "Report") -> None:
+    """Give SPARK's news to the spark it reports to, for its next shift:
+    not a reason to start one, as handing work over is."""
+
+    lead = lead_of(spark)
+    if lead is None or report.quiet or report.failed or report.approval:
+        return
+    text = " ".join(report.text.split())
+    if len(text) > ROLLUP_CHARS:
+        text = text[:ROLLUP_CHARS].rstrip() + " [...]"
+
+    def give(other: Spark) -> None:
+        other.inbox.append({
+            "from": spark.name, "text": text, "at": report.at,
+            "rollup": True,
+        })
+        del other.inbox[:-MAX_INBOX]
+
+    with contextlib.suppress(SparkError):
+        _edit(lead.id, give)
+
+
+# --- Budgets -------------------------------------------------------------
+#
+# Off unless switched on for a spark. On, the spark has a number of
+# tokens a month, counted over every shift, chat and answer it gives;
+# past it, it pauses itself, and starts again when the month turns. As
+# Paperclip's per-agent budgets do.
+
+MIN_BUDGET = 1000
+MAX_BUDGET = 1_000_000_000
+OUT_OF_BUDGET = (
+    "I have used my budget for this month. Raise it or switch it off in "
+    "my settings, and I am back."
+)
+
+
+def _month(when: Optional[float] = None) -> str:
+    return time.strftime("%Y-%m", time.localtime(when))
+
+
+def used_this_month(spark: Spark) -> int:
+    """The tokens SPARK has used this month."""
+
+    spent = spark.spent or {}
+    if spent.get("month") != _month():
+        return 0
+    try:
+        return int(spent.get("tokens") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def over_budget(spark: Optional[Spark]) -> bool:
+    """Whether SPARK has a budget on and has used all of it."""
+
+    return bool(
+        spark is not None and spark.budget_on and spark.budget > 0
+        and used_this_month(spark) >= spark.budget
+    )
+
+
+def parse_budget(value) -> int:
+    """A budget in tokens, from 50000, "50k", "2m" or "1.5M"."""
+
+    text = str(value or "").strip().lower().replace(",", "").replace("_", "")
+    scale = 1
+    if text.endswith(("k", "m")):
+        scale = 1000 if text[-1] == "k" else 1_000_000
+        text = text[:-1]
+    text = text.removesuffix(" tokens").strip()
+    try:
+        tokens = int(float(text) * scale)
+    except ValueError:
+        raise SparkError(
+            f"Could not read {value!r} as a budget. Try 200000, 200k or 2m."
+        ) from None
+    if tokens < MIN_BUDGET:
+        raise SparkError(f"A budget is at least {MIN_BUDGET:,} tokens.")
+    return min(tokens, MAX_BUDGET)
+
+
+def set_budget(key: str, on: bool, tokens=None) -> Spark:
+    """Switch KEY's budget on, with TOKENS a month, or off. A spark the
+    budget paused goes back to work when it is raised past what it has
+    used, or switched off."""
+
+    limit = parse_budget(tokens) if tokens not in (None, "") else None
+
+    def change(spark: Spark) -> None:
+        spark.budget_on = bool(on)
+        if limit is not None:
+            spark.budget = limit
+        if spark.budget_on and spark.budget <= 0:
+            raise SparkError("Say how many tokens a month it may use.")
+        if spark.budget_paused and not over_budget(spark):
+            spark.budget_paused = False
+            spark.paused = False
+            spark.next_run = min(spark.next_run, time.time())
+
+    spark = _edit(key, change)
+    log(spark.id, "budget", on=spark.budget_on, tokens=spark.budget)
+    wake()
+    return spark
+
+
+def spend(spark_id: str, tokens: int) -> bool:
+    """Count TOKENS against SPARK_ID's month. True when that puts it
+    over its budget: it is paused then, and says so in a report."""
+
+    tokens = max(0, int(tokens or 0))
+    if not tokens:
+        return over_budget(find(spark_id))
+    paused_now = False
+    with _held():
+        spark = find(spark_id)
+        if spark is None:
+            return False
+        month = _month()
+        if (spark.spent or {}).get("month") != month:
+            spark.spent = {"month": month, "tokens": 0}
+        spark.spent["tokens"] = int(spark.spent.get("tokens") or 0) + tokens
+        over = over_budget(spark)
+        if over and not spark.budget_paused:
+            spark.paused = True
+            spark.budget_paused = True
+            paused_now = True
+            spark.reports.append(Report(
+                at=time.time(),
+                text=(
+                    f"Paused: I used my budget of {spark.budget:,} tokens "
+                    "for this month. I start again when the month turns, "
+                    "or sooner if you raise my budget or switch it off."
+                ),
+            ))
+            del spark.reports[:-MAX_REPORTS]
+        _save(spark)
+    if paused_now:
+        log(spark_id, "budget_paused", used=used_this_month(spark),
+            tokens=spark.budget)
+        _changed()
+    return over
+
+
+def renew_budgets() -> None:
+    """Start again the sparks their budget paused, once the month that
+    paused them is over."""
+
+    for spark in all_sparks():
+        if spark.budget_paused and not over_budget(spark):
+            def change(found: Spark) -> None:
+                found.budget_paused = False
+                found.paused = False
+                found.next_run = min(found.next_run, time.time())
+
+            with contextlib.suppress(SparkError):
+                _edit(spark.id, change)
+                log(spark.id, "budget_renewed", month=_month())
+
+
+def _tokens_of(response) -> int:
+    """What one model call cost: the prompt it read and what it wrote."""
+
+    total = 0
+    for name in ("prompt_eval_count", "eval_count"):
+        value = getattr(response, name, None)
+        if value is None and isinstance(response, dict):
+            value = response.get(name)
+        try:
+            total += int(value or 0)
+        except (TypeError, ValueError):
+            pass
+    return total
+
+
+# --- Hiring --------------------------------------------------------------
+#
+# A spark that needs another on its team proposes one, and one that
+# leads others can propose letting one of them go. Neither happens until
+# the user says yes: as the board approves hires in Paperclip. Proposals
+# wait in ~/.flash/sparks/.hires.json.
+
+MAX_PENDING_HIRES = 3
+REASON_CHARS = 600
+
+
+def _hires_path() -> Path:
+    return sparks_dir() / ".hires.json"
+
+
+def _read_hires() -> list[dict]:
+    try:
+        data = json.loads(_hires_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    return [h for h in data if isinstance(h, dict)] if isinstance(
+        data, list
+    ) else []
+
+
+def _write_hires(found: list[dict]) -> None:
+    folder = sparks_dir()
+    folder.mkdir(parents=True, exist_ok=True)
+    temp = folder / ".hires.tmp"
+    # The decided ones are kept a while, for the record, not for ever.
+    temp.write_text(json.dumps(found[-100:], indent=2), encoding="utf-8")
+    os.replace(temp, _hires_path())
+
+
+def hires(pending: bool = True) -> list[dict]:
+    """Proposals to hire or let go, oldest first: only those waiting on
+    the user, unless PENDING is False."""
+
+    with _lock:
+        found = _read_hires()
+    return [h for h in found if h.get("status") == "pending" or not pending]
+
+
+def propose_hire(
+    by_key: str, name: str, goal: str, title: str = "", every="",
+    boundaries: str = "", reason: str = "",
+) -> dict:
+    """BY_KEY asks the user to hire a new spark onto its team."""
+
+    by = _must_find(by_key)
+    name = " ".join(str(name or "").split())[:NAME_CHARS]
+    goal = str(goal or "").strip()[:GOAL_CHARS]
+    if not name or not goal:
+        raise SparkError("A hire needs a name and a goal.")
+    if find(handle_of(name)) is not None:
+        raise SparkError(f"There is already a spark called {name}.")
+    minutes, at = parse_schedule(every or DEFAULT_EVERY_MINUTES)
+    with _held():
+        found = _read_hires()
+        waiting = [
+            h for h in found
+            if h.get("status") == "pending" and h.get("by") == by.id
+        ]
+        if len(waiting) >= MAX_PENDING_HIRES:
+            raise SparkError(
+                "You already have proposals waiting on the user. Wait for "
+                "their answer first."
+            )
+        hire = {
+            "id": uuid.uuid4().hex[:8], "kind": "hire", "by": by.id,
+            "by_name": by.name, "at": time.time(), "status": "pending",
+            "reason": " ".join(str(reason or "").split())[:REASON_CHARS],
+            "spark": {
+                "name": name, "title": _title(title), "goal": goal,
+                "every": minutes, "at": at,
+                "boundaries": str(boundaries or "").strip()[:BOUNDARY_CHARS],
+            },
+        }
+        _write_hires([*found, hire])
+    log(by.id, "hire_proposed", hire=hire["id"], name=name, goal=goal,
+        reason=hire["reason"])
+    _changed()
+    return hire
+
+
+def propose_removal(by_key: str, target_key: str, reason: str = "") -> dict:
+    """BY_KEY asks the user to let TARGET_KEY go: one that reports to it."""
+
+    by = _must_find(by_key)
+    target = _must_find(target_key)
+    if target.reports_to != by.id or target.team != by.team or not by.team:
+        raise SparkError(
+            f"{target.name} does not report to you: you can only propose "
+            "letting go of your own reports."
+        )
+    with _held():
+        found = _read_hires()
+        if any(
+            h.get("status") == "pending" and h.get("kind") == "remove"
+            and h.get("target") == target.id for h in found
+        ):
+            raise SparkError(f"Letting {target.name} go is already proposed.")
+        hire = {
+            "id": uuid.uuid4().hex[:8], "kind": "remove", "by": by.id,
+            "by_name": by.name, "at": time.time(), "status": "pending",
+            "target": target.id, "target_name": target.name,
+            "reason": " ".join(str(reason or "").split())[:REASON_CHARS],
+        }
+        _write_hires([*found, hire])
+    log(by.id, "removal_proposed", hire=hire["id"], target=target.name,
+        reason=hire["reason"])
+    _changed()
+    return hire
+
+
+def decide_hire(hire_id: str, yes: bool, why: str = "") -> dict:
+    """The user's answer to a proposal. Yes to a hire makes the spark, on
+    the proposer's team and reporting to it; yes to letting one go
+    removes it. Either way the proposer hears, at its next shift."""
+
+    why = " ".join(str(why or "").split())[:LESSON_CHARS]
+    with _held():
+        found = _read_hires()
+        hire = next((h for h in found if h.get("id") == hire_id), None)
+        if hire is None or hire.get("status") != "pending":
+            raise SparkError("That proposal is not waiting on an answer.")
+        by = find(hire["by"])
+        made: Optional[Spark] = None
+        if yes and hire["kind"] == "hire":
+            wanted = hire["spark"]
+            made = create(
+                wanted["name"], wanted["goal"], wanted.get("boundaries", ""),
+                wanted.get("at") or wanted.get("every") or "",
+                model=by.model if by else "", title=wanted.get("title", ""),
+            )
+            if by is not None and by.team:
+                made.team, made.reports_to = by.team, by.id
+                _save(made)
+            log(made.id, "hired", by=hire.get("by_name", ""),
+                reason=hire.get("reason", ""))
+        elif yes and hire["kind"] == "remove":
+            with contextlib.suppress(SparkError):
+                remove(hire["target"])
+        hire["status"] = "approved" if yes else "declined"
+        hire["decided"] = time.time()
+        hire["why"] = why
+        _write_hires(found)
+        if by is not None:
+            what = (
+                f"hiring {hire['spark']['name']}" if hire["kind"] == "hire"
+                else f"letting {hire.get('target_name', 'a spark')} go"
+            )
+            note = (
+                f"The user said yes to {what}."
+                + (f" {made.name} reports to you now." if made and by.team
+                   else "")
+                if yes else f"The user said no to {what}"
+                + (f": {why}" if why else ".")
+            )
+
+            def tell(spark: Spark) -> None:
+                spark.inbox.append({
+                    "from": "the user", "text": note, "at": time.time(),
+                    "decision": True,
+                })
+                del spark.inbox[:-MAX_INBOX]
+
+            with contextlib.suppress(SparkError):
+                _edit(by.id, tell)
+            log(by.id, "hire_decided", hire=hire_id, yes=bool(yes), why=why)
+    _changed()
+    return hire
+
+
 # --- Projects ------------------------------------------------------------
 #
 # A spark can be given a project, one of the web UI's: a folder, with
@@ -948,39 +1588,57 @@ TEMPLATES = [
 SHARE_PREFIX = "flash-spark:"
 
 
-def share_code(key: str) -> str:
-    """SPARK as a code to paste somewhere: its template, no more."""
+def _template_of(spark: Spark) -> dict:
+    """SPARK as a template: what it does, not what it has done."""
 
-    spark = _must_find(key)
     data = {
-        "v": 1, "name": spark.name, "title": spark.title,
-        "goal": spark.goal,
+        "name": spark.name, "title": spark.title, "goal": spark.goal,
         "boundaries": spark.boundaries, "every": spark.every,
         "lessons": spark.lessons,
     }
     if spark.at:
         data["at"] = spark.at
+    return data
+
+
+def _pack(prefix: str, data: dict) -> str:
     packed = base64.urlsafe_b64encode(
         json.dumps(data, ensure_ascii=False).encode("utf-8")
     ).decode("ascii")
-    return SHARE_PREFIX + packed.rstrip("=")
+    return prefix + packed.rstrip("=")
 
 
-def read_code(code: str) -> dict:
-    """What a share code holds, checked, to show before adding it."""
-
+def _unpack(prefix: str, code: str, what: str) -> dict:
     code = "".join(str(code or "").split())
-    if not code.startswith(SHARE_PREFIX):
-        raise SparkError(
-            f"That is not a spark's code: they start {SHARE_PREFIX}"
-        )
-    packed = code[len(SHARE_PREFIX):]
+    if not code.startswith(prefix):
+        raise SparkError(f"That is not {what}'s code: they start {prefix}")
+    packed = code[len(prefix):]
     try:
         data = json.loads(base64.urlsafe_b64decode(
             packed + "=" * (-len(packed) % 4)
         ).decode("utf-8"))
     except (ValueError, UnicodeDecodeError):
         raise SparkError("That code is not whole. Copy all of it.") from None
+    if not isinstance(data, dict):
+        raise SparkError(f"That code holds no {what}.")
+    return data
+
+
+def share_code(key: str) -> str:
+    """SPARK as a code to paste somewhere: its template, no more."""
+
+    return _pack(SHARE_PREFIX, {"v": 1, **_template_of(_must_find(key))})
+
+
+def read_code(code: str) -> dict:
+    """What a share code holds, checked, to show before adding it."""
+
+    return _checked(_unpack(SHARE_PREFIX, code, "a spark"))
+
+
+def _checked(data: dict) -> dict:
+    """One spark's template from a code, checked and cut to size."""
+
     if not isinstance(data, dict) or not str(data.get("goal") or "").strip():
         raise SparkError("That code holds no spark.")
     lessons = data.get("lessons") or []
@@ -1000,6 +1658,163 @@ def read_code(code: str) -> dict:
     }
     read["schedule"] = schedule_words(read)
     return read
+
+
+# --- Team templates --------------------------------------------------------
+#
+# A whole team as one code, flash-team:..., to share or keep: its name,
+# each spark's template, and who reports to whom. Or one of these, made
+# from the spark templates. As Paperclip's company templates are.
+
+TEAM_SHARE_PREFIX = "flash-team:"
+MAX_TEAM_SPARKS = 12
+
+TEAM_TEMPLATES = [
+    {
+        "name": "Dev Team",
+        "blurb": "Watches a repo, runs its tests, and keeps it up to date",
+        "lead": "Repo Watch",
+        "reports": ["Test Runner", "Dependency Check"],
+    },
+    {
+        "name": "Personal Desk",
+        "blurb": "Your morning brief, your inbox, and pages you watch",
+        "lead": "Morning Brief",
+        "reports": ["Inbox", "Page Watch"],
+    },
+]
+
+
+def _team_template(template: dict) -> dict:
+    """A built-in team template, as a team code holds one."""
+
+    by_name = {t["name"]: t for t in TEMPLATES}
+    sparks = [
+        {**_template_fields(by_name[template["lead"]]), "reports_to": -1},
+        *(
+            {**_template_fields(by_name[name]), "reports_to": 0}
+            for name in template["reports"]
+        ),
+    ]
+    return {"name": template["name"], "colour": "", "sparks": sparks}
+
+
+def _template_fields(template: dict) -> dict:
+    return {k: template[k] for k in (
+        "name", "title", "goal", "boundaries", "every",
+    ) if k in template}
+
+
+def team_templates() -> list[dict]:
+    """The built-in team templates, each with its sparks, for the page."""
+
+    return [
+        {**t, "team": read_team(_team_template(t))} for t in TEAM_TEMPLATES
+    ]
+
+
+def share_team_code(key: str) -> str:
+    """TEAM as a code: its name, its sparks' templates, and who reports
+    to whom. Never their reports, notes or chats."""
+
+    team = _must_find_team(key)
+    found = members(team.id)
+    if not found:
+        raise SparkError(f"{team.name} has no sparks to share.")
+    index = {s.id: i for i, s in enumerate(found)}
+    return _pack(TEAM_SHARE_PREFIX, {
+        "v": 1, "name": team.name, "colour": team.colour,
+        "sparks": [
+            {**_template_of(s), "reports_to": index.get(s.reports_to, -1)}
+            for s in found
+        ],
+    })
+
+
+def read_team(data: dict) -> dict:
+    """A team template, checked: its name and its sparks, each with the
+    index of the one it reports to, or -1."""
+
+    sparks = data.get("sparks") if isinstance(data, dict) else None
+    if not isinstance(sparks, list) or not sparks:
+        raise SparkError("That code holds no team.")
+    sparks = sparks[:MAX_TEAM_SPARKS]
+    out = []
+    for item in sparks:
+        checked = _checked(item)
+        lead = item.get("reports_to", -1) if isinstance(item, dict) else -1
+        checked["reports_to"] = lead if isinstance(lead, int) and (
+            0 <= lead < len(sparks)
+        ) else -1
+        out.append(checked)
+    colour = str(data.get("colour") or "")
+    return {
+        "name": _team_name(data.get("name") or "Team"),
+        "colour": colour if colour in COLOURS else "",
+        "sparks": out,
+    }
+
+
+def read_team_code(code: str) -> dict:
+    """What a team's code holds, checked, to show before adding it."""
+
+    return read_team(_unpack(TEAM_SHARE_PREFIX, code, "a team"))
+
+
+def _free_name(name: str, taken, limit: int) -> str:
+    """NAME, or NAME 2, NAME 3... the first that TAKEN says is free."""
+
+    found, number = name, 2
+    while taken(found):
+        found = f"{name[:limit - 3]} {number}"
+        number += 1
+    return found
+
+
+def add_team(source: str, model: str = "", paused: bool = False) -> Team:
+    """A team of your own, from a team's code or a built-in team template
+    named SOURCE: the team, its sparks, and who reports to whom. Names
+    already taken get a number."""
+
+    found = next(
+        (t for t in TEAM_TEMPLATES
+         if t["name"].casefold() == str(source).strip().casefold()),
+        None,
+    )
+    data = read_team(_team_template(found)) if found else read_team_code(
+        source
+    )
+    team = create_team(
+        _free_name(data["name"], lambda n: find_team(n) is not None,
+                   TEAM_NAME_CHARS),
+        data["colour"],
+    )
+    made: list[Spark] = []
+    for item in data["sparks"]:
+        name = _free_name(
+            item["name"], lambda n: find(handle_of(n)) is not None,
+            NAME_CHARS,
+        )
+        spark = create(
+            name, item["goal"], item.get("boundaries", ""),
+            item.get("at") or item["every"], model=model,
+            title=item.get("title", ""), paused=paused,
+        )
+        lessons = item.get("lessons") or []
+
+        def join(found_spark: Spark, lessons=lessons) -> None:
+            found_spark.team = team.id
+            for lesson in lessons:
+                _add_lesson(found_spark, lesson)
+
+        made.append(_edit(spark.id, join))
+    for spark, item in zip(made, data["sparks"]):
+        if item["reports_to"] >= 0 and made[item["reports_to"]].id != spark.id:
+            _edit(spark.id, lambda s, lead=made[item["reports_to"]].id:
+                  setattr(s, "reports_to", lead))
+    for spark in made:
+        log(spark.id, "team", team=team.name, from_template=data["name"])
+    return team
 
 
 def add_from(
@@ -1068,6 +1883,9 @@ def create(
             # Its first shift is at its first set time, not now.
             spark.next_run = next_shift(spark, time.time())
         _save(spark)
+    log(spark.id, "made", name=spark.name, goal=spark.goal,
+        boundaries=spark.boundaries, schedule=schedule_words(spark),
+        model=spark.model)
     _changed()
     wake()
     return spark
@@ -1076,7 +1894,10 @@ def create(
 def update(key: str, **changes) -> Spark:
     """Change a spark's goal, boundaries, schedule, name, or title."""
 
+    before: dict = {}
+
     def change(spark: Spark) -> None:
+        before.update(asdict(spark))
         if "goal" in changes:
             goal = str(changes["goal"] or "").strip()[:GOAL_CHARS]
             if not goal:
@@ -1105,26 +1926,50 @@ def update(key: str, **changes) -> Spark:
                 raise SparkError(f"There is already a spark called {name}.")
             spark.name = name
 
-    return _edit(key, change)
+    spark = _edit(key, change)
+    after = asdict(spark)
+    changed = {
+        name: {"from": before.get(name), "to": after.get(name)}
+        for name in ("name", "title", "goal", "boundaries", "every", "at",
+                     "project", "watch", "model")
+        if before.get(name) != after.get(name)
+    }
+    if changed:
+        log(spark.id, "changed", changes=changed)
+    return spark
 
 
 def remove(key: str) -> Spark:
+    """Take a spark away. Those that reported to it report to its lead."""
+
     with _held():
         spark = _must_find(key)
         _path(spark.id).unlink(missing_ok=True)
+        for other in all_sparks():
+            if other.reports_to == spark.id:
+                other.reports_to = spark.reports_to
+                _save(other)
+    log(spark.id, "removed", name=spark.name)
     _changed()
     return spark
 
 
 def set_paused(key: str, paused: bool) -> Spark:
     def change(spark: Spark) -> None:
+        if not paused and over_budget(spark):
+            raise SparkError(
+                f"{spark.name} has used its budget for this month: raise "
+                "it or switch it off to start it again."
+            )
         spark.paused = paused
+        spark.budget_paused = False
         if not paused and spark.next_run < time.time():
             # Back from a pause, it picks up now rather than at once for
             # every shift it missed.
             spark.next_run = time.time()
 
     spark = _edit(key, change)
+    log(spark.id, "paused" if paused else "resumed")
     wake()
     return spark
 
@@ -1152,7 +1997,9 @@ def teach(key: str, lesson: str, report_at: Optional[float] = None) -> Spark:
                 report.feedback = lesson
                 report.read = True
 
-    return _edit(key, change)
+    spark = _edit(key, change)
+    log(spark.id, "taught", lesson=lesson)
+    return spark
 
 
 def rate(key: str, report_at: float, rating: int) -> Spark:
@@ -1230,7 +2077,9 @@ def unread_total() -> int:
     """What the Sparks badge counts: new reports, and steps waiting on a
     yes or a no."""
 
-    return sum(s.unread + (1 if s.waiting else 0) for s in all_sparks())
+    return sum(
+        s.unread + (1 if s.waiting else 0) for s in all_sparks()
+    ) + len(hires())
 
 
 # --- News, for the terminal ---------------------------------------------
@@ -1576,9 +2425,12 @@ def consult(
         {"role": "system", "content": prompt},
         {"role": "user", "content": question},
     ]
+    if over_budget(spark):
+        raise SparkError(f"{spark.name} has used its budget for this month.")
+    log(spark.id, "asked", by=asker, question=question)
     text = _work(
         spark, messages, {}, [], [], lambda doing: None, 1,
-        CONSULT_LAST_WORD, client, names=(),
+        CONSULT_LAST_WORD, client, names=(), audit_as="answer",
     )
     return spark, text or "(It had nothing to say.)"
 
@@ -1626,19 +2478,142 @@ def roster_block() -> str:
     return "\n".join(lines)
 
 
+PROPOSAL_TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "propose_hire",
+            "description": (
+                "Ask the user to hire a new spark onto your team, when there "
+                "is standing work that is nobody's job and too much to fold "
+                "into yours. It does not exist until the user says yes; then "
+                "it reports to you, and you can hand_off work to it."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string",
+                             "description": "A short name, e.g. Scout."},
+                    "title": {"type": "string",
+                              "description": "Its job, e.g. Bug triager."},
+                    "goal": {"type": "string", "description": (
+                        "Its standing goal, written so it needs nothing "
+                        "else.")},
+                    "every": {"type": "string", "description": (
+                        "How often it works: 30m, 2h, daily, or set times "
+                        "like 9am weekdays.")},
+                    "boundaries": {"type": "string",
+                                   "description": "What it must never do."},
+                    "reason": {"type": "string", "description": (
+                        "Why it is needed, for the user to decide on.")},
+                },
+                "required": ["name", "goal", "reason"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "propose_removal",
+            "description": (
+                "Ask the user to let go of a spark that reports to you, "
+                "when its work is done or no longer needed. Nothing "
+                "happens until the user says yes."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "spark": {"type": "string",
+                              "description": "Its name or handle."},
+                    "reason": {"type": "string", "description": (
+                        "Why, for the user to decide on.")},
+                },
+                "required": ["spark", "reason"],
+            },
+        },
+    },
+]
+
+
+def _proposing(spark: Spark) -> dict[str, Callable[[dict], str]]:
+    """propose_hire and propose_removal, for SPARK."""
+
+    def hire(args: dict) -> str:
+        try:
+            made = propose_hire(
+                spark.id, str(args.get("name", "")),
+                str(args.get("goal", "")), str(args.get("title", "")),
+                str(args.get("every", "")), str(args.get("boundaries", "")),
+                str(args.get("reason", "")),
+            )
+        except SparkError as exc:
+            return f"Error: {exc}"
+        tool_line(f"ProposeHire({made['spark']['name']})")
+        tool_result("Waiting for the user to say yes or no")
+        return (
+            f"(proposed: hiring {made['spark']['name']} waits on the user. "
+            "You hear their answer at a later shift.)"
+        )
+
+    def removal(args: dict) -> str:
+        try:
+            made = propose_removal(
+                spark.id, str(args.get("spark", "")),
+                str(args.get("reason", "")),
+            )
+        except SparkError as exc:
+            return f"Error: {exc}"
+        tool_line(f"ProposeRemoval({made['target_name']})")
+        tool_result("Waiting for the user to say yes or no")
+        return (
+            f"(proposed: letting {made['target_name']} go waits on the user. "
+            "You hear their answer at a later shift.)"
+        )
+
+    return {"propose_hire": hire, "propose_removal": removal}
+
+
 def team_block(spark: Spark) -> str:
-    """The other sparks, for SPARK to hand work to; "" if there are none."""
+    """SPARK's team and where it stands in it, then the other sparks, for
+    it to hand work to and ask; "" if it is alone."""
 
     others = [s for s in all_sparks() if s.id != spark.id]
+    lines: list[str] = []
+    team = find_team(spark.team) if spark.team else None
+    if team is not None:
+        lines.append(f"=== Your team: {team.name} ===")
+        lead = lead_of(spark)
+        under = reports_of(spark)
+        lines.append(
+            f"- You report to {lead.name} ({lead.handle}): what you find "
+            "goes up to it." if lead else
+            "- You report to no one on it: you lead"
+            + (" it." if under else " your own work.")
+        )
+        if under:
+            lines.append(
+                "- Reporting to you: "
+                + ", ".join(f"{r.name} ({r.handle})" for r in under)
+                + ". Hand them work that is theirs with hand_off. You can "
+                "propose_removal one whose work is done, and propose_hire "
+                "when the team needs another."
+            )
+        else:
+            lines.append(
+                "- You can propose_hire when the team needs another spark."
+            )
     if not others:
-        return ""
-    lines = [
+        return "\n".join(lines)
+    lines.append(
         "=== The other sparks: hand_off sends one work, ask_spark asks "
         "one something ==="
-    ]
+    )
     for other in others:
         first = other.goal.splitlines()[0][:120]
-        lines.append(f"- {other.name} ({other.handle}): {first}")
+        where = ""
+        if team is not None and other.team == spark.team:
+            where = " [your team]"
+        lines.append(f"- {other.name} ({other.handle}){where}: {first}")
     return "\n".join(lines)
 
 
@@ -1731,13 +2706,18 @@ def _work(
     names: Optional[tuple[str, ...]] = None,
     gate: Optional[Callable[[str], bool]] = None,
     stopping: Optional[Callable[[], bool]] = None,
+    spent: Optional[Callable[[int], object]] = None,
+    audit_as: str = "shift",
 ) -> str:
     """One agent run for SPARK: the model and its tools, back and forth,
     until it answers. OWN are the tools only a spark has, each answered
     here; NAMES the rest it may call, a sub-agent's by default. What it
     ran lands in STEPS, and DOING hears what it is up to. A call GATE
     says asks first raises NeedsApproval, and STOPPING raises Stopped
-    between steps. Its last reply, without dashes."""
+    between steps. SPENT hears the tokens each call to the model cost
+    (by default they count against the spark's budget), and each tool
+    call goes in its audit log, as part of AUDIT_AS. Its last reply,
+    without dashes."""
 
     from . import tools as flash_tools  # deferred: avoids a module cycle
 
@@ -1769,6 +2749,10 @@ def _work(
         elif kind == "result" and style == ERROR and steps:
             steps[-1] += " (failed)"
 
+    if spent is None:
+        def spent(tokens: int) -> bool:
+            return spend(spark.id, tokens)
+
     final = ""
     tool_calls: list = []
     with capture_tool_output(record):
@@ -1783,6 +2767,7 @@ def _work(
                 model=model, messages=messages, tools=schemas,
                 options=subagents.chat_options(),
             )
+            spent(_tokens_of(response))
             message = getattr(response, "message", None)
             final = getattr(message, "content", "") or ""
             tool_calls = list(getattr(message, "tool_calls", None) or [])
@@ -1802,6 +2787,8 @@ def _work(
                 if gate is not None and name in allowed and gate(name):
                     raise NeedsApproval(name, args, calls[at + 1:])
                 result = _call(name, args, allowed, steps, own)
+                log(spark.id, "tool", tool=name, args=args,
+                    result=str(result), during=audit_as)
                 messages.append({
                     "role": "tool",
                     "content": flash_tools.trim_tool_output(result, name),
@@ -1816,6 +2803,7 @@ def _work(
             model=model, messages=messages,
             options=subagents.chat_options(),
         )
+        spent(_tokens_of(response))
         final = getattr(
             getattr(response, "message", None), "content", ""
         ) or ""
@@ -1891,7 +2879,12 @@ def _opening(why: str, inbox: list) -> str:
     if why:
         parts.append(f"It started early because: {why}")
     jobs = [item for item in inbox if item.get("job")]
-    handed = [item for item in inbox if not item.get("job")]
+    rolled = [item for item in inbox if item.get("rollup")]
+    decided = [item for item in inbox if item.get("decision")]
+    handed = [
+        item for item in inbox
+        if not (item.get("job") or item.get("rollup") or item.get("decision"))
+    ]
     if jobs:
         parts.append(
             "The user asked you, in a chat, to do this. Do it first, then "
@@ -1903,6 +2896,19 @@ def _opening(why: str, inbox: list) -> str:
         parts.append("Handed to you by other sparks:\n" + "\n".join(
             f"- From {item.get('from', 'a spark')}: {item.get('text', '')}"
             for item in handed
+        ))
+    if rolled:
+        parts.append(
+            "News from the sparks that report to you, since your last "
+            "shift. Act on what needs you, and put what matters in your "
+            "own report:\n" + "\n".join(
+                f"- {item.get('from', 'A spark')}: {item.get('text', '')}"
+                for item in rolled
+            )
+        )
+    if decided:
+        parts.append("The user answered your proposals:\n" + "\n".join(
+            f"- {item.get('text', '')}" for item in decided
         ))
     return "\n\n".join(parts)
 
@@ -1920,6 +2926,11 @@ def shift(spark_id: str, client=None) -> Optional[Report]:
     with _held():
         spark = find(spark_id)
         if spark is None or spark.status == WORKING or spark.waiting:
+            return None
+        if over_budget(spark):
+            # Its month's tokens are spent: nothing starts, asked or not.
+            spark.asked = False
+            _save(spark)
             return None
         resuming = dict(spark.pending) if spark.pending else None
         if resuming:
@@ -1957,10 +2968,13 @@ def shift(spark_id: str, client=None) -> Optional[Report]:
     )
     notes = [resuming["notes"] if resuming else spark.notes]
     messages: list[dict] = list(resuming["messages"]) if resuming else []
+    log(spark.id, "shift_start", resuming=bool(resuming), why=why,
+        given=[i.get("text", "") for i in inbox])
     own = {
         "keep_notes": _keeping_notes(notes),
         "hand_off": _handing_off(spark),
         "ask_spark": _asking(spark),
+        **_proposing(spark),
     }
     # Every tool a sub-agent has, the ones that ask first too: in
     # autonomous mode they run, and otherwise the shift waits for the
@@ -1990,6 +3004,8 @@ def shift(spark_id: str, client=None) -> Optional[Report]:
                 with capture_tool_output(record), \
                         answer_from(lambda question: "y"):
                     result = flash_tools.run_tool((tool, args))
+                log(spark.id, "tool", tool=tool, args=args,
+                    result=str(result), approved=True)
             else:
                 result = (
                     "The user said no to this step"
@@ -2024,13 +3040,15 @@ def shift(spark_id: str, client=None) -> Optional[Report]:
                 else contextlib.nullcontext():
             text = _work(
                 spark, messages, own,
-                [KEEP_NOTES_TOOL, HAND_OFF_TOOL, ASK_SPARK_TOOL],
+                [KEEP_NOTES_TOOL, HAND_OFF_TOOL, ASK_SPARK_TOOL,
+                 *PROPOSAL_TOOLS],
                 steps, lambda doing: _set_activity(spark.id, doing),
                 shift_rounds(), ROUND_LIMIT_MESSAGE, client,
                 names=names, gate=gate,
                 stopping=lambda: bool(
                     getattr(find(spark.id), "stop_asked", 0)
-                ),
+                ) or over_budget(find(spark.id)),
+                spent=lambda tokens: spend(spark.id, tokens),
             )
         quiet = not text or text.strip(" .").upper() == NOTHING_NEW
         if quiet and has_job:
@@ -2058,6 +3076,9 @@ def shift(spark_id: str, client=None) -> Optional[Report]:
         report = Report(
             at=time.time(), text="Stopped, as you asked, before it finished.",
             steps=steps, read=True,
+        ) if not over_budget(find(spark.id)) else Report(
+            at=time.time(), steps=steps, read=True,
+            text="Stopped part way: it used its budget for this month.",
         )
     except Exception as e:  # noqa: BLE001
         report = Report(
@@ -2065,6 +3086,11 @@ def shift(spark_id: str, client=None) -> Optional[Report]:
             text=f"This shift failed: {e.__class__.__name__}: {e}",
             failed=True, steps=steps,
         )
+    if pending:
+        log(spark.id, "approval_asked", tool=pending["tool"],
+            args=pending["args"], label=pending["label"])
+    log(spark.id, "shift_end", report=report.text, quiet=report.quiet,
+        failed=report.failed, waiting=bool(pending))
 
     # The chats that asked get the report: the asking too, so they know
     # it waits on the user.
@@ -2078,8 +3104,11 @@ def shift(spark_id: str, client=None) -> Optional[Report]:
         spark.notes = notes[0][:NOTES_CHARS]
         spark.activity = ""
         # Anything handed over while it worked is still to do: another
-        # shift soon, not at its next time.
-        spark.asked = bool(spark.inbox or spark.why)
+        # shift soon, not at its next time. News rolled up from its
+        # reports, and answers to its proposals, wait for that time.
+        spark.asked = bool(spark.why or any(
+            not (i.get("rollup") or i.get("decision")) for i in spark.inbox
+        ))
         spark.stop_asked = False
         if pending:
             # The rest of the shift waits on the user, and so does the
@@ -2093,6 +3122,8 @@ def shift(spark_id: str, client=None) -> Optional[Report]:
             spark.next_run = next_shift(spark, report.at)
         _save(spark)
     _changed()
+    if not pending:
+        _roll_up(spark, report)
     return report
 
 
@@ -2111,6 +3142,8 @@ def answer_step(key: str, yes: bool, why: str = "") -> Spark:
                 report.read = True
 
     spark = _edit(key, change)
+    log(spark.id, "approval_answered", yes=bool(yes),
+        tool=spark.pending.get("tool", ""), why=spark.pending.get("why", ""))
     wake()
     return spark
 
@@ -2137,7 +3170,9 @@ def stop(key: str) -> Spark:
         else:
             raise SparkError(f"{spark.name} is not working on anything.")
 
-    return _edit(key, change)
+    spark = _edit(key, change)
+    log(spark.id, "stopped")
+    return spark
 
 
 def _call(
@@ -2280,7 +3315,7 @@ class ChatKit:
 
     schemas = [
         KEEP_NOTES_TOOL, HAND_OFF_TOOL, ASK_SPARK_TOOL, TAKE_ON_TOOL,
-        *CHAT_TOOLS,
+        *PROPOSAL_TOOLS, *CHAT_TOOLS,
     ]
 
     def __init__(self, spark: Spark, chat: str = "") -> None:
@@ -2300,6 +3335,7 @@ class ChatKit:
             "hand_off": _handing_off(spark),
             "ask_spark": _asking(spark),
             "take_on": self._take_on,
+            **_proposing(spark),
         }
 
     def _take_on(self, args: dict) -> str:
@@ -2533,10 +3569,12 @@ def answer(spark_id: str, client=None) -> Optional[Message]:
             for m in spark.chat[-CHAT_CONTEXT:]
             if not m.failed
         ]
+        if over_budget(spark):
+            raise RuntimeError(OUT_OF_BUDGET)
         text = _work(
             spark, messages, kit.tools, kit.schemas, steps,
             lambda doing: _set_activity(spark.id, doing, "reply_activity"),
-            MAX_CHAT_ROUNDS, CHAT_LAST_WORD, client,
+            MAX_CHAT_ROUNDS, CHAT_LAST_WORD, client, audit_as="chat",
         )
         reply = Message(
             at=time.time(), who="spark",
@@ -2604,7 +3642,15 @@ def run_now(key: str) -> Spark:
     whichever process that is.
     """
 
-    spark = _edit(key, lambda s: setattr(s, "asked", True))
+    def change(spark: Spark) -> None:
+        if over_budget(spark):
+            raise SparkError(
+                f"{spark.name} has used its budget for this month: raise it "
+                "or switch it off first."
+            )
+        spark.asked = True
+
+    spark = _edit(key, change)
     wake()
     return spark
 
@@ -2723,9 +3769,11 @@ def _signature() -> tuple:
     """What the folder holds, cheaply: enough to see that it changed."""
 
     try:
+        kept = _spark_files() + [
+            p for p in (_teams_path(), _hires_path()) if p.exists()
+        ]
         return tuple(sorted(
-            (p.name, p.stat().st_mtime_ns, p.stat().st_size)
-            for p in _spark_files()
+            (p.name, p.stat().st_mtime_ns, p.stat().st_size) for p in kept
         ))
     except OSError:
         return ()
@@ -2862,6 +3910,9 @@ def _keep(
         if wanted is not None and ticks % CHECK_EVERY_TICKS == 0:
             if not wanted():
                 break
+        if holding and ticks % CHECK_EVERY_TICKS == 0:
+            with contextlib.suppress(OSError):
+                renew_budgets()
         if renew and ticks % CHECK_EVERY_TICKS == 0:
             now_code = _code_stamp()
             if now_code != _RUNNING_CODE and now_code == looked:

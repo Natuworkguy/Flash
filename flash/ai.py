@@ -2471,6 +2471,184 @@ def _chat_with_spark(key: str, first: str) -> None:
         said = ""
 
 
+def _hire_words(hire: dict) -> str:
+    if hire.get("kind") == "remove":
+        return (
+            f"{hire.get('by_name', 'A spark')} proposes letting "
+            f"{hire.get('target_name', 'a spark')} go"
+        )
+    wanted = hire.get("spark", {})
+    return (
+        f"{hire.get('by_name', 'A spark')} proposes hiring "
+        f"{wanted.get('name', 'a spark')}"
+        + (f", {wanted['title']}" if wanted.get("title") else "")
+    )
+
+
+def _list_hires() -> None:
+    waiting = sparks.hires()
+    if not waiting:
+        console.print(Text("No proposals waiting on you.", style=DIM))
+        return
+    body = Text()
+    for hire in waiting:
+        body.append(f"  {hire['id']}  ", style=ACCENT)
+        body.append(_hire_words(hire) + "\n")
+        if hire.get("kind") == "hire":
+            body.append(f"     {hire['spark']['goal'][:160]}\n", style=DIM)
+        if hire.get("reason"):
+            body.append(f"     Why: {hire['reason'][:200]}\n", style=DIM)
+    body.append(
+        "  /sparks hire <id> yes, or no with a reason.", style=DIM,
+    )
+    console.print(body)
+
+
+def _teams_command(rest: str) -> None:
+    """/sparks teams: list them, or new, remove, share, add, templates."""
+
+    action, _, extra = rest.partition(" ")
+    action, extra = action.lower(), extra.strip()
+    if action == "new" and extra:
+        team = sparks.create_team(extra)
+        console.print(Text(
+            f"Made the team {team.name}. /sparks team <spark> "
+            f"{team.name} puts a spark on it.", style=DIM,
+        ))
+        return
+    if action == "remove" and extra:
+        team = sparks.remove_team(extra)
+        console.print(Text(
+            f"{team.name} is gone. Its sparks are on no team now.",
+            style=DIM,
+        ))
+        return
+    if action == "share" and extra:
+        console.print(Text(
+            "Anyone with Flash can add a copy of the whole team with "
+            "/sparks teams add <code>:", style=DIM,
+        ))
+        console.print(sparks.share_team_code(extra), soft_wrap=True)
+        return
+    if action == "add" and extra:
+        source, _, last = extra.rpartition(" ")
+        paused = last.lower() == "paused" and bool(source.strip())
+        team = sparks.add_team(
+            source.strip() if paused else extra, Config.model or "", paused,
+        )
+        console.print(Text(
+            f"Added the team {team.name}, with "
+            + ", ".join(s.name for s in sparks.members(team.id)) + ".",
+            style=DIM,
+        ))
+        return
+    if action == "templates":
+        body = Text()
+        for template in sparks.TEAM_TEMPLATES:
+            body.append(f"  {template['name']:<16}", style=ACCENT)
+            body.append(
+                f"{template['blurb']}: {template['lead']}, leading "
+                + " and ".join(template["reports"]) + "\n", style=DIM,
+            )
+        body.append("\n  /sparks teams add <template> makes one.", DIM)
+        console.print(body)
+        return
+    if action:
+        warn("Usage: /sparks teams [new|remove|share <name> | add "
+             "<code|template> [paused] | templates]")
+        return
+    found = sparks.teams()
+    if not found:
+        console.print(Text(
+            "No teams yet. /sparks teams new <name> makes one, or /sparks "
+            "teams templates for a whole team at once.", style=DIM,
+        ))
+        return
+    body = Text()
+
+    def branch(node: dict, depth: int) -> None:
+        spark = sparks.find(node["id"])
+        if spark is None:
+            return
+        body.append("  " + "   " * depth + ("└─ " if depth else ""))
+        body.append(spark.name, style=f"bold {spark.colour}")
+        if spark.title:
+            body.append(f"  {spark.title}", style=DIM)
+        body.append("\n")
+        for child in node["reports"]:
+            branch(child, depth + 1)
+
+    for team in found:
+        body.append(f"{team.name}\n", style=f"bold {team.colour}")
+        chart = sparks.org_chart(team.id)
+        if not chart:
+            body.append("  (no sparks yet)\n", style=DIM)
+        for node in chart:
+            branch(node, 0)
+    alone = [s.name for s in sparks.all_sparks() if not s.team]
+    if alone:
+        body.append("No team\n", style="bold")
+        body.append("  " + ", ".join(alone) + "\n", style=DIM)
+    console.print(body)
+
+
+def _spark_budget(key: str, extra: str) -> None:
+    """/sparks budget <name> [tokens|off]."""
+
+    if not extra:
+        spark = sparks.find(key)
+        if spark is None:
+            warn(f"No spark called {key!r}.")
+            return
+        used = sparks.used_this_month(spark)
+        console.print(Text(
+            f"{spark.name} has used {used:,} tokens this month"
+            + (f", of a budget of {spark.budget:,}." if spark.budget_on
+               else ". It has no budget: /sparks budget "
+               f"{_spark_key(spark)} <tokens> gives it one."),
+            style=DIM,
+        ))
+        return
+    off = extra.lower() in ("off", "none", "no")
+    spark = sparks.set_budget(key, not off, None if off else extra)
+    console.print(Text(
+        f"{spark.name}'s budget is off." if off else
+        f"{spark.name} may use {spark.budget:,} tokens a month; it pauses "
+        "itself past that, until the month turns.", style=DIM,
+    ))
+
+
+def _spark_audit(key: str) -> None:
+    """/sparks audit <name>: the latest of its audit log."""
+
+    log = sparks.audit_log(key, 40)
+    body = Text()
+    for entry in log["entries"]:
+        when = time.strftime("%d %b %H:%M", time.localtime(entry["at"]))
+        body.append(f"  {when}  ", style=DIM)
+        body.append(f"{entry['kind']:<16}", style=ACCENT)
+        detail = next((
+            str(entry[k]) for k in (
+                "tool", "report", "lesson", "label", "team", "name", "lead",
+                "reason", "why",
+            ) if entry.get(k)
+        ), "")
+        if entry["kind"] == "budget":
+            detail = f"{entry.get('tokens', 0):,} tokens" if entry.get(
+                "on"
+            ) else "off"
+        elif entry["kind"] == "changed":
+            detail = ", ".join(entry.get("changes", {}))
+        body.append(" ".join(str(detail).split())[:90] + "\n")
+    body.append(
+        f"  {log['checked']} entries, "
+        + ("intact." if log["intact"] else
+           f"edited by hand at entry {log['checked']}.")
+        + f" The whole log: {log['path']}", style=DIM,
+    )
+    console.print(body)
+
+
 def _sparks_command(arg: str) -> None:
     """/sparks and its actions: new, run, pause, resume, teach, every,
     at, remove, or a spark's name to read its reports."""
@@ -2658,6 +2836,59 @@ def _sparks_command(arg: str) -> None:
                 f"{spark.name} has no project now.", style=DIM,
             ))
             return
+        if action == "teams":
+            _teams_command(rest)
+            return
+        if action == "team" and key:
+            spark = sparks.set_team(
+                key, "" if extra.lower() in ("", "none") else extra,
+            )
+            console.print(Text(
+                f"{spark.name} is on {spark.to_dict()['team_name']} now."
+                if spark.team else f"{spark.name} is on no team now.",
+                style=DIM,
+            ))
+            return
+        if action == "lead" and key:
+            spark = sparks.set_lead(
+                key, "" if extra.lower() in ("", "none") else extra,
+            )
+            lead = sparks.lead_of(spark)
+            console.print(Text(
+                f"{spark.name} reports to {lead.name} now." if lead
+                else f"{spark.name} reports to no one now.", style=DIM,
+            ))
+            return
+        if action == "budget" and key:
+            _spark_budget(key, extra)
+            return
+        if action == "audit" and key:
+            _spark_audit(key)
+            return
+        if action == "hires":
+            _list_hires()
+            return
+        if action == "hire" and key:
+            answer, _, why = extra.partition(" ")
+            if answer.lower() not in ("yes", "no", "y", "n"):
+                warn("Usage: /sparks hire <id> yes|no [why]")
+                return
+            hire = sparks.decide_hire(key, answer.lower() in ("yes", "y"), why)
+            yes = hire["status"] == "approved"
+            if hire["kind"] == "hire":
+                said = (
+                    f"{hire['spark']['name']} is hired, reporting to "
+                    f"{hire['by_name']}." if yes else
+                    f"{hire['by_name']} will not hire "
+                    f"{hire['spark']['name']}."
+                )
+            else:
+                said = (
+                    f"{hire.get('target_name', 'It')} is let go." if yes else
+                    f"{hire.get('target_name', 'It')} stays."
+                )
+            console.print(Text(said, style=DIM))
+            return
         if action in ("every", "at") and key and extra:
             spark = sparks.update(key, every=extra)
             nxt = time.strftime("%a %H:%M", time.localtime(spark.next_run))
@@ -2694,6 +2925,9 @@ def _sparks_command(arg: str) -> None:
             "| templates | goal <name> <text> | watch <name> <folder|none> "
             "| model <name> [model] | title <name> <title|none> "
             "| rounds [number|unlimited] "
+            "| teams [new|remove|share|add|templates] | team <name> "
+            "<team|none> | lead <name> <lead|none> | budget <name> "
+            "<tokens|off> | audit <name> | hires | hire <id> yes|no "
             "| always on|off]"
         )
         return
