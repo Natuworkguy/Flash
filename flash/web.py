@@ -1751,6 +1751,18 @@ def _respond(
     # Who is answering, for the page to put a name on what streams in.
     session.emit(chat, {"type": "speaker", "spark": spark.id if spark else ""})
 
+    if spark is not None and sparks.over_budget(spark):
+        # Its month's tokens are spent: it says so, and asks nothing of
+        # the model.
+        reply = Streamed(content=sparks.OUT_OF_BUDGET)
+        _finish_reply(session, chat, reply, spark)
+        chat.messages.append(ai._message(
+            "system" if guest else "assistant",
+            sparks.called_note(spark, reply.content, []) if guest
+            else reply.content,
+        ))
+        return False, 0
+
     # What System One holds this turn's tool calls up against.
     systemone.set_request(text)
 
@@ -1867,6 +1879,9 @@ def _respond(
                         after = {e.id for e in subagents.list_all()}
                         session.adopt(chat, after - before)
                     tool_count += 1
+                if spark is not None and name != "reason":
+                    sparks.log(spark.id, "tool", tool=name, args=args,
+                               result=str(output), during="chat")
                 convo.append({
                     "role": "tool",
                     "content": flash_tools.trim_tool_output(output, name),
@@ -1929,6 +1944,9 @@ def _respond(
     })
     # Counted with the terminal's replies, for Settings > Usage.
     showcase.record(ai.Config.host, model, tokens, tool_count)
+    if spark is not None:
+        # And against the spark's own month, when it has a budget.
+        sparks.spend(spark.id, tokens)
 
     if kit is not None:
         # What it learned, and any goal or schedule it was given.
@@ -2456,8 +2474,13 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
     if name == "sparks":
         return {
             "sparks": [s.to_dict() for s in sparks.all_sparks()],
+            "teams": [team_info(t) for t in sparks.teams()],
+            "hires": sparks.hires(),
             "always": keepalive.status(),
         }
+
+    if name.startswith(("team-", "hire-")):
+        return _team_command(name, arg, body)
 
     if name == "spark-rounds":
         # No arg: only what it is, for the box in Settings. "limited"
@@ -2832,6 +2855,49 @@ def _email_command(name: str, body: dict) -> dict:
     raise ValueError(f"unknown command {name!r}")
 
 
+def team_info(team: "sparks.Team") -> dict:
+    """A team for the page: its name and colour, and its org chart."""
+
+    return {
+        "id": team.id, "name": team.name, "colour": team.colour,
+        "created": team.created, "chart": sparks.org_chart(team.id),
+    }
+
+
+def _team_command(name: str, arg: str, body: dict) -> dict:
+    """The Sparks page's teams, their templates, and hires to decide."""
+
+    try:
+        if name == "team-create":
+            return {"team": team_info(sparks.create_team(
+                arg, str(body.get("colour") or ""),
+            ))}
+        if name == "team-update":
+            return {"team": team_info(sparks.update_team(
+                arg, str(body.get("rename") or ""),
+                str(body.get("colour") or ""),
+            ))}
+        if name == "team-remove":
+            return {"team": team_info(sparks.remove_team(arg))}
+        if name == "team-share":
+            return {"code": sparks.share_team_code(arg)}
+        if name == "team-code":
+            return {"team": sparks.read_team_code(arg)}
+        if name == "team-templates":
+            return {"templates": sparks.team_templates()}
+        if name == "team-add":
+            return {"team": team_info(sparks.add_team(
+                arg, str(body.get("model") or ""), bool(body.get("paused")),
+            ))}
+        if name == "hire-decide":
+            return {"hire": sparks.decide_hire(
+                arg, bool(body.get("yes")), str(body.get("why") or ""),
+            )}
+    except sparks.SparkError as exc:
+        raise ValueError(str(exc)) from None
+    raise ValueError(f"unknown command {name!r}")
+
+
 def _spark_command(name: str, arg: str, body: dict) -> dict:
     """The Sparks page: make, change, run, teach, and read them."""
 
@@ -2859,6 +2925,18 @@ def _spark_command(name: str, arg: str, body: dict) -> dict:
             })
         elif name == "spark-run":
             spark = sparks.run_now(arg)
+        elif name == "spark-team":
+            spark = sparks.set_team(arg, str(body.get("team") or ""))
+        elif name == "spark-lead":
+            spark = sparks.set_lead(arg, str(body.get("lead") or ""))
+        elif name == "spark-budget":
+            spark = sparks.set_budget(
+                arg, bool(body.get("on")), body.get("tokens") or None,
+            )
+        elif name == "spark-audit":
+            return sparks.audit_log(arg)
+        elif name == "spark-audit-export":
+            return {"text": sparks.audit_export(arg)}
         elif name in ("spark-approve", "spark-deny"):
             spark = sparks.answer_step(
                 arg, name == "spark-approve", str(body.get("why") or ""),

@@ -3941,3 +3941,56 @@ class TestContextBar:
         use = web.command(session, {"name": "context", "chat": chat.id})
 
         assert use["share"] == 100
+
+
+class TestSparkBudgets:
+    @pytest.fixture(autouse=True)
+    def spark_prompt(self, monkeypatch):
+        from flash import sparks
+
+        monkeypatch.setattr(sparks, "get_model_system_prompt", lambda h, m: "")
+
+    def test_a_chat_with_a_spark_counts_against_its_month(self):
+        from flash import sparks
+
+        spark = sparks.create("Scout", "Look.")
+        FakeClient.scripts = [[part("Hi."), part(done=True, tokens=40)]]
+        session = web.Session()
+        chat = session.new_chat(spark=spark.id)
+
+        run(session, chat, "Hello")
+
+        assert sparks.used_this_month(sparks.find("scout")) == 40
+
+    def test_a_spark_out_of_budget_says_so_and_asks_no_model(self):
+        from flash import sparks
+
+        spark = sparks.create("Scout", "Look.")
+        sparks.set_budget("scout", True, 1000)
+        sparks.spend(spark.id, 1000)
+        session = web.Session()
+        chat = session.new_chat(spark=spark.id)
+
+        run(session, chat, "Hello")
+
+        assert chat.messages[-1]["content"] == sparks.OUT_OF_BUDGET
+        assert FakeClient.requests == []
+
+    def test_a_chat_with_a_spark_is_in_its_audit_log(self):
+        from flash import sparks
+
+        spark = sparks.create("Scout", "Look.")
+        FakeClient.scripts = [
+            [part(calls=[call("learn", lesson="Only crashes.")]),
+             part(done=True)],
+            [part("Got it."), part(done=True)],
+        ]
+        session = web.Session()
+        chat = session.new_chat(spark=spark.id)
+
+        run(session, chat, "Only crashes, please.")
+
+        logged = sparks.audit_log(spark.id)["entries"][-1]
+        assert (logged["kind"], logged["tool"], logged["during"]) == (
+            "tool", "learn", "chat",
+        )
