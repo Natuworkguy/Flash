@@ -1060,3 +1060,118 @@ def test_swatch_row_paints_one_block_per_color():
     styles = [str(span.style) for span in row.spans]
     assert "on #d97757" in styles  # nosec B101
     assert "on #1f6feb" in styles  # nosec B101
+
+
+def _fake_devtools_session(monkeypatch):
+    """A page that is open, as far as the devtools can tell, with a few
+    requests and messages already recorded."""
+
+    class Page:
+        def is_closed(self):
+            return False
+
+    session = browser._Session(None, None)
+    session.page = Page()
+    session.network = [
+        {"n": 1, "method": "GET", "url": "https://x.test/",
+         "type": "document", "status": 200, "failure": "",
+         "ms": 12, "started": 0},
+        {"n": 2, "method": "GET", "url": "https://x.test/api/items",
+         "type": "fetch", "status": 404, "failure": "",
+         "ms": 30, "started": 0},
+        {"n": 3, "method": "GET", "url": "https://cdn.test/a.js",
+         "type": "script", "status": None, "failure": "net::ERR_FAILED",
+         "ms": 5, "started": 0},
+    ]
+    session.seq = 3
+    session.console = [
+        {"type": "log", "text": "hello", "at": 0, "where": ""},
+        {"type": "warning", "text": "careful", "at": 0, "where": "a.js:3"},
+        {"type": "pageerror", "text": "boom", "at": 0, "where": ""},
+    ]
+    monkeypatch.setattr(browser, "_session", session)
+    return session
+
+
+def test_devtools_needs_an_open_page(monkeypatch):
+    monkeypatch.setattr(browser, "_session", None)
+
+    for action in ("network", "console", "run", "inspect"):
+        result = tools.devtools(action, target="1", value="1")
+        assert result.startswith("Error: No page is open")  # nosec B101
+
+
+def test_devtools_refuses_an_unknown_action():
+    result = tools.devtools("sources")
+
+    assert "unknown action 'sources'" in result  # nosec B101
+    assert "network, request, console, run, inspect" in result  # nosec B101
+
+
+def test_devtools_lists_the_pages_requests(monkeypatch):
+    _fake_devtools_session(monkeypatch)
+
+    result = tools.devtools("network")
+
+    assert "3 requests since the page opened, 2 failed" in result  # nosec B101
+    assert (  # nosec B101
+        "#2 GET 404 fetch 30ms https://x.test/api/items" in result
+    )
+    assert "#3 GET failed (net::ERR_FAILED) script" in result  # nosec B101
+
+
+def test_devtools_filters_requests(monkeypatch):
+    _fake_devtools_session(monkeypatch)
+
+    by_address = tools.devtools("network", target="api")
+    failed = tools.devtools("network", failed_only=True)
+    by_type = tools.devtools("network", target="document")
+
+    assert "#2" in by_address and "#1 " not in by_address  # nosec B101
+    assert "#2" in failed and "#3" in failed  # nosec B101
+    assert "#1 " not in failed  # nosec B101
+    assert "#1 GET 200 document" in by_type  # nosec B101
+    assert "#2" not in by_type  # nosec B101
+
+
+def test_devtools_request_needs_a_known_number(monkeypatch):
+    _fake_devtools_session(monkeypatch)
+
+    missing = tools.devtools("request")
+    unknown = tools.devtools("request", target="#9")
+
+    assert "needs a request's number" in missing  # nosec B101
+    assert "no request #9" in unknown  # nosec B101
+
+
+def test_devtools_shows_the_console_by_level(monkeypatch):
+    session = _fake_devtools_session(monkeypatch)
+
+    everything = tools.devtools("console")
+    warnings = tools.devtools("console", level="warn")
+    errors = tools.devtools("console", level="error")
+
+    assert "3 messages:" in everything  # nosec B101
+    assert "[warning] careful (a.js:3)" in warnings  # nosec B101
+    assert "hello" not in warnings  # nosec B101
+    assert "[pageerror] boom" in errors  # nosec B101
+    session.console.clear()
+    assert "logged nothing" in tools.devtools("console")  # nosec B101
+
+
+def test_devtools_run_needs_code(monkeypatch):
+    _fake_devtools_session(monkeypatch)
+
+    assert "needs the JavaScript" in tools.devtools("run")  # nosec B101
+
+
+def test_ways_to_run_reads_code_as_a_console_would():
+    assert browser._ways_to_run("1 + 1") == [  # nosec B101
+        "return (1 + 1\n);", "1 + 1",
+    ]
+    ways = browser._ways_to_run("const a = 2; a * 3")
+    assert "const a = 2;\nreturn (a * 3\n);" in ways  # nosec B101
+    assert ways[-1] == "const a = 2; a * 3"  # nosec B101
+    # A last statement is not a value to hand back.
+    ways = browser._ways_to_run("let a = 1;\nreturn a")
+    assert all("return (return" not in w for w in ways)  # nosec B101
