@@ -63,7 +63,8 @@ from .documents import extract_document_text, is_document_path
 from .edit import Edit, apply_edits
 from .images import resolve_image_path
 from .memory import add_memory, forget_memory, search_memory
-from .notify import notify_needs_input
+from .notify import desktop as desktop_notify
+from .notify import notify_needs_input, take_notify_turn
 from .sysprompt import get_system_prompt, model_sees_images
 from .theme import (
     ACCENT,
@@ -82,6 +83,7 @@ from .theme import (
     tool_document,
     tool_file,
     tool_line,
+    tool_notify,
     tool_result,
     typed,
 )
@@ -3805,6 +3807,49 @@ def devtools(
     return text or "(nothing)"
 
 
+MAX_NOTIFY_TITLE = 80
+MAX_NOTIFY_MESSAGE = 300
+
+
+def _wait_words(seconds: int) -> str:
+    if seconds < 60:
+        return f"{seconds} second{'' if seconds == 1 else 's'}"
+    minutes = -(-seconds // 60)
+    return f"{minutes} minute{'' if minutes == 1 else 's'}"
+
+
+def notify_user(message: str, title: str = "") -> str:
+    """Tap the user on the shoulder: a notification, wherever they are
+    looking, a few at a time at most."""
+
+    message = " ".join(str(message or "").split())
+    title = " ".join(str(title or "").split()) or "Flash"
+    tool_line(f"Notify({title}: {message[:60]})")
+
+    if not message:
+        result = "Error: notify_user needs a message."
+        tool_result(result, style=ERROR)
+        return result
+    if len(message) > MAX_NOTIFY_MESSAGE:
+        message = message[:MAX_NOTIFY_MESSAGE - 1].rstrip() + "…"
+    title = title[:MAX_NOTIFY_TITLE]
+
+    wait = take_notify_turn()
+    if wait:
+        result = (
+            f"Error: not sent. Notifications are limited, and the next "
+            f"can go in {_wait_words(wait)}. Say it in your reply instead, "
+            "or send it then if it still matters."
+        )
+        tool_result(result, style=WARN)
+        return result
+
+    if not tool_notify(title, message):
+        desktop_notify(title, message)
+    tool_result(f"Sent: {message}")
+    return "Sent. The user has been notified."
+
+
 # Tool schema expected by Ollama function calling (OpenAI-style).
 tools: list[dict[str, Any]] = [
     {
@@ -4916,6 +4961,38 @@ tools: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "notify_user",
+            "description": (
+                "Send the user a notification: a pop-up in Flash's web "
+                "page, or on their desktop. For news they would want to "
+                "hear the moment it happens, such as a long job finished, "
+                "something you were watching for turned up, or you are "
+                "stuck and need them. Not for anything they will read in "
+                "your reply anyway. Limited to a few in a while; one "
+                "refused says when the next can go."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "message": {
+                        "type": "string",
+                        "description": (
+                            "What to tell them, in a sentence: "
+                            f"{MAX_NOTIFY_MESSAGE} characters at most."
+                        ),
+                    },
+                    "title": {
+                        "type": "string",
+                        "description": "A few words to head it.",
+                    },
+                },
+                "required": ["message"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "devtools",
             "description": (
                 "A browser's developer tools, for the page open_page has "
@@ -5503,6 +5580,7 @@ FUNCTIONS = {
     "check_inbox": check_inbox,
     "read_email": read_email,
     "send_email": send_email,
+    "notify_user": notify_user,
     "open_in_editor": open_in_editor,
     "ask_system_one": ask_system_one,
 }
@@ -5515,7 +5593,7 @@ FUNCTIONS = {
 SUBAGENT_TOOL_NAMES = (
     "shell", "glob", "grep", "read", "write", "edit", "multi_edit",
     "web_search", "fetch", "get_os", "get_date", "reason",
-    "check_inbox", "read_email",
+    "check_inbox", "read_email", "notify_user",
 )
 
 # A spark's tools: a sub-agent's, and sending email, which it asks the

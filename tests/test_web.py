@@ -217,6 +217,22 @@ class TestTurns:
         # The second request carried the tool's answer.
         assert FakeClient.requests[1]["messages"][-1]["role"] == "tool"
 
+    def test_a_notification_pops_up_on_an_open_page(self):
+        session = web.Session()
+        chat = session.new_chat()
+        sink = web._sink(session, chat)
+
+        # With no page open, it is left to the desktop.
+        assert sink("notify", '{"title": "Job", "message": "Done"}', "") \
+            is False
+
+        drain = events_of(session)
+        assert sink("notify", '{"title": "Job", "message": "Done"}', "")
+        sent = [e for e in drain() if e["type"] == "notify"]
+        assert sent and (sent[0]["title"], sent[0]["text"]) == ("Job", "Done")
+        # A pop-up, not part of the conversation drawn again on reload.
+        assert not [e for e in chat.log if e["type"] == "notify"]
+
     def test_a_question_waits_for_the_page(self, tmp_path):
         target = tmp_path / "never"
         FakeClient.scripts = [
