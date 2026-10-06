@@ -8,10 +8,18 @@ win10toast, which raises "WNDPROC return value cannot be converted to LRESULT"
 on current Python/Windows builds from inside its own toast thread.
 """
 
+import json
+import math
 import os
 import shutil
 import subprocess  # nosec B404
 import sys
+import threading
+import time
+from pathlib import Path
+from typing import Optional
+
+from .paths import FLASH_DIR
 
 _APP_NAME = "Flash CLI"
 
@@ -75,6 +83,14 @@ def notify_spark(
     line = next((ln.strip() for ln in text.splitlines() if ln.strip()), "")
     message = line[:160] or "Open Flash to read it."
 
+    desktop(title, message)
+
+
+def desktop(title: str, message: str) -> None:
+    """Show a notification on whichever desktop this is: winotify on
+    Windows, the built-in notifier on macOS, notify-send on Linux.
+    Never raises; with none of them, nothing is shown."""
+
     if _Notification is not None:
         notify(title, message)
         return
@@ -101,3 +117,65 @@ def notify_spark(
         )
     except Exception:  # noqa: BLE001, S110  # nosec B110
         pass
+
+
+# How often the agent may notify the user, whichever chat or spark it
+# is: a few at a time, then a wait, so a loop that calls the tool over
+# and over cannot bury the user's desktop in them.
+NOTIFY_LIMIT = 4
+NOTIFY_WINDOW = 15 * 60
+NOTIFY_GAP = 30
+
+_sent_lock = threading.Lock()
+
+
+def _sent_path() -> Path:
+    # FLASH_DIR is looked up here, not bound at import, so a test can
+    # point it at a temporary home.
+    return FLASH_DIR / "notified.json"
+
+
+def _sent_times() -> list[float]:
+    try:
+        found = json.loads(_sent_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    if not isinstance(found, list):
+        return []
+    return [float(t) for t in found if isinstance(t, (int, float))]
+
+
+def wait_to_notify(now: Optional[float] = None) -> int:
+    """Seconds until the agent may notify the user again: 0 when it may
+    now. Kept on disk, so the keeper's sparks and an open Flash share
+    one limit."""
+
+    now = time.time() if now is None else now
+    recent = sorted(t for t in _sent_times() if now - t < NOTIFY_WINDOW)
+    waits = [0.0]
+    if recent:
+        waits.append(recent[-1] + NOTIFY_GAP - now)
+    if len(recent) >= NOTIFY_LIMIT:
+        waits.append(recent[-NOTIFY_LIMIT] + NOTIFY_WINDOW - now)
+    return max(0, math.ceil(max(waits)))
+
+
+def take_notify_turn(now: Optional[float] = None) -> int:
+    """Claim a notification, if the limit allows one now: 0 when it was
+    claimed, or the seconds to wait before one can be."""
+
+    now = time.time() if now is None else now
+    with _sent_lock:
+        wait = wait_to_notify(now)
+        if wait:
+            return wait
+        kept = [t for t in _sent_times() if now - t < NOTIFY_WINDOW]
+        try:
+            path = _sent_path()
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(kept + [now]), encoding="utf-8")
+        except OSError:
+            # Unable to keep count, it still sends: a full disk is no
+            # reason to lose what the agent had to say.
+            pass
+        return 0

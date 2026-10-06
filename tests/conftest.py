@@ -10,6 +10,7 @@ from flash import (
     learning,
     mail,
     memory,
+    notify,
     repl_input,
     showcase,
     skills,
@@ -58,6 +59,8 @@ def isolated_home(tmp_path_factory, monkeypatch):
     monkeypatch.setattr(skills, "FLASH_DIR", home / ".flash")
     # Sparks, and what this session has already pointed out about them.
     monkeypatch.setattr(sparks, "FLASH_DIR", home / ".flash")
+    # How many notifications the agent has sent lately.
+    monkeypatch.setattr(notify, "FLASH_DIR", home / ".flash")
     # The tally of replies, and what tips have been shown.
     monkeypatch.setattr(showcase, "FLASH_DIR", home / ".flash")
     monkeypatch.delenv("SHOW_TIPS", raising=False)

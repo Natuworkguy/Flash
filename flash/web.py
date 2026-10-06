@@ -221,6 +221,12 @@ class Hub:
         self._queues: dict[Queue, str] = {}
         self.seq = 0
 
+    def watched(self) -> bool:
+        """Whether any page is open on this server to see an event."""
+
+        with self._lock:
+            return bool(self._queues)
+
     def subscribe(self, owner: str = "") -> Queue:
         queue: Queue = Queue()
         with self._lock:
@@ -1393,7 +1399,17 @@ def stream_reply(
 def _sink(session: Session, chat: Chat):
     """Where a tool's output goes: to the page, as it happens."""
 
-    def sink(kind: str, text: str, style: str) -> None:
+    def sink(kind: str, text: str, style: str) -> Optional[bool]:
+        if kind == "notify":
+            if not session.hub.watched():
+                # No page open to pop it up: the desktop, then.
+                return False
+            shown = json.loads(text)
+            session.emit(chat, {
+                "type": "notify", "title": str(shown.get("title") or ""),
+                "text": str(shown.get("message") or ""),
+            })
+            return True
         if kind == "line":
             session.emit(chat, {"type": "tool", "label": text})
         elif kind == "result":

@@ -210,7 +210,7 @@ def ansi(colour: str) -> str:
     return f"\033[38;2;{red};{green};{blue}m"
 
 
-ToolSink = Callable[[str, str, str], None]
+ToolSink = Callable[[str, str, str], Optional[bool]]
 
 _capture = threading.local()
 
@@ -380,6 +380,22 @@ def tool_plan(steps: list[dict]) -> bool:
         return False
     sink("plan", json.dumps(steps), "")
     return True
+
+
+def tool_notify(title: str, message: str) -> bool:
+    """Hand a notification for the user to whoever is drawing.
+
+    True when it was shown there: the web UI, which pops it up in the
+    page and, with the tab out of sight, as the browser's own. False
+    when nothing took it, and the desktop is the place for it.
+    """
+
+    sink = _sink()
+    if sink is None:
+        return False
+    return bool(sink("notify", json.dumps({
+        "title": title, "message": message,
+    }), ""))
 
 
 def tool_result(text: str, *, style: str = DIM) -> None:

@@ -2229,6 +2229,7 @@ const ICON = {
   quote: '<path d="M7 7H4.5A1.5 1.5 0 0 0 3 8.5V12h4v5M17 7h-2.5A1.5 1.5 0 0 0 13 8.5V12h4v5"/>',
   link: '<path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/>',
   code: '<path d="m8 7-5 5 5 5M16 7l5 5-5 5"/>',
+  bell: '<path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/>',
   cube: '<path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><path d="M3.3 7 12 12l8.7-5M12 22V12"/>',
   image: '<rect x="3" y="4" width="18" height="16" rx="3"/><circle cx="9" cy="10" r="1.6"/><path d="m21 16-5.5-5.5L6 20"/>',
   server: '<rect x="3" y="4" width="18" height="7" rx="2"/><rect x="3" y="13" width="18" height="7" rx="2"/><path d="M7 7.5h.01M7 16.5h.01"/>',
@@ -2692,6 +2693,7 @@ function toolIcon(label) {
   if (/bash|shell/.test(name)) return "terminal";
   if (/inbox|email/.test(name)) return "mail";
   if (/devtools/.test(name)) return "code";
+  if (/^notify/.test(name)) return "bell";
   if (/read|glob|grep|recall|skillview/.test(name)) return "file";
   if (/edit|write/.test(name)) return "edit";
   if (/web|fetch|page|screenshot|interact/.test(name)) return "globe";
@@ -8677,6 +8679,7 @@ function apply(event) {
   if (event.type === "voice-model") { voiceModelEvent(event); return; }
   if (event.type === "sparks") { sparksChanged(); return; }
   if (event.type === "browsers") { if (view === "settings" && settingsTab === "security") renderBrowsers(); return; }
+  if (event.type === "notify") { notified(event); return; }
 
   const chat = chats.get(event.chat);
   if (!chat) { if (event.chat) refreshLite(); return; }
@@ -8731,6 +8734,38 @@ function apply(event) {
     }
   }
   if (here) keepUp();
+}
+
+// The agent tapping the user on the shoulder, with notify_user: a toast
+// here and, with the tab out of sight, the browser's own notification.
+// The browser asks before it shows one, and only after a click, so the
+// first one arms that question for the user's next click on the page.
+function notified(event) {
+  const title = event.title || "Flash";
+  const text = event.text || "";
+  const chat = chats.get(event.chat);
+  toast(`**${title}**: ${text}`);
+  const can = "Notification" in window;
+  if (can && Notification.permission === "granted" && document.hidden) {
+    try {
+      // One per notification, however many tabs are open on Flash.
+      const shown = new Notification(title, { body: text, tag: `flash-${event.seq || Date.now()}`, icon: "/static/logo-icon.svg" });
+      shown.onclick = () => { window.focus(); if (chat) switchTo(chat.id); shown.close(); };
+    } catch (_) { /* a browser that will not show it still has the toast */ }
+  } else if (can && Notification.permission === "default" && !notified.asking) {
+    notified.asking = true;
+    document.addEventListener("pointerdown", () => {
+      try { Notification.requestPermission(); } catch (_) { /* nothing to do */ }
+    }, { once: true });
+  }
+  if (document.hidden) {
+    // A mark on the tab, too, for a browser that shows no notification.
+    if (!notified.title) notified.title = document.title;
+    document.title = `🔔 ${title}`;
+    document.addEventListener("visibilitychange", () => {
+      if (notified.title) { document.title = notified.title; notified.title = ""; }
+    }, { once: true });
+  }
 }
 
 // What a live entry does beyond being drawn: a question takes the keys,
