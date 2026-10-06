@@ -443,6 +443,10 @@ class Spark:
         found_team = find_team(self.team) if self.team else None
         data["team_name"] = found_team.name if found_team else ""
         data["team_colour"] = found_team.colour if found_team else ""
+        # Its lead's own file only: listing every spark reads each once.
+        lead = _load(_path(self.reports_to)) if self.reports_to else None
+        data["lead_name"] = lead.name if lead and lead.team == self.team \
+            and self.team else ""
         data["used"] = used_this_month(self)
         return data
 

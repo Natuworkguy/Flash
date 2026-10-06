@@ -1096,6 +1096,11 @@ body.page-projects #dock, body.page-settings #dock, body.page-tool #dock { displ
 .mem-edit-row { flex: 1; display: flex; flex-direction: column; gap: 6px; }
 .mem-edit-row small { font-size: 12px; color: var(--text-3); padding-left: 2px; }
 .mem-head .buttons { display: flex; gap: 8px; flex: none; }
+/* Short of room, the buttons go under the words, and wrap. */
+@media (max-width: 760px) {
+  .mem-head { flex-direction: column; align-items: stretch; }
+  .mem-head .buttons { flex-wrap: wrap; flex: initial; }
+}
 .memories li.fresh { animation: fresh 1.8s var(--ease) both; animation-delay: calc(var(--i, 0) * 0.04s); }
 @keyframes fresh { 0% { opacity: 0; transform: translateY(6px); background: color-mix(in srgb, var(--accent) 16%, transparent); } 25% { opacity: 1; transform: none; } 100% { background: transparent; } }
 .mem-empty { border: 1px dashed var(--border-strong); border-radius: 14px; padding: 28px 22px; text-align: center; color: var(--text-3); font-size: 14px; }
@@ -1293,6 +1298,150 @@ button.item-row:hover { background: var(--hover); }
 #spark-ask .top b { font-weight: 600; }
 #spark-ask .top .sub { color: var(--text-3); font-size: 12.5px; }
 #spark-ask pre { margin: 0; max-height: 120px; }
+/* Teams: each an org chart, drawn in as it appears. */
+.team-block { --t: var(--accent); --line: color-mix(in srgb, var(--t) 50%, var(--border-strong)); margin: 0 0 20px; padding: 16px 16px 20px; border-radius: 20px;
+  border: 1px solid color-mix(in srgb, var(--t) 24%, var(--border));
+  background: radial-gradient(130% 90% at 0% 0%, color-mix(in srgb, var(--t) 11%, transparent), transparent 55%), var(--surface);
+  animation: rise 0.35s var(--ease) both; animation-delay: calc(var(--i, 0) * 60ms); }
+.team-head { display: flex; align-items: center; gap: 14px; margin-bottom: 6px; }
+.team-badge { position: relative; width: 38px; height: 38px; flex: none; border-radius: 50%; display: grid; place-items: center; font-weight: 700; font-size: 16px; color: #1b1a19;
+  background: radial-gradient(circle at 32% 28%, color-mix(in srgb, var(--t) 55%, white), var(--t)); box-shadow: 0 4px 16px color-mix(in srgb, var(--t) 40%, transparent); }
+.team-badge .ring { position: absolute; inset: -6px; border-radius: 50%; border: 2px dashed color-mix(in srgb, var(--t) 65%, transparent); animation: team-orbit 16s linear infinite; }
+.team-title { display: flex; flex-direction: column; min-width: 0; }
+.team-title b { font-size: 15.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.team-title .count { font-size: 12.5px; color: var(--text-3); }
+.team-faces { display: flex; padding-left: 4px; }
+.team-faces i { width: 14px; height: 14px; border-radius: 50%; background: var(--c); border: 2px solid var(--surface); margin-left: -4px; }
+.team-head:hover .team-faces i { animation: team-wave 0.6s var(--spring) both; animation-delay: calc(var(--k, 0) * 70ms); }
+.team-head:hover ~ .org .face-wrap { animation: team-wave 0.65s var(--spring) both; animation-delay: calc(var(--k, 0) * 70ms + 80ms); }
+.team-actions { margin-left: auto; display: flex; gap: 2px; opacity: 0.5; transition: opacity 0.15s; }
+.team-block:hover .team-actions, .team-actions:focus-within { opacity: 1; }
+.team-actions .sure { color: var(--del); }
+.team-empty { color: var(--text-3); font-size: 13.5px; padding: 8px 4px 0 52px; }
+.team-loose { font-size: 13px; font-weight: 600; color: var(--text-2); margin: 4px 2px 10px; }
+
+.org { overflow-x: auto; padding: 4px 2px 2px; }
+.org-tree, .org-tree ul { display: flex; justify-content: center; list-style: none; margin: 0; padding: 0; position: relative; }
+.org-tree { width: max-content; min-width: 100%; }
+.org-tree ul { padding-top: 22px; }
+.org-tree li { position: relative; display: flex; flex-direction: column; align-items: center; padding: 22px 7px 0; }
+.org-tree li::before, .org-tree li::after { content: ""; position: absolute; top: 0; right: 50%; width: 50%; height: 22px; border-top: 2px solid var(--line);
+  transform-origin: right; animation: org-draw-x 0.45s var(--ease) both; animation-delay: calc(var(--d, 0) * 200ms + 100ms); }
+.org-tree li::after { right: auto; left: 50%; border-left: 2px solid var(--line); transform-origin: left; }
+.org-tree li:only-child::before, .org-tree li:only-child::after { display: none; }
+.org-tree li:only-child { padding-top: 0; }
+.org-tree li:first-child::before, .org-tree li:last-child::after { border: 0 none; }
+.org-tree li:last-child::before { border-right: 2px solid var(--line); border-radius: 0 12px 0 0; }
+.org-tree li:first-child::after { border-radius: 12px 0 0 0; }
+.org-tree ul::before { content: ""; position: absolute; top: 0; left: 50%; height: 22px; border-left: 2px solid var(--line); margin-left: -1px;
+  transform-origin: top; animation: org-draw-y 0.3s var(--ease) both; animation-delay: calc(var(--d, 0) * 200ms); }
+.org-tree > li { padding-top: 6px; }
+.org-tree > li::before, .org-tree > li::after { display: none; }
+
+.org-node { --t2: var(--t); position: relative; display: flex; align-items: center; gap: 10px; padding: 10px 14px 10px 10px; width: 210px; text-align: left; border-radius: 14px;
+  border: 1px solid var(--border); background: var(--bg);
+  transition: transform 0.2s var(--spring), border-color 0.15s, box-shadow 0.2s;
+  animation: org-pop 0.5s var(--spring) both; animation-delay: calc(var(--d, 0) * 200ms + var(--k, 0) * 40ms + 220ms); }
+.org-node:hover { transform: translateY(-2px); border-color: color-mix(in srgb, var(--t) 55%, var(--border)); box-shadow: 0 8px 22px color-mix(in srgb, var(--t) 20%, transparent); }
+.org-tree > li > .org-node { border-color: color-mix(in srgb, var(--t) 40%, var(--border)); box-shadow: 0 0 0 3px color-mix(in srgb, var(--t) 9%, transparent); }
+.org-node .face-wrap { display: inline-flex; flex: none; }
+.org-node .words { display: flex; flex-direction: column; min-width: 0; gap: 1px; }
+.org-node .name { font-weight: 600; font-size: 14px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.org-node .title { font-size: 12px; color: color-mix(in srgb, var(--c) 70%, var(--text-2)); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.org-node .state { font-size: 12px; color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.org-node .state.working { color: var(--text-2); }
+.org-node .state.asking { color: var(--warn); }
+/* At work under a lead: a glow climbs the line to it. */
+.org-node .pulse { position: absolute; left: 50%; top: -22px; width: 8px; height: 8px; margin-left: -4px; border-radius: 50%; pointer-events: none;
+  background: var(--t); box-shadow: 0 0 10px 3px color-mix(in srgb, var(--t) 70%, transparent); animation: org-pulse 1.7s ease-in infinite; }
+.org-node.joined { animation: org-join 0.9s var(--spring) both !important; }
+.org-node.joined::after { content: ""; position: absolute; inset: -1px; border-radius: inherit; pointer-events: none; animation: org-flash 1.2s ease-out both; }
+
+/* A team just made: its badge bursts in, and its sparks gather round. */
+.team-block.fresh .team-badge { animation: team-born 0.9s var(--spring) both; }
+.team-block.fresh .team-badge::after { content: ""; position: absolute; inset: -4px; border-radius: 50%; border: 3px solid var(--t); animation: team-burst 1.1s ease-out 0.15s both; }
+.team-block.fresh .org-node { animation: org-gather 0.85s var(--spring) both; animation-delay: calc(var(--d, 0) * 160ms + var(--k, 0) * 90ms + 350ms); }
+.team-block.again:not(.fresh), .team-block.again:not(.fresh) .org-node:not(.joined), .team-block.again:not(.fresh) .org-tree li::before, .team-block.again:not(.fresh) .org-tree li::after, .team-block.again:not(.fresh) .org-tree ul::before { animation: none; }
+
+@keyframes team-orbit { to { transform: rotate(360deg); } }
+@keyframes team-wave { 0%, 100% { transform: translateY(0); } 35% { transform: translateY(-7px) scale(1.12); } 65% { transform: translateY(1px) scale(0.96, 1.04); } }
+@keyframes team-born { 0% { transform: scale(0) rotate(-120deg); } 60% { transform: scale(1.22) rotate(12deg); } 100% { transform: none; } }
+@keyframes team-burst { from { transform: scale(0.7); opacity: 1; } to { transform: scale(2.6); opacity: 0; } }
+@keyframes org-draw-x { from { transform: scaleX(0); } }
+@keyframes org-draw-y { from { transform: scaleY(0); } }
+@keyframes org-pop { from { opacity: 0; transform: translateY(-14px) scale(0.86); } }
+@keyframes org-gather { 0% { opacity: 0; transform: translate(calc(-40px - var(--k, 0) * 24px), -70px) scale(0.3) rotate(-25deg); } 60% { opacity: 1; transform: translate(0, 4px) scale(1.05) rotate(2deg); } 100% { transform: none; } }
+@keyframes org-join { 0% { opacity: 0; transform: translateY(-46px) scale(0.6) rotate(-6deg); } 55% { opacity: 1; transform: translateY(5px) scale(1.06, 0.94); } 80% { transform: translateY(-2px) scale(0.98, 1.02); } 100% { transform: none; } }
+@keyframes org-flash { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--t) 70%, transparent); } 100% { box-shadow: 0 0 0 16px transparent; } }
+@keyframes org-pulse { 0% { transform: translateY(22px) scale(0.4); opacity: 0; } 25% { opacity: 1; } 100% { transform: translateY(-3px) scale(1); opacity: 0; } }
+
+/* What a spark with a budget has used of its month. */
+.budget-meter { display: flex; align-items: center; gap: 7px; margin-top: 4px; font-size: 11.5px; color: var(--text-3); min-width: 0; }
+.budget-meter .bar { width: 56px; height: 4px; border-radius: 99px; background: var(--border); overflow: hidden; flex: none; }
+.budget-meter i { display: block; height: 100%; width: 0; background: var(--add); border-radius: inherit; transition: width 0.6s var(--ease); }
+.budget-meter .said { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.budget-meter.warn i { background: var(--warn); }
+.budget-meter.full i { background: var(--del); }
+.budget-meter.full .said { color: var(--del); }
+
+/* Hires and let-gos waiting on the user. */
+.hire-stack { margin-bottom: 18px; }
+.hire-card { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-start; padding: 14px; margin-bottom: 8px; border-radius: 16px;
+  border: 1px solid color-mix(in srgb, var(--warn) 40%, var(--border)); background: color-mix(in srgb, var(--warn) 6%, var(--surface)); animation: rise 0.35s var(--ease) both; }
+.hire-card .face { flex: none; display: inline-flex; }
+.hire-card .words { flex: 1; min-width: 200px; display: flex; flex-direction: column; gap: 3px; }
+.hire-card .hire-ask { font-size: 14px; }
+.hire-card .goal { font-size: 13px; color: var(--text-2); }
+.hire-card .why { font-size: 12.5px; color: var(--text-3); }
+.hire-card .decide { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.hire-card .decide input { width: 180px; font: 13px var(--sans); padding: 6px 10px; border-radius: 9px; border: 1px solid var(--border); background: var(--bg); color: var(--text); }
+.hire-stack.again .hire-card:not(.stamped):not(.waved) { animation: none; }
+.hire-card.stamped { animation: hire-stamp 0.7s var(--spring) forwards; }
+.hire-card.waved { animation: hire-wave 0.5s var(--ease) forwards; }
+@keyframes hire-stamp { 30% { transform: scale(1.03); border-color: var(--add); background: color-mix(in srgb, var(--add) 14%, var(--surface)); } 100% { transform: translateY(-8px) scale(0.96); opacity: 0; } }
+@keyframes hire-wave { to { transform: translateX(48px); opacity: 0; } }
+
+/* The team forms and the spark window's team line. */
+.team-line { display: flex; align-items: center; gap: 7px; font-size: 12.5px; color: var(--text-2); margin-top: 4px; }
+.team-line .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--t); box-shadow: 0 0 0 3px color-mix(in srgb, var(--t) 22%, transparent); }
+.swatches { display: flex; flex-wrap: wrap; gap: 9px; }
+.swatch { width: 28px; height: 28px; border-radius: 50%; background: var(--c); border: 2px solid transparent; box-shadow: inset 0 0 0 2px var(--surface); transition: transform 0.2s var(--spring), border-color 0.15s; }
+.swatch:hover { transform: scale(1.1); }
+.swatch[aria-checked="true"] { border-color: var(--c); transform: scale(1.14); }
+.field-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.team-code { margin: 0 0 14px; }
+.team-code summary { cursor: pointer; font-size: 13px; color: var(--text-2); margin-bottom: 10px; }
+
+/* The audit log. */
+.audit-sum .intact { color: var(--add); font-weight: 600; display: inline-flex; gap: 4px; align-items: center; }
+.audit-sum .broken { color: var(--del); font-weight: 600; display: inline-flex; gap: 4px; align-items: center; }
+.audit-sum svg { width: 14px; height: 14px; }
+.audit-list { list-style: none; margin: 0 0 8px; padding: 0; max-height: 52vh; overflow: auto; border: 1px solid var(--border); border-radius: 12px; }
+.audit-row { border-bottom: 1px solid var(--border); animation: rise 0.25s var(--ease) both; animation-delay: calc(var(--k, 0) * 18ms); }
+.audit-row:last-child { border-bottom: 0; }
+.audit-line { display: grid; grid-template-columns: 112px 118px minmax(0, 1fr); gap: 10px; width: 100%; text-align: left; padding: 8px 12px; font-size: 13px; align-items: baseline; }
+.audit-line:hover, .audit-row.open .audit-line { background: var(--hover); }
+.audit-line .when { color: var(--text-3); font-size: 12px; font-variant-numeric: tabular-nums; }
+.audit-line .kind { font-weight: 600; font-size: 12.5px; color: var(--text-2); }
+.audit-line .what { color: var(--text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.audit-row pre { margin: 0 12px 10px; max-height: 260px; overflow: auto; font-size: 12px; }
+.audit-row.kind-tool .kind { color: var(--accent); }
+.audit-row.kind-approval_asked .kind, .audit-row.kind-budget_paused .kind, .audit-row.kind-hire_proposed .kind, .audit-row.kind-removal_proposed .kind { color: var(--warn); }
+.audit-row.kind-shift_end .kind, .audit-row.kind-hired .kind, .audit-row.kind-made .kind { color: var(--add); }
+.audit-row.kind-removed .kind, .audit-row.kind-stopped .kind { color: var(--del); }
+.audit-empty { padding: 14px; color: var(--text-3); }
+@media (max-width: 560px) {
+  .field-pair { grid-template-columns: 1fr; }
+  .org-node { width: 168px; }
+  .team-block { padding: 14px 12px 16px; }
+  .audit-line { grid-template-columns: 1fr; gap: 2px; }
+  .team-faces { display: none; }
+  .hire-card .decide input { width: 100%; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .team-block, .team-block .org-node, .team-badge, .team-badge .ring, .team-block .org-tree li::before, .team-block .org-tree li::after, .team-block .org-tree ul::before, .face-wrap, .team-faces i, .hire-card { animation: none !important; }
+  .org-node .pulse { display: none; }
+}
 .spark-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 12px; }
 .spark-card { display: flex; gap: 14px; align-items: flex-start; padding: 16px; text-align: left; border: 1px solid var(--border); border-radius: 16px; background: var(--surface);
   transition: border-color 0.15s, transform 0.15s; animation: rise 0.3s var(--ease) both; animation-delay: calc(var(--i, 0) * 0.04s); min-width: 0; }
@@ -1992,6 +2141,10 @@ const ICON = {
   halt: '<rect x="6.5" y="6.5" width="11" height="11" rx="2" fill="currentColor" stroke="none"/>',
   copy: '<rect x="9" y="9" width="12" height="12" rx="2.5"/><path d="M5 15a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2"/>',
   check: '<path d="M20 6 9 17l-5-5"/>',
+  users: '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/>',
+  share: '<path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"/><path d="m16 6-4-4-4 4"/><path d="M12 2v13"/>',
+  trash: '<path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>',
+  scroll: '<path d="M8 21h12a2 2 0 0 0 2-2v-2H10v2a2 2 0 1 1-4 0V5a2 2 0 1 0-4 0v3h4"/><path d="M19 17V5a2 2 0 0 0-2-2H4"/><path d="M14 8h-4M14 12h-4"/>',
   mail: '<rect x="2" y="4" width="20" height="16" rx="2"/><path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7"/>',
   retry: '<path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/>',
   edit: '<path d="M17 3a2.8 2.8 0 0 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/>',
@@ -5195,20 +5348,31 @@ async function drawSparks(body, again = false) {
   const shared = el("button", "btn with-icon", `${icon("download")}<span>Add shared</span>`);
   shared.type = "button";
   shared.onclick = () => addSharedSpark();
+  const team = el("button", "btn with-icon", `${icon("users")}<span>New team</span>`);
+  team.type = "button";
+  team.onclick = () => teamForm();
   const add = el("button", "btn primary with-icon", `${icon("plus")}<span>New spark</span>`);
   add.type = "button";
   add.onclick = () => sparkForm();
-  buttons.append(shared, add);
+  buttons.append(shared, team, add);
   body.querySelector(".mem-head").appendChild(buttons);
   sparksAlways = r.always;
   const host = body.querySelector(".host");
   if (r.always.other) host.before(otherKeeperBanner(r.always));
-  if (!r.sparks.length) {
-    host.innerHTML = `<div class="mem-empty"><b>No sparks yet</b>Give one a goal like “every morning, check my repo for new issues and tell me which look like bugs”. Or ask Flash in a chat to make one.</div>`;
+  if (r.hires.length) host.appendChild(hireCards(r.hires, r.sparks, again));
+  if (!r.sparks.length && !r.teams.length) {
+    host.insertAdjacentHTML("beforeend", `<div class="mem-empty"><b>No sparks yet</b>Give one a goal like “every morning, check my repo for new issues and tell me which look like bugs”. Or ask Flash in a chat to make one, or start a whole team from New team.</div>`);
     return;
   }
+  const byId = new Map(r.sparks.map((s) => [s.id, s]));
+  r.teams.forEach((t, ti) => host.appendChild(teamBlock(t, byId, again, ti)));
+  const teamIds = new Set(r.teams.map((t) => t.id));
+  const alone = r.sparks.filter((s) => !teamIds.has(s.team));
+  if (alone.length && r.teams.length) host.appendChild(el("h3", "team-loose", "No team"));
+  for (const s of r.sparks) seenTeam.set(s.id, s.team || "");
+  if (!alone.length) { sparksFooter(body, r); return; }
   const grid = el("div", "spark-grid");
-  r.sparks.forEach((spark, i) => {
+  alone.forEach((spark, i) => {
     const card = el("button", "spark-card", `<span class="main"><span class="name"></span><span class="title"></span><span class="state"></span><span class="goal"></span><span class="meta"></span></span>`);
     card.style.setProperty("--c", spark.colour);
     card.type = "button";
@@ -5231,10 +5395,15 @@ async function drawSparks(body, again = false) {
     state.classList.toggle("working", spark.status === "working");
     state.classList.toggle("asking", !!spark.waiting);
     card.querySelector(".goal").textContent = spark.goal;
+    if (spark.budget_on) card.querySelector(".main").appendChild(budgetMeter(spark));
     card.onclick = () => openSpark(spark.id);
     grid.appendChild(card);
   });
   host.appendChild(grid);
+  sparksFooter(body, r);
+}
+
+function sparksFooter(body, r) {
   const working = r.sparks.filter((s) => s.status === "working").length;
   const where = body.querySelector(".mem-path");
   where.textContent = `${r.sparks.length} spark${r.sparks.length === 1 ? "" : "s"}${working ? ` · ${working} working` : ""} · ${r.always.installed ? "working with Flash closed too" : "working while Flash is open"} · `;
@@ -5244,6 +5413,310 @@ async function drawSparks(body, again = false) {
   where.appendChild(change);
 }
 const drawSparksPage = () => toolPage("Sparks", drawSparks);
+
+// Teams ---------------------------------------------------------------------
+// A team is drawn as its org chart: the sparks that report to no one on
+// it along the top, each with the ones that report to it below, joined
+// by lines. The lines draw themselves in, the sparks pop in a level at a
+// time, a spark at work sends a glow up its line to its lead, and a team
+// waves hello when the pointer comes onto its name.
+
+// The team each spark was on when the page last drew it, to see a spark
+// that has just joined one; and teams made just now, to assemble: for a
+// moment, since a team from a template is drawn as each spark lands.
+const seenTeam = new Map();
+const freshTeams = new Map();
+const FRESH_MS = 2500;
+const TEAM_COLOURS = ["#f2a65a", "#5ab0f2", "#7bd88f", "#c792ea", "#ff7a90", "#ffd166", "#4fd1c5", "#a3b1ff"];
+
+function teamBlock(team, byId, again, ti) {
+  const block = el("section", "team-block", `<header class="team-head"><span class="team-badge"><span class="ring"></span><span class="letter"></span></span><span class="team-title"><b></b><span class="count"></span></span><span class="team-faces"></span><span class="team-actions"></span></header><div class="org"></div>`);
+  block.style.setProperty("--t", team.colour);
+  block.style.setProperty("--i", ti);
+  if (again) block.classList.add("again");
+  const fresh = Date.now() - (freshTeams.get(team.id) || 0) < FRESH_MS;
+  if (fresh) block.classList.add("fresh");
+  block.querySelector(".letter").textContent = (team.name.match(/\p{L}|\p{N}/u) || ["?"])[0].toUpperCase();
+  block.querySelector(".team-title b").textContent = team.name;
+  const ids = [];
+  const walk = (node) => { ids.push(node.id); node.reports.forEach(walk); };
+  team.chart.forEach(walk);
+  const working = ids.filter((id) => byId.get(id)?.status === "working").length;
+  block.querySelector(".count").textContent = `${ids.length} spark${ids.length === 1 ? "" : "s"}${working ? ` · ${working} working` : ""}`;
+  const faces = block.querySelector(".team-faces");
+  ids.slice(0, 6).forEach((id, k) => {
+    const dot = el("i");
+    dot.style.setProperty("--c", byId.get(id)?.colour || team.colour);
+    dot.style.setProperty("--k", k);
+    faces.appendChild(dot);
+  });
+  const actions = block.querySelector(".team-actions");
+  const action = (name, tip, run) => {
+    const b = button("icon-btn", name, tip, "", run);
+    actions.appendChild(b);
+    return b;
+  };
+  action("share", "Share this team", () => shareTeam(team));
+  action("edit", "Rename or recolour", () => teamForm(team));
+  action("trash", "Delete the team (its sparks stay)", async (b) => {
+    if (!b.classList.contains("sure")) { b.classList.add("sure"); b.dataset.tip = "Click again to delete it"; return; }
+    try { await command("team-remove", team.id, null); toast(`${team.name} is gone. Its sparks are on no team now.`); }
+    catch (error) { showFailure(error); }
+  });
+  const org = block.querySelector(".org");
+  if (!team.chart.length) {
+    org.innerHTML = `<div class="team-empty">No sparks on ${esc(team.name)} yet. Edit a spark to put it here, or make one with this team picked.</div>`;
+    return block;
+  }
+  const tree = el("ul", "org-tree");
+  let k = 0;
+  const grow = (node, depth, into) => {
+    const spark = byId.get(node.id);
+    if (!spark) return;
+    const li = el("li");
+    li.style.setProperty("--d", depth);
+    li.style.setProperty("--k", k++);
+    li.appendChild(orgNode(spark, depth, fresh));
+    if (node.reports.length) {
+      const ul = el("ul");
+      node.reports.forEach((child) => grow(child, depth + 1, ul));
+      li.appendChild(ul);
+    }
+    into.appendChild(li);
+  };
+  team.chart.forEach((node) => grow(node, 0, tree));
+  org.appendChild(tree);
+  // Wider than the page, as on a phone: it opens on its lead, centred.
+  requestAnimationFrame(() => { org.scrollLeft = (org.scrollWidth - org.clientWidth) / 2; });
+  return block;
+}
+
+function orgNode(spark, depth, fresh) {
+  const node = el("button", "org-node", `<span class="face-wrap"></span><span class="words"><span class="name"></span><span class="title"></span><span class="state"></span></span>`);
+  node.type = "button";
+  node.style.setProperty("--c", spark.colour);
+  const face = sparkAvatar(spark, 40, depth);
+  node.querySelector(".face-wrap").appendChild(face);
+  node.querySelector(".name").textContent = spark.name;
+  const title = node.querySelector(".title");
+  if (spark.title) title.textContent = spark.title; else title.remove();
+  const state = node.querySelector(".state");
+  state.textContent = spark.unread ? `${spark.unread} new · ${sparkState(spark)}` : sparkState(spark);
+  state.classList.toggle("working", spark.status === "working");
+  state.classList.toggle("asking", !!spark.waiting);
+  if (spark.budget_on) node.querySelector(".words").appendChild(budgetMeter(spark));
+  // At work under a lead: a glow runs up the line to it.
+  if (spark.status === "working" && depth > 0) node.appendChild(el("span", "pulse"));
+  const before = seenTeam.get(spark.id);
+  if (before !== undefined && before !== spark.team) node.classList.add("joined");
+  // Just made, a hire say: it pops into being on its team.
+  else if (Date.now() / 1000 - (spark.created || 0) < 8 && !fresh) celebrate(face, "born");
+  const unread = seenUnread.get(spark.id);
+  if (unread !== undefined && spark.unread > unread) celebrate(face, "cheer");
+  seenUnread.set(spark.id, spark.unread);
+  node.onclick = () => openSpark(spark.id);
+  node.dataset.tip = `${spark.name}: ${spark.goal.split("\n")[0].slice(0, 120)}`;
+  return node;
+}
+
+// How much of its month a spark with a budget has used.
+function budgetMeter(spark) {
+  const share = spark.budget ? Math.min(100, Math.round(100 * (spark.used || 0) / spark.budget)) : 0;
+  const meter = el("span", "budget-meter", `<span class="bar"><i></i></span><span class="said"></span>`);
+  meter.querySelector("i").style.width = `${share}%`;
+  meter.classList.toggle("warn", share >= 75 && share < 100);
+  meter.classList.toggle("full", share >= 100);
+  const n = (x) => x >= 1e6 ? `${+(x / 1e6).toFixed(1)}M` : x >= 1e3 ? `${Math.round(x / 1e3)}k` : String(x);
+  meter.querySelector(".said").textContent = share >= 100 ? "Budget used" : `${n(spark.used || 0)} / ${n(spark.budget)}`;
+  meter.dataset.tip = share >= 100
+    ? `Used all ${Number(spark.budget).toLocaleString()} tokens of this month's budget: paused till the month turns`
+    : `${Number(spark.used || 0).toLocaleString()} of ${Number(spark.budget).toLocaleString()} tokens used this month`;
+  return meter;
+}
+
+// Hires and let-gos waiting on the user, at the top of the page.
+function hireCards(hires, all, again = false) {
+  const box = el("section", "hire-stack", `<h3 class="team-loose">Waiting on you</h3>`);
+  // Drawn again for news: the cards stay put rather than rise again.
+  if (again) box.classList.add("again");
+  const byId = new Map(all.map((s) => [s.id, s]));
+  for (const hire of hires) {
+    const by = byId.get(hire.by);
+    const card = el("div", "hire-card", `<span class="face"></span><span class="words"><span class="hire-ask"></span><span class="goal"></span><span class="why"></span></span><span class="decide"><input type="text" maxlength="300" placeholder="Why not? (optional)" aria-label="Why not"><button type="button" class="btn small" data-no>Decline</button><button type="button" class="btn small primary" data-yes></button></span>`);
+    if (by) card.querySelector(".face").appendChild(sparkAvatar(by, 36));
+    const ask = card.querySelector(".hire-ask");
+    if (hire.kind === "hire") {
+      ask.innerHTML = `<b></b> wants to hire <b class="who"></b>`;
+      ask.querySelector("b").textContent = hire.by_name;
+      ask.querySelector(".who").textContent = hire.spark.name + (hire.spark.title ? `, ${hire.spark.title}` : "");
+      card.querySelector(".goal").textContent = hire.spark.goal;
+      card.querySelector("[data-yes]").textContent = "Hire";
+    } else {
+      ask.innerHTML = `<b></b> wants to let <b class="who"></b> go`;
+      ask.querySelector("b").textContent = hire.by_name;
+      ask.querySelector(".who").textContent = hire.target_name;
+      card.querySelector(".goal").remove();
+      card.querySelector("[data-yes]").textContent = "Let it go";
+    }
+    const why = card.querySelector(".why");
+    if (hire.reason) why.textContent = `Why: ${hire.reason}`; else why.remove();
+    const decide = async (yes) => {
+      card.querySelectorAll("button").forEach((b) => { b.disabled = true; });
+      try {
+        await command("hire-decide", hire.id, null, { yes, why: card.querySelector("input").value });
+        card.classList.add(yes ? "stamped" : "waved");
+        toast(yes ? (hire.kind === "hire" ? `${hire.spark.name} is hired` : `${hire.target_name} is let go`) : "Declined");
+      } catch (error) { showFailure(error); card.querySelectorAll("button").forEach((b) => { b.disabled = false; }); }
+    };
+    card.querySelector("[data-yes]").onclick = () => decide(true);
+    card.querySelector("[data-no]").onclick = () => decide(false);
+    box.appendChild(card);
+  }
+  return box;
+}
+
+// Making a team, empty or from a template or a code; or, given TEAM,
+// renaming and recolouring it.
+function teamForm(team = null) {
+  const colour = team ? team.colour : TEAM_COLOURS[Math.floor(Math.random() * TEAM_COLOURS.length)];
+  const form = openForm(`
+    <h2>${team ? "Edit team" : "New team"}</h2>
+    <p class="sub">${team ? "" : "A team keeps sparks together: a lead, and the sparks that report to it. Sparks can also stay on no team."}</p>
+    ${team ? "" : `<div class="spark-templates team-templates"><span class="sub">Start from:</span></div>`}
+    <label class="field"><span>Name</span><input name="teamname" maxlength="32" placeholder="Dev" autocomplete="off" required></label>
+    <div class="field"><span>Colour</span><div class="swatches" role="radiogroup" aria-label="Colour">${TEAM_COLOURS.map((c) => `<button type="button" class="swatch" role="radio" data-c="${c}" style="--c:${c}" aria-label="${c}"></button>`).join("")}</div></div>
+    ${team ? "" : `<details class="team-code"><summary>Add a shared team instead</summary><label class="field"><span>Team code</span><textarea name="code" rows="3" class="mono" placeholder="flash-team:..." spellcheck="false"></textarea><small class="code-said">Paste the code someone shared. You see its sparks before anything is added.</small></label></details>`}
+    <div class="dialog-buttons"><button type="button" class="btn" data-cancel>Cancel</button><button type="submit" class="btn primary">${team ? "Save" : "Make team"}</button></div>`,
+    async (data) => {
+      const name = (data.teamname || "").trim();
+      const chosen = form.dataset.colour;
+      if (team) {
+        await command("team-update", team.id, null, { rename: name, colour: chosen });
+        toast(`Saved ${name}`);
+        return;
+      }
+      const code = (data.code || "").trim();
+      const from = form.dataset.template || code;
+      let made;
+      if (from) made = (await command("team-add", from, null, { model: info.model || "" })).team;
+      else made = (await command("team-create", name, null, { colour: chosen })).team;
+      freshTeams.set(made.id, Date.now());
+      toast(from ? `${made.name} is here, with its sparks` : `Made ${made.name}. Edit a spark to put it on the team.`);
+      if (view !== "sparks") showPage("sparks");
+    });
+  form.querySelector("[data-cancel]").onclick = closeForm;
+  const pick = (c) => {
+    form.dataset.colour = c;
+    form.querySelectorAll(".swatch").forEach((b) => b.setAttribute("aria-checked", b.dataset.c === c));
+  };
+  form.querySelectorAll(".swatch").forEach((b) => { b.onclick = () => pick(b.dataset.c); });
+  pick(colour);
+  if (team) { form.teamname.value = team.name; return; }
+  command("team-templates", "", null).then(({ templates }) => {
+    const row = form.querySelector(".team-templates");
+    if (!row) return;
+    for (const t of templates) {
+      const chip = el("button", "chip-btn");
+      chip.type = "button";
+      chip.textContent = t.name;
+      chip.dataset.tip = `${t.blurb}: ${t.lead}, leading ${t.reports.join(" and ")}`;
+      chip.onclick = () => {
+        const on = !chip.classList.contains("on");
+        row.querySelectorAll(".chip-btn").forEach((c) => c.classList.remove("on"));
+        chip.classList.toggle("on", on);
+        form.dataset.template = on ? t.name : "";
+        if (on) form.teamname.value = t.name;
+      };
+      row.appendChild(chip);
+    }
+  }).catch(() => {});
+  let timer = 0;
+  form.code.addEventListener("input", () => {
+    clearTimeout(timer);
+    const said = form.querySelector(".code-said");
+    timer = setTimeout(async () => {
+      const code = form.code.value.trim();
+      form.teamname.required = !code;
+      if (!code) { said.textContent = "Paste the code someone shared. You see its sparks before anything is added."; return; }
+      try {
+        const seen = (await command("team-code", code, null)).team;
+        form.teamname.value = seen.name;
+        said.textContent = `${seen.name}: ${seen.sparks.map((s) => s.name).join(", ")}.`;
+      } catch (error) { said.textContent = error.message; }
+    }, 200);
+  });
+}
+
+async function shareTeam(team) {
+  let code;
+  try { code = (await command("team-share", team.id, null)).code; } catch (error) { showFailure(error); return; }
+  const form = openForm(`
+    <h2>Share ${esc(team.name)}</h2>
+    <p class="sub">Anyone with Flash can add a copy of the whole team with New team on their Sparks page, or <code>/sparks teams add</code> in the terminal. It carries each spark's goal, schedule, boundaries and lessons, and who reports to whom; not their reports or notes.</p>
+    <textarea class="spark-code" rows="4" readonly></textarea>
+    <div class="dialog-buttons"><button type="button" class="btn" data-cancel>Close</button><button type="button" class="btn primary" data-copy>Copy</button></div>`, async () => false);
+  const box = form.querySelector(".spark-code");
+  box.value = code;
+  box.select();
+  form.querySelector("[data-cancel]").onclick = closeForm;
+  form.querySelector("[data-copy]").onclick = async () => {
+    try { await navigator.clipboard.writeText(code); toast("Copied"); }
+    catch (_) { box.select(); document.execCommand("copy"); toast("Copied"); }
+  };
+}
+
+// A spark's audit log: every shift, tool call, approval and change, newest
+// first, each opening to the whole of what was kept.
+const AUDIT_WORDS = { made: "Made", shift_start: "Shift started", shift_end: "Shift ended", tool: "Tool", approval_asked: "Asked first", approval_answered: "Answered", changed: "Changed", taught: "Taught", paused: "Paused", resumed: "Resumed", stopped: "Stopped", team: "Team", reports_to: "Reports to", budget: "Budget", budget_paused: "Budget used", budget_renewed: "New month", hire_proposed: "Proposed a hire", removal_proposed: "Proposed a let-go", hire_decided: "Your answer", hired: "Hired", asked: "Asked", removed: "Removed" };
+
+function auditSummary(e) {
+  if (e.kind === "tool") return `${e.tool}${e.during && e.during !== "shift" ? ` (in a ${e.during})` : ""}`;
+  if (e.kind === "shift_end") return e.report || "";
+  if (e.kind === "changed") return Object.keys(e.changes || {}).join(", ");
+  if (e.kind === "budget") return e.on ? `${Number(e.tokens || 0).toLocaleString()} tokens a month` : "off";
+  return e.lesson || e.label || e.team || e.lead || e.name || e.question || e.reason || e.why || "";
+}
+
+async function openAudit(spark) {
+  let log;
+  try { log = await command("spark-audit", spark.id, null); } catch (error) { showFailure(error); return; }
+  const form = openForm(`
+    <h2>${esc(spark.name)}'s audit log</h2>
+    <p class="sub audit-sum"></p>
+    <ol class="audit-list"></ol>
+    <div class="dialog-buttons"><button type="button" class="btn with-icon" data-export>${icon("download")}<span>Export</span></button><button type="button" class="btn primary" data-cancel>Close</button></div>`, async () => false);
+  const sum = form.querySelector(".audit-sum");
+  sum.innerHTML = log.intact
+    ? `<span class="intact">${icon("check")} Intact</span> ${log.checked} entr${log.checked === 1 ? "y" : "ies"}, each sealed with a hash of the one before. Nothing here is ever changed.`
+    : `<span class="broken">${icon("alert")} Edited by hand</span> at entry ${log.checked}: what follows it cannot be trusted.`;
+  const list = form.querySelector(".audit-list");
+  const entries = [...log.entries].reverse();
+  if (!entries.length) list.innerHTML = `<li class="audit-empty">Nothing yet: it has not worked a shift.</li>`;
+  entries.forEach((e, k) => {
+    const li = el("li", `audit-row kind-${e.kind}`, `<button type="button" class="audit-line"><span class="when"></span><span class="kind"></span><span class="what"></span></button><pre hidden></pre>`);
+    li.style.setProperty("--k", Math.min(k, 20));
+    li.querySelector(".when").textContent = new Date(e.at * 1000).toLocaleString([], { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" });
+    li.querySelector(".kind").textContent = AUDIT_WORDS[e.kind] || e.kind;
+    li.querySelector(".what").textContent = auditSummary(e);
+    const { hash, prev, at, kind, ...rest } = e;
+    li.querySelector("pre").textContent = JSON.stringify(rest, null, 2);
+    li.querySelector(".audit-line").onclick = () => { const pre = li.querySelector("pre"); pre.hidden = !pre.hidden; li.classList.toggle("open", !pre.hidden); };
+    list.appendChild(li);
+  });
+  form.querySelector("[data-cancel]").onclick = () => openSpark(spark.id);
+  form.querySelector("[data-export]").onclick = async () => {
+    try {
+      const { text } = await command("spark-audit-export", spark.id, null);
+      const a = el("a");
+      a.href = URL.createObjectURL(new Blob([text], { type: "application/x-ndjson" }));
+      a.download = `${spark.handle.replace(/^@/, "")}-audit.jsonl`;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    } catch (error) { showFailure(error); }
+  };
+}
+
+
 
 // System One's switch in Settings. Its model is picked in the model
 // menu. Switching it on asks the server its version first: an Ollama
@@ -5391,6 +5864,13 @@ function fillSpark(box, spark, again = false) {
   pill.textContent = kind === "idle" ? "Ready" : doing;
   box.querySelector(".handle").textContent = spark.handle;
   box.querySelector(".spark-head .meta").textContent = `On ${spark.model_used || "no model"}${spark.model ? "" : " (Flash's)"} · ${spark.schedule}${spark.project_name ? ` · in ${spark.project_name}` : ""} · ${sparkState(spark)} · ${spark.runs} shift${spark.runs === 1 ? "" : "s"}`;
+  if (spark.team_name) {
+    const line = el("div", "team-line", `<span class="dot"></span><span></span>`);
+    line.style.setProperty("--t", spark.team_colour || spark.colour);
+    line.querySelector("span:last-child").textContent = `On ${spark.team_name}${spark.lead_name ? `, reporting to ${spark.lead_name}` : ""}`;
+    box.querySelector(".spark-head .meta").after(line);
+  }
+  if (spark.budget_on) box.querySelector(".spark-head .meta").parentElement.appendChild(budgetMeter(spark));
   box.querySelector("[data-goal]").textContent = spark.goal;
   if (spark.boundaries) {
     box.querySelector("[data-bounds]").hidden = false;
@@ -5437,6 +5917,7 @@ function fillSpark(box, spark, again = false) {
   act(spark.paused ? "Resume" : "Pause", async () => { await command(spark.paused ? "spark-resume" : "spark-pause", spark.id, null); });
   act("Edit", async () => sparkForm(spark));
   act("Share", async () => shareSpark(spark));
+  act("Audit log", async () => openAudit(spark));
   act("Delete", async (b) => {
     if (!b.classList.contains("sure")) { b.classList.add("sure"); b.textContent = "Delete it?"; return; }
     await command("spark-remove", spark.id, null);
@@ -5635,6 +6116,29 @@ async function needsEmail(row, needs) {
   row.after(note);
 }
 
+// The spark form's team and "reports to": the second lists the sparks on
+// the team picked in the first, and the budget box shows with its tick.
+async function teamFields(form, spark) {
+  form.budget_on.addEventListener("change", () => {
+    form.querySelector(".budget-field").hidden = !form.budget_on.checked;
+    if (form.budget_on.checked) form.budget.focus();
+  });
+  let r;
+  try { r = await command("sparks"); } catch (_) { return; }
+  if (!form.isConnected) return;
+  form.team.insertAdjacentHTML("beforeend", r.teams.map((t) => `<option value="${esc(t.id)}">${esc(t.name)}</option>`).join(""));
+  form.team.value = spark?.team && r.teams.some((t) => t.id === spark.team) ? spark.team : "";
+  const leads = () => {
+    const on = form.team.value;
+    const mates = r.sparks.filter((s) => on && s.team === on && s.id !== spark?.id);
+    form.lead.innerHTML = `<option value="">No one</option>` + mates.map((s) => `<option value="${esc(s.id)}">${esc(s.name)}</option>`).join("");
+    form.lead.disabled = !mates.length;
+    form.lead.value = spark && on === spark.team && mates.some((s) => s.id === spark.reports_to) ? spark.reports_to : "";
+  };
+  form.team.addEventListener("change", leads);
+  leads();
+}
+
 // "At set times": the box for them shows with the choice, and says back
 // what it read and when that next comes round, or why it cannot.
 function setTimesField(form) {
@@ -5688,20 +6192,37 @@ function sparkForm(spark, inProjectId = "", template = "") {
     <label class="field"><span>Project</span><select name="project"><option value="">No project</option>${[...projects].reverse().map((p) => `<option value="${esc(p.id)}"${editing && spark.project === p.id ? " selected" : ""}>${esc(p.name)}</option>`).join("")}</select><small>${projects.length ? "Its shifts work on the project's folder and follow its instructions, and a chat with it starts there." : "Make a project on the Projects page to give it one: a folder, and how to work in it."}</small></label>
     <label class="field"><span>Watch a folder <em class="count">optional</em></span><input name="watch" class="mono" placeholder="~/Downloads" autocomplete="off" spellcheck="false" role="combobox" aria-autocomplete="list" aria-expanded="false"><small>A change to its files starts a shift too, besides the schedule, and it is told which files changed. Tab takes a suggestion and shows what is inside it.</small></label>
     <label class="field"><span>Boundaries</span><textarea name="boundaries" rows="2" placeholder="Only read. Never push, delete, or message anyone."></textarea><small>Lines it must not cross. Running commands and changing files also need autonomous mode, as for sub-agents.</small></label>
+    <div class="field-pair"><label class="field"><span>Team <em class="count">optional</em></span><select name="team"><option value="">No team</option></select></label><label class="field"><span>Reports to</span><select name="lead" disabled><option value="">No one</option></select></label></div>
+    <label class="field check"><input type="checkbox" name="budget_on"${editing && spark.budget_on ? " checked" : ""}><span>Give it a monthly budget. Past it, it pauses itself until the month turns.</span></label>
+    <label class="field budget-field"${editing && spark.budget_on ? "" : " hidden"}><span>Tokens a month</span><input name="budget" placeholder="200k" autocomplete="off" value="${editing && spark.budget ? spark.budget : ""}"><small>${editing && spark.budget_on ? `${(spark.used || 0).toLocaleString()} used this month. ` : ""}Counted over its shifts, chats and answers: what it reads and what it writes. Like 200000, 200k or 2m.</small></label>
     ${editing ? "" : `<label class="field check"><input type="checkbox" name="paused"><span>Make it paused. Nothing runs until you press Resume in its window; then it starts its first shift.</span></label>`}
     ${editing || sparksAlways.installed ? "" : `<label class="field check"><input type="checkbox" name="always" checked><span>Keep sparks working when Flash is closed. Flash starts a keeper at login and notifies you of news.</span></label>`}
     <div class="dialog-buttons"><button type="button" class="btn" data-cancel>Cancel</button><button type="submit" class="btn primary">${editing ? "Save" : "Make spark"}</button></div>`,
     async (data) => {
       const fields = { goal: data.goal, every: data.every === "at" ? data.at.trim() : data.every, boundaries: data.boundaries, project: data.project || "", watch: data.watch || "", model: data.model || "", title: data.title || "" };
       const name = data.sparkname.trim();
+      // Its team, who it reports to and its budget, each only if changed.
+      const placement = async (id, was) => {
+        const team = data.team || "", lead = data.lead || "";
+        if (team !== (was.team || "")) await command("spark-team", id, null, { team });
+        if (lead !== (team === (was.team || "") ? was.reports_to || "" : "")) await command("spark-lead", id, null, { lead });
+        const on = !!data.budget_on;
+        const tokens = (data.budget || "").trim();
+        if (on !== !!was.budget_on || (on && tokens && tokens !== String(was.budget || ""))) {
+          await command("spark-budget", id, null, { on, tokens: on ? tokens : "" });
+        }
+      };
       if (editing) {
         // Not "name": that is the command's own.
         await command("spark-update", spark.id, null, { ...fields, rename: name });
+        await placement(spark.id, spark);
         toast(`Saved ${name}`);
         await openSpark(spark.id);
         return false;
       }
+      if (data.budget_on && !(data.budget || "").trim()) throw new Error("Say how many tokens a month it may use.");
       const made = (await command("spark-create", name, null, { ...fields, paused: !!data.paused })).spark;
+      await placement(made.id, {});
       toast(made.paused ? `${made.name} is made, paused: Resume starts it` : `${made.name} is on it`);
       if (data.always) await setSparksAlways(true);
       if (view !== "sparks") showPage("sparks");
@@ -5709,6 +6230,7 @@ function sparkForm(spark, inProjectId = "", template = "") {
   // The folder to watch, suggested as you type, as a project's is.
   suggestFolders(form.watch);
   setTimesField(form);
+  teamFields(form, spark);
   // Chosen, not assumed: a spark from before it had one picks one now.
   fillModelField(form, editing ? spark.model || "" : "");
   const handle = form.querySelector("[data-handle]");
