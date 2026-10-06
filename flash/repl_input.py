@@ -68,6 +68,7 @@ COMMANDS = [
     ("/compact", "summarize the conversation to free up room"),
     ("/context", "show how much of the window is in use"),
     ("/stats", "what Flash has done for you so far"),
+    ("/notify", "how often the agent may notify you (/notify 4 per 15m)"),
     ("/image", "send an image to the model (/image <path> [prompt])"),
     ("/web", "open Flash in your browser (/web lan for your phone)"),
     ("/extension", "list, install, or remove extensions (/extension help)"),

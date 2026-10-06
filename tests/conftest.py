@@ -61,6 +61,9 @@ def isolated_home(tmp_path_factory, monkeypatch):
     monkeypatch.setattr(sparks, "FLASH_DIR", home / ".flash")
     # How many notifications the agent has sent lately.
     monkeypatch.setattr(notify, "FLASH_DIR", home / ".flash")
+    monkeypatch.setattr(notify, "ENV_PATH", str(home / ".flash.env"))
+    monkeypatch.setenv(notify.LIMIT_SETTING, "")
+    monkeypatch.setenv(notify.WINDOW_SETTING, "")
     # The tally of replies, and what tips have been shown.
     monkeypatch.setattr(showcase, "FLASH_DIR", home / ".flash")
     monkeypatch.delenv("SHOW_TIPS", raising=False)

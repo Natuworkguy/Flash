@@ -114,3 +114,67 @@ def test_sparks_and_sub_agents_can_notify():
     assert "notify_user" in tools.SUBAGENT_TOOL_NAMES  # nosec B101
     assert "notify_user" in tools.SPARK_TOOL_NAMES  # nosec B101
     assert "notify_user" in tools.FUNCTIONS  # nosec B101
+
+
+def test_the_limit_starts_at_its_default():
+    assert notify.limits() == (  # nosec B101
+        notify.NOTIFY_LIMIT, notify.NOTIFY_WINDOW,
+    )
+    said = notify.limit_words()
+    assert "4 notifications every 15 minutes" in said  # nosec B101
+
+
+def test_the_user_sets_the_limit():
+    assert notify.set_limits(10, "60m") == (10, 3600)  # nosec B101
+    assert notify.limits() == (10, 3600)  # nosec B101
+    assert "every 1 hour" in notify.limit_words()  # nosec B101
+    saved = (notify.FLASH_DIR.parent / ".flash.env").read_text()
+    assert "NOTIFY_LIMIT=" in saved  # nosec B101
+
+
+def test_a_limit_out_of_range_is_refused():
+    for count, minutes in ((61, 15), (4, 0), ("lots", 15), (4, "soon")):
+        with pytest.raises(notify.LimitError):
+            notify.set_limits(count, minutes)
+    assert notify.limits()[0] == notify.NOTIFY_LIMIT  # nosec B101
+
+
+def test_a_tighter_limit_brings_the_gap_down():
+    notify.set_limits(20, 1)
+    start = 1_000_000.0
+
+    assert notify.take_notify_turn(start) == 0  # nosec B101
+    # 20 in a minute is one every 3 seconds, not one every 30.
+    assert notify.take_notify_turn(start + 3) == 0  # nosec B101
+
+
+def test_a_bigger_limit_lets_more_through():
+    notify.set_limits(6, 15)
+    start = 1_000_000.0
+    for turn in range(6):
+        assert notify.take_notify_turn(start + turn * 30) == 0  # nosec B101
+
+    assert notify.take_notify_turn(start + 6 * 30) > 0  # nosec B101
+
+
+def test_notifications_turned_off_are_refused(shown):
+    notify.set_limits("off", 15)
+
+    result = tools.notify_user("Done")
+
+    assert "turned notifications from you off" in result  # nosec B101
+    assert shown == []  # nosec B101
+    assert "cannot send notifications" in notify.limit_words()  # nosec B101
+
+
+def test_the_terminal_sets_the_limit(monkeypatch):
+    from flash import ai
+
+    ai._notify_command("8 per 30m")
+    assert notify.limits() == (8, 1800)  # nosec B101
+
+    ai._notify_command("off")
+    assert notify.limits() == (0, 1800)  # nosec B101
+
+    ai._notify_command("on")
+    assert notify.limits() == (notify.NOTIFY_LIMIT, 1800)  # nosec B101

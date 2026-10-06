@@ -64,6 +64,7 @@ from .edit import Edit, apply_edits
 from .images import resolve_image_path
 from .memory import add_memory, forget_memory, search_memory
 from .notify import desktop as desktop_notify
+from .notify import limits as notify_limits
 from .notify import notify_needs_input, take_notify_turn
 from .sysprompt import get_system_prompt, model_sees_images
 from .theme import (
@@ -3840,6 +3841,13 @@ def notify_user(message: str, title: str = "") -> str:
         message = message[:MAX_NOTIFY_MESSAGE - 1].rstrip() + "…"
     title = title[:MAX_NOTIFY_TITLE]
 
+    if not notify_limits()[0]:
+        result = (
+            "Error: not sent. The user has turned notifications from you "
+            "off. Say it in your reply instead."
+        )
+        tool_result(result, style=WARN)
+        return result
     wait = take_notify_turn()
     if wait:
         result = (

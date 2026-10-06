@@ -3835,6 +3835,20 @@ def test_the_page_hears_when_no_host_answers(monkeypatch):
     assert said["spark_model"] == "qwen3:8b"
 
 
+def test_the_page_reads_and_sets_the_notification_limit():
+    session = web.Session()
+
+    now = web.command(session, {"name": "notify-limit"})
+    changed = web.command(session, {"name": "notify-limit", "arg": "10/60"})
+    off = web.command(session, {"name": "notify-limit", "arg": "off"})
+
+    assert (now["count"], now["minutes"]) == (4, 15)
+    assert (changed["count"], changed["minutes"]) == (10, 60)
+    assert off["count"] == 0 and off["minutes"] == 60
+    with pytest.raises(ValueError):
+        web.command(session, {"name": "notify-limit", "arg": "999/15"})
+
+
 # --- Screen recordings ---------------------------------------------------
 
 
