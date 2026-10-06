@@ -406,6 +406,9 @@ class Spark:
     spent: dict = field(default_factory=dict)
     # Paused by its budget, not by the user: it resumes at the new period.
     budget_paused: bool = False
+    # Paused by Pause all or Stop all, not on its own: Resume all wakes
+    # these, and leaves the ones paused one by one as they are.
+    held: bool = False
 
     @property
     def handle(self) -> str:
@@ -2052,6 +2055,7 @@ def set_paused(key: str, paused: bool) -> Spark:
             )
         spark.paused = paused
         spark.budget_paused = False
+        spark.held = False
         if not paused and spark.next_run < time.time():
             # Back from a pause, it picks up now rather than at once for
             # every shift it missed.
@@ -2061,6 +2065,72 @@ def set_paused(key: str, paused: bool) -> Spark:
     log(spark.id, "paused" if paused else "resumed")
     wake()
     return spark
+
+
+def pause_all() -> list[Spark]:
+    """Pause every spark that is not paused already: no shift starts on
+    its schedule until Resume all. A shift running now finishes."""
+
+    held: list[Spark] = []
+    with _held():
+        for spark in all_sparks():
+            if spark.paused:
+                continue
+            spark.paused = True
+            spark.held = True
+            _save(spark)
+            held.append(spark)
+    for spark in held:
+        log(spark.id, "paused", all=True)
+    _changed()
+    return held
+
+
+def stop_all() -> dict:
+    """Everything stops: each shift running now at its next step, each
+    step waiting for an answer called off, and every spark paused until
+    Resume all. How many of each."""
+
+    stopped = 0
+    for spark in all_sparks():
+        if spark.status == WORKING or spark.status == WAITING:
+            with contextlib.suppress(SparkError):
+                stop(spark.id)
+                stopped += 1
+    paused = pause_all()
+    return {"stopped": stopped, "paused": len(paused)}
+
+
+def resume_all() -> list[Spark]:
+    """Wake the sparks Pause all or Stop all paused. Those paused one by
+    one, or by their budget, stay as they are."""
+
+    woke: list[Spark] = []
+    with _held():
+        for spark in all_sparks():
+            if not spark.held:
+                continue
+            spark.held = False
+            if over_budget(spark):
+                spark.budget_paused = True
+                _save(spark)
+                continue
+            spark.paused = False
+            if spark.next_run < time.time():
+                spark.next_run = time.time()
+            _save(spark)
+            woke.append(spark)
+    for spark in woke:
+        log(spark.id, "resumed", all=True)
+    _changed()
+    wake()
+    return woke
+
+
+def held_count() -> int:
+    """How many sparks Pause all or Stop all is holding."""
+
+    return sum(1 for s in all_sparks() if s.held)
 
 
 def _add_lesson(spark: Spark, lesson: str) -> None:

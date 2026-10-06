@@ -580,3 +580,91 @@ def test_the_page_sets_a_period():
 
     assert got["spark"]["budget_period"] == "hour"
     assert got["spark"]["period_words"] == "this hour"
+
+
+# --- Every spark at once -------------------------------------------------
+
+
+def test_pause_all_holds_every_spark_and_resume_all_wakes_only_those():
+    sparks.create("Scout", "Look.")
+    sparks.create("Tidy", "Tidy.")
+    sparks.create("Asleep", "Sleep.")
+    sparks.set_paused("asleep", True)
+
+    held = sparks.pause_all()
+
+    assert {s.name for s in held} == {"Scout", "Tidy"}
+    assert all(s.paused for s in sparks.all_sparks())
+    assert sparks.due() == [] and sparks.held_count() == 2
+
+    woke = sparks.resume_all()
+
+    assert {s.name for s in woke} == {"Scout", "Tidy"}
+    assert sparks.find("asleep").paused  # paused on its own: stays so
+    assert sparks.held_count() == 0
+
+
+def test_stop_all_stops_running_shifts_and_calls_off_waiting_ones():
+    sparks.create("Busy", "Work.")
+    sparks.create("Asking", "Ask.")
+    sparks._edit("busy", lambda s: setattr(s, "status", sparks.WORKING))
+    sparks._edit("asking", lambda s: (
+        setattr(s, "status", sparks.WAITING),
+        setattr(s, "pending", {"label": "Run a command"}),
+    ))
+
+    done = sparks.stop_all()
+
+    assert done == {"stopped": 2, "paused": 2}
+    assert sparks.find("busy").stop_asked
+    asking = sparks.find("asking")
+    assert asking.status == sparks.IDLE and asking.pending == {}
+    assert all(s.paused for s in sparks.all_sparks())
+
+
+def test_resuming_one_by_hand_lets_it_go_from_pause_all():
+    sparks.create("Scout", "Look.")
+    sparks.pause_all()
+
+    sparks.set_paused("scout", False)
+
+    assert not sparks.find("scout").held
+    assert sparks.resume_all() == []
+
+
+def test_a_team_from_a_preset_starts_paused_on_the_page():
+    session = web.Session()
+
+    added = web.command(session, {"name": "team-add", "arg": "Dev Team"})
+    members = sparks.members(added["team"]["id"])
+    assert members and all(s.paused for s in members)
+
+    running = web.command(session, {
+        "name": "team-add", "arg": "Personal Desk", "paused": False,
+    })
+    assert not any(s.paused for s in sparks.members(running["team"]["id"]))
+
+
+def test_the_page_and_terminal_pause_stop_and_resume_all(monkeypatch):
+    from flash import ai
+
+    session = web.Session()
+    sparks.create("Scout", "Look.")
+
+    assert web.command(session, {"name": "sparks-pause-all"}) == {"paused": 1}
+    assert web.command(session, {"name": "sparks"})["held"] == 1
+    assert web.command(session, {"name": "sparks-resume-all"}) == {
+        "resumed": 1,
+    }
+    ai._sparks_command("stop all")
+    assert sparks.find("scout").paused
+    ai._sparks_command("resume all")
+    assert not sparks.find("scout").paused
+
+    monkeypatch.setattr(ai.Config, "model", "m")
+    ai._sparks_command("teams add Dev Team")
+    team = sparks.find_team("dev team")
+    assert all(s.paused for s in sparks.members(team.id))
+    ai._sparks_command("teams add Personal Desk running")
+    team = sparks.find_team("personal desk")
+    assert not any(s.paused for s in sparks.members(team.id))

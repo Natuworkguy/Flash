@@ -2476,8 +2476,16 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
             "sparks": [s.to_dict() for s in sparks.all_sparks()],
             "teams": [team_info(t) for t in sparks.teams()],
             "hires": sparks.hires(),
+            "held": sparks.held_count(),
             "always": keepalive.status(),
         }
+
+    if name == "sparks-pause-all":
+        return {"paused": len(sparks.pause_all())}
+    if name == "sparks-stop-all":
+        return sparks.stop_all()
+    if name == "sparks-resume-all":
+        return {"resumed": len(sparks.resume_all())}
 
     if name.startswith(("team-", "hire-")):
         return _team_command(name, arg, body)
@@ -2886,8 +2894,11 @@ def _team_command(name: str, arg: str, body: dict) -> dict:
         if name == "team-templates":
             return {"templates": sparks.team_templates()}
         if name == "team-add":
+            # Its sparks start paused unless asked otherwise: a whole team
+            # at once is a lot to set going before it is looked over.
             return {"team": team_info(sparks.add_team(
-                arg, str(body.get("model") or ""), bool(body.get("paused")),
+                arg, str(body.get("model") or ""),
+                bool(body.get("paused", True)),
             ))}
         if name == "hire-decide":
             return {"hire": sparks.decide_hire(
