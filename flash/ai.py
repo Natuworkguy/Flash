@@ -2493,6 +2493,68 @@ def _spark_says(spark: "sparks.Spark", said: "sparks.Message") -> None:
     console.print()
 
 
+TEAM_CHAT_SHOWN = 15
+
+
+def _team_chat(rest: str) -> None:
+    """/sparks teamchat <team> [message]: a team's group chat, its
+    latest shown; with a message, that one is sent and answered."""
+
+    from . import teamchat
+
+    words = rest.split()
+    team, said = None, ""
+    # A team's name can have spaces in it: the longest one that matches.
+    for count in range(len(words), 0, -1):
+        team = sparks.find_team(" ".join(words[:count]))
+        if team is not None:
+            said = " ".join(words[count:])
+            break
+    if team is None:
+        warn(f"No team called {rest!r}.")
+        return
+    by_id = {s.id: s for s in sparks.all_sparks()}
+
+    def show(entry: dict) -> None:
+        spark = by_id.get(entry.get("spark", ""))
+        if entry["kind"] == teamchat.USER:
+            line = Text("  You  ", style=f"bold {ACCENT}")
+            line.append(entry["text"])
+            console.print(line)
+        elif entry["kind"] == teamchat.EVENT:
+            console.print(Text(
+                f"  {teamchat._line(entry, by_id).strip('()')}", style=DIM,
+            ))
+        elif spark is not None:
+            _spark_says(spark, sparks.Message(
+                at=entry["at"], who="spark", text=entry["text"],
+                steps=entry.get("steps", []),
+                failed=bool(entry.get("failed")),
+            ))
+
+    if not said:
+        entries = teamchat.history(team.id)["entries"][-TEAM_CHAT_SHOWN:]
+        console.print(Text(f"\n{team.name}'s chat", style="bold"))
+        if not entries:
+            console.print(Text(
+                "  Nothing said yet. /sparks teamchat "
+                f"{team.name} <message> starts it.", style=DIM,
+            ))
+        for entry in entries:
+            show(entry)
+        teamchat.mark_read(team.id)
+        return
+    try:
+        message = teamchat.say(team.id, said)
+    except teamchat.TeamChatError as exc:
+        warn(str(exc))
+        return
+    with console.status(f"{team.name} is answering", spinner="dots"):
+        posted = teamchat.answer(team.id, message, _client())
+    for entry in posted:
+        show(entry)
+
+
 def _chat_with_spark(key: str, first: str) -> None:
     """/sparks chat <name> [message]: talk with a spark between shifts.
 
@@ -2950,6 +3012,9 @@ def _sparks_command(arg: str) -> None:
         if action == "teams":
             _teams_command(rest)
             return
+        if action == "teamchat" and rest:
+            _team_chat(rest)
+            return
         if action == "team" and key:
             spark = sparks.set_team(
                 key, "" if extra.lower() in ("", "none") else extra,
@@ -3037,7 +3102,8 @@ def _sparks_command(arg: str) -> None:
             "| model <name> [model] | title <name> <title|none> "
             "| rounds [number|unlimited] | default [model|flash] "
             "| pause all | resume all | stop all "
-            "| teams [new|remove|share|add|templates] | team <name> "
+            "| teams [new|remove|share|add|templates] | teamchat <team> "
+            "[message] | team <name> "
             "<team|none> | lead <name> <lead|none> | budget <name> "
             "<tokens [hour|day|week|month]|off> | audit <name> | hires "
             "| hire <id> yes|no "

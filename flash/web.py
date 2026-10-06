@@ -60,6 +60,7 @@ from . import (
     skills,
     sparks,
     systemone,
+    teamchat,
     updater,
     voice,
     workspace,
@@ -2937,6 +2938,7 @@ def team_info(team: "sparks.Team") -> dict:
     return {
         "id": team.id, "name": team.name, "colour": team.colour,
         "created": team.created, "chart": sparks.org_chart(team.id),
+        "chat_unread": teamchat.unread(team.id),
     }
 
 
@@ -2955,6 +2957,14 @@ def _team_command(name: str, arg: str, body: dict) -> dict:
             ))}
         if name == "team-remove":
             return {"team": team_info(sparks.remove_team(arg))}
+        if name == "team-chat":
+            # The page with the chat open reads what it has not drawn,
+            # and, while it is in front of the user, marks it read.
+            if body.get("read"):
+                teamchat.mark_read(arg)
+            return teamchat.history(arg, int(body.get("since") or 0))
+        if name == "team-chat-say":
+            return {"entry": teamchat.send(arg, str(body.get("text") or ""))}
         if name == "team-share":
             return {"code": sparks.share_team_code(arg)}
         if name == "team-code":
@@ -2977,7 +2987,7 @@ def _team_command(name: str, arg: str, body: dict) -> dict:
             return {"hire": sparks.decide_hire(
                 arg, bool(body.get("yes")), str(body.get("why") or ""),
             )}
-    except sparks.SparkError as exc:
+    except (sparks.SparkError, teamchat.TeamChatError) as exc:
         raise ValueError(str(exc)) from None
     raise ValueError(f"unknown command {name!r}")
 
@@ -3704,6 +3714,9 @@ def _attach(server: "Server", standalone: bool) -> None:
     # Sparks work for as long as the server runs, and the page hears of
     # every shift they start and finish.
     sparks.on_change(session.sparks_changed)
+    teamchat.on_change(
+        lambda team: session.hub.publish({"type": "team-chat", "team": team})
+    )
     sparks.start()
     session.switch_lan = lambda on: threading.Timer(
         SWITCH_DELAY, _switch_lan, (server, on),
