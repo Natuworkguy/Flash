@@ -2042,3 +2042,140 @@ def test_other_sparks_are_not_offered_email_tools(model):
     offered = {t["function"]["name"] for t in client.calls[0]["tools"]}
     assert "check_inbox" not in offered
     assert not sparks.needs_email(made)
+
+
+# --- The default model for new sparks -------------------------------------
+
+
+class _Listed:
+    def __init__(self, name):
+        self.model = name
+
+
+class _Listing:
+    def __init__(self, names):
+        self.models = [_Listed(n) for n in names]
+
+
+class HostClient(FakeClient):
+    """A FakeClient on a host with these models, and no others."""
+
+    def __init__(self, responses, here):
+        super().__init__(responses)
+        self.here = here
+        self.used = []
+
+    def list(self):
+        return _Listing(self.here)
+
+    def chat(self, model, messages, tools=None, options=None):
+        self.used.append(model)
+        return super().chat(model, messages, tools, options)
+
+
+def test_new_sparks_are_on_flashs_model_until_a_default_is_set():
+    assert sparks.default_model() == ""  # nosec B101
+    made = sparks.model_for_new("mine", look=False)
+
+    assert made == ("mine", "")  # nosec B101
+
+
+def test_the_default_is_kept_and_flash_takes_it_back():
+    assert sparks.set_default_model("qwen3:8b") == "qwen3:8b"  # nosec B101
+    assert sparks.default_model() == "qwen3:8b"  # nosec B101
+    saved = Path(sparks.ENV_PATH).read_text()
+    assert "SPARK_DEFAULT_MODEL=" in saved  # nosec B101
+
+    assert sparks.set_default_model("flash") == ""  # nosec B101
+    assert sparks.default_model() == ""  # nosec B101
+
+
+def test_new_sparks_are_made_on_the_default_while_it_is_here():
+    sparks.set_default_model("qwen3")
+
+    here = {"qwen3:latest", "llama3.1:latest"}
+    made = sparks.model_for_new("llama3.1", here)
+    # Not known whether it is here: it is used, and Ollama has its say.
+    unknown = sparks.model_for_new("llama3.1", None, look=False)
+
+    assert made == unknown == ("qwen3", "")  # nosec B101
+
+
+def test_a_default_that_is_gone_falls_back_to_flashs_model():
+    sparks.set_default_model("qwen3:8b")
+
+    model, note = sparks.model_for_new("llama3.1", {"llama3.1:latest"})
+
+    assert model == "llama3.1"  # nosec B101
+    assert "qwen3:8b" in note  # nosec B101
+    assert "not on this computer" in note  # nosec B101
+
+
+def test_make_spark_uses_the_default(model, monkeypatch):
+    monkeypatch.setattr(tools, "NO_COMMAND_CONFIRMATION", True)
+    monkeypatch.setattr(sparks, "models_here", lambda client=None: None)
+    sparks.set_default_model("qwen3:8b")
+
+    result = tools.make_spark("Scout", "Watch the issues.")
+
+    assert "on qwen3:8b" in result  # nosec B101
+    assert sparks.all_sparks()[0].model == "qwen3:8b"  # nosec B101
+
+
+def test_make_spark_says_when_the_default_is_gone(model, monkeypatch):
+    monkeypatch.setattr(tools, "NO_COMMAND_CONFIRMATION", True)
+    monkeypatch.setattr(
+        sparks, "models_here", lambda client=None: {"test-model:latest"},
+    )
+    sparks.set_default_model("qwen3:8b")
+
+    result = tools.make_spark("Scout", "Watch the issues.")
+
+    assert sparks.all_sparks()[0].model == "test-model"  # nosec B101
+    assert "Tell the user: qwen3:8b" in result  # nosec B101
+
+
+def test_a_spark_whose_model_is_gone_runs_on_another(model):
+    made = sparks.create("Scout", "Watch the issues.", model="gone:7b")
+    sparks.set_default_model("qwen3")
+    client = HostClient([_reply("Issue 12 is new.")], ["qwen3:latest"])
+
+    report = sparks.shift(made.id, client=client)
+
+    assert client.used == ["qwen3"]  # nosec B101
+    assert report.text.startswith("Issue 12 is new.")  # nosec B101
+    assert "gone:7b is not on this computer" in report.text  # nosec B101
+    # Its own model is left as it was, for the user to change.
+    assert sparks.find(made.id).model == "gone:7b"  # nosec B101
+
+
+def test_a_quiet_shift_still_says_its_model_is_gone(model):
+    made = sparks.create("Scout", "Watch the issues.", model="gone:7b")
+    client = HostClient([_reply("NOTHING NEW")], ["test-model:latest"])
+
+    report = sparks.shift(made.id, client=client)
+
+    assert client.used == ["test-model"]  # nosec B101
+    assert not report.quiet  # nosec B101
+    assert "ran on test-model" in report.text  # nosec B101
+
+
+def test_a_spark_with_no_model_to_run_on_fails_plainly(model):
+    made = sparks.create("Scout", "Watch the issues.", model="gone:7b")
+    client = HostClient([_reply("unused")], ["other:latest"])
+
+    report = sparks.shift(made.id, client=client)
+
+    assert report.failed  # nosec B101
+    assert "gone:7b is not on this computer" in report.text  # nosec B101
+    assert client.used == []  # nosec B101
+
+
+def test_a_spark_on_a_model_still_here_is_left_alone(model):
+    made = sparks.create("Scout", "Watch the issues.", model="qwen3:8b")
+    client = HostClient([_reply("Done.")], ["qwen3:8b"])
+
+    report = sparks.shift(made.id, client=client)
+
+    assert client.used == ["qwen3:8b"]  # nosec B101
+    assert report.text == "Done."  # nosec B101

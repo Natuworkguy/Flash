@@ -1020,6 +1020,10 @@ body.page-projects #dock, body.page-settings #dock, body.page-tool #dock { displ
 .setting-row { display: flex; align-items: center; justify-content: space-between; gap: 20px; max-width: 620px; padding: 14px 16px; border: 1px solid var(--border); border-radius: 14px; background: var(--surface); text-align: left; width: 100%; }
 /* Two in a row under one heading: apart, not touching. */
 .setting-row + .setting-row { margin-top: 10px; }
+.spark-model-row .side select { font: 13.5px var(--sans); color: var(--text); background: var(--bg); border: 1px solid var(--border-strong); border-radius: 9px; padding: 7px 10px; max-width: 220px; outline: 0; }
+.spark-model-row.warned { border-color: color-mix(in srgb, var(--warn, #c9821f) 55%, var(--border)); }
+.model-gone-word { display: inline !important; font-size: inherit !important; font-weight: 600 !important; color: var(--warn, #c9821f) !important; margin: 0 !important; }
+.field .model-gone { margin: 6px 0 0; font-size: 12.5px; line-height: 1.45; color: var(--warn, #c9821f); }
 .setting-row[hidden] { display: none; }
 .setting-row .what b { display: block; font-size: 14.5px; font-weight: 500; color: var(--text); margin-bottom: 3px; }
 .setting-row .what span { font-size: 13px; color: var(--text-3); line-height: 1.45; }
@@ -4914,6 +4918,11 @@ function drawGeneral(body) {
   body.appendChild(rounds);
   fillRoundsRow(rounds, limit);
 
+  // The model a new spark starts on, picked for it in the form.
+  const sparkModel = el("div", "setting-row static spark-model-row", `<span class="what"><b>Default model for new sparks</b><span></span></span><span class="side"><select aria-label="Default model for new sparks"><option>Loading…</option></select></span>`);
+  body.appendChild(sparkModel);
+  fillSparkModelRow(sparkModel);
+
   body.insertAdjacentHTML("beforeend", `<h2 class="settings-section settings-gap">Voice models</h2><p class="settings-sub">What voice mode listens and speaks with. Both run on this computer, so pick lighter ones for a weaker machine.</p><div class="voice-models"></div>`);
   drawVoiceModels(body.querySelector(".voice-models"));
 
@@ -5810,7 +5819,9 @@ function teamForm(team = null) {
       const code = (data.code || "").trim();
       const from = form.dataset.template || code;
       let made;
-      if (from) made = (await command("team-add", from, null, { model: info.model || "", paused: !!data.paused })).team;
+      let note = "";
+      if (from) ({ team: made, note } = await command("team-add", from, null, { model: "", paused: !!data.paused }));
+      if (note) toast(note);
       else made = (await command("team-create", name, null, { colour: chosen })).team;
       freshTeams.set(made.id, Date.now());
       toast(from ? `${made.name} is here, with its sparks` : `Made ${made.name}. Edit a spark to put it on the team.`);
@@ -6228,6 +6239,36 @@ function fillSpark(box, spark, again = false) {
   if (said.length && quiet) reports.appendChild(el("p", "spark-quiet", `And ${quiet} quiet shift${quiet === 1 ? "" : "s"} with nothing new.`));
 }
 
+// Settings' pick of the model new sparks are made on: Flash's own, or
+// one of this computer's. One that has since gone from it stays in the
+// list, marked, with what new sparks get meanwhile.
+async function fillSparkModelRow(row) {
+  const select = row.querySelector("select");
+  const words = row.querySelector(".what span");
+  const draw = (said) => {
+    const listed = said.models || [];
+    const chosen = said.spark_default || "";
+    const names = chosen && !listed.includes(chosen) ? [chosen, ...listed] : listed;
+    select.innerHTML = `<option value="flash">Flash's model${info.model ? ` (${esc(shortModel(info.model))})` : ""}</option>` + names.map((m) => `<option value="${esc(m)}">${esc(m)}${listed.includes(m) || !said.reachable ? "" : " (not here)"}</option>`).join("");
+    select.value = chosen || "flash";
+    row.classList.toggle("warned", said.spark_default_here === false);
+    words.innerHTML = said.spark_default_here === false
+      ? `<b class="model-gone-word">${esc(chosen)} is not on this computer any more.</b> New sparks are made on ${esc(said.spark_model || "Flash's model")} until you pick another, and sparks on it run on that meanwhile.`
+      : "The model the form picks for a new spark, and the one teams and sparks made by Flash start on. Each spark can still have its own.";
+  };
+  let said;
+  try { said = await command("model", "", null); } catch (_) { words.textContent = "Could not ask this computer for its models."; return; }
+  if (!row.isConnected) return;
+  draw(said);
+  select.onchange = async () => {
+    try {
+      const now = await command("spark-default-model", select.value, null);
+      draw({ ...said, ...now });
+      toast(now.spark_default ? `New sparks are made on **${now.spark_default}**` : "New sparks are made on Flash's model");
+    } catch (error) { showFailure(error); }
+  };
+}
+
 // The model a spark runs on, chosen in its form: the host's models in a
 // list, with none picked until one is. A host that does not answer
 // leaves a box to type the name in.
@@ -6235,12 +6276,21 @@ function modelField(current = "") {
   return `<label class="field"><span>Model</span><select name="model" required><option value="">Loading the models…</option></select><small>What it thinks with, on every shift and in every chat. A smaller model is quicker and lighter on this computer; a bigger one does harder work.</small></label>`;
 }
 
-async function fillModelField(form, current = "") {
+// FRESH, for a spark not made yet: the default for new sparks is picked
+// for it, or, when that is no longer on this computer, the form says so.
+async function fillModelField(form, current = "", fresh = false) {
   const select = form.querySelector("select[name=model]");
   if (!select) return;
   let listed = [];
-  try { listed = (await command("model", "", null)).models || []; } catch (_) { listed = []; }
+  let said = {};
+  try { said = await command("model", "", null); listed = said.models || []; } catch (_) { listed = []; }
   if (!select.isConnected) return;
+  if (fresh && !current && said.spark_default) {
+    if (said.spark_default_here === false) {
+      const gone = el("p", "model-gone", `<b>${esc(said.spark_default)}</b>, your default for new sparks, is not on this computer any more. Pick one here, or another default in Settings.`);
+      select.closest(".field").appendChild(gone);
+    } else current = said.spark_default;
+  }
   if (!listed.length) {
     const box = el("input");
     box.name = "model";
@@ -6253,7 +6303,7 @@ async function fillModelField(form, current = "") {
     return;
   }
   const names = current && !listed.includes(current) ? [current, ...listed] : listed;
-  select.innerHTML = `<option value="">Choose a model…</option>` + names.map((m) => `<option value="${esc(m)}">${esc(m)}${m === info.model ? " (Flash's)" : ""}</option>`).join("");
+  select.innerHTML = `<option value="">Choose a model…</option>` + names.map((m) => `<option value="${esc(m)}">${esc(m)}${!listed.includes(m) ? " (not on this computer)" : m === said.spark_default ? " (default)" : m === info.model ? " (Flash's)" : ""}</option>`).join("");
   select.value = current;
 }
 
@@ -6296,7 +6346,7 @@ function addSharedSpark() {
     });
   const box = form.querySelector(".preview, .spark-preview");
   const submit = form.querySelector("[type=submit]");
-  fillModelField(form);
+  fillModelField(form, "", true);
   form.querySelector("[data-cancel]").onclick = closeForm;
   let timer = null;
   form.code.addEventListener("input", () => {
@@ -6451,7 +6501,7 @@ function sparkForm(spark, inProjectId = "", template = "") {
   setTimesField(form);
   teamFields(form, spark);
   // Chosen, not assumed: a spark from before it had one picks one now.
-  fillModelField(form, editing ? spark.model || "" : "");
+  fillModelField(form, editing ? spark.model || "" : "", !editing);
   const handle = form.querySelector("[data-handle]");
   const named = () => { handle.textContent = sparkHandle(form.sparkname.value || "scout"); };
   form.sparkname.addEventListener("input", named);

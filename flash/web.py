@@ -66,6 +66,7 @@ from . import (
 )
 from .dashes import DashGuard
 from .emojis import EMOJIS
+from .models import full_name
 from .sysprompt import model_sees_images
 from .theme import (
     ACCENT,
@@ -2125,6 +2126,27 @@ def context_use(ai, chat: Chat) -> dict:
 MODEL_LIST_SECONDS = 4.0
 
 
+def _spark_default(models: Optional[list[str]]) -> dict:
+    """The model new sparks are made on, for the page: whether it is
+    still on this computer (None when the host did not say), and the
+    one a new spark gets instead when it is not."""
+
+    from . import ai  # deferred: ai imports half of Flash
+
+    chosen = sparks.default_model()
+    here = None if models is None else {
+        full_name(m) for m in models
+    }
+    model, gone = sparks.model_for_new(
+        ai.Config.model or "", here, look=False,
+    )
+    return {
+        "spark_default": chosen,
+        "spark_default_here": sparks.is_here(chosen, here),
+        "spark_model": model, "spark_default_note": gone,
+    }
+
+
 def list_models(ai) -> Optional[list[str]]:
     """The models on the current host, or None if it did not answer."""
 
@@ -2544,6 +2566,12 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
         except keepalive.KeepAliveError as exc:
             raise ValueError(str(exc)) from None
 
+    if name == "spark-default-model":
+        # No arg: only what it is. "flash" makes it Flash's own again.
+        if arg:
+            sparks.set_default_model(arg)
+        return _spark_default(list_models(ai))
+
     if name.startswith("spark-"):
         return _spark_command(name, arg, body)
 
@@ -2709,7 +2737,8 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
             session.hub.publish({"type": "status"})
         models = list_models(ai)
         return {"model": ai.Config.model or "", "models": models or [],
-                "reachable": models is not None}
+                "reachable": models is not None,
+                **_spark_default(models)}
 
     if name == "hosts":
         return {"hosts": workspace.hosts_with_health(ai.Config.host),
@@ -2912,10 +2941,15 @@ def _team_command(name: str, arg: str, body: dict) -> dict:
         if name == "team-add":
             # Its sparks start paused unless asked otherwise: a whole team
             # at once is a lot to set going before it is looked over.
+            from . import ai  # deferred: ai imports half of Flash
+
+            # Given none, it is made on the model new sparks are made on.
+            model, gone = str(body.get("model") or ""), ""
+            if not model:
+                model, gone = sparks.model_for_new(ai.Config.model or "")
             return {"team": team_info(sparks.add_team(
-                arg, str(body.get("model") or ""),
-                bool(body.get("paused", True)),
-            ))}
+                arg, model, bool(body.get("paused", True)),
+            )), "note": gone}
         if name == "hire-decide":
             return {"hire": sparks.decide_hire(
                 arg, bool(body.get("yes")), str(body.get("why") or ""),
