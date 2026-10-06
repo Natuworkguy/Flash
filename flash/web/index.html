@@ -1698,6 +1698,30 @@ body.all-stopped .org-node, body.all-stopped .spark-card { animation: all-halt 0
 .attachment .thumb img { width: 100%; height: 100%; object-fit: cover; }
 .attachment .thumb .badge { font: 700 10px/1 var(--sans); letter-spacing: 0.04em; color: var(--accent); }
 .attachment .info { flex: 1; min-width: 0; }
+.inline-image {
+  position: relative; display: block; padding: 0; overflow: hidden; cursor: zoom-in;
+  max-width: min(480px, 100%); width: fit-content; border-radius: 14px;
+  border: 1px solid var(--border); background: var(--hover);
+  transition: border-color 0.14s, box-shadow 0.2s, transform 0.25s var(--spring);
+}
+.inline-image img { display: block; max-width: 100%; max-height: 380px; width: auto; height: auto; object-fit: contain; }
+.inline-image:hover { border-color: var(--border-strong); box-shadow: var(--composer-shadow); transform: translateY(-1px); }
+.inline-image:active { transform: scale(0.985); }
+.inline-image:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.inline-image .caption {
+  position: absolute; left: 0; right: 0; bottom: 0; display: flex; align-items: center; gap: 8px;
+  padding: 18px 12px 9px; color: #fff; font-size: 12.5px; text-align: left;
+  background: linear-gradient(transparent, rgba(0, 0, 0, 0.55));
+  opacity: 0; transform: translateY(4px); transition: opacity 0.18s, transform 0.18s;
+}
+.inline-image:hover .caption, .inline-image:focus-visible .caption { opacity: 1; transform: none; }
+.inline-image .caption .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.inline-image .caption svg { width: 14px; height: 14px; }
+.inline-image.broken { min-width: 220px; min-height: 64px; cursor: pointer; }
+.inline-image.broken img { display: none; }
+.inline-image.broken .caption { position: static; opacity: 1; transform: none; color: var(--text-2); background: none; padding: 22px 14px; }
+@media (hover: none) { .inline-image .caption { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .inline-image, .inline-image .caption { transition: none; } }
 .attachment .name { font-weight: 500; font-size: 14.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .attachment .meta { font-size: 12.5px; color: var(--text-3); }
 .attachment .chev svg { width: 16px; height: 16px; color: var(--text-3); }
@@ -2815,6 +2839,24 @@ const fileKind = (entry) => (entry.kind === "pdf" ? "PDF" : entry.kind === "html
   : entry.kind === "midi" ? "MIDI"
   : entry.kind === "doc" ? (/\.txt$/i.test(entry.name) ? "Text" : "Markdown")
   : (entry.mime || "image/").split("/")[1].toUpperCase());
+
+// A picture the agent sends sits in the conversation itself, at its own
+// shape; a click opens it in the panel, to zoom and download.
+function inlineImage(entry) {
+  const card = el("button", "block inline-image");
+  card.type = "button";
+  card.dataset.file = entry.id;
+  card.setAttribute("aria-label", `Open ${entry.name}`);
+  card.innerHTML = `<img alt="" loading="lazy" decoding="async"><span class="caption"><span class="name"></span><span class="open">${icon("chevRight")}</span></span>`;
+  const img = card.querySelector("img");
+  img.alt = entry.name;
+  img.src = fileUrl(entry);
+  // One that will not load still says what it was, and still opens.
+  img.onerror = () => card.classList.add("broken");
+  card.querySelector(".name").textContent = entry.name;
+  card.onclick = () => openViewer(entry);
+  return card;
+}
 
 function attachment(entry) {
   const card = el("button", "block attachment");
@@ -4560,7 +4602,7 @@ function drawEntry(entry, ctx) {
       break;
     }
     case "tool": ctx.tool = toolCard(entry.label); messagesEl.appendChild(ctx.tool); break;
-    case "file": messagesEl.appendChild(attachment(entry)); break;
+    case "file": messagesEl.appendChild(entry.kind === "image" ? inlineImage(entry) : attachment(entry)); break;
     case "browser": drawBrowserFrame(entry); break;
     case "result": if (ctx.tool) addResult(ctx.tool, entry.text, entry.error, entry.warn); break;
     case "diff": if (ctx.tool) addDiff(ctx.tool, entry.text); break;
@@ -8822,7 +8864,8 @@ function notified(event) {
 // and a file the agent sends pops out on the right.
 function arrived(entry) {
   if (entry.type === "ask") focusAsk();
-  if (entry.type === "file") openViewer(entry);
+  // A picture shows where it is, in the chat; anything else pops out.
+  if (entry.type === "file" && entry.kind !== "image") openViewer(entry);
 }
 
 let routed = false;
