@@ -2531,14 +2531,20 @@ def _teams_command(rest: str) -> None:
         console.print(sparks.share_team_code(extra), soft_wrap=True)
         return
     if action == "add" and extra:
+        # Its sparks start paused, unless it says "running".
         source, _, last = extra.rpartition(" ")
-        paused = last.lower() == "paused" and bool(source.strip())
+        word = last.lower() if source.strip() else ""
+        paused = word != "running"
         team = sparks.add_team(
-            source.strip() if paused else extra, Config.model or "", paused,
+            source.strip() if word in ("running", "paused") else extra,
+            Config.model or "", paused,
         )
         console.print(Text(
             f"Added the team {team.name}, with "
-            + ", ".join(s.name for s in sparks.members(team.id)) + ".",
+            + ", ".join(s.name for s in sparks.members(team.id))
+            + (". They are paused: /sparks resume <name> starts one, or "
+               "add it with running at the end to start them all."
+               if paused else "."),
             style=DIM,
         ))
         return
@@ -2555,7 +2561,7 @@ def _teams_command(rest: str) -> None:
         return
     if action:
         warn("Usage: /sparks teams [new|remove|share <name> | add "
-             "<code|template> [paused] | templates]")
+             "<code|template> [running] | templates]")
         return
     found = sparks.teams()
     if not found:
@@ -2711,6 +2717,31 @@ def _sparks_command(arg: str) -> None:
         if action == "run" and key:
             spark = sparks.run_now(key)
             console.print(Text(f"{spark.name} starts a shift now.", DIM))
+            return
+        if action in ("pause", "resume", "stop") and key.lower() == "all":
+            if action == "pause":
+                held = sparks.pause_all()
+                said = (
+                    f"Paused {len(held)} spark{'' if len(held) == 1 else 's'}"
+                    ": shifts running now finish, and nothing starts until "
+                    "/sparks resume all."
+                )
+            elif action == "stop":
+                done = sparks.stop_all()
+                said = (
+                    f"Stopped {done['stopped']} shift"
+                    f"{'' if done['stopped'] == 1 else 's'} and paused "
+                    f"{done['paused']} spark"
+                    f"{'' if done['paused'] == 1 else 's'}. /sparks resume "
+                    "all starts them again."
+                )
+            else:
+                woke = sparks.resume_all()
+                said = (
+                    f"Resumed {len(woke)} spark{'' if len(woke) == 1 else 's'}"
+                    ". Ones you paused yourself stay paused."
+                )
+            console.print(Text(said, style=DIM))
             return
         if action in ("pause", "resume") and key:
             spark = sparks.set_paused(key, action == "pause")
@@ -2937,6 +2968,7 @@ def _sparks_command(arg: str) -> None:
             "| templates | goal <name> <text> | watch <name> <folder|none> "
             "| model <name> [model] | title <name> <title|none> "
             "| rounds [number|unlimited] "
+            "| pause all | resume all | stop all "
             "| teams [new|remove|share|add|templates] | team <name> "
             "<team|none> | lead <name> <lead|none> | budget <name> "
             "<tokens [hour|day|week|month]|off> | audit <name> | hires "

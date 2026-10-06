@@ -1430,6 +1430,13 @@ button.item-row:hover { background: var(--hover); }
 .budget-meter.full .said { color: var(--del); }
 
 /* Hires and let-gos waiting on the user. */
+.sparks-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; justify-content: space-between; margin: -4px 0 16px; padding: 8px 8px 8px 14px;
+  border-radius: 14px; border: 1px solid var(--border); background: var(--surface); font-size: 13px; color: var(--text-2); animation: rise 0.3s var(--ease) both; }
+.sparks-bar .buttons { display: flex; flex-wrap: wrap; gap: 6px; }
+.sparks-bar.holding { border-color: color-mix(in srgb, var(--warn) 45%, var(--border)); background: color-mix(in srgb, var(--warn) 7%, var(--surface)); }
+/* Stop all: everything flinches to a halt. */
+body.all-stopped .org-node, body.all-stopped .spark-card { animation: all-halt 0.6s var(--ease) both !important; }
+@keyframes all-halt { 0% { transform: none; } 25% { transform: translateX(-4px) scale(0.98); filter: saturate(0.4); } 50% { transform: translateX(3px); } 100% { transform: none; filter: saturate(1); } }
 .hire-stack { margin-bottom: 18px; }
 .hire-card { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-start; padding: 14px; margin-bottom: 8px; border-radius: 16px;
   border: 1px solid color-mix(in srgb, var(--warn) 40%, var(--border)); background: color-mix(in srgb, var(--warn) 6%, var(--surface)); animation: rise 0.35s var(--ease) both; }
@@ -5405,6 +5412,7 @@ async function drawSparks(body, again = false) {
   sparksAlways = r.always;
   const host = body.querySelector(".host");
   if (r.always.other) host.before(otherKeeperBanner(r.always));
+  if (r.sparks.length) host.appendChild(sparksBar(r, again));
   if (r.hires.length) host.appendChild(hireCards(r.hires, r.sparks, again));
   if (!r.sparks.length && !r.teams.length) {
     host.insertAdjacentHTML("beforeend", `<div class="mem-empty"><b>No sparks yet</b>Give one a goal like “every morning, check my repo for new issues and tell me which look like bugs”. Or ask Flash in a chat to make one, or start a whole team from New team.</div>`);
@@ -5585,6 +5593,53 @@ function orgNode(spark, depth, fresh) {
   return node;
 }
 
+// Every spark at once: Pause all holds their schedules, Stop all also
+// stops whatever is running and calls off what waits on you, and Resume
+// all wakes what either held.
+function sparksBar(r, again = false) {
+  const bar = el("div", "sparks-bar", `<span class="said"></span><span class="buttons"></span>`);
+  if (again) bar.style.animation = "none";
+  const working = r.sparks.filter((s) => s.status === "working" || s.waiting).length;
+  const awake = r.sparks.filter((s) => !s.paused).length;
+  const paused = r.sparks.length - awake;
+  bar.querySelector(".said").textContent = r.held
+    ? `${r.held} spark${r.held === 1 ? "" : "s"} paused till Resume all`
+    : [working && `${working} working`, `${awake} on schedule`, paused && `${paused} paused`].filter(Boolean).join(" · ");
+  bar.classList.toggle("holding", !!r.held);
+  const buttons = bar.querySelector(".buttons");
+  const add = (label, iconName, cls, run) => {
+    const b = el("button", `btn small with-icon ${cls}`, `${icon(iconName)}<span>${label}</span>`);
+    b.type = "button";
+    b.onclick = () => run(b);
+    buttons.appendChild(b);
+    return b;
+  };
+  if (r.held) {
+    add("Resume all", "play", "primary", async () => {
+      try { const { resumed } = await command("sparks-resume-all"); toast(`${resumed} spark${resumed === 1 ? "" : "s"} back on schedule`); }
+      catch (error) { showFailure(error); }
+    });
+  }
+  if (awake) {
+    add("Pause all", "pause", "", async () => {
+      try { const { paused: n } = await command("sparks-pause-all"); toast(`Paused ${n}: what is running finishes, and nothing starts till Resume all`); }
+      catch (error) { showFailure(error); }
+    });
+  }
+  if (awake || working) {
+    add("Stop all", "halt", "danger", async (b) => {
+      if (!b.classList.contains("sure")) { b.classList.add("sure"); b.querySelector("span").textContent = "Stop everything?"; return; }
+      try {
+        const done = await command("sparks-stop-all");
+        toast(`Stopped ${done.stopped} shift${done.stopped === 1 ? "" : "s"} and paused ${done.paused}`);
+        document.body.classList.add("all-stopped");
+        setTimeout(() => document.body.classList.remove("all-stopped"), 1200);
+      } catch (error) { showFailure(error); }
+    });
+  }
+  return bar;
+}
+
 // The spark a node reports to, as drawn: the node of the list item one
 // level up.
 function leadNodeOf(node) {
@@ -5738,7 +5793,8 @@ function teamForm(team = null) {
     ${team ? "" : `<div class="spark-templates team-templates"><span class="sub">Start from:</span></div>`}
     <label class="field"><span>Name</span><input name="teamname" maxlength="32" placeholder="Dev" autocomplete="off" required></label>
     <div class="field"><span>Colour</span><div class="swatches" role="radiogroup" aria-label="Colour">${TEAM_COLOURS.map((c) => `<button type="button" class="swatch" role="radio" data-c="${c}" style="--c:${c}" aria-label="${c}"></button>`).join("")}</div></div>
-    ${team ? "" : `<details class="team-code"><summary>Add a shared team instead</summary><label class="field"><span>Team code</span><textarea name="code" rows="3" class="mono" placeholder="flash-team:..." spellcheck="false"></textarea><small class="code-said">Paste the code someone shared. You see its sparks before anything is added.</small></label></details>`}
+    ${team ? "" : `<details class="team-code"><summary>Add a shared team instead</summary><label class="field"><span>Team code</span><textarea name="code" rows="3" class="mono" placeholder="flash-team:..." spellcheck="false"></textarea><small class="code-said">Paste the code someone shared. You see its sparks before anything is added.</small></label></details>
+    <label class="field check start-paused" hidden><input type="checkbox" name="paused" checked><span>Start its sparks paused, to look them over first. Resume each in its window, or Resume all.</span></label>`}
     <div class="dialog-buttons"><button type="button" class="btn" data-cancel>Cancel</button><button type="submit" class="btn primary">${team ? "Save" : "Make team"}</button></div>`,
     async (data) => {
       const name = (data.teamname || "").trim();
@@ -5751,7 +5807,7 @@ function teamForm(team = null) {
       const code = (data.code || "").trim();
       const from = form.dataset.template || code;
       let made;
-      if (from) made = (await command("team-add", from, null, { model: info.model || "" })).team;
+      if (from) made = (await command("team-add", from, null, { model: info.model || "", paused: !!data.paused })).team;
       else made = (await command("team-create", name, null, { colour: chosen })).team;
       freshTeams.set(made.id, Date.now());
       toast(from ? `${made.name} is here, with its sparks` : `Made ${made.name}. Edit a spark to put it on the team.`);
@@ -5779,12 +5835,18 @@ function teamForm(team = null) {
         chip.classList.toggle("on", on);
         form.dataset.template = on ? t.name : "";
         if (on) form.teamname.value = t.name;
+        showStartPaused();
       };
       row.appendChild(chip);
     }
   }).catch(() => {});
+  // Only a team that comes with sparks has sparks to start paused.
+  const showStartPaused = () => {
+    form.querySelector(".start-paused").hidden = !(form.dataset.template || form.code.value.trim());
+  };
   let timer = 0;
   form.code.addEventListener("input", () => {
+    showStartPaused();
     clearTimeout(timer);
     const said = form.querySelector(".code-said");
     timer = setTimeout(async () => {
