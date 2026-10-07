@@ -1,27 +1,40 @@
-<a href="https://github.com/Natuworkguy/Flash"><img src="flash/web/logo-icon.svg" width="88" alt="Flash"></a>
+<p align="center">
+  <a href="https://github.com/Natuworkguy/Flash"><img src="docs/images/banner.svg" alt="Flash: the fast local agent shell" width="100%"></a>
+</p>
 
-[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-3776ab?style=flat-square)](https://www.python.org)
-[![Runs on Ollama](https://img.shields.io/badge/runs%20on-Ollama-111?style=flat-square)](https://ollama.com)
-[![MIT](https://img.shields.io/badge/license-MIT-f2a65a?style=flat-square)](LICENSE)
+<p align="center">
+  <b>An AI agent for your terminal and your browser,<br>running on <a href="https://ollama.com">Ollama</a> models you choose.</b>
+</p>
 
-Flash
-=====
+<p align="center">
+  <a href="https://www.python.org"><img src="https://img.shields.io/badge/python-3.10%2B-3776ab?style=flat-square" alt="Python 3.10+"></a>
+  <a href="https://ollama.com"><img src="https://img.shields.io/badge/runs%20on-Ollama-111?style=flat-square" alt="Runs on Ollama"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-f2a65a?style=flat-square" alt="MIT"></a>
+</p>
 
-**Flash is the Fast Local Agent SHell: an AI agent for your terminal and
-your browser, running on [Ollama](https://ollama.com) models you choose.**
+<p align="center">
+  <a href="#getting-started">Install</a> ·
+  <a href="docs/GUIDE.md">Guide</a> ·
+  <a href="docs/CONFIGURATION.md">Configuration</a> ·
+  <a href="docs/EXTENSIONS.md">Extensions</a> ·
+  <a href="https://www.youtube.com/watch?v=padyQR3tPUs">Video</a>
+</p>
 
-It reads your code, edits it a line at a time, runs your commands, drives
-a real browser, talks out loud, and keeps a team of agents working while
-you sleep. On your machine, on your models. No account, no API keys.
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/images/web-dark.png">
+    <img src="docs/images/web-light.png" alt="Flash's web UI: in the Shop project, Flash plans, searches, edits and tests a fix for a slow checkout, with its sparks in the sidebar" width="100%">
+  </picture>
+</p>
+
+Flash reads your code, edits it a line at a time, runs your commands,
+drives a real browser, talks out loud, and keeps a team of agents working
+while you sleep. On your machine, on your models. No account, no API keys.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Natuworkguy/Flash/main/install.sh | bash
 flash
 ```
-
-[Watch the original video](https://www.youtube.com/watch?v=padyQR3tPUs) ·
-[The guide](docs/GUIDE.md) · [Configuration](docs/CONFIGURATION.md) ·
-[Extensions](docs/EXTENSIONS.md)
 
 
 Getting started
