@@ -20,6 +20,7 @@ import json
 import os
 import threading
 import time
+import unicodedata
 from collections.abc import Callable
 from pathlib import Path
 from typing import Optional
@@ -71,6 +72,10 @@ You are shown the latest of the chat, then asked to post your message.
   call send_message to post one now, say a quick "on it, checking"
   before you look into something, and your answer is posted after it.
   When send_message already said it all, answer with only {quiet}.
+- Each message in the chat starts with its number, as #12. To react to
+  one with an emoji, call react with its number: a thumbs up says you
+  saw it or agree, with no message needed. When the reaction says it
+  all, answer with only {quiet}.
 """.strip()
 
 # How many messages a spark may post in one turn with send_message, so
@@ -95,6 +100,42 @@ SEND_MESSAGE_TOOL = {
                 },
             },
             "required": ["text"],
+        },
+    },
+}
+
+# The reactions the page offers first. Any one emoji will do.
+QUICK_REACTIONS = ("\U0001f44d", "❤️", "\U0001f602", "\U0001f389",
+                   "\U0001f440", "\U0001f64f", "\U0001f525", "✅")
+# How many different reactions one message can carry, and how long one
+# can be: an emoji made of several, a family or a flag, runs to a few.
+MAX_REACTIONS = 12
+REACTION_CHARS = 16
+# How many reactions a spark may put on in one turn.
+MAX_REACTED = 3
+
+REACT_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "react",
+        "description": (
+            "React to a message in the team chat with an emoji, by its "
+            "number: a thumbs up to say you saw it, a party popper for "
+            "good news. It posts no message."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "message": {
+                    "type": "integer",
+                    "description": "The message's number, as in #12.",
+                },
+                "emoji": {
+                    "type": "string",
+                    "description": "One emoji.",
+                },
+            },
+            "required": ["message", "emoji"],
         },
     },
 }
@@ -192,8 +233,9 @@ def _team(key: str) -> sparks.Team:
 
 
 def history(team_key: str, since: int = 0) -> dict:
-    """TEAM_KEY's chat for the page: the entries after SINCE, who is
-    typing, and how many came in since the user last looked."""
+    """TEAM_KEY's chat for the page: the entries after SINCE, those
+    before it reacted to since, who is typing, and how many came in since
+    the user last looked."""
 
     team = _team(team_key)
     data = _read(team.id)
@@ -206,6 +248,12 @@ def history(team_key: str, since: int = 0) -> dict:
     return {
         "team": team.id, "seq": data["seq"],
         "entries": [e for e in data["entries"] if e.get("id", 0) > since],
+        # Those it has, but changed since: their reactions, as now.
+        "changed": [
+            e for e in data["entries"]
+            if since and 0 < e.get("id", 0) <= since
+            and e.get("changed", 0) > since
+        ],
         "typing": typing,
         "unread": _unread(data),
     }
@@ -339,6 +387,21 @@ def say(team_key: str, text: str, reply_to: int = 0) -> dict:
 
 
 def _line(entry: dict, by_id: dict) -> str:
+    line = _said_line(entry, by_id)
+    reactions = _reactions(entry)
+    if not reactions:
+        return line
+    names = {USER: "the user"}
+    return line + " [reactions: " + "; ".join(
+        f"{emoji} " + ", ".join(
+            names.get(who) or getattr(by_id.get(who), "name", "a spark")
+            for who in whose
+        )
+        for emoji, whose in reactions.items()
+    ) + "]"
+
+
+def _said_line(entry: dict, by_id: dict) -> str:
     text = " ".join(str(entry.get("text") or "").split())
     if len(text) > ENTRY_CHARS:
         text = text[:ENTRY_CHARS].rstrip() + " [...]"
@@ -373,7 +436,7 @@ def _line(entry: dict, by_id: dict) -> str:
 
 def _view(team: sparks.Team, spark: sparks.Spark, entries: list) -> str:
     by_id = {s.id: s for s in sparks.all_sparks()}
-    lines = [ln for ln in (_line(e, by_id) for e in entries) if ln]
+    lines = [f"#{e.get('id', 0)} {_line(e, by_id)}" for e in entries]
     return (
         f"=== {team.name}'s chat: its latest {len(lines)} messages ===\n"
         + "\n\n".join(lines)
@@ -425,6 +488,98 @@ def _sending(team_id: str, spark: sparks.Spark, sent: list[dict]):
     return send
 
 
+def _reactions(entry: dict) -> dict[str, list[str]]:
+    found = entry.get("reactions")
+    if not isinstance(found, dict):
+        return {}
+    return {
+        str(emoji): [str(w) for w in whose]
+        for emoji, whose in found.items()
+        if isinstance(whose, list) and whose
+    }
+
+
+def _emoji(text: str) -> str:
+    """TEXT, if it is an emoji to react with; else TeamChatError."""
+
+    said = str(text or "").strip()
+    if (
+        not said or len(said) > REACTION_CHARS
+        # Emoji, their joiners and variations are all past U+2000; a
+        # word is not, nor a space.
+        or any(ord(c) < 0x2000 or c.isspace() for c in said)
+        or not any(unicodedata.category(c) == "So" for c in said)
+    ):
+        raise TeamChatError("A reaction is an emoji.")
+    return said
+
+
+def react(
+    team_key: str, entry_id: int, emoji: str, by: str = USER,
+    on: Optional[bool] = None,
+) -> dict:
+    """Put EMOJI on the message numbered ENTRY_ID in TEAM_KEY's chat, as
+    BY, the user or a spark's id, or take it off: as ON says, or, without
+    it, off if BY has it on already. The message, as it is now."""
+
+    team = _team(team_key)
+    emoji = _emoji(emoji)
+
+    def change(data: dict) -> dict:
+        entry = next(
+            (e for e in data["entries"] if e.get("id") == entry_id), None,
+        )
+        if entry is None:
+            raise TeamChatError("That message is no longer in the chat.")
+        reactions = _reactions(entry)
+        whose = reactions.get(emoji, [])
+        adding = by not in whose if on is None else on
+        if adding and by not in whose:
+            if emoji not in reactions and len(reactions) >= MAX_REACTIONS:
+                raise TeamChatError(
+                    f"That message has {MAX_REACTIONS} reactions already."
+                )
+            reactions[emoji] = [*whose, by]
+        elif not adding and by in whose:
+            whose = [w for w in whose if w != by]
+            if whose:
+                reactions[emoji] = whose
+            else:
+                reactions.pop(emoji)
+        if reactions:
+            entry["reactions"] = reactions
+        else:
+            entry.pop("reactions", None)
+        # The chat's count moves on, so a page that has the message
+        # sees it changed; no message is ever given the number it took.
+        data["seq"] += 1
+        entry["changed"] = data["seq"]
+        return dict(entry)
+
+    return _change(team.id, change)
+
+
+def _reacting(team_id: str, spark: sparks.Spark, reacted: list[str]):
+    """react, for SPARK: its reaction put on, never taken off."""
+
+    def put(args: dict) -> str:
+        if len(reacted) >= MAX_REACTED:
+            return f"Error: that is {MAX_REACTED} reactions this turn already."
+        emoji = str(args.get("emoji", ""))
+        try:
+            entry_id = int(str(args.get("message", "")).strip().lstrip("#"))
+            entry = react(team_id, entry_id, emoji, spark.id, on=True)
+        except ValueError as exc:  # TeamChatError is one too
+            if isinstance(exc, TeamChatError):
+                return f"Error: {exc}"
+            return "Error: give the message's number, as in 12."
+        reacted.append(emoji)
+        sparks.tool_line(f"React(#{entry['id']} {emoji.strip()})")
+        return "(reacted)"
+
+    return put
+
+
 def _reply(
     team: sparks.Team, spark: sparks.Spark, client=None,
 ) -> list[dict]:
@@ -437,8 +592,12 @@ def _reply(
     steps: list[str] = []
     kit = sparks.ChatKit(spark)
     sent: list[dict] = []
-    tools = {**kit.tools, "send_message": _sending(team.id, spark, sent)}
-    schemas = [*kit.schemas, SEND_MESSAGE_TOOL]
+    reacted: list[str] = []
+    tools = {
+        **kit.tools, "send_message": _sending(team.id, spark, sent),
+        "react": _reacting(team.id, spark, reacted),
+    }
+    schemas = [*kit.schemas, SEND_MESSAGE_TOOL, REACT_TOOL]
     others = [s for s in _members(team.id) if s.id != spark.id]
     roster = "\n".join(
         f"- {s.name} ({s.handle})"
@@ -491,7 +650,7 @@ def _reply(
     if entry is not None:
         return [*sent, _post(team.id, spark, entry, done=True)]
     _set_typing(team.id, spark.id, "")
-    if not sent:
+    if not sent and not reacted:
         sparks.log(spark.id, "team_chat_quiet", team=team.name)
     return sent
 

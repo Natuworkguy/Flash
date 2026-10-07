@@ -2542,6 +2542,11 @@ def _team_chat(rest: str) -> None:
                 steps=entry.get("steps", []),
                 failed=bool(entry.get("failed")),
             ))
+        reactions = teamchat._reactions(entry)
+        if reactions:
+            console.print(Text("    " + "  ".join(
+                f"{emoji} {len(whose)}" for emoji, whose in reactions.items()
+            ), style=DIM))
 
     if not said:
         entries = teamchat.history(team.id)["entries"][-TEAM_CHAT_SHOWN:]

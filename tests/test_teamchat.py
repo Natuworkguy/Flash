@@ -555,3 +555,156 @@ def test_several_messages_are_one_turn_of_the_limit(team, monkeypatch):
     posted = teamchat.answer("desk", message, client)
 
     assert [e["name"] for e in posted] == ["Scout", "Scout"]  # nosec B101
+
+
+THUMBS = "\U0001f44d"
+PARTY = "\U0001f389"
+
+
+def test_the_user_reacts_and_takes_it_back(team):
+    message = teamchat.say("desk", "Shipped it.")
+
+    on = teamchat.react("desk", message["id"], THUMBS)
+    off = teamchat.react("desk", message["id"], THUMBS)
+
+    assert on["reactions"] == {THUMBS: ["user"]}  # nosec B101
+    assert "reactions" not in off  # nosec B101
+
+
+@pytest.mark.parametrize("emoji", [
+    "❤️", "\U0001f44d\U0001f3fd", "\U0001f468‍\U0001f4bb",
+])
+def test_any_one_emoji_will_do(team, emoji):
+    message = teamchat.say("desk", "Hi.")
+
+    reacted = teamchat.react("desk", message["id"], emoji)
+
+    assert list(reacted["reactions"]) == [emoji]  # nosec B101
+
+
+@pytest.mark.parametrize("emoji", ["", "ok", "a\U0001f44d", ":)", " "])
+def test_a_reaction_must_be_an_emoji(team, emoji):
+    message = teamchat.say("desk", "Hi.")
+
+    with pytest.raises(teamchat.TeamChatError, match="emoji"):
+        teamchat.react("desk", message["id"], emoji)
+
+
+def test_a_reaction_to_a_message_that_is_gone_is_refused(team):
+    with pytest.raises(teamchat.TeamChatError, match="no longer"):
+        teamchat.react("desk", 999, THUMBS)
+
+
+def test_a_message_carries_only_so_many_reactions(team, monkeypatch):
+    monkeypatch.setattr(teamchat, "MAX_REACTIONS", 1)
+    message = teamchat.say("desk", "Hi.")
+    teamchat.react("desk", message["id"], THUMBS)
+
+    with pytest.raises(teamchat.TeamChatError, match="1 reactions"):
+        teamchat.react("desk", message["id"], PARTY)
+    # One already on it can still be added to.
+    teamchat.react("desk", message["id"], THUMBS, by="lead-id")
+
+
+def test_the_page_hears_of_a_reaction_to_what_it_has(team):
+    message = teamchat.say("desk", "Shipped it.")
+    seq = teamchat.history("desk")["seq"]
+
+    teamchat.react("desk", message["id"], PARTY)
+    later = teamchat.history("desk", since=seq)
+    nothing = teamchat.history("desk", since=later["seq"])
+    teamchat.say("desk", "Next.")
+
+    assert later["entries"] == []  # nosec B101
+    assert [e["id"] for e in later["changed"]] == [message["id"]]  # nosec B101
+    assert later["changed"][0]["reactions"] == {PARTY: ["user"]}  # nosec B101
+    assert nothing["changed"] == []  # nosec B101
+    # No message takes the number the reaction moved the chat on to.
+    ids = [e["id"] for e in _said(team.id)]
+    assert len(ids) == len(set(ids))  # nosec B101
+
+
+def test_the_page_reacts(team):
+    message = teamchat.say("desk", "Shipped it.")
+    session = web.Session()
+
+    reacted = web.command(session, {
+        "name": "team-chat-react", "arg": team.id, "id": message["id"],
+        "emoji": THUMBS,
+    })
+
+    assert reacted["entry"]["reactions"] == {THUMBS: ["user"]}  # nosec B101
+    with pytest.raises(ValueError, match="emoji"):
+        web.command(session, {
+            "name": "team-chat-react", "arg": team.id,
+            "id": message["id"], "emoji": "yes",
+        })
+
+
+def test_a_spark_reacts_instead_of_answering(team):
+    message = teamchat.say("desk", "@scout thanks for the fix!")
+    client = FakeClient([
+        _reply("", ("react", {"message": message["id"], "emoji": THUMBS})),
+        _reply("NO_REPLY"),
+    ])
+
+    posted = teamchat.answer("desk", message, client)
+
+    scout = sparks.find("scout")
+    assert posted == []  # nosec B101
+    reacted = [e for e in _said(team.id) if e["id"] == message["id"]][0]
+    assert reacted["reactions"] == {THUMBS: [scout.id]}  # nosec B101
+    assert teamchat.history("desk")["typing"] == []  # nosec B101
+    # It saw the message's number, to react to it by.
+    seen = client.calls[0]["messages"][-1]["content"]
+    assert f"#{message['id']} The user: @scout thanks" in seen  # nosec B101
+
+
+def test_a_spark_reacting_twice_keeps_its_reaction(team):
+    message = teamchat.say("desk", "@scout well done")
+    react = ("react", {"message": message["id"], "emoji": THUMBS})
+    client = FakeClient([_reply("", react), _reply("", react),
+                         _reply("NO_REPLY")])
+
+    teamchat.answer("desk", message, client)
+
+    reacted = [e for e in _said(team.id) if e["id"] == message["id"]][0]
+    assert reacted["reactions"] == {  # nosec B101
+        THUMBS: [sparks.find("scout").id],
+    }
+
+
+def test_a_spark_is_told_when_it_cannot_react(team):
+    message = teamchat.say("desk", "@scout hi")
+    client = FakeClient([
+        _reply("", ("react", {"message": 999, "emoji": THUMBS})),
+        _reply("", ("react", {"message": message["id"], "emoji": "yes"})),
+        _reply("Hi."),
+    ])
+
+    teamchat.answer("desk", message, client)
+
+    told = [c["messages"][-1]["content"] for c in client.calls[1:]]
+    assert "no longer in the chat" in told[0]  # nosec B101
+    assert "emoji" in told[1]  # nosec B101
+
+
+def test_sparks_read_who_reacted(team):
+    message = teamchat.say("desk", "Release is out.")
+    teamchat.react("desk", message["id"], PARTY)
+    teamchat.react("desk", message["id"], PARTY, by=sparks.find("lead").id)
+
+    block = teamchat.prompt_block(sparks.find("scout"))
+
+    assert f"[reactions: {PARTY} the user, Lead]" in block  # nosec B101
+
+
+def test_the_terminal_shows_reactions(team, capsys):
+    from flash import ai
+
+    message = teamchat.say("desk", "Release is out.")
+    teamchat.react("desk", message["id"], PARTY)
+
+    ai._sparks_command("teamchat desk")
+
+    assert f"{PARTY} 1" in capsys.readouterr().out  # nosec B101
