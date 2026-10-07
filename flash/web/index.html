@@ -1781,6 +1781,7 @@ body.all-stopped .org-node, body.all-stopped .spark-card { animation: all-halt 0
 .tc-msg.failed .tc-bubble { background: transparent; border-style: dashed; color: var(--text-3); }
 .mention { font-weight: 600; color: color-mix(in srgb, var(--c) 78%, var(--text)); background: color-mix(in srgb, var(--c) 16%, transparent); padding: 0 5px; border-radius: 6px; cursor: pointer; white-space: nowrap; transition: background 0.15s; }
 .mention:hover { background: color-mix(in srgb, var(--c) 28%, transparent); }
+.mention.compact, .mention.compact:hover { padding: 0; background: none; border-radius: 0; cursor: inherit; color: color-mix(in srgb, var(--c) 82%, var(--text)); }
 .tc-msg.mine .mention { color: #fff; background: rgba(255, 255, 255, 0.22); }
 .tc-steps { font-size: 12px; color: var(--text-3); padding-left: 4px; }
 .tc-steps summary { cursor: pointer; }
@@ -4884,7 +4885,7 @@ function drawChat() {
     markLatest();
     drawStreaming();
   }
-  $("#title").textContent = chat ? chat.title : "New chat";
+  setTitle($("#title"), chat ? chat.title : "New chat");
   document.title = chat && chat.title !== "New chat" ? `${chat.title} · Flash` : "Flash";
   const inProject = projectOf(chat ? chat.project : viewProject);
   $("#crumb").hidden = !inProject;
@@ -5049,7 +5050,7 @@ function drawProject() {
     for (const c of inProject) {
       const row = el("button", "", `<span></span><span class="when">${ago(c.updated || c.created || 0)}</span>`);
       row.type = "button";
-      row.firstChild.textContent = c.title;
+      setTitle(row.firstChild, c.title);
       row.onclick = () => switchTo(c.id, "forward");
       listEl.appendChild(row);
     }
@@ -9729,7 +9730,7 @@ function refreshLite() {
     renderInfo();
     renderSparkBtn();
     const chat = chats.get(current);
-    if (chat && !$("#title input")) { $("#title").textContent = chat.title; document.title = chat.title === "New chat" ? "Flash" : `${chat.title} · Flash`; }
+    if (chat && !$("#title input")) { setTitle($("#title"), chat.title); document.title = chat.title === "New chat" ? "Flash" : `${chat.title} · Flash`; }
   }, 60);
 }
 
@@ -9853,7 +9854,7 @@ function renderChats() {
     const open = el("a", "open", `<span class="name"></span>`);
     open.href = `/c/${id}`;
     open.draggable = false;
-    open.firstChild.textContent = chat.title;
+    setTitle(open.firstChild, chat.title);
     const withSpark = sparkOf(chat.spark);
     if (withSpark) {
       const badge = sparkAvatar({ ...withSpark, unread: 0, status: "idle", waiting: false, paused: false }, 14);
@@ -10900,7 +10901,7 @@ function renameInSide(id, row) {
     const changed = save && value && value !== chat.title;
     if (changed) {
       chat.title = value;
-      if (id === current && view === "chat") { $("#title").textContent = value; document.title = `${value} · Flash`; }
+      if (id === current && view === "chat") { setTitle($("#title"), value); document.title = `${value} · Flash`; }
     }
     renderChats();
     if (changed) await command("rename", value, id).catch(showFailure);
@@ -10929,10 +10930,10 @@ function rename() {
     if (finished) return;
     finished = true;
     const value = field.value.trim();
-    title.textContent = chat.title;
+    setTitle(title, chat.title);
     if (save && value && value !== chat.title) {
       chat.title = value;
-      title.textContent = value;
+      setTitle(title, value);
       renderChats();
       await command("rename", value);
     }
@@ -11350,7 +11351,7 @@ function runSlash(text) {
   const [word, ...rest] = text.split(/\s+/);
   const arg = rest.join(" ").trim();
   if (word === "/model" && arg) { setModel(arg); clearInput(); return true; }
-  if (word === "/rename" && arg) { const c = chats.get(current); if (c) { c.title = arg; renderChats(); $("#title").textContent = arg; } command("rename", arg); clearInput(); return true; }
+  if (word === "/rename" && arg) { const c = chats.get(current); if (c) { c.title = arg; renderChats(); setTitle($("#title"), arg); } command("rename", arg); clearInput(); return true; }
   const action = ACTIONS.find((a) => a.slash === word);
   if (!action) return false;
   clearInput();
@@ -11408,14 +11409,20 @@ const mentionOf = (sp) => sp.handle.slice(1).replace(/-spark$/, "");
 // block, or a link keeps its text as it is. A click opens the spark.
 const MENTION_RE = /(^|[^\w@/.])@([a-z0-9][a-z0-9-]*)(?![\w/-])/gi;
 
-function chipMentions(root, sparks = sparkList) {
+function chipMentions(root, sparks = sparkList, compact = false) {
   if (!root || !sparks.length || !root.textContent.includes("@")) return root;
   const find = (name) => {
     const key = name.toLowerCase();
     return sparks.find((sp) => mentionOf(sp).toLowerCase() === key || sp.handle.slice(1).toLowerCase() === key || sp.name.toLowerCase().replace(/\s+/g, "-") === key);
   };
+  // Code, a link, or a chip already made, within ROOT; a link ROOT sits
+  // in, as a chat's title sits in its row, does not count.
+  const kept = (node) => {
+    const holder = node.parentElement.closest("code, pre, a, .mention");
+    return holder && root.contains(holder) && holder !== root;
+  };
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
-    acceptNode: (node) => (node.nodeValue.includes("@") && !node.parentElement.closest("code, pre, a, .mention")
+    acceptNode: (node) => (node.nodeValue.includes("@") && !kept(node)
       ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT),
   });
   const nodes = [];
@@ -11430,8 +11437,9 @@ function chipMentions(root, sparks = sparkList) {
       made = made || document.createDocumentFragment();
       const start = at + before.length;
       made.append(text.slice(last, start));
-      const chip = el("span", "mention");
-      chip.dataset.spark = sp.id;
+      const chip = el("span", compact ? "mention compact" : "mention");
+      // In a title the row is what a click opens, not the spark.
+      if (!compact) chip.dataset.spark = sp.id;
       chip.style.setProperty("--c", sp.colour);
       chip.textContent = `@${sp.name}`;
       chip.title = sp.handle;
@@ -11444,6 +11452,13 @@ function chipMentions(root, sparks = sparkList) {
     node.replaceWith(made);
   }
   return root;
+}
+
+// A chat's title, with its @mentions in their sparks' colours: a word
+// in a line, not a chip, so a row keeps its height and its "…".
+function setTitle(node, text) {
+  node.textContent = text;
+  return chipMentions(node, sparkList, true);
 }
 
 document.addEventListener("click", (e) => {
@@ -11568,6 +11583,7 @@ function drawSearch(terms) {
       (hit ? `<span class="snippet"><span class="who">${who}:</span> ${markTerms(hit.snippet, terms)}</span>` : "") +
       (r.matches > 1 ? `<span class="more">${r.matches} messages match</span>` : "") +
       `</div><span class="when">${p ? esc(p.name) + " · " : ""}${ago(r.updated)}</span>`;
+    chipMentions(row.querySelector(".title"), sparkList, true);
     row.onmousemove = () => { if (searchSel !== i) { searchSel = i; markSearch(false); } };
     row.onclick = () => openResult(i);
     list.appendChild(row);
