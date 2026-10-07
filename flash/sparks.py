@@ -1528,6 +1528,7 @@ def propose_hire(
     goal = str(goal or "").strip()[:GOAL_CHARS]
     if not name or not goal:
         raise SparkError("A hire needs a name and a goal.")
+    _not_reserved(name)
     if find(handle_of(name)) is not None:
         raise SparkError(f"There is already a spark called {name}.")
     minutes, at = parse_schedule(every or DEFAULT_EVERY_MINUTES)
@@ -2104,6 +2105,21 @@ def add_from(
     return spark
 
 
+# @everyone calls on every spark, so no spark may take its name.
+EVERYONE = "everyone"
+# How many answer an @everyone at most, so a long list of sparks does not
+# answer for ever.
+EVERYONE_MOST = 12
+
+
+def _not_reserved(name: str) -> None:
+    if handle_of(name).lstrip("@").removesuffix("-spark") == EVERYONE:
+        raise SparkError(
+            "Everyone is kept for @everyone, which calls on every spark. "
+            "Pick another name."
+        )
+
+
 def create(
     name: str, goal: str, boundaries: str = "", every="", project: str = "",
     watch: str = "", model: str = "", title: str = "", paused: bool = False,
@@ -2123,6 +2139,7 @@ def create(
 
     with _held():
         taken = {s.handle for s in all_sparks()}
+        _not_reserved(name)
         if handle_of(name) in taken:
             raise SparkError(f"There is already a spark called {name}.")
         spark = Spark(
@@ -2187,6 +2204,7 @@ def update(key: str, **changes) -> Spark:
             name = " ".join(str(changes["name"] or "").split())[:NAME_CHARS]
             if not name:
                 raise SparkError("A spark needs a name.")
+            _not_reserved(name)
             clash = find(handle_of(name))
             if clash and clash.id != spark.id:
                 raise SparkError(f"There is already a spark called {name}.")
@@ -3956,14 +3974,36 @@ HISTORY_CHARS = 1500
 CALLED = "[Spark called]"
 
 
-def mentioned(text: str) -> list[Spark]:
-    """The sparks TEXT @mentions, in the order it first names them."""
+def mentions_everyone(text: str) -> bool:
+    """Whether TEXT says @everyone."""
+
+    return any(
+        m.group(1).lower() == EVERYONE
+        for m in _MENTION_RE.finditer(text or "")
+    )
+
+
+def mentioned(
+    text: str, everyone: bool = False, among: Optional[list] = None,
+) -> list[Spark]:
+    """The sparks TEXT @mentions, in the order it first names them. With
+    EVERYONE, an @everyone in it calls on the rest of AMONG too (every
+    spark, by default), after those it names, EVERYONE_MOST at most: the
+    user's way to ask them all. A spark's own @everyone calls no one."""
 
     found: list[Spark] = []
     for match in _MENTION_RE.finditer(text or ""):
+        if match.group(1).lower() == EVERYONE:
+            continue
         spark = find(match.group(1))
         if spark is not None and all(s.id != spark.id for s in found):
             found.append(spark)
+    if everyone and mentions_everyone(text):
+        named = len(found)
+        rest = all_sparks() if among is None else among
+        found += [s for s in rest if all(f.id != s.id for f in found)]
+        # Those named are always kept; the rest fill up to the most.
+        found = found[:max(EVERYONE_MOST, named)]
     return found
 
 

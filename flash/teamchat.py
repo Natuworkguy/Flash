@@ -225,12 +225,21 @@ def _leads(team_id: str) -> list[sparks.Spark]:
     return [s for s in found if s.reports_to not in ids]
 
 
-def _named(team_id: str, text: str, skip: set[str]) -> list[sparks.Spark]:
-    """The team's sparks TEXT @mentions, but those in SKIP."""
+def _named(
+    team_id: str, text: str, skip: set[str], everyone: bool = False,
+) -> list[sparks.Spark]:
+    """The team's sparks TEXT @mentions, but those in SKIP. With
+    EVERYONE, an @everyone in it names the whole team, its leads first:
+    the user's way to ask them all; a spark's own @everyone names no
+    one."""
 
-    ids = {s.id for s in _members(team_id)}
+    team = _members(team_id)
+    ids = {s.id for s in team}
+    leads = _leads(team_id)
+    order = leads + [s for s in team if all(s.id != lead.id for lead in leads)]
     return [
-        s for s in sparks.mentioned(text) if s.id in ids and s.id not in skip
+        s for s in sparks.mentioned(text, everyone, order)
+        if s.id in ids and s.id not in skip
     ]
 
 
@@ -407,7 +416,11 @@ def _replied_to(team_id: str, message: dict) -> Optional[sparks.Spark]:
 
 def _round(team: sparks.Team, message: dict, client=None) -> list[dict]:
     answered: set[str] = set()
-    queue = _named(team.id, message.get("text", ""), answered)
+    queue = _named(team.id, message.get("text", ""), answered, everyone=True)
+    # @everyone: each of them gets its turn, past the usual few replies.
+    limit = REPLY_LIMIT
+    if sparks.mentions_everyone(message.get("text", "")):
+        limit = max(REPLY_LIMIT, len(queue))
     replied = _replied_to(team.id, message)
     if replied is not None and all(q.id != replied.id for q in queue):
         # The one replied to answers first, then any it named besides.
@@ -415,7 +428,7 @@ def _round(team: sparks.Team, message: dict, client=None) -> list[dict]:
     if not queue:
         queue = _leads(team.id)[:1]
     posted: list[dict] = []
-    while queue and len(posted) < REPLY_LIMIT:
+    while queue and len(posted) < limit:
         spark = sparks.find(queue.pop(0).id)
         if spark is None or spark.id in answered:
             continue

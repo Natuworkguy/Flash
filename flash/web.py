@@ -1670,7 +1670,7 @@ def run_turn(
             "text": "That spark is not here any more, so nobody can answer.",
         })
         return
-    speakers: list = sparks.mentioned(text) or [own]
+    speakers: list = sparks.mentioned(text, everyone=True) or [own]
 
     # Each needs a model to answer on: Flash its own, a spark the one it
     # was given, or Flash's.
