@@ -49,6 +49,7 @@ from .theme import (
     ERROR,
     answer_from,
     capture_tool_output,
+    tool_file,
     tool_line,
     tool_result,
 )
@@ -343,6 +344,8 @@ class Report:
     # and the ones it has been posted into so far.
     chats: list[str] = field(default_factory=list)
     posted: list[str] = field(default_factory=list)
+    # Documents it wrote this shift: {"path", "title"} each, newest last.
+    files: list[dict] = field(default_factory=list)
 
 
 @dataclass
@@ -1236,7 +1239,7 @@ def _team_news(spark: Spark, report: "Report") -> None:
     with contextlib.suppress(Exception):
         teamchat.event(
             spark.team, spark, "failed" if report.failed else "report",
-            report.text,
+            report.text, report.files,
         )
 
 
@@ -2771,6 +2774,140 @@ def autonomous() -> bool:
         return bool(flash_tools.NO_COMMAND_CONFIRMATION)
 
 
+# --- Documents -----------------------------------------------------------
+#
+# A spark can write a document: a brief, a summary, a plan, a write-up of
+# what it found. Markdown, kept in a folder of its own, so it needs no
+# leave to write anywhere else. The same title again is the next version
+# of the same document. What a shift writes comes with its report, and
+# what a chat or the team chat gets writes shows there.
+
+DOCUMENT_CHARS = 200_000
+DOC_TITLE_CHARS = 120
+
+MAKE_DOCUMENT_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "make_document",
+        "description": (
+            "Write a document for the user, in Markdown: a brief, a "
+            "summary, a plan, a write-up. It is kept, shown with your "
+            "report or in the chat, and the user can open it, edit it "
+            "and comment on it. The same title again saves a new version "
+            "of that document. Use it for anything longer than a few "
+            "paragraphs, or anything the user will want to keep."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "title": {
+                    "type": "string",
+                    "description": "Its title, a few words.",
+                },
+                "content": {
+                    "type": "string",
+                    "description": "The whole document, in Markdown.",
+                },
+            },
+            "required": ["title", "content"],
+        },
+    },
+}
+
+
+def documents_dir(spark_id: str) -> Path:
+    return sparks_dir() / "docs" / spark_id
+
+
+def _document_slug(title: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")[:60]
+    return slug.strip("-") or "document"
+
+
+def write_document(spark_id: str, title: str, content: str) -> Path:
+    """Save SPARK_ID's document called TITLE, its old version replaced.
+    Its path."""
+
+    title = " ".join(str(title or "").split())[:DOC_TITLE_CHARS]
+    content = str(content or "").strip()[:DOCUMENT_CHARS]
+    if not title:
+        raise SparkError("A document needs a title.")
+    if not content:
+        raise SparkError("The document was empty.")
+    # Its title on top, unless it opens with a title of its own; a "##"
+    # section heading is not one.
+    if not content.lstrip().startswith("# "):
+        content = f"# {title}\n\n{content}"
+    folder = documents_dir(spark_id)
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / f"{_document_slug(title)}.md"
+    temp = path.with_suffix(".tmp")
+    temp.write_text(content + "\n", encoding="utf-8")
+    os.replace(temp, path)
+    return path
+
+
+def documents(spark_id: str) -> list[dict]:
+    """SPARK_ID's documents, newest first: path, title, size, when."""
+
+    folder = documents_dir(spark_id)
+    found = []
+    for path in folder.glob("*.md") if folder.is_dir() else []:
+        try:
+            stat = path.stat()
+            first = path.read_text(encoding="utf-8").lstrip().splitlines()
+        except OSError:
+            continue
+        title = first[0][2:].strip() if first and first[0].startswith(
+            "# ") else path.stem.replace("-", " ")
+        found.append({
+            "path": str(path), "name": path.name, "title": title,
+            "size": stat.st_size, "at": stat.st_mtime,
+        })
+    return sorted(found, key=lambda d: d["at"], reverse=True)
+
+
+def document_of(spark_id: str, path: str) -> Path:
+    """PATH, if it is one of SPARK_ID's documents; SparkError if not, so
+    a request cannot reach any other file."""
+
+    folder = documents_dir(spark_id).resolve()
+    try:
+        found = Path(path).resolve()
+    except (OSError, ValueError):
+        raise SparkError("No such document.") from None
+    if found.parent != folder or found.suffix != ".md" or not found.is_file():
+        raise SparkError("No such document.")
+    return found
+
+
+def _documenting(spark: Spark, made: list[dict]) -> Callable[[dict], str]:
+    """make_document, for SPARK: what it writes goes in MADE too, for
+    its report or its chat."""
+
+    def make(args: dict) -> str:
+        title = " ".join(
+            str(args.get("title", "")).split()
+        )[:DOC_TITLE_CHARS]
+        try:
+            path = write_document(spark.id, title, args.get("content", ""))
+        except SparkError as exc:
+            return f"Error: {exc}"
+        made[:] = [d for d in made if d["path"] != str(path)]
+        made.append({"path": str(path), "title": title})
+        log(spark.id, "document", title=title, path=str(path))
+        tool_line(f"MakeDocument({title})")
+        # In a web chat the page shows it there and then.
+        tool_file(str(path))
+        tool_result(f"Saved {path.name}")
+        return (
+            f"(saved \"{title}\" as {path.name}: the user sees it with "
+            "your report or in this chat)"
+        )
+
+    return make
+
+
 HAND_OFF_TOOL = {
     "type": "function",
     "function": {
@@ -3490,10 +3627,12 @@ def shift(spark_id: str, client=None) -> Optional[Report]:
     messages: list[dict] = list(resuming["messages"]) if resuming else []
     log(spark.id, "shift_start", resuming=bool(resuming), why=why,
         given=[i.get("text", "") for i in inbox])
+    made: list[dict] = []
     own = {
         "keep_notes": _keeping_notes(notes),
         "hand_off": _handing_off(spark),
         "ask_spark": _asking(spark),
+        "make_document": _documenting(spark, made),
         **_proposing(spark),
     }
     # Every tool a sub-agent has, the ones that ask first too: in
@@ -3561,7 +3700,7 @@ def shift(spark_id: str, client=None) -> Optional[Report]:
             text = _work(
                 spark, messages, own,
                 [KEEP_NOTES_TOOL, HAND_OFF_TOOL, ASK_SPARK_TOOL,
-                 *PROPOSAL_TOOLS],
+                 MAKE_DOCUMENT_TOOL, *PROPOSAL_TOOLS],
                 steps, lambda doing: _set_activity(spark.id, doing),
                 shift_rounds(), ROUND_LIMIT_MESSAGE, client,
                 names=names, gate=gate,
@@ -3574,10 +3713,13 @@ def shift(spark_id: str, client=None) -> Optional[Report]:
         if quiet and has_job:
             # A job asked for is answered, even with nothing to show.
             text, quiet = "Done, with nothing to report on it.", False
+        if quiet and made:
+            # A document written is news, said or not.
+            text, quiet = "I wrote this up.", False
         report = Report(
             at=time.time(),
             text="Nothing new this shift." if quiet else text,
-            quiet=quiet, read=quiet, steps=steps,
+            quiet=quiet, read=quiet, steps=steps, files=list(made),
         )
     except NeedsApproval as need:
         label, detail = describe(need.name, need.arguments)
@@ -3855,7 +3997,7 @@ class ChatKit:
 
     schemas = [
         KEEP_NOTES_TOOL, HAND_OFF_TOOL, ASK_SPARK_TOOL, TAKE_ON_TOOL,
-        *PROPOSAL_TOOLS, *CHAT_TOOLS,
+        MAKE_DOCUMENT_TOOL, *PROPOSAL_TOOLS, *CHAT_TOOLS,
     ]
 
     def __init__(self, spark: Spark, chat: str = "") -> None:
@@ -3877,6 +4019,9 @@ class ChatKit:
             "take_on": self._take_on,
             **_proposing(spark),
         }
+        # The documents this answer writes, for whoever shows it.
+        self.documents: list[dict] = []
+        self.tools["make_document"] = _documenting(spark, self.documents)
 
     def _take_on(self, args: dict) -> str:
         try:

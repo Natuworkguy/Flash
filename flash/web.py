@@ -3059,6 +3059,17 @@ def _spark_command(name: str, arg: str, body: dict) -> dict:
                 arg, str(body.get("project") or ""),
                 str(body.get("model") or ""), bool(body.get("paused")),
             )
+        elif name == "spark-documents":
+            return {"documents": sparks.documents(sparks._must_find(arg).id)}
+        elif name == "spark-document":
+            # One of a spark's documents, kept for the page to show and
+            # edit, the edits landing in the spark's own copy.
+            spark = sparks._must_find(arg)
+            path = sparks.document_of(spark.id, str(body.get("path") or ""))
+            try:
+                return {"file": workspace.keep_file(str(path))}
+            except (workspace.WorkspaceError, OSError) as exc:
+                raise ValueError(str(exc)) from None
         elif name == "spark-templates":
             return {"templates": sparks.TEMPLATES}
         elif name == "spark-schedule":

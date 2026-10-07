@@ -2311,3 +2311,91 @@ def test_the_terminal_says_on_call(model):
     made = sparks.create("Scout", "Look.", every="on call")
 
     assert ai._spark_state(made) == "on call"  # nosec B101
+
+
+# --- Documents ---------------------------------------------------------------
+
+
+def test_a_spark_writes_a_document_and_a_new_version(model):
+    made = sparks.create("Scout", "Write things up.")
+
+    first = sparks.write_document(made.id, "Weekly Brief", "All quiet.")
+    again = sparks.write_document(
+        made.id, "Weekly Brief", "# Brief\n\nBusy.",
+    )
+
+    assert first == again  # nosec B101
+    assert first.read_text().startswith("# Brief")  # nosec B101
+    found = sparks.documents(made.id)
+    assert [d["title"] for d in found] == ["Brief"]  # nosec B101
+
+
+def test_a_document_gets_its_title_as_a_heading(model):
+    made = sparks.create("Scout", "Write things up.")
+
+    path = sparks.write_document(made.id, "Release notes", "Two fixes.")
+
+    assert path.read_text() == "# Release notes\n\nTwo fixes.\n"  # nosec B101
+    with pytest.raises(sparks.SparkError):
+        sparks.write_document(made.id, "", "x")
+    with pytest.raises(sparks.SparkError):
+        sparks.write_document(made.id, "Empty", "  ")
+
+
+def test_only_a_sparks_own_documents_can_be_reached(model, tmp_path):
+    scout = sparks.create("Scout", "Write.")
+    other = sparks.create("Other", "Write.")
+    mine = sparks.write_document(scout.id, "Mine", "Text.")
+    secret = tmp_path / "secret.md"
+    secret.write_text("no")
+
+    found = sparks.document_of(scout.id, str(mine))
+    assert found == mine.resolve()  # nosec B101
+    for path in (str(secret), str(mine.parent / ".." / "x.md"), ""):
+        with pytest.raises(sparks.SparkError):
+            sparks.document_of(scout.id, path)
+    with pytest.raises(sparks.SparkError):
+        sparks.document_of(other.id, str(mine))
+
+
+def test_a_shift_brings_its_documents_with_its_report(model):
+    made = sparks.create("Scout", "Write a brief.")
+    client = FakeClient([
+        _reply("", ("make_document", {
+            "title": "Morning brief", "content": "Three things.",
+        })),
+        _reply("NOTHING NEW"),
+    ])
+
+    report = sparks.shift(made.id, client=client)
+
+    assert not report.quiet  # nosec B101
+    titles = [f["title"] for f in report.files]
+    assert titles == ["Morning brief"]  # nosec B101
+    assert "MakeDocument(Morning brief)" in report.steps  # nosec B101
+    saved = sparks.find(made.id).reports[-1]
+    assert saved.files[0]["path"].endswith("morning-brief.md")  # nosec B101
+
+
+def test_a_chat_answer_can_write_a_document(model):
+    made = sparks.create("Scout", "Write.")
+    client = FakeClient([
+        _reply("", ("make_document", {"title": "Plan", "content": "Do it."})),
+        _reply("Here is the plan."),
+    ])
+
+    reply = sparks.say(made.id, "Write me a plan?", client)
+
+    assert reply.text == "Here is the plan."  # nosec B101
+    titles = [d["title"] for d in sparks.documents(made.id)]
+    assert titles == ["Plan"]  # nosec B101
+
+
+def test_a_document_opening_with_a_section_still_gets_its_title(model):
+    made = sparks.create("Scout", "Write.")
+
+    path = sparks.write_document(made.id, "Review", "## Summary\n\nFine.")
+
+    assert path.read_text().startswith("# Review\n\n## Summary")  # nosec B101
+    titles = [d["title"] for d in sparks.documents(made.id)]
+    assert titles == ["Review"]  # nosec B101

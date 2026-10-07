@@ -198,7 +198,7 @@ def mark_read(team_key: str) -> bool:
 
 
 def event(team_id: str, spark: Optional[sparks.Spark], what: str,
-          text: str = "") -> Optional[dict]:
+          text: str = "", files: Optional[list] = None) -> Optional[dict]:
     """Put news in TEAM_ID's chat: WHAT happened (report, failed,
     joined), by SPARK, with TEXT, the start of what it said."""
 
@@ -208,6 +208,8 @@ def event(team_id: str, spark: Optional[sparks.Spark], what: str,
     if len(text) > EVENT_CHARS:
         text = text[:EVENT_CHARS].rstrip() + " [...]"
     by = {"spark": spark.id, "name": spark.name} if spark else {}
+    if files:
+        by["files"] = list(files)
     return _change(team_id, lambda data: _add(data, {
         "kind": EVENT, "what": what, "text": text, **by,
     }))
@@ -389,6 +391,8 @@ def _reply(team: sparks.Team, spark: sparks.Spark, client=None) -> dict:
             "kind": SPARK, "spark": spark.id, "name": spark.name,
             "text": text or "(nothing to add)", "steps": steps,
         }
+        if kit.documents:
+            entry["files"] = list(kit.documents)
     except Exception as exc:  # noqa: BLE001
         entry = {
             "kind": SPARK, "spark": spark.id, "name": spark.name,
