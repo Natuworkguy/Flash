@@ -1779,8 +1779,9 @@ body.all-stopped .org-node, body.all-stopped .spark-card { animation: all-halt 0
 .tc-bubble pre { max-width: 100%; overflow-x: auto; font-size: 12.5px; }
 .tc-msg.mine .tc-bubble a { color: inherit; }
 .tc-msg.failed .tc-bubble { background: transparent; border-style: dashed; color: var(--text-3); }
-.tc-at { font-weight: 600; color: color-mix(in srgb, var(--c) 78%, var(--text)); background: color-mix(in srgb, var(--c) 16%, transparent); padding: 0 5px; border-radius: 6px; }
-.tc-msg.mine .tc-at { color: #fff; background: rgba(255, 255, 255, 0.22); }
+.mention { font-weight: 600; color: color-mix(in srgb, var(--c) 78%, var(--text)); background: color-mix(in srgb, var(--c) 16%, transparent); padding: 0 5px; border-radius: 6px; cursor: pointer; white-space: nowrap; transition: background 0.15s; }
+.mention:hover { background: color-mix(in srgb, var(--c) 28%, transparent); }
+.tc-msg.mine .mention { color: #fff; background: rgba(255, 255, 255, 0.22); }
 .tc-steps { font-size: 12px; color: var(--text-3); padding-left: 4px; }
 .tc-steps summary { cursor: pointer; }
 .tc-steps ul { margin: 4px 0 0; padding-left: 18px; font-family: var(--mono, ui-monospace, monospace); font-size: 11.5px; }
@@ -4716,7 +4717,11 @@ function userBlock(text, steered, files) {
   const wrap = el("div", "block user-wrap turn");
   if (steered) wrap.appendChild(el("div", "steer-tag", `${icon("steer")}<span>Steered mid-turn</span>`));
   if (files && files.length) wrap.appendChild(sentFiles(files));
-  if (text) wrap.appendChild(el("div", "user")).textContent = text;
+  if (text) {
+    const said = wrap.appendChild(el("div", "user"));
+    said.textContent = text;
+    chipMentions(said);
+  }
   wrap.dataset.raw = text;
   wrap.tabIndex = -1;
   const row = el("div", "actions");
@@ -4794,7 +4799,7 @@ function assistantBlock(entry) {
     wrap.tabIndex = -1;
     wrap.dataset.raw = entry.text;
     wrap.dataset.reply = "1";
-    wrap.appendChild(el("div", "assistant", markdown(entry.text)));
+    wrap.appendChild(chipMentions(el("div", "assistant", markdown(entry.text))));
     wrap.appendChild(replyActions(entry.text));
     frag.appendChild(wrap);
   }
@@ -4819,6 +4824,7 @@ function drawEntry(entry, ctx) {
     case "thought": {
       const block = messagesEl.appendChild(el("div", "block thought assistant"));
       block.innerHTML = markdown(entry.text || "");
+      chipMentions(block);
       block.dataset.log = ctx.index;
       break;
     }
@@ -5811,16 +5817,6 @@ function tcDay(at) {
 
 const tcClock = (at) => new Date(at * 1000).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
 
-// @mentions of the team's sparks, drawn as chips in their colours.
-function tcMentions(html) {
-  return html.replace(/(^|[\s(>])@([a-z0-9][a-z0-9-]*)/gi, (whole, before, name) => {
-    const key = name.toLowerCase();
-    const spark = tcMembers().find((s) => s.handle.slice(1).toLowerCase() === key || s.handle.slice(1).toLowerCase() === `${key}-spark` || s.name.toLowerCase() === key);
-    if (!spark) return whole;
-    return `${before}<span class="tc-at" style="--c:${esc(spark.colour)}">@${esc(spark.name)}</span>`;
-  });
-}
-
 async function openTeamChat(teamId) {
   const wrap = $("#team-chat");
   clearTimeout(teamChat.timer);
@@ -6014,7 +6010,8 @@ function tcEntry(entry, fresh) {
   }
   if (entry.reply) col.appendChild(tcQuote(entry.reply));
   const bubble = el("div", "tc-bubble");
-  bubble.innerHTML = tcMentions(markdown(entry.text || ""));
+  bubble.innerHTML = markdown(entry.text || "");
+  chipMentions(bubble, tcMembers());
   bubble.title = tcClock(entry.at);
   // The reply sits just beside the bubble, however short it is.
   const line = el("div", "tc-line");
@@ -8787,6 +8784,7 @@ function drawStreaming() {
   if (chat.partial) {
     const wrap = el("div", "block");
     const body = el("div", "assistant", markdown(chat.partial));
+    chipMentions(body);
     ink(body);
     const last = body.lastElementChild;
     const tail = last && !["PRE", "DIV", "UL", "OL"].includes(last.tagName) ? last : body;
@@ -11403,6 +11401,55 @@ function emojiMatches(query) {
 
 // A spark is mentioned by its handle without "-spark": @scout.
 const mentionOf = (sp) => sp.handle.slice(1).replace(/-spark$/, "");
+
+// @mentions drawn as chips in each spark's colour, in a chat and in a
+// team's chat alike: @scout, @scout-spark or @Scout, of a spark in
+// SPARKS (all of them by default). Only in the words: code, a code
+// block, or a link keeps its text as it is. A click opens the spark.
+const MENTION_RE = /(^|[^\w@/.])@([a-z0-9][a-z0-9-]*)(?![\w/-])/gi;
+
+function chipMentions(root, sparks = sparkList) {
+  if (!root || !sparks.length || !root.textContent.includes("@")) return root;
+  const find = (name) => {
+    const key = name.toLowerCase();
+    return sparks.find((sp) => mentionOf(sp).toLowerCase() === key || sp.handle.slice(1).toLowerCase() === key || sp.name.toLowerCase().replace(/\s+/g, "-") === key);
+  };
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+    acceptNode: (node) => (node.nodeValue.includes("@") && !node.parentElement.closest("code, pre, a, .mention")
+      ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT),
+  });
+  const nodes = [];
+  while (walker.nextNode()) nodes.push(walker.currentNode);
+  for (const node of nodes) {
+    const text = node.nodeValue;
+    let last = 0;
+    let made = null;
+    text.replace(MENTION_RE, (whole, before, name, at) => {
+      const sp = find(name);
+      if (!sp) return whole;
+      made = made || document.createDocumentFragment();
+      const start = at + before.length;
+      made.append(text.slice(last, start));
+      const chip = el("span", "mention");
+      chip.dataset.spark = sp.id;
+      chip.style.setProperty("--c", sp.colour);
+      chip.textContent = `@${sp.name}`;
+      chip.title = sp.handle;
+      made.append(chip);
+      last = start + name.length + 1;
+      return whole;
+    });
+    if (!made) continue;
+    made.append(text.slice(last));
+    node.replaceWith(made);
+  }
+  return root;
+}
+
+document.addEventListener("click", (e) => {
+  const chip = e.target.closest(".mention[data-spark]");
+  if (chip && sparkOf(chip.dataset.spark)) openSpark(chip.dataset.spark);
+});
 
 function suggestionRows(want) {
   if (want.kind === "emoji") {
