@@ -2179,3 +2179,117 @@ def test_a_spark_on_a_model_still_here_is_left_alone(model):
 
     assert client.used == ["qwen3:8b"]  # nosec B101
     assert report.text == "Done."  # nosec B101
+
+
+# --- On call -----------------------------------------------------------------
+
+
+@pytest.mark.parametrize("words", [
+    "on call", "On Call", "oncall", "on demand", "manual", "never",
+    "only when called on", "when mentioned", 0, "0",
+])
+def test_on_call_reads_as_no_schedule(words):
+    assert sparks.parse_schedule(words) == (sparks.ON_CALL, "")  # nosec B101
+
+
+def test_an_on_call_spark_is_never_due_by_the_clock(model):
+    made = sparks.create("Scout", "Look when asked.", every="on call")
+
+    assert sparks.on_call(made)  # nosec B101
+    assert sparks.schedule_words(made) == "only when called on"  # nosec B101
+    assert sparks.due(time.time() + 10 ** 8) == []  # nosec B101
+
+
+def test_an_on_call_spark_runs_when_called_on(model):
+    made = sparks.create("Scout", "Look when asked.", every="on call")
+
+    sparks.run_now(made.id)
+
+    assert [s.id for s in sparks.due()] == [made.id]  # nosec B101
+    report = sparks.shift(made.id, client=FakeClient([_reply("Looked.")]))
+    assert report.text == "Looked."  # nosec B101
+    # Done, it waits to be called on again.
+    assert sparks.due(time.time() + 10 ** 8) == []  # nosec B101
+
+
+def test_a_hand_off_calls_an_on_call_spark(model):
+    sparks.create("Lead", "Lead.")
+    helper = sparks.create("Helper", "Help when asked.", every="on call")
+    lead = sparks.find("lead")
+    hand = sparks._handing_off(lead)
+
+    hand({"spark": "helper", "note": "Check the build."})
+
+    assert helper.id in [s.id for s in sparks.due()]  # nosec B101
+
+
+def test_a_report_that_mentions_an_on_call_spark_calls_it(model):
+    sparks.create("Scout", "Watch the issues.")
+    fixer = sparks.create("Fixer", "Fix what is found.", every="on call")
+    other = sparks.create("Other", "Watch the docs.")
+
+    sparks.shift(
+        sparks.find("scout").id,
+        client=FakeClient([
+            _reply("Issue 12 is a bug. @fixer can you take it?"),
+        ]),
+    )
+
+    called = sparks.find(fixer.id)
+    assert called.asked  # nosec B101
+    assert called.inbox[-1]["mentioned"] is True  # nosec B101
+    assert "Issue 12" in called.inbox[-1]["text"]  # nosec B101
+    assert sparks.find(other.id).inbox == []  # nosec B101
+    opening = sparks._opening("", called.inbox)
+    assert "@mentioned you in their reports" in opening  # nosec B101
+
+
+def test_a_scheduled_spark_mentioned_gets_the_note_but_is_not_woken(model):
+    sparks.create("Scout", "Watch the issues.")
+    later = sparks.create("Later", "Works hourly.")
+    sparks.update(later.id, every="daily")
+
+    sparks.shift(
+        sparks.find("scout").id,
+        client=FakeClient([_reply("@later this is for you.")]),
+    )
+
+    found = sparks.find(later.id)
+    assert found.inbox and not found.asked  # nosec B101
+
+
+def test_an_on_call_spark_knows_it_is_on_call(model):
+    made = sparks.create("Scout", "Look when asked.", every="on call")
+
+    block = sparks.status_block(made)
+
+    assert "you are on call" in block  # nosec B101
+    assert "Next shift" not in block  # nosec B101
+
+
+def test_a_spark_can_be_moved_on_and_off_call(model):
+    made = sparks.create("Scout", "Look.")
+
+    sparks.update(made.id, every="on call")
+    assert sparks.on_call(sparks.find(made.id))  # nosec B101
+
+    sparks.update(made.id, every="2h")
+    assert not sparks.on_call(sparks.find(made.id))  # nosec B101
+    assert sparks.find(made.id).every == 120  # nosec B101
+
+
+def test_make_spark_says_an_on_call_spark_waits(model, monkeypatch):
+    monkeypatch.setattr(tools, "NO_COMMAND_CONFIRMATION", True)
+
+    result = tools.make_spark("Fixer", "Fix things.", every="on call")
+
+    assert "It is on call" in result  # nosec B101
+    assert sparks.on_call(sparks.find("fixer"))  # nosec B101
+
+
+def test_the_terminal_says_on_call(model):
+    from flash import ai
+
+    made = sparks.create("Scout", "Look.", every="on call")
+
+    assert ai._spark_state(made) == "on call"  # nosec B101
