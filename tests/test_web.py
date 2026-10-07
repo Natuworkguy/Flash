@@ -10,7 +10,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from flash import ai, sparks, tools, web
+from flash import ai, sparks, tools, web, workspace
 from flash.cli import parse_args
 
 # --- A model that streams what each test scripts -------------------------
@@ -854,6 +854,28 @@ class TestProjectCommands:
 
         web.command(session, {"name": "project-delete", "arg": made["id"]})
         assert session.state()["projects"] == []
+
+    def test_a_project_with_more_folders(self, tmp_path):
+        (tmp_path / "web").mkdir()
+        (tmp_path / "api").mkdir()
+        session = web.Session()
+
+        made = web.command(session, {
+            "name": "project-new", "arg": str(tmp_path / "web"),
+            "label": "App", "folders": [str(tmp_path / "api")],
+        })
+        api = str((tmp_path / "api").resolve())
+        assert made["folders"] == [api]
+        prompt = web.project_prompt(workspace.project(made["id"]))
+        assert "also takes in these folders" in prompt and api in prompt
+
+        # Saved without them, its folders stay as they were.
+        kept = web.command(session, {"name": "project-update",
+                                     "arg": made["id"], "instructions": "x"})
+        assert kept["folders"] == [api]
+        cleared = web.command(session, {"name": "project-update",
+                                        "arg": made["id"], "folders": []})
+        assert cleared["folders"] == []
 
     def test_a_bad_folder_is_a_400(self, server, tmp_path):
         status, body = request(server, "POST", "/api/command", {

@@ -1761,6 +1761,11 @@ def project_block(spark: Spark) -> str:
         "start there, so give full paths, and cd into it first in shell "
         "commands.",
     ]
+    if found.folders:
+        lines.append(
+            "The project also takes in these folders, by their full paths:\n"
+            + "\n".join(f"- {folder}" for folder in found.folders)
+        )
     if found.instructions:
         lines += ["", found.instructions]
     return "\n".join(lines)

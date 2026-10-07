@@ -890,6 +890,13 @@ body.page-projects #dock, body.page-settings #dock, body.page-tool #dock { displ
 .page-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 22px; }
 .page h1 { font: 600 28px/1.2 var(--brand); letter-spacing: -0.025em; margin: 0; }
 .page .path { font: 13px var(--mono); color: var(--text-3); margin-top: 6px; word-break: break-all; }
+.more-folders .folder-rows { display: flex; flex-direction: column; gap: 6px; }
+.more-folders .folder-rows:empty { display: none; }
+.folder-row { display: flex; align-items: center; gap: 6px; }
+.folder-row input { flex: 1; min-width: 0; }
+.folder-row .icon-btn { flex: none; }
+.more-folders .add-folder { align-self: flex-start; display: inline-flex; align-items: center; gap: 5px; }
+.more-folders .add-folder svg { width: 14px; height: 14px; }
 .back { display: inline-flex; align-items: center; gap: 4px; color: var(--text-3); font-size: 13.5px; margin-bottom: 14px; padding: 4px 8px 4px 2px; border-radius: 7px; }
 .back:hover { color: var(--text); background: var(--hover); }
 .back svg { width: 15px; height: 15px; transform: rotate(180deg); }
@@ -5016,7 +5023,8 @@ function drawProjects() {
     card.innerHTML = `<span class="name"></span><span class="where"></span><span class="meta">${count} chat${count === 1 ? "" : "s"} · ${ago(latest)}</span>`;
     card.style.setProperty("--i", i);
     card.querySelector(".name").textContent = p.name;
-    card.querySelector(".where").textContent = shortPath(p.path);
+    const more = (p.folders || []).length;
+    card.querySelector(".where").textContent = shortPath(p.path) + (more ? ` + ${more} more folder${more === 1 ? "" : "s"}` : "");
     card.onclick = () => openProject(p.id, "forward");
     cards.appendChild(card);
   }
@@ -5044,7 +5052,7 @@ function drawProject() {
   const head = el("div", "page-head");
   head.innerHTML = `<div><h1></h1><div class="path"></div></div>`;
   head.querySelector("h1").textContent = p.name;
-  head.querySelector(".path").textContent = shortPath(p.path);
+  head.querySelector(".path").textContent = [p.path, ...(p.folders || [])].map(shortPath).join("  ·  ");
   head.appendChild(button("icon-btn", "more", "Edit project", "", () => projectForm(p)));
   page.appendChild(head);
 
@@ -9001,16 +9009,18 @@ function projectForm(p) {
     <p class="sub">${editing ? "" : "Chats in a project run in its folder, with its instructions."}</p>
     <label class="field"><span>Name</span><input name="label" placeholder="Name it after the codebase" autocomplete="off"></label>
     <label class="field"><span>Folder</span><input name="path" class="mono" autocomplete="off" spellcheck="false" role="combobox" aria-autocomplete="list" aria-expanded="false"><small>A folder on the computer Flash runs on. Tab takes a suggestion and shows what is inside it.</small></label>
+    <div class="field more-folders"><span>More folders</span><div class="folder-rows"></div><button type="button" class="link-btn add-folder">${icon("plus")}Add a folder</button><small>Optional. Folders the project also takes in, like a backend beside its frontend. Chats start in the folder above and reach these by their full paths.</small></div>
     <label class="field"><span>Instructions</span><textarea name="instructions" rows="4" placeholder="Optional. Conventions, commands to run, what to avoid."></textarea></label>
     <div class="dialog-buttons">${editing ? '<button type="button" class="btn danger" data-delete>Delete</button><span class="spacer"></span>' : ""}
       <button type="button" class="btn" data-cancel>Cancel</button><button type="submit" class="btn primary">${editing ? "Save" : "Create project"}</button></div>`,
     async (data) => {
+      const folders = [...form.querySelectorAll(".folder-rows input")].map((f) => f.value.trim()).filter(Boolean);
       if (editing) {
-        const updated = await command("project-update", p.id, null, { name: data.label, path: data.path, instructions: data.instructions });
+        const updated = await command("project-update", p.id, null, { name: data.label, path: data.path, instructions: data.instructions, folders });
         Object.assign(p, updated);
         drawPage();
       } else {
-        const made = await command("project-new", data.path, null, { label: data.label, instructions: data.instructions });
+        const made = await command("project-new", data.path, null, { label: data.label, instructions: data.instructions, folders });
         projects.push(made);
         openProject(made.id);
       }
@@ -9018,6 +9028,20 @@ function projectForm(p) {
   form.label.value = editing ? p.name : "";
   form.path.value = editing ? shortPath(p.path) : shortPath(info.cwd || "");
   form.instructions.value = editing ? p.instructions : "";
+  // One row for each folder besides the main one, each with its own
+  // suggestions, and a button to take it out.
+  const rows = form.querySelector(".folder-rows");
+  const addRow = (value = "", focus = false) => {
+    const row = el("div", "folder-row", `<input class="mono" autocomplete="off" spellcheck="false" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-label="Another folder" placeholder="~/code/backend"><button type="button" class="icon-btn" aria-label="Take this folder out" data-tip="Take it out">${icon("x")}</button>`);
+    const field = row.querySelector("input");
+    field.value = value;
+    row.querySelector("button").onclick = () => { row.remove(); dropSuggestions(); };
+    rows.appendChild(row);
+    suggestFolders(field);
+    if (focus) field.focus();
+  };
+  (editing ? p.folders || [] : []).forEach((f) => addRow(shortPath(f)));
+  form.querySelector(".add-folder").onclick = () => addRow("", true);
   form.querySelector("[data-cancel]").onclick = closeForm;
   if (editing) form.querySelector("[data-delete]").onclick = async () => {
     await command("project-delete", p.id);
