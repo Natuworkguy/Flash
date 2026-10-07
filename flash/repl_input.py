@@ -28,7 +28,7 @@ from prompt_toolkit.renderer import Renderer
 from prompt_toolkit.styles import Style
 from prompt_toolkit.utils import get_cwidth
 
-from . import background, extensions
+from . import background, extensions, sparks_completion
 from .emojis import EMOJIS
 from .images import IMAGE_EXTENSIONS
 from .memory import MEMORY_PATH
@@ -174,8 +174,9 @@ def _parse_path_arg(
 
 
 class SlashCommandCompleter(Completer):
-    """Suggests / commands as the line is typed, and image file paths as
-    the argument to /image (auto-quoting suggestions that contain spaces)."""
+    """Suggests / commands as the line is typed, image file paths as the
+    argument to /image (auto-quoting suggestions that contain spaces),
+    and what /sparks and its actions take."""
 
     def get_completions(self, document, complete_event):
         text = document.text_before_cursor
@@ -209,6 +210,14 @@ class SlashCommandCompleter(Completer):
                     suffix, start_position=0, display=completion.display
                 )
             return
+
+        # What /sparks and its actions take. Past them, in a lesson or a
+        # message, the emoji and @ mentions below have the line.
+        if text.startswith("/sparks "):
+            offered = list(sparks_completion.complete(text[len("/sparks "):]))
+            if offered:
+                yield from offered
+                return
 
         # Emoji names, as :smile. Checked after the path branches so a
         # colon inside a path does not swallow the completion.
