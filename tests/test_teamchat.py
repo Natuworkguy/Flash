@@ -477,3 +477,81 @@ def test_staying_quiet_is_only_for_the_team_chat(model):
     assert reply.text == "NO_REPLY"  # nosec B101
     prompt = sparks.chat_prompt(made, "h", "m", "")
     assert "NO_REPLY" not in prompt  # nosec B101
+
+
+def _send(text):
+    return _reply("", ("send_message", {"text": text}))
+
+
+def test_a_spark_can_send_messages_in_a_row(team):
+    message = teamchat.say("desk", "@scout any new bugs?")
+    client = FakeClient([_send("On it, checking."), _reply("Found 2.")])
+
+    posted = teamchat.answer("desk", message, client)
+
+    assert [(e["name"], e["text"]) for e in posted] == [  # nosec B101
+        ("Scout", "On it, checking."), ("Scout", "Found 2."),
+    ]
+    talk = [e["text"] for e in _said(team.id, teamchat.SPARK)]
+    assert talk == ["On it, checking.", "Found 2."]  # nosec B101
+    assert teamchat.history("desk")["typing"] == []  # nosec B101
+    # It could, since it was told how.
+    names = [t["function"]["name"] for t in client.calls[0]["tools"]]
+    assert "send_message" in names  # nosec B101
+
+
+def test_what_it_sent_can_be_all_it_says(team):
+    message = teamchat.say("desk", "@scout ping")
+    client = FakeClient([_send("Pong."), _reply("NO_REPLY")])
+
+    posted = teamchat.answer("desk", message, client)
+
+    assert [e["text"] for e in posted] == ["Pong."]  # nosec B101
+    assert teamchat.history("desk")["typing"] == []  # nosec B101
+
+
+def test_an_answer_that_repeats_what_it_sent_is_posted_once(team):
+    message = teamchat.say("desk", "@scout ping")
+    client = FakeClient([_send("Pong."), _reply("Pong.")])
+
+    posted = teamchat.answer("desk", message, client)
+
+    assert [e["text"] for e in posted] == ["Pong."]  # nosec B101
+
+
+def test_a_spark_cannot_flood_the_chat(team, monkeypatch):
+    monkeypatch.setattr(teamchat, "MAX_SENT", 2)
+    message = teamchat.say("desk", "@scout talk")
+    client = FakeClient([
+        _send("One."), _send("Two."), _send("Three."), _reply("Done."),
+    ])
+
+    posted = teamchat.answer("desk", message, client)
+
+    texts = [e["text"] for e in posted]
+    assert texts == ["One.", "Two.", "Done."]  # nosec B101
+    refused = client.calls[3]["messages"][-1]["content"]
+    assert "2 messages this turn already" in refused  # nosec B101
+
+
+def test_a_sent_message_brings_a_teammate_in(team):
+    message = teamchat.say("desk", "@scout who writes it up?")
+    client = FakeClient([
+        _send("@writer can you take this?"), _reply("NO_REPLY"),
+        _reply("On it."),
+    ])
+
+    posted = teamchat.answer("desk", message, client)
+
+    assert [e["name"] for e in posted] == ["Scout", "Writer"]  # nosec B101
+
+
+def test_several_messages_are_one_turn_of_the_limit(team, monkeypatch):
+    monkeypatch.setattr(teamchat, "REPLY_LIMIT", 1)
+    message = teamchat.say("desk", "@scout @writer both of you")
+    client = FakeClient([_send("Looking."), _reply("Found it."),
+                         _reply("Here.")])
+
+    posted = teamchat.answer("desk", message, client)
+
+    assert [e["name"] for e in posted] == ["Scout", "Scout"]  # nosec B101

@@ -67,7 +67,37 @@ You are shown the latest of the chat, then asked to post your message.
 - You need not answer. When you have nothing worth adding (it was not
   for you, a teammate already said it, or there is nothing to say),
   stay quiet: answer with only {quiet}, and nothing is posted.
+- You can send more than one message, as people do in a group chat:
+  call send_message to post one now, say a quick "on it, checking"
+  before you look into something, and your answer is posted after it.
+  When send_message already said it all, answer with only {quiet}.
 """.strip()
+
+# How many messages a spark may post in one turn with send_message, so
+# one turn is a few lines in the chat, not a flood.
+MAX_SENT = 4
+
+SEND_MESSAGE_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "send_message",
+        "description": (
+            "Post a message in the team chat now, before your answer: a "
+            "quick word while you work, or one thought of several, each "
+            f"its own message. At most {MAX_SENT} in a turn."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "text": {
+                    "type": "string",
+                    "description": "The message, in a sentence or a few.",
+                },
+            },
+            "required": ["text"],
+        },
+    },
+}
 
 # What a spark answers in the team chat to stay quiet. Only there: in a
 # chat with the user or on a shift, a spark always answers.
@@ -362,17 +392,53 @@ def _set_typing(team_id: str, spark_id: str, doing: str) -> None:
     _change(team_id, change)
 
 
+def _post(team_id: str, spark: sparks.Spark, entry: dict,
+          done: bool = False) -> dict:
+    """Put ENTRY, SPARK's, in the chat; DONE takes it off the typing."""
+
+    def change(data: dict) -> dict:
+        if done:
+            data["typing"].pop(spark.id, None)
+        return _add(data, {
+            "kind": SPARK, "spark": spark.id, "name": spark.name, **entry,
+        })
+
+    return _change(team_id, change)
+
+
+def _sending(team_id: str, spark: sparks.Spark, sent: list[dict]):
+    """send_message, for SPARK: posted now, and kept in SENT."""
+
+    def send(args: dict) -> str:
+        text = str(args.get("text", "")).strip()[:sparks.MESSAGE_CHARS]
+        if not text or _quiet(text):
+            return "Error: the message was empty."
+        if len(sent) >= MAX_SENT:
+            return (
+                f"Error: that is {MAX_SENT} messages this turn already. "
+                "Put the rest in your answer."
+            )
+        sent.append(_post(team_id, spark, {"text": text}))
+        sparks.tool_line(f"SendMessage({text[:60]})")
+        return "(posted in the chat)"
+
+    return send
+
+
 def _reply(
     team: sparks.Team, spark: sparks.Spark, client=None,
-) -> Optional[dict]:
-    """SPARK's message in TEAM's chat, made now and posted; None if it
-    chose to stay quiet."""
+) -> list[dict]:
+    """SPARK's messages in TEAM's chat, made now and posted: those it
+    sent as it worked, then its answer. [] if it chose to stay quiet."""
 
     from . import agent as subagents
     from . import tools as flash_tools  # deferred: avoids a module cycle
 
     steps: list[str] = []
     kit = sparks.ChatKit(spark)
+    sent: list[dict] = []
+    tools = {**kit.tools, "send_message": _sending(team.id, spark, sent)}
+    schemas = [*kit.schemas, SEND_MESSAGE_TOOL]
     others = [s for s in _members(team.id) if s.id != spark.id]
     roster = "\n".join(
         f"- {s.name} ({s.handle})"
@@ -381,6 +447,7 @@ def _reply(
         for s in others
     ) or "(no one else yet)"
     _set_typing(team.id, spark.id, "Thinking")
+    entry: Optional[dict] = None
     try:
         model = sparks.model_of(spark)
         if not model:
@@ -400,38 +467,33 @@ def _reply(
             {"role": "user", "content": _view(team, spark, entries)},
         ]
         text = sparks._work(
-            spark, messages, kit.tools, kit.schemas, steps,
+            spark, messages, tools, schemas, steps,
             lambda doing: _set_typing(team.id, spark.id, doing),
             sparks.MAX_CHAT_ROUNDS, sparks.CHAT_LAST_WORD, client,
             audit_as="team chat",
         )
-        if (not text or _quiet(text)) and not kit.documents:
-            # It chose not to answer: nothing is posted.
-            entry = None
-        else:
-            entry = {
-                "kind": SPARK, "spark": spark.id, "name": spark.name,
-                "text": "" if _quiet(text) else text, "steps": steps,
-            }
+        said = "" if not text or _quiet(text) else text
+        # Its answer only repeating the message it just sent is not
+        # another message.
+        if sent and said.strip() == sent[-1].get("text", "").strip():
+            said = ""
+        if said or kit.documents:
+            entry = {"text": said or "I wrote this up.", "steps": steps}
             if kit.documents:
                 entry["files"] = list(kit.documents)
-                if not entry["text"]:
-                    entry["text"] = "I wrote this up."
     except Exception as exc:  # noqa: BLE001
         entry = {
-            "kind": SPARK, "spark": spark.id, "name": spark.name,
             "steps": steps, "failed": True,
             "text": f"I could not answer: {exc.__class__.__name__}: {exc}",
         }
     kit.apply()
 
-    def change(data: dict) -> Optional[dict]:
-        data["typing"].pop(spark.id, None)
-        return _add(data, entry) if entry is not None else None
-
-    if entry is None:
+    if entry is not None:
+        return [*sent, _post(team.id, spark, entry, done=True)]
+    _set_typing(team.id, spark.id, "")
+    if not sent:
         sparks.log(spark.id, "team_chat_quiet", team=team.name)
-    return _change(team.id, change)
+    return sent
 
 
 def _replied_to(team_id: str, message: dict) -> Optional[sparks.Spark]:
@@ -458,21 +520,22 @@ def _round(team: sparks.Team, message: dict, client=None) -> list[dict]:
     if not queue:
         queue = _leads(team.id)[:1]
     posted: list[dict] = []
-    while queue and len(posted) < limit:
+    turns = 0
+    while queue and turns < limit:
         spark = sparks.find(queue.pop(0).id)
         if spark is None or spark.id in answered:
             continue
         answered.add(spark.id)
-        entry = _reply(team, spark, client)
-        if entry is None:
-            # It stayed quiet, and so brings no one in.
-            continue
-        posted.append(entry)
-        if not entry.get("failed"):
-            queue += [
-                s for s in _named(team.id, entry["text"], answered)
-                if all(q.id != s.id for q in queue)
-            ]
+        turns += 1
+        # One turn, and any messages in it: one quiet brings no one in.
+        said = _reply(team, spark, client)
+        posted += said
+        for entry in said:
+            if not entry.get("failed"):
+                queue += [
+                    s for s in _named(team.id, entry["text"], answered)
+                    if all(q.id != s.id for q in queue)
+                ]
     return posted
 
 
