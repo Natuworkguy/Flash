@@ -1724,8 +1724,18 @@ body.all-stopped .org-node, body.all-stopped .spark-card { animation: all-halt 0
   display: flex; flex-direction: column; overflow: hidden;
   background: var(--bg); border: 1px solid var(--border); border-radius: 20px;
   box-shadow: 0 24px 60px rgba(0, 0, 0, 0.28);
-  transform: translateX(calc(100% + 24px)); transition: transform 0.42s cubic-bezier(0.22, 1, 0.36, 1);
+  transform: translateX(calc(100% + 24px));
+  transition: transform 0.42s cubic-bezier(0.22, 1, 0.36, 1), top 0.5s var(--apple), right 0.5s var(--apple), bottom 0.5s var(--apple), width 0.5s var(--apple), border-radius 0.5s var(--apple), box-shadow 0.5s var(--apple);
 }
+/* Full screen: the sheet grows out to the whole window, its edges and
+   corners easing together, and the talk keeps a readable column in the
+   middle rather than stretching across it. */
+.tc-wrap.full .tc { top: 0; right: 0; bottom: 0; width: 100%; border-radius: 0; box-shadow: none; }
+.tc-wrap.full .tc-log > *, .tc-wrap.full .tc-typing, .tc-wrap.full .tc-compose > * { width: 100%; max-width: 820px; margin-left: auto; margin-right: auto; }
+.tc-wrap.full .tc-log > .tc-day, .tc-wrap.full .tc-log > .tc-event { width: auto; }
+.tc-log > *, .tc-typing, .tc-compose > * { transition: max-width 0.5s var(--apple); }
+.tc-full svg { width: 17px; height: 17px; }
+@media (max-width: 600px) { .tc-full { display: none; } }
 .tc-wrap { --t: var(--accent); }
 .tc-wrap.open .tc { transform: none; }
 .tc-head {
@@ -2353,7 +2363,7 @@ body.resizing-viewer iframe { pointer-events: none; }
 <div id="form" class="overlay" hidden><div class="dialog" role="dialog"><div class="inner" id="form-body"></div></div></div>
 <div id="tip" role="tooltip"></div>
 <div id="toast" role="status"></div>
-<div id="team-chat" class="tc-wrap" hidden><div class="tc-scrim" data-close></div><section class="tc" role="dialog" aria-modal="true" aria-labelledby="tc-name"><header class="tc-head"><span class="tc-badge"><span class="letter"></span></span><span class="tc-who"><b id="tc-name"></b><span class="tc-sub"></span></span><span class="tc-faces"></span><button type="button" class="icon-btn tc-close" data-close aria-label="Close"></button></header><div class="tc-log" aria-live="polite"></div><div class="tc-typing" hidden></div><form class="tc-compose"><div class="tc-chips"></div><div class="tc-box"><textarea rows="1" placeholder="Message the team" aria-label="Message the team"></textarea><button type="submit" class="tc-send" aria-label="Send"></button></div><div class="tc-mention" role="listbox" hidden></div></form></section></div>
+<div id="team-chat" class="tc-wrap" hidden><div class="tc-scrim" data-close></div><section class="tc" role="dialog" aria-modal="true" aria-labelledby="tc-name"><header class="tc-head"><span class="tc-badge"><span class="letter"></span></span><span class="tc-who"><b id="tc-name"></b><span class="tc-sub"></span></span><span class="tc-faces"></span><button type="button" class="icon-btn tc-full" aria-label="Full screen" data-tip="Full screen"></button><button type="button" class="icon-btn tc-close" data-close aria-label="Close"></button></header><div class="tc-log" aria-live="polite"></div><div class="tc-typing" hidden></div><form class="tc-compose"><div class="tc-chips"></div><div class="tc-box"><textarea rows="1" placeholder="Message the team" aria-label="Message the team"></textarea><button type="submit" class="tc-send" aria-label="Send"></button></div><div class="tc-mention" role="listbox" hidden></div></form></section></div>
 
 <script src="/static/katex/katex.min.js" id="katex" async></script>
 <script>
@@ -2423,6 +2433,8 @@ const ICON = {
   quote: '<path d="M7 7H4.5A1.5 1.5 0 0 0 3 8.5V12h4v5M17 7h-2.5A1.5 1.5 0 0 0 13 8.5V12h4v5"/>',
   link: '<path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/>',
   code: '<path d="m8 7-5 5 5 5M16 7l5 5-5 5"/>',
+  expand: '<path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/>',
+  shrink: '<path d="M4 14h6v6M20 10h-6V4M14 10l7-7M3 21l7-7"/>',
   chat: '<path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1.1-4.6A8 8 0 1 1 21 12Z"/><path d="M8.5 12h.01M12 12h.01M15.5 12h.01"/>',
   bell: '<path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/>',
   cube: '<path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><path d="M3.3 7 12 12l8.7-5M12 22V12"/>',
@@ -5777,6 +5789,7 @@ async function openTeamChat(teamId) {
   log.textContent = "";
   log.appendChild(el("div", "tc-loading", "Gathering the team…"));
   wrap.querySelector(".tc-close").innerHTML = icon("x");
+  tcFullScreen(tcFullScreen.saved());
   wrap.querySelector(".tc-send").innerHTML = icon("up");
   wrap.hidden = false;
   requestAnimationFrame(() => wrap.classList.add("open"));
@@ -5788,6 +5801,31 @@ async function openTeamChat(teamId) {
   tcWireComposer();
   wrap.querySelector("textarea").focus({ preventScroll: true });
 }
+
+// Full screen or a sheet at the side, as last chosen in this browser.
+function tcFullScreen(on) {
+  const wrap = $("#team-chat");
+  const b = wrap.querySelector(".tc-full");
+  wrap.classList.toggle("full", on);
+  b.innerHTML = icon(on ? "shrink" : "expand");
+  b.dataset.tip = on ? "Back to the side" : "Full screen";
+  b.setAttribute("aria-label", b.dataset.tip);
+  b.setAttribute("aria-pressed", String(on));
+  b.onclick = () => {
+    const next = !wrap.classList.contains("full");
+    try { localStorage.setItem("flash-team-chat-full", next ? "1" : ""); } catch (_) { /* kept for this visit only */ }
+    // The talk stays where it was read, through the change of size.
+    const log = wrap.querySelector(".tc-log");
+    const fromEnd = log.scrollHeight - log.scrollTop;
+    tcFullScreen(next);
+    const keep = () => { log.scrollTop = log.scrollHeight - fromEnd; };
+    keep();
+    const tc = wrap.querySelector(".tc");
+    const settle = () => { keep(); tc.removeEventListener("transitionend", settle); };
+    tc.addEventListener("transitionend", settle);
+  };
+}
+tcFullScreen.saved = () => { try { return localStorage.getItem("flash-team-chat-full") === "1"; } catch (_) { return false; } };
 
 function closeTeamChat() {
   const wrap = $("#team-chat");
