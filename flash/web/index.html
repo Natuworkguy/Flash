@@ -1911,9 +1911,52 @@ body.all-stopped .org-node, body.all-stopped .spark-card { animation: all-halt 0
   .tc { top: 0; right: 0; bottom: 0; width: 100%; border-radius: 0; border: 0; }
   .tc-faces { display: none; }
 }
+/* Reactions: a pill for each emoji under the message, with how many put
+   it on; the user's own lit in the accent. */
+.tc-reacts { display: flex; flex-wrap: wrap; gap: 4px; max-width: 100%; padding-left: 2px; }
+.tc-reacts[hidden] { display: none; }
+.tc-msg.mine .tc-reacts { justify-content: flex-end; padding: 0 2px 0 0; }
+.tc-event-reacts { align-self: center; justify-content: center; margin: -1px 0 4px; }
+.tc-react {
+  display: inline-flex; align-items: center; gap: 4px; height: 26px; padding: 0 9px 0 7px;
+  border-radius: 999px; font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums; color: var(--text-2);
+  background: var(--surface); border: 1px solid var(--border);
+  transition: transform 0.2s var(--spring), border-color 0.15s, background 0.15s, color 0.15s;
+}
+.tc-react .e { font-size: 15px; line-height: 1; display: inline-block; }
+.tc-react:hover { transform: translateY(-1px); border-color: var(--border-strong); }
+.tc-react:active { transform: scale(0.94); }
+.tc-react.mine { color: color-mix(in srgb, var(--accent) 85%, var(--text)); background: color-mix(in srgb, var(--accent) 12%, var(--surface)); border-color: color-mix(in srgb, var(--accent) 50%, var(--border)); }
+.tc-react.add { width: 26px; padding: 0; justify-content: center; color: var(--text-3); opacity: 0; transition: opacity 0.15s, transform 0.2s var(--spring); }
+.tc-react.add svg { width: 14px; height: 14px; }
+.tc-msg:hover .tc-react.add, .tc-reacts:hover .tc-react.add, .tc-react.add:focus-visible { opacity: 1; }
+@media (hover: none) { .tc-react.add { opacity: 0.7; } }
+.tc-react.pop .e { animation: tc-react-pop 0.55s var(--spring); }
+.tc-react.pop .n { animation: tc-react-count 0.4s var(--ease) both; }
+@keyframes tc-react-pop { 0% { transform: scale(0.3) rotate(-14deg); } 55% { transform: scale(1.4) rotate(6deg); } 100% { transform: none; } }
+@keyframes tc-react-count { from { opacity: 0; transform: translateY(-6px); } }
+.tc-picker {
+  position: fixed; z-index: 2; display: flex; gap: 1px; padding: 5px; border-radius: 999px;
+  background: var(--surface); border: 1px solid var(--border); box-shadow: 0 14px 34px rgba(0, 0, 0, 0.2);
+  transform-origin: var(--ox, 50%) 100%; animation: tc-picker-in 0.3s var(--spring) both;
+}
+.tc-picker.below { transform-origin: var(--ox, 50%) 0; }
+.tc-picker.leaving { animation: tc-picker-out 0.14s var(--ease) both; }
+.tc-picker button {
+  width: 36px; height: 36px; border-radius: 50%; display: grid; place-items: center; font-size: 20px; line-height: 1;
+  transition: transform 0.2s var(--spring), background 0.15s;
+  animation: tc-pick-in 0.36s var(--spring) both; animation-delay: calc(var(--i) * 20ms);
+}
+.tc-picker button:hover, .tc-picker button:focus-visible { background: var(--hover); transform: scale(1.25) translateY(-3px); outline: none; }
+.tc-picker button.on { background: color-mix(in srgb, var(--accent) 16%, transparent); }
+@keyframes tc-picker-in { from { opacity: 0; transform: translateY(8px) scale(0.86); } }
+@keyframes tc-picker-out { to { opacity: 0; transform: scale(0.92); } }
+@keyframes tc-pick-in { from { opacity: 0; transform: translateY(6px) scale(0.5); } }
+@media (max-width: 420px) { .tc-picker button { width: 32px; height: 32px; font-size: 18px; } }
 @media (prefers-reduced-motion: reduce) {
   .tc, .tc-scrim { transition: none; }
   .tc-msg.fresh, .tc-event.fresh, .tc-count, .tc-dots i, .tc-typer, .tc-typer .spark-av { animation: none; }
+  .tc-picker, .tc-picker button, .tc-react.pop .e, .tc-react.pop .n { animation: none; }
 }
 .attachment {
   display: flex; align-items: center; gap: 12px; width: min(420px, 100%);
@@ -2491,6 +2534,7 @@ const ICON = {
   link: '<path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/>',
   code: '<path d="m8 7-5 5 5 5M16 7l5 5-5 5"/>',
   reply: '<path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/>',
+  smile: '<circle cx="12" cy="12" r="9"/><path d="M8.5 14.5a4.5 4.5 0 0 0 7 0"/><path d="M9 9.5h.01M15 9.5h.01"/>',
   expand: '<path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/>',
   shrink: '<path d="M4 14h6v6M20 10h-6V4M14 10l7-7M3 21l7-7"/>',
   chat: '<path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1.1-4.6A8 8 0 1 1 21 12Z"/><path d="M8.5 12h.01M12 12h.01M15.5 12h.01"/>',
@@ -5814,7 +5858,7 @@ const TEAM_COLOURS = ["#f2a65a", "#5ab0f2", "#7bd88f", "#c792ea", "#ff7a90", "#f
 // goes to the sparks it @mentions, or to the lead, and a spark can bring
 // a teammate in. The team's news lands in it as it happens.
 
-const teamChat = { id: null, seq: 0, team: null, sparks: new Map(), typing: [], timer: null, drawnDay: "", lastWho: "", loading: false, replyTo: null };
+const teamChat = { id: null, seq: 0, team: null, sparks: new Map(), typing: [], timer: null, drawnDay: "", lastWho: "", loading: false, replyTo: null, pickerAnchor: null };
 
 function tcSpark(id) { return teamChat.sparks.get(id) || sparkList.find((s) => s.id === id) || null; }
 
@@ -5885,6 +5929,7 @@ function closeTeamChat() {
   const wrap = $("#team-chat");
   wrap.classList.remove("open");
   clearTimeout(teamChat.timer);
+  tcClosePicker();
   teamChat.id = null;
   setTimeout(() => { if (!teamChat.id) wrap.hidden = true; }, calm.matches ? 0 : 320);
   if (view === "sparks") sparksChanged();
@@ -5957,6 +6002,11 @@ async function tcFetch(first = false) {
     log.querySelector(".tc-empty")?.remove();
   }
   r.entries.forEach((entry) => log.appendChild(tcEntry(entry, !first)));
+  // Messages already drawn that were reacted to: only their pills change.
+  (r.changed || []).forEach((entry) => {
+    const box = log.querySelector(`.tc-reacts[data-for="${CSS.escape(String(entry.id))}"]`);
+    if (box) tcFillReacts(box, entry, true);
+  });
   teamChat.seq = Math.max(teamChat.seq, r.seq);
   tcTyping(r.typing);
   if (first || near || r.entries.some((e) => e.kind === "user")) log.scrollTo({ top: log.scrollHeight, behavior: first || calm.matches ? "auto" : "smooth" });
@@ -6007,8 +6057,11 @@ function tcEntry(entry, fresh) {
     // News from a spark can be answered, as its messages can.
     const line = el("div", "tc-event-row");
     line.dataset.id = entry.id;
-    line.append(row, tcReplyButton(entry));
+    line.append(row, tcReactButton(entry), tcReplyButton(entry));
     frag.appendChild(line);
+    const reacts = tcReacts(entry);
+    reacts.classList.add("tc-event-reacts");
+    frag.appendChild(reacts);
     if (entry.files && entry.files.length) {
       const docs = docCards(entry.spark, entry.files);
       docs.classList.add("tc-event-docs");
@@ -6044,8 +6097,8 @@ function tcEntry(entry, fresh) {
   bubble.title = tcClock(entry.at);
   // The reply sits just beside the bubble, however short it is.
   const line = el("div", "tc-line");
-  if (mine) line.append(tcReplyButton(entry), bubble); else line.append(bubble, tcReplyButton(entry));
-  col.appendChild(line);
+  if (mine) line.append(tcReplyButton(entry), tcReactButton(entry), bubble); else line.append(bubble, tcReactButton(entry), tcReplyButton(entry));
+  col.append(line, tcReacts(entry));
   if (entry.files && entry.files.length && entry.spark) col.appendChild(docCards(entry.spark, entry.files));
   if (entry.steps && entry.steps.length) {
     const used = el("details", "tc-steps");
@@ -6096,6 +6149,141 @@ function tcReplyButton(entry) {
   b.dataset.tip = "Reply";
   b.onclick = (e) => { e.stopPropagation(); tcReplyTo(entry); };
   return b;
+}
+
+// Reactions: an emoji on a message, the user's or a spark's. Each is a
+// pill under the message with how many put it on, the user's own lit; a
+// click puts the user's on or takes it off, drawn at once and then as
+// the chat has it. The smile beside the reply opens the quick ones.
+const TC_QUICK = ["👍", "❤️", "😂", "🎉", "👀", "🙏", "🔥", "✅"];
+
+function tcReactButton(entry) {
+  const b = el("button", "icon-btn tc-reply-btn tc-react-btn", icon("smile"));
+  b.type = "button";
+  b.setAttribute("aria-label", "React");
+  b.setAttribute("aria-haspopup", "menu");
+  b.dataset.tip = "React";
+  b.onclick = (e) => { e.stopPropagation(); tcPicker(b, entry.id); };
+  return b;
+}
+
+function tcReacts(entry) {
+  const box = el("div", "tc-reacts");
+  box.dataset.for = entry.id;
+  tcFillReacts(box, entry, false);
+  return box;
+}
+
+function tcNames(whose) {
+  const names = whose.map((w) => (w === "user" ? "You" : tcSpark(w)?.name || "A spark"));
+  return names.length < 2 ? names.join("") : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+}
+
+function tcFillReacts(box, entry, fresh) {
+  const before = new Map([...box.querySelectorAll(".tc-react[data-emoji]")].map((b) => [b.dataset.emoji, b.dataset.count]));
+  box.entry = entry;
+  box.textContent = "";
+  const reactions = Object.entries(entry.reactions || {}).filter(([, whose]) => whose && whose.length);
+  for (const [emoji, whose] of reactions) {
+    const b = el("button", `tc-react${whose.includes("user") ? " mine" : ""}`, `<span class="e"></span><span class="n"></span>`);
+    b.type = "button";
+    b.querySelector(".e").textContent = emoji;
+    b.querySelector(".n").textContent = whose.length;
+    b.dataset.emoji = emoji;
+    b.dataset.count = whose.length;
+    b.dataset.tip = `${tcNames(whose)} reacted with ${emoji}`;
+    b.setAttribute("aria-pressed", String(whose.includes("user")));
+    b.setAttribute("aria-label", `${emoji} ${whose.length}: ${b.dataset.tip}`);
+    if (fresh && before.get(emoji) !== String(whose.length)) b.classList.add("pop");
+    b.onclick = (e) => { e.stopPropagation(); tcReact(box, emoji); };
+    box.appendChild(b);
+  }
+  if (reactions.length) {
+    const add = el("button", "tc-react add", icon("smile"));
+    add.type = "button";
+    add.dataset.tip = "Add a reaction";
+    add.setAttribute("aria-label", "Add a reaction");
+    add.onclick = (e) => { e.stopPropagation(); tcPicker(add, entry.id); };
+    box.appendChild(add);
+  }
+  box.hidden = !reactions.length;
+}
+
+async function tcReact(box, emoji) {
+  const was = box.entry;
+  const reactions = Object.fromEntries(Object.entries(was.reactions || {}).map(([k, v]) => [k, [...v]]));
+  const whose = reactions[emoji] || [];
+  reactions[emoji] = whose.includes("user") ? whose.filter((w) => w !== "user") : [...whose, "user"];
+  if (!reactions[emoji].length) delete reactions[emoji];
+  tcFillReacts(box, { ...was, reactions }, true);
+  try {
+    const r = await command("team-chat-react", teamChat.id, null, { id: was.id, emoji });
+    if (box.isConnected) tcFillReacts(box, r.entry, false);
+  } catch (error) {
+    if (box.isConnected) tcFillReacts(box, was, false);
+    showFailure(error);
+  }
+}
+
+function tcPicker(anchor, id) {
+  const open = $("#team-chat .tc-picker");
+  const again = open && open.dataset.for === String(id);
+  tcClosePicker();
+  if (again) return;
+  const box = $("#team-chat .tc-log").querySelector(`.tc-reacts[data-for="${CSS.escape(String(id))}"]`);
+  if (!box) return;
+  const pick = el("div", "tc-picker");
+  pick.setAttribute("role", "menu");
+  pick.dataset.for = id;
+  const mineNow = Object.entries(box.entry.reactions || {}).filter(([, w]) => w.includes("user")).map(([e]) => e);
+  TC_QUICK.forEach((emoji, i) => {
+    const b = el("button", mineNow.includes(emoji) ? "on" : "");
+    b.type = "button";
+    b.setAttribute("role", "menuitem");
+    b.setAttribute("aria-label", `React with ${emoji}`);
+    b.style.setProperty("--i", i);
+    b.textContent = emoji;
+    b.onclick = (e) => { e.stopPropagation(); tcClosePicker(); tcReact(box, emoji); };
+    pick.appendChild(b);
+  });
+  pick.addEventListener("keydown", (e) => {
+    const items = [...pick.querySelectorAll("button")];
+    const at = items.indexOf(document.activeElement);
+    const step = { ArrowRight: 1, ArrowLeft: -1 }[e.key];
+    if (step) { e.preventDefault(); items[(at + step + items.length) % items.length].focus(); }
+  });
+  $("#team-chat").appendChild(pick);
+  // Over the button, or under it near the top; kept inside the window.
+  const a = anchor.getBoundingClientRect();
+  const w = pick.offsetWidth, h = pick.offsetHeight;
+  const left = Math.max(8, Math.min(window.innerWidth - w - 8, a.left + a.width / 2 - w / 2));
+  const below = a.top - h - 8 < 8;
+  pick.classList.toggle("below", below);
+  pick.style.left = `${left}px`;
+  pick.style.top = `${below ? a.bottom + 8 : a.top - h - 8}px`;
+  pick.style.setProperty("--ox", `${a.left + a.width / 2 - left}px`);
+  teamChat.pickerAnchor = anchor;
+  pick.querySelector(".on, button").focus({ preventScroll: true });
+  setTimeout(() => {
+    document.addEventListener("pointerdown", tcPickerAway, true);
+    $("#team-chat .tc-log").addEventListener("scroll", tcClosePicker, { once: true });
+  });
+}
+
+function tcPickerAway(e) {
+  if (!e.target.closest(".tc-picker")) tcClosePicker();
+}
+
+// Whether there was one to close.
+function tcClosePicker() {
+  document.removeEventListener("pointerdown", tcPickerAway, true);
+  const pick = $("#team-chat .tc-picker:not(.leaving)");
+  if (!pick) return false;
+  const back = pick.contains(document.activeElement) ? teamChat.pickerAnchor : null;
+  pick.classList.add("leaving");
+  setTimeout(() => pick.remove(), calm.matches ? 0 : 140);
+  if (back?.isConnected) back.focus({ preventScroll: true });
+  return true;
 }
 
 function tcWhose(quote) {
@@ -12018,7 +12206,7 @@ window.addEventListener("keydown", (e) => {
   // shortcuts wait until it is gone. An Esc its @mention list used is
   // not one for closing.
   if (teamChat.id) {
-    if (e.key === "Escape" && !e.defaultPrevented) { e.preventDefault(); closeTeamChat(); }
+    if (e.key === "Escape" && !e.defaultPrevented) { e.preventDefault(); if (!tcClosePicker()) closeTeamChat(); }
     return;
   }
 

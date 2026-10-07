@@ -2977,6 +2977,15 @@ def _team_command(name: str, arg: str, body: dict) -> dict:
             return {"entry": teamchat.send(
                 arg, str(body.get("text") or ""), reply_to=reply_to,
             )}
+        if name == "team-chat-react":
+            # The user's reaction, on or off as it was not.
+            try:
+                entry_id = int(body.get("id") or 0)
+            except (TypeError, ValueError):
+                entry_id = 0
+            return {"entry": teamchat.react(
+                arg, entry_id, str(body.get("emoji") or ""),
+            )}
         if name == "team-share":
             return {"code": sparks.share_team_code(arg)}
         if name == "team-code":
