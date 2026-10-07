@@ -64,7 +64,22 @@ You are shown the latest of the chat, then asked to post your message.
   they answer after you. Only do that when they are really needed.
 - Do not speak for the user or for another spark.
 - Real work goes in a shift: call take_on, then say you are on it.
+- You need not answer. When you have nothing worth adding (it was not
+  for you, a teammate already said it, or there is nothing to say),
+  stay quiet: answer with only {quiet}, and nothing is posted.
 """.strip()
+
+# What a spark answers in the team chat to stay quiet. Only there: in a
+# chat with the user or on a shift, a spark always answers.
+QUIET = "NO_REPLY"
+
+
+def _quiet(text: str) -> bool:
+    """Whether TEXT is a spark choosing not to answer."""
+
+    said = " ".join(str(text or "").split()).strip(" .!*_`\"'").upper()
+    return said in (QUIET, QUIET.replace("_", " "), QUIET.replace("_", ""))
+
 
 _listeners: list[Callable[[str], None]] = []
 _busy: set[str] = set()
@@ -347,8 +362,11 @@ def _set_typing(team_id: str, spark_id: str, doing: str) -> None:
     _change(team_id, change)
 
 
-def _reply(team: sparks.Team, spark: sparks.Spark, client=None) -> dict:
-    """SPARK's message in TEAM's chat, made now and posted."""
+def _reply(
+    team: sparks.Team, spark: sparks.Spark, client=None,
+) -> Optional[dict]:
+    """SPARK's message in TEAM's chat, made now and posted; None if it
+    chose to stay quiet."""
 
     from . import agent as subagents
     from . import tools as flash_tools  # deferred: avoids a module cycle
@@ -374,7 +392,7 @@ def _reply(team: sparks.Team, spark: sparks.Spark, client=None) -> dict:
             spark, host, model, flash_tools.CURRENT_DATE_PROMPT,
         ) + "\n\n" + TEAM_CHAT_PROMPT.format(
             team=team.name, name=spark.name, handle=spark.handle,
-            roster=roster,
+            roster=roster, quiet=QUIET,
         )
         entries = _read(team.id)["entries"][-CONTEXT_ENTRIES:]
         messages = [
@@ -387,12 +405,18 @@ def _reply(team: sparks.Team, spark: sparks.Spark, client=None) -> dict:
             sparks.MAX_CHAT_ROUNDS, sparks.CHAT_LAST_WORD, client,
             audit_as="team chat",
         )
-        entry = {
-            "kind": SPARK, "spark": spark.id, "name": spark.name,
-            "text": text or "(nothing to add)", "steps": steps,
-        }
-        if kit.documents:
-            entry["files"] = list(kit.documents)
+        if (not text or _quiet(text)) and not kit.documents:
+            # It chose not to answer: nothing is posted.
+            entry = None
+        else:
+            entry = {
+                "kind": SPARK, "spark": spark.id, "name": spark.name,
+                "text": "" if _quiet(text) else text, "steps": steps,
+            }
+            if kit.documents:
+                entry["files"] = list(kit.documents)
+                if not entry["text"]:
+                    entry["text"] = "I wrote this up."
     except Exception as exc:  # noqa: BLE001
         entry = {
             "kind": SPARK, "spark": spark.id, "name": spark.name,
@@ -401,10 +425,12 @@ def _reply(team: sparks.Team, spark: sparks.Spark, client=None) -> dict:
         }
     kit.apply()
 
-    def change(data: dict) -> dict:
+    def change(data: dict) -> Optional[dict]:
         data["typing"].pop(spark.id, None)
-        return _add(data, entry)
+        return _add(data, entry) if entry is not None else None
 
+    if entry is None:
+        sparks.log(spark.id, "team_chat_quiet", team=team.name)
     return _change(team.id, change)
 
 
@@ -438,6 +464,9 @@ def _round(team: sparks.Team, message: dict, client=None) -> list[dict]:
             continue
         answered.add(spark.id)
         entry = _reply(team, spark, client)
+        if entry is None:
+            # It stayed quiet, and so brings no one in.
+            continue
         posted.append(entry)
         if not entry.get("failed"):
             queue += [

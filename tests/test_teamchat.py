@@ -431,3 +431,49 @@ def test_the_page_opens_a_sparks_document(team, tmp_path):
             "name": "spark-document", "arg": writer.id,
             "path": str(tmp_path / "x.md"),
         })
+
+
+@pytest.mark.parametrize("said", ["NO_REPLY", "no reply.", "**NO_REPLY**", ""])
+def test_a_spark_can_stay_quiet_in_the_team_chat(team, said):
+    before = len(_said(team.id))
+    message = teamchat.say("desk", "Morning all.")
+
+    posted = teamchat.answer("desk", message, FakeClient([_reply(said)]))
+
+    assert posted == []  # nosec B101
+    # Only the user's message is new, and nobody is left typing.
+    assert len(_said(team.id)) == before + 1  # nosec B101
+    assert teamchat.history("desk")["typing"] == []  # nosec B101
+
+
+def test_a_quiet_spark_brings_no_one_in(team):
+    message = teamchat.say("desk", "@scout @writer anything?")
+    client = FakeClient([_reply("NO_REPLY"), _reply("Draft is up.")])
+
+    posted = teamchat.answer("desk", message, client)
+
+    assert [e["name"] for e in posted] == ["Writer"]  # nosec B101
+
+
+def test_a_quiet_spark_that_wrote_a_document_still_posts_it(team):
+    message = teamchat.say("desk", "@writer the plan?")
+    client = FakeClient([
+        _reply("", ("make_document", {"title": "Plan", "content": "Do."})),
+        _reply("NO_REPLY"),
+    ])
+
+    posted = teamchat.answer("desk", message, client)
+
+    assert posted[0]["text"] == "I wrote this up."  # nosec B101
+    assert posted[0]["files"][0]["title"] == "Plan"  # nosec B101
+
+
+def test_staying_quiet_is_only_for_the_team_chat(model):
+    made = sparks.create("Scout", "Watch.")
+
+    reply = sparks.say(made.id, "Hi?", FakeClient([_reply("NO_REPLY")]))
+
+    # In a chat of its own it is posted as it said it: no silence there.
+    assert reply.text == "NO_REPLY"  # nosec B101
+    prompt = sparks.chat_prompt(made, "h", "m", "")
+    assert "NO_REPLY" not in prompt  # nosec B101
