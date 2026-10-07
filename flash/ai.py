@@ -1959,6 +1959,12 @@ def _spark_state(spark: "sparks.Spark") -> str:
         return f"working{': ' + spark.activity if spark.activity else ''}"
     if spark.paused:
         return "paused"
+    if spark.unavailable and not spark.asked:
+        return (
+            f"unavailable: {spark.unavailable_model or 'no model'} failed "
+            f"({spark.unavailable}). /sparks run {spark.handle[1:]} tries "
+            "again; /sparks model changes it"
+        )
     if spark.asked:
         state = "starting soon"
     elif sparks.on_call(spark):

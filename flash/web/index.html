@@ -1185,6 +1185,25 @@ button.item-row:hover { background: var(--hover); }
 .spark-av[data-state="waiting"]::before { content: "?"; position: absolute; top: -34%; left: -12%; font: 800 calc(var(--s) * 0.36)/1 var(--sans); color: var(--accent); text-shadow: 0 1px 0 var(--surface); animation: spark-ask 1.2s ease-in-out infinite; }
 .spark-av.tiny[data-state="waiting"]::before, .spark-av.tiny[data-state="paused"]::before, .spark-av.tiny[data-state="paused"]::after { display: none; }
 
+/* On call: no floating about. It sits still and alert, eyes wide and
+   straight ahead, and every few seconds a soft ring goes out from it,
+   like a pager's signal, with a little perk as it does: standing by. */
+.spark-av[data-state="oncall"] { animation: spark-perk 3.2s ease-in-out infinite; animation-delay: calc(var(--i, 0) * -0.7s); }
+.spark-av[data-state="oncall"] .eye { height: max(3px, calc(var(--s) * 0.2)); }
+.spark-av[data-state="oncall"]::after { content: ""; position: absolute; inset: 0; border-radius: inherit; border: max(2px, calc(var(--s) * 0.065)) solid var(--c); opacity: 0; pointer-events: none; animation: spark-beacon 3.2s ease-out infinite; animation-delay: inherit; }
+.spark-av.tiny[data-state="oncall"]::after { display: none; }
+@keyframes spark-perk { 0%, 100% { transform: none; } 6% { transform: translateY(calc(var(--s) * -0.06)) scale(1.04, 0.97); } 12% { transform: none; } }
+@keyframes spark-beacon { 0% { opacity: 0.95; transform: scale(1); } 45%, 100% { opacity: 0; transform: scale(1.55); } }
+
+/* Unavailable: its model failed. Grey, eyes flat, and now and then a
+   flicker, as a screen with no signal; a "!" says it needs you. */
+.spark-av[data-state="unavailable"] { background: color-mix(in srgb, var(--c) 14%, #8b8b8b); animation: spark-flicker 4.6s steps(1) infinite; }
+.spark-av[data-state="unavailable"] .eyes { animation: none; translate: none; }
+.spark-av[data-state="unavailable"] .eye { height: max(1.5px, calc(var(--s) * 0.05)); border-radius: 2px; animation: none; }
+.spark-av[data-state="unavailable"]::before { content: "!"; position: absolute; top: -26%; right: -8%; width: calc(var(--s) * 0.36); height: calc(var(--s) * 0.36); border-radius: 50%; display: grid; place-items: center; font: 800 calc(var(--s) * 0.24)/1 var(--sans); color: #fff; background: var(--del); box-shadow: 0 0 0 2px var(--surface); }
+.spark-av.tiny[data-state="unavailable"]::before { display: none; }
+@keyframes spark-flicker { 0%, 88%, 100% { opacity: 1; transform: none; } 90% { opacity: 0.45; transform: translateX(calc(var(--s) * 0.03)); } 92% { opacity: 1; transform: none; } 94% { opacity: 0.6; transform: translateX(calc(var(--s) * -0.02)); } }
+
 /* A failed shift: eyes low and half shut. */
 .spark-av[data-state="failed"] { animation: spark-float 5s ease-in-out infinite; }
 .spark-av[data-state="failed"] .eyes { animation: none; transform: translateY(calc(var(--s) * 0.05)); }
@@ -1516,6 +1535,10 @@ body.all-stopped .org-node, body.all-stopped .spark-card { animation: all-halt 0
 .spark-card .state { font-size: 12.5px; color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .spark-card .state.working { color: var(--text-2); }
 .spark-card .goal { font-size: 13.5px; color: var(--text-2); line-height: 1.45; margin-top: 4px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.spark-unavailable { display: flex; flex-direction: column; gap: 10px; margin: 0 0 14px; padding: 12px 14px; border-radius: 12px; border: 1px solid color-mix(in srgb, var(--del) 40%, var(--border)); background: color-mix(in srgb, var(--del) 8%, var(--surface)); }
+.spark-unavailable .why { display: flex; flex-direction: column; gap: 3px; font-size: 13px; color: var(--text-2); overflow-wrap: anywhere; }
+.spark-unavailable .why b { font-size: 14px; color: var(--del); }
+.spark-unavailable .row { display: flex; gap: 8px; flex-wrap: wrap; }
 .spark-head { display: flex; align-items: center; gap: 18px; margin: -6px -6px 16px; padding: 18px 18px 16px; border-radius: 16px;
   background: radial-gradient(120% 140% at 0% 0%, color-mix(in srgb, var(--c) 26%, transparent), transparent 60%), color-mix(in srgb, var(--c) 6%, var(--surface)); }
 .spark-head h2 { margin: 0; font-size: 19px; }
@@ -5220,7 +5243,8 @@ const EVERY_CHOICES = [[15, "Every 15 minutes"], [30, "Every 30 minutes"], [60, 
 
 function sparkAvatar(spark, size = 36, i = 0) {
   const av = el("span", "spark-av", `<i class="face"><i class="eyes"><i class="eye"></i><i class="eye"></i></i></i>`);
-  av.dataset.state = spark.status === "working" ? "working" : spark.waiting ? "waiting" : spark.paused ? "paused" : spark.status === "failed" ? "failed" : "idle";
+  av.dataset.state = spark.status === "working" ? "working" : spark.waiting ? "waiting" : spark.paused ? "paused"
+    : spark.unavailable ? "unavailable" : spark.status === "failed" ? "failed" : onCall(spark) ? "oncall" : "idle";
   // Too small for a "?" or z's to read beside it.
   av.classList.toggle("tiny", size < 20);
   av.style.setProperty("--c", spark.colour);
@@ -5463,13 +5487,14 @@ function everyWords(minutes) {
 
 // On call: no schedule. It works when it is called on, by Run now, a
 // hand-off, a job from Flash or an @mention, and never by the clock.
-const onCall = (spark) => !spark.at && spark.every === 0;
+function onCall(spark) { return !spark.at && spark.every === 0; }
 
 function sparkState(spark) {
   if (spark.waiting) return "Waiting for your approval";
   if (spark.answering) return "Answering you";
   if (spark.status === "working") return spark.activity ? `Working: ${spark.activity}` : "Working";
   if (spark.paused) return "Paused";
+  if (spark.unavailable) return `Unavailable: ${spark.unavailable_model || "no model"} failed`;
   if (onCall(spark)) return spark.status === "failed" ? "Last shift failed · On call" : "On call";
   const wait = Math.round((spark.next_run - Date.now() / 1000) / 60);
   const next = wait <= 0 ? "Starting soon" : wait < 120 ? `Next shift in ${wait} min` : wait < 2880 ? `Next shift in ${Math.round(wait / 60)} h` : `Next shift in ${Math.round(wait / 1440)} d`;
@@ -5482,6 +5507,7 @@ function sparkPresence(spark) {
   if (spark.status === "working") return ["working", spark.activity ? spark.activity : "Working"];
   if (spark.answering) return ["working", "Answering you"];
   if (spark.paused) return ["paused", "Paused"];
+  if (spark.unavailable) return ["failed", "Unavailable"];
   if (spark.status === "failed") return ["failed", "Last shift failed"];
   return ["idle", spark.unread ? `${spark.unread} new report${spark.unread === 1 ? "" : "s"}` : onCall(spark) ? "On call" : "Ready"];
 }
@@ -6751,6 +6777,21 @@ function fillSpark(box, spark, again = false) {
     box.querySelector(".spark-actions").before(card);
   }
 
+  // Its model failed: it waits for a try again, or another model. It is
+  // never switched to another model by itself.
+  if (spark.unavailable && spark.status !== "working") {
+    const card = el("div", "spark-unavailable", `<div class="why"><b></b><span></span></div><div class="row"><button type="button" class="btn small primary" data-retry>Try again</button><button type="button" class="btn small" data-model>Change model</button></div>`);
+    card.querySelector("b").textContent = `Unavailable: ${spark.unavailable_model || "no model is set"}${spark.unavailable_model ? " failed" : ""}`;
+    const why = spark.unavailable.replace(/\s*$/, "");
+    card.querySelector("span").textContent = `${why}${/[.!?]$/.test(why) ? "" : "."} No shift starts on its schedule until you try again or give it another model.`;
+    card.querySelector("[data-retry]").onclick = async () => {
+      try { await command("spark-run", spark.id, null); toast(`${spark.name} is trying again`); }
+      catch (error) { showFailure(error); }
+    };
+    card.querySelector("[data-model]").onclick = () => sparkForm(spark);
+    box.querySelector(".spark-actions").before(card);
+  }
+
   const act = (label, run, cls = "btn small") => {
     const b = el("button", cls);
     b.type = "button";
@@ -6763,7 +6804,8 @@ function fillSpark(box, spark, again = false) {
   act("Chat", async () => startSparkChat(spark.id), "btn small primary");
   if (working || spark.waiting) {
     act(working ? "Stop" : "Call off", async () => { await command("spark-stop", spark.id, null); toast(working ? `${spark.name} stops at its next step` : `${spark.name} called off that shift`); });
-  } else {
+  } else if (!spark.unavailable) {
+    // Unavailable, its card above has Try again in this one's place.
     act("Run now", async () => { await command("spark-run", spark.id, null); toast(`${spark.name} is starting a shift`); });
   }
   act(spark.paused ? "Resume" : "Pause", async () => { await command(spark.paused ? "spark-resume" : "spark-pause", spark.id, null); });
@@ -6796,7 +6838,8 @@ function fillSpark(box, spark, again = false) {
   if (!said.length) {
     // A paused one, or one on set times, is not about to start: it says
     // when it will, as its card does.
-    const first = spark.paused ? "Paused: its first shift waits until you resume it."
+    const first = spark.unavailable && !spark.asked ? "Unavailable: its first shift waits until you try again or give it another model."
+      : spark.paused ? "Paused: its first shift waits until you resume it."
       : onCall(spark) && !spark.asked ? "On call: its first shift is the first time you or another spark call on it."
       : Date.now() / 1000 >= spark.next_run - 60 ? "Its first shift starts soon."
       : `Its first shift: ${sparkState(spark).replace(/^Next shift /, "")}.`;
@@ -6882,7 +6925,7 @@ async function fillSparkModelRow(row) {
     select.value = chosen || "flash";
     row.classList.toggle("warned", said.spark_default_here === false);
     words.innerHTML = said.spark_default_here === false
-      ? `<b class="model-gone-word">${esc(chosen)} is not on this computer any more.</b> New sparks are made on ${esc(said.spark_model || "Flash's model")} until you pick another, and sparks on it run on that meanwhile.`
+      ? `<b class="model-gone-word">${esc(chosen)} is not in this computer's model list.</b> New sparks are still made on it, never switched to another. One whose model cannot run is marked Unavailable, for you to try again or pick another.`
       : "The model the form picks for a new spark, and the one teams and sparks made by Flash start on. Each spark can still have its own.";
   };
   let said;
@@ -6915,10 +6958,11 @@ async function fillModelField(form, current = "", fresh = false) {
   try { said = await command("model", "", null); listed = said.models || []; } catch (_) { listed = []; }
   if (!select.isConnected) return;
   if (fresh && !current && said.spark_default) {
+    current = said.spark_default;
     if (said.spark_default_here === false) {
-      const gone = el("p", "model-gone", `<b>${esc(said.spark_default)}</b>, your default for new sparks, is not on this computer any more. Pick one here, or another default in Settings.`);
+      const gone = el("p", "model-gone", `<b>${esc(said.spark_default)}</b>, your default for new sparks, is not in this computer's model list. Pick another here if it is gone.`);
       select.closest(".field").appendChild(gone);
-    } else current = said.spark_default;
+    }
   }
   if (!listed.length) {
     const box = el("input");

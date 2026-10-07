@@ -424,6 +424,12 @@ class Spark:
     # Paused because its team was: resuming the team wakes these, and
     # leaves the ones paused one by one, or by Pause all, as they are.
     team_held: bool = False
+    # Its model failed (why, which, and when): no shift starts on its
+    # schedule until it is called on again, its model answers, or it is
+    # given another. "" while its model works.
+    unavailable: str = ""
+    unavailable_model: str = ""
+    unavailable_at: float = 0.0
 
     @property
     def handle(self) -> str:
@@ -2168,7 +2174,13 @@ def update(key: str, **changes) -> Spark:
         if "watch" in changes:
             spark.watch = _watch_folder(changes["watch"])
         if "model" in changes:
-            spark.model = _model_name(changes["model"])
+            model = _model_name(changes["model"])
+            if model != spark.model:
+                # Another model to try: whatever made the last one
+                # unavailable is no reason to hold this one back.
+                spark.unavailable = spark.unavailable_model = ""
+                spark.unavailable_at = 0.0
+            spark.model = model
         if "title" in changes:
             spark.title = _title(changes["title"])
         if "name" in changes:
@@ -2628,10 +2640,19 @@ def models_here(client=None) -> Optional[set[str]]:
         return None
 
 
-def is_here(model: str, here: Optional[set[str]]) -> Optional[bool]:
-    """Whether MODEL is among HERE, or None when that is not known."""
+def is_cloud(model: str) -> bool:
+    """Whether MODEL runs in Ollama's cloud, as gpt-oss:120b-cloud does:
+    it need not be in this computer's list to work."""
 
-    if here is None or not model:
+    return "cloud" in str(model or "").lower().rpartition(":")[2] or \
+        str(model or "").lower().endswith("-cloud")
+
+
+def is_here(model: str, here: Optional[set[str]]) -> Optional[bool]:
+    """Whether MODEL is among HERE, or None when that is not known: a
+    cloud model's place in the list says nothing either way."""
+
+    if here is None or not model or is_cloud(model):
         return None
     return full_name(model) in here
 
@@ -2640,10 +2661,11 @@ def model_for_new(
     flash: str = "", here: Optional[set[str]] = None, look: bool = True,
 ) -> tuple[str, str]:
     """The model a new spark is made on when it is given none, and a
-    word for the user if that is not the default: `(model, note)`. The
-    default, if it is set and still on this computer; Flash's (FLASH,
-    or the one in use) if not. HERE is the models on this computer, or
-    with LOOK they are asked for."""
+    word for the user if it is not in this computer's list: `(model,
+    note)`. The default, if one is set, else Flash's (FLASH, or the one
+    in use). Never another in its place: one that cannot run marks the
+    spark unavailable, where the user sees it. HERE is the models on
+    this computer, or with LOOK they are asked for."""
 
     from . import tools as flash_tools  # deferred: avoids a module cycle
 
@@ -2654,36 +2676,56 @@ def model_for_new(
     if here is None and look:
         here = models_here()
     if is_here(chosen, here) is False:
-        return flash, (
-            f"{chosen}, the model new sparks are made on, is not on this "
-            f"computer any more, so this one is on {flash or 'no model'}. "
-            "Pick another default in Settings, or with /sparks default."
+        return chosen, (
+            f"{chosen}, the model new sparks are made on, is not in this "
+            "computer's model list. The spark is made on it anyway; if it "
+            "cannot run, the spark is marked unavailable. Pick another "
+            "default in Settings, or with /sparks default."
         )
     return chosen, ""
 
 
-def _usable_model(spark: Spark, model: str, client) -> tuple[str, str]:
-    """MODEL, or the one to run SPARK on instead when MODEL is no longer
-    on this computer: the default for new sparks, else Flash's. With
-    the reason, for its report. `(model, note)`"""
+class ModelFailed(RuntimeError):
+    """A spark's model could not answer, retries and all: the spark is
+    marked unavailable rather than run on another model."""
 
-    from . import tools as flash_tools  # deferred: avoids a module cycle
+    def __init__(self, model: str, reason: str) -> None:
+        super().__init__(f"{model or 'its model'} is unavailable: {reason}")
+        self.model = model
+        self.reason = reason
 
-    here = models_here(client)
-    if is_here(model, here) is not False:
-        return model, ""
-    for instead in (default_model(), flash_tools.MODEL_NAME):
-        if instead and is_here(instead, here):
-            return instead, (
-                f"{model} is not on this computer any more, so this ran "
-                f"on {instead}. Pick another model for {spark.name} to "
-                "keep it on one."
-            )
-    raise RuntimeError(
-        f"{model} is not on this computer any more, and neither is any "
-        f"other model to run on: pull it again, or pick another for "
-        f"{spark.name}"
-    )
+
+def _reason(error: Exception) -> str:
+    text = " ".join(str(error).split()) or error.__class__.__name__
+    return text[:300]
+
+
+def _mark_unavailable(spark_id: str, model: str, reason: str) -> None:
+    """Mark a spark unavailable: its model failed. No shift starts on its
+    schedule until it is called on again or given another model."""
+
+    def change(spark: Spark) -> None:
+        spark.unavailable = reason
+        spark.unavailable_model = model
+        spark.unavailable_at = time.time()
+
+    with contextlib.suppress(SparkError):
+        _edit(spark_id, change)
+        log(spark_id, "unavailable", model=model, reason=reason)
+    _changed()
+
+
+def _mark_available(spark_id: str) -> None:
+    """Its model answered again: it is back on its schedule."""
+
+    def change(spark: Spark) -> None:
+        spark.unavailable = spark.unavailable_model = ""
+        spark.unavailable_at = 0.0
+
+    with contextlib.suppress(SparkError):
+        _edit(spark_id, change)
+        log(spark_id, "available")
+    _changed()
 
 
 def autonomous() -> bool:
@@ -3154,16 +3196,33 @@ def _work(
 
     model = model_of(spark)
     if not model:
-        raise RuntimeError("no model is set, so it could not run")
+        _mark_unavailable(spark.id, "", "no model is set")
+        raise ModelFailed("", "no model is set")
     host = flash_tools.OLLAMA_HOST or subagents.OLLAMA_HOST_DEFAULT
     from . import workspace  # deferred: only a client needs its key
 
     client = client or ollama.Client(
         host=host, **workspace.client_options(host),
     )
-    model, swapped = _usable_model(spark, model, client)
-    if swapped:
-        doing(swapped)
+    # Always its own model. One that fails, past its retries, marks the
+    # spark unavailable; it is never run on another model instead.
+    answered = [False]
+
+    def ask(**request):
+        try:
+            response = _ask_model(client, doing, stopping, **request)
+        except Stopped:
+            raise
+        except Exception as error:
+            reason = _reason(error)
+            _mark_unavailable(spark.id, model, reason)
+            raise ModelFailed(model, reason) from error
+        if not answered[0]:
+            answered[0] = True
+            if spark.unavailable:
+                _mark_available(spark.id)
+        return response
+
     allowed = names if names is not None else subagents.allowed_tool_names()
     offered = flash_tools.available_tools()
     if not flash_tools.mail.configured() and _about_email(spark):
@@ -3196,8 +3255,7 @@ def _work(
             if stopping is not None and stopping():
                 raise Stopped()
             doing("Thinking")
-            response = _ask_model(
-                client, doing, stopping,
+            response = ask(
                 model=model, messages=messages, tools=schemas,
                 options=subagents.chat_options(),
             )
@@ -3232,8 +3290,7 @@ def _work(
     if tool_calls:
         doing("Writing")
         messages.append({"role": "system", "content": last_word})
-        response = _ask_model(
-            client, doing, stopping,
+        response = ask(
             model=model, messages=messages,
             options=subagents.chat_options(),
         )
@@ -3242,13 +3299,7 @@ def _work(
             getattr(response, "message", None), "content", ""
         ) or ""
 
-    final = undash(final).strip()
-    if swapped:
-        # Said even on a shift with nothing new: the user has a model to
-        # pick, and this is the only place they would hear of it.
-        nothing = not final or final.strip(" .").upper() == NOTHING_NEW
-        final = f"_{swapped}_" if nothing else f"{final}\n\n_{swapped}_"
-    return final
+    return undash(final).strip()
 
 
 def _keeping_notes(notes: list[str]):
@@ -3531,6 +3582,14 @@ def shift(spark_id: str, client=None) -> Optional[Report]:
             at=time.time(), steps=steps, read=True,
             text="Stopped part way: it used its budget for "
             f"{this_period(find(spark.id) or spark)}.",
+        )
+    except ModelFailed as e:
+        report = Report(
+            at=time.time(), failed=True, steps=steps,
+            text=f"This shift could not run: {e}. {spark.name} is marked "
+            "unavailable, and no shift starts on its schedule until you "
+            "try again or give it another model. It is never switched to "
+            "another model by itself.",
         )
     except Exception as e:  # noqa: BLE001
         report = Report(
@@ -4094,7 +4153,7 @@ def due(now: Optional[float] = None) -> list[Spark]:
         if s.status != WORKING and not s.waiting
         and (s.asked or (
             s.status != WAITING and not s.paused and not on_call(s)
-            and s.next_run <= now
+            and not s.unavailable and s.next_run <= now
         ))
     ]
 
