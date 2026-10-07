@@ -1,5 +1,6 @@
 # pylint: disable=C0114,C0115,C0116
 
+import json
 import time
 
 import pytest
@@ -708,3 +709,88 @@ def test_the_terminal_shows_reactions(team, capsys):
     ai._sparks_command("teamchat desk")
 
     assert f"{PARTY} 1" in capsys.readouterr().out  # nosec B101
+
+
+def test_another_flash_writing_a_chat_is_heard(team):
+    heard = []
+    teamchat.on_change(heard.append)
+    try:
+        seen = teamchat._stamps()
+        # This one's own write it knew of already.
+        teamchat.say("desk", "From here.")
+        heard.clear()
+        assert teamchat._look(seen) and heard == []
+        seen = teamchat._stamps()
+        # Another Flash's: the file changes under it.
+        path = teamchat._path(team.id)
+        data = json.loads(path.read_text(encoding="utf-8"))
+        data["entries"].append({"id": 99, "kind": "user", "text": "Hi",
+                                "at": time.time()})
+        path.write_text(json.dumps(data), encoding="utf-8")
+        teamchat._look(seen)
+    finally:
+        teamchat.off_change(heard.append)
+
+    assert heard == [team.id]
+
+
+def test_the_page_watches_for_other_flashes(monkeypatch):
+    started = []
+    monkeypatch.setattr(teamchat, "watch", lambda: started.append(True))
+    monkeypatch.setattr(sparks, "start", lambda: None)
+    # Set before _attach takes it, so the server it never ran is not
+    # left behind as the one /web serves, for another test to stop.
+    monkeypatch.setattr(web, "_background", None)
+    server = web._listen(0, False)
+    try:
+        web._attach(server, standalone=False)
+    finally:
+        server.server_close()
+
+    assert started == [True]
+
+
+def test_the_terminal_shows_who_is_typing_and_each_message(team, monkeypatch,
+                                                           capsys):
+    from flash import ai
+
+    said = []
+
+    class Live:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def update(self, words):
+            said.append(words)
+
+    monkeypatch.setattr(ai.console, "status", lambda *a, **k: Live())
+    monkeypatch.setattr(ai, "_client", lambda: FakeClient([
+        _send("On it, checking."), _reply("Found 2."),
+    ]))
+
+    ai._sparks_command("teamchat desk @scout any bugs?")
+    out = capsys.readouterr().out
+
+    assert "Scout is typing · Thinking" in said  # nosec B101
+    assert out.count("Scout") >= 2  # nosec B101
+    assert out.index("On it, checking.") < out.index("Found 2.")  # nosec B101
+    # Each once, though answer() hands them back as well.
+    assert out.count("Found 2.") == 1  # nosec B101
+
+
+def test_the_terminal_names_replies_and_sparks_that_left(team, capsys):
+    from flash import ai
+
+    first = teamchat.say("desk", "Ping.")
+    teamchat.say("desk", "Pong?", reply_to=first["id"])
+    teamchat._post(team.id, sparks.find("writer"), {"text": "Bye all."})
+    sparks.remove(sparks.find("writer").id)
+
+    ai._sparks_command("teamchat desk")
+    out = capsys.readouterr().out
+
+    assert "replying to yourself: Ping." in out  # nosec B101
+    assert "Writer" in out and "Bye all." in out  # nosec B101

@@ -2537,6 +2537,16 @@ def _team_chat(rest: str) -> None:
 
     def show(entry: dict) -> None:
         spark = by_id.get(entry.get("spark", ""))
+        reply = entry.get("reply")
+        if reply:
+            whose = "yourself" if reply.get("kind") == teamchat.USER else (
+                reply.get("name") or "a spark"
+            )
+            quote = " ".join(str(reply.get("text") or "").split())
+            console.print(Text(
+                f"  ↪ replying to {whose}: {quote[:80]}"
+                + ("…" if len(quote) > 80 else ""), style=DIM,
+            ))
         if entry["kind"] == teamchat.USER:
             line = Text("  You  ", style=f"bold {ACCENT}")
             line.append(entry["text"])
@@ -2545,8 +2555,11 @@ def _team_chat(rest: str) -> None:
             console.print(Text(
                 f"  {teamchat._line(entry, by_id).strip('()')}", style=DIM,
             ))
-        elif spark is not None:
-            _spark_says(spark, sparks.Message(
+        else:
+            # One that has left since is still named, as it signed it.
+            _spark_says(spark or sparks.Spark(
+                id="", name=entry.get("name") or "A spark", goal="",
+            ), sparks.Message(
                 at=entry["at"], who="spark", text=entry["text"],
                 steps=entry.get("steps", []),
                 failed=bool(entry.get("failed")),
@@ -2574,10 +2587,52 @@ def _team_chat(rest: str) -> None:
     except teamchat.TeamChatError as exc:
         warn(str(exc))
         return
-    with console.status(f"{team.name} is answering", spinner="dots"):
-        posted = teamchat.answer(team.id, message, _client())
+    # The answers as they come: who is typing, and what each says the
+    # moment it is posted, as the page shows them; and what the page's
+    # user says meanwhile, too.
+    seen, shown, drawing = [message["id"]], set(), threading.Lock()
+
+    def typing_words(typing: list) -> str:
+        names = [
+            (by_id[t["spark"]].name, t.get("doing", ""))
+            for t in typing if t["spark"] in by_id
+        ]
+        if not names:
+            return f"{team.name} is answering"
+        if len(names) == 1:
+            name, doing = names[0]
+            return f"{name} is typing" + (f" · {doing}" if doing else "")
+        return (", ".join(n for n, _ in names[:-1])
+                + f" and {names[-1][0]} are typing")
+
+    with console.status(f"{team.name} is answering", spinner="dots") as live:
+
+        def heard(team_id: str) -> None:
+            if team_id != team.id:
+                return
+            with drawing:
+                found = teamchat.history(team.id, since=seen[0])
+                seen[0] = max(seen[0], found["seq"])
+                for entry in found["entries"]:
+                    if entry["id"] not in shown:
+                        shown.add(entry["id"])
+                        show(entry)
+                live.update(typing_words(found["typing"]))
+
+        teamchat.on_change(heard)
+        try:
+            posted = teamchat.answer(team.id, message, _client())
+        finally:
+            teamchat.off_change(heard)
+        heard(team.id)
     for entry in posted:
-        show(entry)
+        if entry["id"] not in shown:
+            show(entry)
+    if not posted and not shown and teamchat._waiting.get(team.id) is message:
+        console.print(Text(
+            f"{team.name} is answering another message: yours is next. "
+            f"/sparks teamchat {team.name} shows the chat.", style=DIM,
+        ))
 
 
 def _chat_with_spark(key: str, first: str) -> None:

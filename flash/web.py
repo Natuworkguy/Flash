@@ -3755,6 +3755,9 @@ def _attach(server: "Server", standalone: bool) -> None:
     teamchat.on_change(
         lambda team: session.hub.publish({"type": "team-chat", "team": team})
     )
+    # A terminal's Flash, or the keeper, talking in a team's chat is news
+    # to the page as soon as it is written.
+    teamchat.watch()
     sparks.start()
     session.switch_lan = lambda on: threading.Timer(
         SWITCH_DELAY, _switch_lan, (server, on),
