@@ -1878,6 +1878,11 @@ body.all-stopped .org-node, body.all-stopped .spark-card { animation: all-halt 0
 .tc-pick.on, .tc-pick:hover { background: color-mix(in srgb, var(--c) 12%, var(--hover)); }
 .tc-pick .words { display: flex; flex-direction: column; min-width: 0; font-size: 13px; }
 .tc-pick .words span { font-size: 11.5px; color: var(--text-3); }
+.tc-pick.emoji { --c: var(--accent); }
+.tc-pick .emo { flex: none; width: 20px; text-align: center; font-size: 18px; line-height: 1; }
+/* Voice mode in a team's chat: the orb takes the composer's place. */
+.tc-wrap.voice .tc-box, .tc-wrap.voice .tc-chips, .tc-wrap.voice .tc-replying, .tc-wrap.voice .tc-mention { display: none; }
+.tc-compose #voice { box-shadow: none; }
 .tc-msg.fresh { animation: tc-in 0.42s cubic-bezier(0.22, 1, 0.36, 1) both; }
 .tc-msg.mine.fresh { animation-name: tc-in-mine; }
 .tc-event.fresh { animation: tc-pop 0.5s var(--spring) both; }
@@ -2671,7 +2676,7 @@ const VOICE_PAUSE = 1.2;         // seconds of quiet that end a turn
 const VOICE_PATIENCE = 8;        // seconds with no speech before pausing
 const VOICE_LONGEST = 120;       // seconds in one turn, at most
 
-const voice = { on: false, state: "", ctx: null, stream: null, level: 0, turn: null, tap: null, source: null, cut: false, setup: null, analyser: null };
+const voice = { on: false, state: "", ctx: null, stream: null, level: 0, turn: null, tap: null, source: null, cut: false, setup: null, analyser: null, team: null, home: null };
 let view = "chat";         // "chat" | "projects" | "project" | "settings" | "skills" | "sparks" | "extensions"
 let viewProject = null;    // the project page shown, or the project a new chat starts in
 let viewSpark = null;      // the spark a new chat is with, before its first message
@@ -5888,7 +5893,6 @@ async function openTeamChat(teamId) {
   log.appendChild(el("div", "tc-loading", "Gathering the team…"));
   wrap.querySelector(".tc-close").innerHTML = icon("x");
   tcFullScreen(tcFullScreen.saved());
-  wrap.querySelector(".tc-send").innerHTML = icon("up");
   wrap.hidden = false;
   requestAnimationFrame(() => wrap.classList.add("open"));
   wrap.querySelectorAll("[data-close]").forEach((b) => { b.onclick = closeTeamChat; });
@@ -5930,6 +5934,7 @@ function closeTeamChat() {
   wrap.classList.remove("open");
   clearTimeout(teamChat.timer);
   tcClosePicker();
+  if (voice.on && voice.team) endVoice();
   teamChat.id = null;
   setTimeout(() => { if (!teamChat.id) wrap.hidden = true; }, calm.matches ? 0 : 320);
   if (view === "sparks") sparksChanged();
@@ -6118,6 +6123,7 @@ function tcEntry(entry, fresh) {
   }
   row.appendChild(col);
   row.dataset.id = entry.id;
+  row.dataset.who = who;
   frag.appendChild(row);
   return frag;
 }
@@ -6415,14 +6421,29 @@ function tcWireComposer() {
   const send = form.querySelector(".tc-send");
   let picks = [];
   let at = 0;
-  const grow = () => { area.style.height = "auto"; area.style.height = Math.min(area.scrollHeight, 160) + "px"; send.disabled = !area.value.trim(); };
+  // Nothing typed, where the browser can record: the button starts voice
+  // mode, for talking to the team, as the chat's own does.
+  const grow = () => {
+    area.style.height = "auto";
+    area.style.height = Math.min(area.scrollHeight, 160) + "px";
+    const state = area.value.trim() || !canRecord || area.disabled ? "up" : "voice";
+    send.disabled = state === "up" && !area.value.trim();
+    if (send.dataset.state !== state) {
+      send.dataset.state = state;
+      send.innerHTML = icon(state);
+      send.dataset.tip = state === "voice" ? "Voice mode" : "Send";
+      send.setAttribute("aria-label", send.dataset.tip);
+    }
+  };
   const closeMenu = () => { menu.hidden = true; picks = []; };
-  const choose = (spark) => {
+  // A pick is a spark, @everyone, or an emoji: what replaces the word
+  // being typed, from its @ or its colon.
+  const choose = (pick) => {
     const caret = area.selectionStart;
-    const start = area.value.lastIndexOf("@", caret - 1);
-    const handle = spark.handle.slice(1).replace(/-spark$/, "");
-    area.value = area.value.slice(0, start) + `@${handle} ` + area.value.slice(caret);
-    const end = start + handle.length + 2;
+    const start = area.value.lastIndexOf(pick.emoji ? ":" : "@", caret - 1);
+    const put = pick.emoji || `@${pick.handle.slice(1).replace(/-spark$/, "")}`;
+    area.value = area.value.slice(0, start) + `${put} ` + area.value.slice(caret);
+    const end = start + put.length + 1;
     area.setSelectionRange(end, end);
     closeMenu();
     grow();
@@ -6430,9 +6451,17 @@ function tcWireComposer() {
   const drawMenu = () => {
     menu.textContent = "";
     picks.forEach((spark, i) => {
-      const item = el("button", `tc-pick${i === at ? " on" : ""}`);
+      const item = el("button", `tc-pick${i === at ? " on" : ""}${spark.emoji ? " emoji" : ""}`);
       item.type = "button";
       item.setAttribute("role", "option");
+      if (spark.emoji) {
+        item.innerHTML = `<span class="emo"></span><span class="words"><b></b></span>`;
+        item.querySelector(".emo").textContent = spark.emoji;
+        item.querySelector("b").textContent = `:${spark.name}:`;
+        item.onmousedown = (e) => { e.preventDefault(); choose(spark); };
+        menu.appendChild(item);
+        return;
+      }
       item.style.setProperty("--c", spark.colour);
       if (spark.everyone) item.insertAdjacentHTML("beforeend", everyoneIcon());
       else item.appendChild(sparkAvatar(spark, 20));
@@ -6448,7 +6477,17 @@ function tcWireComposer() {
   area.addEventListener("input", () => {
     grow();
     const caret = area.selectionStart;
-    const word = area.value.slice(0, caret).match(/(?:^|\s)@([\w-]*)$/);
+    const before = area.value.slice(0, caret);
+    // A colon and a few letters: the emojis named that way, as in the
+    // terminal and the chat.
+    const colon = before.match(/(?:^|\s):([a-z0-9_+-]{1,32})$/i);
+    if (colon) {
+      picks = emojiMatches(colon[1].toLowerCase()).slice(0, 6).map((name) => ({ emoji: emojis[name], name }));
+      at = 0;
+      drawMenu();
+      return;
+    }
+    const word = before.match(/(?:^|\s)@([\w-]*)$/);
     if (!word) { closeMenu(); return; }
     const q = word[1].toLowerCase();
     const team = tcMembers();
@@ -6472,7 +6511,8 @@ function tcWireComposer() {
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
     const text = area.value.trim();
-    if (!text || !teamChat.id) return;
+    if (!teamChat.id) return;
+    if (!text) { if (canRecord) startVoice(teamChat.id); return; }
     area.value = "";
     grow();
     const reply = teamChat.replyTo;
@@ -9216,7 +9256,7 @@ function setVoice(state, hint) {
   voice.state = state;
   const panel = $("#voice");
   panel.dataset.state = state;
-  const words = {
+  const words = voice.team && state === "thinking" ? ["The team is answering", "Each answer is read out, with who said it."] : {
     setup: ["Getting voice ready", "Downloading the voice models, once."],
     listening: ["Listening", "Speak, then pause. Say “stop voice” to finish."],
     hearing: ["Catching that", ""],
@@ -9229,15 +9269,25 @@ function setVoice(state, hint) {
   panel.querySelector(".voice-hint").textContent = hint ?? words[1];
 }
 
-async function startVoice() {
+// TEAM, a team's ID, talks to that team in its chat instead of to Flash:
+// the orb sits where the team's composer was.
+async function startVoice(team = null) {
   if (voice.on) return;
   if (!canRecord) { toast("Voice mode needs this page opened on this computer, or over HTTPS"); return; }
   let status;
   try { status = await command("voice-status"); } catch (error) { showFailure(error); return; }
   if (status.missing.length) { toast(status.install); return; }
+  if (team && teamChat.id !== team) return;
   voice.on = true;
   voice.cut = false;
+  voice.team = team;
   document.body.classList.add("voice-on");
+  if (team) {
+    const panel = $("#voice");
+    voice.home = voice.home || { parent: panel.parentElement, next: panel.nextSibling };
+    $("#team-chat .tc-compose").prepend(panel);
+    $("#team-chat").classList.add("voice");
+  }
   $("#voice").hidden = false;
   if (!status.ready) {
     setVoice("setup");
@@ -9289,10 +9339,19 @@ function endVoice() {
   if (voice.setup) voice.setup("");
   if (voice.stream) voice.stream.getTracks().forEach((t) => t.stop());
   if (voice.ctx) voice.ctx.close().catch(() => {});
-  Object.assign(voice, { ctx: null, stream: null, turn: null, tap: null, source: null, played: null, analyser: null, state: "" });
+  const team = voice.team;
+  Object.assign(voice, { ctx: null, stream: null, turn: null, tap: null, source: null, played: null, analyser: null, state: "", team: null });
   $("#voice").hidden = true;
   document.body.classList.remove("voice-on");
   updateSend();
+  if (team) {
+    // The orb goes back under the chat, for the next time.
+    const panel = $("#voice");
+    voice.home.parent.insertBefore(panel, voice.home.next);
+    $("#team-chat").classList.remove("voice");
+    if (teamChat.id) $("#team-chat textarea").focus();
+    return;
+  }
   input.focus();
 }
 
@@ -9398,6 +9457,12 @@ async function voiceLoop() {
     if (heard.exit) { endVoice(); toast("Voice mode off"); return; }
     if (heard.pause) { if (!(await pausedUntilResume())) return; continue; }
     setVoice("thinking");
+    if (voice.team) {
+      const how = await tcVoiceRound(heard.text);
+      if (how === "exit") { endVoice(); toast("Voice mode off"); return; }
+      if (how === "pause" && !(await pausedUntilResume())) return;
+      continue;
+    }
     const reply = await sendAndWait(heard.text);
     if (!voice.on) return;
     if (!reply) continue;
@@ -9436,6 +9501,56 @@ async function sendAndWait(text) {
     const said = replies[replies.length - 1].text;
     const shown = [...messagesEl.querySelectorAll("[data-reply]")].reverse().find((n) => n.dataset.raw === said);
     return shown || null;
+  }
+}
+
+// One round of voice mode in a team's chat: TEXT is sent as the user's
+// message, and the sparks' answers are read out as they finish, each
+// spark named before its first. Resolves to how the reading ended.
+async function tcVoiceRound(text) {
+  const team = voice.team;
+  let mine;
+  try { mine = (await command("team-chat-say", team, null, { text, reply_to: teamChat.replyTo ? teamChat.replyTo.id : 0 })).entry; }
+  catch (error) { showFailure(error); return "done"; }
+  tcCancelReply();
+  tcFetch();
+  const log = $("#team-chat .tc-log");
+  const read = new Set();
+  let last = "";
+  const started = Date.now();
+  let quiet = Date.now();
+  let typed = false;
+  for (;;) {
+    await new Promise((r) => setTimeout(r, 300));
+    if (!voice.on || voice.team !== team || teamChat.id !== team) return "exit";
+    const waiting = [...log.querySelectorAll(".tc-msg.theirs")].filter((row) => Number(row.dataset.id) > mine.id && !read.has(row.dataset.id));
+    if (waiting.length) {
+      for (const row of waiting) {
+        read.add(row.dataset.id);
+        const who = row.dataset.who || "";
+        const name = tcSpark(who)?.name || "A spark";
+        const how = await readAloud(row.querySelector(".tc-bubble"), who !== last ? `${name} says:` : "");
+        last = who;
+        if (how !== "done") return how;
+      }
+      setVoice("thinking");
+      quiet = Date.now();
+      continue;
+    }
+    if (teamChat.typing.length) {
+      typed = true;
+      quiet = Date.now();
+      const names = teamChat.typing.map((t) => tcSpark(t.spark)?.name).filter(Boolean);
+      setVoice("thinking", names.length ? `${names.join(" and ")} ${names.length === 1 ? "is" : "are"} typing.` : undefined);
+      continue;
+    }
+    // The round is over once no one has typed for a moment; one in which
+    // every spark stayed quiet is told so, rather than waited out.
+    if (read.size && Date.now() - quiet > 2500) return "done";
+    if (!read.size && ((typed && Date.now() - quiet > 3000) || Date.now() - started > 30000)) {
+      await sayLine("No one answered.");
+      return voice.on ? "done" : "exit";
+    }
   }
 }
 
@@ -9511,11 +9626,13 @@ function sentencesOf(root) {
 function markSpoken(range) {
   if (!range || !window.CSS || !CSS.highlights) return;
   CSS.highlights.set("speaking", new Highlight(range));
+  // In the chat's log, or a team chat's, whichever it is in.
+  const holder = range.startContainer.parentElement?.closest(".tc-log") || logEl;
   const r = range.getBoundingClientRect();
-  const box = logEl.getBoundingClientRect();
+  const box = holder.getBoundingClientRect();
   if (r.top < box.top + 64 || r.bottom > box.bottom - 24) {
-    follow = false;
-    logEl.scrollBy({ top: r.top - box.top - box.height * 0.3, behavior: calm.matches ? "auto" : "smooth" });
+    if (holder === logEl) follow = false;
+    holder.scrollBy({ top: r.top - box.top - box.height * 0.3, behavior: calm.matches ? "auto" : "smooth" });
   }
 }
 const unmarkSpoken = () => { if (window.CSS && CSS.highlights) CSS.highlights.delete("speaking"); };
@@ -9714,9 +9831,11 @@ function listenForInterruptions(line) {
 // Reads a whole reply aloud, a sentence at a time: the next one is made
 // while this one plays, so the gaps stay short. Resolves to how it ended:
 // "done", or what cut it short.
-async function readAloud(node) {
+async function readAloud(node, lead = "") {
   const parts = sentencesOf(node.querySelector(".assistant") || node);
   if (!parts.length) parts.push({ text: "That reply is code. It is on screen.", range: null });
+  // Who is speaking, in a team's chat, said before what they said.
+  if (lead) parts.unshift({ text: lead, range: null });
   setVoice("speaking");
   voice.cut = false;
   let now = "";
