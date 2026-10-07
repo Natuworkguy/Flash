@@ -387,3 +387,47 @@ def test_no_spark_can_be_called_everyone(model):
     made = sparks.create("Scout", "Job.")
     with pytest.raises(sparks.SparkError, match="kept for @everyone"):
         sparks.update(made.id, name="Everyone")
+
+
+def test_a_team_chat_reply_carries_its_documents(team):
+    message = teamchat.say("desk", "@writer write up the plan?")
+    client = FakeClient([
+        _reply("", ("make_document", {"title": "Plan", "content": "Do."})),
+        _reply("Done, here it is."),
+    ])
+
+    posted = teamchat.answer("desk", message, client)
+
+    assert [f["title"] for f in posted[0]["files"]] == ["Plan"]  # nosec B101
+
+
+def test_report_news_carries_its_documents(team):
+    sparks.shift(sparks.find("scout").id, client=FakeClient([
+        _reply("", ("make_document", {"title": "Bugs", "content": "Two."})),
+        _reply("Wrote up the bugs."),
+    ]))
+
+    news = _said(team.id, teamchat.EVENT)[-1]
+
+    assert [f["title"] for f in news["files"]] == ["Bugs"]  # nosec B101
+
+
+def test_the_page_opens_a_sparks_document(team, tmp_path):
+    writer = sparks.find("writer")
+    path = sparks.write_document(writer.id, "Plan", "Do.")
+    session = web.Session()
+
+    opened = web.command(session, {
+        "name": "spark-document", "arg": writer.id, "path": str(path),
+    })
+    listed = web.command(session, {
+        "name": "spark-documents", "arg": writer.id,
+    })
+
+    assert opened["file"]["kind"] == "doc"  # nosec B101
+    assert [d["title"] for d in listed["documents"]] == ["Plan"]  # nosec B101
+    with pytest.raises(ValueError, match="No such document"):
+        web.command(session, {
+            "name": "spark-document", "arg": writer.id,
+            "path": str(tmp_path / "x.md"),
+        })

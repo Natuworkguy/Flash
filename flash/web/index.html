@@ -1535,6 +1535,16 @@ body.all-stopped .org-node, body.all-stopped .spark-card { animation: all-halt 0
 .spark-card .state { font-size: 12.5px; color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .spark-card .state.working { color: var(--text-2); }
 .spark-card .goal { font-size: 13.5px; color: var(--text-2); line-height: 1.45; margin-top: 4px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.spark-docs { display: flex; flex-direction: column; gap: 6px; margin: 8px 0 2px; }
+.spark-doc { display: flex; align-items: center; gap: 10px; width: min(360px, 100%); padding: 8px 12px 8px 8px; border-radius: 12px; text-align: left; border: 1px solid var(--border); background: var(--surface); transition: border-color 0.14s, transform 0.25s var(--spring), box-shadow 0.2s; }
+.spark-doc:hover { border-color: var(--border-strong); box-shadow: var(--composer-shadow); transform: translateY(-1px); }
+.spark-doc .badge { flex: none; width: 32px; height: 36px; border-radius: 7px; display: grid; place-items: center; background: var(--hover); color: var(--text-3); }
+.spark-doc .badge svg { width: 16px; height: 16px; }
+.spark-doc .words { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.spark-doc .name { font-size: 13.5px; font-weight: 500; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.spark-doc .meta { font-size: 12px; color: var(--text-3); }
+.spark-doc .chev svg { width: 14px; height: 14px; color: var(--text-3); }
+.tc-event-docs { align-self: center; align-items: center; margin-top: 2px; }
 .spark-unavailable { display: flex; flex-direction: column; gap: 10px; margin: 0 0 14px; padding: 12px 14px; border-radius: 12px; border: 1px solid color-mix(in srgb, var(--del) 40%, var(--border)); background: color-mix(in srgb, var(--del) 8%, var(--surface)); }
 .spark-unavailable .why { display: flex; flex-direction: column; gap: 3px; font-size: 13px; color: var(--text-2); overflow-wrap: anywhere; }
 .spark-unavailable .why b { font-size: 14px; color: var(--del); }
@@ -5999,6 +6009,11 @@ function tcEntry(entry, fresh) {
     line.dataset.id = entry.id;
     line.append(row, tcReplyButton(entry));
     frag.appendChild(line);
+    if (entry.files && entry.files.length) {
+      const docs = docCards(entry.spark, entry.files);
+      docs.classList.add("tc-event-docs");
+      frag.appendChild(docs);
+    }
     return frag;
   }
   const mine = entry.kind === "user";
@@ -6031,6 +6046,7 @@ function tcEntry(entry, fresh) {
   const line = el("div", "tc-line");
   if (mine) line.append(tcReplyButton(entry), bubble); else line.append(bubble, tcReplyButton(entry));
   col.appendChild(line);
+  if (entry.files && entry.files.length && entry.spark) col.appendChild(docCards(entry.spark, entry.files));
   if (entry.steps && entry.steps.length) {
     const used = el("details", "tc-steps");
     used.innerHTML = `<summary>Used ${entry.steps.length} tool${entry.steps.length === 1 ? "" : "s"}</summary>`;
@@ -6043,6 +6059,31 @@ function tcEntry(entry, fresh) {
   row.dataset.id = entry.id;
   frag.appendChild(row);
   return frag;
+}
+
+// A spark's documents: a card for each, which opens it in the side
+// panel to read, edit and comment on, the edits going to the spark's own
+// copy. What is over the page steps aside for it.
+async function openSparkDocument(sparkId, path) {
+  let found;
+  try { found = (await command("spark-document", sparkId, null, { path })).file; }
+  catch (error) { showFailure(error); return; }
+  if (isOpen($("#form"))) closeForm();
+  if (teamChat.id) closeTeamChat();
+  openViewer(found);
+}
+
+function docCards(sparkId, files) {
+  const box = el("div", "spark-docs");
+  for (const f of files || []) {
+    const card = el("button", "spark-doc", `<span class="badge">${icon("file")}</span><span class="words"><span class="name"></span><span class="meta">Document</span></span><span class="chev">${icon("chevRight")}</span>`);
+    card.type = "button";
+    card.querySelector(".name").textContent = f.title || (f.path || "").split(/[\\/]/).pop();
+    if (f.at) card.querySelector(".meta").textContent = `Document · ${ago(f.at)}`;
+    card.onclick = (e) => { e.stopPropagation(); openSparkDocument(sparkId, f.path); };
+    box.appendChild(card);
+  }
+  return box;
 }
 
 // Replies: a message can be answered by name. The spark whose message,
@@ -6926,6 +6967,7 @@ function fillSpark(box, spark, again = false) {
     <div data-watch hidden><div class="spark-sec">Watching</div><div class="spark-text"></div></div>
     <div class="spark-actions"></div>
     <div data-lessons hidden><div class="spark-sec">What you have taught it</div><ul class="spark-lessons"></ul></div>
+    <div data-docs hidden><div class="spark-sec">Documents</div><div class="docs-list"></div></div>
     <div class="spark-sec">Reports</div><div data-reports></div>
     <div class="dialog-buttons"><button type="button" class="btn" data-cancel>Close</button></div>`;
   box.querySelector(".spark-head").prepend(sparkAvatar({ ...spark, unread: 0 }, 64));
@@ -7029,6 +7071,14 @@ function fillSpark(box, spark, again = false) {
     });
   }
 
+  // Everything it has written, newest first.
+  command("spark-documents", spark.id, null).then(({ documents }) => {
+    const host = box.querySelector("[data-docs]");
+    if (!host || !documents.length) return;
+    host.querySelector(".docs-list").replaceChildren(docCards(spark.id, documents));
+    host.hidden = false;
+  }).catch(() => {});
+
   const reports = box.querySelector("[data-reports]");
   const said = spark.reports.filter((r) => !r.quiet).reverse();
   const quiet = spark.reports.length - said.length;
@@ -7048,6 +7098,7 @@ function fillSpark(box, spark, again = false) {
     card.querySelector(".when").textContent = `${when(report.at)} · ${ago(report.at)}`;
     if (!report.read) card.querySelector(".when").appendChild(el("span", "made-by", "New"));
     card.querySelector(".body").innerHTML = markdown(report.text);
+    if (report.files && report.files.length) card.querySelector(".body").after(docCards(spark.id, report.files));
     const play = readButton(`report:${spark.id}:${report.at}`, () => card.querySelector(".body"));
     play.classList.add("small");
     card.querySelector(".when").appendChild(play);
