@@ -791,3 +791,116 @@ def test_pausing_a_team_is_not_unread_news(crew):
     sparks.pause_team("crew")
 
     assert teamchat.unread(crew.id) == 0
+
+
+# --- Team rules ----------------------------------------------------------
+
+RULES = "Never push to main."
+
+
+def test_every_spark_on_a_team_keeps_to_its_rules(crew, model):
+    sparks.update("scout", boundaries="Only read.")
+    sparks.set_team_rules("crew", RULES)
+    scout, loner = sparks.find("scout"), sparks.find("loner")
+
+    shift = sparks._prompt(scout, "h", "m", "")
+    chat = sparks.chat_prompt(scout, "h", "m", "")
+
+    for prompt in (shift, chat):
+        assert "Only read." in prompt
+        assert "Your team's rules (Crew)" in prompt and RULES in prompt
+    assert RULES not in sparks._prompt(loner, "h", "m", "")
+    assert sparks.find_team("crew").rules == RULES
+    assert scout.to_dict()["team_rules"] == RULES
+
+
+def test_a_spark_with_no_boundaries_still_gets_its_teams_rules(crew):
+    sparks.set_team_rules("crew", RULES)
+
+    assert sparks.lines_of(sparks.find("lead")).endswith(RULES)
+    assert sparks.lines_of(sparks.find("loner")) == ""
+
+
+def test_system_one_holds_a_shift_to_its_teams_rules(crew, model, monkeypatch):
+    from flash import systemone
+
+    asked = []
+    monkeypatch.setattr(systemone, "set_request", asked.append)
+    sparks.set_team_rules("crew", RULES)
+
+    sparks.shift(sparks.find("scout").id, client=FakeClient([_reply("Done.")]))
+
+    assert RULES in asked[0]
+
+
+def test_changing_the_rules_is_news_and_audited(crew):
+    from flash import teamchat
+
+    sparks.set_team_rules("crew", RULES)
+    sparks.set_team_rules("crew", f"  {RULES}  ")
+    sparks.set_team_rules("crew", "")
+
+    news = [
+        (e["what"], e["text"]) for e in teamchat.history("crew")["entries"]
+        if e["kind"] == "event" and not e.get("spark")
+    ]
+    assert news == [("set the rules of", RULES), ("cleared the rules of", "")]
+    kinds = [e["kind"] for e in sparks.audit_log("scout")["entries"]]
+    assert kinds.count("team_rules") == 2
+    assert "team_rules" not in [
+        e["kind"] for e in sparks.audit_log("loner")["entries"]
+    ]
+    assert sparks.find_team("crew").rules == ""
+
+
+def test_rules_travel_with_a_shared_team(crew, model):
+    sparks.set_team_rules("crew", RULES)
+
+    code = sparks.share_team_code("crew")
+    team = sparks.add_team(code, model="m")
+
+    assert sparks.read_team_code(code)["rules"] == RULES
+    assert team.rules == RULES
+
+
+def test_a_team_template_brings_its_rules(model):
+    team = sparks.add_team("dev team", model="m")
+
+    assert "Never push" in team.rules
+    lead = sparks.find(sparks.org_chart(team.id)[0]["id"])
+    assert "Never push" in sparks.lines_of(lead)
+
+
+def test_the_page_sets_a_teams_rules(crew):
+    session = web.Session()
+
+    saved = web.command(session, {
+        "name": "team-update", "arg": crew.id, "rules": RULES,
+    })
+    renamed = web.command(session, {
+        "name": "team-update", "arg": crew.id, "rename": "Crew Two",
+    })
+
+    assert saved["team"]["rules"] == RULES
+    # Saved without them, the rules stay as they were.
+    assert renamed["team"]["rules"] == RULES
+
+
+def test_the_terminal_shows_sets_and_clears_rules(model, capsys):
+    from flash import ai
+
+    sparks.create_team("Night Shift")
+    sparks.create("Owl", "Watch.")
+    sparks.set_team("owl", "night shift")
+
+    ai._sparks_command("teams rules night shift")
+    assert "has no rules" in capsys.readouterr().out
+    ai._sparks_command(f"teams rules night shift {RULES}")
+    assert sparks.find_team("night shift").rules == RULES
+    ai._sparks_command("teams rules Night Shift")
+    ai._sparks_command("teams")
+    ai._sparks_command("owl")
+    out = capsys.readouterr().out
+    assert out.count(RULES) == 3
+    ai._sparks_command("teams rules night shift none")
+    assert sparks.find_team("night shift").rules == ""

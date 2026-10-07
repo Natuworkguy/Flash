@@ -6817,14 +6817,16 @@ function teamForm(team = null) {
     ${team ? "" : `<div class="spark-templates team-templates"><span class="sub">Start from:</span></div>`}
     <label class="field"><span>Name</span><input name="teamname" maxlength="32" placeholder="Dev" autocomplete="off" required></label>
     <div class="field"><span>Colour</span><div class="swatches" role="radiogroup" aria-label="Colour">${TEAM_COLOURS.map((c) => `<button type="button" class="swatch" role="radio" data-c="${c}" style="--c:${c}" aria-label="${c}"></button>`).join("")}</div></div>
+    <label class="field"><span>Team rules</span><textarea name="rules" rows="3" maxlength="2000" placeholder="Never push, merge, or delete anything. Report what should change."></textarea><small>Every spark on the team keeps to these, on top of its own boundaries: on its shifts, in chats, and in the team chat.${team ? "" : " A template brings its own; what you write here replaces them."}</small></label>
     ${team ? "" : `<details class="team-code"><summary>Add a shared team instead</summary><label class="field"><span>Team code</span><textarea name="code" rows="3" class="mono" placeholder="flash-team:..." spellcheck="false"></textarea><small class="code-said">Paste the code someone shared. You see its sparks before anything is added.</small></label></details>
     <label class="field check start-paused" hidden><input type="checkbox" name="paused" checked><span>Start its sparks paused, to look them over first. Resume each in its window, or Resume all.</span></label>`}
     <div class="dialog-buttons"><button type="button" class="btn" data-cancel>Cancel</button><button type="submit" class="btn primary">${team ? "Save" : "Make team"}</button></div>`,
     async (data) => {
       const name = (data.teamname || "").trim();
       const chosen = form.dataset.colour;
+      const rules = (data.rules || "").trim();
       if (team) {
-        await command("team-update", team.id, null, { rename: name, colour: chosen });
+        await command("team-update", team.id, null, { rename: name, colour: chosen, rules });
         toast(`Saved ${name}`);
         return;
       }
@@ -6832,9 +6834,13 @@ function teamForm(team = null) {
       const from = form.dataset.template || code;
       let made;
       let note = "";
-      if (from) ({ team: made, note } = await command("team-add", from, null, { model: "", paused: !!data.paused }));
-      if (note) toast(note);
-      else made = (await command("team-create", name, null, { colour: chosen })).team;
+      if (from) {
+        ({ team: made, note } = await command("team-add", from, null, { model: "", paused: !!data.paused }));
+        if (note) toast(note);
+      } else {
+        made = (await command("team-create", name, null, { colour: chosen })).team;
+      }
+      if (rules) made = (await command("team-update", made.id, null, { rules })).team;
       freshTeams.set(made.id, Date.now());
       toast(from ? `${made.name} is here, with its sparks` : `Made ${made.name}. Edit a spark to put it on the team.`);
       if (view !== "sparks") showPage("sparks");
@@ -6846,7 +6852,7 @@ function teamForm(team = null) {
   };
   form.querySelectorAll(".swatch").forEach((b) => { b.onclick = () => pick(b.dataset.c); });
   pick(colour);
-  if (team) { form.teamname.value = team.name; return; }
+  if (team) { form.teamname.value = team.name; form.rules.value = team.rules || ""; return; }
   command("team-templates", "", null).then(({ templates }) => {
     const row = form.querySelector(".team-templates");
     if (!row) return;
@@ -7152,6 +7158,7 @@ function fillSpark(box, spark, again = false) {
   box.innerHTML = `<div class="spark-head"><div><h2></h2><div class="title"></div><div class="handle"></div><div class="meta"></div><div class="spark-status"></div></div></div>
     <div class="spark-sec">Goal</div><div class="spark-text" data-goal></div>
     <div data-bounds hidden><div class="spark-sec">Boundaries</div><div class="spark-text"></div></div>
+    <div data-team-rules hidden><div class="spark-sec"></div><div class="spark-text"></div></div>
     <div data-watch hidden><div class="spark-sec">Watching</div><div class="spark-text"></div></div>
     <div class="spark-actions"></div>
     <div data-lessons hidden><div class="spark-sec">What you have taught it</div><ul class="spark-lessons"></ul></div>
@@ -7180,6 +7187,12 @@ function fillSpark(box, spark, again = false) {
   if (spark.boundaries) {
     box.querySelector("[data-bounds]").hidden = false;
     box.querySelector("[data-bounds] .spark-text").textContent = spark.boundaries;
+  }
+  if (spark.team_rules) {
+    const rules = box.querySelector("[data-team-rules]");
+    rules.hidden = false;
+    rules.querySelector(".spark-sec").textContent = `${spark.team_name}'s rules`;
+    rules.querySelector(".spark-text").textContent = spark.team_rules;
   }
   if (spark.watch) {
     box.querySelector("[data-watch]").hidden = false;
