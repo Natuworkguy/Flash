@@ -262,3 +262,75 @@ def test_marking_it_read_twice_writes_once(team):
         teamchat._listeners.remove(changes.append)
 
     assert changes == [team.id]  # nosec B101
+
+
+def test_a_reply_calls_on_the_spark_it_answers(team):
+    said = teamchat._change(team.id, lambda data: teamchat._add(data, {
+        "kind": teamchat.SPARK, "spark": sparks.find("writer").id,
+        "name": "Writer", "text": "The summary is half done.",
+    }))
+    message = teamchat.say("desk", "When will it be ready?", said["id"])
+    client = FakeClient([_reply("By noon.")])
+
+    posted = teamchat.answer("desk", message, client)
+
+    # Writer answers, not the lead, and reads which message is meant.
+    assert [e["name"] for e in posted] == ["Writer"]  # nosec B101
+    quoted = message["reply"]["text"]
+    assert quoted == "The summary is half done."  # nosec B101
+    seen = client.calls[0]["messages"][-1]["content"]
+    assert "replying to Writer's message" in seen  # nosec B101
+    assert '"The summary is half done."' in seen  # nosec B101
+
+
+def test_a_reply_and_a_mention_both_answer(team):
+    said = teamchat._change(team.id, lambda data: teamchat._add(data, {
+        "kind": teamchat.SPARK, "spark": sparks.find("writer").id,
+        "name": "Writer", "text": "Draft is up.",
+    }))
+    message = teamchat.say("desk", "@scout can you check it?", said["id"])
+    client = FakeClient([_reply("Thanks."), _reply("Checking.")])
+
+    posted = teamchat.answer("desk", message, client)
+
+    assert [e["name"] for e in posted] == ["Writer", "Scout"]  # nosec B101
+
+
+def test_a_reply_to_news_calls_on_its_spark(team):
+    news = teamchat.event(team.id, sparks.find("scout"), "report", "Found 2.")
+    message = teamchat.say("desk", "Which two?", news["id"])
+    client = FakeClient([_reply("12, 14.")])
+
+    posted = teamchat.answer("desk", message, client)
+
+    assert [e["name"] for e in posted] == ["Scout"]  # nosec B101
+    assert message["reply"]["what"] == "report"  # nosec B101
+
+
+def test_a_reply_to_your_own_message_goes_to_the_lead(team):
+    first = teamchat.say("desk", "Plan for today?")
+    message = teamchat.say("desk", "Also, the release.", first["id"])
+
+    posted = teamchat.answer("desk", message, FakeClient([_reply("Noted.")]))
+
+    assert [e["name"] for e in posted] == ["Lead"]  # nosec B101
+    assert "replying to their own message" in teamchat._line(  # nosec B101
+        message, {},
+    )
+
+
+def test_a_reply_to_a_message_that_is_gone_is_refused(team):
+    with pytest.raises(teamchat.TeamChatError, match="no longer"):
+        teamchat.say("desk", "Hm?", 9999)
+
+
+def test_the_page_sends_a_reply(team, monkeypatch):
+    monkeypatch.setattr(teamchat, "answer", lambda *a, **k: None)
+    news = teamchat.event(team.id, sparks.find("scout"), "report", "Found 2.")
+
+    posted = web.command(web.Session(), {
+        "name": "team-chat-say", "arg": team.id, "text": "Which?",
+        "reply_to": news["id"],
+    })
+
+    assert posted["entry"]["reply"]["id"] == news["id"]  # nosec B101

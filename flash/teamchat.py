@@ -38,6 +38,9 @@ EVENT_CHARS = 280
 # How much of it every member carries in its prompt.
 PROMPT_ENTRIES = 6
 PROMPT_CHARS = 300
+# How much of the message a reply is to it carries, for the page's quote
+# and for the sparks reading it.
+QUOTE_CHARS = 600
 # A spark marked typing for longer than this has gone quiet: a Flash
 # that quit half way through an answer.
 TYPING_STALE = 10 * 60
@@ -231,9 +234,27 @@ def _named(team_id: str, text: str, skip: set[str]) -> list[sparks.Spark]:
     ]
 
 
-def say(team_key: str, text: str) -> dict:
-    """Post what the user wrote in TEAM_KEY's chat. The sparks' answers
-    are answer()'s to make."""
+def _quote(entry: dict) -> dict:
+    """What a reply keeps of the message it answers: whose it is, and
+    the start of what it said."""
+
+    text = " ".join(str(entry.get("text") or "").split())
+    if len(text) > QUOTE_CHARS:
+        text = text[:QUOTE_CHARS].rstrip() + " [...]"
+    quote = {"id": entry.get("id", 0), "kind": entry.get("kind", ""),
+             "text": text}
+    if entry.get("spark"):
+        quote["spark"] = entry["spark"]
+        quote["name"] = entry.get("name", "")
+    if entry.get("kind") == EVENT:
+        quote["what"] = entry.get("what", "")
+    return quote
+
+
+def say(team_key: str, text: str, reply_to: int = 0) -> dict:
+    """Post what the user wrote in TEAM_KEY's chat, as a reply to the
+    message numbered REPLY_TO if one is given. The sparks' answers are
+    answer()'s to make."""
 
     team = _team(team_key)
     text = str(text or "").strip()[:sparks.MESSAGE_CHARS]
@@ -245,8 +266,18 @@ def say(team_key: str, text: str) -> dict:
         )
 
     def change(data: dict) -> dict:
+        entry = {"kind": USER, "text": text}
+        if reply_to:
+            to = next(
+                (e for e in data["entries"] if e.get("id") == reply_to), None,
+            )
+            if to is None:
+                raise TeamChatError(
+                    "That message is no longer in the chat to reply to."
+                )
+            entry["reply"] = _quote(to)
         data["read"] = time.time()
-        return _add(data, {"kind": USER, "text": text})
+        return _add(data, entry)
 
     return _change(team.id, change)
 
@@ -257,7 +288,18 @@ def _line(entry: dict, by_id: dict) -> str:
         text = text[:ENTRY_CHARS].rstrip() + " [...]"
     kind = entry.get("kind")
     if kind == USER:
-        return f"The user: {text}"
+        reply = entry.get("reply")
+        if not reply:
+            return f"The user: {text}"
+        whose = (
+            "their own message" if reply.get("kind") == USER
+            else f"{reply.get('name') or 'a spark'}'s "
+            + ("news" if reply.get("kind") == EVENT else "message")
+        )
+        return (
+            f"The user, replying to {whose} \"{reply.get('text', '')}\": "
+            f"{text}"
+        )
     spark = by_id.get(entry.get("spark", ""))
     if kind == EVENT and not entry.get("spark"):
         # News about the team itself, not one of its sparks.
@@ -353,9 +395,23 @@ def _reply(team: sparks.Team, spark: sparks.Spark, client=None) -> dict:
     return _change(team.id, change)
 
 
+def _replied_to(team_id: str, message: dict) -> Optional[sparks.Spark]:
+    """The spark whose message, or news, MESSAGE replies to, if it is
+    still on the team: a reply calls on it as an @mention would."""
+
+    spark_id = (message.get("reply") or {}).get("spark", "")
+    if not spark_id:
+        return None
+    return next((s for s in _members(team_id) if s.id == spark_id), None)
+
+
 def _round(team: sparks.Team, message: dict, client=None) -> list[dict]:
     answered: set[str] = set()
     queue = _named(team.id, message.get("text", ""), answered)
+    replied = _replied_to(team.id, message)
+    if replied is not None and all(q.id != replied.id for q in queue):
+        # The one replied to answers first, then any it named besides.
+        queue.insert(0, replied)
     if not queue:
         queue = _leads(team.id)[:1]
     posted: list[dict] = []
@@ -402,11 +458,14 @@ def answer(team_key: str, message: dict, client=None) -> list[dict]:
         raise
 
 
-def send(team_key: str, text: str, client=None) -> dict:
-    """Post what the user wrote, and have the sparks answer it in the
-    background: the page's way. The user's message, as posted."""
+def send(
+    team_key: str, text: str, client=None, reply_to: int = 0,
+) -> dict:
+    """Post what the user wrote, a reply to REPLY_TO if given, and have
+    the sparks answer it in the background: the page's way. The user's
+    message, as posted."""
 
-    message = say(team_key, text)
+    message = say(team_key, text, reply_to)
     threading.Thread(
         target=answer, args=(team_key, message, client), daemon=True,
     ).start()

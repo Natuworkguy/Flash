@@ -1758,7 +1758,9 @@ body.all-stopped .org-node, body.all-stopped .spark-card { animation: all-halt 0
 .tc-msg.grouped { margin-top: 2px; }
 .tc-msg.mine { justify-content: flex-end; }
 .tc-av { width: 30px; flex: none; align-self: flex-start; }
-.tc-col { min-width: 0; max-width: min(82%, 400px); display: flex; flex-direction: column; gap: 4px; }
+/* Each bubble as wide as its words, not as the name line above it: a
+   short reply is a small bubble. */
+.tc-col { min-width: 0; max-width: min(82%, 400px); display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }
 .tc-msg.mine .tc-col { align-items: flex-end; }
 .tc-from { display: flex; align-items: baseline; gap: 7px; padding-left: 2px; font-size: 12.5px; }
 .tc-from b { color: color-mix(in srgb, var(--c) 80%, var(--text)); font-weight: 600; }
@@ -1803,6 +1805,32 @@ body.all-stopped .org-node, body.all-stopped .spark-card { animation: all-halt 0
 .tc-dots i:nth-child(2) { animation-delay: 0.15s; }
 .tc-dots i:nth-child(3) { animation-delay: 0.3s; }
 @keyframes tc-dot { 0%, 60%, 100% { transform: translateY(0); opacity: 0.45; } 30% { transform: translateY(-4px); opacity: 1; } }
+.tc-line { display: flex; align-items: center; gap: 2px; max-width: 100%; min-width: 0; }
+.tc-line .tc-bubble { min-width: 0; }
+.tc-reply-btn { flex: none; align-self: center; width: 28px; height: 28px; opacity: 0; color: var(--text-3); transition: opacity 0.15s, transform 0.2s var(--spring); }
+.tc-reply-btn svg { width: 15px; height: 15px; }
+.tc-msg:hover .tc-reply-btn, .tc-event-row:hover .tc-reply-btn, .tc-reply-btn:focus-visible { opacity: 1; }
+.tc-reply-btn:hover { transform: scale(1.1); color: var(--text); }
+@media (hover: none) { .tc-reply-btn { opacity: 0.55; } }
+.tc-event-row { align-self: center; display: flex; align-items: center; gap: 4px; max-width: 92%; margin: 10px 0 4px; }
+.tc-event-row .tc-event { margin: 0; max-width: none; min-width: 0; }
+.tc-quote { display: flex; align-items: baseline; gap: 6px; max-width: 100%; min-width: 0; padding: 5px 10px 5px 8px; border-radius: 10px; font-size: 12.5px; text-align: left; color: var(--text-3); background: var(--hover); border-left: 3px solid var(--c); }
+.tc-quote svg { flex: none; width: 12px; height: 12px; align-self: center; transform: scaleX(-1); }
+.tc-quote b { flex: none; color: color-mix(in srgb, var(--c) 75%, var(--text)); font-weight: 600; }
+.tc-quote span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tc-quote:hover { background: color-mix(in srgb, var(--c) 10%, var(--hover)); }
+.tc-msg.mine .tc-quote { align-self: flex-end; }
+.tc-replying { --c: var(--accent); display: flex; align-items: center; gap: 8px; margin: 0 0 8px; padding: 7px 6px 7px 12px; border-radius: 12px; border-left: 3px solid var(--c); background: color-mix(in srgb, var(--c) 9%, var(--bg)); }
+.tc-replying[hidden] { display: none; }
+.tc-replying.in { animation: tc-reply-in 0.32s var(--spring) both; }
+.tc-replying .words { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; font-size: 12.5px; }
+.tc-replying .words b { color: color-mix(in srgb, var(--c) 75%, var(--text)); font-weight: 600; }
+.tc-replying .words span { color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tc-unreply { flex: none; width: 26px; height: 26px; }
+.tc-unreply svg { width: 14px; height: 14px; }
+@keyframes tc-reply-in { from { opacity: 0; transform: translateY(8px) scale(0.98); } }
+.tc-log .lit .tc-bubble, .tc-log .lit.tc-event-row .tc-event, .tc-log .tc-event.lit { animation: tc-lit 1.6s ease-out; }
+@keyframes tc-lit { 0%, 30% { box-shadow: 0 0 0 3px color-mix(in srgb, var(--c, var(--accent)) 55%, transparent); } 100% { box-shadow: 0 0 0 3px transparent; } }
 .tc-compose { position: relative; padding: 8px 12px 12px; border-top: 1px solid var(--border); background: var(--surface); }
 .tc-chips { display: flex; gap: 6px; overflow-x: auto; padding: 2px 2px 8px; scrollbar-width: none; }
 .tc-chips::-webkit-scrollbar { display: none; }
@@ -2363,7 +2391,7 @@ body.resizing-viewer iframe { pointer-events: none; }
 <div id="form" class="overlay" hidden><div class="dialog" role="dialog"><div class="inner" id="form-body"></div></div></div>
 <div id="tip" role="tooltip"></div>
 <div id="toast" role="status"></div>
-<div id="team-chat" class="tc-wrap" hidden><div class="tc-scrim" data-close></div><section class="tc" role="dialog" aria-modal="true" aria-labelledby="tc-name"><header class="tc-head"><span class="tc-badge"><span class="letter"></span></span><span class="tc-who"><b id="tc-name"></b><span class="tc-sub"></span></span><span class="tc-faces"></span><button type="button" class="icon-btn tc-full" aria-label="Full screen" data-tip="Full screen"></button><button type="button" class="icon-btn tc-close" data-close aria-label="Close"></button></header><div class="tc-log" aria-live="polite"></div><div class="tc-typing" hidden></div><form class="tc-compose"><div class="tc-chips"></div><div class="tc-box"><textarea rows="1" placeholder="Message the team" aria-label="Message the team"></textarea><button type="submit" class="tc-send" aria-label="Send"></button></div><div class="tc-mention" role="listbox" hidden></div></form></section></div>
+<div id="team-chat" class="tc-wrap" hidden><div class="tc-scrim" data-close></div><section class="tc" role="dialog" aria-modal="true" aria-labelledby="tc-name"><header class="tc-head"><span class="tc-badge"><span class="letter"></span></span><span class="tc-who"><b id="tc-name"></b><span class="tc-sub"></span></span><span class="tc-faces"></span><button type="button" class="icon-btn tc-full" aria-label="Full screen" data-tip="Full screen"></button><button type="button" class="icon-btn tc-close" data-close aria-label="Close"></button></header><div class="tc-log" aria-live="polite"></div><div class="tc-typing" hidden></div><form class="tc-compose"><div class="tc-chips"></div><div class="tc-replying" hidden><span class="words"><b></b><span></span></span><button type="button" class="icon-btn tc-unreply" aria-label="Cancel the reply" data-tip="Cancel the reply"></button></div><div class="tc-box"><textarea rows="1" placeholder="Message the team" aria-label="Message the team"></textarea><button type="submit" class="tc-send" aria-label="Send"></button></div><div class="tc-mention" role="listbox" hidden></div></form></section></div>
 
 <script src="/static/katex/katex.min.js" id="katex" async></script>
 <script>
@@ -2433,6 +2461,7 @@ const ICON = {
   quote: '<path d="M7 7H4.5A1.5 1.5 0 0 0 3 8.5V12h4v5M17 7h-2.5A1.5 1.5 0 0 0 13 8.5V12h4v5"/>',
   link: '<path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/>',
   code: '<path d="m8 7-5 5 5 5M16 7l5 5-5 5"/>',
+  reply: '<path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/>',
   expand: '<path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/>',
   shrink: '<path d="M4 14h6v6M20 10h-6V4M14 10l7-7M3 21l7-7"/>',
   chat: '<path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1.1-4.6A8 8 0 1 1 21 12Z"/><path d="M8.5 12h.01M12 12h.01M15.5 12h.01"/>',
@@ -5751,7 +5780,7 @@ const TEAM_COLOURS = ["#f2a65a", "#5ab0f2", "#7bd88f", "#c792ea", "#ff7a90", "#f
 // goes to the sparks it @mentions, or to the lead, and a spark can bring
 // a teammate in. The team's news lands in it as it happens.
 
-const teamChat = { id: null, seq: 0, team: null, sparks: new Map(), typing: [], timer: null, drawnDay: "", lastWho: "", loading: false };
+const teamChat = { id: null, seq: 0, team: null, sparks: new Map(), typing: [], timer: null, drawnDay: "", lastWho: "", loading: false, replyTo: null };
 
 function tcSpark(id) { return teamChat.sparks.get(id) || sparkList.find((s) => s.id === id) || null; }
 
@@ -5785,6 +5814,7 @@ async function openTeamChat(teamId) {
   const wrap = $("#team-chat");
   clearTimeout(teamChat.timer);
   Object.assign(teamChat, { id: teamId, seq: 0, typing: [], drawnDay: "", lastWho: "" });
+  tcCancelReply();
   const log = wrap.querySelector(".tc-log");
   log.textContent = "";
   log.appendChild(el("div", "tc-loading", "Gathering the team…"));
@@ -5942,7 +5972,12 @@ function tcEntry(entry, fresh) {
       row.appendChild(quote);
     }
     row.onclick = () => { if (spark) openSpark(spark.id); };
-    frag.appendChild(row);
+    if (!spark) { row.dataset.id = entry.id; frag.appendChild(row); return frag; }
+    // News from a spark can be answered, as its messages can.
+    const line = el("div", "tc-event-row");
+    line.dataset.id = entry.id;
+    line.append(row, tcReplyButton(entry));
+    frag.appendChild(line);
     return frag;
   }
   const mine = entry.kind === "user";
@@ -5966,10 +6001,14 @@ function tcEntry(entry, fresh) {
     head.querySelector(".when").textContent = tcClock(entry.at);
     col.appendChild(head);
   }
+  if (entry.reply) col.appendChild(tcQuote(entry.reply));
   const bubble = el("div", "tc-bubble");
   bubble.innerHTML = tcMentions(markdown(entry.text || ""));
   bubble.title = tcClock(entry.at);
-  col.appendChild(bubble);
+  // The reply sits just beside the bubble, however short it is.
+  const line = el("div", "tc-line");
+  if (mine) line.append(tcReplyButton(entry), bubble); else line.append(bubble, tcReplyButton(entry));
+  col.appendChild(line);
   if (entry.steps && entry.steps.length) {
     const used = el("details", "tc-steps");
     used.innerHTML = `<summary>Used ${entry.steps.length} tool${entry.steps.length === 1 ? "" : "s"}</summary>`;
@@ -5979,8 +6018,71 @@ function tcEntry(entry, fresh) {
     col.appendChild(used);
   }
   row.appendChild(col);
+  row.dataset.id = entry.id;
   frag.appendChild(row);
   return frag;
+}
+
+// Replies: a message can be answered by name. The spark whose message,
+// or news, it answers is called on, as an @mention would, and reads
+// which message is meant.
+function tcReplyButton(entry) {
+  const b = el("button", "icon-btn tc-reply-btn", icon("reply"));
+  b.type = "button";
+  b.setAttribute("aria-label", "Reply");
+  b.dataset.tip = "Reply";
+  b.onclick = (e) => { e.stopPropagation(); tcReplyTo(entry); };
+  return b;
+}
+
+function tcWhose(quote) {
+  if (quote.kind === "user") return "You";
+  return quote.name || tcSpark(quote.spark)?.name || "A spark";
+}
+
+function tcQuote(quote) {
+  const spark = quote.spark ? tcSpark(quote.spark) : null;
+  const b = el("button", "tc-quote", `${icon("reply")}<b></b><span></span>`);
+  b.type = "button";
+  b.style.setProperty("--c", spark ? spark.colour : "var(--accent)");
+  b.querySelector("b").textContent = tcWhose(quote);
+  b.querySelector("span").textContent = quote.text || (quote.what ? `${quote.what}` : "");
+  b.dataset.tip = "Show the message";
+  b.onclick = () => tcJump(quote.id);
+  return b;
+}
+
+// To the message a reply answers, lit for a moment once it is there.
+function tcJump(id) {
+  const target = $("#team-chat .tc-log").querySelector(`[data-id="${CSS.escape(String(id))}"]`);
+  if (!target) { toast("That message is no longer in the chat"); return; }
+  target.scrollIntoView({ block: "center", behavior: calm.matches ? "auto" : "smooth" });
+  target.classList.remove("lit");
+  void target.offsetWidth;
+  target.classList.add("lit");
+  setTimeout(() => target.classList.remove("lit"), 1600);
+}
+
+function tcReplyTo(entry) {
+  teamChat.replyTo = entry;
+  const bar = $("#team-chat .tc-replying");
+  const spark = entry.spark ? tcSpark(entry.spark) : null;
+  bar.style.setProperty("--c", spark ? spark.colour : "var(--accent)");
+  bar.querySelector("b").textContent = `Replying to ${entry.kind === "user" ? "yourself" : tcWhose(entry)}`;
+  bar.querySelector(".words span").textContent = String(entry.text || entry.what || "").replace(/\s+/g, " ").slice(0, 160);
+  bar.querySelector(".tc-unreply").innerHTML = icon("x");
+  bar.querySelector(".tc-unreply").onclick = tcCancelReply;
+  bar.hidden = false;
+  bar.classList.remove("in");
+  void bar.offsetWidth;
+  bar.classList.add("in");
+  $("#team-chat textarea").focus();
+}
+
+function tcCancelReply() {
+  teamChat.replyTo = null;
+  const bar = $("#team-chat .tc-replying");
+  if (bar) bar.hidden = true;
 }
 
 function tcTyping(typing) {
@@ -6072,6 +6174,7 @@ function tcWireComposer() {
       if (e.key === "Enter" || e.key === "Tab") { e.preventDefault(); choose(picks[at]); return; }
       if (e.key === "Escape") { e.preventDefault(); closeMenu(); return; }
     }
+    if (e.key === "Escape" && teamChat.replyTo) { e.preventDefault(); tcCancelReply(); return; }
     if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); form.requestSubmit(); }
   });
   area.addEventListener("blur", () => setTimeout(closeMenu, 120));
@@ -6081,8 +6184,10 @@ function tcWireComposer() {
     if (!text || !teamChat.id) return;
     area.value = "";
     grow();
-    try { await command("team-chat-say", teamChat.id, null, { text }); await tcFetch(); }
-    catch (error) { area.value = text; grow(); showFailure(error); }
+    const reply = teamChat.replyTo;
+    tcCancelReply();
+    try { await command("team-chat-say", teamChat.id, null, { text, reply_to: reply ? reply.id : 0 }); await tcFetch(); }
+    catch (error) { area.value = text; grow(); if (reply) tcReplyTo(reply); showFailure(error); }
   });
   grow();
 }
