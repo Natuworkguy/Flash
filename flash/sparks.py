@@ -71,6 +71,8 @@ NAME_CHARS = 24
 TITLE_CHARS = 40
 GOAL_CHARS = 2000
 BOUNDARY_CHARS = 1000
+# A team's rules, for every spark on it.
+TEAM_RULES_CHARS = 2000
 LESSON_CHARS = 400
 NOTES_CHARS = 4000
 
@@ -473,6 +475,7 @@ class Spark:
         found_team = find_team(self.team) if self.team else None
         data["team_name"] = found_team.name if found_team else ""
         data["team_colour"] = found_team.colour if found_team else ""
+        data["team_rules"] = found_team.rules if found_team else ""
         # Its lead's own file only: listing every spark reads each once.
         lead = _load(_path(self.reports_to)) if self.reports_to else None
         data["lead_name"] = lead.name if lead and lead.team == self.team \
@@ -879,6 +882,9 @@ class Team:
     # Paused as a whole: no member's shift starts on its schedule, and a
     # spark that joins it is paused too, until the team is resumed.
     paused: bool = False
+    # Lines every spark on it keeps to, on top of its own boundaries, on
+    # shifts and in chats alike. "" for none.
+    rules: str = ""
 
 
 def _teams_path() -> Path:
@@ -1049,6 +1055,50 @@ def _set_team_paused(key: str, paused: bool) -> tuple[Team, list[Spark]]:
     if not paused:
         wake()
     return team, changed
+
+
+def set_team_rules(key: str, rules: str) -> Team:
+    """Give a team RULES that every spark on it keeps to, on top of its
+    own boundaries, on its shifts and in chats alike; "" takes them
+    away. Its members' audit logs and its chat hear of a change."""
+
+    rules = str(rules or "").strip()[:TEAM_RULES_CHARS]
+    with _held():
+        team = _must_find_team(key)
+        if team.rules == rules:
+            return team
+        found = _read_teams()
+        for one in found:
+            if one.id == team.id:
+                one.rules = rules
+                team = one
+        _write_teams(found)
+        on_it = members(team.id)
+    for spark in on_it:
+        log(spark.id, "team_rules", team=team.name, rules=rules)
+    from . import teamchat  # deferred: it builds on this module
+
+    with contextlib.suppress(Exception):
+        teamchat.event(
+            team.id, None,
+            "set the rules of" if rules else "cleared the rules of", rules,
+        )
+    _changed()
+    return team
+
+
+def lines_of(spark: Spark) -> str:
+    """The lines SPARK must not cross: its own boundaries, then its
+    team's rules. "" for none."""
+
+    team = find_team(spark.team) if spark.team else None
+    rules = team.rules if team else ""
+    if not rules:
+        return spark.boundaries
+    return "\n\n".join(part for part in (
+        spark.boundaries,
+        f"Your team's rules ({team.name}), for every spark on it:\n{rules}",
+    ) if part)
 
 
 def pause_team(key: str) -> tuple[Team, list[Spark]]:
@@ -1939,12 +1989,20 @@ TEAM_TEMPLATES = [
         "blurb": "Watches a repo, runs its tests, and keeps it up to date",
         "lead": "Repo Watch",
         "reports": ["Test Runner", "Dependency Check"],
+        "rules": (
+            "Never push, merge, tag, or delete anything in a repo. Report "
+            "what should change; the user makes the change."
+        ),
     },
     {
         "name": "Personal Desk",
         "blurb": "Your morning brief, your inbox, and pages you watch",
         "lead": "Morning Brief",
         "reports": ["Inbox", "Page Watch"],
+        "rules": (
+            "Never send, reply to, or delete anything for the user, and "
+            "never pay for or sign up to anything."
+        ),
     },
 ]
 
@@ -1960,7 +2018,10 @@ def _team_template(template: dict) -> dict:
             for name in template["reports"]
         ),
     ]
-    return {"name": template["name"], "colour": "", "sparks": sparks}
+    return {
+        "name": template["name"], "colour": "", "sparks": sparks,
+        "rules": template.get("rules", ""),
+    }
 
 
 def _template_fields(template: dict) -> dict:
@@ -1978,8 +2039,8 @@ def team_templates() -> list[dict]:
 
 
 def share_team_code(key: str) -> str:
-    """TEAM as a code: its name, its sparks' templates, and who reports
-    to whom. Never their reports, notes or chats."""
+    """TEAM as a code: its name, its rules, its sparks' templates, and
+    who reports to whom. Never their reports, notes or chats."""
 
     team = _must_find_team(key)
     found = members(team.id)
@@ -1988,6 +2049,7 @@ def share_team_code(key: str) -> str:
     index = {s.id: i for i, s in enumerate(found)}
     return _pack(TEAM_SHARE_PREFIX, {
         "v": 1, "name": team.name, "colour": team.colour,
+        "rules": team.rules,
         "sparks": [
             {**_template_of(s), "reports_to": index.get(s.reports_to, -1)}
             for s in found
@@ -1996,8 +2058,8 @@ def share_team_code(key: str) -> str:
 
 
 def read_team(data: dict) -> dict:
-    """A team template, checked: its name and its sparks, each with the
-    index of the one it reports to, or -1."""
+    """A team template, checked: its name, its rules, and its sparks,
+    each with the index of the one it reports to, or -1."""
 
     sparks = data.get("sparks") if isinstance(data, dict) else None
     if not isinstance(sparks, list) or not sparks:
@@ -2015,6 +2077,7 @@ def read_team(data: dict) -> dict:
     return {
         "name": _team_name(data.get("name") or "Team"),
         "colour": colour if colour in COLOURS else "",
+        "rules": str(data.get("rules") or "").strip()[:TEAM_RULES_CHARS],
         "sparks": out,
     }
 
@@ -2078,6 +2141,8 @@ def add_team(source: str, model: str = "", paused: bool = False) -> Team:
                   setattr(s, "reports_to", lead))
     for spark in made:
         log(spark.id, "team", team=team.name, from_template=data["name"])
+    if data["rules"]:
+        team = set_team_rules(team.id, data["rules"])
     return team
 
 
@@ -2470,7 +2535,7 @@ def _prompt(spark: Spark, host: str, model: str, date_prompt: str) -> str:
         titled=_titled(spark),
         rated=rated_block(spark),
         goal=spark.goal,
-        boundaries=spark.boundaries or "(none beyond your usual care)",
+        boundaries=lines_of(spark) or "(none beyond your usual care)",
         lessons=lessons or "(nothing yet)",
         notes=spark.notes or "(none yet)",
         last=last or "(none yet)",
@@ -3608,10 +3673,10 @@ def shift(spark_id: str, client=None) -> Optional[Report]:
     # reviews them: the spark's standing goal, its lines, and its jobs.
     from . import systemone  # deferred: avoids a module cycle
 
+    lines = lines_of(spark)
     systemone.set_request("\n".join(part for part in (
         f"{spark.name}'s standing goal: {spark.goal}",
-        f"Lines it must not cross: {spark.boundaries}"
-        if spark.boundaries else "",
+        f"Lines it must not cross: {lines}" if lines else "",
         *(f"Job: {i['job']}" for i in inbox if i.get("job")),
     ) if part))
 
@@ -3975,7 +4040,7 @@ def chat_prompt(
         titled=_titled(spark),
         every=schedule_words(spark),
         goal=spark.goal,
-        boundaries=spark.boundaries or "(none beyond your usual care)",
+        boundaries=lines_of(spark) or "(none beyond your usual care)",
         lessons=lessons or "(nothing yet)",
         notes=spark.notes or "(none yet)",
         reports=reports or "(none yet: you have not reported anything)",

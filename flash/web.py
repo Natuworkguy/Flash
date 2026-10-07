@@ -2939,6 +2939,7 @@ def team_info(team: "sparks.Team") -> dict:
         "id": team.id, "name": team.name, "colour": team.colour,
         "created": team.created, "chart": sparks.org_chart(team.id),
         "chat_unread": teamchat.unread(team.id), "paused": team.paused,
+        "rules": team.rules,
     }
 
 
@@ -2951,10 +2952,15 @@ def _team_command(name: str, arg: str, body: dict) -> dict:
                 arg, str(body.get("colour") or ""),
             ))}
         if name == "team-update":
-            return {"team": team_info(sparks.update_team(
+            team = sparks.update_team(
                 arg, str(body.get("rename") or ""),
                 str(body.get("colour") or ""),
-            ))}
+            )
+            if "rules" in body:
+                team = sparks.set_team_rules(
+                    team.id, str(body.get("rules") or ""),
+                )
+            return {"team": team_info(team)}
         if name == "team-remove":
             return {"team": team_info(sparks.remove_team(arg))}
         if name in ("team-pause", "team-resume"):

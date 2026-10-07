@@ -2438,6 +2438,10 @@ def _show_spark(spark: "sparks.Spark") -> None:
     if spark.boundaries:
         head.append("\nBoundaries\n", style="bold")
         head.append(f"  {spark.boundaries}\n")
+    team = sparks.find_team(spark.team) if spark.team else None
+    if team is not None and team.rules:
+        head.append(f"\n{team.name}'s rules\n", style="bold")
+        head.append(f"  {team.rules}\n")
     if spark.watch:
         head.append("\nWatching\n", style="bold")
         head.append(f"  {spark.watch}: a change there starts a shift\n")
@@ -2507,20 +2511,25 @@ def _spark_says(spark: "sparks.Spark", said: "sparks.Message") -> None:
 TEAM_CHAT_SHOWN = 15
 
 
+def _team_and_rest(text: str) -> tuple[Optional["sparks.Team"], str]:
+    """The team TEXT starts with, and the words after it. A team's name
+    can have spaces in it, so the longest one that matches."""
+
+    words = text.split()
+    for count in range(len(words), 0, -1):
+        team = sparks.find_team(" ".join(words[:count]))
+        if team is not None:
+            return team, " ".join(words[count:])
+    return None, ""
+
+
 def _team_chat(rest: str) -> None:
     """/sparks teamchat <team> [message]: a team's group chat, its
     latest shown; with a message, that one is sent and answered."""
 
     from . import teamchat
 
-    words = rest.split()
-    team, said = None, ""
-    # A team's name can have spaces in it: the longest one that matches.
-    for count in range(len(words), 0, -1):
-        team = sparks.find_team(" ".join(words[:count]))
-        if team is not None:
-            said = " ".join(words[count:])
-            break
+    team, said = _team_and_rest(rest)
     if team is None:
         warn(f"No team called {rest!r}.")
         return
@@ -2710,6 +2719,9 @@ def _teams_command(rest: str) -> None:
             )
         console.print(Text(said, style=DIM))
         return
+    if action == "rules" and extra:
+        _team_rules(extra)
+        return
     if action == "templates":
         body = Text()
         for template in sparks.TEAM_TEMPLATES:
@@ -2723,6 +2735,7 @@ def _teams_command(rest: str) -> None:
         return
     if action:
         warn("Usage: /sparks teams [new|remove|share|pause|resume <name> "
+             "| rules <name> [rules|none] "
              "| add <code|template> [running] | templates]")
         return
     found = sparks.teams()
@@ -2749,6 +2762,11 @@ def _teams_command(rest: str) -> None:
     for team in found:
         body.append(team.name, style=f"bold {team.colour}")
         body.append("  paused\n" if team.paused else "\n", style=DIM)
+        if team.rules:
+            body.append(
+                "  Rules: " + " ".join(team.rules.split())[:100] + "\n",
+                style=DIM,
+            )
         chart = sparks.org_chart(team.id)
         if not chart:
             body.append("  (no sparks yet)\n", style=DIM)
@@ -2759,6 +2777,35 @@ def _teams_command(rest: str) -> None:
         body.append("No team\n", style="bold")
         body.append("  " + ", ".join(alone) + "\n", style=DIM)
     console.print(body)
+
+
+def _team_rules(rest: str) -> None:
+    """/sparks teams rules <team> [rules|none]: a team's rules, shown, or
+    set for every spark on it, or taken away."""
+
+    team, said = _team_and_rest(rest)
+    if team is None:
+        warn(f"No team called {rest!r}.")
+        return
+    if not said:
+        if team.rules:
+            console.print(Text(f"{team.name}'s rules, for every spark on it:",
+                               style="bold"))
+            console.print(Text(f"  {team.rules}"))
+        else:
+            console.print(Text(
+                f"{team.name} has no rules. /sparks teams rules {team.name} "
+                "<rules> gives every spark on it lines it must not cross.",
+                style=DIM,
+            ))
+        return
+    clear = said.lower() in ("none", "off", "clear")
+    team = sparks.set_team_rules(team.id, "" if clear else said)
+    console.print(Text(
+        f"{team.name} has no rules now." if clear else
+        f"Every spark on {team.name} keeps to that from now on, on top of "
+        "its own boundaries.", style=DIM,
+    ))
 
 
 def _spark_budget(key: str, extra: str) -> None:
@@ -3139,7 +3186,8 @@ def _sparks_command(arg: str) -> None:
             "| model <name> [model] | title <name> <title|none> "
             "| rounds [number|unlimited] | default [model|flash] "
             "| pause all | resume all | stop all "
-            "| teams [new|remove|share|add|templates] | teamchat <team> "
+            "| teams [new|remove|share|rules|add|templates] "
+            "| teamchat <team> "
             "[message] | team <name> "
             "<team|none> | lead <name> <lead|none> | budget <name> "
             "<tokens [hour|day|week|month]|off> | audit <name> | hires "
