@@ -104,6 +104,16 @@ REPLY_STALE_SECONDS = 600
 MIN_EVERY_MINUTES = 15
 MAX_EVERY_MINUTES = 7 * 24 * 60
 DEFAULT_EVERY_MINUTES = 60
+# On call: no schedule at all. The keeper never starts one by itself; it
+# works when it is called on, by Run now, a hand-off from another spark,
+# a job Flash gives it, or a change in the folder it watches, and it
+# answers when it is @mentioned. Kept as every = 0 with no set times.
+ON_CALL = 0
+ON_CALL_WORDS = (
+    "on call", "oncall", "on-call", "on demand", "on-demand", "manual",
+    "manually", "when called", "when called on", "when mentioned",
+    "when asked", "never", "none",
+)
 
 # How often the keeper looks for a spark that is due, and for one that
 # another Flash changed.
@@ -277,8 +287,9 @@ CHAT_TOOLS = [
     _tool(
         "set_schedule",
         "Change how often your shifts run, when the user asks.",
-        "every", "How often: 30m, 2h, daily, weekly (at least 15m), or set "
-        "times: 9am weekdays, mon 8:30, the 1st at 9am, or a cron line.",
+        "every", "How often: 30m, 2h, daily, weekly (at least 15m), set "
+        "times: 9am weekdays, mon 8:30, the 1st at 9am, or a cron line, or "
+        "on call: no schedule, working only when called on.",
     ),
 ]
 
@@ -532,6 +543,11 @@ def parse_schedule(text) -> tuple[int, str]:
     is "" for every so often; for set times, MINUTES is how often they
     come round at their busiest."""
 
+    words = " ".join(str(text if text is not None else "").lower().split())
+    if words.removeprefix("only ") in ON_CALL_WORDS or (
+        _read_every(text) == ON_CALL
+    ):
+        return ON_CALL, ""
     if _read_every(text) is not None:
         return parse_every(text), ""
     try:
@@ -555,7 +571,18 @@ def schedule_words(spark) -> str:
 
     at = spark.get("at", "") if isinstance(spark, dict) else spark.at
     every = spark["every"] if isinstance(spark, dict) else spark.every
+    if not at and every == ON_CALL:
+        return "only when called on"
     return cron.words(at) if at else f"every {every_words(every)}"
+
+
+def on_call(spark) -> bool:
+    """Whether SPARK has no schedule, and works only when called on.
+    SPARK is a spark, or a template's dict."""
+
+    at = spark.get("at", "") if isinstance(spark, dict) else spark.at
+    every = spark.get("every") if isinstance(spark, dict) else spark.every
+    return not at and every == ON_CALL
 
 
 def next_shift(spark: Spark, after: float) -> float:
@@ -568,6 +595,7 @@ def next_shift(spark: Spark, after: float) -> float:
             when = None
         if when is not None:
             return when
+    # On call, nothing is due by the clock: due() never looks at it.
     return after + spark.every * 60
 
 
@@ -1158,6 +1186,38 @@ def _roll_up(spark: Spark, report: "Report") -> None:
 
     with contextlib.suppress(SparkError):
         _edit(lead.id, give)
+
+
+def _call_mentioned(spark: Spark, report: "Report") -> None:
+    """The sparks SPARK's report @mentions get it, for their next shift;
+    one on call is called on by it, and works on it now."""
+
+    if report.quiet or report.failed or report.approval:
+        return
+    text = " ".join(report.text.split())
+    if len(text) > ROLLUP_CHARS:
+        text = text[:ROLLUP_CHARS].rstrip() + " [...]"
+    called = False
+    for other in mentioned(report.text):
+        if other.id == spark.id:
+            continue
+
+        def give(target: Spark) -> None:
+            nonlocal called
+            target.inbox.append({
+                "from": spark.name, "text": text, "at": report.at,
+                "mentioned": True,
+            })
+            del target.inbox[:-MAX_INBOX]
+            if on_call(target) and not over_budget(target):
+                target.asked = True
+                called = True
+
+        with contextlib.suppress(SparkError):
+            _edit(other.id, give)
+            log(other.id, "mentioned", by=spark.name)
+    if called:
+        wake()
 
 
 def _team_news(spark: Spark, report: "Report") -> None:
@@ -3261,9 +3321,11 @@ def _opening(why: str, inbox: list) -> str:
     jobs = [item for item in inbox if item.get("job")]
     rolled = [item for item in inbox if item.get("rollup")]
     decided = [item for item in inbox if item.get("decision")]
+    named = [item for item in inbox if item.get("mentioned")]
     handed = [
         item for item in inbox
-        if not (item.get("job") or item.get("rollup") or item.get("decision"))
+        if not (item.get("job") or item.get("rollup") or item.get("decision")
+                or item.get("mentioned"))
     ]
     if jobs:
         parts.append(
@@ -3277,6 +3339,15 @@ def _opening(why: str, inbox: list) -> str:
             f"- From {item.get('from', 'a spark')}: {item.get('text', '')}"
             for item in handed
         ))
+    if named:
+        parts.append(
+            "Other sparks @mentioned you in their reports. Do what they "
+            "call on you for, and say in your report what you did:\n"
+            + "\n".join(
+                f"- {item.get('from', 'A spark')}: {item.get('text', '')}"
+                for item in named
+            )
+        )
     if rolled:
         parts.append(
             "News from the sparks that report to you, since your last "
@@ -3506,6 +3577,7 @@ def shift(spark_id: str, client=None) -> Optional[Report]:
     if not pending:
         _roll_up(spark, report)
         _team_news(spark, report)
+        _call_mentioned(spark, report)
     return report
 
 
@@ -3635,8 +3707,17 @@ def status_block(spark: Spark) -> str:
     else:
         lines.append("- You have not run a shift yet.")
     if not spark.paused and not spark.waiting and spark.status != WORKING:
-        when = "right away" if spark.asked else _until(spark.next_run)
-        lines.append(f"- Next shift: {when}.")
+        if spark.asked:
+            lines.append("- Next shift: right away.")
+        elif on_call(spark):
+            lines.append(
+                "- You have no schedule: you are on call. You work when "
+                "you are called on (the user's Run now, a hand-off from "
+                "another spark, a job given you) and answer when you are "
+                "@mentioned."
+            )
+        else:
+            lines.append(f"- Next shift: {_until(spark.next_run)}.")
     lines.append(
         f"- Shifts so far: {spark.runs}. Reports the user has not read: "
         f"{spark.unread}."
@@ -4012,7 +4093,8 @@ def due(now: Optional[float] = None) -> list[Spark]:
         s for s in all_sparks()
         if s.status != WORKING and not s.waiting
         and (s.asked or (
-            s.status != WAITING and not s.paused and s.next_run <= now
+            s.status != WAITING and not s.paused and not on_call(s)
+            and s.next_run <= now
         ))
     ]
 

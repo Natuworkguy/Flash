@@ -1959,11 +1959,16 @@ def _spark_state(spark: "sparks.Spark") -> str:
         return f"working{': ' + spark.activity if spark.activity else ''}"
     if spark.paused:
         return "paused"
-    wait = int((spark.next_run - time.time()) // 60)
-    state = "starting soon" if wait <= 0 else (
-        f"next shift in {wait}m" if wait < 120 else
-        f"next shift in {wait // 60}h"
-    )
+    if spark.asked:
+        state = "starting soon"
+    elif sparks.on_call(spark):
+        state = "on call"
+    else:
+        wait = int((spark.next_run - time.time()) // 60)
+        state = "starting soon" if wait <= 0 else (
+            f"next shift in {wait}m" if wait < 120 else
+            f"next shift in {wait // 60}h"
+        )
     if spark.status == sparks.FAILED:
         state = f"last shift failed · {state}"
     return state
@@ -2291,8 +2296,8 @@ def _new_spark() -> None:
         console.print(Text("  No spark made.", style=DIM))
         return
     every = _ask_line(
-        "How often? (30m, 2h, daily, or set times like 9am weekdays; "
-        "Enter for hourly)"
+        "How often? (30m, 2h, daily, set times like 9am weekdays, or on "
+        "call for only when called on; Enter for hourly)"
     )
     boundaries = _ask_line("Anything it must never do? (Enter for none)")
     from . import workspace
@@ -3115,7 +3120,8 @@ def _sparks_command(arg: str) -> None:
             "Usage: /sparks [new | <name> | chat <name> [message] "
             "| run|pause|resume|remove <name> | teach <name> <lesson> "
             "| like <name> | dislike <name> [why] "
-            "| every <name> <30m|2h|daily> | at <name> <9am weekdays|cron> "
+            "| every <name> <30m|2h|daily|on call> "
+            "| at <name> <9am weekdays|cron> "
             "| project <name> <project|none> "
             "| approve|deny|stop|share <name> | add <code|template> [paused] "
             "| templates | goal <name> <text> | watch <name> <folder|none> "

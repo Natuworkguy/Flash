@@ -5215,6 +5215,7 @@ const drawExtensionsPage = () => toolPage("Extensions", drawExtensions);
 // runs, and report back. Each is drawn as a bubble with eyes: floating while
 // it waits, bouncing while it works, asleep while paused.
 
+const ON_CALL_SAID = "No schedule: it works only when it is called on. Run now, a hand-off from another spark, a job Flash gives it, or an @mention in a chat or its team's chat.";
 const EVERY_CHOICES = [[15, "Every 15 minutes"], [30, "Every 30 minutes"], [60, "Every hour"], [120, "Every 2 hours"], [360, "Every 6 hours"], [720, "Every 12 hours"], [1440, "Every day"], [10080, "Every week"]];
 
 function sparkAvatar(spark, size = 36, i = 0) {
@@ -5460,11 +5461,16 @@ function everyWords(minutes) {
   return `${minutes} minutes`;
 }
 
+// On call: no schedule. It works when it is called on, by Run now, a
+// hand-off, a job from Flash or an @mention, and never by the clock.
+const onCall = (spark) => !spark.at && spark.every === 0;
+
 function sparkState(spark) {
   if (spark.waiting) return "Waiting for your approval";
   if (spark.answering) return "Answering you";
   if (spark.status === "working") return spark.activity ? `Working: ${spark.activity}` : "Working";
   if (spark.paused) return "Paused";
+  if (onCall(spark)) return spark.status === "failed" ? "Last shift failed · On call" : "On call";
   const wait = Math.round((spark.next_run - Date.now() / 1000) / 60);
   const next = wait <= 0 ? "Starting soon" : wait < 120 ? `Next shift in ${wait} min` : wait < 2880 ? `Next shift in ${Math.round(wait / 60)} h` : `Next shift in ${Math.round(wait / 1440)} d`;
   return spark.status === "failed" ? `Last shift failed · ${next}` : next;
@@ -5477,7 +5483,7 @@ function sparkPresence(spark) {
   if (spark.answering) return ["working", "Answering you"];
   if (spark.paused) return ["paused", "Paused"];
   if (spark.status === "failed") return ["failed", "Last shift failed"];
-  return ["idle", spark.unread ? `${spark.unread} new report${spark.unread === 1 ? "" : "s"}` : "Ready"];
+  return ["idle", spark.unread ? `${spark.unread} new report${spark.unread === 1 ? "" : "s"}` : onCall(spark) ? "On call" : "Ready"];
 }
 
 // The team, in the sidebar, as Grok Bot lists its bots: each face, name,
@@ -6165,11 +6171,12 @@ function sparksBar(r, again = false) {
   const bar = el("div", "sparks-bar", `<span class="said"></span><span class="buttons"></span>`);
   if (again) bar.style.animation = "none";
   const working = r.sparks.filter((s) => s.status === "working" || s.waiting).length;
-  const awake = r.sparks.filter((s) => !s.paused).length;
-  const paused = r.sparks.length - awake;
+  const called = r.sparks.filter((s) => !s.paused && onCall(s)).length;
+  const awake = r.sparks.filter((s) => !s.paused && !onCall(s)).length;
+  const paused = r.sparks.filter((s) => s.paused).length;
   bar.querySelector(".said").textContent = r.held
     ? `${r.held} spark${r.held === 1 ? "" : "s"} paused till Resume all`
-    : [working && `${working} working`, `${awake} on schedule`, paused && `${paused} paused`].filter(Boolean).join(" · ");
+    : [working && `${working} working`, (awake || !called) && `${awake} on schedule`, called && `${called} on call`, paused && `${paused} paused`].filter(Boolean).join(" · ");
   bar.classList.toggle("holding", !!r.held);
   const buttons = bar.querySelector(".buttons");
   const add = (label, iconName, cls, run) => {
@@ -6790,6 +6797,7 @@ function fillSpark(box, spark, again = false) {
     // A paused one, or one on set times, is not about to start: it says
     // when it will, as its card does.
     const first = spark.paused ? "Paused: its first shift waits until you resume it."
+      : onCall(spark) && !spark.asked ? "On call: its first shift is the first time you or another spark call on it."
       : Date.now() / 1000 >= spark.next_run - 60 ? "Its first shift starts soon."
       : `Its first shift: ${sparkState(spark).replace(/^Next shift /, "")}.`;
     reports.appendChild(el("p", "spark-quiet", spark.runs ? `Nothing to report yet. ${quiet} quiet shift${quiet === 1 ? "" : "s"}.` : working ? "Working on its first shift." : first));
@@ -7035,10 +7043,13 @@ function setTimesField(form) {
   const said = field.querySelector(".at-said");
   const example = said.innerHTML;
   let timer = 0;
+  const everySaid = form.querySelector(".every-said");
+  const usual = "It works while Flash is open, in the terminal or here.";
   form.every.addEventListener("change", () => {
     field.hidden = form.every.value !== "at";
     form.at.required = !field.hidden;
     if (!field.hidden) form.at.focus();
+    if (everySaid) everySaid.textContent = form.every.value === "oncall" ? ON_CALL_SAID : usual;
   });
   form.at.required = !field.hidden;
   form.at.addEventListener("input", () => {
@@ -7067,7 +7078,8 @@ function sparkForm(spark, inProjectId = "", template = "") {
   const editing = !!spark;
   const every = editing ? spark.every : 60;
   const atTimes = editing && !!spark.at;
-  const choices = atTimes || EVERY_CHOICES.some(([m]) => m === every) ? EVERY_CHOICES : [...EVERY_CHOICES, [every, `Every ${everyWords(every)}`]].sort((a, b) => a[0] - b[0]);
+  const called = editing && onCall(spark);
+  const choices = atTimes || called || EVERY_CHOICES.some(([m]) => m === every) ? EVERY_CHOICES : [...EVERY_CHOICES, [every, `Every ${everyWords(every)}`]].sort((a, b) => a[0] - b[0]);
   const form = openForm(`
     <h2>${editing ? "Edit spark" : "New spark"}</h2>
     <p class="sub">${editing ? "" : "An agent that keeps working on one goal, on a schedule, while Flash runs, and reports back."}</p>
@@ -7076,7 +7088,7 @@ function sparkForm(spark, inProjectId = "", template = "") {
     <label class="field"><span>Title <em class="count">optional</em></span><input name="title" maxlength="40" placeholder="Repo watcher" autocomplete="off"><small>Its job, as a teammate's: shown under its name, and it knows it.</small></label>
     ${modelField()}
     <label class="field"><span>Goal</span><textarea name="goal" rows="4" placeholder="Check github.com/me/app for new issues. Tell me which look like bugs, and skip ones you have already told me about."></textarea></label>
-    <label class="field"><span>How often</span><select name="every">${choices.map(([m, label]) => `<option value="${m}"${!atTimes && m === every ? " selected" : ""}>${label}</option>`).join("")}<option value="at"${atTimes ? " selected" : ""}>At set times…</option></select><small>It works while Flash is open, in the terminal or here.</small></label>
+    <label class="field"><span>How often</span><select name="every">${choices.map(([m, label]) => `<option value="${m}"${!atTimes && !called && m === every ? " selected" : ""}>${label}</option>`).join("")}<option value="at"${atTimes ? " selected" : ""}>At set times…</option><option value="oncall"${called ? " selected" : ""}>Only when called on</option></select><small class="every-said">${called ? ON_CALL_SAID : "It works while Flash is open, in the terminal or here."}</small></label>
     <label class="field at-field"${atTimes ? "" : " hidden"}><span>When</span><input name="at" placeholder="9am weekdays" autocomplete="off" spellcheck="false"><small class="at-said">Like <b>9am weekdays</b>, <b>mon, thu 8:30</b>, <b>the 1st at 9am</b>, or a cron line such as <b>0 9 * * 1-5</b>. On this computer's clock.</small></label>
     <label class="field"><span>Project</span><select name="project"><option value="">No project</option>${[...projects].reverse().map((p) => `<option value="${esc(p.id)}"${editing && spark.project === p.id ? " selected" : ""}>${esc(p.name)}</option>`).join("")}</select><small>${projects.length ? "Its shifts work on the project's folder and follow its instructions, and a chat with it starts there." : "Make a project on the Projects page to give it one: a folder, and how to work in it."}</small></label>
     <label class="field"><span>Watch a folder <em class="count">optional</em></span><input name="watch" class="mono" placeholder="~/Downloads" autocomplete="off" spellcheck="false" role="combobox" aria-autocomplete="list" aria-expanded="false"><small>A change to its files starts a shift too, besides the schedule, and it is told which files changed. Tab takes a suggestion and shows what is inside it.</small></label>

@@ -2314,6 +2314,10 @@ def make_spark(
             if spark.paused else
             f"It works {schedule}; its first shift is {first}. "
             if spark.at else
+            "It is on call: it has no schedule, and works only when it is "
+            "called on, by Run now, a hand-off, give_spark, or "
+            f"{spark.handle} in a chat. "
+            if sparks.on_call(spark) else
             f"Its first shift starts now, then {schedule}. "
         ) + "Its reports are under /sparks, or Sparks in the web UI."
     )
@@ -5353,7 +5357,9 @@ tools: list[dict[str, Any]] = [
                             "How often it works, e.g. 30m, 2h, daily "
                             f"(at least {sparks.MIN_EVERY_MINUTES}m), or at "
                             "set times, e.g. 9am weekdays, mon 8:30, the "
-                            "1st at 9am, or a cron line."
+                            "1st at 9am, or a cron line. Or \"on call\" "
+                            "for no schedule: it works only when the user "
+                            "or another spark calls on it."
                         ),
                     },
                     "boundaries": {
