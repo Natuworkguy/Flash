@@ -66,6 +66,12 @@ COLOURS = (
     "#4fd1c5",  # lagoon
     "#a3b1ff",  # periwinkle
 )
+# The palette by name, for the terminal; any other colour is a #rrggbb.
+COLOUR_NAMES = dict(zip(
+    ("ember", "sky", "mint", "lilac", "coral", "sun", "lagoon", "periwinkle"),
+    COLOURS,
+))
+_HEX_COLOUR = re.compile(r"^#?([0-9a-f]{6}|[0-9a-f]{3})$")
 
 NAME_CHARS = 24
 TITLE_CHARS = 40
@@ -2193,12 +2199,33 @@ def _not_reserved(name: str) -> None:
         )
 
 
+def parse_colour(value) -> str:
+    """VALUE as a spark's colour: one of the palette's by name, or any
+    colour as #rrggbb (or #rgb). SparkError if it is neither."""
+
+    word = str(value or "").strip().lower()
+    if word in COLOUR_NAMES:
+        return COLOUR_NAMES[word]
+    found = _HEX_COLOUR.match(word)
+    if not found:
+        raise SparkError(
+            "A colour is one of " + ", ".join(COLOUR_NAMES)
+            + ", or any as #rrggbb."
+        )
+    digits = found.group(1)
+    if len(digits) == 3:
+        digits = "".join(c * 2 for c in digits)
+    return f"#{digits}"
+
+
 def create(
     name: str, goal: str, boundaries: str = "", every="", project: str = "",
     watch: str = "", model: str = "", title: str = "", paused: bool = False,
+    colour: str = "",
 ) -> Spark:
     """Make a spark. Its first shift runs as soon as the keeper looks;
-    made PAUSED, as soon as it is resumed."""
+    made PAUSED, as soon as it is resumed. Without a COLOUR, it gets the
+    palette's next."""
 
     name = " ".join(str(name or "").split())[:NAME_CHARS]
     goal = str(goal or "").strip()[:GOAL_CHARS]
@@ -2209,6 +2236,7 @@ def create(
     minutes, at = parse_schedule(every)
     project = resolve_project(project)
     watch = _watch_folder(watch)
+    chosen = parse_colour(colour) if str(colour or "").strip() else ""
 
     with _held():
         taken = {s.handle for s in all_sparks()}
@@ -2223,7 +2251,7 @@ def create(
             boundaries=str(boundaries or "").strip()[:BOUNDARY_CHARS],
             every=minutes,
             at=at,
-            colour=COLOURS[len(taken) % len(COLOURS)],
+            colour=chosen or COLOURS[len(taken) % len(COLOURS)],
             project=project,
             watch=watch,
             model=_model_name(model),
@@ -2242,7 +2270,8 @@ def create(
 
 
 def update(key: str, **changes) -> Spark:
-    """Change a spark's goal, boundaries, schedule, name, or title."""
+    """Change a spark's goal, boundaries, schedule, name, title, or
+    colour."""
 
     before: dict = {}
 
@@ -2273,6 +2302,8 @@ def update(key: str, **changes) -> Spark:
             spark.model = model
         if "title" in changes:
             spark.title = _title(changes["title"])
+        if "colour" in changes:
+            spark.colour = parse_colour(changes["colour"])
         if "name" in changes:
             name = " ".join(str(changes["name"] or "").split())[:NAME_CHARS]
             if not name:
@@ -2288,7 +2319,7 @@ def update(key: str, **changes) -> Spark:
     changed = {
         name: {"from": before.get(name), "to": after.get(name)}
         for name in ("name", "title", "goal", "boundaries", "every", "at",
-                     "project", "watch", "model")
+                     "project", "watch", "model", "colour")
         if before.get(name) != after.get(name)
     }
     if changed:

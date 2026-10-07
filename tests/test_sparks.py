@@ -2415,3 +2415,53 @@ def test_a_document_opening_with_a_section_still_gets_its_title(model):
     assert path.read_text().startswith("# Review\n\n## Summary")  # nosec B101
     titles = [d["title"] for d in sparks.documents(made.id)]
     assert titles == ["Review"]  # nosec B101
+
+
+# --- Colours -------------------------------------------------------------
+
+
+@pytest.mark.parametrize("given, colour", [
+    ("lagoon", "#4fd1c5"), ("Sky", "#5ab0f2"), ("#AbCdEf", "#abcdef"),
+    ("123456", "#123456"), ("#f0a", "#ff00aa"),
+])
+def test_a_colour_by_name_or_hex(given, colour):
+    assert sparks.parse_colour(given) == colour
+
+
+@pytest.mark.parametrize("given", ["", "blue-ish", "#12345", "#ggg000"])
+def test_a_colour_that_is_not_one(given):
+    with pytest.raises(sparks.SparkError, match="#rrggbb"):
+        sparks.parse_colour(given)
+
+
+def test_a_spark_is_made_in_a_colour_and_changes_it():
+    left = sparks.create("Scout", "Look.")
+    made = sparks.create("Owl", "Watch.", colour="#123abc")
+
+    assert left.colour in sparks.COLOURS
+    assert made.colour == "#123abc"
+    changed = sparks.update("owl", colour="coral")
+    assert changed.colour == sparks.COLOUR_NAMES["coral"]
+    log = sparks.audit_log("owl")["entries"]
+    assert log[-1]["changes"]["colour"] == {
+        "from": "#123abc", "to": sparks.COLOUR_NAMES["coral"],
+    }
+
+
+def test_the_page_and_the_terminal_set_a_colour(capsys):
+    from flash import ai, web
+
+    session = web.Session()
+    made = web.command(session, {
+        "name": "spark-create", "arg": "Scout", "goal": "Look.",
+        "colour": "#00ff88",
+    })["spark"]
+    assert made["colour"] == "#00ff88"
+    web.command(session, {"name": "spark-update", "arg": made["id"],
+                          "colour": "sun"})
+    assert sparks.find("scout").colour == sparks.COLOUR_NAMES["sun"]
+
+    ai._sparks_command("color scout #102030")
+    assert sparks.find("scout").colour == "#102030"
+    ai._sparks_command("colour scout nope")
+    assert "#rrggbb" in capsys.readouterr().out
