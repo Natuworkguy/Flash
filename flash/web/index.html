@@ -1176,7 +1176,7 @@ button.item-row:hover { background: var(--hover); }
 .spark-av[data-state="paused"] { animation: spark-snooze 4.2s ease-in-out infinite; filter: saturate(0.35) brightness(0.92); }
 .spark-av[data-state="paused"] .eyes { animation: none; }
 .spark-av[data-state="paused"] .eye { height: calc(var(--s) * 0.07); background: transparent; border: max(1.3px, calc(var(--s) * 0.04)) solid var(--ink); border-top: 0; border-radius: 0 0 999px 999px; animation: none; }
-.spark-av[data-state="paused"]::before, .spark-av[data-state="paused"]::after { content: "z"; position: absolute; top: -8%; right: -6%; font: 700 calc(var(--s) * 0.26)/1 var(--sans); color: var(--text-2); opacity: 0; animation: spark-z 3s ease-out infinite; }
+.spark-av[data-state="paused"]::before, .spark-av[data-state="paused"]::after { content: "z"; position: absolute; top: -8%; right: 6%; font: 700 calc(var(--s) * 0.26)/1 var(--sans); color: var(--text-2); opacity: 0; animation: spark-z 3s ease-out infinite; }
 .spark-av[data-state="paused"]::after { animation-delay: 1.5s; }
 
 /* Waiting on you: a curious tilt, eyes up, and a question bobbing. */
@@ -1244,7 +1244,9 @@ button.item-row:hover { background: var(--hover); }
 @keyframes spark-bounce { 0%, 100% { transform: translateY(0) scale(1); } 35% { transform: translateY(-4px) scale(0.95, 1.05); } 65% { transform: translateY(0) scale(1.06, 0.94); } }
 @keyframes spark-look { 0%, 100% { transform: translateX(0); } 30% { transform: translateX(calc(var(--s) * -0.06)); } 70% { transform: translateX(calc(var(--s) * 0.06)); } }
 @keyframes spark-snooze { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.04, 0.97) translateY(1px); } }
-@keyframes spark-z { 0% { opacity: 0; transform: translate(0, 0) scale(0.6); } 20% { opacity: 0.9; } 100% { opacity: 0; transform: translate(calc(var(--s) * 0.35), calc(var(--s) * -0.55)) scale(1.2) rotate(12deg); } }
+/* Up more than out: drifting far to the side, a sleeping face's z's
+   landed on the name beside it. */
+@keyframes spark-z { 0% { opacity: 0; transform: translate(0, 0) scale(0.6); } 20% { opacity: 0.9; } 100% { opacity: 0; transform: translate(calc(var(--s) * 0.1), calc(var(--s) * -0.72)) scale(1.2) rotate(12deg); } }
 @keyframes spark-tilt { 0%, 100% { transform: rotate(-9deg); } 50% { transform: rotate(9deg) translateY(-1px); } }
 @keyframes spark-ask { 0%, 100% { transform: translateY(0) rotate(8deg); } 50% { transform: translateY(-3px) rotate(-6deg); } }
 @keyframes spark-ping { 0%, 100% { transform: scale(1); box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 60%, transparent); } 15% { transform: scale(1.25); } 30% { transform: scale(0.95); } 45% { transform: scale(1.15); box-shadow: 0 0 0 5px transparent; } }
@@ -1309,7 +1311,10 @@ button.item-row:hover { background: var(--hover); }
   border: 1px solid color-mix(in srgb, var(--t) 24%, var(--border));
   background: radial-gradient(130% 90% at 0% 0%, color-mix(in srgb, var(--t) 11%, transparent), transparent 55%), var(--surface);
   animation: rise 0.35s var(--ease) both; animation-delay: calc(var(--i, 0) * 60ms); }
-.team-head { display: flex; align-items: center; gap: 14px; margin-bottom: 6px; }
+/* Its buttons wrap to a line of their own when the card is too narrow
+   for them beside the name, as on a phone, rather than squeezing the
+   name out of sight. */
+.team-head { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; margin-bottom: 6px; }
 .team-badge { position: relative; width: 38px; height: 38px; flex: none; border-radius: 50%; display: grid; place-items: center; margin: 4px; cursor: pointer;
   transition: transform 0.25s var(--spring); }
 .team-badge:hover { transform: scale(1.08); }
@@ -1686,7 +1691,9 @@ body.all-stopped .org-node, body.all-stopped .spark-card { animation: all-halt 0
 
 /* Files the agent shows: a card in the chat, a panel from the right --- */
 /* Team chat: a sheet from the right, tinted with the team's colour. */
-.tc-wrap { position: fixed; inset: 0; z-index: 60; }
+/* Under the dialogs (40): a spark opened from the chat comes up over it,
+   and closes back to it. */
+.tc-wrap { position: fixed; inset: 0; z-index: 38; }
 .tc-scrim { position: absolute; inset: 0; background: rgba(10, 8, 4, 0.32); opacity: 0; transition: opacity 0.28s; }
 .tc-wrap.open .tc-scrim { opacity: 1; }
 .tc {
@@ -1787,12 +1794,14 @@ body.all-stopped .org-node, body.all-stopped .spark-card { animation: all-halt 0
 @keyframes tc-in { from { opacity: 0; transform: translate(-10px, 10px) scale(0.97); } }
 @keyframes tc-in-mine { from { opacity: 0; transform: translate(10px, 10px) scale(0.97); } }
 @keyframes tc-pop { from { opacity: 0; transform: scale(0.85); } }
-.team-pause-btn { display: inline-flex; align-items: center; gap: 6px; margin-left: auto; flex: none; padding: 6px 12px 6px 10px; border-radius: 999px; font-size: 13px; font-weight: 500; color: var(--text-2); background: var(--surface); border: 1px solid var(--border); transition: transform 0.2s var(--spring), background 0.15s, border-color 0.15s; }
+.team-tools { margin-left: auto; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.team-tools .team-actions { margin-left: 0; }
+@media (max-width: 600px) { .team-tools { flex-basis: 100%; margin-left: 0; } }
+.team-pause-btn { display: inline-flex; align-items: center; gap: 6px; flex: none; padding: 6px 12px 6px 10px; border-radius: 999px; font-size: 13px; font-weight: 500; color: var(--text-2); background: var(--surface); border: 1px solid var(--border); transition: transform 0.2s var(--spring), background 0.15s, border-color 0.15s; }
 .team-pause-btn svg { width: 14px; height: 14px; }
 .team-pause-btn:hover { transform: translateY(-1px); border-color: var(--border-strong); }
 .team-pause-btn.on { color: color-mix(in srgb, var(--t) 70%, var(--text)); border-color: color-mix(in srgb, var(--t) 45%, var(--border)); background: color-mix(in srgb, var(--t) 10%, var(--surface)); }
 .team-pause-btn:disabled { opacity: 0.5; }
-.team-pause-btn + .team-chat-btn { margin-left: 0; }
 .team-paused-chip { display: inline-flex; align-items: center; gap: 4px; width: fit-content; margin-top: 3px; padding: 1px 8px 1px 6px; border-radius: 999px; font-size: 11.5px; font-weight: 600; color: var(--text-3); background: var(--hover); }
 .team-paused-chip svg { width: 10px; height: 10px; }
 /* A paused team rests: its colour drains a little, and its lines and
@@ -1804,8 +1813,7 @@ body.all-stopped .org-node, body.all-stopped .spark-card { animation: all-halt 0
 .team-block.paused .team-badge .aura { opacity: 0.2; }
 .team-block.pausing .org-node { animation: all-halt 0.6s var(--ease) both !important; }
 .tc-event.team-news { color: var(--text-3); }
-.team-chat-btn + .team-actions { margin-left: 6px; }
-.team-chat-btn { position: relative; display: inline-flex; align-items: center; gap: 6px; margin-left: auto; flex: none; padding: 6px 12px 6px 10px; border-radius: 999px; font-size: 13px; font-weight: 500; color: color-mix(in srgb, var(--t) 70%, var(--text)); background: color-mix(in srgb, var(--t) 12%, var(--surface)); border: 1px solid color-mix(in srgb, var(--t) 30%, var(--border)); transition: transform 0.2s var(--spring), background 0.15s; }
+.team-chat-btn { position: relative; display: inline-flex; align-items: center; gap: 6px; flex: none; padding: 6px 12px 6px 10px; border-radius: 999px; font-size: 13px; font-weight: 500; color: color-mix(in srgb, var(--t) 70%, var(--text)); background: color-mix(in srgb, var(--t) 12%, var(--surface)); border: 1px solid color-mix(in srgb, var(--t) 30%, var(--border)); transition: transform 0.2s var(--spring), background 0.15s; }
 .team-chat-btn svg { width: 15px; height: 15px; }
 .team-chat-btn:hover { transform: translateY(-1px); background: color-mix(in srgb, var(--t) 20%, var(--surface)); }
 .tc-count { position: absolute; top: -3px; right: -3px; min-width: 16px; height: 16px; padding: 0 4px; border-radius: 8px; background: var(--t, var(--accent)); color: #fff; font: 700 10px/16px var(--sans); text-align: center; box-shadow: 0 0 0 2px var(--surface); animation: tc-pop 0.5s var(--spring) both; }
@@ -2815,12 +2823,14 @@ function markdownBody(text) {
 // ---------------------------------------------------------------------------
 // Small helpers
 
+// How long ago SECONDS was, the way every list in the page says it:
+// past a week, the date itself.
 function ago(seconds) {
-  const d = Date.now() / 1000 - seconds;
-  if (d < 60) return "just now";
-  if (d < 3600) return `${Math.floor(d / 60)}m ago`;
-  if (d < 86400) return `${Math.floor(d / 3600)}h ago`;
-  if (d < 86400 * 7) return `${Math.floor(d / 86400)}d ago`;
+  const s = Math.max(0, Date.now() / 1000 - seconds);
+  if (s < 60) return "just now";
+  if (s < 3600) return `${Math.floor(s / 60)} min ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)} h ago`;
+  if (s < 86400 * 7) return `${Math.floor(s / 86400)} d ago`;
   return new Date(seconds * 1000).toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 const projectOf = (id) => projects.find((p) => p.id === id) || null;
@@ -5023,6 +5033,14 @@ function drawSettings() {
     thumb.style.left = `${on.offsetLeft}px`;
     thumb.style.width = `${on.offsetWidth}px`;
     if (!animate) { thumb.offsetWidth; thumb.style.transition = ""; }
+    // On a phone the tabs scroll sideways: the open one is kept in view,
+    // not left cut off at the edge.
+    const edge = 12;
+    if (on.offsetLeft + on.offsetWidth > tabs.scrollLeft + tabs.clientWidth - edge) {
+      tabs.scrollTo({ left: on.offsetLeft + on.offsetWidth - tabs.clientWidth + edge, behavior: animate && !calm.matches ? "smooth" : "auto" });
+    } else if (on.offsetLeft < tabs.scrollLeft + edge) {
+      tabs.scrollTo({ left: Math.max(0, on.offsetLeft - edge), behavior: animate && !calm.matches ? "smooth" : "auto" });
+    }
     // A new body each time, so the one a slow answer was meant for
     // can tell it has been replaced.
     const old = page.querySelector(".tab-body");
@@ -5985,7 +6003,6 @@ function tcWireComposer() {
       if (e.key === "Escape") { e.preventDefault(); closeMenu(); return; }
     }
     if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); form.requestSubmit(); }
-    if (e.key === "Escape") { e.preventDefault(); closeTeamChat(); }
   });
   area.addEventListener("blur", () => setTimeout(closeMenu, 120));
   form.addEventListener("submit", async (e) => {
@@ -6060,6 +6077,11 @@ function teamBlock(team, byId, again, ti) {
     } catch (error) { hold.disabled = false; showFailure(error); }
   };
   talk.before(hold);
+  // One toolbar, so on a narrow card its buttons move to a line of their
+  // own together instead of splitting across two.
+  const tools = el("span", "team-tools");
+  hold.before(tools);
+  tools.append(hold, talk, actions);
   if (team.paused) {
     block.classList.add("paused");
     block.querySelector(".team-title").appendChild(el("span", "team-paused-chip", `${icon("pause")}Paused`));
@@ -6765,7 +6787,12 @@ function fillSpark(box, spark, again = false) {
   const said = spark.reports.filter((r) => !r.quiet).reverse();
   const quiet = spark.reports.length - said.length;
   if (!said.length) {
-    reports.appendChild(el("p", "spark-quiet", spark.runs ? `Nothing to report yet. ${quiet} quiet shift${quiet === 1 ? "" : "s"}.` : working ? "Working on its first shift." : "Its first shift starts soon."));
+    // A paused one, or one on set times, is not about to start: it says
+    // when it will, as its card does.
+    const first = spark.paused ? "Paused: its first shift waits until you resume it."
+      : Date.now() / 1000 >= spark.next_run - 60 ? "Its first shift starts soon."
+      : `Its first shift: ${sparkState(spark).replace(/^Next shift /, "")}.`;
+    reports.appendChild(el("p", "spark-quiet", spark.runs ? `Nothing to report yet. ${quiet} quiet shift${quiet === 1 ? "" : "s"}.` : working ? "Working on its first shift." : first));
   }
   for (const report of said) {
     const card = el("div", "spark-report" + (report.failed ? " failed" : ""), `<div class="when"></div><div class="body assistant"></div>`);
@@ -7968,13 +7995,6 @@ async function signOutOthers() {
   toast(n ? `Signed out ${n} other browser${n === 1 ? "" : "s"}. The old link no longer works.` : "No other browsers were signed in. The old link no longer works.");
 }
 
-function ago(seconds) {
-  const s = Math.max(0, Date.now() / 1000 - seconds);
-  if (s < 60) return "just now";
-  if (s < 3600) return `${Math.floor(s / 60)} min ago`;
-  if (s < 86400) return `${Math.floor(s / 3600)} h ago`;
-  return `${Math.floor(s / 86400)} d ago`;
-}
 
 function when(seconds) {
   const d = new Date(seconds * 1000);
@@ -8139,11 +8159,9 @@ function renderMemories(host, entries) {
   const fresh = new Set(freshMemories);
   freshMemories = [];
   if (!entries.length) {
-    host.innerHTML = `<div class="mem-empty"><b>Nothing saved yet</b>Flash saves what is worth keeping as you work. Or bring over what another AI already knows about you.</div>`;
-    const b = el("button", "btn with-icon", `${icon("download")}<span>Import memory</span>`);
-    b.type = "button";
-    b.onclick = importMemory;
-    host.firstChild.appendChild(b);
+    // Import memory is right above, so the empty state only points to it
+    // rather than drawing a second one in the middle of its sentence.
+    host.innerHTML = `<div class="mem-empty"><b>Nothing saved yet</b>Flash saves what is worth keeping as you work. Or bring over what another AI already knows about you with Import memory.</div>`;
     return;
   }
   const list = el("ul", "memories");
@@ -11618,6 +11636,13 @@ window.addEventListener("keydown", (e) => {
   if (up($("#phone"))) { if (e.key === "Escape") { e.preventDefault(); closePhone(); } return; }
   if (up($("#form"))) return;
   if (up(palette) || up(searchBox)) return;
+  // The team chat is over the page: Esc closes it, and the page's own
+  // shortcuts wait until it is gone. An Esc its @mention list used is
+  // not one for closing.
+  if (teamChat.id) {
+    if (e.key === "Escape" && !e.defaultPrevented) { e.preventDefault(); closeTeamChat(); }
+    return;
+  }
 
   if (menuEl && !slashOpen) {
     if (e.key === "ArrowDown" || e.key === "ArrowUp") {
