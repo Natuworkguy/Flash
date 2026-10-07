@@ -3116,6 +3116,12 @@ def _sparks_command(arg: str) -> None:
                 style=DIM,
             ))
             return
+        if action in ("colour", "color") and key and extra:
+            spark = sparks.update(key, colour=extra)
+            console.print(Text(f"{_bubble()} ", style=spark.colour).append(
+                f"{spark.name} wears {spark.colour} now.", style=DIM,
+            ))
+            return
         if action == "watch" and key and extra:
             spark = sparks.update(
                 key, watch="" if extra.lower() == "none" else extra,
@@ -3239,6 +3245,7 @@ def _sparks_command(arg: str) -> None:
             "| approve|deny|stop|share <name> | add <code|template> [paused] "
             "| templates | goal <name> <text> | watch <name> <folder|none> "
             "| model <name> [model] | title <name> <title|none> "
+            "| colour <name> <ember|sky|mint|...|#rrggbb> "
             "| rounds [number|unlimited] | default [model|flash] "
             "| pause all | resume all | stop all "
             "| teams [new|remove|share|rules|add|templates] "

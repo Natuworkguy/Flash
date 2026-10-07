@@ -1497,6 +1497,12 @@ body.all-stopped .org-node, body.all-stopped .spark-card { animation: all-halt 0
 .swatch { width: 28px; height: 28px; border-radius: 50%; background: var(--c); border: 2px solid transparent; box-shadow: inset 0 0 0 2px var(--surface); transition: transform 0.2s var(--spring), border-color 0.15s; }
 .swatch:hover { transform: scale(1.1); }
 .swatch[aria-checked="true"] { border-color: var(--c); transform: scale(1.14); }
+/* The last swatch: any colour, from the browser's picker. A rainbow until
+   one is picked, then that colour. */
+.swatch.custom { position: relative; overflow: hidden; cursor: pointer; background: conic-gradient(#ff7a90, #ffd166, #7bd88f, #4fd1c5, #5ab0f2, #c792ea, #ff7a90); }
+.swatch.custom.on { background: var(--c); border-color: var(--c); transform: scale(1.14); }
+.swatch.custom input { position: absolute; inset: 0; width: 100%; height: 100%; padding: 0; border: 0; opacity: 0; cursor: pointer; }
+.swatch.custom:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
 .field-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .team-code { margin: 0 0 14px; }
 .team-code summary { cursor: pointer; font-size: 13px; color: var(--text-2); margin-bottom: 10px; }
@@ -7635,6 +7641,7 @@ function sparkForm(spark, inProjectId = "", template = "") {
     ${editing ? "" : `<div class="spark-templates"></div>`}
     <label class="field"><span>Name</span><input name="sparkname" maxlength="24" placeholder="Scout" autocomplete="off"><small>Its handle: <b data-handle>@scout-spark</b></small></label>
     <label class="field"><span>Title <em class="count">optional</em></span><input name="title" maxlength="40" placeholder="Repo watcher" autocomplete="off"><small>Its job, as a teammate's: shown under its name, and it knows it.</small></label>
+    <div class="field"><span>Colour</span><div class="swatches spark-colours" role="radiogroup" aria-label="Colour">${TEAM_COLOURS.map((c) => `<button type="button" class="swatch" role="radio" data-c="${c}" style="--c:${c}" aria-label="${c}"></button>`).join("")}<label class="swatch custom" data-tip="Any colour"><input type="color" aria-label="Any colour"></label></div><small class="colour-said">${editing ? "Its face, its chips and its messages wear it." : "Left alone, it gets the next in the palette."}</small></div>
     ${modelField()}
     <label class="field"><span>Goal</span><textarea name="goal" rows="4" placeholder="Check github.com/me/app for new issues. Tell me which look like bugs, and skip ones you have already told me about."></textarea></label>
     <label class="field"><span>How often</span><select name="every">${choices.map(([m, label]) => `<option value="${m}"${!atTimes && !called && m === every ? " selected" : ""}>${label}</option>`).join("")}<option value="at"${atTimes ? " selected" : ""}>At set times…</option><option value="oncall"${called ? " selected" : ""}>Only when called on</option></select><small class="every-said">${called ? ON_CALL_SAID : "It works while Flash is open, in the terminal or here."}</small></label>
@@ -7650,6 +7657,7 @@ function sparkForm(spark, inProjectId = "", template = "") {
     <div class="dialog-buttons"><button type="button" class="btn" data-cancel>Cancel</button><button type="submit" class="btn primary">${editing ? "Save" : "Make spark"}</button></div>`,
     async (data) => {
       const fields = { goal: data.goal, every: data.every === "at" ? data.at.trim() : data.every, boundaries: data.boundaries, project: data.project || "", watch: data.watch || "", model: data.model || "", title: data.title || "" };
+      if (form.dataset.colour) fields.colour = form.dataset.colour;
       const name = data.sparkname.trim();
       // Its team, who it reports to and its budget, each only if changed.
       const placement = async (id, was) => {
@@ -7678,6 +7686,19 @@ function sparkForm(spark, inProjectId = "", template = "") {
       if (data.always) await setSparksAlways(true);
       if (view !== "sparks") showPage("sparks");
     });
+  // Its colour: one of the palette's, or any from the picker at the end.
+  const custom = form.querySelector(".spark-colours .custom");
+  const pickColour = (c) => {
+    form.dataset.colour = c;
+    form.querySelectorAll(".spark-colours .swatch[data-c]").forEach((b) => b.setAttribute("aria-checked", String(b.dataset.c === c)));
+    const own = !!c && !TEAM_COLOURS.includes(c);
+    custom.classList.toggle("on", own);
+    custom.style.setProperty("--c", own ? c : "transparent");
+    if (own) custom.querySelector("input").value = c;
+  };
+  form.querySelectorAll(".spark-colours .swatch[data-c]").forEach((b) => { b.onclick = () => pickColour(b.dataset.c); });
+  custom.querySelector("input").addEventListener("input", (e) => pickColour(e.target.value));
+  pickColour(editing ? spark.colour : "");
   // The folder to watch, suggested as you type, as a project's is.
   suggestFolders(form.watch);
   setTimesField(form);

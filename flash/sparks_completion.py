@@ -33,6 +33,7 @@ ACTIONS: list[tuple[str, str, tuple[str, ...]]] = [
     ("every", "how often it works", ("spark", "every")),
     ("at", "set times it works", ("spark", "at")),
     ("title", "its job title", ("spark", "none")),
+    ("colour", "its colour: a name, or any as #rrggbb", ("spark", "colour")),
     ("watch", "a folder whose changes start a shift", ("spark", "none")),
     ("model", "the model it runs on", ("spark",)),
     ("project", "the project it works on", ("spark", "none")),
@@ -153,6 +154,8 @@ def _choices(kind: str) -> list[tuple[str, ...]]:
                     for t in sparks.TEMPLATES]
         elif part == "teamtemplate":
             out += [(t["name"], t["blurb"]) for t in sparks.TEAM_TEMPLATES]
+        elif part == "colour":
+            out += [(name, hex_) for name, hex_ in sparks.COLOUR_NAMES.items()]
         elif part == "hire":
             out += _cached("hires", lambda: [
                 (h["id"], h.get("by_name", "") + (

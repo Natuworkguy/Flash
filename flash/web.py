@@ -3042,13 +3042,14 @@ def _spark_command(name: str, arg: str, body: dict) -> dict:
                 str(body.get("model") or ""),
                 str(body.get("title") or ""),
                 bool(body.get("paused")),
+                str(body.get("colour") or ""),
             )
         elif name == "spark-update":
             # The new name comes as "rename": "name" names the command.
             fields = {"rename": "name", "goal": "goal", "every": "every",
                       "boundaries": "boundaries", "project": "project",
                       "watch": "watch", "model": "model",
-                      "title": "title"}
+                      "title": "title", "colour": "colour"}
             spark = sparks.update(arg, **{
                 field: str(body[key])
                 for key, field in fields.items() if key in body
