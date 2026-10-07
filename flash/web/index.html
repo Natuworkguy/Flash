@@ -1781,6 +1781,12 @@ body.all-stopped .org-node, body.all-stopped .spark-card { animation: all-halt 0
 .tc-msg.failed .tc-bubble { background: transparent; border-style: dashed; color: var(--text-3); }
 .mention { font-weight: 600; color: color-mix(in srgb, var(--c) 78%, var(--text)); background: color-mix(in srgb, var(--c) 16%, transparent); padding: 0 5px; border-radius: 6px; cursor: pointer; white-space: nowrap; transition: background 0.15s; }
 .mention:hover { background: color-mix(in srgb, var(--c) 28%, transparent); }
+.mention.everyone { cursor: default; }
+.everyone-face { flex: none; width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center; background: color-mix(in srgb, var(--accent) 18%, var(--surface)); color: var(--accent); }
+.everyone-face svg { width: 13px; height: 13px; }
+.tc-pick .everyone-face { width: 20px; height: 20px; }
+.tc-chip.everyone { --c: var(--accent); }
+.tc-chip.everyone svg { width: 13px; height: 13px; color: var(--accent); }
 .mention.compact, .mention.compact:hover { padding: 0; background: none; border-radius: 0; cursor: inherit; color: color-mix(in srgb, var(--c) 82%, var(--text)); }
 .tc-msg.mine .mention { color: #fff; background: rgba(255, 255, 255, 0.22); }
 .tc-steps { font-size: 12px; color: var(--text-3); padding-left: 4px; }
@@ -5903,6 +5909,13 @@ async function tcRefreshTeam() {
   });
   const chips = wrap.querySelector(".tc-chips");
   chips.textContent = "";
+  if (members.length > 1) {
+    const all = el("button", "tc-chip everyone", `${icon("users")}@everyone`);
+    all.type = "button";
+    all.dataset.tip = `All ${members.length} answer`;
+    all.onclick = () => tcInsert("@everyone ");
+    chips.appendChild(all);
+  }
   members.forEach((s) => {
     const chip = el("button", "tc-chip");
     chip.type = "button";
@@ -6184,7 +6197,8 @@ function tcWireComposer() {
       item.type = "button";
       item.setAttribute("role", "option");
       item.style.setProperty("--c", spark.colour);
-      item.appendChild(sparkAvatar(spark, 20));
+      if (spark.everyone) item.insertAdjacentHTML("beforeend", everyoneIcon());
+      else item.appendChild(sparkAvatar(spark, 20));
       const words = el("span", "words", `<b></b><span></span>`);
       words.querySelector("b").textContent = spark.name;
       words.querySelector("span").textContent = spark.title || spark.handle;
@@ -6200,7 +6214,11 @@ function tcWireComposer() {
     const word = area.value.slice(0, caret).match(/(?:^|\s)@([\w-]*)$/);
     if (!word) { closeMenu(); return; }
     const q = word[1].toLowerCase();
-    picks = tcMembers().filter((s) => s.name.toLowerCase().startsWith(q) || s.handle.slice(1).startsWith(q)).slice(0, 6);
+    const team = tcMembers();
+    picks = [
+      ...(team.length > 1 && "everyone".startsWith(q) ? [{ ...EVERYONE_PICK, title: `All ${team.length} on the team answer` }] : []),
+      ...team.filter((s) => s.name.toLowerCase().startsWith(q) || s.handle.slice(1).startsWith(q)),
+    ].slice(0, 6);
     at = 0;
     drawMenu();
   });
@@ -11403,6 +11421,11 @@ function emojiMatches(query) {
 // A spark is mentioned by its handle without "-spark": @scout.
 const mentionOf = (sp) => sp.handle.slice(1).replace(/-spark$/, "");
 
+// @everyone: every spark answers, or every one on the team in its chat.
+// Offered first in the pickers, and drawn as a chip of its own.
+const EVERYONE_PICK = { id: "", name: "everyone", handle: "@everyone", colour: "var(--accent)", title: "Every spark answers", everyone: true };
+const everyoneIcon = () => `<span class="everyone-face">${icon("users")}</span>`;
+
 // @mentions drawn as chips in each spark's colour, in a chat and in a
 // team's chat alike: @scout, @scout-spark or @Scout, of a spark in
 // SPARKS (all of them by default). Only in the words: code, a code
@@ -11413,6 +11436,7 @@ function chipMentions(root, sparks = sparkList, compact = false) {
   if (!root || !sparks.length || !root.textContent.includes("@")) return root;
   const find = (name) => {
     const key = name.toLowerCase();
+    if (key === "everyone") return EVERYONE_PICK;
     return sparks.find((sp) => mentionOf(sp).toLowerCase() === key || sp.handle.slice(1).toLowerCase() === key || sp.name.toLowerCase().replace(/\s+/g, "-") === key);
   };
   // Code, a link, or a chip already made, within ROOT; a link ROOT sits
@@ -11437,9 +11461,9 @@ function chipMentions(root, sparks = sparkList, compact = false) {
       made = made || document.createDocumentFragment();
       const start = at + before.length;
       made.append(text.slice(last, start));
-      const chip = el("span", compact ? "mention compact" : "mention");
+      const chip = el("span", (compact ? "mention compact" : "mention") + (sp.everyone ? " everyone" : ""));
       // In a title the row is what a click opens, not the spark.
-      if (!compact) chip.dataset.spark = sp.id;
+      if (!compact && !sp.everyone) chip.dataset.spark = sp.id;
       chip.style.setProperty("--c", sp.colour);
       chip.textContent = `@${sp.name}`;
       chip.title = sp.handle;
@@ -11473,10 +11497,13 @@ function suggestionRows(want) {
   const q = want.query.replace(/-spark$/, "");
   const starts = sparkList.filter((sp) => mentionOf(sp).startsWith(q) || sp.name.toLowerCase().startsWith(q));
   const within = sparkList.filter((sp) => !starts.includes(sp) && mentionOf(sp).includes(q));
-  return [...starts, ...within].slice(0, 8).map((sp) => ({
+  const all = sparkList.length > 1 && "everyone".startsWith(q.toLowerCase())
+    ? [{ html: `${everyoneIcon()}<span class="label">Everyone</span><span class="handle">@everyone</span>`, insert: "@everyone" }]
+    : [];
+  return [...all, ...[...starts, ...within].slice(0, 8 - all.length).map((sp) => ({
     html: `${sparkAvatar({ ...sp, unread: 0 }, 22).outerHTML}<span class="label">${esc(sp.name)}</span><span class="handle">@${esc(mentionOf(sp))}</span>`,
     insert: `@${mentionOf(sp)}`,
-  }));
+  }))];
 }
 
 function showEmoji(field, anchor = field) {

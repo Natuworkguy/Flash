@@ -334,3 +334,56 @@ def test_the_page_sends_a_reply(team, monkeypatch):
     })
 
     assert posted["entry"]["reply"]["id"] == news["id"]  # nosec B101
+
+
+def test_everyone_calls_on_the_whole_team(team, monkeypatch):
+    monkeypatch.setattr(teamchat, "REPLY_LIMIT", 2)
+    message = teamchat.say("desk", "@everyone stand-up: what are you on?")
+    client = FakeClient([_reply("Leading."), _reply("Looking."),
+                         _reply("Writing.")])
+
+    posted = teamchat.answer("desk", message, client)
+
+    # All three, past the usual limit, the lead first.
+    assert [e["name"] for e in posted][0] == "Lead"  # nosec B101
+    assert sorted(e["name"] for e in posted) == [  # nosec B101
+        "Lead", "Scout", "Writer",
+    ]
+
+
+def test_a_sparks_own_everyone_calls_no_one(team):
+    message = teamchat.say("desk", "@writer what's new?")
+    client = FakeClient([_reply("Asking @everyone, hold on.")])
+
+    posted = teamchat.answer("desk", message, client)
+
+    assert [e["name"] for e in posted] == ["Writer"]  # nosec B101
+
+
+def test_everyone_in_a_chat_calls_every_spark(model):
+    sparks.create("Loner", "Alone.")
+    sparks.create("Other", "Other.")
+
+    named = sparks.mentioned("@other and @everyone, hi", everyone=True)
+
+    assert [s.name for s in named] == ["Other", "Loner"]  # nosec B101
+    assert sparks.mentioned("@everyone hi") == []  # nosec B101
+
+
+def test_everyone_answers_at_most_a_dozen(model, monkeypatch):
+    monkeypatch.setattr(sparks, "EVERYONE_MOST", 2)
+    for name in ("A1", "B2", "C3"):
+        sparks.create(name, "Job.")
+
+    named = sparks.mentioned("@c3 @everyone", everyone=True)
+
+    assert [s.name for s in named] == ["C3", "A1"]  # nosec B101
+
+
+def test_no_spark_can_be_called_everyone(model):
+    for name in ("Everyone", "everyone"):
+        with pytest.raises(sparks.SparkError, match="kept for @everyone"):
+            sparks.create(name, "Job.")
+    made = sparks.create("Scout", "Job.")
+    with pytest.raises(sparks.SparkError, match="kept for @everyone"):
+        sparks.update(made.id, name="Everyone")
