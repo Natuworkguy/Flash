@@ -2970,7 +2970,13 @@ def _team_command(name: str, arg: str, body: dict) -> dict:
                 teamchat.mark_read(arg)
             return teamchat.history(arg, int(body.get("since") or 0))
         if name == "team-chat-say":
-            return {"entry": teamchat.send(arg, str(body.get("text") or ""))}
+            try:
+                reply_to = int(body.get("reply_to") or 0)
+            except (TypeError, ValueError):
+                reply_to = 0
+            return {"entry": teamchat.send(
+                arg, str(body.get("text") or ""), reply_to=reply_to,
+            )}
         if name == "team-share":
             return {"code": sparks.share_team_code(arg)}
         if name == "team-code":
