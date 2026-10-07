@@ -1522,6 +1522,12 @@ def project_prompt(found: "workspace.Project") -> str:
         f"=== Project: {found.name} ===",
         f"You are working in {found.path}; relative paths start there.",
     ]
+    if found.folders:
+        lines.append(
+            "The project also takes in these folders; work in them by "
+            "their full paths:\n"
+            + "\n".join(f"- {folder}" for folder in found.folders)
+        )
     if found.instructions:
         lines += ["", found.instructions]
     return "\n".join(lines)
@@ -2801,15 +2807,18 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
         made = workspace.create_project(
             str(body.get("label") or ""), arg,
             str(body.get("instructions") or ""),
+            body.get("folders") or [],
         )
         session.hub.publish({"type": "projects"})
         return asdict(made)
 
     if name == "project-update":
-        changes = {
+        changes: dict = {
             key: str(body[key]) for key in ("name", "path", "instructions")
             if key in body
         }
+        if "folders" in body:
+            changes["folders"] = body["folders"] or []
         updated = workspace.update_project(arg, **changes)
         session.hub.publish({"type": "projects"})
         return asdict(updated)

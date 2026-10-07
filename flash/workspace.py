@@ -325,9 +325,17 @@ def hosts_with_health(current: str = "") -> list[dict]:
 class Project:
     id: str
     name: str
+    # Its main folder: where its chats start, and relative paths with them.
     path: str
     instructions: str = ""
     created: float = field(default_factory=time.time)
+    # More folders it takes in, besides PATH: a backend beside its
+    # frontend, a docs repo. Worked on by their full paths.
+    folders: list[str] = field(default_factory=list)
+
+
+# How many folders a project can take in besides its main one.
+MAX_FOLDERS = 8
 
 
 def _folder(path: str) -> str:
@@ -335,6 +343,26 @@ def _folder(path: str) -> str:
     if not str(path or "").strip() or not folder.is_dir():
         raise WorkspaceError(f"{path!r} is not a folder on this computer")
     return str(folder)
+
+
+def _folders(paths: Any, main: str) -> list[str]:
+    """PATHS, each a folder on this computer, in full: blanks, repeats,
+    and MAIN itself left out."""
+
+    if isinstance(paths, str):
+        paths = [paths]
+    out: list[str] = []
+    for path in paths or []:
+        if not str(path or "").strip():
+            continue
+        folder = _folder(str(path))
+        if folder != main and folder not in out:
+            out.append(folder)
+    if len(out) > MAX_FOLDERS:
+        raise WorkspaceError(
+            f"a project can take in at most {MAX_FOLDERS} more folders"
+        )
+    return out
 
 
 def _name(name: str, folder: str) -> str:
@@ -355,9 +383,12 @@ def projects() -> list[Project]:
     found = []
     for entry in _read("projects.json", []):
         try:
-            found.append(Project(**entry))
+            made = Project(**entry)
         except TypeError:
             continue
+        if not isinstance(made.folders, list):
+            made.folders = []
+        found.append(made)
     return sorted(found, key=lambda p: p.created)
 
 
@@ -369,13 +400,16 @@ def _save_projects(listed: list[Project]) -> None:
     _write("projects.json", [asdict(p) for p in listed])
 
 
-def create_project(name: str, path: str, instructions: str = "") -> Project:
+def create_project(
+    name: str, path: str, instructions: str = "", folders: Any = (),
+) -> Project:
     folder = _folder(path)
     made = Project(
         id=uuid.uuid4().hex[:8],
         name=_name(name, folder),
         path=folder,
         instructions=_instructions(instructions),
+        folders=_folders(folders, folder),
     )
     with _lock:
         _save_projects([*projects(), made])
@@ -391,6 +425,11 @@ def update_project(project_id: str, **changes: Any) -> Project:
 
         if "path" in changes:
             found.path = _folder(changes["path"])
+        if "folders" in changes:
+            found.folders = _folders(changes["folders"], found.path)
+        elif found.path in found.folders:
+            # Its main folder moved to one it had besides: not twice.
+            found.folders.remove(found.path)
         if "name" in changes:
             found.name = _name(changes["name"], found.path)
         if "instructions" in changes:

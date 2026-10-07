@@ -212,6 +212,45 @@ class TestProjects:
         assert workspace.project(made.id) is None
         assert tmp_path.is_dir()  # the folder itself is never touched
 
+    def test_a_project_takes_in_more_folders(self, tmp_path):
+        main, api, docs = (tmp_path / n for n in ("web", "api", "docs"))
+        for folder in (main, api, docs):
+            folder.mkdir()
+
+        made = workspace.create_project(
+            "App", str(main), folders=[str(api), "", str(api), str(main)],
+        )
+        # Blanks, repeats and the main folder itself are left out.
+        assert made.folders == [str(api.resolve())]
+        assert workspace.project(made.id).folders == [str(api.resolve())]
+
+        workspace.update_project(made.id, folders=[str(docs)])
+        assert workspace.project(made.id).folders == [str(docs.resolve())]
+        # The main folder moved to one it had besides: it is not twice.
+        workspace.update_project(made.id, path=str(docs))
+        found = workspace.project(made.id)
+        assert found.path == str(docs.resolve()) and found.folders == []
+
+    def test_more_folders_have_to_exist_and_are_capped(self, tmp_path):
+        with pytest.raises(WorkspaceError, match="not a folder"):
+            workspace.create_project(
+                "x", str(tmp_path), folders=[str(tmp_path / "missing")],
+            )
+        many = []
+        for n in range(workspace.MAX_FOLDERS + 1):
+            (tmp_path / f"f{n}").mkdir()
+            many.append(str(tmp_path / f"f{n}"))
+        with pytest.raises(WorkspaceError, match="at most"):
+            workspace.create_project("x", str(tmp_path), folders=many)
+
+    def test_a_project_from_before_folders_reads_as_none(self, tmp_path):
+        made = workspace.create_project("Old", str(tmp_path))
+        workspace._write("projects.json", [{
+            "id": made.id, "name": "Old", "path": made.path,
+        }])
+
+        assert workspace.project(made.id).folders == []
+
     def test_the_folder_has_to_exist(self, tmp_path):
         with pytest.raises(WorkspaceError, match="not a folder"):
             workspace.create_project("x", str(tmp_path / "missing"))

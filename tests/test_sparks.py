@@ -889,6 +889,22 @@ def test_a_spark_whose_project_went_has_none(model, project):
     assert sparks.project_block(kept) == ""
 
 
+def test_a_sparks_project_names_its_other_folders(tmp_path):
+    from flash import workspace
+
+    (tmp_path / "web").mkdir()
+    (tmp_path / "api").mkdir()
+    found = workspace.create_project(
+        "App", str(tmp_path / "web"), folders=[str(tmp_path / "api")],
+    )
+    spark = sparks.create("Scout", "Look.", project=found.id)
+
+    block = sparks.project_block(spark)
+
+    assert str((tmp_path / "api").resolve()) in block
+    assert "also takes in these folders" in block
+
+
 def test_a_chat_prompt_can_leave_the_project_to_the_web(project):
     made = sparks.create("Scout", "Watch the build.", project="App")
 
