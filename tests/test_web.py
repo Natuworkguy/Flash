@@ -3821,8 +3821,9 @@ def test_the_page_hears_when_the_default_model_is_gone(monkeypatch):
     said = web.command(web.Session(), {"name": "spark-default-model"})
 
     assert said["spark_default_here"] is False
-    assert said["spark_model"] == "llama3.1:latest"
-    assert "not on this computer" in said["spark_default_note"]
+    # Never another in its place.
+    assert said["spark_model"] == "qwen3:8b"
+    assert "not in this computer's model list" in said["spark_default_note"]
 
 
 def test_the_page_hears_when_no_host_answers(monkeypatch):

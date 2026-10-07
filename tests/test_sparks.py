@@ -2047,32 +2047,6 @@ def test_other_sparks_are_not_offered_email_tools(model):
 # --- The default model for new sparks -------------------------------------
 
 
-class _Listed:
-    def __init__(self, name):
-        self.model = name
-
-
-class _Listing:
-    def __init__(self, names):
-        self.models = [_Listed(n) for n in names]
-
-
-class HostClient(FakeClient):
-    """A FakeClient on a host with these models, and no others."""
-
-    def __init__(self, responses, here):
-        super().__init__(responses)
-        self.here = here
-        self.used = []
-
-    def list(self):
-        return _Listing(self.here)
-
-    def chat(self, model, messages, tools=None, options=None):
-        self.used.append(model)
-        return super().chat(model, messages, tools, options)
-
-
 def test_new_sparks_are_on_flashs_model_until_a_default_is_set():
     assert sparks.default_model() == ""  # nosec B101
     made = sparks.model_for_new("mine", look=False)
@@ -2101,14 +2075,24 @@ def test_new_sparks_are_made_on_the_default_while_it_is_here():
     assert made == unknown == ("qwen3", "")  # nosec B101
 
 
-def test_a_default_that_is_gone_falls_back_to_flashs_model():
+def test_a_default_not_listed_is_kept_not_switched():
     sparks.set_default_model("qwen3:8b")
 
     model, note = sparks.model_for_new("llama3.1", {"llama3.1:latest"})
 
-    assert model == "llama3.1"  # nosec B101
-    assert "qwen3:8b" in note  # nosec B101
-    assert "not on this computer" in note  # nosec B101
+    assert model == "qwen3:8b"  # nosec B101
+    assert "not in this computer's model list" in note  # nosec B101
+
+
+def test_a_cloud_default_is_never_called_missing():
+    sparks.set_default_model("gpt-oss:120b-cloud")
+
+    made = sparks.model_for_new("llama3.1", {"llama3.1:latest"})
+    cloud = sparks.is_here("deepseek-v3.1:671b-cloud", set())
+
+    assert made == ("gpt-oss:120b-cloud", "")  # nosec B101
+    assert cloud is None  # nosec B101
+    assert sparks.is_here("qwen3:8b", set()) is False  # nosec B101
 
 
 def test_make_spark_uses_the_default(model, monkeypatch):
@@ -2122,7 +2106,7 @@ def test_make_spark_uses_the_default(model, monkeypatch):
     assert sparks.all_sparks()[0].model == "qwen3:8b"  # nosec B101
 
 
-def test_make_spark_says_when_the_default_is_gone(model, monkeypatch):
+def test_make_spark_keeps_a_default_that_is_not_listed(model, monkeypatch):
     monkeypatch.setattr(tools, "NO_COMMAND_CONFIRMATION", True)
     monkeypatch.setattr(
         sparks, "models_here", lambda client=None: {"test-model:latest"},
@@ -2131,54 +2115,88 @@ def test_make_spark_says_when_the_default_is_gone(model, monkeypatch):
 
     result = tools.make_spark("Scout", "Watch the issues.")
 
-    assert sparks.all_sparks()[0].model == "test-model"  # nosec B101
+    assert sparks.all_sparks()[0].model == "qwen3:8b"  # nosec B101
     assert "Tell the user: qwen3:8b" in result  # nosec B101
 
 
-def test_a_spark_whose_model_is_gone_runs_on_another(model):
-    made = sparks.create("Scout", "Watch the issues.", model="gone:7b")
-    sparks.set_default_model("qwen3")
-    client = HostClient([_reply("Issue 12 is new.")], ["qwen3:latest"])
+class FailingClient(FakeClient):
+    """A host whose model refuses every request."""
+
+    def __init__(self, error):
+        super().__init__([])
+        self.error = error
+        self.used = []
+
+    def chat(self, model, messages, tools=None, options=None):
+        self.used.append(model)
+        raise self.error
+
+
+@pytest.fixture
+def no_waits(monkeypatch):
+    monkeypatch.setattr(sparks, "RETRY_WAITS", ())
+
+
+def test_a_failing_model_marks_the_spark_unavailable(model, no_waits):
+    import ollama
+
+    made = sparks.create("Scout", "Watch.", model="glm-4.6:cloud")
+    client = FailingClient(ollama.ResponseError("model not found", 404))
 
     report = sparks.shift(made.id, client=client)
 
-    assert client.used == ["qwen3"]  # nosec B101
-    assert report.text.startswith("Issue 12 is new.")  # nosec B101
-    assert "gone:7b is not on this computer" in report.text  # nosec B101
-    # Its own model is left as it was, for the user to change.
-    assert sparks.find(made.id).model == "gone:7b"  # nosec B101
-
-
-def test_a_quiet_shift_still_says_its_model_is_gone(model):
-    made = sparks.create("Scout", "Watch the issues.", model="gone:7b")
-    client = HostClient([_reply("NOTHING NEW")], ["test-model:latest"])
-
-    report = sparks.shift(made.id, client=client)
-
-    assert client.used == ["test-model"]  # nosec B101
-    assert not report.quiet  # nosec B101
-    assert "ran on test-model" in report.text  # nosec B101
-
-
-def test_a_spark_with_no_model_to_run_on_fails_plainly(model):
-    made = sparks.create("Scout", "Watch the issues.", model="gone:7b")
-    client = HostClient([_reply("unused")], ["other:latest"])
-
-    report = sparks.shift(made.id, client=client)
-
+    found = sparks.find(made.id)
     assert report.failed  # nosec B101
-    assert "gone:7b is not on this computer" in report.text  # nosec B101
-    assert client.used == []  # nosec B101
+    assert "glm-4.6:cloud is unavailable" in report.text  # nosec B101
+    assert "never switched to another model" in report.text  # nosec B101
+    assert found.unavailable  # nosec B101
+    assert found.unavailable_model == "glm-4.6:cloud"  # nosec B101
+    # Only its own model was ever asked.
+    assert set(client.used) == {"glm-4.6:cloud"}  # nosec B101
+    assert found.model == "glm-4.6:cloud"  # nosec B101
 
 
-def test_a_spark_on_a_model_still_here_is_left_alone(model):
-    made = sparks.create("Scout", "Watch the issues.", model="qwen3:8b")
-    client = HostClient([_reply("Done.")], ["qwen3:8b"])
+def test_an_unavailable_spark_waits_for_you(model, no_waits):
+    made = sparks.create("Scout", "Watch.")
+    sparks.shift(made.id, client=FailingClient(ConnectionError("down")))
 
-    report = sparks.shift(made.id, client=client)
+    assert sparks.due(time.time() + 10 ** 8) == []  # nosec B101
 
-    assert client.used == ["qwen3:8b"]  # nosec B101
-    assert report.text == "Done."  # nosec B101
+    sparks.run_now(made.id)
+    assert [s.id for s in sparks.due()] == [made.id]  # nosec B101
+    report = sparks.shift(made.id, client=FakeClient([_reply("Back.")]))
+
+    assert report.text == "Back."  # nosec B101
+    assert not sparks.find(made.id).unavailable  # nosec B101
+
+
+def test_another_model_clears_unavailable(model, no_waits):
+    made = sparks.create("Scout", "Watch.", model="a:1b")
+    sparks.shift(made.id, client=FailingClient(ConnectionError("down")))
+
+    sparks.update(made.id, model="b:2b")
+
+    assert not sparks.find(made.id).unavailable  # nosec B101
+
+
+def test_a_chat_that_fails_on_its_model_marks_it_too(model, no_waits):
+    made = sparks.create("Scout", "Watch.")
+
+    reply = sparks.say(made.id, "Hi?", FailingClient(ConnectionError("x")))
+
+    assert reply.failed  # nosec B101
+    assert sparks.find(made.id).unavailable == "x"  # nosec B101
+
+
+def test_the_terminal_says_unavailable(model, no_waits):
+    from flash import ai
+
+    made = sparks.create("Scout", "Watch.", model="a:1b")
+    sparks.shift(made.id, client=FailingClient(ConnectionError("down")))
+
+    assert ai._spark_state(sparks.find(made.id)).startswith(  # nosec B101
+        "unavailable: a:1b failed (down)"
+    )
 
 
 # --- On call -----------------------------------------------------------------
