@@ -5991,7 +5991,15 @@ async function tcFetch(first = false) {
   teamChat.loading = true;
   let r;
   try { r = await command("team-chat", teamChat.id, null, { since: teamChat.seq, read: !document.hidden }); }
-  catch (error) { teamChat.loading = false; if (first) showFailure(error); return; }
+  catch (error) {
+    teamChat.loading = false;
+    if (first) showFailure(error);
+    // A look that failed (Flash restarting, a moment offline) is tried
+    // again, rather than leaving the chat as it was from then on.
+    clearTimeout(teamChat.timer);
+    teamChat.timer = setTimeout(() => tcFetch(), 6000);
+    return;
+  }
   teamChat.loading = false;
   if (!teamChat.id || r.team !== teamChat.id) return;
   const log = $("#team-chat .tc-log");

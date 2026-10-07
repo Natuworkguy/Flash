@@ -16,6 +16,7 @@ running elsewhere can post its news while an open Flash shows it.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import threading
@@ -170,6 +171,13 @@ def on_change(listener: Callable[[str], None]) -> None:
         _listeners.append(listener)
 
 
+def off_change(listener: Callable[[str], None]) -> None:
+    """Stop calling LISTENER."""
+
+    with contextlib.suppress(ValueError):
+        _listeners.remove(listener)
+
+
 def _changed(team_id: str) -> None:
     for listener in list(_listeners):
         try:
@@ -178,8 +186,68 @@ def _changed(team_id: str) -> None:
             pass  # a page that is gone never stops the chat
 
 
+def _folder() -> Path:
+    return sparks.sparks_dir() / "teamchat"
+
+
 def _path(team_id: str) -> Path:
-    return sparks.sparks_dir() / "teamchat" / f"{team_id}.json"
+    return _folder() / f"{team_id}.json"
+
+
+# What another Flash writes in a chat (a terminal's, or the keeper's
+# while this one serves the page) is only on disk: this one looks every
+# WATCH_SECONDS, and hears of each chat whose file changed. Its own
+# writes it knows of already, by the file each left.
+WATCH_SECONDS = 1.0
+_written: dict[str, tuple[int, int]] = {}
+_watcher: Optional[threading.Thread] = None
+
+
+def _stamp(path: Path) -> tuple[int, int]:
+    found = path.stat()
+    return found.st_mtime_ns, found.st_size
+
+
+def _stamps() -> dict[str, tuple[int, int]]:
+    out = {}
+    with contextlib.suppress(OSError):
+        for path in _folder().glob("*.json"):
+            with contextlib.suppress(OSError):
+                out[path.stem] = _stamp(path)
+    return out
+
+
+def _look(seen: dict[str, tuple[int, int]]) -> dict[str, tuple[int, int]]:
+    """The chats on disk now; each changed since SEEN by another Flash
+    is passed on to the listeners, as if it changed here."""
+
+    now = _stamps()
+    for team_id, stamp in now.items():
+        if seen.get(team_id) != stamp and _written.get(team_id) != stamp:
+            _changed(team_id)
+    return now
+
+
+def _watch() -> None:
+    seen = _stamps()
+    while True:
+        time.sleep(WATCH_SECONDS)
+        seen = _look(seen)
+
+
+def watch() -> None:
+    """Hear of what other Flashes write in the team chats, from now on:
+    once per process, for one that shows them live."""
+
+    global _watcher
+
+    with _busy_lock:
+        if _watcher is not None and _watcher.is_alive():
+            return
+        _watcher = threading.Thread(
+            target=_watch, daemon=True, name="teamchat-watch",
+        )
+        _watcher.start()
 
 
 def _read(team_id: str) -> dict:
@@ -203,6 +271,8 @@ def _write(team_id: str, data: dict) -> None:
     temp = path.with_suffix(".tmp")
     temp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
     os.replace(temp, path)
+    with contextlib.suppress(OSError):
+        _written[team_id] = _stamp(path)
 
 
 def _change(team_id: str, change: Callable[[dict], object]):
