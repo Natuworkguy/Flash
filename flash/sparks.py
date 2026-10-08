@@ -135,6 +135,9 @@ FAILED = "failed"
 WAITING = "waiting"
 
 MAX_INBOX = 20
+# Reactions to what a spark said, kept apart, so a run of them never
+# crowds out work handed to it.
+MAX_REACTION_NOTES = 8
 # How often, in ticks, a spark's watched folder is looked at, the most
 # files looked at in one, and how long after a shift a change waits.
 WATCH_EVERY_TICKS = 3
@@ -1365,6 +1368,46 @@ def _answer_askers(
     if called:
         wake()
     return answered
+
+
+def reacted(
+    key: str, emoji: str, by: str, quote: str, where: str, mark: str,
+    on: bool = True,
+) -> None:
+    """Tell the spark KEY that BY (a name, or "The user") put EMOJI on
+    what it said, QUOTE, WHERE: a note for its next shift, and its chats
+    till then; not a reason to start one. MARK names the message, the
+    emoji and who, so one reaction is noted once; taken off (ON false)
+    before it was read, its note goes too."""
+
+    def change(spark: Spark) -> None:
+        spark.inbox[:] = [
+            item for item in spark.inbox if item.get("reaction") != mark
+        ]
+        if not on:
+            return
+        spark.inbox.append({
+            "from": by, "text": quote, "at": time.time(),
+            "reaction": mark, "emoji": emoji, "where": where,
+        })
+        noted = [item for item in spark.inbox if item.get("reaction")]
+        for item in noted[:-MAX_REACTION_NOTES]:
+            spark.inbox.remove(item)
+
+    with contextlib.suppress(SparkError):
+        _edit(key, change)
+        if on:
+            log(key, "reacted_to", by=by, emoji=emoji)
+
+
+def _reaction_lines(items: list) -> str:
+    """Each reaction note in ITEMS, as a line: who, what, on what."""
+
+    return "\n".join(
+        f"- {item.get('from', 'A spark')} reacted {item.get('emoji', '')} "
+        f"in {item.get('where', 'the chat')} to: {item.get('text', '')}"
+        for item in items
+    )
 
 
 def _call_mentioned(spark: Spark, report: "Report") -> None:
@@ -3840,11 +3883,13 @@ def _opening(why: str, inbox: list) -> str:
         if item.get("mentioned")
         and not (item.get("rollup") or item.get("answer"))
     ]
+    reactions = [item for item in inbox if item.get("reaction")]
     answers = [item for item in inbox if item.get("answer")]
     handed = [
         item for item in inbox
         if not (item.get("job") or item.get("rollup") or item.get("decision")
-                or item.get("mentioned") or item.get("answer"))
+                or item.get("mentioned") or item.get("answer")
+                or item.get("reaction"))
     ]
     if jobs:
         parts.append(
@@ -3890,6 +3935,12 @@ def _opening(why: str, inbox: list) -> str:
                 f"{item.get('text', '')}"
                 for item in rolled
             )
+        )
+    if reactions:
+        parts.append(
+            "Reactions to what you said, since your last shift. Nothing to "
+            "answer; take them as how it landed:\n"
+            + _reaction_lines(reactions)
         )
     if decided:
         parts.append("The user answered your proposals:\n" + "\n".join(
@@ -4128,7 +4179,8 @@ def shift(spark_id: str, client=None) -> Optional[Report]:
         # shift soon, not at its next time. News rolled up from its
         # reports, and answers to its proposals, wait for that time.
         spark.asked = bool(spark.why or any(
-            not (i.get("rollup") or i.get("decision") or i.get("answer"))
+            not (i.get("rollup") or i.get("decision") or i.get("answer")
+                 or i.get("reaction"))
             for i in spark.inbox
         ))
         spark.stop_asked = False
@@ -4296,11 +4348,18 @@ def status_block(spark: Spark) -> str:
         f"- Shifts so far: {spark.runs}. Reports the user has not read: "
         f"{spark.unread}."
     )
-    if spark.inbox:
+    notes = [item for item in spark.inbox if not item.get("reaction")]
+    if notes:
         lines.append(
             f"- Handed to you by other sparks, for your next shift: "
-            f"{len(spark.inbox)} note{'' if len(spark.inbox) == 1 else 's'}."
+            f"{len(notes)} note{'' if len(notes) == 1 else 's'}."
         )
+    reactions = [item for item in spark.inbox if item.get("reaction")]
+    if reactions:
+        lines.append("- Reactions to what you said, since your last shift:")
+        lines += [
+            f"  {line}" for line in _reaction_lines(reactions).splitlines()
+        ]
     lines.append(f"- You run on the model {model_of(spark) or '(none set)'}.")
     found = project_of(spark)
     if found:

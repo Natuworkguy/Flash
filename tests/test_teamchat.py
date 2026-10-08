@@ -794,3 +794,74 @@ def test_the_terminal_names_replies_and_sparks_that_left(team, capsys):
 
     assert "replying to yourself: Ping." in out  # nosec B101
     assert "Writer" in out and "Bye all." in out  # nosec B101
+
+
+def test_a_spark_hears_of_a_reaction_to_its_message(team):
+    scout = sparks.find("scout")
+    said = teamchat._post(team.id, scout, {"text": "Found the leak."})
+
+    teamchat.react("desk", said["id"], THUMBS)
+    teamchat.react("desk", said["id"], PARTY, by=sparks.find("lead").id)
+
+    notes = sparks.find("scout").inbox
+    assert [(n["from"], n["emoji"]) for n in notes] == [  # nosec B101
+        ("The user", THUMBS), ("Lead", PARTY),
+    ]
+    assert "Found the leak." in notes[0]["text"]  # nosec B101
+    # Told, not called: a reaction starts no shift.
+    assert not sparks.find("scout").asked  # nosec B101
+    opening = sparks._opening("", notes)
+    assert f"The user reacted {THUMBS} in Desk's chat" in opening  # nosec B101
+    assert "Handed to you" not in opening  # nosec B101
+    status = sparks.status_block(sparks.find("scout"))
+    assert "Reactions to what you said" in status  # nosec B101
+    assert "Handed to you by other sparks" not in status  # nosec B101
+
+
+def test_a_reaction_taken_back_takes_its_note(team):
+    scout = sparks.find("scout")
+    said = teamchat._post(team.id, scout, {"text": "Found the leak."})
+
+    teamchat.react("desk", said["id"], THUMBS)
+    teamchat.react("desk", said["id"], THUMBS)
+
+    assert sparks.find("scout").inbox == []  # nosec B101
+
+
+def test_a_reaction_to_a_report_tells_who_filed_it(team):
+    scout = sparks.find("scout")
+    filed = teamchat.event(team.id, scout, "report", "All green.")
+
+    teamchat.react("desk", filed["id"], THUMBS)
+
+    note = sparks.find("scout").inbox[-1]
+    assert note["text"].startswith("your report #")  # nosec B101
+
+
+def test_no_note_for_its_own_reaction_or_on_news_of_joining(team):
+    scout = sparks.find("scout")
+    said = teamchat._post(team.id, scout, {"text": "Found the leak."})
+    joined = next(
+        e for e in _said(team.id, teamchat.EVENT) if e["name"] == "Scout"
+    )
+
+    teamchat.react("desk", said["id"], THUMBS, by=scout.id)
+    teamchat.react("desk", joined["id"], THUMBS)
+    teamchat.react("desk", teamchat.say("desk", "Hi.")["id"], THUMBS)
+
+    assert sparks.find("scout").inbox == []  # nosec B101
+
+
+def test_reactions_never_crowd_out_work(team, monkeypatch):
+    monkeypatch.setattr(sparks, "MAX_REACTION_NOTES", 2)
+    scout = sparks.find("scout")
+    sparks._handing_off(sparks.find("lead"))(
+        {"spark": "scout", "note": "Check the build."},
+    )
+    for number in range(4):
+        said = teamchat._post(team.id, scout, {"text": f"Note {number}."})
+        teamchat.react("desk", said["id"], THUMBS)
+
+    inbox = sparks.find("scout").inbox
+    assert sum(1 for n in inbox if n.get("reaction")) == 2  # nosec B101
+    assert any(n.get("by") for n in inbox)  # nosec B101
