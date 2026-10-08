@@ -1933,7 +1933,11 @@ body.all-stopped .org-node, body.all-stopped .spark-card { animation: all-halt 0
 .team-block.pausing .org-node { animation: all-halt 0.6s var(--ease) both !important; }
 .tc-event.team-news { color: var(--text-3); }
 .team-chat-btn { position: relative; display: inline-flex; align-items: center; gap: 6px; flex: none; padding: 6px 12px 6px 10px; border-radius: 999px; font-size: 13px; font-weight: 500; color: color-mix(in srgb, var(--t) 70%, var(--text)); background: color-mix(in srgb, var(--t) 12%, var(--surface)); border: 1px solid color-mix(in srgb, var(--t) 30%, var(--border)); transition: transform 0.2s var(--spring), background 0.15s; }
-.team-chat-btn svg { width: 15px; height: 15px; transform: translateY(-1px); }
+/* In the line, its middle on the middle of the label's capitals, whatever
+   the font: its foot raised off the baseline by half the cap height, less
+   half its own, and the half pixel its tail's weight pulls it down. */
+.team-chat-btn { display: inline-block; white-space: nowrap; line-height: 20px; }
+.team-chat-btn svg { width: 15px; height: 15px; margin-right: 6px; vertical-align: calc(0.35em - 7px); vertical-align: calc(0.5cap - 7px); }
 .team-chat-btn:hover { transform: translateY(-1px); background: color-mix(in srgb, var(--t) 20%, var(--surface)); }
 .tc-count { position: absolute; top: -3px; right: -3px; min-width: 16px; height: 16px; padding: 0 4px; border-radius: 8px; background: var(--t, var(--accent)); color: #fff; font: 700 10px/16px var(--sans); text-align: center; box-shadow: 0 0 0 2px var(--surface); animation: tc-pop 0.5s var(--spring) both; }
 @media (max-width: 600px) {
