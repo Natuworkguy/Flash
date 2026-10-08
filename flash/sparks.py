@@ -441,6 +441,10 @@ class Spark:
     unavailable: str = ""
     unavailable_model: str = ""
     unavailable_at: float = 0.0
+    # The sparks that have handed it work, by ID, and when each last did:
+    # a worker shared by two managers answers whichever asked, and the
+    # chart shows who else it works for besides its lead.
+    serves: dict = field(default_factory=dict)
 
     @property
     def handle(self) -> str:
@@ -482,6 +486,7 @@ class Spark:
         data["team_name"] = found_team.name if found_team else ""
         data["team_colour"] = found_team.colour if found_team else ""
         data["team_rules"] = found_team.rules if found_team else ""
+        data["also_for"] = also_for(self)
         # Its lead's own file only: listing every spark reads each once.
         lead = _load(_path(self.reports_to)) if self.reports_to else None
         data["lead_name"] = lead.name if lead and lead.team == self.team \
@@ -1253,6 +1258,46 @@ def _roll_up(spark: Spark, report: "Report") -> None:
         _edit(lead.id, give)
 
 
+def _answer_askers(
+    spark: Spark, report: "Report", askers: list[str],
+) -> list[str]:
+    """Give SPARK's report to each spark in ASKERS that handed it work
+    this shift: theirs to read on their next shift, or now for one on
+    call. The names of those answered."""
+
+    if report.approval or not askers:
+        return []
+    text = " ".join(report.text.split())
+    if len(text) > ROLLUP_CHARS:
+        text = text[:ROLLUP_CHARS].rstrip() + " [...]"
+    if report.failed:
+        text = f"Could not finish it: {text}"
+    answered: list[str] = []
+    called = False
+    for asker_id in askers:
+        if asker_id == spark.id:
+            continue
+
+        def give(target: Spark) -> None:
+            nonlocal called
+            target.inbox.append({
+                "from": spark.name, "text": text, "at": report.at,
+                "answer": True,
+            })
+            del target.inbox[:-MAX_INBOX]
+            if on_call(target) and not over_budget(target):
+                target.asked = True
+                called = True
+
+        with contextlib.suppress(SparkError):
+            target = _edit(asker_id, give)
+            answered.append(target.name)
+            log(asker_id, "answered", by=spark.name, report=text)
+    if called:
+        wake()
+    return answered
+
+
 def _call_mentioned(spark: Spark, report: "Report") -> None:
     """The sparks SPARK's report @mentions get it, for their next shift;
     one on call is called on by it, and works on it now."""
@@ -1285,8 +1330,11 @@ def _call_mentioned(spark: Spark, report: "Report") -> None:
         wake()
 
 
-def _team_news(spark: Spark, report: "Report") -> None:
-    """Put SPARK's report, or its failed shift, in its team's chat."""
+def _team_news(
+    spark: Spark, report: "Report", answered: Optional[list] = None,
+) -> None:
+    """Put SPARK's report, or its failed shift, in its team's chat: for
+    whoever handed it the work, when someone did."""
 
     if not spark.team or report.quiet or report.approval:
         return
@@ -1295,7 +1343,7 @@ def _team_news(spark: Spark, report: "Report") -> None:
     with contextlib.suppress(Exception):
         teamchat.event(
             spark.team, spark, "failed" if report.failed else "report",
-            report.text, report.files,
+            report.text, report.files, whom=" and ".join(answered or []),
         )
 
 
@@ -1755,17 +1803,11 @@ def resolve_project(key: str) -> str:
     raise SparkError(f"No project called {key!r}.")
 
 
-def project_block(spark: Spark) -> str:
-    """What a shift is told about SPARK's project, or ""."""
-
-    found = project_of(spark)
-    if found is None:
-        return ""
+def _project_lines(found, head: str, where: str) -> list[str]:
     lines = [
-        f"=== Your project: {found.name} ===",
-        f"You work on the project in {found.path}. Relative paths do not "
-        "start there, so give full paths, and cd into it first in shell "
-        "commands.",
+        head,
+        f"{where} Relative paths do not start there, so give full paths, "
+        "and cd into it first in shell commands.",
     ]
     if found.folders:
         lines.append(
@@ -1774,7 +1816,70 @@ def project_block(spark: Spark) -> str:
         )
     if found.instructions:
         lines += ["", found.instructions]
-    return "\n".join(lines)
+    return lines
+
+
+def project_block(spark: Spark, jobs: Optional[dict] = None) -> str:
+    """What a shift is told about SPARK's project, or "". JOBS maps the
+    project of each piece of work handed to it this shift to who handed
+    it: that work is done in its own project, not the spark's."""
+
+    from . import workspace  # deferred: only a spark with one needs it
+
+    own = project_of(spark)
+    blocks = []
+    if own is not None:
+        blocks.append(_project_lines(
+            own, f"=== Your project: {own.name} ===",
+            f"You work on the project in {own.path}.",
+        ))
+    for project_id, names in (jobs or {}).items():
+        found = workspace.project(project_id)
+        if found is None or (own is not None and found.id == own.id):
+            continue
+        blocks.append(_project_lines(
+            found,
+            f"=== The project of the work {' and '.join(names)} handed "
+            f"you: {found.name} ===",
+            f"That work is on the project in {found.path}, not your own: "
+            "do it there, and follow this project's instructions for it.",
+        ))
+    return "\n\n".join("\n".join(lines) for lines in blocks)
+
+
+def _job_projects(inbox: list) -> dict:
+    """Each project that work handed over in INBOX is on, with who
+    handed it."""
+
+    jobs: dict = {}
+    for item in inbox:
+        if item.get("by") and item.get("project"):
+            names = jobs.setdefault(item["project"], [])
+            if item.get("from") not in names:
+                names.append(item.get("from", "a spark"))
+    return jobs
+
+
+# How long a spark that handed another work still shows as one it works
+# for.
+ALSO_FOR_DAYS = 30
+
+
+def also_for(spark: Spark) -> list[str]:
+    """The sparks besides its lead that SPARK has done work for lately,
+    by name, the latest first."""
+
+    since = time.time() - ALSO_FOR_DAYS * 86400
+    out = []
+    for spark_id, at in sorted(
+        (spark.serves or {}).items(), key=lambda kv: -float(kv[1] or 0),
+    ):
+        if spark_id == spark.reports_to or float(at or 0) < since:
+            continue
+        other = _load(_path(spark_id))
+        if other is not None:
+            out.append(other.name)
+    return out
 
 
 def _watch_folder(path: str) -> str:
@@ -2560,7 +2665,10 @@ def news() -> list[tuple[Spark, Report]]:
 # --- A shift -------------------------------------------------------------
 
 
-def _prompt(spark: Spark, host: str, model: str, date_prompt: str) -> str:
+def _prompt(
+    spark: Spark, host: str, model: str, date_prompt: str,
+    jobs: Optional[dict] = None,
+) -> str:
     lessons = "\n".join(f"- {lesson}" for lesson in spark.lessons)
     last = next(
         (r.text for r in reversed(spark.reports) if not r.failed), ""
@@ -2580,8 +2688,8 @@ def _prompt(spark: Spark, host: str, model: str, date_prompt: str) -> str:
         nothing_new=NOTHING_NEW,
     )
     parts = [
-        get_model_system_prompt(host, model), body, project_block(spark),
-        team_block(spark), date_prompt,
+        get_model_system_prompt(host, model), body,
+        project_block(spark, jobs), team_block(spark), date_prompt,
     ]
     return "\n\n".join(part for part in parts if part)
 
@@ -3045,13 +3153,20 @@ def _handing_off(spark: Spark) -> Callable[[dict], str]:
         if not note:
             return "Error: the note was empty."
 
+        # Who asked, and in which project: the report on it goes back to
+        # them, and the work is done in their project, whoever the
+        # spark that does it reports to.
         def give(other: Spark) -> None:
             other.inbox.append({"from": spark.name, "text": note,
-                                "at": time.time()})
+                                "at": time.time(), "by": spark.id,
+                                "project": spark.project})
             del other.inbox[:-MAX_INBOX]
+            other.serves = {**(other.serves or {}), spark.id: time.time()}
             other.asked = True
 
         _edit(target.id, give)
+        log(target.id, "handed", by=spark.name, note=note,
+            project=spark.project)
         wake()
         tool_line(f"HandOff({target.name})")
         tool_result(note)
@@ -3629,10 +3744,11 @@ def _opening(why: str, inbox: list) -> str:
     rolled = [item for item in inbox if item.get("rollup")]
     decided = [item for item in inbox if item.get("decision")]
     named = [item for item in inbox if item.get("mentioned")]
+    answers = [item for item in inbox if item.get("answer")]
     handed = [
         item for item in inbox
         if not (item.get("job") or item.get("rollup") or item.get("decision")
-                or item.get("mentioned"))
+                or item.get("mentioned") or item.get("answer"))
     ]
     if jobs:
         parts.append(
@@ -3642,10 +3758,23 @@ def _opening(why: str, inbox: list) -> str:
             + "\n".join(f"- {item.get('text', '')}" for item in jobs)
         )
     if handed:
-        parts.append("Handed to you by other sparks:\n" + "\n".join(
-            f"- From {item.get('from', 'a spark')}: {item.get('text', '')}"
-            for item in handed
-        ))
+        parts.append(
+            "Handed to you by other sparks. Do it, each in the project it "
+            "came from, and say in your report what you did; it goes back "
+            "to whoever handed it:\n" + "\n".join(
+                f"- From {item.get('from', 'a spark')}"
+                f"{_on_project(item)}: {item.get('text', '')}"
+                for item in handed
+            )
+        )
+    if answers:
+        parts.append(
+            "Answers to the work you handed off. Act on what needs you, "
+            "and put what matters in your own report:\n" + "\n".join(
+                f"- {item.get('from', 'A spark')}: {item.get('text', '')}"
+                for item in answers
+            )
+        )
     if named:
         parts.append(
             "Other sparks @mentioned you in their reports. Do what they "
@@ -3669,6 +3798,17 @@ def _opening(why: str, inbox: list) -> str:
             f"- {item.get('text', '')}" for item in decided
         ))
     return "\n\n".join(parts)
+
+
+def _on_project(item: dict) -> str:
+    """", on <project>" for work handed over in a project; "" for none."""
+
+    if not item.get("project"):
+        return ""
+    from . import workspace  # deferred: only a spark with one needs it
+
+    found = workspace.project(item["project"])
+    return f", on {found.name}" if found is not None else ""
 
 
 def shift(spark_id: str, client=None) -> Optional[Report]:
@@ -3714,6 +3854,8 @@ def shift(spark_id: str, client=None) -> Optional[Report]:
         f"{spark.name}'s standing goal: {spark.goal}",
         f"Lines it must not cross: {lines}" if lines else "",
         *(f"Job: {i['job']}" for i in inbox if i.get("job")),
+        *(f"Job from {i.get('from', 'a spark')}: {i.get('text', '')}"
+          for i in inbox if i.get("by")),
     ) if part))
 
     steps: list[str] = list(resuming["steps"]) if resuming else []
@@ -3721,9 +3863,17 @@ def shift(spark_id: str, client=None) -> Optional[Report]:
     chats = list(resuming.get("chats", [])) if resuming else list(
         dict.fromkeys(i["chat"] for i in inbox if i.get("chat"))
     )
-    has_job = bool(chats) or any(i.get("job") for i in inbox) or bool(
-        resuming and resuming.get("job")
+    # The sparks that handed it work this shift, to answer, and the
+    # projects that work is in. Kept through a wait for approval.
+    askers = list(resuming.get("asked_by", [])) if resuming else list(
+        dict.fromkeys(i["by"] for i in inbox if i.get("by"))
     )
+    jobs = dict(resuming.get("jobs", {})) if resuming else _job_projects(
+        inbox
+    )
+    has_job = bool(chats) or bool(askers) or any(
+        i.get("job") for i in inbox
+    ) or bool(resuming and resuming.get("job"))
     notes = [resuming["notes"] if resuming else spark.notes]
     messages: list[dict] = list(resuming["messages"]) if resuming else []
     log(spark.id, "shift_start", resuming=bool(resuming), why=why,
@@ -3786,7 +3936,7 @@ def shift(spark_id: str, client=None) -> Optional[Report]:
             host = flash_tools.OLLAMA_HOST or subagents.OLLAMA_HOST_DEFAULT
             prompt = _prompt(
                 spark, host, model_of(spark),
-                flash_tools.CURRENT_DATE_PROMPT,
+                flash_tools.CURRENT_DATE_PROMPT, jobs,
             )
             messages = [
                 {"role": "system", "content": prompt},
@@ -3830,6 +3980,7 @@ def shift(spark_id: str, client=None) -> Optional[Report]:
             "messages": messages, "steps": steps, "notes": notes[0],
             "at": time.time(), "answer": "", "why": "",
             "chats": chats, "job": has_job,
+            "asked_by": askers, "jobs": jobs,
         }
         report = Report(
             at=time.time(), text=f"Waiting for your approval: {label}.",
@@ -3879,7 +4030,8 @@ def shift(spark_id: str, client=None) -> Optional[Report]:
         # shift soon, not at its next time. News rolled up from its
         # reports, and answers to its proposals, wait for that time.
         spark.asked = bool(spark.why or any(
-            not (i.get("rollup") or i.get("decision")) for i in spark.inbox
+            not (i.get("rollup") or i.get("decision") or i.get("answer"))
+            for i in spark.inbox
         ))
         spark.stop_asked = False
         if pending:
@@ -3895,8 +4047,12 @@ def shift(spark_id: str, client=None) -> Optional[Report]:
         _save(spark)
     _changed()
     if not pending:
-        _roll_up(spark, report)
-        _team_news(spark, report)
+        # Work handed over is answered to whoever handed it, whoever the
+        # spark reports to; a shift of its own goes up to its lead.
+        answered = _answer_askers(spark, report, askers)
+        if not askers:
+            _roll_up(spark, report)
+        _team_news(spark, report, answered)
         _call_mentioned(spark, report)
     return report
 

@@ -904,3 +904,195 @@ def test_the_terminal_shows_sets_and_clears_rules(model, capsys):
     assert out.count(RULES) == 3
     ai._sparks_command("teams rules night shift none")
     assert sparks.find_team("night shift").rules == ""
+
+
+# --- Shared workers --------------------------------------------------------
+# Two managers, each with its own project, hand work to the same workers:
+# the work is done in the project of whoever handed it, and the report on
+# it goes back to them, whoever the worker reports to.
+
+
+@pytest.fixture
+def studio(model, tmp_path):
+    """Dev: Engine Manager over Test Runner, and Flash Manager, each on a
+    project of its own."""
+
+    from flash import workspace
+
+    for name in ("engine", "flash"):
+        (tmp_path / name).mkdir()
+    engine = workspace.create_project("Engine", str(tmp_path / "engine"))
+    flash = workspace.create_project("Flash", str(tmp_path / "flash"))
+    sparks.create_team("Dev")
+    sparks.create("Engine Manager", "Run the engine.", project=engine.id)
+    sparks.create("Flash Manager", "Run Flash.", project=flash.id)
+    sparks.create("Test Runner", "Run the tests.", project=engine.id)
+    for name in ("engine manager", "flash manager", "test runner"):
+        sparks.set_team(name, "dev")
+    sparks.set_lead("test runner", "engine manager")
+    return {"engine": engine, "flash": flash}
+
+
+def _hand(by, to, note):
+    return sparks._handing_off(sparks.find(by))({"spark": to, "note": note})
+
+
+def _inbox(name, flag):
+    return [i for i in sparks.find(name).inbox if i.get(flag)]
+
+
+def test_work_handed_over_is_answered_to_whoever_handed_it(studio):
+    _hand("flash manager", "test runner", "Run the web UI tests.")
+    client = FakeClient([_reply("All 48 pass.")])
+
+    report = sparks.shift(sparks.find("test runner").id, client=client)
+
+    assert report.text == "All 48 pass."
+    answers = _inbox("flash manager", "answer")
+    assert [(a["from"], a["text"]) for a in answers] == [
+        ("Test Runner", "All 48 pass."),
+    ]
+    # Not its lead's work, so not rolled up to it.
+    assert _inbox("engine manager", "rollup") == []
+    assert _inbox("engine manager", "answer") == []
+
+
+def test_the_work_is_done_in_the_project_it_came_from(studio):
+    _hand("flash manager", "test runner", "Run the web UI tests.")
+    client = FakeClient([_reply("Done.")])
+
+    sparks.shift(sparks.find("test runner").id, client=client)
+
+    system = client.calls[0]["messages"][0]["content"]
+    opening = client.calls[0]["messages"][1]["content"]
+    assert "the work Flash Manager handed you: Flash" in system
+    assert studio["flash"].path in system
+    # Its own project is still there, for its own goal.
+    assert "Your project: Engine" in system
+    assert "From Flash Manager, on Flash: Run the web UI tests." in opening
+
+
+def test_its_own_shift_still_goes_up_to_its_lead(studio):
+    sparks.shift(sparks.find("test runner").id,
+                 client=FakeClient([_reply("Two tests flaked.")]))
+
+    assert [r["text"] for r in _inbox("engine manager", "rollup")] == [
+        "Two tests flaked.",
+    ]
+    assert _inbox("flash manager", "answer") == []
+
+
+def test_both_managers_are_answered_when_both_handed_work(studio):
+    _hand("engine manager", "test runner", "Run the renderer tests.")
+    _hand("flash manager", "test runner", "Run the web UI tests.")
+    client = FakeClient([_reply("Renderer 12 pass, web UI 48 pass.")])
+
+    sparks.shift(sparks.find("test runner").id, client=client)
+
+    assert len(_inbox("engine manager", "answer")) == 1
+    assert len(_inbox("flash manager", "answer")) == 1
+    assert _inbox("engine manager", "rollup") == []
+    system = client.calls[0]["messages"][0]["content"]
+    assert "Flash Manager handed you: Flash" in system
+
+
+def test_a_job_with_nothing_found_is_still_answered(studio):
+    _hand("flash manager", "test runner", "Anything failing?")
+
+    sparks.shift(sparks.find("test runner").id,
+                 client=FakeClient([_reply("NOTHING NEW")]))
+
+    assert _inbox("flash manager", "answer")[0]["text"] == (
+        "Done, with nothing to report on it."
+    )
+
+
+def test_a_failed_job_is_answered_as_one(studio, monkeypatch):
+    _hand("flash manager", "test runner", "Run the tests.")
+    monkeypatch.setattr(tools, "MODEL_NAME", "")
+
+    sparks.shift(sparks.find("test runner").id, client=FakeClient([]))
+
+    answer = _inbox("flash manager", "answer")[0]["text"]
+    assert answer.startswith("Could not finish it:")
+
+
+def test_the_answer_waits_through_an_approval(studio, monkeypatch):
+    ran = []
+    monkeypatch.setitem(tools.FUNCTIONS, "shell",
+                        lambda command, timeout=None: ran.append(command)
+                        or "(ran it)")
+    _hand("flash manager", "test runner", "Run the tests.")
+    runner = sparks.find("test runner").id
+    sparks.shift(runner, client=FakeClient([
+        _reply("", ("shell", {"command": "make test"})),
+    ]))
+    assert _inbox("flash manager", "answer") == []
+
+    sparks.answer_step(runner, True)
+    sparks.shift(runner, client=FakeClient([_reply("48 pass.")]))
+
+    assert ran == ["make test"]
+    assert [a["text"] for a in _inbox("flash manager", "answer")] == [
+        "48 pass.",
+    ]
+
+
+def test_an_answer_starts_an_on_call_manager_and_waits_for_others(studio):
+    sparks.update("flash manager", every="on call")
+    _hand("flash manager", "test runner", "Run the tests.")
+    _hand("engine manager", "test runner", "Run the tests.")
+    # Its shift was asked for by the hand-off above, and has run.
+    for name in ("flash manager", "engine manager"):
+        sparks._edit(sparks.find(name).id,
+                     lambda s: setattr(s, "asked", False))
+
+    sparks.shift(sparks.find("test runner").id,
+                 client=FakeClient([_reply("48 pass.")]))
+
+    assert sparks.find("flash manager").asked
+    assert not sparks.find("engine manager").asked
+
+
+def test_the_manager_reads_the_answer_on_its_next_shift(studio):
+    _hand("flash manager", "test runner", "Run the tests.")
+    sparks.shift(sparks.find("test runner").id,
+                 client=FakeClient([_reply("48 pass.")]))
+    client = FakeClient([_reply("Tests are green; shipping.")])
+
+    sparks.shift(sparks.find("flash manager").id, client=client)
+
+    opening = client.calls[0]["messages"][1]["content"]
+    assert "Answers to the work you handed off" in opening
+    assert "Test Runner: 48 pass." in opening
+
+
+def test_who_else_a_worker_works_for_shows(studio, capsys):
+    from flash import ai, teamchat
+
+    _hand("flash manager", "test runner", "Run the tests.")
+    sparks.shift(sparks.find("test runner").id,
+                 client=FakeClient([_reply("48 pass.")]))
+
+    runner = sparks.find("test runner")
+    assert sparks.also_for(runner) == ["Flash Manager"]
+    assert runner.to_dict()["also_for"] == ["Flash Manager"]
+    news = [e for e in teamchat.history("dev")["entries"]
+            if e.get("what") == "report"]
+    assert news[-1]["for"] == "Flash Manager"
+    assert "filed a report for Flash Manager" in teamchat._line(
+        news[-1], {s.id: s for s in sparks.all_sparks()},
+    )
+    ai._sparks_command("teams")
+    assert "also for Flash Manager" in capsys.readouterr().out
+    log = [e["kind"] for e in sparks.audit_log("test runner")["entries"]]
+    assert "handed" in log
+    assert "answered" in [
+        e["kind"] for e in sparks.audit_log("flash manager")["entries"]
+    ]
+
+
+def test_its_lead_is_not_also_for(studio):
+    _hand("engine manager", "test runner", "Run the tests.")
+
+    assert sparks.also_for(sparks.find("test runner")) == []

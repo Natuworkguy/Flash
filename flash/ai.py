@@ -2816,6 +2816,9 @@ def _teams_command(rest: str) -> None:
         body.append(spark.name, style=f"bold {spark.colour}")
         if spark.title:
             body.append(f"  {spark.title}", style=DIM)
+        also = sparks.also_for(spark)
+        if also:
+            body.append(f"  also for {', '.join(also)}", style=DIM)
         body.append("\n")
         for child in node["reports"]:
             branch(child, depth + 1)

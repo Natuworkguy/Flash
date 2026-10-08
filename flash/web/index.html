@@ -1824,6 +1824,8 @@ body.all-stopped .org-node, body.all-stopped .spark-card { animation: all-halt 0
 .tc-event:hover { border-color: color-mix(in srgb, var(--c, var(--accent)) 40%, var(--border)); background: color-mix(in srgb, var(--c, var(--accent)) 8%, var(--hover)); }
 .tc-event .words b { color: var(--text); font-weight: 600; }
 .tc-event .when { color: var(--text-3); }
+.org-node .also-for { display: inline-flex; align-items: flex-start; gap: 4px; font-size: 11.5px; line-height: 1.35; color: color-mix(in srgb, var(--c) 70%, var(--text-3)); max-width: 100%; }
+.org-node .also-for svg { flex: none; width: 11px; height: 11px; margin-top: 2px; transform: scaleX(-1); }
 .tc-event .quote { flex-basis: 100%; color: var(--text-3); overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
 .tc-event.failed .words { color: var(--warn); }
 .tc-typing { display: flex; flex-direction: column; gap: 8px; padding: 4px 16px 10px; }
@@ -6065,7 +6067,7 @@ function tcEntry(entry, fresh) {
   if (entry.kind === "event") {
     teamChat.lastWho = "";
     const what = !entry.spark ? `${entry.what} the team`
-      : { report: "filed a report", failed: "could not finish a shift", joined: "joined the team", left: "left the team" }[entry.what] || entry.what;
+      : ({ report: "filed a report", failed: "could not finish a shift", joined: "joined the team", left: "left the team" }[entry.what] || entry.what) + (entry.for ? ` for ${entry.for}` : "");
     const row = el("button", `tc-event ${entry.what || ""}${fresh ? " fresh" : ""}`);
     row.type = "button";
     if (spark) { row.style.setProperty("--c", spark.colour); row.appendChild(sparkAvatar(spark, 18)); }
@@ -6661,6 +6663,12 @@ function orgNode(spark, depth, fresh) {
   state.classList.toggle("working", spark.status === "working");
   state.classList.toggle("asking", !!spark.waiting);
   if (spark.budget_on) node.querySelector(".words").appendChild(budgetMeter(spark));
+  // A spark shared by two managers: who else it does work for.
+  if ((spark.also_for || []).length) {
+    const also = el("span", "also-for", `${icon("reply")}<span></span>`);
+    also.querySelector("span").textContent = `also for ${spark.also_for.join(", ")}`;
+    node.querySelector(".words").appendChild(also);
+  }
   // At work under a lead: a glow runs up the line to it.
   if (spark.status === "working" && depth > 0) node.appendChild(el("span", "pulse"));
   const before = seenTeam.get(spark.id);
@@ -7241,7 +7249,7 @@ function fillSpark(box, spark, again = false) {
   if (spark.team_name) {
     const line = el("div", "team-line", `<span class="dot"></span><span></span>`);
     line.style.setProperty("--t", spark.team_colour || spark.colour);
-    line.querySelector("span:last-child").textContent = `On ${spark.team_name}${spark.lead_name ? `, reporting to ${spark.lead_name}` : ""}`;
+    line.querySelector("span:last-child").textContent = `On ${spark.team_name}${spark.lead_name ? `, reporting to ${spark.lead_name}` : ""}${(spark.also_for || []).length ? `, and working for ${spark.also_for.join(" and ")} too` : ""}`;
     box.querySelector(".spark-head .meta").after(line);
   }
   if (spark.budget_on) box.querySelector(".spark-head .meta").parentElement.appendChild(budgetMeter(spark));

@@ -500,6 +500,12 @@ have looked them over.
 - **Team rules.** Lines every spark on a team keeps to, on top of its own
   boundaries, on shifts and in chats alike (the team's edit form, or
   `/sparks teams rules <team> <rules|none>`).
+- **Shared workers.** Any spark can hand work to any other with
+  `hand_off`, across leads and projects. The work is done in the
+  project of whoever handed it, and the report on it goes back to them,
+  not up to the worker's own lead: two managers, one per project, can
+  share the same Test Runner, and each hears back about its own work.
+  The org chart shows who else a worker does work for.
 - **Hiring.** A spark can propose hiring another, or letting one go. It
   waits for your yes (`/sparks hires`, `/sparks hire <id> yes|no`).
 - **Budgets.** Off by default. Give a spark tokens per hour, day, week
