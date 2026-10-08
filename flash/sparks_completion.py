@@ -38,7 +38,7 @@ ACTIONS: list[tuple[str, str, tuple[str, ...]]] = [
     ("model", "the model it runs on", ("spark",)),
     ("project", "the project it works on", ("spark", "none")),
     ("team", "put a spark on a team", ("spark", "team+none")),
-    ("lead", "who a spark reports to", ("spark", "spark+none")),
+    ("lead", "who a spark reports to, one or more", ("spark", "spark+none")),
     ("budget", "a token budget, or off", ("spark", "budget")),
     ("audit", "its audit log", ("spark",)),
     ("share", "a code anyone can add a copy from", ("spark",)),

@@ -1067,32 +1067,147 @@ def test_the_manager_reads_the_answer_on_its_next_shift(studio):
     assert "Test Runner: 48 pass." in opening
 
 
-def test_who_else_a_worker_works_for_shows(studio, capsys):
-    from flash import ai, teamchat
+def test_a_report_on_handed_work_says_who_it_was_for(studio):
+    from flash import teamchat
 
     _hand("flash manager", "test runner", "Run the tests.")
     sparks.shift(sparks.find("test runner").id,
                  client=FakeClient([_reply("48 pass.")]))
 
-    runner = sparks.find("test runner")
-    assert sparks.also_for(runner) == ["Flash Manager"]
-    assert runner.to_dict()["also_for"] == ["Flash Manager"]
     news = [e for e in teamchat.history("dev")["entries"]
             if e.get("what") == "report"]
     assert news[-1]["for"] == "Flash Manager"
     assert "filed a report for Flash Manager" in teamchat._line(
         news[-1], {s.id: s for s in sparks.all_sparks()},
     )
-    ai._sparks_command("teams")
-    assert "also for Flash Manager" in capsys.readouterr().out
-    log = [e["kind"] for e in sparks.audit_log("test runner")["entries"]]
-    assert "handed" in log
+    assert "handed" in [
+        e["kind"] for e in sparks.audit_log("test runner")["entries"]
+    ]
     assert "answered" in [
         e["kind"] for e in sparks.audit_log("flash manager")["entries"]
     ]
 
 
-def test_its_lead_is_not_also_for(studio):
-    _hand("engine manager", "test runner", "Run the tests.")
+# --- Two leads, as equals --------------------------------------------------
 
-    assert sparks.also_for(sparks.find("test runner")) == []
+
+def test_a_spark_reports_to_two_leads_as_equals(studio):
+    runner = sparks.set_leads("test runner",
+                              ["engine manager", "flash manager"])
+    engine, flash = (sparks.find(n) for n in ("engine manager",
+                                              "flash manager"))
+
+    assert [lead.name for lead in sparks.leads_of(runner)] == [
+        "Engine Manager", "Flash Manager",
+    ]
+    shown = runner.to_dict()
+    assert shown["lead_ids"] == [engine.id, flash.id]
+    assert shown["lead_name"] == "Engine Manager and Flash Manager"
+    # Each counts it among its reports, and is told so.
+    for lead in (engine, flash):
+        assert "Test Runner" in [r.name for r in sparks.reports_of(lead)]
+        assert "Reporting to you: Test Runner" in sparks._team_lines(lead)
+    told = sparks._team_lines(sparks.find("test runner"))
+    assert "You report to Engine Manager" in told
+    assert "and Flash Manager" in told and "as equals" in told
+    assert sparks.audit_log("test runner")["entries"][-1]["leads"] == [
+        "Engine Manager", "Flash Manager",
+    ]
+
+
+def test_its_own_news_goes_up_to_both_leads(studio):
+    sparks.set_leads("test runner", ["engine manager", "flash manager"])
+
+    sparks.shift(sparks.find("test runner").id,
+                 client=FakeClient([_reply("Two tests flaked.")]))
+
+    for name in ("engine manager", "flash manager"):
+        assert [r["text"] for r in _inbox(name, "rollup")] == [
+            "Two tests flaked.",
+        ]
+
+
+def test_work_one_lead_hands_it_goes_back_to_that_one(studio):
+    sparks.set_leads("test runner", ["engine manager", "flash manager"])
+    _hand("flash manager", "test runner", "Run the web UI tests.")
+
+    sparks.shift(sparks.find("test runner").id,
+                 client=FakeClient([_reply("48 pass.")]))
+
+    assert len(_inbox("flash manager", "answer")) == 1
+    assert _inbox("engine manager", "answer") == []
+    assert _inbox("engine manager", "rollup") == []
+
+
+def test_what_a_spark_can_report_to(studio):
+    sparks.create("Loner", "Alone.")
+
+    with pytest.raises(sparks.SparkError, match="itself"):
+        sparks.set_leads("test runner", ["test runner"])
+    with pytest.raises(sparks.SparkError, match="not on"):
+        sparks.set_leads("test runner", ["loner"])
+    # No circles, through either lead.
+    sparks.set_leads("test runner", ["engine manager", "flash manager"])
+    with pytest.raises(sparks.SparkError, match="already reports to"):
+        sparks.set_leads("flash manager", ["test runner"])
+    # Repeats count once; none is no one.
+    runner = sparks.set_leads("test runner", ["flash manager",
+                                              "flash manager"])
+    assert sparks.find("test runner").also_reports_to == []
+    assert runner.reports_to == sparks.find("flash manager").id
+    assert sparks.leads_of(sparks.set_leads("test runner", [])) == []
+
+
+def test_losing_a_lead_keeps_the_other(studio):
+    sparks.set_leads("test runner", ["engine manager", "flash manager"])
+
+    sparks.remove(sparks.find("engine manager").id)
+
+    assert [lead.name for lead in sparks.leads_of(
+        sparks.find("test runner")
+    )] == ["Flash Manager"]
+
+    sparks.create_team("Other")
+    sparks.set_team("flash manager", "other")
+    assert sparks.leads_of(sparks.find("test runner")) == []
+
+
+def test_two_leads_travel_with_a_shared_team(studio):
+    sparks.set_leads("test runner", ["engine manager", "flash manager"])
+
+    copy = sparks.add_team(sparks.share_team_code("dev"), model="m")
+
+    runner = next(s for s in sparks.members(copy.id)
+                  if s.name.startswith("Test Runner"))
+    assert [lead.name for lead in sparks.leads_of(runner)] == [
+        "Engine Manager 2", "Flash Manager 2",
+    ]
+
+
+def test_the_page_and_the_terminal_set_two_leads(studio, capsys):
+    from flash import ai
+
+    session = web.Session()
+    runner = sparks.find("test runner")
+    engine, flash = (sparks.find(n) for n in ("engine manager",
+                                              "flash manager"))
+    shown = web.command(session, {
+        "name": "spark-lead", "arg": runner.id,
+        "leads": [engine.id, flash.id],
+    })["spark"]
+    assert shown["lead_ids"] == [engine.id, flash.id]
+    # One "lead" still works, as it did.
+    web.command(session, {"name": "spark-lead", "arg": runner.id,
+                          "lead": engine.id})
+    assert sparks.find("test runner").also_reports_to == []
+
+    ai._sparks_command("lead test-runner engine manager, flash manager")
+    assert len(sparks.leads_of(sparks.find("test runner"))) == 2
+    said = capsys.readouterr().out
+    assert "reports to Engine Manager and Flash Manager now." in said
+    ai._sparks_command("teams")
+    assert "reports to Engine Manager and Flash Manager" in (
+        capsys.readouterr().out
+    )
+    ai._sparks_command("lead test-runner none")
+    assert sparks.leads_of(sparks.find("test runner")) == []

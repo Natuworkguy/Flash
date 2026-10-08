@@ -3070,7 +3070,12 @@ def _spark_command(name: str, arg: str, body: dict) -> dict:
         elif name == "spark-team":
             spark = sparks.set_team(arg, str(body.get("team") or ""))
         elif name == "spark-lead":
-            spark = sparks.set_lead(arg, str(body.get("lead") or ""))
+            # One or more, as equals: "leads", or the one "lead".
+            picked = body.get("leads")
+            spark = sparks.set_leads(
+                arg, [str(p) for p in picked] if isinstance(picked, list)
+                else [str(body.get("lead") or "")],
+            )
         elif name == "spark-budget":
             spark = sparks.set_budget(
                 arg, bool(body.get("on")), body.get("tokens") or None,

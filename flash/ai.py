@@ -2816,9 +2816,13 @@ def _teams_command(rest: str) -> None:
         body.append(spark.name, style=f"bold {spark.colour}")
         if spark.title:
             body.append(f"  {spark.title}", style=DIM)
-        also = sparks.also_for(spark)
-        if also:
-            body.append(f"  also for {', '.join(also)}", style=DIM)
+        leads = sparks.leads_of(spark)
+        if len(leads) > 1:
+            # Drawn under its first; it reports to them all, as equals.
+            body.append(
+                "  reports to " + " and ".join(lead.name for lead in leads),
+                style=DIM,
+            )
         body.append("\n")
         for child in node["reports"]:
             branch(child, depth + 1)
@@ -3179,13 +3183,17 @@ def _sparks_command(arg: str) -> None:
             ))
             return
         if action == "lead" and key:
-            spark = sparks.set_lead(
-                key, "" if extra.lower() in ("", "none") else extra,
-            )
-            lead = sparks.lead_of(spark)
+            # Several, by commas, as equals: a name can have spaces in it.
+            spark = sparks.set_leads(key, [
+                part for part in extra.split(",")
+                if part.strip().lower() not in ("", "none")
+            ])
+            leads = sparks.leads_of(spark)
             console.print(Text(
-                f"{spark.name} reports to {lead.name} now." if lead
-                else f"{spark.name} reports to no one now.", style=DIM,
+                f"{spark.name} reports to "
+                + " and ".join(lead.name for lead in leads) + " now."
+                if leads else f"{spark.name} reports to no one now.",
+                style=DIM,
             ))
             return
         if action == "budget" and key:
@@ -3260,7 +3268,8 @@ def _sparks_command(arg: str) -> None:
             "| teams [new|remove|share|rules|add|templates] "
             "| teamchat <team> "
             "[message] | team <name> "
-            "<team|none> | lead <name> <lead|none> | budget <name> "
+            "<team|none> | lead <name> <lead, lead|none> "
+            "| budget <name> "
             "<tokens [hour|day|week|month]|off> | audit <name> | hires "
             "| hire <id> yes|no "
             "| always on|off]"
