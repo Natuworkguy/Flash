@@ -361,9 +361,11 @@ def mark_read(team_key: str) -> bool:
 
 
 def event(team_id: str, spark: Optional[sparks.Spark], what: str,
-          text: str = "", files: Optional[list] = None) -> Optional[dict]:
+          text: str = "", files: Optional[list] = None,
+          whom: str = "") -> Optional[dict]:
     """Put news in TEAM_ID's chat: WHAT happened (report, failed,
-    joined), by SPARK, with TEXT, the start of what it said."""
+    joined), by SPARK, with TEXT, the start of what it said, and WHOM it
+    was for, the sparks that handed it the work, if any did."""
 
     if not team_id or sparks.find_team(team_id) is None:
         return None
@@ -373,6 +375,8 @@ def event(team_id: str, spark: Optional[sparks.Spark], what: str,
     by = {"spark": spark.id, "name": spark.name} if spark else {}
     if files:
         by["files"] = list(files)
+    if whom:
+        by["for"] = whom
     return _change(team_id, lambda data: _add(data, {
         "kind": EVENT, "what": what, "text": text, **by,
     }))
@@ -501,6 +505,8 @@ def _said_line(entry: dict, by_id: dict) -> str:
         "report": "filed a report", "failed": "could not finish a shift",
         "joined": "joined the team", "left": "left the team",
     }.get(entry.get("what", ""), entry.get("what", ""))
+    if entry.get("for"):
+        what += f" for {entry['for']}"
     return f"({who} {what}{': ' + text if text else ''})"
 
 
