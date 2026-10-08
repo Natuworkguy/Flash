@@ -61,9 +61,11 @@ from .repl_input import (
     TOGGLE_AUTO,
     WAKE,
     all_commands,
+    is_shell_line,
     read_line,
     screen_redrawn,
     screen_size,
+    shell_prompt,
     status_segments,
 )
 from .stats import Turn, bar, bar_text, elapsed, window
@@ -3780,12 +3782,18 @@ def _render_sent_message(
     the plain text prompt_toolkit erased on submit -- so things like
     `code` show up highlighted rather than as raw backticks."""
 
-    prompt = Text.from_ansi(prompt_ansi)
-    body = Markdown(
-        _hard_breaks(render_latex(text)),
-        code_theme="monokai",
-        hyperlinks=True,
-    )
+    # A shell command keeps the ! prompt it was typed at, and its text
+    # as typed: Markdown would eat a `*` or a `_` out of it.
+    if is_shell_line(text):
+        prompt = Text.from_ansi(shell_prompt(prompt_ansi))
+        body = Text(text[1:].strip())
+    else:
+        prompt = Text.from_ansi(prompt_ansi)
+        body = Markdown(
+            _hard_breaks(render_latex(text)),
+            code_theme="monokai",
+            hyperlinks=True,
+        )
 
     def paint() -> None:
         console.print(prompt, end="")
