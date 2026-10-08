@@ -56,7 +56,7 @@ COMMANDS = [
     ("/model", "pick from the models here, or /model <name> to switch"),
     ("/auto", "toggle autonomous command mode (/auto on|off)"),
     ("/systemone", "a small model that reviews autonomous commands (on|off)"),
-    ("/voice", "talk to Flash and hear its replies (/voice on|off)"),
+    ("/voice", "talk to Flash and hear its replies (on|off, models, pull)"),
     ("/background", "pixel-art scene behind the prompt (/background <name>)"),
     ("/set", f"set an env var, saved to {ENV_PATH} (/set NAME VALUE)"),
     ("/unset", "remove an env var (/unset NAME)"),
@@ -179,6 +179,46 @@ def _parse_path_arg(
     return "".join(literal_chars), quote is not None
 
 
+VOICE_ACTIONS = (
+    ("on", "turn voice mode on"),
+    ("off", "turn voice mode off"),
+    ("models", "what it can listen and speak with"),
+    ("pull", "download a model and switch to it"),
+    ("remove", "delete a downloaded model"),
+    ("style", "how its voice speaks"),
+)
+
+
+def _voice_completions(rest: str):
+    """What /voice takes: its actions, then a model's name after pull or
+    remove, or a style after style."""
+
+    from . import voice  # deferred: only wanted once /voice is typed
+
+    action, spaced, after = rest.partition(" ")
+    if not spaced:
+        for name, meta in VOICE_ACTIONS:
+            if name.startswith(action.lower()):
+                yield Completion(name, start_position=-len(action),
+                                 display_meta=meta)
+        return
+    action = action.lower()
+    if action in ("pull", "remove"):
+        query = after.strip().lower()
+        for kind, offered in voice.KINDS.items():
+            for choice in offered:
+                if query in choice.name.lower():
+                    yield Completion(
+                        choice.name, start_position=-len(after),
+                        display_meta=f"{kind}: {choice.label}",
+                    )
+    elif action == "style":
+        for name, style in voice.STYLES.items():
+            if name.startswith(after.strip().lower()):
+                yield Completion(name, start_position=-len(after),
+                                 display_meta=style.label.split(": ", 1)[-1])
+
+
 class SlashCommandCompleter(Completer):
     """Suggests / commands as the line is typed, image file paths as the
     argument to /image (auto-quoting suggestions that contain spaces),
@@ -215,6 +255,10 @@ class SlashCommandCompleter(Completer):
                 yield Completion(
                     suffix, start_position=0, display=completion.display
                 )
+            return
+
+        if text.startswith("/voice "):
+            yield from _voice_completions(text[len("/voice "):])
             return
 
         # What /sparks and its actions take. Past them, in a lesson or a
