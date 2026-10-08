@@ -1383,11 +1383,22 @@ def _call_mentioned(spark: Spark, report: "Report") -> None:
 
         def give(target: Spark) -> None:
             nonlocal called
-            target.inbox.append({
-                "from": spark.name, "text": text, "at": report.at,
-                "mentioned": True,
-            })
-            del target.inbox[:-MAX_INBOX]
+            # A lead it rolled up to, or one it answered, has the report
+            # already: that note says it was mentioned, not a second one.
+            had = next((
+                item for item in target.inbox
+                if item.get("at") == report.at
+                and item.get("from") == spark.name
+                and (item.get("rollup") or item.get("answer"))
+            ), None)
+            if had is not None:
+                had["mentioned"] = True
+            else:
+                target.inbox.append({
+                    "from": spark.name, "text": text, "at": report.at,
+                    "mentioned": True,
+                })
+                del target.inbox[:-MAX_INBOX]
             if on_call(target) and not over_budget(target):
                 target.asked = True
                 called = True
@@ -3521,7 +3532,9 @@ def _team_lines(spark: Spark) -> str:
         return "\n".join(lines)
     lines.append(
         "=== The other sparks: hand_off sends one work, ask_spark asks "
-        "one something ==="
+        "one something, and an @mention by handle in your report brings "
+        "one in: it gets the report on its next shift, or now if it is on "
+        "call ==="
     )
     for other in others:
         first = other.goal.splitlines()[0][:120]
@@ -3805,6 +3818,14 @@ def posted(spark_id: str, report_at: float, chat: str) -> None:
         _edit(spark_id, change)
 
 
+def _named_you(item: dict) -> str:
+    """Said after who a note is from when its report @mentioned you."""
+
+    return " (it @mentioned you: do what it calls on you for)" if (
+        item.get("mentioned")
+    ) else ""
+
+
 def _opening(why: str, inbox: list) -> str:
     """What a shift is told first: to start, and why it started now."""
 
@@ -3814,7 +3835,11 @@ def _opening(why: str, inbox: list) -> str:
     jobs = [item for item in inbox if item.get("job")]
     rolled = [item for item in inbox if item.get("rollup")]
     decided = [item for item in inbox if item.get("decision")]
-    named = [item for item in inbox if item.get("mentioned")]
+    named = [
+        item for item in inbox
+        if item.get("mentioned")
+        and not (item.get("rollup") or item.get("answer"))
+    ]
     answers = [item for item in inbox if item.get("answer")]
     handed = [
         item for item in inbox
@@ -3842,7 +3867,8 @@ def _opening(why: str, inbox: list) -> str:
         parts.append(
             "Answers to the work you handed off. Act on what needs you, "
             "and put what matters in your own report:\n" + "\n".join(
-                f"- {item.get('from', 'A spark')}: {item.get('text', '')}"
+                f"- {item.get('from', 'A spark')}{_named_you(item)}: "
+                f"{item.get('text', '')}"
                 for item in answers
             )
         )
@@ -3860,7 +3886,8 @@ def _opening(why: str, inbox: list) -> str:
             "News from the sparks that report to you, since your last "
             "shift. Act on what needs you, and put what matters in your "
             "own report:\n" + "\n".join(
-                f"- {item.get('from', 'A spark')}: {item.get('text', '')}"
+                f"- {item.get('from', 'A spark')}{_named_you(item)}: "
+                f"{item.get('text', '')}"
                 for item in rolled
             )
         )
@@ -4445,6 +4472,21 @@ HISTORY_CHARS = 1500
 
 # What starts the note a conversation keeps when a spark answers in it.
 CALLED = "[Spark called]"
+
+
+def mention_spans(text: str) -> list[tuple[int, int, Optional[Spark]]]:
+    """Where TEXT @mentions a spark, start and end, with the spark; None
+    for an @everyone. A word after @ that names no spark is left out."""
+
+    spans: list[tuple[int, int, Optional[Spark]]] = []
+    for match in _MENTION_RE.finditer(text or ""):
+        if match.group(1).lower() == EVERYONE:
+            spans.append((match.start(), match.end(), None))
+            continue
+        spark = find(match.group(1))
+        if spark is not None:
+            spans.append((match.start(), match.end(), spark))
+    return spans
 
 
 def mentions_everyone(text: str) -> bool:

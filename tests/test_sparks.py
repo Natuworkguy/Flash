@@ -2292,6 +2292,36 @@ def test_a_scheduled_spark_mentioned_gets_the_note_but_is_not_woken(model):
     assert found.inbox and not found.asked  # nosec B101
 
 
+def test_a_lead_mentioned_in_a_report_gets_it_once(model):
+    lead = sparks.create("Lead", "Lead.")
+    worker = sparks.create("Worker", "Work.")
+    team = sparks.create_team("Crew")
+    sparks.set_team(lead.id, team.id)
+    sparks.set_team(worker.id, team.id)
+    sparks.set_lead(worker.id, lead.id)
+
+    sparks.shift(
+        worker.id,
+        client=FakeClient([_reply("Done. @lead the release needs you.")]),
+    )
+
+    notes = sparks.find(lead.id).inbox
+    assert len(notes) == 1  # nosec B101
+    assert notes[0]["rollup"] and notes[0]["mentioned"]  # nosec B101
+    opening = sparks._opening("", notes)
+    assert "Worker (it @mentioned you" in opening  # nosec B101
+    assert "@mentioned you in their reports" not in opening  # nosec B101
+
+
+def test_a_spark_is_told_it_can_mention_others_in_its_report(model):
+    scout = sparks.create("Scout", "Watch the issues.")
+    sparks.create("Fixer", "Fix what is found.")
+
+    block = sparks.team_block(sparks.find(scout.id))
+
+    assert "@mention by handle in your report" in block  # nosec B101
+
+
 def test_an_on_call_spark_knows_it_is_on_call(model):
     made = sparks.create("Scout", "Look when asked.", every="on call")
 
@@ -2465,3 +2495,41 @@ def test_the_page_and_the_terminal_set_a_colour(capsys):
     assert sparks.find("scout").colour == "#102030"
     ai._sparks_command("colour scout nope")
     assert "#rrggbb" in capsys.readouterr().out
+
+
+def test_mention_spans_finds_sparks_and_everyone(model):
+    fixer = sparks.create("Fixer", "Fix.")
+    text = "@fixer and @everyone, not a@b.com or @nobody."
+
+    spans = sparks.mention_spans(text)
+
+    assert [(text[a:b], s.id if s else None) for a, b, s in spans] == [
+        ("@fixer", fixer.id), ("@everyone", None),
+    ]  # nosec B101
+
+
+def test_the_terminal_colours_a_mention_in_a_report(model):
+    from rich.console import Console
+    from rich.markdown import Markdown
+
+    from flash import ai
+
+    fixer = sparks.create("Fixer", "Fix.")
+    out = Console(
+        force_terminal=True, color_system="truecolor", width=80,
+        record=True,
+    )
+
+    out.print(ai._Mentions(Markdown("A bug. @fixer, and `@fixer` in code.")))
+
+    styles = [
+        (seg.text, seg.style) for seg in out._record_buffer if seg.text
+    ]
+    plain = "".join(text for text, _ in styles)
+    assert "A bug. @fixer, and @fixer in code." in plain  # nosec B101
+    coloured = [
+        style for text, style in styles
+        if text == "@fixer" and style and style.bgcolor is None
+    ]
+    assert coloured and coloured[0].bold  # nosec B101
+    assert coloured[0].color.triplet.hex == fixer.colour  # nosec B101

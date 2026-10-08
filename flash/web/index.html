@@ -5391,7 +5391,7 @@ const drawExtensionsPage = () => toolPage("Extensions", drawExtensions);
 // runs, and report back. Each is drawn as a bubble with eyes: floating while
 // it waits, bouncing while it works, asleep while paused.
 
-const ON_CALL_SAID = "No schedule: it works only when it is called on. Run now, a hand-off from another spark, a job Flash gives it, or an @mention in a chat or its team's chat.";
+const ON_CALL_SAID = "No schedule: it works only when it is called on. Run now, a hand-off from another spark, a job Flash gives it, an @mention in a chat or its team's chat, or another spark's report.";
 const EVERY_CHOICES = [[15, "Every 15 minutes"], [30, "Every 30 minutes"], [60, "Every hour"], [120, "Every 2 hours"], [360, "Every 6 hours"], [720, "Every 12 hours"], [1440, "Every day"], [10080, "Every week"]];
 
 function sparkAvatar(spark, size = 36, i = 0) {
@@ -6092,6 +6092,7 @@ function tcEntry(entry, fresh) {
     if (entry.text) {
       const quote = el("span", "quote");
       quote.textContent = entry.text;
+      chipMentions(quote, sparkList, true);
       row.appendChild(quote);
     }
     row.onclick = () => { if (spark) openSpark(spark.id); };
@@ -7445,6 +7446,8 @@ function fillSpark(box, spark, again = false) {
     card.querySelector(".when").textContent = `${when(report.at)} · ${ago(report.at)}`;
     if (!report.read) card.querySelector(".when").appendChild(el("span", "made-by", "New"));
     card.querySelector(".body").innerHTML = markdown(report.text);
+    // Those it @mentions were sent it: drawn as chips, as in a chat.
+    chipMentions(card.querySelector(".body"));
     if (report.files && report.files.length) card.querySelector(".body").after(docCards(spark.id, report.files));
     const play = readButton(`report:${spark.id}:${report.at}`, () => card.querySelector(".body"));
     play.classList.add("small");
