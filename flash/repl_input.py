@@ -23,6 +23,11 @@ from prompt_toolkit.formatted_text import (
 )
 from prompt_toolkit.history import FileHistory
 from prompt_toolkit.key_binding import KeyBindings
+from prompt_toolkit.layout.processors import (
+    Processor,
+    Transformation,
+    explode_text_fragments,
+)
 from prompt_toolkit.layout.screen import Screen
 from prompt_toolkit.renderer import Renderer
 from prompt_toolkit.styles import Style
@@ -35,6 +40,7 @@ from .memory import MEMORY_PATH
 from .paths import ENV_PATH, FLASH_DIR
 from .theme import (
     BAR_EMPTY,
+    CHEVRON,
     CURSOR,
     DIFF_ADD,
     DIM_HEX,
@@ -577,6 +583,39 @@ class SessionHistory(FileHistory):
             pass
 
 
+SHELL_MARK = "!"
+
+
+def is_shell_line(text: str) -> bool:
+    """Whether TEXT is a shell command typed after a !."""
+
+    return text.startswith(SHELL_MARK)
+
+
+def shell_prompt(prompt_ansi: str) -> str:
+    """PROMPT_ANSI with its chevron turned into a ! in the same colour:
+    the prompt while a shell command is typed, as Claude Code's is."""
+
+    head, chevron, tail = prompt_ansi.rpartition(CHEVRON)
+    return head + SHELL_MARK + tail if chevron else prompt_ansi
+
+
+class HideShellMark(Processor):
+    """Keeps the ! that starts a shell command out of sight: the prompt
+    wears it instead. It stays in the text, so history brings a command
+    back as one, and backspacing it away leaves shell mode."""
+
+    def apply_transformation(self, ti):
+        if ti.lineno != 0 or not is_shell_line(ti.document.text):
+            return Transformation(ti.fragments)
+        fragments = explode_text_fragments(ti.fragments)[1:]
+        return Transformation(
+            fragments,
+            source_to_display=lambda i: max(0, i - 1),
+            display_to_source=lambda i: i + 1,
+        )
+
+
 def _stand_down(app, result: str) -> None:
     """Leave the prompt with RESULT, keeping what was typed for later."""
 
@@ -832,6 +871,7 @@ def read_line(
             style=_RULE_STYLE,
             history=SessionHistory(str(HISTORY_PATH)),
             key_bindings=key_bindings(),
+            input_processors=[HideShellMark()],
         )
         _snug(_session)
 
@@ -879,10 +919,15 @@ def read_line(
 
         Built once, it was measured for the terminal it was built in,
         so a resize left both rules at the old width and the status
-        line padded to a margin that had moved.
+        line padded to a margin that had moved. A line started with !
+        is a shell command, and the prompt says so.
         """
 
-        return ANSI(above() + status_prefix(status, health) + prompt_ansi)
+        app = get_app_or_none()
+        typed = app.current_buffer.text if app is not None else ""
+        shown = shell_prompt(prompt_ansi) if is_shell_line(typed) \
+            else prompt_ansi
+        return ANSI(above() + status_prefix(status, health) + shown)
 
     def above() -> str:
         """Everything between the last message and the status line.
