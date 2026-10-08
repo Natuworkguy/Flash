@@ -1373,6 +1373,9 @@ button.item-row:hover { background: var(--hover); }
 .team-loose { font-size: 13px; font-weight: 600; color: var(--text-2); margin: 4px 2px 10px; }
 
 .org { position: relative; overflow-x: auto; padding: 4px 2px 2px; }
+/* A team wider than its card zooms out to fit it: the chart, its lines
+   and its comets together, from the top left. */
+.org-fit { position: relative; transform-origin: 0 0; }
 .org-tree, .org-tree ul { display: flex; justify-content: center; list-style: none; margin: 0; padding: 0; position: relative; }
 .org-tree { width: max-content; min-width: 100%; }
 .org-tree ul { padding-top: 22px; }
@@ -6647,17 +6650,39 @@ function teamBlock(team, byId, again, ti) {
     into.appendChild(li);
   };
   team.chart.forEach((node) => grow(node, 0, tree));
-  org.appendChild(tree);
-  sharedLines(org, tree, byId);
-  // Wider than the page, as on a phone: it opens on its lead, centred.
-  requestAnimationFrame(() => { org.scrollLeft = (org.scrollWidth - org.clientWidth) / 2; });
+  const fit = el("div", "org-fit");
+  fit.appendChild(tree);
+  org.appendChild(fit);
+  sharedLines(fit, tree, byId);
+  fitOrg(org, fit, tree, block.querySelector(".team-head"));
   tree.querySelectorAll(".org-node").forEach(tilt);
-  // News just in, from a spark with a lead: a comet carries it up.
+  // News just in, from a spark with a lead: a comet carries it up to
+  // each of its leads.
   const news = [...tree.querySelectorAll(".org-node.has-news")];
   if (news.length) {
-    setTimeout(() => news.forEach((node, k) => courier(org, node, leadNodeOf(node), team.colour, k * 160)), again ? 150 : 900);
+    setTimeout(() => news.forEach((node, k) => cometsUp(fit, node, team.colour, k * 160)), again ? 150 : 900);
   }
   return block;
+}
+
+// A team wider than its card zooms out to fit it, down to ORG_MIN_ZOOM;
+// past that it scrolls, and opens on its lead, centred. Watched through
+// the card's header and the tree, whose sizes the zoom leaves alone, so
+// fitting it never sets off another round of fitting.
+const ORG_MIN_ZOOM = 0.3;
+function fitOrg(org, fit, tree, head) {
+  let shown = false;
+  const apply = () => {
+    if (!org.isConnected) { if (shown && watch) watch.disconnect(); return; }
+    shown = true;
+    const room = fit.clientWidth, wide = tree.offsetWidth;
+    const zoom = room && wide > room ? Math.max(ORG_MIN_ZOOM, room / wide) : 1;
+    fit.style.transform = zoom < 1 ? `scale(${zoom})` : "";
+    fit.style.height = zoom < 1 ? `${tree.offsetHeight * zoom}px` : "";
+    org.scrollLeft = zoom === ORG_MIN_ZOOM ? (org.scrollWidth - org.clientWidth) / 2 : 0;
+  };
+  const watch = window.ResizeObserver ? new ResizeObserver(apply) : null;
+  if (watch) { watch.observe(head); watch.observe(tree); } else requestAnimationFrame(apply);
 }
 
 function orgNode(spark, depth, fresh) {
@@ -6780,14 +6805,7 @@ function sharedLines(org, tree, byId) {
   svg.classList.add("shared-lines");
   svg.setAttribute("aria-hidden", "true");
   org.prepend(svg);
-  // Where an element sits in the chart, by layout rather than by what is
-  // on screen, so a card mid-animation or tilted under the pointer does
-  // not drag its line along.
-  const at = (n) => {
-    let x = 0, y = 0;
-    for (let e = n; e && e !== org; e = e.offsetParent) { x += e.offsetLeft; y += e.offsetTop; }
-    return { x, y, w: n.offsetWidth, h: n.offsetHeight };
-  };
+  const at = (n) => chartAt(org, n);
   const draw = () => {
     if (!org.isConnected) return;
     svg.setAttribute("width", org.scrollWidth);
@@ -6828,24 +6846,58 @@ function sharedLines(org, tree, byId) {
   if (window.ResizeObserver) new ResizeObserver(draw).observe(tree);
 }
 
-// A comet that runs along the org chart's lines from FROM up to TO: up
-// its stub, across the bar, up into its lead, which lights as it lands.
-function courier(org, from, to, colour, delay = 0) {
-  if (calm.matches || !from || !to || !org.isConnected) return;
-  const box = org.getBoundingClientRect();
-  const a = from.getBoundingClientRect(), b = to.getBoundingClientRect();
-  const x0 = a.left + a.width / 2 - box.left + org.scrollLeft;
-  const y0 = a.top - box.top + org.scrollTop;
-  const x1 = b.left + b.width / 2 - box.left + org.scrollLeft;
-  const y1 = b.bottom - box.top + org.scrollTop;
-  const bar = y0 - 22;
-  const frames = [[x0, y0, 0], [x0, bar, 0.28], [x1, bar, 0.72], [x1, y1, 1]].map(([x, y, offset]) => ({ transform: `translate(${x}px, ${y}px)`, offset }));
+// Where an element sits in the chart, by layout rather than by what is
+// on screen, so a card mid-animation, tilted under the pointer or zoomed
+// out to fit does not drag its line along.
+function chartAt(root, n) {
+  let x = 0, y = 0;
+  for (let e = n; e && e !== root; e = e.offsetParent) { x += e.offsetLeft; y += e.offsetTop; }
+  return { x, y, w: n.offsetWidth, h: n.offsetHeight };
+}
+
+// Comets from NODE up to every one of its leads: the one it sits under
+// in the tree, and any other along the line drawn up to it.
+function cometsUp(root, node, colour, delay = 0) {
+  const lead = leadNodeOf(node);
+  if (lead) {
+    const a = chartAt(root, node), b = chartAt(root, lead);
+    const x0 = a.x + a.w / 2, x1 = b.x + b.w / 2, bar = a.y - 22 + 1;
+    courier(root, [[x0, a.y], [x0, bar], [x1, bar], [x1, b.y + b.h]], lead, colour, delay);
+  }
+  root.querySelectorAll(".shared-lines path").forEach((path) => {
+    const [from, to] = path.dataset.ends.split(" ");
+    if (from !== node.dataset.spark) return;
+    const other = root.querySelector(`.org-node[data-spark="${CSS.escape(to)}"]`);
+    if (!other) return;
+    const length = path.getTotalLength();
+    const steps = Math.max(8, Math.ceil(length / 10));
+    const route = [];
+    for (let i = 0; i <= steps; i++) {
+      const p = path.getPointAtLength(length * i / steps);
+      route.push([p.x, p.y]);
+    }
+    // Up its own stub first: the line leaves from the bar above it.
+    route.unshift([route[0][0], chartAt(root, node).y]);
+    courier(root, route, other, colour, delay);
+  });
+}
+
+// A comet that runs along ROUTE, points in the chart, at an even speed,
+// and lights TO as it lands.
+function courier(root, route, to, colour, delay = 0) {
+  if (calm.matches || !to || !root.isConnected || route.length < 2) return;
+  const run = [0];
+  for (let i = 1; i < route.length; i++) {
+    run.push(run[i - 1] + Math.hypot(route[i][0] - route[i - 1][0], route[i][1] - route[i - 1][1]));
+  }
+  const total = run[run.length - 1] || 1;
+  const frames = route.map(([x, y], i) => ({ transform: `translate(${x}px, ${y}px)`, offset: run[i] / total }));
   for (let t = 0; t < 5; t++) {
     const orb = el("i", "courier");
     orb.style.setProperty("--c", colour);
     orb.style.setProperty("--s", 1 - t * 0.17);
     orb.style.opacity = String(1 - t * 0.2);
-    org.appendChild(orb);
+    root.appendChild(orb);
     const run = orb.animate(frames, { duration: 1150, delay: delay + t * 42, easing: "cubic-bezier(0.55, 0, 0.3, 1)", fill: "both" });
     run.onfinish = () => {
       orb.remove();
@@ -6859,18 +6911,20 @@ function courier(org, from, to, colour, delay = 0) {
 }
 
 // Clicking a team's badge: the team jumps in a wave down the tree, the
-// badge throws sparks, and a comet runs up every line to its lead.
+// badge throws sparks, and a comet runs up every line to every lead.
 function rally(block, colour) {
   if (calm.matches) return;
   block.classList.remove("rally");
   void block.offsetWidth;
   block.classList.add("rally");
   teamBurst(block.querySelector(".team-badge"), colour, 20);
-  const org = block.querySelector(".org");
-  block.querySelectorAll(".org-node").forEach((node) => {
-    const d = Number(getComputedStyle(node).getPropertyValue("--d")) || 0;
-    courier(org, node, leadNodeOf(node), colour, 350 + d * 160);
-  });
+  const fit = block.querySelector(".org-fit");
+  if (fit) {
+    block.querySelectorAll(".org-node").forEach((node) => {
+      const d = Number(getComputedStyle(node).getPropertyValue("--d")) || 0;
+      cometsUp(fit, node, colour, 350 + d * 160);
+    });
+  }
   clearTimeout(block.rallyEnd);
   block.rallyEnd = setTimeout(() => block.classList.remove("rally"), 2400);
 }
