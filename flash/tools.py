@@ -3,6 +3,7 @@
 import base64
 import difflib
 import fnmatch
+import inspect
 import io
 import json
 import os
@@ -5696,11 +5697,17 @@ def run_tool(call):
 
     name, args = call
 
+    # A call missing what it needs is told so first: there is nothing
+    # yet for System One to review, or for the user to say yes to.
+    func = FUNCTIONS.get(name)
+    missing = _missing_arguments(func, args) if func else []
+    if missing:
+        return _missing_note(name, missing, args)
+
     stopped = _review(name, args)
     if stopped is not None:
         return stopped
 
-    func = FUNCTIONS.get(name)
     if func is None:
         answered = _extension_tool(name, args)
         return f"Unknown tool: {name}" if answered is None else answered
@@ -5709,3 +5716,46 @@ def run_tool(call):
         return func(**args)
     except Exception as e:  # noqa: BLE001
         return f"{e.__class__.__name__}: {e}"
+
+
+def _missing_arguments(func, args: dict) -> list[str]:
+    """The arguments FUNC needs that ARGS does not give."""
+
+    try:
+        params = inspect.signature(func).parameters.values()
+    except (TypeError, ValueError):
+        return []
+    return [
+        p.name for p in params
+        if p.default is inspect.Parameter.empty
+        and p.kind in (p.POSITIONAL_OR_KEYWORD, p.KEYWORD_ONLY)
+        and p.name not in args
+    ]
+
+
+# Past this much content, a call missing an argument was most likely cut
+# off at the reply's output limit rather than written without it.
+LONG_CALL_CHARS = 2000
+
+
+def _missing_note(name: str, missing: list[str], args: dict) -> str:
+    """What the model is told of a call that came without MISSING: which
+    ones, and, for a long one, that it was most likely cut off where
+    its reply ran out, so the fix is a shorter call, not the same one."""
+
+    said = ", ".join(f"`{m}`" for m in missing)
+    note = f"Error: the {name} call arrived without {said}."
+    if sum(len(str(v)) for v in args.values()) >= LONG_CALL_CHARS:
+        note += (
+            " It was long, so it was most likely cut off where your reply "
+            "hit its output limit, and what it had not reached never "
+            "arrived. Do not send the same call again: make it shorter."
+        )
+        if name == "write":
+            note += (
+                " Put path first and write the file in pieces: the first "
+                "with no append, then each next piece with append=true."
+            )
+    else:
+        note += " Call it again with every required argument."
+    return note
