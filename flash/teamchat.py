@@ -1,7 +1,7 @@
 """A team's group chat: the user and the team's sparks, in one room.
 
 Every team has one. The user writes in it; the sparks it @mentions
-answer, or its lead when it names no one, and a spark can @mention a
+answer, or its leads when it names no one, and a spark can @mention a
 teammate to bring it in too, a few replies at most for each message of
 the user's, so two sparks never talk on forever. Around the talk, the
 team's news lands in it as it happens: a report filed, a shift that
@@ -712,10 +712,13 @@ def _reply(
     }
     schemas = [*kit.schemas, SEND_MESSAGE_TOOL, REACT_TOOL]
     others = [s for s in _members(team.id) if s.id != spark.id]
+    # A team can have several leads, equals at the top of it.
+    leads = _leads(team.id)
+    lead_word = ", a lead" if len(leads) > 1 else ", the lead"
     roster = "\n".join(
         f"- {s.name} ({s.handle})"
         + (f", {s.title}" if s.title else "")
-        + (", the lead" if not sparks.lead_of(s) else "")
+        + (lead_word if any(s.id == lead.id for lead in leads) else "")
         for s in others
     ) or "(no one else yet)"
     _set_typing(team.id, spark.id, "Thinking")
@@ -790,7 +793,9 @@ def _round(team: sparks.Team, message: dict, client=None) -> list[dict]:
         # The one replied to answers first, then any it named besides.
         queue.insert(0, replied)
     if not queue:
-        queue = _leads(team.id)[:1]
+        # Named no one: the team's leads answer, each of them, as equals.
+        queue = _leads(team.id)
+        limit = max(limit, len(queue))
     posted: list[dict] = []
     turns = 0
     while queue and turns < limit:
@@ -813,7 +818,7 @@ def _round(team: sparks.Team, message: dict, client=None) -> list[dict]:
 
 def answer(team_key: str, message: dict, client=None) -> list[dict]:
     """The sparks' answers to MESSAGE, the user's, made now on this
-    thread: those it @mentions, else the team's lead, then whoever their
+    thread: those it @mentions, else the team's leads, then whoever their
     answers bring in, REPLY_LIMIT at most. A message sent while another
     is being answered waits its turn, and is answered next."""
 
