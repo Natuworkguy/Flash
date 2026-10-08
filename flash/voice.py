@@ -453,6 +453,61 @@ def download_voice(
     return why
 
 
+# The two kinds of model voice mode runs on, and the setting that names
+# the one in use of each.
+KINDS = {"listening": LISTENING, "speaking": SPEAKING}
+SETTINGS = {"listening": "VOICE_VOSK_MODEL", "speaking": "VOICE_PIPER_VOICE"}
+
+
+def find_model(query: str) -> tuple[str, Choice]:
+    """The model Flash offers that QUERY names, and its kind: its whole
+    name, or any part of it that only one has ("ryan", "lgraph"), any
+    case. Raises ValueError saying why not."""
+
+    wanted = " ".join(str(query or "").split()).lower()
+    if not wanted:
+        raise ValueError("Name a model. /voice models lists them.")
+    every = [(kind, c) for kind, offered in KINDS.items() for c in offered]
+    exact = [(kind, c) for kind, c in every if c.name.lower() == wanted]
+    if exact:
+        return exact[0]
+    found = [(kind, c) for kind, c in every if wanted in c.name.lower()]
+    if len(found) == 1:
+        return found[0]
+    if not found:
+        raise ValueError(
+            f"No voice model called {query!r}. /voice models lists them."
+        )
+    raise ValueError(
+        f"{query!r} could be {', '.join(c.name for _, c in found)}. "
+        "Name one of them."
+    )
+
+
+def model_in_use(kind: str) -> str:
+    return vosk_model() if kind == "listening" else piper_voice()
+
+
+def model_installed(kind: str, name: str) -> bool:
+    return (listening_installed(name) if kind == "listening"
+            else voice_installed(name))
+
+
+def download_model(
+    kind: str, name: str, on_progress: Progress,
+    stop: Optional[threading.Event] = None,
+) -> str:
+    """Fetch the model NAME of KIND. Returns "" once it is in, CANCELLED
+    when called off, or why it could not be had."""
+
+    fetch = download_listening if kind == "listening" else download_voice
+    return fetch(name, on_progress, stop)
+
+
+def remove_model(kind: str, name: str) -> None:
+    (remove_listening if kind == "listening" else remove_voice)(name)
+
+
 def remove_listening(name: str) -> None:
     """Delete the Vosk model NAME, which must be one Settings offers."""
 

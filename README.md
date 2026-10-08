@@ -133,7 +133,7 @@ Commands
 | `/auto [on\|off]` | Run commands and edits without asking |
 | `/sparks` | Your sparks: `new`, `chat`, `teams`, `teamchat` and more, with Tab completion |
 | `/web [lan]` | Open Flash in your browser, or on your phone |
-| `/voice [on\|off]` | Talk to Flash |
+| `/voice [on\|off\|models\|pull <name>]` | Talk to Flash, and pick its listening and speaking models |
 | `/undo` | Take back the last turn's file changes |
 | `/plan` | The checklist it is working through |
 | `/agents` | Watch sub-agents work live |

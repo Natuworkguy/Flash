@@ -23,6 +23,7 @@ from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.segment import Segment
 from rich.spinner import Spinner
+from rich.table import Table
 from rich.text import Text
 
 from . import agent as subagents
@@ -3913,7 +3914,7 @@ def _set_voice(on: bool) -> None:
     told = Text()
     told.append("Voice mode on. ", style=f"bold {ACCENT}")
     told.append(
-        "Press Enter on an empty line to start talking."
+        "Press Enter on an empty line to start talking. "
         "Talk over a reply with \"interrupt\" to cut it "
         "short, and say \"voice off\" to stop the conversation; Enter "
         "starts it again.\nType /voice off to disable voice mode "
@@ -3982,6 +3983,133 @@ def _voice_style(name: str) -> None:
         body.append(f"{style.label.split(': ', 1)[-1]}\n", style=DIM)
     body.append("\n  /voice style <name> picks one.\n", style=DIM)
     console.print(body)
+
+
+def _megabytes(size: int) -> str:
+    return f"{size / 1e9:.1f} GB" if size >= 1e9 else f"{round(size / 1e6)} MB"
+
+
+def _voice_models() -> None:
+    """/voice models: what Flash can listen and speak with, which are
+    downloaded, and which are in use."""
+
+    from . import voice  # deferred: voice pulls in audio on demand
+
+    console.print()
+    for kind, title in (("listening", "Listening, speech to text"),
+                        ("speaking", "Speaking, text to speech")):
+        console.print(Text(title, style="bold"))
+        grid = Table.grid(padding=(0, 2))
+        grid.add_column(no_wrap=True)
+        grid.add_column(no_wrap=True)
+        grid.add_column(no_wrap=True, justify="right")
+        grid.add_column()
+        in_use = voice.model_in_use(kind)
+        for choice in voice.KINDS[kind]:
+            current = choice.name == in_use
+            have = voice.model_installed(kind, choice.name)
+            grid.add_row(
+                Text("  ●" if current else "   ", style=ACCENT),
+                Text(choice.name, style=ACCENT if current else ""),
+                Text("downloaded" if have else _megabytes(choice.size),
+                     style=DIM),
+                Text(choice.label, style=DIM),
+            )
+        console.print(grid)
+        console.print()
+    console.print(Text(
+        "  /voice pull <name> downloads one and switches to it, and "
+        "/voice remove <name> deletes one. Part of a name will do: "
+        "/voice pull ryan.", style=DIM,
+    ))
+
+
+def _voice_download(kind: str, name: str) -> str:
+    """Download NAME with a progress line, on a thread so Ctrl+C can
+    call it off. Returns what voice.download_model does."""
+
+    from . import voice  # deferred: voice pulls in audio on demand
+
+    stop = threading.Event()
+    result = [""]
+    last: list = [None]
+    with Live(Text(f"Starting the download{ELLIPSIS}", style=DIM),
+              console=console, transient=True,
+              refresh_per_second=10) as live:
+        def on_progress(label: str, percent: int) -> None:
+            if last[0] != (label, percent):
+                last[0] = (label, percent)
+                live.update(_voice_progress_line(label, percent))
+
+        def fetch() -> None:
+            try:
+                result[0] = voice.download_model(
+                    kind, name, on_progress, stop,
+                )
+            finally:
+                done.set()
+
+        # Waited on with an event rather than join(): a Ctrl+C landing in
+        # join() can leave the thread looking finished while it is not.
+        done = threading.Event()
+        threading.Thread(target=fetch, daemon=True).start()
+        try:
+            while not done.wait(0.1):
+                pass
+        except KeyboardInterrupt:
+            stop.set()
+            done.wait()
+    return result[0]
+
+
+def _voice_pull(query: str) -> None:
+    """/voice pull <name>: download a listening model or a voice, if it is
+    not already, and switch to it."""
+
+    from . import voice  # deferred: voice pulls in audio on demand
+
+    try:
+        kind, choice = voice.find_model(query)
+    except ValueError as exc:
+        warn(str(exc))
+        return
+    if not voice.model_installed(kind, choice.name):
+        console.print(Text(
+            f"Downloading {choice.name}, {_megabytes(choice.size)}. "
+            "Ctrl+C stops it.", style=DIM,
+        ))
+        why = _voice_download(kind, choice.name)
+        if why == voice.CANCELLED:
+            console.print(Text("Download stopped. Nothing of it was kept.",
+                               style=DIM))
+            return
+        if why:
+            show_error(why)
+            return
+    set_config_var(voice.SETTINGS[kind], choice.name)
+    doing = "listens with" if kind == "listening" else "speaks with"
+    console.print(Text(f"Flash {doing} {choice.name} now.",
+                       style=f"bold {ACCENT}"))
+
+
+def _voice_remove(query: str) -> None:
+    """/voice remove <name>: delete a downloaded model not in use."""
+
+    from . import voice  # deferred: voice pulls in audio on demand
+
+    try:
+        kind, choice = voice.find_model(query)
+    except ValueError as exc:
+        warn(str(exc))
+        return
+    if choice.name == voice.model_in_use(kind):
+        warn(f"{choice.name} is in use. /voice pull another one first.")
+        return
+    if not voice.model_installed(kind, choice.name):
+        console.print(Text(f"{choice.name} is not downloaded.", style=DIM))
+        return
+    voice.remove_model(kind, choice.name)
+    console.print(Text(f"Removed {choice.name}.", style=DIM))
 
 
 def _speak_reply(text: str, heard: bool = True) -> bool:
@@ -4451,10 +4579,16 @@ def main() -> None:
                     _set_voice(False)
                 elif arg == "style" or arg.startswith("style "):
                     _voice_style(arg[len("style"):].strip())
+                elif arg == "models":
+                    _voice_models()
+                elif arg == "pull" or arg.startswith("pull "):
+                    _voice_pull(arg[len("pull"):].strip())
+                elif arg == "remove" or arg.startswith("remove "):
+                    _voice_remove(arg[len("remove"):].strip())
                 else:
                     warn(
-                        "Usage: /voice [on|off|toggle|style "
-                        f"[{'|'.join(voice_styles())}]]"
+                        "Usage: /voice [on|off|toggle|models|pull <name>|"
+                        f"remove <name>|style [{'|'.join(voice_styles())}]]"
                     )
                 continue
 

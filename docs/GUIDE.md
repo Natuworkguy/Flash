@@ -597,6 +597,19 @@ pressing Enter starts talking again without re-enabling anything. To turn
 the feature off altogether, type `/voice off`; the setting is saved in
 `~/.flash.env` as `VOICE`, so voice mode survives a restart either way.
 
+To listen or speak with a different model, `/voice models` lists the ones
+Flash offers, with their sizes, which are downloaded, and which are in use.
+`/voice pull <name>` downloads one and switches to it (part of the name is
+enough, as in `/voice pull ryan`, and Ctrl+C stops the download), and
+`/voice remove <name>` deletes one you no longer use. The web UI does the
+same under Settings > Voice models.
+
+```FLASH
+/voice models
+/voice pull lgraph
+/voice pull kristin
+```
+
 Only the prose of a reply is spoken. Code blocks, tables, and URLs are
 skipped, because they are on screen already and unpleasant to listen to,
 and a long answer is cut at a sentence once it passes `VOICE_MAX_CHARS`.
