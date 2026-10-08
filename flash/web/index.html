@@ -10563,9 +10563,28 @@ function renderInfo() {
   greet();
 }
 
+// What a new chat says hello with: one of the greetings the terminal's
+// welcome box picks from, for the time of day by this browser's clock.
+// Picked once and kept while the chat is new, so the status refreshing
+// every few seconds does not reshuffle it; a new chat or a new part of
+// the day picks again.
+function greeting() {
+  const now = new Date();
+  const hour = now.getHours();
+  const part = hour < 5 ? "late" : hour < 12 ? "morning" : hour < 18 ? "afternoon" : hour < 22 ? "evening" : "night";
+  const day = now.toLocaleDateString(undefined, { weekday: "long" });
+  const key = `${part}|${day}`;
+  if (greeting.picked && greeting.picked.key === key) return greeting.picked.text;
+  const pools = info.greetings;
+  if (!pools || !pools[part]) return hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
+  const pool = [...pools[part], ...(["morning", "afternoon", "evening"].includes(part) ? pools.any || [] : [])];
+  const text = pool[Math.floor(Math.random() * pool.length)].replace("{day}", day);
+  greeting.picked = { key, text };
+  return text;
+}
+
 function greet() {
-  const hour = new Date().getHours();
-  const when = hour < 5 ? "Up late" : hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
+  const when = greeting();
   const inProject = projectOf(viewProject);
   const withSpark = !current && sparkOf(viewSpark);
   $("#greeting").innerHTML = esc(when) + (withSpark ? `<span class="in">talking with ${esc(withSpark.name)}</span>` : inProject ? `<span class="in">in ${esc(inProject.name)}</span>` : "");
@@ -11385,6 +11404,7 @@ async function newChat() {
   current = null;
   viewProject = null;
   viewSpark = null;
+  greeting.picked = null;
   renderChats();
   morph(drawChat);
   input.focus();
