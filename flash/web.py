@@ -1517,6 +1517,16 @@ def inside(folder: Optional[str]):
         os.chdir(before)
 
 
+# Where a chat in the browser is, for what the prompt says differs from
+# the terminal: there is no ! here to run a command with.
+WEB_PROMPT = (
+    "=== Where you are ===\n"
+    "This chat is in Flash's web UI, in a browser, not Flash's terminal. "
+    "There is no `!` here: a command for the user to run themselves goes "
+    "in a code block, for them to paste into their own terminal."
+)
+
+
 def project_prompt(found: "workspace.Project") -> str:
     lines = [
         f"=== Project: {found.name} ===",
@@ -1805,7 +1815,8 @@ def _respond(
                     host=host_name,
                 )
         else:
-            prompt = ai._session_system_prompt(heard=chat.heard)
+            prompt = ai._session_system_prompt(heard=chat.heard) \
+                + "\n\n" + WEB_PROMPT
         if found is not None:
             prompt = f"{prompt}\n\n{project_prompt(found)}".strip()
         system = ai._message("system", prompt)
