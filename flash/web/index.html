@@ -6794,14 +6794,27 @@ function sharedLines(org, tree, byId) {
     svg.textContent = "";
     for (const [from, to] of pairs) {
       const a = at(from), b = at(to);
-      const x0 = a.x + a.w / 2, x1 = b.x + b.w / 2;
-      // The bar its own line rises to, where every line in its row turns.
-      const bar = a.y - 22;
+      const li = from.closest("li");
+      const first = li && !li.previousElementSibling, last = li && !li.nextElementSibling;
+      // The tree's 2px borders sit beside the middle, not on it: a first
+      // card's rises a pixel right of it, a last card's a pixel left.
+      const x0 = a.x + a.w / 2 + (first && !last ? 1 : last && !first ? -1 : 0);
+      const x1 = b.x + b.w / 2;
+      // The bar its own line rises to, where every line in its row turns,
+      // through the middle of the bar's border.
+      const bar = a.y - 22 + 1;
       const top = b.y + b.h;
-      const r = Math.min(12, Math.abs(x1 - x0) / 2);
+      // The tree's corners: 12px outside, 11 through the line's middle.
+      const r = Math.min(11, Math.abs(x1 - x0) / 2);
       const dir = x1 > x0 ? 1 : -1;
+      const cw = dir > 0 ? 1 : 0;
+      // Off a first or last card the tree's own corner is rounded, so the
+      // line leaves along the same curve rather than straight past it.
+      const start = first || last
+        ? `M ${x0} ${bar + r} A ${r} ${r} 0 0 ${cw} ${x0 + dir * r} ${bar}`
+        : `M ${x0} ${bar}`;
       const d = top <= bar - r
-        ? `M ${x0} ${bar} H ${x1 - dir * r} Q ${x1} ${bar} ${x1} ${bar - r} V ${top}`
+        ? `${start} H ${x1 - dir * r} A ${r} ${r} 0 0 ${1 - cw} ${x1} ${bar - r} V ${top}`
         // A lead in its own row: over the top of both, into its side.
         : `M ${x0} ${a.y} V ${b.y - 14 + r} Q ${x0} ${b.y - 14} ${x0 + dir * r} ${b.y - 14} H ${x1 - dir * r} Q ${x1} ${b.y - 14} ${x1} ${b.y - 14 + r} V ${b.y}`;
       const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
