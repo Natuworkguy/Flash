@@ -64,6 +64,31 @@ def test_the_lead_answers_a_message_to_no_one(team):
     assert "Desk's group chat" in system  # nosec B101
 
 
+def test_every_lead_answers_a_message_to_no_one(team):
+    # Writer leads too now, beside Lead: two at the top, as equals.
+    sparks.set_lead("writer", "")
+    message = teamchat.say("desk", "Where are we?")
+    client = FakeClient([_reply("Planning is done."), _reply("Drafting.")])
+
+    posted = teamchat.answer("desk", message, client)
+
+    assert [e["name"] for e in posted] == ["Lead", "Writer"]  # nosec B101
+    # Each is told the other is a lead, not the lead.
+    system = client.calls[0]["messages"][0]["content"]
+    assert "Writer (@writer-spark), a lead" in system  # nosec B101
+    assert ", the lead" not in system  # nosec B101
+
+
+def test_one_lead_is_still_the_lead(team):
+    message = teamchat.say("desk", "@scout status?")
+    client = FakeClient([_reply("Fine.")])
+
+    teamchat.answer("desk", message, client)
+
+    system = client.calls[0]["messages"][0]["content"]
+    assert "Lead (@lead-spark), the lead" in system  # nosec B101
+
+
 def test_a_mentioned_spark_answers_instead(team):
     message = teamchat.say("desk", "@scout what did you find?")
     client = FakeClient([_reply("Two bugs.")])

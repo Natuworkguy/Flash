@@ -5895,6 +5895,18 @@ const teamChat = { id: null, seq: 0, team: null, sparks: new Map(), typing: [], 
 
 function tcSpark(id) { return teamChat.sparks.get(id) || sparkList.find((s) => s.id === id) || null; }
 
+// Names as a sentence says them: "Ada", "Ada and Grace", "Ada, Grace and
+// Ken".
+function tcAnd(list) {
+  const names = list.map((s) => s.name);
+  return names.length < 3 ? names.join(" and ") : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+}
+
+function tcLeadCount() {
+  const members = tcMembers();
+  return members.filter((s) => !members.some((m) => m.id === s.reports_to)).length;
+}
+
 function tcMembers() {
   return [...teamChat.sparks.values()].filter((s) => teamChat.team && s.team === teamChat.team.id);
 }
@@ -5982,9 +5994,11 @@ async function tcRefreshTeam() {
   wrap.querySelector(".tc-badge .letter").textContent = (team.name.match(/\p{L}|\p{N}/u) || ["?"])[0].toUpperCase();
   wrap.querySelector("#tc-name").textContent = team.name;
   const members = tcMembers();
-  const lead = members.find((s) => !members.some((m) => m.id === s.reports_to));
+  // Its leads: those that report to no one on it, as many as it has.
+  const leads = members.filter((s) => !members.some((m) => m.id === s.reports_to));
+  const leadNames = tcAnd(leads);
   const working = members.filter((s) => s.status === "working").length;
-  wrap.querySelector(".tc-sub").textContent = `${members.length} spark${members.length === 1 ? "" : "s"}${lead ? ` · ${lead.name} leads` : ""}${working ? ` · ${working} working` : ""}${team.paused ? " · paused" : ""}`;
+  wrap.querySelector(".tc-sub").textContent = `${members.length} spark${members.length === 1 ? "" : "s"}${leads.length ? ` · ${leadNames} lead${leads.length === 1 ? "s" : ""}` : ""}${working ? ` · ${working} working` : ""}${team.paused ? " · paused" : ""}`;
   const faces = wrap.querySelector(".tc-faces");
   faces.textContent = "";
   members.slice(0, 6).forEach((s, i) => {
@@ -6014,7 +6028,7 @@ async function tcRefreshTeam() {
   });
   const area = wrap.querySelector("textarea");
   area.placeholder = members.length
-    ? `Message ${team.name}${lead ? `: ${lead.name} answers, or @mention a spark` : ""}`
+    ? `Message ${team.name}${leads.length ? `: ${leadNames} answer${leads.length === 1 ? "s" : ""}, or @mention a spark` : ""}`
     : `Put a spark on ${team.name} to talk to it`;
   area.disabled = !members.length;
 }
@@ -6038,7 +6052,7 @@ async function tcFetch(first = false) {
   const log = $("#team-chat .tc-log");
   const near = log.scrollHeight - log.scrollTop - log.clientHeight < 120;
   if (first && !r.entries.length) {
-    log.appendChild(el("div", "tc-empty", `<b>This is the start of ${esc(teamChat.team.name)}'s chat.</b><span>Say hello. The lead answers, or @mention a spark to hear from it. Reports and news from the team land here too, and every spark reads the latest of it on its shifts.</span>`));
+    log.appendChild(el("div", "tc-empty", `<b>This is the start of ${esc(teamChat.team.name)}'s chat.</b><span>Say hello. ${tcLeadCount() > 1 ? "The leads answer" : "The lead answers"}, or @mention a spark to hear from it. Reports and news from the team land here too, and every spark reads the latest of it on its shifts.</span>`));
   } else if (r.entries.length) {
     log.querySelector(".tc-empty")?.remove();
   }
@@ -7010,7 +7024,7 @@ function teamForm(team = null) {
   const colour = team ? team.colour : TEAM_COLOURS[Math.floor(Math.random() * TEAM_COLOURS.length)];
   const form = openForm(`
     <h2>${team ? "Edit team" : "New team"}</h2>
-    <p class="sub">${team ? "" : "A team keeps sparks together: a lead, and the sparks that report to it. Sparks can also stay on no team."}</p>
+    <p class="sub">${team ? "" : "A team keeps sparks together: one or more leads, and the sparks that report to them. Sparks can also stay on no team."}</p>
     ${team ? "" : `<div class="spark-templates team-templates"><span class="sub">Start from:</span></div>`}
     <label class="field"><span>Name</span><input name="teamname" maxlength="32" placeholder="Dev" autocomplete="off" required></label>
     <div class="field"><span>Colour</span><div class="swatches" role="radiogroup" aria-label="Colour">${TEAM_COLOURS.map((c) => `<button type="button" class="swatch" role="radio" data-c="${c}" style="--c:${c}" aria-label="${c}"></button>`).join("")}</div></div>
