@@ -31,6 +31,7 @@ from . import (
     checkpoint,
     context,
     extensions,
+    greetings,
     learning,
     plan,
     serif,
@@ -400,7 +401,8 @@ def _banner_lines(update_version: Optional[str] = None) -> list:
     """
 
     title = Text()
-    title.append(f"Flash CLI v{__version__}", style="bold")
+    title.append(greetings.pick(), style="bold")
+    title.append(f"\nFlash CLI v{__version__}", style=DIM)
 
     fields = Text()
     fields.append("  /help", style=ACCENT)

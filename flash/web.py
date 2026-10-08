@@ -53,6 +53,7 @@ from . import (
     checkpoint,
     context,
     extensions,
+    greetings,
     keepalive,
     learning,
     memory,
@@ -2101,6 +2102,9 @@ def status(ai) -> dict:
         "system_one": systemone.enabled(),
         "system_one_model": systemone.model() if systemone.enabled() else "",
         "compact": bool(ai.Config.auto_compact),
+        # What a new chat says hello with, for the page to pick from by
+        # the browser's clock.
+        "greetings": greetings.POOLS,
         "voice_style": voice.voice_style(),
         # The scene actually in effect: a name that no longer finds one,
         # because the extension that brought it was removed, is none.
