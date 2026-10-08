@@ -21,6 +21,7 @@ from rich.console import Console, Group
 from rich.live import Live
 from rich.markdown import Markdown
 from rich.panel import Panel
+from rich.segment import Segment
 from rich.spinner import Spinner
 from rich.text import Text
 
@@ -2427,6 +2428,36 @@ def _default_spark_model(wanted: str) -> None:
     ))
 
 
+class _Mentions:
+    """RENDERABLE with each @mention of a spark in that spark's colour,
+    and @everyone in Flash's, as the page draws them as chips. Picked out
+    once it is laid out, so the words wrap just as they would; code
+    keeps its own colours."""
+
+    def __init__(self, renderable) -> None:
+        self.renderable = renderable
+
+    def __rich_console__(self, console, options):
+        colours: dict[str, str] = {}
+        for segment in console.render(self.renderable, options):
+            text, style, control = segment
+            if control or "@" not in text or (style and style.bgcolor):
+                yield segment
+                continue
+            last = 0
+            for start, end, spark in sparks.mention_spans(text):
+                word = text[start:end]
+                if word not in colours:
+                    colours[word] = spark.colour if spark else ACCENT
+                if start > last:
+                    yield Segment(text[last:start], style)
+                picked = console.get_style(f"bold {colours[word]}")
+                yield Segment(word, style + picked if style else picked)
+                last = end
+            if last < len(text):
+                yield Segment(text[last:], style)
+
+
 def _show_spark(spark: "sparks.Spark") -> None:
     head = Text(f"\n{_bubble()} ", style=spark.colour)
     head.append(spark.name, style=f"bold {spark.colour}")
@@ -2488,7 +2519,9 @@ def _show_spark(spark: "sparks.Spark") -> None:
                 "  liked" if report.rating > 0 else "  disliked", style=DIM,
             )
         console.print(title)
-        console.print(Markdown(report.text, code_theme="monokai"))
+        console.print(
+            _Mentions(Markdown(report.text, code_theme="monokai")),
+        )
         if report.feedback:
             console.print(Text(f"  You said: {report.feedback}", style=DIM))
         console.print()
@@ -2510,7 +2543,7 @@ def _spark_says(spark: "sparks.Spark", said: "sparks.Message") -> None:
     if said.failed:
         warn(said.text)
     else:
-        console.print(Markdown(said.text, code_theme="monokai"))
+        console.print(_Mentions(Markdown(said.text, code_theme="monokai")))
     console.print()
 
 
@@ -2556,11 +2589,11 @@ def _team_chat(rest: str) -> None:
         if entry["kind"] == teamchat.USER:
             line = Text("  You  ", style=f"bold {ACCENT}")
             line.append(entry["text"])
-            console.print(line)
+            console.print(_Mentions(line))
         elif entry["kind"] == teamchat.EVENT:
-            console.print(Text(
+            console.print(_Mentions(Text(
                 f"  {teamchat._line(entry, by_id).strip('()')}", style=DIM,
-            ))
+            )))
         else:
             # One that has left since is still named, as it signed it.
             _spark_says(spark or sparks.Spark(

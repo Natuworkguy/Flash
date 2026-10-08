@@ -509,6 +509,12 @@ have looked them over.
   managers, one per project, can share the same Test Runner, and each
   hears back about its own work. Any spark can hand work to any other,
   across leads and projects, the same way.
+- **Mentions in reports.** A spark that writes `@fixer` in its report
+  sends it the report: Fixer reads it on its next shift, or starts one
+  now if it is on call, and does what it was called on for. A lead the
+  report rolls up to anyway gets it once, marked as mentioning it. The
+  page draws each mention as a chip in that spark's colour, and the
+  terminal in its colour.
 - **Hiring.** A spark can propose hiring another, or letting one go. It
   waits for your yes (`/sparks hires`, `/sparks hire <id> yes|no`).
 - **Budgets.** Off by default. Give a spark tokens per hour, day, week
