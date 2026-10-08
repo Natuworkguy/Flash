@@ -36,6 +36,8 @@ REPLY_LIMIT = 4
 # How much of the chat a spark reads before it answers.
 CONTEXT_ENTRIES = 30
 ENTRY_CHARS = 1500
+# How much of a message a spark is quoted when told of a reaction to it.
+REACTED_CHARS = 160
 EVENT_CHARS = 280
 # How much of it every member carries in its prompt.
 PROMPT_ENTRIES = 6
@@ -600,6 +602,7 @@ def react(
 
     team = _team(team_key)
     emoji = _emoji(emoji)
+    moved: list[bool] = []
 
     def change(data: dict) -> dict:
         entry = next(
@@ -610,6 +613,8 @@ def react(
         reactions = _reactions(entry)
         whose = reactions.get(emoji, [])
         adding = by not in whose if on is None else on
+        if adding != (by in whose):
+            moved.append(adding)
         if adding and by not in whose:
             if emoji not in reactions and len(reactions) >= MAX_REACTIONS:
                 raise TeamChatError(
@@ -632,7 +637,39 @@ def react(
         entry["changed"] = data["seq"]
         return dict(entry)
 
-    return _change(team.id, change)
+    entry = _change(team.id, change)
+    if moved:
+        _tell_author(team, entry, emoji, by, moved[0])
+    return entry
+
+
+def _tell_author(
+    team: sparks.Team, entry: dict, emoji: str, by: str, on: bool,
+) -> None:
+    """Tell the spark that said ENTRY, a message or a report, that BY
+    put EMOJI on it, or took it off (ON false); not when it was its own."""
+
+    author = entry.get("spark")
+    if not author or author == by or entry.get("kind") == USER:
+        return
+    if entry.get("kind") == EVENT and entry.get("what") not in (
+        "report", "failed",
+    ):
+        return  # news of joining or leaving is not something it said
+    if by == USER:
+        who = "The user"
+    else:
+        found = sparks.find(by)
+        who = found.name if found else "A spark"
+    text = " ".join(str(entry.get("text") or "").split())
+    if len(text) > REACTED_CHARS:
+        text = text[:REACTED_CHARS].rstrip() + "…"
+    what = "report" if entry.get("kind") == EVENT else "message"
+    sparks.reacted(
+        author, emoji, who, f'your {what} #{entry.get("id", 0)}, "{text}"',
+        f"{team.name}'s chat", f"{team.id}:{entry.get('id', 0)}:{emoji}:{by}",
+        on,
+    )
 
 
 def _reacting(team_id: str, spark: sparks.Spark, reacted: list[str]):

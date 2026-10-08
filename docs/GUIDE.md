@@ -496,7 +496,10 @@ have looked them over.
   on one, `@everyone` on all of them, and replying to a message calls on
   whoever wrote it. Sparks can bring a teammate in, send a few messages
   in a row, react with an emoji, or stay quiet when they have nothing to
-  add. Voice mode and `:emoji` work there too.
+  add. A spark hears of a reaction to what it said, a message or a
+  report, by you or a teammate: in its chats, and on its next shift,
+  without being called to one. Taken back, it is never told.
+  Voice mode and `:emoji` work there too.
 - **Team rules.** Lines every spark on a team keeps to, on top of its own
   boundaries, on shifts and in chats alike (the team's edit form, or
   `/sparks teams rules <team> <rules|none>`).
