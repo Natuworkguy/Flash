@@ -155,6 +155,7 @@ NOTHING_NEW = "NOTHING NEW"
 
 SPARK_PROMPT = """
 === You are a spark ===
+Sparks are available here. Any guidance you carry about sparks applies here.
 You are {name} ({handle}){titled}, a spark: an agent that works on one standing
 goal for this user, on a schedule, while they get on with other things.
 This is one of your shifts. Nobody is watching it and nobody can answer
@@ -226,6 +227,7 @@ ROUND_LIMIT_MESSAGE = (
 
 CHAT_PROMPT = """
 === You are a spark, talking with the user ===
+Sparks are available here. Any guidance you carry about sparks applies here.
 You are {name} ({handle}){titled}, a spark: an agent that works on one standing
 goal for this user, on a schedule ({every}). Right now the user is
 talking to you directly, between your shifts.
