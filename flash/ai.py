@@ -254,8 +254,12 @@ class Config:
         cls.max_tool_output_chars = _int_env(
             "MAX_TOOL_OUTPUT_CHARS", 1200, minimum=500
         )
+        # Room for a whole file in one write call. A tool call is part of
+        # the reply, so one cut off here arrives missing what it had not
+        # reached yet; history_budget keeps this from crowding a small
+        # window.
         cls.max_output_tokens = _int_env(
-            "MAX_OUTPUT_TOKENS", 1024, minimum=128
+            "MAX_OUTPUT_TOKENS", 8192, minimum=128
         )
         cls.num_ctx = (os.getenv("NUM_CTX") or "").strip().lower()
         cls.no_command_confirmation = bool(

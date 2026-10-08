@@ -1175,3 +1175,42 @@ def test_ways_to_run_reads_code_as_a_console_would():
     # A last statement is not a value to hand back.
     ways = browser._ways_to_run("let a = 1;\nreturn a")
     assert all("return (return" not in w for w in ways)  # nosec B101
+
+
+class TestACallMissingAnArgument:
+    """A write cut off at the reply's output limit arrives with its path
+    never written; the model must hear that, not a Python TypeError it
+    reads as having got the syntax wrong."""
+
+    def test_a_long_write_without_its_path_was_cut_off(self, tmp_path,
+                                                       monkeypatch):
+        monkeypatch.chdir(tmp_path)
+
+        said = tools.run_tool(("write", {"content": "<html>" + "x" * 5000}))
+
+        assert said.startswith("Error: the write call arrived without "
+                               "`path`.")
+        assert "cut off" in said and "append=true" in said
+        assert list(tmp_path.iterdir()) == []
+
+    def test_a_short_call_is_asked_again_in_full(self):
+        said = tools.run_tool(("write", {"content": "hi"}))
+
+        assert "without `path`" in said
+        assert "Call it again with every required argument." in said
+        assert "cut off" not in said
+
+    def test_missing_arguments_are_checked_before_system_one(self,
+                                                             monkeypatch):
+        reviewed = []
+        monkeypatch.setattr(tools, "_review",
+                            lambda name, args: reviewed.append(name))
+
+        tools.run_tool(("write", {"content": "hi"}))
+
+        assert reviewed == []
+
+    def test_optional_arguments_are_not_missing(self):
+        assert tools._missing_arguments(
+            tools.write_tool, {"path": "a", "content": "b"},
+        ) == []
