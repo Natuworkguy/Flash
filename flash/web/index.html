@@ -1824,8 +1824,17 @@ body.all-stopped .org-node, body.all-stopped .spark-card { animation: all-halt 0
 .tc-event:hover { border-color: color-mix(in srgb, var(--c, var(--accent)) 40%, var(--border)); background: color-mix(in srgb, var(--c, var(--accent)) 8%, var(--hover)); }
 .tc-event .words b { color: var(--text); font-weight: 600; }
 .tc-event .when { color: var(--text-3); }
-.org-node .also-for { display: inline-flex; align-items: flex-start; gap: 4px; font-size: 11.5px; line-height: 1.35; color: color-mix(in srgb, var(--c) 70%, var(--text-3)); max-width: 100%; }
-.org-node .also-for svg { flex: none; width: 11px; height: 11px; margin-top: 2px; transform: scaleX(-1); }
+.lead-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.lead-chips .chip-btn { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; padding: 4px 11px 4px 5px; border-radius: 999px; border: 1px solid var(--border-strong); color: var(--text-2); transition: background 0.15s, border-color 0.15s, transform 0.2s var(--spring); }
+.lead-chips .chip-btn:hover { background: var(--hover); color: var(--text); }
+.lead-chips .chip-btn .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--c); flex: none; margin-left: 3px; }
+.lead-chips .chip-btn:active { transform: scale(0.95); }
+.lead-chips .chip-btn.on { border-color: color-mix(in srgb, var(--c) 60%, var(--border)); background: color-mix(in srgb, var(--c) 16%, var(--surface)); color: var(--text); }
+.org .shared-lines { position: absolute; left: 0; top: 0; pointer-events: none; overflow: visible; z-index: 0; }
+.org-tree { z-index: 1; }
+/* The same line as the tree's own: a second lead is no lesser one. */
+.shared-lines path { fill: none; stroke: var(--line); stroke-width: 2; stroke-linejoin: round; }
+
 .tc-event .quote { flex-basis: 100%; color: var(--text-3); overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
 .tc-event.failed .words { color: var(--warn); }
 .tc-typing { display: flex; flex-direction: column; gap: 8px; padding: 4px 16px 10px; }
@@ -6638,6 +6647,7 @@ function teamBlock(team, byId, again, ti) {
   };
   team.chart.forEach((node) => grow(node, 0, tree));
   org.appendChild(tree);
+  sharedLines(org, tree, byId);
   // Wider than the page, as on a phone: it opens on its lead, centred.
   requestAnimationFrame(() => { org.scrollLeft = (org.scrollWidth - org.clientWidth) / 2; });
   tree.querySelectorAll(".org-node").forEach(tilt);
@@ -6663,12 +6673,6 @@ function orgNode(spark, depth, fresh) {
   state.classList.toggle("working", spark.status === "working");
   state.classList.toggle("asking", !!spark.waiting);
   if (spark.budget_on) node.querySelector(".words").appendChild(budgetMeter(spark));
-  // A spark shared by two managers: who else it does work for.
-  if ((spark.also_for || []).length) {
-    const also = el("span", "also-for", `${icon("reply")}<span></span>`);
-    also.querySelector("span").textContent = `also for ${spark.also_for.join(", ")}`;
-    node.querySelector(".words").appendChild(also);
-  }
   // At work under a lead: a glow runs up the line to it.
   if (spark.status === "working" && depth > 0) node.appendChild(el("span", "pulse"));
   const before = seenTeam.get(spark.id);
@@ -6683,6 +6687,7 @@ function orgNode(spark, depth, fresh) {
   seenUnread.set(spark.id, spark.unread);
   node.onclick = () => openSpark(spark.id);
   node.dataset.tip = `${spark.name}: ${spark.goal.split("\n")[0].slice(0, 120)}`;
+  node.dataset.spark = spark.id;
   return node;
 }
 
@@ -6753,6 +6758,60 @@ function teamBurst(node, colour, count = 14) {
     bit.addEventListener("animationend", () => bit.remove());
     node.appendChild(bit);
   }
+}
+
+// A spark with more than one lead sits under the first in the tree, and
+// gets a line up to each of the others the same as that one: from where
+// its own line meets the bar, along to under the other lead and up into
+// it, rounded at the turns as the tree's are. Drawn once the tree is laid
+// out, and again whenever it changes size.
+function sharedLines(org, tree, byId) {
+  const pairs = [];
+  tree.querySelectorAll(".org-node").forEach((node) => {
+    const spark = byId.get(node.dataset.spark);
+    for (const id of ((spark && spark.lead_ids) || []).slice(1)) {
+      const to = tree.querySelector(`.org-node[data-spark="${CSS.escape(id)}"]`);
+      if (to) pairs.push([node, to]);
+    }
+  });
+  if (!pairs.length) return;
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.classList.add("shared-lines");
+  svg.setAttribute("aria-hidden", "true");
+  org.prepend(svg);
+  // Where an element sits in the chart, by layout rather than by what is
+  // on screen, so a card mid-animation or tilted under the pointer does
+  // not drag its line along.
+  const at = (n) => {
+    let x = 0, y = 0;
+    for (let e = n; e && e !== org; e = e.offsetParent) { x += e.offsetLeft; y += e.offsetTop; }
+    return { x, y, w: n.offsetWidth, h: n.offsetHeight };
+  };
+  const draw = () => {
+    if (!org.isConnected) return;
+    svg.setAttribute("width", org.scrollWidth);
+    svg.setAttribute("height", org.scrollHeight);
+    svg.textContent = "";
+    for (const [from, to] of pairs) {
+      const a = at(from), b = at(to);
+      const x0 = a.x + a.w / 2, x1 = b.x + b.w / 2;
+      // The bar its own line rises to, where every line in its row turns.
+      const bar = a.y - 22;
+      const top = b.y + b.h;
+      const r = Math.min(12, Math.abs(x1 - x0) / 2);
+      const dir = x1 > x0 ? 1 : -1;
+      const d = top <= bar - r
+        ? `M ${x0} ${bar} H ${x1 - dir * r} Q ${x1} ${bar} ${x1} ${bar - r} V ${top}`
+        // A lead in its own row: over the top of both, into its side.
+        : `M ${x0} ${a.y} V ${b.y - 14 + r} Q ${x0} ${b.y - 14} ${x0 + dir * r} ${b.y - 14} H ${x1 - dir * r} Q ${x1} ${b.y - 14} ${x1} ${b.y - 14 + r} V ${b.y}`;
+      const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+      path.setAttribute("d", d);
+      path.dataset.ends = `${from.dataset.spark} ${to.dataset.spark}`;
+      svg.appendChild(path);
+    }
+  };
+  requestAnimationFrame(() => requestAnimationFrame(draw));
+  if (window.ResizeObserver) new ResizeObserver(draw).observe(tree);
 }
 
 // A comet that runs along the org chart's lines from FROM up to TO: up
@@ -7249,7 +7308,7 @@ function fillSpark(box, spark, again = false) {
   if (spark.team_name) {
     const line = el("div", "team-line", `<span class="dot"></span><span></span>`);
     line.style.setProperty("--t", spark.team_colour || spark.colour);
-    line.querySelector("span:last-child").textContent = `On ${spark.team_name}${spark.lead_name ? `, reporting to ${spark.lead_name}` : ""}${(spark.also_for || []).length ? `, and working for ${spark.also_for.join(" and ")} too` : ""}`;
+    line.querySelector("span:last-child").textContent = `On ${spark.team_name}${spark.lead_name ? `, reporting to ${spark.lead_name}` : ""}`;
     box.querySelector(".spark-head .meta").after(line);
   }
   if (spark.budget_on) box.querySelector(".spark-head .meta").parentElement.appendChild(budgetMeter(spark));
@@ -7588,12 +7647,32 @@ async function teamFields(form, spark) {
   if (!form.isConnected) return;
   form.team.insertAdjacentHTML("beforeend", r.teams.map((t) => `<option value="${esc(t.id)}">${esc(t.name)}</option>`).join(""));
   form.team.value = spark?.team && r.teams.some((t) => t.id === spark.team) ? spark.team : "";
+  // Who it reports to: a chip for each spark on its team, as many as
+  // wanted, all equals; a click picks one or lets it go.
+  const field = form.querySelector(".leads-field");
+  const box = form.querySelector(".lead-chips");
+  const picked = new Set(spark?.lead_ids || []);
   const leads = () => {
     const on = form.team.value;
     const mates = r.sparks.filter((s) => on && s.team === on && s.id !== spark?.id);
-    form.lead.innerHTML = `<option value="">No one</option>` + mates.map((s) => `<option value="${esc(s.id)}">${esc(s.name)}</option>`).join("");
-    form.lead.disabled = !mates.length;
-    form.lead.value = spark && on === spark.team && mates.some((s) => s.id === spark.reports_to) ? spark.reports_to : "";
+    box.textContent = "";
+    for (const mate of mates) {
+      const chosen = picked.has(mate.id) && on === spark?.team;
+      const chip = el("button", `chip-btn${chosen ? " on" : ""}`);
+      chip.type = "button";
+      chip.dataset.id = mate.id;
+      chip.style.setProperty("--c", mate.colour);
+      chip.appendChild(el("i", "dot"));
+      chip.append(mate.name);
+      chip.setAttribute("aria-pressed", String(chosen));
+      chip.onclick = () => {
+        const now = chip.classList.toggle("on");
+        chip.setAttribute("aria-pressed", String(now));
+        if (now) picked.add(mate.id); else picked.delete(mate.id);
+      };
+      box.appendChild(chip);
+    }
+    field.hidden = !mates.length;
   };
   form.team.addEventListener("change", leads);
   leads();
@@ -7657,7 +7736,8 @@ function sparkForm(spark, inProjectId = "", template = "") {
     <label class="field"><span>Project</span><select name="project"><option value="">No project</option>${[...projects].reverse().map((p) => `<option value="${esc(p.id)}"${editing && spark.project === p.id ? " selected" : ""}>${esc(p.name)}</option>`).join("")}</select><small>${projects.length ? "Its shifts work on the project's folder and follow its instructions, and a chat with it starts there." : "Make a project on the Projects page to give it one: a folder, and how to work in it."}</small></label>
     <label class="field"><span>Watch a folder <em class="count">optional</em></span><input name="watch" class="mono" placeholder="~/Downloads" autocomplete="off" spellcheck="false" role="combobox" aria-autocomplete="list" aria-expanded="false"><small>A change to its files starts a shift too, besides the schedule, and it is told which files changed. Tab takes a suggestion and shows what is inside it.</small></label>
     <label class="field"><span>Boundaries</span><textarea name="boundaries" rows="2" placeholder="Only read. Never push, delete, or message anyone."></textarea><small>Lines it must not cross. Running commands and changing files also need autonomous mode, as for sub-agents.</small></label>
-    <div class="field-pair"><label class="field"><span>Team <em class="count">optional</em></span><select name="team"><option value="">No team</option></select></label><label class="field"><span>Reports to</span><select name="lead" disabled><option value="">No one</option></select></label></div>
+    <label class="field"><span>Team <em class="count">optional</em></span><select name="team"><option value="">No team</option></select></label>
+    <div class="field leads-field" hidden><span>Reports to <em class="count">one or more</em></span><div class="lead-chips" role="group" aria-label="Reports to"></div><small>Its own news goes up to each of them. Work one of them hands it goes back to that one, done in its project.</small></div>
     <label class="field check"><input type="checkbox" name="budget_on"${editing && spark.budget_on ? " checked" : ""}><span>Give it a budget. Past it, it pauses itself until the hour, day, week or month turns.</span></label>
     <div class="field budget-field"${editing && spark.budget_on ? "" : " hidden"}><span>Budget</span><div class="budget-row"><input name="budget" placeholder="200k" autocomplete="off" aria-label="Tokens" value="${editing && spark.budget ? spark.budget : ""}"><span class="per">tokens</span><select name="budget_period" aria-label="Every">${[["hour", "an hour"], ["day", "a day"], ["week", "a week"], ["month", "a month"]].map(([v, label]) => `<option value="${v}"${(editing ? spark.budget_period || "month" : "month") === v ? " selected" : ""}>${label}</option>`).join("")}</select></div><small>${editing && spark.budget_on ? `${(spark.used || 0).toLocaleString()} used ${spark.period_words || "this month"}. ` : ""}Counted over its shifts, chats and answers: what it reads and what it writes. Like 200000, 200k or 2m.</small></div>
     ${editing ? "" : `<label class="field check"><input type="checkbox" name="paused"><span>Make it paused. Nothing runs until you press Resume in its window; then it starts its first shift.</span></label>`}
@@ -7669,9 +7749,11 @@ function sparkForm(spark, inProjectId = "", template = "") {
       const name = data.sparkname.trim();
       // Its team, who it reports to and its budget, each only if changed.
       const placement = async (id, was) => {
-        const team = data.team || "", lead = data.lead || "";
+        const team = data.team || "";
+        const leads = [...form.querySelectorAll(".lead-chips .chip-btn.on")].map((b) => b.dataset.id);
         if (team !== (was.team || "")) await command("spark-team", id, null, { team });
-        if (lead !== (team === (was.team || "") ? was.reports_to || "" : "")) await command("spark-lead", id, null, { lead });
+        const had = team === (was.team || "") ? was.lead_ids || [] : [];
+        if (leads.join() !== had.join()) await command("spark-lead", id, null, { leads });
         const on = !!data.budget_on;
         const tokens = (data.budget || "").trim();
         const period = data.budget_period || "month";

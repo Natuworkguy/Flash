@@ -441,10 +441,9 @@ class Spark:
     unavailable: str = ""
     unavailable_model: str = ""
     unavailable_at: float = 0.0
-    # The sparks that have handed it work, by ID, and when each last did:
-    # a worker shared by two managers answers whichever asked, and the
-    # chart shows who else it works for besides its lead.
-    serves: dict = field(default_factory=dict)
+    # Its other leads on its team, after REPORTS_TO, as equals: a spark
+    # can report to two at once, a manager for each project it works on.
+    also_reports_to: list = field(default_factory=list)
 
     @property
     def handle(self) -> str:
@@ -486,11 +485,11 @@ class Spark:
         data["team_name"] = found_team.name if found_team else ""
         data["team_colour"] = found_team.colour if found_team else ""
         data["team_rules"] = found_team.rules if found_team else ""
-        data["also_for"] = also_for(self)
-        # Its lead's own file only: listing every spark reads each once.
-        lead = _load(_path(self.reports_to)) if self.reports_to else None
-        data["lead_name"] = lead.name if lead and lead.team == self.team \
-            and self.team else ""
+        # Its leads' own files only: listing every spark reads each once.
+        leads = leads_of(self)
+        data["lead_ids"] = [lead.id for lead in leads]
+        data["lead_names"] = [lead.name for lead in leads]
+        data["lead_name"] = " and ".join(data["lead_names"])
         data["used"] = used_this_period(self)
         data["period_words"] = this_period(self)
         return data
@@ -1132,21 +1131,56 @@ def members(team_id: str) -> list[Spark]:
 
 
 def reports_of(spark: Spark) -> list[Spark]:
-    """The sparks that report to SPARK."""
+    """The sparks that report to SPARK, alone or with another lead."""
 
     return [
         s for s in all_sparks()
-        if s.reports_to == spark.id and s.team == spark.team
+        if s.team == spark.team and (
+            s.reports_to == spark.id or spark.id in (s.also_reports_to or [])
+        )
     ]
 
 
 def lead_of(spark: Spark) -> Optional[Spark]:
-    """The spark SPARK reports to, if it is still on its team."""
+    """The spark SPARK reports to first, if it is still on its team."""
 
     if not spark.reports_to or not spark.team:
         return None
     lead = find(spark.reports_to)
     return lead if lead is not None and lead.team == spark.team else None
+
+
+def leads_of(spark: Spark) -> list[Spark]:
+    """Every spark SPARK reports to, still on its team: its first lead,
+    then the others, as equals."""
+
+    if not spark.team:
+        return []
+    out: list[Spark] = []
+    for lead_id in [spark.reports_to, *(spark.also_reports_to or [])]:
+        if not lead_id or lead_id == spark.id or any(
+            lead.id == lead_id for lead in out
+        ):
+            continue
+        lead = _load(_path(lead_id))
+        if lead is not None and lead.team == spark.team:
+            out.append(lead)
+    return out
+
+
+def _reports_up_to(start: Spark, target_id: str) -> bool:
+    """Whether START reports, through any of its leads, up to TARGET_ID."""
+
+    todo, seen = [start], set()
+    while todo:
+        spark = todo.pop()
+        if spark.id == target_id:
+            return True
+        if spark.id in seen:
+            continue
+        seen.add(spark.id)
+        todo.extend(leads_of(spark))
+    return False
 
 
 def set_team(key: str, team_key: str = "") -> Spark:
@@ -1161,14 +1195,16 @@ def set_team(key: str, team_key: str = "") -> Spark:
         spark.team = team.id if team else ""
         if spark.team != before:
             spark.reports_to = ""
+            spark.also_reports_to = []
             # Out of a paused team, it is its own again; into one, it
             # waits with the rest.
             _release(spark)
             if team is not None and team.paused:
                 _hold(spark)
             for other in all_sparks():
-                if other.reports_to == spark.id and other.id != spark.id:
-                    other.reports_to = ""
+                if other.id == spark.id:
+                    continue
+                if _let_go_of(other, spark.id, ""):
                     _save(other)
         _save(spark)
     log(spark.id, "team", team=team.name if team else "")
@@ -1181,17 +1217,29 @@ def set_team(key: str, team_key: str = "") -> Spark:
     return spark
 
 
+MAX_LEADS = 4
+
+
 def set_lead(key: str, lead_key: str = "") -> Spark:
     """Have KEY report to LEAD_KEY, a spark on its team, or to no one."""
 
+    return set_leads(key, [lead_key] if str(lead_key or "").strip() else [])
+
+
+def set_leads(key: str, keys: list) -> Spark:
+    """Have KEY report to every spark KEYS names, on its team, as equals:
+    two managers, say, one for each project it works on. Its own news
+    goes up to all of them; work one hands it goes back to that one. An
+    empty KEYS, or "none", is no one."""
+
     with _held():
         spark = _must_find(key)
-        if not str(lead_key or "").strip():
-            spark.reports_to = ""
-            _save(spark)
-            lead = None
-        else:
-            lead = _must_find(lead_key)
+        leads: list[Spark] = []
+        for wanted in keys or []:
+            wanted = str(wanted or "").strip()
+            if not wanted or wanted.lower() == "none":
+                continue
+            lead = _must_find(wanted)
             if lead.id == spark.id:
                 raise SparkError(f"{spark.name} cannot report to itself.")
             if not spark.team or lead.team != spark.team:
@@ -1199,21 +1247,41 @@ def set_lead(key: str, lead_key: str = "") -> Spark:
                     f"{lead.name} is not on {spark.name}'s team: put them "
                     "on the same team first."
                 )
-            # No circles: the lead must not already report up to it.
-            up, seen = lead, set()
-            while up is not None and up.id not in seen:
-                if up.id == spark.id:
-                    raise SparkError(
-                        f"{lead.name} already reports to {spark.name}, "
-                        "so it cannot be the other way round too."
-                    )
-                seen.add(up.id)
-                up = lead_of(up)
-            spark.reports_to = lead.id
-            _save(spark)
-    log(spark.id, "reports_to", lead=lead.name if lead else "")
+            # No circles: a lead must not already report up to it.
+            if _reports_up_to(lead, spark.id):
+                raise SparkError(
+                    f"{lead.name} already reports to {spark.name}, "
+                    "so it cannot be the other way round too."
+                )
+            if all(found.id != lead.id for found in leads):
+                leads.append(lead)
+        if len(leads) > MAX_LEADS:
+            raise SparkError(
+                f"A spark can report to at most {MAX_LEADS} others."
+            )
+        spark.reports_to = leads[0].id if leads else ""
+        spark.also_reports_to = [lead.id for lead in leads[1:]]
+        _save(spark)
+    names = [lead.name for lead in leads]
+    log(spark.id, "reports_to", lead=" and ".join(names), leads=names)
     _changed()
     return spark
+
+
+def _let_go_of(spark: Spark, gone: str, instead: str) -> bool:
+    """Take GONE out of SPARK's leads, putting INSTEAD where it was first:
+    whether anything changed."""
+
+    also = [i for i in spark.also_reports_to or [] if i != gone]
+    changed = also != list(spark.also_reports_to or [])
+    if spark.reports_to == gone:
+        spark.reports_to = instead
+        changed = True
+    if not spark.reports_to and also:
+        spark.reports_to = also.pop(0)
+    also = [i for i in also if i != spark.reports_to]
+    spark.also_reports_to = also
+    return changed
 
 
 def org_chart(team_id: str) -> list[dict]:
@@ -1237,11 +1305,11 @@ def org_chart(team_id: str) -> list[dict]:
 
 
 def _roll_up(spark: Spark, report: "Report") -> None:
-    """Give SPARK's news to the spark it reports to, for its next shift:
-    not a reason to start one, as handing work over is."""
+    """Give SPARK's news to every spark it reports to, for their next
+    shifts: not a reason to start one, as handing work over is."""
 
-    lead = lead_of(spark)
-    if lead is None or report.quiet or report.failed or report.approval:
+    leads = leads_of(spark)
+    if not leads or report.quiet or report.failed or report.approval:
         return
     text = " ".join(report.text.split())
     if len(text) > ROLLUP_CHARS:
@@ -1254,8 +1322,9 @@ def _roll_up(spark: Spark, report: "Report") -> None:
         })
         del other.inbox[:-MAX_INBOX]
 
-    with contextlib.suppress(SparkError):
-        _edit(lead.id, give)
+    for lead in leads:
+        with contextlib.suppress(SparkError):
+            _edit(lead.id, give)
 
 
 def _answer_askers(
@@ -1672,7 +1741,9 @@ def propose_removal(by_key: str, target_key: str, reason: str = "") -> dict:
 
     by = _must_find(by_key)
     target = _must_find(target_key)
-    if target.reports_to != by.id or target.team != by.team or not by.team:
+    if not by.team or target.team != by.team or by.id not in [
+        lead.id for lead in leads_of(target)
+    ]:
         raise SparkError(
             f"{target.name} does not report to you: you can only propose "
             "letting go of your own reports."
@@ -1858,28 +1929,6 @@ def _job_projects(inbox: list) -> dict:
             if item.get("from") not in names:
                 names.append(item.get("from", "a spark"))
     return jobs
-
-
-# How long a spark that handed another work still shows as one it works
-# for.
-ALSO_FOR_DAYS = 30
-
-
-def also_for(spark: Spark) -> list[str]:
-    """The sparks besides its lead that SPARK has done work for lately,
-    by name, the latest first."""
-
-    since = time.time() - ALSO_FOR_DAYS * 86400
-    out = []
-    for spark_id, at in sorted(
-        (spark.serves or {}).items(), key=lambda kv: -float(kv[1] or 0),
-    ):
-        if spark_id == spark.reports_to or float(at or 0) < since:
-            continue
-        other = _load(_path(spark_id))
-        if other is not None:
-            out.append(other.name)
-    return out
 
 
 def _watch_folder(path: str) -> str:
@@ -2167,7 +2216,10 @@ def share_team_code(key: str) -> str:
         "v": 1, "name": team.name, "colour": team.colour,
         "rules": team.rules,
         "sparks": [
-            {**_template_of(s), "reports_to": index.get(s.reports_to, -1)}
+            {**_template_of(s), "reports_to": index.get(s.reports_to, -1),
+             "also_reports_to": [
+                 index[i] for i in s.also_reports_to or [] if i in index
+             ]}
             for s in found
         ],
     })
@@ -2188,6 +2240,11 @@ def read_team(data: dict) -> dict:
         checked["reports_to"] = lead if isinstance(lead, int) and (
             0 <= lead < len(sparks)
         ) else -1
+        more = item.get("also_reports_to") if isinstance(item, dict) else []
+        checked["also_reports_to"] = [
+            i for i in (more if isinstance(more, list) else [])
+            if isinstance(i, int) and 0 <= i < len(sparks)
+        ][:MAX_LEADS - 1]
         out.append(checked)
     colour = str(data.get("colour") or "")
     return {
@@ -2255,6 +2312,13 @@ def add_team(source: str, model: str = "", paused: bool = False) -> Team:
         if item["reports_to"] >= 0 and made[item["reports_to"]].id != spark.id:
             _edit(spark.id, lambda s, lead=made[item["reports_to"]].id:
                   setattr(s, "reports_to", lead))
+        more = [
+            made[i].id for i in item.get("also_reports_to", [])
+            if made[i].id != spark.id
+        ]
+        if more:
+            _edit(spark.id, lambda s, more=more:
+                  setattr(s, "also_reports_to", more))
     for spark in made:
         log(spark.id, "team", team=team.name, from_template=data["name"])
     if data["rules"]:
@@ -2439,8 +2503,7 @@ def remove(key: str) -> Spark:
         spark = _must_find(key)
         _path(spark.id).unlink(missing_ok=True)
         for other in all_sparks():
-            if other.reports_to == spark.id:
-                other.reports_to = spark.reports_to
+            if _let_go_of(other, spark.id, spark.reports_to):
                 _save(other)
     log(spark.id, "removed", name=spark.name)
     _changed()
@@ -3161,7 +3224,6 @@ def _handing_off(spark: Spark) -> Callable[[dict], str]:
                                 "at": time.time(), "by": spark.id,
                                 "project": spark.project})
             del other.inbox[:-MAX_INBOX]
-            other.serves = {**(other.serves or {}), spark.id: time.time()}
             other.asked = True
 
         _edit(target.id, give)
@@ -3426,14 +3488,23 @@ def _team_lines(spark: Spark) -> str:
     team = find_team(spark.team) if spark.team else None
     if team is not None:
         lines.append(f"=== Your team: {team.name} ===")
-        lead = lead_of(spark)
+        leads = leads_of(spark)
         under = reports_of(spark)
-        lines.append(
-            f"- You report to {lead.name} ({lead.handle}): what you find "
-            "goes up to it." if lead else
-            "- You report to no one on it: you lead"
-            + (" it." if under else " your own work.")
-        )
+        if len(leads) > 1:
+            lines.append(
+                "- You report to "
+                + " and ".join(f"{one.name} ({one.handle})" for one in leads)
+                + ", as equals: what you find on your own goes up to all of "
+                "them, and work one of them hands you goes back to that one, "
+                "done in its project."
+            )
+        else:
+            lines.append(
+                f"- You report to {leads[0].name} ({leads[0].handle}): what "
+                "you find goes up to it." if leads else
+                "- You report to no one on it: you lead"
+                + (" it." if under else " your own work.")
+            )
         if under:
             lines.append(
                 "- Reporting to you: "
