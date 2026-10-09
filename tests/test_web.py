@@ -2734,6 +2734,160 @@ class TestRetryAfterError:
         assert [e["type"] for e in chat.log][:2] == ["user", "assistant"]
 
 
+class TestEditing:
+    def settle(self, chat):
+        wait_for(lambda: not (chat.busy or chat.queued or chat.pending))
+
+    def said(self, chat):
+        return [
+            (e["type"], e["text"]) for e in chat.log
+            if e["type"] in ("user", "assistant", "error")
+        ]
+
+    def chat_of_two(self):
+        FakeClient.scripts = [
+            [part("Red."), part(done=True)],
+            [part("Blue."), part(done=True)],
+        ]
+        session = web.Session()
+        chat = session.new_chat()
+        run(session, chat, "pick a colour")
+        run(session, chat, "another")
+        self.second = [
+            i for i, e in enumerate(chat.log) if e["type"] == "user"
+        ][1]
+        return session, chat
+
+    def test_an_edit_goes_back_and_runs_from_there(self):
+        session, chat = self.chat_of_two()
+        drain = events_of(session)
+        FakeClient.scripts = [[part("Square."), part(done=True)]]
+
+        web.command(session, {
+            "name": "edit", "chat": chat.id, "at": 0, "arg": "pick a shape",
+        })
+        self.settle(chat)
+
+        assert self.said(chat) == [
+            ("user", "pick a shape"), ("assistant", "Square."),
+        ]
+        # The model sees the edited message, and nothing it replaced.
+        assert [m["content"] for m in chat.messages] == [
+            "pick a shape", "Square.",
+        ]
+        sent = FakeClient.requests[-1]["messages"]
+        assert [m["content"] for m in sent[1:]] == ["pick a shape"]
+        edited = chat.log[0]
+        assert (edited["version"], edited["versions"]) == (1, 2)
+        rewound = next(e for e in drain() if e["type"] == "rewound")
+        assert (rewound["keep"], rewound["tail"]) == (0, [])
+
+    def test_an_earlier_version_comes_back_with_its_replies(self):
+        session, chat = self.chat_of_two()
+        before = (list(chat.log), list(chat.messages))
+        FakeClient.scripts = [[part("Blue again."), part(done=True)]]
+        web.command(session, {
+            "name": "edit", "chat": chat.id, "at": self.second,
+            "arg": "one more",
+        })
+        self.settle(chat)
+        after = self.said(chat)
+
+        web.command(session, {
+            "name": "version", "chat": chat.id, "at": self.second,
+            "version": 0,
+        })
+        assert self.said(chat) == [
+            (e["type"], e["text"]) for e in before[0]
+            if e["type"] in ("user", "assistant", "error")
+        ]
+        assert chat.messages == before[1]
+        shown = chat.log[self.second]
+        assert (shown["version"], shown["versions"]) == (0, 2)
+
+        web.command(session, {
+            "name": "version", "chat": chat.id, "at": self.second,
+            "version": 1,
+        })
+        assert self.said(chat) == after
+        assert chat.messages[-1]["content"] == "Blue again."
+
+    def test_versions_survive_a_restart(self, tmp_path):
+        session, chat = self.chat_of_two()
+        FakeClient.scripts = [[part("Green."), part(done=True)]]
+        web.command(session, {
+            "name": "edit", "chat": chat.id, "at": 0, "arg": "pick again",
+        })
+        self.settle(chat)
+
+        again = web.Chat.restore(json.loads(json.dumps(chat.saved())))
+        session.chats[chat.id] = again
+        web.command(session, {
+            "name": "version", "chat": chat.id, "at": 0, "version": 0,
+        })
+        assert [t for t, _ in self.said(again)].count("user") == 2
+
+    def test_only_a_message_you_sent_can_be_edited(self):
+        session, chat = self.chat_of_two()
+        with pytest.raises(ValueError):
+            web.command(session, {
+                "name": "edit", "chat": chat.id, "at": 1, "arg": "x",
+            })
+
+    def test_not_while_a_reply_runs(self):
+        gate = threading.Event()
+
+        def held():
+            gate.wait(5)
+            yield from [part("Done."), part(done=True)]
+
+        FakeClient.scripts = [held]
+        session = web.Session()
+        chat = session.new_chat()
+        session.send(chat, "go")
+        wait_for(lambda: chat.busy)
+        with pytest.raises(ValueError):
+            web.command(session, {
+                "name": "edit", "chat": chat.id, "at": 0, "arg": "stop",
+            })
+        gate.set()
+        self.settle(chat)
+
+    def test_a_chat_from_before_turns_were_marked_is_matched(self):
+        session, chat = self.chat_of_two()
+        for entry in chat.log:
+            entry.pop("turn", None)
+        for message in chat.messages:
+            message.pop("turn", None)
+        FakeClient.scripts = [[part("Teal."), part(done=True)]]
+
+        web.command(session, {
+            "name": "edit", "chat": chat.id, "at": self.second,
+            "arg": "one more",
+        })
+        self.settle(chat)
+
+        assert [m["content"] for m in chat.messages] == [
+            "pick a colour", "Red.", "one more", "Teal.",
+        ]
+
+    def test_a_summarized_message_is_not_edited(self):
+        session, chat = self.chat_of_two()
+        chat.messages[:] = [web.context.summary_message("They chatted.")]
+        with pytest.raises(ValueError, match="summarized"):
+            web.command(session, {
+                "name": "edit", "chat": chat.id, "at": 0, "arg": "x",
+            })
+
+    def test_the_turn_mark_never_reaches_an_extension(self):
+        from flash import providers
+
+        assert providers._own({"role": "user", "content": "x",
+                               "turn": "ab"}) == {
+            "role": "user", "content": "x",
+        }
+
+
 class TestSwitchingLan:
     def test_the_server_reopens_with_the_same_port_token_and_chats(
         self, monkeypatch

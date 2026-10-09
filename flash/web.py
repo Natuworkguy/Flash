@@ -300,6 +300,10 @@ class Chat:
     project: str = ""
     # The spark this chat is with, if any: it answers instead of Flash.
     spark: str = ""
+    # Every version of a message that was edited, by the group its
+    # versions share: what the chat was from that message on, in the log
+    # and in what the model saw, with None for the version showing now.
+    branches: dict[str, list] = field(default_factory=dict)
 
     def summary(self) -> dict:
         return {
@@ -328,6 +332,7 @@ class Chat:
             "updated": self.updated,
             "project": self.project,
             "spark": self.spark,
+            "branches": self.branches,
         }
 
     @classmethod
@@ -341,6 +346,7 @@ class Chat:
             updated=float(data.get("updated") or time.time()),
             project=str(data.get("project") or ""),
             spark=str(data.get("spark") or ""),
+            branches=dict(data.get("branches") or {}),
         )
 
 
@@ -861,6 +867,7 @@ class Session:
         self.unqueue(chat)
         chat.messages.clear()
         chat.log.clear()
+        chat.branches.clear()
         chat.partial = chat.thinking = ""
         workspace.delete_chat(chat.id)
         self.emit(chat, {"type": "cleared"})
@@ -1282,9 +1289,10 @@ class Session:
 
     def _begin(
         self, chat: Chat, text: str, wake: bool = False,
-        files: Optional[list] = None,
+        files: Optional[list] = None, version: Optional[dict] = None,
     ) -> None:
-        """Put a turn's message in the chat, as its turn starts."""
+        """Put a turn's message in the chat, as its turn starts. An
+        edited one says which of its versions it is."""
 
         if wake:
             self.started.pop(chat.id, None)
@@ -1301,11 +1309,145 @@ class Session:
             )
             chat.title = " ".join(named.split())[:TITLE_CHARS] or chat.title
             self.hub.publish({"type": "chats", "chat": chat.id})
-        event: dict = {"type": "user", "text": text}
+        event: dict = {
+            "type": "user", "text": text, "turn": uuid.uuid4().hex[:8],
+            **(version or {}),
+        }
         if files:
             event["files"] = files
         self.emit(chat, event)
         self.started[chat.id] = len(chat.log) - 1
+
+    # Editing -------------------------------------------------------
+
+    def _cut(self, chat: Chat, at: int) -> int:
+        """Where, in what the model sees, the turn the message at AT in
+        the log began: everything from there on came after it.
+
+        Each turn's message carries the turn it began. A chat from
+        before that is matched by counting turns back from the end.
+        """
+
+        entry = chat.log[at]
+        if entry.get("turn"):
+            later = [
+                e["turn"] for e in chat.log[at:]
+                if e["type"] == "user" and e.get("turn")
+            ]
+            for turn in later:
+                for index, message in enumerate(chat.messages):
+                    if message.get("turn") == turn:
+                        return index
+        else:
+            turns = sum(
+                1 for e in chat.log[at:]
+                if e["type"] == "user" and not e.get("steer")
+                or e["type"] == "note" and e.get("text") == WAKE_TEXT
+            )
+            for index in range(len(chat.messages) - 1, -1, -1):
+                message = chat.messages[index]
+                if (
+                    message.get("role") == "user"
+                    and not context.is_summary(message)
+                    and not str(message.get("content") or "")
+                    .startswith(STEER_NOTE)
+                ):
+                    turns -= 1
+                    if turns == 0:
+                        return index
+        # None of it is in what the model sees: those turns failed, or
+        # were summarized to make room, and a summary can't be undone.
+        if any(context.is_summary(m) for m in chat.messages):
+            raise ValueError(
+                "That part of the chat was summarized to make room, "
+                "so it can't be changed."
+            )
+        return len(chat.messages)
+
+    def _message_at(self, chat: Chat, at: int) -> dict:
+        if not 0 <= at < len(chat.log):
+            raise ValueError("That message is not in the chat any more.")
+        entry = chat.log[at]
+        if entry["type"] != "user" or entry.get("steer"):
+            raise ValueError("Only a message you sent can be edited.")
+        return entry
+
+    def edit(
+        self, chat: Chat, at: int, text: str,
+        files: Optional[list] = None,
+    ) -> None:
+        """Send the message at AT in the log again, as TEXT.
+
+        The chat goes back to just before it and the turn runs again.
+        What came after is kept as the message's earlier version, to
+        go back to.
+        """
+
+        text = text.strip()
+        with self._lock:
+            if chat.busy or chat.queued:
+                raise ValueError("Wait for the reply to finish.")
+            entry = self._message_at(chat, at)
+            if files is None:
+                files = entry.get("files") or []
+            if not text and not files:
+                raise ValueError("The message is empty.")
+            cut = self._cut(chat, at)
+            group = entry.get("group") or entry.get("turn") \
+                or uuid.uuid4().hex[:8]
+            versions = chat.branches.setdefault(group, [None])
+            versions[int(entry.get("version") or 0)] = {
+                "log": chat.log[at:], "messages": chat.messages[cut:],
+            }
+            versions.append(None)
+            del chat.log[at:]
+            del chat.messages[cut:]
+            chat.stop.clear()
+            chat.queued = True
+            chat.heard = False
+        self.hub.publish({
+            "type": "rewound", "chat": chat.id, "keep": at, "tail": [],
+        })
+        self._begin(chat, text, False, files, {
+            "group": group, "version": len(versions) - 1,
+            "versions": len(versions),
+        })
+        threading.Thread(
+            target=self._run, args=(chat, text, files), daemon=True,
+        ).start()
+
+    def show_version(self, chat: Chat, at: int, version: int) -> None:
+        """Show another version of the edited message at AT, and the
+        chat as it went on from that version."""
+
+        with self._lock:
+            if chat.busy or chat.queued:
+                raise ValueError("Wait for the reply to finish.")
+            entry = self._message_at(chat, at)
+            group = str(entry.get("group") or "")
+            versions = chat.branches.get(group)
+            now = int(entry.get("version") or 0)
+            if not versions or not 0 <= version < len(versions) \
+                    or versions[version] is None:
+                raise ValueError("That version is not here.")
+            if version == now:
+                return
+            cut = self._cut(chat, at)
+            versions[now] = {
+                "log": chat.log[at:], "messages": chat.messages[cut:],
+            }
+            shown, versions[version] = versions[version], None
+            tail = list(shown["log"])
+            tail[0] = {
+                **tail[0], "group": group, "version": version,
+                "versions": len(versions),
+            }
+            chat.log[at:] = tail
+            chat.messages[cut:] = shown["messages"]
+        self.save(chat)
+        self.hub.publish({
+            "type": "rewound", "chat": chat.id, "keep": at, "tail": tail,
+        })
 
     def retry(self, chat: Chat) -> None:
         """Run a turn that failed again, from its message.
@@ -1875,8 +2017,13 @@ def run_turn(
             "sent anyway, but expect an error."
         )})
     content = "\n\n".join(part for part in (news, said) if part)
-    chat.messages.append(ai._message("user", content, images or None))
-    session.asked[chat.id] = chat.messages[-1]
+    asked = ai._message("user", content, images or None)
+    # Which turn it began, so editing the message finds where to cut.
+    at = session.started.get(chat.id)
+    if at is not None and at < len(chat.log) and chat.log[at].get("turn"):
+        asked["turn"] = chat.log[at]["turn"]
+    chat.messages.append(asked)
+    session.asked[chat.id] = asked
 
     stopped = False
     flash_spoke = False
@@ -2584,6 +2731,20 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
 
     if name == "retry":
         session.retry(session.chat(chat_id))
+        return {}
+
+    if name == "edit":
+        session.edit(
+            session.chat(chat_id), int(body.get("at", -1)), arg,
+            attachments(body["files"]) if "files" in body else None,
+        )
+        return {}
+
+    if name == "version":
+        session.show_version(
+            session.chat(chat_id), int(body.get("at", -1)),
+            int(body.get("version", -1)),
+        )
         return {}
 
     if name == "stop":
