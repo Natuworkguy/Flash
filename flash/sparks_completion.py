@@ -35,7 +35,8 @@ ACTIONS: list[tuple[str, str, tuple[str, ...]]] = [
     ("title", "its job title", ("spark", "none")),
     ("colour", "its colour: a name, or any as #rrggbb", ("spark", "colour")),
     ("watch", "a folder whose changes start a shift", ("spark", "none")),
-    ("model", "the model it runs on", ("spark",)),
+    ("model", "the model it runs on: one, a, b, c or all", ("spark+all",)),
+    ("models", "every spark's model, by team", ()),
     ("project", "the project it works on", ("spark", "none")),
     ("team", "put a spark on a team", ("spark", "team+none")),
     ("lead", "who a spark reports to, one or more", ("spark", "spark+none")),
@@ -58,6 +59,7 @@ ACTIONS: list[tuple[str, str, tuple[str, ...]]] = [
 TEAMS_ACTIONS: list[tuple[str, str, tuple[str, ...]]] = [
     ("new", "make a team", ()),
     ("rules", "rules every spark on a team keeps to", ("team",)),
+    ("model", "everyone on a team onto one model", ("team",)),
     ("pause", "pause a whole team", ("team",)),
     ("resume", "put a team back on its schedules", ("team",)),
     ("share", "a code for the whole team", ("team",)),

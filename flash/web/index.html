@@ -1592,6 +1592,20 @@ body.all-stopped .org-node, body.all-stopped .spark-card { animation: all-halt 0
 .spark-quiet { font-size: 12.5px; color: var(--text-3); margin-top: 10px; }
 .field small [data-handle] { font: 500 12px var(--mono); color: var(--text-2); }
 .mem-path .link-btn { font: inherit; padding: 0 4px; text-decoration: underline; text-underline-offset: 2px; }
+/* Change models: the sparks to move, by team, then the model. */
+.bulk-models { max-height: min(46vh, 420px); overflow-y: auto; border: 1px solid var(--border); border-radius: 12px; margin: 4px 0 14px; }
+.bulk-models .group + .group { border-top: 1px solid var(--border); }
+.bulk-models label { display: flex; align-items: center; gap: 10px; padding: 8px 12px; cursor: pointer; min-width: 0; }
+.bulk-models label:hover { background: var(--hover); }
+.bulk-models input { flex: none; margin: 0; accent-color: var(--accent); }
+.bulk-models .head { font-weight: 600; font-size: 13.5px; }
+.bulk-models .head .dot { width: 10px; height: 10px; border-radius: 3px; background: var(--c); flex: none; }
+.bulk-models .one { padding-left: 34px; font-size: 13.5px; }
+.bulk-models .one .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--c); flex: none; }
+.bulk-models .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bulk-models .now { flex: none; max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; color: var(--text-3); }
+.bulk-count { margin-right: auto; align-self: center; font-size: 13px; color: var(--text-3); }
+@media (max-height: 900px) and (max-width: 560px) { .bulk-models { max-height: 30vh; } }
 .field.check { display: flex; align-items: flex-start; gap: 10px; cursor: pointer; }
 .field.check input { flex: none; width: auto; margin: 3px 0 0; padding: 0; accent-color: var(--accent); }
 .field.check span { flex: 1; margin: 0; font-weight: 400; color: var(--text-2); }
@@ -2573,6 +2587,7 @@ const ICON = {
   bell: '<path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/>',
   cube: '<path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><path d="M3.3 7 12 12l8.7-5M12 22V12"/>',
   image: '<rect x="3" y="4" width="18" height="16" rx="3"/><circle cx="9" cy="10" r="1.6"/><path d="m21 16-5.5-5.5L6 20"/>',
+  chip: '<rect x="5" y="5" width="14" height="14" rx="2"/><rect x="9" y="9" width="6" height="6" rx="1"/><path d="M9 2v3M15 2v3M9 19v3M15 19v3M19 9h3M19 15h3M2 9h3M2 15h3"/>',
   server: '<rect x="3" y="4" width="18" height="7" rx="2"/><rect x="3" y="13" width="18" height="7" rx="2"/><path d="M7 7.5h.01M7 16.5h.01"/>',
   more: '<circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/>',
 };
@@ -6637,6 +6652,7 @@ function teamBlock(team, byId, again, ti) {
   }
   action("share", "Share this team", () => shareTeam(team));
   action("edit", "Rename or recolour", () => teamForm(team));
+  action("chip", "Change everyone's model", () => modelsForm(team.id));
   action("trash", "Delete the team (its sparks stay)", async (b) => {
     if (!b.classList.contains("sure")) { b.classList.add("sure"); b.dataset.tip = "Click again to delete it"; return; }
     try { await command("team-remove", team.id, null); toast(`${team.name} is gone. Its sparks are on no team now.`); }
@@ -6765,6 +6781,7 @@ function sparksBar(r, again = false) {
       catch (error) { showFailure(error); }
     });
   }
+  if (r.sparks.length > 1) add("Change models", "chip", "", () => modelsForm());
   if (awake || working) {
     add("Stop all", "halt", "danger", async (b) => {
       if (!b.classList.contains("sure")) { b.classList.add("sure"); b.querySelector("span").textContent = "Stop everything?"; return; }
@@ -7020,6 +7037,88 @@ function hireCards(hires, all, again = false) {
 
 // Making a team, empty or from a template or a code; or, given TEAM,
 // renaming and recolouring it.
+// Change models: tick the sparks, by team or one by one, and put them
+// all on one model. Opened from a team, its sparks come ticked.
+async function modelsForm(teamId = "") {
+  let r, said;
+  try { [r, said] = await Promise.all([command("sparks", "", null), command("model", "", null)]); }
+  catch (error) { showFailure(error); return; }
+  const form = openForm(`
+    <h2>Change models</h2>
+    <p class="sub">Tick the sparks to move, a whole team at once or one by one, then pick the model they all run on.</p>
+    <label class="field check all-row"><input type="checkbox" data-all><span>Every spark</span></label>
+    <div class="bulk-models"></div>
+    <label class="field"><span>Model</span><span class="model-slot"></span><small>Flash's model follows whatever Flash itself runs on.</small></label>
+    <div class="dialog-buttons"><span class="bulk-count"></span><button type="button" class="btn" data-cancel>Cancel</button><button type="submit" class="btn primary">Change</button></div>`,
+    async (data, f) => {
+      const ids = [...f.querySelectorAll("[data-spark]:checked")].map((b) => b.dataset.spark);
+      if (!ids.length) throw new Error("Tick at least one spark.");
+      const model = (data.model || "").trim();
+      if (!model) throw new Error("Pick a model.");
+      const { changed } = await command("spark-models", "", null, { ids, model });
+      const on = model === "flash" ? "Flash's model" : model;
+      toast(`${changed.length === 1 ? `**${changed[0]}** runs` : `**${changed.length} sparks** run`} on **${on}** now`);
+    });
+  form.querySelector("[data-cancel]").onclick = closeForm;
+  // The model: the host's list, or a box to type one in when it has none.
+  const listed = said.models || [];
+  form.querySelector(".model-slot").outerHTML = listed.length
+    ? `<select name="model" required><option value="flash">Flash's model${info.model ? ` (${esc(shortModel(info.model))})` : ""}</option>${listed.map((m) => `<option value="${esc(m)}">${esc(m)}</option>`).join("")}</select>`
+    : `<input name="model" placeholder="llama3.1:8b, or flash" autocomplete="off" spellcheck="false" required>`;
+  const box = form.querySelector(".bulk-models");
+  const groups = [...r.teams.map((t) => ({ id: t.id, name: t.name, colour: t.colour })), { id: "", name: "No team", colour: "var(--text-3)" }];
+  for (const g of groups) {
+    const mates = r.sparks.filter((s) => (s.team || "") === g.id);
+    if (!mates.length) continue;
+    const group = el("div", "group");
+    const head = el("label", "head", `<input type="checkbox" data-team="${esc(g.id)}"><i class="dot"></i><span class="name"></span>`);
+    head.style.setProperty("--c", g.colour);
+    head.querySelector(".name").textContent = `${g.name} · ${mates.length}`;
+    group.appendChild(head);
+    for (const s of mates) {
+      const row = el("label", "one", `<input type="checkbox" data-spark="${esc(s.id)}" data-in="${esc(g.id)}"><i class="dot"></i><span class="name"></span><span class="now"></span>`);
+      row.style.setProperty("--c", s.colour);
+      row.querySelector(".name").textContent = s.name;
+      row.querySelector(".now").textContent = s.model ? shortModel(s.model) : "Flash's model";
+      row.querySelector(".now").title = s.model || "";
+      if (teamId && s.team === teamId) row.querySelector("input").checked = true;
+      group.appendChild(row);
+    }
+    box.appendChild(group);
+  }
+  // A team's box, and Every spark, tick or clear all under them, and
+  // show a dash while only some are.
+  const sync = () => {
+    const every = [...box.querySelectorAll("[data-spark]")];
+    for (const head of box.querySelectorAll("[data-team]")) {
+      const mine = every.filter((b) => b.dataset.in === head.dataset.team);
+      const on = mine.filter((b) => b.checked).length;
+      head.checked = on === mine.length;
+      head.indeterminate = on > 0 && on < mine.length;
+    }
+    const on = every.filter((b) => b.checked).length;
+    const all = form.querySelector("[data-all]");
+    all.checked = on === every.length;
+    all.indeterminate = on > 0 && on < every.length;
+    form.querySelector(".bulk-count").textContent = on ? `${on} of ${every.length} ticked` : "";
+    form.querySelector("[type=submit]").textContent = on ? `Change ${on === 1 ? "1 spark" : `${on} sparks`}` : "Change";
+  };
+  box.addEventListener("change", (e) => {
+    const team = e.target.dataset.team;
+    if (team !== undefined) box.querySelectorAll(`[data-in="${CSS.escape(team)}"]`).forEach((b) => { b.checked = e.target.checked; });
+    sync();
+  });
+  form.querySelector("[data-all]").addEventListener("change", (e) => {
+    box.querySelectorAll("[data-spark]").forEach((b) => { b.checked = e.target.checked; });
+    sync();
+  });
+  sync();
+  // Opened from a team, its sparks' own model is the likely start.
+  const select = form.querySelector("select[name=model]");
+  const firstTicked = r.sparks.find((s) => teamId && s.team === teamId);
+  if (select && firstTicked && firstTicked.model && listed.includes(firstTicked.model)) select.value = firstTicked.model;
+}
+
 function teamForm(team = null) {
   const colour = team ? team.colour : TEAM_COLOURS[Math.floor(Math.random() * TEAM_COLOURS.length)];
   const form = openForm(`

@@ -1893,6 +1893,38 @@ def decide_hire(hire_id: str, yes: bool, why: str = "") -> dict:
 # whatever else is running; it is told to use full paths instead.
 
 
+# Words for "no model of its own": the spark runs on Flash's.
+FLASH_MODEL_WORDS = ("flash", "none", "default", "off")
+
+
+def set_models(keys: list, model) -> list[Spark]:
+    """Put every spark KEYS names on MODEL at once, or on Flash's own
+    model with "" or one of FLASH_MODEL_WORDS. Every key is checked
+    before any spark changes, so a typo changes none of them."""
+
+    model = _model_name(model)
+    if model.lower() in FLASH_MODEL_WORDS:
+        model = ""
+    found: list[Spark] = []
+    for key in keys or []:
+        spark = _must_find(str(key))
+        if all(spark.id != other.id for other in found):
+            found.append(spark)
+    if not found:
+        raise SparkError("Pick at least one spark.")
+    return [update(spark.id, model=model) for spark in found]
+
+
+def set_team_model(team_key: str, model) -> tuple[Team, list[Spark]]:
+    """Put everyone on TEAM_KEY's team on MODEL, as set_models does."""
+
+    team = _must_find_team(team_key)
+    found = members(team.id)
+    if not found:
+        raise SparkError(f"No sparks on {team.name} yet.")
+    return team, set_models([s.id for s in found], model)
+
+
 def model_of(spark: Spark, flash: str = "") -> str:
     """The model SPARK runs on: its own, or Flash's if it has none.
     FLASH, when given, is Flash's model as the caller has it."""

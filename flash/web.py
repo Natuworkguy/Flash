@@ -2617,6 +2617,16 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
             sparks.set_default_model(arg)
         return _spark_default(list_models(ai))
 
+    if name == "spark-models":
+        # Many sparks onto one model at once, from the bulk editor.
+        try:
+            changed = sparks.set_models(
+                list(body.get("ids") or []), str(body.get("model") or ""),
+            )
+        except sparks.SparkError as exc:
+            raise ValueError(str(exc)) from None
+        return {"changed": [spark.name for spark in changed]}
+
     if name.startswith("spark-"):
         return _spark_command(name, arg, body)
 
@@ -2987,6 +2997,13 @@ def _team_command(name: str, arg: str, body: dict) -> dict:
             return {"team": team_info(team)}
         if name == "team-remove":
             return {"team": team_info(sparks.remove_team(arg))}
+        if name == "team-model":
+            # Everyone on the team onto one model; "flash" is Flash's own.
+            team, changed = sparks.set_team_model(
+                arg, str(body.get("model") or ""),
+            )
+            return {"team": team_info(team),
+                    "changed": [spark.name for spark in changed]}
         if name in ("team-pause", "team-resume"):
             team, changed = (
                 sparks.pause_team if name == "team-pause"
