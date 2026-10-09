@@ -21,7 +21,6 @@ from typing import Optional
 
 import ollama
 from rich.console import Group, RenderableType
-from rich.live import Live
 from rich.text import Text
 
 from . import systemone, workspace
@@ -39,6 +38,7 @@ from .theme import (
     SPINNER_FRAMES,
     TICK,
     WARN,
+    Live,
     ToolSink,
     capture_tool_output,
     capturing,

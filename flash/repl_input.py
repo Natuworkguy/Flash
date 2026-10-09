@@ -644,6 +644,9 @@ def shell_prompt(prompt_ansi: str) -> str:
     return head + SHELL_MARK + tail if chevron else prompt_ansi
 
 
+SHELL_HINT = "Press Backspace to go back to prompt mode"
+
+
 class HideShellMark(Processor):
     """Keeps the ! that starts a shell command out of sight: the prompt
     wears it instead. It stays in the text, so history brings a command
@@ -653,6 +656,10 @@ class HideShellMark(Processor):
         if ti.lineno != 0 or not is_shell_line(ti.document.text):
             return Transformation(ti.fragments)
         fragments = explode_text_fragments(ti.fragments)[1:]
+        # Nothing typed after the ! yet: say how to get out of it, where
+        # the placeholder would be, as Claude Code does.
+        if ti.document.text == SHELL_MARK:
+            fragments = [*fragments, (f"fg:{DIM_HEX}", SHELL_HINT)]
         return Transformation(
             fragments,
             source_to_display=lambda i: max(0, i - 1),
@@ -708,6 +715,15 @@ def key_bindings() -> KeyBindings:
         _stand_down(event.app, EXPAND)
 
     return keys
+
+
+def carry(text: str) -> None:
+    """Put TEXT in the next prompt's box, after anything already there."""
+
+    global _carried
+
+    if text:
+        _carried = f"{_carried}\n{text}" if _carried else text
 
 
 def _take_carried() -> str:
@@ -883,6 +899,100 @@ def _snug(session: PromptSession) -> None:
     app._on_resize = app.invalidate
 
 
+def _frame_message(
+    prompt_ansi: str,
+    status,
+    health,
+    backdrop: Optional[list[str]] = None,
+    extra: Optional[Callable[[], str]] = None,
+) -> Callable[[], ANSI]:
+    """The prompt's message: the frame and everything above it, rebuilt
+    on every redraw. STATUS and HEALTH may be callables, asked each time,
+    for a frame that stays up while they change; EXTRA gives rows drawn
+    just above the status line, each ending in a newline."""
+
+    def now(value):
+        return value() if callable(value) else value
+
+    def rows_above_status() -> str:
+        return extra() if extra is not None else ""
+
+    def message() -> ANSI:
+        """The prompt, rebuilt on every redraw.
+
+        Built once, it was measured for the terminal it was built in,
+        so a resize left both rules at the old width and the status
+        line padded to a margin that had moved. A line started with !
+        is a shell command, and the prompt says so.
+        """
+
+        app = get_app_or_none()
+        typed = app.current_buffer.text if app is not None else ""
+        shown = shell_prompt(prompt_ansi) if is_shell_line(typed) \
+            else prompt_ansi
+        bar = status_prefix(now(status), now(health))
+        return ANSI(above() + rows_above_status() + bar + shown)
+
+    def above() -> str:
+        """Everything between the last message and the status line.
+
+        The rows of the picture the caller held back, then blank rows
+        down to wherever the frame has to start for it to sit on the
+        foot of the screen. Messages run from the top, so until they
+        fill the screen there is a gap between them and the frame, and
+        the prompt owns it.
+
+        The menu opens up over those rows. They are blank or the
+        prompt's own to redraw, so it covers nothing it cannot give
+        back and nothing has to move to make room for it. Only once
+        the conversation fills the screen, with no gap left, does the
+        prompt grow for the menu, by as little as it can.
+        """
+
+        held = backdrop or []
+        rows = "".join(row + RESET_ANSI + "\n" for row in held)
+        app = get_app_or_none()
+
+        if app is None:
+            return rows
+
+        renderer = app.renderer
+        below = (
+            renderer.rows_below
+            if isinstance(renderer, SnugRenderer) else 0
+        )
+        head = (
+            rows_above_status() + status_prefix(now(status), now(health))
+            + prompt_ansi
+        ).count("\n")
+        gap = max(0, below - len(held) - head - input_rows(app) - 1)
+
+        # The menu can cover every row above the cursor.
+        cover = len(held) + gap + head
+        wanted = menu_headroom()
+
+        if wanted > cover:
+            gap += max(0, min(wanted, MIN_MENU_ROWS) - cover)
+
+        return rows + "\n" * gap
+
+    def input_rows(app) -> int:
+        """Rows the line being typed takes up, wrapping included."""
+
+        columns = max(1, app.output.get_size().columns)
+        indent = fragment_list_width(
+            to_formatted_text(ANSI(prompt_ansi.split("\n")[-1]))
+        )
+
+        return sum(
+            # One more column for the cursor sitting past the end.
+            max(1, -(-(indent + get_cwidth(line) + 1) // columns))
+            for line in app.current_buffer.document.lines
+        )
+
+    return message
+
+
 def read_line(
     prompt_ansi: str,
     wake: Optional[Callable[[], bool]] = None,
@@ -958,74 +1068,7 @@ def read_line(
         watch_for_wake()
         watch_for_resize()
 
-    def message() -> ANSI:
-        """The prompt, rebuilt on every redraw.
-
-        Built once, it was measured for the terminal it was built in,
-        so a resize left both rules at the old width and the status
-        line padded to a margin that had moved. A line started with !
-        is a shell command, and the prompt says so.
-        """
-
-        app = get_app_or_none()
-        typed = app.current_buffer.text if app is not None else ""
-        shown = shell_prompt(prompt_ansi) if is_shell_line(typed) \
-            else prompt_ansi
-        return ANSI(above() + status_prefix(status, health) + shown)
-
-    def above() -> str:
-        """Everything between the last message and the status line.
-
-        The rows of the picture the caller held back, then blank rows
-        down to wherever the frame has to start for it to sit on the
-        foot of the screen. Messages run from the top, so until they
-        fill the screen there is a gap between them and the frame, and
-        the prompt owns it.
-
-        The menu opens up over those rows. They are blank or the
-        prompt's own to redraw, so it covers nothing it cannot give
-        back and nothing has to move to make room for it. Only once
-        the conversation fills the screen, with no gap left, does the
-        prompt grow for the menu, by as little as it can.
-        """
-
-        held = backdrop or []
-        rows = "".join(row + RESET_ANSI + "\n" for row in held)
-        app = get_app_or_none()
-
-        if app is None:
-            return rows
-
-        renderer = app.renderer
-        below = (
-            renderer.rows_below
-            if isinstance(renderer, SnugRenderer) else 0
-        )
-        head = (status_prefix(status, health) + prompt_ansi).count("\n")
-        gap = max(0, below - len(held) - head - input_rows(app) - 1)
-
-        # The menu can cover every row above the cursor.
-        cover = len(held) + gap + head
-        wanted = menu_headroom()
-
-        if wanted > cover:
-            gap += max(0, min(wanted, MIN_MENU_ROWS) - cover)
-
-        return rows + "\n" * gap
-
-    def input_rows(app) -> int:
-        """Rows the line being typed takes up, wrapping included."""
-
-        columns = max(1, app.output.get_size().columns)
-        indent = fragment_list_width(
-            to_formatted_text(ANSI(prompt_ansi.split("\n")[-1]))
-        )
-
-        return sum(
-            # One more column for the cursor sitting past the end.
-            max(1, -(-(indent + get_cwidth(line) + 1) // columns))
-            for line in app.current_buffer.document.lines
-        )
+    message = _frame_message(prompt_ansi, status, health, backdrop)
 
     # Nothing reserved under the input. Those rows are drawn whether or
     # not a menu is open, so they show up as dead space below the
@@ -1037,3 +1080,320 @@ def read_line(
         reserve_space_for_menu=0,
         bottom_toolbar=closing_rule,
     )
+
+
+# The dock ---------------------------------------------------------------
+#
+# While a turn runs, the input box and the status bar stay at the foot of
+# the screen and take typing, as they do between turns. Enter steers: the
+# message goes to the model before its next step, as the web UI's does,
+# or, if the turn ends first, runs as the next turn. Tab queues one to run
+# as a turn of its own once this one is done. Ctrl+C stops the turn.
+#
+# The box is a prompt run on a thread of its own, the turn keeping the
+# main thread it has always had. Everything the turn prints goes through
+# prompt_toolkit's stdout proxy, which writes it above the box and draws
+# the box again underneath. A y/n question, or a Live redrawing its rows
+# in place, needs the terminal to itself, and pauses the dock while it
+# runs (theme.screen_to_itself).
+
+STEER = "steer"
+QUEUE = "queue"
+
+# What the dock's prompt returns when it was told to step aside.
+_ASIDE = "\x00aside"
+
+DOCK_REFRESH_SECONDS = 0.1
+
+DOCK_PLACEHOLDER = "Steer Flash, or tab to queue · ctrl+c to stop"
+
+
+def _interrupt_main() -> None:
+    """Ctrl+C in the dock: stop the turn, as Ctrl+C at a bare terminal
+    does. A real signal to the main thread, where one can be sent, so a
+    wait on the model is cut short and not only noticed after it."""
+
+    import _thread
+    import signal
+    import threading
+
+    if hasattr(signal, "pthread_kill"):
+        signal.pthread_kill(threading.main_thread().ident, signal.SIGINT)
+    else:
+        _thread.interrupt_main()
+
+
+def route(result) -> Optional[tuple[str, str]]:
+    """What the dock's prompt returned, as (mode, text) to send, or None
+    for nothing to send. Enter steers and Tab queues; a command, or a
+    shell line, is not something to tell the model mid-step, and runs
+    on its own once the turn is done."""
+
+    if result is None or result == _ASIDE:
+        return None
+    mode, text = result if isinstance(result, tuple) else (STEER, result)
+    if not text.strip():
+        return None
+    if text.lstrip().startswith("/") or is_shell_line(text):
+        mode = QUEUE
+    return mode, text
+
+
+class Dock:
+    """The input box, kept at the foot of the screen while a turn runs.
+
+    PROMPT_ANSI is the prompt as read_line draws it; STATUS and HEALTH are
+    asked on every redraw. What the turn wants drawn just above the
+    status line, its loader, goes in with show().
+    """
+
+    def __init__(
+        self,
+        prompt_ansi: str,
+        status: Callable[[], Optional[str]],
+        health: Callable[[], str],
+        on_key: Optional[Callable[[str], None]] = None,
+    ) -> None:
+        import threading
+
+        self.prompt_ansi = prompt_ansi
+        self.status = status
+        self.health = health
+        self.on_key = on_key
+        self.sent: list[tuple[str, str]] = []
+        self._loader = ""
+        self._cv = threading.Condition()
+        self._held = 0
+        self._quit = False
+        self._in_prompt = False
+        self._app = None
+        self._thread: Optional[threading.Thread] = None
+        self._proxy = None
+        self._stdout = None
+        self._session: Optional[PromptSession] = None
+
+    # What the turn shows and takes ---------------------------------------
+
+    def show(self, loader: str) -> None:
+        """Draw LOADER, rows of ANSI each ending in a newline, above the
+        status line; "" for none."""
+
+        self._loader = loader
+
+    def take(self, mode: str) -> list[str]:
+        """The messages sent with MODE, taken off the dock."""
+
+        with self._cv:
+            taken = [text for m, text in self.sent if m == mode]
+            self.sent = [(m, text) for m, text in self.sent if m != mode]
+        return taken
+
+    def _rows(self) -> str:
+        """The loader, then what is waiting to go in, a row each."""
+
+        rows = self._loader
+        with self._cv:
+            waiting = list(self.sent)
+        width = max(20, shutil.get_terminal_size().columns - 16)
+        for mode, text in waiting:
+            line = " ".join(text.split())
+            if len(line) > width:
+                line = line[:width - 1] + "…"
+            said = "steering" if mode == STEER else "queued"
+            rows += (
+                ansi(DIM_HEX) + f"  ↳ {said}: " + RESET_ANSI + line + "\n"
+            )
+        return rows
+
+    # Up and down ---------------------------------------------------------
+
+    def start(self) -> None:
+        import threading
+
+        from . import theme
+
+        self._patch()
+        theme.set_dock(self)
+        self._thread = threading.Thread(
+            target=self._run, name="flash-dock", daemon=True,
+        )
+        self._thread.start()
+
+    def stop(self) -> list[tuple[str, str]]:
+        """Take the dock down, keeping what was half typed for the next
+        prompt. What was sent and not taken, in order."""
+
+        from . import theme
+
+        with self._cv:
+            self._quit = True
+            self._cv.notify_all()
+        self._wait_aside()
+        if self._thread is not None:
+            self._thread.join(timeout=2)
+        theme.set_dock(None)
+        self._unpatch()
+        with self._cv:
+            left, self.sent = self.sent, []
+        return left
+
+    def pause(self) -> None:
+        """Step aside: the screen is the caller's until resume()."""
+
+        with self._cv:
+            self._held += 1
+            first = self._held == 1
+        if first:
+            self._wait_aside()
+            self._unpatch()
+
+    def resume(self) -> None:
+        with self._cv:
+            self._held = max(0, self._held - 1)
+            back = self._held == 0 and not self._quit
+        if back:
+            self._patch()
+            with self._cv:
+                self._cv.notify_all()
+
+    def _wait_aside(self) -> None:
+        """Have the prompt stand down, and wait until it has."""
+
+        with self._cv:
+            while self._in_prompt:
+                app = self._app
+                if app is not None and not app.is_done:
+                    app.loop.call_soon_threadsafe(self._aside, app)
+                self._cv.wait(timeout=0.05)
+
+    @staticmethod
+    def _aside(app) -> None:
+        if not app.is_done:
+            _stand_down(app, _ASIDE)
+
+    def _patch(self) -> None:
+        import sys
+
+        from prompt_toolkit.patch_stdout import StdoutProxy
+
+        if self._proxy is not None:
+            return
+        self._stdout = (sys.stdout, sys.stderr)
+        self._proxy = StdoutProxy(raw=True, sleep_between_writes=0.05)
+        sys.stdout = self._proxy
+        sys.stderr = self._proxy
+
+    def _unpatch(self) -> None:
+        import sys
+
+        if self._proxy is None:
+            return
+        sys.stdout, sys.stderr = self._stdout
+        proxy, self._proxy = self._proxy, None
+        proxy.close()
+
+    # The prompt, on its thread ---------------------------------------------
+
+    def _keys(self) -> KeyBindings:
+        keys = KeyBindings()
+
+        @keys.add("enter", filter=_after_backslash)
+        def _continued(event) -> None:
+            buffer = event.current_buffer
+            buffer.delete_before_cursor(1)
+            buffer.insert_text("\n")
+
+        @keys.add("escape", "enter")
+        def _newline(event) -> None:
+            event.current_buffer.insert_text("\n")
+
+        @keys.add("tab", filter=~has_completions)
+        def _queue(event) -> None:
+            buffer = event.current_buffer
+            if buffer.text.strip():
+                buffer.append_to_history()
+                event.app.exit(result=(QUEUE, buffer.text))
+
+        @keys.add("c-c")
+        def _stop(event) -> None:
+            _interrupt_main()
+
+        @keys.add("s-tab", filter=~has_completions)
+        def _toggle_auto(event) -> None:
+            if self.on_key is not None:
+                self.on_key(TOGGLE_AUTO)
+
+        @keys.add("c-o")
+        def _expand(event) -> None:
+            if self.on_key is not None:
+                self.on_key(EXPAND)
+
+        return keys
+
+    def _prompt(self):
+        if self._session is None:
+            history = _session.history if _session is not None \
+                else SessionHistory(str(HISTORY_PATH))
+            self._session = PromptSession(
+                completer=SlashCommandCompleter(),
+                complete_while_typing=True,
+                erase_when_done=True,
+                style=_RULE_STYLE,
+                history=history,
+                key_bindings=self._keys(),
+                input_processors=[HideShellMark()],
+            )
+            _snug(self._session)
+        message = _frame_message(
+            self.prompt_ansi, self.status, self.health, extra=self._rows,
+        )
+
+        def pre_run() -> None:
+            app = get_app()
+            renderer = app.renderer
+            if isinstance(renderer, SnugRenderer):
+                # A resize mid-turn redraws the box; the conversation
+                # above it is redrawn once the turn is done.
+                renderer.on_resize = None
+            with self._cv:
+                self._app = app
+                if self._held or self._quit:
+                    app.loop.call_soon(self._aside, app)
+
+        return self._session.prompt(
+            message,
+            default=_take_carried(),
+            pre_run=pre_run,
+            placeholder=ANSI(ansi(DIM_HEX) + DOCK_PLACEHOLDER + RESET_ANSI),
+            refresh_interval=DOCK_REFRESH_SECONDS,
+            reserve_space_for_menu=0,
+            bottom_toolbar=closing_rule,
+            handle_sigint=False,
+        )
+
+    def _run(self) -> None:
+        while True:
+            with self._cv:
+                while self._held and not self._quit:
+                    self._cv.wait()
+                if self._quit:
+                    return
+                self._in_prompt = True
+            try:
+                result = self._prompt()
+            except (EOFError, KeyboardInterrupt):
+                result = None
+            except Exception:  # noqa: BLE001
+                # A dock that cannot draw is no reason to lose the turn.
+                result = None
+                with self._cv:
+                    self._quit = True
+            finally:
+                with self._cv:
+                    self._in_prompt = False
+                    self._app = None
+                    self._cv.notify_all()
+            sent = route(result)
+            if sent is not None:
+                with self._cv:
+                    self.sent.append(sent)

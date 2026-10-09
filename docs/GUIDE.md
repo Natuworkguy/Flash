@@ -191,6 +191,16 @@ python run.py
   the command failed, since the error is usually at the end. The model
   always sees all of it.
 - `Ctrl+C` stops the model mid-answer.
+- While Flash works, the box and the status bar stay at the foot of the
+  screen. `Enter` there steers: the message goes to the model before its
+  next step, or, if the turn ends first, runs as the next turn. `Tab`
+  queues one to run as a turn of its own once this one is done, and a
+  `/command` or a `!` line always waits its turn. What is waiting is
+  listed above the box; after a `Ctrl+C` it goes back into the box, to
+  send again or not. `FLASH_NO_DOCK=1` turns the box off while Flash
+  works.
+- Type `!` to run a shell command; `Backspace` on the bare `!` goes back
+  to typing a message.
 
 Type `@` anywhere in a message to pick a file out of a dropdown, e.g.
 `why does @flash/theme.py fall back to ASCII?`. Arrow keys and Tab pick
