@@ -1882,6 +1882,15 @@ body.all-stopped .org-node, body.all-stopped .spark-card { animation: all-halt 0
 .tc-msg:hover .tc-reply-btn, .tc-event-row:hover .tc-reply-btn, .tc-reply-btn:focus-visible { opacity: 1; }
 .tc-reply-btn:hover { transform: scale(1.1); color: var(--text); }
 @media (hover: none) { .tc-reply-btn { opacity: 0.55; } }
+/* Under a spark's message: read it aloud, or have it answer again. */
+.tc-tools { display: flex; gap: 2px; margin-top: 2px; opacity: 0; transition: opacity 0.15s; }
+.tc-msg:hover .tc-tools, .tc-tools:focus-within, .tc-tools .read-aloud.on { opacity: 1; }
+.tc-msg:has(.read-aloud.on) .tc-tools { opacity: 1; }
+.tc-tools .icon-btn { width: 26px; height: 26px; color: var(--text-3); }
+.tc-tools .icon-btn:hover { color: var(--text); }
+.tc-tools .icon-btn.on { color: var(--accent); }
+.tc-tools svg { width: 14px; height: 14px; }
+@media (hover: none) { .tc-tools { opacity: 0.55; } }
 .tc-event-row { align-self: center; display: flex; align-items: center; gap: 4px; max-width: 92%; margin: 10px 0 4px; }
 .tc-event-row .tc-event { margin: 0; max-width: none; min-width: 0; }
 .tc-quote { display: flex; align-items: baseline; gap: 6px; max-width: 100%; min-width: 0; padding: 5px 10px 5px 8px; border-radius: 10px; font-size: 12.5px; text-align: left; color: var(--text-3); background: var(--hover); border-left: 3px solid var(--c); }
@@ -6073,7 +6082,9 @@ async function tcFetch(first = false) {
   }
   r.entries.forEach((entry) => log.appendChild(tcEntry(entry, !first)));
   // Messages already drawn that were reacted to: only their pills change.
+  // One a retry replaced leaves the chat.
   (r.changed || []).forEach((entry) => {
+    if (entry.retried) { tcRemove(entry.id); return; }
     const box = log.querySelector(`.tc-reacts[data-for="${CSS.escape(String(entry.id))}"]`);
     if (box) tcFillReacts(box, entry, true);
   });
@@ -6083,6 +6094,25 @@ async function tcFetch(first = false) {
   // Someone is typing, maybe in a keeper elsewhere: look again soon.
   clearTimeout(teamChat.timer);
   teamChat.timer = setTimeout(() => tcFetch(), r.typing.length ? 1500 : 6000);
+}
+
+// Takes a message out of the chat as drawn, and gives the next one in a
+// run from the same spark its name and face back.
+function tcRemove(id) {
+  const row = $(`#team-chat .tc-msg[data-id="${CSS.escape(String(id))}"]`);
+  if (!row) return;
+  const next = row.nextElementSibling;
+  const wasHead = !row.classList.contains("grouped");
+  row.remove();
+  if (wasHead && next && next.classList.contains("grouped") && next.dataset.who === row.dataset.who) {
+    const spark = tcSpark(next.dataset.who);
+    next.classList.remove("grouped");
+    const face = next.querySelector(".tc-av");
+    if (face && spark && !face.firstChild) face.appendChild(sparkAvatar(spark, 30));
+  }
+  // What comes next runs on from whatever is last now.
+  const last = $("#team-chat .tc-log").lastElementChild;
+  teamChat.lastWho = last && last.classList.contains("tc-msg") ? last.dataset.who : "";
 }
 
 function teamChatChanged(teamId, sparksToo = false) {
@@ -6170,6 +6200,21 @@ function tcEntry(entry, fresh) {
   const line = el("div", "tc-line");
   if (mine) line.append(tcReplyButton(entry), tcReactButton(entry), bubble); else line.append(bubble, tcReactButton(entry), tcReplyButton(entry));
   col.append(line, tcReacts(entry));
+  // A spark's message can be read aloud, or answered again in its place.
+  if (!mine && spark) {
+    const tools = el("div", "tc-tools");
+    tools.appendChild(readButton(`tc:${teamChat.id}:${entry.id}`, () => bubble));
+    tools.appendChild(button("icon-btn tc-retry", "retry", "Retry: answer again", "", async (b) => {
+      b.disabled = true;
+      try {
+        stopReading();
+        await command("team-chat-retry", teamChat.id, null, { id: entry.id });
+        tcRemove(entry.id);
+        tcFetch();
+      } catch (error) { b.disabled = false; showFailure(error); }
+    }));
+    col.appendChild(tools);
+  }
   if (entry.files && entry.files.length && entry.spark) col.appendChild(docCards(entry.spark, entry.files));
   if (entry.steps && entry.steps.length) {
     const used = el("details", "tc-steps");

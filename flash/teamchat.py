@@ -297,6 +297,13 @@ def _add(data: dict, entry: dict) -> dict:
     return entry
 
 
+def _live(entries: list) -> list:
+    """ENTRIES without the messages a retry replaced: gone from the chat
+    for the page, the terminal and every spark's prompt alike."""
+
+    return [e for e in entries if not e.get("retried")]
+
+
 def _team(key: str) -> sparks.Team:
     team = sparks.find_team(key)
     if team is None:
@@ -319,7 +326,9 @@ def history(team_key: str, since: int = 0) -> dict:
     ]
     return {
         "team": team.id, "seq": data["seq"],
-        "entries": [e for e in data["entries"] if e.get("id", 0) > since],
+        "entries": _live(
+            [e for e in data["entries"] if e.get("id", 0) > since]
+        ),
         # Those it has, but changed since: their reactions, as now.
         "changed": [
             e for e in data["entries"]
@@ -336,7 +345,7 @@ def _unread(data: dict) -> int:
     messages, nor news of what the user did to the team."""
 
     return sum(
-        1 for e in data["entries"]
+        1 for e in _live(data["entries"])
         if e.get("kind") != USER and e.get("at", 0) > data["read"]
         and not (e.get("kind") == EVENT and not e.get("spark"))
     )
@@ -736,7 +745,7 @@ def _reply(
             team=team.name, name=spark.name, handle=spark.handle,
             roster=roster, quiet=QUIET,
         )
-        entries = _read(team.id)["entries"][-CONTEXT_ENTRIES:]
+        entries = _live(_read(team.id)["entries"])[-CONTEXT_ENTRIES:]
         messages = [
             {"role": "system", "content": system},
             {"role": "user", "content": _view(team, spark, entries)},
@@ -844,6 +853,65 @@ def answer(team_key: str, message: dict, client=None) -> list[dict]:
         raise
 
 
+def retry(team_key: str, entry_id: int, client=None) -> dict:
+    """Have the spark whose message ENTRY_ID is answer again, as a retry
+    of a reply that went wrong: the old one leaves the chat, and the
+    spark writes another from the chat as it is without it. Answered on
+    a thread of its own, the page's way; the old message, as marked."""
+
+    team = _team(team_key)
+
+    def mark(data: dict) -> dict:
+        entry = next(
+            (e for e in data["entries"] if e.get("id") == entry_id), None,
+        )
+        if entry is None or entry.get("retried"):
+            raise TeamChatError("That message is no longer in the chat.")
+        if entry.get("kind") != SPARK:
+            raise TeamChatError("Only a spark's message can be retried.")
+        spark = next((s for s in _members(team.id)
+                      if s.id == entry.get("spark")), None)
+        if spark is None:
+            raise TeamChatError(
+                f"{entry.get('name') or 'That spark'} is not on the team "
+                "now, so it cannot answer again."
+            )
+        entry["retried"] = True
+        # As a reaction does: a page that has it sees it changed.
+        data["seq"] += 1
+        entry["changed"] = data["seq"]
+        return dict(entry)
+
+    with _busy_lock:
+        if team.id in _busy:
+            raise TeamChatError(
+                "The team is still answering. Try again once it is done."
+            )
+        _busy.add(team.id)
+    try:
+        old = _change(team.id, mark)
+    except BaseException:
+        with _busy_lock:
+            _busy.discard(team.id)
+        raise
+
+    def again() -> None:
+        try:
+            spark = sparks.find(old["spark"])
+            if spark is not None:
+                _reply(team, spark, client)
+        finally:
+            with _busy_lock:
+                _busy.discard(team.id)
+                waiting = _waiting.pop(team.id, None)
+            # A message sent while it answered again is answered now.
+            if waiting is not None:
+                answer(team.id, waiting, client)
+
+    threading.Thread(target=again, daemon=True).start()
+    return old
+
+
 def send(
     team_key: str, text: str, client=None, reply_to: int = 0,
 ) -> dict:
@@ -864,7 +932,7 @@ def prompt_block(spark: sparks.Spark) -> str:
 
     if not spark.team:
         return ""
-    entries = _read(spark.team)["entries"][-PROMPT_ENTRIES:]
+    entries = _live(_read(spark.team)["entries"])[-PROMPT_ENTRIES:]
     if not entries:
         return ""
     by_id = {s.id: s for s in sparks.all_sparks()}

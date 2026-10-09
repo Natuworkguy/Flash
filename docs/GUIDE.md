@@ -495,13 +495,16 @@ have looked them over.
 
 - **Team chat.** Every team has a group chat, the user and its sparks in
   one room (the chat button on the team, or `/sparks teamchat <team>
-  [message]`). The lead answers what is said to no one; `@scout` calls
+  [message]`). The leads answer what is said to no one; `@scout` calls
   on one, `@everyone` on all of them, and replying to a message calls on
   whoever wrote it. Sparks can bring a teammate in, send a few messages
   in a row, react with an emoji, or stay quiet when they have nothing to
   add. A spark hears of a reaction to what it said, a message or a
   report, by you or a teammate: in its chats, and on its next shift,
   without being called to one. Taken back, it is never told.
+  Under a spark's message, the play button reads it aloud, and Retry
+  has the spark answer again in its place, the old message gone from
+  the chat and from what every spark reads of it.
   Voice mode and `:emoji` work there too.
 - **Team rules.** Lines every spark on a team keeps to, on top of its own
   boundaries, on shifts and in chats alike (the team's edit form, or
