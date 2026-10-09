@@ -1,0 +1,7 @@
+{
+  "name": "echo-provider",
+  "description": "A provider for tests: echoes what it is told",
+  "providers": [
+    {"name": "echo", "description": "Echoes", "run": ["python", "./provider.py"], "timeout": 20}
+  ]
+}

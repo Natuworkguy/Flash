@@ -45,7 +45,6 @@ from queue import Empty, Queue
 from typing import Any, Optional
 from urllib.parse import parse_qs, urlparse
 
-import ollama
 import segno
 from rich.text import Text
 
@@ -59,6 +58,7 @@ from . import (
     keepalive,
     learning,
     memory,
+    providers,
     showcase,
     skills,
     sparks,
@@ -2256,10 +2256,7 @@ def list_models(ai) -> Optional[list[str]]:
 
     def ask() -> None:
         try:
-            found["listed"] = ollama.Client(
-                host=ai.Config.host,
-                **workspace.client_options(ai.Config.host),
-            ).list()
+            found["listed"] = providers.client(ai.Config.host).list()
         except Exception:  # noqa: BLE001
             found["failed"] = True
 

@@ -8,6 +8,7 @@ import threading
 import time
 from types import SimpleNamespace
 
+import ollama
 import pytest
 
 from flash import ai, sparks, tools, web, workspace
@@ -50,7 +51,7 @@ class FakeClient:
 def offline(monkeypatch):
     FakeClient.scripts = []
     FakeClient.requests = []
-    monkeypatch.setattr(web.ollama, "Client", FakeClient)
+    monkeypatch.setattr(ollama, "Client", FakeClient)
     monkeypatch.setattr(ai.Config, "model", "flash-test")
     monkeypatch.setattr(ai.Config, "no_command_confirmation", False)
     monkeypatch.setattr(ai, "_session_system_prompt", lambda heard=False: "")
@@ -1780,7 +1781,7 @@ def subagent_world(monkeypatch):
     from flash import agent as subagents
 
     monkeypatch.setattr(subagents, "_agents", {})
-    monkeypatch.setattr(subagents.ollama, "Client", SubAgentModel)
+    monkeypatch.setattr(ollama, "Client", SubAgentModel)
     monkeypatch.setattr(tools, "MODEL_NAME", "flash-test")
     monkeypatch.setattr(web, "WATCH_SECONDS", 0.02)
     sessions = []
@@ -2690,7 +2691,7 @@ class TestSlowHosts:
                 release.wait(5)
                 return SimpleNamespace(models=[])
 
-        monkeypatch.setattr(web.ollama, "Client", Silent)
+        monkeypatch.setattr(ollama, "Client", Silent)
         monkeypatch.setattr(web, "MODEL_LIST_SECONDS", 0.1)
         started = time.monotonic()
         try:
@@ -2711,7 +2712,7 @@ class TestSlowHosts:
                     SimpleNamespace(model="b"), SimpleNamespace(model="a"),
                 ])
 
-        monkeypatch.setattr(web.ollama, "Client", Up)
+        monkeypatch.setattr(ollama, "Client", Up)
 
         result = web.command(web.Session(), {"name": "model"})
 
@@ -2730,7 +2731,7 @@ class TestSlowHosts:
                 asked.append(True)
                 return SimpleNamespace(models=[])
 
-        monkeypatch.setattr(web.ollama, "Client", Tracked)
+        monkeypatch.setattr(ollama, "Client", Tracked)
         monkeypatch.setattr(web.workspace, "host_state", lambda url: "down")
         monkeypatch.setattr(ai, "set_config_var", lambda *a: None)
         monkeypatch.setattr(ai, "forget_model_facts", lambda: None)

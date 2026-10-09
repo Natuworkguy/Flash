@@ -97,6 +97,10 @@ def is_private(host: str, model: str) -> bool:
     a server on this computer or the local network, and not one of
     Ollama's cloud models, which run on Ollama's servers."""
 
+    # A provider's model runs wherever its provider sends it, which
+    # Flash cannot see, so it is never counted as private.
+    if (model or "").startswith("@"):
+        return False
     name = (model or "").lower()
     tag = name.rpartition(":")[2]
     if tag == "cloud" or tag.endswith("-cloud") or name.endswith("-cloud"):

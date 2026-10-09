@@ -34,13 +34,13 @@ from . import (
     greetings,
     learning,
     plan,
+    providers,
     serif,
     showcase,
     skills,
     sparks,
     systemone,
     terminal,
-    workspace,
 )
 from .cli import parse_args
 from .dashes import undash
@@ -301,9 +301,7 @@ Config.refresh()
 def _client() -> "ollama.Client":
     """A client for the host in use, sending its API key if it has one."""
 
-    return ollama.Client(
-        host=Config.host, **workspace.client_options(Config.host),
-    )
+    return providers.client(Config.host)
 
 
 def set_config_var(name: str, value: str) -> None:

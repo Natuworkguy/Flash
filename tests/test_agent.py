@@ -4,6 +4,7 @@ import io
 import threading
 import time
 
+import ollama
 from rich.console import Console
 
 from flash import agent, theme, tools
@@ -65,7 +66,7 @@ def _reply(content="", *calls):
 def _wire(monkeypatch, responses, *, model="test-model", delay=0.0,
           autonomous=False):
     fake_client = FakeClient(responses, delay=delay)
-    monkeypatch.setattr(agent.ollama, "Client", fake_client)
+    monkeypatch.setattr(ollama, "Client", fake_client)
     monkeypatch.setattr(agent, "get_model_system_prompt", lambda h, m: "")
     monkeypatch.setattr(agent, "chat_options", dict)
     monkeypatch.setattr(tools, "MODEL_NAME", model)

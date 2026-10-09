@@ -25,6 +25,7 @@ from prompt_toolkit.layout import Layout, Window
 from prompt_toolkit.layout.controls import FormattedTextControl
 from rich.text import Text
 
+from . import providers
 from .theme import (
     ACCENT,
     BAR_EMPTY,
@@ -133,9 +134,11 @@ def _tagged(name: str) -> str:
 
 
 def full_name(name: str) -> str:
-    """NAME as Ollama lists it, with its tag: llama3.1 is llama3.1:latest."""
+    """NAME as Ollama lists it, with its tag: llama3.1 is llama3.1:latest.
+    A provider's model is listed by the name its provider gave it."""
 
-    return _tagged(name.strip())
+    name = name.strip()
+    return name if providers.routed(name) else _tagged(name)
 
 
 def _listing(client) -> Optional[list]:
@@ -206,13 +209,17 @@ def installed_models(
     if listing is None:
         return None
 
-    active = _tagged(current) if current else ""
+    active = full_name(current) if current else ""
     rows = [
         Model(
-            _tagged(model.model),
-            _describe(model),
-            human_size(model.size or 0),
-            "active" if _tagged(model.model) == active else "",
+            full_name(model.model),
+            # A provider's model has no size or family to tell: where it
+            # comes from is what there is to say.
+            f"from the @{providers.split(model.model)[0]} provider"
+            if providers.routed(model.model) else _describe(model),
+            "" if providers.routed(model.model)
+            else human_size(model.size or 0),
+            "active" if full_name(model.model) == active else "",
         )
         for model in listing
     ]
@@ -582,7 +589,9 @@ def fetch_if_missing(client, name: str) -> bool:
     either way, so nothing is offered and the name is taken on trust.
     """
 
-    if is_installed(client, name) is not False:
+    # A provider's model is the provider's to have, never Ollama's to
+    # download.
+    if providers.routed(name) or is_installed(client, name) is not False:
         return True
 
     if not confirm(f"{name} is not installed. Download it now?"):
