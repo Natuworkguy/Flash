@@ -8786,7 +8786,8 @@ async function drawUsage(body) {
 // Security: every browser signed in with the link, each one signed out
 // on its own, or all but this one at once with a new link.
 async function drawSecurity(body) {
-  body.innerHTML = `<h2 class="settings-section">Signed-in browsers</h2><p class="settings-sub">Every browser that opened Flash's link. Each stays signed in until it is signed out here or Flash stops.</p><div class="browser-list"></div>` +
+  body.innerHTML = `<h2 class="settings-section">Staying signed in</h2><p class="settings-sub">Off, every time Flash starts it takes the link it prints, token and all. On, a browser that has opened the link once opens Flash at its plain address from then on, <code>http://127.0.0.1:${location.port || 80}/</code>, until it is signed out below or goes ${REMEMBER_DAYS} days without opening it.</p>` +
+    `<h2 class="settings-section settings-gap">Signed-in browsers</h2><p class="settings-sub browsers-sub"></p><div class="browser-list"></div>` +
     `<h2 class="settings-section settings-gap">Everywhere else</h2><p class="settings-sub">For a link that went somewhere it should not have, or a device you no longer use.</p>`;
   const row = el("div", "setting-row static", `<span class="what"><b>Sign out all other browsers</b><span>They lose access at once. Flash also makes a new link, so the old link and QR code stop working. The new one shows in the terminal Flash runs in.</span></span><span class="side"></span>`);
   const others = el("button", "btn danger", "Sign out others");
@@ -8796,19 +8797,47 @@ async function drawSecurity(body) {
   };
   row.querySelector(".side").appendChild(others);
   body.appendChild(row);
-  await renderBrowsers(body.querySelector(".browser-list"));
+  const remember = el("button", "setting-row remember-row", `<span class="what"><b>Remember signed-in browsers</b><span>Kept in Flash's folder on this computer, as a fingerprint of each browser's cookie that cannot be used to sign in. Turning it off forgets them all the next time Flash starts.</span></span><span class="switch" aria-hidden="true"></span>`);
+  remember.type = "button";
+  remember.setAttribute("role", "switch");
+  remember.onclick = async () => {
+    const on = remember.getAttribute("aria-checked") !== "true";
+    remember.setAttribute("aria-checked", on);
+    try {
+      const r = await command("remember-browsers", on ? "on" : "off");
+      remember.setAttribute("aria-checked", r.remember);
+      sayRemembering(body, r.remember);
+      // The page once more, for the cookie this browser keeps to last.
+      if (r.remember) await fetch(location.pathname, { credentials: "same-origin", cache: "no-store" }).catch(() => {});
+      toast(r.remember ? "This browser stays signed in, and opens Flash without the link" : "Browsers are signed in until Flash stops again");
+    } catch (error) { remember.setAttribute("aria-checked", !on); showFailure(error); }
+  };
+  // Under the first heading, before the list.
+  body.querySelector(".settings-sub").after(remember);
+  const r = await renderBrowsers(body.querySelector(".browser-list"));
+  if (r) { remember.setAttribute("aria-checked", !!r.remember); sayRemembering(body, r.remember); }
+}
+
+const REMEMBER_DAYS = 180;
+
+function sayRemembering(body, on) {
+  const sub = body.querySelector(".browsers-sub");
+  if (sub) sub.textContent = on
+    ? "Every browser that opened Flash's link. Each stays signed in, across restarts of Flash, until it is signed out here."
+    : "Every browser that opened Flash's link. Each stays signed in until it is signed out here or Flash stops.";
 }
 
 async function renderBrowsers(list = document.querySelector(".browser-list")) {
-  if (!list) return;
-  let listed;
-  try { listed = (await command("browsers")).browsers; } catch (error) { showFailure(error); return; }
-  if (!list.isConnected) return;
+  if (!list) return null;
+  let said;
+  try { said = await command("browsers"); } catch (error) { showFailure(error); return null; }
+  const listed = said.browsers;
+  if (!list.isConnected) return said;
   const known = new Set([...list.children].map((r) => r.dataset.id));
   list.textContent = "";
   if (!listed.length) {
     list.innerHTML = `<div class="browser-empty">No browser is signed in yet.</div>`;
-    return;
+    return said;
   }
   for (const b of listed) {
     const row = el("div", "browser-row" + (known.size && !known.has(b.id) ? " new" : ""), `<span class="dev${b.active ? " live" : ""}">${icon(b.phone ? "phone" : "monitor")}</span><span class="who"><span class="name"><span class="device"></span></span><span class="sub"></span></span>`);
@@ -8829,6 +8858,7 @@ async function renderBrowsers(list = document.querySelector(".browser-list")) {
     row.appendChild(out);
     list.appendChild(row);
   }
+  return said;
 }
 
 // The first press arms the button, a second within four seconds acts.

@@ -18,6 +18,8 @@ request from a page has to come from this server's own origin.
 """
 
 import base64
+import contextlib
+import hashlib
 import io
 import ipaddress
 import json
@@ -248,11 +250,12 @@ class Hub:
                 queue.put(None)
 
     def end(self, owners) -> None:
-        """End the streams of browsers just signed out."""
+        """End the streams of browsers just signed out: OWNERS are the
+        hashes of their keys, as Access keeps them."""
 
         with self._lock:
             for queue, owner in self._queues.items():
-                if owner and owner in owners:
+                if owner and _hashed(owner) in owners:
                     queue.put(None)
 
     def owners(self) -> set:
@@ -375,13 +378,64 @@ MAX_BROWSERS = 50
 AGENT_CHARS = 300
 
 
+# Remembered browsers. Off, a browser stays signed in until Flash
+# stops, and every new Flash needs its link opened again. On (Settings,
+# Security), a browser that opened the link once is remembered on disk,
+# by a hash of its cookie's key, never the key, and opens Flash at its
+# plain address from then on, until it is signed out or REMEMBER_DAYS go
+# by without it.
+REMEMBER_SETTING = "WEB_REMEMBER_BROWSERS"
+REMEMBER_DAYS = 180
+
+
+def remembering() -> bool:
+    return os.environ.get(REMEMBER_SETTING, "").strip().lower() in (
+        "1", "true", "on", "yes",
+    )
+
+
+def _remembered_path() -> Path:
+    return workspace.FLASH_DIR / "web-browsers.json"
+
+
+def _hashed(key: str) -> str:
+    """What is kept of a cookie's key: enough to know it again, and
+    nothing that would let a reader of the file sign in with it."""
+
+    return hashlib.sha256(key.encode("utf-8", "replace")).hexdigest()
+
+
+def _read_remembered() -> dict:
+    try:
+        found = json.loads(_remembered_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(found, dict):
+        return {}
+    stale = time.time() - REMEMBER_DAYS * 86400
+    return {
+        key: value for key, value in found.items()
+        if isinstance(value, dict) and value.get("id")
+        and float(value.get("seen") or 0) > stale
+    }
+
+
+def forget_remembered() -> None:
+    """Remember no browser on disk; those signed in now stay so until
+    Flash stops."""
+
+    with contextlib.suppress(OSError):
+        _remembered_path().unlink()
+
+
 class Access:
     """Who may use Flash.
 
     The link Flash prints carries a token. A browser that opens it is
     signed in: it gets a cookie of its own, a random key recorded here,
-    so each browser can be signed out by itself. A new token ends the
-    link, and with it the way back in for a browser signed out.
+    by its hash, so each browser can be signed out by itself. A new
+    token ends the link, and with it the way back in for a browser
+    signed out.
     """
 
     def __init__(
@@ -408,10 +462,30 @@ class Access:
             browsers = {}
         if not token or not isinstance(browsers, dict):
             browsers = {}
-        return cls(token, {
+        kept = _read_remembered() if remembering() else {}
+        kept.update({
             key: value for key, value in browsers.items()
             if isinstance(value, dict) and value.get("id")
         })
+        return cls(token, kept)
+
+    def remember(self) -> None:
+        """Write the signed-in browsers down, if they are remembered."""
+
+        if not remembering():
+            return
+        with self._lock:
+            data = json.dumps(self._browsers)
+        path = _remembered_path()
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            partial = path.with_suffix(".json.partial")
+            partial.write_text(data, encoding="utf-8")
+            with contextlib.suppress(OSError):
+                os.chmod(partial, 0o600)
+            os.replace(partial, path)
+        except OSError:
+            pass
 
     def hand_over(self) -> None:
         """Leave all this where the restarted Flash will look for it."""
@@ -433,7 +507,7 @@ class Access:
         if not key:
             return None
         with self._lock:
-            found = self._browsers.get(key)
+            found = self._browsers.get(_hashed(key))
             if found is not None:
                 found["seen"] = time.time()
                 found["address"] = address
@@ -441,7 +515,7 @@ class Access:
 
     def signed_out(self, key: str) -> bool:
         with self._lock:
-            return key in self._gone
+            return bool(key) and _hashed(key) in self._gone
 
     def sign_in(self, address: str, agent: str) -> str:
         """Sign a browser in, and give back the key for its cookie."""
@@ -449,7 +523,7 @@ class Access:
         key = secrets.token_urlsafe(24)
         now = time.time()
         with self._lock:
-            self._browsers[key] = {
+            self._browsers[_hashed(key)] = {
                 "id": secrets.token_hex(4),
                 "agent": agent[:AGENT_CHARS],
                 "address": address,
@@ -461,6 +535,7 @@ class Access:
                     self._browsers, key=lambda k: self._browsers[k]["seen"]
                 )
                 self._drop(stalest)
+        self.remember()
         return key
 
     def _drop(self, key: str) -> None:
@@ -476,6 +551,7 @@ class Access:
             ]
             for key in keys:
                 self._drop(key)
+        self.remember()
         return keys
 
     def sign_out_others(self, keep: str) -> list[str]:
@@ -485,11 +561,13 @@ class Access:
         it again. The one asking stays signed in by its cookie.
         """
 
+        mine = _hashed(keep) if keep else ""
         with self._lock:
-            keys = [k for k in self._browsers if k != keep]
+            keys = [k for k in self._browsers if k != mine]
             for key in keys:
                 self._drop(key)
             self.token = secrets.token_urlsafe(24)
+        self.remember()
         return keys
 
     def new_token(self) -> str:
@@ -504,6 +582,8 @@ class Access:
 
         with self._lock:
             items = list(self._browsers.items())
+        mine = _hashed(current) if current else ""
+        live = {_hashed(w) for w in watching if w}
         shown = [
             {
                 "id": b["id"],
@@ -513,8 +593,8 @@ class Access:
                 "here": _is_loopback(b.get("address", "")),
                 "since": b.get("since", 0),
                 "seen": b.get("seen", 0),
-                "current": key == current,
-                "active": key in watching,
+                "current": key == mine,
+                "active": key in live,
             }
             for key, b in items
         ]
@@ -2656,7 +2736,18 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
     if name == "browsers":
         return {"browsers": session.access.listing(
             browser, session.hub.owners()
-        )}
+        ), "remember": remembering()}
+
+    if name == "remember-browsers":
+        # On, every browser signed in now is written down at once, so
+        # this one is known to the next Flash without opening the link.
+        on = arg in ("on", "1", "true")
+        ai.set_config_var(REMEMBER_SETTING, "1" if on else "0")
+        if on:
+            session.access.remember()
+        else:
+            forget_remembered()
+        return {"remember": remembering()}
 
     if name in ("sign-out", "sign-out-others"):
         gone = (
@@ -2667,7 +2758,8 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
         session.hub.publish({"type": "browsers"})
         if name == "sign-out-others" and session.relink is not None:
             session.relink()
-        return {"signed_out": len(gone), "you": bool(browser in gone)}
+        return {"signed_out": len(gone),
+                "you": bool(browser) and _hashed(browser) in gone}
 
     if name == "voice-status":
         return {
@@ -3337,18 +3429,26 @@ class Handler(BaseHTTPRequestHandler):
             # its own, HttpOnly so no script can read it, SameSite=Strict
             # so no other site's request carries it, and no expiry, so it
             # goes when the browser closes. A new server knows none of
-            # the old keys.
+            # the old keys, unless browsers are remembered: then the
+            # cookie lasts REMEMBER_DAYS, renewed each time the page
+            # opens, and the next Flash knows it from the file.
             headers = {}
-            if not self.browser:
+            key = self.browser
+            if not key:
                 key = self.server.session.access.sign_in(
                     self.client_address[0],
                     self.headers.get("User-Agent", ""),
                 )
+                self.server.session.hub.publish({"type": "browsers"})
+            if not self.browser or remembering():
+                lasts = (
+                    f"; Max-Age={REMEMBER_DAYS * 86400}"
+                    if remembering() else ""
+                )
                 headers["Set-Cookie"] = (
                     f"{self.server.cookie_name}={key}; Path=/; "
-                    "HttpOnly; SameSite=Strict"
+                    f"HttpOnly; SameSite=Strict{lasts}"
                 )
-                self.server.session.hub.publish({"type": "browsers"})
             self._send(
                 HTTPStatus.OK, PAGE.read_bytes(), "text/html; charset=utf-8",
                 headers,
@@ -3695,10 +3795,16 @@ def announce(server: "Server") -> None:
     line.append(server.url, style=f"bold {ACCENT}")
     console.print(line)
 
+    if remembering():
+        plain = Text("Browsers signed in before open it at ", style=DIM)
+        plain.append(f"http://{HOST}:{server.port}/", style=ACCENT)
+        console.print(plain)
+
     if server.network_url is None:
         console.print(Text(
-            "Only this machine can reach it, and only with that link. "
-            "Add --lan (or /web lan) to open it on your phone.",
+            ("Only this machine can reach it. " if remembering() else
+             "Only this machine can reach it, and only with that link. ")
+            + "Add --lan (or /web lan) to open it on your phone.",
             style=DIM,
         ))
         return
