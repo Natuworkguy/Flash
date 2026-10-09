@@ -53,7 +53,7 @@ flash --web --lan   # ... and on your phone, with a QR code to scan
 
 The installer uses [pipx](https://pipx.pypa.io/); on Windows, run
 `install.ps1` in PowerShell. `--uninstall` (`-Uninstall` on Windows)
-takes Flash back out. Point it at another machine with `OLLAMA_HOST`, or add hosts
+takes Flash back out. Point it at another machine with `/host`, or add hosts
 in the web UI's model menu. A clone works too: `pip install -r
 requirements.txt && python3 run.py`.
 
@@ -130,6 +130,7 @@ Commands
 | Command | What it does |
 | --- | --- |
 | `/model [name]` | Pick a model, or download one |
+| `/host [name\|url]` | Switch Ollama server: `add`, `remove`, `list` |
 | `/auto [on\|off]` | Run commands and edits without asking |
 | `/sparks` | Your sparks: `new`, `chat`, `teams`, `teamchat` and more, with Tab completion |
 | `/web [lan]` | Open Flash in your browser, or on your phone |

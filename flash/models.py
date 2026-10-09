@@ -254,16 +254,24 @@ def _fit(text: str, width: int) -> str:
     return text[: max(0, width - len(ELLIPSIS))] + ELLIPSIS
 
 
-def choose(models: list[Model]) -> Optional[str]:
+def choose(
+    models: list[Model],
+    title: str = "Switch model",
+    unmatched: str = "Enter downloads {typed!r}",
+    empty: str = "no models here yet. Type a name to download one",
+    start: int = 0,
+) -> Optional[str]:
     """Run the picker over MODELS; return a model name, or None if cancelled.
 
     Typing filters the list. A query that matches nothing is handed back
     as typed, which is how a model that is not on this machine yet gets
-    named: the caller downloads it.
+    named: the caller downloads it. TITLE heads the list, UNMATCHED and
+    EMPTY say what Enter does with nothing to pick, and the cursor
+    starts on row START.
     """
 
-    index = 0
-    top = 0
+    index = max(0, min(start, len(models) - 1))
+    top = max(0, index - VISIBLE_ROWS + 1)
     query = ""
 
     def rows() -> list[Model]:
@@ -288,7 +296,7 @@ def choose(models: list[Model]) -> Optional[str]:
 
         out: StyleAndTextTuples = [
             (f"fg:{ACCENT}", f"{BULLET} "),
-            ("bold", "Switch model"),
+            ("bold", title),
         ]
 
         if query:
@@ -304,10 +312,10 @@ def choose(models: list[Model]) -> Optional[str]:
             out.append((
                 f"fg:{DIM_HEX}",
                 (
-                    f"     nothing here matches. Enter downloads {typed!r}\n"
+                    "     nothing here matches. "
+                    + unmatched.format(typed=typed) + "\n"
                     if typed
-                    else "     no models here yet. Type a name to "
-                         "download one\n"
+                    else f"     {empty}\n"
                 ),
             ))
 

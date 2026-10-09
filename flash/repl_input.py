@@ -54,6 +54,7 @@ from .theme import (
 # Single source of truth for both the completion dropdown and /help.
 COMMANDS = [
     ("/model", "pick from the models here, or /model <name> to switch"),
+    ("/host", "switch Ollama server (/host <name|url>, add, remove, list)"),
     ("/auto", "toggle autonomous command mode (/auto on|off)"),
     ("/systemone", "a small model that reviews autonomous commands (on|off)"),
     ("/voice", "talk to Flash and hear its replies (on|off, models, pull)"),
@@ -219,6 +220,39 @@ def _voice_completions(rest: str):
                                  display_meta=style.label.split(": ", 1)[-1])
 
 
+HOST_ACTIONS = (
+    ("list", "every saved host, and whether it answers"),
+    ("add", "save a host, with its API key if it asks for one"),
+    ("remove", "forget a saved host"),
+)
+
+
+def _host_completions(rest: str):
+    """What /host takes: an action or a saved host's name, then a saved
+    host's name after remove."""
+
+    from . import workspace  # deferred: only wanted once /host is typed
+
+    action, spaced, after = rest.partition(" ")
+    if not spaced or action.lower() not in ("add", "remove", "rm"):
+        query = rest.lower()
+        for name, meta in HOST_ACTIONS:
+            if name.startswith(query):
+                yield Completion(name, start_position=-len(rest),
+                                 display_meta=meta)
+        for host in workspace.hosts():
+            if host["name"].lower().startswith(query):
+                yield Completion(host["name"], start_position=-len(rest),
+                                 display_meta=host["url"])
+        return
+    if action.lower() in ("remove", "rm"):
+        for host in workspace.hosts():
+            if host["saved"] and \
+                    host["name"].lower().startswith(after.lower()):
+                yield Completion(host["name"], start_position=-len(after),
+                                 display_meta=host["url"])
+
+
 class SlashCommandCompleter(Completer):
     """Suggests / commands as the line is typed, image file paths as the
     argument to /image (auto-quoting suggestions that contain spaces),
@@ -259,6 +293,10 @@ class SlashCommandCompleter(Completer):
 
         if text.startswith("/voice "):
             yield from _voice_completions(text[len("/voice "):])
+            return
+
+        if text.startswith("/host "):
+            yield from _host_completions(text[len("/host "):])
             return
 
         # What /sparks and its actions take. Past them, in a lesson or a
