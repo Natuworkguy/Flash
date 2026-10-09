@@ -370,7 +370,10 @@ And always:
   (`/sparks title scout Bug triager`),
 - a **model**, chosen when you make it: every shift and every chat with
   it runs on that one, whatever Flash itself is set to
-  (`/sparks model scout qwen3:8b` changes it),
+  (`/sparks model scout qwen3:8b` changes it; `/sparks model scout,
+  writer qwen3:8b` or `/sparks model all qwen3:8b` changes many,
+  `/sparks teams model Desk qwen3:8b` a whole team, and `/sparks models`
+  lists them all; on the Sparks page, Change models does the same),
 - a **goal**, the standing assignment it works toward,
 - a **schedule**, from every 15 minutes to weekly,
 - **boundaries**, what it must never do whatever the goal seems to need.

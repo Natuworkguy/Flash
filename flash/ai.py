@@ -2565,6 +2565,82 @@ def _team_and_rest(text: str) -> tuple[Optional["sparks.Team"], str]:
     return None, ""
 
 
+def _say_moved(changed: list, model: str) -> None:
+    on = model or "Flash's model"
+    names = ", ".join(spark.name for spark in changed)
+    console.print(Text(
+        f"{names} {'runs' if len(changed) == 1 else 'run'} on {on} now.",
+        style=DIM,
+    ))
+
+
+def _team_model(rest: str) -> None:
+    """/sparks teams model <team> [model]: everyone on the team onto one
+    model, picked from the list when it is not named."""
+
+    team, model = _team_and_rest(rest)
+    if team is None:
+        warn(f"No team called {rest!r}.")
+        return
+    model = model.strip() or _ask_spark_model()
+    if not model:
+        return
+    team, changed = sparks.set_team_model(team.id, model)
+    _say_moved(changed, changed[0].model)
+
+
+def _spark_models_bulk(rest: str) -> None:
+    """/sparks model all [model], or /sparks model ada, grace, ken
+    [model]: many sparks onto one model at once."""
+
+    if rest.split()[0].lower() == "all":
+        keys = [spark.id for spark in sparks.all_sparks()]
+        model = rest.split(maxsplit=1)[1].strip() if " " in rest else ""
+    else:
+        *named, last = [part.strip() for part in rest.split(",")]
+        # The model, when given, is the last word after the last name;
+        # a whole last part that is a spark's name has none after it.
+        model = ""
+        if sparks.find(last) is None and " " in last:
+            last, model = last.rsplit(" ", 1)
+        keys = [key for key in [*named, last] if key]
+    if not keys:
+        warn("No sparks yet.")
+        return
+    model = model or _ask_spark_model()
+    if not model:
+        return
+    changed = sparks.set_models(keys, model)
+    _say_moved(changed, changed[0].model)
+
+
+def _spark_models_list() -> None:
+    """/sparks models: every spark and the model it runs on, by team."""
+
+    every = sparks.all_sparks()
+    if not every:
+        console.print(Text("No sparks yet.", style=DIM))
+        return
+    groups = [(team.name, team.id) for team in sparks.teams()]
+    groups.append(("No team", ""))
+    body = Text()
+    for name, team_id in groups:
+        mates = [s for s in every if (s.team or "") == team_id]
+        if not mates:
+            continue
+        body.append(f"\n{name}\n", style="bold")
+        for spark in mates:
+            body.append(f"  {spark.name:<18}", style=ACCENT)
+            body.append(f"{spark.model or 'Flash' + chr(39) + 's model'}\n",
+                        style="" if spark.model else DIM)
+    body.append(
+        "\n  /sparks model all <model>, /sparks model ada, grace <model>, "
+        "or /sparks teams model <team> <model> moves many at once.",
+        style=DIM,
+    )
+    console.print(body)
+
+
 def _team_chat(rest: str) -> None:
     """/sparks teamchat <team> [message]: a team's group chat, its
     latest shown; with a message, that one is sent and answered."""
@@ -2819,6 +2895,9 @@ def _teams_command(rest: str) -> None:
     if action == "rules" and extra:
         _team_rules(extra)
         return
+    if action == "model" and extra:
+        _team_model(extra)
+        return
     if action == "templates":
         body = Text()
         for template in sparks.TEAM_TEMPLATES:
@@ -2832,7 +2911,7 @@ def _teams_command(rest: str) -> None:
         return
     if action:
         warn("Usage: /sparks teams [new|remove|share|pause|resume <name> "
-             "| rules <name> [rules|none] "
+             "| rules <name> [rules|none] | model <name> [model] "
              "| add <code|template> [running] | templates]")
         return
     found = sparks.teams()
@@ -3180,6 +3259,12 @@ def _sparks_command(arg: str) -> None:
                 if spark.watch else f"{spark.name} watches nothing now.",
                 style=DIM,
             ))
+            return
+        if action == "models":
+            _spark_models_list()
+            return
+        if action == "model" and (key.lower() == "all" or "," in rest):
+            _spark_models_bulk(rest)
             return
         if action == "model" and key:
             spark = sparks.find(key)
