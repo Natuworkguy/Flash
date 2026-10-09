@@ -151,13 +151,14 @@ Flash Onyx
 
 Flash runs on any Ollama model that calls tools. **Flash Onyx** is its
 own: `gemma4` with Flash's persona and tuned settings baked in, in a
-`12b` for consumer GPUs and a `31b` flagship.
+`12b` for consumer GPUs and a `31b` flagship. Each release is a Modelfile
+under `models/`; build the newest one:
 
 ```bash
-python3 models/build.py models/flash-onyx-2.5.Modelfile
+python3 models/build.py models/flash-onyx-<version>.Modelfile
 ```
 
-Then set `MODEL=flash-onyx-2.5:31b` in `~/.flash.env`.
+Then set `MODEL=flash-onyx-<version>:31b` in `~/.flash.env`.
 [Building Onyx](docs/GUIDE.md#flash-onyx-recommended-model).
 
 
@@ -188,5 +189,5 @@ Modelfile and the prompt, not the weights underneath:
 
 `models/build.py` copies this repository's `LICENSE` into every model it
 builds, together with a pointer to the base model's own terms, so
-`ollama show --license flash-onyx-2.2:12b` prints both. Check the base model's
+`ollama show --license flash-onyx-<version>:12b` prints both. Check the base model's
 license with `ollama show --license gemma4` before publishing a build.
