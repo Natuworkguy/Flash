@@ -474,6 +474,9 @@ pre code { display: block; padding: 2px 16px 14px; overflow-x: auto; font-size: 
 .note { text-align: center; color: var(--text-3); font-size: 13px; }
 .error { display: flex; gap: 10px; align-items: flex-start; color: var(--del); font-size: 14px; }
 .error svg { margin-top: 2px; }
+.error > span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.error .retry-error { flex: none; display: inline-flex; align-items: center; gap: 6px; margin-top: -3px; color: var(--text); }
+.error .retry-error svg { width: 14px; height: 14px; margin: 0; }
 
 /* Math, typeset by the browser from KaTeX's MathML. */
 .katex math { font-family: "STIX Two Math", "Cambria Math", "Latin Modern Math", math; font-size: 1.12em; }
@@ -4963,7 +4966,21 @@ function drawEntry(entry, ctx) {
     case "plan": if (ctx.tool) addPlan(ctx.tool, entry.steps || []); break;
     case "ask": messagesEl.appendChild(askCard(entry)); break;
     case "answered": { const card = messagesEl.querySelector(`[data-ask="${entry.id}"]`); if (card) settleAsk(card, entry.answer); break; }
-    case "error": { const node = el("div", "block error", icon("alert") + "<span></span>"); node.lastChild.textContent = entry.text; messagesEl.appendChild(node); break; }
+    case "error": {
+      const node = el("div", "block error", icon("alert") + "<span></span>");
+      node.lastChild.textContent = entry.text;
+      node.dataset.log = ctx.index;
+      // A turn that failed can run again from its message, while it is
+      // still the last thing in the chat.
+      if (entry.retry) {
+        const again = node.appendChild(el("button", "btn small retry-error", `${icon("retry")}<span>Retry</span>`));
+        again.type = "button";
+        again.hidden = true;
+        again.onclick = () => retryFailed();
+      }
+      messagesEl.appendChild(node);
+      break;
+    }
     case "note": messagesEl.appendChild(el("div", "block note")).textContent = entry.text; break;
     case "stats": {
       const reply = ctx.lastReply;
@@ -4977,6 +4994,28 @@ function drawEntry(entry, ctx) {
       break;
     }
   }
+}
+
+// A failed turn's Retry shows while the error is the chat's last word
+// and nothing is running.
+function failedTurn(chat) {
+  const last = chat && chat.log[chat.log.length - 1];
+  return last && last.type === "error" && last.retry && !chat.busy && !chat.queued ? last : null;
+}
+
+function markRetry() {
+  const chat = chats.get(current);
+  const can = failedTurn(chat);
+  messagesEl.querySelectorAll(".retry-error").forEach((b) => {
+    b.hidden = !can || Number(b.parentNode.dataset.log) !== chat.log.length - 1;
+  });
+}
+
+async function retryFailed() {
+  const chat = chats.get(current);
+  if (!failedTurn(chat)) { toast("Nothing to retry"); return; }
+  messagesEl.querySelectorAll(".retry-error").forEach((b) => { b.hidden = true; });
+  try { await command("retry", "", chat.id); } catch (err) { toast(err.message); markRetry(); }
 }
 
 // The newest reply keeps its actions showing, as chat apps do.
@@ -5009,6 +5048,7 @@ function drawChat() {
   if (!empty) {
     chat.log.forEach((entry, index) => { drawCtx.index = index; drawEntry(entry, drawCtx); });
     markLatest();
+    markRetry();
     drawStreaming();
   }
   setTitle($("#title"), chat ? chat.title : "New chat");
@@ -10399,12 +10439,20 @@ function apply(event) {
       if (event.busy) chat.queued = false;
       else { chat.partial = ""; chat.thinking = ""; chat.speaker = ""; refreshContext(); }
       renderChats();
-      if (here) { drawStreaming(); updateSend(); }
+      if (here) { drawStreaming(); updateSend(); markRetry(); }
       // The browser in the panel is live only while the turn runs.
       if (here && viewing && viewing.kind === "browser") openBrowser(viewing.run, viewing.at);
       break;
     case "cleared":
       chat.log = []; chat.partial = ""; chat.thinking = "";
+      if (here) drawChat();
+      return;
+    case "retrying":
+      // The failed turn leaves the chat, back to its message, which
+      // runs again.
+      chat.log = chat.log.slice(0, event.keep);
+      chat.queued = true; chat.partial = ""; chat.thinking = "";
+      renderChats();
       if (here) drawChat();
       return;
     default: {
@@ -10422,6 +10470,7 @@ function apply(event) {
         if (streamNode) { streamNode.remove(); streamNode = null; }
         drawCtx.index = chat.log.length - 1;
         drawEntry(entry, drawCtx);
+        markRetry();
         drawStreaming();
         updateSend();
         arrived(entry);
@@ -11819,7 +11868,11 @@ function lastOf(type) {
   return null;
 }
 
-function retry() { const last = lastOf("user"); if (last) send(last.text); else toast("Nothing to retry"); }
+function retry() {
+  if (failedTurn(chats.get(current))) { retryFailed(); return; }
+  const last = lastOf("user");
+  if (last) send(last.text); else toast("Nothing to retry");
+}
 
 function editLast(text, files) {
   const last = text === undefined ? lastOf("user") || {} : {};

@@ -805,6 +805,11 @@ class Session:
         # each chat has been woken for one, with no message in between.
         self.agents: dict[str, str] = {}
         self.wakes: dict[str, int] = {}
+        # Each running turn's message: where it is in the chat's log, and
+        # what the model was given, so a turn that fails can be taken
+        # back out and tried again.
+        self.started: dict[str, int] = {}
+        self.asked: dict[str, dict] = {}
         self._watching: Optional[threading.Thread] = None
         # One at a time, so a report is never posted twice.
         self._posting = threading.Lock()
@@ -1282,6 +1287,7 @@ class Session:
         """Put a turn's message in the chat, as its turn starts."""
 
         if wake:
+            self.started.pop(chat.id, None)
             self.emit(chat, {"type": "note", "text": WAKE_TEXT})
             return
         self.wakes[chat.id] = 0
@@ -1299,6 +1305,67 @@ class Session:
         if files:
             event["files"] = files
         self.emit(chat, event)
+        self.started[chat.id] = len(chat.log) - 1
+
+    def retry(self, chat: Chat) -> None:
+        """Run a turn that failed again, from its message.
+
+        The error and whatever the turn showed before it leave the chat,
+        and a steer sent during it waits to be read again.
+        """
+
+        with self._lock:
+            if chat.busy or chat.queued:
+                raise ValueError("Wait for the reply to finish.")
+            if not chat.log or not chat.log[-1].get("retry"):
+                raise ValueError("Nothing to retry.")
+            at = next((
+                i for i in range(len(chat.log) - 1, -1, -1)
+                if chat.log[i]["type"] == "user"
+                and not chat.log[i].get("steer")
+            ), None)
+            if at is None:
+                raise ValueError("Nothing to retry.")
+            entry = chat.log[at]
+            steers = [
+                {
+                    "id": uuid.uuid4().hex[:8],
+                    "text": e.get("text", ""),
+                    "mode": "steer",
+                    "files": e.get("files") or [],
+                }
+                for e in chat.log[at + 1:]
+                if e["type"] == "user" and e.get("steer")
+            ]
+            del chat.log[at + 1:]
+            chat.pending[:0] = steers
+            chat.stop.clear()
+            chat.queued = True
+            self.started[chat.id] = at
+        self.hub.publish({"type": "retrying", "chat": chat.id, "keep": at + 1})
+        if steers:
+            self._publish_pending(chat)
+        threading.Thread(
+            target=self._run,
+            args=(chat, entry.get("text", ""), entry.get("files") or []),
+            daemon=True,
+        ).start()
+
+    def _take_back(self, chat: Chat) -> bool:
+        """Take a failed turn's message back out of what the model sees,
+        as the terminal does, so it is not left there unanswered. True
+        when the turn had a message of its own to try again."""
+
+        asked = self.asked.pop(chat.id, None)
+        for at, message in enumerate(chat.messages):
+            if message is asked:
+                del chat.messages[at:]
+                break
+        at = self.started.pop(chat.id, None)
+        return (
+            at is not None and at < len(chat.log)
+            and chat.log[at]["type"] == "user"
+        )
 
     def _publish_pending(self, chat: Chat) -> None:
         self.hub.publish({
@@ -1374,11 +1441,16 @@ class Session:
                         with inside(found.path if found else None):
                             run_turn(self, chat, text, found, files)
                 except Exception as exc:  # noqa: BLE001
-                    self.emit(chat, {
+                    failed: dict = {
                         "type": "error",
                         "text": f"{exc.__class__.__name__}: {exc}",
-                    })
+                    }
+                    if self._take_back(chat):
+                        failed["retry"] = True
+                    self.emit(chat, failed)
                 finally:
+                    self.asked.pop(chat.id, None)
+                    self.started.pop(chat.id, None)
                     with self._lock:
                         following = self._take_next(chat)
                         chat.busy = False
@@ -1776,9 +1848,11 @@ def run_turn(
         else ai.Config.model
         for s in speakers
     ):
+        # Tried again once one is picked.
         session.emit(chat, {
             "type": "error",
             "text": "No model is set. Pick one with Alt+M or /model.",
+            "retry": chat.id in session.started,
         })
         return
 
@@ -1802,6 +1876,7 @@ def run_turn(
         )})
     content = "\n\n".join(part for part in (news, said) if part)
     chat.messages.append(ai._message("user", content, images or None))
+    session.asked[chat.id] = chat.messages[-1]
 
     stopped = False
     flash_spoke = False
@@ -2505,6 +2580,10 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
 
     if name == "clear":
         session.clear_chat(session.chat(chat_id))
+        return {}
+
+    if name == "retry":
+        session.retry(session.chat(chat_id))
         return {}
 
     if name == "stop":
