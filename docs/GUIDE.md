@@ -848,6 +848,16 @@ drive Flash without it. The link travels unencrypted, though, so use
 firewall is probably blocking Python from accepting connections. On a
 Mac, allow it in System Settings, Network, Firewall.
 
+A browser that opens the link is signed in by a cookie until Flash
+stops, so each new `flash --web` takes its new link. To skip that, turn
+on Remember signed-in browsers under Settings, Security (off by
+default). From then on a browser that has opened the link once opens
+Flash at its plain address, `http://127.0.0.1:7433/` or whatever port it
+runs on, across restarts, until you sign it out there or it goes 180
+days without opening Flash. Flash keeps only a fingerprint of each
+browser's cookie, in `~/.flash/web-browsers.json`, which cannot be used
+to sign in.
+
 The suggestions use the [Orbit](https://github.com/JAMO-TYPEFACE/Orbit)
 typeface, bundled under the SIL Open Font License
 (`flash/web/OFL-orbit.txt`).

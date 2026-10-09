@@ -86,6 +86,8 @@ def isolated_home(tmp_path_factory, monkeypatch):
     monkeypatch.setattr(systemone, "ENV_PATH", str(home / ".flash.env"))
     for name in ("SYSTEM_ONE", "SYSTEM_ONE_MODEL"):
         monkeypatch.delenv(name, raising=False)
+    # Browsers are remembered across restarts only where a test says so.
+    monkeypatch.delenv("WEB_REMEMBER_BROWSERS", raising=False)
     # A key in the developer's shell would ride on every test's requests.
     monkeypatch.delenv("OLLAMA_API_KEY", raising=False)
     systemone.forget_checks()
