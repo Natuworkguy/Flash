@@ -2618,6 +2618,122 @@ class TestQueueAndSteer:
         self.settle(session, chat)
 
 
+def down():
+    raise ConnectionError("the model went away")
+
+
+class TestRetryAfterError:
+    def settle(self, chat):
+        wait_for(lambda: not (chat.busy or chat.queued or chat.pending))
+
+    def test_a_failed_turn_leaves_nothing_unanswered(self):
+        FakeClient.scripts = [
+            [part("Hi."), part(done=True)],
+            down,
+        ]
+        session = web.Session()
+        chat = session.new_chat()
+        run(session, chat, "hello")
+        before = list(chat.messages)
+
+        run(session, chat, "build it")
+
+        # The model never sees the message it failed to answer.
+        assert chat.messages == before
+        assert chat.log[-1]["type"] == "error"
+        assert chat.log[-1]["retry"] is True
+
+    def test_retry_runs_the_message_again_in_place(self):
+        FakeClient.scripts = [
+            down,
+            [part("Built."), part(done=True)],
+        ]
+        session = web.Session()
+        drain = events_of(session)
+        chat = session.new_chat()
+        run(session, chat, "build it")
+
+        web.command(session, {"name": "retry", "chat": chat.id})
+        self.settle(chat)
+
+        said = [
+            (e["type"], e.get("text")) for e in chat.log
+            if e["type"] in ("user", "assistant", "error")
+        ]
+        assert said == [("user", "build it"), ("assistant", "Built.")]
+        assert [m["content"] for m in chat.messages] == [
+            "build it", "Built.",
+        ]
+        retrying = next(e for e in drain() if e["type"] == "retrying")
+        assert retrying["keep"] == 1
+
+    def test_only_a_failed_turn_at_the_end_retries(self):
+        FakeClient.scripts = [
+            down,
+            [part("Fine."), part(done=True)],
+        ]
+        session = web.Session()
+        chat = session.new_chat()
+        run(session, chat, "build it")
+        run(session, chat, "never mind")
+
+        with pytest.raises(ValueError):
+            web.command(session, {"name": "retry", "chat": chat.id})
+
+    def test_a_steer_from_the_failed_turn_is_read_again(self):
+        gate = threading.Event()
+
+        def held():
+            gate.wait(5)
+            raise ConnectionError("the model went away")
+
+        FakeClient.scripts = [
+            held,
+            [part("Building."), part(done=True)],
+            [part("Using Rust."), part(done=True)],
+        ]
+        session = web.Session()
+        chat = session.new_chat()
+        session.send(chat, "build it")
+        wait_for(lambda: chat.busy)
+        session.send(chat, "in rust", mode="steer")
+        # Read at the next step, which the failure never reaches, so
+        # it is put in the log by hand as a turn that read it would.
+        session.take_steers(chat)
+        gate.set()
+        self.settle(chat)
+
+        web.command(session, {"name": "retry", "chat": chat.id})
+        self.settle(chat)
+
+        # The turn ends before it could read it, so it runs next, as
+        # any steer a turn never read does.
+        said = [
+            (e["type"], e["text"]) for e in chat.log
+            if e["type"] in ("user", "assistant", "error")
+        ]
+        assert said == [
+            ("user", "build it"), ("assistant", "Building."),
+            ("user", "in rust"), ("assistant", "Using Rust."),
+        ]
+
+    def test_no_model_can_be_tried_again_once_one_is_picked(
+        self, monkeypatch,
+    ):
+        monkeypatch.setattr(ai.Config, "model", "")
+        session = web.Session()
+        chat = session.new_chat()
+        run(session, chat, "hello")
+        assert chat.log[-1]["retry"] is True
+
+        monkeypatch.setattr(ai.Config, "model", "flash-test")
+        FakeClient.scripts = [[part("Hi."), part(done=True)]]
+        web.command(session, {"name": "retry", "chat": chat.id})
+        self.settle(chat)
+
+        assert [e["type"] for e in chat.log][:2] == ["user", "assistant"]
+
+
 class TestSwitchingLan:
     def test_the_server_reopens_with_the_same_port_token_and_chats(
         self, monkeypatch
