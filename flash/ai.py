@@ -3865,6 +3865,165 @@ def _web_command(arg: str) -> None:
     ))
 
 
+HOST_USAGE = "Usage: /host [<name|url>|list|add <url> [name]|remove <name>]"
+
+
+def _find_host(wanted: str) -> Optional[dict]:
+    """The listed host WANTED names, by its name or its address."""
+
+    from . import workspace
+
+    listed = workspace.hosts(Config.host)
+    by_name = [h for h in listed if h["name"].lower() == wanted.lower()]
+    if by_name:
+        return by_name[0]
+    key = workspace.host_key(wanted)
+    return next(
+        (h for h in listed if workspace.host_key(h["url"]) == key), None,
+    )
+
+
+def _host_rows() -> tuple[list, int]:
+    """The hosts as picker rows, each checked, and the one in use."""
+
+    from . import workspace
+    from .models import Model
+
+    in_use = workspace.host_key(Config.host)
+    rows, start = [], 0
+    for at, host in enumerate(workspace.hosts_with_health(Config.host)):
+        state = (
+            "up" if host["up"] else
+            "needs key" if host["refused"] else "down"
+        )
+        if workspace.host_key(host["url"]) == in_use:
+            start = at
+            state += ", in use"
+        rows.append(Model(
+            host["name"],
+            host["url"] + ("  (API key saved)" if host.get("locked") else ""),
+            note=state,
+        ))
+    return rows, start
+
+
+def _switch_host(url: str) -> None:
+    """Use the Ollama at URL from the next message on, as the web UI's
+    host menu does, and say how it answers."""
+
+    from . import workspace
+    from .models import installed_models
+
+    url = workspace.normalize_host(url)
+    set_config_var("OLLAMA_HOST", url)
+    # The same model name can be a different model on another server.
+    forget_model_facts()
+    found = _find_host(url)
+    name = found["name"] if found else url
+    state = workspace.host_state(url)
+    if state == "refused":
+        warn(
+            f"Switched to {name}, but it turned Flash away: it wants an "
+            f"API key. /host add {url} saves one."
+        )
+        return
+    if state != "up":
+        warn(f"Switched to {name}, but nothing answers at {url} yet.")
+        return
+    console.print(Text(f"Switched to {name} ({url}).", style=DIM))
+    if not Config.model or providers.routed(Config.model):
+        return
+    rows = installed_models(_client(), Config.model)
+    if rows is not None and not any(r.note == "active" for r in rows):
+        warn(f"{Config.model} is not on this host. /model picks one here.")
+
+
+def _host_command(arg: str) -> None:
+    """/host: pick, switch, list, add, or remove an Ollama server. The
+    hosts are the web UI's, so one saved in either shows in both."""
+
+    from . import workspace
+    from .models import can_pick, choose
+
+    action, _, rest = arg.partition(" ")
+    action, rest = action.lower(), rest.strip()
+
+    try:
+        if not arg:
+            if not can_pick():
+                action = "list"
+            else:
+                rows, start = _host_rows()
+                picked = choose(
+                    rows, title="Switch host",
+                    unmatched="Enter switches to {typed!r}",
+                    empty="Type an address to switch to",
+                    start=start,
+                )
+                if picked:
+                    found = _find_host(picked)
+                    _switch_host(found["url"] if found else picked)
+                return
+
+        if action == "list":
+            rows = _host_rows()[0]
+            names = max(len(r.name) for r in rows)
+            urls = max(len(r.summary) for r in rows)
+            for row in rows:
+                state, _, in_use = row.note.partition(", ")
+                line = Text("  ")
+                line.append(row.name.ljust(names),
+                            style="bold" if in_use else "")
+                line.append(f"  {row.summary.ljust(urls)}  ", style=DIM)
+                line.append(state, style="green" if state == "up"
+                            else "yellow")
+                if in_use:
+                    line.append(f"  {in_use}", style=DIM)
+                console.print(line)
+            return
+
+        if action == "add":
+            url, _, name = rest.partition(" ")
+            if not url:
+                warn("Usage: /host add <url> [name]")
+                return
+            url = workspace.normalize_host(url)
+            import getpass
+
+            try:
+                key = getpass.getpass(
+                    "  API key, if the server asks for one "
+                    "(hidden, Enter for none): "
+                )
+            except (EOFError, KeyboardInterrupt):
+                key = ""
+            added = workspace.add_host(name, url, key)
+            console.print(Text(f"Saved {added['name']}.", style=DIM))
+            _switch_host(added["url"])
+            return
+
+        if action in ("remove", "rm"):
+            found = _find_host(rest) if rest else None
+            if found is None or not found.get("saved"):
+                warn(
+                    f"No saved host is called {rest!r}." if rest
+                    else "Usage: /host remove <name>"
+                )
+                return
+            if workspace.host_key(found["url"]) == \
+                    workspace.host_key(Config.host):
+                warn("That host is in use. Switch to another one first.")
+                return
+            workspace.remove_host(found["url"])
+            console.print(Text(f"Removed {found['name']}.", style=DIM))
+            return
+
+        found = _find_host(arg)
+        _switch_host(found["url"] if found else arg)
+    except workspace.WorkspaceError as exc:
+        warn(f"{exc}. {HOST_USAGE}")
+
+
 def _print_backend_error(detail: str) -> None:
     show_error(f"Ollama backend error: {detail}")
 
@@ -4720,6 +4879,11 @@ def main() -> None:
                     info.append("\nhost:  ", style=DIM)
                     info.append(Config.host)
                     console.print(info)
+                continue
+
+            if uin == "/host" or uin.startswith("/host "):
+                _host_command(uin[len("/host"):].strip())
+                client = _client()
                 continue
 
             if uin == "/auto" or uin.startswith("/auto "):

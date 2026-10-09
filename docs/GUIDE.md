@@ -131,6 +131,15 @@ See [docs/CONFIGURATION.md](CONFIGURATION.md).
 
 Make sure the target server is reachable and that `MODEL` has been pulled on it.
 
+Or switch from inside Flash with `/host`. It lists the saved hosts with
+whether each one answers, and Enter switches to the one picked; typing
+an address that isn't saved switches to that. `/host <name|url>`
+switches straight away, `/host add <url> [name]` saves one (asking for
+an API key, hidden, if its server wants one) and switches to it,
+`/host remove <name>` forgets one, and `/host list` prints them. These
+are the same hosts as the web UI's, so one added in either shows in
+both.
+
 ## Usage
 
 Start the CLI by running:
@@ -144,6 +153,8 @@ python run.py
 - `/help` or `/?`: Display the help message.
 - `/model`: Pick from the models on this machine, or type a name to
   download one. `/model <name>` switches straight to one.
+- `/host [name|url]`: Pick or switch the Ollama server. `add <url>
+  [name]`, `remove <name>`, and `list` manage the saved hosts.
 - `/auto [on|off]`: Toggle autonomous mode: commands and edits run
   without asking first.
 - `/systemone [on|off|model [name]]`: Show, switch, or pick the model for
@@ -831,7 +842,7 @@ any other machine you add, like one with a bigger GPU. The model menu
 (`Alt M`, or `Alt H` to start on the hosts) lists them with a dot showing
 which ones answer. Picking one switches Flash to it and lists the models
 there. The choice is saved as `OLLAMA_HOST`, the same setting the
-terminal uses.
+terminal uses, and the terminal's `/host` lists the same hosts.
 
 Ollama itself has no API keys, but a server can sit behind a proxy that
 asks for one. Give the key in the API key box when you add the host, and
