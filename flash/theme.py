@@ -15,6 +15,7 @@ from typing import Optional
 from prompt_toolkit.formatted_text import StyleAndTextTuples
 from rich.console import Console
 from rich.control import Control
+from rich.live import Live as _RichLive
 from rich.markdown import Markdown
 from rich.text import Text
 
@@ -24,6 +25,87 @@ ERROR = "#e5484d"
 WARN = "#d9a63f"
 DIFF_ADD = "#3fb950"
 DIFF_DEL = "#e5484d"
+
+
+# The dock: the input box and status bar, kept at the foot of the screen
+# while a turn runs (repl_input.Dock). Output reaches the screen above it
+# through prompt_toolkit, which draws the dock again underneath, but a
+# question read with input(), or a Live redrawing its rows in place,
+# needs the terminal to itself: those step the dock aside while they
+# run, and it comes back, typing and all, when they are done.
+_dock = None
+
+
+def set_dock(dock) -> None:
+    global _dock
+    _dock = dock
+
+
+def dock_active() -> bool:
+    return _dock is not None
+
+
+def current_dock():
+    return _dock
+
+
+@contextmanager
+def screen_to_itself() -> Iterator[None]:
+    """The terminal without the dock, for as long as this runs."""
+
+    dock = _dock
+    if dock is None:
+        yield
+        return
+    dock.pause()
+    try:
+        yield
+    finally:
+        dock.resume()
+
+
+class Live(_RichLive):
+    """A Live that steps the dock aside while it runs."""
+
+    _holding = False
+
+    def start(self, refresh: bool = False) -> None:
+        if _dock is not None and not self._holding:
+            self._holding = True
+            _dock.pause()
+        super().start(refresh)
+
+    def stop(self) -> None:
+        try:
+            super().stop()
+        finally:
+            if self._holding:
+                self._holding = False
+                if _dock is not None:
+                    _dock.resume()
+
+
+class _HeldStatus:
+    """console.status(), with the dock stepped aside while it shows."""
+
+    def __init__(self, status) -> None:
+        self._status = status
+        self._held = None
+
+    def __enter__(self):
+        self._held = screen_to_itself()
+        self._held.__enter__()
+        self._status.__enter__()
+        return self
+
+    def __exit__(self, *exc) -> None:
+        try:
+            self._status.__exit__(*exc)
+        finally:
+            self._held.__exit__(*exc)
+
+    def __getattr__(self, name):
+        return getattr(self._status, name)
 
 
 class ScreenConsole(Console):
@@ -55,7 +137,21 @@ class ScreenConsole(Console):
         finally:
             self._not_keeping -= 1
 
+    def status(self, *args, **kwargs):
+        return _HeldStatus(super().status(*args, **kwargs))
+
+    # Whether a question has stepped the dock aside, for typed() to
+    # bring it back once the answer is in.
+    asking = False
+
     def print(self, *objects, **kwargs) -> None:
+        # Printed with no line end, under the dock, it is a question:
+        # the answer goes on the same line, typed into the terminal, so
+        # the dock steps aside first.
+        if (_dock is not None and kwargs.get("end") == ""
+                and not self.asking):
+            self.asking = True
+            _dock.pause()
         if not (objects and all(isinstance(o, Control) for o in objects)):
             self.keep(("print", objects, kwargs))
         super().print(*objects, **kwargs)
@@ -145,6 +241,22 @@ class ScreenConsole(Console):
 
 
 console = ScreenConsole()
+
+
+# The loader: a little grid of dots, two wide and four tall, every one
+# lit but the gap running round it, drawn with braille where the
+# terminal can show it and a plain ASCII turn where it cannot.
+LOADER_FRAMES = ("⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷")
+LOADER_FRAMES_ASCII = ("|", "/", "-", "\\")
+LOADER_SECONDS = 0.09
+
+
+def loader_frame(elapsed: float) -> str:
+    """The loader's glyph ELAPSED seconds in."""
+
+    frames = LOADER_FRAMES if can_encode(LOADER_FRAMES[0]) \
+        else LOADER_FRAMES_ASCII
+    return frames[int(elapsed / LOADER_SECONDS) % len(frames)]
 
 
 def can_encode(text: str) -> bool:
@@ -488,7 +600,14 @@ def typed() -> str:
     answer.
     """
 
-    answer = input()
+    try:
+        with screen_to_itself():
+            answer = input()
+    finally:
+        if console.asking:
+            console.asking = False
+            if _dock is not None:
+                _dock.resume()
     console.keep(answer + "\n")
     return answer.strip().lower()
 
@@ -499,6 +618,7 @@ def confirm(question: str) -> bool:
     ask = Text(f"  {question} ", style=DIM)
     ask.append("y", style=f"bold {ACCENT}")
     ask.append("/n ", style=DIM)
+
     console.print(ask, end="")
 
     try:

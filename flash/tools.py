@@ -25,7 +25,6 @@ from tempfile import mkdtemp
 from typing import Any, Optional, Union
 
 from ddgs import DDGS
-from rich.live import Live
 from rich.markdown import Markdown
 from rich.text import Text
 
@@ -75,8 +74,10 @@ from .theme import (
     ELLIPSIS,
     ERROR,
     WARN,
+    Live,
     capturing,
     console,
+    dock_active,
     glimmer,
     plural,
     remote_answer,
@@ -2548,7 +2549,10 @@ def _animating() -> bool:
     line to appear.
     """
 
-    return console.is_terminal and not os.environ.get("FLASH_NO_ANIMATION")
+    # Under the dock, a sweep would have to step it aside for every
+    # line, and the box would blink with each tool.
+    return (console.is_terminal and not dock_active()
+            and not os.environ.get("FLASH_NO_ANIMATION"))
 
 
 def _sweep_in(plain: str, settled: Text) -> None:

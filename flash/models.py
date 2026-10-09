@@ -23,7 +23,6 @@ from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.keys import Keys
 from prompt_toolkit.layout import Layout, Window
 from prompt_toolkit.layout.controls import FormattedTextControl
-from rich.live import Live
 from rich.text import Text
 
 from .theme import (
@@ -36,6 +35,7 @@ from .theme import (
     DIM,
     DIM_HEX,
     ELLIPSIS,
+    Live,
     confirm,
     console,
     tool_line,

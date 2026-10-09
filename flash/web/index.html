@@ -484,6 +484,16 @@ pre code { display: block; padding: 2px 16px 14px; overflow-x: auto; font-size: 
    happening, changing every few seconds, and how long it has been. */
 .loader { display: flex; align-items: center; gap: 9px; padding: 10px 0 4px; font-size: 14.5px; color: var(--text-3); }
 .loader .word { display: inline-grid; }
+/* The loader's dots: two wide and four tall, all lit but the gap that
+   runs down the left and up the right, as the terminal's braille one
+   does. */
+/* Sized to the text, and lifted a tenth of it: the letters' ink sits
+   that much above the middle of their line, and the dots centre on the
+   ink, not the line. */
+.loader .dots { display: inline-grid; grid-template-columns: repeat(2, 0.2em); grid-template-rows: repeat(4, 0.2em); gap: 0.1em; flex: none; position: relative; top: -0.1em; }
+.loader .dots i { width: 0.2em; height: 0.2em; border-radius: 50%; background: var(--accent); animation: dot-gap 0.72s steps(1, end) infinite; animation-delay: calc(var(--k) * 0.09s - 0.72s); }
+@keyframes dot-gap { 0% { opacity: 0.15; } 12.5%, 100% { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .loader .dots i { animation: none; } }
 .loader .word span { grid-area: 1 / 1; white-space: nowrap; background: linear-gradient(90deg, var(--text-3) 25%, var(--text) 50%, var(--text-3) 75%) 0 0 / 200% 100%; -webkit-background-clip: text; background-clip: text; color: transparent; animation: shine 1.8s linear infinite, word-in 0.45s var(--ease) both; }
 .loader .word span.out { animation: shine 1.8s linear infinite, word-out 0.3s var(--ease) both; }
 @keyframes word-in { from { opacity: 0; transform: translateY(7px); filter: blur(3px); } }
@@ -9503,7 +9513,10 @@ function startedWaiting(id) {
 
 function loaderBlock(chat) {
   startedWaiting(chat.id);
-  const node = el("div", "block loader", `<span class="word"></span><span class="elapsed"></span>`);
+  // The gap's path round the dots: down the left, then up the right.
+  const ring = [[1, 1], [2, 1], [3, 1], [4, 1], [4, 2], [3, 2], [2, 2], [1, 2]];
+  const dots = ring.map(([row, col], k) => `<i style="grid-area:${row}/${col};--k:${k}"></i>`).join("");
+  const node = el("div", "block loader", `<span class="dots" aria-hidden="true">${dots}</span><span class="word"></span><span class="elapsed"></span>`);
   node.setAttribute("role", "status");
   node.dataset.chat = chat.id;
   node.wordAt = -1;

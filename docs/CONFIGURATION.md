@@ -53,6 +53,7 @@ Requirements:
 | `MEMORY_REVIEW_EVERY` | No | `10` | `0` | Every this many messages, the same background review also saves facts worth remembering about you and your setup. `0` turns this off. |
 | `SYSTEM_ONE` | No | `0` | - | `1` (with `SYSTEM_ONE_MODEL` set) puts System One to work in autonomous mode: a small model that reviews each command and edit before it runs and answers the model's quick questions. Needs Ollama v0.35 or later. Usually set with `/systemone on` or in the web UI's Settings, which check the server's version first. See [System One](../README.md#system-one). |
 | `SYSTEM_ONE_MODEL` | No | unset | - | The model System One asks: any model on the server whose capabilities include `decision`, such as `nimble`. Unset, System One stays off until one is picked; `/systemone on` picks the first such model it finds. |
+| `FLASH_NO_DOCK` | No | unset | - | `1` takes the message box and status bar down while Flash works, as it was before you could steer or queue mid-turn. |
 | `SHOW_TIPS` | No | `1` | - | While the model is working, a one-line tip about a feature under the spinner (under the message box in the web UI), a new one every 30 seconds. `0` turns them off. |
 | `SHOW_STATS` | No | `1` | - | Prints a dim line under each reply with the tokens the turn used, how long it took, the generation rate, and how full the context got. `0` hides it. |
 | `VOICE` | No | `0` | - | `1` turns voice mode on at startup: press Enter on an empty prompt to speak, and replies are read aloud. Usually set with `/voice on` rather than by hand. |

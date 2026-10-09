@@ -1,5 +1,6 @@
 """Main App"""
 
+import io
 import json
 import os
 import re
@@ -18,11 +19,9 @@ from ollama import ResponseError
 from rich.box import ROUNDED
 from rich.cells import cell_len
 from rich.console import Console, Group
-from rich.live import Live
 from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.segment import Segment
-from rich.spinner import Spinner
 from rich.table import Table
 from rich.text import Text
 
@@ -61,9 +60,12 @@ from .repl_input import (
     MAX_MENU_ROWS,
     RESERVED_COMMANDS,
     RESIZE,
+    STEER,
     TOGGLE_AUTO,
     WAKE,
+    Dock,
     all_commands,
+    carry,
     is_shell_line,
     read_line,
     screen_redrawn,
@@ -94,13 +96,16 @@ from .theme import (
     RESET_ANSI,
     SPARKLE,
     WARN,
+    Live,
     ScreenConsole,
     can_encode,
     clear_collapsed,
     confirm,
     console,
+    current_dock,
     expand_collapsed,
     glimmer,
+    loader_frame,
     tool_line,
     tool_result,
     typed,
@@ -1340,12 +1345,10 @@ def _try_chat(
         )
 
     def _frame(elapsed: float):
-        spinner = Spinner(
-            "point",
-            text=Text.from_markup(_label(elapsed)),
-            style=ACCENT,
-            speed=5,
-        )
+        # Built fresh each frame, with the glyph for the time: a Spinner
+        # made anew every frame starts over every frame, and stood still.
+        spinner = Text(f"{loader_frame(elapsed)} ", style=ACCENT)
+        spinner.append_text(Text.from_markup(_label(elapsed)))
 
         # Rebuilt each frame rather than captured once: sub-agents
         # finish while the model is writing, which is exactly when a
@@ -1406,13 +1409,22 @@ def _chat_with_status(
     bar: Optional[Callable[[], str]] = None,
     turn: Optional[Turn] = None,
 ) -> tuple[Optional[object], Optional[str]]:
+    dock = current_dock()
+    if dock is not None:
+        # Under the dock the loader is drawn in it, above the status line
+        # it already carries, rather than by a Live of its own.
+        try:
+            return _try_chat(
+                client, messages, _DockLoader(dock), tools_arg,
+                is_image=is_image, bar=None, turn=turn,
+            )
+        finally:
+            dock.show("")
+
+    first = Text(f"{loader_frame(0)} ", style=ACCENT)
+    first.append(f"Thinking{ELLIPSIS}", style="bold")
     with Live(
-        Spinner(
-            "point",
-            text=Text.from_markup(f"[bold]Thinking{ELLIPSIS}[/bold]"),
-            style=ACCENT,
-            speed=5,
-        ),
+        first,
         console=console,
         refresh_per_second=GLIMMER_REFRESH_PER_SECOND,
         transient=True,
@@ -1421,6 +1433,28 @@ def _chat_with_status(
             client, messages, live, tools_arg,
             is_image=is_image, bar=bar, turn=turn,
         )
+
+
+class _DockLoader:
+    """What _try_chat draws its loader on under the dock: each frame as
+    ANSI rows, for the dock to show above its status line."""
+
+    def __init__(self, dock) -> None:
+        self.dock = dock
+
+    def update(self, renderable) -> None:
+        self.dock.show(_as_ansi(renderable))
+
+
+def _as_ansi(renderable) -> str:
+    """RENDERABLE as the terminal would show it, escape codes and all."""
+
+    out = Console(
+        file=io.StringIO(), force_terminal=True,
+        color_system=console.color_system, width=console.size.width,
+    )
+    out.print(renderable)
+    return out.file.getvalue()
 
 
 def _chat_retry_until_response(
@@ -1663,6 +1697,25 @@ def _bar_text(messages: list[dict]) -> Text:
     line.append(rest[1], style=DIM)
 
     return line
+
+
+# How a steering message reaches the model, as in the web UI: marked, so
+# it reads as the user cutting in rather than a new request from scratch.
+STEER_NOTE = (
+    "[Sent while you were working. Take it into account from here.]"
+)
+
+
+def _dock_wanted(heard: bool) -> bool:
+    """Whether a turn keeps the input box up while it runs: in a real
+    terminal, for a typed turn (voice mode has the floor otherwise), and
+    unless FLASH_NO_DOCK turns it off."""
+
+    return (
+        not heard
+        and sys.stdin.isatty() and sys.stdout.isatty()
+        and os.environ.get("FLASH_NO_DOCK", "") not in ("1", "true")
+    )
 
 
 def _status_text(messages: list[dict]) -> str:
@@ -3866,6 +3919,8 @@ KEYS = [
     ("Shift+Tab", "toggle autonomous mode"),
     ("Ctrl+O", "show tool output that was cut short this turn"),
     ("Ctrl+C", "stop the model mid-answer"),
+    ("Enter, while working", "steer: the model reads it before its next step"),
+    ("Tab, while working", "queue it to run once this turn is done"),
 ]
 
 
@@ -4387,6 +4442,11 @@ def main() -> None:
 
     pending: list[str] = []
 
+    # What was sent from the dock while a turn ran and did not reach it:
+    # queued with Tab, or a steer the turn finished before taking. Each
+    # runs as a turn of its own, in the order it was sent.
+    queued: list[str] = []
+
     if args.url:
         try:
             pending.append(parse_flash_url(args.url))
@@ -4445,7 +4505,58 @@ def main() -> None:
         _sync(False)
         screen_redrawn(painted)
 
+    def dock_key(key: str) -> None:
+        """Shift+Tab and Ctrl+O, pressed in the dock mid-turn."""
+
+        if key == TOGGLE_AUTO:
+            set_config_var(
+                "NO_COMMAND_CONFIRMATION",
+                "0" if Config.no_command_confirmation else "1",
+            )
+        elif key == EXPAND:
+            expand_collapsed()
+
+    def start_dock(heard: bool) -> Optional[Dock]:
+        """The input box and status bar, kept up while the turn runs."""
+
+        if not _dock_wanted(heard):
+            return None
+        dock = Dock(
+            Config.prompt,
+            status=lambda: _status_text(messages),
+            health=lambda: _backend_health,
+            on_key=dock_key,
+        )
+        dock.start()
+        return dock
+
+    def end_dock(dock: Optional[Dock], stopped: bool = False) -> None:
+        """Take the dock down. What was sent and not taken runs next,
+        unless the turn was stopped: then it goes back in the box, for
+        the user to send again or not."""
+
+        if dock is None:
+            return
+        left = [text for _, text in dock.stop()]
+        if stopped:
+            carry("\n".join(left))
+        else:
+            queued.extend(left)
+
+    def steers(dock: Optional[Dock]) -> list[str]:
+        """What the user sent to steer the turn since the model's last
+        step, shown in the conversation as they are handed over."""
+
+        if dock is None:
+            return []
+        said = dock.take(STEER)
+        for text in said:
+            _render_sent_message(console, Config.prompt, text)
+        return said
+
     while True:
+        dock: Optional[Dock] = None
+        stopped = False
         try:
             pending_images: Optional[list[str]] = None
             heard = False
@@ -4457,6 +4568,9 @@ def main() -> None:
                 if not _confirm_url_prompt(uin):
                     console.print(Text("Prompt discarded.", style=DIM))
                     break
+            elif queued:
+                uin = queued.pop(0)
+                _render_sent_message(console, Config.prompt, uin)
             elif listening_on:
                 # An empty line is what the voice branch below listens on.
                 listening_on = False
@@ -4964,6 +5078,7 @@ def main() -> None:
 
             nudged = [0]
             first = [system_message] + messages
+            dock = start_dock(heard)
             final, thinking, tool_calls, err = _chat_until_acted(
                 console, client, first, offered, nudged,
                 is_image=bool(pending_images), turn=turn, bar=bar,
@@ -4986,6 +5101,11 @@ def main() -> None:
             if not woken:
                 terminal_seen = looked_at
             clear_user_runs()
+
+            if not tool_calls:
+                # Done: the box goes, and what was sent to it runs next.
+                end_dock(dock)
+                dock = None
 
             _render_thinking(thinking)
 
@@ -5056,6 +5176,13 @@ def main() -> None:
                         _message("user", TOOL_IMAGE_NOTE, tool_images)
                     )
 
+                # Whatever the user sent to steer this turn, read before
+                # the model decides its next step.
+                for said in steers(dock):
+                    tool_messages.append(
+                        _message("user", f"{STEER_NOTE}\n{said}")
+                    )
+
                 final, thinking, tool_calls, err = _chat_until_acted(
                     console, client, tool_messages, offered, nudged,
                     turn=turn, is_image=bool(tool_images), bar=bar,
@@ -5097,6 +5224,8 @@ def main() -> None:
                 )
                 followup += "\n```"
 
+            end_dock(dock)
+            dock = None
             _render_markdown(console, followup)
             _render_done(turn)
             _render_stats(turn)
@@ -5114,8 +5243,11 @@ def main() -> None:
             console.print()
 
         except KeyboardInterrupt:
+            stopped = True
             console.print()
             continue
+        finally:
+            end_dock(dock, stopped)
 
 
 if __name__ == "__main__":
