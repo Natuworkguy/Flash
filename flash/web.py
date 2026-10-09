@@ -3629,7 +3629,11 @@ class Handler(BaseHTTPRequestHandler):
                 try:
                     event = queue.get(timeout=PING_SECONDS)
                 except Empty:
-                    self.wfile.write(b": ping\n\n")
+                    # An event, not a comment: the page sees it, and a
+                    # stream that has gone quiet without closing, after
+                    # a laptop sleeps or the network changes, is one it
+                    # can notice and open again.
+                    self.wfile.write(b"event: ping\ndata: {}\n\n")
                     self.wfile.flush()
                     continue
                 if event is None:

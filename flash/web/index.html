@@ -10537,11 +10537,22 @@ function refreshLite() {
   }, 60);
 }
 
-function connect() {
+// The event stream, and when it was last heard from. The server pings
+// every 15 seconds; a stream silent for STREAM_QUIET_MS has died without
+// saying so, and is opened again, the page catching up on what it missed.
+const STREAM_QUIET_MS = 40000;
+let stream = null;
+let streamHeard = Date.now();
+
+function connect(missed = false) {
   const source = new EventSource("/api/events");
-  let first = true;
-  source.onopen = () => { if (!first) loadState().catch(showFailure); first = false; };
+  stream = source;
+  streamHeard = Date.now();
+  let first = !missed;
+  source.onopen = () => { streamHeard = Date.now(); if (!first) loadState().catch(showFailure); first = false; };
+  source.addEventListener("ping", () => { streamHeard = Date.now(); });
   source.onmessage = (message) => {
+    streamHeard = Date.now();
     const event = JSON.parse(message.data);
     if (loading) buffered.push(event); else apply(event);
   };
@@ -11014,8 +11025,39 @@ async function send(text, mode = "steer") {
   // The chat has to exist here before anything is said in it, or its
   // first events would arrive for a chat this page has never seen.
   if (!current) await createChat(viewProject || "", viewSpark || "");
+  const chatId = current;
+  const before = (chats.get(chatId) || { log: [] }).log.length;
   // From voice mode, the reply will be heard: the model is told so.
-  await api("/api/send", { chat: current, text, files, voice: voice.on }).catch(showFailure);
+  const sentOk = await api("/api/send", { chat: chatId, text, files, voice: voice.on }).then(() => true).catch((error) => { showFailure(error); return false; });
+  if (sentOk) checkSent(chatId, before);
+}
+
+function reconnect() {
+  if (stream) stream.close();
+  connect(true);
+}
+
+setInterval(() => {
+  if (stream && !restartingServer && Date.now() - streamHeard > STREAM_QUIET_MS) reconnect();
+}, 5000);
+
+// Back to a tab left in the background: a stream gone quiet while it
+// was away is opened again at once, rather than in a while.
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden && stream && Date.now() - streamHeard > 20000) reconnect();
+});
+
+// A message sent should be in its chat in a moment, the server echoing
+// it back over the stream. Not there after SENT_CHECK_MS, something was
+// missed: the page loads the state again rather than sitting on an empty
+// chat until it is refreshed.
+const SENT_CHECK_MS = 3000;
+function checkSent(chatId, before) {
+  setTimeout(() => {
+    const chat = chats.get(chatId);
+    if (!chat || chat.log.length > before || loading) return;
+    loadState().catch(showFailure);
+  }, SENT_CHECK_MS);
 }
 
 async function createChat(project = "", spark = "") {
