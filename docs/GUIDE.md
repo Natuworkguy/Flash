@@ -797,6 +797,15 @@ lists them all:
 - Outside the message box, `j` and `k` move between blocks, `c` copies
   one, and `g` and `G` jump to the top and bottom.
 
+**Editing a message** happens where it is. Hover over one you sent and
+click the pencil, or press `Alt E` for the last one. Change it, then
+press `Enter` or Save, or `Esc` to cancel. The chat goes back to that
+message and carries on from what it says now. The earlier version is
+kept: `‹ 1 / 2 ›` under the message steps between versions, each with
+the replies that followed it. Retry on a reply answers your message
+again the same way, and a reply that failed with an error has a Retry
+button of its own.
+
 **Files** the agent makes come to you. It sends a picture with
 `send_image` and a PDF with `send_pdf`. In the browser, the file slides
 out in a panel on the right, with its name and size across the top and

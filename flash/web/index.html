@@ -404,6 +404,21 @@ pre code { display: block; padding: 2px 16px 14px; overflow-x: auto; font-size: 
 .actions .icon-btn svg { width: 16px; height: 16px; }
 .actions .meta { margin-left: 8px; font-size: 12px; color: var(--text-3); white-space: nowrap; }
 .user-wrap .actions { justify-content: flex-end; }
+/* An edited message's versions, to step between: always in sight. */
+.versions { display: inline-flex; align-items: center; margin-right: 2px; font-size: 12.5px; color: var(--text-3); font-variant-numeric: tabular-nums; opacity: 1; }
+.actions:has(.versions) { opacity: 1; }
+.turn:not(:hover):not(:focus-within) .actions:has(.versions) > .icon-btn { opacity: 0; }
+.actions > .icon-btn { transition: opacity 0.15s; }
+.versions .icon-btn { width: 26px; height: 30px; }
+.versions .icon-btn:disabled { opacity: 0.35; cursor: default; background: none; }
+.versions .count { min-width: 30px; text-align: center; }
+/* A sent message, opened to be edited in place. */
+.user-wrap.editing { align-items: stretch; }
+.user-wrap.editing > :not(.edit-box) { display: none; }
+.edit-box { background: var(--surface); border: 1px solid var(--border-strong); border-radius: 18px; padding: 12px 14px 10px; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05); animation: rise 0.2s var(--ease) both; }
+.edit-box textarea { display: block; width: 100%; min-height: 24px; max-height: 50vh; border: 0; outline: none; resize: none; background: transparent; color: var(--text); font: 400 16px/1.5 var(--sans); padding: 0; }
+.edit-box .row { display: flex; align-items: center; justify-content: flex-end; gap: 8px; margin-top: 10px; }
+.edit-box .row .note { margin-right: auto; font-size: 12px; color: var(--text-3); }
 
 .tool { border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; font-size: 13.5px; }
 .tool + .tool, .tool + .thinking, .thinking + .tool { margin-top: 8px; }
@@ -2576,6 +2591,7 @@ const ICON = {
   x: '<path d="M18 6 6 18M6 6l12 12"/>',
   lock: '<rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>',
   chevRight: '<path d="m9 6 6 6-6 6"/>',
+  chevLeft: '<path d="m15 6-6 6 6 6"/>',
   chevDown: '<path d="m6 9 6 6 6-6"/>',
   bolt: '<path d="M13 2 4 14h7l-1 8 9-12h-7Z"/>',
   spark: '<circle cx="10" cy="13" r="7"/><path d="M8 11.5v2M12 11.5v2"/><path d="M19 2.5v4M17 4.5h4"/>',
@@ -4841,7 +4857,8 @@ function commentsBlock(sent, text, steered) {
   return wrap;
 }
 
-function userBlock(text, steered, files) {
+function userBlock(entry, at) {
+  const { text, steer: steered, files } = entry;
   const sent = !(files && files.length) && parseComments(text);
   if (sent) return commentsBlock(sent, text, steered);
   const wrap = el("div", "block user-wrap turn");
@@ -4855,10 +4872,76 @@ function userBlock(text, steered, files) {
   wrap.dataset.raw = text;
   wrap.tabIndex = -1;
   const row = el("div", "actions");
+  if (entry.versions > 1) row.append(versionPicker(entry, at));
   if (text) row.append(button("icon-btn", "copy", "Copy", "", (b) => copy(text, "message", b)));
-  row.append(button("icon-btn", "edit", "Edit", "Alt E", () => editLast(text, files || [])));
+  if (!steered) row.append(button("icon-btn", "edit", "Edit", "Alt E", () => editMessage(wrap, at)));
   wrap.appendChild(row);
   return wrap;
+}
+
+// ‹ 2 / 3 ›: the versions an edit left, each with the chat as it went
+// on from there.
+function versionPicker(entry, at) {
+  const now = entry.version || 0;
+  const box = el("span", "versions");
+  const back = box.appendChild(button("icon-btn", "chevLeft", "Previous version", "", () => showVersion(at, now - 1)));
+  box.appendChild(el("span", "count")).textContent = `${now + 1} / ${entry.versions}`;
+  const next = box.appendChild(button("icon-btn", "chevRight", "Next version", "", () => showVersion(at, now + 1)));
+  back.disabled = now === 0;
+  next.disabled = now >= entry.versions - 1;
+  return box;
+}
+
+async function showVersion(at, version) {
+  const chat = chats.get(current);
+  if (!chat) return;
+  if (chat.busy || chat.queued) { toast("Wait for the reply to finish"); return; }
+  try { await command("version", "", chat.id, { at, version }); } catch (err) { toast(err.message); }
+}
+
+// Edit a sent message where it is, as Claude does: the chat goes back
+// to it and carries on from what it says now, and what it said before
+// stays a version to go back to.
+function editMessage(wrap, at) {
+  const chat = chats.get(current);
+  const entry = chat && chat.log[at];
+  if (!entry || entry.type !== "user" || entry.steer) return;
+  if (parseComments(entry.text) && !(entry.files && entry.files.length)) { toast("Comments are sent from the document. Open it to add more."); return; }
+  if (chat.busy || chat.queued) { toast("Wait for the reply to finish"); return; }
+  const open = messagesEl.querySelector(".user-wrap.editing");
+  if (open && open !== wrap) open._close();
+  if (wrap.classList.contains("editing")) { wrap.querySelector("textarea").focus(); return; }
+  const box = el("div", "edit-box", `<textarea rows="1" aria-label="Edit message"></textarea><div class="row"><button type="button" class="btn small" data-cancel>Cancel</button><button type="button" class="btn small primary" data-save>Save</button></div>`);
+  const field = box.querySelector("textarea");
+  const save = box.querySelector("[data-save]");
+  const files = entry.files || [];
+  if (files.length) {
+    const note = el("span", "note");
+    note.textContent = files.length === 1 ? "Its file is sent again" : `Its ${files.length} files are sent again`;
+    box.querySelector(".row").prepend(note);
+  }
+  field.value = entry.text || "";
+  const fit = () => { field.style.height = "auto"; field.style.height = `${field.scrollHeight}px`; };
+  const ready = () => { save.disabled = !field.value.trim() && !files.length; };
+  wrap._close = () => { box.remove(); wrap.classList.remove("editing"); wrap._close = null; };
+  const submit = async () => {
+    if (save.disabled) return;
+    save.disabled = true;
+    try {
+      await command("edit", field.value, chat.id, { at });
+    } catch (err) { toast(err.message); ready(); }
+  };
+  field.oninput = () => { fit(); ready(); };
+  field.onkeydown = (e) => {
+    if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); wrap._close(); }
+    else if (e.key === "Enter" && !e.shiftKey && !e.isComposing && !matchMedia("(pointer: coarse)").matches) { e.preventDefault(); submit(); }
+  };
+  box.querySelector("[data-cancel]").onclick = () => wrap._close();
+  save.onclick = submit;
+  wrap.classList.add("editing");
+  wrap.appendChild(box);
+  ready();
+  requestAnimationFrame(() => { fit(); field.focus(); field.setSelectionRange(field.value.length, field.value.length); });
 }
 
 const extOf = (name) => (name.includes(".") ? name.split(".").pop().toUpperCase().slice(0, 5) : "File");
@@ -4939,7 +5022,7 @@ function assistantBlock(entry) {
 function drawEntry(entry, ctx) {
   switch (entry.type) {
     case "user": {
-      const block = messagesEl.appendChild(userBlock(entry.text, entry.steer, entry.files));
+      const block = messagesEl.appendChild(userBlock(entry, ctx.index));
       block.dataset.log = ctx.index;
       ctx.lastReply = null;
       break;
@@ -10447,6 +10530,15 @@ function apply(event) {
       chat.log = []; chat.partial = ""; chat.thinking = "";
       if (here) drawChat();
       return;
+    case "rewound":
+      // An edit or another version: the chat from that message on is
+      // replaced, by what the version said, or by the edit about to run.
+      chat.log = chat.log.slice(0, event.keep).concat(event.tail || []);
+      chat.partial = ""; chat.thinking = "";
+      if (!(event.tail || []).length) chat.queued = true;
+      renderChats();
+      if (here) drawChat();
+      return;
     case "retrying":
       // The failed turn leaves the chat, back to its message, which
       // runs again.
@@ -11868,24 +11960,30 @@ function lastOf(type) {
   return null;
 }
 
-function retry() {
-  if (failedTurn(chats.get(current))) { retryFailed(); return; }
-  const last = lastOf("user");
-  if (last) send(last.text); else toast("Nothing to retry");
+// Answer the last message again, in place: its earlier answer stays a
+// version, as an edit's does.
+async function retry() {
+  const chat = chats.get(current);
+  if (failedTurn(chat)) { retryFailed(); return; }
+  let at = -1;
+  if (chat) for (let i = chat.log.length - 1; i >= 0; i--) if (chat.log[i].type === "user" && !chat.log[i].steer) { at = i; break; }
+  if (at < 0) { toast("Nothing to retry"); return; }
+  if (chat.busy || chat.queued) { toast("Wait for the reply to finish"); return; }
+  try { await command("edit", chat.log[at].text || "", chat.id, { at }); } catch (err) { toast(err.message); }
 }
 
-function editLast(text, files) {
-  const last = text === undefined ? lastOf("user") || {} : {};
-  const value = text ?? last.text ?? "";
-  if (parseComments(value)) { toast("Comments are sent from the document. Open it to add more."); return; }
-  files = files ?? last.files ?? [];
-  if (!value && !files.length) { toast("Nothing to edit"); return; }
-  reattach(files);
-  input.value = value;
-  autosize();
-  updateSend();
-  input.focus();
-  input.setSelectionRange(value.length, value.length);
+// Edit a message in place: the one given, or the last one sent.
+function editLast(block) {
+  const chat = chats.get(current);
+  if (view !== "chat" || !chat) { toast("Nothing to edit"); return; }
+  let at = block ? Number(block.dataset.log) : -1;
+  if (!(at >= 0)) {
+    for (let i = chat.log.length - 1; i >= 0; i--) if (chat.log[i].type === "user" && !chat.log[i].steer) { at = i; break; }
+  }
+  const wrap = at >= 0 && messagesEl.querySelector(`.user-wrap[data-log="${at}"]`);
+  if (!wrap) { toast("Nothing to edit"); return; }
+  wrap.scrollIntoView({ block: "nearest", behavior: calm.matches ? "auto" : "smooth" });
+  editMessage(wrap, at);
 }
 
 async function copy(text, what, from) {
@@ -12918,7 +13016,7 @@ window.addEventListener("keydown", (e) => {
     case "G": case "End": e.preventDefault(); toBottom(true); focusBlock(all.length - 1); break;
     case "Enter": case "o": e.preventDefault(); openFocused(); break;
     case "c": { const n = focusedBlock(); if (n) { e.preventDefault(); copy(n.dataset.raw || n.textContent, "block"); } break; }
-    case "e": { const n = focusedBlock(); e.preventDefault(); editLast(n && n.classList.contains("user-wrap") ? n.dataset.raw : undefined); break; }
+    case "e": { const n = focusedBlock(); e.preventDefault(); editLast(n && n.classList.contains("user-wrap") ? n : undefined); break; }
     case "y": if (answerPending("y")) e.preventDefault(); break;
     case "n": if (answerPending("n")) e.preventDefault(); break;
     case "?": e.preventDefault(); openHelp(); break;

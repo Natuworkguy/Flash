@@ -109,6 +109,15 @@ def _plain(value: Any) -> Any:
     return value
 
 
+def _own(message: Any) -> Any:
+    """A message without what Flash keeps on it for itself: which turn
+    of a chat it began, so an edit can find it."""
+
+    if isinstance(message, dict) and "turn" in message:
+        return {k: v for k, v in message.items() if k != "turn"}
+    return message
+
+
 def _images(images: Any) -> list[str]:
     """Every image as base64, the way Ollama sends them."""
 
@@ -351,7 +360,7 @@ def chat(
     request = {
         "action": "chat",
         "model": name,
-        "messages": _plain(list(messages or [])),
+        "messages": _plain([_own(m) for m in messages or []]),
         "stream": bool(stream),
     }
     if tools:
