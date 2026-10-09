@@ -890,3 +890,68 @@ def test_reactions_never_crowd_out_work(team, monkeypatch):
     inbox = sparks.find("scout").inbox
     assert sum(1 for n in inbox if n.get("reaction")) == 2  # nosec B101
     assert any(n.get("by") for n in inbox)  # nosec B101
+
+
+def _settled(team_id):
+    for _ in range(200):
+        if team_id not in teamchat._busy:
+            return
+        time.sleep(0.02)
+    raise AssertionError("still answering")
+
+
+def test_retry_replaces_a_sparks_message(team):
+    message = teamchat.say("desk", "Morning, team.")
+    first = teamchat.answer("desk", message, FakeClient([_reply("Mornin.")]))
+    client = FakeClient([_reply("Good morning, all quiet here.")])
+
+    old = teamchat.retry("desk", first[0]["id"], client)
+    _settled(team.id)
+
+    assert old["retried"] is True  # nosec B101
+    talk = [e["text"] for e in teamchat.history(team.id)["entries"]
+            if e["kind"] != "event"]
+    assert talk == [  # nosec B101
+        "Morning, team.", "Good morning, all quiet here.",
+    ]
+    # It answered without its old message in front of it.
+    seen = client.calls[0]["messages"][-1]["content"]
+    assert "Mornin." not in seen  # nosec B101
+    # A page that had the old one is told it changed.
+    changed = teamchat.history(team.id, since=first[0]["id"])["changed"]
+    assert [e["id"] for e in changed if e.get("retried")] == [  # nosec B101
+        first[0]["id"],
+    ]
+
+
+def test_only_a_sparks_message_can_be_retried(team):
+    message = teamchat.say("desk", "Hello.")
+
+    with pytest.raises(teamchat.TeamChatError, match="Only a spark"):
+        teamchat.retry("desk", message["id"])
+    with pytest.raises(teamchat.TeamChatError, match="no longer"):
+        teamchat.retry("desk", 9999)
+
+
+def test_no_retry_while_the_team_answers(team):
+    message = teamchat.say("desk", "Hi.")
+    said = teamchat.answer("desk", message, FakeClient([_reply("Hey.")]))
+    teamchat._busy.add(team.id)
+    try:
+        with pytest.raises(teamchat.TeamChatError, match="still answering"):
+            teamchat.retry("desk", said[0]["id"])
+    finally:
+        teamchat._busy.discard(team.id)
+
+
+def test_the_page_retries(team, monkeypatch):
+    message = teamchat.say("desk", "Morning.")
+    said = teamchat.answer("desk", message, FakeClient([_reply("Hi.")]))
+    monkeypatch.setattr(teamchat, "_reply", lambda *a, **k: [])
+
+    out = web.command(web.Session(), {
+        "name": "team-chat-retry", "arg": team.id, "id": said[0]["id"],
+    })
+    _settled(team.id)
+
+    assert out["entry"]["retried"] is True  # nosec B101

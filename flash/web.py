@@ -3024,6 +3024,13 @@ def _team_command(name: str, arg: str, body: dict) -> dict:
             return {"entry": teamchat.send(
                 arg, str(body.get("text") or ""), reply_to=reply_to,
             )}
+        if name == "team-chat-retry":
+            # A spark's message, answered again in its place.
+            try:
+                entry_id = int(body.get("id") or 0)
+            except (TypeError, ValueError):
+                entry_id = 0
+            return {"entry": teamchat.retry(arg, entry_id)}
         if name == "team-chat-react":
             # The user's reaction, on or off as it was not.
             try:
