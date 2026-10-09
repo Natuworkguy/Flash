@@ -3,6 +3,7 @@
 import io
 from types import SimpleNamespace
 
+import ollama
 import pytest
 from rich.console import Console
 
@@ -223,7 +224,7 @@ class FakeClient:
 def fake_model(monkeypatch):
     FakeClient.scripts = []
     FakeClient.seen = []
-    monkeypatch.setattr(learning.ollama, "Client", FakeClient)
+    monkeypatch.setattr(ollama, "Client", FakeClient)
     return FakeClient
 
 

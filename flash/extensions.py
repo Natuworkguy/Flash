@@ -72,6 +72,8 @@ GITHUB_RE = re.compile(
 
 DEFAULT_TIMEOUT = 30
 MAX_TIMEOUT = 600
+# A provider answers a whole turn, which a big model can take minutes on.
+DEFAULT_PROVIDER_TIMEOUT = 300
 
 # Every extension's prompt rides along on every turn, and Flash runs
 # on local models with windows measured in thousands of tokens. A
@@ -114,6 +116,18 @@ class Tool:
 
 
 @dataclass
+class Provider:
+    """Models from somewhere other than Ollama, answered by a program:
+    asked for its models, and to chat, with JSON on stdin (providers.py
+    has the protocol)."""
+
+    name: str
+    description: str
+    run: list[str]
+    timeout: int = DEFAULT_PROVIDER_TIMEOUT
+
+
+@dataclass
 class Extension:
     """One installed (or about to be installed) extension."""
 
@@ -126,6 +140,7 @@ class Extension:
     commands: list[Command] = field(default_factory=list)
     tools: list[Tool] = field(default_factory=list)
     backgrounds: Optional[Path] = None
+    providers: list[Provider] = field(default_factory=list)
 
     def contents(self) -> list[str]:
         """What installing this adds, one line per kind of thing."""
@@ -148,6 +163,11 @@ class Extension:
             )
         if self.backgrounds is not None:
             lines.append(f"backgrounds: {self.backgrounds.name}/")
+        if self.providers:
+            lines.append(
+                "model providers: "
+                + ", ".join(f"@{p.name}" for p in self.providers)
+            )
 
         return lines
 
@@ -303,6 +323,33 @@ def _tool(entry: Any, root: Path, index: int) -> Tool:
     )
 
 
+def _provider(entry: Any, root: Path, index: int) -> Provider:
+    where = f"providers[{index}]"
+
+    if not isinstance(entry, dict):
+        raise ExtensionError(f"{where} has to be an object")
+
+    name = _text(entry.get("name"), f"{where}.name", required=True).lower()
+
+    if not NAME_RE.match(name):
+        raise ExtensionError(
+            f"{where}: {name!r} is not a provider name (lowercase letters, "
+            "digits, - and _)"
+        )
+
+    where = f"provider {name}"
+    timeout = DEFAULT_PROVIDER_TIMEOUT
+    if entry.get("timeout") is not None:
+        timeout = _timeout(entry.get("timeout"), where)
+
+    return Provider(
+        name=name,
+        description=_text(entry.get("description"), f"{where}.description"),
+        run=_argv(entry.get("run"), root, where),
+        timeout=timeout,
+    )
+
+
 def _entries(manifest: dict, key: str) -> list:
     value = manifest.get(key, [])
     if not isinstance(value, list):
@@ -375,13 +422,19 @@ def load(root: Path) -> Extension:
         for index, entry in enumerate(_entries(manifest, "tools"))
     ]
 
+    providers = [
+        _provider(entry, root, index)
+        for index, entry in enumerate(_entries(manifest, "providers"))
+    ]
+
     _unique([c.name for c in commands], "command")
     _unique([t.name for t in tools], "tool")
+    _unique([p.name for p in providers], "provider")
 
-    if not (commands or tools or prompt or backgrounds):
+    if not (commands or tools or prompt or backgrounds or providers):
         raise ExtensionError(
-            f"{MANIFEST} declares nothing: no commands, tools, prompt, or "
-            "backgrounds"
+            f"{MANIFEST} declares nothing: no commands, tools, prompt, "
+            "backgrounds, or providers"
         )
 
     try:
@@ -399,6 +452,7 @@ def load(root: Path) -> Extension:
         commands=commands,
         tools=tools,
         backgrounds=backgrounds,
+        providers=providers,
     )
 
 
@@ -455,6 +509,22 @@ def problems() -> list[str]:
 def find(name: str) -> Optional[Extension]:
     wanted = name.strip().lower()
     return next((e for e in installed() if e.name == wanted), None)
+
+
+def providers() -> list[tuple[Extension, Provider]]:
+    """Every extension's model providers, the first to claim a name
+    winning, which install already keeps from mattering."""
+
+    taken: set[str] = set()
+    found = []
+
+    for extension in installed():
+        for provider in extension.providers:
+            if provider.name not in taken:
+                taken.add(provider.name)
+                found.append((extension, provider))
+
+    return found
 
 
 def commands() -> list[tuple[Extension, Command]]:
@@ -767,6 +837,15 @@ def clashes(
             found.append(f"{tool.name} is a built-in tool")
         elif owner:
             found.append(f"tool {tool.name} belongs to {owner}")
+
+    for provider in extension.providers:
+        owner = next(
+            (e.name for e in others
+             if any(p.name == provider.name for p in e.providers)),
+            None,
+        )
+        if owner:
+            found.append(f"provider @{provider.name} belongs to {owner}")
 
     return found
 

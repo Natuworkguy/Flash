@@ -40,7 +40,7 @@ from typing import Optional
 import ollama
 
 from . import agent as subagents
-from . import audit, cron
+from . import audit, cron, providers
 from .dashes import undash
 from .models import full_name, installed_names
 from .paths import ENV_PATH, FLASH_DIR
@@ -3005,10 +3005,9 @@ def set_default_model(model) -> str:
 
 def _client():
     from . import tools as flash_tools  # deferred: avoids a module cycle
-    from . import workspace  # deferred: only a client needs its key
 
     host = flash_tools.OLLAMA_HOST or subagents.OLLAMA_HOST_DEFAULT
-    return ollama.Client(host=host, **workspace.client_options(host))
+    return providers.client(host)
 
 
 def models_here(client=None) -> Optional[set[str]]:
@@ -3731,11 +3730,8 @@ def _work(
         _mark_unavailable(spark.id, "", "no model is set")
         raise ModelFailed("", "no model is set")
     host = flash_tools.OLLAMA_HOST or subagents.OLLAMA_HOST_DEFAULT
-    from . import workspace  # deferred: only a client needs its key
 
-    client = client or ollama.Client(
-        host=host, **workspace.client_options(host),
-    )
+    client = client or providers.client(host)
     # Always its own model. One that fails, past its retries, marks the
     # spark unavailable; it is never run on another model instead.
     answered = [False]

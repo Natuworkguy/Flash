@@ -5,6 +5,10 @@ import urllib.error
 import urllib.request
 from typing import Optional
 
+import ollama
+
+from . import providers
+
 SHOW_TIMEOUT_SECONDS = 5
 
 _NUM_CTX_RE = re.compile(r"^num_ctx\s+(\d+)", re.MULTILINE)
@@ -56,6 +60,13 @@ def _show(host: str, model: str) -> dict:
 
     if not model:
         return {}
+
+    # An extension's provider says what its own models are.
+    if providers.routed(model):
+        try:
+            return providers.show_payload(model)
+        except ollama.ResponseError:
+            return {}
 
     request = urllib.request.Request(
         _show_url(host),
