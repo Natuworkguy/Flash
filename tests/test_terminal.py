@@ -75,8 +75,8 @@ def test_since_keeps_the_latest_few(monkeypatch):
 
 @pytest.mark.parametrize(("typed", "shown"), [
     ("export GITHUB_TOKEN=ghp_abc123", "export GITHUB_TOKEN=[redacted]"),
-    ('OPENAI_API_KEY="sk live" python app.py',
-     "OPENAI_API_KEY=[redacted] python app.py"),
+    ('EXAMPLE_API_KEY="sk live" python app.py',
+     "EXAMPLE_API_KEY=[redacted] python app.py"),
     ("mysql -u root --password hunter2 db",
      "mysql -u root --password [redacted] db"),
     ("gh auth login --token=abc", "gh auth login --token=[redacted]"),

@@ -281,7 +281,7 @@ body:not(.side-closed) #top .when-closed { display: none; }
 body.empty #title { visibility: hidden; }
 
 #log { flex: 1; overflow-y: auto; overscroll-behavior: contain; }
-.col { width: 100%; max-width: 768px; margin: 0 auto; padding: 0 24px; }
+.col { width: 100%; max-width: var(--chat-width, 768px); margin: 0 auto; padding: 0 24px; }
 #messages { padding-top: 8px; padding-bottom: 40px; }
 body.empty #log { display: none; }
 /* The pixel-art scene behind a new chat, the terminal's /background.
@@ -330,7 +330,7 @@ body.empty #suggestions { display: flex; flex-wrap: wrap; justify-content: cente
 .suggestion:active { transform: scale(0.98); }
 
 /* Messages ------------------------------------------------------------- */
-.block { margin: 22px 0 0; }
+.block { margin: var(--block-gap, 22px) 0 0; }
 .block.focused { box-shadow: -14px 0 0 -11px var(--accent); }
 .user-wrap { display: flex; flex-direction: column; align-items: flex-end; }
 .steer-tag { display: flex; align-items: center; gap: 5px; font-size: 11.5px; color: var(--text-3); margin: 0 6px 5px 0; }
@@ -351,6 +351,7 @@ body.empty #suggestions { display: flex; flex-wrap: wrap; justify-content: cente
   background: var(--surface);
   border: 1px solid var(--border);
   padding: 10px 16px; border-radius: 20px 20px 6px 20px;
+  font-family: var(--chat-font, var(--sans)); font-size: calc(15px * var(--chat-scale, 1));
   white-space: pre-wrap; word-wrap: break-word;
 }
 .sent-comments { width: min(460px, 88%); border: 1px solid var(--border); border-radius: 18px 18px 6px 18px; background: var(--surface); overflow: hidden; box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04); }
@@ -370,7 +371,7 @@ body.empty #suggestions { display: flex; flex-wrap: wrap; justify-content: cente
 .sent-comments .where:empty { display: none; }
 .sent-comments q { display: block; padding-left: 9px; border-left: 3px solid var(--warn); font-size: 13px; line-height: 1.45; color: var(--text-3); quotes: none; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; }
 .sent-comments p { margin: 6px 0 0; font-size: 14.5px; line-height: 1.5; white-space: pre-wrap; word-wrap: break-word; }
-.assistant { font-size: 16px; line-height: 1.72; color: var(--text); word-wrap: break-word; }
+.assistant { font-family: var(--chat-font, var(--sans)); font-size: calc(16px * var(--chat-scale, 1)); line-height: var(--chat-leading, 1.72); color: var(--text); word-wrap: break-word; }
 .assistant > :first-child { margin-top: 0; }
 .assistant > :last-child { margin-bottom: 0; }
 .assistant p { margin: 0 0 0.85em; }
@@ -516,10 +517,46 @@ pre code { display: block; padding: 2px 16px 14px; overflow-x: auto; font-size: 
 /* Sized to the text, and lifted a tenth of it: the letters' ink sits
    that much above the middle of their line, and the dots centre on the
    ink, not the line. */
-.loader .dots { display: inline-grid; grid-template-columns: repeat(2, 0.2em); grid-template-rows: repeat(4, 0.2em); gap: 0.1em; flex: none; position: relative; top: -0.1em; }
-.loader .dots i { width: 0.2em; height: 0.2em; border-radius: 50%; background: var(--accent); animation: dot-gap 0.72s steps(1, end) infinite; animation-delay: calc(var(--k) * 0.09s - 0.72s); }
+/* Centred on the middle of the letters beside it, not of their line:
+   --ink-lift is measured from the font itself (see inkLift). */
+.ld { display: inline-grid; place-items: center; flex: none; position: relative; top: var(--ink-lift, -0.1em); width: 1.1em; height: 1.1em; color: var(--accent); }
+.ld-dots { display: inline-grid; grid-template-columns: repeat(2, 0.2em); grid-template-rows: repeat(4, 0.2em); gap: 0.1em; width: auto; height: auto; place-items: stretch; }
+.ld-dots i { width: 0.2em; height: 0.2em; border-radius: 50%; background: currentColor; animation: dot-gap 0.72s steps(1, end) infinite; animation-delay: calc(var(--k) * 0.09s - 0.72s); }
 @keyframes dot-gap { 0% { opacity: 0.15; } 12.5%, 100% { opacity: 1; } }
-@media (prefers-reduced-motion: reduce) { .loader .dots i { animation: none; } }
+/* The other loaders, each about the size of a letter and in the accent:
+   one picked in Settings, or with morph on, one after another. */
+.ld .glyph { font: 400 1em/1 var(--mono); white-space: pre; color: currentColor; }
+.ld:has(.glyph) { width: auto; min-width: 1.1em; }
+.ld-bloom svg { width: 1.15em; height: 1.15em; fill: currentColor; animation: bloom-turn 4.8s linear infinite; }
+.ld-bloom rect { transform-box: fill-box; transform-origin: 50% 100%; animation: petal 1.2s var(--ease) infinite; animation-delay: calc(var(--k) * 0.15s - 1.2s); }
+@keyframes bloom-turn { to { transform: rotate(360deg); } }
+@keyframes petal { 0%, 100% { opacity: 0.35; scale: 0.55; } 30% { opacity: 1; scale: 1; } }
+.ld-orbit .ring { position: absolute; inset: 0.12em; border-radius: 50%; border: 0.09em solid color-mix(in srgb, currentColor 28%, transparent); }
+.ld-orbit .moon { position: absolute; inset: 0; animation: bloom-turn 1s linear infinite; }
+.ld-orbit .moon::before { content: ""; position: absolute; left: 50%; top: 0.02em; width: 0.26em; height: 0.26em; margin-left: -0.13em; border-radius: 50%; background: currentColor; }
+.ld-pulse i { position: absolute; width: 0.42em; height: 0.42em; border-radius: 50%; background: currentColor; animation: breathe 1.4s ease-in-out infinite; }
+.ld-pulse i.ripple { background: none; border: 0.07em solid currentColor; animation: ripple 1.4s var(--ease) infinite; }
+@keyframes breathe { 50% { scale: 1.3; } }
+@keyframes ripple { from { scale: 0.8; opacity: 0.9; } to { scale: 2.5; opacity: 0; } }
+.ld-wave { display: inline-flex; align-items: center; gap: 0.08em; }
+.ld-wave i { width: 0.14em; height: 0.85em; border-radius: 0.07em; background: currentColor; animation: wave 0.9s ease-in-out infinite; animation-delay: calc(var(--k) * 0.12s - 0.9s); }
+@keyframes wave { 0%, 100% { scale: 1 0.3; } 40% { scale: 1 1; } }
+.ld-bounce { display: inline-flex; align-items: center; gap: 0.1em; width: auto; }
+.ld-bounce i { width: 0.24em; height: 0.24em; border-radius: 50%; background: currentColor; animation: hop 0.9s var(--ease) infinite; animation-delay: calc(var(--k) * 0.14s - 0.9s); }
+@keyframes hop { 0%, 60%, 100% { translate: 0 0.12em; opacity: 0.45; } 25% { translate: 0 -0.18em; opacity: 1; } }
+.ld-grid { display: inline-grid; grid-template-columns: repeat(3, 0.24em); gap: 0.08em; width: auto; height: auto; }
+.ld-grid i { width: 0.24em; height: 0.24em; border-radius: 0.05em; background: currentColor; animation: cell 1.2s ease-in-out infinite; animation-delay: calc(var(--k) * 0.1s - 1.2s); }
+@keyframes cell { 0%, 100% { opacity: 0.2; scale: 0.7; } 35% { opacity: 1; scale: 1; } }
+.ld-arc i { position: absolute; inset: 0.1em; border-radius: 50%; border: 0.12em solid color-mix(in srgb, currentColor 22%, transparent); border-top-color: currentColor; animation: bloom-turn 0.8s linear infinite; }
+.ld-cursor i { width: 0.14em; height: 1em; border-radius: 0.04em; background: currentColor; animation: blink 1s steps(1, end) infinite; }
+@keyframes blink { 50% { opacity: 0; } }
+.ld-slot { display: inline-grid; place-items: center; flex: none; }
+.ld-slot > .ld { grid-area: 1 / 1; }
+.ld-out { animation: ld-out 0.6s var(--ease) both; pointer-events: none; }
+.ld-in { animation: ld-in 0.7s var(--spring) both; }
+@keyframes ld-out { to { opacity: 0; scale: 0.3; rotate: 90deg; filter: blur(3px); } }
+@keyframes ld-in { from { opacity: 0; scale: 0.3; rotate: -90deg; filter: blur(3px); } }
+@media (prefers-reduced-motion: reduce) { .ld, .ld * { animation: none !important; } }
 .loader .word span { grid-area: 1 / 1; white-space: nowrap; background: linear-gradient(90deg, var(--text-3) 25%, var(--text) 50%, var(--text-3) 75%) 0 0 / 200% 100%; -webkit-background-clip: text; background-clip: text; color: transparent; animation: shine 1.8s linear infinite, word-in 0.45s var(--ease) both; }
 .loader .word span.out { animation: shine 1.8s linear infinite, word-out 0.3s var(--ease) both; }
 @keyframes word-in { from { opacity: 0; transform: translateY(7px); filter: blur(3px); } }
@@ -620,7 +657,7 @@ body.voice-on .shell, body.voice-on #suggestions, body.voice-on #pending { displ
   cursor: text;
 }
 #composer:focus-within { border-color: color-mix(in srgb, var(--accent) 60%, transparent); }
-#input, #input::placeholder { font: 400 16px/1.5 var(--sans); letter-spacing: normal; }
+#input, #input::placeholder { font: 400 16px/1.5 var(--chat-font, var(--sans)); letter-spacing: normal; }
 #input {
   display: block; width: 100%; resize: none; border: 0; outline: 0;
   background: transparent; color: var(--text);
@@ -1087,6 +1124,7 @@ body.page-projects #dock, body.page-settings #dock, body.page-tool #dock { displ
 .stepper:focus-within { border-color: var(--accent); }
 .notify-limit { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
 .notify-limit .per { font-size: 13px; color: var(--text-3); }
+@media (max-width: 560px) { .notify-limit-row { flex-wrap: wrap; } .notify-limit-row .what { flex: 1 1 100%; } .notify-limit { justify-content: flex-start; } }
 .spin { width: 18px; height: 18px; border-radius: 50%; border: 2px solid color-mix(in srgb, var(--text) 18%, transparent); border-top-color: var(--accent); animation: spin 0.8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 .update-extra { max-width: 620px; margin-top: 10px; }
@@ -1115,12 +1153,49 @@ body.page-projects #dock, body.page-settings #dock, body.page-tool #dock { displ
 .mini.half { clip-path: polygon(100% 0, 100% 100%, 0 100%); }
 .mini .side { background: var(--m-side); padding: 16% 14%; display: flex; flex-direction: column; gap: 9%; }
 .mini .side i { height: 5%; min-height: 4px; border-radius: 3px; background: var(--m-line); }
-.mini .side i:first-child { width: 60%; background: #d97757; }
+.mini .side i:first-child { width: 60%; background: var(--m-accent, #d97757); }
 .mini .main { display: flex; flex-direction: column; gap: 7%; padding: 14% 12% 0; }
 .mini .bubble { align-self: flex-end; width: 46%; height: 12%; border-radius: 6px; background: var(--m-bubble); }
 .mini .line { height: 5%; min-height: 4px; border-radius: 3px; background: var(--m-line); }
 .mini .line.short { width: 64%; }
 .mini .box { margin-top: auto; height: 20%; border-radius: 8px 8px 0 0; background: var(--m-box); border: 1px solid var(--m-line); border-bottom: 0; }
+/* The look: colours, accent, text and layout, per browser. */
+.palette-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(132px, 1fr)); gap: 14px; max-width: 620px; }
+.palette-grid .theme-card .preview { aspect-ratio: 16 / 11; }
+.palette-grid .from { font-size: 11.5px; font-weight: 400; color: var(--text-3); margin-left: auto; }
+.swatches { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; max-width: 620px; }
+.swatch { position: relative; width: 30px; height: 30px; border-radius: 50%; background: var(--c); box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.12); transition: transform 0.2s var(--spring), box-shadow 0.2s; }
+.swatch:hover { transform: scale(1.1); }
+.swatch.on { box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--c); }
+.swatch.own { background: conic-gradient(from 0deg, #e5534b, #e0a03a, #4caf6a, #2bb3a3, #4f8ef7, #8b6cf6, #e5609b, #e5534b); }
+.swatch.own input { position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%; height: 100%; border: 0; padding: 0; }
+.swatch.none { background: var(--surface); box-shadow: inset 0 0 0 1px var(--border-strong); display: grid; place-items: center; color: var(--text-3); }
+.swatch.none svg { width: 14px; height: 14px; }
+.look-rows { display: flex; flex-direction: column; gap: 10px; max-width: 620px; }
+.look-rows .setting-row { padding: 10px 12px 10px 16px; flex-wrap: wrap; row-gap: 10px; }
+.look-rows .setting-row .what { flex: 1 1 180px; }
+.look-rows .setting-row .side { max-width: 100%; }
+.seg { display: inline-flex; flex-wrap: wrap; gap: 2px; padding: 3px; border-radius: 11px; background: var(--bg); border: 1px solid var(--border); }
+.seg button { padding: 5px 11px; border-radius: 8px; font-size: 13px; color: var(--text-2); white-space: nowrap; transition: background 0.14s, color 0.14s; }
+.seg button:hover { color: var(--text); }
+.seg button.on { background: var(--surface); color: var(--text); box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12), inset 0 0 0 1px var(--border); }
+.loader-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); gap: 10px; max-width: 620px; }
+.loader-card { display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 18px 8px 12px; border-radius: 14px; border: 1px solid var(--border); background: var(--surface); font-size: 13px; color: var(--text-2); transition: border-color 0.2s, box-shadow 0.2s, transform 0.25s var(--spring); }
+.loader-card:hover { transform: translateY(-2px); border-color: var(--border-strong); }
+.loader-card.on { border-color: transparent; box-shadow: 0 0 0 2px var(--accent); color: var(--text); }
+.loader-card .stage { height: 30px; display: grid; place-items: center; font-size: 24px; }
+.loader-card .stage svg.i { width: 24px; height: 24px; color: var(--accent); }
+.look-reset { margin-top: 14px; }
+:root.corners-square { --radius: 4px; }
+:root.corners-square .user { border-radius: 8px; }
+:root.corners-square #composer { border-radius: 8px; }
+:root.corners-square main { border-radius: 6px; }
+:root.corners-square .setting-row, :root.corners-square .loader-card { border-radius: 8px; }
+:root.corners-round { --radius: 18px; }
+:root.corners-round .user { border-radius: 24px 24px 8px 24px; }
+:root.corners-round #composer { border-radius: 30px; }
+:root.corners-round main { border-radius: 22px; }
+:root.corners-round .setting-row, :root.corners-round .loader-card { border-radius: 20px; }
 @media (max-width: 560px) { .appearance { grid-template-columns: 1fr 1fr; } }
 .scene-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 14px; max-width: 620px; }
 .scene-grid .preview { aspect-ratio: 2 / 1; }
@@ -1178,7 +1253,7 @@ button.item-row:hover { background: var(--hover); }
 .field .count { float: right; font-size: 11.5px; color: var(--text-3); font-weight: 400; }
 .field textarea.mono { font: 12.5px/1.55 var(--mono); }
 /* Sparks: one flat circle each, in its colour, with two oval eyes and
-   nothing else, as Grok Bot draws its bots. What it is doing is in how
+   nothing else. What it is doing is in how
    it moves and what its eyes do: it floats, glances about and blinks
    while it waits, and squints happily when you hover it. At work it
    bounces, eyes darting, ringed in purple; asleep its eyes shut and z's
@@ -1210,8 +1285,7 @@ button.item-row:hover { background: var(--hover); }
 :is(.spark-av:hover, .spark-card:hover .spark-av, #spark-btn:hover .spark-av, .project-sparks button:hover .spark-av, .spark-head .spark-av:hover, .spark-mate:hover .spark-av):is([data-state="idle"], [data-state="waiting"]) { animation: spark-happy 0.9s var(--spring) infinite; }
 :is(.spark-av:hover, .spark-card:hover .spark-av, #spark-btn:hover .spark-av, .project-sparks button:hover .spark-av, .spark-head .spark-av:hover, .spark-mate:hover .spark-av):is([data-state="idle"], [data-state="waiting"]) .eye { height: calc(var(--s) * 0.08); background: transparent; border: max(1.3px, calc(var(--s) * 0.04)) solid var(--ink); border-bottom: 0; border-radius: 999px 999px 0 0; animation: none; }
 
-/* Working: a bounce, darting eyes, and a purple ring, as a Grok Bot's
-   computer shows while it works. */
+/* Working: a bounce, darting eyes, and a purple ring. */
 .spark-av[data-state="working"] { animation: spark-bounce 0.95s var(--spring) infinite; box-shadow: 0 0 0 2px var(--surface), 0 0 0 3.5px var(--working), 0 0 14px color-mix(in srgb, var(--working) 55%, transparent); }
 .spark-av[data-state="working"] .eyes { animation: spark-look 2.2s ease-in-out infinite; }
 
@@ -1322,7 +1396,7 @@ button.item-row:hover { background: var(--hover); }
 /* While any spark is at work, its icon turns purple. */
 #sparks-btn.busy svg { color: var(--working); filter: drop-shadow(0 0 4px color-mix(in srgb, var(--working) 60%, transparent)); }
 /* The team, in the sidebar: each spark's face, name and title, and what
-   it is doing. Bots, not conversations, as Grok Bot has it. */
+   it is doing: who is on the team, not which conversations there are. */
 #spark-roster { flex: 0 1 auto; min-height: min(84px, 12vh); max-height: 34vh; overflow-y: auto; padding: 4px 0 2px; transition: max-height 0.32s var(--ease), opacity 0.2s var(--ease), padding 0.32s var(--ease); }
 #spark-roster:empty { display: none; }
 /* Squeezed by a short window, the sparks, and the sidebar itself, fade
@@ -1360,7 +1434,7 @@ button.item-row:hover { background: var(--hover); }
 .spark-status.failed { color: var(--del); }
 .spark-status.failed::before { background: var(--del); }
 /* A chat with a spark that is waiting on you: its approval card, above
-   the box, as a Grok Bot shows one in its chat. */
+   the box. */
 #spark-ask { margin: 0 0 10px; }
 #spark-ask[hidden] { display: none; }
 #spark-ask .spark-approval { margin: 0; display: flex; flex-direction: column; gap: 8px; }
@@ -4907,7 +4981,7 @@ async function showVersion(at, version) {
   try { await command("version", "", chat.id, { at, version }); } catch (err) { toast(err.message); }
 }
 
-// Edit a sent message where it is, as Claude does: the chat goes back
+// Edit a sent message where it is: the chat goes back
 // to it and carries on from what it says now, and what it said before
 // stays a version to go back to.
 function editMessage(wrap, at) {
@@ -5398,6 +5472,147 @@ function drawSettings() {
 const THEMES = [["light", "Light", "sun"], ["dark", "Dark", "moon"], ["system", "System", "monitor"]];
 const mini = (kind, extra = "") => `<div class="mini ${kind} ${extra}"><div class="side"><i></i><i></i><i></i><i></i></div><div class="main"><span class="bubble"></span><span class="line"></span><span class="line short"></span><span class="box"></span></div></div>`;
 
+// A palette's colours on the little window preview, in the mode showing.
+function paletteMini(palette) {
+  const mode = document.documentElement.dataset.theme === "light" ? "light" : "dark";
+  const t = palette[mode] || {};
+  const node = el("div", "", mini(mode));
+  const box = node.firstChild;
+  const set = (name, value) => { if (value) box.style.setProperty(name, value); };
+  set("--m-bg", t.bg); set("--m-side", t.sidebar); set("--m-bubble", t.surface); set("--m-box", t.surface);
+  set("--m-line", t["text-3"] && `color-mix(in srgb, ${t["text-3"]} 45%, transparent)`);
+  set("--m-accent", look.accent || t.accent);
+  return box.outerHTML;
+}
+
+function segRow(label, about, kind, choices) {
+  const row = el("div", "setting-row static", `<span class="what"><b></b><span></span></span><span class="side"><span class="seg" role="radiogroup"></span></span>`);
+  row.querySelector("b").textContent = label;
+  row.querySelector(".what span").textContent = about;
+  const seg = row.querySelector(".seg");
+  seg.setAttribute("aria-label", label);
+  for (const [id, name] of choices) {
+    const b = el("button", look[kind] === id ? "on" : "");
+    b.type = "button";
+    b.textContent = name;
+    b.setAttribute("role", "radio");
+    b.setAttribute("aria-checked", look[kind] === id);
+    b.onclick = () => {
+      setLook({ [kind]: id });
+      for (const other of seg.children) { other.classList.toggle("on", other === b); other.setAttribute("aria-checked", other === b); }
+    };
+    seg.appendChild(b);
+  }
+  return row;
+}
+
+function drawLookSettings(body) {
+  // Colours: Flash's own, the built-in palettes, and extensions'.
+  body.insertAdjacentHTML("beforeend", `<h2 class="settings-section settings-gap">Colors</h2><p class="settings-sub">A palette for the whole page, in light and dark alike. Extensions can add more.</p><div class="palette-grid" role="radiogroup" aria-label="Colors"></div>`);
+  const grid = body.querySelector(".palette-grid");
+  const drawPalettes = () => {
+    grid.textContent = "";
+    allPalettes().forEach((palette, i) => {
+      const card = el("button", "theme-card" + (look.palette === palette.id ? " on" : ""));
+      card.type = "button";
+      card.setAttribute("role", "radio");
+      card.setAttribute("aria-checked", look.palette === palette.id);
+      card.style.setProperty("--i", i);
+      card.innerHTML = `<span class="preview">${paletteMini(palette)}<span class="tick">${icon("check")}</span></span><span class="name"><span></span>${palette.extension ? `<span class="from"></span>` : ""}</span>`;
+      card.querySelector(".name span").textContent = palette.name;
+      if (palette.extension) card.querySelector(".from").textContent = palette.source;
+      card.onclick = () => { setLook({ palette: palette.id }); drawPalettes(); drawSwatches(); };
+      grid.appendChild(card);
+    });
+  };
+
+  body.insertAdjacentHTML("beforeend", `<h2 class="settings-section settings-gap">Accent</h2><p class="settings-sub">The colour of buttons, links and the loader. The first keeps the palette's own.</p><div class="swatches" role="radiogroup" aria-label="Accent"></div>`);
+  const swatches = body.querySelector(".swatches");
+  const drawSwatches = () => {
+    swatches.textContent = "";
+    const pick = (node, value, tip) => {
+      node.type = "button";
+      node.dataset.tip = tip;
+      node.setAttribute("aria-label", tip);
+      node.setAttribute("role", "radio");
+      node.setAttribute("aria-checked", look.accent === value);
+      node.classList.toggle("on", look.accent === value);
+      swatches.appendChild(node);
+      return node;
+    };
+    pick(el("button", "swatch none", icon("x")), "", "The palette's own").onclick = () => { setLook({ accent: "" }); drawSwatches(); drawPalettes(); };
+    for (const color of ACCENTS) {
+      const sw = pick(el("button", "swatch"), color, color);
+      sw.style.setProperty("--c", color);
+      sw.onclick = () => { setLook({ accent: color }); drawSwatches(); drawPalettes(); };
+    }
+    const own = !ACCENTS.includes(look.accent) && look.accent;
+    const custom = el("label", "swatch own" + (own ? " on" : ""), `<input type="color" aria-label="Pick any colour">`);
+    if (own) custom.style.setProperty("--c", look.accent);
+    custom.dataset.tip = "Any colour";
+    const input = custom.querySelector("input");
+    input.value = look.accent || "#d97757";
+    input.oninput = () => setLook({ accent: input.value });
+    input.onchange = () => { drawSwatches(); drawPalettes(); };
+    swatches.appendChild(custom);
+  };
+  drawPalettes();
+  drawSwatches();
+
+  body.insertAdjacentHTML("beforeend", `<h2 class="settings-section settings-gap">Text and layout</h2><p class="settings-sub">How messages read, and how much room they get.</p><div class="look-rows"></div>`);
+  const rows = body.querySelector(".look-rows");
+  rows.append(
+    segRow("Chat font", "For messages and the message box.", "font", LOOK_CHOICES.font),
+    segRow("Text size", "Messages only; the rest stays put.", "size", LOOK_CHOICES.size),
+    segRow("Chat width", "How wide the conversation runs.", "width", LOOK_CHOICES.width),
+    segRow("Spacing", "Room between messages and lines.", "density", LOOK_CHOICES.density),
+    segRow("Corners", "From sharp to soft.", "corners", LOOK_CHOICES.corners),
+  );
+  const reset = el("button", "btn small look-reset", "Reset colors, text and layout");
+  reset.type = "button";
+  reset.onclick = () => { look = { ...LOOK_DEFAULT }; savePref("look", JSON.stringify(look)); applyLook(); drawSettings(); };
+  body.appendChild(reset);
+
+  // The loader, shared with the terminal: it is the LOADER setting.
+  body.insertAdjacentHTML("beforeend", `<h2 class="settings-section settings-gap">Loading animation</h2><p class="settings-sub">What turns beside "Thinking" while Flash works, here and in the terminal (<code>/loader</code>), drawn in plain characters where a terminal can't show it. Extensions can add more.</p><div class="loader-grid" role="radiogroup" aria-label="Loading animation"></div>`);
+  const loaderGrid = body.querySelector(".loader-grid");
+  const drawLoaders = () => {
+    loaderGrid.textContent = "";
+    const card = (id, name, stage, tip) => {
+      const node = el("button", "loader-card" + (info.loader === id ? " on" : ""), `<span class="stage"></span><span class="name"></span>`);
+      node.type = "button";
+      node.setAttribute("role", "radio");
+      node.setAttribute("aria-checked", info.loader === id);
+      node.querySelector(".stage").appendChild(stage);
+      node.querySelector(".name").textContent = name;
+      if (tip) node.dataset.tip = tip;
+      node.onclick = async () => {
+        const was = info.loader;
+        info.loader = id;
+        drawLoaders();
+        try { info.loader = (await command("loader", id)).loader; } catch (error) { info.loader = was; showFailure(error); }
+        drawLoaders();
+      };
+      loaderGrid.appendChild(node);
+    };
+    for (const loader of allLoaders()) card(loader.id, loader.name, spinner(loader), loader.about + (loader.source ? ` (from ${loader.source})` : ""));
+  };
+  drawLoaders();
+
+  const morph = el("button", "setting-row loader-morph-row", `<span class="what"><b>Morph between loaders</b><span>Every ${MORPH_MS / 1000} seconds it turns into another, at random, for as long as Flash works.</span></span><span class="switch" aria-hidden="true"></span>`);
+  morph.type = "button";
+  morph.setAttribute("role", "switch");
+  morph.setAttribute("aria-checked", !!info.loader_morph);
+  morph.onclick = async () => {
+    const on = morph.getAttribute("aria-checked") !== "true";
+    morph.setAttribute("aria-checked", on);
+    try { info.loader_morph = (await command("loader-morph", on ? "on" : "off")).loader_morph; }
+    catch (error) { morph.setAttribute("aria-checked", !on); showFailure(error); }
+  };
+  morph.style.marginTop = "12px";
+  body.appendChild(morph);
+}
+
 function drawGeneral(body) {
   body.innerHTML = `<h2 class="settings-section">Appearance</h2><p class="settings-sub">How Flash looks in this browser. System follows your computer's light or dark setting.</p><div class="appearance" role="radiogroup" aria-label="Appearance"></div>`;
   const grid = body.querySelector(".appearance");
@@ -5413,6 +5628,7 @@ function drawGeneral(body) {
     grid.appendChild(card);
   });
   markThemeCards();
+  drawLookSettings(body);
 
   body.insertAdjacentHTML("beforeend", `<h2 class="settings-section settings-gap">Background</h2><p class="settings-sub">A pixel-art scene behind a new chat, the same ones <code>/background</code> shows in the terminal. Add your own as <code>.scene</code> files in <code>~/.flash/backgrounds</code>.</p><div class="scene-grid" role="radiogroup" aria-label="Background"></div>`);
   drawSceneCards(body.querySelector(".scene-grid"));
@@ -5829,7 +6045,7 @@ function sparkPresence(spark) {
   return ["idle", spark.unread ? `${spark.unread} new report${spark.unread === 1 ? "" : "s"}` : onCall(spark) ? "On call" : "Ready"];
 }
 
-// The team, in the sidebar, as Grok Bot lists its bots: each face, name,
+// The team, in the sidebar: each face, name,
 // and title or what it is doing now. A spark opens its latest chat, or a
 // new one.
 function renderRoster() {
@@ -7250,7 +7466,7 @@ async function modelsForm(teamId = "") {
   const listed = said.models || [];
   form.querySelector(".model-slot").outerHTML = listed.length
     ? `<select name="model" required><option value="flash">Flash's model${info.model ? ` (${esc(shortModel(info.model))})` : ""}</option>${listed.map((m) => `<option value="${esc(m)}">${esc(m)}</option>`).join("")}</select>`
-    : `<input name="model" placeholder="llama3.1:8b, or flash" autocomplete="off" spellcheck="false" required>`;
+    : `<input name="model" placeholder="model:8b, or flash" autocomplete="off" spellcheck="false" required>`;
   const box = form.querySelector(".bulk-models");
   const groups = [...r.teams.map((t) => ({ id: t.id, name: t.name, colour: t.colour })), { id: "", name: "No team", colour: "var(--text-3)" }];
   for (const g of groups) {
@@ -7916,7 +8132,7 @@ async function fillModelField(form, current = "", fresh = false) {
     box.name = "model";
     box.required = true;
     box.className = "mono";
-    box.placeholder = info.model || "llama3.1";
+    box.placeholder = info.model || "Model name";
     box.value = current;
     box.autocomplete = "off";
     select.replaceWith(box);
@@ -9326,7 +9542,7 @@ async function importMemory() {
   }
   const form = openForm(`
     <h2>Import memory</h2>
-    <p class="sub">Bring over what another AI, like ChatGPT, Claude, or Gemini, already knows about you.</p>
+    <p class="sub">Bring over what another AI assistant already knows about you.</p>
     <div class="steps">
       <div class="step"><span class="num">1</span><div><div class="step-title">Copy this prompt into a chat with the other AI</div>
         <div class="prompt-box"><pre></pre><div class="bar"><button type="button" class="btn small with-icon" data-copy>${icon("copy")}<span>Copy prompt</span></button></div></div></div></div>
@@ -9672,12 +9888,157 @@ function startedWaiting(id) {
   }
 }
 
+// The loaders drawn in CSS. The rest, an extension's among them, turn
+// through the frames the terminal shows.
+const repeat = (n, make) => Array.from({ length: n }, (_, k) => make(k)).join("");
+const LOADER_ART = {
+  // The gap's path round the dots: down the left, then up the right.
+  dots: () => [[1, 1], [2, 1], [3, 1], [4, 1], [4, 2], [3, 2], [2, 2], [1, 2]].map(([row, col], k) => `<i style="grid-area:${row}/${col};--k:${k}"></i>`).join(""),
+  bloom: () => `<svg viewBox="-12 -12 24 24">${repeat(8, (k) => `<rect x="-1.5" y="-11" width="3" height="7.5" rx="1.5" transform="rotate(${k * 45})" style="--k:${k}"/>`)}</svg>`,
+  orbit: () => `<i class="ring"></i><i class="moon"></i>`,
+  pulse: () => `<i class="ripple"></i><i></i>`,
+  wave: () => repeat(4, (k) => `<i style="--k:${k}"></i>`),
+  bounce: () => repeat(3, (k) => `<i style="--k:${k}"></i>`),
+  grid: () => repeat(9, (k) => `<i style="--k:${(k % 3) + Math.floor(k / 3)}"></i>`),
+  arc: () => "<i></i>",
+  cursor: () => "<i></i>",
+};
+
+const allLoaders = () => info.loaders || [];
+const loaderBy = (id) => allLoaders().find((l) => l.id === id) || allLoaders()[0] || { id: "dots", frames: ["⣾"], seconds: 0.1 };
+
+// Each chat's loaders for the reply it is waiting on: the chosen one,
+// and with morph on, a different one at random every MORPH_MS, picked
+// as the wait goes on and kept for it, so drawing the chat again
+// carries on with the same ones.
+const MORPH_MS = 10000;
+const BLEND_MS = 700;
+const runs = new Map();
+function runAt(id, stretch) {
+  if (!runs.has(id)) runs.set(id, [loaderBy(info.loader).id]);
+  const chain = runs.get(id);
+  while (chain.length <= stretch) {
+    const last = chain[chain.length - 1];
+    const others = allLoaders().filter((l) => l.id !== last);
+    chain.push(others.length ? others[Math.floor(Math.random() * others.length)].id : last);
+  }
+  return loaderBy(chain[stretch]);
+}
+const stretchOf = (id) => (info.loader_morph ? Math.floor((Date.now() - (busySince.get(id) || Date.now())) / MORPH_MS) : 0);
+
+// A loader to put in the page: drawn, or a glyph the ticker below turns,
+// counted from SINCE so it carries on where it was when drawn again.
+function spinner(loader, since = performance.now()) {
+  const art = LOADER_ART[loader.id];
+  const node = el("span", `ld ld-${art ? loader.id : "frames"}`, art ? art() : `<span class="glyph"></span>`);
+  node.setAttribute("aria-hidden", "true");
+  if (!art) {
+    const glyph = node.firstChild;
+    glyph.frames = loader.frames && loader.frames.length ? loader.frames : ["·"];
+    glyph.every = (loader.seconds || 0.1) * 1000;
+    glyph.since = since;
+    const width = Math.max(...glyph.frames.map((f) => f.length));
+    glyph.style.minWidth = `${width}ch`;
+    glyph.style.translate = `0 ${glyphShift(loader)}em`;
+    glyph.textContent = glyph.frames[0];
+  }
+  return node;
+}
+
+// How far the middle of a word's letters sits from the middle of its
+// line, in its own font: halfway between the middle of the small letters
+// and the middle of the capitals, which is where the eye puts "the
+// middle" of a word like "Thinking". A loader is moved by that much, so
+// it lines up whatever font the browser ends up with.
+// How far TEXT's ink reaches above and below its baseline, in FONT at
+// 100px, found by drawing it and looking: what a font says of its own
+// glyphs can be a pixel or two out, and an accent's worth matters here.
+function inkReach(text, font) {
+  const canvas = inkReach.canvas || (inkReach.canvas = document.createElement("canvas"));
+  canvas.width = 400; canvas.height = 240;
+  const ctx = canvas.getContext("2d", { willReadFrequently: true });
+  ctx.clearRect(0, 0, 400, 240);
+  ctx.font = font;
+  ctx.textBaseline = "alphabetic";
+  ctx.fillStyle = "#000";
+  ctx.fillText(text, 10, 160);
+  const data = ctx.getImageData(0, 0, 400, 240).data;
+  let top = -1, bottom = -1;
+  for (let y = 0; y < 240; y++) {
+    for (let x = 0; x < 400; x++) {
+      if (data[(y * 400 + x) * 4 + 3] > 96) { if (top < 0) top = y; bottom = y + 1; break; }
+    }
+  }
+  return top < 0 ? null : [160 - top, bottom - 160];
+}
+
+function inkLift() {
+  // The baseline, found where the page lays it out: an empty box sits on
+  // it. The letters' heights come from the font, drawn on a canvas.
+  const probe = el("div", "block loader", `<span class="word"><span style="animation:none">Thinking<i style="display:inline-block;width:0;height:0"></i></span></span>`);
+  probe.style.cssText = "position:absolute;visibility:hidden;left:-9999px;top:0";
+  document.body.appendChild(probe);
+  const word = probe.querySelector(".word");
+  const style = getComputedStyle(word.firstChild);
+  const size = parseFloat(style.fontSize);
+  const font = `${style.fontWeight} 100px ${style.fontFamily}`;
+  const x = ((inkReach("x", font) || [0])[0] / 100) * size;
+  const cap = ((inkReach("H", font) || [0])[0] / 100) * size;
+  const box = word.getBoundingClientRect();
+  const baseline = word.querySelector("i").getBoundingClientRect().top;
+  probe.remove();
+  if (!size || !x || !cap || !box.height) return;
+  // Positive is down, as CSS top is.
+  const lift = baseline - (x + cap) / 4 - (box.top + box.height / 2);
+  document.documentElement.style.setProperty("--ink-lift", `${(lift / size).toFixed(3)}em`);
+}
+inkLift();
+if (document.fonts) document.fonts.ready.then(inkLift);
+
+// How far to move a loader drawn from characters so the ink of all its
+// frames together sits in the middle of its box: braille dots, say, are
+// drawn high in their cell, and a font's arrows and stars sit where it
+// likes. Measured once for each loader, in the font it is drawn in.
+const glyphShifts = new Map();
+function glyphShift(loader) {
+  if (glyphShifts.has(loader.id)) return glyphShifts.get(loader.id);
+  const probe = el("span", "ld", `<span class="glyph" style="font-size:100px">x<i style="display:inline-block;width:0;height:0"></i></span>`);
+  probe.style.cssText = "position:absolute;visibility:hidden;left:-9999px;top:0;font-size:100px";
+  document.body.appendChild(probe);
+  const glyph = probe.firstChild;
+  const box = glyph.getBoundingClientRect();
+  const baseline = glyph.querySelector("i").getBoundingClientRect().top - box.top;
+  // Read while it is still in the page: a removed element has no style.
+  const style = getComputedStyle(glyph);
+  const font = `${style.fontWeight} 100px ${style.fontFamily}`;
+  probe.remove();
+  let top = Infinity, bottom = -Infinity;
+  for (const frame of loader.frames || []) {
+    const reach = frame.trim() && inkReach(frame, font);
+    if (!reach) continue;
+    top = Math.min(top, baseline - reach[0]);
+    bottom = Math.max(bottom, baseline + reach[1]);
+  }
+  const shift = Number.isFinite(top) && box.height ? +((box.height / 2 - (top + bottom) / 2) / 100).toFixed(3) : 0;
+  glyphShifts.set(loader.id, shift);
+  return shift;
+}
+
+(function turnGlyphs() {
+  const now = performance.now();
+  for (const glyph of document.querySelectorAll(".ld .glyph")) {
+    const at = calm.matches ? 0 : Math.floor((now - glyph.since) / glyph.every) % glyph.frames.length;
+    if (glyph.shown !== at) { glyph.shown = at; glyph.textContent = glyph.frames[at]; }
+  }
+  setTimeout(() => requestAnimationFrame(turnGlyphs), 40);
+})();
+
 function loaderBlock(chat) {
   startedWaiting(chat.id);
-  // The gap's path round the dots: down the left, then up the right.
-  const ring = [[1, 1], [2, 1], [3, 1], [4, 1], [4, 2], [3, 2], [2, 2], [1, 2]];
-  const dots = ring.map(([row, col], k) => `<i style="grid-area:${row}/${col};--k:${k}"></i>`).join("");
-  const node = el("div", "block loader", `<span class="dots" aria-hidden="true">${dots}</span><span class="word"></span><span class="elapsed"></span>`);
+  const node = el("div", "block loader", `<span class="ld-slot"></span><span class="word"></span><span class="elapsed"></span>`);
+  node.since = performance.now() - (Date.now() - busySince.get(chat.id));
+  node.stretch = stretchOf(chat.id);
+  node.firstChild.appendChild(spinner(runAt(chat.id, node.stretch), node.since));
   node.setAttribute("role", "status");
   node.dataset.chat = chat.id;
   node.wordAt = -1;
@@ -9685,7 +10046,25 @@ function loaderBlock(chat) {
   return node;
 }
 
+// Morph: the loader shrinks away, turning and blurring, as the next one
+// grows out of the same spot.
+function morphLoader(node) {
+  const stretch = stretchOf(node.dataset.chat);
+  if (stretch === node.stretch) return;
+  node.stretch = stretch;
+  const slot = node.querySelector(".ld-slot");
+  for (const old of slot.querySelectorAll(".ld:not(.ld-out)")) {
+    old.classList.remove("ld-in");
+    old.classList.add("ld-out");
+    setTimeout(() => old.remove(), calm.matches ? 0 : BLEND_MS);
+  }
+  const next = spinner(runAt(node.dataset.chat, stretch), node.since);
+  if (!calm.matches) next.classList.add("ld-in");
+  slot.appendChild(next);
+}
+
 function tickLoader(node, first) {
+  morphLoader(node);
   const age = Date.now() - (busySince.get(node.dataset.chat) || Date.now());
   const at = Math.floor(age / WORD_MS);
   if (at !== node.wordAt) {
@@ -10526,7 +10905,7 @@ function apply(event) {
     case "speaker": chat.speaker = event.spark; if (here) drawStreaming(); return;
     case "busy":
       chat.busy = event.busy;
-      if (event.busy) startedWaiting(chat.id); else busySince.delete(chat.id);
+      if (event.busy) startedWaiting(chat.id); else { busySince.delete(chat.id); runs.delete(chat.id); }
       if (event.busy) chat.queued = false;
       else { chat.partial = ""; chat.thinking = ""; chat.speaker = ""; refreshContext(); }
       renderChats();
@@ -10638,6 +11017,8 @@ async function loadState() {
   for (const c of state.chats) chats.set(c.id, c);
   order = state.chats.map((c) => c.id);
   info = state.status;
+  // A palette an extension brings is only known once the server says.
+  if (!PALETTES.some((p) => p.id === look.palette)) applyLook();
   projects = state.projects || [];
   if (state.words && state.words.length) words = state.words;
   if (state.emojis) emojis = state.emojis;
@@ -10663,6 +11044,7 @@ function refreshLite() {
     const state = await api("/api/state?lite=1").catch(() => null);
     if (!state) return;
     info = state.status;
+    if (!PALETTES.some((p) => p.id === look.palette)) applyLook();
     projects = state.projects || [];
     sparkList = state.sparks || [];
     const ids = state.chats.map((c) => c.id);
@@ -12039,7 +12421,88 @@ const resolveTheme = (choice) => (choice === "system" ? (lightQuery.matches ? "l
 
 function applyTheme(theme) {
   document.documentElement.dataset.theme = theme;
-  document.querySelector('meta[name="theme-color"]').content = theme === "light" ? "#faf9f5" : "#262624";
+  const bg = getComputedStyle(document.documentElement).getPropertyValue("--bg").trim();
+  document.querySelector('meta[name="theme-color"]').content = bg || (theme === "light" ? "#faf9f5" : "#262624");
+}
+
+// The look, per browser, on top of light or dark: a palette, an accent,
+// and how text and the page are laid out. A palette sets the page's
+// colours for each mode; Flash's own sets none.
+const PALETTES = [
+  { id: "flash", name: "Flash", dark: {}, light: {} },
+  { id: "ocean", name: "Ocean",
+    dark: { bg: "#1d2328", sidebar: "#171c20", surface: "#262e35", accent: "#4fa3d1", text: "#eef3f6", "text-2": "#b9c6cf", "text-3": "#82929d", "code-bg": "#161b1f" },
+    light: { bg: "#f6f9fb", sidebar: "#edf2f6", surface: "#ffffff", accent: "#1f7ab5", text: "#14202a", "text-2": "#34444f", "text-3": "#6b7b86", "code-bg": "#eef3f7" } },
+  { id: "forest", name: "Forest",
+    dark: { bg: "#1f2420", sidebar: "#191d1a", surface: "#2a302b", accent: "#6fbf73", text: "#eef2ec", "text-2": "#bfc8bc", "text-3": "#87917f", "code-bg": "#171b18" },
+    light: { bg: "#f7f9f4", sidebar: "#eef2e8", surface: "#ffffff", accent: "#2f8f46", text: "#18211a", "text-2": "#384437", "text-3": "#6c7868", "code-bg": "#eff3ea" } },
+  { id: "grape", name: "Grape",
+    dark: { bg: "#221f2a", sidebar: "#1b1922", surface: "#2c2836", accent: "#a78bfa", text: "#f1eef8", "text-2": "#c4bdd4", "text-3": "#8d859e", "code-bg": "#1a1820" },
+    light: { bg: "#f9f7fc", sidebar: "#f1edf8", surface: "#ffffff", accent: "#7c4dff", text: "#1d1726", "text-2": "#3c3449", "text-3": "#746c82", "code-bg": "#f2eef8" } },
+  { id: "rose", name: "Rose",
+    dark: { bg: "#2a2124", sidebar: "#221b1d", surface: "#342a2d", accent: "#f07a9a", text: "#f8eef1", "text-2": "#d1bec4", "text-3": "#9a868c", "code-bg": "#1f191b" },
+    light: { bg: "#fcf7f8", sidebar: "#f6edef", surface: "#ffffff", accent: "#d0446b", text: "#2a1a1f", "text-2": "#4a3a3f", "text-3": "#806e74", "code-bg": "#f7eff1" } },
+  { id: "sunset", name: "Sunset",
+    dark: { bg: "#2a241e", sidebar: "#221d18", surface: "#352d25", accent: "#f59e3b", text: "#f8f2ea", "text-2": "#d3c6b6", "text-3": "#9c8f80", "code-bg": "#1f1a15" },
+    light: { bg: "#fcf8f2", sidebar: "#f6efe4", surface: "#ffffff", accent: "#c86b0b", text: "#26190b", "text-2": "#47392a", "text-3": "#7f7060", "code-bg": "#f6efe5" } },
+  { id: "midnight", name: "Midnight",
+    dark: { bg: "#12141c", sidebar: "#0d0f15", surface: "#1b1e29", accent: "#7aa2f7", text: "#e6e9f2", "text-2": "#aab1c4", "text-3": "#737b91", "code-bg": "#0e1017" },
+    light: { bg: "#f5f6fb", sidebar: "#eceef6", surface: "#ffffff", accent: "#3d5bd9", text: "#141826", "text-2": "#363c52", "text-3": "#6c7289", "code-bg": "#eef0f7" } },
+  { id: "graphite", name: "Graphite",
+    dark: { bg: "#1f1f1f", sidebar: "#181818", surface: "#2a2a2a", accent: "#e8e8e8", "accent-text": "#111111", text: "#f2f2f2", "text-2": "#c4c4c4", "text-3": "#8c8c8c", "code-bg": "#171717" },
+    light: { bg: "#fafafa", sidebar: "#f1f1f1", surface: "#ffffff", accent: "#222222", "accent-text": "#ffffff", text: "#111111", "text-2": "#383838", "text-3": "#737373", "code-bg": "#f0f0f0" } },
+  { id: "contrast", name: "High contrast",
+    dark: { bg: "#000000", sidebar: "#000000", surface: "#121212", accent: "#ffb454", "accent-text": "#000000", text: "#ffffff", "text-2": "#e6e6e6", "text-3": "#bdbdbd", border: "rgba(255, 255, 255, 0.35)", "border-strong": "rgba(255, 255, 255, 0.6)", "code-bg": "#0a0a0a" },
+    light: { bg: "#ffffff", sidebar: "#ffffff", surface: "#ffffff", accent: "#b34700", text: "#000000", "text-2": "#111111", "text-3": "#333333", border: "rgba(0, 0, 0, 0.4)", "border-strong": "rgba(0, 0, 0, 0.7)", "code-bg": "#f2f2f2" } },
+];
+const ACCENTS = ["#d97757", "#e5534b", "#e0a03a", "#4caf6a", "#2bb3a3", "#4f8ef7", "#8b6cf6", "#e5609b"];
+const LOOK_CHOICES = {
+  font: [["sans", "Default", "var(--sans)"], ["rounded", "Rounded", 'ui-rounded, "SF Pro Rounded", "Nunito", "Varela Round", var(--sans)'], ["serif", "Serif", "var(--serif)"], ["mono", "Mono", "var(--mono)"], ["system", "System", "system-ui, sans-serif"]],
+  size: [["s", "Small", 0.9], ["m", "Default", 1], ["l", "Large", 1.1], ["xl", "Larger", 1.22]],
+  width: [["narrow", "Narrow", "640px"], ["default", "Default", "768px"], ["wide", "Wide", "960px"], ["full", "Full", "1400px"]],
+  density: [["compact", "Compact", ["14px", 1.6]], ["default", "Default", ["22px", 1.72]], ["roomy", "Roomy", ["32px", 1.85]]],
+  corners: [["square", "Square"], ["default", "Default"], ["round", "Round"]],
+};
+const LOOK_DEFAULT = { palette: "flash", accent: "", font: "sans", size: "m", width: "default", density: "default", corners: "default" };
+
+function readLook() {
+  try { return { ...LOOK_DEFAULT, ...JSON.parse(pref("look", "{}")) }; } catch (_) { return { ...LOOK_DEFAULT }; }
+}
+let look = readLook();
+
+const allPalettes = () => PALETTES.concat((info.themes || []).map((t) => ({ ...t, extension: true })));
+const lookChoice = (kind, id) => (LOOK_CHOICES[kind].find((c) => c[0] === id) || LOOK_CHOICES[kind].find((c) => c[0] === LOOK_DEFAULT[kind]));
+
+// Whether text on COLOR reads better white or near-black.
+function inkOn(color) {
+  const m = /^#([0-9a-f]{6})$/i.exec(color || "");
+  if (!m) return "#fff";
+  const n = parseInt(m[1], 16);
+  const [r, g, b] = [n >> 16, (n >> 8) & 255, n & 255].map((v) => { v /= 255; return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; });
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b > 0.45 ? "#111111" : "#ffffff";
+}
+
+function applyLook() {
+  const palette = allPalettes().find((p) => p.id === look.palette) || PALETTES[0];
+  const vars = (tokens) => Object.entries(tokens).map(([k, v]) => `--${k}: ${v};`).join(" ");
+  const accent = look.accent ? { accent: look.accent, "accent-text": inkOn(look.accent) } : {};
+  const [, , scale] = lookChoice("size", look.size);
+  const [, , [gap, leading]] = lookChoice("density", look.density);
+  let tag = document.getElementById("look");
+  if (!tag) { tag = document.createElement("style"); tag.id = "look"; document.head.appendChild(tag); }
+  tag.textContent = `:root { --chat-font: ${lookChoice("font", look.font)[2]}; --chat-scale: ${scale}; --chat-width: ${lookChoice("width", look.width)[2]}; --block-gap: ${gap}; --chat-leading: ${leading}; }
+:root[data-theme="dark"] { ${vars({ ...palette.dark, ...accent })} }
+:root[data-theme="light"] { ${vars({ ...palette.light, ...accent })} }`;
+  const root = document.documentElement;
+  root.classList.toggle("corners-square", look.corners === "square");
+  root.classList.toggle("corners-round", look.corners === "round");
+  if (root.dataset.theme) applyTheme(root.dataset.theme);
+}
+
+function setLook(change) {
+  look = { ...look, ...change };
+  savePref("look", JSON.stringify(look));
+  applyLook();
 }
 
 function setTheme(choice) {
@@ -13157,6 +13620,7 @@ $("#phone-btn").innerHTML = icon("phone") + "<span>Open on phone</span>";
 $("#jump").innerHTML = icon("down");
 $("#search-ico").innerHTML = icon("search");
 applyTheme(resolveTheme(themeChoice));
+applyLook();
 if (innerWidth <= 800 || pref("side", "open") === "closed") document.body.classList.add("side-closed");
 renderInfo();
 updateSend();

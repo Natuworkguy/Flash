@@ -157,7 +157,7 @@ class TestHostKeys:
             raise OSError("not really there")
 
         monkeypatch.setattr(sysprompt.urllib.request, "urlopen", urlopen)
-        sysprompt._show("http://10.0.0.5:11434", "llama3.1")
+        sysprompt._show("http://10.0.0.5:11434", "alpha3.1")
 
         assert seen == ["Bearer s3cret"]
 

@@ -15,7 +15,7 @@ If a variable is set in both places, the real environment variable wins.
 Example `~/.flash.env`:
 
 ```env
-MODEL=llama3.1
+MODEL=my-model:8b
 OLLAMA_HOST=http://localhost:11434
 ```
 
@@ -31,15 +31,15 @@ Requirements:
 - The model named in `MODEL` must already be pulled on that server
   (`ollama pull <model>`).
 - For tool calling (shell / web search / OS info) to work, choose a model that
-  supports tools, such as `llama3.1`.
+  supports tools.
 - For `/image` and the `view_image` tool to work, the model must also be
-  vision-capable, such as `llama3.2-vision`.
+  vision-capable.
 
 ## Options
 
 | Variable | Required | Default | Minimum | Description |
 | -------- | -------- | ------- | ------- | ----------- |
-| `MODEL` | Yes | - | - | Name of the Ollama model to use, e.g. `llama3.1`, `qwen2.5`, `mistral`. Must be pulled on the target server. |
+| `MODEL` | Yes | - | - | Name of the Ollama model to use, e.g. `my-model:8b`. Must be pulled on the target server. |
 | `OLLAMA_HOST` | No | `http://localhost:11434` | - | Base URL of the Ollama server. Change this to switch from a local server to a remote one. |
 | `OLLAMA_API_KEY` | No | unset | - | Sent as `Authorization: Bearer <key>` to a server behind a proxy that asks for a key. A key saved with a host in the web UI's Add host form wins for that host; this covers the rest, the terminal included. |
 | `MAX_HISTORY_MESSAGES` | No | unset | `2` | Hard cap on how many messages of history are kept. Left unset, the token budget below decides, which is almost always the better answer; set it only to force a smaller history than the budget would allow. |
@@ -120,7 +120,7 @@ The backend is switched purely with `OLLAMA_HOST`.
 Leave `OLLAMA_HOST` unset, or set it explicitly:
 
 ```env
-MODEL=llama3.1
+MODEL=my-model:8b
 OLLAMA_HOST=http://localhost:11434
 ```
 
@@ -129,14 +129,14 @@ OLLAMA_HOST=http://localhost:11434
 Point FLASH at another machine running Ollama:
 
 ```env
-MODEL=llama3.1
+MODEL=my-model:8b
 OLLAMA_HOST=http://192.168.1.50:11434
 ```
 
 Or a server behind a hostname / reverse proxy:
 
 ```env
-MODEL=llama3.1
+MODEL=my-model:8b
 OLLAMA_HOST=https://ollama.example.com
 ```
 

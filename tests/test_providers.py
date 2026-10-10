@@ -32,7 +32,7 @@ class Ollama:
 
     def list(self):
         return SimpleNamespace(models=[SimpleNamespace(
-            model="llama3.1:latest", size=1, details=None, modified_at=None,
+            model="alpha3.1:latest", size=1, details=None, modified_at=None,
         )])
 
     def chat(self, **kwargs):
@@ -84,7 +84,7 @@ def test_ollama_names_are_never_routed():
 def test_its_models_are_listed_beside_ollamas(echo, client):
     names = [m.model for m in client.list().models]
 
-    assert names == ["llama3.1:latest", "@echo/echo-1", "@echo/plain"]
+    assert names == ["alpha3.1:latest", "@echo/echo-1", "@echo/plain"]
 
 
 def test_a_chat_goes_to_the_provider_and_comes_back_as_ollamas(
@@ -97,7 +97,7 @@ def test_a_chat_goes_to_the_provider_and_comes_back_as_ollamas(
     assert reply["message"]["content"] == "echo-1 heard: hi"
     assert reply.prompt_eval_count == 10 and reply.eval_count == 4
     # Anything else is still Ollama's.
-    assert client.chat(model="llama3.1", messages=[]).message.content \
+    assert client.chat(model="alpha3.1", messages=[]).message.content \
         == "from ollama"
 
 

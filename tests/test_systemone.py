@@ -17,7 +17,7 @@ class FakeServer:
         self.version = version
         # What it has, and what /api/show says each can do.
         self.models = {
-            "llama3.1:latest": ["completion", "tools"],
+            "alpha3.1:latest": ["completion", "tools"],
             "nimble:latest": ["decision"],
             "Natuworkguy/tev1:0.8b": ["completion", "decision"],
         }
@@ -275,7 +275,7 @@ def test_scan_finds_the_decision_models(server):
 
 
 def test_scan_finds_none(server):
-    server.models = {"llama3.1:latest": ["completion"]}
+    server.models = {"alpha3.1:latest": ["completion"]}
 
     assert systemone.scan("localhost") == []  # nosec B101
     assert "ollama pull nimble" in systemone.no_models("x")  # nosec B101
@@ -283,13 +283,13 @@ def test_scan_finds_none(server):
 
 def test_capable(server):
     assert systemone.capable("localhost", "nimble") is True  # nosec B101
-    assert systemone.capable("localhost", "llama3.1") is False  # nosec B101
+    assert systemone.capable("localhost", "alpha3.1") is False  # nosec B101
     assert systemone.capable("localhost", "gone") is None  # nosec B101
 
 
 def test_choose_checks_before_saving(server):
     with pytest.raises(systemone.SystemOneError, match="not a System One"):
-        systemone.choose("localhost", "llama3.1:latest")
+        systemone.choose("localhost", "alpha3.1:latest")
     with pytest.raises(systemone.SystemOneError, match="ollama pull gone"):
         systemone.choose("localhost", "gone")
     assert not systemone.enabled()  # nosec B101
@@ -530,7 +530,7 @@ def test_cli_lists_the_models_found(server, monkeypatch):
 
     shown = "".join(printed)
     assert "nimble:latest" in shown and "tev1:0.8b" in shown  # nosec B101
-    assert "llama3.1" not in shown  # nosec B101
+    assert "alpha3.1" not in shown  # nosec B101
 
 
 def test_web_refuses_an_old_server(server):
@@ -577,7 +577,7 @@ def test_web_picks_a_model_and_none(server):
 def test_web_refuses_a_model_that_is_not_one(server):
     with pytest.raises(ValueError, match="not a System One model"):
         web.command(web.Session(), {
-            "name": "system-one", "arg": "model", "model": "llama3.1:latest",
+            "name": "system-one", "arg": "model", "model": "alpha3.1:latest",
         })
 
 

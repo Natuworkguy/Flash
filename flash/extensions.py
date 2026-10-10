@@ -27,8 +27,18 @@ picks up whatever the manifest declares:
                         "required": ["key"]},
          "run": ["python", "./tools/jira.py"]}
       ],
-      "backgrounds": "scenes"
+      "backgrounds": "scenes",
+      "themes": "themes.json",
+      "loaders": [
+        {"name": "rocket", "label": "Rocket", "interval": 0.15,
+         "frames": [">   ", " >  ", "  > ", "   >"]}
+      ]
     }
+
+"themes" are colour themes for the web UI (see flash/themes.py) and
+"loaders" are loading animations for both the terminal and the page
+(see flash/loaders.py). Either can be the list itself or a JSON file
+holding it.
 
 Everything an extension runs is a program, not Python loaded into
 Flash, so an extension can be written in anything, cannot take the
@@ -141,6 +151,8 @@ class Extension:
     tools: list[Tool] = field(default_factory=list)
     backgrounds: Optional[Path] = None
     providers: list[Provider] = field(default_factory=list)
+    themes: list = field(default_factory=list)
+    loaders: list = field(default_factory=list)
 
     def contents(self) -> list[str]:
         """What installing this adds, one line per kind of thing."""
@@ -167,6 +179,15 @@ class Extension:
             lines.append(
                 "model providers: "
                 + ", ".join(f"@{p.name}" for p in self.providers)
+            )
+        if self.themes:
+            lines.append(
+                "themes: " + ", ".join(t.name for t in self.themes)
+            )
+        if self.loaders:
+            lines.append(
+                "loading animations: "
+                + ", ".join(loader.name for loader in self.loaders)
             )
 
         return lines
@@ -365,6 +386,24 @@ def _unique(names: list[str], what: str) -> None:
         seen.add(name)
 
 
+def _listed(manifest: dict, key: str, root: Path) -> list:
+    """KEY's entries: written into the manifest, or in a JSON file it
+    names."""
+
+    value = manifest.get(key)
+    if value is None:
+        return []
+    if isinstance(value, str):
+        text = _file_text(root, value, f'"{key}"')
+        try:
+            value = json.loads(text)
+        except ValueError as exc:
+            raise ExtensionError(f'"{key}": {value} is not JSON: {exc}')
+    if not isinstance(value, list):
+        raise ExtensionError(f'"{key}" has to be a list, or a file of one')
+    return value
+
+
 def load(root: Path) -> Extension:
     """Read and check the extension at ROOT.
 
@@ -427,14 +466,36 @@ def load(root: Path) -> Extension:
         for index, entry in enumerate(_entries(manifest, "providers"))
     ]
 
+    from . import loaders as loading  # deferred: both read this module
+    from . import themes as colours
+
+    try:
+        themes = [
+            colours.from_manifest(entry, f"theme {index + 1}", name)
+            for index, entry in enumerate(_listed(manifest, "themes", root))
+        ]
+        loaders = [
+            loading.from_manifest(entry, f"loader {index + 1}", name)
+            for index, entry in enumerate(
+                _listed(manifest, "loaders", root)
+            )
+        ]
+    except ValueError as exc:
+        if isinstance(exc, ExtensionError):
+            raise
+        raise ExtensionError(str(exc))
+
     _unique([c.name for c in commands], "command")
     _unique([t.name for t in tools], "tool")
     _unique([p.name for p in providers], "provider")
+    _unique([t.id for t in themes], "theme")
+    _unique([loader.id for loader in loaders], "loader")
 
-    if not (commands or tools or prompt or backgrounds or providers):
+    if not (commands or tools or prompt or backgrounds or providers
+            or themes or loaders):
         raise ExtensionError(
             f"{MANIFEST} declares nothing: no commands, tools, prompt, "
-            "backgrounds, or providers"
+            "backgrounds, providers, themes, or loaders"
         )
 
     try:
@@ -453,6 +514,8 @@ def load(root: Path) -> Extension:
         tools=tools,
         backgrounds=backgrounds,
         providers=providers,
+        themes=themes,
+        loaders=loaders,
     )
 
 

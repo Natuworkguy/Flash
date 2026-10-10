@@ -3021,8 +3021,8 @@ def models_here(client=None) -> Optional[set[str]]:
 
 
 def is_cloud(model: str) -> bool:
-    """Whether MODEL runs in Ollama's cloud, as gpt-oss:120b-cloud does:
-    it need not be in this computer's list to work."""
+    """Whether MODEL runs in Ollama's cloud, as a tag ending in -cloud
+    does: it need not be in this computer's list to work."""
 
     return "cloud" in str(model or "").lower().rpartition(":")[2] or \
         str(model or "").lower().endswith("-cloud")

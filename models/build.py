@@ -118,7 +118,7 @@ def render(source: str, name: str, size: str, terms: str) -> str:
 
 
 def origin(source: str, path: Path) -> str:
-    """Return the repo SOURCE builds on: FROM gemma4:12b -> gemma4."""
+    """Return the repo SOURCE builds on: FROM base:12b -> base."""
 
     match = FROM_PATTERN.search(source)
 

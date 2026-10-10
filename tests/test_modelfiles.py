@@ -226,7 +226,7 @@ def test_spoken_says_the_tag_out_loud():
 
 def test_origin_reads_the_repo_off_the_from_line():
     assert (  # nosec B101
-        build.origin("FROM gemma4:12b\n", Path("demo")) == "gemma4"
+        build.origin("FROM basemodel:12b\n", Path("demo")) == "basemodel"
     )
 
 
@@ -236,33 +236,33 @@ def test_origin_needs_a_from_line():
 
 
 def test_render_pins_the_size_and_leaves_the_rest_alone():
-    source = "# name: demo\nFROM gemma4:12b\nSYSTEM \"\"\"{{name}}\"\"\"\n"
+    source = "# name: demo\nFROM basemodel:12b\nSYSTEM \"\"\"{{name}}\"\"\"\n"
 
     rendered = build.render(source, "demo", "31b", "")
 
-    assert "FROM gemma4:31b" in rendered  # nosec B101
-    assert "gemma4:12b" not in rendered  # nosec B101
+    assert "FROM basemodel:31b" in rendered  # nosec B101
+    assert "basemodel:12b" not in rendered  # nosec B101
     assert "Demo" in rendered  # nosec B101
 
 
 def test_render_without_a_size_keeps_the_from_line():
-    source = "# name: demo\nFROM gemma4:12b\n"
+    source = "# name: demo\nFROM basemodel:12b\n"
 
-    assert "FROM gemma4:12b" in build.render(  # nosec B101
+    assert "FROM basemodel:12b" in build.render(  # nosec B101
         source, "demo", "", ""
     )
 
 
 def test_notice_adds_the_repository_and_base_terms():
-    rendered = build.notice("FROM gemma4:12b\n", "MIT-ISH TERMS")
+    rendered = build.notice("FROM basemodel:12b\n", "MIT-ISH TERMS")
 
     assert "LICENSE \"\"\"" in rendered  # nosec B101
     assert "MIT-ISH TERMS" in rendered  # nosec B101
-    assert "Built on gemma4." in rendered  # nosec B101
+    assert "Built on basemodel." in rendered  # nosec B101
 
 
 def test_notice_leaves_a_license_the_file_already_has():
-    body = 'FROM gemma4:12b\nLICENSE """mine"""\n'
+    body = 'FROM basemodel:12b\nLICENSE """mine"""\n'
 
     assert build.notice(body, "TERMS") == body  # nosec B101
 
@@ -310,7 +310,7 @@ def test_targets_adds_a_cloudbase_build_where_the_base_has_one(
     monkeypatch.setattr(build, "published", lambda _repo, _tag: True)
 
     assert build.targets(  # nosec B101
-        ["31b"], "gemma4", True, Path("demo")
+        ["31b"], "basemodel", True, Path("demo")
     ) == [("31b", "31b"), ("31b-cloud", "31b-cloudbase")]
 
 
@@ -318,7 +318,7 @@ def test_targets_skips_a_cloud_tag_the_base_does_not_publish(monkeypatch):
     monkeypatch.setattr(build, "published", lambda _repo, _tag: False)
 
     assert build.targets(  # nosec B101
-        ["12b"], "gemma4", True, Path("demo")
+        ["12b"], "basemodel", True, Path("demo")
     ) == [("12b", "12b")]
 
 
@@ -326,7 +326,7 @@ def test_targets_refuses_a_cloudbase_asked_for_by_name(monkeypatch):
     monkeypatch.setattr(build, "published", lambda _repo, _tag: False)
 
     with pytest.raises(SystemExit):
-        build.targets(["12b-cloudbase"], "gemma4", True, Path("demo"))
+        build.targets(["12b-cloudbase"], "basemodel", True, Path("demo"))
 
 
 def test_our_tag_never_ends_in_the_suffix_ollama_resolves_remotely():

@@ -41,11 +41,11 @@ Getting started
 ---------------
 
 Flash needs Python 3.10+ and an [Ollama](https://ollama.com) server, on
-this computer or another one. Pull a model that can call tools, then run
-Flash:
+this computer or another one. Pull a model that can call tools (Flash
+Onyx, below, is made for it), then run Flash:
 
 ```bash
-ollama pull qwen3:8b
+ollama pull <model>
 flash               # the terminal
 flash --web         # the same agent in your browser
 flash --web --lan   # ... and on your phone, with a QR code to scan
@@ -131,6 +131,7 @@ Commands
 | --- | --- |
 | `/model [name]` | Pick a model, or download one |
 | `/host [name\|url]` | Switch Ollama server: `add`, `remove`, `list` |
+| `/loader [name]` | Pick the loading animation; `morph on` cycles them |
 | `/auto [on\|off]` | Run commands and edits without asking |
 | `/sparks` | Your sparks: `new`, `chat`, `teams`, `teamchat` and more, with Tab completion |
 | `/web [lan]` | Open Flash in your browser, or on your phone |
@@ -151,7 +152,7 @@ Flash Onyx
 ----------
 
 Flash runs on any Ollama model that calls tools. **Flash Onyx** is its
-own: `gemma4` with Flash's persona and tuned settings baked in, in a
+own: an open base model with Flash's persona and tuned settings baked in, in a
 `12b` for consumer GPUs and a `31b` flagship. Each release is a Modelfile
 under `models/`; build the newest one:
 

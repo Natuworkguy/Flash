@@ -74,12 +74,17 @@ An extension is a folder, usually a GitHub repository, with a
       "run": ["python", "./tools/weather.py"]
     }
   ],
-  "backgrounds": "scenes"
+  "backgrounds": "scenes",
+  "themes": "themes.json",
+  "loaders": [
+    {"name": "rain", "label": "Rain", "interval": 0.12,
+     "frames": ["╷  ", " ╷ ", "  ╷"], "ascii": [".  ", " . ", "  ."]}
+  ]
 }
 ```
 
 Only `name` is required, plus at least one command, tool, prompt,
-backgrounds folder, or provider. Every path is relative to the extension's folder
+backgrounds folder, provider, theme, or loader. Every path is relative to the extension's folder
 and cannot point outside it.
 
 | Field | Meaning |
@@ -91,6 +96,8 @@ and cannot point outside it.
 | `tools` | Tools the model can call. See below. |
 | `backgrounds` | A folder of `.scene` files, added to `/background`. |
 | `providers` | Model providers. See below. |
+| `themes` | Colour themes for the web UI. See below. |
+| `loaders` | Loading animations for the terminal and the web UI. See below. |
 
 ### Commands
 
@@ -145,21 +152,68 @@ args = json.load(sys.stdin)
 print(f"It is sunny in {args['city']}.")
 ```
 
+### Themes
+
+A theme is a set of the web UI's colours for dark mode, light mode, or
+both. It shows in Settings, under Colors, beside the built-in palettes,
+with the extension's name on it:
+
+```json
+"themes": [
+  {
+    "name": "nord",
+    "label": "Nord",
+    "dark": {"bg": "#2e3440", "sidebar": "#272c36", "surface": "#3b4252",
+             "text": "#eceff4", "accent": "#88c0d0"},
+    "light": {"bg": "#eceff4", "surface": "#ffffff", "accent": "#5e81ac"}
+  }
+]
+```
+
+`name` is lowercase letters, digits and `-`. A mode may set any of
+`bg`, `sidebar`, `surface`, `text`, `text-2`, `text-3`, `accent`,
+`accent-text`, `border`, `border-strong`, `hover`, `pressed`, `code-bg`,
+`add`, `del`, `warn`, `working`, `invert-bg` and `invert-text`, each to a
+colour (`#hex`, `rgb()`, `rgba()`, `hsl()` or `hsla()`). Anything left
+out keeps Flash's own. `"themes"` can also name a JSON file holding the
+list.
+
+### Loaders
+
+A loader is the animation beside "Thinking" while Flash works. Each is
+a list of text frames, shown one after another every `interval`
+seconds (0.04 to 1), in the terminal and in the browser alike. Pick one
+in Settings, under Loading animation, or with `/loader <name>`.
+
+```json
+"loaders": [
+  {"name": "rain", "label": "Rain", "description": "Drops falling",
+   "interval": 0.12, "frames": ["╷  ", " ╷ ", "  ╷"],
+   "ascii": [".  ", " . ", "  ."]}
+]
+```
+
+Up to 60 frames of up to 12 characters each. `ascii` is what a
+terminal that can't show the frames' characters draws instead. Left
+out, every non-ASCII character becomes `*`. A name a built-in loader
+already has is skipped. `"loaders"` can also name a JSON file holding
+the list.
+
 ### Providers
 
 A provider brings models that Flash does not get from Ollama. Its
-models are named `@provider/model`, such as `@openai/gpt-5`, and are used
-like any other: `/model @openai/gpt-5`, the web UI's model menu, a
+models are named `@provider/model`, such as `@example/big-model`, and are used
+like any other: `/model @example/big-model`, the web UI's model menu, a
 spark's model, or `MODEL` in `~/.flash.env`. They are listed beside
 Ollama's, and are never downloaded.
 
 ```json
 {
-  "name": "openai",
+  "name": "example",
   "providers": [
     {
-      "name": "openai",
-      "description": "OpenAI's hosted models",
+      "name": "example",
+      "description": "A hosted model service",
       "run": ["python", "./provider.py"],
       "timeout": 300
     }
@@ -180,7 +234,7 @@ a name or an object; `capabilities` (Ollama's words: `completion`,
 `context` is the window in tokens, if you want Flash to show it:
 
 ```json
-{"models": [{"name": "gpt-5", "capabilities": ["completion", "tools", "vision"], "context": 400000}]}
+{"models": [{"name": "big-model", "capabilities": ["completion", "tools", "vision"], "context": 400000}]}
 ```
 
 `{"action": "chat", ...}` asks for an answer. The request carries
@@ -209,12 +263,12 @@ To fail, print `{"error": "what went wrong"}` or exit non-zero with the
 reason on stderr: Flash shows it the way it shows Ollama's errors.
 
 A provider that needs an API key reads it from the environment. Set it
-with `/set OPENAI_API_KEY ...`, which saves it to `~/.flash.env`, and
+with `/set EXAMPLE_API_KEY ...`, which saves it to `~/.flash.env`, and
 the program sees it on its next run. Provider models are never counted
 as running on your own machine in `/stats`, since Flash cannot see where
 a provider sends them.
 
-A provider for an API that speaks OpenAI's chat format, using only the
+A provider for an API that speaks the common chat-completions format, using only the
 standard library:
 
 ```python
@@ -223,8 +277,8 @@ import os
 import sys
 import urllib.request
 
-BASE = "https://api.openai.com/v1"
-KEY = os.environ.get("OPENAI_API_KEY", "")
+BASE = "https://api.example.com/v1"
+KEY = os.environ.get("EXAMPLE_API_KEY", "")
 
 
 def call(path, body=None):
@@ -240,7 +294,7 @@ def call(path, body=None):
 
 ask = json.load(sys.stdin)
 if not KEY:
-    print(json.dumps({"error": "set OPENAI_API_KEY with /set"}))
+    print(json.dumps({"error": "set EXAMPLE_API_KEY with /set"}))
 elif ask["action"] == "models":
     listed = call("/models")["data"]
     print(json.dumps({"models": [m["id"] for m in listed]}))

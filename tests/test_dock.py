@@ -88,12 +88,14 @@ def test_without_a_dock_nothing_steps_anywhere():
 
 
 def test_the_loader_runs_on_braille_or_ascii(monkeypatch):
-    frames = [theme.loader_frame(n * theme.LOADER_SECONDS)
-              for n in range(len(theme.LOADER_FRAMES))]
-    assert frames == list(theme.LOADER_FRAMES)
+    monkeypatch.delenv("LOADER", raising=False)
+    dots = theme.BUILTIN_LOADERS[0]
+    frames = [theme.loader_frame(n * dots.seconds)
+              for n in range(len(dots.frames))]
+    assert frames == list(dots.frames)
 
     monkeypatch.setattr(theme, "can_encode", lambda text: False)
-    assert theme.loader_frame(0) in theme.LOADER_FRAMES_ASCII
+    assert theme.loader_frame(0) in dots.ascii
 
 
 def test_carry_adds_to_what_is_already_in_the_box():

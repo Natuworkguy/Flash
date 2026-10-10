@@ -57,6 +57,7 @@ from . import (
     greetings,
     keepalive,
     learning,
+    loaders,
     memory,
     providers,
     showcase,
@@ -64,6 +65,7 @@ from . import (
     sparks,
     systemone,
     teamchat,
+    themes,
     updater,
     voice,
     workspace,
@@ -2423,6 +2425,13 @@ def status(ai) -> dict:
         "sparks_unread": sparks.unread_total(),
         # Shown under the box while a reply is on its way.
         "tips": showcase.web_tips(),
+        # The animation beside "Thinking", the same one the terminal
+        # turns, and every one there is to pick from.
+        "loader": loaders.chosen(),
+        "loader_morph": loaders.morphing(),
+        "loaders": [loader.summary() for loader in loaders.all_loaders()],
+        # Colour themes from extensions, beside the page's own.
+        "themes": [t.summary() for t in themes.extension_themes()],
     }
 
 
@@ -3127,6 +3136,20 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
     if name == "hosts":
         return {"hosts": workspace.hosts_with_health(ai.Config.host),
                 "current": workspace.listed_url(ai.Config.host)}
+
+    if name == "loader":
+        found = loaders.find(arg)
+        if found is None:
+            raise ValueError(f"No loader is called {arg!r}.")
+        ai.set_config_var(loaders.SETTING, found.id)
+        session.hub.publish({"type": "status"})
+        return {"loader": found.id}
+
+    if name == "loader-morph":
+        on = arg.lower() in ("on", "1", "true")
+        ai.set_config_var(loaders.MORPH_SETTING, "1" if on else "0")
+        session.hub.publish({"type": "status"})
+        return {"loader_morph": on}
 
     if name == "host":
         url = workspace.normalize_host(arg)

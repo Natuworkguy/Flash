@@ -128,7 +128,7 @@ def test_context_limit_prefers_the_pinned_num_ctx(monkeypatch):
         "_show",
         lambda _host, _model: {
             "parameters": "temperature 0.6\nnum_ctx 65536\ntop_k 64",
-            "model_info": {"gemma4.context_length": 262144},
+            "model_info": {"gamma4.context_length": 262144},
         },
     )
 
@@ -141,7 +141,7 @@ def test_context_limit_ignores_the_architecture_ceiling(monkeypatch):
         "_show",
         lambda _host, _model: {
             "parameters": "temperature 0.6",
-            "model_info": {"gemma4.context_length": 262144},
+            "model_info": {"gamma4.context_length": 262144},
         },
     )
 
@@ -160,7 +160,7 @@ def test_context_ceiling_reports_what_the_architecture_supports(monkeypatch):
         "_show",
         lambda _host, _model: {
             "parameters": "num_ctx 65536",
-            "model_info": {"gemma4.context_length": 262144},
+            "model_info": {"gamma4.context_length": 262144},
         },
     )
 
