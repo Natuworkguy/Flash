@@ -1196,9 +1196,16 @@ body.page-projects #dock, body.page-settings #dock, body.page-tool #dock { displ
 .look-rows .setting-row .what { flex: 1 1 180px; }
 .look-rows .setting-row .side { max-width: 100%; }
 .seg { display: inline-flex; flex-wrap: wrap; gap: 2px; padding: 3px; border-radius: 11px; background: var(--bg); border: 1px solid var(--border); }
-.seg button { padding: 5px 11px; border-radius: 8px; font-size: 13px; color: var(--text-2); white-space: nowrap; transition: background 0.14s, color 0.14s; }
+.seg button { padding: 5px 11px; border-radius: 8px; font-size: 13px; color: var(--text-2); white-space: nowrap; transition: background 0.24s var(--ease), color 0.24s var(--ease), box-shadow 0.24s var(--ease), opacity 0.24s var(--ease); }
 .seg button:hover { color: var(--text); }
 .seg button.on { background: var(--surface); color: var(--text); box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12), inset 0 0 0 1px var(--border); }
+/* Many-at-once choices: one turned off fades back, one turned on fades
+   up, each where it is. */
+.seg.multi button:not(.on) { opacity: 0.62; }
+.seg.multi button:not(.on):hover { opacity: 1; }
+.seg.multi button.flip { animation: seg-flip 0.32s var(--ease); }
+@keyframes seg-flip { 40% { opacity: 0.45; } }
+@media (prefers-reduced-motion: reduce) { .seg button { transition: none; } .seg.multi button.flip { animation: none; } }
 .loader-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); gap: 10px; max-width: 620px; }
 .loader-card { display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 18px 8px 12px; border-radius: 14px; border: 1px solid var(--border); background: var(--surface); font-size: 13px; color: var(--text-2); transition: border-color 0.2s, box-shadow 0.2s, transform 0.25s var(--spring); }
 .loader-card:hover { transform: translateY(-2px); border-color: var(--border-strong); }
@@ -9372,7 +9379,13 @@ async function drawProgressEmail(host, change = {}) {
     host.appendChild(from);
   }
 
-  const kinds = segRowMulti("Which ones", "A quieter inbox: just Needs you and Done.", PROGRESS_KINDS, p.kinds, (picked) => drawProgressEmail(host, { kinds: picked }));
+  // Saved as they change, without drawing the section again, so each
+  // one fades between on and off where it is.
+  const kinds = segRowMulti("Which ones", "A quieter inbox: just Needs you and Done.", PROGRESS_KINDS, p.kinds, async (picked) => {
+    const r = (await command("progress-email", "", null, { kinds: picked })).progress_email;
+    p.kinds = r.kinds;
+    return r.kinds;
+  });
   host.appendChild(kinds);
 
   const actions = el("div", "buttons", "");
@@ -9393,19 +9406,37 @@ async function drawProgressEmail(host, change = {}) {
 
 // Like segRow, but any number can be on at once.
 function segRowMulti(label, about, choices, picked, onChange) {
-  const row = el("div", "setting-row static", `<span class="what"><b></b><span></span></span><span class="side"><span class="seg" role="group"></span></span>`);
+  const row = el("div", "setting-row static", `<span class="what"><b></b><span></span></span><span class="side"><span class="seg multi" role="group"></span></span>`);
   row.querySelector("b").textContent = label;
   row.querySelector(".what span").textContent = about;
   const seg = row.querySelector(".seg");
   seg.setAttribute("aria-label", label);
+  let now = [...picked];
+  const show = () => {
+    for (const b of seg.children) {
+      const on = now.includes(b.dataset.id);
+      b.classList.toggle("on", on);
+      b.setAttribute("aria-pressed", on);
+    }
+  };
   for (const [id, name] of choices) {
-    const b = el("button", picked.includes(id) ? "on" : "");
+    const b = el("button");
     b.type = "button";
+    b.dataset.id = id;
     b.textContent = name;
-    b.setAttribute("aria-pressed", picked.includes(id));
-    b.onclick = () => onChange(picked.includes(id) ? picked.filter((k) => k !== id) : [...picked, id]);
+    b.onclick = async () => {
+      const was = now;
+      now = now.includes(id) ? now.filter((k) => k !== id) : [...now, id];
+      b.classList.remove("flip");
+      void b.offsetWidth;
+      b.classList.add("flip");
+      show();
+      try { now = await onChange(now); show(); }
+      catch (error) { now = was; show(); showFailure(error); }
+    };
     seg.appendChild(b);
   }
+  show();
   return row;
 }
 
