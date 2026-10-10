@@ -19,6 +19,7 @@ from rich.live import Live as _RichLive
 from rich.markdown import Markdown
 from rich.text import Text
 
+from . import progress
 from .loaders import BUILTIN as BUILTIN_LOADERS
 from .loaders import Loader
 from .loaders import chosen as chosen_loader
@@ -371,8 +372,11 @@ def answer_from(answerer: Answerer) -> Iterator[None]:
 
 
 def remote_answer(question: str) -> Optional[str]:
-    """The answer from this thread's answerer, or None to ask here."""
+    """The answer from this thread's answerer, or None to ask here.
+    Asked from the terminal and the web alike, it is where a turn is
+    known to be waiting on the user."""
 
+    progress.ask(question)
     answerer = getattr(_capture, "answerer", None)
 
     if answerer is None:

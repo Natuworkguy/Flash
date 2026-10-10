@@ -84,7 +84,7 @@ An extension is a folder, usually a GitHub repository, with a
 ```
 
 Only `name` is required, plus at least one command, tool, prompt,
-backgrounds folder, provider, theme, or loader. Every path is relative to the extension's folder
+backgrounds folder, provider, theme, loader, or events. Every path is relative to the extension's folder
 and cannot point outside it.
 
 | Field | Meaning |
@@ -98,6 +98,7 @@ and cannot point outside it.
 | `providers` | Model providers. See below. |
 | `themes` | Colour themes for the web UI. See below. |
 | `loaders` | Loading animations for the terminal and the web UI. See below. |
+| `events` | A program told when a turn starts, plans, waits on you, and ends. See below. |
 
 ### Commands
 
@@ -198,6 +199,36 @@ terminal that can't show the frames' characters draws instead. Left
 out, every non-ASCII character becomes `*`. A name a built-in loader
 already has is skipped. `"loaders"` can also name a JSON file holding
 the list.
+
+### Events
+
+An extension can follow the turn you are waiting on, to tell you about
+it somewhere else: a phone, a watch, a chat. Flash runs its program once
+for each milestone, with the event as JSON on stdin:
+
+```json
+"events": {"run": ["python", "./events.py"],
+           "on": ["turn-start", "plan", "ask", "turn-end"],
+           "timeout": 30}
+```
+
+`on` defaults to all four. Every event carries `event`, `turn` (an id
+shared by one turn's events), `source` (`terminal` or `web`), `chat`,
+`title`, `request` (what was asked) and `at` (a Unix time). Then:
+
+| Event | Also carries |
+| --- | --- |
+| `turn-start` | nothing more |
+| `plan` | `steps` (each `{"text", "status"}`), `done`, `total`, and `change`: `set` for a new checklist, `done` with the step's `index` when one is ticked |
+| `ask` | `question`: what the turn is waiting on your yes or no for |
+| `turn-end` | `ok`, `summary` (the reply's first line), `error` (why not, if not ok) and `seconds` |
+
+Only the turn you are waiting on is followed: a sub-agent's or a spark's
+work is not. Events go out one at a time, in order, on a thread of their
+own, so a slow program never holds a turn up; one too slow to keep up
+misses events rather than queueing them forever. A program run on
+Flash's own Python (`"python"`) can `import flash` and use what Flash
+has, such as `flash.mail` and the email account set up with `/email`.
 
 ### Providers
 
