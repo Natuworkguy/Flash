@@ -4364,3 +4364,30 @@ class TestSparkBudgets:
         assert (logged["kind"], logged["tool"], logged["during"]) == (
             "tool", "learn", "chat",
         )
+
+
+class TestPageAddresses:
+    """Every address the page puts in the bar is one the server serves,
+    so refreshing on it opens the page and not a "not found"."""
+
+    def page_tabs(self):
+        import re
+        from pathlib import Path
+
+        page = (Path(web.__file__).parent / "web" / "index.html").read_text(
+            encoding="utf-8",
+        )
+        found = re.search(r"\\/settings\(\?:\\/\(([a-z|]+)\)\)", page)
+        assert found, "the page's settings route is not where it was"
+        return found.group(1).split("|")
+
+    def test_every_settings_tab_is_served(self):
+        tabs = self.page_tabs()
+        assert "email" in tabs
+        for tab in tabs:
+            assert web.PAGE_PATHS.match(f"/settings/{tab}"), tab
+
+    def test_a_refresh_on_a_settings_tab_opens_the_page(self, server):
+        status, body = request(server, "GET", "/settings/email")
+        assert status == 200
+        assert b"<html" in body[:400].lower()
