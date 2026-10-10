@@ -1728,6 +1728,10 @@ body.all-stopped .org-node, body.all-stopped .spark-card { animation: all-halt 0
 .spark-report .teach input { flex: 1; min-width: 0; font: 13.5px var(--sans); color: var(--text); background: var(--surface); border: 1px solid var(--border-strong); border-radius: 9px; padding: 6px 10px; outline: 0; }
 .spark-quiet { font-size: 12.5px; color: var(--text-3); margin-top: 10px; }
 .field small [data-handle] { font: 500 12px var(--mono); color: var(--text-2); }
+.field small.taken { display: flex; align-items: flex-start; gap: 6px; color: var(--warn); animation: rise 0.2s var(--ease) both; }
+.field small.taken svg { width: 14px; height: 14px; flex: none; margin-top: 2px; }
+.field small.taken [data-handle], .field small.taken .who { color: var(--warn); }
+.field input[aria-invalid="true"] { border-color: var(--warn); }
 .mem-path .link-btn { font: inherit; padding: 0 4px; text-decoration: underline; text-underline-offset: 2px; }
 /* Change models: the sparks to move, by team, then the model. */
 .bulk-models { max-height: min(46vh, 420px); overflow-y: auto; border: 1px solid var(--border); border-radius: 12px; margin: 4px 0 14px; }
@@ -8414,7 +8418,25 @@ function sparkForm(spark, inProjectId = "", template = "") {
   // Chosen, not assumed: a spark from before it had one picks one now.
   fillModelField(form, editing ? spark.model || "" : "", !editing);
   const handle = form.querySelector("[data-handle]");
-  const named = () => { handle.textContent = sparkHandle(form.sparkname.value || "scout"); };
+  const handleNote = handle.parentNode;
+  // As it is typed: a handle another spark already has is said at once,
+  // and the form won't save until the name is changed.
+  const named = () => {
+    const typed = form.sparkname.value.trim();
+    const mine = sparkHandle(typed || "scout");
+    const other = typed && sparkList.find((s) => s.handle === mine && (!editing || s.id !== spark.id));
+    handleNote.classList.toggle("taken", !!other);
+    form.sparkname.setAttribute("aria-invalid", other ? "true" : "false");
+    form.sparkname.setCustomValidity(other ? `${other.name} already has ${mine}. Pick another name.` : "");
+    if (other) {
+      handleNote.innerHTML = `${icon("alert")}<span><b data-handle></b> is taken by <b class="who"></b>. Pick another name.</span>`;
+      handleNote.querySelector(".who").textContent = other.name;
+    } else if (!handleNote.querySelector("[data-handle]") || handleNote.classList.contains("was-taken")) {
+      handleNote.innerHTML = `Its handle: <b data-handle></b>`;
+    }
+    handleNote.classList.toggle("was-taken", !!other);
+    handleNote.querySelector("[data-handle]").textContent = mine;
+  };
   form.sparkname.addEventListener("input", named);
   if (editing) {
     form.sparkname.value = spark.name;
