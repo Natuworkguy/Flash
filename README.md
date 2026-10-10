@@ -131,6 +131,7 @@ Commands
 | --- | --- |
 | `/model [name]` | Pick a model, or download one |
 | `/host [name\|url]` | Switch Ollama server: `add`, `remove`, `list` |
+| `/btw <question>` | A side question, even mid-turn, that doesn't interrupt or join the chat |
 | `/loader [name]` | Pick the loading animation; `morph on` cycles them |
 | `/auto [on\|off]` | Run commands and edits without asking |
 | `/sparks` | Your sparks: `new`, `chat`, `teams`, `teamchat` and more, with Tab completion |

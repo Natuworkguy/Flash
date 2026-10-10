@@ -335,6 +335,21 @@ body.empty #suggestions { display: flex; flex-wrap: wrap; justify-content: cente
 .user-wrap { display: flex; flex-direction: column; align-items: flex-end; }
 .steer-tag { display: flex; align-items: center; gap: 5px; font-size: 11.5px; color: var(--text-3); margin: 0 6px 5px 0; }
 .steer-tag svg { width: 13px; height: 13px; color: var(--accent); }
+/* Side questions (/btw): answered apart from the chat, above the box,
+   while a reply carries on. They go when closed, or when the page does. */
+#btw { display: flex; flex-direction: column; gap: 8px; margin: 0 8px 10px; max-height: 42vh; overflow-y: auto; }
+#btw[hidden] { display: none; }
+.btw-card { position: relative; padding: 10px 40px 12px 14px; border: 1px solid var(--border); border-left: 3px solid var(--accent); border-radius: 12px; background: var(--surface); box-shadow: var(--composer-shadow); animation: rise 0.25s var(--ease) both; }
+.btw-card .q { display: flex; align-items: baseline; gap: 8px; font-size: 13px; color: var(--text-3); }
+.btw-card .q b { flex: none; font-size: 11px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--accent); }
+.btw-card .q span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.btw-card .a { margin-top: 6px; font-size: 14.5px; line-height: 1.6; color: var(--text); }
+.btw-card .a > :first-child { margin-top: 0; }
+.btw-card .a > :last-child { margin-bottom: 0; }
+.btw-card .a.waiting { color: var(--text-3); }
+.btw-card .a.failed { color: var(--del); }
+.btw-card .x { position: absolute; top: 6px; right: 6px; width: 28px; height: 28px; }
+.btw-card .x svg { width: 15px; height: 15px; }
 #pending { display: flex; flex-direction: column; gap: 6px; margin: 0 8px 8px; }
 #pending[hidden] { display: none; }
 .pending-row { display: flex; align-items: center; gap: 10px; padding: 6px 6px 6px 12px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); font-size: 13.5px; animation: rise 0.25s var(--ease) both; }
@@ -2557,6 +2572,7 @@ body.resizing-viewer iframe { pointer-events: none; }
     <div id="dock">
       <div class="col">
         <div id="hero"><h1 id="greeting">Good evening</h1></div>
+        <div id="btw" hidden aria-label="Side questions"></div>
         <div id="pending" hidden aria-label="Waiting messages"></div>
         <div id="recording" hidden role="group" aria-label="Screen recording">
           <span class="rec-dot" aria-hidden="true"></span>
@@ -2842,7 +2858,7 @@ const voice = { on: false, state: "", ctx: null, stream: null, level: 0, turn: n
 let view = "chat";         // "chat" | "projects" | "project" | "settings" | "skills" | "sparks" | "extensions"
 let viewProject = null;    // the project page shown, or the project a new chat starts in
 let viewSpark = null;      // the spark a new chat is with, before its first message
-const reading = { key: null, stop: null };  // what the play button is reading
+const reading = { key: null, stop: null, place: null };  // what the play button is reading, and on which page
 let ownVoice = null;       // whether Flash's own voice is here: null until asked
 let sparkList = [];        // each spark's id, name, handle and colour, for badges
 const sparkOf = (id) => (id && sparkList.find((s) => s.id === id)) || null;
@@ -5193,6 +5209,7 @@ function markLatest() {
 let drawCtx = {};
 
 function drawChat() {
+  leftReading();
   if (view !== "chat") { closeViewer(); drawPage(); return; }
   // A file belongs to its chat: the panel does not follow to another.
   const chatNow = chats.get(current);
@@ -5227,6 +5244,7 @@ function drawChat() {
   renderProjectBtn();
   renderSparkBtn();
   renderPending();
+  renderBtw();
   syncUrl();
   greet();
   markSide();
@@ -5245,6 +5263,7 @@ function drawChat() {
 // Projects pages -----------------------------------------------------------
 
 function drawPage() {
+  leftReading();
   // A file belongs to its chat: a page that is not a chat has no panel.
   closeViewer();
   document.body.classList.remove("empty");
@@ -5259,6 +5278,7 @@ function drawPage() {
   const pages = { projects: drawProjects, settings: drawSettings, skills: drawSkillsPage, sparks: drawSparksPage, extensions: drawExtensionsPage };
   (pages[view] || drawProject)();
   renderPending();
+  renderBtw();
   syncUrl();
   markSide();
   updateSend();
@@ -6356,6 +6376,7 @@ function closeTeamChat() {
   clearTimeout(teamChat.timer);
   tcClosePicker();
   if (voice.on && voice.team) endVoice();
+  if (reading.key && reading.key.startsWith("tc:")) stopReading();
   teamChat.id = null;
   setTimeout(() => { if (!teamChat.id) wrap.hidden = true; }, calm.matches ? 0 : 320);
   if (view === "sparks") sparksChanged();
@@ -9634,7 +9655,11 @@ function openForm(html, onSubmit) {
   });
   return form;
 }
-function closeForm() { hideOverlay($("#form")); dropSuggestions(); input.focus(); }
+function closeForm() {
+  // A spark's report read aloud in its window stops with the window.
+  if (reading.key && reading.key.startsWith("report:")) stopReading();
+  hideOverlay($("#form")); dropSuggestions(); input.focus();
+}
 // A form's folder suggestions go with the form.
 const dropSuggestions = () => document.querySelectorAll(".suggest").forEach((node) => node.remove());
 $("#form").addEventListener("mousedown", (e) => { if (e.target.id === "form") closeForm(); });
@@ -10593,6 +10618,14 @@ function stopReading() {
   if (reading.stop) reading.stop();
 }
 
+// Where the page is: a chat, or one of the other pages. Reading aloud
+// stops on leaving where it started; the same chat drawn again, as it
+// is for every new message, is not leaving it.
+const placeNow = () => (view === "chat" ? `chat:${current || ""}` : `${view}:${viewProject || ""}`);
+function leftReading() {
+  if (reading.place && reading.place !== placeNow()) stopReading();
+}
+
 // A play button for what NODE() finds, known by KEY across redraws.
 function readButton(key, node) {
   const b = button("icon-btn read-aloud", reading.key === key ? "halt" : "play", reading.key === key ? "Stop reading" : "Read aloud", "", () => readAloudNode(key, node()));
@@ -10614,6 +10647,7 @@ async function readAloudNode(key, node) {
   // Only one in the chat scrolls to keep the sentence in view: a report
   // sits in a window of its own.
   const inChat = messagesEl.contains(node);
+  reading.place = inChat ? placeNow() : null;
   const mark = (range) => {
     if (!range || !node.isConnected) return;
     if (inChat) markSpoken(range);
@@ -10622,7 +10656,7 @@ async function readAloudNode(key, node) {
   const done = () => {
     finish();
     unmarkSpoken();
-    if (reading.key === key) { reading.key = null; reading.stop = null; }
+    if (reading.key === key) { reading.key = null; reading.stop = null; reading.place = null; }
     markPlaying(key, false);
   };
   reading.stop = () => { stopped = true; done(); };
@@ -10893,6 +10927,7 @@ function apply(event) {
   if (event.type === "browsers") { if (view === "settings" && settingsTab === "security") renderBrowsers(); return; }
   if (event.type === "notify") { notified(event); return; }
   if (event.type === "team-chat") { teamChatChanged(event.team); return; }
+  if (event.type === "btw") { btwEvent(event); return; }
 
   const chat = chats.get(event.chat);
   if (!chat) { if (event.chat) refreshLite(); return; }
@@ -11633,6 +11668,59 @@ function stopReply() {
     toast(back.length === 1 ? "Stopped. Your waiting message is back in the box." : "Stopped. Your waiting messages are back in the box.");
   }).catch(showFailure);
   return true;
+}
+
+// Side questions, per chat: asked with /btw, answered on the side from
+// what the chat holds, never added to it. Kept by this page only.
+const btws = new Map();
+
+async function askOnTheSide(text) {
+  if (!current) await createChat(viewProject || "", viewSpark || "");
+  const chatId = current;
+  try { await api("/api/btw", { chat: chatId, text }); }
+  catch (error) { showFailure(error); }
+}
+
+function btwEvent(event) {
+  if (!btws.has(event.chat)) btws.set(event.chat, []);
+  const list = btws.get(event.chat);
+  let entry = list.find((b) => b.id === event.id);
+  if (!entry) { entry = { id: event.id, question: event.question || "", text: "", done: false, error: "" }; list.push(entry); }
+  if (event.text) entry.text += event.text;
+  if (event.done) entry.done = true;
+  if (event.error) entry.error = event.error;
+  if (event.chat === current && view === "chat") renderBtw();
+}
+
+function renderBtw() {
+  const box = $("#btw");
+  const list = view === "chat" && current ? btws.get(current) || [] : [];
+  box.hidden = !list.length;
+  const seen = new Set();
+  for (const entry of list) {
+    seen.add(entry.id);
+    let card = box.querySelector(`[data-btw="${entry.id}"]`);
+    if (!card) {
+      card = el("div", "btw-card", `<div class="q"><b>btw</b><span></span></div><div class="a"></div>`);
+      card.dataset.btw = entry.id;
+      card.querySelector(".q span").textContent = entry.question;
+      card.querySelector(".q span").title = entry.question;
+      const x = button("icon-btn x", "x", "Close", "", () => {
+        btws.set(current, (btws.get(current) || []).filter((b) => b.id !== entry.id));
+        renderBtw();
+      });
+      card.appendChild(x);
+      box.appendChild(card);
+    }
+    const answer = card.querySelector(".a");
+    answer.classList.toggle("waiting", !entry.text && !entry.error);
+    answer.classList.toggle("failed", !!entry.error);
+    if (entry.error) answer.textContent = entry.error;
+    else if (entry.text) answer.innerHTML = markdown(entry.text);
+    else answer.textContent = "Thinking on the side…";
+  }
+  for (const card of box.querySelectorAll("[data-btw]")) if (!seen.has(card.dataset.btw)) card.remove();
+  box.scrollTop = box.scrollHeight;
 }
 
 function renderPending() {
@@ -12832,6 +12920,7 @@ const ACTIONS = [
   { label: "Toggle autonomous mode", keys: "Shift Tab", slash: "/auto", run: toggleAuto },
   { label: "Retry last message", keys: "Alt R", slash: "/retry", run: retry },
   { label: "Edit last message", keys: "Alt E", slash: "/edit", run: () => editLast() },
+  { label: "Side question, without interrupting", keys: "", slash: "/btw", run: () => { input.value = "/btw "; autosize(); input.focus(); } },
   { label: "Undo the last turn's file changes", keys: "Alt Z", slash: "/undo", run: undo },
   { label: "Stop the reply", keys: "Esc", slash: "/stop", run: stopReply },
   { label: "Copy last reply", keys: "Alt C", slash: "/copy", run: copyLastReply },
@@ -12852,6 +12941,12 @@ function runSlash(text) {
   const [word, ...rest] = text.split(/\s+/);
   const arg = rest.join(" ").trim();
   if (word === "/model" && arg) { setModel(arg); clearInput(); return true; }
+  if (word === "/btw") {
+    if (!arg) { toast("Ask something after /btw, like /btw what does this function return?"); return true; }
+    clearInput();
+    askOnTheSide(arg);
+    return true;
+  }
   if (word === "/rename" && arg) { const c = chats.get(current); if (c) { c.title = arg; renderChats(); setTitle($("#title"), arg); } command("rename", arg); clearInput(); return true; }
   const action = ACTIONS.find((a) => a.slash === word);
   if (!action) return false;

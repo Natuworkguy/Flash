@@ -154,6 +154,12 @@ python run.py
 - `/help` or `/?`: Display the help message.
 - `/model`: Pick from the models on this machine, or type a name to
   download one. `/model <name>` switches straight to one.
+- `/btw <question>`: Ask something on the side, even while Flash is
+  working. It is answered at once from what the conversation already
+  holds, with no tools, and shown apart from the chat: neither the
+  question nor the answer joins the conversation, and the work in
+  progress carries on undisturbed. The web UI takes `/btw` too, and
+  shows the answer in a card above the message box until you close it.
 - `/loader [name]`: Pick the animation that turns while Flash works,
   from a list showing each one's frames. `/loader morph on` has it turn
   into another, at random, every 10 seconds. Where the terminal can't
