@@ -1980,7 +1980,7 @@ class TestUsage:
             ),
             logged(
                 {"type": "user", "text": "c"},
-                {"type": "stats", "at": at(26), "model": "qwen",
+                {"type": "stats", "at": at(26), "model": "beta",
                  "tokens": 0, "rate": 0, "seconds": 1, "tools": 1},
             ),
             logged(),
@@ -1995,7 +1995,7 @@ class TestUsage:
         assert u["days"] == {
             "2026-09-24": 1, "2026-09-25": 1, "2026-09-26": 1,
         }
-        assert u["models"] == [("onyx", 2), ("qwen", 1)]
+        assert u["models"] == [("onyx", 2), ("beta", 1)]
         assert (u["streak"], u["longest_streak"], u["active_days"]) == (
             3, 3, 3,
         )
@@ -3893,7 +3893,7 @@ def test_a_spark_answers_in_a_chat_on_its_own_model(monkeypatch):
     from flash import sparks
 
     monkeypatch.setattr(sparks, "get_model_system_prompt", lambda h, m: "")
-    sparks.create("Scout", "Watch the issues.", model="qwen3:8b")
+    sparks.create("Scout", "Watch the issues.", model="beta3:8b")
     FakeClient.scripts = [
         [part("Scout here."), part(done=True)],
         [part("Flash here."), part(done=True)],
@@ -3905,10 +3905,10 @@ def test_a_spark_answers_in_a_chat_on_its_own_model(monkeypatch):
     run(session, chat, "and you, Flash?")
 
     assert [r["model"] for r in FakeClient.requests] == [
-        "qwen3:8b", "flash-test",
+        "beta3:8b", "flash-test",
     ]
     stats = [e["model"] for e in chat.log if e["type"] == "stats"]
-    assert stats == ["qwen3:8b", "flash-test"]
+    assert stats == ["beta3:8b", "flash-test"]
 
 
 def test_a_mentioned_spark_knows_its_status(monkeypatch):
@@ -4086,18 +4086,18 @@ def test_the_page_reads_and_sets_the_rounds_a_shift_gets():
 
 def test_the_page_sets_the_model_new_sparks_are_made_on(monkeypatch):
     monkeypatch.setattr(
-        web, "list_models", lambda ai: ["llama3.1:latest", "qwen3:8b"],
+        web, "list_models", lambda ai: ["alpha3.1:latest", "beta3:8b"],
     )
     session = web.Session()
 
     picked = web.command(
-        session, {"name": "spark-default-model", "arg": "qwen3:8b"},
+        session, {"name": "spark-default-model", "arg": "beta3:8b"},
     )
-    assert picked["spark_default"] == "qwen3:8b"
+    assert picked["spark_default"] == "beta3:8b"
     assert picked["spark_default_here"] is True
-    assert picked["spark_model"] == "qwen3:8b"
+    assert picked["spark_model"] == "beta3:8b"
     said = web.command(session, {"name": "model"})
-    assert said["spark_default"] == "qwen3:8b"
+    assert said["spark_default"] == "beta3:8b"
 
     back = web.command(
         session, {"name": "spark-default-model", "arg": "flash"},
@@ -4107,26 +4107,26 @@ def test_the_page_sets_the_model_new_sparks_are_made_on(monkeypatch):
 
 
 def test_the_page_hears_when_the_default_model_is_gone(monkeypatch):
-    monkeypatch.setattr(ai.Config, "model", "llama3.1:latest")
-    monkeypatch.setattr(web, "list_models", lambda ai: ["llama3.1:latest"])
-    sparks.set_default_model("qwen3:8b")
+    monkeypatch.setattr(ai.Config, "model", "alpha3.1:latest")
+    monkeypatch.setattr(web, "list_models", lambda ai: ["alpha3.1:latest"])
+    sparks.set_default_model("beta3:8b")
 
     said = web.command(web.Session(), {"name": "spark-default-model"})
 
     assert said["spark_default_here"] is False
     # Never another in its place.
-    assert said["spark_model"] == "qwen3:8b"
+    assert said["spark_model"] == "beta3:8b"
     assert "not in this computer's model list" in said["spark_default_note"]
 
 
 def test_the_page_hears_when_no_host_answers(monkeypatch):
     monkeypatch.setattr(web, "list_models", lambda ai: None)
-    sparks.set_default_model("qwen3:8b")
+    sparks.set_default_model("beta3:8b")
 
     said = web.command(web.Session(), {"name": "spark-default-model"})
 
     assert said["spark_default_here"] is None
-    assert said["spark_model"] == "qwen3:8b"
+    assert said["spark_model"] == "beta3:8b"
 
 
 def test_the_page_reads_and_sets_the_notification_limit():

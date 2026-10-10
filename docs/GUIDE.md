@@ -81,7 +81,7 @@ Or, if you already have the repo cloned locally:
    Flash talks to an [Ollama](https://ollama.com) server. Install Ollama, start it, and pull a model that supports tool calling:
 
    ```bash
-   ollama pull llama3.1
+   ollama pull <model>
    ```
 
    By default, Flash connects to a local server at `http://localhost:11434`. To use a remote server, set `OLLAMA_HOST` (see [Configuration](#configuration)).
@@ -93,7 +93,8 @@ model with Flash's persona and tuned parameters baked in. Each one lives in a
 single Modelfile under `models/` that declares its name and sizes at the top,
 and `models/build.py` builds whatever a Modelfile declares.
 
-Recent releases are built on `gemma4` in two sizes: `12b` runs on consumer
+Recent releases come in two sizes (the README's license notes say what
+they are built on): `12b` runs on consumer
 hardware, and `31b` is the flagship and wants a bigger GPU. The highest
 version under `models/` is the newest; older ones stay there to build too.
 
@@ -116,7 +117,7 @@ python3 run.py
 FLASH CLI is configured through environment variables. You can create a `.flash.env` file in your home directory:
 
 ```env
-MODEL=llama3.1
+MODEL=my-model:8b
 OLLAMA_HOST=http://localhost:11434
 ```
 
@@ -153,6 +154,10 @@ python run.py
 - `/help` or `/?`: Display the help message.
 - `/model`: Pick from the models on this machine, or type a name to
   download one. `/model <name>` switches straight to one.
+- `/loader [name]`: Pick the animation that turns while Flash works,
+  from a list showing each one's frames. `/loader morph on` has it turn
+  into another, at random, every 10 seconds. Where the terminal can't
+  show a loader's characters, it draws a plain ASCII version.
 - `/host [name|url]`: Pick or switch the Ollama server. `add <url>
   [name]`, `remove <name>`, and `list` manage the saved hosts.
 - `/auto [on|off]`: Toggle autonomous mode: commands and edits run
@@ -386,9 +391,9 @@ And always:
   (`/sparks title scout Bug triager`),
 - a **model**, chosen when you make it: every shift and every chat with
   it runs on that one, whatever Flash itself is set to
-  (`/sparks model scout qwen3:8b` changes it; `/sparks model scout,
-  writer qwen3:8b` or `/sparks model all qwen3:8b` changes many,
-  `/sparks teams model Desk qwen3:8b` a whole team, and `/sparks models`
+  (`/sparks model scout my-model:8b` changes it; `/sparks model scout,
+  writer my-model:8b` or `/sparks model all my-model:8b` changes many,
+  `/sparks teams model Desk my-model:8b` a whole team, and `/sparks models`
   lists them all; on the Sparks page, Change models does the same),
 - a **goal**, the standing assignment it works toward,
 - a **schedule**, from every 15 minutes to weekly,
@@ -567,13 +572,13 @@ requires a vision-capable model  text-only models will ignore the image
 or error. Pull one and switch to it first, e.g.:
 
 ```bash
-ollama pull llama3.2-vision
+ollama pull my-vision-model
 ```
 
 Flash Onyx 2+ is vision capable.
 
 ```console
-/model llama3.2-vision
+/model my-vision-model
 /image ~/Pictures/screenshot.png What's going on in this UI?
 ```
 
@@ -836,6 +841,23 @@ sidebar (`Alt P`). Chats are saved as they change, so a project keeps its
 conversations across restarts. Hosts, projects, and chats live in
 `~/.flash/web`, and removing a project never touches its folder or its
 chats.
+
+**Making it yours.** Settings › General changes how the page looks, in
+this browser:
+
+- **Colors**: a palette for the whole page in light and dark: Flash,
+  Ocean, Forest, Grape, Rose, Sunset, Midnight, Graphite, High contrast,
+  and any an extension adds.
+- **Accent**: the colour of buttons, links and the loader. Pick a swatch
+  or any colour.
+- **Text and layout**: the chat font (default, rounded, serif, mono or
+  system), text size, how wide the conversation runs, the spacing
+  between messages, and how round the corners are.
+- **Loading animation**: Dots, Bloom, Orbit, Pulse, Wave, Bounce, Grid,
+  Snake, Arc, Cursor, Comet, or an extension's. Turn on **Morph between
+  loaders** and every 10 seconds it shrinks away into another, at
+  random, for as long as Flash works. Both are the same settings as the
+  terminal's `/loader` and `/loader morph`.
 
 **Hosts** are the Ollama servers Flash can talk to: this computer, and
 any other machine you add, like one with a bigger GPU. The model menu

@@ -55,6 +55,7 @@ from .theme import (
 COMMANDS = [
     ("/model", "pick from the models here, or /model <name> to switch"),
     ("/host", "switch Ollama server (/host <name|url>, add, remove, list)"),
+    ("/loader", "pick the animation that turns while Flash works"),
     ("/auto", "toggle autonomous command mode (/auto on|off)"),
     ("/systemone", "a small model that reviews autonomous commands (on|off)"),
     ("/voice", "talk to Flash and hear its replies (on|off, models, pull)"),
@@ -297,6 +298,20 @@ class SlashCommandCompleter(Completer):
 
         if text.startswith("/host "):
             yield from _host_completions(text[len("/host "):])
+            return
+
+        if text.startswith("/loader "):
+            from . import loaders  # deferred: wanted once /loader is typed
+
+            typed = text[len("/loader "):].lower()
+            for loader in loaders.all_loaders():
+                if loader.id.startswith(typed):
+                    yield Completion(loader.id, start_position=-len(typed),
+                                     display_meta=loader.about)
+            if "morph".startswith(typed):
+                yield Completion("morph", start_position=-len(typed),
+                                 display_meta="turn into another every "
+                                 f"{loaders.MORPH_SECONDS:.0f}s (on|off)")
             return
 
         # What /sparks and its actions take. Past them, in a lesson or a
@@ -676,7 +691,7 @@ def is_shell_line(text: str) -> bool:
 
 def shell_prompt(prompt_ansi: str) -> str:
     """PROMPT_ANSI with its chevron turned into a ! in the same colour:
-    the prompt while a shell command is typed, as Claude Code's is."""
+    the prompt while a shell command is typed."""
 
     head, chevron, tail = prompt_ansi.rpartition(CHEVRON)
     return head + SHELL_MARK + tail if chevron else prompt_ansi
@@ -695,7 +710,7 @@ class HideShellMark(Processor):
             return Transformation(ti.fragments)
         fragments = explode_text_fragments(ti.fragments)[1:]
         # Nothing typed after the ! yet: say how to get out of it, where
-        # the placeholder would be, as Claude Code does.
+        # the placeholder would be.
         if ti.document.text == SHELL_MARK:
             fragments = [*fragments, (f"fg:{DIM_HEX}", SHELL_HINT)]
         return Transformation(

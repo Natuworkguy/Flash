@@ -33,6 +33,7 @@ from . import (
     extensions,
     greetings,
     learning,
+    loaders,
     plan,
     providers,
     serif,
@@ -1326,6 +1327,9 @@ def _try_chat(
     states = _load_image_thinking_states() if is_image \
         else _load_thinking_states()
     state = _next_thinking_state(states)
+    # The wait's loaders: the chosen one, or with morph, one after
+    # another, picked as the wait goes on and kept for it.
+    look = loaders.Run()
     word = f"{state['now']}{ELLIPSIS}"
     period = len(word) + 2 * GLIMMER_SPREAD
     stop_event = threading.Event()
@@ -1345,7 +1349,7 @@ def _try_chat(
     def _frame(elapsed: float):
         # Built fresh each frame, with the glyph for the time: a Spinner
         # made anew every frame starts over every frame, and stood still.
-        spinner = Text(f"{loader_frame(elapsed)} ", style=ACCENT)
+        spinner = Text(f"{look.frame(elapsed, can_encode)} ", style=ACCENT)
         spinner.append_text(Text.from_markup(_label(elapsed)))
 
         # Rebuilt each frame rather than captured once: sub-agents
@@ -3865,6 +3869,93 @@ def _web_command(arg: str) -> None:
     ))
 
 
+def _loader_command(arg: str) -> None:
+    """/loader: pick the animation that turns while Flash works, from a
+    list with each one's frames, or name one; /loader morph [on|off] has
+    it turn into another every few seconds."""
+
+    from .models import Model, can_pick, choose
+
+    every = loaders.all_loaders()
+    now = loaders.chosen()
+
+    def preview(loader) -> str:
+        fancy = can_encode("".join(loader.frames))
+        frames = loader.frames if fancy else loader.ascii
+        # Spaces shown as dots, or a frame that moves by them reads as
+        # the same frame over and over.
+        return "  ".join(
+            f.replace(" ", "·") if len(f) > 1 else (f.strip() or "·")
+            for f in frames[:8]
+        )
+
+    word, _, rest = arg.partition(" ")
+    if word.lower() == "morph":
+        rest = rest.strip().lower()
+        if rest in ("", "toggle"):
+            on = not loaders.morphing()
+        elif rest in ("on", "enable", "true", "1"):
+            on = True
+        elif rest in ("off", "disable", "false", "0"):
+            on = False
+        else:
+            warn("Usage: /loader morph [on|off]")
+            return
+        set_config_var(loaders.MORPH_SETTING, "1" if on else "0")
+        console.print(Text(
+            f"Morph on: every {loaders.MORPH_SECONDS:.0f}s the loader "
+            "turns into another, at random." if on else "Morph off.",
+            style=DIM,
+        ))
+        return
+
+    if not arg or arg == "list":
+        rows = [
+            Model(
+                loader.name,
+                (loader.about + (f" (from {loader.source})"
+                                 if loader.source else "")),
+                note=preview(loader)
+                + ("   in use" if loader.id == now else ""),
+            )
+            for loader in every
+        ]
+        if arg == "list" or not can_pick():
+            for row in rows:
+                line = Text("  ")
+                line.append(row.name.ljust(10), style="bold")
+                line.append(f" {row.note}", style=ACCENT)
+                console.print(line)
+            console.print(Text(
+                "  Morph is "
+                + ("on" if loaders.morphing() else "off")
+                + ": /loader morph on|off", style=DIM,
+            ))
+            return
+        start = next(
+            (i for i, loader in enumerate(every) if loader.id == now), 0,
+        )
+        arg = choose(
+            rows, title="Loading animation",
+            unmatched="no loader is called {typed!r}",
+            empty="no loaders", start=start,
+        ) or ""
+        if not arg:
+            return
+
+    found = loaders.find(arg)
+    if found is None:
+        warn(
+            f"No loader is called {arg!r}. /loader lists them: "
+            + ", ".join(loader.id for loader in every) + "."
+        )
+        return
+    set_config_var(loaders.SETTING, found.id)
+    line = Text(f"Loader: {found.name}  ", style=DIM)
+    line.append(preview(found), style=ACCENT)
+    console.print(line)
+
+
 HOST_USAGE = "Usage: /host [<name|url>|list|add <url> [name]|remove <name>]"
 
 
@@ -4879,6 +4970,10 @@ def main() -> None:
                     info.append("\nhost:  ", style=DIM)
                     info.append(Config.host)
                     console.print(info)
+                continue
+
+            if uin == "/loader" or uin.startswith("/loader "):
+                _loader_command(uin[len("/loader"):].strip())
                 continue
 
             if uin == "/host" or uin.startswith("/host "):

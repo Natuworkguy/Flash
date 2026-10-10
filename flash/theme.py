@@ -1,4 +1,4 @@
-"""Shared terminal theme for Flash CLI, styled after Claude Code's CLI.
+"""Shared terminal theme for Flash CLI.
 
 Centralizes the color palette and the "tool call" line format (a bulleted
 header line followed by an indented result) so ai.py and tools.py render
@@ -18,6 +18,11 @@ from rich.control import Control
 from rich.live import Live as _RichLive
 from rich.markdown import Markdown
 from rich.text import Text
+
+from .loaders import BUILTIN as BUILTIN_LOADERS
+from .loaders import Loader
+from .loaders import chosen as chosen_loader
+from .loaders import find as find_loader
 
 ACCENT = "#d97757"
 DIM = "grey62"
@@ -243,20 +248,14 @@ class ScreenConsole(Console):
 console = ScreenConsole()
 
 
-# The loader: a little grid of dots, two wide and four tall, every one
-# lit but the gap running round it, drawn with braille where the
-# terminal can show it and a plain ASCII turn where it cannot.
-LOADER_FRAMES = ("⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷")
-LOADER_FRAMES_ASCII = ("|", "/", "-", "\\")
-LOADER_SECONDS = 0.09
+def loader_frame(elapsed: float, loader: "Optional[Loader]" = None) -> str:
+    """The loader's frame ELAPSED seconds in: LOADER's, or the one the
+    LOADER setting picks, in its own glyphs where the terminal can show
+    them and in ASCII where it cannot."""
 
-
-def loader_frame(elapsed: float) -> str:
-    """The loader's glyph ELAPSED seconds in."""
-
-    frames = LOADER_FRAMES if can_encode(LOADER_FRAMES[0]) \
-        else LOADER_FRAMES_ASCII
-    return frames[int(elapsed / LOADER_SECONDS) % len(frames)]
+    if loader is None:
+        loader = find_loader(chosen_loader()) or BUILTIN_LOADERS[0]
+    return loader.frame(elapsed, can_encode("".join(loader.frames)))
 
 
 def can_encode(text: str) -> bool:

@@ -3873,7 +3873,7 @@ def notify_user(message: str, title: str = "") -> str:
     return "Sent. The user has been notified."
 
 
-# Tool schema expected by Ollama function calling (OpenAI-style).
+# Tool schema expected by Ollama function calling.
 tools: list[dict[str, Any]] = [
     {
         "type": "function",

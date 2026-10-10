@@ -11,10 +11,10 @@ A provider is a program. Flash runs it with one JSON request on stdin
 and reads JSON back from stdout:
 
     {"action": "models"}
-        -> {"models": [{"name": "gpt-5", "capabilities": ["completion",
+        -> {"models": [{"name": "big-model", "capabilities": ["completion",
             "tools", "vision"], "context": 400000}]}
 
-    {"action": "chat", "model": "gpt-5", "messages": [...],
+    {"action": "chat", "model": "big-model", "messages": [...],
      "tools": [...], "options": {...}, "think": true, "stream": false}
         -> {"message": {"role": "assistant", "content": "...",
             "thinking": "...", "tool_calls": [{"function": {"name": "...",

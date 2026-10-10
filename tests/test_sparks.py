@@ -1497,13 +1497,13 @@ class RecordingClient(FakeClient):
 
 
 def test_a_spark_runs_on_its_own_model(model):
-    made = sparks.create("Scout", "Watch the issues.", model="qwen3:8b")
+    made = sparks.create("Scout", "Watch the issues.", model="beta3:8b")
     client = RecordingClient([_reply("Found one.")])
 
     sparks.shift(made.id, client=client)
 
-    assert client.calls[0]["model"] == "qwen3:8b"
-    assert sparks.find(made.id).to_dict()["model_used"] == "qwen3:8b"
+    assert client.calls[0]["model"] == "beta3:8b"
+    assert sparks.find(made.id).to_dict()["model_used"] == "beta3:8b"
 
 
 def test_a_spark_without_one_runs_on_flashs(model):
@@ -1525,7 +1525,7 @@ def test_a_spark_gets_a_new_model(model):
 def test_a_spark_with_a_model_runs_when_flash_has_none(monkeypatch):
     monkeypatch.setattr(sparks, "get_model_system_prompt", lambda h, m: "")
     monkeypatch.setattr(tools, "MODEL_NAME", "")
-    made = sparks.create("Scout", "Watch the issues.", model="qwen3:8b")
+    made = sparks.create("Scout", "Watch the issues.", model="beta3:8b")
 
     report = sparks.shift(made.id, client=RecordingClient([_reply("Hi.")]))
 
@@ -1537,11 +1537,11 @@ def test_make_spark_names_the_model_it_asks_about():
     with capture_tool_output(lambda kind, text, style: None):
         with answer_from(lambda question: asked.append(question) or "y"):
             result = tools.make_spark(
-                "Scout", "Watch the issues.", "daily", model="qwen3:8b",
+                "Scout", "Watch the issues.", "daily", model="beta3:8b",
             )
 
-    assert "on qwen3:8b" in asked[0] and "on qwen3:8b" in result
-    assert sparks.find("scout").model == "qwen3:8b"
+    assert "on beta3:8b" in asked[0] and "on beta3:8b" in result
+    assert sparks.find("scout").model == "beta3:8b"
 
 
 def test_make_spark_takes_flashs_model_by_default():
@@ -1565,18 +1565,18 @@ def test_the_page_makes_and_changes_a_sparks_model():
     session = web.Session()
     made = web.command(session, {
         "name": "spark-create", "arg": "Scout", "goal": "Goal.",
-        "model": "qwen3:8b",
+        "model": "beta3:8b",
     })["spark"]
-    assert made["model"] == "qwen3:8b"
+    assert made["model"] == "beta3:8b"
 
     web.command(session, {
-        "name": "spark-update", "arg": made["id"], "model": "llama3.1",
+        "name": "spark-update", "arg": made["id"], "model": "alpha3.1",
     })
     added = web.command(session, {
         "name": "spark-add", "arg": "Disk Guard", "model": "phi4",
     })["spark"]
 
-    assert sparks.find(made["id"]).model == "llama3.1"
+    assert sparks.find(made["id"]).model == "alpha3.1"
     assert added["model"] == "phi4"
 
 
@@ -2071,8 +2071,8 @@ def test_new_sparks_are_on_flashs_model_until_a_default_is_set():
 
 
 def test_the_default_is_kept_and_flash_takes_it_back():
-    assert sparks.set_default_model("qwen3:8b") == "qwen3:8b"  # nosec B101
-    assert sparks.default_model() == "qwen3:8b"  # nosec B101
+    assert sparks.set_default_model("beta3:8b") == "beta3:8b"  # nosec B101
+    assert sparks.default_model() == "beta3:8b"  # nosec B101
     saved = Path(sparks.ENV_PATH).read_text()
     assert "SPARK_DEFAULT_MODEL=" in saved  # nosec B101
 
@@ -2081,45 +2081,45 @@ def test_the_default_is_kept_and_flash_takes_it_back():
 
 
 def test_new_sparks_are_made_on_the_default_while_it_is_here():
-    sparks.set_default_model("qwen3")
+    sparks.set_default_model("beta3")
 
-    here = {"qwen3:latest", "llama3.1:latest"}
-    made = sparks.model_for_new("llama3.1", here)
+    here = {"beta3:latest", "alpha3.1:latest"}
+    made = sparks.model_for_new("alpha3.1", here)
     # Not known whether it is here: it is used, and Ollama has its say.
-    unknown = sparks.model_for_new("llama3.1", None, look=False)
+    unknown = sparks.model_for_new("alpha3.1", None, look=False)
 
-    assert made == unknown == ("qwen3", "")  # nosec B101
+    assert made == unknown == ("beta3", "")  # nosec B101
 
 
 def test_a_default_not_listed_is_kept_not_switched():
-    sparks.set_default_model("qwen3:8b")
+    sparks.set_default_model("beta3:8b")
 
-    model, note = sparks.model_for_new("llama3.1", {"llama3.1:latest"})
+    model, note = sparks.model_for_new("alpha3.1", {"alpha3.1:latest"})
 
-    assert model == "qwen3:8b"  # nosec B101
+    assert model == "beta3:8b"  # nosec B101
     assert "not in this computer's model list" in note  # nosec B101
 
 
 def test_a_cloud_default_is_never_called_missing():
-    sparks.set_default_model("gpt-oss:120b-cloud")
+    sparks.set_default_model("big:120b-cloud")
 
-    made = sparks.model_for_new("llama3.1", {"llama3.1:latest"})
-    cloud = sparks.is_here("deepseek-v3.1:671b-cloud", set())
+    made = sparks.model_for_new("alpha3.1", {"alpha3.1:latest"})
+    cloud = sparks.is_here("huge:671b-cloud", set())
 
-    assert made == ("gpt-oss:120b-cloud", "")  # nosec B101
+    assert made == ("big:120b-cloud", "")  # nosec B101
     assert cloud is None  # nosec B101
-    assert sparks.is_here("qwen3:8b", set()) is False  # nosec B101
+    assert sparks.is_here("beta3:8b", set()) is False  # nosec B101
 
 
 def test_make_spark_uses_the_default(model, monkeypatch):
     monkeypatch.setattr(tools, "NO_COMMAND_CONFIRMATION", True)
     monkeypatch.setattr(sparks, "models_here", lambda client=None: None)
-    sparks.set_default_model("qwen3:8b")
+    sparks.set_default_model("beta3:8b")
 
     result = tools.make_spark("Scout", "Watch the issues.")
 
-    assert "on qwen3:8b" in result  # nosec B101
-    assert sparks.all_sparks()[0].model == "qwen3:8b"  # nosec B101
+    assert "on beta3:8b" in result  # nosec B101
+    assert sparks.all_sparks()[0].model == "beta3:8b"  # nosec B101
 
 
 def test_make_spark_keeps_a_default_that_is_not_listed(model, monkeypatch):
@@ -2127,12 +2127,12 @@ def test_make_spark_keeps_a_default_that_is_not_listed(model, monkeypatch):
     monkeypatch.setattr(
         sparks, "models_here", lambda client=None: {"test-model:latest"},
     )
-    sparks.set_default_model("qwen3:8b")
+    sparks.set_default_model("beta3:8b")
 
     result = tools.make_spark("Scout", "Watch the issues.")
 
-    assert sparks.all_sparks()[0].model == "qwen3:8b"  # nosec B101
-    assert "Tell the user: qwen3:8b" in result  # nosec B101
+    assert sparks.all_sparks()[0].model == "beta3:8b"  # nosec B101
+    assert "Tell the user: beta3:8b" in result  # nosec B101
 
 
 class FailingClient(FakeClient):

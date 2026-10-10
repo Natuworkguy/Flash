@@ -124,7 +124,7 @@ def _ago(when: Optional[datetime]) -> str:
 
 
 def _tagged(name: str) -> str:
-    """NAME as Ollama stores it: gemma4 -> gemma4:latest.
+    """NAME as Ollama stores it: mymodel -> mymodel:latest.
 
     Only the part after the last slash can carry a tag; the rest may be a
     namespace or a registry host, and a host can hold a port colon.
@@ -134,7 +134,7 @@ def _tagged(name: str) -> str:
 
 
 def full_name(name: str) -> str:
-    """NAME as Ollama lists it, with its tag: llama3.1 is llama3.1:latest.
+    """NAME as Ollama lists it, with its tag: mymodel is mymodel:latest.
     A provider's model is listed by the name its provider gave it."""
 
     name = name.strip()
@@ -177,7 +177,7 @@ def is_installed(client, name: str) -> Optional[bool]:
 
 def _describe(model) -> str:
     """What one model is, out of what the listing already told us:
-    'gemma3, 12.2B, Q4_K_M, pulled 3 days ago'."""
+    'family, 12.2B, Q4_K_M, pulled 3 days ago'."""
 
     details = getattr(model, "details", None)
 

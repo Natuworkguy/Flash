@@ -10,16 +10,16 @@ from flash import ai, showcase, web
 
 
 @pytest.mark.parametrize("host, model, private", [
-    ("http://localhost:11434", "llama3.1", True),
-    ("127.0.0.1:11434", "llama3.1", True),
-    ("http://192.168.1.20:11434", "gemma4", True),
-    ("http://10.0.0.5:11434", "gemma4", True),
-    ("http://studio.local:11434", "gemma4", True),
-    ("", "llama3.1", True),
-    ("https://ollama.example.com", "llama3.1", False),
-    ("http://8.8.8.8:11434", "llama3.1", False),
+    ("http://localhost:11434", "alpha3.1", True),
+    ("127.0.0.1:11434", "alpha3.1", True),
+    ("http://192.168.1.20:11434", "gamma4", True),
+    ("http://10.0.0.5:11434", "gamma4", True),
+    ("http://studio.local:11434", "gamma4", True),
+    ("", "alpha3.1", True),
+    ("https://ollama.example.com", "alpha3.1", False),
+    ("http://8.8.8.8:11434", "alpha3.1", False),
     # Ollama's cloud models run on Ollama's servers, whatever the host.
-    ("http://localhost:11434", "gpt-oss:120b-cloud", False),
+    ("http://localhost:11434", "big:120b-cloud", False),
     ("http://localhost:11434", "kimi-k2:cloud", False),
 ])
 def test_private_means_it_stayed_on_your_machines(host, model, private):
@@ -27,8 +27,8 @@ def test_private_means_it_stayed_on_your_machines(host, model, private):
 
 
 def test_replies_add_up():
-    showcase.record("localhost", "llama3.1", 1000, tools=2)
-    showcase.record("https://ollama.example.com", "llama3.1", 500)
+    showcase.record("localhost", "alpha3.1", 1000, tools=2)
+    showcase.record("https://ollama.example.com", "alpha3.1", 500)
 
     found = showcase.totals()
     assert found["turns"] == 2 and found["tokens"] == 1500
@@ -125,7 +125,7 @@ def test_the_terminal_says_it(monkeypatch):
 
 def test_the_page_gets_the_numbers_and_the_tips(monkeypatch):
     monkeypatch.setattr(ai.Config, "host", "http://localhost:11434")
-    monkeypatch.setattr(ai.Config, "model", "llama3.1")
+    monkeypatch.setattr(ai.Config, "model", "alpha3.1")
 
     status = web.status(ai)
     assert status["tips"] == showcase.web_tips()
