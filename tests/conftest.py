@@ -11,6 +11,7 @@ from flash import (
     mail,
     memory,
     notify,
+    progress_mail,
     repl_input,
     showcase,
     skills,
@@ -72,6 +73,10 @@ def isolated_home(tmp_path_factory, monkeypatch):
     monkeypatch.setattr(sparks, "_told", set())
     # The web UI's saved hosts, projects, and chats.
     monkeypatch.setattr(workspace, "FLASH_DIR", home / ".flash")
+    # Progress emails: off, and their log in the temp home.
+    monkeypatch.setattr(progress_mail, "FLASH_DIR", home / ".flash")
+    for name in [n for n in os.environ if n.startswith("PROGRESS_EMAIL")]:
+        monkeypatch.delenv(name)
     # Voice settings and models too: the developer's own picks, loaded
     # from ~/.flash.env when ai was imported, would otherwise decide
     # which model a test expects. And a setting a test saves lands in

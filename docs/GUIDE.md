@@ -193,6 +193,9 @@ python run.py
 - `/stats`: What Flash has done for you so far, in the terminal and the
   web UI together: replies, tokens, and how much of it ran on a local
   model.
+- `/email [connect|test|inbox|default|progress|disconnect]`: Your email
+  accounts, for Flash and your sparks to read and send from, and
+  [progress emails](#progress-emails).
 - `/image <path> [prompt]`: Send a local image to the model.
 - `/extension [install <source>|remove <name>]`: List, install, or
   remove extensions.
@@ -568,6 +571,40 @@ have looked them over.
 - **Documents and colours.** A spark can write a document, which opens
   in the side panel; and each wears a colour you pick
   (`/sparks colour scout lagoon`, or any `#rrggbb`).
+
+### Progress emails
+
+Flash can email you the milestones of what it is working on, so you can
+follow a long request from your phone, a watch, or another computer:
+
+- **▶ Flash started** when it starts on something,
+- **☐ Plan, 4 steps** and **☑ Step 2/4** as it plans and ticks steps off,
+- **❓ Flash needs you** when it is waiting on your yes or no,
+- **✓ Flash finished** (the first line of its answer, and how long it
+  took), or **✗ Flash stopped** (and why).
+
+Subjects are short, since a small screen shows little more, and every
+email of one request is in one thread. They are sent through the
+account `/email connect` set up, to your own address unless you give
+another, and only for the request you are waiting on: sub-agents and
+sparks working on their own don't send any.
+
+```text
+/email progress on            turn them on
+/email progress to x@y.com    send them somewhere else; "to me" goes back
+/email progress only ask,end  just these: start, plan, ask, end
+/email progress all           every one
+/email progress test          send one now, to see it arrive
+/email progress off
+```
+
+The web UI has the same under Settings, Email, Progress emails. Sent to
+an iCloud address, they reach an Apple Watch's Mail on its own, over
+Wi-Fi or cellular. `only ask,end` is the quiet setting: a message only
+when Flash needs you and when it is done. One that can't be sent (a
+wrong app password, no network) is noted in
+`~/.flash/progress-email.log`, and `/email progress` shows the last
+problem.
 
 ### Image Recognition
 

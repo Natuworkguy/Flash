@@ -1188,6 +1188,11 @@ body.page-projects #dock, body.page-settings #dock, body.page-tool #dock { displ
 .swatch.none svg { width: 14px; height: 14px; }
 .look-rows { display: flex; flex-direction: column; gap: 10px; max-width: 620px; }
 .look-rows .setting-row { padding: 10px 12px 10px 16px; flex-wrap: wrap; row-gap: 10px; }
+.progress-email .field-input { font: 13.5px var(--sans); color: var(--text); background: var(--bg); border: 1px solid var(--border-strong); border-radius: 9px; padding: 7px 10px; width: min(260px, 100%); outline: 0; }
+.progress-email .field-input:focus { border-color: var(--accent); }
+.progress-email select { font: 13.5px var(--sans); color: var(--text); background: var(--bg); border: 1px solid var(--border-strong); border-radius: 9px; padding: 7px 10px; max-width: 260px; outline: 0; }
+.progress-email .buttons { margin-top: 4px; }
+.progress-problem { color: var(--del); margin: 4px 0 0; }
 .look-rows .setting-row .what { flex: 1 1 180px; }
 .look-rows .setting-row .side { max-width: 100%; }
 .seg { display: inline-flex; flex-wrap: wrap; gap: 2px; padding: 3px; border-radius: 11px; background: var(--bg); border: 1px solid var(--border); }
@@ -9317,8 +9322,91 @@ async function drawEmail(body) {
   let e;
   try { e = (await command("email")).email; } catch (error) { showFailure(error); return; }
   if (!body.isConnected) return;
-  body.innerHTML = `<h2 class="settings-section">Email</h2><p class="settings-sub">Connect your email accounts, as many as you use, and Flash and your sparks can look through your inboxes, read what matters, and send email you approve first, every time. Looking never marks anything read, moves it, or deletes it.</p><div class="email-body"></div>`;
+  body.innerHTML = `<h2 class="settings-section">Email</h2><p class="settings-sub">Connect your email accounts, as many as you use, and Flash and your sparks can look through your inboxes, read what matters, and send email you approve first, every time. Looking never marks anything read, moves it, or deletes it.</p><div class="email-body"></div><h2 class="settings-section settings-gap">Progress emails</h2><p class="settings-sub">What Flash is working on, as it happens: when it starts, its plan as it goes, when it needs your yes or no, and when it is done or stopped. Short subjects, one thread for each request, so they read well on a phone or a watch. The same as <code>/email progress</code> in the terminal.</p><div class="progress-email look-rows"></div>`;
   drawEmailAccounts(body.querySelector(".email-body"), e);
+  drawProgressEmail(body.querySelector(".progress-email"));
+}
+
+const PROGRESS_KINDS = [["start", "Started"], ["plan", "Plan steps"], ["ask", "Needs you"], ["end", "Done or stopped"]];
+
+async function drawProgressEmail(host, change = {}) {
+  let p;
+  try { p = (await command("progress-email", "", null, change)).progress_email; }
+  catch (error) { showFailure(error); if (!Object.keys(change).length) return; p = (await command("progress-email")).progress_email; }
+  if (!host.isConnected) return;
+  host.textContent = "";
+  const none = !p.accounts.length;
+
+  const on = el("button", "setting-row", `<span class="what"><b>Email me progress</b><span></span></span><span class="switch" aria-hidden="true"></span>`);
+  on.type = "button";
+  on.setAttribute("role", "switch");
+  on.setAttribute("aria-checked", !!p.on);
+  on.querySelector(".what span").textContent = none
+    ? "Connect an account above first: they are sent from it."
+    : p.on ? `On, to ${p.recipient}.` : "Off.";
+  on.disabled = none && !p.on;
+  on.onclick = () => drawProgressEmail(host, { on: !p.on });
+  host.appendChild(on);
+  if (none) return;
+
+  const to = el("div", "setting-row static", `<span class="what"><b>Send to</b><span>Your own address unless you give another.</span></span><span class="side"><input type="email" class="field-input" spellcheck="false" aria-label="Send progress emails to"></span>`);
+  const input = to.querySelector("input");
+  input.placeholder = p.own || "you@example.com";
+  input.value = p.to;
+  const saveTo = () => { if (input.value.trim() !== p.to) drawProgressEmail(host, { to: input.value.trim() }); };
+  input.onchange = saveTo;
+  input.onkeydown = (ev) => { if (ev.key === "Enter") { ev.preventDefault(); input.blur(); } };
+  host.appendChild(to);
+
+  if (p.accounts.length > 1) {
+    const from = el("div", "setting-row static", `<span class="what"><b>Send from</b><span>Which connected account sends them.</span></span><span class="side"><select aria-label="Send progress emails from"></select></span>`);
+    const select = from.querySelector("select");
+    for (const [value, label] of [["", `Default (${p.own})`], ...p.accounts.map((a) => [a, a])]) {
+      const option = el("option");
+      option.value = value;
+      option.textContent = label;
+      option.selected = value === p.account;
+      select.appendChild(option);
+    }
+    select.onchange = () => drawProgressEmail(host, { account: select.value });
+    host.appendChild(from);
+  }
+
+  const kinds = segRowMulti("Which ones", "A quieter inbox: just Needs you and Done.", PROGRESS_KINDS, p.kinds, (picked) => drawProgressEmail(host, { kinds: picked }));
+  host.appendChild(kinds);
+
+  const actions = el("div", "buttons", "");
+  const test = el("button", "btn small", "Send a test");
+  test.type = "button";
+  test.onclick = async () => {
+    test.disabled = true;
+    try {
+      const r = (await command("progress-email", "", null, { test: true })).progress_email;
+      toast(`Sent to ${r.sent}. It should arrive in a moment.`);
+    } catch (error) { showFailure(error); }
+    test.disabled = false;
+  };
+  actions.appendChild(test);
+  host.appendChild(actions);
+  if (p.problem) host.appendChild(el("p", "settings-sub progress-problem")).textContent = `Last one not sent: ${p.problem}`;
+}
+
+// Like segRow, but any number can be on at once.
+function segRowMulti(label, about, choices, picked, onChange) {
+  const row = el("div", "setting-row static", `<span class="what"><b></b><span></span></span><span class="side"><span class="seg" role="group"></span></span>`);
+  row.querySelector("b").textContent = label;
+  row.querySelector(".what span").textContent = about;
+  const seg = row.querySelector(".seg");
+  seg.setAttribute("aria-label", label);
+  for (const [id, name] of choices) {
+    const b = el("button", picked.includes(id) ? "on" : "");
+    b.type = "button";
+    b.textContent = name;
+    b.setAttribute("aria-pressed", picked.includes(id));
+    b.onclick = () => onChange(picked.includes(id) ? picked.filter((k) => k !== id) : [...picked, id]);
+    seg.appendChild(b);
+  }
+  return row;
 }
 
 // Every account, a card each, with its own test, change and disconnect;

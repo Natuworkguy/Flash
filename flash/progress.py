@@ -1,4 +1,8 @@
-"""A turn's milestones, for extensions that want to follow along.
+"""A turn's milestones, for progress emails and for extensions that
+want to follow along.
+
+Flash's own progress emails (progress_mail.py) are sent from these, and
+an extension can have them too.
 
 An extension asks for them with "events" in its manifest:
 
@@ -53,10 +57,12 @@ def _subscribers(event: str) -> list:
 
 
 def _deliver() -> None:
-    from . import extensions
+    from . import extensions, progress_mail
 
     while True:
         event, payload = _queue.get()
+        if progress_mail.wants(event):
+            progress_mail.handle(payload)
         for extension in _subscribers(event):
             try:
                 subprocess.run(  # nosec B603 -- the user installed it
@@ -73,8 +79,12 @@ def _deliver() -> None:
 def _emit(event: str, **data: Any) -> None:
     global _worker
 
+    from . import progress_mail
+
     current = getattr(_turn, "now", None)
-    if current is None or not _subscribers(event):
+    if current is None or not (
+        progress_mail.wants(event) or _subscribers(event)
+    ):
         return
     payload = {"event": event, **current, "at": time.time(), **data}
     with _worker_lock:
