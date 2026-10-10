@@ -59,6 +59,7 @@ from . import (
     learning,
     loaders,
     memory,
+    progress,
     providers,
     showcase,
     skills,
@@ -1627,6 +1628,9 @@ class Session:
                 chat.queued = False
                 chat.busy = True
                 self.emit(chat, {"type": "busy", "busy": True})
+                # Followed by any extension that asked to be.
+                progress.begin("web", chat.id, chat.title, text)
+                begun = len(chat.log)
                 try:
                     found = (
                         workspace.project(chat.project)
@@ -1637,7 +1641,9 @@ class Session:
                     else:
                         with inside(found.path if found else None):
                             run_turn(self, chat, text, found, files)
+                    progress.end(*_outcome(chat, begun))
                 except Exception as exc:  # noqa: BLE001
+                    progress.failed(f"{exc.__class__.__name__}: {exc}")
                     failed: dict = {
                         "type": "error",
                         "text": f"{exc.__class__.__name__}: {exc}",
@@ -1646,6 +1652,7 @@ class Session:
                         failed["retry"] = True
                     self.emit(chat, failed)
                 finally:
+                    progress.end(False)
                     self.asked.pop(chat.id, None)
                     self.started.pop(chat.id, None)
                     with self._lock:
@@ -1667,6 +1674,23 @@ class Session:
 
 
 # --- A turn --------------------------------------------------------------
+
+
+def _outcome(chat: Chat, begun: int) -> tuple[bool, str, str]:
+    """How the turn that began at BEGUN in CHAT's log went, for
+    progress.end: done, its reply's first words, or what stopped it."""
+
+    added = chat.log[begun:]
+    errors = [e.get("text", "") for e in added if e["type"] == "error"]
+    if errors:
+        return False, "", errors[-1]
+    if chat.stop.is_set():
+        return False, "", "Stopped."
+    replies = [
+        e.get("text", "") for e in added
+        if e["type"] == "assistant" and (e.get("text") or "").strip()
+    ]
+    return True, replies[-1] if replies else "", ""
 
 
 @dataclass

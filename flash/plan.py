@@ -10,6 +10,7 @@ its next turn can see which step it is on without a second tool call.
 
 from rich.text import Text
 
+from . import progress
 from .theme import (
     ACCENT,
     BRANCH,
@@ -60,6 +61,7 @@ def set_steps(items: list[str]) -> None:
     for text in items[:MAX_STEPS]:
         _steps.append({"text": text[:MAX_STEP_LEN], "status": TODO})
     _advance()
+    progress.plan(steps(), "set")
 
 
 def mark_done(index: int) -> str:
@@ -75,6 +77,7 @@ def mark_done(index: int) -> str:
 
     _steps[index - 1]["status"] = DONE
     _advance()
+    progress.plan(steps(), "done", index)
     return ""
 
 

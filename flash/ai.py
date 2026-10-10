@@ -35,6 +35,7 @@ from . import (
     learning,
     loaders,
     plan,
+    progress,
     providers,
     serif,
     showcase,
@@ -4148,6 +4149,7 @@ def _host_command(arg: str) -> None:
 
 
 def _print_backend_error(detail: str) -> None:
+    progress.failed(detail)
     show_error(f"Ollama backend error: {detail}")
 
 
@@ -5376,6 +5378,8 @@ def main() -> None:
             learning.cancel()
 
             turn = Turn()
+            # Followed by any extension that asked to be.
+            progress.begin("terminal", title=uin, request=uin)
             offered = turn_tools()
 
             def bar() -> Text:
@@ -5429,6 +5433,7 @@ def main() -> None:
                 _note_learning()
                 _note_sparks()
                 notify_reply_ready()
+                progress.end(True, summary=final)
                 listening_on = _speak_reply(final, heard)
                 messages.append(_message("assistant", final))
                 _fit_and_compact(console, client, messages)
@@ -5539,6 +5544,7 @@ def main() -> None:
             _note_learning()
             _note_sparks()
             notify_reply_ready()
+            progress.end(True, summary=followup)
             listening_on = _speak_reply(followup, heard)
             messages.extend(_worth_keeping(tool_messages, keep_from))
             messages.append(_message("assistant", followup))
@@ -5553,6 +5559,9 @@ def main() -> None:
             continue
         finally:
             end_dock(dock, stopped)
+            # A turn that got here without finishing failed, or was
+            # stopped; nothing, when there was no turn.
+            progress.end(False, error="Stopped." if stopped else "")
 
 
 if __name__ == "__main__":

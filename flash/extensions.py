@@ -126,6 +126,16 @@ class Tool:
 
 
 @dataclass
+class Events:
+    """A program told of the turn's milestones (progress.py has them),
+    one JSON event on stdin at a time."""
+
+    run: list[str]
+    on: tuple[str, ...]
+    timeout: int = DEFAULT_TIMEOUT
+
+
+@dataclass
 class Provider:
     """Models from somewhere other than Ollama, answered by a program:
     asked for its models, and to chat, with JSON on stdin (providers.py
@@ -153,6 +163,7 @@ class Extension:
     providers: list[Provider] = field(default_factory=list)
     themes: list = field(default_factory=list)
     loaders: list = field(default_factory=list)
+    events: Optional[Events] = None
 
     def contents(self) -> list[str]:
         """What installing this adds, one line per kind of thing."""
@@ -189,6 +200,8 @@ class Extension:
                 "loading animations: "
                 + ", ".join(loader.name for loader in self.loaders)
             )
+        if self.events is not None:
+            lines.append("follows turns: " + ", ".join(self.events.on))
 
         return lines
 
@@ -371,6 +384,28 @@ def _provider(entry: Any, root: Path, index: int) -> Provider:
     )
 
 
+def _events(entry: Any, root: Path) -> Events:
+    from .progress import EVENTS
+
+    where = '"events"'
+    if not isinstance(entry, dict):
+        raise ExtensionError(f"{where} has to be an object")
+    wanted = entry.get("on", list(EVENTS))
+    if not isinstance(wanted, list) or not wanted or not all(
+        isinstance(name, str) and name in EVENTS for name in wanted
+    ):
+        raise ExtensionError(
+            f'{where}: "on" has to list some of {", ".join(EVENTS)}'
+        )
+    timeout = DEFAULT_TIMEOUT
+    if entry.get("timeout") is not None:
+        timeout = _timeout(entry.get("timeout"), where)
+    return Events(
+        run=_argv(entry.get("run"), root, where),
+        on=tuple(dict.fromkeys(wanted)), timeout=timeout,
+    )
+
+
 def _entries(manifest: dict, key: str) -> list:
     value = manifest.get(key, [])
     if not isinstance(value, list):
@@ -491,11 +526,16 @@ def load(root: Path) -> Extension:
     _unique([t.id for t in themes], "theme")
     _unique([loader.id for loader in loaders], "loader")
 
+    events = (
+        _events(manifest["events"], root)
+        if manifest.get("events") is not None else None
+    )
+
     if not (commands or tools or prompt or backgrounds or providers
-            or themes or loaders):
+            or themes or loaders or events):
         raise ExtensionError(
             f"{MANIFEST} declares nothing: no commands, tools, prompt, "
-            "backgrounds, providers, themes, or loaders"
+            "backgrounds, providers, themes, loaders, or events"
         )
 
     try:
@@ -516,6 +556,7 @@ def load(root: Path) -> Extension:
         providers=providers,
         themes=themes,
         loaders=loaders,
+        events=events,
     )
 
 
@@ -720,6 +761,12 @@ def argv(extension: Extension, run: list[str]) -> list[str]:
 def environment(extension: Extension) -> dict[str, str]:
     env = dict(os.environ)
     env["FLASH_EXTENSION_DIR"] = str(extension.path)
+    # Run on Flash's own Python, a Python program can import flash too,
+    # and use what it has: its email account, say.
+    here = str(Path(__file__).resolve().parent.parent)
+    env["PYTHONPATH"] = os.pathsep.join(
+        part for part in (here, env.get("PYTHONPATH", "")) if part
+    )
     return env
 
 
