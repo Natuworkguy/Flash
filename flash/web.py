@@ -1320,6 +1320,59 @@ class Session:
         self.emit(chat, event)
         self.started[chat.id] = len(chat.log) - 1
 
+    # Side questions ------------------------------------------------
+
+    def btw(self, chat: Chat, question: str) -> str:
+        """Answer QUESTION on the side, from what CHAT holds, without
+        tools and without joining the conversation; a turn running in
+        it carries on. The answer streams to the page as "btw" events,
+        none of them kept in the chat."""
+
+        from . import ai  # deferred: ai imports half of Flash
+        from . import btw as side
+
+        question = question.strip()
+        if not question:
+            raise ValueError(side.USAGE)
+        spark = sparks.find(chat.spark) if chat.spark else None
+        model = (
+            sparks.model_of(spark, ai.Config.model or "") if spark
+            else ai.Config.model
+        )
+        if not model:
+            raise ValueError("No model is set. Pick one with Alt+M.")
+        asked_id = uuid.uuid4().hex[:8]
+        working_on = ""
+        if chat.busy or chat.queued:
+            working_on = next(
+                (e.get("text", "") for e in reversed(chat.log)
+                 if e["type"] == "user"),
+                "",
+            )
+        messages = side.context(
+            list(chat.messages), question, working_on, chat.partial,
+        )
+
+        def say(**event: Any) -> None:
+            self.hub.publish({
+                "type": "btw", "chat": chat.id, "id": asked_id, **event,
+            })
+
+        def answer() -> None:
+            try:
+                side.ask(
+                    ai._client(), model, messages, ai._chat_options(),
+                    on_text=lambda piece: say(text=piece),
+                )
+            except Exception as exc:  # noqa: BLE001
+                say(done=True, error=f"{exc.__class__.__name__}: {exc}")
+                return
+            say(done=True)
+
+        say(question=question)
+        threading.Thread(target=answer, daemon=True).start()
+        return asked_id
+
     # Editing -------------------------------------------------------
 
     def _cut(self, chat: Chat, at: int) -> int:
@@ -3787,6 +3840,16 @@ class Handler(BaseHTTPRequestHandler):
                 heard=bool(body.get("voice")),
             )
             return {"chat": chat.id, **sent}
+
+        if path == "/api/btw":
+            chat_id = str(body.get("chat") or "")
+            chat = (
+                session.chat(chat_id) if chat_id else session.new_chat()
+            )
+            return {
+                "chat": chat.id,
+                "id": session.btw(chat, str(body.get("text", ""))),
+            }
 
         if path == "/api/upload":
             try:

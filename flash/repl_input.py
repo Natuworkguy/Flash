@@ -54,6 +54,7 @@ from .theme import (
 # Single source of truth for both the completion dropdown and /help.
 COMMANDS = [
     ("/model", "pick from the models here, or /model <name> to switch"),
+    ("/btw", "a side question, even while Flash works, without interrupting"),
     ("/host", "switch Ollama server (/host <name|url>, add, remove, list)"),
     ("/loader", "pick the animation that turns while Flash works"),
     ("/auto", "toggle autonomous command mode (/auto on|off)"),
@@ -1152,6 +1153,9 @@ def read_line(
 
 STEER = "steer"
 QUEUE = "queue"
+# A side question: answered on the side at once, never handed to the
+# turn or run after it.
+BTW = "btw"
 
 # What the dock's prompt returns when it was told to step aside.
 _ASIDE = "\x00aside"
@@ -1187,6 +1191,10 @@ def route(result) -> Optional[tuple[str, str]]:
     mode, text = result if isinstance(result, tuple) else (STEER, result)
     if not text.strip():
         return None
+    from .btw import question_of  # deferred: wanted once a line is sent
+
+    if question_of(text) is not None:
+        return BTW, text
     if text.lstrip().startswith("/") or is_shell_line(text):
         mode = QUEUE
     return mode, text
@@ -1206,6 +1214,7 @@ class Dock:
         status: Callable[[], Optional[str]],
         health: Callable[[], str],
         on_key: Optional[Callable[[str], None]] = None,
+        on_btw: Optional[Callable[[str], None]] = None,
     ) -> None:
         import threading
 
@@ -1213,6 +1222,7 @@ class Dock:
         self.status = status
         self.health = health
         self.on_key = on_key
+        self.on_btw = on_btw
         self.sent: list[tuple[str, str]] = []
         self._loader = ""
         self._cv = threading.Condition()
@@ -1447,6 +1457,8 @@ class Dock:
                     self._app = None
                     self._cv.notify_all()
             sent = route(result)
-            if sent is not None:
+            if sent is not None and sent[0] == BTW and self.on_btw:
+                self.on_btw(sent[1])
+            elif sent is not None:
                 with self._cv:
                     self.sent.append(sent)

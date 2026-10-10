@@ -43,6 +43,7 @@ from . import (
     systemone,
     terminal,
 )
+from .btw import question_of as btw_question
 from .cli import parse_args
 from .dashes import undash
 from .envfile import set_env_var, unset_env_var
@@ -86,6 +87,7 @@ from .sysprompt import (
 from .theme import (
     ACCENT,
     ACCENT_ANSI,
+    BRANCH,
     BULLET,
     CHEVRON,
     CURSOR,
@@ -3836,6 +3838,36 @@ def _handle_extension_flags(args) -> bool:
     return True
 
 
+def _btw(question: str, history: list, working_on: str = "") -> None:
+    """Answer a side question from the conversation so far, with no
+    tools, and show it apart from the conversation, which it never
+    joins. Run on a thread of its own while a turn is going."""
+
+    from . import btw
+
+    if not question:
+        warn(btw.USAGE)
+        return
+    if not Config.model:
+        warn("No model is set. Pick one with /model.")
+        return
+    asked = Text(f"  {BRANCH} btw ", style=f"bold {ACCENT}")
+    asked.append(question, style=DIM)
+    console.print(asked)
+    try:
+        answer = btw.ask(
+            _client(), Config.model,
+            btw.context(history, question, working_on), _chat_options(),
+        )
+    except Exception as exc:  # noqa: BLE001
+        warn(f"  The side question went unanswered: {exc}")
+        return
+    console.print(Panel(
+        Markdown(answer or "(no answer)"), border_style=DIM,
+        title=Text("btw", style=DIM), title_align="left", padding=(0, 1),
+    ))
+
+
 def _web_command(arg: str) -> None:
     """/web, /web lan, /web stop: the browser UI beside this session."""
 
@@ -4764,6 +4796,16 @@ def main() -> None:
         elif key == EXPAND:
             expand_collapsed()
 
+    def dock_btw(line: str) -> None:
+        """A /btw sent mid-turn: answered on the side, on a thread of its
+        own, while the turn carries on."""
+
+        threading.Thread(
+            target=_btw,
+            args=(btw_question(line) or "", list(messages), uin),
+            daemon=True,
+        ).start()
+
     def start_dock(heard: bool) -> Optional[Dock]:
         """The input box and status bar, kept up while the turn runs."""
 
@@ -4774,6 +4816,7 @@ def main() -> None:
             status=lambda: _status_text(messages),
             health=lambda: _backend_health,
             on_key=dock_key,
+            on_btw=dock_btw,
         )
         dock.start()
         return dock
@@ -4970,6 +5013,11 @@ def main() -> None:
                     info.append("\nhost:  ", style=DIM)
                     info.append(Config.host)
                     console.print(info)
+                continue
+
+            asked_aside = btw_question(uin)
+            if asked_aside is not None:
+                _btw(asked_aside, messages)
                 continue
 
             if uin == "/loader" or uin.startswith("/loader "):
