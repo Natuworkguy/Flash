@@ -105,7 +105,7 @@ HTML_SANDBOX = "sandbox allow-scripts allow-forms allow-popups allow-modals"
 # opens whatever the address names: a chat, a project, a settings tab.
 PAGE_PATHS = re.compile(
     r"^/(?:c/[0-9a-f]{8}|p/[0-9a-f]{8}|projects|skills|sparks|extensions"
-    r"|settings(?:/(?:general|usage|memory|security))?)?/?$"
+    r"|settings(?:/(?:general|usage|memory|email|security))?)?/?$"
 )
 
 STATIC = {"orbit.woff2": "font/woff2", "logo-icon.svg": "image/svg+xml"}
