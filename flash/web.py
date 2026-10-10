@@ -3347,6 +3347,9 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
         learning.refresh()
         return {"entries": memory.list_memory(), "text": text}
 
+    if name == "progress-email":
+        return {"progress_email": _progress_email(ai, body)}
+
     if name.startswith("email"):
         return _email_command(name, body)
 
@@ -3362,6 +3365,50 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
         return context_use(ai, session.chat(chat_id))
 
     raise ValueError(f"unknown command {name!r}")
+
+
+def _progress_email(ai: Any, body: dict) -> dict:
+    """Settings > Email > Progress emails: change what is in BODY (on,
+    to, account, kinds, or test), then say how they are set up."""
+
+    from . import mail
+    from . import progress_mail as pm
+
+    sent = ""
+    if "on" in body:
+        ai.set_config_var(pm.SETTING, "1" if body["on"] else "0")
+    if "to" in body:
+        to = str(body["to"] or "").strip()
+        if to and ("@" not in to or " " in to):
+            raise ValueError("That isn't one email address.")
+        if to:
+            ai.set_config_var(pm.TO_SETTING, to)
+        else:
+            ai.unset_config_var(pm.TO_SETTING)
+    if "account" in body:
+        account = str(body["account"] or "").strip()
+        if account and account.lower() not in (
+            a.lower() for a in mail.addresses()
+        ):
+            raise ValueError(f"{account} is not a connected account.")
+        if account:
+            ai.set_config_var(pm.FROM_SETTING, account)
+        else:
+            ai.unset_config_var(pm.FROM_SETTING)
+    if "kinds" in body:
+        kinds = [k for k in pm.KINDS if k in (body["kinds"] or [])]
+        ai.set_config_var(pm.KINDS_SETTING, ",".join(kinds))
+    if body.get("test"):
+        try:
+            sent = pm.test()
+        except (mail.MailError, RuntimeError) as exc:
+            raise ValueError(f"Not sent: {exc}") from None
+    now = pm.settings()
+    return {
+        **now, "recipient": pm.recipient(now), "own": mail.default_address(),
+        "accounts": mail.addresses(), "about": pm.ABOUT,
+        "problem": pm.last_problem(), "sent": sent,
+    }
 
 
 def _email_command(name: str, body: dict) -> dict:

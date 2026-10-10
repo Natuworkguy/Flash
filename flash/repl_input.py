@@ -70,7 +70,7 @@ COMMANDS = [
     ("/plan", "show the checklist the model is working through"),
     ("/agents", "watch sub-agents work live (/agents <id> for one)"),
     ("/sparks", "agents that keep working on a goal (new, chat <name>)"),
-    ("/email", "your email accounts (connect, test, inbox, disconnect)"),
+    ("/email", "your email (connect, test, inbox, progress, disconnect)"),
     ("/hook", "let Flash see what you run in VS Code's terminal"),
     ("/clear", "clear saved context"),
     ("/undo", "take back the file changes from the last turn"),

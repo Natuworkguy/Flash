@@ -2060,6 +2060,119 @@ def _ask_line(question: str) -> str:
     return answer.strip()
 
 
+PROGRESS_EMAIL_USAGE = (
+    "Usage: /email progress [on|off|to <address>|to me|from <account>|"
+    "only start,plan,ask,end|all|test]"
+)
+
+
+def _progress_email_command(arg: str) -> None:
+    """/email progress: what Flash is working on, its milestones, sent to
+    your email as they happen."""
+
+    from . import mail
+    from . import progress_mail as pm
+
+    word, _, rest = arg.partition(" ")
+    word, rest = word.lower(), rest.strip()
+    now = pm.settings()
+
+    if word in ("", "status"):
+        state = "on" if now["on"] else "off"
+        to = pm.recipient(now)
+        line = Text(f"  Progress emails are {state}", style=DIM)
+        if to:
+            line.append(f", to {to}", style=DIM)
+            if not now["to"]:
+                line.append(" (your own)", style=DIM)
+        sender = now["account"] or mail.default_address()
+        if sender:
+            line.append(f", from {sender}", style=DIM)
+        line.append(".", style=DIM)
+        console.print(line)
+        for kind, about in pm.ABOUT.items():
+            mark = Text(
+                "  ✓ " if kind in now["kinds"] else "  · ",
+                style=ACCENT if kind in now["kinds"] else DIM,
+            )
+            mark.append(f"{kind:<6}", style="bold")
+            mark.append(f" {about}", style=DIM)
+            console.print(mark)
+        if not mail.configured():
+            warn(f"  {mail.NOT_SET_UP}")
+        problem = pm.last_problem()
+        if problem:
+            warn(f"  Last one not sent: {problem}")
+        console.print(Text(f"  {PROGRESS_EMAIL_USAGE}", style=DIM))
+        return
+
+    if word in ("on", "off"):
+        set_config_var(pm.SETTING, "1" if word == "on" else "0")
+        if word == "on" and not pm.recipient():
+            warn(f"  On, but there is nowhere to send them: "
+                 f"{mail.NOT_SET_UP}")
+            return
+        console.print(Text(
+            f"  Progress emails on, to {pm.recipient()}. /email progress "
+            "test sends one." if word == "on" else "  Progress emails off.",
+            style=DIM,
+        ))
+        return
+    if word == "to":
+        if rest.lower() in ("me", "default", ""):
+            unset_config_var(pm.TO_SETTING)
+            console.print(Text(
+                f"  They go to your own address, {pm.recipient() or '?'}.",
+                style=DIM,
+            ))
+            return
+        if "@" not in rest or " " in rest:
+            warn("  Give one email address: /email progress to you@x.com")
+            return
+        set_config_var(pm.TO_SETTING, rest)
+        console.print(Text(f"  They go to {rest}.", style=DIM))
+        return
+    if word == "from":
+        if rest.lower() in ("", "default"):
+            unset_config_var(pm.FROM_SETTING)
+            console.print(Text(
+                "  Sent from your default account.", style=DIM,
+            ))
+            return
+        if rest.lower() not in (a.lower() for a in mail.addresses()):
+            warn(f"  {rest} is not a connected account. /email lists them.")
+            return
+        set_config_var(pm.FROM_SETTING, rest)
+        console.print(Text(f"  Sent from {rest}.", style=DIM))
+        return
+    if word in ("all", "only"):
+        picked = list(pm.KINDS) if word == "all" else [
+            k.strip().lower() for k in rest.replace(" ", ",").split(",")
+            if k.strip()
+        ]
+        if not picked or any(k not in pm.KINDS for k in picked):
+            warn("  Pick from " + ", ".join(pm.KINDS)
+                 + ", like /email progress only ask,end")
+            return
+        kinds = [k for k in pm.KINDS if k in picked]
+        set_config_var(pm.KINDS_SETTING, ",".join(kinds))
+        console.print(Text(
+            "  Emailing: " + ", ".join(kinds) + ".", style=DIM,
+        ))
+        return
+    if word == "test":
+        try:
+            sent = pm.test()
+        except (mail.MailError, RuntimeError) as exc:
+            warn(f"  Not sent: {exc}")
+            return
+        console.print(Text(
+            f"  Sent to {sent}. It should arrive in a moment.", style=DIM,
+        ))
+        return
+    warn(f"  {PROGRESS_EMAIL_USAGE}")
+
+
 def _email_command(arg: str) -> None:
     """/email: connect the user's email accounts, test them, look, or
     disconnect one."""
@@ -2101,6 +2214,9 @@ def _email_command(arg: str) -> None:
             return
         if action in ("connect", "add", "setup", "set"):
             _email_connect()
+            return
+        if action == "progress":
+            _progress_email_command(which)
             return
         if action == "test":
             for address in [which] if which else mail.addresses():

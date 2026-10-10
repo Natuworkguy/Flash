@@ -55,6 +55,10 @@ Requirements:
 | `SYSTEM_ONE_MODEL` | No | unset | - | The model System One asks: any model on the server whose capabilities include `decision`, such as `nimble`. Unset, System One stays off until one is picked; `/systemone on` picks the first such model it finds. |
 | `WEB_REMEMBER_BROWSERS` | No | `0` | - | `1` keeps browsers signed in to the web UI across restarts of Flash, so after opening the link once a browser opens Flash at its plain address. Usually set under Settings, Security. |
 | `FLASH_NO_DOCK` | No | unset | - | `1` takes the message box and status bar down while Flash works, as it was before you could steer or queue mid-turn. |
+| `PROGRESS_EMAIL` | No | `0` | - | `1` emails you a request's milestones as it goes (see the guide's Progress emails). Set with `/email progress on` or under Settings, Email. |
+| `PROGRESS_EMAIL_TO` | No | your default address | - | Where progress emails go. |
+| `PROGRESS_EMAIL_FROM` | No | your default account | - | Which connected account sends them. |
+| `PROGRESS_EMAIL_KINDS` | No | `start,plan,ask,end` | - | Which milestones are emailed. |
 | `SHOW_TIPS` | No | `1` | - | While the model is working, a one-line tip about a feature under the spinner (under the message box in the web UI), a new one every 30 seconds. `0` turns them off. |
 | `SHOW_STATS` | No | `1` | - | Prints a dim line under each reply with the tokens the turn used, how long it took, the generation rate, and how full the context got. `0` hides it. |
 | `VOICE` | No | `0` | - | `1` turns voice mode on at startup: press Enter on an empty prompt to speak, and replies are read aloud. Usually set with `/voice on` rather than by hand. |
