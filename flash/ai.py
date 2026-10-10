@@ -2481,6 +2481,19 @@ def _new_spark() -> None:
         "reports back.", style=DIM,
     ))
     name = _ask_line("Name it:")
+    # Said as soon as the name is in, not after every other question:
+    # a handle is one spark's only.
+    while name:
+        taken = next(
+            (s for s in sparks.all_sparks()
+             if s.handle == sparks.handle_of(name)), None,
+        )
+        if taken is None:
+            break
+        warn(
+            f"  {taken.name} already has {taken.handle}. Pick another name."
+        )
+        name = _ask_line("Name it:")
     goal = _ask_line("What should it keep doing?") if name else ""
     if not name or not goal:
         console.print(Text("  No spark made.", style=DIM))
