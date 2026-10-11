@@ -128,6 +128,18 @@ def _sparks() -> list[tuple[str, ...]]:
     ])
 
 
+def mentionable() -> list[tuple[str, str, str, str]]:
+    """Each spark, for an @ mention: its bare handle, its name, its job
+    title and its colour."""
+
+    from . import sparks  # deferred: only once someone types @
+
+    return _cached("mentionable", lambda: [
+        (_spark_key(s), s.name, s.title, s.colour)
+        for s in sparks.all_sparks()
+    ])
+
+
 def _teams() -> list[tuple[str, str]]:
     from . import sparks
 

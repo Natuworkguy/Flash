@@ -152,6 +152,43 @@ def _mention_before(text: str) -> Optional[str]:
     return text[at + 1:]
 
 
+def _mention_sparks(
+    mention: str, files: list[Completion],
+) -> list[Completion]:
+    """The sparks an @ mention could mean, below the files, each named in
+    its own colour, with a rule between the two when there are both.
+
+    A path (a slash, a quote) is never a spark, so those offer none.
+    """
+
+    if "/" in mention or '"' in mention or "'" in mention:
+        return []
+    typed = mention.lower()
+    found = [
+        Completion(
+            f"@{key} ",
+            start_position=-len(mention) - 1,
+            display=[(f"fg:{colour}", name)],
+            display_meta=title or f"@{key}",
+        )
+        for key, name, title, colour in sparks_completion.mentionable()
+        if key.startswith(typed) or name.lower().startswith(typed)
+    ]
+    if not found or not files:
+        return found
+
+    # Picking the rule types nothing; it is as wide as the column.
+    wide = max(
+        fragment_list_width(to_formatted_text(c.display))
+        for c in files + found
+    )
+    rule = Completion(
+        "", start_position=0,
+        display=[(f"fg:{DIM_HEX}", "─" * max(wide, 8))],
+    )
+    return [rule, *found]
+
+
 def _parse_path_arg(
     remainder: str,
 ) -> Optional[tuple[str, bool]]:
@@ -350,6 +387,7 @@ class SlashCommandCompleter(Completer):
             sub_document = Document(
                 literal_path, cursor_position=len(literal_path)
             )
+            files = []
             for completion in _mention_completer(
                 literal_path
             ).get_completions(sub_document, complete_event):
@@ -358,17 +396,19 @@ class SlashCommandCompleter(Completer):
                 # A path with a space in it has to be quoted whole, so
                 # the mention is replaced rather than appended to.
                 if " " in whole and not in_quote:
-                    yield Completion(
+                    files.append(Completion(
                         f'"{whole}"',
                         start_position=-len(mention),
                         display=completion.display,
-                    )
+                    ))
                 else:
-                    yield Completion(
+                    files.append(Completion(
                         completion.text,
                         start_position=0,
                         display=completion.display,
-                    )
+                    ))
+            yield from files
+            yield from _mention_sparks(mention, files)
             return
 
         if not text.startswith("/") or " " in text:
