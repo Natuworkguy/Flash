@@ -21,8 +21,11 @@ from typing import Optional
 # A gap left to be filled in: "[insert the Q3 numbers here]", "[add a
 # summary]", "[fill in the date]". Square brackets, one line, starting
 # with what to do. A Markdown link, "[Add to calendar](...)", is not one.
+# One typed in the page's editor is saved with its brackets escaped,
+# "\[fill in the date\]", and is the same gap.
 PLACEHOLDER_RE = re.compile(
-    r"\[(?:insert|add|put|write|fill in|fill)\b[^\[\]\n]{0,200}\](?!\()",
+    r"\\?\[(?:insert|add|put|write|fill in|fill)\b[^\[\]\n]{0,200}\]"
+    r"(?!\()",
     re.IGNORECASE,
 )
 

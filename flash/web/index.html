@@ -4587,7 +4587,10 @@ async function sendComments(doc) {
 // the same question the chat asks. A gap left to fill, "[insert the
 // numbers here]", is marked, and Flash fills it in when asked.
 
-const SLOT_RE = /\[(?:insert|add|put|write|fill in|fill)\b[^[\]\n]{0,200}\](?!\()/gi;
+// One typed in the editor is saved with its brackets escaped, "\[...\]".
+const SLOT_RE = /\\?\[(?:insert|add|put|write|fill in|fill)\b[^[\]\n]{0,200}\](?!\()/gi;
+// As the page shows it: without the escapes.
+const slotShown = (slot) => slot.replace(/\\([[\]])/g, "$1");
 
 // Each gap in the file's text: what it says, which of its kind it is,
 // and its line.
@@ -4602,7 +4605,7 @@ function docSlots(text) {
 
 function markSlots(doc, shown = doc.text) {
   const article = doc.body.querySelector(".doc");
-  doc.slots = docSlots(shown).map((x) => ({ ...x, range: article ? findQuote(article, x.slot, x.nth) : null }));
+  doc.slots = docSlots(shown).map((x) => ({ ...x, range: article ? findQuote(article, slotShown(x.slot), x.nth) : null }));
   if (window.CSS && CSS.highlights) {
     const ranges = doc.slots.map((x) => x.range).filter(Boolean);
     if (ranges.length && !doc.editing) CSS.highlights.set("doc-slot", new Highlight(...ranges));
@@ -4626,7 +4629,7 @@ function offerFill(doc, slot) {
   dropCommentUi();
   if (!doc.entry.path) return;
   const box = el("div", "doc-comment-box note-pop", `<div class="who"><span class="dot"></span>Placeholder</div><p></p><div class="row"><span class="hint"></span><button type="button" class="btn small primary with-icon" data-fill>${icon("spark")}<span>Fill in</span></button></div>`);
-  box.querySelector("p").textContent = slot.slot;
+  box.querySelector("p").textContent = slotShown(slot.slot);
   const r = slot.range.getBoundingClientRect();
   placeFloat(box, r);
   document.body.appendChild(box);
