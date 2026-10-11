@@ -1623,9 +1623,10 @@ class TestShownFiles:
         )
         assert request.last.getheader("X-Content-Type-Options") == "nosniff"
 
-    def test_an_edit_saves_to_the_file_and_is_told_next_turn(
+    def test_a_quiet_save_writes_the_file_and_is_told_next_turn(
         self, tmp_path,
     ):
+        # Saved with comments: those are the message, so it wakes nothing.
         doc = tmp_path / "plan.md"
         doc.write_text("# Plan")
         kept = web.workspace.keep_file(str(doc))
@@ -1635,7 +1636,7 @@ class TestShownFiles:
 
         saved = web.command(session, {
             "name": "document-save", "arg": kept["id"], "chat": chat.id,
-            "text": "# Plan\n\nMine now.",
+            "text": "# Plan\n\nMine now.", "quiet": True,
         })
         run(session, chat, "what changed?")
 
