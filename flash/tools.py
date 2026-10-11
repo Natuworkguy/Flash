@@ -35,6 +35,7 @@ from . import (
     editor,
     extensions,
     learning,
+    livedocs,
     mail,
     midi,
     model3d,
@@ -893,31 +894,14 @@ def write_tool(path: str, content: str, append: Any = False) -> str:
     tool_result(summary)
     tool_diff(preview, more=omitted)
 
-    if not NO_COMMAND_CONFIRMATION:
-        if (preview or not existed) and editor.show_diff(
-            old_text, new_text, file_path.name, SCRATCH_DIR
-        ):
-            tool_result("Opened side by side in VS Code")
-
-        notify_needs_input()
-
-        prompt = Text(f"  {BRANCH}  ", style=DIM)
-        prompt.append(
-            "Append to this file? " if adding else "Write this file? ",
-            style=DIM,
-        )
-        prompt.append("y", style=f"bold {ACCENT}")
-        prompt.append("/n ", style=DIM)
-        console.print(prompt, end="")
-
-        try:
-            answer = typed()
-        finally:
-            _close_diff()
-
-        if answer != "y":
-            tool_result("Write blocked by user", style=WARN)
-            return "Write blocked by user"
+    refused = _ask_change(
+        file_path, old_text, new_text,
+        "Append to this file?" if adding else "Write this file?",
+        blocked="Write blocked by user",
+        side_by_side=bool(preview or not existed),
+    )
+    if refused is not None:
+        return refused
 
     checkpoint.record(file_path)
 
@@ -932,6 +916,7 @@ def write_tool(path: str, content: str, append: Any = False) -> str:
         result = f"Error: could not write {file_path}: {exc}"
         tool_result(result, style=ERROR)
         return result
+    livedocs.changed(file_path, new_text)
 
     written = len(content.splitlines())
 
@@ -997,6 +982,19 @@ def _confirm_change(
         f"{removals} removal{plural(removals)}"
     )
     tool_diff(preview, more=omitted)
+    return _ask_change(file_path, old_text, new_text, question)
+
+
+def _ask_change(
+    file_path: Path,
+    old_text: str,
+    new_text: str,
+    question: str,
+    blocked: str = "Edit blocked by user",
+    side_by_side: bool = True,
+) -> Optional[str]:
+    """Ask whether the change shown may go in. None means go ahead;
+    otherwise BLOCKED, for the model."""
 
     if NO_COMMAND_CONFIRMATION:
         return None
@@ -1004,15 +1002,20 @@ def _confirm_change(
     notify_needs_input()
 
     # Asked of the browser when the web UI is running this turn, where
-    # the diff is already on screen above the question.
+    # the diff is already on screen above the question, and the change
+    # in the document itself when it is open in the side panel.
+    livedocs.propose(file_path, new_text)
     answer = remote_answer(f"{question}\n{file_path}")
+    livedocs.take_proposal()
     if answer is not None:
         if answer != "y":
-            tool_result("Edit blocked by user", style=WARN)
-            return "Edit blocked by user"
+            tool_result(blocked, style=WARN)
+            return blocked
         return None
 
-    if editor.show_diff(old_text, new_text, file_path.name, SCRATCH_DIR):
+    if side_by_side and editor.show_diff(
+        old_text, new_text, file_path.name, SCRATCH_DIR
+    ):
         tool_result("Opened side by side in VS Code")
 
     prompt = Text(f"  {BRANCH}  ", style=DIM)
@@ -1029,8 +1032,8 @@ def _confirm_change(
         _close_diff()
 
     if answer != "y":
-        tool_result("Edit blocked by user", style=WARN)
-        return "Edit blocked by user"
+        tool_result(blocked, style=WARN)
+        return blocked
 
     return None
 
@@ -1122,6 +1125,7 @@ def _edit_file(path: str, edits: list[Edit], question: str) -> str:
     if failed is not None:
         tool_result(failed, style=ERROR)
         return failed
+    livedocs.changed(file_path, new_text)
 
     made = result.replacements
     summary = (
@@ -3114,8 +3118,10 @@ def send_document(
         return (
             f"Sent {doc.name} ({kilobytes} KB) to the user's screen, "
             f"beside the chat.{pinned} They can edit it there, and "
-            "saving writes the file. Their comments come to you as a "
-            f"message quoting each passage.{unplaced}"
+            "saving writes the file. Your own edits to the file show "
+            "there as they land: change it with edit, not by sending it "
+            "again. Their comments come to you as a message quoting each "
+            f"passage.{unplaced}"
         )
 
     problem = _open_with_spinner(doc)
@@ -4289,8 +4295,11 @@ tools: list[dict[str, Any]] = [
                 "to the user: a report, plan, README, or notes you wrote. "
                 "In the web UI it opens beside the chat, rendered, where "
                 "they can edit it and comment on passages; their comments "
-                "reach you as a message quoting each one. Write the file "
-                "first; this only shows it. To flag something for them in "
+                "reach you as a message quoting each one. Your edits to "
+                "the file (edit, write) show in it as they land, so once "
+                "it is open, change it in place rather than sending it "
+                "again. Write the file first; this only shows it. To flag "
+                "something for them in "
                 "it (unfinished work, a gap to fill, an open question, an "
                 "assumption to check), add comments pinned to passages."
             ),
