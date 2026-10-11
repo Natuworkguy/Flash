@@ -3,10 +3,12 @@ gaps in them left to fill in."""
 
 import threading
 import time
+from types import SimpleNamespace
 
+import ollama
 import pytest
 
-from flash import livedocs, theme, tools, web, workspace
+from flash import ai, livedocs, theme, tools, web, workspace
 
 
 @pytest.fixture
@@ -181,3 +183,147 @@ class TestAskingFirst:
         session.answer(next(iter(session.asks)), "n")
         worker.join(5)
         assert drain("doc-proposal") == []
+
+
+# --- Saving wakes Flash -------------------------------------------------
+
+
+def part(content="", calls=None, done=False):
+    return SimpleNamespace(
+        message=SimpleNamespace(content=content, thinking="",
+                                tool_calls=calls),
+        done=done, eval_count=1, eval_duration=1,
+    )
+
+
+def call(name, **arguments):
+    return SimpleNamespace(
+        function=SimpleNamespace(name=name, arguments=arguments)
+    )
+
+
+class FakeClient:
+    scripts: list = []
+    requests: list = []
+
+    def __init__(self, host=None, **_):
+        pass
+
+    def chat(self, **kwargs):
+        FakeClient.requests.append(
+            {**kwargs, "messages": list(kwargs["messages"])}
+        )
+        script = FakeClient.scripts.pop(0)
+        return iter(script() if callable(script) else script)
+
+
+class TestSavingWakesFlash:
+    @pytest.fixture(autouse=True)
+    def offline(self, monkeypatch):
+        FakeClient.scripts = []
+        FakeClient.requests = []
+        monkeypatch.setattr(ollama, "Client", FakeClient)
+        monkeypatch.setattr(ai.Config, "model", "flash-test")
+        monkeypatch.setattr(ai, "_session_system_prompt",
+                            lambda heard=False: "")
+        monkeypatch.setattr(ai, "_history_budget", lambda: 100_000)
+        monkeypatch.setattr(web.checkpoint, "start_turn", lambda label: None)
+        monkeypatch.setattr(tools, "NO_COMMAND_CONFIRMATION", True)
+
+    def save(self, session, chat, info, text, **more):
+        return web.command(session, {
+            "name": "document-save", "arg": info["id"], "chat": chat.id,
+            "text": text, **more,
+        })
+
+    def settled(self, chat):
+        wait_for(lambda: not chat.busy and not chat.queued)
+
+    def test_a_save_wakes_flash_to_do_what_was_left(self, shown):
+        path, info = shown
+        saved = path.read_text(encoding="utf-8") + (
+            "\nFlash, add a line on what drove the growth.\n"
+        )
+        FakeClient.scripts = [
+            [part(calls=[call(
+                "edit", path=str(path),
+                old_string="Flash, add a line on what drove the growth.",
+                new_string="Growth came from the new billing page.",
+            )]), part(done=True)],
+            [part("Added the line on growth."), part(done=True)],
+        ]
+        session = web.Session()
+        drain = events_of(session)
+        chat = session.new_chat()
+
+        self.save(session, chat, info, saved)
+        self.settled(chat)
+
+        asked = FakeClient.requests[0]["messages"][-1]["content"]
+        assert f"saved {path.resolve()}" in asked
+        assert "+Flash, add a line on what drove the growth." in asked
+        assert "[insert the Q3 revenue here]" in asked  # a gap still in it
+        assert "Growth came from the new billing page." in path.read_text(
+            encoding="utf-8")
+        notes = [e["text"] for e in drain("note")]
+        assert notes == ["You saved report.md."]
+        assert not [e for e in chat.log if e["type"] == "user"]
+        said = [e["text"] for e in chat.log if e["type"] == "assistant"]
+        assert said[-1] == "Added the line on growth."
+
+    def test_nothing_to_do_shows_nothing(self, shown):
+        path, info = shown
+        FakeClient.scripts = [[part("NOTH"), part("ING"), part(done=True)]]
+        session = web.Session()
+        queue = session.hub.subscribe()
+        chat = session.new_chat()
+
+        self.save(session, chat, info, "# Q3, fixed a typo\n")
+        self.settled(chat)
+
+        seen = []
+        while not queue.empty():
+            seen.append(queue.get_nowait())
+        kinds = [e["type"] for e in seen]
+        assert "token" not in kinds and "assistant" not in kinds
+        assert "stats" not in kinds
+        # Kept for the next message as a file that changed, not as a turn.
+        assert chat.messages == []
+        assert session.edited[chat.id] == [str(path.resolve())]
+
+    def test_saves_during_a_turn_are_read_once_it_ends(self, shown):
+        path, info = shown
+        gate = threading.Event()
+
+        def held():
+            gate.wait(5)
+            yield from [part("Working."), part(done=True)]
+
+        FakeClient.scripts = [held, [part("NOTHING"), part(done=True)]]
+        session = web.Session()
+        chat = session.new_chat()
+        session.send(chat, "hello")
+        wait_for(lambda: FakeClient.requests)
+
+        self.save(session, chat, info, "first\n")
+        self.save(session, chat, info, "second\n")
+        assert len(FakeClient.requests) == 1
+        gate.set()
+        wait_for(lambda: len(FakeClient.requests) == 2)
+        self.settled(chat)
+
+        # One turn for both, from before the first to after the second.
+        asked = FakeClient.requests[1]["messages"][-1]["content"]
+        assert "-# Q3" in asked and "+second" in asked
+        assert "+first" not in asked
+
+    def test_comments_save_without_waking(self, shown):
+        path, info = shown
+        session = web.Session()
+        chat = session.new_chat()
+
+        self.save(session, chat, info, "quiet\n", quiet=True)
+
+        time.sleep(0.1)
+        assert FakeClient.requests == [] and not chat.busy
+        assert session.edited[chat.id] == [str(path.resolve())]

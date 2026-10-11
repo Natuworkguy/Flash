@@ -179,6 +179,11 @@ SPARK_POST_TICKS = 20
 MAX_WAKES_IN_A_ROW = 3
 WAKE_TEXT = "A sub-agent finished. Flash is reading what it found."
 
+# A turn a save woke that finds nothing to do answers with only this.
+QUIET_WORD = "NOTHING"
+# How much of a saved document's change the model is shown.
+SAVED_DIFF_CHARS = 12_000
+
 # Search: how many chats come back, how many words a query may have,
 # and how much of a message a result quotes around its match.
 SEARCH_LIMIT = 40
@@ -299,6 +304,12 @@ class Chat:
     # The turn running now came from voice mode: its reply is heard, so
     # the model is asked to keep it short and plain.
     heard: bool = False
+    # The user saved a document in the side panel while a turn ran: the
+    # next turn reads it, {"path", "name", "before", "text"}.
+    saved_doc: Optional[dict] = None
+    # The turn running now is one a save of this file woke: it may find
+    # nothing in it to do, and then says so in a word nobody sees.
+    quiet: str = ""
     created: float = field(default_factory=time.time)
     updated: float = field(default_factory=time.time)
     project: str = ""
@@ -1263,6 +1274,31 @@ class Session:
                     "size": size,
                 })
 
+    def document_saved(
+        self, chat: Chat, path: str, before: str, text: str,
+    ) -> None:
+        """The user saved a document in CHAT's side panel, from BEFORE to
+        TEXT: Flash wakes to read it and do whatever they left for it.
+        A save while a turn runs is read once that turn is done, with
+        any other saves since as one change."""
+
+        if before == text:
+            return
+        saved = {
+            "path": path, "name": Path(path).name, "before": before,
+            "text": text,
+        }
+        with self._lock:
+            if chat.busy or chat.queued:
+                was = chat.saved_doc
+                if was is not None and was["path"] == path:
+                    saved["before"] = was["before"]
+                chat.saved_doc = saved
+                return
+        turn = _saved_turn(saved)
+        self.send(chat, turn["text"], wake=True, note=turn["note"],
+                  quiet=turn["quiet"])
+
     def document_proposed(self, ask_id: str, path: str, text: str) -> None:
         """The question ASK_ID is whether PATH may become TEXT: a panel
         showing it shows the change, to allow or deny there."""
@@ -1279,6 +1315,7 @@ class Session:
     def send(
         self, chat: Chat, text: str, wake: bool = False, mode: str = "",
         files: Optional[list] = None, heard: bool = False,
+        note: str = "", quiet: str = "",
     ) -> dict:
         """Start a turn on a thread of its own and return at once.
 
@@ -1316,22 +1353,25 @@ class Session:
             self._publish_pending(chat)
             return {"pending": item["id"]}
 
-        self._begin(chat, text, wake, attached)
+        self._begin(chat, text, wake, attached, note=note)
         threading.Thread(
-            target=self._run, args=(chat, text, attached), daemon=True
+            target=self._run, args=(chat, text, attached, quiet),
+            daemon=True,
         ).start()
         return {}
 
     def _begin(
         self, chat: Chat, text: str, wake: bool = False,
         files: Optional[list] = None, version: Optional[dict] = None,
+        note: str = "",
     ) -> None:
         """Put a turn's message in the chat, as its turn starts. An
-        edited one says which of its versions it is."""
+        edited one says which of its versions it is. One nobody typed
+        shows as NOTE, a line saying why it began."""
 
         if wake:
             self.started.pop(chat.id, None)
-            self.emit(chat, {"type": "note", "text": WAKE_TEXT})
+            self.emit(chat, {"type": "note", "text": note or WAKE_TEXT})
             return
         self.wakes[chat.id] = 0
         if chat.title == "New chat":
@@ -1628,7 +1668,12 @@ class Session:
         and runs. Called with the lock held."""
 
         if not chat.pending:
-            return None
+            if chat.saved_doc is None:
+                return None
+            saved, chat.saved_doc = chat.saved_doc, None
+            chat.queued = True
+            chat.stop.clear()
+            return _saved_turn(saved)
         item = chat.pending.pop(0)
         chat.queued = True
         chat.stop.clear()
@@ -1645,6 +1690,7 @@ class Session:
 
     def _run(
         self, chat: Chat, text: str, files: Optional[list] = None,
+        quiet: str = "",
     ) -> None:
         # A local backend runs one generation at a time, and this turn
         # is the one somebody is now waiting on.
@@ -1653,12 +1699,15 @@ class Session:
         # One runner per chat, so its waiting messages go in the order
         # they were sent. The lock is let go between turns, so another
         # chat is not held up behind a long queue.
-        following: Optional[dict] = {"text": text, "files": files or []}
+        following: Optional[dict] = {
+            "text": text, "files": files or [], "quiet": quiet,
+        }
         while following is not None:
             text, files = following["text"], following.get("files") or []
             with self.turn_lock:
                 chat.queued = False
                 chat.busy = True
+                chat.quiet = following.get("quiet") or ""
                 self.emit(chat, {"type": "busy", "busy": True})
                 # Followed by any extension that asked to be.
                 progress.begin("web", chat.id, chat.title, text)
@@ -1684,6 +1733,7 @@ class Session:
                         failed["retry"] = True
                     self.emit(chat, failed)
                 finally:
+                    chat.quiet = ""
                     progress.end(False)
                     self.asked.pop(chat.id, None)
                     self.started.pop(chat.id, None)
@@ -1700,8 +1750,9 @@ class Session:
             if following is not None:
                 self._publish_pending(chat)
                 self._begin(
-                    chat, following["text"], False,
+                    chat, following["text"], bool(following.get("note")),
                     following.get("files") or [],
+                    note=following.get("note") or "",
                 )
 
 
@@ -1733,6 +1784,8 @@ class Streamed:
     stopped: bool = False
     tokens: int = 0
     seconds: float = 0.0
+    # A woken turn's word that it found nothing to do: never shown.
+    quiet: bool = False
 
 
 def stream_reply(
@@ -1753,6 +1806,19 @@ def stream_reply(
     # token at a time.
     content = DashGuard()
     thinking: list[str] = []
+    # A turn a save woke may answer with only QUIET_WORD: what could
+    # still be that word is held back, not shown, until it is not.
+    held: Optional[str] = "" if chat.quiet else None
+
+    def show(text: str) -> None:
+        nonlocal held
+        if held is not None:
+            held += text
+            if QUIET_WORD.startswith(held.strip().rstrip(".").upper()):
+                return
+            text, held = held, None
+        chat.partial += text
+        session.emit(chat, {"type": "token", "text": text})
 
     parts = client.chat(
         model=model or ai.Config.model,
@@ -1780,8 +1846,7 @@ def stream_reply(
                 session.emit(chat, {"type": "thinking", "text": thought})
             text = content.feed(text) if text else ""
             if text:
-                chat.partial += text
-                session.emit(chat, {"type": "token", "text": text})
+                show(text)
 
             out.calls.extend(getattr(message, "tool_calls", None) or [])
 
@@ -1797,9 +1862,14 @@ def stream_reply(
 
     rest = content.flush()
     if rest:
-        chat.partial += rest
-        session.emit(chat, {"type": "token", "text": rest})
+        show(rest)
     out.content = content.text()
+    if held is not None:
+        if out.content.strip().rstrip(".").upper() == QUIET_WORD:
+            out.quiet = True
+        elif held:
+            chat.partial += held
+            session.emit(chat, {"type": "token", "text": held})
     out.thinking = "".join(thinking)
     return out
 
@@ -1947,6 +2017,45 @@ def project_prompt(found: "workspace.Project") -> str:
     if found.instructions:
         lines += ["", found.instructions]
     return "\n".join(lines)
+
+
+def _saved_turn(saved: dict) -> dict:
+    """The turn a save starts: what Flash is told, and the line the chat
+    shows for it."""
+
+    import difflib
+
+    from . import livedocs
+
+    diff = "".join(difflib.unified_diff(
+        saved["before"].splitlines(keepends=True),
+        saved["text"].splitlines(keepends=True),
+        fromfile="before", tofile="saved", n=3,
+    ))
+    if len(diff) > SAVED_DIFF_CHARS:
+        diff = diff[:SAVED_DIFF_CHARS] + "\n[the rest of the change is cut]"
+    gaps = livedocs.placeholders(saved["text"])
+    listed = (
+        "\n\nGaps still in it: " + "; ".join(gaps[:20]) if gaps else ""
+    )
+    text = (
+        f"[The user saved {saved['path']} in the side panel. You were "
+        "woken to read it; they have not written to you otherwise. What "
+        f"changed:\n\n```diff\n{diff.rstrip()}\n```{listed}\n\n"
+        "Look at what they changed and at what is around it. If they "
+        "left anything for you (a placeholder to fill in, a note or "
+        "instruction meant for you, a question, a sentence or section "
+        "they started and left unfinished, a list to finish, a TODO), "
+        "do it now: find out what you need, then edit the file in place, "
+        "one change at a time, while they watch. Their version is the one "
+        "that counts: build on it and never undo what they wrote. Say in "
+        "a line or two what you did. If nothing in it asks anything of "
+        f"you, answer with only the word {QUIET_WORD}.]"
+    )
+    return {
+        "text": text, "note": f"You saved {saved['name']}.",
+        "quiet": saved["path"],
+    }
 
 
 def edited_note(paths: list[str]) -> str:
@@ -2349,13 +2458,25 @@ def _respond(
             tokens += reply.tokens
             generating += reply.seconds
 
+    # Woken by a save that asked nothing of it: nothing to show, and
+    # nothing kept but that the file changed, for the next message.
+    nothing = reply.quiet and not tool_count
     if reply.stopped and not reply.content:
         chat.partial = chat.thinking = ""
         session.emit(chat, {"type": "note", "text": "Stopped."})
+    elif nothing:
+        chat.partial = chat.thinking = ""
     else:
         _finish_reply(session, chat, reply, spark)
 
-    if guest:
+    if nothing:
+        asked = session.asked.get(chat.id)
+        if asked is not None and asked in chat.messages:
+            chat.messages.remove(asked)
+        listed = session.edited.setdefault(chat.id, [])
+        if chat.quiet and chat.quiet not in listed:
+            listed.append(chat.quiet)
+    elif guest:
         # Whoever the chat is with sees a spark was called, and what it
         # said and did, as a note: not as a reply of its own, and not
         # with the spark's tool calls in its history.
@@ -2368,16 +2489,17 @@ def _respond(
         if reply.content:
             chat.messages.append(ai._message("assistant", reply.content))
 
-    session.emit(chat, {
-        "type": "stats",
-        # When, and on what: the settings page counts days and models.
-        "at": round(time.time()),
-        "model": model,
-        "tokens": tokens,
-        "rate": round(tokens / generating, 1) if generating else 0,
-        "seconds": round(time.monotonic() - started, 1),
-        "tools": tool_count,
-    })
+    if not nothing:
+        session.emit(chat, {
+            "type": "stats",
+            # When, and on what: the settings page counts days and models.
+            "at": round(time.time()),
+            "model": model,
+            "tokens": tokens,
+            "rate": round(tokens / generating, 1) if generating else 0,
+            "seconds": round(time.monotonic() - started, 1),
+            "tools": tool_count,
+        })
     # Counted with the terminal's replies, for Settings > Usage.
     showcase.record(ai.Config.host, model, tokens, tool_count)
     if spark is not None:
@@ -3307,10 +3429,23 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
         return {"dirs": workspace.folder_suggestions(arg)}
 
     if name == "document-save":
-        saved = workspace.save_document(arg, str(body.get("text") or ""))
-        # Told to the model with the chat's next message.
+        kept = workspace.kept_file(arg)
+        try:
+            before = kept[0].read_text(encoding="utf-8") if kept else ""
+        except (OSError, UnicodeDecodeError):
+            before = ""
+        text = str(body.get("text") or "")
+        saved = workspace.save_document(arg, text)
         where = saved["path"] or arg
-        if chat_id in session.chats:
+        if chat_id not in session.chats:
+            return saved
+        if saved["path"] and not body.get("quiet"):
+            # Flash reads what changed, now, and does what was left for it.
+            session.document_saved(
+                session.chat(chat_id), saved["path"], before, text,
+            )
+        else:
+            # Told to the model with the chat's next message.
             listed = session.edited.setdefault(chat_id, [])
             if where not in listed:
                 listed.append(where)
