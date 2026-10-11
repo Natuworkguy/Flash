@@ -1729,7 +1729,7 @@ body.all-stopped .org-node, body.all-stopped .spark-card { animation: all-halt 0
 .spark-quiet { font-size: 12.5px; color: var(--text-3); margin-top: 10px; }
 .field small [data-handle] { font: 500 12px var(--mono); color: var(--text-2); }
 .field small.taken { display: flex; align-items: flex-start; gap: 6px; color: var(--warn); animation: rise 0.2s var(--ease) both; }
-.field small.taken svg { width: 14px; height: 14px; flex: none; margin-top: 2px; }
+.field small.taken svg { width: 14px; height: 14px; flex: none; margin-top: calc((1lh - 14px) / 2); }
 .field small.taken [data-handle], .field small.taken .who { color: var(--warn); }
 .field input[aria-invalid="true"] { border-color: var(--warn); }
 .mem-path .link-btn { font: inherit; padding: 0 4px; text-decoration: underline; text-underline-offset: 2px; }
@@ -1809,9 +1809,9 @@ body.all-stopped .org-node, body.all-stopped .spark-card { animation: all-halt 0
 .ext-preview ul { margin: 8px 0 0; padding-left: 18px; font-size: 13.5px; color: var(--text-2); }
 .ext-preview .note { margin: 10px 0 0; font-size: 13px; color: var(--text-3); text-align: left; }
 .ext-preview .note.warn { color: var(--del); }
-.field small.source-hint { display: flex; align-items: center; gap: 6px; transition: color 0.2s var(--ease); }
+.field small.source-hint { display: flex; align-items: flex-start; gap: 6px; transition: color 0.2s var(--ease); }
 .field small.source-hint.is-bundle { color: var(--accent); }
-.field small.source-hint svg { width: 14px; height: 14px; flex: none; }
+.field small.source-hint svg { width: 14px; height: 14px; flex: none; margin-top: calc((1lh - 14px) / 2); }
 .mem-path { font: 12px var(--mono); color: var(--text-3); margin: 10px 2px 0; }
 .steps { display: flex; flex-direction: column; gap: 20px; margin: 18px 0 16px; }
 .step { display: grid; grid-template-columns: 24px minmax(0, 1fr); gap: 12px; }
@@ -1841,6 +1841,8 @@ body.all-stopped .org-node, body.all-stopped .spark-card { animation: all-halt 0
 
 .field { display: block; margin: 0 0 14px; text-align: left; }
 .field span { display: block; font-size: 12.5px; font-weight: 500; color: var(--text-2); margin-bottom: 6px; }
+/* Words inside a field's note are the note's, not a label's. */
+.field small span { display: inline; font: inherit; color: inherit; margin: 0; }
 .field small { display: block; font-size: 12px; color: var(--text-3); margin-top: 6px; }
 .field[hidden] { display: none; }
 .field small.bad { color: var(--del); }
