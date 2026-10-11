@@ -1807,8 +1807,11 @@ body.all-stopped .org-node, body.all-stopped .spark-card { animation: all-halt 0
 .ext-preview { margin: 14px 0 6px; padding: 12px 14px; border: 1px solid var(--border); border-radius: 12px; background: var(--code-bg); }
 .ext-preview .name { font: 600 14px var(--mono); }
 .ext-preview ul { margin: 8px 0 0; padding-left: 18px; font-size: 13.5px; color: var(--text-2); }
-.ext-preview .note { margin: 10px 0 0; font-size: 13px; color: var(--text-3); }
+.ext-preview .note { margin: 10px 0 0; font-size: 13px; color: var(--text-3); text-align: left; }
 .ext-preview .note.warn { color: var(--del); }
+.field small.source-hint { display: flex; align-items: center; gap: 6px; transition: color 0.2s var(--ease); }
+.field small.source-hint.is-bundle { color: var(--accent); }
+.field small.source-hint svg { width: 14px; height: 14px; flex: none; }
 .mem-path { font: 12px var(--mono); color: var(--text-3); margin: 10px 2px 0; }
 .steps { display: flex; flex-direction: column; gap: 20px; margin: 18px 0 16px; }
 .step { display: grid; grid-template-columns: 24px minmax(0, 1fr); gap: 12px; }
@@ -8599,7 +8602,7 @@ async function drawExtensions(body) {
     host.appendChild(warn);
   }
   if (!r.extensions.length) {
-    host.appendChild(el("div", "mem-empty", `<b>No extensions installed</b>Install one with <code>github@owner/repo</code>, or <code>path@/some/folder</code> while you write your own.`));
+    host.appendChild(el("div", "mem-empty", `<b>No extensions installed</b>Install one with <code>github@owner/repo</code>, <code>path@/some/folder</code> while you write your own, or <code>path@/some/file.bundle</code> for one passed around as a git bundle.`));
     return;
   }
   const list = el("div", "item-list");
@@ -8633,8 +8636,8 @@ function extensionForm() {
   let staged = null;
   const form = openForm(`
     <h2>Install an extension</h2>
-    <p class="sub">From GitHub, or from a folder on the computer Flash runs on.</p>
-    <label class="field"><span>Source</span><input name="spec" class="mono" placeholder="github@owner/repo" autocomplete="off" spellcheck="false"></label>
+    <p class="sub">From GitHub, or from a folder or a git bundle on the computer Flash runs on.</p>
+    <label class="field"><span>Source</span><input name="spec" class="mono" placeholder="github@owner/repo" autocomplete="off" spellcheck="false"><small class="source-hint">github@owner/repo, path@/some/folder, or path@/some/file.bundle</small></label>
     <div class="preview-host"></div>
     <div class="dialog-buttons"><button type="button" class="btn" data-cancel>Cancel</button><button type="submit" class="btn primary">Check it</button></div>`,
     async (data) => {
@@ -8658,6 +8661,14 @@ function extensionForm() {
     });
   const submit = form.querySelector("[type=submit]");
   const host = form.querySelector(".preview-host");
+  // A bundle is told apart as it is typed: a path with .bundle in it.
+  const hint = form.querySelector(".source-hint");
+  form.spec.addEventListener("input", () => {
+    const spec = form.spec.value.trim();
+    const bundle = /^path@/i.test(spec) && /\.bundle/i.test(spec.split(/[\\/]/).pop());
+    hint.classList.toggle("is-bundle", bundle);
+    hint.innerHTML = bundle ? `${icon("cube")}<span>A git bundle: Flash installs the branch it carries.</span>` : "github@owner/repo, path@/some/folder, or path@/some/file.bundle";
+  });
   const showPreview = () => {
     const box = el("div", "ext-preview", `<div><span class="name"></span> <span class="ver"></span></div><div class="sub"></div><ul></ul>`);
     box.querySelector(".name").textContent = staged.name;
@@ -8665,6 +8676,7 @@ function extensionForm() {
     box.querySelector(".sub").textContent = staged.description;
     const lines = staged.contents.length ? staged.contents : ["Nothing Flash would use"];
     for (const line of lines) box.querySelector("ul").appendChild(el("li")).textContent = line;
+    if (staged.note) box.appendChild(el("p", "note")).textContent = staged.note;
     if (staged.replaces) box.appendChild(el("p", "note warn")).textContent = `This replaces the ${staged.name} installed from ${staged.replaces}.`;
     if (staged.runs_programs) box.appendChild(el("p", "note warn")).textContent = "It runs programs on this machine as you. Only install it if you trust where it came from.";
     host.textContent = "";

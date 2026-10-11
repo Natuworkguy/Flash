@@ -805,7 +805,9 @@ def call_tool(extension: Extension, tool: Tool, arguments: dict) -> str:
 
 
 def parse_source(spec: str) -> tuple[str, str]:
-    """`github@owner/repo` or `path@folder`, as (kind, target)."""
+    """`github@owner/repo` or `path@folder`, as (kind, target). A path
+    can also be a git bundle, a file with `.bundle` in its name, as
+    `git bundle create` makes to carry a repository about as one file."""
 
     kind, at, target = spec.strip().partition("@")
     kind = kind.lower()
@@ -814,7 +816,8 @@ def parse_source(spec: str) -> tuple[str, str]:
     if not at or not target:
         raise ExtensionError(
             f"{spec!r} is not an extension source. Use "
-            "github@owner/repo, or path@/some/folder for one on disk."
+            "github@owner/repo, or path@/some/folder or "
+            "path@/some/file.bundle for one on disk."
         )
 
     if kind == "github":
@@ -830,8 +833,96 @@ def parse_source(spec: str) -> tuple[str, str]:
         return kind, str(Path(target).expanduser().resolve())
 
     raise ExtensionError(
-        f"Unknown extension source {kind!r}. Use github@owner/repo or "
-        "path@/some/folder."
+        f"Unknown extension source {kind!r}. Use github@owner/repo, "
+        "path@/some/folder, or path@/some/file.bundle."
+    )
+
+
+def is_bundle(target: str) -> bool:
+    """Whether the path TARGET names a git bundle rather than a folder:
+    `.bundle` in its name, and not a folder (macOS calls some folders
+    bundles too)."""
+
+    path = Path(target)
+    return ".bundle" in path.name.lower() and not path.is_dir()
+
+
+def _git(args: list[str]) -> subprocess.CompletedProcess:
+    if not shutil.which("git"):
+        raise ExtensionError(
+            "git is needed to install from GitHub or a bundle, but was "
+            "not found."
+        )
+    # A repository that does not exist, or is private, makes git ask
+    # for a username on the terminal, which would hang a session that
+    # is only waiting for a clone.
+    env = dict(os.environ, GIT_TERMINAL_PROMPT="0")
+    try:
+        return subprocess.run(  # nosec B603 B607
+            ["git", *args], capture_output=True, text=True,
+            timeout=CLONE_TIMEOUT_SECONDS, check=False, env=env,
+            stdin=subprocess.DEVNULL,
+        )
+    except subprocess.TimeoutExpired:
+        raise ExtensionError(
+            f"git took longer than {CLONE_TIMEOUT_SECONDS} seconds."
+        ) from None
+
+
+def _last_line(result: subprocess.CompletedProcess) -> str:
+    detail = (result.stderr or result.stdout).strip()
+    return detail.splitlines()[-1] if detail else ""
+
+
+def bundle_branch(target: str) -> str:
+    """The branch a bundle's extension is installed from: the one its
+    HEAD points at, else main, master, or the first it holds."""
+
+    path = Path(target)
+    if not path.is_file():
+        raise ExtensionError(f"There is no bundle at {target}.")
+    result = _git(["bundle", "list-heads", str(path)])
+    if result.returncode:
+        why = _last_line(result)
+        raise ExtensionError(
+            f"{path.name} is not a git bundle" + (f": {why}" if why else ".")
+        )
+    heads = {}
+    for line in result.stdout.splitlines():
+        sha, _, ref = line.strip().partition(" ")
+        if sha and ref:
+            heads[ref] = sha
+    branches = [r for r in heads if r.startswith("refs/heads/")]
+    if not branches:
+        raise ExtensionError(f"{path.name} holds no branch to install.")
+    if "HEAD" in heads:
+        pointed = [r for r in branches if heads[r] == heads["HEAD"]]
+        if pointed:
+            return pointed[0].removeprefix("refs/heads/")
+    for name in ("main", "master"):
+        if f"refs/heads/{name}" in heads:
+            return name
+    return branches[0].removeprefix("refs/heads/")
+
+
+def source_note(spec: str) -> str:
+    """A line to show before installing from SPEC, when there is
+    something worth knowing about where it comes from: "" otherwise."""
+
+    try:
+        kind, target = parse_source(spec)
+    except ExtensionError:
+        return ""
+    if kind != "path" or not is_bundle(target):
+        return ""
+    try:
+        branch = bundle_branch(target)
+    except ExtensionError:
+        branch = ""
+    on = f" of its {branch} branch" if branch else ""
+    return (
+        f"{Path(target).name} is a git bundle: this installs the copy{on} "
+        "it carries. To update, install a newer bundle the same way."
     )
 
 
@@ -855,6 +946,23 @@ def fetch(spec: str) -> Path:
     checkout = staging / "extension"
 
     try:
+        if kind == "path" and is_bundle(target):
+            # The branch named, since a bundle made from one branch
+            # carries no HEAD for a plain clone to check out.
+            branch = bundle_branch(target)
+            result = _git([
+                "clone", "--quiet", "--branch", branch, target,
+                str(checkout),
+            ])
+            if result.returncode:
+                why = _last_line(result)
+                raise ExtensionError(
+                    f"Could not open {Path(target).name}"
+                    + (f": {why}" if why else ".")
+                )
+            shutil.rmtree(checkout / ".git", ignore_errors=True)
+            return checkout
+
         if kind == "path":
             if not Path(target).is_dir():
                 raise ExtensionError(f"{target} is not a folder")
@@ -863,40 +971,15 @@ def fetch(spec: str) -> Path:
             )
             return checkout
 
-        if not shutil.which("git"):
-            raise ExtensionError(
-                "git is needed to install from GitHub but was not found."
-            )
-
-        # A repository that does not exist, or is private, makes git
-        # ask for a username on the terminal, which would hang a
-        # session that is only waiting for a clone.
-        env = dict(os.environ, GIT_TERMINAL_PROMPT="0")
-
-        try:
-            result = subprocess.run(  # nosec B603 B607
-                [
-                    "git", "clone", "--depth", "1", "--quiet",
-                    f"https://github.com/{target}.git", str(checkout),
-                ],
-                capture_output=True,
-                text=True,
-                timeout=CLONE_TIMEOUT_SECONDS,
-                check=False,
-                env=env,
-                stdin=subprocess.DEVNULL,
-            )
-        except subprocess.TimeoutExpired:
-            raise ExtensionError(
-                f"Downloading {target} took longer than "
-                f"{CLONE_TIMEOUT_SECONDS} seconds."
-            )
-
+        result = _git([
+            "clone", "--depth", "1", "--quiet",
+            f"https://github.com/{target}.git", str(checkout),
+        ])
         if result.returncode:
-            detail = (result.stderr or result.stdout).strip()
+            why = _last_line(result)
             raise ExtensionError(
                 f"Could not download github.com/{target}"
-                + (f": {detail.splitlines()[-1]}" if detail else ".")
+                + (f": {why}" if why else ".")
             )
 
         shutil.rmtree(checkout / ".git", ignore_errors=True)

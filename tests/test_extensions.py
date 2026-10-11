@@ -471,3 +471,80 @@ class TestMainLoop:
         install(tmp_path)
 
         assert self.sent(monkeypatch, ["/hello"]) == []
+
+
+class TestBundles:
+    """A path@ source with .bundle in its name is a git bundle: the
+    branch it carries is installed, with a note saying so."""
+
+    def bundle(self, tmp_path, name="demo.bundle", branch="main",
+               everything=False):
+        repo = make(tmp_path / "repo", {
+            "name": "bundled", "description": "From a bundle",
+            "prompt": "prompt.md",
+        }, {"prompt.md": "Be brief.\n"})
+        git = ["git", "-C", str(repo), "-c", "user.name=t",
+               "-c", "user.email=t@example.com"]
+        subprocess.run([*git, "init", "-q", "-b", branch], check=True)
+        subprocess.run([*git, "add", "-A"], check=True)
+        subprocess.run([*git, "commit", "-qm", "first"], check=True)
+        path = tmp_path / name
+        refs = ["--all"] if everything else [branch]
+        subprocess.run([*git, "bundle", "create", "-q", str(path), *refs],
+                       check=True, capture_output=True)
+        return path
+
+    def test_a_branch_bundle_installs(self, tmp_path):
+        path = self.bundle(tmp_path)
+        checkout = extensions.fetch(f"path@{path}")
+        try:
+            assert extensions.load(checkout).name == "bundled"
+            assert not (checkout / ".git").exists()
+            installed = extensions.install(checkout, f"path@{path}")
+        finally:
+            extensions.discard(checkout)
+        assert installed.prompt.strip() == "Be brief."
+
+    def test_any_branch_and_a_full_bundle(self, tmp_path):
+        trunk = self.bundle(tmp_path / "a", branch="trunk")
+        assert extensions.bundle_branch(str(trunk)) == "trunk"
+        full = self.bundle(tmp_path / "b", everything=True)
+        assert extensions.bundle_branch(str(full)) == "main"
+        checkout = extensions.fetch(f"path@{full}")
+        extensions.discard(checkout)
+
+    def test_the_note(self, tmp_path):
+        path = self.bundle(tmp_path, name="ext.bundle.v2")
+        note = extensions.source_note(f"path@{path}")
+        assert note.startswith("ext.bundle.v2 is a git bundle")
+        assert "main branch" in note
+        assert extensions.source_note(f"path@{tmp_path}") == ""
+        assert extensions.source_note("github@owner/repo") == ""
+
+    def test_a_folder_named_like_a_bundle_is_a_folder(self, tmp_path):
+        folder = full(tmp_path / "Thing.bundle")
+        assert not extensions.is_bundle(str(folder))
+        checkout = extensions.fetch(f"path@{folder}")
+        extensions.discard(checkout)
+
+    def test_a_missing_or_broken_bundle_says_so(self, tmp_path):
+        with pytest.raises(ExtensionError, match="no bundle at"):
+            extensions.fetch(f"path@{tmp_path / 'gone.bundle'}")
+        broken = tmp_path / "broken.bundle"
+        broken.write_text("not a bundle")
+        with pytest.raises(ExtensionError, match="not a git bundle"):
+            extensions.fetch(f"path@{broken}")
+
+    def test_the_web_preview_carries_the_note(self, tmp_path):
+        from flash import web
+
+        path = self.bundle(tmp_path)
+        session = web.Session()
+        staged = web.command(
+            session, {"name": "extension-preview", "arg": f"path@{path}"},
+        )
+        try:
+            assert staged["name"] == "bundled"
+            assert "git bundle" in staged["note"]
+        finally:
+            web._discard_staged(session)

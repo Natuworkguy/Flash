@@ -30,6 +30,19 @@ Or from inside a session:
 `path@/some/folder` installs from a folder on disk instead of GitHub,
 which is how you try out an extension while you are writing it.
 
+`path@/some/file.bundle` installs from a git bundle, the single file
+`git bundle create` makes, which is handy for an extension passed
+around without a repository to clone. Any path with `.bundle` in its
+file name is taken as one, and Flash says so before you confirm. It
+installs the branch the bundle's `HEAD` points at, or else `main`,
+`master`, or the first branch it holds. To make one:
+
+```bash
+git bundle create my-extension.bundle main
+```
+
+To update, install a newer bundle the same way.
+
 Before anything is installed, Flash shows what the extension adds and
 asks you to confirm. Installed extensions live in
 `~/.flash/extensions/<name>`. To update one, install it again: Flash

@@ -3883,6 +3883,9 @@ def _install_extension(spec: str) -> bool:
         existing = extensions.find(ext.name)
 
         console.print(_describe_extension(ext, source))
+        note = extensions.source_note(spec)
+        if note:
+            console.print(Text(f"  {note}", style=DIM))
 
         if existing and existing.source and existing.source != source:
             warn(
