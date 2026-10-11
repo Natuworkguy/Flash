@@ -252,7 +252,14 @@ body.side-closed #sidebar { margin-left: -272px; }
   .chat:hover .open, .chat:focus-within .open { padding-right: 10px; }
 }
 .chat .rename { flex: 1; min-width: 0; margin: 3px 4px; padding: 3px 6px; font: inherit; color: var(--text); background: var(--surface); border: 1px solid color-mix(in srgb, var(--text) 30%, transparent); border-radius: 7px; outline: none; }
-.chat .live { flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); margin-right: 12px; animation: pulse 1.2s ease-in-out infinite; }
+.chat .live { flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); margin-right: 12px; animation: pulse 1.2s ease-in-out infinite; transition: margin-right 0.14s; }
+/* Pointed at, a working chat's dot moves aside for the row's buttons,
+   and the title makes room for both. */
+.chat:hover .live, .chat:focus-within .live { margin-right: 64px; }
+.chat:has(.live):hover .open, .chat:has(.live):focus-within .open { padding-right: 10px; }
+@media (hover: none) {
+  .chat:hover .live, .chat:focus-within .live { margin-right: 8px; }
+}
 .side-foot { margin-top: auto; padding: 8px 0 12px; border-top: 1px solid var(--border); }
 .side-foot .side-row svg { color: var(--text-3); }
 .side-sep { height: 1px; background: var(--border); margin: 6px 12px; }
