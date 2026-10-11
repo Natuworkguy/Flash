@@ -2764,6 +2764,8 @@ def _stage_extension(session: Session, spec: str) -> dict:
             else ""
         ),
         "runs_programs": bool(ext.commands or ext.tools),
+        # Where it comes from, when that is worth a line: a git bundle.
+        "note": extensions.source_note(spec),
     }
 
 
