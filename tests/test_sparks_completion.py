@@ -114,3 +114,47 @@ def test_templates_and_hires(crew):
     assert _offered(f"/sparks hire {hire['id']} y") == [
         f"/sparks hire {hire['id']} yes",
     ]
+
+
+class TestMentions:
+    @pytest.fixture
+    def here(self, tmp_path, monkeypatch):
+        (tmp_path / "notes.txt").write_text("")
+        (tmp_path / "owl.py").write_text("")
+        monkeypatch.chdir(tmp_path)
+
+    def offered(self, text):
+        return list(SlashCommandCompleter().get_completions(
+            Document(text, cursor_position=len(text)),
+            SimpleNamespace(completion_requested=True),
+        ))
+
+    def test_files_then_a_rule_then_sparks(self, crew, here):
+        offered = self.offered("ask @")
+        texts = [c.text for c in offered]
+
+        assert texts[:2] == ["notes.txt", "owl.py"]
+        assert texts[2] == ""
+        assert offered[2].display_text.strip("─") == ""
+        assert texts[3:] == ["@owl ", "@repo-watch ", "@loner "]
+
+    def test_a_spark_is_named_in_its_colour(self, crew, here):
+        owl = sparks.find("owl")
+        picked = [c for c in self.offered("@ow") if c.text == "@owl "][0]
+
+        assert picked.display == [(f"fg:{owl.colour}", "Owl")]
+        assert picked.display_meta_text == "Night lead"
+        assert picked.start_position == -len("@ow")
+
+    def test_by_name_and_no_rule_without_files(self, crew, here):
+        texts = [c.text for c in self.offered("@repo w")]
+        assert texts == []  # a space ends a mention
+        texts = [c.text for c in self.offered("@rep")]
+        assert texts == ["@repo-watch "]
+        texts = [c.text for c in self.offered("@Lon")]
+        assert texts == ["@loner "]
+
+    def test_a_path_is_never_a_spark(self, crew, here):
+        assert all(
+            not c.text.startswith("@") for c in self.offered("@./ow")
+        )
