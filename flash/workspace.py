@@ -616,6 +616,41 @@ def save_document(file_id: str, text: str) -> dict:
     return {"size": len(data), "path": written}
 
 
+def documents_from(source: str) -> list[str]:
+    """The ids of the documents shown from the file at SOURCE (a
+    resolved path): one file can be shown in several chats."""
+
+    found = []
+    for record in sorted((store() / "files").glob("*.source.json")):
+        try:
+            said = json.loads(record.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        file_id = record.name.split(".", 1)[0]
+        if isinstance(said, dict) and said.get("source") == source and (
+            FILE_ID_RE.match(file_id)
+        ):
+            found.append(file_id)
+    return found
+
+
+def refresh_document(file_id: str, text: str) -> Optional[int]:
+    """Bring a shown document's copy up to TEXT, which its file now
+    holds. Its size, or None when it is not one, or too large now."""
+
+    kept = kept_file(file_id)
+    data = (text or "").encode("utf-8")
+    if kept is None or kept[0].suffix.lower() not in DOCUMENT_TYPES or (
+        len(data) > MAX_DOCUMENT_BYTES
+    ):
+        return None
+    try:
+        kept[0].write_bytes(data)
+    except OSError:
+        return None
+    return len(data)
+
+
 def kept_file(file_id: str) -> Optional[tuple[Path, str]]:
     """The stored copy of a shown file, and its type, or None. That is
     a file the agent showed, or one the user attached that a browser

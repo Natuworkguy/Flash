@@ -57,6 +57,7 @@ from . import (
     greetings,
     keepalive,
     learning,
+    livedocs,
     loaders,
     memory,
     progress,
@@ -780,6 +781,9 @@ class Session:
         # turn: chat id -> the paths, told to the model with its next
         # message so it reads them again rather than writing over them.
         self.edited: dict[str, list[str]] = {}
+        # An agent's edit to a file shown as a document reaches the page
+        # as it lands.
+        livedocs.listen(self.document_changed)
         # The voice models are being downloaded for the page: the first
         # use's pair, or one model picked in Settings, (kind, name).
         self.voice_setup = False
@@ -1215,10 +1219,13 @@ class Session:
         def ask(question: str) -> str:
             entry = Ask(id=uuid.uuid4().hex[:8], chat=chat.id,
                         question=question)
+            proposal = livedocs.take_proposal()
             self.asks[entry.id] = entry
             self.emit(chat, {
                 "type": "ask", "id": entry.id, "question": question,
             })
+            if proposal is not None:
+                self.document_proposed(entry.id, *proposal)
 
             while not entry.done.wait(ASK_POLL_SECONDS):
                 if chat.stop.is_set():
@@ -1241,6 +1248,31 @@ class Session:
         entry.answer = "y" if str(answer).lower().startswith("y") else "n"
         entry.done.set()
         return True
+
+    # Documents -----------------------------------------------------
+
+    def document_changed(self, path: str, text: str) -> None:
+        """An agent wrote PATH: each document shown from it is brought up
+        to date, and an open panel shows the change going in."""
+
+        for file_id in workspace.documents_from(path):
+            size = workspace.refresh_document(file_id, text)
+            if size is not None:
+                self.hub.publish({
+                    "type": "doc-changed", "id": file_id, "text": text,
+                    "size": size,
+                })
+
+    def document_proposed(self, ask_id: str, path: str, text: str) -> None:
+        """The question ASK_ID is whether PATH may become TEXT: a panel
+        showing it shows the change, to allow or deny there."""
+
+        ids = workspace.documents_from(path)
+        if ids:
+            self.hub.publish({
+                "type": "doc-proposal", "ask": ask_id, "ids": ids,
+                "text": text,
+            })
 
     # Turns ---------------------------------------------------------
 

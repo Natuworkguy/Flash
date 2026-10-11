@@ -2330,6 +2330,19 @@ body.resizing-viewer iframe { pointer-events: none; }
 ::highlight(doc-comment) { background-color: color-mix(in srgb, var(--warn) 30%, transparent); }
 /* Flash's comments: its own colour, and a line under, so they read as
    notes from it and not the user's. */
+/* A gap left to fill, what Flash just wrote, and what it wants to. */
+::highlight(doc-slot) { background-color: color-mix(in srgb, var(--working) 16%, transparent); text-decoration: underline 1.5px dashed color-mix(in srgb, var(--working) 70%, transparent); text-underline-offset: 4px; }
+::highlight(doc-fresh) { background-color: color-mix(in srgb, var(--add) 24%, transparent); }
+::highlight(doc-proposed) { background-color: color-mix(in srgb, var(--add) 20%, transparent); text-decoration: underline 2px color-mix(in srgb, var(--add) 70%, transparent); text-underline-offset: 4px; }
+.doc-live { position: absolute; left: 50%; bottom: 16px; transform: translateX(-50%); z-index: 3; display: flex; align-items: center; gap: 8px; width: max-content; max-width: calc(100% - 32px); padding: 6px 6px 6px 14px; border-radius: 999px; background: var(--surface); border: 1px solid var(--border-strong); box-shadow: var(--shadow); font-size: 13px; color: var(--text-2); animation: vt-in 0.28s var(--apple) both; }
+.doc-live[hidden] { display: none; }
+#viewer-body:has(.doc-foot:not([hidden])) .doc-live { bottom: calc(var(--foot, 220px) + 16px); }
+.doc-live .what { display: flex; align-items: center; gap: 8px; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; padding: 4px 4px 4px 0; }
+.doc-live q { color: var(--text); overflow: hidden; text-overflow: ellipsis; }
+.doc-live .btn { flex: none; }
+.doc-live .pulse { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--working); animation: breathe 1.1s ease-in-out infinite; }
+#viewer-fill { flex: none; }
+#viewer-fill svg { color: var(--working); }
 ::highlight(doc-note) { background-color: color-mix(in srgb, var(--accent) 16%, transparent); text-decoration: underline 2px color-mix(in srgb, var(--accent) 75%, transparent); text-underline-offset: 4px; }
 .note-pop .who { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; font-size: 12px; font-weight: 600; color: var(--accent); }
 .note-pop .who .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); }
@@ -2638,6 +2651,7 @@ body.resizing-viewer iframe { pointer-events: none; }
         <span class="kind" id="viewer-kind"></span>
         <div class="names"><div id="viewer-title"></div><div id="viewer-size"></div></div>
         <span class="viewer-editing" id="viewer-editing" hidden><button type="button" class="btn small" id="viewer-cancel" data-keys="Esc">Cancel</button><button type="button" class="btn small primary" id="viewer-save" data-keys="⌘S">Save</button></span>
+        <button type="button" class="btn small with-icon" id="viewer-fill" hidden data-tip="Have Flash fill in the placeholders"></button>
         <button class="icon-btn" id="viewer-edit" hidden data-tip="Edit" aria-label="Edit"></button>
         <a class="icon-btn" id="viewer-download" data-tip="Download" aria-label="Download"></a>
         <a class="icon-btn" id="viewer-open" target="_blank" rel="noopener" data-tip="Open in a new tab" aria-label="Open in a new tab"></a>
@@ -3411,6 +3425,7 @@ function openBrowser(run, at) {
   $("#viewer-kind").innerHTML = icon("globe");
   $("#viewer-edit").hidden = true;
   $("#viewer-editing").hidden = true;
+  $("#viewer-fill").hidden = true;
   const download = $("#viewer-download");
   download.href = fileUrl(frame, true);
   download.setAttribute("download", `${hostOf(frame.url) || "browser"}-step-${i + 1}.png`);
@@ -3471,6 +3486,7 @@ function openViewer(entry) {
   $("#viewer-kind").innerHTML = icon({ pdf: "file", html: "globe", doc: "file", model: "cube", midi: "music" }[entry.kind] || "image");
   $("#viewer-edit").hidden = entry.kind !== "doc";
   $("#viewer-editing").hidden = true;
+  $("#viewer-fill").hidden = true;
   if (openDoc && openDoc.onSelect) document.removeEventListener("selectionchange", openDoc.onSelect);
   openDoc = null;
   const download = $("#viewer-download");
@@ -4172,7 +4188,7 @@ async function openDocument(entry, body) {
   const gone = dismissedNotes()[entry.id] || [];
   doc.notes = (entry.comments || []).map((c, i) => ({ i, quote: String(c.quote || ""), note: String(c.note || ""), range: null })).filter((n) => n.note && !gone.includes(n.i));
   openDoc = doc;
-  body.innerHTML = `<div class="doc-scroll"><article class="doc"></article></div><div class="doc-foot" hidden></div>`;
+  body.innerHTML = `<div class="doc-scroll"><article class="doc"></article></div><div class="doc-live" role="status" hidden></div><div class="doc-foot" hidden></div>`;
   try {
     const response = await fetch(fileUrl(entry), { credentials: "same-origin" });
     if (!response.ok) throw new Error(response.statusText);
@@ -4198,6 +4214,7 @@ function drawDocument(doc) {
   article.onmouseup = () => setTimeout(() => offerComment(doc), 0);
   article.onkeyup = (e) => { if (e.shiftKey) offerComment(doc); };
   markComments(doc);
+  markSlots(doc);
   drawComments(doc);
 }
 
@@ -4356,8 +4373,11 @@ function offerComment(doc) {
   if (!selection || !selection.rangeCount) return;
   const article = doc.body.querySelector(".doc");
   if (selection.isCollapsed) {
-    const hit = (doc.notes || []).find((n) => n.range && article.contains(selection.anchorNode) && n.range.isPointInRange(selection.anchorNode, selection.anchorOffset));
-    if (hit) showNote(doc, hit);
+    const inside = (r) => r && article.contains(selection.anchorNode) && r.isPointInRange(selection.anchorNode, selection.anchorOffset);
+    const hit = (doc.notes || []).find((n) => inside(n.range));
+    if (hit) { showNote(doc, hit); return; }
+    const slot = (doc.slots || []).find((x) => inside(x.range));
+    if (slot) offerFill(doc, slot);
     return;
   }
   const range = selection.getRangeAt(0);
@@ -4558,6 +4578,214 @@ async function sendComments(doc) {
   drawComments(doc);
   await send(lines.join("\n"));
   toast("Comments sent to Flash");
+}
+
+// ---------------------------------------------------------------------------
+// Live documents. What Flash, a sub-agent or a spark writes to a document
+// open here shows going in as it lands. Without autonomous mode, a change
+// waits on a yes first: shown in place, with Allow and Deny beside it,
+// the same question the chat asks. A gap left to fill, "[insert the
+// numbers here]", is marked, and Flash fills it in when asked.
+
+const SLOT_RE = /\[(?:insert|add|put|write|fill in|fill)\b[^[\]\n]{0,200}\](?!\()/gi;
+
+// Each gap in the file's text: what it says, which of its kind it is,
+// and its line.
+function docSlots(text) {
+  const seen = new Map();
+  return [...text.matchAll(SLOT_RE)].map((m) => {
+    const nth = seen.get(m[0]) || 0;
+    seen.set(m[0], nth + 1);
+    return { slot: m[0], nth, line: text.slice(0, m.index).split("\n").length };
+  });
+}
+
+function markSlots(doc, shown = doc.text) {
+  const article = doc.body.querySelector(".doc");
+  doc.slots = docSlots(shown).map((x) => ({ ...x, range: article ? findQuote(article, x.slot, x.nth) : null }));
+  if (window.CSS && CSS.highlights) {
+    const ranges = doc.slots.map((x) => x.range).filter(Boolean);
+    if (ranges.length && !doc.editing) CSS.highlights.set("doc-slot", new Highlight(...ranges));
+    else CSS.highlights.delete("doc-slot");
+  }
+  showFill(doc);
+}
+
+// The header's button: how many gaps there are, while Flash can reach
+// the file to fill them.
+function showFill(doc) {
+  const b = $("#viewer-fill");
+  const count = docSlots(doc.text).length;
+  b.hidden = openDoc !== doc || !count || !doc.entry.path;
+  b.innerHTML = `${icon("spark")}<span>Fill in ${count}</span>`;
+  b.setAttribute("aria-label", `Have Flash fill in ${count} placeholder${count === 1 ? "" : "s"}`);
+  b.onclick = () => fillSlots(doc);
+}
+
+function offerFill(doc, slot) {
+  dropCommentUi();
+  if (!doc.entry.path) return;
+  const box = el("div", "doc-comment-box note-pop", `<div class="who"><span class="dot"></span>Placeholder</div><p></p><div class="row"><span class="hint"></span><button type="button" class="btn small primary with-icon" data-fill>${icon("spark")}<span>Fill in</span></button></div>`);
+  box.querySelector("p").textContent = slot.slot;
+  const r = slot.range.getBoundingClientRect();
+  placeFloat(box, r);
+  document.body.appendChild(box);
+  fitFloat(box, r);
+  box.querySelector("[data-fill]").onclick = () => { dropCommentUi(); fillSlots(doc, slot); };
+}
+
+// Asks Flash, as a message, to fill in the gaps: all of them, or ONE.
+// An edit still open is saved first, so Flash reads what is on screen.
+async function fillSlots(doc, one) {
+  if (doc.editing && !(await saveDocument(doc))) return;
+  const slots = one ? docSlots(doc.text).filter((x) => x.slot === one.slot && x.nth === one.nth) : docSlots(doc.text);
+  if (!slots.length) { toast("Nothing to fill in"); return; }
+  const where = `${doc.entry.name} (${doc.entry.path})`;
+  const lines = [slots.length === 1 ? `Fill in the placeholder in ${where}:` : `Fill in the ${slots.length} placeholders in ${where}:`, ""];
+  slots.forEach((x, i) => lines.push(`${i + 1}. Line ${x.line}: ${x.slot}`));
+  lines.push("", "Replace each one whole, brackets and all, with what it asks for, written to fit the text around it. Find out what you need first. Edit the file one placeholder at a time: I am watching it change.");
+  await send(lines.join("\n"));
+}
+
+// The bar over the document: what is going on, and what can be done.
+function docBar(doc, html, actions = []) {
+  const bar = doc.body.querySelector(".doc-live");
+  if (!bar) return null;
+  if (!html) { bar.hidden = true; bar.textContent = ""; return null; }
+  bar.innerHTML = `<span class="what">${html}</span>`;
+  for (const [label, kind, act] of actions) {
+    const b = bar.appendChild(el("button", `btn small${kind ? ` ${kind}` : ""}`, label));
+    b.type = "button";
+    b.onclick = act;
+  }
+  bar.hidden = false;
+  return bar;
+}
+
+// Where the old and new text part ways, and meet again: what was taken
+// out, and what was put in.
+function textChange(before, after) {
+  let a = 0;
+  while (a < before.length && a < after.length && before[a] === after[a]) a++;
+  let b = 0;
+  while (b < before.length - a && b < after.length - a && before[before.length - 1 - b] === after[after.length - 1 - b]) b++;
+  return { head: after.slice(0, a), added: after.slice(a, after.length - b), removed: before.slice(a, before.length - b), tail: after.slice(after.length - b) };
+}
+
+// Draws TEXT in the reading view, without touching what the document
+// holds: a frame of a change going in, or a change waiting on a yes.
+function drawDocText(doc, text) {
+  const article = doc.body.querySelector(".doc");
+  if (!article || doc.editing) return null;
+  if (doc.markdown) article.innerHTML = markdown(text);
+  else article.textContent = text;
+  return article;
+}
+
+// The new passage, marked in KIND's colour and brought into view.
+function markAdded(doc, added, kind) {
+  const article = doc.body.querySelector(".doc");
+  const words = plainQuote(added).trim();
+  if (!article || !words || !window.CSS || !CSS.highlights) return;
+  const range = findQuote(article, words) || findQuote(article, words.split("\n")[0].trim());
+  if (!range) return;
+  CSS.highlights.set(kind, new Highlight(range));
+  const box = doc.body.querySelector(".doc-scroll");
+  const rect = range.getBoundingClientRect(), frame = box.getBoundingClientRect();
+  if (rect.top < frame.top || rect.bottom > frame.bottom) box.scrollBy({ top: rect.top - frame.top - frame.height * 0.3, behavior: calm.matches ? "auto" : "smooth" });
+}
+
+const quoted = (text, most = 80) => {
+  const flat = text.replace(/\s+/g, " ").trim();
+  return esc(flat.length > most ? `${flat.slice(0, most)}…` : flat);
+};
+
+function docChanged(event) {
+  let shown = null;
+  for (const chat of chats.values()) for (const e of chat.log || []) if (e.type === "file" && e.id === event.id) { e.size = event.size; shown = e; }
+  const card = messagesEl.querySelector(`.attachment[data-file="${event.id}"] .meta`);
+  if (card && shown) card.textContent = attachmentMeta(shown);
+  const doc = openDoc;
+  if (!doc || doc.entry.id !== event.id) return;
+  doc.entry.size = event.size;
+  $("#viewer-size").textContent = `${fileKind(doc.entry)} · ${fileSize(event.size)}`;
+  // One at a time, in order: a gap filled after another types in after it.
+  doc.landing = (doc.landing || Promise.resolve()).then(() => landChange(doc, event.text)).catch(() => {});
+}
+
+async function landChange(doc, text) {
+  if (openDoc !== doc || text === doc.text) { if (doc.proposal && doc.proposal.text === text) { doc.proposal = null; docBar(doc, ""); } return; }
+  const shown = doc.proposal && doc.proposal.text === text;
+  doc.proposal = null;
+  if (doc.editing) {
+    if (editorText(doc) !== doc.startedAs) {
+      // Their unsaved work is not thrown away under them: they choose.
+      doc.theirs = text;
+      docBar(doc, "Flash changed this file while you were editing.", [
+        ["Keep editing", "", () => docBar(doc, "")],
+        ["Load its version", "primary", () => { docBar(doc, ""); stopEditing(doc); doc.theirs = null; doc.text = text; drawDocument(doc); }],
+      ]);
+      return;
+    }
+    stopEditing(doc);
+  }
+  const before = doc.text;
+  doc.text = text;
+  const change = textChange(before, text);
+  if (!shown && !calm.matches && change.added && change.added.length <= 6000) {
+    // Typed in, a few characters a frame, as Flash would have.
+    docBar(doc, `<span class="pulse"></span>Flash is editing${change.removed ? ` <q>${quoted(change.removed, 40)}</q>` : ""}`);
+    const frames = Math.min(36, Math.max(4, Math.ceil(change.added.length / 3)));
+    for (let k = 1; k < frames; k++) {
+      if (openDoc !== doc || doc.editing) return;
+      drawDocText(doc, change.head + change.added.slice(0, Math.round((change.added.length * k) / frames)) + change.tail);
+      if (k === 1) markAdded(doc, change.added.slice(0, 24), "doc-fresh");
+      await new Promise((r) => setTimeout(r, 26));
+    }
+  }
+  if (openDoc !== doc) return;
+  docBar(doc, "");
+  if (doc.editing) return;
+  drawDocument(doc);
+  markAdded(doc, change.added, "doc-fresh");
+  clearTimeout(doc.freshTimer);
+  doc.freshTimer = setTimeout(() => { if (window.CSS && CSS.highlights) CSS.highlights.delete("doc-fresh"); }, 2200);
+}
+
+function docProposal(event) {
+  const doc = openDoc;
+  if (!doc || !(event.ids || []).includes(doc.entry.id)) return;
+  doc.proposal = { ask: event.ask, text: event.text };
+  const change = textChange(doc.text, event.text);
+  const allow = () => answer(event.ask, "y");
+  const deny = () => answer(event.ask, "n");
+  const said = change.removed && change.added ? `Flash wants to replace <q>${quoted(change.removed, 40)}</q>`
+    : change.removed ? `Flash wants to take out <q>${quoted(change.removed, 40)}</q>` : "Flash wants to make this change";
+  if (doc.editing) {
+    docBar(doc, `${said}. Allowing it replaces what you have not saved.`, [["Deny", "", deny], ["Allow", "primary", allow]]);
+    return;
+  }
+  drawDocText(doc, event.text);
+  markSlots(doc, event.text);
+  markAdded(doc, change.added, "doc-proposed");
+  docBar(doc, said, [["Deny", "", deny], ["Allow", "primary", allow]]);
+}
+
+// The question was answered, here or in the chat.
+function docAnswered(event) {
+  const doc = openDoc;
+  if (!doc || !doc.proposal || doc.proposal.ask !== event.id) return;
+  if (window.CSS && CSS.highlights) CSS.highlights.delete("doc-proposed");
+  if (event.answer === "y") {
+    docBar(doc, `<span class="pulse"></span>Allowed`);
+    // A change that never lands (the write failed) leaves the file as it was.
+    const asked = doc.proposal;
+    setTimeout(() => { if (openDoc === doc && doc.proposal === asked) { doc.proposal = null; docBar(doc, ""); if (!doc.editing) drawDocument(doc); } }, 5000);
+    return;
+  }
+  doc.proposal = null;
+  docBar(doc, "");
+  if (!doc.editing) drawDocument(doc);
 }
 
 // Editing: the page itself turns editable, like a word processor, with
@@ -11083,6 +11311,9 @@ function apply(event) {
   if (event.type === "notify") { notified(event); return; }
   if (event.type === "team-chat") { teamChatChanged(event.team); return; }
   if (event.type === "btw") { btwEvent(event); return; }
+  if (event.type === "doc-changed") { docChanged(event); return; }
+  if (event.type === "doc-proposal") { docProposal(event); return; }
+  if (event.type === "answered") docAnswered(event);
 
   const chat = chats.get(event.chat);
   if (!chat) { if (event.chat) refreshLite(); return; }
