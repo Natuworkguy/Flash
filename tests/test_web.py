@@ -108,61 +108,20 @@ class TestTurns:
         stats = next(e for e in seen if e["type"] == "stats")
         assert (stats["tokens"], stats["rate"]) == (4, 10.0)
 
-    def test_a_reply_that_promises_work_is_told_to_do_it(self):
+    def test_a_reply_saying_what_comes_next_ends_the_turn(self):
+        # Nothing tells the model to go on: it stops where it said so.
         FakeClient.scripts = [
-            [part(calls=[call("get_date")]), part(done=True)],
-            # It sees the problem and says what it will do, then stops.
-            [part("Wait, the block covers the text. I'll move the logo "
-                  "text forward."), part(done=True)],
-            [part(calls=[call("get_date")]), part(done=True)],
-            [part("Fixed: the text is in front now."), part(done=True)],
-        ]
-        session = web.Session()
-        drain = events_of(session)
-        chat = session.new_chat()
-
-        run(session, chat, "make the minecraft logo")
-
-        said = [e["text"] for e in drain()
-                if e["type"] == "assistant" and e["text"]]
-        assert said[-2:] == [
-            "Wait, the block covers the text. I'll move the logo text "
-            "forward.",
-            "Fixed: the text is in front now.",
-        ]
-        # The model was told to go on, right after its promise.
-        sent = FakeClient.requests[-1]["messages"]
-        at = sent.index({"role": "system", "content": ai.PROMISE_NOTE})
-        assert "I'll move the logo" in sent[at - 1]["content"]
-        assert len(FakeClient.requests) == 4
-        # The history keeps what the user saw, not Flash's nudge.
-        kept = [m.get("content") for m in chat.messages]
-        assert ai.PROMISE_NOTE not in kept
-        assert kept[-1] == "Fixed: the text is in front now."
-        assert any("I'll move the logo" in (c or "") for c in kept)
-
-    def test_a_model_that_keeps_promising_is_let_go(self):
-        promise = [part("I'll fix it."), part(done=True)]
-        FakeClient.scripts = [promise, promise, promise]
-        session = web.Session()
-        chat = session.new_chat()
-
-        run(session, chat, "fix it")
-
-        # Asked twice, then its word is taken as the answer.
-        assert len(FakeClient.requests) == 1 + ai.MAX_PROMISE_NUDGES
-        assert chat.messages[-1]["content"] == "I'll fix it."
-
-    def test_an_offer_is_not_a_promise(self):
-        FakeClient.scripts = [
-            [part("Done. I'll add a roof if you'd like."), part(done=True)],
+            [part("Done. Tell me and I'll rewrite it."), part(done=True)],
         ]
         session = web.Session()
         chat = session.new_chat()
 
-        run(session, chat, "make a house")
+        run(session, chat, "fill it in")
 
         assert len(FakeClient.requests) == 1
+        assert chat.messages[-1]["content"] == (
+            "Done. Tell me and I'll rewrite it."
+        )
 
     def test_a_streamed_reply_comes_without_dashes(self):
         FakeClient.scripts = [[
@@ -3564,19 +3523,6 @@ class TestSparkChats:
         kept = sparks.find(spark.id)
         assert kept.goal == "Watch the pull requests."
         assert kept.every == 120
-
-    def test_a_spark_saying_what_it_will_do_next_shift_is_not_nudged(self):
-        spark = self._spark()
-        FakeClient.scripts = [
-            [part("I'll only tell you about crashes from now on."),
-             part(done=True)],
-        ]
-        session = web.Session()
-        chat = session.new_chat(spark=spark.id)
-
-        run(session, chat, "Only crashes please.")
-
-        assert len(FakeClient.requests) == 1
 
     def test_a_chat_whose_spark_was_removed_says_so(self):
         from flash import sparks

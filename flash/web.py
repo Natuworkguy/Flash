@@ -2256,7 +2256,6 @@ def _respond(
             convo = [system, *chat.messages]
         keep_from = len(convo)
         tool_count = 0
-        nudged = 0
         reply = Streamed()
 
         for _round in range(ai.Config.max_tool_rounds):
@@ -2269,18 +2268,6 @@ def _respond(
             if reply.stopped:
                 break
             if not reply.calls:
-                # It said what it would do next and stopped short of
-                # doing it: keep what it said, and tell it to go on.
-                # Not for a spark: "I'll only tell you about crashes" is
-                # about its next shifts, not this turn.
-                if (offered and kit is None
-                        and nudged < ai.MAX_PROMISE_NUDGES
-                        and ai.unkept_promise(reply.content)):
-                    nudged += 1
-                    _finish_reply(session, chat, reply, spark)
-                    convo.append(ai._message("assistant", reply.content))
-                    convo.append(ai.promise_nudge())
-                    continue
                 break
 
             _finish_reply(session, chat, reply, spark)
