@@ -46,6 +46,8 @@ class TestPlaceholders:
         ("[Add to calendar](https://example.com)", []),
         ("- [x] done, [see above], [1]", []),
         ("[insert\nacross lines]", []),
+        # Typed in the page's editor, saved with its brackets escaped.
+        ('Hi \\[fill in "hi"\\] there', ['\\[fill in "hi"\\]']),
     ])
     def test_what_counts(self, text, found):
         assert livedocs.placeholders(text) == found
