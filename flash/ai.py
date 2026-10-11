@@ -4403,13 +4403,28 @@ def _voice_input() -> Optional[str]:
     try:
         with Live(Text(), console=console, transient=True,
                   refresh_per_second=10) as live:
-            def on_state(state: str) -> None:
-                live.update(Text(
-                    f"{VOICE_STATES.get(state, state)}{ELLIPSIS}",
-                    style=ACCENT,
-                ))
+            now = {"state": "", "words": ""}
 
-            heard, why = listen(on_state)
+            def draw() -> None:
+                shown = Text(
+                    f"{VOICE_STATES.get(now['state'], now['state'])}"
+                    f"{ELLIPSIS}",
+                    style=ACCENT,
+                )
+                # What has been heard so far, as it is said.
+                if now["words"]:
+                    shown.append(f"\n  {now['words']}")
+                live.update(shown)
+
+            def on_state(state: str) -> None:
+                now["state"] = state
+                draw()
+
+            def on_words(words: str) -> None:
+                now["words"] = words
+                draw()
+
+            heard, why = listen(on_state, on_words)
     except KeyboardInterrupt:
         # Ctrl+C ends the spoken turn and hands the prompt back, rather
         # than tearing down whatever else the main loop was doing.

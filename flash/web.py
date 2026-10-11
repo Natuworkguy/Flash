@@ -4035,6 +4035,7 @@ class Handler(BaseHTTPRequestHandler):
         limit = {
             "/api/upload": MAX_RECORDING_BODY,
             "/api/voice/hear": MAX_VOICE_BODY,
+            "/api/voice/live": MAX_VOICE_BODY,
         }.get(url.path, MAX_BODY_BYTES)
         if length > limit:
             self._json(
@@ -4108,6 +4109,24 @@ class Handler(BaseHTTPRequestHandler):
                 "text": text,
                 **voice.voice_command(text, str(body.get("speaking") or "")),
             }
+
+        if path == "/api/voice/live":
+            # The words so far, while the user is still talking.
+            try:
+                pcm = base64.b64decode(
+                    str(body.get("data") or ""), validate=True
+                )
+            except (ValueError, TypeError):
+                raise ValueError(
+                    "that recording did not arrive whole"
+                ) from None
+            stream = str(body.get("id") or "")[:32]
+            if not stream:
+                raise ValueError("which recording is that?")
+            words, why = voice.hear_live(stream, pcm, bool(body.get("end")))
+            if why:
+                raise ValueError(why)
+            return {"text": words}
 
         if path == "/api/voice/say":
             wav, why = voice.synthesize(
