@@ -2434,7 +2434,9 @@ class TestRemovingHosts:
 
 class TestQueueAndSteer:
     def held(self, gate, *parts):
-        """A reply that waits on GATE, so a turn stays running."""
+        """A reply that waits on GATE, so a turn stays running. Wait for
+        the model to have been asked, not only for the chat to be busy:
+        a turn stopped before it asks never asks at all."""
 
         def script():
             gate.wait(5)
@@ -2456,7 +2458,7 @@ class TestQueueAndSteer:
         chat = session.new_chat()
 
         session.send(chat, "one")
-        wait_for(lambda: chat.busy)
+        wait_for(lambda: chat.busy and FakeClient.requests)
         assert session.send(chat, "two")["pending"]
         session.send(chat, "three")
 
@@ -2489,7 +2491,7 @@ class TestQueueAndSteer:
         chat = session.new_chat()
 
         session.send(chat, "write it in python")
-        wait_for(lambda: chat.busy)
+        wait_for(lambda: chat.busy and FakeClient.requests)
         session.send(chat, "actually, use rust", mode="steer")
         gate.set()
         self.settle(session, chat)
@@ -2520,7 +2522,7 @@ class TestQueueAndSteer:
         chat = session.new_chat()
 
         session.send(chat, "fix it")
-        wait_for(lambda: chat.busy)
+        wait_for(lambda: chat.busy and FakeClient.requests)
         session.send(chat, "and add tests", mode="steer")
         gate.set()
         self.settle(session, chat)
@@ -2539,7 +2541,7 @@ class TestQueueAndSteer:
         chat = session.new_chat()
 
         session.send(chat, "go")
-        wait_for(lambda: chat.busy)
+        wait_for(lambda: chat.busy and FakeClient.requests)
         session.send(chat, "then this")
         result = web.command(session, {"name": "stop", "chat": chat.id})
         gate.set()
@@ -2558,7 +2560,7 @@ class TestQueueAndSteer:
         session = web.Session()
         chat = session.new_chat()
         session.send(chat, "go")
-        wait_for(lambda: chat.busy)
+        wait_for(lambda: chat.busy and FakeClient.requests)
         first = session.send(chat, "a")["pending"]
         second = session.send(chat, "b")["pending"]
 
@@ -2655,7 +2657,7 @@ class TestRetryAfterError:
         session = web.Session()
         chat = session.new_chat()
         session.send(chat, "build it")
-        wait_for(lambda: chat.busy)
+        wait_for(lambda: chat.busy and FakeClient.requests)
         session.send(chat, "in rust", mode="steer")
         # Read at the next step, which the failure never reaches, so
         # it is put in the log by hand as a turn that read it would.
@@ -2805,7 +2807,7 @@ class TestEditing:
         session = web.Session()
         chat = session.new_chat()
         session.send(chat, "go")
-        wait_for(lambda: chat.busy)
+        wait_for(lambda: chat.busy and FakeClient.requests)
         with pytest.raises(ValueError):
             web.command(session, {
                 "name": "edit", "chat": chat.id, "at": 0, "arg": "stop",
