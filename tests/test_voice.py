@@ -876,3 +876,70 @@ def test_an_unknown_style_falls_back_to_warm(monkeypatch):
     monkeypatch.setenv("VOICE_STYLE", "shouty")
 
     assert voice.voice_style() == "warm"  # nosec B101
+
+
+class _Talking:
+    """A recognizer that hears "run the tests" "and then stop" a word a
+    block, finishing the first stretch after three blocks."""
+
+    WORDS = ["run", "the", "tests", "and", "then", "stop"]
+
+    def __init__(self, *_):
+        self.fed = 0
+
+    def AcceptWaveform(self, data):
+        self.fed += 1
+        return self.fed == 3
+
+    def Result(self):
+        return json.dumps({"text": "run the tests"})
+
+    def PartialResult(self):
+        return json.dumps({"partial": " ".join(self.WORDS[3:self.fed])})
+
+    def FinalResult(self):
+        return json.dumps({"text": " ".join(self.WORDS[3:self.fed])})
+
+
+def test_hearing_gives_the_words_so_far_and_keeps_every_stretch():
+    hearing = voice.Hearing(_Talking())
+
+    seen = [hearing.feed(b"..") for _ in range(5)]
+
+    assert seen == [  # nosec B101
+        "", "", "run the tests", "run the tests and",
+        "run the tests and then",
+    ]
+    # The first stretch is not lost from the end result.
+    assert hearing.final() == "run the tests and then"  # nosec B101
+
+
+def test_listen_shows_the_words_as_they_are_said(monkeypatch):
+    _fake_audio(monkeypatch, [_pcm(6000)] * 5 + [_pcm(0)] * 20)
+    sys.modules["vosk"].KaldiRecognizer = _Talking
+
+    shown = []
+    heard, why = listen(lambda _state: None, shown.append)
+
+    assert why == ""  # nosec B101
+    assert shown[:3] == [  # nosec B101
+        "run the tests", "run the tests and", "run the tests and then",
+    ]
+    assert heard.startswith("run the tests and then")  # nosec B101
+
+
+def test_the_page_hears_a_recording_a_piece_at_a_time(monkeypatch):
+    _fake_audio(monkeypatch)
+    sys.modules["vosk"].KaldiRecognizer = _Talking
+    monkeypatch.setattr(voice, "_live", {})
+    piece = b"\0" * (voice.BLOCK_FRAMES * 2)
+
+    assert voice.hear_live("a", piece * 2) == ("", "")  # nosec B101
+    assert voice.hear_live("a", piece * 2) == (  # nosec B101
+        "run the tests and", "",
+    )
+    # Another recording starts from nothing.
+    assert voice.hear_live("b", piece) == ("", "")  # nosec B101
+
+    voice.hear_live("a", b"", end=True)
+    assert "a" not in voice._live and "b" in voice._live  # nosec B101

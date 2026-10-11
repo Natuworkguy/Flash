@@ -16,6 +16,7 @@ import re
 import shutil
 import sys
 import threading
+import time
 import unicodedata
 import wave
 import zipfile
@@ -599,8 +600,55 @@ def _load_listener():
     return _listener[1]
 
 
-def listen(on_state: State) -> tuple[str, str]:
-    """Record until the speaker stops, and return what was said.
+class Hearing:
+    """Speech turned into words as it comes in: the words so far while
+    the speaker talks, and all of them once they stop."""
+
+    def __init__(self, recognizer, live: bool = True) -> None:
+        self._recognizer = recognizer
+        self._said: list[str] = []
+        self._partial = ""
+        # Only worth working out when someone is shown them.
+        self._live = live
+
+    def feed(self, pcm: bytes) -> str:
+        """Hear PCM, 16 kHz mono 16-bit, and return the words so far."""
+
+        if self._recognizer.AcceptWaveform(pcm):
+            # A stretch of speech the model is done with: kept, since
+            # the final result only has the stretch after it.
+            piece = _result_text(self._recognizer.Result(), "text")
+            if piece:
+                self._said.append(piece)
+            self._partial = ""
+        elif self._live:
+            self._partial = _result_text(
+                self._recognizer.PartialResult(), "partial",
+            )
+        return self.words()
+
+    def words(self) -> str:
+        return " ".join([*self._said, self._partial]).strip()
+
+    def final(self) -> str:
+        """Everything that was said."""
+
+        piece = _result_text(self._recognizer.FinalResult(), "text")
+        return " ".join([*self._said, piece]).strip()
+
+
+def _result_text(result: str, key: str) -> str:
+    try:
+        return str(json.loads(result).get(key) or "").strip()
+    except (ValueError, AttributeError):
+        return ""
+
+
+def listen(
+    on_state: State, on_words: Optional[Callable[[str], None]] = None,
+) -> tuple[str, str]:
+    """Record until the speaker stops, and return what was said. ON_WORDS
+    is told the words so far, as they change, while they talk.
 
     Returns `(text, "")`, where `text` is empty when nothing was heard,
     or `("", reason)` when the microphone or the model was not usable.
@@ -617,7 +665,10 @@ def listen(on_state: State) -> tuple[str, str]:
     except Exception as exc:  # noqa: BLE001
         return "", f"could not load the listening model: {exc}"
 
-    recognizer = vosk.KaldiRecognizer(model, SAMPLE_RATE)
+    hearing = Hearing(
+        vosk.KaldiRecognizer(model, SAMPLE_RATE), live=on_words is not None,
+    )
+    shown = ""
     heard = False
     quiet = 0.0
     elapsed = 0.0
@@ -640,7 +691,10 @@ def listen(on_state: State) -> tuple[str, str]:
             while elapsed < MAX_TURN_SECONDS:
                 block, _overflowed = stream.read(BLOCK_FRAMES)
                 block = bytes(block)
-                recognizer.AcceptWaveform(block)
+                words = hearing.feed(block)
+                if on_words is not None and words != shown:
+                    shown = words
+                    on_words(words)
                 elapsed += step
 
                 if _level(block) >= threshold:
@@ -664,12 +718,7 @@ def listen(on_state: State) -> tuple[str, str]:
 
     on_state("transcribing")
 
-    try:
-        result = json.loads(recognizer.FinalResult())
-    except ValueError:
-        return "", "the listening model returned nothing usable."
-
-    return str(result.get("text") or "").strip(), ""
+    return hearing.final(), ""
 
 
 # Said while Flash is talking, the interrupt word cuts the reply off. It
@@ -991,17 +1040,64 @@ def transcribe(pcm: bytes) -> tuple[str, str]:
     except Exception as exc:  # noqa: BLE001
         return "", f"could not load the listening model: {exc}"
 
-    recognizer = vosk.KaldiRecognizer(model, SAMPLE_RATE)
+    hearing = Hearing(vosk.KaldiRecognizer(model, SAMPLE_RATE), live=False)
     block = BLOCK_FRAMES * 2
     for start in range(0, len(pcm) - len(pcm) % 2, block):
-        recognizer.AcceptWaveform(pcm[start:start + block])
+        hearing.feed(pcm[start:start + block])
 
-    try:
-        result = json.loads(recognizer.FinalResult())
-    except ValueError:
-        return "", "the listening model returned nothing usable."
+    return hearing.final(), ""
 
-    return str(result.get("text") or "").strip(), ""
+
+# The web page's words as they are spoken: it sends the microphone a
+# piece at a time while the speaker talks, and shows what comes back.
+# What it sends once they stop is still heard whole, by transcribe().
+LIVE_IDLE_SECONDS = 60.0
+LIVE_STREAMS = 8
+_live: dict[str, tuple[float, Hearing, threading.Lock]] = {}
+_live_lock = threading.Lock()
+
+
+def hear_live(stream: str, pcm: bytes, end: bool = False) -> tuple[str, str]:
+    """The words so far in STREAM, once PCM (16 kHz mono 16-bit) is
+    heard too. END lets it go. Returns `(words, "")`, or `("", reason)`
+    when the listening model cannot be used."""
+
+    now = time.monotonic()
+    with _live_lock:
+        # A page that went away without saying it was done.
+        for key in [k for k, v in _live.items()
+                    if now - v[0] > LIVE_IDLE_SECONDS]:
+            del _live[key]
+        if end:
+            _live.pop(stream, None)
+            return "", ""
+        found = _live.get(stream)
+    if found is None:
+        try:
+            import vosk
+        except Exception:  # noqa: BLE001
+            return "", INSTALL_HINT
+        try:
+            with _models_lock:
+                model = _load_listener()
+        except Exception as exc:  # noqa: BLE001
+            return "", f"could not load the listening model: {exc}"
+        found = (now, Hearing(vosk.KaldiRecognizer(model, SAMPLE_RATE)),
+                 threading.Lock())
+        with _live_lock:
+            while len(_live) >= LIVE_STREAMS:
+                del _live[min(_live, key=lambda k: _live[k][0])]
+            found = _live.setdefault(stream, found)
+    _, hearing, lock = found
+    with lock:
+        block = BLOCK_FRAMES * 2
+        words = hearing.words()
+        for start in range(0, len(pcm) - len(pcm) % 2, block):
+            words = hearing.feed(pcm[start:start + block])
+    with _live_lock:
+        if stream in _live:
+            _live[stream] = (time.monotonic(), hearing, lock)
+    return words, ""
 
 
 def synthesize(text: str) -> tuple[bytes, str]:

@@ -426,6 +426,7 @@ pre code { display: block; padding: 2px 16px 14px; overflow-x: auto; font-size: 
 .turn:hover .actions, .actions.keep, .block:focus-within .actions { opacity: 1; }
 .actions .icon-btn { width: 30px; height: 30px; border-radius: 8px; }
 .actions .icon-btn svg { width: 16px; height: 16px; }
+.actions.gone { display: none; }
 .actions .meta { margin-left: 8px; font-size: 12px; color: var(--text-3); white-space: nowrap; }
 .user-wrap .actions { justify-content: flex-end; }
 /* An edited message's versions, to step between: always in sight. */
@@ -626,6 +627,10 @@ body.voice-on .shell, body.voice-on #suggestions, body.voice-on #pending { displ
 .voice-say { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .voice-say b { font-size: 15.5px; font-weight: 600; color: var(--text); }
 .voice-say span { font-size: 13px; color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* What you are saying, as you say it: the newest words, two lines of them. */
+.voice-say .voice-heard { font-size: 14.5px; line-height: 1.4; color: var(--text); white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; animation: word-in 0.25s var(--ease) both; }
+.voice-say .voice-heard[hidden] { display: none; }
+.voice-say:has(.voice-heard:not([hidden])) .voice-hint { display: none; }
 .voice-end { flex: none; }
 @media (prefers-reduced-motion: reduce) { .voice-orb { transform: none; } }
 
@@ -2615,7 +2620,7 @@ body.resizing-viewer iframe { pointer-events: none; }
         <div id="spark-ask" hidden aria-live="polite"></div>
         <div id="voice" hidden role="group" aria-label="Voice mode">
           <button type="button" class="voice-orb" aria-label="Voice"><span></span></button>
-          <div class="voice-say"><b class="voice-state">Listening</b><span class="voice-hint"></span></div>
+          <div class="voice-say"><b class="voice-state">Listening</b><span class="voice-hint"></span><span class="voice-heard" hidden></span></div>
           <button type="button" class="icon-btn voice-end" data-tip="End voice mode" data-keys="Esc" aria-label="End voice mode"></button>
         </div>
         <div class="shell"><div class="glow" aria-hidden="true"></div>
@@ -5083,14 +5088,40 @@ function statsText(entry) {
   return parts.join(" · ");
 }
 
+// Under the last words of a turn, for all of its words: copied and read
+// aloud together, in order (see placeActions).
 function replyActions(text) {
   const row = el("div", "actions");
+  row.dataset.text = text;
+  const blocks = () => row.blocks || [row.closest(".block")];
   row.append(
-    button("icon-btn", "copy", "Copy", "Alt C", (b) => copy(text, "reply", b)),
-    readButton(`reply:${text}`, () => row.closest(".block") && row.closest(".block").querySelector(".assistant")),
+    button("icon-btn", "copy", "Copy", "Alt C", (b) => copy(row.dataset.text, "reply", b)),
+    readButton(`reply:${text}`, () => blocks().map((b) => b && b.querySelector(".assistant")).filter(Boolean)),
     button("icon-btn", "retry", "Retry", "Alt R", retry),
   );
   return row;
+}
+
+// What Flash says between its tool calls is all one answer: its buttons
+// sit once, under the last of it, and only once the turn is over.
+function placeActions() {
+  const chat = chats.get(current);
+  const running = !!chat && (chat.busy || chat.queued);
+  const groups = [[]];
+  for (const node of messagesEl.children) {
+    if (node.matches(".user-wrap, .note")) groups.push([]);
+    else if (node.matches("[data-reply]")) groups[groups.length - 1].push(node);
+  }
+  groups.forEach((group, i) => group.forEach((block, j) => {
+    const row = block.querySelector(":scope > .actions");
+    if (!row) return;
+    const last = j === group.length - 1;
+    row.classList.toggle("gone", !last || (running && i === groups.length - 1));
+    if (last) {
+      row.blocks = group;
+      row.dataset.text = group.map((b) => b.dataset.raw).join("\n\n");
+    }
+  }));
 }
 
 // Comments sent from a document are a message Flash reads as text. In
@@ -5381,8 +5412,9 @@ async function retryFailed() {
 
 // The newest reply keeps its actions showing, as chat apps do.
 function markLatest() {
+  placeActions();
   messagesEl.querySelectorAll(".actions.keep").forEach((n) => n.classList.remove("keep"));
-  const replies = messagesEl.querySelectorAll("[data-reply] .actions");
+  const replies = messagesEl.querySelectorAll("[data-reply] .actions:not(.gone)");
   if (replies.length) replies[replies.length - 1].classList.add("keep");
 }
 
@@ -10522,6 +10554,18 @@ function setVoice(state, hint) {
   }[state] || [state, ""];
   panel.querySelector(".voice-state").textContent = words[0];
   panel.querySelector(".voice-hint").textContent = hint ?? words[1];
+  // What was said stays up while it is worked out and sent; a new turn
+  // of listening starts with none.
+  if (state !== "hearing" && state !== "thinking") showHeard("");
+}
+
+// The words heard so far, newest last; at most the last few lines' worth.
+function showHeard(text) {
+  const shown = $("#voice .voice-heard");
+  if (!shown) return;
+  const words = String(text || "").trim();
+  shown.hidden = !words;
+  shown.textContent = words.length > 160 ? `…${words.slice(-160).replace(/^\S*\s/, "")}` : words;
 }
 
 // TEAM, a team's ID, talks to that team in its chat instead of to Flash:
@@ -10624,7 +10668,17 @@ function listenOnce(opts = {}) {
   const o = { pause: VOICE_PAUSE, patience: VOICE_PATIENCE, longest: VOICE_LONGEST, loud: VOICE_LOUD, ...opts };
   if (voice.turn) voice.turn.finish(null);
   return new Promise((resolve) => {
-    const turn = { o, parts: [], heard: false, quiet: 0, elapsed: 0, finish: (pcm) => { if (voice.turn === turn) voice.turn = null; resolve(pcm); } };
+    const turn = {
+      o, parts: [], heard: false, quiet: 0, elapsed: 0, sent: 0, sending: false, last: 0, id: "",
+      finish: (pcm) => {
+        if (voice.turn === turn) voice.turn = null;
+        // Done with: what it said is heard whole, from here on. After the
+        // piece on its way, if one is, or that would start it over.
+        turn.done = true;
+        if (!turn.sending) endLive(turn);
+        resolve(pcm);
+      },
+    };
     voice.turn = turn;
   });
 }
@@ -10658,12 +10712,37 @@ function hearChunk(samples) {
   } else turn.parts.push(out);
   if (loud) { turn.heard = true; turn.quiet = 0; } else turn.quiet += step;
   const spoken = turn.heard ? turn.parts.length * out.length / VOICE_RATE : 0;
+  if (turn.o.live && turn.heard) hearLive(turn);
   if (turn.heard && (turn.quiet >= turn.o.pause || spoken >= turn.o.longest)) {
     const pcm = new Int16Array(turn.parts.reduce((n, part) => n + part.length, 0));
     let at = 0;
     for (const part of turn.parts) { pcm.set(part, at); at += part.length; }
     turn.finish(pcm);
   } else if (!turn.heard && turn.elapsed >= turn.o.patience) turn.finish(null);
+}
+
+// While they talk: what has been recorded since the last piece went, a
+// few times a second, one piece at a time, so the words keep up.
+const LIVE_EVERY = 0.3;
+function hearLive(turn) {
+  if (turn.sending || turn.elapsed - turn.last < LIVE_EVERY || turn.sent >= turn.parts.length) return;
+  const parts = turn.parts.slice(turn.sent);
+  turn.sent = turn.parts.length;
+  turn.last = turn.elapsed;
+  turn.sending = true;
+  if (!turn.id) turn.id = Math.random().toString(36).slice(2, 12);
+  const pcm = new Int16Array(parts.reduce((n, part) => n + part.length, 0));
+  let at = 0;
+  for (const part of parts) { pcm.set(part, at); at += part.length; }
+  api("/api/voice/live", { id: turn.id, data: base64Of(new Uint8Array(pcm.buffer)) })
+    .then((heard) => { if (!turn.done && voice.on) showHeard(heard.text); })
+    .catch(() => {})
+    .finally(() => { turn.sending = false; if (turn.done) endLive(turn); });
+}
+
+function endLive(turn) {
+  if (turn.id) api("/api/voice/live", { id: turn.id, data: "", end: true }).catch(() => {});
+  turn.id = "";
 }
 
 function base64Of(bytes) {
@@ -10702,13 +10781,14 @@ async function pausedUntilResume() {
 async function voiceLoop() {
   while (voice.on) {
     setVoice("listening");
-    const pcm = await listenOnce();
+    const pcm = await listenOnce({ live: true });
     if (!voice.on) return;
     if (!pcm) { if (!(await pausedUntilResume())) return; continue; }
     setVoice("hearing");
     const heard = await hear(pcm);
     if (!voice.on) return;
     if (!heard || !heard.text || heard.alone) continue;
+    showHeard(heard.text);
     if (heard.exit) { endVoice(); toast("Voice mode off"); return; }
     if (heard.pause) { if (!(await pausedUntilResume())) return; continue; }
     setVoice("thinking");
@@ -10952,7 +11032,8 @@ async function readAloudNode(key, node) {
   if (reading.key === key) { stopReading(); return; }
   stopReading();
   if (voice.on) { toast("Voice mode is on, and reads replies itself"); return; }
-  const parts = node ? sentencesOf(node) : [];
+  const nodes = (Array.isArray(node) ? node : [node]).filter(Boolean);
+  const parts = nodes.flatMap((n) => sentencesOf(n));
   if (!parts.length) { toast("There is nothing to read aloud in that"); return; }
   let stopped = false;
   let finish = () => {};
@@ -10960,10 +11041,10 @@ async function readAloudNode(key, node) {
   markPlaying(key, true);
   // Only one in the chat scrolls to keep the sentence in view: a report
   // sits in a window of its own.
-  const inChat = messagesEl.contains(node);
+  const inChat = nodes.some((n) => messagesEl.contains(n));
   reading.place = inChat ? placeNow() : null;
   const mark = (range) => {
-    if (!range || !node.isConnected) return;
+    if (!range || !range.startContainer.isConnected) return;
     if (inChat) markSpoken(range);
     else if (window.CSS && CSS.highlights) CSS.highlights.set("speaking", new Highlight(range));
   };
@@ -11261,7 +11342,7 @@ function apply(event) {
       if (event.busy) chat.queued = false;
       else { chat.partial = ""; chat.thinking = ""; chat.speaker = ""; refreshContext(); }
       renderChats();
-      if (here) { drawStreaming(); updateSend(); markRetry(); }
+      if (here) { drawStreaming(); updateSend(); markRetry(); markLatest(); }
       // The browser in the panel is live only while the turn runs.
       if (here && viewing && viewing.kind === "browser") openBrowser(viewing.run, viewing.at);
       break;
@@ -11301,6 +11382,7 @@ function apply(event) {
         if (streamNode) { streamNode.remove(); streamNode = null; }
         drawCtx.index = chat.log.length - 1;
         drawEntry(entry, drawCtx);
+        if (entry.type === "assistant") placeActions();
         markRetry();
         drawStreaming();
         updateSend();
@@ -12808,7 +12890,11 @@ async function copy(text, what, from) {
     from._restore = setTimeout(() => { from.innerHTML = was; }, 1300);
   } else toast(`Copied ${what}`);
 }
-const copyLastReply = () => copy((lastOf("assistant") || {}).text, "reply");
+// The whole of the last answer, as its Copy button gives it.
+const copyLastReply = () => {
+  const rows = messagesEl.querySelectorAll("[data-reply] .actions:not(.gone)");
+  copy(rows.length ? rows[rows.length - 1].dataset.text : (lastOf("assistant") || {}).text, "reply");
+};
 function copyLastCode() {
   const found = [...((lastOf("assistant") || {}).text || "").matchAll(/```[^\n]*\n([\s\S]*?)```/g)];
   copy(found.length ? found[found.length - 1][1].replace(/\n$/, "") : "", "code block");
