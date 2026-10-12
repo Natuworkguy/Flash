@@ -5872,7 +5872,7 @@ function drawGeneral(body) {
   body.insertAdjacentHTML("beforeend", `<h2 class="settings-section settings-gap">Background</h2><p class="settings-sub">A pixel-art scene behind a new chat, the same ones <code>/background</code> shows in the terminal. Add your own as <code>.scene</code> files in <code>~/.flash/backgrounds</code>.</p><div class="scene-grid" role="radiogroup" aria-label="Background"></div>`);
   drawSceneCards(body.querySelector(".scene-grid"));
 
-  body.insertAdjacentHTML("beforeend", `<h2 class="settings-section settings-gap">Conversation</h2><p class="settings-sub">What happens when a chat outgrows the model's context window. The last three exchanges always stay word for word.</p>`);
+  body.insertAdjacentHTML("beforeend", `<h2 class="settings-section settings-gap">Conversation</h2><p class="settings-sub">What happens when a chat outgrows the model's context window, where the last three exchanges always stay word for word, and how chats are named.</p>`);
   const row = el("button", "setting-row", `<span class="what"><b>Summarize old messages</b><span>Have the model condense what no longer fits into a summary it keeps reading. Off, the oldest messages are dropped instead, which is faster and never loses detail from the ones kept.</span></span><span class="switch" aria-hidden="true"></span>`);
   row.type = "button";
   row.setAttribute("role", "switch");
@@ -5884,6 +5884,17 @@ function drawGeneral(body) {
     catch (error) { row.setAttribute("aria-checked", !on); showFailure(error); }
   };
   body.appendChild(row);
+  const named = el("button", "setting-row titles-row", `<span class="what"><b>Let the model title chats</b><span>After a chat's first reply, the model names it in a few words. Off, a chat is named after its first message. A name you give a chat yourself always stays.</span></span><span class="switch" aria-hidden="true"></span>`);
+  named.type = "button";
+  named.setAttribute("role", "switch");
+  named.setAttribute("aria-checked", !!info.model_titles);
+  named.onclick = async () => {
+    const on = named.getAttribute("aria-checked") !== "true";
+    named.setAttribute("aria-checked", on);
+    try { info.model_titles = (await command("titles-setting", on ? "on" : "off")).model_titles; }
+    catch (error) { named.setAttribute("aria-checked", !on); showFailure(error); }
+  };
+  body.appendChild(named);
 
   body.insertAdjacentHTML("beforeend", `<h2 class="settings-section settings-gap">System One</h2><p class="settings-sub">A small, quick model at Flash's side in autonomous mode. It looks over each command and edit before it runs and stops the ones that look unsafe or off task, and it answers Flash's quick yes/no, choice and score questions. Needs Ollama v0.35 or later. Pick which model it is, or None, in the model menu by the message box.</p>`);
   const systemOne = el("button", "setting-row system-one-row", `<span class="what"><b>Review autonomous commands</b><span>Checking this Ollama…</span></span><span class="switch" aria-hidden="true"></span>`);

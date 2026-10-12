@@ -68,6 +68,7 @@ from . import (
     systemone,
     teamchat,
     themes,
+    titles,
     updater,
     voice,
     workspace,
@@ -307,6 +308,9 @@ class Chat:
     # The user saved a document in the side panel while a turn ran: the
     # next turn reads it, {"path", "name", "before", "text"}.
     saved_doc: Optional[dict] = None
+    # The title its first message gave it, while the model may still
+    # write a better one (see titles.py); "" once that is settled.
+    auto_title: str = ""
     # The turn running now is one a save of this file woke: it may find
     # nothing in it to do, and then says so in a word nobody sees.
     quiet: str = ""
@@ -1383,6 +1387,7 @@ class Session:
                 else first.get("name", "")
             )
             chat.title = " ".join(named.split())[:TITLE_CHARS] or chat.title
+            chat.auto_title = chat.title
             self.hub.publish({"type": "chats", "chat": chat.id})
         event: dict = {
             "type": "user", "text": text, "turn": uuid.uuid4().hex[:8],
@@ -1661,6 +1666,47 @@ class Session:
             self.emit(chat, event)
         return steers
 
+    def _title(self, chat: Chat) -> None:
+        """After a chat's first turn: the model names it, when the user
+        has that on, on a thread of its own. Not over a name they gave
+        it meanwhile, and only once."""
+
+        from . import ai  # deferred: ai imports half of Flash
+
+        was, chat.auto_title = chat.auto_title, ""
+        if not titles.enabled() or chat.title != was:
+            return
+        asked = next(
+            (e.get("text", "") for e in chat.log if e["type"] == "user"), "",
+        )
+        answered = next(
+            (e.get("text", "") for e in chat.log
+             if e["type"] == "assistant" and (e.get("text") or "").strip()),
+            "",
+        )
+        spark = sparks.find(chat.spark) if chat.spark else None
+        model = (
+            sparks.model_of(spark, ai.Config.model or "") if spark
+            else ai.Config.model
+        )
+        if not asked.strip() or not model:
+            return
+
+        def name() -> None:
+            try:
+                said = titles.write(
+                    ai._client(), model, asked, answered, TITLE_CHARS,
+                    ai._chat_options(),
+                )
+            except Exception:  # noqa: BLE001
+                return  # its first message still names it
+            if said and chat.title == was and chat.id in self.chats:
+                chat.title = said
+                self.save(chat)
+                self.hub.publish({"type": "chats", "chat": chat.id})
+
+        threading.Thread(target=name, daemon=True).start()
+
     def _take_next(self, chat: Chat) -> Optional[dict]:
         """The next waiting message to run as a turn, if any. A steer
         the turn ended before it could read comes first: it is older.
@@ -1744,6 +1790,8 @@ class Session:
                     self.save(chat)
                     self.emit(chat, {"type": "busy", "busy": False})
                     self.hub.publish({"type": "status"})
+            if chat.auto_title:
+                self._title(chat)
             # A spark's report that came in while the turn ran.
             if following is None:
                 self.post_spark_reports()
@@ -2624,6 +2672,7 @@ def status(ai) -> dict:
         "system_one": systemone.enabled(),
         "system_one_model": systemone.model() if systemone.enabled() else "",
         "compact": bool(ai.Config.auto_compact),
+        "model_titles": titles.enabled(),
         # What a new chat says hello with, for the page to pick from by
         # the browser's clock.
         "greetings": greetings.POOLS,
@@ -3304,6 +3353,12 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
         ai.set_config_var("BACKGROUND", scene["name"])
         session.hub.publish({"type": "status"})
         return {"background": scene["name"], "scene": scene}
+
+    if name == "titles-setting":
+        on = arg in ("on", "1", "true")
+        ai.set_config_var(titles.SETTING, "1" if on else "0")
+        session.hub.publish({"type": "status"})
+        return {"model_titles": on}
 
     if name == "compact-setting":
         on = arg in ("on", "1", "true")
