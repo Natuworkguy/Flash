@@ -630,6 +630,42 @@ def _settle_size() -> None:
         size = now
 
 
+def _leave(messages: list, conversation: bool, started: float) -> None:
+    """Leave the way a finished program does: the opening screen and the
+    prompt's frame go, the conversation is printed again to scroll back
+    through, and one line says what the session came to."""
+
+    if console.is_terminal:
+        shown = console.rendered() if conversation else ""
+        console.file.write(
+            SYNC_BEGIN + "\x1b[H\x1b[2J\x1b[3J" + shown + SYNC_END
+        )
+        console.file.flush()
+        console.forget()
+    elif not conversation:
+        print()
+
+    asked = sum(
+        1 for m in messages
+        if m.get("role") == "user" and str(m.get("content") or "").strip()
+    )
+    took = int(time.monotonic() - started)
+    minutes, seconds = divmod(took, 60)
+    hours, minutes = divmod(minutes, 60)
+    length = (
+        f"{hours}h {minutes}m" if hours
+        else f"{minutes}m {seconds}s" if minutes else f"{seconds}s"
+    )
+    said = [f"{asked} message{'' if asked == 1 else 's'}", length]
+    if Config.model:
+        said.append(Config.model)
+    line = Text("● ", style=ACCENT)
+    line.append("Bye.", style="bold")
+    if asked:
+        line.append("  " + " · ".join(said), style=DIM)
+    console.print(line)
+
+
 def redraw_conversation(c: ScreenConsole) -> None:
     """Wipe the screen and print the conversation on it again.
 
@@ -4832,6 +4868,7 @@ def main() -> None:
     backdrop = open_screen(console, update)
 
     banner_showing = True
+    session_started = time.monotonic()
 
     def redraw_banner() -> None:
         """Paint the opening screen again, for a resize or a toggle."""
@@ -4954,7 +4991,7 @@ def main() -> None:
                         backdrop=backdrop if banner_showing else None,
                     )
                 except EOFError:
-                    print()
+                    _leave(messages, not banner_showing, session_started)
                     return
 
                 if uin == RESIZE:
@@ -5047,6 +5084,7 @@ def main() -> None:
 
             if uin in ("/bye", "/exit"):
                 _clear_scratch_dir()
+                _leave(messages, True, session_started)
                 return
 
             if uin == "/model" or uin.startswith("/model "):
