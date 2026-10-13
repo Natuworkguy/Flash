@@ -84,13 +84,14 @@ COMMANDS = [
     ("/version", "show the current version and check for updates"),
     ("/update", "update Flash to the latest version (pipx installs)"),
     ("/help", "show this help (alias: /?)"),
-    ("/bye", "exit Flash (alias: /exit)"),
+    ("/bye", "exit Flash"),
+    ("/exit", "exit Flash"),
 ]
 
 # Every name an extension may not take: the commands above and their
 # aliases.
 RESERVED_COMMANDS = frozenset(
-    [cmd for cmd, _desc in COMMANDS] + ["/?", "/exit", "/extensions"]
+    [cmd for cmd, _desc in COMMANDS] + ["/?", "/extensions"]
 )
 
 
@@ -837,7 +838,7 @@ def key_bindings() -> KeyBindings:
 
 # How long a first Ctrl+C on an empty line waits for the second.
 EXIT_PRESS_SECONDS = 1.5
-EXIT_HINT = "Press Ctrl+C again to exit"
+EXIT_HINT = "Press Ctrl+C again to exit, or type /bye"
 _exit_armed_until = 0.0
 
 
