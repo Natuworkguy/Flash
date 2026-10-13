@@ -467,6 +467,10 @@ def _suggestion_placeholder() -> StyleAndTextTuples:
     if get_app().is_done:
         return []
 
+    # One Ctrl+C on an empty line: a second one leaves.
+    if time.monotonic() < _exit_armed_until:
+        return [(f"fg:{DIM_HEX}", EXIT_HINT)]
+
     total = _CYCLE * len(_SUGGESTIONS)
     pos = time.monotonic() % total
     idx = int(pos // _CYCLE)
@@ -808,7 +812,33 @@ def key_bindings() -> KeyBindings:
     def _expand(event) -> None:
         _stand_down(event.app, EXPAND)
 
+    # Ctrl+C clears what is typed. On an empty line it asks for a second
+    # press, and that one leaves, as Ctrl+D does. Nothing is printed
+    # either way, so the screen above never moves.
+    @keys.add("c-c")
+    def _interrupt(event) -> None:
+        global _exit_armed_until
+
+        buffer = event.app.current_buffer
+        if buffer.text:
+            buffer.reset()
+            _exit_armed_until = 0.0
+            return
+        now = time.monotonic()
+        if now < _exit_armed_until:
+            _exit_armed_until = 0.0
+            event.app.exit(exception=EOFError)
+            return
+        _exit_armed_until = now + EXIT_PRESS_SECONDS
+        event.app.invalidate()
+
     return keys
+
+
+# How long a first Ctrl+C on an empty line waits for the second.
+EXIT_PRESS_SECONDS = 1.5
+EXIT_HINT = "Press Ctrl+C again to exit"
+_exit_armed_until = 0.0
 
 
 def carry(text: str) -> None:
