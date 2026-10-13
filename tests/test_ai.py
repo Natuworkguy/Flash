@@ -532,3 +532,33 @@ def test_a_bang_command_with_no_output_or_a_timeout(monkeypatch):
 
     assert "$ touch x\nexit 0\n" in block  # nosec B101
     assert "$ sleep 999\ntimed out after 600s" in block  # nosec B101
+
+
+# --- Leaving -----------------------------------------------------------------
+
+
+def test_leaving_says_what_the_session_came_to(monkeypatch):
+    shown = []
+    monkeypatch.setattr(ai.console, "print", lambda *a, **k: shown.append(a))
+    monkeypatch.setattr(ai.Config, "model", "flash-test")
+    monkeypatch.setattr(ai.time, "monotonic", lambda: 1000.0)
+    messages = [
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": "hey"},
+        {"role": "user", "content": "fix it"},
+    ]
+
+    ai._leave(messages, True, 1000.0 - 125)
+
+    line = shown[-1][0].plain
+    assert line.startswith("\u25cf Bye.")  # nosec B101
+    assert "2 messages \u00b7 2m 5s \u00b7 flash-test" in line  # nosec B101
+
+
+def test_leaving_before_anything_was_said_is_just_bye(monkeypatch):
+    shown = []
+    monkeypatch.setattr(ai.console, "print", lambda *a, **k: shown.append(a))
+
+    ai._leave([], False, ai.time.monotonic())
+
+    assert shown[-1][0].plain == "\u25cf Bye."  # nosec B101

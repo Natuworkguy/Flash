@@ -3,6 +3,7 @@
 import threading
 import time
 
+import pytest
 from prompt_toolkit import PromptSession
 from prompt_toolkit.completion import CompleteEvent
 from prompt_toolkit.document import Document
@@ -329,3 +330,33 @@ def test_a_shell_line_comes_back_from_history_as_one(monkeypatch, tmp_path):
     assert _typed(  # nosec B101
         monkeypatch, tmp_path, "\x1b[A\r", history=1
     ) == "!ls"
+
+
+# --- Ctrl+C at the prompt ----------------------------------------------------
+
+CTRL_C = "\x03"
+
+
+def test_ctrl_c_clears_what_is_typed(monkeypatch, tmp_path):
+    monkeypatch.setattr(repl_input, "_exit_armed_until", 0.0)
+    assert _typed(  # nosec B101
+        monkeypatch, tmp_path, f"half a thought{CTRL_C}fresh\r"
+    ) == "fresh"
+
+
+def test_ctrl_c_twice_on_an_empty_line_leaves(monkeypatch, tmp_path):
+    monkeypatch.setattr(repl_input, "_exit_armed_until", 0.0)
+    with pytest.raises(EOFError):
+        _typed(monkeypatch, tmp_path, CTRL_C + CTRL_C)
+
+
+def test_one_ctrl_c_only_asks(monkeypatch, tmp_path):
+    monkeypatch.setattr(repl_input, "_exit_armed_until", 0.0)
+    assert _typed(  # nosec B101
+        monkeypatch, tmp_path, f"{CTRL_C}still here\r"
+    ) == "still here"
+    # The second press has to come soon, or it is a first one again.
+    monkeypatch.setattr(repl_input, "_exit_armed_until", 0.0)
+    assert _typed(  # nosec B101
+        monkeypatch, tmp_path, f"{CTRL_C}again\r"
+    ) == "again"

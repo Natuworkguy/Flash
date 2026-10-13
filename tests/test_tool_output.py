@@ -193,9 +193,10 @@ class TestKeysInTheLoop:
         # Drawn again after each press, with the mode already flipped,
         # so the banner's autonomous notice comes and goes.
         assert drawn == [True, False]
-        # EOF prints one bare newline, and nothing else: no
-        # "Autonomous mode enabled." line.
-        assert printed == [()]
+        # Leaving prints a bare newline and the goodbye, and nothing
+        # else: no "Autonomous mode enabled." line.
+        assert printed[0] == ()
+        assert [a[0].plain for a in printed[1:]] == ["\u25cf Bye."]
 
     def test_shift_tab_after_the_banner_only_toggles(self, monkeypatch):
         from flash.repl_input import TOGGLE_AUTO
