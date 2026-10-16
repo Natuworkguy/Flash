@@ -70,6 +70,7 @@ from . import (
     themes,
     titles,
     updater,
+    visuals,
     voice,
     workspace,
 )
@@ -2673,6 +2674,7 @@ def status(ai) -> dict:
         "system_one_model": systemone.model() if systemone.enabled() else "",
         "compact": bool(ai.Config.auto_compact),
         "model_titles": titles.enabled(),
+        "visuals": visuals.level(),
         # What a new chat says hello with, for the page to pick from by
         # the browser's clock.
         "greetings": greetings.POOLS,
@@ -3359,6 +3361,12 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
         ai.set_config_var(titles.SETTING, "1" if on else "0")
         session.hub.publish({"type": "status"})
         return {"model_titles": on}
+
+    if name == "visuals-setting":
+        level = "less" if arg == "less" else "more"
+        ai.set_config_var(visuals.SETTING, level)
+        session.hub.publish({"type": "status"})
+        return {"visuals": level}
 
     if name == "compact-setting":
         on = arg in ("on", "1", "true")

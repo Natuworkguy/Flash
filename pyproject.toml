@@ -33,6 +33,7 @@ include = ["flash*"]
 [tool.setuptools.package-data]
 flash = [
     "system_prompt.txt",
+    "visuals_prompt.txt",
     "thinking_states.json",
     "suggestions.json",
     "backgrounds/*.scene",

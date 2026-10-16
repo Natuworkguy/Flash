@@ -44,6 +44,7 @@ from . import (
     sparks,
     systemone,
     textures,
+    visuals,
 )
 from .browser import (
     ACTIONS,
@@ -262,12 +263,16 @@ def _flash_system_prompt(extension_prompt: str = "") -> str:
     """
 
     added = f"{extension_prompt}\n" if extension_prompt else ""
+    # Rich answers are part of how Flash writes, so they sit with its own
+    # style, read afresh so the Settings switch takes effect at once.
+    rich = visuals.prompt_block()
+    rich = f"\n{rich}\n" if rich else ""
 
     return f"""
 === System Prompt ===
 
 {FLASH_PROMPT}
-{TOOL_SYSTEM_PROMPT}
+{rich}{TOOL_SYSTEM_PROMPT}
 {CURRENT_DATE_PROMPT}
 {added}=== END OF SYSTEM PROMPT ===
 
@@ -290,7 +295,7 @@ def build_system_prompt(model_prompt: str = "") -> str:
         )
         if part
     )
-    flash_prompt = _flash_system_prompt(added) if added else SYSTEM_PROMPT
+    flash_prompt = _flash_system_prompt(added)
 
     if not model_prompt:
         return flash_prompt

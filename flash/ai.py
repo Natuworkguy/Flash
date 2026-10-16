@@ -43,6 +43,7 @@ from . import (
     sparks,
     systemone,
     terminal,
+    visuals,
 )
 from .btw import question_of as btw_question
 from .cli import parse_args
@@ -4246,7 +4247,7 @@ def _render_markdown(console: Console, text: str, *, end: str = "\n") -> None:
     trailing cursor dot -- the full reply already arrived in one shot, so
     this is a paced typewriter effect rather than real token streaming."""
 
-    text = render_latex(serif.for_terminal(text))
+    text = render_latex(serif.for_terminal(visuals.for_terminal(text)))
 
     def render(body: str) -> Markdown:
         return Markdown(body, code_theme="monokai", hyperlinks=True)

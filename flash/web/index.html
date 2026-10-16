@@ -405,6 +405,127 @@ body.empty #suggestions { display: flex; flex-wrap: wrap; justify-content: cente
 .assistant .serif-block > :last-child { margin-bottom: 0; }
 .assistant .serif-block h1, .assistant .serif-block h2, .assistant .serif-block h3, .assistant .serif-block h4 { font-weight: 500; letter-spacing: -0.01em; }
 .assistant .serif { font-family: var(--serif); font-style: italic; font-size: 1.3em; line-height: 1; letter-spacing: -0.01em; color: var(--text-2); }
+/* Rich answers: the live pieces of a reply, each on a card of its own. */
+.ui-card { --c0: var(--accent); --c1: #5b9cf5; --c2: var(--add); --c3: #a98bff; --c4: var(--warn); --c5: #4cbcc4; margin: 1.1em 0; padding: 16px 18px; border: 1px solid var(--border); border-radius: 16px; background: var(--surface); box-shadow: var(--composer-shadow); font-size: 14px; line-height: 1.45; animation: ui-in 0.45s var(--apple) both; }
+.streaming .ui-card, .streaming .ui-card * { animation: none !important; }
+.streaming .ui-card { pointer-events: none; }
+@keyframes ui-in { from { opacity: 0; transform: translateY(6px) scale(0.99); } }
+.ui-card + .ui-card { margin-top: 10px; }
+.ui-title { font-weight: 600; font-size: 15px; letter-spacing: -0.01em; margin-bottom: 12px; }
+.ui-pending { display: flex; align-items: center; gap: 10px; color: var(--text-3); font-size: 13.5px; background: linear-gradient(100deg, var(--surface) 30%, var(--hover) 50%, var(--surface) 70%) 0 0 / 300% 100%; animation: ui-shimmer 1.6s linear infinite; }
+@keyframes ui-shimmer { to { background-position: -150% 0; } }
+.ui-spin { width: 14px; height: 14px; border-radius: 50%; border: 2px solid var(--border-strong); border-top-color: var(--accent); animation: ui-spin 0.8s linear infinite; }
+@keyframes ui-spin { to { transform: rotate(360deg); } }
+.ui-card .c0 { --c: var(--c0); } .ui-card .c1 { --c: var(--c1); } .ui-card .c2 { --c: var(--c2); } .ui-card .c3 { --c: var(--c3); } .ui-card .c4 { --c: var(--c4); } .ui-card .c5 { --c: var(--c5); }
+
+/* Charts. */
+.ui-svg { display: block; width: 100%; height: auto; overflow: visible; }
+.ui-svg .grid { stroke: var(--border); stroke-width: 1; }
+.ui-svg .base { stroke: var(--border-strong); stroke-width: 1; }
+.ui-svg .axis { fill: var(--text-3); font: 500 11px var(--sans); }
+.ui-svg .bar { fill: var(--c); transform-box: fill-box; transform-origin: bottom; animation: ui-grow 0.6s var(--apple) both; animation-delay: var(--d, 0ms); transition: opacity 0.15s; }
+.ui-plot:hover .bar { opacity: 0.55; }
+.ui-plot .bar:hover { opacity: 1; }
+@keyframes ui-grow { from { transform: scaleY(0); } }
+.ui-svg .line { fill: none; stroke: var(--c); stroke-width: 2.5; stroke-linejoin: round; stroke-linecap: round; stroke-dasharray: 1; animation: ui-draw 0.9s var(--ease) both; }
+@keyframes ui-draw { from { stroke-dashoffset: 1; } to { stroke-dashoffset: 0; } }
+.ui-svg .area { fill: var(--c); opacity: 0.1; }
+.ui-svg .dot { fill: var(--surface); stroke: var(--c); stroke-width: 2; transition: r 0.15s; }
+.ui-svg .dot:hover { r: 6; fill: var(--c); }
+.ui-legend { display: flex; flex-wrap: wrap; gap: 6px 14px; margin-bottom: 10px; font-size: 12.5px; color: var(--text-2); }
+.ui-legend span { display: inline-flex; align-items: center; gap: 6px; }
+.ui-legend i { width: 9px; height: 9px; border-radius: 3px; background: var(--c); }
+.ui-legend b { color: var(--text); font-weight: 600; }
+.ui-donut { display: flex; align-items: center; gap: 22px; flex-wrap: wrap; }
+.ui-donut .ui-svg { width: 150px; flex: none; }
+.ui-donut .ui-legend { flex-direction: column; margin: 0; gap: 8px; font-size: 13.5px; }
+.ui-svg .arc { fill: none; stroke: var(--c); stroke-width: 22; transition: stroke-width 0.15s; animation: ui-in 0.5s var(--apple) both; }
+.ui-svg .arc:hover { stroke-width: 27; }
+.ui-svg .total { fill: var(--text); font: 700 22px var(--sans); text-anchor: middle; }
+.ui-svg .sub { fill: var(--text-3); font: 500 11px var(--sans); text-anchor: middle; }
+
+/* Side by side. */
+.ui-cols { display: grid; grid-template-columns: repeat(var(--n), minmax(0, 1fr)); gap: 10px; }
+.ui-col { position: relative; padding: 14px; border: 1px solid var(--border); border-radius: 12px; background: var(--bg); }
+.ui-col.pick { border-color: color-mix(in srgb, var(--accent) 60%, transparent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent); }
+.ui-col .name { font-weight: 650; font-size: 15px; }
+.ui-col .tag { font-size: 12px; color: var(--text-3); margin-top: 2px; }
+.ui-col .points { margin-top: 10px; display: grid; gap: 6px; font-size: 13px; color: var(--text-2); }
+.ui-col .points div { padding-left: 14px; position: relative; }
+.ui-col .points div::before { content: ""; position: absolute; left: 2px; top: 0.6em; width: 5px; height: 5px; border-radius: 50%; background: var(--border-strong); }
+.ui-badge { position: absolute; top: -10px; right: 10px; display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px 2px 6px; border-radius: 999px; background: var(--accent); color: var(--accent-text); font-size: 11px; font-weight: 600; }
+.ui-badge svg { width: 11px; height: 11px; }
+@media (max-width: 640px) { .ui-cols { grid-template-columns: 1fr; } }
+
+/* Headline figures. */
+.ui-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px; }
+.ui-stat { padding: 12px 14px; border-radius: 12px; background: var(--bg); border: 1px solid var(--border); }
+.ui-stat .label { font-size: 12px; color: var(--text-3); font-weight: 500; }
+.ui-stat .value { font-size: 24px; font-weight: 700; letter-spacing: -0.02em; margin-top: 2px; font-variant-numeric: tabular-nums; }
+.ui-stat .note { font-size: 12px; color: var(--text-3); margin-top: 2px; }
+.ui-stat .note.up { color: var(--add); } .ui-stat .note.down { color: var(--del); }
+
+/* Steps, and a chain of stages to click through. */
+.ui-steps { display: grid; gap: 0; }
+.ui-step { display: flex; gap: 12px; position: relative; padding-bottom: 14px; }
+.ui-step:last-child { padding-bottom: 0; }
+.ui-step:not(:last-child)::before { content: ""; position: absolute; left: 11px; top: 26px; bottom: 2px; width: 2px; border-radius: 1px; background: var(--border); }
+.ui-step .n { flex: none; width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center; font-size: 12px; font-weight: 700; background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); }
+.ui-step .name { font-weight: 600; padding-top: 2px; }
+.ui-step .text { color: var(--text-2); font-size: 13.5px; margin-top: 2px; }
+.ui-chain { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+.ui-node { padding: 8px 12px; border-radius: 10px; border: 1px solid var(--border-strong); background: var(--bg); color: var(--text); font: 600 13px var(--sans); cursor: pointer; transition: background 0.15s, border-color 0.15s, transform 0.15s var(--spring); }
+.ui-node:hover:not(:disabled) { transform: translateY(-1px); border-color: var(--accent); }
+.ui-node.on { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+.ui-node:disabled { cursor: default; }
+.ui-arrow { color: var(--text-3); display: grid; }
+.ui-arrow svg { width: 15px; height: 15px; }
+.ui-detail { display: none; margin-top: 12px; padding: 12px 14px; border-radius: 12px; background: var(--bg); color: var(--text-2); font-size: 13.5px; animation: ui-in 0.3s var(--apple) both; }
+.ui-detail.on { display: block; }
+.ui-detail b { display: block; color: var(--text); margin-bottom: 2px; }
+
+/* Calculators. */
+.ui-ins { display: grid; gap: 12px; }
+.ui-in { display: grid; grid-template-columns: minmax(90px, 1fr) minmax(0, 2fr) auto; align-items: center; gap: 12px; font-size: 13.5px; }
+.ui-in .name { color: var(--text-2); }
+.ui-in input[type=range] { width: 100%; accent-color: var(--accent); }
+.ui-in:not(:has(input[type=range])) .box { grid-column: 2 / 4; justify-self: start; }
+.ui-in .box { display: inline-flex; align-items: center; gap: 4px; width: 136px; padding: 5px 9px; border: 1px solid var(--border-strong); border-radius: 9px; background: var(--bg); }
+.ui-in .box em { font-style: normal; color: var(--text-3); font-size: 12.5px; }
+.ui-in .box input { flex: 1; min-width: 0; width: 0; border: 0; background: none; color: var(--text); font: 600 13.5px var(--sans); font-variant-numeric: tabular-nums; outline: none; text-align: right; }
+.ui-outs { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px; margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--border); }
+.ui-out span { display: block; font-size: 12px; color: var(--text-3); font-weight: 500; }
+.ui-out b { display: block; font-size: 22px; font-weight: 700; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; color: var(--accent); }
+
+/* Choices and forms: what the user says next. */
+.ui-choices { padding: 14px 16px; }
+.ui-options { display: flex; flex-wrap: wrap; gap: 8px; }
+.ui-option { display: inline-flex; align-items: center; gap: 8px; padding: 9px 12px 9px 14px; border-radius: 12px; border: 1px solid var(--border-strong); background: var(--bg); color: var(--text); font: 500 13.5px var(--sans); cursor: pointer; text-align: left; transition: border-color 0.15s, background 0.15s, transform 0.18s var(--spring); }
+.ui-option span { display: grid; width: 20px; height: 20px; place-items: center; border-radius: 50%; background: var(--hover); color: var(--text-3); transition: background 0.15s, color 0.15s; }
+.ui-option svg { width: 12px; height: 12px; }
+.ui-option:hover:not(:disabled) { border-color: var(--accent); transform: translateY(-1px); }
+.ui-option:hover:not(:disabled) span { background: var(--accent); color: var(--accent-text); }
+.ui-option:disabled { cursor: default; opacity: 0.45; }
+.ui-option.chosen { opacity: 1; border-color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.ui-option.chosen span { background: var(--accent); color: var(--accent-text); }
+.ui-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; }
+.ui-field { display: grid; gap: 5px; font-size: 12.5px; color: var(--text-2); font-weight: 500; }
+.ui-field input, .ui-field select { padding: 8px 10px; border: 1px solid var(--border-strong); border-radius: 9px; background: var(--bg); color: var(--text); font: 400 13.5px var(--sans); outline: none; }
+.ui-field input:focus, .ui-field select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent); }
+.ui-submit { grid-column: 1 / -1; justify-self: start; padding: 9px 16px; border: 0; border-radius: 10px; background: var(--accent); color: var(--accent-text); font: 600 13.5px var(--sans); cursor: pointer; transition: transform 0.18s var(--spring), opacity 0.15s; }
+.ui-submit:hover:not(:disabled) { transform: translateY(-1px); }
+.ui-submit:disabled { opacity: 0.5; cursor: default; }
+
+/* Checklists. */
+.ui-checks { display: grid; gap: 2px; }
+.ui-check { display: flex; align-items: flex-start; gap: 10px; padding: 7px 8px; margin: 0 -8px; border: 0; border-radius: 9px; background: none; color: var(--text); font: 400 14px/1.4 var(--sans); text-align: left; cursor: pointer; }
+.ui-check:hover { background: var(--hover); }
+.ui-check .box { flex: none; width: 18px; height: 18px; margin-top: 1px; border-radius: 6px; border: 1.5px solid var(--border-strong); display: grid; place-items: center; color: transparent; transition: background 0.15s, border-color 0.15s, color 0.15s; }
+.ui-check .box svg { width: 12px; height: 12px; }
+.ui-check.done .box { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+.ui-check.done span:last-child { color: var(--text-3); text-decoration: line-through; }
+.ui-count { margin-top: 8px; font-size: 12px; color: var(--text-3); }
+.ui-checklist.finished .ui-count { color: var(--add); font-weight: 600; }
 .assistant h1, .assistant h2, .assistant h3, .assistant h4 { font-weight: 600; letter-spacing: -0.015em; line-height: 1.3; margin: 1.4em 0 0.55em; }
 .assistant h1 { font-size: 1.45em; } .assistant h2 { font-size: 1.25em; } .assistant h3 { font-size: 1.08em; } .assistant h4 { font-size: 1em; }
 .assistant ul, .assistant ol { margin: 0 0 0.85em; padding-left: 1.4em; }
@@ -3029,6 +3150,294 @@ function table(rows) {
   return html + "</tbody></table></div>";
 }
 
+// ---------------------------------------------------------------------------
+// Rich answers: a ```ui block holds JSON for a live piece of the reply,
+// a chart, comparison, calculator, buttons or a form (see visuals.py for
+// the kinds). Drawn as HTML here; the controls in it work through the
+// listeners under uiBlock, so a reply drawn again keeps working.
+
+const UI_TYPES = new Set(["chart", "compare", "stats", "steps", "flow", "calc", "choices", "form", "checklist"]);
+const UI_BUILDING = { chart: "Drawing a chart", compare: "Laying out the options", stats: "Gathering the figures", steps: "Setting out the steps", flow: "Drawing a diagram", calc: "Building a calculator", choices: "Getting your options ready", form: "Building a form", checklist: "Making a checklist" };
+
+function uiBlock(src, closed) {
+  let specs = null;
+  try {
+    const data = JSON.parse(src);
+    specs = (Array.isArray(data) ? data : [data]).filter((s) => s && typeof s === "object" && UI_TYPES.has(s.type));
+    if (!specs.length) specs = null;
+  } catch (_) { specs = null; }
+  if (!specs) {
+    // Still arriving: a placeholder that says what is coming. Finished
+    // but not ours, or not JSON after all: the code it is.
+    if (closed) return codeBlock("json", src);
+    const kind = (src.match(/"type"\s*:\s*"(\w+)"/) || [])[1];
+    return `<div class="ui-card ui-pending"><span class="ui-spin"></span>${esc(UI_BUILDING[kind] || "Putting it together")}…</div>`;
+  }
+  return specs.map(uiCard).join("");
+}
+
+const uiText = (v) => esc(v === undefined || v === null ? "" : String(v));
+const uiNum = (v) => (typeof v === "number" && isFinite(v) ? v : Number(v) || 0);
+const uiCompact = new Intl.NumberFormat(undefined, { notation: "compact", maximumFractionDigits: 1 });
+
+function uiFormat(value, spec = {}, decimals) {
+  if (typeof value !== "number" || !isFinite(value)) return "–";
+  const places = Number.isInteger(decimals) ? Math.max(0, Math.min(decimals, 6)) : undefined;
+  const text = value.toLocaleString(undefined, places === undefined ? { maximumFractionDigits: 2 } : { minimumFractionDigits: places, maximumFractionDigits: places });
+  return `${spec.prefix || ""}${text}${spec.suffix || ""}${spec.unit ? " " + spec.unit : ""}`;
+}
+
+function uiCard(spec) {
+  const title = spec.title && spec.type !== "choices" ? `<div class="ui-title">${uiText(spec.title)}</div>` : "";
+  const body = {
+    chart: uiChart, compare: uiCompare, stats: uiStats, steps: uiSteps, flow: uiFlow,
+    calc: uiCalc, choices: uiChoices, form: uiForm, checklist: uiChecklist,
+  }[spec.type](spec);
+  const data = ["calc", "form", "choices"].includes(spec.type) ? ` data-spec="${esc(JSON.stringify(spec))}"` : "";
+  return `<div class="ui-card ui-${spec.type}"${data}>${title}${body}</div>`;
+}
+
+// A round number at or above X, for an axis to end on.
+function uiNice(x) {
+  if (x <= 0) return 1;
+  const p = 10 ** Math.floor(Math.log10(x));
+  const m = x / p;
+  return (m <= 1 ? 1 : m <= 2 ? 2 : m <= 2.5 ? 2.5 : m <= 5 ? 5 : 10) * p;
+}
+
+function uiChart(spec) {
+  const labels = (spec.labels || []).map(String);
+  const series = (spec.series || []).filter((s) => s && Array.isArray(s.values)).slice(0, 4);
+  if (!labels.length || !series.length) return "";
+  const unit = spec.unit || "";
+  const legend = (items) => `<div class="ui-legend">${items.join("")}</div>`;
+  const key = (name, i, extra = "") => `<span><i class="c${i % 6}"></i>${uiText(name)}${extra}</span>`;
+
+  if (spec.kind === "donut") {
+    const values = labels.map((_, i) => Math.max(0, uiNum(series[0].values[i])));
+    const total = values.reduce((a, b) => a + b, 0) || 1;
+    const r = 62, c = 2 * Math.PI * r;
+    let at = 0;
+    const arcs = values.map((v, i) => {
+      const len = (v / total) * c;
+      const arc = `<circle class="arc c${i % 6}" cx="80" cy="80" r="${r}" stroke-dasharray="${len} ${c - len}" stroke-dashoffset="${-at}" data-tip="${esc(`${labels[i]}: ${uiFormat(v)}${unit} (${Math.round((v / total) * 100)}%)`)}"/>`;
+      at += len;
+      return arc;
+    }).join("");
+    const sum = values.reduce((a, b) => a + b, 0);
+    return `<div class="ui-donut"><svg viewBox="0 0 160 160" class="ui-svg"><g transform="rotate(-90 80 80)">${arcs}</g><text x="80" y="78" class="total">${esc(uiCompact.format(sum))}${esc(unit)}</text><text x="80" y="98" class="sub">${uiText(series[0].name || "Total")}</text></svg>${legend(labels.map((l, i) => key(l, i, ` <b>${Math.round((values[i] / total) * 100)}%</b>`)))}</div>`;
+  }
+
+  const W = 640, H = 250, left = 46, right = 12, top = 12, bottom = 30;
+  const plotW = W - left - right, plotH = H - top - bottom;
+  const all = series.flatMap((s) => labels.map((_, i) => uiNum(s.values[i])));
+  // An axis in round steps, five or so, from zero or below it.
+  const most = Math.max(0, ...all), least = Math.min(0, ...all);
+  const step = uiNice((most - least) / 5 || 1);
+  const hi = Math.ceil(most / step) * step || step, lo = Math.floor(least / step) * step;
+  const y = (v) => top + plotH - ((v - lo) / (hi - lo || 1)) * plotH;
+  let grid = "";
+  for (let t = 0; t <= Math.round((hi - lo) / step); t++) {
+    const v = lo + step * t;
+    grid += `<line class="grid" x1="${left}" x2="${W - right}" y1="${y(v)}" y2="${y(v)}"/><text class="axis" x="${left - 8}" y="${y(v) + 4}" text-anchor="end">${esc(Math.abs(v) >= 1000 ? uiCompact.format(v) : Number(v.toFixed(6)).toLocaleString(undefined, { maximumFractionDigits: 2 }))}</text>`;
+  }
+  const slot = plotW / labels.length;
+  // Labels thin out when there are too many to read side by side.
+  const every = Math.ceil(labels.length / Math.max(1, Math.floor(plotW / 56)));
+  const xLabel = (i, x) => (i % every ? "" : `<text class="axis" x="${x}" y="${H - 9}" text-anchor="middle">${uiText(labels[i])}</text>`);
+  let marks = "", xs = "";
+
+  if (spec.kind === "line") {
+    const px = (i) => left + (labels.length === 1 ? plotW / 2 : (i * plotW) / (labels.length - 1));
+    series.forEach((s, si) => {
+      const pts = labels.map((_, i) => [px(i), y(uiNum(s.values[i]))]);
+      const path = pts.map((p, i) => `${i ? "L" : "M"}${p[0].toFixed(1)} ${p[1].toFixed(1)}`).join(" ");
+      if (si === 0) marks += `<path class="area c0" d="${path} L${px(labels.length - 1)} ${y(Math.max(lo, 0))} L${px(0)} ${y(Math.max(lo, 0))} Z"/>`;
+      marks += `<path class="line c${si}" d="${path}" pathLength="1"/>`;
+      marks += pts.map((p, i) => `<circle class="dot c${si}" cx="${p[0]}" cy="${p[1]}" r="4" data-tip="${esc(`${labels[i]} · ${s.name ? s.name + ": " : ""}${uiFormat(uiNum(s.values[i]))}${unit}`)}"/>`).join("");
+    });
+    labels.forEach((_, i) => { xs += xLabel(i, px(i)); });
+  } else {
+    const group = slot * 0.72, bar = group / series.length;
+    labels.forEach((label, i) => {
+      series.forEach((s, si) => {
+        const v = uiNum(s.values[i]);
+        const x = left + i * slot + (slot - group) / 2 + si * bar;
+        const y0 = y(Math.max(v, 0)), h = Math.abs(y(v) - y(0));
+        marks += `<rect class="bar c${si}" x="${x + 1}" y="${y0}" width="${Math.max(bar - 2, 2)}" height="${Math.max(h, 1)}" rx="${Math.min(5, bar / 3)}" style="--d:${i * 40}ms" data-tip="${esc(`${label} · ${s.name ? s.name + ": " : ""}${uiFormat(v)}${unit}`)}"/>`;
+      });
+      xs += xLabel(i, left + i * slot + slot / 2);
+    });
+  }
+  const names = series.length > 1 ? legend(series.map((s, i) => key(s.name || `Series ${i + 1}`, i))) : "";
+  return `${names}<svg class="ui-svg ui-plot" viewBox="0 0 ${W} ${H}">${grid}<line class="base" x1="${left}" x2="${W - right}" y1="${y(0)}" y2="${y(0)}"/>${marks}${xs}</svg>`;
+}
+
+function uiCompare(spec) {
+  const items = (spec.items || []).filter((x) => x && typeof x === "object").slice(0, 4);
+  return `<div class="ui-cols" style="--n:${items.length}">${items.map((item) => `<div class="ui-col${item.pick ? " pick" : ""}">${item.pick ? `<span class="ui-badge">${icon("check")}Recommended</span>` : ""}<div class="name">${uiText(item.name)}</div>${item.tag ? `<div class="tag">${uiText(item.tag)}</div>` : ""}<div class="points">${(item.points || []).map((p) => `<div>${inline(String(p))}</div>`).join("")}</div></div>`).join("")}</div>`;
+}
+
+function uiStats(spec) {
+  const items = (spec.items || []).filter((x) => x && typeof x === "object").slice(0, 6);
+  const tone = (note) => (/^\s*[+↑▲]/.test(note) ? " up" : /^\s*[-−↓▼]/.test(note) ? " down" : "");
+  return `<div class="ui-stats">${items.map((s) => `<div class="ui-stat"><div class="label">${uiText(s.label)}</div><div class="value">${uiText(s.value)}</div>${s.note ? `<div class="note${tone(String(s.note))}">${uiText(s.note)}</div>` : ""}</div>`).join("")}</div>`;
+}
+
+function uiSteps(spec) {
+  const items = (spec.items || []).map((x) => (typeof x === "string" ? { title: x } : x)).filter(Boolean);
+  return `<div class="ui-steps">${items.map((s, i) => `<div class="ui-step"><span class="n">${i + 1}</span><div><div class="name">${inline(String(s.title || ""))}</div>${s.text ? `<div class="text">${inline(String(s.text))}</div>` : ""}</div></div>`).join("")}</div>`;
+}
+
+function uiFlow(spec) {
+  const nodes = (spec.nodes || []).map((x) => (typeof x === "string" ? { label: x } : x)).filter(Boolean);
+  const chain = nodes.map((n, i) => `${i ? `<span class="ui-arrow">${icon("chevRight")}</span>` : ""}<button type="button" class="ui-node${i === 0 && n.detail ? " on" : ""}" data-i="${i}"${n.detail ? "" : " disabled"}>${uiText(n.label)}</button>`).join("");
+  const details = nodes.map((n, i) => (n.detail ? `<div class="ui-detail${i === 0 ? " on" : ""}" data-i="${i}"><b>${uiText(n.label)}</b>${inline(String(n.detail))}</div>` : "")).join("");
+  return `<div class="ui-chain">${chain}</div>${details}`;
+}
+
+function uiCalcValues(card) {
+  const values = {};
+  card.querySelectorAll(".ui-in input[type=number]").forEach((box) => { values[box.dataset.id] = Number(box.value) || 0; });
+  return values;
+}
+
+function uiCalc(spec) {
+  const inputs = (spec.inputs || []).filter((x) => x && x.id);
+  const values = Object.fromEntries(inputs.map((x) => [x.id, uiNum(x.value)]));
+  const rows = inputs.map((x) => {
+    const range = x.min !== undefined && x.max !== undefined
+      ? `<input type="range" data-id="${esc(x.id)}" min="${uiNum(x.min)}" max="${uiNum(x.max)}" step="${x.step || "any"}" value="${uiNum(x.value)}">` : "";
+    return `<label class="ui-in"><span class="name">${uiText(x.label || x.id)}</span>${range}<span class="box">${x.prefix ? `<em>${uiText(x.prefix)}</em>` : ""}<input type="number" data-id="${esc(x.id)}" step="${x.step || "any"}" value="${uiNum(x.value)}">${x.suffix || x.unit ? `<em>${uiText(x.suffix || x.unit)}</em>` : ""}</span></label>`;
+  }).join("");
+  const outs = (spec.outputs || []).filter(Boolean).map((o, i) => `<div class="ui-out"><span>${uiText(o.label)}</span><b data-i="${i}">${esc(uiFormat(uiEval(o.formula, values), o, o.decimals))}</b></div>`).join("");
+  return `<div class="ui-ins">${rows}</div><div class="ui-outs">${outs}</div>`;
+}
+
+// Arithmetic over a calculator's inputs: numbers, names, + - * / % ^,
+// brackets and a few functions. No eval: a formula is only ever this.
+const UI_FUNCS = { min: Math.min, max: Math.max, round: Math.round, floor: Math.floor, ceil: Math.ceil, abs: Math.abs, sqrt: Math.sqrt, pow: Math.pow, log: Math.log10, ln: Math.log, exp: Math.exp };
+function uiEval(formula, values) {
+  const tokens = String(formula || "").match(/\d+\.?\d*(?:e[+-]?\d+)?|\.\d+|[A-Za-z_]\w*|\*\*|[-+*/%^(),]|\S/gi) || [];
+  let at = 0;
+  const peek = () => tokens[at];
+  const take = (t) => (tokens[at] === t ? (at++, true) : false);
+  const fail = () => { throw new Error("formula"); };
+  const expr = () => {
+    let v = term();
+    for (;;) { if (take("+")) v += term(); else if (take("-")) v -= term(); else return v; }
+  };
+  const term = () => {
+    let v = unary();
+    for (;;) { if (take("*")) v *= unary(); else if (take("/")) v /= unary(); else if (take("%")) v %= unary(); else return v; }
+  };
+  const unary = () => (take("-") ? -unary() : take("+") ? unary() : power());
+  const power = () => {
+    const base = atom();
+    return take("^") || take("**") ? base ** unary() : base;
+  };
+  const atom = () => {
+    const t = tokens[at++];
+    if (t === undefined) fail();
+    if (t === "(") { const v = expr(); if (!take(")")) fail(); return v; }
+    if (/^[\d.]/.test(t)) return Number(t);
+    if (/^[A-Za-z_]/.test(t)) {
+      if (peek() === "(" && Object.hasOwn(UI_FUNCS, t)) {
+        at++;
+        const args = [];
+        if (!take(")")) { do args.push(expr()); while (take(",")); if (!take(")")) fail(); }
+        return UI_FUNCS[t](...args);
+      }
+      if (Object.hasOwn(values, t)) return values[t];
+      if (t === "pi") return Math.PI;
+      if (t === "e") return Math.E;
+    }
+    return fail();
+  };
+  try {
+    const v = expr();
+    return at === tokens.length && isFinite(v) ? v : NaN;
+  } catch (_) { return NaN; }
+}
+
+function uiChoices(spec) {
+  const options = (spec.options || []).map(String).slice(0, 6);
+  return `${spec.prompt ? `<div class="ui-title">${uiText(spec.prompt)}</div>` : ""}<div class="ui-options">${options.map((o) => `<button type="button" class="ui-option" data-text="${esc(o)}">${uiText(o)}<span>${icon("up")}</span></button>`).join("")}</div>`;
+}
+
+function uiForm(spec) {
+  const fields = (spec.fields || []).filter((f) => f && (f.id || f.label));
+  const control = (f) => {
+    const id = esc(f.id || f.label);
+    if (f.kind === "select") return `<select data-id="${id}">${(f.options || []).map((o) => `<option>${uiText(o)}</option>`).join("")}</select>`;
+    const type = ["number", "date"].includes(f.kind) ? f.kind : "text";
+    return `<input type="${type}" data-id="${id}" placeholder="${esc(f.placeholder || "")}">`;
+  };
+  return `<form class="ui-fields">${fields.map((f) => `<label class="ui-field"><span>${uiText(f.label || f.id)}</span>${control(f)}</label>`).join("")}<button type="submit" class="ui-submit">${uiText(spec.submit || "Send")}</button></form>`;
+}
+
+function uiChecklist(spec) {
+  const items = (spec.items || []).map(String);
+  return `<div class="ui-checks">${items.map((t) => `<button type="button" class="ui-check"><span class="box">${icon("check")}</span><span>${inline(t)}</span></button>`).join("")}</div><div class="ui-count">0 of ${items.length} done</div>`;
+}
+
+// The controls, for every card on the page however it was drawn.
+document.addEventListener("input", (e) => {
+  const card = e.target.closest(".ui-calc");
+  if (!card || !e.target.dataset.id) return;
+  // A slider and its box stay together.
+  card.querySelectorAll(`[data-id="${CSS.escape(e.target.dataset.id)}"]`).forEach((other) => { if (other !== e.target) other.value = e.target.value; });
+  let spec;
+  try { spec = JSON.parse(card.dataset.spec); } catch (_) { return; }
+  const values = uiCalcValues(card);
+  (spec.outputs || []).filter(Boolean).forEach((o, i) => {
+    const out = card.querySelector(`.ui-out b[data-i="${i}"]`);
+    if (out) out.textContent = uiFormat(uiEval(o.formula, values), o, o.decimals);
+  });
+});
+
+document.addEventListener("click", (e) => {
+  const option = e.target.closest(".ui-option");
+  if (option && !option.closest(".streaming")) {
+    const group = option.closest(".ui-options");
+    group.querySelectorAll(".ui-option").forEach((b) => { b.disabled = true; b.classList.toggle("chosen", b === option); });
+    send(option.dataset.text);
+    return;
+  }
+  const node = e.target.closest(".ui-node");
+  if (node) {
+    const card = node.closest(".ui-flow");
+    const open = !node.classList.contains("on");
+    card.querySelectorAll(".ui-node, .ui-detail").forEach((x) => x.classList.toggle("on", open && x.dataset.i === node.dataset.i));
+    return;
+  }
+  const check = e.target.closest(".ui-check");
+  if (check) {
+    check.classList.toggle("done");
+    const card = check.closest(".ui-checklist");
+    const all = card.querySelectorAll(".ui-check").length;
+    const done = card.querySelectorAll(".ui-check.done").length;
+    card.querySelector(".ui-count").textContent = done === all ? "All done" : `${done} of ${all} done`;
+    card.classList.toggle("finished", done === all);
+  }
+});
+
+document.addEventListener("submit", (e) => {
+  const form = e.target.closest(".ui-form form");
+  if (!form) return;
+  e.preventDefault();
+  if (form.closest(".streaming")) return;
+  let spec = {};
+  try { spec = JSON.parse(form.closest(".ui-form").dataset.spec); } catch (_) { /* the labels on the page will do */ }
+  const lines = [...form.querySelectorAll("[data-id]")].map((box) => {
+    const label = box.closest(".ui-field").querySelector("span").textContent;
+    return `- ${label}: ${box.value.trim() || "(left blank)"}`;
+  });
+  form.querySelectorAll("input, select, button").forEach((x) => { x.disabled = true; });
+  form.querySelector(".ui-submit").textContent = "Sent";
+  send(`${spec.title ? spec.title + "\n" : ""}${lines.join("\n")}`);
+});
+
 // Math: $...$, $$...$$, \(...\) and \[...\] become MathML through
 // KaTeX, which the browser typesets with its own math font. Pulled out
 // before the Markdown pass so neither mangles the other, and left alone
@@ -3141,9 +3550,14 @@ function markdownBody(text) {
       const body = [];
       i++;
       while (i < lines.length && !lines[i].trim().startsWith(fence[1])) body.push(lines[i++]);
+      const closed = i < lines.length;
+      const lang = fence[2].toLowerCase();
       // A ```serif block is not code: it is a passage the agent sets
-      // apart in Newsreader, Markdown and all.
-      html += fence[2].toLowerCase() === "serif" ? `<div class="serif-block">${markdownBody(body.join("\n"))}</div>` : codeBlock(fence[2], body.join("\n"));
+      // apart in Newsreader, Markdown and all. A ```ui block is a live
+      // piece of the reply: a chart, a calculator, buttons.
+      if (lang === "serif") html += `<div class="serif-block">${markdownBody(body.join("\n"))}</div>`;
+      else if (lang === "ui") html += uiBlock(body.join("\n"), closed);
+      else html += codeBlock(fence[2], body.join("\n"));
       continue;
     }
     if (!line.trim()) { flush(); continue; }
@@ -5872,7 +6286,7 @@ function drawGeneral(body) {
   body.insertAdjacentHTML("beforeend", `<h2 class="settings-section settings-gap">Background</h2><p class="settings-sub">A pixel-art scene behind a new chat, the same ones <code>/background</code> shows in the terminal. Add your own as <code>.scene</code> files in <code>~/.flash/backgrounds</code>.</p><div class="scene-grid" role="radiogroup" aria-label="Background"></div>`);
   drawSceneCards(body.querySelector(".scene-grid"));
 
-  body.insertAdjacentHTML("beforeend", `<h2 class="settings-section settings-gap">Conversation</h2><p class="settings-sub">What happens when a chat outgrows the model's context window, where the last three exchanges always stay word for word, and how chats are named.</p>`);
+  body.insertAdjacentHTML("beforeend", `<h2 class="settings-section settings-gap">Conversation</h2><p class="settings-sub">What happens when a chat outgrows the model's context window, where the last three exchanges always stay word for word, how chats are named, and how replies look.</p>`);
   const row = el("button", "setting-row", `<span class="what"><b>Summarize old messages</b><span>Have the model condense what no longer fits into a summary it keeps reading. Off, the oldest messages are dropped instead, which is faster and never loses detail from the ones kept.</span></span><span class="switch" aria-hidden="true"></span>`);
   row.type = "button";
   row.setAttribute("role", "switch");
@@ -5895,6 +6309,28 @@ function drawGeneral(body) {
     catch (error) { named.setAttribute("aria-checked", !on); showFailure(error); }
   };
   body.appendChild(named);
+  // How often replies hold charts, calculators, buttons and forms.
+  const rich = el("div", "setting-row static visuals-row", `<span class="what"><b>Rich answers</b><span>Replies can mix their text with charts, side-by-side comparisons, calculators, steps, buttons and forms, where those show something better than words. Less keeps to text, with one only when you ask or the answer needs it.</span></span><span class="side"><span class="seg" role="radiogroup" aria-label="Rich answers"></span></span>`);
+  const richSeg = rich.querySelector(".seg");
+  const markRich = (level) => {
+    for (const b of richSeg.children) { b.classList.toggle("on", b.dataset.level === level); b.setAttribute("aria-checked", b.dataset.level === level); }
+  };
+  for (const [level, name] of [["more", "More"], ["less", "Less"]]) {
+    const b = el("button", "");
+    b.type = "button";
+    b.textContent = name;
+    b.dataset.level = level;
+    b.setAttribute("role", "radio");
+    b.onclick = async () => {
+      const was = info.visuals || "more";
+      markRich(level);
+      try { info.visuals = (await command("visuals-setting", level)).visuals; }
+      catch (error) { markRich(was); showFailure(error); }
+    };
+    richSeg.appendChild(b);
+  }
+  markRich(info.visuals || "more");
+  body.appendChild(rich);
 
   body.insertAdjacentHTML("beforeend", `<h2 class="settings-section settings-gap">System One</h2><p class="settings-sub">A small, quick model at Flash's side in autonomous mode. It looks over each command and edit before it runs and stops the ones that look unsafe or off task, and it answers Flash's quick yes/no, choice and score questions. Needs Ollama v0.35 or later. Pick which model it is, or None, in the model menu by the message box.</p>`);
   const systemOne = el("button", "setting-row system-one-row", `<span class="what"><b>Review autonomous commands</b><span>Checking this Ollama…</span></span><span class="switch" aria-hidden="true"></span>`);
@@ -10940,7 +11376,7 @@ async function askAloud(card) {
 // page it covers, so the one being said can be marked where it sits.
 // Code blocks and tables are shown, not read.
 function sentencesOf(root) {
-  const skip = "pre, table, .katex, math, svg, .actions";
+  const skip = "pre, table, .katex, math, svg, .actions, .ui-card";
   const spans = [];
   let text = "", home = null;
   const walk = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {

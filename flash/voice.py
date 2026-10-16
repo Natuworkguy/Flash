@@ -27,7 +27,7 @@ from typing import Optional
 from urllib.error import URLError
 from urllib.request import Request, urlopen
 
-from . import serif
+from . import serif, visuals
 from .paths import MODELS_DIR
 
 
@@ -1205,6 +1205,9 @@ def for_speech(text: str, limit: int = 0) -> str:
     # A passage set apart in Newsreader is prose, not code: its words
     # are read like the rest.
     text = serif.plain(text or "")
+    # A rich answer's piece says its few spoken words; its numbers and
+    # boxes are on screen.
+    text = visuals.plain(text)
     stripped = _EMOJI.sub("", _FENCE.sub(" ", text))
     stripped = _IMAGE.sub(" ", stripped)
     stripped = _LINK.sub(r"\1", stripped)
