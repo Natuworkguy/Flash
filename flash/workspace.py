@@ -561,7 +561,8 @@ def keep_file(source: str) -> dict:
     folder.mkdir(parents=True, exist_ok=True)
     kept = folder / f"{file_id}{suffix}"
     kept.write_bytes(path.read_bytes())
-    if document:
+    page = SHOWN_TYPES[suffix] == "text/html"
+    if document or page:
         # Where it came from, so an edit made in the page lands in the
         # real file too, not only in this copy.
         _write(f"files/{file_id}.source.json", {"source": str(path.resolve())})
@@ -580,9 +581,16 @@ def keep_file(source: str) -> dict:
             else "image"
         ),
     }
-    if document:
+    if document or page:
         info["path"] = str(path.resolve())
     return info
+
+
+def file_source(file_id: str) -> str:
+    """The file a shown document or page was copied from, or ""."""
+
+    record = _read(f"files/{file_id}.source.json", {})
+    return str(record.get("source") or "") if isinstance(record, dict) else ""
 
 
 def save_document(file_id: str, text: str) -> dict:

@@ -53,6 +53,7 @@ from . import (
     background,
     checkpoint,
     context,
+    design,
     extensions,
     greetings,
     keepalive,
@@ -96,6 +97,21 @@ DEFAULT_PORT = 7433
 
 WEB_DIR = Path(__file__).parent / "web"
 PAGE = WEB_DIR / "index.html"
+DESIGN_KIT = WEB_DIR / "designkit.js"
+
+
+def with_design_kit(page: bytes) -> bytes:
+    """A page with the side panel's design tools in it, before its
+    closing body tag, or at its end when it has none."""
+
+    kit = (
+        '<script id="flash-design-kit">'
+        + DESIGN_KIT.read_text(encoding="utf-8")
+        + "</script>"
+    ).encode("utf-8")
+    at = page.lower().rfind(b"</body>")
+    return page[:at] + kit + page[at:] if at >= 0 else page + kit
+
 
 # The only files served without the token: a stylesheet cannot send
 # one, and there is nothing in a font to protect.
@@ -3491,6 +3507,17 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
     if name == "dirs":
         return {"dirs": workspace.folder_suggestions(arg)}
 
+    if name == "design-save":
+        saved = design.save(
+            arg, list(body.get("edits") or []), dict(body.get("vars") or {}),
+        )
+        if chat_id in session.chats and saved["path"]:
+            # Told to the model with the chat's next message.
+            listed = session.edited.setdefault(chat_id, [])
+            if saved["path"] not in listed:
+                listed.append(saved["path"])
+        return saved
+
     if name == "document-save":
         kept = workspace.kept_file(arg)
         try:
@@ -4062,9 +4089,16 @@ class Handler(BaseHTTPRequestHandler):
             ))
         elif url.path == "/api/events":
             self._events()
+        elif url.path.startswith("/api/files/") and url.path.endswith(
+                "/export"):
+            self._export(
+                url.path.removeprefix("/api/files/").removesuffix("/export"),
+                query.get("format", [""])[0],
+            )
         elif url.path.startswith("/api/files/"):
             self._file(url.path.removeprefix("/api/files/"),
-                       download=query.get("download", [""])[0] == "1")
+                       download=query.get("download", [""])[0] == "1",
+                       design=query.get("design", [""])[0] == "1")
         elif url.path == "/api/agents":
             self._json({"agents": self.server.session.agent_list(
                 query.get("chat", [""])[0]
@@ -4211,7 +4245,9 @@ class Handler(BaseHTTPRequestHandler):
 
         raise ValueError(f"unknown endpoint {path}")
 
-    def _file(self, file_id: str, download: bool) -> None:
+    def _file(
+        self, file_id: str, download: bool, design: bool = False,
+    ) -> None:
         """A file the agent showed, as the type it was stored as.
 
         Only types a browser shows are ever stored, and nosniff keeps it
@@ -4236,7 +4272,29 @@ class Handler(BaseHTTPRequestHandler):
         }
         if mime == "text/html":
             headers["Content-Security-Policy"] = HTML_SANDBOX
+            if design and not download:
+                data = with_design_kit(data)
         self._send(HTTPStatus.OK, data, mime, headers)
+
+    def _export(self, file_id: str, fmt: str) -> None:
+        """A design drawn as a PNG, a PDF or slides, as a download."""
+
+        try:
+            out = design.export(
+                file_id, fmt, workspace.store() / "exports" / file_id,
+            )
+            data = out.read_bytes()
+        except (design.DesignError, OSError) as exc:
+            self._json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+            return
+        kinds = {
+            "png": "image/png", "pdf": "application/pdf",
+            "pptx": "application/vnd.openxmlformats-officedocument"
+                    ".presentationml.presentation",
+        }
+        self._send(HTTPStatus.OK, data, kinds[fmt], {
+            "Content-Disposition": f'attachment; filename="{out.name}"',
+        })
 
     def _events(self) -> None:
         """A Server-Sent Events stream of everything that happens."""
