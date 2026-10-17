@@ -462,8 +462,8 @@ body.empty #suggestions { display: flex; flex-wrap: wrap; justify-content: cente
 .ui-stat { padding: 12px 14px; border-radius: 12px; background: var(--bg); border: 1px solid var(--border); }
 .ui-stat .label { font-size: 12px; color: var(--text-3); font-weight: 500; }
 .ui-stat .value { font-size: 24px; font-weight: 700; letter-spacing: -0.02em; margin-top: 2px; font-variant-numeric: tabular-nums; }
-.ui-stat .note { font-size: 12px; color: var(--text-3); margin-top: 2px; }
-.ui-stat .note.up { color: var(--add); } .ui-stat .note.down { color: var(--del); }
+.ui-stat .ui-note { font-size: 12px; color: var(--text-3); margin-top: 2px; }
+.ui-stat .ui-note.up { color: var(--add); } .ui-stat .ui-note.down { color: var(--del); }
 
 /* Steps, and a chain of stages to click through. */
 .ui-steps { display: grid; gap: 0; }
@@ -3281,7 +3281,7 @@ function uiCompare(spec) {
 function uiStats(spec) {
   const items = (spec.items || []).filter((x) => x && typeof x === "object").slice(0, 6);
   const tone = (note) => (/^\s*[+↑▲]/.test(note) ? " up" : /^\s*[-−↓▼]/.test(note) ? " down" : "");
-  return `<div class="ui-stats">${items.map((s) => `<div class="ui-stat"><div class="label">${uiText(s.label)}</div><div class="value">${uiText(s.value)}</div>${s.note ? `<div class="note${tone(String(s.note))}">${uiText(s.note)}</div>` : ""}</div>`).join("")}</div>`;
+  return `<div class="ui-stats">${items.map((s) => `<div class="ui-stat"><div class="label">${uiText(s.label)}</div><div class="value">${uiText(s.value)}</div>${s.note ? `<div class="ui-note${tone(String(s.note))}">${uiText(s.note)}</div>` : ""}</div>`).join("")}</div>`;
 }
 
 function uiSteps(spec) {
