@@ -23,7 +23,7 @@
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/images/web-dark.png">
-    <img src="docs/images/web-light.png" alt="Flash's web UI: in the Shop project, Flash plans, searches, edits and tests a fix for a slow checkout, with its sparks in the sidebar" width="100%">
+    <img src="docs/images/web-light.png" alt="Flash's web UI: in the Shop project, Flash answers how its checkout fix did with stat tiles, a before and after chart and buttons to ship it, with its sparks in the sidebar" width="100%">
   </picture>
 </p>
 
@@ -90,6 +90,9 @@ it goes:
 - **Makes things.** 3D models that open in Blender, MIDI tunes with a
   piano roll to play them, PDFs, images and documents, all shown in the
   web UI's side panel.
+- **Answers with more than words.** Where they say it better, replies
+  hold live charts, side-by-side comparisons, calculators you can change,
+  and buttons for what you say next.
 - **Talks.** `/voice on` and you talk to it, hands free, with speech
   recognition and a voice that run on your machine.
 
