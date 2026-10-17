@@ -34,10 +34,12 @@ include = ["flash*"]
 flash = [
     "system_prompt.txt",
     "visuals_prompt.txt",
+    "design_prompt.txt",
     "thinking_states.json",
     "suggestions.json",
     "backgrounds/*.scene",
     "web/*.html",
+    "web/*.js",
     "web/*.woff2",
     "web/*.svg",
     "web/katex/*.js",

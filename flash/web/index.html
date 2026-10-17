@@ -2398,6 +2398,49 @@ body.resizing-viewer iframe { pointer-events: none; }
 #viewer-body { flex: 1; min-height: 0; position: relative; background: var(--code-bg); }
 #viewer-body iframe { width: 100%; height: 100%; border: 0; display: block; background: var(--code-bg); }
 #viewer-body iframe.page { background: #fff; }
+/* A design in the panel: its tools on top, the page, and under it what
+   is waiting to go to Flash. */
+.design { display: flex; flex-direction: column; height: 100%; }
+.design-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 8px 10px; border-bottom: 1px solid var(--border); background: var(--bg); }
+.design-bar .grow { flex: 1; }
+.design-bar .btn svg { width: 14px; height: 14px; margin-right: 5px; vertical-align: -2px; }
+.design-bar .btn.on { background: var(--hover); box-shadow: inset 0 0 0 1px var(--border-strong); }
+.design-export { position: relative; }
+.design-menu { position: absolute; right: 0; top: calc(100% + 6px); z-index: 5; min-width: 150px; padding: 5px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); box-shadow: var(--shadow); display: grid; }
+.design-menu[hidden] { display: none; }
+.design-menu button { text-align: left; padding: 7px 10px; border-radius: 8px; font-size: 13px; color: var(--text); }
+.design-menu button:hover { background: var(--hover); }
+.design-stage { flex: 1; min-height: 0; position: relative; overflow: hidden; background: var(--code-bg); }
+.design-stage iframe { width: 100%; height: 100%; border: 0; display: block; background: #fff; transition: width 0.35s var(--apple); }
+.design-stage.framed { display: flex; justify-content: center; padding: 12px; }
+.design-stage.framed iframe { flex: none; transform-origin: top center; border-radius: 14px; box-shadow: 0 0 0 1px var(--border-strong), var(--shadow); }
+.design-tweaks { padding: 10px 14px 12px; border-bottom: 1px solid var(--border); background: var(--bg); max-height: 40%; overflow: auto; }
+.design-tweaks[hidden] { display: none; }
+.design-tweaks .rows { display: grid; gap: 8px; }
+.design-tweak { display: grid; grid-template-columns: 120px minmax(0, 1fr) 70px; align-items: center; gap: 10px; font-size: 12.5px; color: var(--text-2); }
+.design-tweak input[type=range] { width: 100%; accent-color: var(--accent); }
+.design-tweak input[type=color] { width: 40px; height: 24px; padding: 0; border: 1px solid var(--border-strong); border-radius: 6px; background: none; }
+.design-tweak .value { font-variant-numeric: tabular-nums; color: var(--text-3); text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.design-tweaks .foot { display: flex; justify-content: flex-end; gap: 8px; margin-top: 10px; }
+.design-tray { display: grid; gap: 8px; padding: 10px 12px; border-top: 1px solid var(--border); background: var(--bg); max-height: 45%; overflow: auto; }
+.design-tray[hidden] { display: none; }
+.design-compose { display: grid; gap: 8px; padding: 10px; border-radius: 12px; border: 1px solid color-mix(in srgb, var(--accent) 50%, transparent); background: var(--surface); }
+.design-compose .on { display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--text-3); min-width: 0; }
+.design-compose .on svg { width: 14px; height: 14px; color: var(--accent); flex: none; }
+.design-compose .on b { color: var(--text); font-weight: 600; }
+.design-compose .on span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.design-compose textarea { width: 100%; resize: vertical; border: 1px solid var(--border-strong); border-radius: 9px; padding: 8px 10px; background: var(--bg); color: var(--text); font: 13.5px/1.4 var(--sans); outline: none; }
+.design-compose textarea:focus { border-color: var(--accent); }
+.design-compose .row, .design-edited { display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
+.design-edited span { margin-right: auto; font-size: 13px; color: var(--text-2); }
+.design-comments { display: grid; gap: 4px; }
+.design-comment { display: flex; align-items: flex-start; gap: 10px; padding: 7px 8px; border-radius: 10px; background: var(--surface); border: 1px solid var(--border); }
+.design-comment .n { flex: none; width: 20px; height: 20px; border-radius: 50%; display: grid; place-items: center; font-size: 11px; font-weight: 700; background: var(--accent); color: var(--accent-text); }
+.design-comment .what { flex: 1; min-width: 0; display: grid; font-size: 13px; }
+.design-comment .what b { font-size: 12px; color: var(--text-3); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.design-comment .icon-btn { width: 24px; height: 24px; }
+.design-send { justify-self: end; }
+.design-send svg { width: 13px; height: 13px; margin-right: 5px; vertical-align: -2px; }
 #viewer-body .image { position: absolute; inset: 0; overflow: auto; display: grid; place-items: center; padding: 20px; cursor: zoom-in; }
 #viewer-body .image img { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: 8px; box-shadow: var(--shadow); animation: rise-far 0.45s var(--apple) both; }
 #viewer-body .image.actual { place-items: start; cursor: zoom-out; }
@@ -3916,15 +3959,12 @@ function openViewer(entry) {
   const body = $("#viewer-body");
   dropModel();
   dropMidi();
+  dropDesign();
   body.textContent = "";
   if (entry.kind === "html") {
-    // Sandboxed twice over: here, and by the header the server sends,
-    // so the page runs on an origin of its own and never as Flash.
-    const frame = el("iframe", "page");
-    frame.title = entry.name;
-    frame.setAttribute("sandbox", "allow-scripts allow-forms allow-popups allow-modals");
-    frame.src = fileUrl(entry);
-    body.appendChild(frame);
+    // Sandboxed twice over, in openDesign and by the header the server
+    // sends, so the page runs on an origin of its own and never as Flash.
+    openDesign(entry, body);
   } else if (entry.kind === "pdf") {
     const frame = el("iframe");
     frame.title = entry.name;
@@ -3956,6 +3996,290 @@ function openViewer(entry) {
     viewer.classList.add("open");
   }
   markOpenCard();
+}
+
+// ---------------------------------------------------------------------------
+// Designs: a web page Flash made, in the panel to work on. Comment on any
+// part of it, edit its words in place, drag the sliders it offers, see it
+// at phone, tablet and desktop width, export it, or have Flash build it.
+// The page runs sandboxed on an origin of its own, with the server's
+// design kit added to the copy shown here; the two talk by postMessage.
+
+let designView = null;
+const DESIGN_SIZES = [["phone", "Phone", 390], ["tablet", "Tablet", 820], ["desktop", "Desktop", 0]];
+
+function dropDesign() {
+  if (!designView) return;
+  removeEventListener("message", designView.onMessage);
+  designView.resize.disconnect();
+  designView = null;
+}
+
+function openDesign(entry, body) {
+  const wrap = body.appendChild(el("div", "design"));
+  wrap.innerHTML = `
+    <div class="design-bar">
+      <span class="seg design-modes" role="radiogroup" aria-label="Mode"></span>
+      <button type="button" class="btn small design-tweak-btn" hidden>${icon("settings")}Tweaks</button>
+      <span class="seg design-sizes" role="radiogroup" aria-label="Width"></span>
+      <span class="grow"></span>
+      <span class="design-export"><button type="button" class="btn small">${icon("download")}Export</button><span class="design-menu" hidden></span></span>
+      <button type="button" class="btn small primary design-build" data-tip="Have Flash build it for real">${icon("code")}Build it</button>
+    </div>
+    <div class="design-tweaks" hidden><div class="rows"></div><div class="foot"><button type="button" class="btn small design-reset">Reset</button><button type="button" class="btn small primary design-keep">Keep</button></div></div>
+    <div class="design-stage"><iframe class="design-frame" title="" sandbox="allow-scripts allow-forms allow-popups allow-modals"></iframe></div>
+    <div class="design-tray" hidden></div>`;
+  const frame = wrap.querySelector("iframe");
+  const stage = wrap.querySelector(".design-stage");
+  const view = designView = {
+    entry, wrap, frame, stage, mode: "view", size: "desktop", tweaks: [], values: {}, slides: 0,
+    comments: [], picked: null, edits: new Map(),
+  };
+  frame.title = entry.name;
+  const post = (message) => frame.contentWindow && frame.contentWindow.postMessage({ flashDesign: true, ...message }, "*");
+  view.post = post;
+  const load = () => { frame.src = fileUrl(entry) + "?design=1&v=" + Date.now(); };
+
+  const modes = wrap.querySelector(".design-modes");
+  for (const [id, name, tip] of [["view", "View", "Use the page as it is"], ["comment", "Comment", "Click a part of the page to comment on it"], ["edit", "Edit text", "Click words to change them"]]) {
+    const b = modes.appendChild(el("button", id === "view" ? "on" : "", name));
+    b.type = "button";
+    b.dataset.mode = id;
+    b.dataset.tip = tip;
+    b.onclick = () => setDesignMode(id);
+  }
+  const sizes = wrap.querySelector(".design-sizes");
+  for (const [id, name] of DESIGN_SIZES) {
+    const b = sizes.appendChild(el("button", id === "desktop" ? "on" : "", name));
+    b.type = "button";
+    b.onclick = () => {
+      view.size = id;
+      for (const other of sizes.children) other.classList.toggle("on", other === b);
+      fitDesign();
+    };
+  }
+
+  const tweakBtn = wrap.querySelector(".design-tweak-btn");
+  tweakBtn.onclick = () => {
+    const panel = wrap.querySelector(".design-tweaks");
+    panel.hidden = !panel.hidden;
+    tweakBtn.classList.toggle("on", !panel.hidden);
+    fitDesign();
+  };
+  wrap.querySelector(".design-reset").onclick = () => { view.values = {}; load(); };
+  wrap.querySelector(".design-keep").onclick = () => saveDesign({ vars: view.values }, "Kept");
+
+  const exportBox = wrap.querySelector(".design-export");
+  const menu = exportBox.querySelector(".design-menu");
+  exportBox.firstElementChild.onclick = () => {
+    menu.innerHTML = "";
+    const kinds = [["png", "PNG image"], ["pdf", "PDF"], ...(view.slides ? [["pptx", `Slides (${view.slides})`]] : []), ["html", "HTML file"]];
+    for (const [fmt, name] of kinds) {
+      const b = menu.appendChild(el("button", "", name));
+      b.type = "button";
+      b.onclick = () => { menu.hidden = true; exportDesign(fmt); };
+    }
+    menu.hidden = !menu.hidden;
+  };
+  wrap.querySelector(".design-build").onclick = () => {
+    const where = entry.path ? `${entry.name} (${entry.path})` : entry.name;
+    send(`Build the design ${where} for real: recreate it in this project's own stack and components, matching it as closely as you can, and show me when it runs.`);
+  };
+
+  view.onMessage = (e) => {
+    if (!designView || e.source !== frame.contentWindow || !e.data || !e.data.flashDesign) return;
+    const m = e.data;
+    if (m.type === "ready") {
+      view.tweaks = Array.isArray(m.tweaks) ? m.tweaks : [];
+      view.slides = m.slides || 0;
+      tweakBtn.hidden = !view.tweaks.length;
+      drawTweaks();
+      post({ type: "mode", mode: view.mode });
+      post({ type: "vars", vars: view.values });
+      post({ type: "mark", paths: view.comments.map((c) => c.path) });
+    } else if (m.type === "pick") {
+      view.picked = m;
+      drawTray(true);
+    } else if (m.type === "edit") {
+      view.edits.set(m.path, { old: (view.edits.get(m.path) || m).old, new: m.new });
+      drawTray();
+    }
+  };
+  addEventListener("message", view.onMessage);
+  view.resize = new ResizeObserver(fitDesign);
+  view.resize.observe(stage);
+  load();
+}
+
+function setDesignMode(mode) {
+  const view = designView;
+  if (!view) return;
+  view.mode = mode;
+  view.wrap.querySelectorAll(".design-modes button").forEach((b) => { b.classList.toggle("on", b.dataset.mode === mode); });
+  view.post({ type: "mode", mode });
+  if (mode !== "comment") view.picked = null;
+  drawTray();
+}
+
+// The page at the width chosen, scaled down to fit when the panel is
+// narrower, the way a design tool shows a phone frame.
+function fitDesign() {
+  const view = designView;
+  if (!view) return;
+  const width = (DESIGN_SIZES.find((s) => s[0] === view.size) || [])[2] || 0;
+  const room = view.stage.clientWidth - 24;
+  const tall = view.stage.clientHeight - 24;
+  const scale = width && width > room ? room / width : 1;
+  view.stage.classList.toggle("framed", !!width);
+  Object.assign(view.frame.style, width
+    ? { width: `${width}px`, height: `${tall / scale}px`, transform: `scale(${scale})` }
+    : { width: "", height: "", transform: "" });
+}
+
+function drawTweaks() {
+  const view = designView;
+  const rows = view.wrap.querySelector(".design-tweaks .rows");
+  rows.innerHTML = "";
+  const nice = (name) => name.replace(/^--/, "").replace(/[-_]+/g, " ").replace(/^./, (c) => c.toUpperCase());
+  for (const t of view.tweaks) {
+    const row = rows.appendChild(el("label", "design-tweak"));
+    row.appendChild(el("span", "name")).textContent = t.label || nice(t.var);
+    const value = String(t.value || "");
+    const colour = /^(#|rgb|hsl|oklch|lab\()/i.test(value);
+    const shown = row.appendChild(el("span", "value"));
+    const set = (v) => {
+      view.values[t.var] = v;
+      shown.textContent = v;
+      view.post({ type: "vars", vars: { [t.var]: v } });
+    };
+    if (colour) {
+      const pick = row.insertBefore(el("input"), shown);
+      pick.type = "color";
+      pick.value = /^#[0-9a-f]{6}$/i.test(value) ? value : "#d97757";
+      pick.oninput = () => set(pick.value);
+      shown.textContent = value;
+      continue;
+    }
+    const m = value.match(/^(-?[\d.]+)([a-z%]*)$/i);
+    if (!m) { shown.textContent = value; continue; }
+    const now = Number(m[1]), unit = t.unit ?? m[2];
+    const slider = row.insertBefore(el("input"), shown);
+    slider.type = "range";
+    slider.min = t.min ?? 0;
+    slider.max = t.max ?? Math.max(now * 3, unit === "px" ? 48 : 2);
+    slider.step = t.step ?? (unit === "px" || unit === "%" ? 1 : 0.01);
+    slider.value = now;
+    shown.textContent = value;
+    slider.oninput = () => set(`${slider.value}${unit}`);
+  }
+}
+
+// Under the page: the comment being written, the ones waiting to go, and
+// any words changed and not yet saved.
+function drawTray(focus = false) {
+  const view = designView;
+  const tray = view.wrap.querySelector(".design-tray");
+  tray.innerHTML = "";
+  if (view.picked) {
+    const p = view.picked;
+    const box = tray.appendChild(el("div", "design-compose"));
+    box.innerHTML = `<div class="on">${icon("chat")}<b></b><span></span></div><textarea rows="2" placeholder="What should change here?"></textarea><div class="row"><button type="button" class="btn small">Cancel</button><button type="button" class="btn small primary">Add comment</button></div>`;
+    box.querySelector("b").textContent = p.kind;
+    box.querySelector(".on span").textContent = p.text ? `“${p.text.slice(0, 60)}${p.text.length > 60 ? "…" : ""}”` : "";
+    const text = box.querySelector("textarea");
+    const [cancel, add] = box.querySelectorAll("button");
+    cancel.onclick = () => { view.picked = null; drawTray(); };
+    const keep = () => {
+      if (!text.value.trim()) return;
+      view.comments.push({ path: p.path, kind: p.kind, text: p.text, note: text.value.trim() });
+      view.picked = null;
+      view.post({ type: "mark", paths: view.comments.map((c) => c.path) });
+      drawTray();
+    };
+    add.onclick = keep;
+    text.onkeydown = (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); keep(); } };
+    if (focus) setTimeout(() => text.focus(), 0);
+  }
+  if (view.comments.length) {
+    const list = tray.appendChild(el("div", "design-comments"));
+    view.comments.forEach((c, i) => {
+      const item = list.appendChild(el("div", "design-comment"));
+      item.innerHTML = `<span class="n">${i + 1}</span><span class="what"><b></b><span></span></span><button type="button" class="icon-btn" aria-label="Remove">${icon("x")}</button>`;
+      item.querySelector("b").textContent = c.kind + (c.text ? ` “${c.text.slice(0, 40)}${c.text.length > 40 ? "…" : ""}”` : "");
+      item.querySelector(".what span").textContent = c.note;
+      item.querySelector("button").onclick = () => {
+        view.comments.splice(i, 1);
+        view.post({ type: "mark", paths: view.comments.map((x) => x.path) });
+        drawTray();
+      };
+    });
+    const go = tray.appendChild(el("button", "btn small primary design-send", `${icon("up")}Send ${view.comments.length === 1 ? "comment" : `${view.comments.length} comments`} to Flash`));
+    go.type = "button";
+    go.onclick = sendDesignComments;
+  }
+  const changed = [...view.edits.values()].filter((e) => e.old !== e.new);
+  if (changed.length) {
+    const bar = tray.appendChild(el("div", "design-edited"));
+    bar.innerHTML = `<span>${changed.length === 1 ? "1 change" : `${changed.length} changes`} to the words</span><button type="button" class="btn small">Discard</button><button type="button" class="btn small primary">Save</button>`;
+    const [discard, save] = bar.querySelectorAll("button");
+    discard.onclick = () => { view.edits.clear(); drawTray(); view.frame.src = fileUrl(view.entry) + "?design=1&v=" + Date.now(); };
+    save.onclick = () => saveDesign({ edits: changed }, "Saved");
+  }
+  tray.hidden = !tray.childElementCount;
+}
+
+async function sendDesignComments() {
+  const view = designView;
+  if (!view || !view.comments.length) return;
+  const where = view.entry.path ? `${view.entry.name} (${view.entry.path})` : view.entry.name;
+  const lines = [`Comments on the design ${where}, each with the part of the page it is about:`];
+  view.comments.forEach((c, i) => {
+    lines.push("", `${i + 1}. On the ${c.kind.toLowerCase()}${c.text ? ` "${c.text.slice(0, 120)}"` : ""} (${c.path}):`, `   ${c.note.replace(/\n/g, "\n   ")}`);
+  });
+  view.comments = [];
+  view.post({ type: "mark", paths: [] });
+  drawTray();
+  await send(lines.join("\n"));
+  toast("Comments sent to Flash");
+}
+
+async function saveDesign(change, said) {
+  const view = designView;
+  if (!view) return;
+  try {
+    const saved = await command("design-save", view.entry.id, current, { edits: change.edits || [], vars: change.vars || {} });
+    if (change.edits) view.edits.clear();
+    if (change.vars) view.values = {};
+    drawTray();
+    view.frame.src = fileUrl(view.entry) + "?design=1&v=" + Date.now();
+    if (saved.missed && saved.missed.length) {
+      // Words inside markup the file spells another way: Flash makes those.
+      await send(`In the design ${view.entry.path || view.entry.name}, change these words, which I edited on the page:\n${saved.missed.map((m) => `- "${m.old}" to "${m.new}"`).join("\n")}`);
+      toast("Some changes went to Flash to make");
+    } else toast(`${said} in ${view.entry.name}`);
+  } catch (error) { showFailure(error); }
+}
+
+async function exportDesign(fmt) {
+  const view = designView;
+  if (!view) return;
+  const a = el("a");
+  if (fmt === "html") {
+    a.href = fileUrl(view.entry, true);
+    a.download = view.entry.name;
+    a.click();
+    return;
+  }
+  toast("Exporting…");
+  try {
+    const response = await fetch(`/api/files/${encodeURIComponent(view.entry.id)}/export?format=${fmt}`);
+    if (!response.ok) throw new Error((await response.json().catch(() => ({}))).error || `Export failed (${response.status})`);
+    const blob = await response.blob();
+    a.href = URL.createObjectURL(blob);
+    a.download = view.entry.name.replace(/\.html?$/i, "") + "." + fmt;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+  } catch (error) { showFailure(error); }
 }
 
 // ---------------------------------------------------------------------------
@@ -5476,6 +5800,7 @@ function closeViewer() {
   viewing = null;
   if (openDoc && openDoc.onSelect) document.removeEventListener("selectionchange", openDoc.onSelect);
   openDoc = null;
+  dropDesign();
   dropCommentUi();
   if (window.CSS && CSS.highlights) CSS.highlights.delete("doc-comment");
   markOpenCard();

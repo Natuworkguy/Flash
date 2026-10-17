@@ -90,6 +90,11 @@ it goes:
 - **Makes things.** 3D models that open in Blender, MIDI tunes with a
   piano roll to play them, PDFs, images and documents, all shown in the
   web UI's side panel.
+- **Designs.** Pages, app screens, one-pagers, social posts and decks,
+  built live in the side panel. Comment on any part, edit the words in
+  place, drag the sliders it gives you, see it at phone width, export it
+  as a PNG, PDF or slides, or have it build the design for real. Design
+  systems made from your code keep every design on brand.
 - **Answers with more than words.** Where they say it better, replies
   hold live charts, side-by-side comparisons, calculators you can change,
   and buttons for what you say next.

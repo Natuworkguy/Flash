@@ -6,6 +6,7 @@ import pytest
 
 from flash import (
     ai,
+    design,
     extensions,
     learning,
     mail,
@@ -50,6 +51,10 @@ def isolated_home(tmp_path_factory, monkeypatch):
     # Every turn's tool list reads the installed extensions, so without
     # this the suite would pick up whatever the developer has installed.
     monkeypatch.setattr(extensions, "FLASH_DIR", home / ".flash")
+    # The system prompt lists the saved design systems.
+    monkeypatch.setattr(
+        design, "SYSTEMS_DIR", home / ".flash" / "design-systems"
+    )
     extensions.reload()
     monkeypatch.setattr(
         repl_input, "HISTORY_PATH", home / ".flash" / "history"
