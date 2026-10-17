@@ -32,6 +32,7 @@ from . import agent as subagents
 from . import browser as page_devtools
 from . import (
     checkpoint,
+    design,
     editor,
     extensions,
     learning,
@@ -265,7 +266,10 @@ def _flash_system_prompt(extension_prompt: str = "") -> str:
     added = f"{extension_prompt}\n" if extension_prompt else ""
     # Rich answers are part of how Flash writes, so they sit with its own
     # style, read afresh so the Settings switch takes effect at once.
-    rich = visuals.prompt_block()
+    rich = "\n".join(
+        part for part in (visuals.prompt_block(), design.prompt_block())
+        if part
+    )
     rich = f"\n{rich}\n" if rich else ""
 
     return f"""
