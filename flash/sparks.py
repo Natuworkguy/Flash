@@ -1809,11 +1809,48 @@ def hires(pending: bool = True) -> list[dict]:
     return [h for h in found if h.get("status") == "pending" or not pending]
 
 
+def _hire_leads(by: Spark, reports_to) -> list[Spark]:
+    """The sparks a hire BY proposes would report to: those REPORTS_TO
+    names (a list, or names split by commas), on BY's team. None means
+    BY itself; "none" no one."""
+
+    if reports_to is None:
+        return [by] if by.team else []
+    if isinstance(reports_to, str):
+        reports_to = re.split(r",|\band\b", reports_to)
+    wanted = [
+        " ".join(str(key or "").split()) for key in reports_to or []
+    ]
+    wanted = [key for key in wanted if key and key.lower() != "none"]
+    if wanted and not by.team:
+        raise SparkError(
+            "You are not on a team, so a hire cannot report to anyone."
+        )
+    leads: list[Spark] = []
+    for key in wanted:
+        lead = by if key.lower() in ("me", "myself") else _must_find(key)
+        if lead.team != by.team:
+            raise SparkError(
+                f"{lead.name} is not on your team: a hire reports to "
+                "sparks on it."
+            )
+        if all(found.id != lead.id for found in leads):
+            leads.append(lead)
+    if len(leads) > MAX_LEADS:
+        raise SparkError(f"A hire can report to at most {MAX_LEADS}.")
+    return leads
+
+
 def propose_hire(
     by_key: str, name: str, goal: str, title: str = "", every="",
-    boundaries: str = "", reason: str = "",
+    boundaries: str = "", reason: str = "", *, reports_to=None,
+    colour: str = "", model: str = "", project: str = "",
+    watch: str = "", paused: bool = False, budget: str = "",
 ) -> dict:
-    """BY_KEY asks the user to hire a new spark onto its team."""
+    """BY_KEY asks the user to hire a new spark onto its team: all of
+    it, from its instructions to who it reports to (BY_KEY itself unless
+    REPORTS_TO says), its colour, model, project, the folder it watches,
+    whether it starts paused, and a budget such as "50k a day"."""
 
     by = _must_find(by_key)
     name = " ".join(str(name or "").split())[:NAME_CHARS]
@@ -1824,6 +1861,30 @@ def propose_hire(
     if find(handle_of(name)) is not None:
         raise SparkError(f"There is already a spark called {name}.")
     minutes, at = parse_schedule(every or DEFAULT_EVERY_MINUTES)
+    leads = _hire_leads(by, reports_to)
+    chosen = parse_colour(colour) if str(colour or "").strip() else ""
+    project_id = resolve_project(project)
+    tokens, period = (
+        parse_budget_with_period(budget) if str(budget or "").strip()
+        else (0, None)
+    )
+    wanted = {
+        "name": name, "title": _title(title), "goal": goal,
+        "every": minutes, "at": at,
+        "boundaries": str(boundaries or "").strip()[:BOUNDARY_CHARS],
+        "reports_to": [lead.id for lead in leads],
+        "reports_to_names": [lead.name for lead in leads],
+        "colour": chosen, "model": _model_name(model),
+        "project": project_id, "watch": _watch_folder(watch),
+        "paused": bool(paused), "budget": tokens,
+        "budget_period": period or (
+            DEFAULT_BUDGET_PERIOD if tokens else ""
+        ),
+    }
+    if project_id:
+        from . import workspace  # deferred: only a hire with one needs it
+
+        wanted["project_name"] = workspace.project(project_id).name
     with _held():
         found = _read_hires()
         waiting = [
@@ -1839,17 +1900,47 @@ def propose_hire(
             "id": uuid.uuid4().hex[:8], "kind": "hire", "by": by.id,
             "by_name": by.name, "at": time.time(), "status": "pending",
             "reason": " ".join(str(reason or "").split())[:REASON_CHARS],
-            "spark": {
-                "name": name, "title": _title(title), "goal": goal,
-                "every": minutes, "at": at,
-                "boundaries": str(boundaries or "").strip()[:BOUNDARY_CHARS],
-            },
+            "spark": wanted,
         }
         _write_hires([*found, hire])
     log(by.id, "hire_proposed", hire=hire["id"], name=name, goal=goal,
         reason=hire["reason"])
     _changed()
     return hire
+
+
+def hire_details(hire: dict) -> list[str]:
+    """What else a proposed hire would be, besides its name and goal,
+    each as it reads: "reports to Lead", "every 2 hours"..."""
+
+    if hire.get("kind") != "hire":
+        return []
+    wanted = hire.get("spark") or {}
+    out = []
+    if "reports_to" in wanted:
+        names = wanted.get("reports_to_names") or []
+        out.append(
+            "reports to " + " and ".join(names) if names
+            else "reports to no one"
+        )
+    out.append(schedule_words(wanted))
+    if wanted.get("boundaries"):
+        out.append(f"never: {wanted['boundaries']}")
+    if wanted.get("model"):
+        out.append(f"on {wanted['model']}")
+    if wanted.get("project"):
+        out.append(f"works on {wanted.get('project_name') or 'a project'}")
+    if wanted.get("watch"):
+        out.append(f"watches {wanted['watch']}")
+    if wanted.get("budget"):
+        period = wanted.get("budget_period") or DEFAULT_BUDGET_PERIOD
+        out.append(
+            f"{wanted['budget']:,} tokens a{'n' if period == 'hour' else ''}"
+            f" {period}"
+        )
+    if wanted.get("paused"):
+        out.append("starts paused")
+    return out
 
 
 def propose_removal(by_key: str, target_key: str, reason: str = "") -> dict:
@@ -1884,6 +1975,56 @@ def propose_removal(by_key: str, target_key: str, reason: str = "") -> dict:
     return hire
 
 
+def _hire(wanted: dict, by: Optional[Spark]) -> Spark:
+    """The spark a hire the user said yes to WANTED, on BY's team. What
+    changed since it was proposed (a lead let go, a folder gone) leaves
+    that part out rather than the hire."""
+
+    project = ""
+    with contextlib.suppress(SparkError):
+        project = resolve_project(wanted.get("project", ""))
+    watch = ""
+    with contextlib.suppress(SparkError):
+        watch = _watch_folder(wanted.get("watch", ""))
+    colour = ""
+    with contextlib.suppress(SparkError):
+        colour = parse_colour(wanted.get("colour", "")) if wanted.get(
+            "colour") else ""
+    made = create(
+        wanted["name"], wanted["goal"], wanted.get("boundaries", ""),
+        wanted.get("at") or wanted.get("every") or "",
+        project=project, watch=watch,
+        model=wanted.get("model") or (by.model if by else ""),
+        title=wanted.get("title", ""), paused=bool(wanted.get("paused")),
+        colour=colour,
+    )
+    if by is not None and by.team:
+        # From before a hire said who it reports to: the one proposing.
+        ids = wanted.get("reports_to", [by.id])
+        leads = [
+            lead for lead in (find(i) for i in ids)
+            if lead is not None and lead.team == by.team
+        ][:MAX_LEADS]
+        if ids and not leads:
+            leads = [by]
+        made.team = by.team
+        made.reports_to = leads[0].id if leads else ""
+        made.also_reports_to = [lead.id for lead in leads[1:]]
+        team = find_team(by.team)
+        if not project and team is not None and team_project(team):
+            made.project = team.project
+        if team is not None and team.paused:
+            _hold(made)
+        _save(made)
+    if wanted.get("budget"):
+        with contextlib.suppress(SparkError):
+            made = set_budget(
+                made.id, True, wanted["budget"],
+                wanted.get("budget_period") or None,
+            )
+    return made
+
+
 def decide_hire(hire_id: str, yes: bool, why: str = "") -> dict:
     """The user's answer to a proposal. Yes to a hire makes the spark, on
     the proposer's team and reporting to it; yes to letting one go
@@ -1898,15 +2039,11 @@ def decide_hire(hire_id: str, yes: bool, why: str = "") -> dict:
         by = find(hire["by"])
         made: Optional[Spark] = None
         if yes and hire["kind"] == "hire":
-            wanted = hire["spark"]
-            made = create(
-                wanted["name"], wanted["goal"], wanted.get("boundaries", ""),
-                wanted.get("at") or wanted.get("every") or "",
-                model=by.model if by else "", title=wanted.get("title", ""),
-            )
-            if by is not None and by.team:
-                made.team, made.reports_to = by.team, by.id
-                _save(made)
+            made = _hire(hire["spark"], by)
+            if "reports_to" in hire["spark"]:
+                hire["spark"]["reports_to_names"] = [
+                    lead.name for lead in leads_of(made)
+                ]
             log(made.id, "hired", by=hire.get("by_name", ""),
                 reason=hire.get("reason", ""))
         elif yes and hire["kind"] == "remove":
@@ -1923,8 +2060,9 @@ def decide_hire(hire_id: str, yes: bool, why: str = "") -> dict:
             )
             note = (
                 f"The user said yes to {what}."
-                + (f" {made.name} reports to you now." if made and by.team
-                   else "")
+                + (f" {made.name} reports to you now." if made and by.id in (
+                    [made.reports_to, *(made.also_reports_to or [])]
+                ) else "")
                 if yes else f"The user said no to {what}"
                 + (f": {why}" if why else ".")
             )
@@ -3528,8 +3666,11 @@ PROPOSAL_TOOLS = [
             "description": (
                 "Ask the user to hire a new spark onto your team, when there "
                 "is standing work that is nobody's job and too much to fold "
-                "into yours. It does not exist until the user says yes; then "
-                "it reports to you, and you can hand_off work to it."
+                "into yours. Say all it should be: its instructions, who it "
+                "reports to, its colour, schedule, model and the rest; what "
+                "you leave out takes the usual. It does not exist until the "
+                "user says yes; then it reports to you, unless you say "
+                "otherwise, and you can hand_off work to it."
             ),
             "parameters": {
                 "type": "object",
@@ -3539,13 +3680,33 @@ PROPOSAL_TOOLS = [
                     "title": {"type": "string",
                               "description": "Its job, e.g. Bug triager."},
                     "goal": {"type": "string", "description": (
-                        "Its standing goal, written so it needs nothing "
-                        "else.")},
+                        "Its instructions: its standing goal, written so "
+                        "it needs nothing else.")},
                     "every": {"type": "string", "description": (
                         "How often it works: 30m, 2h, daily, or set times "
                         "like 9am weekdays.")},
                     "boundaries": {"type": "string",
                                    "description": "What it must never do."},
+                    "reports_to": {
+                        "type": "array", "items": {"type": "string"},
+                        "description": (
+                            "The sparks on your team it reports to, by name "
+                            f"or handle, at most {MAX_LEADS}: you, if left "
+                            "out; [\"none\"] for no one."),
+                    },
+                    "colour": {"type": "string", "description": (
+                        "Its colour: " + ", ".join(COLOUR_NAMES)
+                        + ", or any as #rrggbb.")},
+                    "model": {"type": "string", "description": (
+                        "The model it runs on, if not yours.")},
+                    "project": {"type": "string", "description": (
+                        "The project it works on, by name.")},
+                    "watch": {"type": "string", "description": (
+                        "A folder whose changes start a shift.")},
+                    "paused": {"type": "boolean", "description": (
+                        "Start paused, until the user resumes it.")},
+                    "budget": {"type": "string", "description": (
+                        "A budget of tokens, e.g. 50k a day.")},
                     "reason": {"type": "string", "description": (
                         "Why it is needed, for the user to decide on.")},
                 },
@@ -3587,6 +3748,13 @@ def _proposing(spark: Spark) -> dict[str, Callable[[dict], str]]:
                 str(args.get("goal", "")), str(args.get("title", "")),
                 str(args.get("every", "")), str(args.get("boundaries", "")),
                 str(args.get("reason", "")),
+                reports_to=args.get("reports_to"),
+                colour=str(args.get("colour") or ""),
+                model=str(args.get("model") or ""),
+                project=str(args.get("project") or ""),
+                watch=str(args.get("watch") or ""),
+                paused=args.get("paused") in (True, "true", "yes"),
+                budget=str(args.get("budget") or ""),
             )
         except SparkError as exc:
             return f"Error: {exc}"

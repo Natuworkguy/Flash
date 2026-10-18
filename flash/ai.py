@@ -2958,6 +2958,9 @@ def _list_hires() -> None:
         body.append(_hire_words(hire) + "\n")
         if hire.get("kind") == "hire":
             body.append(f"     {hire['spark']['goal'][:160]}\n", style=DIM)
+            details = sparks.hire_details(hire)
+            if details:
+                body.append(f"     {' · '.join(details)}\n", style=DIM)
         if hire.get("reason"):
             body.append(f"     Why: {hire['reason'][:200]}\n", style=DIM)
     body.append(
@@ -3510,9 +3513,13 @@ def _sparks_command(arg: str) -> None:
             hire = sparks.decide_hire(key, answer.lower() in ("yes", "y"), why)
             yes = hire["status"] == "approved"
             if hire["kind"] == "hire":
+                leads = hire["spark"].get(
+                    "reports_to_names", [hire["by_name"]],
+                )
                 said = (
-                    f"{hire['spark']['name']} is hired, reporting to "
-                    f"{hire['by_name']}." if yes else
+                    f"{hire['spark']['name']} is hired"
+                    + (f", reporting to {' and '.join(leads)}." if leads
+                       else ".") if yes else
                     f"{hire['by_name']} will not hire "
                     f"{hire['spark']['name']}."
                 )
