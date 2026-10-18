@@ -3038,6 +3038,9 @@ def _teams_command(rest: str) -> None:
     if action == "model" and extra:
         _team_model(extra)
         return
+    if action == "project" and extra:
+        _team_project(extra)
+        return
     if action == "templates":
         body = Text()
         for template in sparks.TEAM_TEMPLATES:
@@ -3052,6 +3055,7 @@ def _teams_command(rest: str) -> None:
     if action:
         warn("Usage: /sparks teams [new|remove|share|pause|resume <name> "
              "| rules <name> [rules|none] | model <name> [model] "
+             "| project <name> <project|none> "
              "| add <code|template> [running] | templates]")
         return
     found = sparks.teams()
@@ -3084,6 +3088,9 @@ def _teams_command(rest: str) -> None:
 
     for team in found:
         body.append(team.name, style=f"bold {team.colour}")
+        on = sparks.team_project(team)
+        if on is not None:
+            body.append(f"  in {on.name}", style=DIM)
         body.append("  paused\n" if team.paused else "\n", style=DIM)
         if team.rules:
             body.append(
@@ -3100,6 +3107,35 @@ def _teams_command(rest: str) -> None:
         body.append("No team\n", style="bold")
         body.append("  " + ", ".join(alone) + "\n", style=DIM)
     console.print(body)
+
+
+def _team_project(rest: str) -> None:
+    """/sparks teams project <team> <project|none>: the whole team into
+    one project, the sparks that join it later too."""
+
+    team, project = _team_and_rest(rest)
+    if team is None:
+        warn(f"No team called {rest!r}.")
+        return
+    from . import workspace  # deferred: only this needs the projects
+
+    if not project.strip():
+        names = ", ".join(p.name for p in workspace.projects())
+        warn(
+            f"Usage: /sparks teams project {team.name} <project|none>"
+            + (f". Projects: {names}" if names else
+               ". There are no projects yet: make one in the web UI.")
+        )
+        return
+    team, moved = sparks.set_team_project(team.id, project)
+    on = sparks.team_project(team)
+    console.print(Text(
+        (f"{team.name} works in {on.name} now" if on
+         else f"{team.name} is on no project now")
+        + (": " + ", ".join(s.name for s in moved) + " moved."
+           if moved else ", as its sparks already were."),
+        style=DIM,
+    ))
 
 
 def _team_rules(rest: str) -> None:

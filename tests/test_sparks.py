@@ -2533,3 +2533,73 @@ def test_the_terminal_colours_a_mention_in_a_report(model):
     ]
     assert coloured and coloured[0].bold  # nosec B101
     assert coloured[0].color.triplet.hex == fixer.colour  # nosec B101
+
+
+# --- Team projects -------------------------------------------------------
+
+
+def test_a_whole_team_goes_into_a_project(project):
+    lead = sparks.create("Lead", "Run the team.")
+    worker = sparks.create("Worker", "Do the work.")
+    team = sparks.create_team("Crew")
+    sparks.set_team(lead.id, team.id)
+    sparks.set_team(worker.id, team.id)
+
+    team, moved = sparks.set_team_project("Crew", "App")
+
+    assert team.project == project.id  # nosec B101
+    assert {s.name for s in moved} == {"Lead", "Worker"}  # nosec B101
+    assert sparks.find(lead.id).project == project.id  # nosec B101
+    on = sparks.team_project(sparks.find_team("Crew"))
+    assert on.name == "App"  # nosec B101
+
+    newcomer = sparks.create("Newcomer", "Help out.")
+    sparks.set_team(newcomer.id, team.id)
+    assert sparks.find(newcomer.id).project == project.id  # nosec B101
+
+
+def test_off_its_project_a_team_takes_only_its_own_along(project, tmp_path):
+    from flash import workspace
+
+    folder = tmp_path / "site"
+    folder.mkdir()
+    other = workspace.create_project("Site", str(folder))
+    stays = sparks.create("Stays", "Keep the site up.")
+    moves = sparks.create("Moves", "Fix the app.")
+    team = sparks.create_team("Crew")
+    for spark in (stays, moves):
+        sparks.set_team(spark.id, team.id)
+    sparks.set_team_project("Crew", project.id)
+    sparks.update(stays.id, project=other.id)
+
+    _, moved = sparks.set_team_project("Crew", "none")
+
+    assert [s.name for s in moved] == ["Moves"]  # nosec B101
+    assert sparks.find(moves.id).project == ""  # nosec B101
+    assert sparks.find(stays.id).project == other.id  # nosec B101
+    assert sparks.find_team("Crew").project == ""  # nosec B101
+
+
+def test_a_team_project_must_exist(project):
+    sparks.create_team("Crew")
+
+    with pytest.raises(sparks.SparkError):
+        sparks.set_team_project("Crew", "Nowhere")
+
+
+def test_the_page_sets_a_team_project(project):
+    from flash import web
+
+    sparks.set_team(
+        sparks.create("Lead", "Run it.").id, sparks.create_team("Crew").id
+    )
+    team = sparks.find_team("Crew")
+
+    shown = web._team_command(
+        "team-update",
+        team.id,
+        {"project": project.id},
+    )["team"]
+
+    assert shown["project"] == project.id  # nosec B101
+    assert sparks.find_team("Crew").project == project.id  # nosec B101

@@ -8008,7 +8008,8 @@ function teamBlock(team, byId, again, ti) {
   const walk = (node) => { ids.push(node.id); node.reports.forEach(walk); };
   team.chart.forEach(walk);
   const working = ids.filter((id) => byId.get(id)?.status === "working").length;
-  block.querySelector(".count").textContent = `${ids.length} spark${ids.length === 1 ? "" : "s"}${working ? ` · ${working} working` : ""}`;
+  const inProject = team.project ? projectOf(team.project) : null;
+  block.querySelector(".count").textContent = `${ids.length} spark${ids.length === 1 ? "" : "s"}${inProject ? ` · in ${inProject.name}` : ""}${working ? ` · ${working} working` : ""}`;
   const faces = block.querySelector(".team-faces");
   const moons = block.querySelector(".moons");
   const orbiting = ids.slice(0, 6);
@@ -8065,7 +8066,7 @@ function teamBlock(team, byId, again, ti) {
     block.querySelector(".team-title").appendChild(el("span", "team-paused-chip", `${icon("pause")}Paused`));
   }
   action("share", "Share this team", () => shareTeam(team));
-  action("edit", "Rename or recolour", () => teamForm(team));
+  action("edit", "Edit the team: name, colour, project, rules", () => teamForm(team));
   action("chip", "Change everyone's model", () => modelsForm(team.id));
   action("trash", "Delete the team (its sparks stay)", async (b) => {
     if (!b.classList.contains("sure")) { b.classList.add("sure"); b.dataset.tip = "Click again to delete it"; return; }
@@ -8541,6 +8542,7 @@ function teamForm(team = null) {
     ${team ? "" : `<div class="spark-templates team-templates"><span class="sub">Start from:</span></div>`}
     <label class="field"><span>Name</span><input name="teamname" maxlength="32" placeholder="Dev" autocomplete="off" required></label>
     <div class="field"><span>Colour</span><div class="swatches" role="radiogroup" aria-label="Colour">${TEAM_COLOURS.map((c) => `<button type="button" class="swatch" role="radio" data-c="${c}" style="--c:${c}" aria-label="${c}"></button>`).join("")}</div></div>
+    <label class="field"><span>Project</span><select name="project"><option value="">No project</option>${[...projects].reverse().map((p) => `<option value="${esc(p.id)}"${team && team.project === p.id ? " selected" : ""}>${esc(p.name)}</option>`).join("")}</select><small>${projects.length ? "Every spark on the team works in it, and so does any that joins later." : "Make a project on the Projects page to put a whole team in it."}</small></label>
     <label class="field"><span>Team rules</span><textarea name="rules" rows="3" maxlength="2000" placeholder="Never push, merge, or delete anything. Report what should change."></textarea><small>Every spark on the team keeps to these, on top of its own boundaries: on its shifts, in chats, and in the team chat.${team ? "" : " A template brings its own; what you write here replaces them."}</small></label>
     ${team ? "" : `<details class="team-code"><summary>Add a shared team instead</summary><label class="field"><span>Team code</span><textarea name="code" rows="3" class="mono" placeholder="flash-team:..." spellcheck="false"></textarea><small class="code-said">Paste the code someone shared. You see its sparks before anything is added.</small></label></details>
     <label class="field check start-paused" hidden><input type="checkbox" name="paused" checked><span>Start its sparks paused, to look them over first. Resume each in its window, or Resume all.</span></label>`}
@@ -8549,8 +8551,9 @@ function teamForm(team = null) {
       const name = (data.teamname || "").trim();
       const chosen = form.dataset.colour;
       const rules = (data.rules || "").trim();
+      const project = data.project || "";
       if (team) {
-        await command("team-update", team.id, null, { rename: name, colour: chosen, rules });
+        await command("team-update", team.id, null, { rename: name, colour: chosen, rules, project });
         toast(`Saved ${name}`);
         return;
       }
@@ -8564,7 +8567,7 @@ function teamForm(team = null) {
       } else {
         made = (await command("team-create", name, null, { colour: chosen })).team;
       }
-      if (rules) made = (await command("team-update", made.id, null, { rules })).team;
+      if (rules || project) made = (await command("team-update", made.id, null, { ...(rules ? { rules } : {}), ...(project ? { project } : {}) })).team;
       freshTeams.set(made.id, Date.now());
       toast(from ? `${made.name} is here, with its sparks` : `Made ${made.name}. Edit a spark to put it on the team.`);
       if (view !== "sparks") showPage("sparks");

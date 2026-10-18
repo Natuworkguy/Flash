@@ -540,6 +540,11 @@ have looked them over.
 - **Team rules.** Lines every spark on a team keeps to, on top of its own
   boundaries, on shifts and in chats alike (the team's edit form, or
   `/sparks teams rules <team> <rules|none>`).
+- **Team projects.** Put a whole team on one project and every spark on
+  it works there, and so does any spark that joins it later (Project in
+  the team's edit form, or `/sparks teams project <team> <project|none>`).
+  Taking the team off its project takes its sparks off too, unless one
+  has been moved to a project of its own since.
 - **Shared workers.** A spark can report to more than one lead, as
   equals: pick each under Reports to in its form (or
   `/sparks lead test-runner engine manager, flash manager`), and the

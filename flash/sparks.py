@@ -900,6 +900,9 @@ class Team:
     # Lines every spark on it keeps to, on top of its own boundaries, on
     # shifts and in chats alike. "" for none.
     rules: str = ""
+    # The project the whole team works in: every spark on it has it, and
+    # one that joins takes it on. "" for none.
+    project: str = ""
 
 
 def _teams_path() -> Path:
@@ -1102,6 +1105,60 @@ def set_team_rules(key: str, rules: str) -> Team:
     return team
 
 
+def set_team_project(key: str, project: str) -> tuple[Team, list[Spark]]:
+    """Put the whole of KEY's team on PROJECT, by ID or name, or on none
+    with "": every spark on it now, and any that joins it later. Taken
+    off, the sparks the team had put there leave it too; one moved to
+    another project since keeps that one. The team, and the sparks it
+    moved."""
+
+    project_id = resolve_project(project)
+    with _held():
+        team = _must_find_team(key)
+        before = team.project
+        found = _read_teams()
+        for one in found:
+            if one.id == team.id:
+                one.project = project_id
+                team = one
+        _write_teams(found)
+        moved = []
+        for spark in members(team.id):
+            now = project_id or (
+                "" if spark.project == before else spark.project
+            )
+            if spark.project != now:
+                spark.project = now
+                _save(spark)
+                moved.append(spark)
+    from . import workspace  # deferred: only a team with one needs it
+
+    named = workspace.project(project_id) if project_id else None
+    name = named.name if named else ""
+    for spark in moved:
+        log(spark.id, "project", project=name, team=team.name)
+    from . import teamchat  # deferred: it builds on this module
+
+    with contextlib.suppress(Exception):
+        teamchat.event(
+            team.id, None,
+            "set the project of" if name else "cleared the project of",
+            name,
+        )
+    _changed()
+    return team, moved
+
+
+def team_project(team: Optional[Team]):
+    """TEAM's project, or None: none given, or the project is gone."""
+
+    if team is None or not team.project:
+        return None
+    from . import workspace  # deferred: only a team with one needs it
+
+    return workspace.project(team.project)
+
+
 def lines_of(spark: Spark) -> str:
     """The lines SPARK must not cross: its own boundaries, then its
     team's rules. "" for none."""
@@ -1206,6 +1263,9 @@ def set_team(key: str, team_key: str = "") -> Spark:
             _release(spark)
             if team is not None and team.paused:
                 _hold(spark)
+            # A team on a project brings its newcomers onto it.
+            if team_project(team) is not None:
+                spark.project = team.project
             for other in all_sparks():
                 if other.id == spark.id:
                     continue

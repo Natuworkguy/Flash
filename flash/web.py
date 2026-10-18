@@ -3697,6 +3697,8 @@ def team_info(team: "sparks.Team") -> dict:
         "created": team.created, "chart": sparks.org_chart(team.id),
         "chat_unread": teamchat.unread(team.id), "paused": team.paused,
         "rules": team.rules,
+        # Only one still there: a deleted project leaves the team on none.
+        "project": team.project if sparks.team_project(team) else "",
     }
 
 
@@ -3716,6 +3718,11 @@ def _team_command(name: str, arg: str, body: dict) -> dict:
             if "rules" in body:
                 team = sparks.set_team_rules(
                     team.id, str(body.get("rules") or ""),
+                )
+            if "project" in body and str(body.get("project") or "") != (
+                    team.project if sparks.team_project(team) else ""):
+                team, _ = sparks.set_team_project(
+                    team.id, str(body.get("project") or ""),
                 )
             return {"team": team_info(team)}
         if name == "team-remove":
