@@ -537,6 +537,9 @@ have looked them over.
   has the spark answer again in its place, the old message gone from
   the chat and from what every spark reads of it.
   Voice mode and `:emoji` work there too.
+  Under each of your messages, one tick means it is in the chat and two
+  mean a spark has read it, answering or on a shift; hover the ticks to
+  see which sparks read it, and when. The terminal says the same.
 - **Team rules.** Lines every spark on a team keeps to, on top of its own
   boundaries, on shifts and in chats alike (the team's edit form, or
   `/sparks teams rules <team> <rules|none>`).

@@ -371,6 +371,45 @@ def mark_read(team_key: str) -> bool:
     return True
 
 
+def _seen(team_id: str, spark: sparks.Spark, entries: list) -> None:
+    """SPARK has read ENTRIES: the user's messages among them are marked
+    read by it, with when, for the page's ticks. Writes nothing when it
+    had read them all already."""
+
+    ids = {
+        e.get("id") for e in entries
+        if e.get("kind") == USER and spark.id not in (e.get("seen") or {})
+    }
+    if not ids:
+        return
+
+    def change(data: dict) -> None:
+        now = time.time()
+        for entry in data["entries"]:
+            if entry.get("id") not in ids:
+                continue
+            seen = entry.get("seen")
+            entry["seen"] = seen = seen if isinstance(seen, dict) else {}
+            if spark.id in seen:
+                continue
+            seen[spark.id] = now
+            # As a reaction does: a page that has it sees it changed.
+            data["seq"] += 1
+            entry["changed"] = data["seq"]
+
+    _change(team_id, change)
+
+
+def read_by(entry: dict) -> list[str]:
+    """The sparks that have read ENTRY, the user's message, by ID, the
+    first to read it first."""
+
+    seen = entry.get("seen")
+    if not isinstance(seen, dict):
+        return []
+    return [i for i, _ in sorted(seen.items(), key=lambda kv: kv[1])]
+
+
 def event(team_id: str, spark: Optional[sparks.Spark], what: str,
           text: str = "", files: Optional[list] = None,
           whom: str = "") -> Optional[dict]:
@@ -746,6 +785,7 @@ def _reply(
             roster=roster, quiet=QUIET,
         )
         entries = _live(_read(team.id)["entries"])[-CONTEXT_ENTRIES:]
+        _seen(team.id, spark, entries)
         messages = [
             {"role": "system", "content": system},
             {"role": "user", "content": _view(team, spark, entries)},
@@ -935,6 +975,9 @@ def prompt_block(spark: sparks.Spark) -> str:
     entries = _live(_read(spark.team)["entries"])[-PROMPT_ENTRIES:]
     if not entries:
         return ""
+    # What is in its prompt it reads, on a shift as in a chat.
+    with contextlib.suppress(OSError):
+        _seen(spark.team, spark, entries)
     by_id = {s.id: s for s in sparks.all_sparks()}
     lines = []
     for entry in entries:

@@ -955,3 +955,45 @@ def test_the_page_retries(team, monkeypatch):
     _settled(team.id)
 
     assert out["entry"]["retried"] is True  # nosec B101
+
+
+def test_a_message_is_read_by_the_sparks_that_answer_it(team):
+    message = teamchat.say("desk", "Morning, team.")
+    assert teamchat.read_by(message) == []  # nosec B101
+
+    teamchat.answer("desk", message, FakeClient([_reply("Morning.")]))
+
+    mine = _said(team.id, teamchat.USER)[0]
+    lead = sparks.find("lead")
+    assert teamchat.read_by(mine) == [lead.id]  # nosec B101
+    assert mine["seen"][lead.id] >= mine["at"]  # nosec B101
+
+
+def test_a_spark_reads_the_chat_on_its_shift_and_the_page_hears(team):
+    teamchat.say("desk", "Scout, look at the logs.")
+    seq = teamchat.history("desk")["seq"]
+    scout = sparks.find("scout")
+
+    assert "look at the logs" in teamchat.prompt_block(scout)  # nosec B101
+    later = teamchat.history("desk", since=seq)
+
+    assert [teamchat.read_by(e) for e in later["changed"]] == [  # nosec B101
+        [scout.id],
+    ]
+    # Read again, nothing more is written.
+    teamchat.prompt_block(scout)
+    again = teamchat.history("desk", since=later["seq"])
+    assert again["changed"] == []  # nosec B101
+
+
+def test_the_terminal_shows_who_read_a_message(team, capsys):
+    from flash import ai
+
+    teamchat.say("desk", "First.")
+    teamchat.prompt_block(sparks.find("writer"))
+    teamchat.say("desk", "Second.")
+
+    ai._sparks_command("teamchat desk")
+
+    out = capsys.readouterr().out
+    assert "✓✓ Read by Writer" in out and "✓ Sent" in out  # nosec B101
