@@ -56,6 +56,7 @@ from . import (
     design,
     extensions,
     greetings,
+    interrupt,
     keepalive,
     learning,
     livedocs,
@@ -4651,7 +4652,8 @@ def serve(
 
     server = _listen(port, lan)
     announce(server)
-    console.print(Text("Ctrl+C stops it.", style=DIM))
+    console.print(Text("Ctrl+C twice stops it.", style=DIM))
+    interrupt.guard("Press Ctrl+C again to stop the web UI")
 
     _attach(server, standalone=True)
     server.session.updates.check_in_background()

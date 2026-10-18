@@ -32,6 +32,7 @@ from . import (
     context,
     extensions,
     greetings,
+    interrupt,
     learning,
     loaders,
     plan,
@@ -69,6 +70,7 @@ from .repl_input import (
     WAKE,
     Dock,
     all_commands,
+    arm_exit,
     carry,
     is_shell_line,
     read_line,
@@ -4784,8 +4786,17 @@ def _confirm_url_prompt(prompt: str) -> bool:
 
 
 def main() -> None:
-    """Main app loop"""
+    """Main app loop. Ctrl+C pressed twice anywhere outside a turn
+    leaves quietly, without a traceback."""
 
+    try:
+        _main()
+    except KeyboardInterrupt:
+        console.print()
+        sys.exit(130)
+
+
+def _main() -> None:
     args = parse_args()
 
     if args.register_url_scheme or args.unregister_url_scheme:
@@ -4945,6 +4956,10 @@ def main() -> None:
         for text in said:
             _render_sent_message(console, Config.prompt, text)
         return said
+
+    # From here a single Ctrl+C stops a running turn; at the prompt the
+    # input box asks for a second press itself.
+    arm_exit(interrupt.release())
 
     while True:
         dock: Optional[Dock] = None
