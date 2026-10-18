@@ -1755,6 +1755,8 @@ body.all-stopped .org-node, body.all-stopped .spark-card { animation: all-halt 0
 .hire-card .hire-ask { font-size: 14px; }
 .hire-card .goal { font-size: 13px; color: var(--text-2); }
 .hire-card .why { font-size: 12.5px; color: var(--text-3); }
+.hire-card .more { font-size: 12.5px; color: var(--text-3); }
+.hire-card .hire-dot { display: inline-block; width: 9px; height: 9px; margin: 0 5px 1px 2px; border-radius: 50%; background: var(--c); vertical-align: middle; }
 .hire-card .decide { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .hire-card .decide input { width: 180px; font: 13px var(--sans); padding: 6px 10px; border-radius: 9px; border: 1px solid var(--border); background: var(--bg); color: var(--text); }
 .hire-stack.again .hire-card:not(.stamped):not(.waved) { animation: none; }
@@ -8417,7 +8419,7 @@ function hireCards(hires, all, again = false) {
   const byId = new Map(all.map((s) => [s.id, s]));
   for (const hire of hires) {
     const by = byId.get(hire.by);
-    const card = el("div", "hire-card", `<span class="face"></span><span class="words"><span class="hire-ask"></span><span class="goal"></span><span class="why"></span></span><span class="decide"><input type="text" maxlength="300" placeholder="Why not? (optional)" aria-label="Why not"><button type="button" class="btn small" data-no>Decline</button><button type="button" class="btn small primary" data-yes></button></span>`);
+    const card = el("div", "hire-card", `<span class="face"></span><span class="words"><span class="hire-ask"></span><span class="goal"></span><span class="more"></span><span class="why"></span></span><span class="decide"><input type="text" maxlength="300" placeholder="Why not? (optional)" aria-label="Why not"><button type="button" class="btn small" data-no>Decline</button><button type="button" class="btn small primary" data-yes></button></span>`);
     if (by) card.querySelector(".face").appendChild(sparkAvatar(by, 36));
     const ask = card.querySelector(".hire-ask");
     if (hire.kind === "hire") {
@@ -8425,12 +8427,22 @@ function hireCards(hires, all, again = false) {
       ask.querySelector("b").textContent = hire.by_name;
       ask.querySelector(".who").textContent = hire.spark.name + (hire.spark.title ? `, ${hire.spark.title}` : "");
       card.querySelector(".goal").textContent = hire.spark.goal;
+      // Its colour, beside its name, as it will be drawn.
+      if (hire.spark.colour) {
+        const dot = el("span", "hire-dot");
+        dot.style.setProperty("--c", hire.spark.colour);
+        dot.dataset.tip = "Its colour";
+        ask.querySelector(".who").before(dot);
+      }
+      const more = card.querySelector(".more");
+      if ((hire.details || []).length) more.textContent = hire.details.join(" · "); else more.remove();
       card.querySelector("[data-yes]").textContent = "Hire";
     } else {
       ask.innerHTML = `<b></b> wants to let <b class="who"></b> go`;
       ask.querySelector("b").textContent = hire.by_name;
       ask.querySelector(".who").textContent = hire.target_name;
       card.querySelector(".goal").remove();
+      card.querySelector(".more").remove();
       card.querySelector("[data-yes]").textContent = "Let it go";
     }
     const why = card.querySelector(".why");

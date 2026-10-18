@@ -1211,3 +1211,91 @@ def test_the_page_and_the_terminal_set_two_leads(studio, capsys):
     )
     ai._sparks_command("lead test-runner none")
     assert sparks.leads_of(sparks.find("test runner")) == []
+
+
+# --- Hires that say all they are -----------------------------------------
+
+
+def test_a_hire_says_everything_it_will_be(org, model, tmp_path):
+    from flash import workspace
+
+    folder = tmp_path / "site"
+    folder.mkdir()
+    workspace.create_project("Site", str(folder))
+
+    hire = sparks.propose_hire(
+        "lead", "Docs", "Keep the docs up to date.", "Doc writer", "2h",
+        "Only edit docs/.", "Docs keep going stale.",
+        reports_to=["Scout", "lead"], colour="lilac", model="big:120b-cloud",
+        project="site", watch=str(folder), paused=True, budget="50k a day",
+    )
+
+    details = sparks.hire_details(hire)
+    assert details[0] == "reports to Scout and Lead"
+    assert "on big:120b-cloud" in details and "works on Site" in details
+    assert "50,000 tokens a day" in details and "starts paused" in details
+
+    sparks.decide_hire(hire["id"], True)
+
+    docs = sparks.find("docs")
+    scout, lead = sparks.find("scout"), sparks.find("lead")
+    assert docs.team == org.id
+    assert [s.id for s in sparks.leads_of(docs)] == [scout.id, lead.id]
+    assert docs.colour == sparks.COLOUR_NAMES["lilac"]
+    assert docs.model == "big:120b-cloud" and docs.every == 120
+    assert docs.project and docs.watch == str(folder.resolve())
+    assert docs.paused and docs.budget_on and docs.budget == 50_000
+    assert docs.budget_period == "day" and docs.boundaries
+    assert "Docs reports to you now" in lead.inbox[-1]["text"]
+
+
+def test_a_hire_can_report_to_no_one_but_only_on_its_team(org, model):
+    sparks.create("Outsider", "Elsewhere.")
+
+    with pytest.raises(sparks.SparkError, match="not on your team"):
+        sparks.propose_hire("lead", "Docs", "Docs.", reports_to=["outsider"])
+    with pytest.raises(sparks.SparkError, match="colour"):
+        sparks.propose_hire("lead", "Docs", "Docs.", colour="plaid")
+    with pytest.raises(sparks.SparkError, match="No project"):
+        sparks.propose_hire("lead", "Docs", "Docs.", project="nowhere")
+
+    hire = sparks.propose_hire("lead", "Docs", "Docs.", reports_to="none")
+    assert sparks.hire_details(hire)[0] == "reports to no one"
+    sparks.decide_hire(hire["id"], True)
+
+    docs = sparks.find("docs")
+    assert docs.team == org.id and sparks.leads_of(docs) == []
+    assert docs.model == sparks.find("lead").model
+
+
+def test_a_lead_gone_before_the_yes_leaves_the_proposer(org, model):
+    hire = sparks.propose_hire("lead", "Docs", "Docs.", reports_to="Scout")
+    sparks.remove("scout")
+
+    sparks.decide_hire(hire["id"], True)
+
+    docs = sparks.find("docs")
+    assert [s.name for s in sparks.leads_of(docs)] == ["Lead"]
+
+
+def test_a_spark_asks_for_a_whole_hire_from_its_shift(org, model):
+    client = FakeClient([
+        _reply("", ("propose_hire", {
+            "name": "Docs", "goal": "Docs.", "reason": "Stale docs.",
+            "reports_to": ["Tester"], "colour": "#123456", "paused": True,
+        })),
+        _reply("Asked to hire Docs."),
+    ])
+
+    sparks.shift("lead", client=client)
+
+    tool = next(
+        t for t in client.calls[0]["tools"]
+        if t["function"]["name"] == "propose_hire"
+    )
+    offered = tool["function"]["parameters"]["properties"]
+    assert {"reports_to", "colour", "model", "project", "watch", "paused",
+            "budget"} <= set(offered)
+    wanted = sparks.hires()[0]["spark"]
+    assert wanted["reports_to_names"] == ["Tester"]
+    assert wanted["colour"] == "#123456" and wanted["paused"]

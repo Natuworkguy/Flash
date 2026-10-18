@@ -561,7 +561,11 @@ have looked them over.
   page draws each mention as a chip in that spark's colour, and the
   terminal in its colour.
 - **Hiring.** A spark can propose hiring another, or letting one go. It
-  waits for your yes (`/sparks hires`, `/sparks hire <id> yes|no`).
+  waits for your yes (`/sparks hires`, `/sparks hire <id> yes|no`). A
+  hire says all it will be: its instructions, title, schedule and
+  boundaries, who on the team it reports to (the proposer unless it
+  says), its colour, model, project, a folder to watch, a budget, and
+  whether it starts paused. Anything it leaves out takes the usual.
 - **Budgets.** Off by default. Give a spark tokens per hour, day, week
   or month and it pauses itself once they are spent
   (`/sparks budget scout 50k day`).

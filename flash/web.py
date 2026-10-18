@@ -3149,7 +3149,10 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
         return {
             "sparks": [s.to_dict() for s in sparks.all_sparks()],
             "teams": [team_info(t) for t in sparks.teams()],
-            "hires": sparks.hires(),
+            "hires": [
+                {**h, "details": sparks.hire_details(h)}
+                for h in sparks.hires()
+            ],
             "held": sparks.held_count(),
             "always": keepalive.status(),
         }
