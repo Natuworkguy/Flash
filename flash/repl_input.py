@@ -842,6 +842,15 @@ EXIT_HINT = "Press Ctrl+C again to exit, or type /bye"
 _exit_armed_until = 0.0
 
 
+def arm_exit(until: float) -> None:
+    """A Ctrl+C pressed before the prompt was up counts as the first: the
+    prompt shows the hint until UNTIL, and a press before then leaves."""
+
+    global _exit_armed_until
+
+    _exit_armed_until = max(_exit_armed_until, until)
+
+
 def carry(text: str) -> None:
     """Put TEXT in the next prompt's box, after anything already there."""
 
