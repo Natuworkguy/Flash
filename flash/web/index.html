@@ -2253,6 +2253,15 @@ body.all-stopped .org-node, body.all-stopped .spark-card { animation: all-halt 0
 .tc-reacts[hidden] { display: none; }
 .tc-msg.mine .tc-reacts { justify-content: flex-end; padding: 0 2px 0 0; }
 .tc-event-reacts { align-self: center; justify-content: center; margin: -1px 0 4px; }
+/* Under the user's own messages: one tick once sent, two once a spark
+   has read it, lit; who read it and when on hover. */
+.tc-receipt { align-self: flex-end; display: inline-flex; align-items: center; height: 14px; margin: 1px 4px 0 0; color: var(--text-3); cursor: default; }
+.tc-receipt svg { width: 14px; height: 14px; stroke-width: 2.4; }
+.tc-receipt svg + svg { margin-left: -9px; }
+.tc-receipt.read { color: var(--accent); }
+.tc-receipt.pop svg + svg { animation: tc-tick 0.45s var(--spring); }
+@keyframes tc-tick { from { opacity: 0; transform: translateX(-4px) scale(0.6); } }
+@media (prefers-reduced-motion: reduce) { .tc-receipt.pop svg + svg { animation: none; } }
 .tc-react {
   display: inline-flex; align-items: center; gap: 4px; height: 26px; padding: 0 9px 0 7px;
   border-radius: 999px; font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums; color: var(--text-2);
@@ -7458,6 +7467,8 @@ async function tcFetch(first = false) {
     if (entry.retried) { tcRemove(entry.id); return; }
     const box = log.querySelector(`.tc-reacts[data-for="${CSS.escape(String(entry.id))}"]`);
     if (box) tcFillReacts(box, entry, true);
+    const receipt = log.querySelector(`.tc-receipt[data-for="${CSS.escape(String(entry.id))}"]`);
+    if (receipt) tcFillReceipt(receipt, entry, true);
   });
   teamChat.seq = Math.max(teamChat.seq, r.seq);
   tcTyping(r.typing);
@@ -7571,6 +7582,7 @@ function tcEntry(entry, fresh) {
   const line = el("div", "tc-line");
   if (mine) line.append(tcReplyButton(entry), tcReactButton(entry), bubble); else line.append(bubble, tcReactButton(entry), tcReplyButton(entry));
   col.append(line, tcReacts(entry));
+  if (mine) col.appendChild(tcReceipt(entry));
   // A spark's message can be read aloud, or answered again in its place.
   if (!mine && spark) {
     const tools = el("div", "tc-tools");
@@ -7653,6 +7665,33 @@ function tcReactButton(entry) {
   b.dataset.tip = "React";
   b.onclick = (e) => { e.stopPropagation(); tcPicker(b, entry.id); };
   return b;
+}
+
+// Read receipts: a tick under each of the user's messages once it is in
+// the chat, a second once any spark has read it, on a shift or answering.
+function tcReceipt(entry) {
+  const box = el("span", "tc-receipt");
+  box.dataset.for = entry.id;
+  tcFillReceipt(box, entry, false);
+  return box;
+}
+
+function tcFillReceipt(box, entry, fresh) {
+  const seen = Object.entries(entry.seen || {}).sort((a, b) => a[1] - b[1]);
+  const read = seen.length > 0;
+  if (fresh && read && !box.classList.contains("read")) {
+    box.classList.remove("pop");
+    void box.offsetWidth;
+    box.classList.add("pop");
+  }
+  box.classList.toggle("read", read);
+  box.innerHTML = icon("check") + (read ? icon("check") : "");
+  const names = seen.map(([id, at]) => `${tcSpark(id)?.name || "A spark"} at ${tcClock(at)}`);
+  box.dataset.tip = read
+    ? `Read by ${names.length < 2 ? names.join("") : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`}`
+    : `Sent at ${tcClock(entry.at)}`;
+  box.setAttribute("aria-label", box.dataset.tip);
+  box.setAttribute("role", "img");
 }
 
 function tcReacts(entry) {

@@ -2809,6 +2809,15 @@ def _team_chat(rest: str) -> None:
             line = Text("  You  ", style=f"bold {ACCENT}")
             line.append(entry["text"])
             console.print(_Mentions(line))
+            readers = [
+                by_id[i].name if i in by_id else "a spark"
+                for i in teamchat.read_by(entry)
+            ]
+            console.print(Text(
+                "       ✓✓ Read by " + " and ".join(readers) if readers
+                else "       ✓ Sent",
+                style=ACCENT if readers else DIM,
+            ))
         elif entry["kind"] == teamchat.EVENT:
             console.print(_Mentions(Text(
                 f"  {teamchat._line(entry, by_id).strip('()')}", style=DIM,
