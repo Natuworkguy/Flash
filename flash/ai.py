@@ -2834,7 +2834,11 @@ def _team_chat(rest: str) -> None:
         reactions = teamchat._reactions(entry)
         if reactions:
             console.print(Text("    " + "  ".join(
-                f"{emoji} {len(whose)}" for emoji, whose in reactions.items()
+                f"{emoji} " + " and ".join(
+                    "You" if who == teamchat.USER
+                    else by_id[who].name if who in by_id else "a spark"
+                    for who in whose
+                ) for emoji, whose in reactions.items()
             ), style=DIM))
 
     if not said:

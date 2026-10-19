@@ -2277,6 +2277,23 @@ body.all-stopped .org-node, body.all-stopped .spark-card { animation: all-halt 0
 .tc-msg:hover .tc-react.add, .tc-reacts:hover .tc-react.add, .tc-react.add:focus-visible { opacity: 1; }
 @media (hover: none) { .tc-react.add { opacity: 0.7; } }
 .tc-react.pop .e { animation: tc-react-pop 0.55s var(--spring); }
+/* Who put a reaction on: a card over its pill, on hover, on focus or on
+   a long press, each with its face and name. */
+.tc-reactors {
+  position: fixed; z-index: 3; min-width: 160px; max-width: 250px; padding: 6px; border-radius: 14px;
+  background: var(--surface); border: 1px solid var(--border); box-shadow: 0 14px 34px rgba(0, 0, 0, 0.2);
+  pointer-events: none; transform-origin: var(--ox, 50%) 100%; animation: tc-reactors-in 0.18s var(--ease) both;
+}
+.tc-reactors.below { transform-origin: var(--ox, 50%) 0; }
+.tc-reactors .head { display: flex; align-items: center; gap: 8px; padding: 2px 6px 7px; margin-bottom: 3px; border-bottom: 1px solid var(--border); font-size: 12px; color: var(--text-3); }
+.tc-reactors .head .e { font-size: 22px; line-height: 1; }
+.tc-reactors ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 1px; }
+.tc-reactors li { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 4px 6px; font-size: 13px; color: var(--text); }
+.tc-reactors li .name { font-weight: 600; white-space: nowrap; }
+.tc-reactors li .title { min-width: 0; margin-left: auto; padding-left: 10px; font-size: 12px; color: var(--text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tc-reactors .you { flex: none; display: inline-grid; place-items: center; width: 20px; height: 20px; border-radius: 50%; font-size: 10px; font-weight: 700; color: #fff; background: var(--accent); }
+@keyframes tc-reactors-in { from { opacity: 0; transform: translateY(4px) scale(0.96); } }
+@media (prefers-reduced-motion: reduce) { .tc-reactors { animation: none; } }
 .tc-react.pop .n { animation: tc-react-count 0.4s var(--ease) both; }
 @keyframes tc-react-pop { 0% { transform: scale(0.3) rotate(-14deg); } 55% { transform: scale(1.4) rotate(6deg); } 100% { transform: none; } }
 @keyframes tc-react-count { from { opacity: 0; transform: translateY(-6px); } }
@@ -7294,7 +7311,7 @@ const TEAM_COLOURS = ["#f2a65a", "#5ab0f2", "#7bd88f", "#c792ea", "#ff7a90", "#f
 // goes to the sparks it @mentions, or to the lead, and a spark can bring
 // a teammate in. The team's news lands in it as it happens.
 
-const teamChat = { id: null, seq: 0, team: null, sparks: new Map(), typing: [], timer: null, drawnDay: "", lastWho: "", loading: false, replyTo: null, pickerAnchor: null };
+const teamChat = { id: null, seq: 0, team: null, sparks: new Map(), typing: [], timer: null, drawnDay: "", lastWho: "", loading: false, replyTo: null, pickerAnchor: null, who: null, whoTimer: null, pressTimer: null };
 
 function tcSpark(id) { return teamChat.sparks.get(id) || sparkList.find((s) => s.id === id) || null; }
 
@@ -7376,6 +7393,7 @@ function closeTeamChat() {
   const wrap = $("#team-chat");
   wrap.classList.remove("open");
   clearTimeout(teamChat.timer);
+  tcWhoAway();
   tcClosePicker();
   if (voice.on && voice.team) endVoice();
   if (reading.key && reading.key.startsWith("tc:")) stopReading();
@@ -7708,6 +7726,8 @@ function tcNames(whose) {
 
 function tcFillReacts(box, entry, fresh) {
   const before = new Map([...box.querySelectorAll(".tc-react[data-emoji]")].map((b) => [b.dataset.emoji, b.dataset.count]));
+  // A card open over one of these pills follows it as it is drawn again.
+  const showing = teamChat.who && teamChat.who.box === box ? teamChat.who : null;
   box.entry = entry;
   box.textContent = "";
   const reactions = Object.entries(entry.reactions || {}).filter(([, whose]) => whose && whose.length);
@@ -7718,13 +7738,37 @@ function tcFillReacts(box, entry, fresh) {
     b.querySelector(".n").textContent = whose.length;
     b.dataset.emoji = emoji;
     b.dataset.count = whose.length;
-    b.dataset.tip = `${tcNames(whose)} reacted with ${emoji}`;
     b.setAttribute("aria-pressed", String(whose.includes("user")));
-    b.setAttribute("aria-label", `${emoji} ${whose.length}: ${b.dataset.tip}`);
+    b.setAttribute("aria-label", `${emoji} ${whose.length}: ${tcNames(whose)} reacted with ${emoji}`);
     if (fresh && before.get(emoji) !== String(whose.length)) b.classList.add("pop");
-    b.onclick = (e) => { e.stopPropagation(); tcReact(box, emoji); };
+    const show = (now) => {
+      clearTimeout(teamChat.whoTimer);
+      teamChat.whoTimer = setTimeout(() => tcWho(box, b, emoji, whose), now || teamChat.who ? 0 : 150);
+    };
+    const hide = () => { clearTimeout(teamChat.whoTimer); teamChat.whoTimer = setTimeout(tcWhoAway, 80); };
+    b.addEventListener("mouseenter", () => show(false));
+    b.addEventListener("mouseleave", hide);
+    b.addEventListener("focus", () => { if (b.matches(":focus-visible")) show(true); });
+    b.addEventListener("blur", hide);
+    // A long press shows them on a touch screen, without reacting.
+    let pressed = false;
+    b.addEventListener("pointerdown", (e) => {
+      if (e.pointerType !== "touch") return;
+      pressed = false;
+      clearTimeout(teamChat.pressTimer);
+      teamChat.pressTimer = setTimeout(() => { pressed = true; tcWho(box, b, emoji, whose, true); }, 450);
+    });
+    ["pointerup", "pointercancel", "pointerleave"].forEach((ev) => b.addEventListener(ev, () => clearTimeout(teamChat.pressTimer)));
+    b.addEventListener("contextmenu", (e) => e.preventDefault());
+    b.onclick = (e) => {
+      e.stopPropagation();
+      if (pressed) { pressed = false; return; }
+      tcReact(box, emoji);
+    };
     box.appendChild(b);
+    if (showing && showing.emoji === emoji) tcWho(box, b, emoji, whose);
   }
+  if (showing && !box.querySelector(`.tc-react[data-emoji="${CSS.escape(showing.emoji)}"]`)) tcWhoAway();
   if (reactions.length) {
     const add = el("button", "tc-react add", icon("smile"));
     add.type = "button";
@@ -7734,6 +7778,48 @@ function tcFillReacts(box, entry, fresh) {
     box.appendChild(add);
   }
   box.hidden = !reactions.length;
+}
+
+// The card of who put EMOJI on, over its PILL: the user first, then
+// the sparks as they reacted, each with its face, name and title.
+function tcWho(box, pill, emoji, whose, touched = false) {
+  tcWhoAway();
+  if (!pill.isConnected) return;
+  const card = el("div", "tc-reactors", `<div class="head"><span class="e"></span><span class="t"></span></div><ul></ul>`);
+  card.setAttribute("role", "tooltip");
+  card.querySelector(".e").textContent = emoji;
+  card.querySelector(".t").textContent = `${whose.length} reacted`;
+  const list = card.querySelector("ul");
+  for (const w of [...whose].sort((a, b) => (b === "user") - (a === "user"))) {
+    const li = el("li");
+    const spark = w === "user" ? null : tcSpark(w);
+    li.appendChild(spark ? sparkAvatar(spark, 20) : el("span", "you", w === "user" ? "Y" : "?"));
+    const name = el("span", "name");
+    name.textContent = w === "user" ? "You" : spark?.name || "A spark";
+    li.appendChild(name);
+    if (spark?.title) { const title = el("span", "title"); title.textContent = spark.title; li.appendChild(title); }
+    list.appendChild(li);
+  }
+  $("#team-chat").appendChild(card);
+  // Over the pill, or under it near the top; kept inside the window.
+  const a = pill.getBoundingClientRect();
+  const w = card.offsetWidth, h = card.offsetHeight;
+  const left = Math.max(8, Math.min(window.innerWidth - w - 8, a.left + a.width / 2 - w / 2));
+  const below = a.top - h - 8 < 8;
+  card.classList.toggle("below", below);
+  card.style.left = `${left}px`;
+  card.style.top = `${below ? a.bottom + 8 : a.top - h - 8}px`;
+  card.style.setProperty("--ox", `${a.left + a.width / 2 - left}px`);
+  teamChat.who = { box, emoji, card };
+  $("#team-chat .tc-log").addEventListener("scroll", tcWhoAway, { once: true });
+  if (touched) setTimeout(() => document.addEventListener("pointerdown", tcWhoAway, { once: true, capture: true }));
+}
+
+function tcWhoAway() {
+  clearTimeout(teamChat.whoTimer);
+  if (!teamChat.who) return;
+  teamChat.who.card.remove();
+  teamChat.who = null;
 }
 
 async function tcReact(box, emoji) {

@@ -730,10 +730,11 @@ def test_the_terminal_shows_reactions(team, capsys):
 
     message = teamchat.say("desk", "Release is out.")
     teamchat.react("desk", message["id"], PARTY)
+    teamchat.react("desk", message["id"], PARTY, by=sparks.find("scout").id)
 
     ai._sparks_command("teamchat desk")
 
-    assert f"{PARTY} 1" in capsys.readouterr().out  # nosec B101
+    assert f"{PARTY} You and Scout" in capsys.readouterr().out  # nosec B101
 
 
 def test_another_flash_writing_a_chat_is_heard(team):
