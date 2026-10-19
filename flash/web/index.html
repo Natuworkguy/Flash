@@ -1508,6 +1508,8 @@ button.item-row:hover { background: var(--hover); }
 
 /* New news: the dot beats. */
 .spark-av .ping { position: absolute; top: -1px; right: -1px; width: calc(var(--s) * 0.3); height: calc(var(--s) * 0.3); min-width: 9px; min-height: 9px; border-radius: 50%; background: var(--accent); border: 2px solid var(--surface); animation: spark-ping 1.6s ease-in-out infinite; }
+/* The "!" of an unavailable spark has the top corner: news drops below. */
+.spark-av:not(.tiny)[data-state="unavailable"] .ping { top: auto; bottom: -1px; }
 
 /* Petted: a squish, and hearts. Five quick pets: heart eyes. */
 .spark-av.petted { animation: spark-squish 0.5s var(--spring) !important; }
