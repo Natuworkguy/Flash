@@ -98,6 +98,16 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
         ),
     )
 
+    parser.add_argument(
+        "--listen",
+        action="store_true",
+        help=(
+            'listen for "Hey Flash" with Flash closed; what its '
+            "background service, in the web UI's voice settings, starts "
+            "at login"
+        ),
+    )
+
     args = parser.parse_args(argv)
     if args.force and not args.update:
         parser.error("--force can only be used with --update")

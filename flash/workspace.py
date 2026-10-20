@@ -848,6 +848,19 @@ def load_chats() -> list[dict]:
     return found
 
 
+# What deleted chats added to the usage dashboard, kept after them.
+KEPT_USAGE = "usage-kept.json"
+
+
+def kept_usage() -> dict:
+    found = _read(KEPT_USAGE, {})
+    return found if isinstance(found, dict) else {}
+
+
+def keep_usage(kept: dict) -> None:
+    _write(KEPT_USAGE, kept)
+
+
 def delete_chat(chat_id: str) -> None:
     path = _chat_file(chat_id)
     if path is not None:

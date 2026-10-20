@@ -1601,6 +1601,103 @@ def test_autonomous_mode_turned_on_in_another_flash_is_heeded(
     assert fake_shell == ["git status"]
 
 
+@pytest.fixture
+def autonomous(monkeypatch, tmp_path):
+    env = tmp_path / ".flash.env"
+    env.write_text("NO_COMMAND_CONFIRMATION=1\n")
+    monkeypatch.setattr(sparks, "ENV_PATH", str(env))
+
+
+def test_a_working_spark_says_what_it_is_doing(
+    model, autonomous, monkeypatch,
+):
+    made = sparks.create("Scout", "Keep the repo current.")
+    seen = []
+
+    def shell(command, timeout=None):
+        seen.append(sparks.find(made.id).activity)
+        return "ok"
+
+    monkeypatch.setitem(tools.FUNCTIONS, "shell", shell)
+    sparks.shift(made.id, client=FakeClient([
+        _reply("**Fixed it**, now running lint and tests.",
+               ("shell", {"command": "make lint test"})),
+        _reply("", ("shell", {"command": "git status"})),
+        _reply("All green."),
+    ]))
+
+    # Its own words while the step runs, kept until it says something new.
+    assert seen == [  # nosec B101
+        "Fixed it, now running lint and tests",
+        "Fixed it, now running lint and tests",
+    ]
+    assert sparks.find(made.id).activity == ""  # nosec B101
+
+
+def test_a_status_note_is_short_and_plain():
+    assert sparks.status_note("") == ""  # nosec B101
+    assert sparks.status_note("\n\n- next: read the config.") == (  # nosec
+        "next: read the config"
+    )
+    long = "I found the bug in the parser, " + "and more words " * 10
+    said = sparks.status_note(long)
+    assert len(said) <= sparks.STATUS_CHARS + 3  # nosec B101
+    assert said.endswith("...")  # nosec B101
+
+
+def test_a_shift_can_be_steered_from_a_chat_as_it_runs(
+    model, autonomous, monkeypatch,
+):
+    made = sparks.create("Scout", "Keep the repo current.")
+
+    def shell(command, timeout=None):
+        # The user, in a chat, while the step runs.
+        sparks.ChatKit(sparks.find(made.id)).tools["steer_shift"](
+            {"change": "skip the tests, only lint"})
+        return "ok"
+
+    monkeypatch.setitem(tools.FUNCTIONS, "shell", shell)
+    client = FakeClient([
+        _reply("", ("shell", {"command": "git pull"})),
+        _reply("Linted."),
+    ])
+    sparks.shift(made.id, client=client)
+
+    told = client.calls[1]["messages"][-1]
+    assert told["role"] == "user"  # nosec B101
+    assert sparks.STEER_NOTE in told["content"]  # nosec B101
+    assert told["content"].endswith("skip the tests, only lint")  # nosec
+    assert sparks.find(made.id).steers == []  # nosec B101
+
+
+def test_a_shift_can_be_stopped_from_a_chat(model, autonomous, monkeypatch):
+    made = sparks.create("Scout", "Keep the repo current.")
+
+    def shell(command, timeout=None):
+        sparks.ChatKit(sparks.find(made.id)).tools["stop_shift"](
+            {"why": "Bo already fixed it"})
+        return "ok"
+
+    monkeypatch.setitem(tools.FUNCTIONS, "shell", shell)
+    report = sparks.shift(made.id, client=FakeClient([
+        _reply("", ("shell", {"command": "git pull"})),
+        _reply("", ("shell", {"command": "make test"})),
+        _reply("Done."),
+    ]))
+
+    assert report.text.startswith("Stopped")  # nosec B101
+
+
+def test_steering_with_no_shift_running_says_so(model):
+    made = sparks.create("Scout", "Keep the repo current.")
+    kit = sparks.ChatKit(made)
+
+    assert "not in a shift" in kit.tools["steer_shift"](  # nosec B101
+        {"change": "skip the tests"})
+    assert kit.tools["stop_shift"]({"why": "done"}).startswith(  # nosec
+        "Error:")
+
+
 def test_a_tool_that_asks_is_told_yes_in_autonomous_mode(
     model, monkeypatch, tmp_path,
 ):
@@ -1626,6 +1723,27 @@ def test_a_tool_that_asks_is_told_yes_in_autonomous_mode(
     sparks.shift(made.id, client=client)
 
     assert "hi-from-spark" in client.calls[1]["messages"][-1]["content"]
+
+
+def test_a_half_written_step_goes_back_to_the_model_not_the_user(
+    model, fake_shell,
+):
+    made = sparks.create("Observer", "Keep notes.")
+    client = FakeClient([
+        _reply("", ("write", {"file_path": "notes.md",
+                              "content": "placeholder"})),
+        _reply("", ("write", {"file_path": "notes.md",
+                              "content": "Real notes."})),
+    ])
+
+    report = sparks.shift(made.id, client=client)
+
+    # Only the finished one is put to the user.
+    assert report.approval  # nosec B101
+    assert sparks.find(made.id).pending["detail"] == "Real notes."  # nosec
+    told = client.calls[1]["messages"][-1]
+    assert told["role"] == "tool"  # nosec B101
+    assert "placeholder" in told["content"]  # nosec B101
 
 
 def test_autonomous_mode_off_in_the_file_waits_even_if_on_here(

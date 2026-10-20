@@ -1992,6 +1992,45 @@ class TestUsage:
         assert abs(stats["at"] - time.time()) < 60
         assert web.command(session, {"name": "usage"})["turns"] == 1
 
+    def test_a_deleted_chats_turns_still_count(self):
+        session = web.Session()
+        for text in ("hello", "again"):
+            FakeClient.scripts = [[part("Hi."), part(done=True, tokens=4)]]
+            chat = session.new_chat()
+            run(session, chat, text)
+        before = web.command(session, {"name": "usage"})
+
+        gone = list(session.chats)
+        session.delete_chat(gone[0])
+        session.clear_chat(session.chats[gone[1]])
+        after = web.command(session, {"name": "usage"})
+
+        for key in ("messages", "turns", "tokens", "days", "models"):
+            assert after[key] == before[key], key
+        assert after["deleted"] == 2
+
+        # Switched off, they no longer count, and nothing more is kept.
+        web.command(session, {"name": "keep-deleted-usage", "arg": "off"})
+        assert web.command(session, {"name": "usage"})["turns"] == 0
+        assert web.command(
+            session, {"name": "keep-deleted-usage"})["keep"] is False
+
+        # Back on, what was kept counts again.
+        web.command(session, {"name": "keep-deleted-usage", "arg": "on"})
+        assert web.command(session, {"name": "usage"})["turns"] == 2
+
+    def test_off_a_deleted_chat_takes_its_turns_with_it(self):
+        session = web.Session()
+        web.command(session, {"name": "keep-deleted-usage", "arg": "off"})
+        FakeClient.scripts = [[part("Hi."), part(done=True, tokens=4)]]
+        chat = session.new_chat()
+        run(session, chat, "hello")
+
+        session.delete_chat(chat.id)
+        web.command(session, {"name": "keep-deleted-usage", "arg": "on"})
+
+        assert web.command(session, {"name": "usage"})["turns"] == 0
+
 
 class TestMemoryCommands:
     REPLY = "```\n- Likes tea\n- Uses Vim\n```"
@@ -4340,3 +4379,232 @@ class TestPageAddresses:
         status, body = request(server, "GET", "/settings/email")
         assert status == 200
         assert b"<html" in body[:400].lower()
+
+
+class TestHeyFlash:
+    def test_hey_flash_wakes_the_page(self, server, monkeypatch):
+        got = []
+
+        def hear_wake(stream, pcm, end=False):
+            got.append((stream, pcm, end))
+            return True, ""
+
+        monkeypatch.setattr(web.voice, "hear_wake", hear_wake)
+
+        status, body = request(server, "POST", "/api/voice/wake", {
+            "id": "abc", "data": base64.b64encode(b"\x01\x02").decode(),
+        })
+
+        assert status == 200 and json.loads(body) == {"woke": True}
+        assert got == [("abc", b"\x01\x02", False)]
+        assert request(server, "POST", "/api/voice/wake",
+                       {"id": "", "data": ""})[0] == 400
+
+    def test_waking_says_why_it_cannot(self, server, monkeypatch):
+        monkeypatch.setattr(web.voice, "hear_wake",
+                            lambda stream, pcm, end=False: (False, "no model"))
+
+        status, body = request(server, "POST", "/api/voice/wake",
+                               {"id": "a", "data": ""})
+
+        assert status == 400 and json.loads(body)["error"] == "no model"
+
+
+class TestThinkHarder:
+    def deep_run(self, session, chat, text, timeout=5):
+        session.send(chat, text, deep=True)
+        deadline = time.monotonic() + timeout
+        time.sleep(0.05)
+        while chat.busy or chat.queued:
+            assert time.monotonic() < deadline, "the turn never finished"
+            time.sleep(0.02)
+
+    def test_a_model_that_reasons_is_asked_to_reason_harder(
+            self, monkeypatch):
+        monkeypatch.setattr(web, "_show_model", lambda host, model: {
+            "capabilities": ["completion", "thinking"]})
+        FakeClient.scripts = [[part("42."), part(done=True, tokens=2)]]
+        session = web.Session()
+        chat = session.new_chat()
+
+        self.deep_run(session, chat, "what is 6 times 7")
+
+        asked = FakeClient.requests[-1]
+        assert asked["think"] is True
+        assert web.THINK_HARDER_PROMPT in asked["messages"][0]["content"]
+
+    def test_levels_for_a_model_that_takes_them(self, monkeypatch):
+        monkeypatch.setattr(web, "_show_model", lambda host, model: {
+            "capabilities": ["thinking"]})
+
+        assert web.think_harder("gpt-oss:20b") == "high"
+        assert web.think_harder("deep-reasoner:8b") is True
+
+    def test_one_that_cannot_is_only_told_to_take_its_time(
+            self, monkeypatch):
+        monkeypatch.setattr(web, "_show_model", lambda host, model: {
+            "capabilities": ["completion"]})
+        FakeClient.scripts = [[part("42."), part(done=True, tokens=2)]]
+        session = web.Session()
+        chat = session.new_chat()
+
+        self.deep_run(session, chat, "what is 6 times 7")
+
+        asked = FakeClient.requests[-1]
+        assert "think" not in asked
+        assert web.THINK_HARDER_PROMPT in asked["messages"][0]["content"]
+
+    def test_only_the_message_it_was_asked_for(self, monkeypatch):
+        monkeypatch.setattr(web, "_show_model", lambda host, model: {
+            "capabilities": ["thinking"]})
+        FakeClient.scripts = [
+            [part("42."), part(done=True, tokens=2)],
+            [part("Hi."), part(done=True, tokens=2)],
+        ]
+        session = web.Session()
+        chat = session.new_chat()
+
+        self.deep_run(session, chat, "what is 6 times 7")
+        run(session, chat, "thanks")
+
+        assert "think" not in FakeClient.requests[-1]
+
+    def test_the_page_sends_it(self, server):
+        FakeClient.scripts = [[part("Ok."), part(done=True, tokens=2)]]
+        status, body = request(server, "POST", "/api/send", {
+            "text": "plan my week", "deep": True,
+        })
+        assert status == 200
+        chat = server.session.chat(json.loads(body)["chat"])
+        deadline = time.monotonic() + 5
+        while (chat.busy or chat.queued) and time.monotonic() < deadline:
+            time.sleep(0.02)
+        assert web.THINK_HARDER_PROMPT in (
+            FakeClient.requests[-1]["messages"][0]["content"])
+
+
+class TestCustomInstructions:
+    def test_kept_and_in_every_system_prompt(self):
+        from flash import instructions, tools
+
+        assert instructions.prompt_block() == ""
+        instructions.save("Use metric. No bullet points.")
+
+        assert "Use metric. No bullet points." in tools.build_system_prompt()
+        assert instructions.path().read_text().strip() == (
+            "Use metric. No bullet points.")
+
+        instructions.save("   ")
+        assert instructions.read() == "" and not instructions.path().exists()
+
+    def test_too_long_is_refused(self):
+        from flash import instructions
+
+        with pytest.raises(ValueError, match="most is"):
+            instructions.save("x" * (instructions.MAX_CHARS + 1))
+
+    def test_the_page_reads_and_saves_them(self):
+        session = web.Session()
+
+        assert web.command(session, {"name": "instructions"})["text"] == ""
+        saved = web.command(session, {
+            "name": "instructions", "text": "Answer in Spanish.",
+        })
+        assert saved["text"] == "Answer in Spanish."
+        assert web.command(session, {"name": "instructions"})["text"] == (
+            "Answer in Spanish.")
+
+    def test_set_in_the_terminal(self, capsys):
+        from flash import instructions
+
+        ai._instructions_command("Keep it short.")
+        assert instructions.read() == "Keep it short."
+        ai._instructions_command("")
+        assert "Keep it short." in capsys.readouterr().out
+        ai._instructions_command("clear")
+        assert instructions.read() == ""
+
+
+class TestChatTools:
+    def test_a_misread_chat_is_retitled_once_understood(self):
+        session = web.Session()
+        chat = session.new_chat()
+        FakeClient.scripts = [[part("Could you say that again?"),
+                               part(done=True, tokens=2)]]
+        run(session, chat, "geth dev tem")
+        chat.title = "Jumbled Message Clarification"
+
+        FakeClient.scripts = [
+            [part(calls=[call("title_chat", title="Getting the dev team")])],
+            [part("On it."), part(done=True, tokens=2)],
+        ]
+        run(session, chat, "sorry, i mean can you get the dev team?")
+
+        assert chat.title == "Getting the dev team"
+        offered = {t["function"]["name"]
+                   for t in FakeClient.requests[-1]["tools"]}
+        assert "title_chat" in offered
+        # Not a spoken conversation: nothing to end.
+        assert "end_conversation" not in offered
+
+    def test_a_title_the_user_gave_stays(self):
+        session = web.Session()
+        chat = session.new_chat()
+        web.command(session, {"name": "rename", "chat": chat.id,
+                              "arg": "Q3 budget"})
+
+        said = web.retitle(session, chat, {"title": "Spreadsheet help"})
+
+        assert chat.title == "Q3 budget" and said.startswith("Not renamed")
+        assert web.Chat.restore(chat.saved()).named is True
+
+    def test_a_spoken_conversation_can_be_ended(self):
+        session = web.Session()
+        chat = session.new_chat()
+        seen = []
+        session.hub.publish = lambda event: seen.append(event) or event
+        FakeClient.scripts = [
+            [part(calls=[call("end_conversation")])],
+            [part("Bye for now."), part(done=True, tokens=2)],
+        ]
+
+        session.send(chat, "thanks, that's all", heard=True)
+        deadline = time.monotonic() + 5
+        while (chat.busy or chat.queued) and time.monotonic() < deadline:
+            time.sleep(0.02)
+
+        offered = {t["function"]["name"]
+                   for t in FakeClient.requests[0]["tools"]}
+        assert {"end_conversation", "title_chat"} <= offered
+        assert chat.voice_ended is True
+        assert {"type": "voice-end", "chat": chat.id} in seen
+
+        # The next spoken turn starts over.
+        FakeClient.scripts = [[part("Hi again."), part(done=True)]]
+        session.send(chat, "hey", heard=True)
+        assert chat.voice_ended is False
+
+    def test_ending_is_only_for_a_spoken_conversation(self):
+        session = web.Session()
+        chat = session.new_chat()
+
+        assert web.end_voice(session, chat).startswith("Error")
+
+
+def test_one_ctrl_c_stops_the_web_ui(monkeypatch):
+    calls = []
+    monkeypatch.setattr(web.interrupt, "release", lambda: calls.append(1))
+    monkeypatch.setattr(web.interrupt, "guard", lambda *a: calls.append(2))
+    monkeypatch.setattr(web, "_listen", lambda port, lan: web.Server(0))
+    monkeypatch.setattr(web, "announce", lambda server: None)
+    monkeypatch.setattr(web, "_attach", lambda server, standalone: None)
+
+    def interrupted(server, standalone, running):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(web, "_serve", interrupted)
+    monkeypatch.setattr(web.Updates, "check_in_background", lambda self: None)
+
+    web.serve(open_browser=False)
+
+    assert calls == [1]

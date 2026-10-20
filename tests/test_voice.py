@@ -928,6 +928,26 @@ def test_listen_shows_the_words_as_they_are_said(monkeypatch):
     assert heard.startswith("run the tests and then")  # nosec B101
 
 
+def test_a_room_never_quiet_ends_the_turn_once_the_words_settle(
+        monkeypatch):
+    # A video playing: loud from start to end, and never a pause.
+    stream = _fake_audio(monkeypatch, [_pcm(6000)] * 400)
+    sys.modules["vosk"].KaldiRecognizer = _Talking
+
+    heard, why = listen(lambda _state: None, settle=True)
+
+    assert why == ""  # nosec B101
+    assert heard.startswith("run the tests and then stop")  # nosec B101
+    # Ended a pause after the last word, not when the recording did.
+    assert len(stream.blocks) > 350  # nosec B101
+
+    # Without it, only a pause or the limit ends the turn.
+    stream = _fake_audio(monkeypatch, [_pcm(6000)] * 400)
+    sys.modules["vosk"].KaldiRecognizer = _Talking
+    listen(lambda _state: None, limit=5)
+    assert 348 <= len(stream.blocks) <= 350  # nosec B101
+
+
 def test_the_page_hears_a_recording_a_piece_at_a_time(monkeypatch):
     _fake_audio(monkeypatch)
     sys.modules["vosk"].KaldiRecognizer = _Talking
@@ -943,3 +963,121 @@ def test_the_page_hears_a_recording_a_piece_at_a_time(monkeypatch):
 
     voice.hear_live("a", b"", end=True)
     assert "a" not in voice._live and "b" in voice._live  # nosec B101
+
+
+class _Waking:
+    """A recognizer held to a grammar, which hears "hey", then "hey
+    flash", a block at a time."""
+
+    made: list = []
+
+    def __init__(self, model, rate, grammar=None):
+        self.grammar = grammar
+        self.fed = 0
+        self.resets = 0
+        _Waking.made.append(self)
+
+    def AcceptWaveform(self, data):
+        self.fed += 1
+        return False
+
+    def PartialResult(self):
+        said = ["", "hey", "hey flash"][min(self.fed, 2)]
+        return json.dumps({"partial": said})
+
+    def Reset(self):
+        self.resets += 1
+        self.fed = 0
+
+
+def test_hey_flash_is_heard_and_nothing_else_is_listened_for(monkeypatch):
+    # Turned all the way up: heard mid phrase.
+    monkeypatch.setenv("VOICE_WAKE_SENSITIVITY", "100")
+    _fake_audio(monkeypatch)
+    sys.modules["vosk"].KaldiRecognizer = _Waking
+    monkeypatch.setattr(voice, "_wake", {})
+    _Waking.made = []
+    piece = b"\0" * (voice.BLOCK_FRAMES * 2)
+
+    assert voice.hear_wake("w", piece) == (False, "")  # nosec B101
+    assert voice.hear_wake("w", piece) == (True, "")  # nosec B101
+
+    heard = _Waking.made[0]
+    assert json.loads(heard.grammar) == [  # nosec B101
+        *voice.WAKE_PHRASES, "[unk]",
+    ]
+    # Heard once, it starts listening afresh for the next time.
+    assert heard.resets == 1  # nosec B101
+    assert voice.hear_wake("w", piece) == (False, "")  # nosec B101
+    voice.hear_wake("w", b"", end=True)
+    assert "w" not in voice._wake  # nosec B101
+
+
+class _Finished:
+    """A recognizer that hears "hey flash" in full on its second block,
+    as sure of each word as CONF, and "hey flash" mid phrase before."""
+
+    conf = 0.9
+
+    def __init__(self, model, rate, grammar=None):
+        self.fed = 0
+        self.words = False
+
+    def SetWords(self, on):
+        self.words = on
+
+    def AcceptWaveform(self, data):
+        self.fed += 1
+        return self.fed == 2
+
+    def PartialResult(self):
+        return json.dumps({"partial": "hey flash"})
+
+    def Result(self):
+        return json.dumps({"text": "hey flash", "result": [
+            {"word": "hey", "conf": 1.0},
+            {"word": "flash", "conf": _Finished.conf},
+        ]})
+
+    def Reset(self):
+        self.fed = 0
+
+
+@pytest.mark.parametrize("sensitivity, conf, woke", [
+    (50, 0.7, True),
+    (50, 0.5, False),
+    (0, 0.9, False),
+    (0, 0.97, True),
+    (100, 0.4, True),
+])
+def test_how_sure_it_has_to_be_follows_the_sensitivity(
+        monkeypatch, sensitivity, conf, woke):
+    monkeypatch.setenv("VOICE_WAKE_SENSITIVITY", str(sensitivity))
+    _fake_audio(monkeypatch)
+    sys.modules["vosk"].KaldiRecognizer = _Finished
+    monkeypatch.setattr(voice, "_wake", {})
+    monkeypatch.setattr(_Finished, "conf", conf)
+    piece = b"\0" * (voice.BLOCK_FRAMES * 2)
+
+    # Below eager, the phrase mid way wakes nothing: only said in full.
+    first = voice.hear_wake("w", piece)
+    assert first == (sensitivity >= voice.WAKE_EAGER, "")  # nosec B101
+    if sensitivity < voice.WAKE_EAGER:
+        assert voice.hear_wake("w", piece) == (woke, "")  # nosec B101
+
+
+def test_wake_sensitivity_is_kept_in_bounds(monkeypatch):
+    assert voice.wake_sensitivity() == 50  # nosec B101
+    monkeypatch.setenv("VOICE_WAKE_SENSITIVITY", "400")
+    assert voice.wake_sensitivity() == 100  # nosec B101
+    monkeypatch.setenv("VOICE_WAKE_SENSITIVITY", "loud")
+    assert voice.wake_sensitivity() == 50  # nosec B101
+
+
+def test_waking_without_the_listening_model_says_why(monkeypatch):
+    monkeypatch.setitem(sys.modules, "vosk", None)
+    monkeypatch.setattr(voice, "_wake", {})
+
+    woke, why = voice.hear_wake("w", b"\0\0")
+
+    assert woke is False and why == voice.INSTALL_HINT  # nosec B101

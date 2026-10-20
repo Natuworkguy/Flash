@@ -35,6 +35,7 @@ from . import (
     design,
     editor,
     extensions,
+    instructions,
     learning,
     livedocs,
     mail,
@@ -294,8 +295,8 @@ def build_system_prompt(model_prompt: str = "") -> str:
     added = "\n\n".join(
         part
         for part in (
-            extensions.system_prompt(), learning.prompt_block(),
-            sparks.roster_block(),
+            extensions.system_prompt(), instructions.prompt_block(),
+            learning.prompt_block(), sparks.roster_block(),
         )
         if part
     )
@@ -2173,6 +2174,13 @@ def send_email(
     Always asks first."""
 
     account = str(account or "").strip()
+    why = unfinished("send_email", {
+        "to": to, "subject": subject, "body": body, "cc": cc,
+    })
+    if why:
+        tool_line(f"SendEmail({to or reply_to})")
+        tool_result(why.removeprefix("Error: "), style=ERROR)
+        return why
     try:
         original = mail.read(str(reply_to), account=account) \
             if str(reply_to or "").strip() else None
@@ -5650,6 +5658,66 @@ ALWAYS_ASK_TOOL_NAMES = ("send_email",)
 # Tools that stop for a y/n unless autonomous mode is on. A sub-agent has
 # no terminal to ask from, so it only gets these in autonomous mode.
 CONFIRMED_TOOL_NAMES = ("shell", "write", "edit", "multi_edit")
+
+# What a model writes when it has not filled something in yet: the whole
+# value only, so real text that mentions one is never caught. In
+# brackets, only words for a gap, so "<div>" is still markup.
+_GAP_WORDS = (
+    r"(?:your|recipient|their|insert|email|name|address|subject|body"
+    r"|message|company|date|placeholder)[a-z _-]*"
+)
+_PLACEHOLDER = re.compile(
+    r"\s*(?:x+|placeholders?|todo|tbd|tbc|lorem ipsum\b.*|\.{3}|\u2026"
+    rf"|<{_GAP_WORDS}>|\[{_GAP_WORDS}\]|\{{{_GAP_WORDS}\}}"
+    r"|(?:your|insert) [a-z ]+? here)\s*",
+    re.IGNORECASE | re.DOTALL,
+)
+# A template's gap left in an email: "Best, [Your Name]".
+_TEMPLATE_GAP = re.compile(
+    r"\[(?:your|recipient|their|insert|name|company|date)\b[^\]\n]{0,40}\]",
+    re.IGNORECASE,
+)
+
+
+def unfinished(name: str, args: dict) -> str:
+    """Why a step that asks the user first is not ready to be asked: a
+    value the model left as a placeholder, or an email that could not go
+    as written. Said back to the model, which fixes it, rather than put
+    to the user. "" when it is ready."""
+
+    args = args if isinstance(args, dict) else {}
+    for key, value in args.items():
+        # A command is the shell's syntax, brackets and all.
+        if key == "command" or not isinstance(value, str):
+            continue
+        if _PLACEHOLDER.fullmatch(value):
+            return (
+                f"Error: {key} is {value!r}, a placeholder, so the user "
+                "was not asked. Fill in the real one, or leave this step "
+                "out if you do not have it."
+            )
+    if name != "send_email":
+        return ""
+    to = str(args.get("to") or "").strip()
+    try:
+        for field in (to, str(args.get("cc") or "").strip()):
+            if field:
+                mail._addresses(field)
+    except mail.MailError as exc:
+        return f"Error: {exc} The user was not asked. Use a real address."
+    body = str(args.get("body") or "")
+    if not body.strip():
+        return "Error: the email has nothing in it, so the user was not asked."
+    gap = _TEMPLATE_GAP.search(body) or _TEMPLATE_GAP.search(
+        str(args.get("subject") or ""))
+    if gap:
+        return (
+            f"Error: the email still has {gap.group(0)} in it, a gap from a "
+            "template, so the user was not asked. Write it in, or leave it "
+            "out."
+        )
+    return ""
+
 
 # Tools System One looks over before they run in autonomous mode: every
 # one that would otherwise have stopped for the user's yes. Sending

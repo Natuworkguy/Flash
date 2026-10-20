@@ -45,7 +45,8 @@ def ran(monkeypatch):
 @pytest.fixture
 def spawned(monkeypatch):
     starts = []
-    monkeypatch.setattr(keepalive, "_spawn", lambda: starts.append(True))
+    monkeypatch.setattr(keepalive, "_spawn",
+                        lambda service=None: starts.append(True))
     return starts
 
 
@@ -556,3 +557,61 @@ def test_the_keeper_stopped_by_hand_is_not_started_again(monkeypatch):
     ai._keep_sparks()
 
     assert started == []
+
+
+class TestTheListener:
+    """The "Hey Flash" service: the same, as `flash --listen`, under a
+    name of its own, beside the sparks' keeper."""
+
+    def test_it_runs_flash_listen(self, monkeypatch):
+        monkeypatch.setattr(keepalive, "_host", lambda: "linux")
+
+        assert keepalive.command(keepalive.LISTENER)[-1] == "--listen"
+
+    def test_linux_gives_it_a_service_of_its_own(self, ran, monkeypatch):
+        monkeypatch.setattr(keepalive, "_host", lambda: "linux")
+        keepalive.turn_on()
+
+        keepalive.turn_on(keepalive.LISTENER)
+
+        unit = keepalive._unit_path(keepalive.LISTENER)
+        assert unit.name == "flash-listen.service"
+        assert "--listen" in unit.read_text()
+        assert keepalive.installed(keepalive.LISTENER)
+        # The sparks' keeper is left as it was.
+        assert "--sparks" in keepalive._unit_path().read_text()
+
+        keepalive.turn_off(keepalive.LISTENER)
+        assert not keepalive.installed(keepalive.LISTENER)
+        assert keepalive.installed()
+
+    def test_macos_and_windows_name_it_apart(self, ran, monkeypatch):
+        monkeypatch.setattr(keepalive, "_host", lambda: "macos")
+        monkeypatch.setattr(keepalive.os, "getuid", lambda: 501,
+                            raising=False)
+
+        keepalive.turn_on(keepalive.LISTENER)
+
+        plist = plistlib.loads(
+            keepalive._plist_path(keepalive.LISTENER).read_bytes())
+        assert plist["Label"] == keepalive.LISTENER.label
+        assert plist["ProgramArguments"][-1] == "--listen"
+        assert plist["StandardOutPath"].endswith("listener.log")
+
+        monkeypatch.setattr(keepalive, "_host", lambda: "windows")
+        keepalive.turn_on(keepalive.LISTENER)
+        assert any(keepalive.LISTENER.task in args for args in ran)
+
+    def test_the_page_turns_it_on_and_off(self, ran, monkeypatch):
+        monkeypatch.setattr(keepalive, "_host", lambda: "linux")
+        session = web.Session()
+
+        on = web.command(session, {"name": "wake-service", "arg": "on"})
+        assert on["on"] is True and "systemd" in on["how"]
+        off = web.command(session, {"name": "wake-service", "arg": "off"})
+        assert off["on"] is False
+        with pytest.raises(ValueError):
+            web.command(session, {"name": "wake-service", "arg": "maybe"})
+
+    def test_the_flag(self):
+        assert cli.parse_args(["--listen"]).listen

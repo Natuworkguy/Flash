@@ -3629,6 +3629,35 @@ def _sparks_command(arg: str) -> None:
     console.print(body)
 
 
+def _keep_listening() -> None:
+    """`flash --listen`: "Hey Flash" with Flash closed, until stopped.
+
+    What its background service starts at login, and just as happy run
+    by hand. Settings are read again before each conversation, so a
+    model picked in an open Flash is the one that answers.
+    """
+
+    from . import heyflash, keepalive
+
+    os.chdir(Path.home())
+    console.print(Text(
+        'Listening for "Hey Flash". Ctrl+C stops it.', style=DIM,
+    ))
+    # Started by its service, it goes when the service does. Run by hand
+    # with the service off, it runs until stopped.
+    wanted = (
+        (lambda: keepalive.installed(keepalive.LISTENER))
+        if keepalive.installed(keepalive.LISTENER) else None
+    )
+    try:
+        heyflash.serve(
+            prepare=refresh_config, wanted=wanted,
+            say=lambda line: console.print(Text(line, style=DIM)),
+        )
+    except KeyboardInterrupt:
+        console.print(Text("Stopped.", style=DIM))
+
+
 def _keep_sparks() -> None:
     """`flash --sparks`: the keeper alone, until stopped.
 
@@ -3788,7 +3817,7 @@ def _hook_command(arg: str) -> None:
 
 EXTENSION_USAGE = (
     "Usage: /extension [list] | install github@owner/repo | "
-    "remove <name>"
+    "remove <name> | settings <name> | set <name> <setting> <value>"
 )
 
 
@@ -3822,6 +3851,56 @@ def _describe_extension(
         body.append(f"    {line}\n", style=DIM)
 
     return body
+
+
+def _extension_settings(arg: str) -> None:
+    """/extension settings <name>: its settings, and what each is set to."""
+
+    ext = extensions.find(arg)
+    if ext is None:
+        warn(f"No extension called {arg!r}.")
+        return
+    if not ext.settings:
+        console.print(Text(f"{ext.name} has no settings.", style=DIM))
+        return
+    values = extensions.settings_values(ext)
+    body = Text(f"\n{ext.name} settings\n\n", style="bold")
+    for setting in ext.settings:
+        value = values[setting.id]
+        shown = ("on" if value else "off") if setting.type == "switch" \
+            else str(value) or "(empty)"
+        body.append(f"  {setting.id}", style=f"bold {ACCENT}")
+        body.append(f"  {setting.label}: ", style=DIM)
+        body.append(f"{shown}\n")
+        if setting.type == "select":
+            body.append(f"    one of {', '.join(setting.options)}\n",
+                        style=DIM)
+        if setting.help:
+            body.append(f"    {setting.help}\n", style=DIM)
+    body.append(
+        f"\n  /extension set {ext.name} <setting> <value> changes one.\n",
+        style=DIM,
+    )
+    console.print(body)
+
+
+def _set_extension_setting(arg: str) -> None:
+    """/extension set <name> <setting> <value>."""
+
+    name, _, rest = arg.partition(" ")
+    setting_id, _, value = rest.strip().partition(" ")
+    ext = extensions.find(name)
+    if ext is None or not setting_id:
+        warn(EXTENSION_USAGE)
+        return
+    try:
+        values = extensions.set_setting(ext, setting_id, value.strip())
+    except extensions.ExtensionError as exc:
+        warn(str(exc))
+        return
+    now = values[setting_id]
+    shown = ("on" if now else "off") if isinstance(now, bool) else now
+    console.print(Text(f"{ext.name}: {setting_id} is {shown}.", style=DIM))
 
 
 def _list_extensions() -> None:
@@ -3963,6 +4042,10 @@ def _extension_command(arg: str) -> None:
         _install_extension(rest)
     elif action in ("remove", "uninstall", "rm"):
         _remove_extension(rest)
+    elif action == "settings" and rest:
+        _extension_settings(rest)
+    elif action == "set" and rest:
+        _set_extension_setting(rest)
     else:
         warn(EXTENSION_USAGE)
 
@@ -4041,6 +4124,40 @@ def _web_command(arg: str) -> None:
         "separate from this one.",
         style=DIM,
     ))
+
+
+def _instructions_command(arg: str) -> None:
+    """/instructions: the standing instructions for every reply; with
+    text, replaces them; /instructions clear removes them."""
+
+    from . import instructions
+
+    if arg:
+        try:
+            kept = instructions.save("" if arg.lower() == "clear" else arg)
+        except ValueError as exc:
+            warn(str(exc))
+            return
+        console.print(Text(
+            "Custom instructions saved: every reply follows them now."
+            if kept else "Custom instructions cleared.", style=DIM,
+        ))
+        return
+    text = instructions.read()
+    if not text:
+        console.print(Text(
+            "No custom instructions. /instructions <text> sets how every "
+            "reply should be, such as: use metric, no bullet points.",
+            style=DIM,
+        ))
+        return
+    body = Text("\nCustom instructions\n\n", style="bold")
+    body.append(f"{text}\n", style="")
+    body.append(
+        "\n  /instructions <text> replaces them; /instructions clear "
+        "removes them.\n", style=DIM,
+    )
+    console.print(body)
 
 
 def _loader_command(arg: str) -> None:
@@ -4873,6 +4990,10 @@ def _main() -> None:
         _keep_sparks()
         return
 
+    if args.listen:
+        _keep_listening()
+        return
+
     if args.web:
         from . import web  # only the web UI needs the server
 
@@ -5195,6 +5316,10 @@ def _main() -> None:
 
             if uin == "/loader" or uin.startswith("/loader "):
                 _loader_command(uin[len("/loader"):].strip())
+                continue
+
+            if uin == "/instructions" or uin.startswith("/instructions "):
+                _instructions_command(uin[len("/instructions"):].strip())
                 continue
 
             if uin == "/host" or uin.startswith("/host "):

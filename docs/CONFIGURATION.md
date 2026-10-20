@@ -70,6 +70,9 @@ Requirements:
 | `VOICE_INTERRUPT_WORD` | No | `interrupt` | - | Word that stops a reply being read aloud when you say it over the top. Matched as a whole word; "stop talking" and "be quiet" always work as well. |
 | `VOICE_NO_SPEECH_SECONDS` | No | `8` | `1` | How long a listening turn waits for you to start speaking before handing the prompt back. This is what ends a hands-free conversation. |
 | `VOICE_SILENCE_THRESHOLD` | No | `500` | `0` | Loudness (0-32768) above which audio counts as speech. Raise it in a noisy room; lower it if a quiet voice is missed. |
+| `VOICE_WAKE_ALWAYS` | No | `0` | - | `1` has the web server listen for "Hey Flash" on the microphone of the computer it runs on, for as long as it runs, with or without a page open, and answer out loud there. The conversation is kept as a chat. Settings, Voice, "Listen even with no page open". |
+| (service) | No | off | - | "Hey Flash" with Flash closed: Settings, Voice, "“Hey Flash” with Flash closed" registers `flash --listen` to start at login (a systemd user service or autostart entry on Linux, a launchd agent on macOS, a scheduled task on Windows), listening on this computer's microphone even after Flash is quit. Its conversations are kept as chats. Run `flash --listen` yourself to try it. Only one Flash listens at a time, and a page listening has the microphone first. |
+| `VOICE_WAKE_SENSITIVITY` | No | `50` | `0` | How readily "Hey Flash" wakes Flash, 0 to 100. From 80 up it wakes mid phrase; below, only once the words are said in full and the listening model is sure enough of them, surer the lower it is. Lower it if a video sets it off. Settings, Voice. |
 | `VOICE_MAX_CHARS` | No | `700` | `80` | Longest reply spoken aloud. Past this the voice stops at a sentence and says the rest is on screen. |
 
 ### How much conversation is kept

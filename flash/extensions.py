@@ -35,6 +35,27 @@ picks up whatever the manifest declares:
       ]
     }
 
+"settings" are choices the user makes for the extension, each a
+switch, a line of text, a number or a pick from a list; the web UI
+shows them in the extension's own settings panel, and /extension set
+changes one in the terminal:
+
+      "settings": [
+        {"id": "banners", "label": "Banners", "type": "switch",
+         "default": true, "help": "A banner when it finishes."},
+        {"id": "color", "label": "Colour", "type": "text",
+         "default": "d97757"},
+        {"id": "every", "label": "Check every", "type": "number",
+         "default": 5, "min": 1, "max": 60},
+        {"id": "size", "label": "Size", "type": "select",
+         "options": ["small", "large"], "default": "small"}
+      ]
+
+Every program the extension runs is handed them: all of them as JSON
+in FLASH_SETTINGS, and each in FLASH_SETTING_<ID> ("1" or "0" for a
+switch). They are kept outside the extension's folder, so an update
+keeps them.
+
 "themes" are colour themes for the web UI (see flash/themes.py) and
 "loaders" are loading animations for both the terminal and the page
 (see flash/loaders.py). Either can be the list itself or a JSON file
@@ -81,6 +102,12 @@ GITHUB_RE = re.compile(
 )
 
 DEFAULT_TIMEOUT = 30
+
+SETTING_TYPES = ("switch", "text", "number", "select")
+SETTING_ID_RE = re.compile(r"^[a-z][a-z0-9_]{0,31}$")
+MAX_SETTINGS = 24
+MAX_OPTIONS = 24
+SETTING_CHARS = 500
 MAX_TIMEOUT = 600
 # A provider answers a whole turn, which a big model can take minutes on.
 DEFAULT_PROVIDER_TIMEOUT = 300
@@ -136,6 +163,76 @@ class Events:
 
 
 @dataclass
+class Voice:
+    """A program in the middle of a voice conversation: told of each
+    moment, and for some asked what to do (voicehooks.py has them), one
+    JSON event on stdin at a time."""
+
+    run: list[str]
+    on: tuple[str, ...]
+    timeout: int = 5
+
+
+@dataclass
+class Setting:
+    """One choice in an extension's settings panel."""
+
+    id: str
+    label: str
+    type: str
+    default: Any
+    help: str = ""
+    options: list[str] = field(default_factory=list)
+    minimum: Optional[float] = None
+    maximum: Optional[float] = None
+
+    def check(self, value: Any) -> Any:
+        """VALUE as this setting keeps it, or ExtensionError."""
+
+        if self.type == "switch":
+            if isinstance(value, str) and value.lower() in (
+                "1", "on", "yes", "true", "0", "off", "no", "false",
+            ):
+                return value.lower() in ("1", "on", "yes", "true")
+            if not isinstance(value, bool):
+                raise ExtensionError(f"{self.label} is on or off")
+            return value
+        if self.type == "number":
+            try:
+                number = float(value)
+            except (TypeError, ValueError):
+                raise ExtensionError(f"{self.label} is a number") from None
+            if number != number or number in (float("inf"), float("-inf")):
+                raise ExtensionError(f"{self.label} is a number")
+            if self.minimum is not None and number < self.minimum:
+                raise ExtensionError(
+                    f"{self.label} is at least {_plain(self.minimum)}")
+            if self.maximum is not None and number > self.maximum:
+                raise ExtensionError(
+                    f"{self.label} is at most {_plain(self.maximum)}")
+            return int(number) if number.is_integer() else number
+        text = " ".join(str(value if value is not None else "").split())
+        if self.type == "select":
+            if text not in self.options:
+                raise ExtensionError(
+                    f"{self.label} is one of: {', '.join(self.options)}")
+            return text
+        return text[:SETTING_CHARS]
+
+    def summary(self) -> dict:
+        return {
+            "id": self.id, "label": self.label, "type": self.type,
+            "default": self.default, "help": self.help,
+            "options": self.options, "min": self.minimum,
+            "max": self.maximum,
+        }
+
+
+def _plain(number: float) -> str:
+    return str(int(number)) if float(number).is_integer() else str(number)
+
+
+@dataclass
 class Provider:
     """Models from somewhere other than Ollama, answered by a program:
     asked for its models, and to chat, with JSON on stdin (providers.py
@@ -164,6 +261,8 @@ class Extension:
     themes: list = field(default_factory=list)
     loaders: list = field(default_factory=list)
     events: Optional[Events] = None
+    voice: Optional[Voice] = None
+    settings: list[Setting] = field(default_factory=list)
 
     def contents(self) -> list[str]:
         """What installing this adds, one line per kind of thing."""
@@ -202,6 +301,14 @@ class Extension:
             )
         if self.events is not None:
             lines.append("follows turns: " + ", ".join(self.events.on))
+        if self.voice is not None:
+            lines.append(
+                "in the middle of voice mode: " + ", ".join(self.voice.on)
+            )
+        if self.settings:
+            lines.append(
+                "settings: " + ", ".join(s.label for s in self.settings)
+            )
 
         return lines
 
@@ -406,6 +513,80 @@ def _events(entry: Any, root: Path) -> Events:
     )
 
 
+def _voice(entry: Any, root: Path) -> Voice:
+    from .voicehooks import DEFAULT_TIMEOUT as VOICE_TIMEOUT
+    from .voicehooks import EVENTS as VOICE_EVENTS
+
+    where = '"voice"'
+    if not isinstance(entry, dict):
+        raise ExtensionError(f"{where} has to be an object")
+    wanted = entry.get("on", list(VOICE_EVENTS))
+    if not isinstance(wanted, list) or not wanted or not all(
+        isinstance(name, str) and name in VOICE_EVENTS for name in wanted
+    ):
+        raise ExtensionError(
+            f'{where}: "on" has to list some of {", ".join(VOICE_EVENTS)}'
+        )
+    timeout = VOICE_TIMEOUT
+    if entry.get("timeout") is not None:
+        # Someone is waiting to be answered: never as long as a tool.
+        timeout = min(_timeout(entry.get("timeout"), where), 30)
+    return Voice(
+        run=_argv(entry.get("run"), root, where),
+        on=tuple(dict.fromkeys(wanted)), timeout=timeout,
+    )
+
+
+def _setting(entry: Any, index: int) -> Setting:
+    where = f"setting {index + 1}"
+    if not isinstance(entry, dict):
+        raise ExtensionError(f"{where} has to be an object")
+    setting_id = _text(entry.get("id"), f"{where} id", required=True)
+    if not SETTING_ID_RE.match(setting_id):
+        raise ExtensionError(
+            f"{where}: {setting_id!r} is not a setting id (lowercase "
+            "letters, digits and _, starting with a letter)"
+        )
+    where = f"setting {setting_id!r}"
+    kind = _text(entry.get("type"), f"{where} type") or "text"
+    if kind not in SETTING_TYPES:
+        raise ExtensionError(
+            f"{where}: type is one of {', '.join(SETTING_TYPES)}")
+    options: list[str] = []
+    if kind == "select":
+        raw = entry.get("options")
+        if not isinstance(raw, list) or not raw:
+            raise ExtensionError(f"{where}: a select needs its options")
+        options = [" ".join(str(o).split())[:SETTING_CHARS]
+                   for o in raw[:MAX_OPTIONS]]
+    bounds = []
+    for key in ("min", "max"):
+        value = entry.get(key)
+        if value is not None and (
+            isinstance(value, bool) or not isinstance(value, (int, float))
+        ):
+            raise ExtensionError(f"{where}: {key} has to be a number")
+        bounds.append(value)
+    setting = Setting(
+        id=setting_id,
+        label=_text(entry.get("label"), f"{where} label") or setting_id,
+        type=kind,
+        default=None,
+        help=_text(entry.get("help"), f"{where} help"),
+        options=options,
+        minimum=bounds[0] if kind == "number" else None,
+        maximum=bounds[1] if kind == "number" else None,
+    )
+    fallback = {"switch": False, "text": "", "number": 0,
+                "select": options[0] if options else ""}[kind]
+    default = entry.get("default", fallback)
+    try:
+        setting.default = setting.check(default)
+    except ExtensionError as exc:
+        raise ExtensionError(f"{where}: its default does not fit: {exc}")
+    return setting
+
+
 def _entries(manifest: dict, key: str) -> list:
     value = manifest.get(key, [])
     if not isinstance(value, list):
@@ -531,11 +712,25 @@ def load(root: Path) -> Extension:
         if manifest.get("events") is not None else None
     )
 
+    voice = (
+        _voice(manifest["voice"], root)
+        if manifest.get("voice") is not None else None
+    )
+
+    settings = [
+        _setting(entry, index)
+        for index, entry in enumerate(_entries(manifest, "settings"))
+    ]
+    if len(settings) > MAX_SETTINGS:
+        raise ExtensionError(
+            f"{len(settings)} settings; the most is {MAX_SETTINGS}")
+    _unique([s.id for s in settings], "setting")
+
     if not (commands or tools or prompt or backgrounds or providers
-            or themes or loaders or events):
+            or themes or loaders or events or voice):
         raise ExtensionError(
             f"{MANIFEST} declares nothing: no commands, tools, prompt, "
-            "backgrounds, providers, themes, loaders, or events"
+            "backgrounds, providers, themes, loaders, events, or voice"
         )
 
     try:
@@ -557,6 +752,8 @@ def load(root: Path) -> Extension:
         themes=themes,
         loaders=loaders,
         events=events,
+        voice=voice,
+        settings=settings,
     )
 
 
@@ -758,9 +955,66 @@ def argv(extension: Extension, run: list[str]) -> list[str]:
     return resolved
 
 
+def settings_dir() -> Path:
+    return FLASH_DIR / "extension-settings"
+
+
+def _settings_path(name: str) -> Path:
+    return settings_dir() / f"{name}.json"
+
+
+def settings_values(extension: Extension) -> dict[str, Any]:
+    """EXTENSION's settings as the user left them, each one's default
+    where they have not, or where what was kept no longer fits."""
+
+    try:
+        saved = json.loads(
+            _settings_path(extension.name).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        saved = {}
+    if not isinstance(saved, dict):
+        saved = {}
+    values = {}
+    for setting in extension.settings:
+        try:
+            values[setting.id] = setting.check(
+                saved.get(setting.id, setting.default))
+        except ExtensionError:
+            values[setting.id] = setting.default
+    return values
+
+
+def set_setting(extension: Extension, setting_id: str,
+                value: Any) -> dict[str, Any]:
+    """Change one of EXTENSION's settings; every value, as now."""
+
+    setting = next(
+        (s for s in extension.settings if s.id == setting_id), None)
+    if setting is None:
+        raise ExtensionError(
+            f"{extension.name} has no setting {setting_id!r}")
+    values = settings_values(extension)
+    values[setting.id] = setting.check(value)
+    path = _settings_path(extension.name)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(values, indent=2), encoding="utf-8")
+    return values
+
+
+def _env_value(value: Any) -> str:
+    if isinstance(value, bool):
+        return "1" if value else "0"
+    return str(value)
+
+
 def environment(extension: Extension) -> dict[str, str]:
     env = dict(os.environ)
     env["FLASH_EXTENSION_DIR"] = str(extension.path)
+    if extension.settings:
+        values = settings_values(extension)
+        env["FLASH_SETTINGS"] = json.dumps(values)
+        for setting_id, value in values.items():
+            env[f"FLASH_SETTING_{setting_id.upper()}"] = _env_value(value)
     # Run on Flash's own Python, a Python program can import flash too,
     # and use what it has: its email account, say.
     here = str(Path(__file__).resolve().parent.parent)
@@ -1084,5 +1338,11 @@ def remove(name: str) -> bool:
         return False
 
     shutil.rmtree(target)
+    # Its settings go with it; an update, which installs over it, keeps
+    # them.
+    try:
+        _settings_path(name).unlink()
+    except OSError:
+        pass
     reload()
     return True
