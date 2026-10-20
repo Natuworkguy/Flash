@@ -928,6 +928,26 @@ def test_listen_shows_the_words_as_they_are_said(monkeypatch):
     assert heard.startswith("run the tests and then")  # nosec B101
 
 
+def test_a_room_never_quiet_ends_the_turn_once_the_words_settle(
+        monkeypatch):
+    # A video playing: loud from start to end, and never a pause.
+    stream = _fake_audio(monkeypatch, [_pcm(6000)] * 400)
+    sys.modules["vosk"].KaldiRecognizer = _Talking
+
+    heard, why = listen(lambda _state: None, settle=True)
+
+    assert why == ""  # nosec B101
+    assert heard.startswith("run the tests and then stop")  # nosec B101
+    # Ended a pause after the last word, not when the recording did.
+    assert len(stream.blocks) > 350  # nosec B101
+
+    # Without it, only a pause or the limit ends the turn.
+    stream = _fake_audio(monkeypatch, [_pcm(6000)] * 400)
+    sys.modules["vosk"].KaldiRecognizer = _Talking
+    listen(lambda _state: None, limit=5)
+    assert 348 <= len(stream.blocks) <= 350  # nosec B101
+
+
 def test_the_page_hears_a_recording_a_piece_at_a_time(monkeypatch):
     _fake_audio(monkeypatch)
     sys.modules["vosk"].KaldiRecognizer = _Talking

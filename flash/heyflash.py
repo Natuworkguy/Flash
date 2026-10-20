@@ -15,6 +15,8 @@ starts two conversations. Only the wake phrases are listened for, and
 nothing heard is kept, as in the page.
 """
 
+import array
+import math
 import os
 import threading
 import time
@@ -37,11 +39,21 @@ RETRY_SECONDS = 30.0
 # A page heard from this recently, listening or in voice mode, has the
 # microphone.
 PAGE_SECONDS = 8.0
-# The longest a conversation waits for Flash's answer.
+# The longest a conversation waits for Flash's answer, and the longest
+# one turn of it listens.
 REPLY_SECONDS = 600.0
+TURN_SECONDS = 30.0
 POLL_SECONDS = 0.25
 
 WOKE = "woke"
+# A microphone the system will not let Flash use opens all the same, on a
+# Mac, and hears nothing at all: not even a quiet room is that quiet.
+SILENT_BLOCKS = 50
+SILENT = (
+    "The microphone is only sending silence. On a Mac, allow the "
+    "microphone for the app Flash runs in (System Settings, Privacy & "
+    "Security, Microphone), then start Flash again."
+)
 WAITING = (
     "I need your answer before I can go on. It's waiting for you in the "
     "chat."
@@ -67,8 +79,8 @@ class Listener:
     """Listens for "Hey Flash" on this computer's microphone, on a
     thread of its own, and holds the conversation it starts.
 
-    LISTEN, SPEAK and MICROPHONE stand in for voice.listen, voice.speak
-    and sounddevice's input stream, for tests.
+    LISTEN, SPEAK, MICROPHONE and CHIME stand in for voice.listen,
+    voice.speak, sounddevice's input stream and the chime, for tests.
     """
 
     def __init__(
@@ -77,11 +89,13 @@ class Listener:
         listen: Optional[Callable] = None,
         speak: Optional[Callable] = None,
         microphone: Optional[Callable] = None,
+        chime: Optional[Callable[[bool], None]] = None,
     ) -> None:
         self.session = session
         self._listen = listen or voice.listen
         self._speak = speak or voice.speak
         self._microphone = microphone or _microphone
+        self._chime = chime or _chime
         self.listening = False
         self.talking = False
         self.problem = ""
@@ -168,8 +182,17 @@ class Listener:
         try:
             with self._microphone() as mic:
                 self._set(listening=True, problem="")
+                silent = 0
                 while not self._stop.is_set() and enabled():
                     block = bytes(mic.read(voice.BLOCK_FRAMES)[0])
+                    if voice._level(block) < 1:
+                        silent += 1
+                        if silent == SILENT_BLOCKS:
+                            self._set(problem=SILENT)
+                    elif silent:
+                        silent = 0
+                        if self.problem == SILENT:
+                            self._set(problem="")
                     if self.page_has_microphone():
                         continue
                     woke, why = voice.hear_wake(STREAM, block)
@@ -198,6 +221,9 @@ class Listener:
 
         self._set(talking=True)
         tell("start", how="wake")
+        # Nothing on a screen says it heard: a chime does, rising as it
+        # starts to listen and falling once it stops.
+        self._chime(True)
         chat = None
         try:
             while not self._stop.is_set():
@@ -210,7 +236,10 @@ class Listener:
                     heard["words"] = text
                     tell("words", text=text)
 
-                text, why = self._listen(lambda _state: None, words)
+                # A room that is never quiet (a video playing) would keep
+                # the turn open: it ends once the words stop changing too.
+                text, why = self._listen(lambda _state: None, words,
+                                         settle=True, limit=TURN_SECONDS)
                 if why:
                     self._set(problem=why)
                     return
@@ -240,6 +269,7 @@ class Listener:
                 if last:
                     return
         finally:
+            self._chime(False)
             tell("end")
             self._set(talking=False)
 
@@ -277,3 +307,31 @@ def _microphone():
         dtype="int16",
         channels=1,
     )
+
+
+CHIME_RATE = 24000
+
+
+def _chime(rising: bool) -> None:
+    """Two soft notes through the speakers: up to start listening, down
+    once done. Quietly nothing where there is nothing to play them on."""
+
+    notes = (660.0, 880.0) if rising else (880.0, 660.0)
+    pcm = array.array("h")
+    length = int(CHIME_RATE * 0.09)
+    for pitch in notes:
+        for i in range(length):
+            # Faded in and out, so neither note clicks.
+            fade = min(1.0, i / 240, (length - i) / 240)
+            pcm.append(int(6000 * fade * math.sin(
+                2 * math.pi * pitch * i / CHIME_RATE)))
+    try:
+        import sounddevice
+
+        with sounddevice.RawOutputStream(
+            samplerate=CHIME_RATE, dtype="int16", channels=1,
+        ) as out:
+            out.write(pcm.tobytes())
+    except Exception:  # noqa: BLE001
+        # Only a nicety: the conversation goes on without it.
+        return

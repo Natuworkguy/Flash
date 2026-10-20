@@ -110,7 +110,7 @@ def listener(session, heard=(), mic=None):
     queue = list(heard)
     spoken = []
 
-    def listen(on_state, on_words=None):
+    def listen(on_state, on_words=None, settle=False, limit=0):
         if not queue:
             return "", ""
         text = queue.pop(0)
@@ -123,9 +123,12 @@ def listener(session, heard=(), mic=None):
         spoken.append(text)
         return "", False
 
+    chimes = []
     found = heyflash.Listener(
         session, listen=listen, speak=speak, microphone=mic or Microphone(),
+        chime=lambda rising: chimes.append("up" if rising else "down"),
     )
+    found.chimes = chimes
     return found, spoken
 
 
@@ -175,6 +178,8 @@ class TestConversation:
         assert spoken == [  # nosec B101
             "You said what time is it.", "You said thanks.",
         ]
+        # A chime as it starts to listen, and one once it stops.
+        assert found.chimes == ["up", "down"]  # nosec B101
         # One chat for the conversation, every message marked as heard.
         assert [s[0] for s in session.sent] == ["c0", "c0"]  # nosec B101
         assert all(s[2] for s in session.sent)  # nosec B101
@@ -268,6 +273,33 @@ class TestConversation:
 
         assert "no input device" in found.problem  # nosec B101
         assert found.listening is False  # nosec B101
+
+
+class Noisy(Microphone):
+    def __init__(self):
+        super().__init__()
+        self.sound = False
+
+    def read(self, frames):
+        block, flag = super().read(frames)
+        return (b"\x10\x00" * frames if self.sound else block), flag
+
+
+class TestSilence:
+    def test_a_microphone_sending_only_silence_is_said(
+            self, wakes, monkeypatch):
+        monkeypatch.setattr(heyflash, "SILENT_BLOCKS", 5)
+        heyflash.set_enabled(True)
+        mic = Noisy()
+        found, _ = listener(FakeSession(), mic=mic)
+        found.start()
+        until(lambda: found.problem == heyflash.SILENT)
+
+        assert found.listening  # nosec B101
+
+        mic.sound = True
+        until(lambda: found.problem == "")
+        found.stop()
 
 
 class TestThePage:
