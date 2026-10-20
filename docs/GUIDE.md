@@ -720,8 +720,7 @@ pip install "flash[voice]"
 ```
 
 `/voice on` prints whichever of the two commands fits your install. On
-Linux
-`sounddevice` also needs PortAudio from the system (`apt install
+Linux `sounddevice` also needs PortAudio from the system (`apt install
 libportaudio2`); the macOS and Windows wheels bundle it. The voice and the
 listening model can be swapped with `VOICE_PIPER_VOICE` and
 `VOICE_VOSK_MODEL`, and the microphone's sensitivity tuned with
@@ -736,6 +735,12 @@ one more package, which an update keeps once you have it:
 ```bash
 pipx inject flash kokoro-onnx      # or: pip install "flash[kokoro]"
 ```
+
+In the web UI none of these commands need typing: wherever Flash finds a
+package missing (starting voice mode, a Kokoro voice, a tool that failed
+for want of one), it shows an Install button that runs the right command
+for your install. Logs shows what it prints as it goes, and opens by
+itself if the install fails.
 
 ### Page screenshots
 
