@@ -727,6 +727,16 @@ listening model can be swapped with `VOICE_PIPER_VOICE` and
 `VOICE_VOSK_MODEL`, and the microphone's sensitivity tuned with
 `VOICE_SILENCE_THRESHOLD`; see [docs/CONFIGURATION.md](CONFIGURATION.md).
 
+For a voice that sounds far more natural, pick a Kokoro voice in
+Settings, Voice models, or `/voice pull heart`: Heart, Bella, Michael,
+Emma or George. They share one download of about 120 MB and run on the
+CPU, a little slower than Piper but well ahead of the reading. They need
+one more package, which an update keeps once you have it:
+
+```bash
+pipx inject flash kokoro-onnx      # or: pip install "flash[kokoro]"
+```
+
 ### Page screenshots
 
 The `screenshot` tool renders a local `.html` file or a URL in a headless

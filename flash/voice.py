@@ -49,6 +49,13 @@ INSTALL_HINT = (
     f"Install them with `{_install_command()}`."
 )
 
+KOKORO_PACKAGE = "kokoro-onnx"
+_ADD = "pipx inject flash" if "pipx" in sys.prefix.lower() else "pip install"
+KOKORO_HINT = (
+    f"Kokoro voices need the {KOKORO_PACKAGE} package. Install it with "
+    f"`{_ADD} {KOKORO_PACKAGE}`."
+)
+
 MIC_HINT = (
     "No microphone is available. Check that one is connected and that "
     "this terminal is allowed to use it."
@@ -151,6 +158,20 @@ VOSK_BASE = "https://alphacephei.com/vosk/models"
 DEFAULT_PIPER_VOICE = "en_US-amy-medium"
 PIPER_BASE = "https://huggingface.co/rhasspy/piper-voices/resolve/main"
 
+# Kokoro speaks far more naturally than Piper, at a little more cost: one
+# network and one file of voices, shared by every Kokoro voice, so the
+# second voice tried downloads nothing. A voice is named kokoro-<its own
+# name>, its first letter its accent (a American, b British).
+KOKORO = "kokoro-"
+KOKORO_BASE = (
+    "https://github.com/thewh1teagle/kokoro-onnx/releases/download/"
+    "model-files-v1.0"
+)
+KOKORO_FILES = ("kokoro-v1.0.int8.onnx", "voices-v1.0.bin")
+KOKORO_SIZE = 92_361_271 + 28_214_398
+KOKORO_RATE = 24000
+KOKORO_ACCENTS = {"a": "en-us", "b": "en-gb"}
+
 # Vosk is trained on 16 kHz mono audio and resamples nothing itself.
 SAMPLE_RATE = 16000
 BLOCK_FRAMES = 1600  # 100 ms of audio per read
@@ -187,6 +208,13 @@ SPEAKING = (
     Choice("en_US-hfc_female-medium", 63_201_294,
            "HFC, bright and friendly"),
     Choice("en_US-lessac-high", 113_895_201, "Lessac, clearest"),
+    # One download for all of them.
+    Choice(f"{KOKORO}af_heart", KOKORO_SIZE,
+           "Kokoro Heart, the most natural, warm"),
+    Choice(f"{KOKORO}af_bella", KOKORO_SIZE, "Kokoro Bella, bright"),
+    Choice(f"{KOKORO}am_michael", KOKORO_SIZE, "Kokoro Michael, calm"),
+    Choice(f"{KOKORO}bf_emma", KOKORO_SIZE, "Kokoro Emma, British"),
+    Choice(f"{KOKORO}bm_george", KOKORO_SIZE, "Kokoro George, British"),
     Choice("en_US-ryan-high", 120_786_792,
            "Ryan, clearest, for strong machines"),
 )
@@ -248,13 +276,34 @@ def piper_paths(name: str = "") -> tuple[Path, Path]:
     return onnx, onnx.with_suffix(".onnx.json")
 
 
+def is_kokoro(name: str) -> bool:
+    return str(name or "").startswith(KOKORO)
+
+
+def kokoro_paths() -> tuple[Path, Path]:
+    """Kokoro's network and its voices, shared by every Kokoro voice."""
+
+    folder = MODELS_DIR / "kokoro"
+    return folder / KOKORO_FILES[0], folder / KOKORO_FILES[1]
+
+
+def kokoro_ready() -> bool:
+    """Whether the package Kokoro voices run on is installed."""
+
+    try:
+        import kokoro_onnx  # noqa: F401
+    except Exception:  # noqa: BLE001
+        return False
+    return True
+
+
 def listening_installed(name: str) -> bool:
     return (vosk_model_dir(name) / "am").is_dir()
 
 
 def voice_installed(name: str) -> bool:
-    onnx, config = piper_paths(name)
-    return onnx.is_file() and config.is_file()
+    paths = kokoro_paths() if is_kokoro(name) else piper_paths(name)
+    return all(path.is_file() for path in paths)
 
 
 def _piper_urls(name: str = "") -> tuple[str, str]:
@@ -277,12 +326,8 @@ def _piper_urls(name: str = "") -> tuple[str, str]:
 def models_present() -> bool:
     """True when both models are already downloaded."""
 
-    onnx, config = piper_paths()
-
-    return (
-        (vosk_model_dir() / "am").is_dir()
-        and onnx.is_file()
-        and config.is_file()
+    return (vosk_model_dir() / "am").is_dir() and voice_installed(
+        piper_voice()
     )
 
 
@@ -291,9 +336,14 @@ def missing_packages() -> list[str]:
 
     missing = []
 
+    # The voice in use decides which speaks: Piper, or Kokoro.
+    speaking = (
+        ("kokoro_onnx", KOKORO_PACKAGE) if is_kokoro(piper_voice())
+        else ("piper", "piper-tts")
+    )
     for module, package in (
         ("vosk", "vosk"),
-        ("piper", "piper-tts"),
+        speaking,
         ("sounddevice", "sounddevice"),
     ):
         try:
@@ -304,6 +354,13 @@ def missing_packages() -> list[str]:
             missing.append(package)
 
     return missing
+
+
+def install_hint() -> str:
+    """How to install what voice mode is missing."""
+
+    return KOKORO_HINT if KOKORO_PACKAGE in missing_packages() \
+        else INSTALL_HINT
 
 
 def web_missing() -> list[str]:
@@ -443,6 +500,9 @@ def download_voice(
     if voice_installed(name):
         return ""
 
+    if is_kokoro(name):
+        return _download_kokoro(on_progress, stop)
+
     try:
         onnx_url, config_url = _piper_urls(name)
     except ValueError:
@@ -460,6 +520,21 @@ def download_voice(
     if why == CANCELLED:
         onnx.unlink(missing_ok=True)
     return why
+
+
+def _download_kokoro(
+    on_progress: Progress, stop: Optional[threading.Event] = None,
+) -> str:
+    """Fetch what every Kokoro voice runs on, what of it is not here."""
+
+    for path, label in zip(kokoro_paths(), ("Kokoro", "Kokoro voices")):
+        if path.is_file():
+            continue
+        why = _download(f"{KOKORO_BASE}/{path.name}", path, label,
+                        on_progress, stop)
+        if why:
+            return why
+    return ""
 
 
 # The two kinds of model voice mode runs on, and the setting that names
@@ -530,6 +605,16 @@ def remove_voice(name: str) -> None:
 
     if name not in {c.name for c in SPEAKING}:
         raise ValueError(f"{name!r} is not a voice Flash offers")
+    if is_kokoro(name):
+        # Shared by them all: not from under the one speaking now.
+        if is_kokoro(piper_voice()):
+            raise ValueError(
+                "Every Kokoro voice shares one download, and one of them "
+                "is in use. Pick another voice first."
+            )
+        for path in kokoro_paths():
+            path.unlink(missing_ok=True)
+        return
     for path in piper_paths(name):
         path.unlink(missing_ok=True)
 
@@ -844,6 +929,12 @@ def _load_speaker():
 
     global _speaker
 
+    name = piper_voice()
+    if is_kokoro(name):
+        if _speaker is None or _speaker[0] != name:
+            _speaker = (name, _KokoroVoice(name), KOKORO_RATE)
+        return _speaker[1], _speaker[2]
+
     onnx, config = piper_paths()
 
     if _speaker is None or _speaker[0] != onnx:
@@ -946,8 +1037,46 @@ def _pcm_chunks(voice, text: str, rate: int = 22050):
             yield b"\x00\x00" * int(rate * breath)
 
 
+# Kokoro's network, once loaded: every Kokoro voice speaks with it.
+_kokoro = None
+
+
+class _KokoroVoice:
+    """A Kokoro voice, speaking as Flash asks a Piper voice to: 16-bit
+    audio for each piece of text, at a pace."""
+
+    def __init__(self, name: str) -> None:
+        global _kokoro
+
+        try:
+            from kokoro_onnx import Kokoro
+        except Exception:  # noqa: BLE001
+            raise RuntimeError(KOKORO_HINT) from None
+        onnx, voices = kokoro_paths()
+        if _kokoro is None or _kokoro[0] != onnx:
+            _kokoro = (onnx, Kokoro(str(onnx), str(voices)))
+        self.model = _kokoro[1]
+        self.voice = name[len(KOKORO):]
+        self.lang = KOKORO_ACCENTS.get(self.voice[:1], "en-us")
+
+    def pcm(self, text: str, pace: float = 1.0) -> bytes:
+        import numpy
+
+        samples, _rate = self.model.create(
+            text, voice=self.voice, speed=1.0 / max(pace, 0.5),
+            lang=self.lang,
+        )
+        clipped = numpy.clip(samples, -1.0, 1.0)
+        return (clipped * 32767).astype("<i2").tobytes()
+
+
 def _said(voice, text: str, settings: dict):
-    """TEXT in VOICE, with SETTINGS, in whichever API this Piper has."""
+    """TEXT in VOICE, with SETTINGS, in whichever API this Piper has, or
+    in Kokoro, which takes the pace and leaves the rest."""
+
+    if isinstance(voice, _KokoroVoice):
+        yield voice.pcm(text, settings.get("length_scale", 1.0))
+        return
 
     if hasattr(voice, "synthesize_stream_raw"):
         yield from voice.synthesize_stream_raw(text, **settings)

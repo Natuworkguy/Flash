@@ -41,6 +41,24 @@ _WAIT_SECONDS = 300
 # whether the update succeeded. Kept in step with install.sh,
 # install.ps1, and requirements-voice.txt.
 VOICE_PACKAGES = ("sounddevice", "vosk", "piper-tts")
+# Kokoro voices' package, put back too by an update, when it was in.
+KOKORO_PACKAGE = "kokoro-onnx"
+
+
+def voice_packages() -> list[str]:
+    """The voice packages an update puts back: Kokoro's too, when the
+    user had added it."""
+
+    import importlib.util
+
+    packages = list(VOICE_PACKAGES)
+    try:
+        if importlib.util.find_spec("kokoro_onnx") is not None:
+            packages.append(KOKORO_PACKAGE)
+    except (ImportError, ValueError):
+        pass
+    return packages
+
 
 _VOICE_FAILED = (
     "Voice packages could not be reinstalled, so voice mode stays "
@@ -158,7 +176,7 @@ def _voice_commands() -> list[list[str]]:
     why the subcommand is `install` and not `pip install`.
     """
 
-    packages = list(VOICE_PACKAGES)
+    packages = voice_packages()
 
     return [
         ["pipx", "inject", "flash"] + packages,
@@ -201,7 +219,7 @@ def _handoff_command(shell: str, pipx: str, tmp_dir: str) -> list[str]:
     """
 
     clone = _quoted(tmp_dir)
-    packages = " ".join(VOICE_PACKAGES)
+    packages = " ".join(voice_packages())
 
     # The reinstall wipes the injected voice packages, and this window is
     # the only thing still running once flash is gone, so they go back
