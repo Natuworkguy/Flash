@@ -57,6 +57,7 @@ from . import (
     extensions,
     greetings,
     heyflash,
+    installer,
     instructions,
     interrupt,
     keepalive,
@@ -839,6 +840,11 @@ class Session:
         # "Hey Flash" heard on this computer's own microphone, with no
         # page open, when switched on. Started with the server.
         self.always = heyflash.Listener(self)
+        # A package Flash needs, installed from a button in the page, its
+        # lines sent to every page as they come.
+        self.installer = installer.Installer(
+            lambda said: self.hub.publish({"type": "install", **said})
+        )
         # The link's token and the browsers signed in with it. A server
         # restarted after an update takes over the old one's (Server).
         self.access = Access()
@@ -3414,6 +3420,17 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
             "most": sparks.SHIFT_ROUNDS_MAX,
             "default": sparks.SHIFT_ROUNDS_DEFAULT,
         }
+
+    if name == "install":
+        # A package Flash needs: "packages", or the one in arg.
+        wanted = body.get("packages") or [arg]
+        try:
+            return session.installer.start([str(p) for p in wanted])
+        except installer.InstallError as exc:
+            raise ValueError(str(exc)) from None
+
+    if name == "install-status":
+        return session.installer.snapshot()
 
     if name == "instructions":
         # How every reply should be. With "text", replaces them.

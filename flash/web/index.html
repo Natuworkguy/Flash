@@ -1505,6 +1505,14 @@ button.item-row:hover { background: var(--hover); }
 .field .count { float: right; font-size: 11.5px; color: var(--text-3); font-weight: 400; }
 .field textarea.mono { font: 12.5px/1.55 var(--mono); }
 .instructions-box { max-width: 620px; display: grid; gap: 8px; }
+/* Installing a package: what it needs, the button, and its logs. */
+.installer { display: grid; gap: 8px; margin: 8px 0; padding: 10px 12px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); max-width: 620px; }
+.installer .inst-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.installer .inst-what { flex: 1 1 220px; font-size: 13px; color: var(--text-2); }
+.installer.running .inst-what::before { content: ""; display: inline-block; width: 8px; height: 8px; margin-right: 8px; border-radius: 50%; background: var(--accent); animation: pulse 1.2s ease-in-out infinite; }
+.installer .inst-acts { display: flex; gap: 6px; flex: none; }
+.installer .inst-log { margin: 0; max-height: 220px; overflow: auto; padding: 10px 12px; border-radius: 9px; background: var(--code-bg, #111); color: var(--text-2); font: 11.5px/1.5 var(--mono); white-space: pre-wrap; word-break: break-word; }
+.installer .inst-log[hidden] { display: none; }
 .instructions-box .field { display: grid; gap: 4px; }
 .instructions-box textarea { width: 100%; resize: vertical; min-height: 110px; }
 .instructions-box .count { justify-self: end; font-size: 12px; color: var(--text-3); font-variant-numeric: tabular-nums; }
@@ -3881,8 +3889,12 @@ function addResult(card, text, error, warn) {
   if (!summary.textContent) summary.textContent = first.slice(0, 80);
   if (!text) return;
   const body = el("div", "body" + (error ? " error" : ""));
-  body.textContent = text;
+  // An error is words to read; anything else is the tool's own output.
+  if (error) richText(body, text); else body.textContent = text;
   slideBox(card).appendChild(body);
+  // A tool that needs a package says so: install it from here.
+  const wanted = packagesIn(text);
+  if (wanted.length) slideBox(card).appendChild(installWidget(wanted, ""));
 }
 
 // A plan draws as boxes to tick, left open: it is there to be watched.
@@ -6261,7 +6273,9 @@ function drawEntry(entry, ctx) {
     case "answered": { const card = messagesEl.querySelector(`[data-ask="${entry.id}"]`); if (card) settleAsk(card, entry.answer); break; }
     case "error": {
       const node = el("div", "block error", icon("alert") + "<span></span>");
-      node.lastChild.textContent = entry.text;
+      richText(node.lastChild, entry.text);
+      const wanted = packagesIn(entry.text);
+      if (wanted.length) node.appendChild(installWidget(wanted, ""));
       node.dataset.log = ctx.index;
       // A turn that failed can run again from its message, while it is
       // still the last thing in the chat.
@@ -6274,7 +6288,7 @@ function drawEntry(entry, ctx) {
       messagesEl.appendChild(node);
       break;
     }
-    case "note": messagesEl.appendChild(el("div", "block note")).textContent = entry.text; break;
+    case "note": richText(messagesEl.appendChild(el("div", "block note")), entry.text); break;
     case "stats": {
       const reply = ctx.lastReply;
       const text = statsText(entry);
@@ -6902,9 +6916,9 @@ function drawGeneral(body) {
   alwaysRow.setAttribute("role", "switch");
   const showAlways = (always) => {
     alwaysRow.setAttribute("aria-checked", !!always.on);
-    alwaysRow.querySelector(".what span").textContent = always.on && always.problem
+    richText(alwaysRow.querySelector(".what span"), always.on && always.problem
       ? `On, but not listening yet: ${always.problem}`
-      : "Flash listens for “Hey Flash” on the microphone of the computer it runs on, for as long as it runs, with or without this page. It answers out loud there and keeps the conversation as a chat. Until then only those words are listened for, and nothing heard is kept.";
+      : "Flash listens for “Hey Flash” on the microphone of the computer it runs on, for as long as it runs, with or without this page. It answers out loud there and keeps the conversation as a chat. Until then only those words are listened for, and nothing heard is kept.");
   };
   showAlways(info.wake_always || {});
   alwaysRow.onclick = async () => {
@@ -7443,7 +7457,7 @@ function otherKeeperBanner(a) {
       toast("Your sparks run on this Flash now");
       banner.remove();
     } catch (error) {
-      banner.querySelector(".words").textContent = error.message;
+      richText(banner.querySelector(".words"), error.message);
       fix.textContent = "Try again";
       fix.disabled = false;
     }
@@ -9002,7 +9016,7 @@ function teamForm(team = null) {
         const seen = (await command("team-code", code, null)).team;
         form.teamname.value = seen.name;
         said.textContent = `${seen.name}: ${seen.sparks.map((s) => s.name).join(", ")}.`;
-      } catch (error) { said.textContent = error.message; }
+      } catch (error) { richText(said, error.message); }
     }, 200);
   });
 }
@@ -9096,7 +9110,7 @@ async function fillSystemOne(row) {
     else note.textContent = `On, with ${r.model}. ${r.counts.reviewed} reviewed and ${r.counts.stopped} stopped since Flash started.`;
   };
   try { show(await command("system-one", "", null)); }
-  catch (error) { note.textContent = error.message || String(error); return; }
+  catch (error) { richText(note, error.message || String(error)); return; }
   row.onclick = async () => {
     if (row.disabled) return;
     const on = row.getAttribute("aria-checked") !== "true";
@@ -9594,7 +9608,7 @@ function addSharedSpark() {
       box.hidden = !code;
       if (!code) return;
       try { preview = (await command("spark-code", code, null)).template; }
-      catch (error) { box.textContent = error.message; return; }
+      catch (error) { richText(box, error.message); return; }
       box.innerHTML = `<b></b> · ${esc(preview.schedule)}<p class="goal"></p><p class="bounds"></p><p class="taught"></p>`;
       box.querySelector("b").textContent = preview.name;
       box.querySelector(".goal").textContent = preview.goal;
@@ -9694,7 +9708,7 @@ function setTimesField(form) {
         said.textContent = `Runs ${read.schedule}. Next: ${next.toLocaleString([], { weekday: "short", day: "numeric", month: "short", hour: "numeric", minute: "2-digit" })}.`;
       } catch (error) {
         if (form.at.value.trim() !== text) return;
-        said.textContent = error.message;
+        richText(said, error.message);
         said.classList.add("bad");
         form.at.setCustomValidity(error.message);
       }
@@ -10209,13 +10223,13 @@ async function drawVoiceModels(box = document.querySelector(".voice-models")) {
   try { r = await command("voice-models"); } catch (error) { showFailure(error); return; }
   if (!box.isConnected) return;
   box.textContent = "";
-  if (r.missing.length) box.appendChild(el("p", "vm-missing")).textContent = r.install;
+  if (r.missing.length) box.appendChild(installWidget(r.missing, r.install, () => drawVoiceModels(box)));
   drawVoiceStyles(box, r);
   for (const [kind, title, sub] of VOICE_GROUPS) {
     box.insertAdjacentHTML("beforeend", `<div class="vm-head"><b>${title}</b><span>${sub}</span></div>`);
     // Voices that need a package first say how, once, above them all.
     const needs = r[kind].find((m) => m.needs);
-    if (needs) box.appendChild(el("p", "vm-missing")).textContent = needs.needs;
+    if (needs) box.appendChild(installWidget(["kokoro-onnx"], needs.needs, () => drawVoiceModels(box)));
     const list = box.appendChild(el("div", "vm-list"));
     for (const m of r[kind]) {
       const fetching = r.downloading && r.downloading.kind === kind && r.downloading.name === m.name;
@@ -10894,7 +10908,7 @@ async function drawProgressEmail(host, change = {}) {
   };
   actions.appendChild(test);
   host.appendChild(actions);
-  if (p.problem) host.appendChild(el("p", "settings-sub progress-problem")).textContent = `Last one not sent: ${p.problem}`;
+  if (p.problem) richText(host.appendChild(el("p", "settings-sub progress-problem")), `Last one not sent: ${p.problem}`);
 }
 
 // Like segRow, but any number can be on at once.
@@ -10965,7 +10979,7 @@ function emailCard(host, account, e) {
     said.className = "said";
     said.textContent = "Connecting…";
     try { said.textContent = (await command("email-test", "", null, { address: account.address })).said; said.classList.add("good"); }
-    catch (error) { said.textContent = error.message; said.classList.add("bad"); }
+    catch (error) { richText(said, error.message); said.classList.add("bad"); }
     test.disabled = false;
   };
   const change = el("button", "btn small", "Change");
@@ -11244,6 +11258,93 @@ function markSide() {
 }
 
 // A form in a dialog: new or edited project, a new host.
+// ---------------------------------------------------------------------------
+// Installing a package Flash needs, from a button: the server installs it
+// into Flash's own environment, and every line it prints comes here, in
+// the logs under the button, open to watch or for when it fails.
+
+const INSTALLABLE = ["vosk", "piper-tts", "sounddevice", "kokoro-onnx", "playwright", "python-pptx", "pypdf", "python-docx"];
+const installers = new Set();
+let installRun = { packages: [], running: false, ok: null, lines: [] };
+
+// The packages a message tells you to install, of those Flash can.
+function packagesIn(text) {
+  const found = [];
+  for (const [, rest] of String(text || "").matchAll(/(?:pip install|pipx inject flash)\s+([^`\n]+)/gi)) {
+    for (const word of rest.split(/[\s,]+/)) {
+      const name = word.replace(/["'`.;:)]+$/g, "").replace(/^["'`(]+/, "").toLowerCase();
+      const names = name === "flash[voice]" ? ["vosk", "piper-tts", "sounddevice"] : name === "flash[kokoro]" ? ["kokoro-onnx"] : [name];
+      for (const n of names) if (INSTALLABLE.includes(n) && !found.includes(n)) found.push(n);
+    }
+  }
+  return found;
+}
+
+function installWidget(packages, why, onDone = null) {
+  const box = el("div", "installer", `<div class="inst-row"><span class="inst-what"></span><span class="inst-acts"><button type="button" class="btn small primary inst-go"></button><button type="button" class="btn small inst-logs" aria-expanded="false">Logs</button></span></div><pre class="inst-log" hidden></pre>`);
+  const what = box.querySelector(".inst-what");
+  const go = box.querySelector(".inst-go");
+  const logs = box.querySelector(".inst-logs");
+  const log = box.querySelector(".inst-log");
+  const named = packages.join(", ");
+  const item = { box, packages, onDone, log };
+  const mine = () => installRun.packages.join() === packages.join();
+  const show = () => {
+    const here = mine();
+    box.classList.toggle("running", here && installRun.running);
+    if (here && installRun.running) { what.textContent = `Installing ${named}…`; go.disabled = true; go.textContent = "Installing"; }
+    else if (here && installRun.ok === false) { what.textContent = `${named} did not install. The logs say why.`; go.disabled = false; go.textContent = "Try again"; }
+    else if (here && installRun.ok) { what.textContent = `Installed ${named}.`; go.disabled = true; go.textContent = "Installed"; }
+    else { richText(what, why || `This needs ${named}.`); go.disabled = installRun.running; go.textContent = `Install ${named}`; }
+    log.textContent = here ? installRun.lines.join("\n") : "";
+    if (!log.textContent) log.textContent = "Nothing yet: the install's output shows here as it runs.";
+    log.scrollTop = log.scrollHeight;
+  };
+  item.show = show;
+  const openLogs = (open) => { log.hidden = !open; logs.setAttribute("aria-expanded", open); if (open) log.scrollTop = log.scrollHeight; };
+  logs.onclick = () => openLogs(log.hidden);
+  item.openLogs = openLogs;
+  go.onclick = async () => {
+    go.disabled = true;
+    try { installRun = { ...(await command("install", "", null, { packages })) }; }
+    catch (error) { showFailure(error); }
+    show();
+  };
+  installers.add(item);
+  command("install-status", "", null).then((s) => { if (!installRun.running || s.running) installRun = s; show(); }).catch(() => show());
+  show();
+  return box;
+}
+
+// A line of the install, or its end, from the server.
+function installHeard(event) {
+  if (event.line !== undefined) {
+    installRun.lines.push(event.line);
+    if (installRun.lines.length > 400) installRun.lines.shift();
+  }
+  if (event.state === "done") {
+    Object.assign(installRun, { running: false, ok: event.ok });
+    toast(event.ok ? `Installed ${event.packages.join(", ")}` : `${event.packages.join(", ")} did not install. The logs say why.`);
+  }
+  for (const item of [...installers]) {
+    if (!item.box.isConnected) { installers.delete(item); continue; }
+    item.show();
+    if (event.state === "done" && item.packages.join() === installRun.packages.join()) {
+      if (event.ok && item.onDone) item.onDone();
+      if (!event.ok) item.openLogs(true);
+    }
+  }
+}
+
+// A dialog for something that cannot start until a package is in: once
+// it is, THEN runs.
+function askInstall(packages, why, then) {
+  const form = openForm(`<h2>Install what this needs</h2><p class="sub"></p><div class="install-host"></div><div class="dialog-buttons"><button type="button" class="btn" data-cancel>Close</button></div>`, async () => false);
+  form.querySelector(".sub").textContent = "Flash installs it into its own environment, on the computer it runs on.";
+  form.querySelector("[data-cancel]").onclick = closeForm;
+  form.querySelector(".install-host").appendChild(installWidget(packages, why, () => { closeForm(); if (then) then(); }));
+}
+
 function openForm(html, onSubmit) {
   closeMenu();
   dropSuggestions();
@@ -11258,7 +11359,7 @@ function openForm(html, onSubmit) {
     const data = Object.fromEntries(new FormData(form));
     // A handler that returns false keeps the dialog open for a next step.
     try { if ((await onSubmit(data, form)) !== false) closeForm(); }
-    catch (error) { form.querySelector(".form-error").textContent = error.message || String(error); }
+    catch (error) { richText(form.querySelector(".form-error"), error.message || String(error)); }
   };
   form.addEventListener("keydown", (e) => {
     if (e.key === "Escape") { e.preventDefault(); closeForm(); }
@@ -11836,7 +11937,7 @@ function setVoice(state, hint) {
     asking: ["Flash is asking", "Say \u201cyes\u201d or \u201cno\u201d."],
   }[state] || [state, ""];
   panel.querySelector(".voice-state").textContent = words[0];
-  panel.querySelector(".voice-hint").textContent = hint ?? words[1];
+  richText(panel.querySelector(".voice-hint"), hint ?? words[1]);
   // What was said stays up while it is worked out and sent; a new turn
   // of listening starts with none.
   if (state !== "hearing" && state !== "thinking") showHeard("");
@@ -11860,7 +11961,7 @@ async function startVoice(team = null, how = "button") {
   if (!canRecord) { toast("Voice mode needs this page opened on this computer, or over HTTPS"); return; }
   let status;
   try { status = await command("voice-status"); } catch (error) { showFailure(error); return; }
-  if (status.missing.length) { toast(status.install); return; }
+  if (status.missing.length) { askInstall(status.missing, status.install, () => startVoice(team, how)); return; }
   if (team && teamChat.id !== team) return;
   voice.on = true;
   voice.cut = false;
@@ -12661,7 +12762,8 @@ async function startWake(told = false) {
   try { status = await command("voice-status"); } catch (_) { wake.on = false; return; }
   if (status.missing.length || !status.ready) {
     wake.on = false;
-    if (told) toast(status.missing.length ? status.install : "Start voice mode once first, so its listening model is downloaded");
+    if (told && status.missing.length) askInstall(status.missing, status.install, () => startWake(true));
+    else if (told) toast("Start voice mode once first, so its listening model is downloaded");
     return;
   }
   let stream;
@@ -12823,6 +12925,7 @@ function apply(event) {
   // Flash ended the spoken conversation: voice mode goes off once its
   // reply is said.
   if (event.type === "retitle") { retypeTitle(event.chat, event.title); return; }
+  if (event.type === "install") { installHeard(event); return; }
   if (event.type === "voice-end") { if (voice.on && event.chat === current) voice.endAfter = true; return; }
   if (event.type === "update") { info.update = event.update; onUpdate(); return; }
   if (event.type === "voice-setup") { voiceSetupEvent(event); return; }
@@ -13415,6 +13518,13 @@ function updateSend() {
 
 // A notice grows out of a small capsule, springs to its width, and
 // shrinks back into it, the way the Dynamic Island shows an alert.
+// TEXT from Flash, with its `code` and the like drawn, as a reply's is:
+// inline() escapes it first, so it cannot put markup of its own here.
+function richText(node, text) {
+  node.innerHTML = inline(String(text ?? ""));
+  return node;
+}
+
 function toast(text) {
   const t = $("#toast");
   clearTimeout(toast.timer);
