@@ -1744,6 +1744,10 @@ class Session:
             if said and chat.title == was and chat.id in self.chats:
                 chat.title = said
                 self.save(chat)
+                self.hub.publish({
+                    "type": "retitle", "chat": chat.id, "from": was,
+                    "title": said,
+                })
                 self.hub.publish({"type": "chats", "chat": chat.id})
 
         threading.Thread(target=name, daemon=True).start()
@@ -1937,10 +1941,15 @@ def retitle(session: "Session", chat: Chat, args: dict) -> str:
             "Not renamed: the user gave this chat its title themselves, "
             "so it stays."
         )
+    was = chat.title
     chat.title = title[:TITLE_CHARS]
     # Settled: a title written after the first turn does not replace it.
     chat.auto_title = ""
     session.save(chat)
+    # The page types it in over the old one, then catches up.
+    session.hub.publish({
+        "type": "retitle", "chat": chat.id, "from": was, "title": chat.title,
+    })
     session.hub.publish({"type": "chats", "chat": chat.id})
     return f"Renamed this chat to {chat.title!r}."
 

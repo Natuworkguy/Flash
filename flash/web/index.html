@@ -286,6 +286,10 @@ body:not(.side-closed) #top .when-closed { display: none; }
   border: 0; outline: 0; width: 320px; max-width: 60vw;
 }
 body.empty #title { visibility: hidden; }
+/* The cursor a model's new title is typed with. */
+#title.retyping { color: var(--text); }
+.title-caret { display: inline-block; width: 1.5px; height: 1.05em; margin-left: 1px; vertical-align: -0.15em; background: var(--accent); animation: caret-blink 1s step-end infinite; }
+@keyframes caret-blink { 50% { opacity: 0; } }
 
 #log { flex: 1; overflow-y: auto; overscroll-behavior: contain; }
 .col { width: 100%; max-width: var(--chat-width, 768px); margin: 0 auto; padding: 0 24px; }
@@ -12813,6 +12817,7 @@ function apply(event) {
   if (event.type === "chats" || event.type === "status" || event.type === "projects") { refreshLite(); return; }
   // Flash ended the spoken conversation: voice mode goes off once its
   // reply is said.
+  if (event.type === "retitle") { retypeTitle(event.chat, event.title); return; }
   if (event.type === "voice-end") { if (voice.on && event.chat === current) voice.endAfter = true; return; }
   if (event.type === "update") { info.update = event.update; onUpdate(); return; }
   if (event.type === "voice-setup") { voiceSetupEvent(event); return; }
@@ -12997,7 +13002,7 @@ function refreshLite() {
     renderInfo();
     renderSparkBtn();
     const chat = chats.get(current);
-    if (chat && !$("#title input")) { setTitle($("#title"), chat.title); document.title = chat.title === "New chat" ? "Flash" : `${chat.title} · Flash`; }
+    if (chat && !$("#title input") && !retyping) { setTitle($("#title"), chat.title); document.title = chat.title === "New chat" ? "Flash" : `${chat.title} · Flash`; }
   }, 60);
 }
 
@@ -14984,6 +14989,48 @@ function chipMentions(root, sparks = sparkList, compact = false) {
 function setTitle(node, text) {
   node.textContent = text;
   return chipMentions(node, sparkList, true);
+}
+
+// The model renamed a chat: at the top, a cursor backs over the old title
+// a letter at a time, types the new one in, blinks, and goes. The list
+// in the sidebar has it at once.
+let retyping = null;
+async function retypeTitle(chatId, title) {
+  const chat = chats.get(chatId);
+  if (chat) chat.title = title;
+  renderChats();
+  const node = $("#title");
+  const here = () => chatId === current && view === "chat" && !node.querySelector("input");
+  if (!here()) return;
+  document.title = `${title} · Flash`;
+  if (calm.matches) { setTitle(node, title); return; }
+  const mine = retyping = {};
+  const caret = el("span", "title-caret");
+  const show = (text) => { node.textContent = text; node.appendChild(caret); };
+  const pause = (ms) => new Promise((r) => setTimeout(r, ms));
+  let text = node.textContent;
+  node.classList.add("retyping");
+  show(text);
+  await pause(260);
+  // Quicker over a long one, so neither half drags.
+  const back = Math.max(14, Math.min(38, 650 / Math.max(1, text.length)));
+  while (text.length && retyping === mine && here()) {
+    text = text.slice(0, -1);
+    show(text);
+    await pause(back);
+  }
+  await pause(180);
+  const typed = Math.max(24, Math.min(62, 1000 / Math.max(1, title.length)));
+  for (let i = 1; i <= title.length && retyping === mine && here(); i++) {
+    show(title.slice(0, i));
+    // A little uneven, as typing is.
+    await pause(typed * (0.6 + Math.random() * 0.8) + (title[i - 1] === " " ? typed * 0.6 : 0));
+  }
+  if (retyping !== mine) return;
+  await pause(650);
+  retyping = null;
+  node.classList.remove("retyping");
+  if (here()) setTitle(node, (chats.get(chatId) || { title }).title);
 }
 
 document.addEventListener("click", (e) => {
