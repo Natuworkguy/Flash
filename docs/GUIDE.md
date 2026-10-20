@@ -736,10 +736,21 @@ one more package, which an update keeps once you have it:
 pipx inject flash kokoro-onnx      # or: pip install "flash[kokoro]"
 ```
 
+For listening that hears far more accurately, pick a Moonshine model in
+Settings, Voice models, or `/voice pull moonshine-small`: Tiny, Small or
+Medium. They stream, so the words on screen while you talk are already
+the right ones, and they need one more package, which an update keeps
+too. "Hey Flash" still listens with the small Vosk model, which downloads
+alongside.
+
+```bash
+pipx inject flash moonshine-voice  # or: pip install "flash[moonshine]"
+```
+
 In the web UI none of these commands need typing: wherever Flash finds a
-package missing (starting voice mode, a Kokoro voice, a tool that failed
-for want of one), it shows an Install button that runs the right command
-for your install. Logs shows what it prints as it goes, and opens by
+package missing (starting voice mode, a Kokoro voice, a Moonshine model,
+a tool that failed for want of one), it shows an Install button that
+runs the right command for your install. Logs shows what it prints as it goes, and opens by
 itself if the install fails.
 
 ### Page screenshots

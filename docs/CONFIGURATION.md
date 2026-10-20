@@ -64,7 +64,7 @@ Requirements:
 | `SHOW_TIPS` | No | `1` | - | While the model is working, a one-line tip about a feature under the spinner (under the message box in the web UI), a new one every 30 seconds. `0` turns them off. |
 | `SHOW_STATS` | No | `1` | - | Prints a dim line under each reply with the tokens the turn used, how long it took, the generation rate, and how full the context got. `0` hides it. |
 | `VOICE` | No | `0` | - | `1` turns voice mode on at startup: press Enter on an empty prompt to speak, and replies are read aloud. Usually set with `/voice on` rather than by hand. |
-| `VOICE_VOSK_MODEL` | No | `vosk-model-small-en-us-0.15` | - | Name of the [Vosk model](https://alphacephei.com/vosk/models) used for listening. Downloaded to `~/.flash/models` on first use. |
+| `VOICE_VOSK_MODEL` | No | `vosk-model-small-en-us-0.15` | - | The model used for listening: a [Vosk model](https://alphacephei.com/vosk/models), or a Moonshine one (`moonshine-tiny`, `moonshine-small` or `moonshine-medium`), which hears far more accurately and needs the `moonshine-voice` package. Downloaded to `~/.flash/models` on first use. |
 | `VOICE_PIPER_VOICE` | No | `en_US-amy-medium` | - | The voice used for speaking: a [Piper voice](https://huggingface.co/rhasspy/piper-voices), as `locale-speaker-quality`, or a Kokoro voice, as `kokoro-<voice>` (`kokoro-af_heart`, `kokoro-bf_emma`...), which sounds far more natural and needs the `kokoro-onnx` package. |
 | `VOICE_SILENCE_SECONDS` | No | `1.2` | `0.2` | How long you have to stop talking before Flash decides your turn is over. |
 | `VOICE_INTERRUPT_WORD` | No | `interrupt` | - | Word that stops a reply being read aloud when you say it over the top. Matched as a whole word; "stop talking" and "be quiet" always work as well. |

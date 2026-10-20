@@ -3111,15 +3111,19 @@ def voice_models(session: "Session") -> dict:
                 "name": c.name, "size": c.size, "label": c.label,
                 "installed": getattr(voice, installed)(c.name),
                 "current": c.name == in_use,
-                # A Kokoro voice, with what it runs on not installed.
+                # A Kokoro voice or a Moonshine model, with what it
+                # runs on not installed.
                 "needs": voice.KOKORO_HINT if (
                     voice.is_kokoro(c.name) and not kokoro
+                ) else voice.MOONSHINE_HINT if (
+                    voice.is_moonshine(c.name) and not moonshine
                 ) else "",
             }
             for c in getattr(voice, offered)
         ]
 
     kokoro = voice.kokoro_ready()
+    moonshine = voice.moonshine_ready()
 
     job = session.voice_job
     return {
@@ -3648,6 +3652,8 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
             return voice_models(session)
         if voice.is_kokoro(arg) and not voice.kokoro_ready():
             raise ValueError(voice.KOKORO_HINT)
+        if voice.is_moonshine(arg) and not voice.moonshine_ready():
+            raise ValueError(voice.MOONSHINE_HINT)
         if getattr(voice, installed)(arg):
             ai.set_config_var(VOICE_SETTINGS[kind], arg)
             return voice_models(session)
