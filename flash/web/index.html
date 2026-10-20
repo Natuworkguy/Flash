@@ -2759,10 +2759,12 @@ body.resizing-viewer iframe { pointer-events: none; }
   #model-btn { max-width: 45%; }
 }
 /* Listening for "Hey Flash": a small pill in the message box, so it is
-   never on without showing it. */
-#wake-btn { display: inline-flex; align-items: center; gap: 6px; }
-#wake-btn[hidden] { display: none; }
-#wake-btn .wake-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); animation: wake-breathe 2.4s ease-in-out infinite; }
+   never on without showing it. Only a sign: it is turned off in Settings,
+   never by a stray click. */
+#wake-pill { display: inline-flex; align-items: center; gap: 6px; cursor: default; }
+#wake-pill:hover { background: none; color: var(--text-3); }
+#wake-pill[hidden] { display: none; }
+#wake-pill .wake-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); animation: wake-breathe 2.4s ease-in-out infinite; }
 @keyframes wake-breathe { 50% { opacity: 0.35; transform: scale(0.8); } }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
@@ -2841,7 +2843,7 @@ body.resizing-viewer iframe { pointer-events: none; }
             <button type="button" class="pill" id="spark-btn" hidden data-tip="Open this spark"></button>
             <button type="button" class="pill" id="agents-btn" hidden data-tip="Sub-agents"><span class="pulse-dot"></span><span id="agents-count"></span></button>
             <span id="context" role="meter" aria-label="Context used" aria-valuemin="0" aria-valuemax="100" hidden><span class="ctx-track"><span class="ctx-fill"></span></span><span class="ctx-pct"></span></span>
-            <button type="button" class="pill" id="wake-btn" hidden data-tip="Listening for “Hey Flash”. Click to stop."><span class="wake-dot"></span>Hey Flash</button>
+            <span class="pill" id="wake-pill" role="status" hidden data-tip="Listening for “Hey Flash”"><span class="wake-dot"></span>Hey Flash</span>
             <button type="button" class="pill model-pick" id="model-btn" data-tip="Switch model" data-keys="Alt M"></button>
             <button type="submit" id="send" data-tip="Send" data-keys="Enter" aria-label="Send" disabled></button>
           </div>
@@ -6745,6 +6747,28 @@ function drawGeneral(body) {
   };
   body.insertAdjacentHTML("beforeend", `<h2 class="settings-section settings-gap">Voice</h2>`);
   body.appendChild(wakeRow);
+
+  // The same, on the microphone of the computer Flash runs on, for as
+  // long as it runs: no page needed.
+  const alwaysRow = el("button", "setting-row wake-always-row", `<span class="what"><b>Listen even with no page open</b><span></span></span><span class="switch" aria-hidden="true"></span>`);
+  alwaysRow.type = "button";
+  alwaysRow.setAttribute("role", "switch");
+  const showAlways = (always) => {
+    alwaysRow.setAttribute("aria-checked", !!always.on);
+    alwaysRow.querySelector(".what span").textContent = always.on && always.problem
+      ? `On, but not listening yet: ${always.problem}`
+      : "Flash listens for “Hey Flash” on the microphone of the computer it runs on, for as long as it runs, with or without this page. It answers out loud there and keeps the conversation as a chat. Until then only those words are listened for, and nothing heard is kept.";
+  };
+  showAlways(info.wake_always || {});
+  alwaysRow.onclick = async () => {
+    const on = alwaysRow.getAttribute("aria-checked") !== "true";
+    showAlways({ on });
+    try {
+      showAlways(await command("wake-always", on ? "on" : "off", null));
+      toast(on ? "Flash listens for “Hey Flash” even with no page open" : "Flash no longer listens with no page open");
+    } catch (error) { showAlways({ on: !on }); showFailure(error); }
+  };
+  body.appendChild(alwaysRow);
 
   body.insertAdjacentHTML("beforeend", `<h2 class="settings-section settings-gap">Voice models</h2><p class="settings-sub">What voice mode listens and speaks with. Both run on this computer, so pick lighter ones for a weaker machine.</p><div class="voice-models"></div>`);
   drawVoiceModels(body.querySelector(".voice-models"));
@@ -12226,8 +12250,10 @@ $("#voice .voice-end").onclick = endVoice;
 // ---------------------------------------------------------------------------
 // "Hey Flash". With it on in Settings, the page listens while it is open,
 // and those words start voice mode. Flash's own listening model hears
-// the microphone a moment at a time and listens for nothing else; the
-// pill in the message box shows it is on, and a click turns it off.
+// the microphone a moment at a time and listens for nothing else. The
+// pill in the message box shows it is on, here or on the computer Flash
+// runs on (with "Listen even with no page open"); it is only a sign, and
+// both are turned off in Settings.
 
 const wake = { on: false, id: "", parts: [], sending: false, ctx: null, stream: null };
 const wakeWanted = () => pref("wake", "") === "on";
@@ -12269,7 +12295,7 @@ async function startWake(told = false) {
     wake.parts.push(toVoiceRate(e.inputBuffer.getChannelData(0), wake.ctx.sampleRate));
     if (wake.parts.length >= 3) sendWake();
   };
-  $("#wake-btn").hidden = false;
+  drawWakePill();
   if (told) toast("Listening for “Hey Flash”");
 }
 
@@ -12294,10 +12320,17 @@ function stopWake() {
   if (wake.ctx) wake.ctx.close().catch(() => {});
   if (wake.id) api("/api/voice/wake", { id: wake.id, data: "", end: true }).catch(() => {});
   Object.assign(wake, { stream: null, ctx: null, id: "", parts: [] });
-  $("#wake-btn").hidden = true;
+  drawWakePill();
 }
 
-$("#wake-btn").onclick = () => setWake(false);
+function drawWakePill() {
+  const always = info.wake_always || {};
+  const pill = $("#wake-pill");
+  pill.hidden = !wake.on && !always.listening && !always.talking;
+  pill.dataset.tip = wake.on
+    ? "Listening for “Hey Flash” on this page. Turn it off in Settings, Voice."
+    : "Listening for “Hey Flash” on the computer Flash runs on. Turn it off in Settings, Voice.";
+}
 // The browser lets a page listen only after someone has used it: the
 // first click or key after it opens starts the listening.
 const armWake = () => startWake();
@@ -12821,6 +12854,7 @@ function renderInfo() {
   autoBtn.dataset.tip = auto
     ? (info.system_one ? "Runs commands and edits once System One has looked them over" : "Runs commands and edits without asking")
     : "Asks before commands and edits";
+  drawWakePill();
   greet();
 }
 

@@ -8,7 +8,9 @@ An extension asks for them with "voice" in its manifest:
               "timeout": 5}
 
 and its program is run once for each moment of a conversation held in
-voice mode in the web UI, with the moment as JSON on stdin:
+voice mode, with the moment as JSON on stdin. "source" says where:
+"web" for the page's voice mode, "server" for a conversation Flash held
+on its own microphone after "Hey Flash" with no page open (heyflash):
 
     {"event": "heard", "conversation": "k3j9x0aa2q", "source": "web",
      "at": 1760100000.0, "text": "what's on my calendar"}
@@ -51,6 +53,7 @@ EVENTS = ASKED + TOLD
 STATES = ("listening", "hearing", "thinking", "speaking", "paused",
           "asking", "setup")
 HOWS = ("wake", "button")
+SOURCES = ("web", "server")
 
 DEFAULT_TIMEOUT = 5
 QUEUE_SIZE = 64
@@ -103,9 +106,10 @@ def _answer(printed: str) -> dict:
 
 
 def _payload(event: str, conversation: str, data: dict) -> dict:
+    source = str(data.get("source") or "")
     payload: dict = {
         "event": event, "conversation": str(conversation or "")[:32],
-        "source": "web", "at": time.time(),
+        "source": source if source in SOURCES else "web", "at": time.time(),
     }
     if "text" in data:
         payload["text"] = str(data.get("text") or "")[:TEXT_CHARS]

@@ -260,7 +260,10 @@ each moment, with the moment as JSON on stdin:
 
 `on` defaults to all seven, and `timeout` to 5 seconds, 30 at most.
 Every moment carries `event`, `conversation` (an id shared by one
-conversation's moments), `source` (`web`) and `at` (a Unix time).
+conversation's moments), `source` and `at` (a Unix time). `source` is
+`web` for voice mode in the page, and `server` for a conversation Flash
+held on the microphone of the computer it runs on, after "Hey Flash"
+with no page open.
 
 Three are the extension's to decide. Flash waits for the program and
 reads what it prints as a JSON object; printing nothing changes nothing:

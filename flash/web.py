@@ -56,6 +56,7 @@ from . import (
     design,
     extensions,
     greetings,
+    heyflash,
     interrupt,
     keepalive,
     learning,
@@ -824,6 +825,9 @@ class Session:
         self.voice_job: Optional[tuple[str, str]] = None
         # Set to call off whichever of those is running.
         self.voice_stop = threading.Event()
+        # "Hey Flash" heard on this computer's own microphone, with no
+        # page open, when switched on. Started with the server.
+        self.always = heyflash.Listener(self)
         # The link's token and the browsers signed in with it. A server
         # restarted after an update takes over the old one's (Server).
         self.access = Access()
@@ -966,6 +970,7 @@ class Session:
                 **status(ai), "lan": self.lan,
                 "can_switch_lan": self.switch_lan is not None,
                 "update": self.updates.snapshot(),
+                "wake_always": self.always.snapshot(),
             },
         }
 
@@ -1158,6 +1163,7 @@ class Session:
 
     def close(self) -> None:
         self._stop_watching.set()
+        self.always.stop()
 
     def reopen(self) -> None:
         """Carry on under a new server after a LAN switch."""
@@ -3189,6 +3195,16 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
             "default": sparks.SHIFT_ROUNDS_DEFAULT,
         }
 
+    if name == "wake-always":
+        # No arg: only how it stands, for the switch in Settings.
+        if arg not in ("", "on", "off"):
+            raise ValueError("wake-always takes on or off")
+        if arg:
+            heyflash.set_enabled(arg == "on")
+            session.always.switched()
+            session.hub.publish({"type": "status"})
+        return session.always.snapshot()
+
     if name == "sparks-always":
         # No arg: only how it stands, for the switch in Settings.
         if arg not in ("", "on", "off"):
@@ -4207,6 +4223,7 @@ class Handler(BaseHTTPRequestHandler):
             return {**kept, "unheard": unheard} if unheard else kept
 
         if path == "/api/voice/hear":
+            session.always.page_listening()
             try:
                 pcm = base64.b64decode(
                     str(body.get("data") or ""), validate=True
@@ -4224,6 +4241,7 @@ class Handler(BaseHTTPRequestHandler):
             }
 
         if path == "/api/voice/live":
+            session.always.page_listening()
             # The words so far, while the user is still talking.
             try:
                 pcm = base64.b64decode(
@@ -4242,6 +4260,7 @@ class Handler(BaseHTTPRequestHandler):
             return {"text": words}
 
         if path == "/api/voice/wake":
+            session.always.page_listening()
             # Listening for "Hey Flash", while the page is open.
             try:
                 pcm = base64.b64decode(
@@ -4277,6 +4296,7 @@ class Handler(BaseHTTPRequestHandler):
             raise ValueError(f"no voice moment called {event!r}")
 
         if path == "/api/voice/say":
+            session.always.page_listening()
             wav, why = voice.synthesize(
                 voice.speakable(str(body.get("text") or ""))
             )
@@ -4664,6 +4684,7 @@ def _attach(server: "Server", standalone: bool) -> None:
     # to the page as soon as it is written.
     teamchat.watch()
     sparks.start()
+    session.always.start()
     session.switch_lan = lambda on: threading.Timer(
         SWITCH_DELAY, _switch_lan, (server, on),
     ).start()

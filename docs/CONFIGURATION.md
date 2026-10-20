@@ -70,6 +70,7 @@ Requirements:
 | `VOICE_INTERRUPT_WORD` | No | `interrupt` | - | Word that stops a reply being read aloud when you say it over the top. Matched as a whole word; "stop talking" and "be quiet" always work as well. |
 | `VOICE_NO_SPEECH_SECONDS` | No | `8` | `1` | How long a listening turn waits for you to start speaking before handing the prompt back. This is what ends a hands-free conversation. |
 | `VOICE_SILENCE_THRESHOLD` | No | `500` | `0` | Loudness (0-32768) above which audio counts as speech. Raise it in a noisy room; lower it if a quiet voice is missed. |
+| `VOICE_WAKE_ALWAYS` | No | `0` | - | `1` has the web server listen for "Hey Flash" on the microphone of the computer it runs on, for as long as it runs, with or without a page open, and answer out loud there. The conversation is kept as a chat. Settings, Voice, "Listen even with no page open". |
 | `VOICE_MAX_CHARS` | No | `700` | `80` | Longest reply spoken aloud. Past this the voice stops at a sentence and says the rest is on screen. |
 
 ### How much conversation is kept
