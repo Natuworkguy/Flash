@@ -41,22 +41,26 @@ _WAIT_SECONDS = 300
 # whether the update succeeded. Kept in step with install.sh,
 # install.ps1, and requirements-voice.txt.
 VOICE_PACKAGES = ("sounddevice", "vosk", "piper-tts")
-# Kokoro voices' package, put back too by an update, when it was in.
+# Kokoro voices' package and Moonshine listening's, each put back too by
+# an update, when it was in.
 KOKORO_PACKAGE = "kokoro-onnx"
+MOONSHINE_PACKAGE = "moonshine-voice"
 
 
 def voice_packages() -> list[str]:
-    """The voice packages an update puts back: Kokoro's too, when the
-    user had added it."""
+    """The voice packages an update puts back: Kokoro's and Moonshine's
+    too, when the user had added them."""
 
     import importlib.util
 
     packages = list(VOICE_PACKAGES)
-    try:
-        if importlib.util.find_spec("kokoro_onnx") is not None:
-            packages.append(KOKORO_PACKAGE)
-    except (ImportError, ValueError):
-        pass
+    for module, package in (("kokoro_onnx", KOKORO_PACKAGE),
+                            ("moonshine_voice", MOONSHINE_PACKAGE)):
+        try:
+            if importlib.util.find_spec(module) is not None:
+                packages.append(package)
+        except (ImportError, ValueError):
+            pass
     return packages
 
 

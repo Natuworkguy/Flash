@@ -10229,7 +10229,7 @@ async function drawVoiceModels(box = document.querySelector(".voice-models")) {
     box.insertAdjacentHTML("beforeend", `<div class="vm-head"><b>${title}</b><span>${sub}</span></div>`);
     // Voices that need a package first say how, once, above them all.
     const needs = r[kind].find((m) => m.needs);
-    if (needs) box.appendChild(installWidget(["kokoro-onnx"], needs.needs, () => drawVoiceModels(box)));
+    if (needs) box.appendChild(installWidget(packagesIn(needs.needs), needs.needs, () => drawVoiceModels(box)));
     const list = box.appendChild(el("div", "vm-list"));
     for (const m of r[kind]) {
       const fetching = r.downloading && r.downloading.kind === kind && r.downloading.name === m.name;
@@ -10240,8 +10240,9 @@ async function drawVoiceModels(box = document.querySelector(".voice-models")) {
       const act = row.querySelector(".vm-act");
       if (fetching) { downloadingSlot(act, "Downloading"); continue; }
       if (m.current) { act.innerHTML = `<span class="vm-tag">In use</span>`; continue; }
-      // A Kokoro voice, with what it runs on not installed: how to.
-      if (m.needs) { act.innerHTML = `<span class="vm-tag">Needs kokoro-onnx</span>`; continue; }
+      // A Kokoro voice or a Moonshine model, with what it runs on not
+      // installed: the button above installs it.
+      if (m.needs) { act.innerHTML = `<span class="vm-tag">Needs ${esc(packagesIn(m.needs).join(", ") || "a package")}</span>`; continue; }
       const pick = el("button", "btn small", m.installed ? "Use" : "Download");
       pick.type = "button";
       pick.disabled = !!r.downloading || (!m.installed && r.missing.length > 0);
@@ -11263,7 +11264,7 @@ function markSide() {
 // into Flash's own environment, and every line it prints comes here, in
 // the logs under the button, open to watch or for when it fails.
 
-const INSTALLABLE = ["vosk", "piper-tts", "sounddevice", "kokoro-onnx", "playwright", "python-pptx", "pypdf", "python-docx"];
+const INSTALLABLE = ["vosk", "piper-tts", "sounddevice", "kokoro-onnx", "moonshine-voice", "playwright", "python-pptx", "pypdf", "python-docx"];
 const installers = new Set();
 let installRun = { packages: [], running: false, ok: null, lines: [] };
 
@@ -11273,7 +11274,7 @@ function packagesIn(text) {
   for (const [, rest] of String(text || "").matchAll(/(?:pip install|pipx inject flash)\s+([^`\n]+)/gi)) {
     for (const word of rest.split(/[\s,]+/)) {
       const name = word.replace(/["'`.;:)]+$/g, "").replace(/^["'`(]+/, "").toLowerCase();
-      const names = name === "flash[voice]" ? ["vosk", "piper-tts", "sounddevice"] : name === "flash[kokoro]" ? ["kokoro-onnx"] : [name];
+      const names = { "flash[voice]": ["vosk", "piper-tts", "sounddevice"], "flash[kokoro]": ["kokoro-onnx"], "flash[moonshine]": ["moonshine-voice"] }[name] || [name];
       for (const n of names) if (INSTALLABLE.includes(n) && !found.includes(n)) found.push(n);
     }
   }

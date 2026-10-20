@@ -3270,6 +3270,23 @@ class TestVoice:
         assert not any(v["installed"] for v in listed["speaking"])
         assert listed["downloading"] is None
 
+    def test_moonshine_says_what_it_needs_until_it_is_in(
+        self, monkeypatch,
+    ):
+        monkeypatch.setattr(web.voice, "moonshine_ready", lambda: False)
+        monkeypatch.setattr(web.voice, "web_missing", lambda: [])
+
+        listed = web.command(web.Session(), {"name": "voice-models"})
+
+        needs = {m["name"]: m["needs"] for m in listed["listening"]}
+        assert needs["moonshine-small"] == web.voice.MOONSHINE_HINT
+        assert needs[web.voice.DEFAULT_VOSK_MODEL] == ""
+        with pytest.raises(ValueError, match="moonshine-voice"):
+            web.command(web.Session(), {
+                "name": "voice-model", "arg": "moonshine-small",
+                "kind": "listening",
+            })
+
     def test_picking_an_installed_model_uses_it(self, monkeypatch):
         saved = {}
         monkeypatch.setattr(ai, "set_config_var",

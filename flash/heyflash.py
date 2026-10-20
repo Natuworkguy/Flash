@@ -346,7 +346,7 @@ class Listener:
         """Listen until "Hey Flash": WOKE, or why it could not listen, or
         "" once switched off or stopped."""
 
-        if not voice.listening_installed(voice.vosk_model()):
+        if not voice.listening_installed(voice.wake_model()):
             return (
                 "The listening model is not here yet. Use voice mode once, "
                 "or download it under Voice models."

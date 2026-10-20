@@ -144,11 +144,9 @@ from .updater import (
 from .urlscheme import SchemeError, parse_flash_url, register, unregister
 from .version import __version__
 from .voice import (
-    INSTALL_HINT as VOICE_INSTALL_HINT,
-)
-from .voice import (
     ensure_models,
     for_speech,
+    install_hint,
     is_exit_phrase,
     listen,
     missing_packages,
@@ -4579,7 +4577,7 @@ def _set_voice(on: bool) -> None:
     if on:
         missing = missing_packages()
         if missing:
-            show_error(VOICE_INSTALL_HINT)
+            show_error(install_hint())
             return
 
         if not models_present() and not _download_voice_models():

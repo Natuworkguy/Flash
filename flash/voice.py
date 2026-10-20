@@ -1,9 +1,9 @@
 """Speech recognition and speech synthesis for voice mode.
 
-Both models run locally and are downloaded on first use: Vosk for
-listening (a small English acoustic model) and Piper for speaking (an
-ONNX voice). Nothing here prints; the caller is handed progress and
-state through callbacks so the CLI keeps one voice for its output.
+Both models run locally and are downloaded on first use: Vosk or
+Moonshine for listening and Piper or Kokoro for speaking. Nothing here
+prints; the caller is handed progress and state through callbacks so the
+CLI keeps one voice for its output.
 """
 
 import array
@@ -56,6 +56,12 @@ KOKORO_HINT = (
     f"`{_ADD} {KOKORO_PACKAGE}`."
 )
 
+MOONSHINE_PACKAGE = "moonshine-voice"
+MOONSHINE_HINT = (
+    f"Moonshine listening needs the {MOONSHINE_PACKAGE} package. Install "
+    f"it with `{_ADD} {MOONSHINE_PACKAGE}`."
+)
+
 MIC_HINT = (
     "No microphone is available. Check that one is connected and that "
     "this terminal is allowed to use it."
@@ -89,9 +95,25 @@ def _number(name: str, default: float, *, minimum: float) -> float:
 
 
 def vosk_model() -> str:
-    """Name of the Vosk model used for listening."""
+    """Name of the model used for listening: a Vosk one, or Moonshine."""
 
     return _setting("VOICE_VOSK_MODEL", DEFAULT_VOSK_MODEL)
+
+
+def wake_model() -> str:
+    """The Vosk model that listens for "Hey Flash": the one in use, or,
+    while Moonshine listens, a Vosk model already here, the small one
+    first."""
+
+    name = vosk_model()
+    if not is_moonshine(name):
+        return name
+    for choice in LISTENING:
+        if not is_moonshine(choice.name) and listening_installed(
+            choice.name
+        ):
+            return choice.name
+    return DEFAULT_VOSK_MODEL
 
 
 def piper_voice() -> str:
@@ -172,6 +194,41 @@ KOKORO_SIZE = 92_361_271 + 28_214_398
 KOKORO_RATE = 24000
 KOKORO_ACCENTS = {"a": "en-us", "b": "en-gb"}
 
+# Moonshine hears more accurately than Vosk, and streams: the words while
+# someone talks come from the same model that hears them in the end. A
+# model is a folder of files from Moonshine's own server, pinned here as
+# Kokoro's are; named moonshine-<its size>. "Hey Flash" stays with a Vosk
+# model, which can be held to the wake phrases.
+MOONSHINE = "moonshine-"
+MOONSHINE_BASE = "https://download.moonshine.ai/model"
+MOONSHINE_RELEASE = "quantized_26_08_21"
+MOONSHINE_FILES = (
+    "adapter.ort", "cross_kv.ort", "decoder_kv.ort", "encoder.ort",
+    "frontend.model.ort", "frontend.weights.ort", "streaming_config.json",
+    "tokenizer.bin",
+)
+# Each one's architecture, as moonshine_voice.ModelArch names it, and
+# the size of each of its files, in MOONSHINE_FILES' order.
+MOONSHINE_MODELS = {
+    f"{MOONSHINE}tiny": ("TINY_STREAMING", (
+        1_319_664, 1_287_544, 32_583_720, 7_675_440, 23_344, 2_093_464,
+        509, 249_974,
+    )),
+    f"{MOONSHINE}small": ("SMALL_STREAMING", (
+        2_870_368, 5_356_536, 81_878_600, 44_148_576, 26_944, 7_769_464,
+        512, 249_974,
+    )),
+    f"{MOONSHINE}medium": ("MEDIUM_STREAMING", (
+        3_651_296, 11_643_776, 146_972_408, 94_705_376, 28_720, 11_889_560,
+        513, 249_974,
+    )),
+}
+
+
+def _moonshine_size(name: str) -> int:
+    return sum(MOONSHINE_MODELS[name][1])
+
+
 # Vosk is trained on 16 kHz mono audio and resamples nothing itself.
 SAMPLE_RATE = 16000
 BLOCK_FRAMES = 1600  # 100 ms of audio per read
@@ -193,10 +250,16 @@ class Choice:
 LISTENING = (
     Choice(DEFAULT_VOSK_MODEL, 41_205_931,
            "Small and quick, for weaker machines"),
+    Choice(f"{MOONSHINE}tiny", _moonshine_size(f"{MOONSHINE}tiny"),
+           "Moonshine Tiny, quick and far more accurate"),
     Choice("vosk-model-en-us-0.22-lgraph", 130_557_655,
            "Balanced, noticeably more accurate"),
+    Choice(f"{MOONSHINE}small", _moonshine_size(f"{MOONSHINE}small"),
+           "Moonshine Small, the best balance"),
+    Choice(f"{MOONSHINE}medium", _moonshine_size(f"{MOONSHINE}medium"),
+           "Moonshine Medium, the most accurate"),
     Choice("vosk-model-en-us-0.22", 1_913_365_522,
-           "Most accurate, for strong machines"),
+           "Vosk's largest, for strong machines"),
 )
 
 # And to speak with.
@@ -265,7 +328,7 @@ State = Callable[[str], None]
 def vosk_model_dir(name: str = "") -> Path:
     """Where an unpacked Vosk model lives once downloaded."""
 
-    return MODELS_DIR / (name or vosk_model())
+    return MODELS_DIR / (name or wake_model())
 
 
 def piper_paths(name: str = "") -> tuple[Path, Path]:
@@ -297,7 +360,25 @@ def kokoro_ready() -> bool:
     return True
 
 
+def is_moonshine(name: str) -> bool:
+    return str(name or "").startswith(MOONSHINE)
+
+
+def moonshine_ready() -> bool:
+    """Whether the package Moonshine runs on is installed."""
+
+    try:
+        import moonshine_voice  # noqa: F401
+    except Exception:  # noqa: BLE001
+        return False
+    return True
+
+
 def listening_installed(name: str) -> bool:
+    if is_moonshine(name):
+        return name in MOONSHINE_MODELS and all(
+            (MODELS_DIR / name / file).is_file() for file in MOONSHINE_FILES
+        )
     return (vosk_model_dir(name) / "am").is_dir()
 
 
@@ -324,11 +405,12 @@ def _piper_urls(name: str = "") -> tuple[str, str]:
 
 
 def models_present() -> bool:
-    """True when both models are already downloaded."""
+    """True when every model voice mode uses is already downloaded:
+    Moonshine's listening needs a Vosk model too, for "Hey Flash"."""
 
-    return (vosk_model_dir() / "am").is_dir() and voice_installed(
-        piper_voice()
-    )
+    return (listening_installed(vosk_model())
+            and listening_installed(wake_model())
+            and voice_installed(piper_voice()))
 
 
 def missing_packages() -> list[str]:
@@ -341,8 +423,14 @@ def missing_packages() -> list[str]:
         ("kokoro_onnx", KOKORO_PACKAGE) if is_kokoro(piper_voice())
         else ("piper", "piper-tts")
     )
+    # Vosk listens for "Hey Flash" even while Moonshine does the rest.
+    hearing = (
+        [("moonshine_voice", MOONSHINE_PACKAGE)]
+        if is_moonshine(vosk_model()) else []
+    )
     for module, package in (
         ("vosk", "vosk"),
+        *hearing,
         speaking,
         ("sounddevice", "sounddevice"),
     ):
@@ -359,8 +447,10 @@ def missing_packages() -> list[str]:
 def install_hint() -> str:
     """How to install what voice mode is missing."""
 
-    return KOKORO_HINT if KOKORO_PACKAGE in missing_packages() \
-        else INSTALL_HINT
+    missing = missing_packages()
+    if MOONSHINE_PACKAGE in missing:
+        return MOONSHINE_HINT
+    return KOKORO_HINT if KOKORO_PACKAGE in missing else INSTALL_HINT
 
 
 def web_missing() -> list[str]:
@@ -459,16 +549,21 @@ def ensure_models(
         return ""
 
     return (download_listening(vosk_model(), on_progress, stop)
+            or download_listening(wake_model(), on_progress, stop)
             or download_voice(piper_voice(), on_progress, stop))
 
 
 def download_listening(
     name: str, on_progress: Progress, stop: Optional[threading.Event] = None,
 ) -> str:
-    """Fetch and unpack the Vosk model NAME. Returns "" once it is in."""
+    """Fetch and unpack the Vosk model NAME, or fetch the Moonshine one.
+    Returns "" once it is in."""
 
     if listening_installed(name):
         return ""
+
+    if is_moonshine(name):
+        return _download_moonshine(name, on_progress, stop)
 
     MODELS_DIR.mkdir(parents=True, exist_ok=True)
     archive = MODELS_DIR / f"{name}.zip"
@@ -537,6 +632,36 @@ def _download_kokoro(
     return ""
 
 
+def _download_moonshine(
+    name: str, on_progress: Progress, stop: Optional[threading.Event] = None,
+) -> str:
+    """Fetch the files of the Moonshine model NAME not here yet, shown as
+    one download."""
+
+    if name not in MOONSHINE_MODELS:
+        return f"{name!r} is not a Moonshine model Flash offers."
+    folder = MODELS_DIR / name
+    size = name[len(MOONSHINE):]
+    base = f"{MOONSHINE_BASE}/{size}-streaming-en/{MOONSHINE_RELEASE}"
+    sizes = MOONSHINE_MODELS[name][1]
+    total = sum(sizes)
+    done = 0
+    for file, file_size in zip(MOONSHINE_FILES, sizes):
+        path = folder / file
+        if not path.is_file():
+            def overall(label: str, percent: int) -> None:
+                on_progress(label, min(100, int(
+                    (done + file_size * percent / 100) * 100 / total
+                )))
+
+            why = _download(f"{base}/{file}", path, "Moonshine", overall,
+                            stop)
+            if why:
+                return why
+        done += file_size
+    return ""
+
+
 # The two kinds of model voice mode runs on, and the setting that names
 # the one in use of each.
 KINDS = {"listening": LISTENING, "speaking": SPEAKING}
@@ -593,11 +718,18 @@ def remove_model(kind: str, name: str) -> None:
 
 
 def remove_listening(name: str) -> None:
-    """Delete the Vosk model NAME, which must be one Settings offers."""
+    """Delete the listening model NAME, which must be one Settings
+    offers."""
 
     if name not in {c.name for c in LISTENING}:
         raise ValueError(f"{name!r} is not a listening model Flash offers")
-    shutil.rmtree(vosk_model_dir(name), ignore_errors=True)
+    if (is_moonshine(vosk_model()) and name == wake_model()
+            and listening_installed(name)):
+        raise ValueError(
+            f"{name} listens for \"Hey Flash\" while Moonshine does the "
+            "rest. Pick a Vosk model first."
+        )
+    shutil.rmtree(MODELS_DIR / name, ignore_errors=True)
 
 
 def remove_voice(name: str) -> None:
@@ -729,12 +861,110 @@ class Hearing:
         piece = _result_text(self._recognizer.FinalResult(), "text")
         return " ".join([*self._said, piece]).strip()
 
+    def close(self) -> None:
+        """Let it go: a Vosk recognizer has nothing to free."""
+
 
 def _result_text(result: str, key: str) -> str:
     try:
         return str(json.loads(result).get(key) or "").strip()
     except (ValueError, AttributeError):
         return ""
+
+
+# Moonshine's transcriber is one native model; its streams are fed one
+# at a time.
+_moonshine = None
+_moonshine_lock = threading.Lock()
+
+
+def _load_moonshine():
+    """Load and cache the Moonshine model in use, as _load_listener
+    does Vosk's."""
+
+    global _moonshine
+
+    name = vosk_model()
+    if _moonshine is None or _moonshine[0] != name:
+        from moonshine_voice import ModelArch, Transcriber
+
+        arch = ModelArch[MOONSHINE_MODELS[name][0]]
+        _moonshine = (name, Transcriber(str(MODELS_DIR / name), arch))
+
+    return _moonshine[1]
+
+
+def _floats(pcm: bytes) -> list[float]:
+    """16-bit PCM as the -1 to 1 samples Moonshine takes."""
+
+    samples = array.array("h")
+    samples.frombytes(pcm[:len(pcm) - len(pcm) % 2])
+    return [sample / 32768.0 for sample in samples]
+
+
+class MoonshineHearing:
+    """Hearing, with Moonshine: the words so far come from its stream as
+    it works through them, a line at a time."""
+
+    def __init__(self, transcriber) -> None:
+        self._lines: dict[int, str] = {}
+        with _moonshine_lock:
+            self._stream = transcriber.create_stream()
+            self._stream.add_listener(self._heard)
+            self._stream.start()
+
+    def _heard(self, event) -> None:
+        line = getattr(event, "line", None)
+        if line is not None:
+            self._lines[line.line_id] = str(line.text or "").strip()
+
+    def _take(self, transcript) -> None:
+        for line in getattr(transcript, "lines", None) or ():
+            self._lines[line.line_id] = str(line.text or "").strip()
+
+    def feed(self, pcm: bytes) -> str:
+        samples = _floats(pcm)
+        if samples:
+            with _moonshine_lock:
+                self._stream.add_audio(samples, SAMPLE_RATE)
+        return self.words()
+
+    def words(self) -> str:
+        return " ".join(text for text in self._lines.values() if text)
+
+    def final(self) -> str:
+        with _moonshine_lock:
+            self._take(self._stream.stop())
+        self.close()
+        return self.words()
+
+    def close(self) -> None:
+        with _moonshine_lock:
+            self._stream.close()
+
+
+def _hearing(live: bool = True):
+    """What hears speech with the listening model in use. Returns
+    `(hearing, "")`, or `(None, reason)` when it cannot be used."""
+
+    moonshine = is_moonshine(vosk_model())
+    try:
+        if moonshine:
+            import moonshine_voice  # noqa: F401
+        else:
+            import vosk
+    except Exception:  # noqa: BLE001
+        return None, install_hint() if moonshine else INSTALL_HINT
+
+    try:
+        with _models_lock:
+            if moonshine:
+                return MoonshineHearing(_load_moonshine()), ""
+            model = _load_listener()
+    except Exception as exc:  # noqa: BLE001
+        return None, f"could not load the listening model: {exc}"
+
+    return Hearing(vosk.KaldiRecognizer(model, SAMPLE_RATE), live=live), ""
 
 
 def listen(
@@ -753,19 +983,12 @@ def listen(
 
     try:
         import sounddevice
-        import vosk
     except Exception:  # noqa: BLE001
         return "", INSTALL_HINT
 
-    try:
-        model = _load_listener()
-    except Exception as exc:  # noqa: BLE001
-        return "", f"could not load the listening model: {exc}"
-
-    hearing = Hearing(
-        vosk.KaldiRecognizer(model, SAMPLE_RATE),
-        live=on_words is not None or settle,
-    )
+    hearing, why = _hearing(live=on_words is not None or settle)
+    if hearing is None:
+        return "", why
     shown = ""
     heard = False
     quiet = 0.0
@@ -813,12 +1036,15 @@ def listen(
                     break
 
                 if not heard and elapsed >= patience:
+                    hearing.close()
                     return "", ""
     except KeyboardInterrupt:
         # Cancelling a turn is not a microphone fault, and the caller
         # says so differently, so it goes straight up.
+        hearing.close()
         raise
     except Exception as exc:  # noqa: BLE001
+        hearing.close()
         return "", f"{MIC_HINT} ({exc})"
 
     on_state("transcribing")
@@ -1178,18 +1404,10 @@ def transcribe(pcm: bytes) -> tuple[str, str]:
     records it. Returns `(text, "")`, or `("", reason)` when the listening
     model cannot be used."""
 
-    try:
-        import vosk
-    except Exception:  # noqa: BLE001
-        return "", INSTALL_HINT
+    hearing, why = _hearing(live=False)
+    if hearing is None:
+        return "", why
 
-    try:
-        with _models_lock:
-            model = _load_listener()
-    except Exception as exc:  # noqa: BLE001
-        return "", f"could not load the listening model: {exc}"
-
-    hearing = Hearing(vosk.KaldiRecognizer(model, SAMPLE_RATE), live=False)
     block = BLOCK_FRAMES * 2
     for start in range(0, len(pcm) - len(pcm) % 2, block):
         hearing.feed(pcm[start:start + block])
@@ -1202,7 +1420,7 @@ def transcribe(pcm: bytes) -> tuple[str, str]:
 # What it sends once they stop is still heard whole, by transcribe().
 LIVE_IDLE_SECONDS = 60.0
 LIVE_STREAMS = 8
-_live: dict[str, tuple[float, Hearing, threading.Lock]] = {}
+_live: dict[str, tuple[float, object, threading.Lock]] = {}
 _live_lock = threading.Lock()
 
 
@@ -1214,29 +1432,28 @@ def hear_live(stream: str, pcm: bytes, end: bool = False) -> tuple[str, str]:
     now = time.monotonic()
     with _live_lock:
         # A page that went away without saying it was done.
-        for key in [k for k, v in _live.items()
-                    if now - v[0] > LIVE_IDLE_SECONDS]:
-            del _live[key]
-        if end:
-            _live.pop(stream, None)
-            return "", ""
-        found = _live.get(stream)
+        gone = [_live.pop(k) for k, v in list(_live.items())
+                if now - v[0] > LIVE_IDLE_SECONDS]
+        if end and stream in _live:
+            gone.append(_live.pop(stream))
+        found = None if end else _live.get(stream)
+    _let_go(gone)
+    if end:
+        return "", ""
     if found is None:
-        try:
-            import vosk
-        except Exception:  # noqa: BLE001
-            return "", INSTALL_HINT
-        try:
-            with _models_lock:
-                model = _load_listener()
-        except Exception as exc:  # noqa: BLE001
-            return "", f"could not load the listening model: {exc}"
-        found = (now, Hearing(vosk.KaldiRecognizer(model, SAMPLE_RATE)),
-                 threading.Lock())
+        hearing, why = _hearing()
+        if hearing is None:
+            return "", why
+        found = (now, hearing, threading.Lock())
         with _live_lock:
             while len(_live) >= LIVE_STREAMS:
-                del _live[min(_live, key=lambda k: _live[k][0])]
-            found = _live.setdefault(stream, found)
+                oldest = min(_live, key=lambda k: _live[k][0])
+                gone.append(_live.pop(oldest))
+            kept = _live.setdefault(stream, found)
+        if kept is not found:
+            gone.append(found)
+        _let_go(gone)
+        found = kept
     _, hearing, lock = found
     with lock:
         block = BLOCK_FRAMES * 2
@@ -1247,6 +1464,16 @@ def hear_live(stream: str, pcm: bytes, end: bool = False) -> tuple[str, str]:
         if stream in _live:
             _live[stream] = (time.monotonic(), hearing, lock)
     return words, ""
+
+
+def _let_go(gone: list) -> None:
+    """Close the live hearings that were let go, each once it is not
+    being fed."""
+
+    for _, hearing, lock in gone:
+        with lock:
+            hearing.close()
+    gone.clear()
 
 
 # Listening for "Hey Flash" while the web page is open, so voice mode

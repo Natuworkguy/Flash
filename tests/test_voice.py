@@ -1203,3 +1203,208 @@ def test_an_update_puts_kokoro_back_when_it_was_in(monkeypatch):
     monkeypatch.setattr("importlib.util.find_spec", lambda name: None)
     assert updater.voice_packages() == list(  # nosec B101
         updater.VOICE_PACKAGES)
+
+
+class _MoonStream:
+    """Stands in for a Moonshine stream: each piece of audio fed to it
+    reveals the next of HEARD, as its listeners hear lines change."""
+
+    def __init__(self, heard):
+        self.heard = list(heard)
+        self.listeners: list = []
+        self.fed: list = []
+        self.started = self.stopped = self.closed = False
+
+    def add_listener(self, listener):
+        self.listeners.append(listener)
+
+    def start(self):
+        self.started = True
+
+    def add_audio(self, samples, rate):
+        self.fed.append((len(samples), rate, min(samples), max(samples)))
+        if self.heard:
+            line_id, text = self.heard.pop(0)
+            line = types.SimpleNamespace(line_id=line_id, text=text)
+            for listener in self.listeners:
+                listener(types.SimpleNamespace(line=line))
+
+    def stop(self):
+        self.stopped = True
+        return types.SimpleNamespace(lines=[
+            types.SimpleNamespace(line_id=0, text="Hello there."),
+            types.SimpleNamespace(line_id=1, text="Run the tests."),
+        ])
+
+    def close(self):
+        self.closed = True
+
+
+class _FakeMoonshine:
+    made: list = []
+    streams: list = []
+
+    def __init__(self, path, arch):
+        _FakeMoonshine.made.append((path, arch))
+
+    def create_stream(self):
+        stream = _MoonStream([(0, "Hello"), (0, "Hello there."),
+                              (1, "Run")])
+        _FakeMoonshine.streams.append(stream)
+        return stream
+
+
+@pytest.fixture
+def moonshine(monkeypatch, tmp_path):
+    import enum
+
+    module = types.ModuleType("moonshine_voice")
+    module.Transcriber = _FakeMoonshine
+    module.ModelArch = enum.IntEnum("ModelArch", {
+        "TINY_STREAMING": 2, "SMALL_STREAMING": 4, "MEDIUM_STREAMING": 5,
+    })
+    monkeypatch.setitem(sys.modules, "moonshine_voice", module)
+    monkeypatch.setattr(voice, "MODELS_DIR", tmp_path)
+    monkeypatch.setattr(voice, "_moonshine", None)
+    _FakeMoonshine.made = []
+    _FakeMoonshine.streams = []
+    for file in voice.MOONSHINE_FILES:
+        (tmp_path / "moonshine-small").mkdir(exist_ok=True)
+        (tmp_path / "moonshine-small" / file).write_bytes(b"model")
+    monkeypatch.setenv("VOICE_VOSK_MODEL", "moonshine-small")
+    return module
+
+
+def test_moonshine_models_are_offered_beside_vosk():
+    offered = {c.name: c.size for c in voice.LISTENING}
+
+    for name, (_, sizes) in voice.MOONSHINE_MODELS.items():
+        assert offered[name] == sum(sizes)  # nosec B101
+        assert len(sizes) == len(voice.MOONSHINE_FILES)  # nosec B101
+    assert voice.find_model("moonshine-small")[0] == "listening"  # nosec
+
+
+def test_moonshine_downloads_as_one(monkeypatch, tmp_path):
+    monkeypatch.setattr(voice, "MODELS_DIR", tmp_path)
+    fetched, shown = [], []
+
+    def download(url, out, label, on_progress, stop=None):
+        fetched.append(url)
+        on_progress(label, 50)
+        on_progress(label, 100)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_bytes(b"x")
+        return ""
+
+    monkeypatch.setattr(voice, "_download", download)
+
+    assert voice.download_listening(  # nosec B101
+        "moonshine-tiny", lambda label, percent: shown.append(percent),
+    ) == ""
+    base = (f"{voice.MOONSHINE_BASE}/tiny-streaming-en/"
+            f"{voice.MOONSHINE_RELEASE}")
+    assert fetched == [  # nosec B101
+        f"{base}/{file}" for file in voice.MOONSHINE_FILES
+    ]
+    # One bar for all its files, never going back.
+    assert shown == sorted(shown) and shown[-1] == 100  # nosec B101
+    assert voice.listening_installed("moonshine-tiny")  # nosec B101
+    assert voice.download_listening("moonshine-tiny", print) == ""  # nosec
+    assert len(fetched) == len(voice.MOONSHINE_FILES)  # nosec B101
+
+
+def test_moonshine_hears_a_recording(moonshine, tmp_path):
+    text, why = voice.transcribe(_pcm(16000) * 3)
+
+    assert (text, why) == ("Hello there. Run the tests.", "")  # nosec B101
+    assert _FakeMoonshine.made == [  # nosec B101
+        (str(tmp_path / "moonshine-small"), 4),
+    ]
+    stream = _FakeMoonshine.streams[0]
+    assert stream.started and stream.stopped and stream.closed  # nosec
+    # Fed as samples between -1 and 1, at the rate Flash records.
+    count, rate, low, high = stream.fed[0]
+    assert (count, rate) == (voice.BLOCK_FRAMES, 16000)  # nosec B101
+    assert -1.0 <= low <= high <= 1.0  # nosec B101
+    # The model loads once.
+    voice.transcribe(_pcm(100))
+    assert len(_FakeMoonshine.made) == 1  # nosec B101
+
+
+def test_moonshine_streams_the_words_as_they_come(moonshine):
+    piece = _pcm(9000)
+
+    assert voice.hear_live("a", piece) == ("Hello", "")  # nosec B101
+    assert voice.hear_live("a", piece) == ("Hello there.", "")  # nosec
+    assert voice.hear_live("a", piece) == (  # nosec B101
+        "Hello there. Run", "",
+    )
+    stream = _FakeMoonshine.streams[0]
+    assert not stream.closed  # nosec B101
+    voice.hear_live("a", b"", end=True)
+    assert stream.closed  # nosec B101
+
+
+def test_moonshine_listens_in_the_terminal(moonshine, monkeypatch):
+    _fake_audio(monkeypatch, [_pcm(4000)] * 3)
+    monkeypatch.setenv("VOICE_SILENCE_SECONDS", "0.3")
+    words = []
+
+    text, why = listen(lambda state: None, words.append)
+
+    assert (text, why) == ("Hello there. Run the tests.", "")  # nosec
+    assert words[0] == "Hello"  # nosec B101
+    assert _FakeMoonshine.streams[0].closed  # nosec B101
+
+
+def test_hey_flash_stays_with_vosk_while_moonshine_listens(moonshine,
+                                                           tmp_path):
+    assert voice.wake_model() == voice.DEFAULT_VOSK_MODEL  # nosec B101
+    # The listening is here; "Hey Flash"'s model is not yet.
+    assert voice.models_present() is False  # nosec B101
+
+    (tmp_path / "vosk-model-en-us-0.22-lgraph" / "am").mkdir(parents=True)
+    assert voice.wake_model() == "vosk-model-en-us-0.22-lgraph"  # nosec
+    with pytest.raises(ValueError, match="Hey Flash"):
+        voice.remove_listening("vosk-model-en-us-0.22-lgraph")
+
+
+def test_setting_up_moonshine_fetches_hey_flash_model_too(moonshine,
+                                                          monkeypatch):
+    monkeypatch.setattr(voice, "voice_installed", lambda name: True)
+    fetched = []
+
+    def fetch(name, on_progress, stop=None):
+        fetched.append(name)
+        return ""
+
+    monkeypatch.setattr(voice, "download_listening", fetch)
+
+    assert ensure_models(lambda *a: None) == ""  # nosec B101
+    assert fetched == [  # nosec B101
+        "moonshine-small", voice.DEFAULT_VOSK_MODEL,
+    ]
+
+
+def test_moonshine_without_its_package_says_how(moonshine, monkeypatch):
+    monkeypatch.setitem(sys.modules, "moonshine_voice", None)
+
+    assert voice.MOONSHINE_PACKAGE in voice.missing_packages()  # nosec
+    assert voice.install_hint() == voice.MOONSHINE_HINT  # nosec B101
+    assert voice.moonshine_ready() is False  # nosec B101
+    assert voice.transcribe(_pcm(100)) == (  # nosec B101
+        "", voice.MOONSHINE_HINT,
+    )
+
+
+def test_an_update_puts_moonshine_back_when_it_was_in(monkeypatch):
+    from flash import updater
+
+    found = types.SimpleNamespace()
+    monkeypatch.setattr(
+        "importlib.util.find_spec",
+        lambda name: found if name == "moonshine_voice" else None,
+    )
+    assert updater.voice_packages() == [  # nosec B101
+        *updater.VOICE_PACKAGES, updater.MOONSHINE_PACKAGE,
+    ]
