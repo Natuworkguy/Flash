@@ -4547,6 +4547,22 @@ class TestChatTools:
         # Not a spoken conversation: nothing to end.
         assert "end_conversation" not in offered
 
+    def test_the_page_is_told_to_type_it_in(self):
+        session = web.Session()
+        chat = session.new_chat()
+        chat.title = "Jumbled Message Clarification"
+        seen = []
+        session.hub.publish = lambda event: seen.append(event) or event
+
+        web.retitle(session, chat, {"title": "Getting the dev team"})
+
+        assert seen[0] == {
+            "type": "retitle", "chat": chat.id,
+            "from": "Jumbled Message Clarification",
+            "title": "Getting the dev team",
+        }
+        assert seen[1]["type"] == "chats"
+
     def test_a_title_the_user_gave_stays(self):
         session = web.Session()
         chat = session.new_chat()
