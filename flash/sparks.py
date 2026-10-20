@@ -185,9 +185,16 @@ This shift runs {every}; the last one was {since}.
 
 How to work:
 - Do what the goal asks now, with your tools. Do not only plan.
-- A step that runs a command or changes a file waits for the user to
-  say yes before it runs. Ask for it only when the goal needs it: the
-  shift pauses there, and carries on with their answer.
+- With each step, write a few words on what you are doing now, as a
+  quick note for the user, like "fixed it, now running lint and tests".
+  It shows beside your name while you work.
+- A step that runs a command, changes a file or sends an email waits for
+  the user to say yes before it runs. Ask for it only when the goal
+  needs it: the shift pauses there, and carries on with their answer.
+- The user sees that step exactly as you wrote it, so write it in full:
+  a real address, the real words. Never leave a placeholder (x, TODO,
+  [Your Name]). If you do not have something it needs, do not ask: say
+  what is missing in your report.
 - Call keep_notes with anything the next shift has to know: what you
   have already seen or reported, what you are waiting on. Your notes are
   replaced, not added to, so keep what still matters.
@@ -261,6 +268,10 @@ How to talk:
   now, in the background, with all your tools, and your report on it
   comes back to them. Then tell them you are on it. A quick look you
   can do here and now needs no shift.
+- While a shift of yours runs and they want it done differently
+  ("actually, skip the tests"), call steer_shift: it takes that from
+  its next step. When they want it stopped, or it is no longer needed,
+  call stop_shift.
 """.strip()
 
 CHAT_LAST_WORD = (
@@ -304,6 +315,19 @@ CHAT_TOOLS = [
         "every", "How often: 30m, 2h, daily, weekly (at least 15m), set "
         "times: 9am weekdays, mon 8:30, the 1st at 9am, or a cron line, or "
         "on call: no schedule, working only when called on.",
+    ),
+    _tool(
+        "steer_shift",
+        "Change the course of your shift running now, when the user wants "
+        "it done differently: it takes this from its next step.",
+        "change", "What to do differently, as an instruction to the shift.",
+    ),
+    _tool(
+        "stop_shift",
+        "Stop your shift running now at its next step, or call off one "
+        "waiting on the user's approval, when the user wants it stopped "
+        "or it is no longer needed.",
+        "why", "Why it stops, in a few words.",
     ),
 ]
 
@@ -410,6 +434,9 @@ class Spark:
     pending: dict = field(default_factory=dict)
     # The user asked the shift running now to stop.
     stop_asked: bool = False
+    # Changes of course for the shift running now, from a chat with the
+    # user (steer_shift): it takes them at its next step.
+    steers: list = field(default_factory=list)
     # A folder whose changes start a shift, besides the schedule.
     watch: str = ""
     # Why the next shift starts early, for it to be told.
@@ -3043,6 +3070,26 @@ def _prompt(
     return "\n\n".join(part for part in parts if part)
 
 
+STATUS_CHARS = 80
+
+
+def status_note(text: str) -> str:
+    """What a model wrote beside its tool calls, as a short status: its
+    first line, plain, cut at a sentence or STATUS_CHARS."""
+
+    line = next((part for part in str(text or "").splitlines()
+                 if part.strip()), "")
+    line = undash(re.sub(r"[*_`#>]+", "", line)).strip(" -")
+    line = " ".join(line.split()).rstrip(".:")
+    if len(line) > STATUS_CHARS:
+        cut = line[:STATUS_CHARS]
+        stop = max(cut.rfind(". "), cut.rfind("; "))
+        line = cut[:stop] if stop > 20 else (
+            cut.rsplit(" ", 1)[0].rstrip(",;:") + "..."
+        )
+    return line
+
+
 def _set_activity(
     spark_id: str, activity: str, what: str = "activity",
 ) -> None:
@@ -3940,6 +3987,7 @@ def _work(
     stopping: Optional[Callable[[], bool]] = None,
     spent: Optional[Callable[[int], object]] = None,
     audit_as: str = "shift",
+    steering: Optional[Callable[[], list[str]]] = None,
 ) -> str:
     """One agent run for SPARK: the model and its tools, back and forth,
     until it answers. OWN are the tools only a spark has, each answered
@@ -3990,11 +4038,15 @@ def _work(
         t for t in offered if t["function"]["name"] in allowed
     ] + own_tools
 
+    # The model's own note on what it is doing ("now running the
+    # tests"), shown in place of the bare step while there is one.
+    note = [""]
+
     def record(kind: str, text: str, style: str) -> None:
         if kind == "line":
             steps.append(text)
             del steps[:-MAX_STEPS]
-            doing(f"Running {text}")
+            doing(note[0] or f"Running {text}")
         elif kind == "result" and style == ERROR and steps:
             steps[-1] += " (failed)"
 
@@ -4010,7 +4062,11 @@ def _work(
         for _ in range(rounds) if rounds is not None else itertools.count():
             if stopping is not None and stopping():
                 raise Stopped()
-            doing("Thinking")
+            for change in steering() if steering is not None else []:
+                messages.append({
+                    "role": "user", "content": f"{STEER_NOTE}\n{change}",
+                })
+            doing(note[0] or "Thinking")
             response = ask(
                 model=model, messages=messages, tools=schemas,
                 options=subagents.chat_options(),
@@ -4021,6 +4077,10 @@ def _work(
             tool_calls = list(getattr(message, "tool_calls", None) or [])
             if not tool_calls:
                 break
+            said = status_note(final)
+            if said:
+                note[0] = said
+                doing(said)
 
             calls = [subagents._tool_call_name_args(c) for c in tool_calls]
             messages.append({
@@ -4032,9 +4092,14 @@ def _work(
                 ],
             })
             for at, (name, args) in enumerate(calls):
+                why = ""
                 if gate is not None and name in allowed and gate(name):
-                    raise NeedsApproval(name, args, calls[at + 1:])
-                result = _call(name, args, allowed, steps, own)
+                    # Half written ("x", "placeholder"): back to the
+                    # model to finish, never put to the user like that.
+                    why = flash_tools.unfinished(name, args)
+                    if not why:
+                        raise NeedsApproval(name, args, calls[at + 1:])
+                result = why or _call(name, args, allowed, steps, own)
                 log(spark.id, "tool", tool=name, args=args,
                     result=str(result), during=audit_as)
                 messages.append({
@@ -4248,6 +4313,7 @@ def shift(spark_id: str, client=None) -> Optional[Report]:
         spark.status = WORKING
         spark.activity = "Starting"
         spark.stop_asked = False
+        spark.steers = []
         spark.pending = {}
         _save(spark)
     _changed()
@@ -4366,6 +4432,7 @@ def shift(spark_id: str, client=None) -> Optional[Report]:
                     getattr(find(spark.id), "stop_asked", 0)
                 ) or over_budget(find(spark.id)),
                 spent=lambda tokens: spend(spark.id, tokens),
+                steering=lambda: _take_steers(spark.id),
             )
         quiet = not text or text.strip(" .").upper() == NOTHING_NEW
         if quiet and has_job:
@@ -4442,6 +4509,7 @@ def shift(spark_id: str, client=None) -> Optional[Report]:
             for i in spark.inbox
         ))
         spark.stop_asked = False
+        spark.steers = []
         if pending:
             # The rest of the shift waits on the user, and so does the
             # schedule: nothing new starts over a question.
@@ -4484,6 +4552,51 @@ def answer_step(key: str, yes: bool, why: str = "") -> Spark:
         tool=spark.pending.get("tool", ""), why=spark.pending.get("why", ""))
     wake()
     return spark
+
+
+STEER_CHARS = 1000
+STEER_NOTE = (
+    "[From your chat with the user, while this shift ran. Take it into "
+    "account from here, over what you were told before:]"
+)
+
+
+def steer(key: str, change: str) -> Spark:
+    """Hand SPARK's running shift CHANGE, for it to take at its next
+    step."""
+
+    change = " ".join(str(change or "").split())[:STEER_CHARS]
+    if not change:
+        raise SparkError("Say what the shift should do differently.")
+
+    def add(spark: Spark) -> None:
+        if spark.status != WORKING:
+            raise SparkError(
+                f"{spark.name} is not in a shift. To start one, use take_on."
+            )
+        spark.steers.append(change)
+
+    spark = _edit(key, add)
+    log(spark.id, "steered", change=change)
+    return spark
+
+
+def _take_steers(spark_id: str) -> list[str]:
+    """The changes of course waiting for SPARK_ID's shift, taken."""
+
+    taken: list[str] = []
+
+    def take(spark: Spark) -> None:
+        taken.extend(spark.steers)
+        spark.steers = []
+
+    # Looked at first, so a shift with none never writes the file.
+    spark = find(spark_id)
+    if spark is None or not spark.steers:
+        return []
+    with contextlib.suppress(SparkError):
+        _edit(spark_id, take)
+    return taken
 
 
 def stop(key: str) -> Spark:
@@ -4689,6 +4802,8 @@ class ChatKit:
             "hand_off": _handing_off(spark),
             "ask_spark": _asking(spark),
             "take_on": self._take_on,
+            "steer_shift": self._steer_shift,
+            "stop_shift": self._stop_shift,
             **_proposing(spark),
         }
         # The documents this answer writes, for whoever shows it.
@@ -4708,6 +4823,26 @@ class ChatKit:
             f"(taken on: a shift starts now, and your report on it comes "
             f"back {where})"
         )
+
+    def _steer_shift(self, args: dict) -> str:
+        change = str(args.get("change", ""))
+        try:
+            steer(self.spark_id, change)
+        except SparkError as exc:
+            return f"Error: {exc}"
+        tool_line(f"SteerShift({' '.join(change.split())[:120]})")
+        tool_result("The shift takes it from its next step")
+        return "(steered: your shift takes it from its next step)"
+
+    def _stop_shift(self, args: dict) -> str:
+        why = " ".join(str(args.get("why", "")).split())
+        try:
+            stop(self.spark_id)
+        except SparkError as exc:
+            return f"Error: {exc}"
+        tool_line(f"StopShift({why[:120]})")
+        tool_result("Stopped at its next step")
+        return "(stopping: your shift ends at its next step)"
 
     def offer(self, tools: list[dict]) -> list[dict]:
         """Of TOOLS, the ones a spark may use here, and its own."""

@@ -548,3 +548,134 @@ class TestBundles:
             assert "git bundle" in staged["note"]
         finally:
             web._discard_staged(session)
+
+
+SETTINGS = [
+    {"id": "banners", "label": "Banners", "type": "switch",
+     "default": True, "help": "A banner when it finishes."},
+    {"id": "color", "label": "Colour", "type": "text", "default": "d97757"},
+    {"id": "every", "label": "Check every", "type": "number",
+     "default": 5, "min": 1, "max": 60},
+    {"id": "size", "label": "Size", "type": "select",
+     "options": ["small", "large"]},
+]
+
+# Prints what it was handed, every way it was handed it.
+SHOW_SETTINGS = """\
+import json, os, sys
+json.load(sys.stdin)
+print(os.environ["FLASH_SETTINGS"], os.environ["FLASH_SETTING_BANNERS"],
+      os.environ["FLASH_SETTING_EVERY"])
+"""
+
+
+def with_settings(folder, settings=None):
+    return make(folder, {
+        "name": "tuned",
+        "tools": [{"name": "show_settings", "description": "Show them.",
+                   "run": ["python", "./show.py"]}],
+        "settings": SETTINGS if settings is None else settings,
+    }, {"show.py": SHOW_SETTINGS})
+
+
+class TestSettings:
+    def test_they_are_read_with_their_defaults(self, tmp_path):
+        ext = extensions.load(with_settings(tmp_path / "src"))
+
+        assert [s.id for s in ext.settings] == [  # nosec B101
+            "banners", "color", "every", "size",
+        ]
+        assert extensions.settings_values(ext) == {  # nosec B101
+            "banners": True, "color": "d97757", "every": 5, "size": "small",
+        }
+        assert "settings: Banners, Colour, Check every, Size" in (  # nosec
+            ext.contents())
+
+    @pytest.mark.parametrize("setting, message", [
+        ({"id": "Bad Id"}, "not a setting id"),
+        ({"id": "a", "type": "slider"}, "type is one of"),
+        ({"id": "a", "type": "select"}, "needs its options"),
+        ({"id": "a", "type": "number", "default": 99, "max": 10},
+         "default does not fit"),
+        ({"id": "a", "type": "number", "min": "low"}, "has to be a number"),
+        ("banners", "has to be an object"),
+    ])
+    def test_bad_ones_are_refused(self, tmp_path, setting, message):
+        with pytest.raises(ExtensionError, match=message):
+            extensions.load(with_settings(tmp_path / "src", [setting]))
+
+    def test_two_with_one_id_are_refused(self, tmp_path):
+        with pytest.raises(ExtensionError, match="setting"):
+            extensions.load(with_settings(
+                tmp_path / "src", [{"id": "a"}, {"id": "a"}]))
+
+    def test_changed_kept_and_checked(self, tmp_path):
+        ext = install(tmp_path, with_settings(tmp_path / "src"))
+
+        values = extensions.set_setting(ext, "every", "15")
+        extensions.set_setting(ext, "banners", False)
+
+        assert values["every"] == 15  # nosec B101
+        assert extensions.settings_values(ext)["banners"] is False  # nosec
+        for bad_id, value in (("every", 0), ("size", "huge"),
+                              ("banners", "maybe"), ("nope", 1)):
+            with pytest.raises(ExtensionError):
+                extensions.set_setting(ext, bad_id, value)
+
+    def test_its_programs_are_handed_them(self, tmp_path):
+        ext = install(tmp_path, with_settings(tmp_path / "src"))
+        extensions.set_setting(ext, "banners", False)
+        extensions.set_setting(ext, "every", 30)
+
+        said = extensions.call_tool(ext, ext.tools[0], {})
+
+        handed, banners, every = said.rsplit(" ", 2)
+        assert json.loads(handed)["color"] == "d97757"  # nosec B101
+        assert (banners, every.strip()) == ("0", "30")  # nosec B101
+
+    def test_an_update_keeps_them_and_removing_it_drops_them(self, tmp_path):
+        ext = install(tmp_path, with_settings(tmp_path / "src"))
+        extensions.set_setting(ext, "color", "00ff88")
+
+        again = install(tmp_path, with_settings(tmp_path / "src"))
+        assert extensions.settings_values(again)["color"] == "00ff88"  # nosec
+
+        extensions.remove("tuned")
+        fresh = install(tmp_path, with_settings(tmp_path / "src"))
+        assert extensions.settings_values(fresh)["color"] == "d97757"  # nosec
+
+    def test_set_in_the_terminal(self, tmp_path, capsys):
+        install(tmp_path, with_settings(tmp_path / "src"))
+        extensions.reload()
+
+        ai._extension_command("set tuned every 12")
+        ai._extension_command("settings tuned")
+
+        out = capsys.readouterr().out
+        assert "every is 12" in out  # nosec B101
+        assert "Check every: 12" in out  # nosec B101
+
+    def test_the_page_shows_and_changes_them(self, tmp_path):
+        from flash import web
+
+        install(tmp_path, with_settings(tmp_path / "src"))
+        extensions.reload()
+        session = web.Session()
+
+        listed = web.command(session, {"name": "extensions"})
+        shown = listed["extensions"][0]
+        assert [s["id"] for s in shown["settings"]][:2] == [  # nosec B101
+            "banners", "color",
+        ]
+        assert shown["values"]["every"] == 5  # nosec B101
+
+        changed = web.command(session, {
+            "name": "extension-setting", "arg": "tuned",
+            "id": "size", "value": "large",
+        })
+        assert changed["values"]["size"] == "large"  # nosec B101
+        with pytest.raises(ValueError, match="one of"):
+            web.command(session, {
+                "name": "extension-setting", "arg": "tuned",
+                "id": "size", "value": "huge",
+            })

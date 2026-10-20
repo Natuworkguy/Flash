@@ -511,6 +511,17 @@ body.empty #suggestions { display: flex; flex-wrap: wrap; justify-content: cente
 .ui-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; }
 .ui-field { display: grid; gap: 5px; font-size: 12.5px; color: var(--text-2); font-weight: 500; }
 .ui-field input, .ui-field select { padding: 8px 10px; border: 1px solid var(--border-strong); border-radius: 9px; background: var(--bg); color: var(--text); font: 400 13.5px var(--sans); outline: none; }
+/* Its own arrow, set in from the edge, where a browser's sits against
+   it; and never wider than its column, however long an option is. */
+.ui-field { min-width: 0; }
+.ui-select { position: relative; display: grid; min-width: 0; }
+.ui-field .ui-select select { appearance: none; -webkit-appearance: none; width: 100%; min-width: 0; padding-right: 38px; text-overflow: ellipsis; }
+.ui-select::after {
+  content: ""; position: absolute; right: 15px; top: 50%; width: 10px; height: 6px; margin-top: -3px;
+  background: var(--text-3); pointer-events: none;
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center / contain no-repeat;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center / contain no-repeat;
+}
 .ui-field input:focus, .ui-field select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent); }
 .ui-submit { grid-column: 1 / -1; justify-self: start; padding: 9px 16px; border: 0; border-radius: 10px; background: var(--accent); color: var(--accent-text); font: 600 13.5px var(--sans); cursor: pointer; transition: transform 0.18s var(--spring), opacity 0.15s; }
 .ui-submit:hover:not(:disabled) { transform: translateY(-1px); }
@@ -761,6 +772,39 @@ body.voice-on .shell, body.voice-on #suggestions, body.voice-on #pending { displ
 .voice-say:has(.voice-heard:not([hidden])) .voice-hint { display: none; }
 .voice-end { flex: none; }
 @media (prefers-reduced-motion: reduce) { .voice-orb { transform: none; } }
+/* The camera, while it is on: what Flash sees with the next thing said. */
+.voice-cam { flex: none; }
+.voice-cam[aria-pressed="true"] { color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.voice-view { flex: none; width: 82px; height: 58px; border-radius: 12px; object-fit: cover; background: #000; border: 1px solid var(--border-strong); animation: pop 0.2s var(--ease); }
+.voice-view[hidden] { display: none; }
+#voice[data-state="thinking"] .voice-view { opacity: 0.7; }
+/* The companion: a face on the orb, minding what voice mode is doing. It
+   blinks while it listens, looks up while it thinks, perks up while you
+   talk, and its mouth moves with what it says. */
+.voice-orb .face { display: none; position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+#voice.companion .voice-orb .face { display: block; }
+#voice.companion .voice-orb { transform: scale(calc(1 + var(--lvl) * 0.05)); }
+.face * { transform-box: fill-box; transform-origin: center; transition: transform 0.3s var(--ease), opacity 0.25s var(--ease); }
+.face .eye ellipse { fill: #2b1810; }
+.face .glint { fill: #fff; opacity: 0.9; }
+.face .cheeks circle { fill: #ff8f8f; opacity: 0.32; }
+.face .brows path, .face .smile { fill: none; stroke: #2b1810; stroke-width: 2; stroke-linecap: round; }
+.face .brows { opacity: 0; }
+.face .mouth { fill: #2b1810; opacity: 0; transform: scaleY(0.2); }
+.face .eye { animation: face-blink 4.6s infinite; }
+.face .eye + .eye { animation-delay: 0.04s; }
+@keyframes face-blink { 0%, 95%, 100% { transform: scaleY(1); } 97% { transform: scaleY(0.1); } }
+#voice[data-state="hearing"] .face .eyes { transform: scale(1.12); }
+#voice[data-state="hearing"] .face .brows, #voice[data-state="asking"] .face .brows { opacity: 1; transform: translateY(-1.5px); }
+#voice[data-state="hearing"] .face { animation: face-nod 0.9s ease-in-out infinite; }
+@keyframes face-nod { 50% { transform: translateY(1.5px); } }
+#voice[data-state="thinking"] .face .eyes, #voice[data-state="setup"] .face .eyes { transform: translate(2.4px, -3px); }
+#voice[data-state="thinking"] .face .smile { transform: scaleX(0.55) scaleY(0.3); }
+#voice[data-state="speaking"] .face .smile { opacity: 0; }
+#voice[data-state="speaking"] .face .mouth { opacity: 1; transform: scaleY(calc(0.25 + var(--lvl) * 1.6)); transition: transform 0.06s linear, opacity 0.2s; }
+#voice[data-state="paused"] .face .eye { animation: none; transform: scaleY(0.12); }
+#voice[data-state="asking"] .face { transform: rotate(-8deg); }
+@media (prefers-reduced-motion: reduce) { .face, .face * { animation: none !important; } }
 
 /* Settings, voice models. */
 .voice-models { max-width: 620px; }
@@ -812,7 +856,34 @@ body.voice-on .shell, body.voice-on #suggestions, body.voice-on #pending { displ
   max-height: 40vh; min-height: 24px; padding: 0 6px 0 0;
 }
 #input::placeholder { color: var(--text-3); opacity: 1; }
-.composer-row { display: flex; align-items: center; gap: 6px; margin-top: 10px; }
+.composer-row { display: flex; align-items: center; gap: 6px; margin-top: 10px; container-type: inline-size; min-width: 0; }
+/* A narrow box (a side panel open, a small window) keeps every button in
+   it: labels give way to their icons, Hey Flash to its dot, and the
+   context meter to its number, before anything is pushed out. */
+@container (max-width: 390px) {
+  #context .ctx-track { display: none; }
+  #think-btn > span { display: none; }
+  #think-btn { padding: 0 9px; }
+}
+@container (max-width: 270px) {
+  #auto-btn > span, #project-btn > span { display: none; }
+  #auto-btn, #project-btn { padding: 0 9px; }
+}
+/* A new chat's row holds more (its project and model), so it folds
+   sooner, and the model's name is never squeezed past reading. */
+body.empty #model-btn { min-width: 70px; }
+@container (max-width: 300px) {
+  body.empty #context { display: none; }
+}
+@container (max-width: 560px) {
+  body.empty #context .ctx-track { display: none; }
+  body.empty #think-btn > span { display: none; }
+  body.empty #think-btn { padding: 0 9px; }
+}
+@container (max-width: 440px) {
+  body.empty #auto-btn > span, body.empty #project-btn > span { display: none; }
+  body.empty #auto-btn, body.empty #project-btn { padding: 0 9px; }
+}
 .pill {
   display: inline-flex; align-items: center; gap: 6px;
   height: 32px; padding: 0 10px; border-radius: 10px;
@@ -831,10 +902,14 @@ body.voice-on .shell, body.voice-on #suggestions, body.voice-on #pending { displ
 .menu .agent-row .state.running { color: var(--accent); }
 .menu .agent-row .detail { font: 11.5px var(--mono); color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* Only before the first message: after that, the chat has its project. */
-#project-btn { display: none; max-width: 220px; }
+#project-btn { display: none; max-width: 220px; min-width: 34px; flex: 0 4 auto; }
 body.empty:not(.on-page) #project-btn { display: inline-flex; }
 #project-btn span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #project-btn.on { color: var(--text); background: var(--hover); border-color: var(--border-strong); }
+/* Think harder: on for the next message only, then off again. */
+#think-btn[aria-pressed="true"] { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 45%, transparent); background: color-mix(in srgb, var(--accent) 10%, transparent); }
+#think-btn[aria-pressed="true"] svg { animation: think-glow 1.8s ease-in-out infinite; }
+@keyframes think-glow { 50% { filter: drop-shadow(0 0 4px color-mix(in srgb, var(--accent) 70%, transparent)); } }
 #auto-btn.on { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 45%, transparent); background: color-mix(in srgb, var(--accent) 10%, transparent); }
 /* The plus: turns a quarter while its menu is open. */
 #plus-btn { width: 32px; padding: 0; justify-content: center; flex: none; }
@@ -889,7 +964,7 @@ button.doc:hover { border-color: var(--border-strong); }
 #model-btn { margin-left: auto; border-color: transparent; max-width: 55%; min-width: 0; flex: 0 1 auto; overflow: hidden; }
 /* Short of room, the model's name gives way; nothing else in the row
    does, so the send button stays inside the box. */
-.composer-row > :not(#model-btn):not(#context) { flex-shrink: 0; }
+.composer-row > :not(#model-btn):not(#context):not(#project-btn) { flex-shrink: 0; }
 .model-pick .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .model-pick svg { width: 14px; height: 14px; margin-right: -2px; flex: none; }
 /* System One's model, beside the chat model's, while it is on. */
@@ -1362,6 +1437,7 @@ body.page-projects #dock, body.page-settings #dock, body.page-tool #dock { displ
 .scene-grid canvas { display: block; width: 100%; height: 100%; image-rendering: pixelated; }
 .scene-grid .none { position: absolute; inset: 0; display: grid; place-items: center; font-size: 12.5px; color: var(--text-3); background: var(--hover); }
 .usage-note { font-size: 12.5px; color: var(--text-3); margin: 4px 2px 0; }
+.keep-usage-row { margin-top: 18px; }
 .mem-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; margin-bottom: 16px; }
 .mem-head .sub { color: var(--text-3); font-size: 14px; margin: 0; max-width: 440px; }
 .btn.with-icon { display: inline-flex; align-items: center; gap: 7px; white-space: nowrap; }
@@ -1393,6 +1469,18 @@ body.page-projects #dock, body.page-settings #dock, body.page-tool #dock { displ
 .item-list { border: 1px solid var(--border); border-radius: 14px; background: var(--surface); overflow: hidden; }
 .item-row { display: flex; align-items: flex-start; gap: 12px; width: 100%; padding: 13px 14px 13px 16px; text-align: left; border-top: 1px solid var(--border); animation: rise 0.3s var(--ease) both; animation-delay: calc(var(--i, 0) * 0.03s); }
 .item-row:first-child { border-top: 0; }
+/* An extension's own settings, sliding open under its row and shut
+   again: its height grows from nothing, the rows easing down into it. */
+.ext-settings { display: grid; grid-template-rows: 0fr; opacity: 0; transition: grid-template-rows 0.34s var(--ease), opacity 0.26s var(--ease); }
+.ext-settings.open { grid-template-rows: 1fr; opacity: 1; }
+.ext-settings > .clip { overflow: hidden; min-height: 0; }
+.ext-settings .rows { display: grid; gap: 10px; padding: 0 14px 16px 16px; transform: translateY(-10px); transition: transform 0.34s var(--ease); }
+.ext-settings.open .rows { transform: none; }
+.ext-settings .setting-row + .setting-row { margin-top: 0; }
+.ext-settings .side input, .ext-settings .side select { font: 13.5px var(--sans); color: var(--text); background: var(--bg); border: 1px solid var(--border-strong); border-radius: 9px; padding: 7px 10px; width: 200px; max-width: 100%; outline: 0; }
+.ext-settings .side input[type="number"] { width: 96px; }
+.ext-settings .side input:focus, .ext-settings .side select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent); }
+.item-row .btn.small[aria-expanded="true"] { color: var(--text); background: var(--hover); border-color: var(--border-strong); }
 button.item-row:hover { background: var(--hover); }
 .item-row .main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
 .item-row .top { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
@@ -1412,6 +1500,11 @@ button.item-row:hover { background: var(--hover); }
 .skill-read > :first-child { margin-top: 0; }
 .field .count { float: right; font-size: 11.5px; color: var(--text-3); font-weight: 400; }
 .field textarea.mono { font: 12.5px/1.55 var(--mono); }
+.instructions-box { max-width: 620px; display: grid; gap: 8px; }
+.instructions-box .field { display: grid; gap: 4px; }
+.instructions-box textarea { width: 100%; resize: vertical; min-height: 110px; }
+.instructions-box .count { justify-self: end; font-size: 12px; color: var(--text-3); font-variant-numeric: tabular-nums; }
+.instructions-box .row { display: flex; justify-content: flex-end; }
 /* Sparks: one flat circle each, in its colour, with two oval eyes and
    nothing else. What it is doing is in how
    it moves and what its eyes do: it floats, glances about and blinks
@@ -2758,6 +2851,29 @@ body.resizing-viewer iframe { pointer-events: none; }
   body.empty #dock { padding-bottom: 6vh; }
   #model-btn { max-width: 45%; }
 }
+/* Listening for "Hey Flash": a quiet sign at the top right, so it is
+   never on without showing it, and out of the message box. Only a sign:
+   it is turned off in Settings, never by a stray click. */
+#wake-pill { margin-left: auto; flex: none; display: inline-flex; align-items: center; gap: 7px; padding: 5px 10px; border-radius: 99px; font-size: 12.5px; color: var(--text-3); cursor: default; user-select: none; }
+#wake-pill[hidden] { display: none; }
+.wake-sense-row .side { gap: 10px; }
+.voice-look-row select { font: 13.5px var(--sans); color: var(--text); background: var(--bg); border: 1px solid var(--border-strong); border-radius: 9px; padding: 7px 10px; outline: 0; }
+.wake-sense-row input[type=range] { width: 160px; accent-color: var(--accent); }
+.wake-sense-row output { width: 26px; text-align: right; font-size: 13px; color: var(--text-3); font-variant-numeric: tabular-nums; }
+/* "• Voice" when it first shows; a few seconds on, the word slides off to
+   the right, a letter at a time, into the side, fading out short of the
+   window's edge, and the dot slides after it, into the room it left, and
+   breathes there. */
+#wake-pill { transition: gap 0.55s var(--ease) 0.8s; }
+#wake-pill.settled { gap: 0; }
+#wake-pill .wake-dot { display: inline-flex; }
+#wake-pill .wake-label { display: inline-block; overflow: hidden; white-space: nowrap; padding-right: 16px; margin-right: -16px; transition: max-width 0.55s var(--ease) 0.8s, padding 0.55s var(--ease) 0.8s, margin 0.55s var(--ease) 0.8s;
+  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 16px), transparent); mask-image: linear-gradient(to right, #000 calc(100% - 16px), transparent); }
+#wake-pill .wake-label > span { display: inline-block; transition: transform 0.9s cubic-bezier(0.55, 0, 0.75, 0.2); }
+#wake-pill.settled .wake-label > span { transform: translateX(calc(100% + 16px)); }
+#wake-pill.settled .wake-label { max-width: 0 !important; padding-right: 0; margin-right: 0; }
+#wake-pill .wake-dot i { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); animation: wake-breathe 2.4s ease-in-out infinite; }
+@keyframes wake-breathe { 50% { opacity: 0.35; transform: scale(0.8); } }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
   .glow, .shell::after, #greeting::after { display: none; }
@@ -2799,6 +2915,7 @@ body.resizing-viewer iframe { pointer-events: none; }
       <button type="button" class="pill model-pick" id="top-model" data-tip="Switch model" data-keys="Alt M" tabindex="-1" aria-hidden="true"></button>
       <button id="crumb" hidden data-tip="Open project"></button>
       <button id="title" data-tip="Rename" data-keys="F2">New chat</button>
+      <span id="wake-pill" role="status" hidden data-tip="Listening for “Hey Flash”" aria-label="Listening for “Hey Flash”"><span class="wake-dot"><i></i></span><span class="wake-label"><span>Voice</span></span></span>
     </header>
 
     <section id="log" aria-live="polite">
@@ -2820,8 +2937,10 @@ body.resizing-viewer iframe { pointer-events: none; }
         </div>
         <div id="spark-ask" hidden aria-live="polite"></div>
         <div id="voice" hidden role="group" aria-label="Voice mode">
-          <button type="button" class="voice-orb" aria-label="Voice"><span></span></button>
+          <button type="button" class="voice-orb" aria-label="Voice"><span></span><svg class="face" viewBox="0 0 58 58" aria-hidden="true"><g class="cheeks"><circle cx="15" cy="34" r="4.2"/><circle cx="43" cy="34" r="4.2"/></g><g class="brows"><path d="M17 17.5q4-2.6 8 0"/><path d="M33 17.5q4-2.6 8 0"/></g><g class="eyes"><g class="eye"><ellipse cx="21" cy="25.5" rx="3.3" ry="4.4"/><circle class="glint" cx="22.2" cy="23.8" r="1.1"/></g><g class="eye"><ellipse cx="37" cy="25.5" rx="3.3" ry="4.4"/><circle class="glint" cx="38.2" cy="23.8" r="1.1"/></g></g><path class="smile" d="M22.5 36.5q6.5 5.2 13 0"/><ellipse class="mouth" cx="29" cy="38" rx="4.6" ry="3.4"/></svg></button>
+          <video class="voice-view" playsinline muted hidden></video>
           <div class="voice-say"><b class="voice-state">Listening</b><span class="voice-hint"></span><span class="voice-heard" hidden></span></div>
+          <button type="button" class="icon-btn voice-cam" aria-pressed="false" data-tip="Show Flash something" aria-label="Camera"></button>
           <button type="button" class="icon-btn voice-end" data-tip="End voice mode" data-keys="Esc" aria-label="End voice mode"></button>
         </div>
         <div class="shell"><div class="glow" aria-hidden="true"></div>
@@ -2831,6 +2950,7 @@ body.resizing-viewer iframe { pointer-events: none; }
           <div class="composer-row">
             <button type="button" class="pill" id="plus-btn" data-tip="Add photos, files and more" aria-label="Add photos, files and more" aria-haspopup="menu"></button>
             <button type="button" class="pill" id="auto-btn" data-tip="Autonomous mode" data-keys="Shift Tab"></button>
+            <button type="button" class="pill" id="think-btn" aria-pressed="false" hidden data-tip="Your next message gets a harder think. Click to skip it."></button>
             <button type="button" class="pill" id="project-btn" data-tip="Start in a project" aria-haspopup="listbox"></button>
             <button type="button" class="pill" id="spark-btn" hidden data-tip="Open this spark"></button>
             <button type="button" class="pill" id="agents-btn" hidden data-tip="Sub-agents"><span class="pulse-dot"></span><span id="agents-count"></span></button>
@@ -2929,6 +3049,7 @@ const ICON = {
   chevLeft: '<path d="m15 6-6 6 6 6"/>',
   chevDown: '<path d="m6 9 6 6 6-6"/>',
   bolt: '<path d="M13 2 4 14h7l-1 8 9-12h-7Z"/>',
+  think: '<path d="M9.5 18h5M10.5 21h3"/><path d="M12 3a6 6 0 0 0-3.7 10.7c.7.6 1.2 1.4 1.2 2.3h5c0-.9.5-1.7 1.2-2.3A6 6 0 0 0 12 3Z"/>',
   spark: '<circle cx="10" cy="13" r="7"/><path d="M8 11.5v2M12 11.5v2"/><path d="M19 2.5v4M17 4.5h4"/>',
   phone: '<rect x="6" y="2" width="12" height="20" rx="3"/><path d="M11 18h2"/>',
   keyboard: '<rect x="2" y="5" width="20" height="14" rx="3"/><path d="M6 9h.01M10 9h.01M14 9h.01M18 9h.01M7 15h10"/>',
@@ -3442,7 +3563,7 @@ function uiForm(spec) {
   const fields = (spec.fields || []).filter((f) => f && (f.id || f.label));
   const control = (f) => {
     const id = esc(f.id || f.label);
-    if (f.kind === "select") return `<select data-id="${id}">${(f.options || []).map((o) => `<option>${uiText(o)}</option>`).join("")}</select>`;
+    if (f.kind === "select") return `<span class="ui-select"><select data-id="${id}">${(f.options || []).map((o) => `<option>${uiText(o)}</option>`).join("")}</select></span>`;
     const type = ["number", "date"].includes(f.kind) ? f.kind : "text";
     return `<input type="${type}" data-id="${id}" placeholder="${esc(f.placeholder || "")}">`;
   };
@@ -6621,6 +6742,34 @@ function drawLookSettings(body) {
   body.appendChild(morph);
 }
 
+// The standing instructions every reply follows, saved when they change.
+async function drawInstructions(box) {
+  box.innerHTML = `<label class="field"><textarea rows="5" maxlength="4000" placeholder="Keep answers short. Use metric units. Explain code before showing it." aria-label="Custom instructions"></textarea><small class="count"></small></label><div class="row"><button type="button" class="btn primary small" disabled>Save</button></div>`;
+  const area = box.querySelector("textarea");
+  const save = box.querySelector("button");
+  const count = box.querySelector(".count");
+  let kept = "";
+  const changed = () => {
+    count.textContent = `${area.value.length} / 4000`;
+    save.disabled = area.value.trim() === kept;
+  };
+  try { kept = (await command("instructions", "", null)).text; } catch (error) { showFailure(error); return; }
+  area.value = kept;
+  changed();
+  area.oninput = changed;
+  const store = async () => {
+    save.disabled = true;
+    try {
+      kept = (await command("instructions", "", null, { text: area.value })).text;
+      area.value = kept;
+      toast(kept ? "Every reply follows your instructions now" : "Custom instructions cleared");
+    } catch (error) { showFailure(error); }
+    changed();
+  };
+  save.onclick = store;
+  area.onkeydown = (e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && !save.disabled) { e.preventDefault(); store(); } };
+}
+
 function drawGeneral(body) {
   body.innerHTML = `<h2 class="settings-section">Appearance</h2><p class="settings-sub">How Flash looks in this browser. System follows your computer's light or dark setting.</p><div class="appearance" role="radiogroup" aria-label="Appearance"></div>`;
   const grid = body.querySelector(".appearance");
@@ -6640,6 +6789,9 @@ function drawGeneral(body) {
 
   body.insertAdjacentHTML("beforeend", `<h2 class="settings-section settings-gap">Background</h2><p class="settings-sub">A pixel-art scene behind a new chat, the same ones <code>/background</code> shows in the terminal. Add your own as <code>.scene</code> files in <code>~/.flash/backgrounds</code>.</p><div class="scene-grid" role="radiogroup" aria-label="Background"></div>`);
   drawSceneCards(body.querySelector(".scene-grid"));
+
+  body.insertAdjacentHTML("beforeend", `<h2 class="settings-section settings-gap">Custom instructions</h2><p class="settings-sub">How you want every reply, in your own words, here and in the terminal: “use metric”, “no bullet points”, “answer in Spanish”. Memories are what Flash knows about you; these are how it answers.</p><div class="instructions-box"></div>`);
+  drawInstructions(body.querySelector(".instructions-box"));
 
   body.insertAdjacentHTML("beforeend", `<h2 class="settings-section settings-gap">Conversation</h2><p class="settings-sub">What happens when a chat outgrows the model's context window, where the last three exchanges always stay word for word, how chats are named, and how replies look.</p>`);
   const row = el("button", "setting-row", `<span class="what"><b>Summarize old messages</b><span>Have the model condense what no longer fits into a summary it keeps reading. Off, the oldest messages are dropped instead, which is faster and never loses detail from the ones kept.</span></span><span class="switch" aria-hidden="true"></span>`);
@@ -6726,6 +6878,97 @@ function drawGeneral(body) {
   const sparkModel = el("div", "setting-row static spark-model-row", `<span class="what"><b>Default model for new sparks</b><span></span></span><span class="side"><select aria-label="Default model for new sparks"><option>Loading…</option></select></span>`);
   body.appendChild(sparkModel);
   fillSparkModelRow(sparkModel);
+
+  const wakeRow = el("button", "setting-row wake-row", `<span class="what"><b>Listen for “Hey Flash”</b><span>While this page is open, saying “Hey Flash” starts voice mode. Only those words are listened for, by the listening model on this computer, and nothing heard is kept. “Hey Flash” at the top right shows when it is on.</span></span><span class="switch" aria-hidden="true"></span>`);
+  wakeRow.type = "button";
+  wakeRow.setAttribute("role", "switch");
+  wakeRow.setAttribute("aria-checked", wakeWanted());
+  wakeRow.onclick = () => {
+    const on = !wakeWanted();
+    setWake(on);
+    wakeRow.setAttribute("aria-checked", on);
+  };
+  body.insertAdjacentHTML("beforeend", `<h2 class="settings-section settings-gap">Voice</h2>`);
+  body.appendChild(wakeRow);
+
+  // The same, on the microphone of the computer Flash runs on, for as
+  // long as it runs: no page needed.
+  const alwaysRow = el("button", "setting-row wake-always-row", `<span class="what"><b>Listen even with no page open</b><span></span></span><span class="switch" aria-hidden="true"></span>`);
+  alwaysRow.type = "button";
+  alwaysRow.setAttribute("role", "switch");
+  const showAlways = (always) => {
+    alwaysRow.setAttribute("aria-checked", !!always.on);
+    alwaysRow.querySelector(".what span").textContent = always.on && always.problem
+      ? `On, but not listening yet: ${always.problem}`
+      : "Flash listens for “Hey Flash” on the microphone of the computer it runs on, for as long as it runs, with or without this page. It answers out loud there and keeps the conversation as a chat. Until then only those words are listened for, and nothing heard is kept.";
+  };
+  showAlways(info.wake_always || {});
+  alwaysRow.onclick = async () => {
+    const on = alwaysRow.getAttribute("aria-checked") !== "true";
+    showAlways({ on });
+    try {
+      showAlways(await command("wake-always", on ? "on" : "off", null));
+      toast(on ? "Flash listens for “Hey Flash” even with no page open" : "Flash no longer listens with no page open");
+    } catch (error) { showAlways({ on: !on }); showFailure(error); }
+  };
+  body.appendChild(alwaysRow);
+
+  // A service the system starts at login: "Hey Flash" with Flash quit.
+  const serviceRow = el("button", "setting-row wake-service-row", `<span class="what"><b>“Hey Flash” with Flash closed</b><span></span></span><span class="switch" aria-hidden="true"></span>`);
+  serviceRow.type = "button";
+  serviceRow.setAttribute("role", "switch");
+  const showService = (s) => {
+    serviceRow.setAttribute("aria-checked", !!s.on);
+    serviceRow.querySelector(".what span").textContent = s.on
+      ? `On: a background service listens for “Hey Flash” on this computer from login, even after you quit Flash, and answers out loud. Its conversations are kept as chats.${s.elsewhere ? " It is listening now." : ""}`
+      : "A small background service the system starts at login, listening for “Hey Flash” even after you quit Flash. It answers out loud on this computer, and keeps the conversations as chats.";
+  };
+  showService({});
+  command("wake-service", "", null).then(showService).catch(() => {});
+  serviceRow.onclick = async () => {
+    const on = serviceRow.getAttribute("aria-checked") !== "true";
+    showService({ on });
+    serviceRow.disabled = true;
+    try {
+      const s = await command("wake-service", on ? "on" : "off", null);
+      showService(s);
+      toast(on ? `“Hey Flash” works with Flash closed now, as ${s.how}` : "The “Hey Flash” service is off");
+    } catch (error) { showService({ on: !on }); showFailure(error); }
+    finally { serviceRow.disabled = false; }
+  };
+  body.appendChild(serviceRow);
+
+  // How readily the words wake it, here and with no page open.
+  const senseRow = el("div", "setting-row static wake-sense-row", `<span class="what"><b>“Hey Flash” sensitivity</b><span></span></span><span class="side"><input type="range" min="0" max="100" step="5" aria-label="“Hey Flash” sensitivity"><output></output></span>`);
+  const slider = senseRow.querySelector("input");
+  const said = (n) => n >= 80
+    ? "Wakes the moment it hears “Hey Flash”, mid phrase. Quickest, but a video or a song can set it off."
+    : n >= 40
+      ? "Wakes once you have said “Hey Flash” in full and it is fairly sure it heard it."
+      : "Only a clear “Hey Flash”, said in full. Hardly ever set off by anything else, but you may have to say it again.";
+  const showSense = (n) => {
+    slider.value = n;
+    senseRow.querySelector("output").textContent = n;
+    senseRow.querySelector(".what span").textContent = said(Number(n));
+  };
+  showSense(info.wake_sensitivity ?? 50);
+  slider.oninput = () => showSense(slider.value);
+  slider.onchange = async () => {
+    try { showSense((await command("wake-sensitivity", slider.value, null)).sensitivity); }
+    catch (error) { showSense(info.wake_sensitivity ?? 50); showFailure(error); }
+  };
+  body.appendChild(senseRow);
+
+  // Voice mode's look, in this browser.
+  const lookRow = el("div", "setting-row static voice-look-row", `<span class="what"><b>Voice mode look</b><span>The orb, or a companion: a face on it that listens, thinks and talks along with Flash.</span></span><span class="side"><select aria-label="Voice mode look"><option value="orb">Orb</option><option value="companion">Companion</option></select></span>`);
+  const lookPick = lookRow.querySelector("select");
+  lookPick.value = voiceLook();
+  lookPick.onchange = () => {
+    savePref("voice-look", lookPick.value);
+    drawVoiceLook();
+    toast(lookPick.value === "companion" ? "Your companion shows in voice mode now" : "The orb is back in voice mode");
+  };
+  body.appendChild(lookRow);
 
   body.insertAdjacentHTML("beforeend", `<h2 class="settings-section settings-gap">Voice models</h2><p class="settings-sub">What voice mode listens and speaks with. Both run on this computer, so pick lighter ones for a weaker machine.</p><div class="voice-models"></div>`);
   drawVoiceModels(body.querySelector(".voice-models"));
@@ -9730,6 +9973,25 @@ async function drawExtensions(body) {
     const chips = row.querySelector(".chips");
     for (const c of ext.commands) chips.appendChild(el("span", "chip")).textContent = c;
     for (const t of ext.tools) chips.appendChild(el("span", "chip")).textContent = `tool ${t}`;
+    let panel = null;
+    if (ext.settings.length) {
+      const open = el("button", "btn small", "Settings");
+      open.type = "button";
+      open.setAttribute("aria-expanded", "false");
+      open.onclick = () => {
+        if (!panel) {
+          panel = extensionPanel(ext);
+          row.after(panel);
+          // Drawn shut first, so it has somewhere to slide open from.
+          panel.getBoundingClientRect();
+        }
+        const shown = !panel.classList.contains("open");
+        panel.classList.toggle("open", shown);
+        panel.inert = !shown;
+        open.setAttribute("aria-expanded", shown);
+      };
+      row.appendChild(open);
+    }
     const remove = el("button", "btn small remove", "Remove");
     remove.type = "button";
     remove.onclick = async () => {
@@ -9742,6 +10004,64 @@ async function drawExtensions(body) {
     list.appendChild(row);
   });
   host.appendChild(list);
+}
+
+// An extension's own settings, as its manifest lists them: each saved
+// as it changes, and handed to its programs from then on.
+function extensionPanel(ext) {
+  const shell = el("div", "ext-settings", `<div class="clip"><div class="rows"></div></div>`);
+  const panel = shell.querySelector(".rows");
+  const save = async (id, value, undo) => {
+    try {
+      ext.values = (await command("extension-setting", ext.name, null, { id, value })).values;
+      toast(`Saved for ${ext.name}`);
+    } catch (error) { undo(); showFailure(error); }
+  };
+  for (const s of ext.settings) {
+    const value = ext.values[s.id];
+    if (s.type === "switch") {
+      const row = el("button", "setting-row", `<span class="what"><b></b><span></span></span><span class="switch" aria-hidden="true"></span>`);
+      row.type = "button";
+      row.setAttribute("role", "switch");
+      row.setAttribute("aria-checked", !!value);
+      row.querySelector("b").textContent = s.label;
+      row.querySelector(".what span").textContent = s.help;
+      row.onclick = () => {
+        const on = row.getAttribute("aria-checked") !== "true";
+        row.setAttribute("aria-checked", on);
+        save(s.id, on, () => row.setAttribute("aria-checked", !on));
+      };
+      panel.appendChild(row);
+      continue;
+    }
+    const row = el("div", "setting-row static", `<span class="what"><b></b><span></span></span><span class="side"></span>`);
+    row.querySelector("b").textContent = s.label;
+    row.querySelector(".what span").textContent = s.help;
+    let control;
+    if (s.type === "select") {
+      control = el("select");
+      for (const option of s.options) control.appendChild(el("option")).textContent = option;
+    } else {
+      control = el("input");
+      control.type = s.type === "number" ? "number" : "text";
+      if (s.type === "number") {
+        if (s.min !== null) control.min = s.min;
+        if (s.max !== null) control.max = s.max;
+        control.step = "any";
+      } else control.spellcheck = false;
+    }
+    control.setAttribute("aria-label", s.label);
+    control.value = value;
+    let kept = control.value;
+    control.onchange = () => {
+      const before = kept;
+      kept = control.value;
+      save(s.id, s.type === "number" ? Number(control.value) : control.value, () => { control.value = kept = before; });
+    };
+    row.querySelector(".side").appendChild(control);
+    panel.appendChild(row);
+  }
+  return shell;
 }
 
 // Fetched and shown first, installed only on a second, deliberate yes:
@@ -10307,8 +10627,24 @@ async function drawUsage(body) {
   const note = el("p", "usage-note");
   const bits = [`${u.chats} chat${u.chats === 1 ? "" : "s"}`, `${u.projects} project${u.projects === 1 ? "" : "s"}`,
     `${u.skills} skill${u.skills === 1 ? "" : "s"} learned`, `${u.memories} memor${u.memories === 1 ? "y" : "ies"}`];
-  note.textContent = `${bits.join(" · ")}. Counted from the web chats saved on this computer.`;
+  const gone = u.keep_deleted && u.deleted ? `, ${u.deleted} of them since deleted` : "";
+  note.textContent = `${bits.join(" · ")}. Counted from the web chats on this computer${gone}.`;
   body.appendChild(note);
+
+  // On, a chat's turns still count here after it is deleted or cleared.
+  const keep = el("button", "setting-row keep-usage-row", `<span class="what"><b>Keep stats from deleted chats</b><span>A chat you delete or clear still counts here: its messages, tokens, days and models, kept as totals, never its words.</span></span><span class="switch" aria-hidden="true"></span>`);
+  keep.type = "button";
+  keep.setAttribute("role", "switch");
+  keep.setAttribute("aria-checked", !!u.keep_deleted);
+  keep.onclick = async () => {
+    const on = keep.getAttribute("aria-checked") !== "true";
+    keep.setAttribute("aria-checked", on);
+    try {
+      await command("keep-deleted-usage", on ? "on" : "off", null);
+      if (view === "settings") { settingsTab = "usage"; drawPage(); } else showSettings("usage");
+    } catch (error) { keep.setAttribute("aria-checked", !on); showFailure(error); }
+  };
+  body.appendChild(keep);
 }
 
 // Security: every browser signed in with the link, each one signed out
@@ -11460,7 +11796,24 @@ const nearBottom = () => logEl.scrollHeight - logEl.scrollTop - logEl.clientHeig
 // it aloud, and listen again. Tap the orb to cut a reply short.
 
 
+// Extensions in the middle of voice mode (voicehooks.py): each moment of
+// a conversation with Flash itself goes to them, the ones they decide on
+// awaited, the rest sent and left. Only when one is installed.
+const voiceHooked = () => !!(info && info.voice_hooks) && voice.on && !voice.team;
+
+function voiceTell(event, data = {}) {
+  if (!voiceHooked()) return;
+  api("/api/voice/hook", { event, conversation: voice.talk, ...data }).catch(() => {});
+}
+
+async function voiceAsk(event, data = {}) {
+  if (!voiceHooked()) return null;
+  try { return await api("/api/voice/hook", { event, conversation: voice.talk, ...data }); }
+  catch (_) { return null; }
+}
+
 function setVoice(state, hint) {
+  if (state !== voice.state) voiceTell("state", { state });
   voice.state = state;
   const panel = $("#voice");
   panel.dataset.state = state;
@@ -11485,14 +11838,16 @@ function showHeard(text) {
   const shown = $("#voice .voice-heard");
   if (!shown) return;
   const words = String(text || "").trim();
+  if (words && words !== voice.toldWords) { voice.toldWords = words; voiceTell("words", { text: words }); }
   shown.hidden = !words;
   shown.textContent = words.length > 160 ? `…${words.slice(-160).replace(/^\S*\s/, "")}` : words;
 }
 
 // TEAM, a team's ID, talks to that team in its chat instead of to Flash:
 // the orb sits where the team's composer was.
-async function startVoice(team = null) {
+async function startVoice(team = null, how = "button") {
   if (voice.on) return;
+  stopWake();
   if (!canRecord) { toast("Voice mode needs this page opened on this computer, or over HTTPS"); return; }
   let status;
   try { status = await command("voice-status"); } catch (error) { showFailure(error); return; }
@@ -11501,6 +11856,12 @@ async function startVoice(team = null) {
   voice.on = true;
   voice.cut = false;
   voice.team = team;
+  voice.state = "";
+  voice.toldWords = "";
+  voice.talk = Math.random().toString(36).slice(2, 12);
+  voice.how = how;
+  voice.endAfter = false;
+  voiceTell("start", { how });
   document.body.classList.add("voice-on");
   if (team) {
     const panel = $("#voice");
@@ -11547,6 +11908,8 @@ async function startVoice(team = null) {
 
 function endVoice() {
   if (!voice.on) return;
+  voiceTell("end");
+  setTimeout(startWake, 800);
   if (voice.state === "setup") command("voice-cancel").catch(() => {});
   voice.on = false;
   if (voice.source) { try { voice.source.stop(); } catch (_) { /* already over */ } }
@@ -11559,6 +11922,7 @@ function endVoice() {
   if (voice.setup) voice.setup("");
   if (voice.stream) voice.stream.getTracks().forEach((t) => t.stop());
   if (voice.ctx) voice.ctx.close().catch(() => {});
+  stopCam();
   const team = voice.team;
   Object.assign(voice, { ctx: null, stream: null, turn: null, tap: null, source: null, played: null, analyser: null, state: "", team: null });
   $("#voice").hidden = true;
@@ -11604,16 +11968,10 @@ function listenOnce(opts = {}) {
   });
 }
 
-function hearChunk(samples) {
-  let sum = 0;
-  for (let i = 0; i < samples.length; i++) sum += samples[i] * samples[i];
-  const rms = Math.sqrt(sum / samples.length);
-  if (voice.state === "listening" || voice.state === "asking") voice.level = Math.min(1, rms * 12);
-  const turn = voice.turn;
-  if (!turn) return;
-  // Down to Vosk's rate: each output sample the average of the input
-  // samples it stands for.
-  const ratio = voice.ctx.sampleRate / VOICE_RATE;
+// SAMPLES, recorded at RATE, down to Vosk's rate as 16-bit: each output
+// sample the average of the input samples it stands for.
+function toVoiceRate(samples, rate) {
+  const ratio = rate / VOICE_RATE;
   const out = new Int16Array(Math.floor(samples.length / ratio));
   for (let i = 0; i < out.length; i++) {
     const from = Math.floor(i * ratio), to = Math.min(samples.length, Math.floor((i + 1) * ratio));
@@ -11622,6 +11980,17 @@ function hearChunk(samples) {
     const value = total / Math.max(1, to - from);
     out[i] = Math.max(-32768, Math.min(32767, Math.round(value * 32767)));
   }
+  return out;
+}
+
+function hearChunk(samples) {
+  let sum = 0;
+  for (let i = 0; i < samples.length; i++) sum += samples[i] * samples[i];
+  const rms = Math.sqrt(sum / samples.length);
+  if (voice.state === "listening" || voice.state === "asking") voice.level = Math.min(1, rms * 12);
+  const turn = voice.turn;
+  if (!turn) return;
+  const out = toVoiceRate(samples, voice.ctx.sampleRate);
   const step = samples.length / voice.ctx.sampleRate;
   turn.elapsed += step;
   const loud = rms >= turn.o.loud;
@@ -11712,6 +12081,9 @@ async function voiceLoop() {
     showHeard(heard.text);
     if (heard.exit) { endVoice(); toast("Voice mode off"); return; }
     if (heard.pause) { if (!(await pausedUntilResume())) return; continue; }
+    // Started with "Hey Flash": a ping says the request is in, words and
+    // all, before the wait for its answer.
+    if (voice.how === "wake") ping();
     setVoice("thinking");
     if (voice.team) {
       const how = await tcVoiceRound(heard.text);
@@ -11719,11 +12091,35 @@ async function voiceLoop() {
       if (how === "pause" && !(await pausedUntilResume())) return;
       continue;
     }
-    const reply = await sendAndWait(heard.text);
+    // An extension in the middle may change what Flash is asked, answer
+    // it itself, or end the conversation.
+    const middle = await voiceAsk("heard", { text: heard.text });
     if (!voice.on) return;
-    if (!reply) continue;
+    if (middle && middle.end) { endVoice(); toast("Voice mode off"); return; }
+    let reply;
+    if (middle && middle.reply) {
+      reply = el("div");
+      reply.textContent = middle.reply;
+    } else {
+      // With the camera on, what it sees goes with what was said.
+      await attachSight();
+      reply = await sendAndWait(middle && middle.text ? middle.text : heard.text);
+      if (!voice.on) return;
+      if (!reply) {
+        if (voice.endAfter) { endVoice(); toast("Voice mode off"); return; }
+        continue;
+      }
+    }
+    // And may change what is read out.
+    const spoken = sentencesOf(reply.querySelector(".assistant") || reply).map((p) => p.text).join(" ");
+    const said = await voiceAsk("reply", { text: spoken });
+    if (!voice.on) return;
+    if (said && typeof said.text === "string" && said.text !== spoken) {
+      reply = el("div");
+      reply.textContent = said.text;
+    }
     const how = await readAloud(reply);
-    if (how === "exit") { endVoice(); toast("Voice mode off"); return; }
+    if (how === "exit" || voice.endAfter) { endVoice(); toast("Voice mode off"); return; }
     if (how === "pause" && !(await pausedUntilResume())) return;
   }
 }
@@ -12147,6 +12543,83 @@ function drawOrb() {
   requestAnimationFrame(drawOrb);
 }
 
+// A soft ping, two notes struck and left to ring, like a glass tapped
+// twice: the same one Flash plays with the page closed.
+function ping() {
+  const ctx = voice.ctx;
+  if (!ctx || ctx.state === "closed") return;
+  const now = ctx.currentTime;
+  for (const [pitch, delay, loud] of [[1318.5, 0, 0.16], [1975.5, 0.07, 0.09]]) {
+    const tone = ctx.createOscillator();
+    const level = ctx.createGain();
+    tone.type = "sine";
+    tone.frequency.value = pitch;
+    level.gain.setValueAtTime(0.0001, now + delay);
+    level.gain.exponentialRampToValueAtTime(loud, now + delay + 0.006);
+    level.gain.exponentialRampToValueAtTime(0.0001, now + delay + 0.5);
+    tone.connect(level).connect(ctx.destination);
+    tone.start(now + delay);
+    tone.stop(now + delay + 0.55);
+  }
+}
+
+// The camera: on, Flash sees what you show it, a frame at the moment each
+// thing you say is sent, as a photo with the message.
+async function toggleCam() {
+  const view = $("#voice .voice-view");
+  const button = $("#voice .voice-cam");
+  if (voice.cam) {
+    stopCam();
+    return;
+  }
+  let stream;
+  try { stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment", width: { ideal: 1280 } } }); }
+  catch (_) { toast("Flash could not use the camera. Allow it for this page, then try again."); return; }
+  if (!voice.on) { stream.getTracks().forEach((t) => t.stop()); return; }
+  voice.cam = stream;
+  view.srcObject = stream;
+  view.hidden = false;
+  view.play().catch(() => {});
+  button.setAttribute("aria-pressed", "true");
+  button.dataset.tip = "Flash sees this with what you say next. Click to turn the camera off.";
+}
+
+function stopCam() {
+  if (!voice.cam) return;
+  voice.cam.getTracks().forEach((t) => t.stop());
+  voice.cam = null;
+  const view = $("#voice .voice-view");
+  view.srcObject = null;
+  view.hidden = true;
+  const button = $("#voice .voice-cam");
+  button.setAttribute("aria-pressed", "false");
+  button.dataset.tip = "Show Flash something";
+}
+
+// What the camera sees now, attached to the next message.
+async function attachSight() {
+  const view = $("#voice .voice-view");
+  if (!voice.cam || !view.videoWidth) return;
+  const scale = Math.min(1, 1280 / view.videoWidth);
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.round(view.videoWidth * scale);
+  canvas.height = Math.round(view.videoHeight * scale);
+  canvas.getContext("2d").drawImage(view, 0, 0, canvas.width, canvas.height);
+  const data = canvas.toDataURL("image/jpeg", 0.85).split(",")[1];
+  try {
+    const kept = await api("/api/upload", { name: "camera.jpg", data });
+    attached.push({ id: kept.id, name: kept.name, size: 0, kind: kept.kind, image: true, url: "" });
+  } catch (error) { toast(`What the camera saw did not upload: ${error.message}`); }
+}
+
+$("#voice .voice-cam").innerHTML = icon("camera");
+$("#voice .voice-cam").onclick = toggleCam;
+
+// Voice mode's look, in this browser: the orb, or the companion's face on it.
+const voiceLook = () => (pref("voice-look", "orb") === "companion" ? "companion" : "orb");
+const drawVoiceLook = () => $("#voice").classList.toggle("companion", voiceLook() === "companion");
+drawVoiceLook();
+
 $("#voice .voice-orb").onclick = () => {
   if (voice.state === "speaking") cutReading("tap");
   else if (voice.state === "paused" && voice.tap) voice.tap();
@@ -12154,6 +12627,108 @@ $("#voice .voice-orb").onclick = () => {
 };
 $("#voice .voice-end").innerHTML = icon("x");
 $("#voice .voice-end").onclick = endVoice;
+
+// ---------------------------------------------------------------------------
+// "Hey Flash". With it on in Settings, the page listens while it is open,
+// and those words start voice mode. Flash's own listening model hears
+// the microphone a moment at a time and listens for nothing else. The
+// pill in the message box shows it is on, here or on the computer Flash
+// runs on (with "Listen even with no page open"); it is only a sign, and
+// both are turned off in Settings.
+
+const wake = { on: false, id: "", parts: [], sending: false, ctx: null, stream: null };
+const wakeWanted = () => pref("wake", "") === "on";
+
+function setWake(on) {
+  savePref("wake", on ? "on" : "");
+  if (on) startWake(true); else { stopWake(); toast("Stopped listening for “Hey Flash”"); }
+}
+
+async function startWake(told = false) {
+  if (wake.on || voice.on || !wakeWanted()) return;
+  if (!canRecord) { if (told) toast("Listening needs this page opened on this computer, or over HTTPS"); return; }
+  wake.on = true;
+  let status;
+  try { status = await command("voice-status"); } catch (_) { wake.on = false; return; }
+  if (status.missing.length || !status.ready) {
+    wake.on = false;
+    if (told) toast(status.missing.length ? status.install : "Start voice mode once first, so its listening model is downloaded");
+    return;
+  }
+  let stream;
+  try { stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true } }); }
+  catch (_) { wake.on = false; if (told) toast("Flash could not use the microphone. Allow it for this page, then try again."); return; }
+  if (!wake.on || voice.on) { stream.getTracks().forEach((t) => t.stop()); wake.on = false; return; }
+  wake.stream = stream;
+  wake.ctx = new AudioContext();
+  if (wake.ctx.state === "suspended") await wake.ctx.resume().catch(() => {});
+  const source = wake.ctx.createMediaStreamSource(stream);
+  const tap = wake.ctx.createScriptProcessor(4096, 1, 1);
+  const hush = wake.ctx.createGain();
+  hush.gain.value = 0;
+  source.connect(tap);
+  tap.connect(hush);
+  hush.connect(wake.ctx.destination);
+  wake.id = Math.random().toString(36).slice(2, 12);
+  wake.parts = [];
+  tap.onaudioprocess = (e) => {
+    if (!wake.on) return;
+    wake.parts.push(toVoiceRate(e.inputBuffer.getChannelData(0), wake.ctx.sampleRate));
+    if (wake.parts.length >= 3) sendWake();
+  };
+  drawWakePill();
+  if (told) toast("Listening for “Hey Flash”");
+}
+
+function sendWake() {
+  if (wake.sending || !wake.on) return;
+  const parts = wake.parts;
+  wake.parts = [];
+  const pcm = new Int16Array(parts.reduce((n, part) => n + part.length, 0));
+  let at = 0;
+  for (const part of parts) { pcm.set(part, at); at += part.length; }
+  wake.sending = true;
+  api("/api/voice/wake", { id: wake.id, data: base64Of(new Uint8Array(pcm.buffer)) })
+    .then((heard) => { if (heard.woke && wake.on) { stopWake(); startVoice(null, "wake"); } })
+    .catch(() => {})
+    .finally(() => { wake.sending = false; });
+}
+
+function stopWake() {
+  if (!wake.on) return;
+  wake.on = false;
+  if (wake.stream) wake.stream.getTracks().forEach((t) => t.stop());
+  if (wake.ctx) wake.ctx.close().catch(() => {});
+  if (wake.id) api("/api/voice/wake", { id: wake.id, data: "", end: true }).catch(() => {});
+  Object.assign(wake, { stream: null, ctx: null, id: "", parts: [] });
+  drawWakePill();
+}
+
+// The sign settles from its word to its dot once, a few seconds after it
+// first shows; shown again later, it is the dot straight away.
+const WAKE_SETTLE_MS = 3200;
+let wakeSettling = null;
+
+function drawWakePill() {
+  const always = info.wake_always || {};
+  const pill = $("#wake-pill");
+  pill.hidden = !wake.on && !always.listening && !always.talking;
+  if (!pill.hidden && !wakeSettling) wakeSettling = setTimeout(() => {
+    // Its width as it is, to shrink from once the word is gone.
+    const word = pill.querySelector(".wake-label");
+    word.style.maxWidth = `${word.offsetWidth}px`;
+    word.getBoundingClientRect();
+    pill.classList.add("settled");
+  }, WAKE_SETTLE_MS);
+  pill.dataset.tip = wake.on
+    ? "Listening for “Hey Flash” on this page. Turn it off in Settings, Voice."
+    : "Listening for “Hey Flash” on the computer Flash runs on. Turn it off in Settings, Voice.";
+}
+// The browser lets a page listen only after someone has used it: the
+// first click or key after it opens starts the listening.
+const armWake = () => startWake();
+window.addEventListener("pointerdown", armWake, { once: true, capture: true });
+window.addEventListener("keydown", armWake, { once: true, capture: true });
 
 function toBottom(force, smooth) {
   if (!force && !follow) return;
@@ -12236,6 +12811,9 @@ function apply(event) {
   if (event.seq && event.seq <= lastSeq) return;
   if (event.seq) lastSeq = event.seq;
   if (event.type === "chats" || event.type === "status" || event.type === "projects") { refreshLite(); return; }
+  // Flash ended the spoken conversation: voice mode goes off once its
+  // reply is said.
+  if (event.type === "voice-end") { if (voice.on && event.chat === current) voice.endAfter = true; return; }
   if (event.type === "update") { info.update = event.update; onUpdate(); return; }
   if (event.type === "voice-setup") { voiceSetupEvent(event); return; }
   if (event.type === "voice-model") { voiceModelEvent(event); return; }
@@ -12672,6 +13250,7 @@ function renderInfo() {
   autoBtn.dataset.tip = auto
     ? (info.system_one ? "Runs commands and edits once System One has looked them over" : "Runs commands and edits without asking")
     : "Asks before commands and edits";
+  drawWakePill();
   greet();
 }
 
@@ -12891,6 +13470,23 @@ document.addEventListener("scroll", hideTip, true);
 // ---------------------------------------------------------------------------
 // Actions: every key, button, menu row and slash command lands here.
 
+// Think harder, from the + menu: the next message has the model reason
+// longer and take its time. While it is set, a Think pill in the box says
+// so, and a click on it lets it go; sending the message does too.
+const thinkBtn = $("#think-btn");
+thinkBtn.innerHTML = `${icon("think")}<span>Think</span>`;
+function setThink(on) {
+  thinkBtn.setAttribute("aria-pressed", on);
+  thinkBtn.hidden = !on;
+  input.focus();
+}
+thinkBtn.onclick = () => setThink(false);
+function takeThink() {
+  const on = thinkBtn.getAttribute("aria-pressed") === "true";
+  if (on) setThink(false);
+  return on;
+}
+
 // While a turn runs, a message waits: MODE "steer" (Enter) reaches the
 // model at the turn's next step, "queue" (Ctrl Enter) runs after it.
 async function send(text, mode = "steer") {
@@ -12908,7 +13504,7 @@ async function send(text, mode = "steer") {
     clearTray();
     autosize();
     updateSend();
-    await api("/api/send", { chat: current, text, mode, files }).catch(showFailure);
+    await api("/api/send", { chat: current, text, mode, files, deep: takeThink() }).catch(showFailure);
     return;
   }
   if (text) sent.push(text);
@@ -12928,7 +13524,7 @@ async function send(text, mode = "steer") {
   const chatId = current;
   const before = (chats.get(chatId) || { log: [] }).log.length;
   // From voice mode, the reply will be heard: the model is told so.
-  const sentOk = await api("/api/send", { chat: chatId, text, files, voice: voice.on }).then(() => true).catch((error) => { showFailure(error); return false; });
+  const sentOk = await api("/api/send", { chat: chatId, text, files, voice: voice.on, deep: takeThink() }).then(() => true).catch((error) => { showFailure(error); return false; });
   if (sentOk) checkSent(chatId, before);
 }
 
@@ -13201,6 +13797,8 @@ function openPlus() {
   }
   if (navigator.clipboard && navigator.clipboard.read) rows.push({ html: `${icon("copy")}<span class="label">Paste an image</span>`, act: pasteImage });
   rows.push({ header: true, rule: true, html: "" });
+  const thinking = thinkBtn.getAttribute("aria-pressed") === "true";
+  rows.push({ html: `${icon("think")}<span class="label">${thinking ? "Skip the harder think" : "Think harder"}</span><span class="desc">${thinking ? "" : "on the next message"}</span>`, act: () => setThink(!thinking) });
   rows.push({ html: `${icon("book")}<span class="label">Use a skill</span><span class="desc">${icon("chevRight")}</span>`, act: openSkillPicker });
   rows.push({ html: `${icon("spark")}<span class="label">Sparks</span><span class="desc">${icon("chevRight")}</span>`, act: openSparkPicker });
   if (!input.value.trim()) rows.push({ html: `${icon("slash")}<span class="label">Commands</span>`, act: () => { input.value = "/"; autosize(); input.focus(); showSlash(); } });
@@ -14237,6 +14835,7 @@ const ACTIONS = [
   { label: "Extensions", keys: "", slash: "/extensions", run: () => showPage("extensions") },
   { label: "Import memory from another AI", keys: "", slash: "/import", run: () => { showSettings("memory"); importMemory(); } },
   { label: "Voice mode", keys: "", slash: "/voice", run: () => startVoice() },
+  { label: "Listen for “Hey Flash”, or stop", keys: "", slash: "/wake", run: () => setWake(!wakeWanted()) },
   { label: "Signed-in browsers", keys: "", slash: "/security", run: () => showSettings("security") },
   { label: "Search chats", keys: "Alt F", slash: "/search", run: () => openSearch() },
   { label: "Show or hide the file panel", keys: "Alt V", slash: "/file", run: toggleViewer },

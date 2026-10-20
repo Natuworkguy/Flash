@@ -467,7 +467,12 @@ spark's window, or with `/sparks approve scout` and `/sparks deny scout
 [why]`, and the shift carries on from exactly where it stopped, told
 why if you said no. Nothing else starts for that spark while it waits.
 A shift that is running can be stopped at its next step: Stop in its
-window, or `/sparks stop scout`.
+window, or `/sparks stop scout`. Or say so to the spark, in a chat or in
+its team's chat: "@scout stop, Bo already fixed it" has it call off its
+own shift, and "@scout skip the tests" changes its course, the shift
+taking that from its next step. While it works, a spark says what it
+is doing in a few words beside its name ("fixed it, now running lint
+and tests").
 
 Sparks work as a team: each knows the others, and can hand one a
 finding or a job with its `hand_off` tool. The other starts a shift
@@ -853,6 +858,31 @@ tools, permission prompts, skills, and extensions. Replies stream in as
 the model writes them. Tool calls show as compact rows that expand, and
 file changes show as colored diffs. A permission prompt takes the
 keyboard focus, so a single `y` or `n` answers it.
+
+**Think harder**, in the + menu, has the model think harder about your
+next message: a model that can reason apart from its answer reasons
+longer, and every model is told to take its time and check its work. A
+Think pill in the box shows while it is set (a click on it skips it),
+and it lets go once the message is sent.
+
+**Custom instructions**, in Settings, are how you want every reply, in
+your own words ("use metric", "no bullet points"), in the browser and
+the terminal alike; `/instructions <text>` sets them from the terminal
+and `/instructions clear` removes them. They are kept in
+`~/.flash/instructions.md`.
+
+Flash can retitle the chat it is in, when the title it has is wrong: a
+chat named after a message it misread is renamed once it understands
+(a title you gave it yourself stays). And in voice mode it can end the
+conversation itself when you are done, after saying goodbye. Ctrl+C in
+the terminal running `flash --web` stops it.
+
+In voice mode in the browser, the camera button shows Flash what you
+point it at: while it is on, what it sees at the moment you finish
+speaking goes with what you said, as a photo (it needs a model that can
+see images). And Settings, Voice, **Voice mode look** swaps the orb for a
+companion, a face that blinks while it listens, perks up while you talk,
+looks up while it thinks, and moves its mouth as it speaks.
 
 Every button has a shortcut, shown when you hover over it, and `?`
 lists them all:

@@ -56,6 +56,8 @@ from . import (
     design,
     extensions,
     greetings,
+    heyflash,
+    instructions,
     interrupt,
     keepalive,
     learning,
@@ -74,6 +76,7 @@ from . import (
     updater,
     visuals,
     voice,
+    voicehooks,
     workspace,
 )
 from .dashes import DashGuard
@@ -323,6 +326,14 @@ class Chat:
     # The turn running now came from voice mode: its reply is heard, so
     # the model is asked to keep it short and plain.
     heard: bool = False
+    # The turn running now was asked to think harder: the model reasons
+    # longer where it can, and is told to take its time.
+    deep: bool = False
+    # The user named it themselves: the model leaves the title alone.
+    named: bool = False
+    # The model ended the spoken conversation this turn belongs to: voice
+    # mode goes off once its reply is said.
+    voice_ended: bool = False
     # The user saved a document in the side panel while a turn ran: the
     # next turn reads it, {"path", "name", "before", "text"}.
     saved_doc: Optional[dict] = None
@@ -370,6 +381,7 @@ class Chat:
             "project": self.project,
             "spark": self.spark,
             "branches": self.branches,
+            "named": self.named,
         }
 
     @classmethod
@@ -384,6 +396,7 @@ class Chat:
             project=str(data.get("project") or ""),
             spark=str(data.get("spark") or ""),
             branches=dict(data.get("branches") or {}),
+            named=bool(data.get("named")),
         )
 
 
@@ -823,6 +836,9 @@ class Session:
         self.voice_job: Optional[tuple[str, str]] = None
         # Set to call off whichever of those is running.
         self.voice_stop = threading.Event()
+        # "Hey Flash" heard on this computer's own microphone, with no
+        # page open, when switched on. Started with the server.
+        self.always = heyflash.Listener(self)
         # The link's token and the browsers signed in with it. A server
         # restarted after an update takes over the old one's (Server).
         self.access = Access()
@@ -891,6 +907,7 @@ class Session:
         chat = self.chats.pop(chat_id, None)
         if chat is not None:
             chat.stop.set()
+            keep_usage_of(chat)
         workspace.delete_chat(chat_id)
         self.hub.publish({"type": "chats", "chat": chat_id})
 
@@ -904,6 +921,7 @@ class Session:
 
     def clear_chat(self, chat: Chat) -> None:
         chat.stop.set()
+        keep_usage_of(chat)
         self.unqueue(chat)
         chat.messages.clear()
         chat.log.clear()
@@ -965,6 +983,7 @@ class Session:
                 **status(ai), "lan": self.lan,
                 "can_switch_lan": self.switch_lan is not None,
                 "update": self.updates.snapshot(),
+                "wake_always": self.always.snapshot(),
             },
         }
 
@@ -1157,6 +1176,7 @@ class Session:
 
     def close(self) -> None:
         self._stop_watching.set()
+        self.always.stop()
 
     def reopen(self) -> None:
         """Carry on under a new server after a LAN switch."""
@@ -1337,7 +1357,7 @@ class Session:
     def send(
         self, chat: Chat, text: str, wake: bool = False, mode: str = "",
         files: Optional[list] = None, heard: bool = False,
-        note: str = "", quiet: str = "",
+        note: str = "", quiet: str = "", deep: bool = False,
     ) -> dict:
         """Start a turn on a thread of its own and return at once.
 
@@ -1362,6 +1382,8 @@ class Session:
                     "text": text,
                     "mode": "steer" if mode == "steer" else "queue",
                     "files": attached,
+                    # Only when asked, so a plain one stays as it was.
+                    **({"deep": True} if deep else {}),
                 }
                 chat.pending.append(item)
                 waiting = True
@@ -1369,6 +1391,7 @@ class Session:
                 chat.stop.clear()
                 chat.queued = True
                 chat.heard = heard
+                chat.voice_ended = False
                 waiting = False
 
         if waiting:
@@ -1377,7 +1400,7 @@ class Session:
 
         self._begin(chat, text, wake, attached, note=note)
         threading.Thread(
-            target=self._run, args=(chat, text, attached, quiet),
+            target=self._run, args=(chat, text, attached, quiet, deep),
             daemon=True,
         ).start()
         return {}
@@ -1754,7 +1777,7 @@ class Session:
 
     def _run(
         self, chat: Chat, text: str, files: Optional[list] = None,
-        quiet: str = "",
+        quiet: str = "", deep: bool = False,
     ) -> None:
         # A local backend runs one generation at a time, and this turn
         # is the one somebody is now waiting on.
@@ -1765,6 +1788,7 @@ class Session:
         # chat is not held up behind a long queue.
         following: Optional[dict] = {
             "text": text, "files": files or [], "quiet": quiet,
+            "deep": deep,
         }
         while following is not None:
             text, files = following["text"], following.get("files") or []
@@ -1772,6 +1796,7 @@ class Session:
                 chat.queued = False
                 chat.busy = True
                 chat.quiet = following.get("quiet") or ""
+                chat.deep = bool(following.get("deep"))
                 self.emit(chat, {"type": "busy", "busy": True})
                 # Followed by any extension that asked to be.
                 progress.begin("web", chat.id, chat.title, text)
@@ -1854,6 +1879,114 @@ class Streamed:
     quiet: bool = False
 
 
+# Tools the model has in a chat in the browser, for the chat itself.
+TITLE_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "title_chat",
+        "description": (
+            "Give this chat a new title when the one it has no longer says "
+            "what it is about: it was named from a message you misread, "
+            "or the talk has moved on to something else. A few words, "
+            "like a heading. Not for every turn: only when the title is "
+            "wrong."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "title": {
+                    "type": "string",
+                    "description": "The new title: a few words, no quotes.",
+                },
+            },
+            "required": ["title"],
+        },
+    },
+}
+
+END_VOICE_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "end_conversation",
+        "description": (
+            "End this spoken conversation once your reply has been said: "
+            "when the user is done (they said goodbye, or that is all), or "
+            "it has come to a natural end. Voice mode turns off after your "
+            "reply. Still answer them as usual."
+        ),
+        "parameters": {"type": "object", "properties": {}},
+    },
+}
+
+
+def chat_tools(chat: Chat) -> list[dict]:
+    """The tools for CHAT itself: retitling it, and in a spoken
+    conversation, ending that."""
+
+    return [TITLE_TOOL, *([END_VOICE_TOOL] if chat.heard else [])]
+
+
+def retitle(session: "Session", chat: Chat, args: dict) -> str:
+    """title_chat: CHAT's new title, from the model."""
+
+    title = " ".join(str(args.get("title") or "").split()).strip("\"'")
+    if not title:
+        return "Error: say the new title."
+    if chat.named:
+        return (
+            "Not renamed: the user gave this chat its title themselves, "
+            "so it stays."
+        )
+    chat.title = title[:TITLE_CHARS]
+    # Settled: a title written after the first turn does not replace it.
+    chat.auto_title = ""
+    session.save(chat)
+    session.hub.publish({"type": "chats", "chat": chat.id})
+    return f"Renamed this chat to {chat.title!r}."
+
+
+def end_voice(session: "Session", chat: Chat) -> str:
+    """end_conversation: voice mode goes off once the reply is said."""
+
+    if not chat.heard:
+        return "Error: this is not a spoken conversation."
+    chat.voice_ended = True
+    session.hub.publish({"type": "voice-end", "chat": chat.id})
+    return "Voice mode ends once your reply is said. Say a short goodbye."
+
+
+# Asked to think harder: what the model is told, on top of reasoning
+# longer where it can.
+THINK_HARDER_PROMPT = """=== Think harder ===
+The user asked you to think harder about this message. Before you
+answer, work through it carefully: what is really being asked, what
+could go wrong, the alternatives, and a check of your reasoning, any
+numbers and any code. Take the time it needs, then answer."""
+
+
+def think_harder(model: str) -> Any:
+    """What to ask MODEL for, to reason longer: the most it offers, or
+    None for one that cannot reason apart from its answer."""
+
+    from . import ai  # deferred: ai imports half of Flash
+
+    capabilities = _show_model(ai.Config.host, model).get("capabilities")
+    if not isinstance(capabilities, list) or "thinking" not in capabilities:
+        return None
+    # Some take a level rather than a yes.
+    return "high" if "gpt-oss" in model.lower() else True
+
+
+def _show_model(host: str, model: str) -> dict:
+    from .sysprompt import _show
+
+    try:
+        found = _show(host, model)
+    except Exception:  # noqa: BLE001
+        return {}
+    return found if isinstance(found, dict) else {}
+
+
 def stream_reply(
     session: Session,
     chat: Chat,
@@ -1863,7 +1996,8 @@ def stream_reply(
     model: str = "",
 ) -> Streamed:
     """One model call, sent to the page a token at a time. MODEL is
-    Flash's unless given: a spark answers on its own."""
+    Flash's unless given: a spark answers on its own. A chat asked to
+    think harder has the model reason longer, where it can."""
 
     from . import ai  # deferred: ai imports half of Flash
 
@@ -1886,12 +2020,18 @@ def stream_reply(
         chat.partial += text
         session.emit(chat, {"type": "token", "text": text})
 
+    asked: dict = {}
+    if chat.deep:
+        think = think_harder(model or ai.Config.model or "")
+        if think is not None:
+            asked["think"] = think
     parts = client.chat(
         model=model or ai.Config.model,
         messages=messages,
         tools=tools_arg,
         options=ai._chat_options(),
         stream=True,
+        **asked,
     )
 
     try:
@@ -2408,6 +2548,8 @@ def _respond(
                 + "\n\n" + WEB_PROMPT
         if found is not None:
             prompt = f"{prompt}\n\n{project_prompt(found)}".strip()
+        if chat.deep:
+            prompt = f"{prompt}\n\n{THINK_HARDER_PROMPT}"
         system = ai._message("system", prompt)
         if first:
             checkpoint.start_turn(ai._turn_label(text))
@@ -2415,6 +2557,7 @@ def _respond(
         offered = flash_tools.turn_tools()
         if kit is not None:
             offered = kit.offer(offered)
+        offered = offered + chat_tools(chat)
         if guest:
             # A bit of the conversation, not all of it, and as a
             # transcript: whose words are whose stays plain, and a small
@@ -2470,6 +2613,10 @@ def _respond(
                         "text": str(args.get("thought", "")).strip(),
                     })
                     output = "(noted)"
+                elif name == "title_chat":
+                    output = retitle(session, chat, args)
+                elif name == "end_conversation":
+                    output = end_voice(session, chat)
                 elif kit is not None and name in kit.tools:
                     output = kit.tools[name](args)
                     tool_count += 1
@@ -2608,60 +2755,120 @@ def _streaks(days: set, today: date) -> tuple[int, int]:
     return current, longest
 
 
-def usage(chats, today: Optional[date] = None) -> dict:
-    """What the settings page's dashboard shows, counted from the
-    saved web chats.
+# On unless switched off: a deleted (or cleared) chat's turns still count
+# on the usage dashboard.
+KEEP_USAGE_SETTING = "WEB_KEEP_DELETED_USAGE"
+_keeping = threading.Lock()
+
+
+def keeping_usage() -> bool:
+    return os.environ.get(KEEP_USAGE_SETTING, "").strip().lower() not in (
+        "0", "false", "off", "no",
+    )
+
+
+def _tally() -> dict:
+    return {"chats": 0, "messages": 0, "turns": 0, "tokens": 0, "tools": 0,
+            "seconds": 0.0, "generating": 0.0, "days": Counter(),
+            "models": Counter()}
+
+
+def _usage_of(chat: "Chat") -> dict:
+    """What one chat adds to the dashboard.
 
     Newer turns record when they ran and on which model;
     an older one counts on the day its chat was last used.
     """
 
-    today = today or datetime.now(timezone.utc).astimezone().date()
-    per_day: Counter = Counter()
-    models: Counter = Counter()
-    messages = turns = tokens = tools = 0
-    seconds = generating = 0.0
-    used = 0
+    tally = _tally()
+    log = list(chat.log)
+    tally["chats"] = 1 if log else 0
+    for entry in log:
+        if entry.get("type") == "user":
+            tally["messages"] += 1
+        if entry.get("type") != "stats":
+            continue
+        tally["turns"] += 1
+        at = entry.get("at") or chat.updated
+        # Days as this computer's clock has them, like the page's.
+        day = datetime.fromtimestamp(at, timezone.utc).astimezone()
+        tally["days"][day.date().isoformat()] += 1
+        if entry.get("model"):
+            tally["models"][entry["model"]] += 1
+        count = int(entry.get("tokens") or 0)
+        rate = float(entry.get("rate") or 0)
+        tally["tokens"] += count
+        tally["tools"] += int(entry.get("tools") or 0)
+        tally["seconds"] += float(entry.get("seconds") or 0)
+        if rate > 0:
+            tally["generating"] += count / rate
+    return tally
 
+
+def _add(into: dict, more: dict) -> dict:
+    for key, value in more.items():
+        if key in ("days", "models"):
+            into[key].update({
+                str(k): int(n) for k, n in dict(value).items()
+                if isinstance(n, (int, float))
+            })
+        elif key in into and isinstance(value, (int, float)):
+            into[key] += value
+    return into
+
+
+def keep_usage_of(chat: "Chat") -> None:
+    """Add CHAT's turns to what deleted chats left behind, before it goes
+    (when keeping them is on), so the dashboard does not lose them."""
+
+    if not keeping_usage():
+        return
+    gone = _usage_of(chat)
+    if not gone["chats"]:
+        return
+    with _keeping:
+        kept = _add(_add(_tally(), workspace.kept_usage()), gone)
+        workspace.keep_usage({
+            **kept, "days": dict(kept["days"]), "models": dict(kept["models"]),
+        })
+
+
+def usage(chats, today: Optional[date] = None) -> dict:
+    """What the settings page's dashboard shows, counted from the
+    saved web chats, and from deleted ones when they are kept."""
+
+    today = today or datetime.now(timezone.utc).astimezone().date()
+    total = _tally()
     for chat in chats:
-        log = list(chat.log)
-        if log:
-            used += 1
-        for entry in log:
-            if entry.get("type") == "user":
-                messages += 1
-            if entry.get("type") != "stats":
-                continue
-            turns += 1
-            at = entry.get("at") or chat.updated
-            # Days as this computer's clock has them, like the page's.
-            day = datetime.fromtimestamp(at, timezone.utc).astimezone()
-            per_day[day.date()] += 1
-            if entry.get("model"):
-                models[entry["model"]] += 1
-            count = int(entry.get("tokens") or 0)
-            rate = float(entry.get("rate") or 0)
-            tokens += count
-            tools += int(entry.get("tools") or 0)
-            seconds += float(entry.get("seconds") or 0)
-            if rate > 0:
-                generating += count / rate
+        _add(total, _usage_of(chat))
+    deleted = 0
+    if keeping_usage():
+        kept = workspace.kept_usage()
+        deleted = int(kept.get("chats") or 0)
+        _add(total, kept)
+    per_day: Counter = Counter()
+    for day, n in total["days"].items():
+        with contextlib.suppress(ValueError):
+            per_day[date.fromisoformat(day)] += n
+    tokens, generating = total["tokens"], total["generating"]
 
     current, longest = _streaks(set(per_day), today)
 
     return {
-        "chats": used,
-        "messages": messages,
-        "turns": turns,
+        "chats": total["chats"],
+        "deleted": deleted,
+        "keep_deleted": keeping_usage(),
+        "messages": total["messages"],
+        "turns": total["turns"],
         "tokens": tokens,
-        "tools": tools,
-        "seconds": round(seconds),
+        "tools": total["tools"],
+        "seconds": round(total["seconds"]),
         "rate": round(tokens / generating, 1) if generating else 0,
         "days": {day.isoformat(): n for day, n in sorted(per_day.items())},
         "active_days": len(per_day),
         "streak": current,
         "longest_streak": longest,
-        "models": models.most_common(),
+        "models": total["models"].most_common(),
         "today": today.isoformat(),
         "memories": len(memory.list_memory()),
         "skills": len(skills.all_skills()),
@@ -2696,6 +2903,7 @@ def status(ai) -> dict:
         # the browser's clock.
         "greetings": greetings.POOLS,
         "voice_style": voice.voice_style(),
+        "wake_sensitivity": voice.wake_sensitivity(),
         # The scene actually in effect: a name that no longer finds one,
         # because the extension that brought it was removed, is none.
         "background": (
@@ -2715,6 +2923,9 @@ def status(ai) -> dict:
         # turns, and every one there is to pick from.
         "loader": loaders.chosen(),
         "loader_morph": loaders.morphing(),
+        # Whether an extension follows voice mode: if none does, the page
+        # does not tell Flash of every moment of it.
+        "voice_hooks": voicehooks.wanted(),
         "loaders": [loader.summary() for loader in loaders.all_loaders()],
         # Colour themes from extensions, beside the page's own.
         "themes": [t.summary() for t in themes.extension_themes()],
@@ -2914,6 +3125,9 @@ def _extension_info(ext: "extensions.Extension") -> dict:
         "contents": ext.contents(),
         "commands": [f"/{c.name}" for c in ext.commands],
         "tools": [t.name for t in ext.tools],
+        # Its own settings panel: each choice, and what the user picked.
+        "settings": [s.summary() for s in ext.settings],
+        "values": extensions.settings_values(ext) if ext.settings else {},
     }
 
 
@@ -3018,6 +3232,7 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
     if name == "rename":
         chat = session.chat(chat_id)
         chat.title = arg[:TITLE_CHARS] or chat.title
+        chat.named = bool(arg)
         session.save(chat)
         session.hub.publish({"type": "chats", "chat": chat.id})
         return {}
@@ -3185,6 +3400,47 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
             "default": sparks.SHIFT_ROUNDS_DEFAULT,
         }
 
+    if name == "instructions":
+        # How every reply should be. With "text", replaces them.
+        if "text" in body:
+            instructions.save(str(body.get("text") or ""))
+        return {"text": instructions.read(), "max": instructions.MAX_CHARS}
+
+    if name == "wake-sensitivity":
+        # No arg: only what it is, for the slider in Settings.
+        if arg:
+            heyflash.set_sensitivity(arg)
+            session.hub.publish({"type": "status"})
+        return {"sensitivity": voice.wake_sensitivity()}
+
+    if name == "wake-service":
+        # The "Hey Flash" background service. No arg: only how it stands,
+        # for the switch in Settings.
+        if arg not in ("", "on", "off"):
+            raise ValueError("wake-service takes on or off")
+        how = ""
+        try:
+            if arg == "on":
+                how = keepalive.turn_on(keepalive.LISTENER)
+            elif arg == "off":
+                keepalive.turn_off(keepalive.LISTENER)
+        except keepalive.KeepAliveError as exc:
+            raise ValueError(str(exc)) from None
+        return {
+            "on": keepalive.installed(keepalive.LISTENER), "how": how,
+            "elsewhere": heyflash.first_listener() not in (None, os.getpid()),
+        }
+
+    if name == "wake-always":
+        # No arg: only how it stands, for the switch in Settings.
+        if arg not in ("", "on", "off"):
+            raise ValueError("wake-always takes on or off")
+        if arg:
+            heyflash.set_enabled(arg == "on")
+            session.always.switched()
+            session.hub.publish({"type": "status"})
+        return session.always.snapshot()
+
     if name == "sparks-always":
         # No arg: only how it stands, for the switch in Settings.
         if arg not in ("", "on", "off"):
@@ -3263,6 +3519,19 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
         _discard_staged(session)
         return {}
 
+    if name == "extension-setting":
+        # One of an extension's own settings, from its panel.
+        ext = extensions.find(arg)
+        if ext is None:
+            raise ValueError(f"No extension called {arg!r}.")
+        try:
+            values = extensions.set_setting(
+                ext, str(body.get("id") or ""), body.get("value"),
+            )
+        except extensions.ExtensionError as exc:
+            raise ValueError(str(exc)) from None
+        return {"values": values}
+
     if name == "extension-remove":
         if not extensions.remove(arg):
             raise ValueError(f"No extension called {arg!r}.")
@@ -3274,6 +3543,14 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
         return {"browsers": session.access.listing(
             browser, session.hub.owners()
         ), "remember": remembering()}
+
+    if name == "keep-deleted-usage":
+        # No arg: only how it stands, for the switch on the usage tab.
+        if arg:
+            ai.set_config_var(
+                KEEP_USAGE_SETTING, "1" if arg in ("on", "1", "true") else "0",
+            )
+        return {"keep": keeping_usage()}
 
     if name == "remember-browsers":
         # On, every browser signed in now is written down at once, so
@@ -4144,6 +4421,7 @@ class Handler(BaseHTTPRequestHandler):
             "/api/upload": MAX_RECORDING_BODY,
             "/api/voice/hear": MAX_VOICE_BODY,
             "/api/voice/live": MAX_VOICE_BODY,
+            "/api/voice/wake": MAX_VOICE_BODY,
         }.get(url.path, MAX_BODY_BYTES)
         if length > limit:
             self._json(
@@ -4174,6 +4452,7 @@ class Handler(BaseHTTPRequestHandler):
                 mode=str(body.get("mode") or ""),
                 files=[str(f) for f in body.get("files") or []],
                 heard=bool(body.get("voice")),
+                deep=bool(body.get("deep")),
             )
             return {"chat": chat.id, **sent}
 
@@ -4202,6 +4481,7 @@ class Handler(BaseHTTPRequestHandler):
             return {**kept, "unheard": unheard} if unheard else kept
 
         if path == "/api/voice/hear":
+            session.always.page_listening()
             try:
                 pcm = base64.b64decode(
                     str(body.get("data") or ""), validate=True
@@ -4219,6 +4499,7 @@ class Handler(BaseHTTPRequestHandler):
             }
 
         if path == "/api/voice/live":
+            session.always.page_listening()
             # The words so far, while the user is still talking.
             try:
                 pcm = base64.b64decode(
@@ -4236,7 +4517,44 @@ class Handler(BaseHTTPRequestHandler):
                 raise ValueError(why)
             return {"text": words}
 
+        if path == "/api/voice/wake":
+            session.always.page_listening()
+            # Listening for "Hey Flash", while the page is open.
+            try:
+                pcm = base64.b64decode(
+                    str(body.get("data") or ""), validate=True
+                )
+            except (ValueError, TypeError):
+                raise ValueError(
+                    "that recording did not arrive whole"
+                ) from None
+            stream = str(body.get("id") or "")[:32]
+            if not stream:
+                raise ValueError("which recording is that?")
+            woke, why = voice.hear_wake(stream, pcm, bool(body.get("end")))
+            if why:
+                raise ValueError(why)
+            if woke and voicehooks.ask("wake")["ignore"]:
+                woke = False
+            return {"woke": woke}
+
+        if path == "/api/voice/hook":
+            # A moment of voice mode, for the extensions in the middle of
+            # it: what they decide for the ones they are asked, nothing
+            # for the ones they are only told.
+            event = str(body.get("event") or "")
+            talk = str(body.get("conversation") or "")
+            data = {k: body[k] for k in ("text", "state", "how")
+                    if k in body}
+            if event in voicehooks.ASKED:
+                return voicehooks.ask(event, talk, **data)
+            if event in voicehooks.TOLD:
+                voicehooks.tell(event, talk, **data)
+                return {}
+            raise ValueError(f"no voice moment called {event!r}")
+
         if path == "/api/voice/say":
+            session.always.page_listening()
             wav, why = voice.synthesize(
                 voice.speakable(str(body.get("text") or ""))
             )
@@ -4624,6 +4942,7 @@ def _attach(server: "Server", standalone: bool) -> None:
     # to the page as soon as it is written.
     teamchat.watch()
     sparks.start()
+    session.always.start()
     session.switch_lan = lambda on: threading.Timer(
         SWITCH_DELAY, _switch_lan, (server, on),
     ).start()
@@ -4662,8 +4981,10 @@ def serve(
 
     server = _listen(port, lan)
     announce(server)
-    console.print(Text("Ctrl+C twice stops it.", style=DIM))
-    interrupt.guard("Press Ctrl+C again to stop the web UI")
+    console.print(Text("Ctrl+C stops it.", style=DIM))
+    # One press: serving is all this process does, so there is nothing a
+    # stray press would lose.
+    interrupt.release()
 
     _attach(server, standalone=True)
     server.session.updates.check_in_background()

@@ -328,6 +328,22 @@ def test_send_email_asks_even_in_autonomous_mode(server, monkeypatch):
     assert "Subject: Re: Contract" in asked[0] and "Signed." in asked[0]
 
 
+@pytest.mark.parametrize("to, body, said", [
+    ("x", "Hello", "placeholder"),
+    ("a@example.com", "placeholder", "placeholder"),
+    ("a@example.com", "Thanks!\n\n[Your Name]", "[Your Name]"),
+    ("nobody", "Hello", "no email address"),
+])
+def test_a_half_written_email_is_never_put_to_the_user(server, to, body,
+                                                       said):
+    asked = []
+    with answer_from(lambda question: asked.append(question) or "y"):
+        result = tools.send_email(to, "Hi", body)
+
+    assert result.startswith("Error:") and said in result  # nosec B101
+    assert asked == [] and FakeSMTP.sent == []  # nosec B101
+
+
 def test_send_email_sends_once_agreed(server):
     with answer_from(lambda question: "y"):
         said = tools.send_email("a@example.com", "Hi", "Hello")

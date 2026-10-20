@@ -8,6 +8,8 @@ from flash import (
     ai,
     design,
     extensions,
+    heyflash,
+    instructions,
     learning,
     mail,
     memory,
@@ -94,10 +96,16 @@ def isolated_home(tmp_path_factory, monkeypatch):
     monkeypatch.setattr(sparks, "ENV_PATH", str(home / ".flash.env"))
     # System One too, off and on its default model unless a test says.
     monkeypatch.setattr(systemone, "ENV_PATH", str(home / ".flash.env"))
+    # "Hey Flash" with no page open (VOICE_WAKE_ALWAYS, cleared above).
+    monkeypatch.setattr(heyflash, "ENV_PATH", str(home / ".flash.env"))
+    # Custom instructions, none unless a test writes some.
+    monkeypatch.setattr(instructions, "FLASH_DIR", home / ".flash")
     for name in ("SYSTEM_ONE", "SYSTEM_ONE_MODEL"):
         monkeypatch.delenv(name, raising=False)
     # Browsers are remembered across restarts only where a test says so.
     monkeypatch.delenv("WEB_REMEMBER_BROWSERS", raising=False)
+    # Deleted chats' usage is kept unless a test switches it off.
+    monkeypatch.delenv("WEB_KEEP_DELETED_USAGE", raising=False)
     # A key in the developer's shell would ride on every test's requests.
     monkeypatch.delenv("OLLAMA_API_KEY", raising=False)
     systemone.forget_checks()

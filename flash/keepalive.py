@@ -15,6 +15,11 @@ wants running in the background:
 Nothing here needs administrator rights, and turning it off removes
 what turning it on wrote. The keeper and an open Flash share the work
 through the lock in flash/sparks.py, so running both is fine.
+
+The same goes for "Hey Flash" with Flash closed: LISTENER is a second
+service like it, `flash --listen`, listening on the microphone from
+login onward (flash/heyflash.py). Every function here takes the service
+it is about, SPARKS when it is not said.
 """
 
 import os
@@ -22,6 +27,7 @@ import shutil
 import subprocess  # nosec B404
 import sys
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
@@ -30,6 +36,31 @@ from . import sparks
 NAME = "flash-sparks"
 LABEL = "io.github.natuworkguy.flash.sparks"
 TASK = "Flash Sparks"
+
+
+@dataclass(frozen=True)
+class Service:
+    """One Flash the system keeps running: what it is called in each
+    system's list, and what Flash is run with."""
+
+    name: str
+    label: str
+    task: str
+    flag: str
+    title: str
+    about: str
+    log: str
+
+
+SPARKS = Service(
+    NAME, LABEL, TASK, "--sparks", "Flash Sparks",
+    "Flash sparks, working while Flash is closed", "keeper.log",
+)
+LISTENER = Service(
+    "flash-listen", "io.github.natuworkguy.flash.listen", "Flash Listen",
+    "--listen", "Flash Listen",
+    "Flash, listening for Hey Flash while Flash is closed", "listener.log",
+)
 
 
 class KeepAliveError(RuntimeError):
@@ -49,7 +80,7 @@ def _checkout_script() -> Optional[Path]:
     return script if script.is_file() else None
 
 
-def command() -> list[str]:
+def command(service: Service = SPARKS) -> list[str]:
     """What the system runs: this Python, this Flash, keeper only.
 
     This interpreter rather than whatever `flash` is on PATH at login: a
@@ -66,12 +97,14 @@ def command() -> list[str]:
             python = quiet
     script = _checkout_script()
     if script is not None:
-        return [str(python), str(script), "--sparks"]
-    return [str(python), "-m", "flash", "--sparks"]
+        return [str(python), str(script), service.flag]
+    return [str(python), "-m", "flash", service.flag]
 
 
-def _log() -> Path:
-    return sparks.sparks_dir() / "keeper.log"
+def _log(service: Service = SPARKS) -> Path:
+    if service == SPARKS:
+        return sparks.sparks_dir() / service.log
+    return sparks.sparks_dir().parent / service.log
 
 
 def _run(args: list[str]) -> subprocess.CompletedProcess:
@@ -92,23 +125,26 @@ def _ok(args: list[str]) -> bool:
 # --- Linux ---------------------------------------------------------------
 
 
-def _unit_path() -> Path:
-    return Path.home() / ".config" / "systemd" / "user" / f"{NAME}.service"
+def _unit_path(service: Service = SPARKS) -> Path:
+    return (Path.home() / ".config" / "systemd" / "user"
+            / f"{service.name}.service")
 
 
-def _autostart_path() -> Path:
-    return Path.home() / ".config" / "autostart" / f"{NAME}.desktop"
+def _autostart_path(service: Service = SPARKS) -> Path:
+    return Path.home() / ".config" / "autostart" / f"{service.name}.desktop"
 
 
-def _unit() -> str:
+def _unit(service: Service = SPARKS) -> str:
     # systemd reads % as the start of a specifier, so each is doubled.
-    run = " ".join(f'"{part}"' for part in command()).replace("%", "%%")
+    run = " ".join(
+        f'"{part}"' for part in command(service)
+    ).replace("%", "%%")
     # The login session's PATH, not systemd's short default, so a spark
     # finds the same programs a shell would.
     path = os.environ.get("PATH", "").replace("%", "%%")
     return (
         "[Unit]\n"
-        "Description=Flash sparks, working while Flash is closed\n"
+        f"Description={service.about}\n"
         "After=network-online.target\n\n"
         "[Service]\n"
         f"ExecStart={run}\n"
@@ -130,24 +166,25 @@ def _arg(part) -> str:
     return part.as_posix() if isinstance(part, Path) else str(part)
 
 
-def _exec_line() -> str:
+def _exec_line(service: Service = SPARKS) -> str:
     # The desktop entry spec quotes an argument with a space in it.
     return " ".join(
         f'"{arg}"' if " " in arg else arg
-        for arg in map(_arg, command())
+        for arg in map(_arg, command(service))
     )
 
 
-def _on_linux() -> str:
+def _on_linux(service: Service = SPARKS) -> str:
+    name = service.name
     if _systemd():
-        path = _unit_path()
+        path = _unit_path(service)
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(_unit(), encoding="utf-8")
+        path.write_text(_unit(service), encoding="utf-8")
         _ok(["systemctl", "--user", "daemon-reload"])
-        if not _ok(["systemctl", "--user", "enable", "--now", NAME]):
+        if not _ok(["systemctl", "--user", "enable", "--now", name]):
             raise KeepAliveError(
-                f"systemd would not start {NAME}. "
-                f"`systemctl --user status {NAME}` says why."
+                f"systemd would not start {name}. "
+                f"`systemctl --user status {name}` says why."
             )
         return (
             "a systemd user service. It runs while you are logged in; "
@@ -156,32 +193,32 @@ def _on_linux() -> str:
 
     # No systemd: the desktop starts it at the next login, and it is
     # started by hand for this one.
-    path = _autostart_path()
+    path = _autostart_path(service)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         "[Desktop Entry]\n"
         "Type=Application\n"
-        "Name=Flash Sparks\n"
-        "Comment=Flash sparks, working while Flash is closed\n"
-        f"Exec={_exec_line()}\n"
+        f"Name={service.title}\n"
+        f"Comment={service.about}\n"
+        f"Exec={_exec_line(service)}\n"
         "Terminal=false\n"
         "NoDisplay=true\n"
         "X-GNOME-Autostart-enabled=true\n",
         encoding="utf-8",
     )
-    _spawn()
+    _spawn(service)
     return "an autostart entry, started at each login to your desktop"
 
 
-def _off_linux() -> bool:
+def _off_linux(service: Service = SPARKS) -> bool:
     removed = False
-    if _unit_path().exists():
-        _ok(["systemctl", "--user", "disable", "--now", NAME])
-        _unit_path().unlink()
+    if _unit_path(service).exists():
+        _ok(["systemctl", "--user", "disable", "--now", service.name])
+        _unit_path(service).unlink()
         _ok(["systemctl", "--user", "daemon-reload"])
         removed = True
-    if _autostart_path().exists():
-        _autostart_path().unlink()
+    if _autostart_path(service).exists():
+        _autostart_path(service).unlink()
         removed = True
     return removed
 
@@ -189,11 +226,12 @@ def _off_linux() -> bool:
 # --- macOS ---------------------------------------------------------------
 
 
-def _plist_path() -> Path:
-    return Path.home() / "Library" / "LaunchAgents" / f"{LABEL}.plist"
+def _plist_path(service: Service = SPARKS) -> Path:
+    return (Path.home() / "Library" / "LaunchAgents"
+            / f"{service.label}.plist")
 
 
-def _plist() -> str:
+def _plist(service: Service = SPARKS) -> str:
     def esc(text: str) -> str:
         return (
             text.replace("&", "&amp;").replace("<", "&lt;")
@@ -201,7 +239,8 @@ def _plist() -> str:
         )
 
     args = "".join(
-        f"\n        <string>{esc(_arg(part))}</string>" for part in command()
+        f"\n        <string>{esc(_arg(part))}</string>"
+        for part in command(service)
     )
     return f"""<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" \
@@ -209,7 +248,7 @@ def _plist() -> str:
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>{LABEL}</string>
+    <string>{service.label}</string>
     <key>ProgramArguments</key>
     <array>{args}
     </array>
@@ -228,36 +267,38 @@ def _plist() -> str:
         <string>{esc(os.environ.get("PATH", ""))}</string>
     </dict>
     <key>StandardOutPath</key>
-    <string>{esc(str(_log()))}</string>
+    <string>{esc(str(_log(service)))}</string>
     <key>StandardErrorPath</key>
-    <string>{esc(str(_log()))}</string>
+    <string>{esc(str(_log(service)))}</string>
 </dict>
 </plist>
 """
 
 
-def _on_macos() -> str:
-    path = _plist_path()
+def _on_macos(service: Service = SPARKS) -> str:
+    path = _plist_path(service)
     path.parent.mkdir(parents=True, exist_ok=True)
-    _log().parent.mkdir(parents=True, exist_ok=True)
+    _log(service).parent.mkdir(parents=True, exist_ok=True)
     domain = f"gui/{os.getuid()}"
     # Loaded already, from an older Flash: out first, so the new one
     # is what runs.
-    _ok(["launchctl", "bootout", f"{domain}/{LABEL}"])
-    path.write_text(_plist(), encoding="utf-8")
+    _ok(["launchctl", "bootout", f"{domain}/{service.label}"])
+    path.write_text(_plist(service), encoding="utf-8")
     if not (
         _ok(["launchctl", "bootstrap", domain, str(path)])
         or _ok(["launchctl", "load", "-w", str(path)])
     ):
-        raise KeepAliveError("launchd would not load the sparks agent.")
+        raise KeepAliveError(
+            f"launchd would not load the {service.title} agent.")
     return "a launchd agent, started at each login"
 
 
-def _off_macos() -> bool:
-    path = _plist_path()
+def _off_macos(service: Service = SPARKS) -> bool:
+    path = _plist_path(service)
     if not path.exists():
         return False
-    if not _ok(["launchctl", "bootout", f"gui/{os.getuid()}/{LABEL}"]):
+    if not _ok(["launchctl", "bootout",
+                f"gui/{os.getuid()}/{service.label}"]):
         _ok(["launchctl", "unload", "-w", str(path)])
     path.unlink()
     return True
@@ -266,39 +307,41 @@ def _off_macos() -> bool:
 # --- Windows -------------------------------------------------------------
 
 
-def _task_line() -> str:
-    return " ".join(f'"{_arg(part)}"' for part in command())
+def _task_line(service: Service = SPARKS) -> str:
+    return " ".join(f'"{_arg(part)}"' for part in command(service))
 
 
-def _on_windows() -> str:
+def _on_windows(service: Service = SPARKS) -> str:
+    task = service.task
     made = _ok([
-        "schtasks", "/Create", "/F", "/TN", TASK, "/SC", "ONLOGON",
-        "/RL", "LIMITED", "/TR", _task_line(),
+        "schtasks", "/Create", "/F", "/TN", task, "/SC", "ONLOGON",
+        "/RL", "LIMITED", "/TR", _task_line(service),
     ])
     if not made:
         raise KeepAliveError(
-            "Task Scheduler would not take the sparks task."
+            f"Task Scheduler would not take the {service.title} task."
         )
     # A logon trigger waits for the next logon; this is the one now.
-    if not _ok(["schtasks", "/Run", "/TN", TASK]):
-        _spawn()
+    if not _ok(["schtasks", "/Run", "/TN", task]):
+        _spawn(service)
     return "a scheduled task, started at each logon"
 
 
-def _off_windows() -> bool:
-    if not _ok(["schtasks", "/Query", "/TN", TASK]):
+def _off_windows(service: Service = SPARKS) -> bool:
+    task = service.task
+    if not _ok(["schtasks", "/Query", "/TN", task]):
         return False
-    _ok(["schtasks", "/End", "/TN", TASK])
-    return _ok(["schtasks", "/Delete", "/F", "/TN", TASK])
+    _ok(["schtasks", "/End", "/TN", task])
+    return _ok(["schtasks", "/Delete", "/F", "/TN", task])
 
 
 # --- Either way ----------------------------------------------------------
 
 
-def _spawn() -> None:
+def _spawn(service: Service = SPARKS) -> None:
     """Start the keeper now, detached from this Flash."""
 
-    log = _log()
+    log = _log(service)
     log.parent.mkdir(parents=True, exist_ok=True)
     options: dict = {}
     if os.name == "nt":
@@ -309,42 +352,42 @@ def _spawn() -> None:
         options["start_new_session"] = True
     with open(log, "ab") as out:
         subprocess.Popen(  # nosec B603 -- this Python, fixed arguments
-            command(), cwd=str(Path.home()), stdin=subprocess.DEVNULL,
+            command(service), cwd=str(Path.home()), stdin=subprocess.DEVNULL,
             stdout=out, stderr=out, **options,
         )
 
 
-def installed() -> bool:
-    """Whether sparks are set to run always, on this machine."""
+def installed(service: Service = SPARKS) -> bool:
+    """Whether SERVICE is set to run always, on this machine."""
 
     host = _host()
     if host == "macos":
-        return _plist_path().exists()
+        return _plist_path(service).exists()
     if host == "windows":
-        return _ok(["schtasks", "/Query", "/TN", TASK])
-    return _unit_path().exists() or _autostart_path().exists()
+        return _ok(["schtasks", "/Query", "/TN", service.task])
+    return _unit_path(service).exists() or _autostart_path(service).exists()
 
 
-def turn_on() -> str:
-    """Register the keeper to start at login, and start it. Says how."""
+def turn_on(service: Service = SPARKS) -> str:
+    """Register SERVICE to start at login, and start it. Says how."""
 
     try:
         how = {
             "linux": _on_linux, "macos": _on_macos, "windows": _on_windows,
-        }[_host()]()
+        }[_host()](service)
     except OSError as exc:
         raise KeepAliveError(str(exc)) from None
     return how
 
 
-def turn_off() -> bool:
+def turn_off(service: Service = SPARKS) -> bool:
     """Undo turn_on. False if it was not on."""
 
     try:
         return {
             "linux": _off_linux, "macos": _off_macos,
             "windows": _off_windows,
-        }[_host()]()
+        }[_host()](service)
     except OSError as exc:
         raise KeepAliveError(str(exc)) from None
 

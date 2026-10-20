@@ -128,6 +128,14 @@ def max_speech_chars() -> int:
     return int(_number("VOICE_MAX_CHARS", 700.0, minimum=80.0))
 
 
+def wake_sensitivity() -> int:
+    """How readily "Hey Flash" wakes Flash, from 0 (only a clear one,
+    said in full) to 100 (the moment it is heard)."""
+
+    return int(min(100.0, _number("VOICE_WAKE_SENSITIVITY", 50.0,
+                                  minimum=0.0)))
+
+
 def interrupt_word() -> str:
     """The word that stops a reply when said over the top of it."""
 
@@ -646,9 +654,13 @@ def _result_text(result: str, key: str) -> str:
 
 def listen(
     on_state: State, on_words: Optional[Callable[[str], None]] = None,
+    settle: bool = False, limit: float = MAX_TURN_SECONDS,
 ) -> tuple[str, str]:
     """Record until the speaker stops, and return what was said. ON_WORDS
-    is told the words so far, as they change, while they talk.
+    is told the words so far, as they change, while they talk. SETTLE
+    also ends the turn once the words have stopped changing for a
+    pause, for a room that is never quiet (a video playing). LIMIT is
+    the longest a turn can run, in seconds.
 
     Returns `(text, "")`, where `text` is empty when nothing was heard,
     or `("", reason)` when the microphone or the model was not usable.
@@ -666,12 +678,15 @@ def listen(
         return "", f"could not load the listening model: {exc}"
 
     hearing = Hearing(
-        vosk.KaldiRecognizer(model, SAMPLE_RATE), live=on_words is not None,
+        vosk.KaldiRecognizer(model, SAMPLE_RATE),
+        live=on_words is not None or settle,
     )
     shown = ""
     heard = False
     quiet = 0.0
     elapsed = 0.0
+    # When the words last changed.
+    changed = 0.0
     step = BLOCK_FRAMES / SAMPLE_RATE
 
     # Read once per turn so a /set during the session takes effect.
@@ -688,14 +703,19 @@ def listen(
         ) as stream:
             on_state("listening")
 
-            while elapsed < MAX_TURN_SECONDS:
+            while elapsed < limit:
                 block, _overflowed = stream.read(BLOCK_FRAMES)
                 block = bytes(block)
                 words = hearing.feed(block)
-                if on_words is not None and words != shown:
+                if words != shown:
                     shown = words
-                    on_words(words)
+                    changed = elapsed
+                    if on_words is not None:
+                        on_words(words)
                 elapsed += step
+
+                if settle and shown and elapsed - changed >= pause:
+                    break
 
                 if _level(block) >= threshold:
                     heard = True
@@ -1098,6 +1118,111 @@ def hear_live(stream: str, pcm: bytes, end: bool = False) -> tuple[str, str]:
         if stream in _live:
             _live[stream] = (time.monotonic(), hearing, lock)
     return words, ""
+
+
+# Listening for "Hey Flash" while the web page is open, so voice mode
+# starts without a click. The page sends the microphone a piece at a time;
+# the recognizer here is held to the wake phrases, which keeps it light
+# and keeps everything else said out of it. Nothing it hears is kept.
+WAKE_PHRASES = ("hey flash", "hi flash", "okay flash", "ok flash")
+WAKE_IDLE_SECONDS = 30.0
+WAKE_STREAMS = 4
+_wake: dict[str, tuple[float, object, threading.Lock]] = {}
+_wake_lock = threading.Lock()
+
+
+# At this sensitivity and above, the phrase wakes Flash as soon as it is
+# heard, mid phrase. Below, only once it is said in full, and only when
+# the listening model is sure enough of its words: less sure at higher
+# sensitivity, so a video or a song sets it off less the lower it is.
+WAKE_EAGER = 80
+WAKE_WORDS = {"hey", "hi", "okay", "ok", "flash"}
+
+
+def _woke(result: str, key: str) -> bool:
+    said = " ".join(_result_text(result, key).lower().split())
+    return any(phrase in said for phrase in WAKE_PHRASES)
+
+
+def wake_confidence(sensitivity: int) -> float:
+    """How sure of each wake word the model has to be."""
+
+    return 0.95 - 0.006 * max(0, min(100, sensitivity))
+
+
+def _woke_surely(result: str, sensitivity: int) -> bool:
+    """Whether a finished RESULT holds a wake phrase, every word of it
+    heard surely enough for SENSITIVITY."""
+
+    if not _woke(result, "text"):
+        return False
+    try:
+        words = json.loads(result).get("result") or []
+    except (ValueError, AttributeError):
+        words = []
+    sure = [
+        float(word.get("conf", 1.0)) for word in words
+        if isinstance(word, dict)
+        and str(word.get("word", "")).lower() in WAKE_WORDS
+    ]
+    # A model that gives no confidences has only its words to go by.
+    return not sure or min(sure) >= wake_confidence(sensitivity)
+
+
+def hear_wake(stream: str, pcm: bytes, end: bool = False) -> tuple[bool, str]:
+    """Whether "Hey Flash" was just said in STREAM, now PCM (16 kHz mono
+    16-bit) is heard too. END lets it go. Returns `(woke, "")`, or
+    `(False, reason)` when the listening model cannot be used."""
+
+    now = time.monotonic()
+    with _wake_lock:
+        for key in [k for k, v in _wake.items()
+                    if now - v[0] > WAKE_IDLE_SECONDS]:
+            del _wake[key]
+        if end:
+            _wake.pop(stream, None)
+            return False, ""
+        found = _wake.get(stream)
+    if found is None:
+        try:
+            import vosk
+        except Exception:  # noqa: BLE001
+            return False, INSTALL_HINT
+        try:
+            with _models_lock:
+                model = _load_listener()
+        except Exception as exc:  # noqa: BLE001
+            return False, f"could not load the listening model: {exc}"
+        # Only the wake phrases, and "[unk]" for everything else said,
+        # with how sure it is of each word.
+        grammar = json.dumps([*WAKE_PHRASES, "[unk]"])
+        recognizer = vosk.KaldiRecognizer(model, SAMPLE_RATE, grammar)
+        if hasattr(recognizer, "SetWords"):
+            recognizer.SetWords(True)
+        found = (now, recognizer, threading.Lock())
+        with _wake_lock:
+            while len(_wake) >= WAKE_STREAMS:
+                del _wake[min(_wake, key=lambda k: _wake[k][0])]
+            found = _wake.setdefault(stream, found)
+    _, recognizer, lock = found
+    woke = False
+    sensitivity = wake_sensitivity()
+    with lock:
+        block = BLOCK_FRAMES * 2
+        for start in range(0, len(pcm) - len(pcm) % 2, block):
+            piece = pcm[start:start + block]
+            if recognizer.AcceptWaveform(piece):
+                woke = _woke_surely(recognizer.Result(), sensitivity)
+            elif sensitivity >= WAKE_EAGER:
+                woke = _woke(recognizer.PartialResult(), "partial")
+            if woke:
+                # Heard once: the next phrase starts from nothing.
+                recognizer.Reset()
+                break
+    with _wake_lock:
+        if stream in _wake:
+            _wake[stream] = (time.monotonic(), recognizer, lock)
+    return woke, ""
 
 
 def synthesize(text: str) -> tuple[bytes, str]:

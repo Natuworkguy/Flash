@@ -97,7 +97,7 @@ An extension is a folder, usually a GitHub repository, with a
 ```
 
 Only `name` is required, plus at least one command, tool, prompt,
-backgrounds folder, provider, theme, loader, or events. Every path is relative to the extension's folder
+backgrounds folder, provider, theme, loader, events, or voice. Every path is relative to the extension's folder
 and cannot point outside it.
 
 | Field | Meaning |
@@ -112,6 +112,8 @@ and cannot point outside it.
 | `themes` | Colour themes for the web UI. See below. |
 | `loaders` | Loading animations for the terminal and the web UI. See below. |
 | `events` | A program told when a turn starts, plans, waits on you, and ends. See below. |
+| `voice` | A program in the middle of voice mode: told what is said both ways, and able to change it. See below. |
+| `settings` | Choices the user makes for the extension, in its own settings panel. See below. |
 
 ### Commands
 
@@ -153,7 +155,8 @@ same on every platform and needs no quoting.
   on, so Python scripts work on Windows too. Only the standard library
   is available.
 - Programs run in your current working directory, with
-  `FLASH_EXTENSION_DIR` set to the extension's folder.
+  `FLASH_EXTENSION_DIR` set to the extension's folder, and its
+  [settings](#settings) in `FLASH_SETTINGS`.
 - `timeout` sets a limit in seconds (default 30, maximum 600).
 
 A tool in Python:
@@ -165,6 +168,41 @@ import sys
 args = json.load(sys.stdin)
 print(f"It is sunny in {args['city']}.")
 ```
+
+### Settings
+
+An extension can have settings of its own. List them in `settings`, and
+the Extensions page gives it a Settings button that opens its panel,
+each saved as it changes; in the terminal, `/extension settings <name>`
+lists them and `/extension set <name> <setting> <value>` changes one.
+
+```json
+"settings": [
+  {"id": "banners", "label": "Banners", "type": "switch",
+   "default": true, "help": "A banner when Flash finishes."},
+  {"id": "color", "label": "Colour", "type": "text", "default": "d97757"},
+  {"id": "every", "label": "Check every", "type": "number",
+   "default": 5, "min": 1, "max": 60},
+  {"id": "size", "label": "Size", "type": "select",
+   "options": ["small", "large"], "default": "small"}
+]
+```
+
+| Field | Meaning |
+| --- | --- |
+| `id` | Required: lowercase letters, digits and `_`, starting with a letter. |
+| `label` | Its name in the panel. The id if left out. |
+| `type` | `switch`, `text` (the default), `number` or `select`. |
+| `default` | What it is until the user changes it: off, empty, 0, or a select's first option if left out. |
+| `help` | A line under its name. |
+| `options` | A select's choices. |
+| `min`, `max` | A number's bounds. |
+
+Every program the extension runs is handed them: all of them as a JSON
+object in `FLASH_SETTINGS`, and each one in `FLASH_SETTING_<ID>` (the id
+in capitals), `1` or `0` for a switch. They are kept in
+`~/.flash/extension-settings`, so updating the extension keeps them;
+removing it drops them. Up to 24 settings.
 
 ### Themes
 
@@ -242,6 +280,52 @@ own, so a slow program never holds a turn up; one too slow to keep up
 misses events rather than queueing them forever. A program run on
 Flash's own Python (`"python"`) can `import flash` and use what Flash
 has, such as `flash.mail` and the email account set up with `/email`.
+
+### Voice
+
+An extension can sit in the middle of voice mode in the web UI, from
+"Hey Flash" (Settings, Voice) or the voice button: told of each moment
+of the conversation, to show it somewhere else, and able to change what
+is said both ways, or answer for Flash. Flash runs its program once for
+each moment, with the moment as JSON on stdin:
+
+```json
+"voice": {"run": ["python", "./voice.py"],
+          "on": ["wake", "start", "state", "words", "heard", "reply", "end"],
+          "timeout": 5}
+```
+
+`on` defaults to all seven, and `timeout` to 5 seconds, 30 at most.
+Every moment carries `event`, `conversation` (an id shared by one
+conversation's moments), `source` and `at` (a Unix time). `source` is
+`web` for voice mode in the page, and `server` for a conversation Flash
+held on the microphone of the computer it runs on, after "Hey Flash"
+with no page open.
+
+Three are the extension's to decide. Flash waits for the program and
+reads what it prints as a JSON object; printing nothing changes nothing:
+
+| Moment | Carries | It may print |
+| --- | --- | --- |
+| `wake` | nothing more: "Hey Flash" was just heard | `{"ignore": true}` to keep voice mode off |
+| `heard` | `text`: what was said | `{"text": ...}` to ask Flash that instead, `{"reply": ...}` to answer it, read aloud, without asking Flash, or `{"end": true}` to end voice mode |
+| `reply` | `text`: what Flash is about to say, as it will be read out | `{"text": ...}` to read that out instead |
+
+The other four it is only told of, in order, from a thread of their own,
+so a slow program never holds the conversation up:
+
+| Moment | Carries |
+| --- | --- |
+| `start` | `how`: `wake` or `button` |
+| `state` | `state`: `listening`, `hearing`, `thinking`, `speaking`, `paused` or `asking` |
+| `words` | `text`: what is being said, as it is said |
+| `end` | nothing more |
+
+With several extensions installed, each is asked in turn, seeing the
+text as the one before left it; once one answers a `heard`, the rest
+are not asked. A program that fails, or takes longer than its timeout,
+changes nothing. Only conversations with Flash itself go through: voice
+mode in a team's chat does not.
 
 ### Providers
 
