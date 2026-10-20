@@ -1100,6 +1100,74 @@ def hear_live(stream: str, pcm: bytes, end: bool = False) -> tuple[str, str]:
     return words, ""
 
 
+# Listening for "Hey Flash" while the web page is open, so voice mode
+# starts without a click. The page sends the microphone a piece at a time;
+# the recognizer here is held to the wake phrases, which keeps it light
+# and keeps everything else said out of it. Nothing it hears is kept.
+WAKE_PHRASES = ("hey flash", "hi flash", "okay flash", "ok flash")
+WAKE_IDLE_SECONDS = 30.0
+WAKE_STREAMS = 4
+_wake: dict[str, tuple[float, object, threading.Lock]] = {}
+_wake_lock = threading.Lock()
+
+
+def _woke(result: str, key: str) -> bool:
+    said = " ".join(_result_text(result, key).lower().split())
+    return any(phrase in said for phrase in WAKE_PHRASES)
+
+
+def hear_wake(stream: str, pcm: bytes, end: bool = False) -> tuple[bool, str]:
+    """Whether "Hey Flash" was just said in STREAM, now PCM (16 kHz mono
+    16-bit) is heard too. END lets it go. Returns `(woke, "")`, or
+    `(False, reason)` when the listening model cannot be used."""
+
+    now = time.monotonic()
+    with _wake_lock:
+        for key in [k for k, v in _wake.items()
+                    if now - v[0] > WAKE_IDLE_SECONDS]:
+            del _wake[key]
+        if end:
+            _wake.pop(stream, None)
+            return False, ""
+        found = _wake.get(stream)
+    if found is None:
+        try:
+            import vosk
+        except Exception:  # noqa: BLE001
+            return False, INSTALL_HINT
+        try:
+            with _models_lock:
+                model = _load_listener()
+        except Exception as exc:  # noqa: BLE001
+            return False, f"could not load the listening model: {exc}"
+        # Only the wake phrases, and "[unk]" for everything else said.
+        grammar = json.dumps([*WAKE_PHRASES, "[unk]"])
+        found = (now, vosk.KaldiRecognizer(model, SAMPLE_RATE, grammar),
+                 threading.Lock())
+        with _wake_lock:
+            while len(_wake) >= WAKE_STREAMS:
+                del _wake[min(_wake, key=lambda k: _wake[k][0])]
+            found = _wake.setdefault(stream, found)
+    _, recognizer, lock = found
+    woke = False
+    with lock:
+        block = BLOCK_FRAMES * 2
+        for start in range(0, len(pcm) - len(pcm) % 2, block):
+            piece = pcm[start:start + block]
+            if recognizer.AcceptWaveform(piece):
+                woke = woke or _woke(recognizer.Result(), "text")
+            else:
+                woke = woke or _woke(recognizer.PartialResult(), "partial")
+            if woke:
+                # Heard once: the next phrase starts from nothing.
+                recognizer.Reset()
+                break
+    with _wake_lock:
+        if stream in _wake:
+            _wake[stream] = (time.monotonic(), recognizer, lock)
+    return woke, ""
+
+
 def synthesize(text: str) -> tuple[bytes, str]:
     """TEXT spoken, as a WAV file the web page can play. Returns
     `(wav, "")`, or `(b"", reason)` when the voice cannot be used."""

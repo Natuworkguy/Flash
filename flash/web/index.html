@@ -2758,6 +2758,12 @@ body.resizing-viewer iframe { pointer-events: none; }
   body.empty #dock { padding-bottom: 6vh; }
   #model-btn { max-width: 45%; }
 }
+/* Listening for "Hey Flash": a small pill in the message box, so it is
+   never on without showing it. */
+#wake-btn { display: inline-flex; align-items: center; gap: 6px; }
+#wake-btn[hidden] { display: none; }
+#wake-btn .wake-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); animation: wake-breathe 2.4s ease-in-out infinite; }
+@keyframes wake-breathe { 50% { opacity: 0.35; transform: scale(0.8); } }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
   .glow, .shell::after, #greeting::after { display: none; }
@@ -2835,6 +2841,7 @@ body.resizing-viewer iframe { pointer-events: none; }
             <button type="button" class="pill" id="spark-btn" hidden data-tip="Open this spark"></button>
             <button type="button" class="pill" id="agents-btn" hidden data-tip="Sub-agents"><span class="pulse-dot"></span><span id="agents-count"></span></button>
             <span id="context" role="meter" aria-label="Context used" aria-valuemin="0" aria-valuemax="100" hidden><span class="ctx-track"><span class="ctx-fill"></span></span><span class="ctx-pct"></span></span>
+            <button type="button" class="pill" id="wake-btn" hidden data-tip="Listening for “Hey Flash”. Click to stop."><span class="wake-dot"></span>Hey Flash</button>
             <button type="button" class="pill model-pick" id="model-btn" data-tip="Switch model" data-keys="Alt M"></button>
             <button type="submit" id="send" data-tip="Send" data-keys="Enter" aria-label="Send" disabled></button>
           </div>
@@ -6726,6 +6733,18 @@ function drawGeneral(body) {
   const sparkModel = el("div", "setting-row static spark-model-row", `<span class="what"><b>Default model for new sparks</b><span></span></span><span class="side"><select aria-label="Default model for new sparks"><option>Loading…</option></select></span>`);
   body.appendChild(sparkModel);
   fillSparkModelRow(sparkModel);
+
+  const wakeRow = el("button", "setting-row wake-row", `<span class="what"><b>Listen for “Hey Flash”</b><span>While this page is open, saying “Hey Flash” starts voice mode. Only those words are listened for, by the listening model on this computer, and nothing heard is kept. A “Hey Flash” pill in the message box shows when it is on.</span></span><span class="switch" aria-hidden="true"></span>`);
+  wakeRow.type = "button";
+  wakeRow.setAttribute("role", "switch");
+  wakeRow.setAttribute("aria-checked", wakeWanted());
+  wakeRow.onclick = () => {
+    const on = !wakeWanted();
+    setWake(on);
+    wakeRow.setAttribute("aria-checked", on);
+  };
+  body.insertAdjacentHTML("beforeend", `<h2 class="settings-section settings-gap">Voice</h2>`);
+  body.appendChild(wakeRow);
 
   body.insertAdjacentHTML("beforeend", `<h2 class="settings-section settings-gap">Voice models</h2><p class="settings-sub">What voice mode listens and speaks with. Both run on this computer, so pick lighter ones for a weaker machine.</p><div class="voice-models"></div>`);
   drawVoiceModels(body.querySelector(".voice-models"));
@@ -11460,7 +11479,24 @@ const nearBottom = () => logEl.scrollHeight - logEl.scrollTop - logEl.clientHeig
 // it aloud, and listen again. Tap the orb to cut a reply short.
 
 
+// Extensions in the middle of voice mode (voicehooks.py): each moment of
+// a conversation with Flash itself goes to them, the ones they decide on
+// awaited, the rest sent and left. Only when one is installed.
+const voiceHooked = () => !!(info && info.voice_hooks) && voice.on && !voice.team;
+
+function voiceTell(event, data = {}) {
+  if (!voiceHooked()) return;
+  api("/api/voice/hook", { event, conversation: voice.talk, ...data }).catch(() => {});
+}
+
+async function voiceAsk(event, data = {}) {
+  if (!voiceHooked()) return null;
+  try { return await api("/api/voice/hook", { event, conversation: voice.talk, ...data }); }
+  catch (_) { return null; }
+}
+
 function setVoice(state, hint) {
+  if (state !== voice.state) voiceTell("state", { state });
   voice.state = state;
   const panel = $("#voice");
   panel.dataset.state = state;
@@ -11485,14 +11521,16 @@ function showHeard(text) {
   const shown = $("#voice .voice-heard");
   if (!shown) return;
   const words = String(text || "").trim();
+  if (words && words !== voice.toldWords) { voice.toldWords = words; voiceTell("words", { text: words }); }
   shown.hidden = !words;
   shown.textContent = words.length > 160 ? `…${words.slice(-160).replace(/^\S*\s/, "")}` : words;
 }
 
 // TEAM, a team's ID, talks to that team in its chat instead of to Flash:
 // the orb sits where the team's composer was.
-async function startVoice(team = null) {
+async function startVoice(team = null, how = "button") {
   if (voice.on) return;
+  stopWake();
   if (!canRecord) { toast("Voice mode needs this page opened on this computer, or over HTTPS"); return; }
   let status;
   try { status = await command("voice-status"); } catch (error) { showFailure(error); return; }
@@ -11501,6 +11539,10 @@ async function startVoice(team = null) {
   voice.on = true;
   voice.cut = false;
   voice.team = team;
+  voice.state = "";
+  voice.toldWords = "";
+  voice.talk = Math.random().toString(36).slice(2, 12);
+  voiceTell("start", { how });
   document.body.classList.add("voice-on");
   if (team) {
     const panel = $("#voice");
@@ -11547,6 +11589,8 @@ async function startVoice(team = null) {
 
 function endVoice() {
   if (!voice.on) return;
+  voiceTell("end");
+  setTimeout(startWake, 800);
   if (voice.state === "setup") command("voice-cancel").catch(() => {});
   voice.on = false;
   if (voice.source) { try { voice.source.stop(); } catch (_) { /* already over */ } }
@@ -11604,16 +11648,10 @@ function listenOnce(opts = {}) {
   });
 }
 
-function hearChunk(samples) {
-  let sum = 0;
-  for (let i = 0; i < samples.length; i++) sum += samples[i] * samples[i];
-  const rms = Math.sqrt(sum / samples.length);
-  if (voice.state === "listening" || voice.state === "asking") voice.level = Math.min(1, rms * 12);
-  const turn = voice.turn;
-  if (!turn) return;
-  // Down to Vosk's rate: each output sample the average of the input
-  // samples it stands for.
-  const ratio = voice.ctx.sampleRate / VOICE_RATE;
+// SAMPLES, recorded at RATE, down to Vosk's rate as 16-bit: each output
+// sample the average of the input samples it stands for.
+function toVoiceRate(samples, rate) {
+  const ratio = rate / VOICE_RATE;
   const out = new Int16Array(Math.floor(samples.length / ratio));
   for (let i = 0; i < out.length; i++) {
     const from = Math.floor(i * ratio), to = Math.min(samples.length, Math.floor((i + 1) * ratio));
@@ -11622,6 +11660,17 @@ function hearChunk(samples) {
     const value = total / Math.max(1, to - from);
     out[i] = Math.max(-32768, Math.min(32767, Math.round(value * 32767)));
   }
+  return out;
+}
+
+function hearChunk(samples) {
+  let sum = 0;
+  for (let i = 0; i < samples.length; i++) sum += samples[i] * samples[i];
+  const rms = Math.sqrt(sum / samples.length);
+  if (voice.state === "listening" || voice.state === "asking") voice.level = Math.min(1, rms * 12);
+  const turn = voice.turn;
+  if (!turn) return;
+  const out = toVoiceRate(samples, voice.ctx.sampleRate);
   const step = samples.length / voice.ctx.sampleRate;
   turn.elapsed += step;
   const loud = rms >= turn.o.loud;
@@ -11719,9 +11768,28 @@ async function voiceLoop() {
       if (how === "pause" && !(await pausedUntilResume())) return;
       continue;
     }
-    const reply = await sendAndWait(heard.text);
+    // An extension in the middle may change what Flash is asked, answer
+    // it itself, or end the conversation.
+    const middle = await voiceAsk("heard", { text: heard.text });
     if (!voice.on) return;
-    if (!reply) continue;
+    if (middle && middle.end) { endVoice(); toast("Voice mode off"); return; }
+    let reply;
+    if (middle && middle.reply) {
+      reply = el("div");
+      reply.textContent = middle.reply;
+    } else {
+      reply = await sendAndWait(middle && middle.text ? middle.text : heard.text);
+      if (!voice.on) return;
+      if (!reply) continue;
+    }
+    // And may change what is read out.
+    const spoken = sentencesOf(reply.querySelector(".assistant") || reply).map((p) => p.text).join(" ");
+    const said = await voiceAsk("reply", { text: spoken });
+    if (!voice.on) return;
+    if (said && typeof said.text === "string" && said.text !== spoken) {
+      reply = el("div");
+      reply.textContent = said.text;
+    }
     const how = await readAloud(reply);
     if (how === "exit") { endVoice(); toast("Voice mode off"); return; }
     if (how === "pause" && !(await pausedUntilResume())) return;
@@ -12154,6 +12222,87 @@ $("#voice .voice-orb").onclick = () => {
 };
 $("#voice .voice-end").innerHTML = icon("x");
 $("#voice .voice-end").onclick = endVoice;
+
+// ---------------------------------------------------------------------------
+// "Hey Flash". With it on in Settings, the page listens while it is open,
+// and those words start voice mode. Flash's own listening model hears
+// the microphone a moment at a time and listens for nothing else; the
+// pill in the message box shows it is on, and a click turns it off.
+
+const wake = { on: false, id: "", parts: [], sending: false, ctx: null, stream: null };
+const wakeWanted = () => pref("wake", "") === "on";
+
+function setWake(on) {
+  savePref("wake", on ? "on" : "");
+  if (on) startWake(true); else { stopWake(); toast("Stopped listening for “Hey Flash”"); }
+}
+
+async function startWake(told = false) {
+  if (wake.on || voice.on || !wakeWanted()) return;
+  if (!canRecord) { if (told) toast("Listening needs this page opened on this computer, or over HTTPS"); return; }
+  wake.on = true;
+  let status;
+  try { status = await command("voice-status"); } catch (_) { wake.on = false; return; }
+  if (status.missing.length || !status.ready) {
+    wake.on = false;
+    if (told) toast(status.missing.length ? status.install : "Start voice mode once first, so its listening model is downloaded");
+    return;
+  }
+  let stream;
+  try { stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true } }); }
+  catch (_) { wake.on = false; if (told) toast("Flash could not use the microphone. Allow it for this page, then try again."); return; }
+  if (!wake.on || voice.on) { stream.getTracks().forEach((t) => t.stop()); wake.on = false; return; }
+  wake.stream = stream;
+  wake.ctx = new AudioContext();
+  if (wake.ctx.state === "suspended") await wake.ctx.resume().catch(() => {});
+  const source = wake.ctx.createMediaStreamSource(stream);
+  const tap = wake.ctx.createScriptProcessor(4096, 1, 1);
+  const hush = wake.ctx.createGain();
+  hush.gain.value = 0;
+  source.connect(tap);
+  tap.connect(hush);
+  hush.connect(wake.ctx.destination);
+  wake.id = Math.random().toString(36).slice(2, 12);
+  wake.parts = [];
+  tap.onaudioprocess = (e) => {
+    if (!wake.on) return;
+    wake.parts.push(toVoiceRate(e.inputBuffer.getChannelData(0), wake.ctx.sampleRate));
+    if (wake.parts.length >= 3) sendWake();
+  };
+  $("#wake-btn").hidden = false;
+  if (told) toast("Listening for “Hey Flash”");
+}
+
+function sendWake() {
+  if (wake.sending || !wake.on) return;
+  const parts = wake.parts;
+  wake.parts = [];
+  const pcm = new Int16Array(parts.reduce((n, part) => n + part.length, 0));
+  let at = 0;
+  for (const part of parts) { pcm.set(part, at); at += part.length; }
+  wake.sending = true;
+  api("/api/voice/wake", { id: wake.id, data: base64Of(new Uint8Array(pcm.buffer)) })
+    .then((heard) => { if (heard.woke && wake.on) { stopWake(); startVoice(null, "wake"); } })
+    .catch(() => {})
+    .finally(() => { wake.sending = false; });
+}
+
+function stopWake() {
+  if (!wake.on) return;
+  wake.on = false;
+  if (wake.stream) wake.stream.getTracks().forEach((t) => t.stop());
+  if (wake.ctx) wake.ctx.close().catch(() => {});
+  if (wake.id) api("/api/voice/wake", { id: wake.id, data: "", end: true }).catch(() => {});
+  Object.assign(wake, { stream: null, ctx: null, id: "", parts: [] });
+  $("#wake-btn").hidden = true;
+}
+
+$("#wake-btn").onclick = () => setWake(false);
+// The browser lets a page listen only after someone has used it: the
+// first click or key after it opens starts the listening.
+const armWake = () => startWake();
+window.addEventListener("pointerdown", armWake, { once: true, capture: true });
+window.addEventListener("keydown", armWake, { once: true, capture: true });
 
 function toBottom(force, smooth) {
   if (!force && !follow) return;
@@ -14237,6 +14386,7 @@ const ACTIONS = [
   { label: "Extensions", keys: "", slash: "/extensions", run: () => showPage("extensions") },
   { label: "Import memory from another AI", keys: "", slash: "/import", run: () => { showSettings("memory"); importMemory(); } },
   { label: "Voice mode", keys: "", slash: "/voice", run: () => startVoice() },
+  { label: "Listen for “Hey Flash”, or stop", keys: "", slash: "/wake", run: () => setWake(!wakeWanted()) },
   { label: "Signed-in browsers", keys: "", slash: "/security", run: () => showSettings("security") },
   { label: "Search chats", keys: "Alt F", slash: "/search", run: () => openSearch() },
   { label: "Show or hide the file panel", keys: "Alt V", slash: "/file", run: toggleViewer },

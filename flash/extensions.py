@@ -136,6 +136,17 @@ class Events:
 
 
 @dataclass
+class Voice:
+    """A program in the middle of a voice conversation: told of each
+    moment, and for some asked what to do (voicehooks.py has them), one
+    JSON event on stdin at a time."""
+
+    run: list[str]
+    on: tuple[str, ...]
+    timeout: int = 5
+
+
+@dataclass
 class Provider:
     """Models from somewhere other than Ollama, answered by a program:
     asked for its models, and to chat, with JSON on stdin (providers.py
@@ -164,6 +175,7 @@ class Extension:
     themes: list = field(default_factory=list)
     loaders: list = field(default_factory=list)
     events: Optional[Events] = None
+    voice: Optional[Voice] = None
 
     def contents(self) -> list[str]:
         """What installing this adds, one line per kind of thing."""
@@ -202,6 +214,10 @@ class Extension:
             )
         if self.events is not None:
             lines.append("follows turns: " + ", ".join(self.events.on))
+        if self.voice is not None:
+            lines.append(
+                "in the middle of voice mode: " + ", ".join(self.voice.on)
+            )
 
         return lines
 
@@ -406,6 +422,30 @@ def _events(entry: Any, root: Path) -> Events:
     )
 
 
+def _voice(entry: Any, root: Path) -> Voice:
+    from .voicehooks import DEFAULT_TIMEOUT as VOICE_TIMEOUT
+    from .voicehooks import EVENTS as VOICE_EVENTS
+
+    where = '"voice"'
+    if not isinstance(entry, dict):
+        raise ExtensionError(f"{where} has to be an object")
+    wanted = entry.get("on", list(VOICE_EVENTS))
+    if not isinstance(wanted, list) or not wanted or not all(
+        isinstance(name, str) and name in VOICE_EVENTS for name in wanted
+    ):
+        raise ExtensionError(
+            f'{where}: "on" has to list some of {", ".join(VOICE_EVENTS)}'
+        )
+    timeout = VOICE_TIMEOUT
+    if entry.get("timeout") is not None:
+        # Someone is waiting to be answered: never as long as a tool.
+        timeout = min(_timeout(entry.get("timeout"), where), 30)
+    return Voice(
+        run=_argv(entry.get("run"), root, where),
+        on=tuple(dict.fromkeys(wanted)), timeout=timeout,
+    )
+
+
 def _entries(manifest: dict, key: str) -> list:
     value = manifest.get(key, [])
     if not isinstance(value, list):
@@ -531,11 +571,16 @@ def load(root: Path) -> Extension:
         if manifest.get("events") is not None else None
     )
 
+    voice = (
+        _voice(manifest["voice"], root)
+        if manifest.get("voice") is not None else None
+    )
+
     if not (commands or tools or prompt or backgrounds or providers
-            or themes or loaders or events):
+            or themes or loaders or events or voice):
         raise ExtensionError(
             f"{MANIFEST} declares nothing: no commands, tools, prompt, "
-            "backgrounds, providers, themes, loaders, or events"
+            "backgrounds, providers, themes, loaders, events, or voice"
         )
 
     try:
@@ -557,6 +602,7 @@ def load(root: Path) -> Extension:
         themes=themes,
         loaders=loaders,
         events=events,
+        voice=voice,
     )
 
 

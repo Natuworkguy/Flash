@@ -943,3 +943,58 @@ def test_the_page_hears_a_recording_a_piece_at_a_time(monkeypatch):
 
     voice.hear_live("a", b"", end=True)
     assert "a" not in voice._live and "b" in voice._live  # nosec B101
+
+
+class _Waking:
+    """A recognizer held to a grammar, which hears "hey", then "hey
+    flash", a block at a time."""
+
+    made: list = []
+
+    def __init__(self, model, rate, grammar=None):
+        self.grammar = grammar
+        self.fed = 0
+        self.resets = 0
+        _Waking.made.append(self)
+
+    def AcceptWaveform(self, data):
+        self.fed += 1
+        return False
+
+    def PartialResult(self):
+        said = ["", "hey", "hey flash"][min(self.fed, 2)]
+        return json.dumps({"partial": said})
+
+    def Reset(self):
+        self.resets += 1
+        self.fed = 0
+
+
+def test_hey_flash_is_heard_and_nothing_else_is_listened_for(monkeypatch):
+    _fake_audio(monkeypatch)
+    sys.modules["vosk"].KaldiRecognizer = _Waking
+    monkeypatch.setattr(voice, "_wake", {})
+    _Waking.made = []
+    piece = b"\0" * (voice.BLOCK_FRAMES * 2)
+
+    assert voice.hear_wake("w", piece) == (False, "")  # nosec B101
+    assert voice.hear_wake("w", piece) == (True, "")  # nosec B101
+
+    heard = _Waking.made[0]
+    assert json.loads(heard.grammar) == [  # nosec B101
+        *voice.WAKE_PHRASES, "[unk]",
+    ]
+    # Heard once, it starts listening afresh for the next time.
+    assert heard.resets == 1  # nosec B101
+    assert voice.hear_wake("w", piece) == (False, "")  # nosec B101
+    voice.hear_wake("w", b"", end=True)
+    assert "w" not in voice._wake  # nosec B101
+
+
+def test_waking_without_the_listening_model_says_why(monkeypatch):
+    monkeypatch.setitem(sys.modules, "vosk", None)
+    monkeypatch.setattr(voice, "_wake", {})
+
+    woke, why = voice.hear_wake("w", b"\0\0")
+
+    assert woke is False and why == voice.INSTALL_HINT  # nosec B101

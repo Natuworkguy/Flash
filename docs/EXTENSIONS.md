@@ -97,7 +97,7 @@ An extension is a folder, usually a GitHub repository, with a
 ```
 
 Only `name` is required, plus at least one command, tool, prompt,
-backgrounds folder, provider, theme, loader, or events. Every path is relative to the extension's folder
+backgrounds folder, provider, theme, loader, events, or voice. Every path is relative to the extension's folder
 and cannot point outside it.
 
 | Field | Meaning |
@@ -112,6 +112,7 @@ and cannot point outside it.
 | `themes` | Colour themes for the web UI. See below. |
 | `loaders` | Loading animations for the terminal and the web UI. See below. |
 | `events` | A program told when a turn starts, plans, waits on you, and ends. See below. |
+| `voice` | A program in the middle of voice mode: told what is said both ways, and able to change it. See below. |
 
 ### Commands
 
@@ -242,6 +243,49 @@ own, so a slow program never holds a turn up; one too slow to keep up
 misses events rather than queueing them forever. A program run on
 Flash's own Python (`"python"`) can `import flash` and use what Flash
 has, such as `flash.mail` and the email account set up with `/email`.
+
+### Voice
+
+An extension can sit in the middle of voice mode in the web UI, from
+"Hey Flash" (Settings, Voice) or the voice button: told of each moment
+of the conversation, to show it somewhere else, and able to change what
+is said both ways, or answer for Flash. Flash runs its program once for
+each moment, with the moment as JSON on stdin:
+
+```json
+"voice": {"run": ["python", "./voice.py"],
+          "on": ["wake", "start", "state", "words", "heard", "reply", "end"],
+          "timeout": 5}
+```
+
+`on` defaults to all seven, and `timeout` to 5 seconds, 30 at most.
+Every moment carries `event`, `conversation` (an id shared by one
+conversation's moments), `source` (`web`) and `at` (a Unix time).
+
+Three are the extension's to decide. Flash waits for the program and
+reads what it prints as a JSON object; printing nothing changes nothing:
+
+| Moment | Carries | It may print |
+| --- | --- | --- |
+| `wake` | nothing more: "Hey Flash" was just heard | `{"ignore": true}` to keep voice mode off |
+| `heard` | `text`: what was said | `{"text": ...}` to ask Flash that instead, `{"reply": ...}` to answer it, read aloud, without asking Flash, or `{"end": true}` to end voice mode |
+| `reply` | `text`: what Flash is about to say, as it will be read out | `{"text": ...}` to read that out instead |
+
+The other four it is only told of, in order, from a thread of their own,
+so a slow program never holds the conversation up:
+
+| Moment | Carries |
+| --- | --- |
+| `start` | `how`: `wake` or `button` |
+| `state` | `state`: `listening`, `hearing`, `thinking`, `speaking`, `paused` or `asking` |
+| `words` | `text`: what is being said, as it is said |
+| `end` | nothing more |
+
+With several extensions installed, each is asked in turn, seeing the
+text as the one before left it; once one answers a `heard`, the rest
+are not asked. A program that fails, or takes longer than its timeout,
+changes nothing. Only conversations with Flash itself go through: voice
+mode in a team's chat does not.
 
 ### Providers
 

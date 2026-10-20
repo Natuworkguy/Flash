@@ -4340,3 +4340,32 @@ class TestPageAddresses:
         status, body = request(server, "GET", "/settings/email")
         assert status == 200
         assert b"<html" in body[:400].lower()
+
+
+class TestHeyFlash:
+    def test_hey_flash_wakes_the_page(self, server, monkeypatch):
+        got = []
+
+        def hear_wake(stream, pcm, end=False):
+            got.append((stream, pcm, end))
+            return True, ""
+
+        monkeypatch.setattr(web.voice, "hear_wake", hear_wake)
+
+        status, body = request(server, "POST", "/api/voice/wake", {
+            "id": "abc", "data": base64.b64encode(b"\x01\x02").decode(),
+        })
+
+        assert status == 200 and json.loads(body) == {"woke": True}
+        assert got == [("abc", b"\x01\x02", False)]
+        assert request(server, "POST", "/api/voice/wake",
+                       {"id": "", "data": ""})[0] == 400
+
+    def test_waking_says_why_it_cannot(self, server, monkeypatch):
+        monkeypatch.setattr(web.voice, "hear_wake",
+                            lambda stream, pcm, end=False: (False, "no model"))
+
+        status, body = request(server, "POST", "/api/voice/wake",
+                               {"id": "a", "data": ""})
+
+        assert status == 400 and json.loads(body)["error"] == "no model"

@@ -74,6 +74,7 @@ from . import (
     updater,
     visuals,
     voice,
+    voicehooks,
     workspace,
 )
 from .dashes import DashGuard
@@ -2715,6 +2716,9 @@ def status(ai) -> dict:
         # turns, and every one there is to pick from.
         "loader": loaders.chosen(),
         "loader_morph": loaders.morphing(),
+        # Whether an extension follows voice mode: if none does, the page
+        # does not tell Flash of every moment of it.
+        "voice_hooks": voicehooks.wanted(),
         "loaders": [loader.summary() for loader in loaders.all_loaders()],
         # Colour themes from extensions, beside the page's own.
         "themes": [t.summary() for t in themes.extension_themes()],
@@ -4144,6 +4148,7 @@ class Handler(BaseHTTPRequestHandler):
             "/api/upload": MAX_RECORDING_BODY,
             "/api/voice/hear": MAX_VOICE_BODY,
             "/api/voice/live": MAX_VOICE_BODY,
+            "/api/voice/wake": MAX_VOICE_BODY,
         }.get(url.path, MAX_BODY_BYTES)
         if length > limit:
             self._json(
@@ -4235,6 +4240,41 @@ class Handler(BaseHTTPRequestHandler):
             if why:
                 raise ValueError(why)
             return {"text": words}
+
+        if path == "/api/voice/wake":
+            # Listening for "Hey Flash", while the page is open.
+            try:
+                pcm = base64.b64decode(
+                    str(body.get("data") or ""), validate=True
+                )
+            except (ValueError, TypeError):
+                raise ValueError(
+                    "that recording did not arrive whole"
+                ) from None
+            stream = str(body.get("id") or "")[:32]
+            if not stream:
+                raise ValueError("which recording is that?")
+            woke, why = voice.hear_wake(stream, pcm, bool(body.get("end")))
+            if why:
+                raise ValueError(why)
+            if woke and voicehooks.ask("wake")["ignore"]:
+                woke = False
+            return {"woke": woke}
+
+        if path == "/api/voice/hook":
+            # A moment of voice mode, for the extensions in the middle of
+            # it: what they decide for the ones they are asked, nothing
+            # for the ones they are only told.
+            event = str(body.get("event") or "")
+            talk = str(body.get("conversation") or "")
+            data = {k: body[k] for k in ("text", "state", "how")
+                    if k in body}
+            if event in voicehooks.ASKED:
+                return voicehooks.ask(event, talk, **data)
+            if event in voicehooks.TOLD:
+                voicehooks.tell(event, talk, **data)
+                return {}
+            raise ValueError(f"no voice moment called {event!r}")
 
         if path == "/api/voice/say":
             wav, why = voice.synthesize(
