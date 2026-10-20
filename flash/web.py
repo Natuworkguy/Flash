@@ -3105,9 +3105,15 @@ def voice_models(session: "Session") -> dict:
                 "name": c.name, "size": c.size, "label": c.label,
                 "installed": getattr(voice, installed)(c.name),
                 "current": c.name == in_use,
+                # A Kokoro voice, with what it runs on not installed.
+                "needs": voice.KOKORO_HINT if (
+                    voice.is_kokoro(c.name) and not kokoro
+                ) else "",
             }
             for c in getattr(voice, offered)
         ]
+
+    kokoro = voice.kokoro_ready()
 
     job = session.voice_job
     return {
@@ -3115,7 +3121,7 @@ def voice_models(session: "Session") -> dict:
         "speaking": listed("speaking"),
         "downloading": {"kind": job[0], "name": job[1]} if job else None,
         "missing": voice.web_missing(),
-        "install": voice.INSTALL_HINT,
+        "install": voice.install_hint(),
         # How the voice delivers what it says.
         "styles": [
             {"name": name, "label": style.label,
@@ -3588,7 +3594,7 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
         return {
             "missing": voice.web_missing(),
             "ready": voice.models_present(),
-            "install": voice.INSTALL_HINT,
+            "install": voice.install_hint(),
         }
 
     if name == "voice-setup":
@@ -3623,6 +3629,8 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
                 raise ValueError("That one is in use. Pick another first.")
             getattr(voice, remove)(arg)
             return voice_models(session)
+        if voice.is_kokoro(arg) and not voice.kokoro_ready():
+            raise ValueError(voice.KOKORO_HINT)
         if getattr(voice, installed)(arg):
             ai.set_config_var(VOICE_SETTINGS[kind], arg)
             return voice_models(session)

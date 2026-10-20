@@ -1,10 +1,12 @@
 # pylint: disable=C0114,C0115,C0116
 
 import array
+import io
 import json
 import sys
 import threading
 import types
+import wave
 import zipfile
 
 import pytest
@@ -1081,3 +1083,123 @@ def test_waking_without_the_listening_model_says_why(monkeypatch):
     woke, why = voice.hear_wake("w", b"\0\0")
 
     assert woke is False and why == voice.INSTALL_HINT  # nosec B101
+
+
+class _FakeKokoro:
+    """Stands in for kokoro_onnx.Kokoro: a short tone per piece of text,
+    longer the slower it is asked to speak."""
+
+    made: list = []
+
+    def __init__(self, model, voices):
+        _FakeKokoro.made.append((model, voices))
+        self.asked: list = []
+
+    def create(self, text, voice, speed=1.0, lang="en-us"):
+        import numpy
+
+        self.asked.append((text, voice, speed, lang))
+        return numpy.full(int(2400 / speed), 0.25, dtype="float32"), 24000
+
+
+@pytest.fixture
+def kokoro(monkeypatch, tmp_path):
+    module = types.ModuleType("kokoro_onnx")
+    module.Kokoro = _FakeKokoro
+    monkeypatch.setitem(sys.modules, "kokoro_onnx", module)
+    monkeypatch.setattr(voice, "MODELS_DIR", tmp_path)
+    monkeypatch.setattr(voice, "_speaker", None)
+    monkeypatch.setattr(voice, "_kokoro", None)
+    _FakeKokoro.made = []
+    for path in voice.kokoro_paths():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"model")
+    monkeypatch.setenv("VOICE_PIPER_VOICE", "kokoro-bf_emma")
+    return module
+
+
+def test_kokoro_voices_are_offered_and_share_one_download(kokoro):
+    names = [c.name for c in voice.SPEAKING if voice.is_kokoro(c.name)]
+
+    assert "kokoro-af_heart" in names and len(names) >= 4  # nosec B101
+    # The files are shared: every Kokoro voice is in once they are.
+    assert all(voice.voice_installed(n) for n in names)  # nosec B101
+    assert voice.models_present() is False  # nosec B101  (no listening)
+
+
+def test_kokoro_speaks_through_the_same_path(kokoro, monkeypatch):
+    monkeypatch.setenv("VOICE_STYLE", "calm")
+
+    wav, why = voice.synthesize("Hello there. How are you?")
+
+    assert why == ""  # nosec B101
+    with wave.open(io.BytesIO(wav)) as heard:
+        assert heard.getframerate() == voice.KOKORO_RATE  # nosec B101
+    spoken = voice._kokoro[1].asked
+    # A sentence at a time, in the voice's accent, at the style's pace.
+    assert [s[0] for s in spoken] == [  # nosec B101
+        "Hello there.", "How are you?",
+    ]
+    assert {s[1] for s in spoken} == {"bf_emma"}  # nosec B101
+    assert {s[3] for s in spoken} == {"en-gb"}  # nosec B101
+    assert all(s[2] < 1.0 for s in spoken)  # nosec B101  (calm is slower)
+    # One network for every voice: another voice loads nothing new.
+    monkeypatch.setenv("VOICE_PIPER_VOICE", "kokoro-af_heart")
+    voice.synthesize("Hi.")
+    assert len(_FakeKokoro.made) == 1  # nosec B101
+
+
+def test_kokoro_without_its_package_says_how(monkeypatch, tmp_path):
+    monkeypatch.setitem(sys.modules, "kokoro_onnx", None)
+    monkeypatch.setattr(voice, "MODELS_DIR", tmp_path)
+    monkeypatch.setattr(voice, "_speaker", None)
+    monkeypatch.setenv("VOICE_PIPER_VOICE", "kokoro-af_heart")
+
+    assert voice.KOKORO_PACKAGE in voice.missing_packages()  # nosec B101
+    assert voice.install_hint() == voice.KOKORO_HINT  # nosec B101
+    assert voice.kokoro_ready() is False  # nosec B101
+
+
+def test_kokoro_downloads_what_is_missing(monkeypatch, tmp_path):
+    monkeypatch.setattr(voice, "MODELS_DIR", tmp_path)
+    fetched = []
+
+    def download(url, out, label, on_progress, stop=None):
+        fetched.append(url.rsplit("/", 1)[1])
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_bytes(b"x")
+        return ""
+
+    monkeypatch.setattr(voice, "_download", download)
+
+    assert voice.download_voice("kokoro-af_heart", lambda *a: None) == ""
+    assert fetched == list(voice.KOKORO_FILES)  # nosec B101
+    # Another Kokoro voice needs nothing more.
+    assert voice.download_voice("kokoro-am_michael", lambda *a: None) == ""
+    assert len(fetched) == 2  # nosec B101
+
+
+def test_kokoro_is_not_removed_from_under_the_voice_in_use(kokoro):
+    with pytest.raises(ValueError, match="in use"):
+        voice.remove_voice("kokoro-af_heart")
+
+
+def test_kokoro_is_removed_once_none_speaks(kokoro, monkeypatch):
+    monkeypatch.setenv("VOICE_PIPER_VOICE", voice.DEFAULT_PIPER_VOICE)
+
+    voice.remove_voice("kokoro-af_heart")
+
+    assert not any(p.exists() for p in voice.kokoro_paths())  # nosec B101
+
+
+def test_an_update_puts_kokoro_back_when_it_was_in(monkeypatch):
+    from flash import updater
+
+    found = types.SimpleNamespace()
+    monkeypatch.setattr("importlib.util.find_spec",
+                        lambda name: found if name == "kokoro_onnx" else None)
+    assert updater.KOKORO_PACKAGE in updater.voice_packages()  # nosec
+
+    monkeypatch.setattr("importlib.util.find_spec", lambda name: None)
+    assert updater.voice_packages() == list(  # nosec B101
+        updater.VOICE_PACKAGES)

@@ -22,6 +22,8 @@ file = ["requirements.txt"]
 [tool.setuptools.dynamic.optional-dependencies]
 dev = { file = ["requirements-dev.txt"] }
 voice = { file = ["requirements-voice.txt"] }
+# Kokoro voices, which speak more naturally: pip install "flash[kokoro]".
+kokoro = { file = ["requirements-kokoro.txt"] }
 
 [project.scripts]
 flash = "flash.ai:main"

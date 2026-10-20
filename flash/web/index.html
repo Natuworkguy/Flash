@@ -10213,6 +10213,9 @@ async function drawVoiceModels(box = document.querySelector(".voice-models")) {
   drawVoiceStyles(box, r);
   for (const [kind, title, sub] of VOICE_GROUPS) {
     box.insertAdjacentHTML("beforeend", `<div class="vm-head"><b>${title}</b><span>${sub}</span></div>`);
+    // Voices that need a package first say how, once, above them all.
+    const needs = r[kind].find((m) => m.needs);
+    if (needs) box.appendChild(el("p", "vm-missing")).textContent = needs.needs;
     const list = box.appendChild(el("div", "vm-list"));
     for (const m of r[kind]) {
       const fetching = r.downloading && r.downloading.kind === kind && r.downloading.name === m.name;
@@ -10223,6 +10226,8 @@ async function drawVoiceModels(box = document.querySelector(".voice-models")) {
       const act = row.querySelector(".vm-act");
       if (fetching) { downloadingSlot(act, "Downloading"); continue; }
       if (m.current) { act.innerHTML = `<span class="vm-tag">In use</span>`; continue; }
+      // A Kokoro voice, with what it runs on not installed: how to.
+      if (m.needs) { act.innerHTML = `<span class="vm-tag">Needs kokoro-onnx</span>`; continue; }
       const pick = el("button", "btn small", m.installed ? "Use" : "Download");
       pick.type = "button";
       pick.disabled = !!r.downloading || (!m.installed && r.missing.length > 0);
