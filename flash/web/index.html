@@ -745,6 +745,23 @@ body.voice-on .shell, body.voice-on #suggestions, body.voice-on #pending { displ
 #recording .rec-meta { font-size: 12px; color: var(--text-3); font-variant-numeric: tabular-nums; }
 #recording .rec-mic { display: inline-flex; align-items: center; gap: 2px; height: 16px; }
 #recording .rec-mic[hidden] { display: none; }
+#meeting { margin: 0 0 10px; padding: 10px 12px 10px 16px; border: 1px solid color-mix(in srgb, #ff4d5e 45%, var(--border-strong)); border-radius: 16px; background: color-mix(in srgb, #ff4d5e 7%, var(--surface)); animation: pop 0.2s var(--ease); }
+#meeting[hidden] { display: none; }
+#meeting .mt-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+#meeting .rec-dot { flex: none; width: 10px; height: 10px; border-radius: 50%; background: #ff4d5e; box-shadow: 0 0 0 0 #ff4d5e80; animation: rec-beat 1.4s ease-out infinite; }
+#meeting.paused .rec-dot { animation: none; background: var(--text-3); box-shadow: none; }
+#meeting .rec-words { flex: 1; min-width: 0; display: flex; flex-direction: column; line-height: 1.3; }
+#meeting .rec-words b { font-size: 13.5px; font-weight: 600; }
+#meeting .mt-meta { font-size: 12px; color: var(--text-3); font-variant-numeric: tabular-nums; }
+#meeting .rec-mic { display: inline-flex; align-items: center; gap: 2px; height: 16px; }
+#meeting .rec-mic i { width: 3px; border-radius: 2px; background: var(--text-2); height: calc(4px + var(--v, 0) * 12px); transition: height 0.08s; }
+#meeting .mt-acts { display: flex; gap: 6px; flex-wrap: wrap; }
+#meeting .mt-words { max-height: 132px; overflow-y: auto; margin-top: 8px; font-size: 13.5px; line-height: 1.5; color: var(--text-2); overscroll-behavior: contain; }
+#meeting .mt-words:empty::before { content: "Listening. What is said shows here as it is written down."; color: var(--text-3); }
+#meeting .mt-words p { margin: 0 0 3px; }
+#meeting .mt-words time { font: 11.5px var(--mono); color: var(--text-3); margin-right: 8px; }
+#meeting .mt-words p:last-child span { color: var(--text-3); }
+@media (max-width: 560px) { #meeting .mt-acts { width: 100%; } #meeting .mt-acts .primary { margin-left: auto; } }
 #recording .rec-mic i { width: 3px; border-radius: 2px; background: var(--text-2); height: calc(4px + var(--v, 0) * 12px); transition: height 0.08s; }
 @keyframes rec-beat { 0% { box-shadow: 0 0 0 0 #ff4d5e80; } 70%, 100% { box-shadow: 0 0 0 8px #ff4d5e00; } }
 .tray-item.clip { width: 96px; overflow: hidden; }
@@ -2961,6 +2978,19 @@ body.resizing-viewer iframe { pointer-events: none; }
           <button type="button" class="btn small" data-rec-discard>Discard</button>
           <button type="button" class="btn small primary" data-rec-stop>Stop</button>
         </div>
+        <div id="meeting" hidden role="group" aria-label="Recording a meeting">
+          <div class="mt-head">
+            <span class="rec-dot" aria-hidden="true"></span>
+            <span class="rec-words"><b>Recording a meeting</b><span class="mt-meta"></span></span>
+            <span class="rec-mic" aria-hidden="true"><i></i><i></i><i></i><i></i></span>
+            <span class="mt-acts">
+              <button type="button" class="btn small" data-mt-pause>Pause</button>
+              <button type="button" class="btn small" data-mt-discard>Discard</button>
+              <button type="button" class="btn small primary" data-mt-stop>Stop and write up</button>
+            </span>
+          </div>
+          <div class="mt-words" aria-live="polite"></div>
+        </div>
         <div id="spark-ask" hidden aria-live="polite"></div>
         <div id="voice" hidden role="group" aria-label="Voice mode">
           <button type="button" class="voice-orb" aria-label="Voice"><span></span><svg class="face" viewBox="0 0 58 58" aria-hidden="true"><g class="cheeks"><circle cx="15" cy="34" r="4.2"/><circle cx="43" cy="34" r="4.2"/></g><g class="brows"><path d="M17 17.5q4-2.6 8 0"/><path d="M33 17.5q4-2.6 8 0"/></g><g class="eyes"><g class="eye"><ellipse cx="21" cy="25.5" rx="3.3" ry="4.4"/><circle class="glint" cx="22.2" cy="23.8" r="1.1"/></g><g class="eye"><ellipse cx="37" cy="25.5" rx="3.3" ry="4.4"/><circle class="glint" cx="38.2" cy="23.8" r="1.1"/></g></g><path class="smile" d="M22.5 36.5q6.5 5.2 13 0"/><ellipse class="mouth" cx="29" cy="38" rx="4.6" ry="3.4"/></svg></button>
@@ -3238,6 +3268,8 @@ const VOICE_PAUSE = 1.2;         // seconds of quiet that end a turn
 const VOICE_PATIENCE = 8;        // seconds with no speech before pausing
 const VOICE_LONGEST = 120;       // seconds in one turn, at most
 
+// A meeting being recorded, if one is (startMeeting).
+let meeting = null;
 const voice = { on: false, state: "", ctx: null, stream: null, level: 0, turn: null, tap: null, source: null, cut: false, setup: null, analyser: null, team: null, home: null };
 let view = "chat";         // "chat" | "projects" | "project" | "settings" | "skills" | "sparks" | "extensions"
 let viewProject = null;    // the project page shown, or the project a new chat starts in
@@ -12094,6 +12126,7 @@ function showHeard(text) {
 // the orb sits where the team's composer was.
 async function startVoice(team = null, how = "button") {
   if (voice.on) return;
+  if (meeting) { toast("A meeting is being recorded: stop it first, and voice mode can have the microphone"); return; }
   stopWake();
   if (!canRecord) { toast("Voice mode needs this page opened on this computer, or over HTTPS"); return; }
   let status;
@@ -12892,7 +12925,7 @@ function setWake(on) {
 }
 
 async function startWake(told = false) {
-  if (wake.on || voice.on || !wakeWanted()) return;
+  if (wake.on || voice.on || meeting || !wakeWanted()) return;
   if (!canRecord) { if (told) toast("Listening needs this page opened on this computer, or over HTTPS"); return; }
   wake.on = true;
   let status;
@@ -14052,6 +14085,7 @@ function openPlus() {
     rows.push({ html: `${icon("record")}<span class="label">Record your screen</span>`, act: () => recordScreen(false) });
     rows.push({ html: `${icon("mic")}<span class="label">Record and narrate</span>`, act: () => recordScreen(true) });
   }
+  if (canRecord) rows.push({ html: `${icon("users")}<span class="label">Record a meeting</span><span class="desc">written up when it ends</span>`, act: startMeeting });
   if (navigator.clipboard && navigator.clipboard.read) rows.push({ html: `${icon("copy")}<span class="label">Paste an image</span>`, act: pasteImage });
   rows.push({ header: true, rule: true, html: "" });
   const thinking = thinkBtn.getAttribute("aria-pressed") === "true";
@@ -14319,6 +14353,155 @@ async function finishRecording(rec) {
   }
   if (attached.includes(item)) { renderTray(); updateSend(); }
 }
+
+// A meeting: the microphone, written down as it goes by the listening
+// model on the computer Flash runs on, then written up in a new chat
+// (the one being recorded is `meeting`, near the top).
+const MEETING_SEND_MS = 600;
+
+async function startMeeting() {
+  if (meeting) return;
+  if (!canRecord) { toast("Recording needs this page opened on this computer, or over HTTPS"); return; }
+  if (voice.on) { toast("End voice mode first: a meeting needs the microphone to itself"); return; }
+  let started;
+  try { started = await api("/api/meeting/start", {}); }
+  catch (error) {
+    const packages = packagesIn(error.message);
+    if (packages.length) askInstall(packages, error.message, startMeeting); else showFailure(error);
+    return;
+  }
+  stopWake();
+  let stream;
+  try { stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true } }); }
+  catch (_) {
+    api("/api/meeting/discard", { id: started.id }).catch(() => {});
+    toast("Flash could not use the microphone. Allow it for this page, then try again.");
+    if (wakeWanted()) startWake();
+    return;
+  }
+  const ctx = new AudioContext();
+  if (ctx.state === "suspended") await ctx.resume().catch(() => {});
+  const source = ctx.createMediaStreamSource(stream);
+  const tap = ctx.createScriptProcessor(4096, 1, 1);
+  const hush = ctx.createGain();
+  hush.gain.value = 0;
+  source.connect(tap);
+  tap.connect(hush);
+  hush.connect(ctx.destination);
+  meeting = { id: started.id, stream, ctx, parts: [], lines: [], seconds: 0, paused: false, sending: null, level: 0 };
+  const m = meeting;
+  tap.onaudioprocess = (e) => {
+    if (m.paused || meeting !== m) return;
+    const samples = e.inputBuffer.getChannelData(0);
+    let peak = 0;
+    for (let i = 0; i < samples.length; i += 16) peak = Math.max(peak, Math.abs(samples[i]));
+    m.level = Math.min(1, peak * 3);
+    m.parts.push(toVoiceRate(samples, ctx.sampleRate));
+  };
+  m.timer = setInterval(() => { sendMeeting(m); drawMeeting(); }, MEETING_SEND_MS);
+  const bar = $("#meeting");
+  bar.hidden = false;
+  bar.classList.remove("paused");
+  bar.querySelector(".mt-words").textContent = "";
+  bar.querySelector("[data-mt-pause]").textContent = "Pause";
+  drawMeeting();
+}
+
+// What was heard since the last send, sent; the transcript it comes back
+// with, drawn. One at a time, so they arrive in order.
+function sendMeeting(m) {
+  if (m.sending) return m.sending;
+  const parts = m.parts;
+  m.parts = [];
+  const pcm = new Int16Array(parts.reduce((n, part) => n + part.length, 0));
+  let at = 0;
+  for (const part of parts) { pcm.set(part, at); at += part.length; }
+  if (!pcm.length && m.lines.length) return Promise.resolve();
+  m.sending = api("/api/meeting/hear", { id: m.id, data: base64Of(new Uint8Array(pcm.buffer)), count: m.lines.length })
+    .then((r) => {
+      m.lines.splice(r.from, m.lines.length - r.from, ...r.lines);
+      m.seconds = r.seconds;
+      if (meeting === m) drawMeeting(true);
+    })
+    .catch((error) => {
+      if (meeting !== m) return;
+      toast(error.message);
+      // Over its longest, or gone with a restart: what was heard is kept.
+      if (/at most|not being recorded/.test(error.message)) stopMeeting();
+    })
+    .finally(() => { m.sending = null; });
+  return m.sending;
+}
+
+function drawMeeting(words = false) {
+  const m = meeting;
+  if (!m) return;
+  const bar = $("#meeting");
+  const count = m.lines.reduce((n, line) => n + line.text.split(/\s+/).filter(Boolean).length, 0);
+  bar.querySelector(".mt-meta").textContent = `${m.paused ? "Paused · " : ""}${clock(m.seconds)} · ${count} word${count === 1 ? "" : "s"}`;
+  bar.querySelectorAll(".rec-mic i").forEach((bit, n) => bit.style.setProperty("--v", m.paused ? 0 : Math.max(0, m.level - n * 0.12).toFixed(2)));
+  if (!words) return;
+  const box = bar.querySelector(".mt-words");
+  const atEnd = box.scrollHeight - box.scrollTop - box.clientHeight < 24;
+  box.textContent = "";
+  for (const line of m.lines) {
+    const p = el("p", "", `<time></time><span></span>`);
+    p.firstChild.textContent = clock(line.at);
+    p.lastChild.textContent = line.text;
+    box.appendChild(p);
+  }
+  if (atEnd) box.scrollTop = box.scrollHeight;
+}
+
+function endMeetingAudio(m) {
+  clearInterval(m.timer);
+  m.stream.getTracks().forEach((t) => t.stop());
+  m.ctx.close().catch(() => {});
+  if (meeting === m) meeting = null;
+  $("#meeting").hidden = true;
+  if (wakeWanted()) startWake();
+}
+
+async function stopMeeting() {
+  const m = meeting;
+  if (!m || m.stopping) return;
+  m.stopping = true;
+  const stop = $("#meeting [data-mt-stop]");
+  stop.disabled = true;
+  stop.textContent = "Writing it up…";
+  // What the microphone still had, sent before the end.
+  if (m.sending) await m.sending;
+  await sendMeeting(m);
+  endMeetingAudio(m);
+  stop.disabled = false;
+  stop.textContent = "Stop and write up";
+  let r;
+  const here = current && chats.get(current);
+  try { r = await api("/api/meeting/stop", { id: m.id, project: (here && here.project) || viewProject || "" }); }
+  catch (error) { showFailure(error); return; }
+  toast(`Meeting of ${clock(r.seconds)} kept, and being written up`);
+  await loadState().catch(() => {});
+  switchTo(r.chat);
+}
+
+$("#meeting [data-mt-stop]").onclick = () => stopMeeting();
+$("#meeting [data-mt-pause]").onclick = (e) => {
+  if (!meeting) return;
+  meeting.paused = !meeting.paused;
+  e.currentTarget.textContent = meeting.paused ? "Resume" : "Pause";
+  $("#meeting").classList.toggle("paused", meeting.paused);
+  drawMeeting();
+};
+$("#meeting [data-mt-discard]").onclick = async (e) => {
+  const m = meeting;
+  if (!m) return;
+  if (m.lines.length && !(await confirmPop(e.currentTarget, { title: "Discard this meeting?", text: "Nothing of it is kept: not the transcript, and no write-up.", yes: "Discard" }))) return;
+  endMeetingAudio(m);
+  api("/api/meeting/discard", { id: m.id }).catch(() => {});
+  toast("Meeting discarded");
+};
+// Closing the page mid-meeting asks first.
+window.addEventListener("beforeunload", (e) => { if (meeting) { e.preventDefault(); e.returnValue = ""; } });
 
 $("#recording [data-rec-stop]").onclick = () => stopRecording();
 $("#recording [data-rec-discard]").onclick = () => stopRecording(true);
@@ -15095,6 +15278,7 @@ const ACTIONS = [
   { label: "Listen for “Hey Flash”, or stop", keys: "", slash: "/wake", run: () => setWake(!wakeWanted()) },
   { label: "Signed-in browsers", keys: "", slash: "/security", run: () => showSettings("security") },
   { label: "Let Flash act on this computer", keys: "", slash: "/computer", run: () => showSettings("general") },
+  { label: "Record a meeting", keys: "", slash: "/meeting", run: () => startMeeting() },
   { label: "Search chats", keys: "Alt F", slash: "/search", run: () => openSearch() },
   { label: "Show or hide the file panel", keys: "Alt V", slash: "/file", run: toggleViewer },
   { label: "New project", keys: "", slash: "/project", run: () => projectForm() },

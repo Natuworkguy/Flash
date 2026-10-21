@@ -453,6 +453,14 @@ def install_hint() -> str:
     return KOKORO_HINT if KOKORO_PACKAGE in missing else INSTALL_HINT
 
 
+def listening_missing() -> list[str]:
+    """What hearing alone still needs installed: no voice to speak with,
+    and no sounddevice, since the page has the microphone."""
+
+    hearing = MOONSHINE_PACKAGE if is_moonshine(vosk_model()) else "vosk"
+    return [p for p in missing_packages() if p == hearing]
+
+
 def web_missing() -> list[str]:
     """What voice in the web UI still needs installed.
 
@@ -855,11 +863,22 @@ class Hearing:
     def words(self) -> str:
         return " ".join([*self._said, self._partial]).strip()
 
+    def pieces(self) -> list[str]:
+        """What was said so far, a stretch at a time, the last one still
+        being heard."""
+
+        return [*self._said, self._partial]
+
+    def ended(self) -> list[str]:
+        """Every stretch of what was said, now it is over."""
+
+        piece = _result_text(self._recognizer.FinalResult(), "text")
+        return [*self._said, piece]
+
     def final(self) -> str:
         """Everything that was said."""
 
-        piece = _result_text(self._recognizer.FinalResult(), "text")
-        return " ".join([*self._said, piece]).strip()
+        return " ".join(p for p in self.ended() if p).strip()
 
     def close(self) -> None:
         """Let it go: a Vosk recognizer has nothing to free."""
@@ -932,11 +951,17 @@ class MoonshineHearing:
     def words(self) -> str:
         return " ".join(text for text in self._lines.values() if text)
 
-    def final(self) -> str:
+    def pieces(self) -> list[str]:
+        return list(self._lines.values())
+
+    def ended(self) -> list[str]:
         with _moonshine_lock:
             self._take(self._stream.stop())
         self.close()
-        return self.words()
+        return self.pieces()
+
+    def final(self) -> str:
+        return " ".join(p for p in self.ended() if p).strip()
 
     def close(self) -> None:
         with _moonshine_lock:

@@ -13,6 +13,7 @@ from flash import (
     instructions,
     learning,
     mail,
+    meeting,
     memory,
     notify,
     progress_mail,
@@ -109,6 +110,8 @@ def isolated_home(tmp_path_factory, monkeypatch):
     monkeypatch.delenv("WEB_KEEP_DELETED_USAGE", raising=False)
     # Acting on the computer: off, as it is until the user turns it on.
     monkeypatch.delenv("COMPUTER_ACTIONS", raising=False)
+    # Meetings' transcripts, in the temp home.
+    monkeypatch.setattr(meeting, "FLASH_DIR", home / ".flash")
     # MCP servers: none but a test's own, and none left running after.
     monkeypatch.setattr(connectors, "FLASH_DIR", home / ".flash")
     connectors.stop_all()
