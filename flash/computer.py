@@ -151,7 +151,7 @@ MAC_PLAYERS = ("Spotify", "Music")
 MAC_KEYS = {"play_pause": 16, "play": 16, "pause": 16, "next_track": 17,
             "previous_track": 18}
 _MAC_MEDIA = """
-const action = %s, players = %s, keys = %s;
+const action = %s, players = %s;
 // An app that is not installed cannot even say it is not running.
 const ask = (fn, otherwise) => { try { return fn(); } catch (e) {
   return otherwise; } };
@@ -163,35 +163,6 @@ const track = (p) => ask(() => {
   const t = Application(p).currentTrack;
   return `${p}: ${t.name()} by ${t.artist()}`;
 }, p);
-// Pressed as the keyboard presses it. macOS lets an app do that only once
-// it may both control the computer and make key presses, two checks under
-// Privacy & Security > Accessibility; one it fails is asked for, and a key
-// it presses without them is dropped without a word.
-const press = (code) => {
-  ObjC.import("Cocoa");
-  ObjC.import("ApplicationServices");
-  const canPost = typeof $.CGPreflightPostEventAccess === "function"
-    ? Boolean($.CGPreflightPostEventAccess()) : true;
-  const trusted = Boolean($.AXIsProcessTrusted());
-  if (!canPost && typeof $.CGRequestPostEventAccess === "function") {
-    $.CGRequestPostEventAccess();
-  }
-  if (!trusted) {
-    $.AXIsProcessTrustedWithOptions($({AXTrustedCheckOptionPrompt: true}));
-  }
-  if (!canPost || !trusted) return "not allowed";
-  for (const down of [true, false]) {
-    const event = $.NSEvent
-      .otherEventWithTypeLocationModifierFlagsTimestampWindowNumberContextSubtypeData1Data2(
-        14, $.NSMakePoint(0, 0), down ? 0xa00 : 0xb00, 0, 0, $(), 8,
-        (code << 16) | ((down ? 0xa : 0xb) << 8), -1);
-    if (!event || event.isNil() || !event.CGEvent) return "no key";
-    $.CGEventPost(0, event.CGEvent);
-    // Down and up as a hand would, and time to arrive before this ends.
-    delay(0.05);
-  }
-  return "pressed";
-};
 let did = "", told = [];
 if (action === "now_playing") {
   told = playing.map(track);
@@ -209,9 +180,70 @@ if (action === "now_playing") {
   did = "skipped";
   told = [track(playing[0])];
 } else {
-  did = press(keys[action]);
+  // Anything else playing gets the key, pressed from Python.
+  did = "press";
 }
 JSON.stringify({did, told});
+"""
+
+# A media key, pressed as the keyboard presses it, by the number in
+# argv[1]: straight through macOS's own calls, in a Python of its own so
+# none of AppKit is loaded into Flash. macOS drops a key pressed by an
+# app it has not let make key presses, without a word, so that is asked
+# first, and asked for when it is not so (Privacy & Security >
+# Accessibility). Prints "pressed", "not allowed" or "no key".
+_MAC_KEY = """
+import ctypes, sys, time
+from ctypes import (c_bool, c_char_p, c_double, c_long, c_short, c_uint32,
+                    c_ulong, c_void_p)
+objc = ctypes.CDLL("/usr/lib/libobjc.A.dylib")
+ctypes.CDLL("/System/Library/Frameworks/AppKit.framework/AppKit")
+cg = ctypes.CDLL(
+    "/System/Library/Frameworks/ApplicationServices.framework/"
+    "ApplicationServices")
+objc.objc_getClass.restype = objc.sel_registerName.restype = c_void_p
+objc.objc_getClass.argtypes = objc.sel_registerName.argtypes = [c_char_p]
+objc.objc_autoreleasePoolPush.restype = c_void_p
+objc.objc_autoreleasePoolPop.argtypes = [c_void_p]
+cg.CGPreflightPostEventAccess.restype = c_bool
+cg.CGRequestPostEventAccess.restype = c_bool
+cg.CGEventPost.argtypes = [c_uint32, c_void_p]
+if not cg.CGPreflightPostEventAccess():
+    cg.CGRequestPostEventAccess()
+    print("not allowed")
+    sys.exit()
+
+
+class Point(ctypes.Structure):
+    _fields_ = [("x", c_double), ("y", c_double)]
+
+
+make = ctypes.CFUNCTYPE(
+    c_void_p, c_void_p, c_void_p, c_ulong, Point, c_ulong, c_double, c_long,
+    c_void_p, c_short, c_long, c_long,
+)(("objc_msgSend", objc))
+as_cg = ctypes.CFUNCTYPE(c_void_p, c_void_p, c_void_p)(("objc_msgSend", objc))
+NSEvent = objc.objc_getClass(b"NSEvent")
+other = objc.sel_registerName(
+    b"otherEventWithType:location:modifierFlags:timestamp:windowNumber:"
+    b"context:subtype:data1:data2:")
+to_cg = objc.sel_registerName(b"CGEvent")
+key = int(sys.argv[1])
+pool = objc.objc_autoreleasePoolPush()
+said = "pressed"
+# Down, then up (NX_KEYDOWN, NX_KEYUP): a system-defined event (14) of the
+# media keys' kind (8).
+for state in (0xA, 0xB):
+    event = make(NSEvent, other, 14, Point(0, 0), state << 8, 0.0, 0, None,
+                 8, (key << 16) | (state << 8), -1)
+    ref = as_cg(event, to_cg) if event else None
+    if not ref:
+        said = "no key"
+        break
+    cg.CGEventPost(0, ref)
+    time.sleep(0.05)
+objc.objc_autoreleasePoolPop(pool)
+print(said)
 """
 
 # Windows and Linux both press the keyboard's media keys, which every
@@ -252,9 +284,11 @@ def _media(kind: str, action: str) -> str:
 
 def _mac_media(action: str) -> str:
     found = json.loads(_jxa(_MAC_MEDIA % (
-        json.dumps(action), json.dumps(MAC_PLAYERS), json.dumps(MAC_KEYS),
+        json.dumps(action), json.dumps(MAC_PLAYERS),
     )) or "{}")
     did, told = found.get("did", ""), found.get("told") or []
+    if did == "press":
+        did = _run([sys.executable, "-c", _MAC_KEY, str(MAC_KEYS[action])])
     if action == "now_playing":
         return ("Playing: " + "; ".join(told) + ".") if told else (
             "Neither Spotify nor Music is playing anything. Those are the "
