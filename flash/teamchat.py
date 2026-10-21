@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import Optional
 
 from . import sparks
+from .dashes import undash
 
 # How many entries a team's chat keeps, oldest dropped first.
 MAX_ENTRIES = 300
@@ -602,7 +603,10 @@ def _sending(team_id: str, spark: sparks.Spark, sent: list[dict]):
     """send_message, for SPARK: posted now, and kept in SENT."""
 
     def send(args: dict) -> str:
-        text = str(args.get("text", "")).strip()[:sparks.MESSAGE_CHARS]
+        # Posted as it is sent, so its dashes go here, as an answer's do.
+        text = undash(
+            str(args.get("text", ""))
+        ).strip()[:sparks.MESSAGE_CHARS]
         if not text or _quiet(text):
             return "Error: the message was empty."
         if len(sent) >= MAX_SENT:

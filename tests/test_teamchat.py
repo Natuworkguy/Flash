@@ -509,6 +509,22 @@ def _send(text):
     return _reply("", ("send_message", {"text": text}))
 
 
+def test_a_message_sent_as_it_works_has_no_dashes(team):
+    message = teamchat.say("desk", "@scout delete it")
+    client = FakeClient([
+        _send("Done \u2014 `a\u2014b` is deleted"),
+        _reply("Checked it \u2014 gone."),
+    ])
+
+    posted = teamchat.answer("desk", message, client)
+
+    # Its answer had them taken out already; what it sent on the way
+    # now does too, code kept as written.
+    assert [e["text"] for e in posted] == [  # nosec B101
+        "Done, `a\u2014b` is deleted", "Checked it, gone.",
+    ]
+
+
 def test_a_spark_can_send_messages_in_a_row(team):
     message = teamchat.say("desk", "@scout any new bugs?")
     client = FakeClient([_send("On it, checking."), _reply("Found 2.")])

@@ -65,6 +65,7 @@ from .browser import is_open as page_is_open
 from .browser import open_page as browser_open
 from .browser import snapshot as page_snapshot
 from .browser import where as page_where
+from .dashes import undash
 from .documents import extract_document_text, is_document_path
 from .edit import Edit, apply_edits
 from .images import resolve_image_path
@@ -3968,8 +3969,8 @@ def notify_user(message: str, title: str = "") -> str:
     """Tap the user on the shoulder: a notification, wherever they are
     looking, a few at a time at most."""
 
-    message = " ".join(str(message or "").split())
-    title = " ".join(str(title or "").split()) or "Flash"
+    message = " ".join(undash(str(message or "")).split())
+    title = " ".join(undash(str(title or "")).split()) or "Flash"
     tool_line(f"Notify({title}: {message[:60]})")
 
     if not message:

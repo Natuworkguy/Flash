@@ -64,6 +64,12 @@ def test_notify_user_shows_it_on_the_desktop(shown):
     assert shown == [("Build", "The build finished.")]  # nosec B101
 
 
+def test_a_notification_has_no_dashes(shown):
+    tools.notify_user("Build done \u2014 all green.", title="CI \u2014 main")
+
+    assert shown == [("CI, main", "Build done, all green.")]  # nosec B101
+
+
 def test_notify_user_is_rate_limited(shown):
     tools.notify_user("One")
     result = tools.notify_user("Two")

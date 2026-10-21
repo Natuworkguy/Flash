@@ -376,6 +376,13 @@ def test_a_spark_proposes_a_hire_from_its_shift(org, model):
     assert sparks.hires()[0]["spark"]["name"] == "Docs"
 
 
+def test_a_proposal_s_reason_has_no_dashes(org):
+    asked = sparks.propose_removal("lead", "tester",
+                                   "Tests moved \u2014 CI runs them now.")
+
+    assert asked["reason"] == "Tests moved, CI runs them now."  # nosec
+
+
 def test_too_many_proposals_at_once_are_refused(org):
     for n in range(sparks.MAX_PENDING_HIRES):
         sparks.propose_hire("lead", f"Help {n}", "Help.")
