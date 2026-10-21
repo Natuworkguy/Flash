@@ -801,7 +801,14 @@ body.voice-on .shell, body.voice-on #suggestions, body.voice-on #pending { displ
 @keyframes orb-breathe { 50% { transform: scale(0.9); filter: brightness(0.85); } }
 @keyframes orb-ring { from { opacity: 0.8; transform: scale(0.9); } to { opacity: 0; transform: scale(1.35); } }
 .voice-say { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
-.voice-say b { font-size: 15.5px; font-weight: 600; color: var(--text); }
+.voice-say b { font-size: 15.5px; font-weight: 600; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* A phone, with the camera on: room for its view and both its buttons. */
+@media (max-width: 480px) {
+  #voice:has(.voice-view:not([hidden])) { gap: 10px; padding: 12px 10px 12px 12px; }
+  #voice:has(.voice-view:not([hidden])) .voice-orb { width: 46px; height: 46px; }
+  #voice:has(.voice-view:not([hidden])) .voice-view { width: 62px; height: 46px; }
+  #voice:has(.voice-view:not([hidden])) .voice-say b { font-size: 14.5px; }
+}
 .voice-say span { font-size: 13px; color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* What you are saying, as you say it: the newest words, two lines of them. */
 .voice-say .voice-heard { font-size: 14.5px; line-height: 1.4; color: var(--text); white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; animation: word-in 0.25s var(--ease) both; }
@@ -815,6 +822,12 @@ body.voice-on .shell, body.voice-on #suggestions, body.voice-on #pending { displ
 .voice-view { flex: none; width: 82px; height: 58px; border-radius: 12px; object-fit: cover; background: #000; border: 1px solid var(--border-strong); animation: pop 0.2s var(--ease); }
 .voice-view[hidden] { display: none; }
 #voice[data-state="thinking"] .voice-view { opacity: 0.7; }
+/* The front camera shows as a mirror does; what Flash sees is not flipped. */
+.voice-view.selfie { transform: scaleX(-1); }
+.voice-flip { flex: none; }
+.voice-flip[hidden] { display: none; }
+.voice-flip svg { transition: transform 0.4s var(--ease); }
+.voice-flip.turned svg { transform: rotateY(180deg); }
 /* The companion: a face on the orb, minding what voice mode is doing. It
    blinks while it listens, looks up while it thinks, perks up while you
    talk, and its mouth moves with what it says. */
@@ -2322,6 +2335,18 @@ body.all-stopped .org-node, body.all-stopped .spark-card { animation: all-halt 0
 .tc-msg:hover .tc-tools, .tc-tools:focus-within, .tc-tools .read-aloud.on { opacity: 1; }
 .tc-msg:has(.read-aloud.on) .tc-tools { opacity: 1; }
 .tc-tools .icon-btn { width: 26px; height: 26px; color: var(--text-3); }
+/* A message its spark edited: "Edited", and every version to step back
+   through. */
+.tc-ver { display: inline-flex; align-items: center; gap: 2px; margin-top: 3px; font-size: 11.5px; color: var(--text-3); font-variant-numeric: tabular-nums; }
+.tc-ver .tc-ver-btn { width: 22px; height: 22px; display: grid; place-items: center; border-radius: 6px; color: var(--text-3); }
+.tc-ver .tc-ver-btn:hover:not(:disabled) { color: var(--text); background: var(--hover); }
+.tc-ver .tc-ver-btn:disabled { opacity: 0.35; cursor: default; }
+.tc-ver .tc-ver-btn svg { width: 13px; height: 13px; }
+.tc-ver .tc-ver-label { padding: 0 3px; }
+.tc-ver .tc-ver-label b { font-weight: 500; color: var(--text-2); }
+.tc-bubble.old { opacity: 0.72; }
+.tc-bubble.just-edited { animation: tc-edited 1.2s var(--ease); }
+@keyframes tc-edited { from { box-shadow: 0 0 0 3px color-mix(in srgb, var(--c, var(--accent)) 45%, transparent); } }
 .tc-tools .icon-btn:hover { color: var(--text); }
 .tc-tools .icon-btn.on { color: var(--accent); }
 .tc-tools svg { width: 14px; height: 14px; }
@@ -3012,6 +3037,7 @@ body.resizing-viewer iframe { pointer-events: none; }
           <button type="button" class="voice-orb" aria-label="Voice"><span></span><svg class="face" viewBox="0 0 58 58" aria-hidden="true"><g class="cheeks"><circle cx="15" cy="34" r="4.2"/><circle cx="43" cy="34" r="4.2"/></g><g class="brows"><path d="M17 17.5q4-2.6 8 0"/><path d="M33 17.5q4-2.6 8 0"/></g><g class="eyes"><g class="eye"><ellipse cx="21" cy="25.5" rx="3.3" ry="4.4"/><circle class="glint" cx="22.2" cy="23.8" r="1.1"/></g><g class="eye"><ellipse cx="37" cy="25.5" rx="3.3" ry="4.4"/><circle class="glint" cx="38.2" cy="23.8" r="1.1"/></g></g><path class="smile" d="M22.5 36.5q6.5 5.2 13 0"/><ellipse class="mouth" cx="29" cy="38" rx="4.6" ry="3.4"/></svg></button>
           <video class="voice-view" playsinline muted hidden></video>
           <div class="voice-say"><b class="voice-state">Listening</b><span class="voice-hint"></span><span class="voice-heard" hidden></span></div>
+          <button type="button" class="icon-btn voice-flip" hidden data-tip="Flip the camera" aria-label="Flip the camera"></button>
           <button type="button" class="icon-btn voice-cam" aria-pressed="false" data-tip="Show Flash something" aria-label="Camera"></button>
           <button type="button" class="icon-btn voice-end" data-tip="End voice mode" data-keys="Esc" aria-label="End voice mode"></button>
         </div>
@@ -3137,6 +3163,7 @@ const ICON = {
   download: '<path d="M12 4v11M7 10.5l5 5 5-5M5 20h14"/>',
   external: '<path d="M14 4h6v6M20 4l-9 9M18 14v4a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4"/>',
   camera: '<path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3Z"/><circle cx="12" cy="13" r="3.5"/>',
+  cameraFlip: '<path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3Z"/><path d="M8.8 12.2a3.3 3.3 0 0 1 5.9-1.4"/><path d="M15.2 13.8a3.3 3.3 0 0 1-5.9 1.4"/><path d="M15 8.6v2.4h-2.4"/><path d="M9 17.4V15h2.4"/>',
   clip: '<path d="m21.4 11.1-9.2 9.2a6 6 0 0 1-8.5-8.5l9.2-9.2a4 4 0 0 1 5.7 5.7l-9.2 9.2a2 2 0 0 1-2.8-2.8l8.5-8.5"/>',
   slash: '<path d="M15 4 9 20"/>',
   voice: '<path d="M4 10v4M8 6.5v11M12 3.5v17M16 6.5v11M20 10v4"/>',
@@ -7871,6 +7898,8 @@ async function tcFetch(first = false) {
   // One a retry replaced leaves the chat.
   (r.changed || []).forEach((entry) => {
     if (entry.retried) { tcRemove(entry.id); return; }
+    const row = log.querySelector(`.tc-msg[data-id="${CSS.escape(String(entry.id))}"]`);
+    if (row && entry.edited) tcFillEdited(row, entry);
     const box = log.querySelector(`.tc-reacts[data-for="${CSS.escape(String(entry.id))}"]`);
     if (box) tcFillReacts(box, entry, true);
     const receipt = log.querySelector(`.tc-receipt[data-for="${CSS.escape(String(entry.id))}"]`);
@@ -7987,7 +8016,9 @@ function tcEntry(entry, fresh) {
   // The reply sits just beside the bubble, however short it is.
   const line = el("div", "tc-line");
   if (mine) line.append(tcReplyButton(entry), tcReactButton(entry), bubble); else line.append(bubble, tcReactButton(entry), tcReplyButton(entry));
-  col.append(line, tcReacts(entry));
+  col.append(line);
+  if (entry.versions && entry.versions.length) col.appendChild(tcVersions(entry, bubble));
+  col.appendChild(tcReacts(entry));
   if (mine) col.appendChild(tcReceipt(entry));
   // A spark's message can be read aloud, or answered again in its place.
   if (!mine && spark) {
@@ -8018,6 +8049,52 @@ function tcEntry(entry, fresh) {
   row.dataset.who = who;
   frag.appendChild(row);
   return frag;
+}
+
+// Every version of an edited message, oldest first, the one it says now
+// last: stepped through in its bubble, the latest shown to begin with.
+function tcVersions(entry, bubble) {
+  const all = [...entry.versions, { text: entry.text, at: entry.edited }];
+  const box = el("div", "tc-ver", `<button type="button" class="tc-ver-btn" data-step="-1" aria-label="Earlier version">${icon("chevLeft")}</button><span class="tc-ver-label"></span><button type="button" class="tc-ver-btn" data-step="1" aria-label="Later version">${icon("chevRight")}</button>`);
+  box.dataset.for = entry.id;
+  box.dataset.count = entry.versions.length;
+  let at = all.length - 1;
+  const show = () => {
+    const v = all[at];
+    const latest = at === all.length - 1;
+    bubble.innerHTML = markdown(v.text || "");
+    chipMentions(bubble, tcMembers());
+    bubble.classList.toggle("old", !latest);
+    const label = box.querySelector(".tc-ver-label");
+    label.innerHTML = latest ? `<b>Edited</b> · ${all.length} versions` : `Version ${at + 1} of ${all.length} · ${esc(tcClock(v.at))}`;
+    label.title = `${latest ? "Edited" : "Written"} ${tcClock(v.at)}`;
+    box.querySelector('[data-step="-1"]').disabled = at === 0;
+    box.querySelector('[data-step="1"]').disabled = latest;
+  };
+  box.onclick = (e) => {
+    const b = e.target.closest(".tc-ver-btn");
+    if (!b || b.disabled) return;
+    at = Math.max(0, Math.min(all.length - 1, at + Number(b.dataset.step)));
+    stopReading();
+    show();
+  };
+  show();
+  return box;
+}
+
+// A message edited after it was drawn: its words now, and its versions.
+function tcFillEdited(row, entry) {
+  const bubble = row.querySelector(".tc-bubble");
+  if (!bubble || !entry.versions || !entry.versions.length) return;
+  const had = row.querySelector(`.tc-ver[data-for="${CSS.escape(String(entry.id))}"]`);
+  if (had && Number(had.dataset.count) === entry.versions.length) return;
+  const box = tcVersions(entry, bubble);
+  if (had) had.replaceWith(box); else row.querySelector(".tc-line").after(box);
+  if (!calm.matches) {
+    bubble.classList.remove("just-edited");
+    bubble.getBoundingClientRect();
+    bubble.classList.add("just-edited");
+  }
 }
 
 // A spark's documents: a card for each, which opens it in the side
@@ -12908,7 +12985,14 @@ function ping() {
 }
 
 // The camera: on, Flash sees what you show it, a frame at the moment each
-// thing you say is sent, as a photo with the message.
+// thing you say is sent, as a photo with the message. The back one first;
+// a phone or tablet with more than one can flip to the front.
+const camFacing = { side: "environment" };
+
+function camWanted(side) {
+  return { video: { facingMode: { ideal: side }, width: { ideal: 1280 } } };
+}
+
 async function toggleCam() {
   const view = $("#voice .voice-view");
   const button = $("#voice .voice-cam");
@@ -12917,7 +13001,7 @@ async function toggleCam() {
     return;
   }
   let stream;
-  try { stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment", width: { ideal: 1280 } } }); }
+  try { stream = await navigator.mediaDevices.getUserMedia(camWanted(camFacing.side)); }
   catch (_) { toast("Flash could not use the camera. Allow it for this page, then try again."); return; }
   if (!voice.on) { stream.getTracks().forEach((t) => t.stop()); return; }
   voice.cam = stream;
@@ -12926,6 +13010,52 @@ async function toggleCam() {
   view.play().catch(() => {});
   button.setAttribute("aria-pressed", "true");
   button.dataset.tip = "Flash sees this with what you say next. Click to turn the camera off.";
+  showCamSide(stream);
+  drawFlip();
+}
+
+// Which way the camera in use faces, for the preview to mirror the front.
+function showCamSide(stream) {
+  const track = stream.getVideoTracks()[0];
+  const facing = track && track.getSettings ? track.getSettings().facingMode : "";
+  if (facing === "user" || facing === "environment") camFacing.side = facing;
+  $("#voice .voice-view").classList.toggle("selfie", camFacing.side === "user");
+}
+
+// Flip shows on a phone or tablet with more than one camera, once the
+// camera is on: only then does the browser say how many it has.
+async function drawFlip() {
+  const flip = $("#voice .voice-flip");
+  let cameras = 0;
+  try { cameras = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === "videoinput").length; }
+  catch (_) { cameras = 0; }
+  flip.hidden = !voice.cam || cameras < 2 || !matchMedia("(pointer: coarse)").matches;
+}
+
+async function flipCam() {
+  if (!voice.cam || voice.flipping) return;
+  voice.flipping = true;
+  const flip = $("#voice .voice-flip");
+  const side = camFacing.side === "user" ? "environment" : "user";
+  // Let go of this one first: many phones open only one camera at a time.
+  voice.cam.getTracks().forEach((t) => t.stop());
+  let stream;
+  try { stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { exact: side }, width: { ideal: 1280 } } }); }
+  catch (_) {
+    try { stream = await navigator.mediaDevices.getUserMedia(camWanted(camFacing.side)); }
+    catch (_) { stream = null; }
+    if (stream) toast("This device could not switch cameras");
+  }
+  voice.flipping = false;
+  if (!stream) { stopCam(); toast("Flash could not use the camera. Allow it for this page, then try again."); return; }
+  if (!voice.on) { stream.getTracks().forEach((t) => t.stop()); return; }
+  voice.cam = stream;
+  const view = $("#voice .voice-view");
+  view.srcObject = stream;
+  view.play().catch(() => {});
+  camFacing.side = side;
+  showCamSide(stream);
+  flip.classList.toggle("turned", camFacing.side === "user");
 }
 
 function stopCam() {
@@ -12938,6 +13068,7 @@ function stopCam() {
   const button = $("#voice .voice-cam");
   button.setAttribute("aria-pressed", "false");
   button.dataset.tip = "Show Flash something";
+  $("#voice .voice-flip").hidden = true;
 }
 
 // What the camera sees now, attached to the next message.
@@ -12958,6 +13089,8 @@ async function attachSight() {
 
 $("#voice .voice-cam").innerHTML = icon("camera");
 $("#voice .voice-cam").onclick = toggleCam;
+$("#voice .voice-flip").innerHTML = icon("cameraFlip");
+$("#voice .voice-flip").onclick = flipCam;
 
 // Voice mode's look, in this browser: the orb, or the companion's face on it.
 const voiceLook = () => (pref("voice-look", "orb") === "companion" ? "companion" : "orb");
