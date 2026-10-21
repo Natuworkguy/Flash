@@ -3851,6 +3851,7 @@ function toolIcon(label) {
   if (/inbox|email/.test(name)) return "mail";
   if (/devtools/.test(name)) return "code";
   if (/^notify/.test(name)) return "bell";
+  if (/^computer/.test(name)) return "monitor";
   if (/read|glob|grep|recall|skillview/.test(name)) return "file";
   if (/edit|write/.test(name)) return "edit";
   if (/web|fetch|page|screenshot|interact/.test(name)) return "globe";
@@ -6863,6 +6864,20 @@ function drawGeneral(body) {
   systemOne.setAttribute("role", "switch");
   body.appendChild(systemOne);
   fillSystemOne(systemOne);
+
+  // Simple things on this computer, when asked: off until turned on.
+  body.insertAdjacentHTML("beforeend", `<h2 class="settings-section settings-gap">Your computer</h2><p class="settings-sub">Simple things Flash can do on the computer it runs on when you ask: play, pause and skip music, set the volume, open and quit apps, open links and files, lock the screen, copy to the clipboard, switch dark mode. It never clicks, types or runs commands this way.</p>`);
+  const computerRow = el("button", "setting-row computer-row", `<span class="what"><b>Let Flash act on this computer</b><span>“Stop the music”, “turn it down”, “open Spotify”. Off, Flash is not offered any of it.</span></span><span class="switch" aria-hidden="true"></span>`);
+  computerRow.type = "button";
+  computerRow.setAttribute("role", "switch");
+  computerRow.setAttribute("aria-checked", !!info.computer);
+  computerRow.onclick = async () => {
+    const on = computerRow.getAttribute("aria-checked") !== "true";
+    computerRow.setAttribute("aria-checked", on);
+    try { info.computer = (await command("computer-setting", on ? "on" : "off")).computer; }
+    catch (error) { computerRow.setAttribute("aria-checked", !on); showFailure(error); }
+  };
+  body.appendChild(computerRow);
 
   body.insertAdjacentHTML("beforeend", `<h2 class="settings-section settings-gap">Notifications</h2><p class="settings-sub">Flash and your sparks can tap you on the shoulder when something can't wait: a pop-up here, or on your desktop when no page is open. Every chat and spark shares one limit.</p>`);
   const notifyOn = el("button", "setting-row notify-on-row", `<span class="what"><b>Let the agent notify you</b><span></span></span><span class="switch" aria-hidden="true"></span>`);
@@ -14958,6 +14973,7 @@ const ACTIONS = [
   { label: "Voice mode", keys: "", slash: "/voice", run: () => startVoice() },
   { label: "Listen for “Hey Flash”, or stop", keys: "", slash: "/wake", run: () => setWake(!wakeWanted()) },
   { label: "Signed-in browsers", keys: "", slash: "/security", run: () => showSettings("security") },
+  { label: "Let Flash act on this computer", keys: "", slash: "/computer", run: () => showSettings("general") },
   { label: "Search chats", keys: "Alt F", slash: "/search", run: () => openSearch() },
   { label: "Show or hide the file panel", keys: "Alt V", slash: "/file", run: toggleViewer },
   { label: "New project", keys: "", slash: "/project", run: () => projectForm() },

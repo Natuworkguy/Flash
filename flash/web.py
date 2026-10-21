@@ -52,6 +52,7 @@ from . import agent as subagents
 from . import (
     background,
     checkpoint,
+    computer,
     context,
     design,
     extensions,
@@ -2913,6 +2914,7 @@ def status(ai) -> dict:
         "system_one_model": systemone.model() if systemone.enabled() else "",
         "compact": bool(ai.Config.auto_compact),
         "model_titles": titles.enabled(),
+        "computer": computer.enabled(),
         "visuals": visuals.level(),
         # What a new chat says hello with, for the page to pick from by
         # the browser's clock.
@@ -3692,6 +3694,12 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
         ai.set_config_var("BACKGROUND", scene["name"])
         session.hub.publish({"type": "status"})
         return {"background": scene["name"], "scene": scene}
+
+    if name == "computer-setting":
+        on = arg in ("on", "1", "true")
+        ai.set_config_var(computer.SETTING, "1" if on else "0")
+        session.hub.publish({"type": "status"})
+        return {"computer": on}
 
     if name == "titles-setting":
         on = arg in ("on", "1", "true")

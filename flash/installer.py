@@ -129,7 +129,8 @@ class Installer:
             for command in commands(packages):
                 self._say("$ " + " ".join(command))
                 try:
-                    running = self._run(  # nosec B603 -- fixed commands
+                    # Fixed commands, from PACKAGES only.
+                    running = self._run(  # nosec B603
                         command, stdout=subprocess.PIPE,
                         stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
                         text=True, errors="replace", bufsize=1,

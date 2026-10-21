@@ -32,6 +32,7 @@ from . import agent as subagents
 from . import browser as page_devtools
 from . import (
     checkpoint,
+    computer,
     design,
     editor,
     extensions,
@@ -1915,9 +1916,14 @@ SYSTEM_ONE_TOOLS: list[dict[str, Any]] = [
 
 def available_tools() -> list[dict[str, Any]]:
     """The built-in tools that can work right now: email's only once it
-    is set up, so a model is not offered tools that can only fail."""
+    is set up, and the computer's only once the user has allowed it, so
+    a model is not offered tools that can only fail."""
 
-    return tools + (EMAIL_TOOLS if mail.configured() else [])
+    return (
+        tools
+        + (EMAIL_TOOLS if mail.configured() else [])
+        + (COMPUTER_TOOLS if computer.enabled() else [])
+    )
 
 
 def turn_tools() -> list[dict[str, Any]]:
@@ -2352,6 +2358,70 @@ def make_spark(
             "keep them working with it closed: /sparks always on in the "
             "terminal, or Settings in the web UI."
         )
+    tool_result(result)
+    return result
+
+
+COMPUTER_TOOLS: list[dict[str, Any]] = [
+    {
+        "type": "function",
+        "function": {
+            "name": "computer",
+            "description": (
+                "Do a simple thing on the user's computer, which they have "
+                "allowed: control the music or video playing, the volume, "
+                "open or quit an app, open a link, file or folder, lock "
+                "the screen, copy text to the clipboard, switch dark mode. "
+                "Use it when they ask for one of these (\"stop the "
+                "music\", \"turn it down\", \"open Spotify\"); it cannot "
+                "click, type or run commands. Actions: "
+                + "; ".join(f"{name}: {what}"
+                            for name, what in computer.ACTIONS.items())
+                + "."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": list(computer.ACTIONS),
+                        "description": "What to do.",
+                    },
+                    "value": {
+                        "type": "string",
+                        "description": (
+                            "What the action needs, where it needs "
+                            "something: the volume level, the app's name, "
+                            "the link or path, the text, on or off."
+                        ),
+                    },
+                },
+                "required": ["action"],
+            },
+        },
+    },
+]
+
+
+def computer_tool(action: str, value: Any = "") -> str:
+    """Do one of computer.ACTIONS, when the user has allowed it."""
+
+    shown = str(value or "").strip()
+    tool_line(f"Computer({action}" + (f", {shown[:60]}" if shown else "")
+              + ")")
+    if not computer.enabled():
+        result = (
+            "Error: the user has not let Flash act on their computer. "
+            "They can turn it on in Settings or with /computer on."
+        )
+        tool_result(result, style=WARN)
+        return result
+    try:
+        result = computer.do(action, shown)
+    except computer.ComputerError as exc:
+        result = f"Error: {exc}"
+        tool_result(str(exc), style=ERROR)
+        return result
     tool_result(result)
     return result
 
@@ -5633,6 +5703,7 @@ FUNCTIONS = {
     "read_email": read_email,
     "send_email": send_email,
     "notify_user": notify_user,
+    "computer": computer_tool,
     "open_in_editor": open_in_editor,
     "ask_system_one": ask_system_one,
 }

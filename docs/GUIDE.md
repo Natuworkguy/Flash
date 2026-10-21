@@ -23,6 +23,7 @@ version; [CONFIGURATION.md](CONFIGURATION.md) lists every setting and
 - **Page Screenshots**: The AI renders a page it built in a headless browser with its `screenshot` tool and looks at the result, so it can see a broken layout instead of guessing from the HTML.
 - **Page Control**: The AI opens a page with `open_page` and then clicks buttons, fills forms, presses keys, and runs JavaScript on it with `interact`, seeing a fresh screenshot, the page's elements, and its console errors after every step, so it can debug what a page *does*, not just how it looks.
 - **Read Aloud**: In the web UI, the play button under any reply, or under a spark's report, reads it out a sentence at a time, marking each as it is said: in Flash's own voice when voice mode is set up, and in the browser's otherwise.
+- **Acts on Your Computer**: With `/computer on`, or the switch in the web UI's Settings, "stop the music", "turn it down" or "open Spotify" just happens: Flash plays, pauses and skips music, sets the volume, opens and quits apps, opens links and files, locks the screen, copies to the clipboard and switches dark mode. Off by default, and it never clicks, types or runs commands this way.
 - **Voice Mode**: `/voice on` downloads a Vosk speech model and a Piper voice, then lets you talk to Flash and hear its replies, with typing still available at any time. Flash talks warmly, like a person rather than a document, and its voice has a style of its own: Warm (the default: unhurried, friendly, a breath between sentences, questions that lift and exclamations with a little bounce), Lively, Calm, or Plain, picked with `/voice style` or under Voice models in the web UI's Settings, where you can hear it first. Kristin and HFC join the voices on offer, for a warmer sound still.
 - **Visible Plans**: For a multi-step task the AI posts a checklist up front and ticks each box as it finishes that step, so you can see where it is instead of waiting for the wall of text at the end.
 - **Knows What Just Broke**: With `/hook install`, Flash sees the commands you run in VS Code's terminal and whether they failed, so "why did that fail?" works without pasting anything.
@@ -171,6 +172,8 @@ python run.py
   without asking first.
 - `/systemone [on|off|model [name]]`: Show, switch, or pick the model for
   [System One](#system-one), which reviews autonomous commands.
+- `/computer [on|off]`: Let Flash do [simple things on your
+  computer](#your-computer), like pausing the music, or stop it.
 - `/skills [show|remove <name>]`: List, read, or delete what Flash has
   learned.
 - `/plan`: Show the checklist the model is working through.
@@ -750,8 +753,33 @@ pipx inject flash moonshine-voice  # or: pip install "flash[moonshine]"
 In the web UI none of these commands need typing: wherever Flash finds a
 package missing (starting voice mode, a Kokoro voice, a Moonshine model,
 a tool that failed for want of one), it shows an Install button that
-runs the right command for your install. Logs shows what it prints as it goes, and opens by
-itself if the install fails.
+runs the right command for your install. Logs shows what it prints as it
+goes, and opens by itself if the install fails.
+
+### Your computer
+
+With `/computer on`, or Settings > General > Your computer in the web
+UI, Flash can do simple things on the computer it runs on when you ask:
+
+- play, pause and skip music or video, and say what is playing
+- set the volume, turn it up or down, mute it
+- open or quit an app by its name (a quit asks to save, as usual)
+- open a link, a file or a folder
+- lock the screen or turn the display off
+- copy text to the clipboard
+- switch dark mode on or off
+
+It is off until you turn it on, and while it is off the model is not
+offered any of it. Each action is one fixed step Flash takes itself: it
+never clicks, types, or runs a command the model wrote, and it will not
+open a script or installer, only apps by name.
+
+On a Mac, music and what is playing come from Spotify and Music, the
+first time asking you to let your terminal control them, and dark mode
+asks to control System Events. Windows uses the keyboard's media keys,
+which every player answers, though it cannot tell what is playing. Linux
+uses `playerctl` for music and PipeWire, PulseAudio or ALSA for the
+volume.
 
 ### Page screenshots
 
