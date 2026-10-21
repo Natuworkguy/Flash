@@ -1675,6 +1675,27 @@ button.item-row:hover { background: var(--hover); }
 .spark-av .ping { position: absolute; top: -1px; right: -1px; width: calc(var(--s) * 0.3); height: calc(var(--s) * 0.3); min-width: 9px; min-height: 9px; border-radius: 50%; background: var(--accent); border: 2px solid var(--surface); animation: spark-ping 1.6s ease-in-out infinite; }
 /* The "!" of an unavailable spark has the top corner: news drops below. */
 .spark-av:not(.tiny)[data-state="unavailable"] .ping { top: auto; bottom: -1px; }
+/* Its presence badge has the bottom right: the "!"'s news goes left. */
+.spark-av.has-presence:not(.tiny)[data-state="unavailable"] .ping { right: auto; left: -1px; }
+
+/* Presence, as a chat app shows people: a badge cut into the corner of
+   the face, ringed in whatever is behind it. Online is a dot, idle a moon,
+   do not disturb a dot with a bar, offline a hollow ring. */
+.presence { --pc: #23a55a; position: absolute; right: calc(var(--s) * -0.07); bottom: calc(var(--s) * -0.07); z-index: 1;
+  width: max(11px, calc(var(--s) * 0.36)); height: max(11px, calc(var(--s) * 0.36)); border-radius: 50%;
+  background: var(--ring, var(--surface)); display: grid; place-items: center; pointer-events: none; transition: background 0.12s; }
+.presence::after { content: ""; width: 66%; height: 66%; border-radius: 50%; background: var(--pc); transition: background 0.2s, box-shadow 0.2s; }
+.presence.idle { --pc: #f0b232; }
+.presence.idle::after { -webkit-mask: radial-gradient(circle at 20% 20%, transparent 0 33%, #000 35%); mask: radial-gradient(circle at 20% 20%, transparent 0 33%, #000 35%); }
+.presence.dnd { --pc: #f23f43; }
+.presence.dnd::before { content: ""; position: absolute; inset: 0; margin: auto; z-index: 1; width: 36%; height: max(2px, 13%); border-radius: 999px; background: var(--ring, var(--surface)); }
+.presence.offline { --pc: #80848e; }
+.presence.offline::after { background: transparent; box-shadow: inset 0 0 0 max(2px, calc(var(--s) * 0.07)) var(--pc); }
+/* What is behind each. */
+.spark-mate { --ring: var(--sidebar); }
+.spark-mate:hover, .spark-mate.current { --ring: linear-gradient(var(--hover), var(--hover)), var(--sidebar); }
+.org-node { --ring: var(--bg); }
+.spark-head { --ring: color-mix(in srgb, var(--c) 6%, var(--surface)); }
 
 /* Petted: a squish, and hearts. Five quick pets: heart eyes. */
 .spark-av.petted { animation: spark-squish 0.5s var(--spring) !important; }
@@ -1742,7 +1763,11 @@ button.item-row:hover { background: var(--hover); }
 #sparks-btn .count:empty + .fold { margin-left: auto; }
 .spark-mate { display: flex; align-items: center; gap: 10px; width: calc(100% - 16px); margin: 0 8px; padding: 6px 10px 6px 12px; border-radius: 9px; text-align: left; color: var(--text-2); transition: background 0.12s, color 0.12s; }
 .spark-mate:hover, .spark-mate.current { background: var(--hover); color: var(--text); }
-.spark-mate .spark-av { --s: 24px; }
+.spark-mate .spark-av { --s: 28px; }
+.spark-mate.away .spark-av, .spark-mate.away .stack { opacity: 0.45; transition: opacity 0.12s; }
+.spark-mate.away:hover .spark-av, .spark-mate.away:hover .stack, .spark-mate.away.current .spark-av, .spark-mate.away.current .stack { opacity: 1; }
+.roster-group { padding: 10px 20px 3px; font-size: 11px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--text-3); }
+.roster-group:first-child { padding-top: 4px; }
 .spark-mate .stack { flex: 1; min-width: 0; display: flex; flex-direction: column; line-height: 1.25; }
 .spark-mate .who { font-size: 13.5px; font-weight: 500; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .spark-mate .doing { font-size: 11.5px; color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -7499,6 +7524,27 @@ function sparkPresence(spark) {
   return ["idle", spark.unread ? `${spark.unread} new report${spark.unread === 1 ? "" : "s"}` : onCall(spark) ? "On call" : "Ready"];
 }
 
+// Whether it is around, the way a chat app shows people: online while it
+// works, needs you, or waits to be called on; idle between shifts; do not
+// disturb while its model fails; offline while paused.
+function sparkOnline(spark) {
+  if (spark.paused) return ["offline", "Offline: paused"];
+  if (spark.unavailable && spark.status !== "working") return ["dnd", "Do not disturb: unavailable"];
+  if (spark.status === "working" || spark.answering) return ["online", "Online: working"];
+  if (spark.waiting) return ["online", "Online: needs you"];
+  if (onCall(spark)) return ["online", "Online: on call"];
+  return ["idle", "Idle: between shifts"];
+}
+
+// That, as a badge cut into the corner of its face.
+function withPresence(av, spark) {
+  const [kind, said] = sparkOnline(spark);
+  av.classList.add("has-presence");
+  av.appendChild(el("span", `presence ${kind}`));
+  av.dataset.presence = said;
+  return av;
+}
+
 // The team, in the sidebar: each face, name,
 // and title or what it is doing now. A spark opens its latest chat, or a
 // new one.
@@ -7510,25 +7556,42 @@ function renderRoster() {
   $("#sparks-btn").classList.toggle("busy", sparkList.some((sp) => sp.status === "working" || sp.answering));
   const fold = $("#sparks-btn .fold");
   if (fold) fold.hidden = !sparkList.length;
-  box.replaceChildren(...sparkList.map((sp, i) => {
+  // As a chat app lists people: the ones around first, the paused ones
+  // under their own heading, faded.
+  const around = sparkList.filter((sp) => sparkOnline(sp)[0] !== "offline");
+  const away = sparkList.filter((sp) => sparkOnline(sp)[0] === "offline");
+  const heading = (name, count) => {
+    const h = el("div", "roster-group");
+    h.textContent = `${name} · ${count}`;
+    return h;
+  };
+  const rows = [...around, ...away].map((sp, i) => {
     const [kind, doing] = sparkPresence(sp);
-    const row = el("button", "spark-mate" + (sp.id === here && view === "chat" ? " current" : ""), `<span class="stack"><span class="who"></span><span class="doing"></span></span>`);
+    const row = el("button", "spark-mate" + (sp.id === here && view === "chat" ? " current" : "") + (away.includes(sp) ? " away" : ""), `<span class="stack"><span class="who"></span><span class="doing"></span></span>`);
     row.type = "button";
-    row.prepend(sparkAvatar({ ...sp, unread: 0 }, 24, i));
+    const face = withPresence(sparkAvatar({ ...sp, unread: 0 }, 28, i), sp);
+    row.prepend(face);
     row.querySelector(".who").textContent = sp.name;
     const line = row.querySelector(".doing");
     line.textContent = kind === "idle" && !sp.unread ? sp.title || sp.handle : doing;
     line.classList.toggle("working", kind === "working");
     line.classList.toggle("asking", kind === "waiting");
     if (sp.unread && kind !== "waiting") row.appendChild(el("span", "dot"));
-    row.dataset.tip = `${sp.name}${sp.title ? ` · ${sp.title}` : ""}`;
+    row.dataset.tip = `${sp.name}${sp.title ? ` · ${sp.title}` : ""} · ${face.dataset.presence}`;
     row.onclick = () => {
       const latest = [...chats.values()].filter((c) => c.spark === sp.id && (c.log.length || c.busy || c.queued || c.title !== "New chat")).sort(byRecent)[0];
       if (latest) switchTo(latest.id); else startSparkChat(sp.id);
       if (innerWidth <= 800) closeSide();
     };
     return row;
-  }));
+  });
+  // Headings only once some are offline: with everyone around, they'd
+  // only take room.
+  if (away.length) {
+    rows.splice(around.length, 0, heading("Offline", away.length));
+    if (around.length) rows.unshift(heading("Online", around.length));
+  }
+  box.replaceChildren(...rows);
   rosterMore();
 }
 
@@ -7670,7 +7733,7 @@ async function drawSparks(body, again = false) {
     card.type = "button";
     card.style.setProperty("--i", i);
     if (again) card.style.animation = "none";
-    const face = sparkAvatar(spark, 44, i);
+    const face = withPresence(sparkAvatar(spark, 44, i), spark);
     // Just made: it pops into being. News since the page last looked:
     // it jumps for joy.
     if (!again && Date.now() / 1000 - (spark.created || 0) < 8) celebrate(face, "born");
@@ -8726,7 +8789,7 @@ function orgNode(spark, depth, fresh) {
   const node = el("button", "org-node", `<span class="face-wrap"></span><span class="words"><span class="name"></span><span class="title"></span><span class="state"></span></span>`);
   node.type = "button";
   node.style.setProperty("--c", spark.colour);
-  const face = sparkAvatar(spark, 40, depth);
+  const face = withPresence(sparkAvatar(spark, 40, depth), spark);
   node.querySelector(".face-wrap").appendChild(face);
   node.querySelector(".name").textContent = spark.name;
   const title = node.querySelector(".title");
@@ -9494,7 +9557,7 @@ function fillSpark(box, spark, again = false) {
     <div data-docs hidden><div class="spark-sec">Documents</div><div class="docs-list"></div></div>
     <div class="spark-sec">Reports</div><div data-reports></div>
     <div class="dialog-buttons"><button type="button" class="btn" data-cancel>Close</button></div>`;
-  box.querySelector(".spark-head").prepend(sparkAvatar({ ...spark, unread: 0 }, 64));
+  box.querySelector(".spark-head").prepend(withPresence(sparkAvatar({ ...spark, unread: 0 }, 64), spark));
   box.querySelector(".spark-head").style.setProperty("--c", spark.colour);
   box.querySelector("h2").textContent = spark.name;
   const titled = box.querySelector(".spark-head .title");
