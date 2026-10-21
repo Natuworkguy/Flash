@@ -174,6 +174,9 @@ class TestConversation:
         wakes.set()
         until(lambda: len(spoken) == 2)
         until(lambda: not found.talking)
+        # It goes back to listening for the next "Hey Flash": looked at
+        # before it is stopped, since a stopped one never listens.
+        until(lambda: found.listening)
         found.stop()
 
         assert spoken == [  # nosec B101
@@ -185,8 +188,6 @@ class TestConversation:
         # One chat for the conversation, every message marked as heard.
         assert [s[0] for s in session.sent] == ["c0", "c0"]  # nosec B101
         assert all(s[2] for s in session.sent)  # nosec B101
-        # It goes back to listening for the next "Hey Flash".
-        until(lambda: found.listening or not heyflash.enabled())
 
     def test_stop_listening_ends_it_unanswered(self, wakes):
         heyflash.set_enabled(True)
