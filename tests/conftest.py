@@ -106,6 +106,8 @@ def isolated_home(tmp_path_factory, monkeypatch):
     monkeypatch.delenv("WEB_REMEMBER_BROWSERS", raising=False)
     # Deleted chats' usage is kept unless a test switches it off.
     monkeypatch.delenv("WEB_KEEP_DELETED_USAGE", raising=False)
+    # Acting on the computer: off, as it is until the user turns it on.
+    monkeypatch.delenv("COMPUTER_ACTIONS", raising=False)
     # A key in the developer's shell would ride on every test's requests.
     monkeypatch.delenv("OLLAMA_API_KEY", raising=False)
     systemone.forget_checks()

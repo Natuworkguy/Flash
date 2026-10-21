@@ -29,6 +29,7 @@ from . import agent as subagents
 from . import (
     background,
     checkpoint,
+    computer,
     context,
     extensions,
     greetings,
@@ -2509,6 +2510,34 @@ def _ask_spark_model() -> str:
         return picked
     example = f" (Enter for {first})" if first else ""
     return _ask_line(f"Model name{example}:") or first
+
+
+def _computer_command(arg: str) -> None:
+    """/computer: whether Flash may do simple things on this computer,
+    shown, or switched with `/computer on` or `/computer off`."""
+
+    arg = arg.lower()
+    if arg in ("on", "off"):
+        set_config_var(computer.SETTING, "1" if arg == "on" else "0")
+    elif arg:
+        warn("Usage: /computer [on|off]")
+        return
+    if computer.enabled():
+        console.print(Text(
+            "Flash can act on this computer: play, pause and skip music, "
+            "set the volume, open and quit apps, open links and files, "
+            "lock the screen, copy to the clipboard and switch dark mode. "
+            "It never clicks, types or runs commands this way. "
+            "/computer off stops it.",
+            style=DIM,
+        ))
+    else:
+        console.print(Text(
+            "Flash does not act on this computer. /computer on lets it do "
+            "simple things when you ask: pause the music, turn the volume "
+            "down, open an app.",
+            style=DIM,
+        ))
 
 
 def _notify_command(arg: str) -> None:
@@ -5339,6 +5368,10 @@ def _main() -> None:
 
             if uin == "/stats":
                 _stats_command()
+                continue
+
+            if uin == "/computer" or uin.startswith("/computer "):
+                _computer_command(uin[len("/computer"):].strip())
                 continue
 
             if uin == "/notify" or uin.startswith("/notify "):
