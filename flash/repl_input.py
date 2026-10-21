@@ -61,6 +61,7 @@ COMMANDS = [
     ("/auto", "toggle autonomous command mode (/auto on|off)"),
     ("/systemone", "a small model that reviews autonomous commands (on|off)"),
     ("/computer", "let Flash pause music, set the volume, open apps (on|off)"),
+    ("/mcp", "connect MCP servers' tools (add, remove, on, off, tools)"),
     ("/voice", "talk to Flash and hear its replies (on|off, models, pull)"),
     ("/background", "pixel-art scene behind the prompt (/background <name>)"),
     ("/set", f"set an env var, saved to {ENV_PATH} (/set NAME VALUE)"),

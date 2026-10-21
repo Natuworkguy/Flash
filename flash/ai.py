@@ -30,6 +30,7 @@ from . import (
     background,
     checkpoint,
     computer,
+    connectors,
     context,
     extensions,
     greetings,
@@ -2510,6 +2511,117 @@ def _ask_spark_model() -> str:
         return picked
     example = f" (Enter for {first})" if first else ""
     return _ask_line(f"Model name{example}:") or first
+
+
+MCP_USAGE = (
+    "Usage: /mcp [add <name> <command or URL> | env <name> KEY=VALUE | "
+    "remove <name> | on <name> | off <name> | tools <name> | reload]"
+)
+
+
+def _show_connectors() -> None:
+    shown = connectors.listing()
+    if not shown:
+        console.print(Text(
+            "No connectors yet. Add an MCP server's tools to Flash's with "
+            "/mcp add <name> <command or URL>, like /mcp add files npx -y "
+            "@modelcontextprotocol/server-filesystem ~/Documents. They are "
+            f"kept in {connectors.config_path()}, which takes the usual "
+            "mcpServers config as it is.",
+            style=DIM,
+        ))
+        return
+    colour = {connectors.READY: ACCENT, connectors.FAILED: ERROR,
+              connectors.STARTING: WARN}
+    for server in shown:
+        line = Text("  ")
+        line.append(CURSOR + " ", style=colour.get(server["state"], DIM))
+        line.append(server["name"], style="bold")
+        count = len(server["tools"])
+        state = {
+            connectors.READY: f"{count} tool{'s' if count != 1 else ''}",
+            connectors.STARTING: "starting",
+            connectors.FAILED: "failed",
+            connectors.OFF: "off",
+        }[server["state"]]
+        line.append(f"  {state}  {server['where']}", style=DIM)
+        console.print(line)
+        if server["why"]:
+            console.print(Text(f"    {server['why']}", style=ERROR))
+    console.print(Text(
+        "  /mcp tools <name> lists one's tools. A tool its server marks "
+        "read-only runs straight away; any other asks first.",
+        style=DIM,
+    ))
+
+
+def _settled_connector(name: str, seconds: float = 15.0) -> None:
+    """Wait for NAME, or every connector, to finish starting, then say
+    how they stand."""
+
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline and any(
+        s["state"] == connectors.STARTING for s in connectors.listing()
+        if not name or s["name"] == name
+    ):
+        time.sleep(0.2)
+    _show_connectors()
+
+
+def _mcp_command(arg: str) -> None:
+    """/mcp: the MCP servers whose tools Flash has, and changes to them."""
+
+    words = arg.split(maxsplit=2)
+    what = words[0].lower() if words else ""
+    try:
+        if not what:
+            connectors.start()
+            _settled_connector("", 2.0)
+        elif what == "add" and len(words) == 3:
+            connectors.add(words[1], words[2])
+            _settled_connector(words[1])
+        elif what == "env" and len(words) == 3 and "=" in words[2]:
+            found = connectors.read_config()
+            if words[1] not in found:
+                raise connectors.ConnectorError(
+                    f"No connector called {words[1]!r}."
+                )
+            key, value = words[2].split("=", 1)
+            spec = found[words[1]]
+            spec.setdefault("headers" if "url" in spec else "env", {})[
+                key.strip()] = value.strip()
+            connectors.write_config(found)
+            connectors.start()
+            _settled_connector(words[1])
+        elif what == "remove" and len(words) == 2:
+            connectors.remove(words[1])
+            console.print(Text(f"Removed {words[1]}.", style=DIM))
+        elif what in ("on", "off") and len(words) == 2:
+            connectors.switch(words[1], what == "on")
+            _settled_connector(words[1])
+        elif what == "reload" and len(words) == 1:
+            connectors.reload()
+            _settled_connector("", 15.0)
+        elif what == "tools" and len(words) == 2:
+            found = next((s for s in connectors.listing()
+                          if s["name"] == words[1]), None)
+            if found is None:
+                raise connectors.ConnectorError(
+                    f"No connector called {words[1]!r}."
+                )
+            for tool in found["tools"]:
+                line = Text(f"  {tool['name']}", style="bold")
+                if tool["read_only"]:
+                    line.append("  read-only", style=ACCENT)
+                line.append(f"  {tool['description'][:120]}", style=DIM)
+                console.print(line)
+            if not found["tools"]:
+                console.print(Text("  No tools, or it is not running.",
+                                   style=DIM))
+        else:
+            warn(MCP_USAGE)
+    except connectors.ConnectorError as exc:
+        warn(str(exc))
 
 
 def _computer_command(arg: str) -> None:
@@ -5368,6 +5480,10 @@ def _main() -> None:
 
             if uin == "/stats":
                 _stats_command()
+                continue
+
+            if uin == "/mcp" or uin.startswith("/mcp "):
+                _mcp_command(uin[len("/mcp"):].strip())
                 continue
 
             if uin == "/computer" or uin.startswith("/computer "):
