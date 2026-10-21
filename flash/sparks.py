@@ -1926,7 +1926,9 @@ def propose_hire(
         hire = {
             "id": uuid.uuid4().hex[:8], "kind": "hire", "by": by.id,
             "by_name": by.name, "at": time.time(), "status": "pending",
-            "reason": " ".join(str(reason or "").split())[:REASON_CHARS],
+            "reason": " ".join(
+                undash(str(reason or "")).split()
+            )[:REASON_CHARS],
             "spark": wanted,
         }
         _write_hires([*found, hire])
@@ -1993,7 +1995,9 @@ def propose_removal(by_key: str, target_key: str, reason: str = "") -> dict:
             "id": uuid.uuid4().hex[:8], "kind": "remove", "by": by.id,
             "by_name": by.name, "at": time.time(), "status": "pending",
             "target": target.id, "target_name": target.name,
-            "reason": " ".join(str(reason or "").split())[:REASON_CHARS],
+            "reason": " ".join(
+                undash(str(reason or "")).split()
+            )[:REASON_CHARS],
         }
         _write_hires([*found, hire])
     log(by.id, "removal_proposed", hire=hire["id"], target=target.name,
@@ -3541,7 +3545,9 @@ HAND_OFF_TOOL = {
 
 def _handing_off(spark: Spark) -> Callable[[dict], str]:
     def hand(args: dict) -> str:
-        note = " ".join(str(args.get("note", "")).split())[:LESSON_CHARS * 2]
+        note = " ".join(
+            undash(str(args.get("note", ""))).split()
+        )[:LESSON_CHARS * 2]
         target = find(str(args.get("spark", "")))
         if target is None or target.id == spark.id:
             return "Error: no other spark by that name."

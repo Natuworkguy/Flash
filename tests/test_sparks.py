@@ -1157,6 +1157,22 @@ def test_a_spark_hands_work_to_another(model):
     assert sparks.find(fixer.id).inbox == []
 
 
+def test_a_hand_off_note_has_no_dashes(model):
+    scout = sparks.create("Scout", "Watch the issues.")
+    fixer = sparks.create("Fixer", "Fix the bugs you are handed.")
+    client = FakeClient([
+        _reply("", ("hand_off", {"spark": "fixer",
+                                 "note": "Issue 12 \u2014 the login one."})),
+        _reply("Handed it over."),
+    ])
+
+    sparks.shift(scout.id, client=client)
+
+    assert sparks.find(fixer.id).inbox[0]["text"] == (  # nosec B101
+        "Issue 12, the login one."
+    )
+
+
 def test_a_spark_cannot_hand_work_to_itself(model):
     made = sparks.create("Scout", "Watch the issues.")
     client = FakeClient([
