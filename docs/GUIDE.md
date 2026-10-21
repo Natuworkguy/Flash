@@ -23,6 +23,7 @@ version; [CONFIGURATION.md](CONFIGURATION.md) lists every setting and
 - **Page Screenshots**: The AI renders a page it built in a headless browser with its `screenshot` tool and looks at the result, so it can see a broken layout instead of guessing from the HTML.
 - **Page Control**: The AI opens a page with `open_page` and then clicks buttons, fills forms, presses keys, and runs JavaScript on it with `interact`, seeing a fresh screenshot, the page's elements, and its console errors after every step, so it can debug what a page *does*, not just how it looks.
 - **Read Aloud**: In the web UI, the play button under any reply, or under a spark's report, reads it out a sentence at a time, marking each as it is said: in Flash's own voice when voice mode is set up, and in the browser's otherwise.
+- **Record a Meeting**: In the web UI, + > Record a meeting writes down what is said as it is said, on this computer, then hands the transcript to the model in a new chat for the summary, decisions and to-dos.
 - **Connectors**: Plug in any MCP server (GitHub, Notion, a database, your files) with `/mcp add` or Settings > Connectors, and its tools join Flash's own. Read-only tools run straight away; anything else asks first.
 - **Acts on Your Computer**: With `/computer on`, or the switch in the web UI's Settings, "stop the music", "turn it down" or "open Spotify" just happens: Flash plays, pauses and skips music, sets the volume, opens and quits apps, opens links and files, locks the screen, copies to the clipboard and switches dark mode. Off by default, and it never clicks, types or runs commands this way.
 - **Voice Mode**: `/voice on` downloads a Vosk speech model and a Piper voice, then lets you talk to Flash and hear its replies, with typing still available at any time. Flash talks warmly, like a person rather than a document, and its voice has a style of its own: Warm (the default: unhurried, friendly, a breath between sentences, questions that lift and exclamations with a little bounce), Lively, Calm, or Plain, picked with `/voice style` or under Voice models in the web UI's Settings, where you can hear it first. Kristin and HFC join the voices on offer, for a warmer sound still.
@@ -759,6 +760,24 @@ package missing (starting voice mode, a Kokoro voice, a Moonshine model,
 a tool that failed for want of one), it shows an Install button that
 runs the right command for your install. Logs shows what it prints as it
 goes, and opens by itself if the install fails.
+
+### Recording a meeting
+
+In the web UI, + > Record a meeting (or `/meeting`) listens through the
+microphone and writes down what is said as it is said, with the
+listening model on this computer: nothing leaves it. The bar over the
+message box shows the transcript as it grows, with Pause, Discard, and
+Stop and write up.
+
+Stopping keeps the transcript in `~/.flash/meetings`, and opens a new
+chat with it attached, where the model writes up what the meeting was
+about, what was decided, the action items with who and by when where
+they were said, and the questions left open. A short meeting goes to the
+model whole; a long one it reads from the file a part at a time. A
+Moonshine listening model (see [Voice mode](#voice-mode)) hears a
+meeting far better than the small Vosk one. It hears one microphone, so
+for a call, leave the sound on the speakers rather than in headphones,
+and it does not say who said what.
 
 ### Connectors
 

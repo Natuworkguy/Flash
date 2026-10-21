@@ -66,6 +66,7 @@ from . import (
     learning,
     livedocs,
     loaders,
+    meeting,
     memory,
     progress,
     providers,
@@ -845,6 +846,8 @@ class Session:
         self.always = heyflash.Listener(self)
         # A package Flash needs, installed from a button in the page, its
         # lines sent to every page as they come.
+        # Meetings being recorded, a piece at a time from the page.
+        self.meetings = meeting.Meetings()
         self.installer = installer.Installer(
             lambda said: self.hub.publish({"type": "install", **said})
         )
@@ -2378,11 +2381,16 @@ def outgoing(ai, text: str, files: Optional[list]) -> tuple[str, list]:
     images: list[str] = []
     notes: list[str] = []
     recorded = False
+    met = False
     for meta in files or []:
         info = workspace.upload_info(meta.get("id", ""))
         if info is None:
             continue
-        if info["kind"] == "image":
+        if info.get("meeting"):
+            # A meeting's transcript: the write-up is what it is for.
+            met = True
+            notes.append(meeting.note(info))
+        elif info["kind"] == "image":
             images.append(info["path"])
         elif info["kind"] == "video" and info.get("stills"):
             recorded = True
@@ -2394,6 +2402,7 @@ def outgoing(ai, text: str, files: Optional[list]) -> tuple[str, list]:
             notes.append(f"Attached file: {info['path']}")
     asked = text or (
         RECORDING_PROMPT if recorded
+        else meeting.PROMPT if met
         else ai.DEFAULT_IMAGE_PROMPT if images else ""
     )
     content = "\n\n".join(part for part in (asked, "\n".join(notes)) if part)
@@ -3981,6 +3990,49 @@ def _connector_command(name: str, arg: str, body: dict) -> dict:
     }
 
 
+def _meeting_post(session: "Session", path: str, body: dict) -> dict:
+    """A meeting being recorded: started, heard a piece at a time, and
+    ended, its transcript then attached to a new chat for the write-up."""
+
+    meetings = session.meetings
+    what = path.removeprefix("/api/meeting/")
+    try:
+        if what == "start":
+            session.always.page_listening()
+            started = meetings.start()
+            return {"id": started.id}
+        if what == "hear":
+            session.always.page_listening()
+            found = meetings.get(str(body.get("id") or ""))
+            try:
+                pcm = base64.b64decode(
+                    str(body.get("data") or ""), validate=True
+                )
+            except (ValueError, TypeError):
+                raise ValueError(
+                    "that recording did not arrive whole"
+                ) from None
+            if pcm:
+                found.hear(pcm)
+            return found.since(int(body.get("count") or 0))
+        if what == "stop":
+            ended, lines = meetings.stop(str(body.get("id") or ""))
+            info = meeting.keep(ended, lines)
+            project = str(body.get("project") or "")
+            if project and workspace.project(project) is None:
+                project = ""
+            chat = session.new_chat(project=project)
+            session.send(chat, "", files=[info["id"]])
+            return {"chat": chat.id, "file": info,
+                    "seconds": round(ended.seconds)}
+        if what == "discard":
+            meetings.discard(str(body.get("id") or ""))
+            return {}
+    except meeting.MeetingError as exc:
+        raise ValueError(str(exc)) from None
+    raise ValueError("no such meeting step")
+
+
 def _progress_email(ai: Any, body: dict) -> dict:
     """Settings > Email > Progress emails: change what is in BODY (on,
     to, account, kinds, or test), then say how they are set up."""
@@ -4584,6 +4636,9 @@ class Handler(BaseHTTPRequestHandler):
                 "text": text,
                 **voice.voice_command(text, str(body.get("speaking") or "")),
             }
+
+        if path.startswith("/api/meeting/"):
+            return _meeting_post(session, path, body)
 
         if path == "/api/voice/live":
             session.always.page_listening()

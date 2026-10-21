@@ -688,6 +688,8 @@ _UNSAFE_NAME = re.compile(r"[^\w.\- ]+")
 MAX_STILLS = 16
 MAX_STILL_BYTES = 1024 * 1024
 STILLS = "stills"
+# Beside a meeting's transcript: how long it was, and when.
+MEETING = "meeting.json"
 
 
 def upload_path(file_id: str) -> Optional[Path]:
@@ -697,7 +699,7 @@ def upload_path(file_id: str) -> Optional[Path]:
         return None
     try:
         kept = [p for p in (store() / "uploads" / file_id).iterdir()
-                if p.is_file()]
+                if p.is_file() and p.name != MEETING]
     except OSError:
         return None
     return kept[0] if len(kept) == 1 else None
@@ -727,7 +729,18 @@ def upload_info(file_id: str) -> Optional[dict]:
         "path": str(path),
         **({"stills": len(recording_stills(file_id))}
            if mime.startswith("video/") else {}),
+        **_meeting_of(path),
     }
+
+
+def _meeting_of(path: Path) -> dict:
+    """{"meeting": {...}} for a meeting's transcript, else {}."""
+
+    try:
+        found = json.loads((path.parent / MEETING).read_text("utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return {"meeting": found} if isinstance(found, dict) else {}
 
 
 def recording_stills(file_id: str) -> list[dict]:
@@ -756,6 +769,7 @@ def recording_stills(file_id: str) -> list[dict]:
 
 def keep_upload(
     name: str, data: bytes, stills: Optional[list] = None,
+    meeting: Optional[dict] = None,
 ) -> dict:
     """Keep a file the user attached in the page, and describe it.
 
@@ -764,7 +778,8 @@ def keep_upload(
     Nothing is run or unpacked: it is only written down. A screen
     recording comes with STILLS, the moments the page caught as the
     screen changed: each {"jpeg": bytes, "at": seconds, "said": text},
-    kept beside it for the model to see.
+    kept beside it for the model to see. A meeting's transcript comes
+    with MEETING, how long it was and when, which marks it as one.
     """
 
     if not data:
@@ -779,6 +794,8 @@ def keep_upload(
     folder = store() / "uploads" / file_id
     folder.mkdir(parents=True, exist_ok=True)
     (folder / clean).write_bytes(data)
+    if meeting:
+        (folder / MEETING).write_text(json.dumps(meeting), "utf-8")
     if stills:
         kept = folder / STILLS
         kept.mkdir()
