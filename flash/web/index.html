@@ -655,6 +655,22 @@ pre code { display: block; padding: 2px 16px 14px; overflow-x: auto; font-size: 
 .ask.done .q svg { width: 15px; height: 15px; }
 
 .note { text-align: center; color: var(--text-3); font-size: 13px; }
+/* A task set aside until something happens (wait_for). */
+.wait { display: flex; gap: 12px; align-items: flex-start; padding: 12px 14px; border: 1px solid var(--border); border-radius: 14px; background: var(--surface); }
+.wait .ico { flex: none; width: 30px; height: 30px; border-radius: 9px; display: grid; place-items: center; background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--accent); }
+.wait .ico svg { width: 16px; height: 16px; }
+.wait.waiting .ico { animation: wait-pulse 2.4s ease-in-out infinite; }
+@keyframes wait-pulse { 50% { background: color-mix(in srgb, var(--accent) 26%, transparent); } }
+.wait .words { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.wait .words b { font-size: 14px; font-weight: 600; overflow-wrap: anywhere; }
+.wait .how, .wait .then, .wait .said { font-size: 12.5px; color: var(--text-3); overflow-wrap: anywhere; }
+.wait .how code { font-size: 12px; }
+.wait .said { font-style: italic; }
+.wait.done .ico { background: color-mix(in srgb, var(--add) 16%, transparent); color: var(--add); }
+.wait.gave_up .ico { background: color-mix(in srgb, var(--warn) 16%, transparent); color: var(--warn); }
+.wait.cancelled { opacity: 0.6; }
+.wait .btn { flex: none; align-self: center; }
+@media (prefers-reduced-motion: reduce) { .wait.waiting .ico { animation: none; } }
 .error { display: flex; gap: 10px; align-items: flex-start; color: var(--del); font-size: 14px; }
 .error svg { margin-top: 2px; }
 .error > span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
@@ -6336,6 +6352,7 @@ function drawEntry(entry, ctx) {
       break;
     }
     case "note": richText(messagesEl.appendChild(el("div", "block note")), entry.text); break;
+    case "wait": messagesEl.appendChild(waitCard(entry)); break;
     case "stats": {
       const reply = ctx.lastReply;
       const text = statsText(entry);
@@ -6348,6 +6365,53 @@ function drawEntry(entry, ctx) {
       break;
     }
   }
+}
+
+// A task set aside until a time comes or something is so, with how it
+// stands, and Cancel while it waits.
+const WAIT_HEADS = { waiting: "Waiting", done: "Done waiting", gave_up: "Stopped waiting", cancelled: "Cancelled" };
+
+function waitWhen(seconds) {
+  const at = new Date(seconds * 1000);
+  const today = new Date().toDateString() === at.toDateString();
+  return at.toLocaleString([], today ? { hour: "numeric", minute: "2-digit" } : { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+}
+
+function waitCard(w) {
+  const card = el("div", `block wait ${w.status}`, `<span class="ico">${icon(w.status === "done" ? "check" : w.status === "gave_up" ? "alert" : "clock")}</span><span class="words"><b></b><span class="how"></span><span class="then"></span><span class="said"></span></span>`);
+  card.dataset.wait = w.id;
+  card.querySelector("b").textContent = `${WAIT_HEADS[w.status] || "Waiting"}: ${w.what}`;
+  const how = card.querySelector(".how");
+  const every = `every ${w.every} min`;
+  const open = w.status === "waiting";
+  const say = (text) => how.append(text);
+  if (w.command) { say(open ? "Running " : "Ran "); how.appendChild(el("code")).textContent = w.command; say(` ${every}`); }
+  else if (w.check) say(`${open ? "Looking" : "Looked"} for: ${w.check}, ${every}`);
+  else say(open ? `Until ${waitWhen(w.at)}` : `At ${waitWhen(w.at)}`);
+  if ((w.command || w.check) && w.at && open && w.at * 1000 > Date.now()) say(`, from ${waitWhen(w.at)}`);
+  if ((w.command || w.check) && w.checks) say(` · looked ${w.checks} time${w.checks === 1 ? "" : "s"}`);
+  card.querySelector(".then").textContent = `Then: ${w.then}`;
+  card.querySelector(".said").textContent = w.said && w.status !== "cancelled" ? w.said.split("\n").slice(-2).join(" ").slice(0, 220) : "";
+  if (w.status === "waiting") {
+    const stop = el("button", "btn small", "Cancel");
+    stop.type = "button";
+    stop.onclick = async () => {
+      stop.disabled = true;
+      try { await command("wait-cancel", w.id); }
+      catch (error) { showFailure(error); stop.disabled = false; }
+    };
+    card.appendChild(stop);
+  }
+  return card;
+}
+
+function waitChanged(event) {
+  const chat = chats.get(event.chat);
+  if (!chat) return;
+  const entry = chat.log.find((e) => e.type === "wait" && e.id === event.id);
+  if (entry) { Object.assign(entry, event); delete entry.chat; }
+  const card = messagesEl.querySelector(`[data-wait="${event.id}"]`);
+  if (card && event.chat === current) card.replaceWith(waitCard(entry || event));
 }
 
 // A failed turn's Retry shows while the error is the chat's last word
@@ -13108,6 +13172,7 @@ function apply(event) {
   if (event.type === "doc-changed") { docChanged(event); return; }
   if (event.type === "doc-proposal") { docProposal(event); return; }
   if (event.type === "answered") docAnswered(event);
+  if (event.type === "wait-state") { waitChanged(event); return; }
 
   const chat = chats.get(event.chat);
   if (!chat) { if (event.chat) refreshLite(); return; }

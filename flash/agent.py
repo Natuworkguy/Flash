@@ -296,6 +296,16 @@ def start(task: str) -> str:
     return entry.id
 
 
+def run_now(task: str) -> tuple[bool, str]:
+    """Run a sub-agent on TASK here, to the end, without listing it with
+    the others: for a look Flash takes for itself, like a wait's check.
+    Whether it finished, and its answer or what went wrong."""
+
+    entry = SubAgent(id=uuid.uuid4().hex[:6], task=task)
+    _run(entry)
+    return entry.status == DONE, entry.result
+
+
 def _snapshot(entry: SubAgent) -> SubAgent:
     return dataclasses.replace(
         entry, steps=[dataclasses.replace(step) for step in entry.steps]
