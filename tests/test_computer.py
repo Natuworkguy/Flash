@@ -2,6 +2,7 @@
 
 import json
 import os
+import sys
 
 import pytest
 
@@ -84,28 +85,34 @@ def test_mac_pauses_what_is_playing(monkeypatch, ran):
 
 def test_mac_presses_the_media_key_for_any_other_app(monkeypatch, ran):
     on(monkeypatch, "mac")
-    ran.answers["osascript"] = json.dumps({"did": "pressed", "told": []})
+    ran.answers["osascript"] = json.dumps({"did": "press", "told": []})
+    ran.answers[sys.executable] = "pressed"
 
     assert tools.computer_tool("play") == (  # nosec B101
         "Pressed the play/pause media key, which goes to whatever played "
         "last."
     )
+    # Pressed by macOS's own calls, in a Python of its own, with only the
+    # key's number given to it.
+    argv, _ = ran[-1]
+    assert argv == [sys.executable, "-c", computer._MAC_KEY, "16"]  # nosec
+    assert "CGPreflightPostEventAccess" in argv[2]  # nosec B101
     assert "next track" in tools.computer_tool("next_track")  # nosec B101
+    assert ran[-1][0][-1] == "17"  # nosec B101
 
-    ran.answers["osascript"] = json.dumps({"did": "not allowed"})
+    ran.answers[sys.executable] = "not allowed"
     assert "Accessibility" in tools.computer_tool("pause")  # nosec B101
-    ran.answers["osascript"] = json.dumps({"did": "no key"})
+    ran.answers[sys.executable] = "no key"
     assert "would not make" in tools.computer_tool("pause")  # nosec B101
-    # Both of macOS's checks are made: a key pressed without either is
-    # dropped without a word.
-    script = ran[-1][0][-1]
-    assert "CGPreflightPostEventAccess" in script  # nosec B101
-    assert "AXIsProcessTrusted" in script  # nosec B101
 
     ran.answers["osascript"] = json.dumps({"did": "", "told": []})
     assert "Neither Spotify nor Music" in tools.computer_tool(  # nosec
         "now_playing"
     )
+
+
+def test_the_mac_key_presser_is_python(monkeypatch):
+    compile(computer._MAC_KEY, "mac_key", "exec")
 
 
 def test_mac_volume_is_held_between_0_and_100(monkeypatch, ran):
