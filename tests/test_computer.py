@@ -67,7 +67,7 @@ def test_an_action_that_is_not_one_says_which_are(monkeypatch, ran):
 def test_mac_pauses_what_is_playing(monkeypatch, ran):
     on(monkeypatch, "mac")
     ran.answers["osascript"] = json.dumps(
-        {"running": ["Spotify"], "told": ["Spotify"]},
+        {"did": "paused", "told": ["Spotify"]},
     )
 
     said = tools.computer_tool("pause")
@@ -77,15 +77,27 @@ def test_mac_pauses_what_is_playing(monkeypatch, ran):
     assert argv[:3] == ["osascript", "-l", "JavaScript"]  # nosec B101
     # The action and the players go in as data, not as script.
     assert '"pause"' in argv[-1] and '"Spotify"' in argv[-1]  # nosec
+    # A player that is not installed is asked carefully: not asking
+    # would fail the whole script.
+    assert "catch" in argv[-1]  # nosec B101
 
 
-def test_mac_says_when_no_player_is_open(monkeypatch, ran):
+def test_mac_presses_the_media_key_for_any_other_app(monkeypatch, ran):
     on(monkeypatch, "mac")
-    ran.answers["osascript"] = json.dumps({"running": [], "told": []})
+    ran.answers["osascript"] = json.dumps({"did": "pressed", "told": []})
 
-    assert "Spotify" in tools.computer_tool("play_pause")  # nosec B101
-    assert tools.computer_tool("now_playing") == (  # nosec B101
-        "Nothing is playing in Spotify or Music."
+    assert tools.computer_tool("play") == (  # nosec B101
+        "Pressed the play/pause media key, which goes to whatever played "
+        "last."
+    )
+    assert "next track" in tools.computer_tool("next_track")  # nosec B101
+
+    ran.answers["osascript"] = json.dumps({"did": "not allowed"})
+    assert "Accessibility" in tools.computer_tool("pause")  # nosec B101
+
+    ran.answers["osascript"] = json.dumps({"did": "", "told": []})
+    assert "Neither Spotify nor Music" in tools.computer_tool(  # nosec
+        "now_playing"
     )
 
 

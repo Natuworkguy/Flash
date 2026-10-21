@@ -141,38 +141,66 @@ _MEDIA = ("play_pause", "play", "pause", "next_track", "previous_track",
           "now_playing")
 
 # On a Mac, the players that can be asked directly, as they name
-# themselves; only ever asked once already running, so none is opened.
+# themselves: only these say what they are playing, and only once
+# already running are they asked anything, so none is opened. Anything
+# else, a browser, a call, any app, gets the keyboard's media keys,
+# which go to whatever played last.
 MAC_PLAYERS = ("Spotify", "Music")
+# The media keys, as macOS numbers them (NX_KEYTYPE_*): play and pause
+# are one key.
+MAC_KEYS = {"play_pause": 16, "play": 16, "pause": 16, "next_track": 17,
+            "previous_track": 18}
 _MAC_MEDIA = """
-const action = %s, players = %s;
-const running = players.filter((p) => Application(p).running());
-const state = (p) => String(Application(p).playerState());
-const playing = running.filter((p) => state(p) === "playing");
-const track = (p) => {
-  try {
-    const t = Application(p).currentTrack;
-    return `${t.name()} by ${t.artist()}`;
-  } catch (e) { return ""; }
-};
-let told = [];
-if (action === "now_playing") {
-  told = playing.map((p) => `${p}: ${track(p)}`);
-} else if (action === "pause") {
-  playing.forEach((p) => Application(p).pause());
-  told = playing;
-} else {
-  const p = playing[0] || running[0];
-  if (p) {
-    const app = Application(p);
-    if (action === "play_pause") playing.length ? app.pause() : app.play();
-    if (action === "play") app.play();
-    if (action === "next_track") app.nextTrack();
-    if (action === "previous_track") app.previousTrack();
-    delay(0.3);
-    told = [`${p}${playing.length ? "" : " (was paused)"}: ${track(p)}`];
+const action = %s, players = %s, keys = %s;
+// An app that is not installed cannot even say it is not running.
+const ask = (fn, otherwise) => { try { return fn(); } catch (e) {
+  return otherwise; } };
+const running = players.filter((p) => ask(() => Application(p).running(),
+  false));
+const playing = running.filter((p) => ask(
+  () => String(Application(p).playerState()), "") === "playing");
+const track = (p) => ask(() => {
+  const t = Application(p).currentTrack;
+  return `${p}: ${t.name()} by ${t.artist()}`;
+}, p);
+// Pressed as the keyboard presses it, which macOS lets an app do only
+// once it is allowed to control the computer: asked for, if not yet.
+const press = (code) => {
+  ObjC.import("Cocoa");
+  ObjC.import("ApplicationServices");
+  if (!$.AXIsProcessTrusted()) {
+    $.AXIsProcessTrustedWithOptions($({AXTrustedCheckOptionPrompt: true}));
+    return false;
   }
+  for (const down of [true, false]) {
+    const event = $.NSEvent
+      .otherEventWithTypeLocationModifierFlagsTimestampWindowNumberContextSubtypeData1Data2(
+        14, $.NSMakePoint(0, 0), down ? 0xa00 : 0xb00, 0, 0, $(), 8,
+        (code << 16) | ((down ? 0xa : 0xb) << 8), -1);
+    $.CGEventPost(0, event.CGEvent);
+  }
+  return true;
+};
+let did = "", told = [];
+if (action === "now_playing") {
+  told = playing.map(track);
+} else if (playing.length && ["pause", "play_pause"].includes(action)) {
+  playing.forEach((p) => Application(p).pause());
+  did = "paused";
+  told = playing;
+} else if (playing.length && action === "play") {
+  did = "already";
+  told = playing.map(track);
+} else if (playing.length && action !== "play_pause") {
+  const app = Application(playing[0]);
+  action === "next_track" ? app.nextTrack() : app.previousTrack();
+  delay(0.3);
+  did = "skipped";
+  told = [track(playing[0])];
+} else {
+  did = press(keys[action]) ? "pressed" : "not allowed";
 }
-JSON.stringify({running, told});
+JSON.stringify({did, told});
 """
 
 # Windows and Linux both press the keyboard's media keys, which every
@@ -194,24 +222,7 @@ def _jxa(script: str) -> str:
 
 def _media(kind: str, action: str) -> str:
     if kind == "mac":
-        found = json.loads(_jxa(
-            _MAC_MEDIA % (json.dumps(action), json.dumps(MAC_PLAYERS))
-        ) or "{}")
-        told = found.get("told") or []
-        if action == "now_playing":
-            return ("Playing: " + "; ".join(told)) if told else (
-                "Nothing is playing in " + " or ".join(MAC_PLAYERS) + "."
-            )
-        if not found.get("running"):
-            raise ComputerError(
-                f"Neither {' nor '.join(MAC_PLAYERS)} is open, and those "
-                "are the players Flash can reach on a Mac."
-            )
-        if action == "pause":
-            return ("Paused " + " and ".join(told) + ".") if told else (
-                "Nothing was playing."
-            )
-        return f"Done ({action.replace('_', ' ')}). {'; '.join(told)}"
+        return _mac_media(action)
     if kind == "windows":
         if action == "now_playing":
             raise ComputerError(
@@ -226,6 +237,37 @@ def _media(kind: str, action: str) -> str:
         return f"Playing: {playing}" if playing else "Nothing is playing."
     _playerctl(_PLAYERCTL[action])
     return f"Done ({action.replace('_', ' ')})."
+
+
+def _mac_media(action: str) -> str:
+    found = json.loads(_jxa(_MAC_MEDIA % (
+        json.dumps(action), json.dumps(MAC_PLAYERS), json.dumps(MAC_KEYS),
+    )) or "{}")
+    did, told = found.get("did", ""), found.get("told") or []
+    if action == "now_playing":
+        return ("Playing: " + "; ".join(told) + ".") if told else (
+            "Neither Spotify nor Music is playing anything. Those are the "
+            "only players Flash can see into on a Mac."
+        )
+    if did == "paused":
+        return "Paused " + " and ".join(told) + "."
+    if did == "already":
+        return "Already playing: " + "; ".join(told) + "."
+    if did == "skipped":
+        return f"Skipped. Now playing {'; '.join(told)}."
+    if did == "not allowed":
+        raise ComputerError(
+            "macOS has to let the app Flash runs in (Terminal, iTerm and "
+            "the like) control the computer before Flash can press the "
+            "media keys. It just asked: turn it on in System Settings > "
+            "Privacy & Security > Accessibility, then ask again."
+        )
+    key = "play/pause" if MAC_KEYS[action] == 16 else (
+        action.replace("_", " ")
+    )
+    return (
+        f"Pressed the {key} media key, which goes to whatever played last."
+    )
 
 
 def _playerctl(args: list[str]) -> str:
