@@ -94,6 +94,13 @@ def test_mac_presses_the_media_key_for_any_other_app(monkeypatch, ran):
 
     ran.answers["osascript"] = json.dumps({"did": "not allowed"})
     assert "Accessibility" in tools.computer_tool("pause")  # nosec B101
+    ran.answers["osascript"] = json.dumps({"did": "no key"})
+    assert "would not make" in tools.computer_tool("pause")  # nosec B101
+    # Both of macOS's checks are made: a key pressed without either is
+    # dropped without a word.
+    script = ran[-1][0][-1]
+    assert "CGPreflightPostEventAccess" in script  # nosec B101
+    assert "AXIsProcessTrusted" in script  # nosec B101
 
     ran.answers["osascript"] = json.dumps({"did": "", "told": []})
     assert "Neither Spotify nor Music" in tools.computer_tool(  # nosec

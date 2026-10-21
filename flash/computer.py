@@ -163,23 +163,34 @@ const track = (p) => ask(() => {
   const t = Application(p).currentTrack;
   return `${p}: ${t.name()} by ${t.artist()}`;
 }, p);
-// Pressed as the keyboard presses it, which macOS lets an app do only
-// once it is allowed to control the computer: asked for, if not yet.
+// Pressed as the keyboard presses it. macOS lets an app do that only once
+// it may both control the computer and make key presses, two checks under
+// Privacy & Security > Accessibility; one it fails is asked for, and a key
+// it presses without them is dropped without a word.
 const press = (code) => {
   ObjC.import("Cocoa");
   ObjC.import("ApplicationServices");
-  if (!$.AXIsProcessTrusted()) {
-    $.AXIsProcessTrustedWithOptions($({AXTrustedCheckOptionPrompt: true}));
-    return false;
+  const canPost = typeof $.CGPreflightPostEventAccess === "function"
+    ? Boolean($.CGPreflightPostEventAccess()) : true;
+  const trusted = Boolean($.AXIsProcessTrusted());
+  if (!canPost && typeof $.CGRequestPostEventAccess === "function") {
+    $.CGRequestPostEventAccess();
   }
+  if (!trusted) {
+    $.AXIsProcessTrustedWithOptions($({AXTrustedCheckOptionPrompt: true}));
+  }
+  if (!canPost || !trusted) return "not allowed";
   for (const down of [true, false]) {
     const event = $.NSEvent
       .otherEventWithTypeLocationModifierFlagsTimestampWindowNumberContextSubtypeData1Data2(
         14, $.NSMakePoint(0, 0), down ? 0xa00 : 0xb00, 0, 0, $(), 8,
         (code << 16) | ((down ? 0xa : 0xb) << 8), -1);
+    if (!event || event.isNil() || !event.CGEvent) return "no key";
     $.CGEventPost(0, event.CGEvent);
+    // Down and up as a hand would, and time to arrive before this ends.
+    delay(0.05);
   }
-  return true;
+  return "pressed";
 };
 let did = "", told = [];
 if (action === "now_playing") {
@@ -198,7 +209,7 @@ if (action === "now_playing") {
   did = "skipped";
   told = [track(playing[0])];
 } else {
-  did = press(keys[action]) ? "pressed" : "not allowed";
+  did = press(keys[action]);
 }
 JSON.stringify({did, told});
 """
@@ -257,11 +268,15 @@ def _mac_media(action: str) -> str:
         return f"Skipped. Now playing {'; '.join(told)}."
     if did == "not allowed":
         raise ComputerError(
-            "macOS has to let the app Flash runs in (Terminal, iTerm and "
-            "the like) control the computer before Flash can press the "
-            "media keys. It just asked: turn it on in System Settings > "
-            "Privacy & Security > Accessibility, then ask again."
+            "macOS has to let the app Flash runs in (Terminal, iTerm, VS "
+            "Code and the like) control the computer and press keys before "
+            "Flash can press the media keys. It just asked: turn that app "
+            "on in System Settings > Privacy & Security > Accessibility. "
+            "If it is on already, turn it off and on again, quit and "
+            "reopen that app, then ask again."
         )
+    if did == "no key":
+        raise ComputerError("macOS would not make the media key press.")
     key = "play/pause" if MAC_KEYS[action] == 16 else (
         action.replace("_", " ")
     )
