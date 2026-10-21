@@ -774,10 +774,12 @@ offered any of it. Each action is one fixed step Flash takes itself: it
 never clicks, types, or runs a command the model wrote, and it will not
 open a script or installer, only apps by name.
 
-On a Mac, Spotify and Music are asked directly, and are the ones Flash
-can say what is playing in; anything else playing, in a browser or any
-other app, gets the keyboard's media keys, which go to whatever played
-last. The first time, macOS asks to let the app Flash runs in (Terminal,
+On a Mac, Spotify and Music are asked directly; anything else playing,
+in a browser or any other app, gets the keyboard's media keys, which go
+to whatever played last. Flash reads what macOS shows as Now Playing,
+before and after, so it knows what is playing in any app, never presses
+play on something already playing, and can tell you whether the key
+worked. The first time, macOS asks to let the app Flash runs in (Terminal,
 iTerm and the like) control Spotify and Music, and, for the media keys,
 to turn it on under Privacy & Security > Accessibility. Dark mode asks
 to control System Events. Windows uses the keyboard's media keys,

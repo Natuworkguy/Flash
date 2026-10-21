@@ -18,6 +18,7 @@ import re
 import shutil
 import subprocess  # nosec B404
 import sys
+import time
 from pathlib import Path
 from typing import Optional
 from urllib.parse import urlparse
@@ -32,7 +33,7 @@ ACTIONS = {
     "pause": "pause music or video",
     "next_track": "skip to the next track",
     "previous_track": "go back a track",
-    "now_playing": "say what is playing",
+    "now_playing": "say what is playing, or paused, and in which app",
     "set_volume": "set the volume, value 0 to 100",
     "volume_up": "turn the volume up a step",
     "volume_down": "turn the volume down a step",
@@ -150,7 +151,49 @@ MAC_PLAYERS = ("Spotify", "Music")
 # are one key.
 MAC_KEYS = {"play_pause": 16, "play": 16, "pause": 16, "next_track": 17,
             "previous_track": 18}
-_MAC_MEDIA = """
+# What macOS shows as Now Playing in Control Center, for whatever app it
+# is: a browser tab, a call, any player. Apple lets only its own programs
+# read it, which a script run by osascript is. {"known": false} when it
+# cannot be read here, otherwise whether it is playing (null when macOS
+# does not say), the title, the artist and the app.
+_NOW_JS = """
+const nowPlaying = () => {
+  const said = (thing) => { try {
+    const value = ObjC.unwrap(thing);
+    return typeof value === "string" ? value : "";
+  } catch (e) { return ""; } };
+  try {
+    $.NSBundle.bundleWithPath(
+      "/System/Library/PrivateFrameworks/MediaRemote.framework").load;
+    const request = $.NSClassFromString("MRNowPlayingRequest");
+    if (!request || request.isNil()) return {known: false};
+    const has = (name) => request.respondsToSelector(name);
+    const item = has("localNowPlayingItem") ? request.localNowPlayingItem
+      : null;
+    const info = item && !item.isNil() ? item.nowPlayingInfo : null;
+    const field = (key) => info && !info.isNil()
+      ? info.objectForKey(`kMRMediaRemoteNowPlayingInfo${key}`) : null;
+    let app = "";
+    if (has("localNowPlayingPlayerPath")) {
+      const path = request.localNowPlayingPlayerPath;
+      const client = path && !path.isNil() ? path.client : null;
+      if (client && !client.isNil()) {
+        app = said(client.displayName) || said(client.bundleIdentifier);
+      }
+    }
+    const rate = field("PlaybackRate");
+    const playing = has("localIsPlaying") ? Boolean(request.localIsPlaying)
+      : rate ? Number(ObjC.unwrap(rate)) > 0 : null;
+    const title = said(field("Title")), artist = said(field("Artist"));
+    return {known: Boolean(app || title), playing, title, artist, app};
+  } catch (e) { return {known: false}; }
+};
+"""
+_MAC_NOW = _NOW_JS + "JSON.stringify(nowPlaying());"
+# How long a pressed key takes to show in Now Playing.
+SETTLE = 0.6
+
+_MAC_MEDIA = _NOW_JS + """
 const action = %s, players = %s;
 // An app that is not installed cannot even say it is not running.
 const ask = (fn, otherwise) => { try { return fn(); } catch (e) {
@@ -183,7 +226,9 @@ if (action === "now_playing") {
   // Anything else playing gets the key, pressed from Python.
   did = "press";
 }
-JSON.stringify({did, told});
+const now = did === "press" || action === "now_playing" ? nowPlaying()
+  : {known: false};
+JSON.stringify({did, told, now});
 """
 
 # A media key, pressed as the keyboard presses it, by the number in
@@ -287,12 +332,13 @@ def _mac_media(action: str) -> str:
         json.dumps(action), json.dumps(MAC_PLAYERS),
     )) or "{}")
     did, told = found.get("did", ""), found.get("told") or []
-    if did == "press":
-        did = _run([sys.executable, "-c", _MAC_KEY, str(MAC_KEYS[action])])
+    now = _known(found.get("now"))
     if action == "now_playing":
+        if now is not None:
+            return f"{_state(now).capitalize()}: {_described(now)}."
         return ("Playing: " + "; ".join(told) + ".") if told else (
-            "Neither Spotify nor Music is playing anything. Those are the "
-            "only players Flash can see into on a Mac."
+            "Flash cannot see what is playing on this Mac, and neither "
+            "Spotify nor Music is playing anything."
         )
     if did == "paused":
         return "Paused " + " and ".join(told) + "."
@@ -300,7 +346,14 @@ def _mac_media(action: str) -> str:
         return "Already playing: " + "; ".join(told) + "."
     if did == "skipped":
         return f"Skipped. Now playing {'; '.join(told)}."
-    if did == "not allowed":
+    # Play and pause are one key: one that would only turn it the wrong
+    # way is not pressed.
+    if now is not None and action == "pause" and now["playing"] is False:
+        return f"Nothing to pause: {_described(now)} is already paused."
+    if now is not None and action == "play" and now["playing"] is True:
+        return f"Already playing: {_described(now)}."
+    pressed = _run([sys.executable, "-c", _MAC_KEY, str(MAC_KEYS[action])])
+    if pressed == "not allowed":
         raise ComputerError(
             "macOS has to let the app Flash runs in (Terminal, iTerm, VS "
             "Code and the like) control the computer and press keys before "
@@ -309,14 +362,66 @@ def _mac_media(action: str) -> str:
             "If it is on already, turn it off and on again, quit and "
             "reopen that app, then ask again."
         )
-    if did == "no key":
+    if pressed == "no key":
         raise ComputerError("macOS would not make the media key press.")
     key = "play/pause" if MAC_KEYS[action] == 16 else (
         action.replace("_", " ")
     )
-    return (
-        f"Pressed the {key} media key, which goes to whatever played last."
-    )
+    return f"Pressed the {key} media key. " + _after(action, now)
+
+
+def _known(now) -> Optional[dict]:
+    """Now Playing as macOS shows it, when it could be read."""
+
+    return now if isinstance(now, dict) and now.get("known") else None
+
+
+def _mac_now() -> Optional[dict]:
+    try:
+        return _known(json.loads(_jxa(_MAC_NOW) or "null"))
+    except (ComputerError, ValueError):
+        return None
+
+
+def _state(now: dict) -> str:
+    states = {True: "playing", False: "paused"}
+    return states.get(now.get("playing"), "showing")
+
+
+def _described(now: dict) -> str:
+    what = now.get("title") or "something"
+    if now.get("artist"):
+        what += f" by {now['artist']}"
+    if now.get("app"):
+        what += f" in {now['app']}"
+    return what
+
+
+def _after(action: str, before: Optional[dict]) -> str:
+    """What Now Playing shows once a pressed key has had time to land,
+    and whether that is what the key was for, so the model can tell the
+    user it worked, or did not."""
+
+    time.sleep(SETTLE)
+    now = _mac_now()
+    if now is None:
+        return (
+            "It goes to whatever played last; Flash cannot see what is "
+            "playing on this Mac to check it worked."
+        )
+    said = f"Now {_state(now)}: {_described(now)}."
+    if action in ("next_track", "previous_track"):
+        if before is not None and before.get("title") == now.get("title"):
+            return said + " That is the same as before, so it may not " \
+                "have skipped."
+        return said
+    wanted = {"play": True, "pause": False}.get(action)
+    if wanted is None and before is not None and before["playing"] is not None:
+        wanted = not before["playing"]
+    if wanted is not None and now["playing"] is not None \
+            and now["playing"] != wanted:
+        return said + " So the key did not do it."
+    return said
 
 
 def _playerctl(args: list[str]) -> str:

@@ -83,30 +83,94 @@ def test_mac_pauses_what_is_playing(monkeypatch, ran):
     assert "catch" in argv[-1]  # nosec B101
 
 
-def test_mac_presses_the_media_key_for_any_other_app(monkeypatch, ran):
-    on(monkeypatch, "mac")
-    ran.answers["osascript"] = json.dumps({"did": "press", "told": []})
+CHROME = {"known": True, "title": "Lofi beats", "artist": "A channel",
+          "app": "Google Chrome"}
+
+
+def mac_now(ran, monkeypatch, before, after=None, did="press"):
+    """The Mac's Now Playing: BEFORE when Flash looks first, AFTER once
+    a key has been pressed."""
+
+    monkeypatch.setattr(computer, "SETTLE", 0)
+
+    def osascript(argv):
+        if "const action" in argv[-1]:
+            return json.dumps({"did": did, "told": [], "now": before})
+        return json.dumps(after if after is not None else before)
+
+    ran.answers["osascript"] = osascript
     ran.answers[sys.executable] = "pressed"
 
-    assert tools.computer_tool("play") == (  # nosec B101
-        "Pressed the play/pause media key, which goes to whatever played "
-        "last."
+
+def test_mac_presses_the_media_key_for_any_other_app(monkeypatch, ran):
+    on(monkeypatch, "mac")
+    mac_now(ran, monkeypatch, {"known": False},
+            {**CHROME, "playing": True})
+
+    said = tools.computer_tool("play")
+
+    # Then it looks again, so the model knows it worked.
+    assert said == (  # nosec B101
+        "Pressed the play/pause media key. Now playing: Lofi beats by A "
+        "channel in Google Chrome."
     )
     # Pressed by macOS's own calls, in a Python of its own, with only the
     # key's number given to it.
-    argv, _ = ran[-1]
+    argv = [a for a, _ in ran if a[0] == sys.executable][0]
     assert argv == [sys.executable, "-c", computer._MAC_KEY, "16"]  # nosec
     assert "CGPreflightPostEventAccess" in argv[2]  # nosec B101
     assert "next track" in tools.computer_tool("next_track")  # nosec B101
-    assert ran[-1][0][-1] == "17"  # nosec B101
+    assert [a for a, _ in ran if a[0] == sys.executable][-1][-1] == (  # nosec
+        "17"
+    )
 
     ran.answers[sys.executable] = "not allowed"
-    assert "Accessibility" in tools.computer_tool("pause")  # nosec B101
+    assert "Accessibility" in tools.computer_tool("play_pause")  # nosec
     ran.answers[sys.executable] = "no key"
-    assert "would not make" in tools.computer_tool("pause")  # nosec B101
+    assert "would not make" in tools.computer_tool("play_pause")  # nosec
 
-    ran.answers["osascript"] = json.dumps({"did": "", "told": []})
-    assert "Neither Spotify nor Music" in tools.computer_tool(  # nosec
+
+def test_mac_says_when_a_key_did_not_do_it(monkeypatch, ran):
+    on(monkeypatch, "mac")
+    mac_now(ran, monkeypatch, {**CHROME, "playing": True},
+            {**CHROME, "playing": True})
+
+    said = tools.computer_tool("play_pause")
+
+    assert said.endswith("So the key did not do it.")  # nosec B101
+
+
+def test_mac_never_presses_a_key_the_wrong_way(monkeypatch, ran):
+    on(monkeypatch, "mac")
+    mac_now(ran, monkeypatch, {**CHROME, "playing": False})
+
+    assert tools.computer_tool("pause") == (  # nosec B101
+        "Nothing to pause: Lofi beats by A channel in Google Chrome is "
+        "already paused."
+    )
+    mac_now(ran, monkeypatch, {**CHROME, "playing": True})
+    assert tools.computer_tool("play").startswith("Already playing")  # nosec
+    assert not [a for a, _ in ran if a[0] == sys.executable]  # nosec B101
+
+
+def test_mac_says_what_is_playing_in_any_app(monkeypatch, ran):
+    on(monkeypatch, "mac")
+    mac_now(ran, monkeypatch, {**CHROME, "playing": False}, did="")
+
+    assert tools.computer_tool("now_playing") == (  # nosec B101
+        "Paused: Lofi beats by A channel in Google Chrome."
+    )
+
+
+def test_mac_without_now_playing_says_it_cannot_check(monkeypatch, ran):
+    on(monkeypatch, "mac")
+    mac_now(ran, monkeypatch, {"known": False})
+
+    assert "cannot see what is playing" in tools.computer_tool(  # nosec
+        "play_pause"
+    )
+    mac_now(ran, monkeypatch, {"known": False}, did="")
+    assert "cannot see what is playing" in tools.computer_tool(  # nosec
         "now_playing"
     )
 
