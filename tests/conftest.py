@@ -6,6 +6,7 @@ import pytest
 
 from flash import (
     ai,
+    connectors,
     design,
     extensions,
     heyflash,
@@ -108,12 +109,18 @@ def isolated_home(tmp_path_factory, monkeypatch):
     monkeypatch.delenv("WEB_KEEP_DELETED_USAGE", raising=False)
     # Acting on the computer: off, as it is until the user turns it on.
     monkeypatch.delenv("COMPUTER_ACTIONS", raising=False)
+    # MCP servers: none but a test's own, and none left running after.
+    monkeypatch.setattr(connectors, "FLASH_DIR", home / ".flash")
+    connectors.stop_all()
+    connectors._begun.clear()
+    connectors._starting.clear()
     # A key in the developer's shell would ride on every test's requests.
     monkeypatch.delenv("OLLAMA_API_KEY", raising=False)
     systemone.forget_checks()
     learning.refresh()
     learning.reset()
     yield home
+    connectors.stop_all()
     extensions.reload()
     learning.refresh()
     learning.reset()

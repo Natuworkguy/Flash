@@ -53,6 +53,7 @@ from . import (
     background,
     checkpoint,
     computer,
+    connectors,
     context,
     design,
     extensions,
@@ -130,7 +131,8 @@ HTML_SANDBOX = "sandbox allow-scripts allow-forms allow-popups allow-modals"
 # opens whatever the address names: a chat, a project, a settings tab.
 PAGE_PATHS = re.compile(
     r"^/(?:c/[0-9a-f]{8}|p/[0-9a-f]{8}|projects|skills|sparks|extensions"
-    r"|settings(?:/(?:general|usage|memory|email|security))?)?/?$"
+    r"|settings(?:/(?:general|usage|memory|email|connectors|security))?)?"
+    r"/?$"
 )
 
 STATIC = {"orbit.woff2": "font/woff2", "logo-icon.svg": "image/svg+xml"}
@@ -3695,6 +3697,10 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
         session.hub.publish({"type": "status"})
         return {"background": scene["name"], "scene": scene}
 
+    if name in ("connectors", "connector-add", "connector-remove",
+                "connector-switch", "connector-reload"):
+        return _connector_command(name, arg, body)
+
     if name == "computer-setting":
         on = arg in ("on", "1", "true")
         ai.set_config_var(computer.SETTING, "1" if on else "0")
@@ -3940,6 +3946,39 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
         return context_use(ai, session.chat(chat_id))
 
     raise ValueError(f"unknown command {name!r}")
+
+
+def _connector_command(name: str, arg: str, body: dict) -> dict:
+    """The MCP servers whose tools Flash has, for Settings, and changes
+    to them. Never a token: only the names of what each is given."""
+
+    try:
+        if name == "connector-add":
+            env: dict = {}
+            for line in str(body.get("env") or "").splitlines():
+                if not line.strip():
+                    continue
+                if "=" not in line:
+                    raise connectors.ConnectorError(
+                        f"{line.strip()!r} is not KEY=VALUE."
+                    )
+                key, value = line.split("=", 1)
+                env[key.strip()] = value.strip()
+            connectors.add(arg, str(body.get("target") or ""), env)
+        elif name == "connector-remove":
+            connectors.remove(arg)
+        elif name == "connector-switch":
+            connectors.switch(arg, bool(body.get("on")))
+        elif name == "connector-reload":
+            connectors.reload()
+        else:
+            connectors.start()
+    except connectors.ConnectorError as exc:
+        raise ValueError(str(exc)) from None
+    return {
+        "connectors": connectors.listing(),
+        "path": str(connectors.config_path()),
+    }
 
 
 def _progress_email(ai: Any, body: dict) -> dict:

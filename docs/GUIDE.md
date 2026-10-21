@@ -23,6 +23,7 @@ version; [CONFIGURATION.md](CONFIGURATION.md) lists every setting and
 - **Page Screenshots**: The AI renders a page it built in a headless browser with its `screenshot` tool and looks at the result, so it can see a broken layout instead of guessing from the HTML.
 - **Page Control**: The AI opens a page with `open_page` and then clicks buttons, fills forms, presses keys, and runs JavaScript on it with `interact`, seeing a fresh screenshot, the page's elements, and its console errors after every step, so it can debug what a page *does*, not just how it looks.
 - **Read Aloud**: In the web UI, the play button under any reply, or under a spark's report, reads it out a sentence at a time, marking each as it is said: in Flash's own voice when voice mode is set up, and in the browser's otherwise.
+- **Connectors**: Plug in any MCP server (GitHub, Notion, a database, your files) with `/mcp add` or Settings > Connectors, and its tools join Flash's own. Read-only tools run straight away; anything else asks first.
 - **Acts on Your Computer**: With `/computer on`, or the switch in the web UI's Settings, "stop the music", "turn it down" or "open Spotify" just happens: Flash plays, pauses and skips music, sets the volume, opens and quits apps, opens links and files, locks the screen, copies to the clipboard and switches dark mode. Off by default, and it never clicks, types or runs commands this way.
 - **Voice Mode**: `/voice on` downloads a Vosk speech model and a Piper voice, then lets you talk to Flash and hear its replies, with typing still available at any time. Flash talks warmly, like a person rather than a document, and its voice has a style of its own: Warm (the default: unhurried, friendly, a breath between sentences, questions that lift and exclamations with a little bounce), Lively, Calm, or Plain, picked with `/voice style` or under Voice models in the web UI's Settings, where you can hear it first. Kristin and HFC join the voices on offer, for a warmer sound still.
 - **Visible Plans**: For a multi-step task the AI posts a checklist up front and ticks each box as it finishes that step, so you can see where it is instead of waiting for the wall of text at the end.
@@ -174,6 +175,9 @@ python run.py
   [System One](#system-one), which reviews autonomous commands.
 - `/computer [on|off]`: Let Flash do [simple things on your
   computer](#your-computer), like pausing the music, or stop it.
+- `/mcp [add <name> <command or URL> | env <name> KEY=VALUE | remove |
+  on | off | tools <name> | reload]`: List and change the
+  [connectors](#connectors) whose tools Flash has.
 - `/skills [show|remove <name>]`: List, read, or delete what Flash has
   learned.
 - `/plan`: Show the checklist the model is working through.
@@ -755,6 +759,37 @@ package missing (starting voice mode, a Kokoro voice, a Moonshine model,
 a tool that failed for want of one), it shows an Install button that
 runs the right command for your install. Logs shows what it prints as it
 goes, and opens by itself if the install fails.
+
+### Connectors
+
+A connector is an MCP server: a program that offers tools (GitHub's
+issues and pull requests, a Postgres database, a Notion workspace, the
+files in a folder) in the Model Context Protocol, the one shape every
+assistant can call. Add one and its tools join Flash's own, named
+`<connector>__<tool>`, in the terminal and the web UI alike.
+
+```text
+/mcp add files npx -y @modelcontextprotocol/server-filesystem ~/Documents
+/mcp add github npx -y @modelcontextprotocol/server-github
+/mcp env github GITHUB_PERSONAL_ACCESS_TOKEN=ghp_...
+/mcp add docs https://example.com/mcp
+/mcp env docs Authorization=Bearer ...
+```
+
+A command is a program Flash starts on this computer and talks to over
+its standard input and output; a URL is a server elsewhere, spoken to
+over HTTP. `/mcp env` gives a command its environment and a URL its
+headers. In the web UI, Settings > Connectors does the same, shows each
+one's tools, and turns them on and off.
+
+They are kept in `~/.flash/mcp.json`, readable only by you, in the
+`mcpServers` shape other MCP clients use, so a config written for one of
+them works pasted in as it is. Servers start in the background the first
+time Flash wants tools, and stop when it exits.
+
+A tool its server marks read-only runs straight away. Any other asks
+first, as a shell command does, unless autonomous mode is on, where
+[System One](#system-one) looks it over instead.
 
 ### Your computer
 

@@ -1288,6 +1288,20 @@ body.page-projects #dock, body.page-settings #dock, body.page-tool #dock { displ
 .field input[readonly] { color: var(--text-3); }
 @media (max-width: 640px) { .email-card { flex-wrap: wrap; } .email-actions { width: 100%; padding-left: 50px; } }
 .email-form { max-width: 460px; }
+.conn-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; background: var(--text-3); }
+.conn-dot.ready { background: var(--add); }
+.conn-dot.failed { background: var(--del); }
+.conn-dot.starting { background: var(--warn); animation: pulse 1.2s ease-in-out infinite; }
+.conn-said { font: 12px/1.45 var(--mono); color: var(--text-3); white-space: pre-wrap; overflow-wrap: anywhere; margin: 4px 0 0; max-height: 120px; overflow: auto; }
+.conn-tools summary { cursor: pointer; font-size: 13px; color: var(--text-2); margin-top: 4px; }
+.conn-tools ul { list-style: none; margin: 6px 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.conn-tools li { font-size: 13px; color: var(--text-3); }
+.conn-tools li b { font: 600 12.5px var(--mono); color: var(--text); margin-right: 6px; }
+.conn-tools .ro { font-size: 11px; font-weight: 600; color: var(--add); margin-right: 6px; }
+.connector-card .switch { align-self: center; border: 0; padding: 0; cursor: pointer; }
+.connector-card .switch[aria-checked="true"] { background: var(--accent); }
+.connector-card .switch[aria-checked="true"]::after { transform: translateX(16px); }
+.connector-card .name-row .said { font-size: 12.5px; }
 .other-keeper { display: flex; align-items: center; gap: 12px; padding: 12px 14px; margin: 0 0 16px; border-radius: var(--radius); border: 1px solid color-mix(in srgb, var(--warn) 45%, transparent); background: color-mix(in srgb, var(--warn) 9%, transparent); font-size: 13.5px; }
 .other-keeper .ico { color: var(--warn); display: grid; flex: none; }
 .other-keeper .ico svg { width: 18px; height: 18px; }
@@ -3266,7 +3280,7 @@ function routeTo(path) {
   } else if ((m = path.match(/^\/p\/([0-9a-f]{8})\/?$/))) {
     if (projectOf(m[1])) { view = "project"; viewProject = m[1]; }
     else { view = "projects"; replaceUrl = true; }
-  } else if ((m = path.match(/^\/settings(?:\/(general|usage|memory|email|security))?\/?$/))) {
+  } else if ((m = path.match(/^\/settings(?:\/(general|usage|memory|email|connectors|security))?\/?$/))) {
     view = "settings";
     settingsTab = m[1] || "general";
   } else if ((m = path.match(/^\/(projects|skills|sparks|extensions)\/?$/))) {
@@ -6578,7 +6592,7 @@ function drawSettings() {
   $("#title").textContent = "Settings";
   document.title = "Settings · Flash";
   const page = el("div", "page settings");
-  page.innerHTML = `<div class="page-head"><h1>Settings</h1></div><div class="tabs" role="tablist"><span class="thumb"></span><button type="button" role="tab" data-tab="general">General</button><button type="button" role="tab" data-tab="usage">Usage</button><button type="button" role="tab" data-tab="memory">Memory</button><button type="button" role="tab" data-tab="email">Email</button><button type="button" role="tab" data-tab="security">Security</button></div><div class="tab-body"></div>`;
+  page.innerHTML = `<div class="page-head"><h1>Settings</h1></div><div class="tabs" role="tablist"><span class="thumb"></span><button type="button" role="tab" data-tab="general">General</button><button type="button" role="tab" data-tab="usage">Usage</button><button type="button" role="tab" data-tab="memory">Memory</button><button type="button" role="tab" data-tab="email">Email</button><button type="button" role="tab" data-tab="connectors">Connectors</button><button type="button" role="tab" data-tab="security">Security</button></div><div class="tab-body"></div>`;
   messagesEl.appendChild(page);
   const tabs = page.querySelector(".tabs");
   const thumb = tabs.querySelector(".thumb");
@@ -6608,7 +6622,7 @@ function drawSettings() {
     const old = page.querySelector(".tab-body");
     const body = el("div", "tab-body");
     old.replaceWith(body);
-    ({ general: drawGeneral, usage: drawUsage, memory: drawMemory, email: drawEmail, security: drawSecurity })[tab](body);
+    ({ general: drawGeneral, usage: drawUsage, memory: drawMemory, email: drawEmail, connectors: drawConnectors, security: drawSecurity })[tab](body);
   };
   tabs.onclick = (e) => {
     const b = e.target.closest("button");
@@ -11081,6 +11095,113 @@ function drawEmailForm(host, account, e) {
     }
   };
   if (account) form.password.focus(); else form.address.focus();
+}
+
+// Connectors: MCP servers whose tools join Flash's. Their tokens stay in
+// the config file; only their names come here.
+const CONNECTOR_STATES = { ready: "Connected", starting: "Starting…", failed: "Failed", off: "Off" };
+
+async function drawConnectors(body, given = null) {
+  let c = given;
+  if (!c) {
+    try { c = await command("connectors"); } catch (error) { showFailure(error); return; }
+  }
+  if (!body.isConnected) return;
+  body.innerHTML = `<h2 class="settings-section">Connectors</h2><p class="settings-sub">Other programs' tools, through the Model Context Protocol: GitHub, Notion, a database, your files, anything with an MCP server. Each one's tools join Flash's own. A tool its server marks read-only runs straight away; any other asks you first, unless autonomous mode is on. The usual <code>mcpServers</code> config works pasted into <code></code> as it is.</p><div class="email-list conn-list"></div><div class="buttons email-buttons"></div><div class="conn-form-host"></div>`;
+  body.querySelectorAll(".settings-sub code")[1].textContent = shortPath(c.path);
+  const list = body.querySelector(".conn-list");
+  for (const server of c.connectors) list.appendChild(connectorCard(body, server));
+  const add = el("button", "btn with-icon", `${icon("plus")}<span>Add a connector</span>`);
+  add.type = "button";
+  add.onclick = () => { add.hidden = true; drawConnectorForm(body); };
+  const reload = el("button", "btn with-icon", `${icon("retry")}<span>Restart all</span>`);
+  reload.type = "button";
+  reload.hidden = !c.connectors.length;
+  reload.onclick = async () => {
+    reload.disabled = true;
+    try { drawConnectors(body, await command("connector-reload")); } catch (error) { showFailure(error); reload.disabled = false; }
+  };
+  body.querySelector(".email-buttons").append(add, reload);
+  if (!c.connectors.length) { add.hidden = true; drawConnectorForm(body); }
+  // A server that is still starting is looked at again in a moment.
+  if (c.connectors.some((s) => s.state === "starting")) {
+    setTimeout(() => { if (body.isConnected && settingsTab === "connectors") drawConnectors(body); }, 1000);
+  }
+}
+
+function connectorCard(body, server) {
+  const card = el("div", "email-card connector-card", `<span class="email-icon">${icon(server.remote ? "globe" : "chip")}</span><span class="what"><span class="name-row"><span class="conn-dot"></span><b></b><span class="state"></span></span><span class="servers"></span><span class="said"></span></span><button type="button" class="switch" role="switch" aria-label="On"></button><span class="email-actions"></span>`);
+  card.querySelector(".conn-dot").classList.add(server.state);
+  card.querySelector("b").textContent = server.name;
+  const count = server.tools.length;
+  card.querySelector(".state").className = "said";
+  card.querySelector(".name-row .said").textContent = server.state === "ready" ? `${count} tool${count === 1 ? "" : "s"}` : CONNECTOR_STATES[server.state];
+  card.querySelector(".servers").textContent = server.where + (server.secrets.length ? `  ·  ${server.secrets.join(", ")}` : "");
+  const said = card.querySelector(".what > .said");
+  if (server.state === "failed") {
+    said.classList.add("bad");
+    richText(said, server.why);
+    if (server.said) card.querySelector(".what").appendChild(el("pre", "conn-said")).textContent = server.said;
+  }
+  if (count) {
+    const tools = el("details", "conn-tools", `<summary>Tools</summary><ul></ul>`);
+    for (const tool of server.tools) {
+      const li = el("li", "", `<b></b>${tool.read_only ? `<span class="ro">read-only</span>` : ""}<span></span>`);
+      li.querySelector("b").textContent = tool.name;
+      li.querySelector("span:last-child").textContent = tool.description;
+      tools.querySelector("ul").appendChild(li);
+    }
+    card.querySelector(".what").appendChild(tools);
+  }
+  const toggle = card.querySelector(".switch");
+  toggle.setAttribute("aria-checked", !!server.on);
+  toggle.dataset.tip = server.on ? "Turn off" : "Turn on";
+  toggle.onclick = async () => {
+    toggle.disabled = true;
+    try { drawConnectors(body, await command("connector-switch", server.name, null, { on: !server.on })); }
+    catch (error) { showFailure(error); toggle.disabled = false; }
+  };
+  const remove = el("button", "btn small danger", "Remove");
+  remove.type = "button";
+  remove.onclick = async () => {
+    if (!(await confirmPop(remove, { title: `Remove ${server.name}?`, text: "Its tools go, and so does what it was given in the config: its command or address, and its keys.", yes: "Remove" }))) return;
+    try { drawConnectors(body, await command("connector-remove", server.name)); toast(`Removed ${server.name}`); }
+    catch (error) { showFailure(error); }
+  };
+  card.querySelector(".email-actions").append(remove);
+  return card;
+}
+
+function drawConnectorForm(body) {
+  const host = body.querySelector(".conn-form-host");
+  host.innerHTML = `<form class="email-form" autocomplete="off">
+    <h3 class="email-form-title">Add a connector</h3>
+    <label class="field"><span>Name</span><input name="name" class="mono" placeholder="github" required pattern="[A-Za-z0-9_-]{1,32}"><small>Letters, digits, - and _. Its tools are called name__tool.</small></label>
+    <label class="field"><span>Command or URL</span><input name="target" class="mono" placeholder="npx -y @modelcontextprotocol/server-github" required><small>A command Flash starts on this computer, or the address of a server elsewhere.</small></label>
+    <label class="field"><span>Keys</span><textarea name="env" class="mono" rows="3" placeholder="GITHUB_PERSONAL_ACCESS_TOKEN=..."></textarea><small>One KEY=VALUE a line: what the command is given, or for a URL, the headers it is sent (Authorization=Bearer ...). Kept in the config file, readable only by you.</small></label>
+    <div class="form-error"></div>
+    <div class="buttons"><button type="button" class="btn" data-cancel>Cancel</button><button type="submit" class="btn primary">Add</button></div>
+  </form>`;
+  const form = host.querySelector("form");
+  const error = form.querySelector(".form-error");
+  form.querySelector("[data-cancel]").onclick = () => drawConnectors(body);
+  form.onsubmit = async (ev) => {
+    ev.preventDefault();
+    const submit = form.querySelector("[type=submit]");
+    submit.disabled = true;
+    submit.textContent = "Adding…";
+    error.textContent = "";
+    try {
+      const c = await command("connector-add", form.name.value.trim(), null, { target: form.target.value, env: form.env.value });
+      toast(`Added ${form.name.value.trim()}`);
+      drawConnectors(body, c);
+    } catch (err) {
+      richText(error, err.message);
+      submit.disabled = false;
+      submit.textContent = "Add";
+    }
+  };
+  form.name.focus();
 }
 
 async function drawMemory(body) {

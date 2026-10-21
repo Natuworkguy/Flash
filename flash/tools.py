@@ -33,6 +33,7 @@ from . import browser as page_devtools
 from . import (
     checkpoint,
     computer,
+    connectors,
     design,
     editor,
     extensions,
@@ -1929,14 +1930,16 @@ def available_tools() -> list[dict[str, Any]]:
 def turn_tools() -> list[dict[str, Any]]:
     """The tools offered on this turn: the editor's only inside VS Code,
     System One's only while it is at work, and whatever the installed
-    extensions add."""
+    extensions and the connected MCP servers add."""
 
-    return (
+    offered = (
         available_tools()
         + (EDITOR_TOOLS if editor.available() else [])
         + (SYSTEM_ONE_TOOLS if systemone.active() else [])
         + extensions.tool_schemas(frozenset(FUNCTIONS))
     )
+    taken = frozenset(t["function"]["name"] for t in offered)
+    return offered + connectors.tool_schemas(taken)
 
 
 def run_extension_command(
@@ -1979,6 +1982,27 @@ def run_extension_command(
     return ""
 
 
+def _user_allows(question: str) -> bool:
+    """Ask the user QUESTION, yes or no, wherever they are: the web page
+    when one is asking, else the terminal."""
+
+    notify_needs_input()
+    answer = remote_answer(question)
+
+    if answer is None:
+        prompt = Text("  ⎿  ", style=DIM)
+        prompt.append(question + " ", style=DIM)
+        prompt.append("y", style=f"bold {ACCENT}")
+        prompt.append("/n ", style=DIM)
+        console.print(prompt, end="")
+        answer = typed()
+
+    if answer != "y":
+        tool_result("Blocked by user", style=WARN)
+        return False
+    return True
+
+
 def _extension_tool(name: str, args: dict) -> Optional[str]:
     """Answer a call to an extension's tool, or None if none has it."""
 
@@ -1991,28 +2015,41 @@ def _extension_tool(name: str, args: dict) -> Optional[str]:
     shown = json.dumps(args, ensure_ascii=False)
     tool_line(f"{name}({shown})")
 
-    if tool.confirm and not NO_COMMAND_CONFIRMATION:
-        notify_needs_input()
-
-        question = f"Let {extension.name} run {name}?"
-        answer = remote_answer(question)
-
-        if answer is None:
-            prompt = Text("  ⎿  ", style=DIM)
-            prompt.append(question + " ", style=DIM)
-            prompt.append("y", style=f"bold {ACCENT}")
-            prompt.append("/n ", style=DIM)
-            console.print(prompt, end="")
-            answer = typed()
-
-        if answer != "y":
-            tool_result("Blocked by user", style=WARN)
-            return "Blocked by user"
+    if tool.confirm and not NO_COMMAND_CONFIRMATION and not _user_allows(
+        f"Let {extension.name} run {name}?"
+    ):
+        return "Blocked by user"
 
     result = extensions.call_tool(extension, tool, args)
     tool_result(
         result, style=ERROR if result.startswith(("(exit", "Error")) else DIM
     )
+    return result
+
+
+def _connector_tool(name: str, args: dict) -> Optional[str]:
+    """Answer a call to a connected MCP server's tool, or None if no
+    server has it. One its server does not mark read-only asks first,
+    unless autonomous mode is on."""
+
+    found = connectors.find(name)
+
+    if found is None:
+        return None
+
+    server, tool = found
+    shown = json.dumps(args, ensure_ascii=False)
+    tool_line(f"{name}({shown[:300]})")
+
+    if not connectors.read_only(tool) and not NO_COMMAND_CONFIRMATION \
+            and not _user_allows(
+                f"Let the {server.name} connector run {tool['name']}?"
+            ):
+        return "Blocked by user"
+
+    result, images = connectors.call(server, tool, args)
+    _pending_images.extend(images)
+    tool_result(result, style=ERROR if result.startswith("Error") else DIM)
     return result
 
 
@@ -5811,6 +5848,9 @@ def _reviewed(name: str) -> bool:
         return True
     if name in FUNCTIONS:
         return False
+    connected = connectors.find(name)
+    if connected is not None:
+        return not connectors.read_only(connected[1])
     found = extensions.find_tool(name, frozenset(FUNCTIONS))
     return found is not None and bool(found[1].confirm)
 
@@ -5871,6 +5911,8 @@ def run_tool(call):
 
     if func is None:
         answered = _extension_tool(name, args)
+        if answered is None:
+            answered = _connector_tool(name, args)
         return f"Unknown tool: {name}" if answered is None else answered
 
     try:
