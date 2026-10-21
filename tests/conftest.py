@@ -25,6 +25,7 @@ from flash import (
     terminal,
     tools,
     voice,
+    waits,
     workspace,
 )
 
@@ -112,6 +113,9 @@ def isolated_home(tmp_path_factory, monkeypatch):
     monkeypatch.delenv("COMPUTER_ACTIONS", raising=False)
     # Meetings' transcripts, in the temp home.
     monkeypatch.setattr(meeting, "FLASH_DIR", home / ".flash")
+    # Waits, likewise, read afresh.
+    monkeypatch.setattr(waits, "FLASH_DIR", home / ".flash")
+    waits.forget_cache()
     # MCP servers: none but a test's own, and none left running after.
     monkeypatch.setattr(connectors, "FLASH_DIR", home / ".flash")
     connectors.stop_all()

@@ -23,6 +23,7 @@ version; [CONFIGURATION.md](CONFIGURATION.md) lists every setting and
 - **Page Screenshots**: The AI renders a page it built in a headless browser with its `screenshot` tool and looks at the result, so it can see a broken layout instead of guessing from the HTML.
 - **Page Control**: The AI opens a page with `open_page` and then clicks buttons, fills forms, presses keys, and runs JavaScript on it with `interact`, seeing a fresh screenshot, the page's elements, and its console errors after every step, so it can debug what a page *does*, not just how it looks.
 - **Read Aloud**: In the web UI, the play button under any reply, or under a spark's report, reads it out a sentence at a time, marking each as it is said: in Flash's own voice when voice mode is set up, and in the browser's otherwise.
+- **Waits**: In the web UI, Flash can set a task aside until something happens, then pick it up in the same chat: "when CI goes green, deploy", "if Sam hasn't replied by Friday, follow up". Waits outlast restarts.
 - **Record a Meeting**: In the web UI, + > Record a meeting writes down what is said as it is said, on this computer, then hands the transcript to the model in a new chat for the summary, decisions and to-dos.
 - **Connectors**: Plug in any MCP server (GitHub, Notion, a database, your files) with `/mcp add` or Settings > Connectors, and its tools join Flash's own. Read-only tools run straight away; anything else asks first.
 - **Acts on Your Computer**: With `/computer on`, or the switch in the web UI's Settings, "stop the music", "turn it down" or "open Spotify" just happens: Flash plays, pauses and skips music, sets the volume, opens and quits apps, opens links and files, locks the screen, copies to the clipboard and switches dark mode. Off by default, and it never clicks, types or runs commands this way.
@@ -760,6 +761,31 @@ package missing (starting voice mode, a Kokoro voice, a Moonshine model,
 a tool that failed for want of one), it shows an Install button that
 runs the right command for your install. Logs shows what it prints as it
 goes, and opens by itself if the install fails.
+
+### Waiting for something
+
+In a web UI chat, Flash can set a task aside until something happens and
+then carry on in the same chat, knowing everything it did before. Ask in
+your own words:
+
+- "in two hours, check the download finished and unzip it"
+- "when CI on #42 goes green, deploy it"
+- "if Sam hasn't replied by Friday morning, draft a follow-up"
+
+It waits for one of three things: a time; a command that succeeds, run
+every so often in the chat's folder (`gh pr checks 42`, `curl -f` on a
+URL, `test -f` on a file), which you say yes to once when the wait is
+set, unless autonomous mode is on; or something it looks for with its
+tools, in words ("a reply from Sam is in my inbox"), checked now and
+then without changing anything. A time and a condition together wait
+for the time, then start looking. A wait that keeps looking gives up
+after three days unless told otherwise, and Flash tells you it did.
+
+Each wait shows in its chat as a card with what it is waiting for, what
+it will do then, how its last look went, and Cancel. Waits are kept in
+`~/.flash/waits.json`, so they outlast Flash restarting, an update, or
+the laptop sleeping. A time that passed while Flash was not running is
+over the moment it is back. Deleting a chat cancels its waits.
 
 ### Recording a meeting
 

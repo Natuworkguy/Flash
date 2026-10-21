@@ -81,6 +81,7 @@ from . import (
     visuals,
     voice,
     voicehooks,
+    waits,
     workspace,
 )
 from .dashes import DashGuard
@@ -418,7 +419,7 @@ class Ask:
 # The rest (tokens, status) only matter to a page that is watching.
 KEPT = {
     "user", "assistant", "tool", "result", "diff", "ask", "answered",
-    "error", "stats", "note", "thought", "file", "plan", "browser",
+    "error", "stats", "note", "thought", "file", "plan", "browser", "wait",
 }
 
 
@@ -888,6 +889,11 @@ class Session:
         # One at a time, so a report is never posted twice.
         self._posting = threading.Lock()
         self._stop_watching = threading.Event()
+        # Waits being checked now, on threads of their own.
+        self._checking: set[str] = set()
+        # Waits set before a restart carry on.
+        if waits.waiting():
+            self.ensure_watching()
 
     # Chats ---------------------------------------------------------
 
@@ -920,6 +926,10 @@ class Session:
         if chat is not None:
             chat.stop.set()
             keep_usage_of(chat)
+        # What it waited for goes with it.
+        for wait in waits.for_chat(chat_id):
+            if wait.status == waits.WAITING:
+                waits.end(wait.id, waits.CANCELLED, "Its chat was deleted.")
         workspace.delete_chat(chat_id)
         self.hub.publish({"type": "chats", "chat": chat_id})
 
@@ -1101,6 +1111,11 @@ class Session:
         for agent_id in agent_ids:
             self.agents[agent_id] = chat.id
         self.hub.publish({"type": "status"})
+        self.ensure_watching()
+
+    def ensure_watching(self) -> None:
+        """Start the watch on sub-agents and waits, once."""
+
         if self._watching is None:
             self._watching = threading.Thread(target=self._watch, daemon=True)
             self._watching.start()
@@ -1170,6 +1185,7 @@ class Session:
                 # A report filed by the keeper in another Flash, which
                 # this one hears of by looking.
                 self.post_spark_reports()
+            self.tick_waits()
             now = subagents.running_count()
             if now != running:
                 running = now
@@ -1185,6 +1201,106 @@ class Session:
                     continue
                 self.wakes[chat_id] = self.wakes.get(chat_id, 0) + 1
                 self.send(chat, ai_wake_note(), wake=True)
+
+    # Waits ---------------------------------------------------------
+
+    def tick_waits(self) -> None:
+        """Each wait whose time, or next look, has come: over, or looked
+        at, on a thread of its own."""
+
+        now = time.time()
+        for wait in waits.due(now):
+            if wait.id in self._checking:
+                continue
+            chat = self.chats.get(wait.chat)
+            if chat is None:
+                self.wait_changed(waits.end(
+                    wait.id, waits.CANCELLED, "Its chat is gone.",
+                ))
+            elif wait.give_up is not None and now >= wait.give_up:
+                self.end_wait(chat, wait, gave_up=True)
+            elif wait.found or not (wait.check or wait.command):
+                # Its time came, or a look already found it so: over, as
+                # soon as the chat is free to hear it.
+                self.end_wait(chat, wait)
+            else:
+                self._checking.add(wait.id)
+                threading.Thread(
+                    target=self._check_wait, args=(wait,), daemon=True,
+                ).start()
+
+    def _check_wait(self, wait: "waits.Wait") -> None:
+        try:
+            ready, said = waits.check(wait)
+        except Exception as exc:  # noqa: BLE001
+            ready, said = False, f"{exc.__class__.__name__}: {exc}"
+        now = waits.find(wait.id)
+        if now is None or now.status != waits.WAITING:
+            self._checking.discard(wait.id)
+            return
+        changed = waits.update(
+            wait.id, said=said[:waits.SAID_CHARS], checks=now.checks + 1,
+            found=ready,
+            next=now.next if ready else time.time() + now.every * 60,
+        )
+        self._checking.discard(wait.id)
+        self.wait_changed(changed)
+
+    def end_wait(
+        self, chat: Chat, wait: "waits.Wait", gave_up: bool = False,
+    ) -> None:
+        """WAIT is over: its chat takes up the task again, with a turn
+        nobody typed. Left for the next look while the chat is busy."""
+
+        with self._lock:
+            if chat.busy or chat.queued:
+                return
+        ended = waits.end(wait.id, waits.GAVE_UP if gave_up else waits.DONE,
+                          wait.said)
+        if ended is None:
+            return
+        self.wait_changed(ended)
+        if gave_up:
+            hours = round(((ended.give_up or 0) - (ended.at or ended.created))
+                          / 3600, 1)
+            told = (
+                f"You stopped waiting: {ended.what} was still not so after "
+                f"{hours:g} hours."
+                + (f" The last look found: {ended.said}" if ended.said
+                   else "")
+                + f"\nOnce it happened, you had planned: {ended.then}\n"
+                "Tell the user, and what they could do now."
+            )
+            note = f"Stopped waiting: {ended.what}"
+        else:
+            why = (
+                f"It is {waits.when(ended)}, the time you were waiting for."
+                if not (ended.check or ended.command)
+                else "What you were waiting for is so."
+                + (f" What the look found: {ended.said}" if ended.said
+                   else "")
+            )
+            told = (
+                f"Your wait is over: {ended.what}. {why}\n"
+                f"Now, as you planned: {ended.then}"
+            )
+            note = f"Done waiting: {ended.what}"
+        self.send(chat, told, wake=True, note=note)
+
+    def wait_changed(self, wait: Optional["waits.Wait"]) -> None:
+        """Its card, in its chat and on every page, brought up to date."""
+
+        if wait is None:
+            return
+        card = wait.card()
+        chat = self.chats.get(wait.chat)
+        if chat is not None:
+            for entry in chat.log:
+                if entry.get("type") == "wait" and entry.get("id") == wait.id:
+                    entry.update(card)
+                    self.save(chat)
+                    break
+        self.hub.publish({"type": "wait-state", "chat": wait.chat, **card})
 
     def close(self) -> None:
         self._stop_watching.set()
@@ -1935,11 +2051,133 @@ END_VOICE_TOOL = {
 }
 
 
-def chat_tools(chat: Chat) -> list[dict]:
-    """The tools for CHAT itself: retitling it, and in a spoken
-    conversation, ending that."""
+WAIT_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "wait_for",
+        "description": (
+            "Set this task aside until something happens, then carry on "
+            "in this chat, knowing all you did: a time comes (\"in two "
+            "hours, check the download\"), a command succeeds (\"when CI "
+            "is green, deploy\": `gh pr checks 12`), or something you look "
+            "for with your tools is so (\"their reply is in my inbox\"). "
+            "It outlasts Flash restarting. Set it, tell the user what you "
+            "are waiting for, and end your turn: you are woken when it is "
+            "over, or told when you gave up. Give at or in_minutes for a "
+            "time, command or check for a condition, or a time and a "
+            "condition to start looking then."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "what": {"type": "string", "description": (
+                    "What you are waiting for, in a few words, as the "
+                    "user will see it."
+                )},
+                "then": {"type": "string", "description": (
+                    "What to do once it happens: written for yourself, "
+                    "with what you will need."
+                )},
+                "at": {"type": "string", "description": (
+                    "A local date and time, ISO 8601: 2026-10-23T09:00."
+                )},
+                "in_minutes": {"type": "number", "description": (
+                    "Or minutes from now."
+                )},
+                "command": {"type": "string", "description": (
+                    "A shell command that succeeds (exit 0) once it is "
+                    "so, run every so often here. The user says yes to "
+                    "it once."
+                )},
+                "check": {"type": "string", "description": (
+                    "Or, in words, what has to be so: looked for with "
+                    "your tools every so often, changing nothing."
+                )},
+                "every_minutes": {"type": "number", "description": (
+                    f"How often to look. Default {waits.DEFAULT_EVERY}."
+                )},
+                "give_up_after_hours": {"type": "number", "description": (
+                    "Stop looking after this long. Default "
+                    f"{waits.DEFAULT_GIVE_UP_HOURS}."
+                )},
+            },
+            "required": ["what", "then"],
+        },
+    },
+}
 
-    return [TITLE_TOOL, *([END_VOICE_TOOL] if chat.heard else [])]
+CANCEL_WAIT_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "cancel_wait",
+        "description": (
+            "Stop waiting for something you set with wait_for, by its id: "
+            "it is no longer needed, or the user asked."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {"id": {"type": "string"}},
+            "required": ["id"],
+        },
+    },
+}
+
+
+def chat_tools(chat: Chat) -> list[dict]:
+    """The tools for CHAT itself: retitling it, waiting for something,
+    and in a spoken conversation, ending that."""
+
+    return [TITLE_TOOL, WAIT_TOOL, CANCEL_WAIT_TOOL,
+            *([END_VOICE_TOOL] if chat.heard else [])]
+
+
+def wait_for(session: "Session", chat: Chat, args: dict) -> str:
+    """wait_for: CHAT's task, set aside until something happens."""
+
+    from . import tools as flash_tools  # deferred: tools imports a lot
+
+    try:
+        wait = waits.make(chat.id, args, cwd=os.getcwd())
+    except waits.WaitError as exc:
+        return f"Error: {exc}"
+    every = f"every {wait.every} minute{'s' if wait.every != 1 else ''}"
+    flash_tools.tool_line(f"WaitFor({wait.what})")
+    # Run again and again with nobody watching: the user says yes once.
+    if wait.command and not flash_tools.NO_COMMAND_CONFIRMATION and \
+            not flash_tools._user_allows(
+                f"Wait for this, running it {every} until it succeeds?\n"
+                f"{wait.command}"
+            ):
+        return "Blocked by user: no wait was set."
+    waits.add(wait)
+    session.emit(chat, {"type": "wait", **wait.card()})
+    session.ensure_watching()
+    if wait.command or wait.check:
+        how = (f"running `{wait.command}`" if wait.command
+               else f"looking for: {wait.check}")
+        start = (f" from {waits.when(wait)}" if wait.at else "")
+        said = (
+            f"Waiting (id {wait.id}): {how}, {every}{start}, until it is "
+            f"so, or for at most "
+            f"{round(((wait.give_up or 0) - wait.next) / 3600, 1):g} hours."
+        )
+    else:
+        said = f"Waiting (id {wait.id}) until {waits.when(wait)}."
+    flash_tools.tool_result(said)
+    return (
+        f"{said} Tell the user, in a sentence, what you are waiting for "
+        "and what you will do then, and end your turn. You are woken here "
+        "when it is over."
+    )
+
+
+def cancel_wait(session: "Session", chat: Chat, args: dict) -> str:
+    try:
+        wait = waits.cancel(str(args.get("id") or ""), chat.id)
+    except waits.WaitError as exc:
+        return f"Error: {exc}"
+    session.wait_changed(wait)
+    return f"Stopped waiting for {wait.what}."
 
 
 def retitle(session: "Session", chat: Chat, args: dict) -> str:
@@ -2644,6 +2882,10 @@ def _respond(
                     output = retitle(session, chat, args)
                 elif name == "end_conversation":
                     output = end_voice(session, chat)
+                elif name == "wait_for":
+                    output = wait_for(session, chat, args)
+                elif name == "cancel_wait":
+                    output = cancel_wait(session, chat, args)
                 elif kit is not None and name in kit.tools:
                     output = kit.tools[name](args)
                     tool_count += 1
@@ -3709,6 +3951,14 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
     if name in ("connectors", "connector-add", "connector-remove",
                 "connector-switch", "connector-reload"):
         return _connector_command(name, arg, body)
+
+    if name == "wait-cancel":
+        try:
+            wait = waits.cancel(arg)
+        except waits.WaitError as exc:
+            raise ValueError(str(exc)) from None
+        session.wait_changed(wait)
+        return {"wait": wait.card()}
 
     if name == "computer-setting":
         on = arg in ("on", "1", "true")
