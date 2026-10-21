@@ -1014,3 +1014,68 @@ def test_the_terminal_shows_who_read_a_message(team, capsys):
 
     out = capsys.readouterr().out
     assert "✓✓ Read by Writer" in out and "✓ Sent" in out  # nosec B101
+
+
+def _edit(message, text):
+    return _reply("", ("edit_message", {"message": str(message),
+                                        "text": text}))
+
+
+def test_a_spark_edits_its_message_and_every_version_stays(team):
+    first = teamchat.say("desk", "@scout how many bugs?")
+    posted = teamchat.answer("desk", first, FakeClient([_reply("Found 2.")]))
+    said = posted[0]
+    seen = teamchat.history("desk")["seq"]
+
+    again = teamchat.say("desk", "@scout check again?")
+    client = FakeClient([
+        _edit(said["id"], "Found 3 — one came in."), _reply("NO_REPLY"),
+    ])
+    teamchat.answer("desk", again, client)
+
+    now = teamchat.history("desk", since=seen)
+    edited = [e for e in now["changed"] if e["id"] == said["id"]][0]
+    # What it says now, dashes and all taken care of, and what it said.
+    assert edited["text"] == "Found 3, one came in."  # nosec B101
+    assert [v["text"] for v in edited["versions"]] == ["Found 2."]  # nosec
+    assert edited["versions"][0]["at"] == said["at"]  # nosec B101
+    # Told how, and nothing new was posted for it.
+    names = [t["function"]["name"] for t in client.calls[0]["tools"]]
+    assert "edit_message" in names  # nosec B101
+    assert [e for e in now["entries"] if e["kind"] == teamchat.SPARK] == []
+    # The others read that it was edited.
+    by_id = {s.id: s for s in sparks.all_sparks()}
+    assert "(edited): Found 3" in teamchat._line(edited, by_id)  # nosec
+
+
+def test_a_spark_edits_only_its_own_messages(team):
+    mine = teamchat.say("desk", "hello all")
+    posted = teamchat.answer("desk", teamchat.say("desk", "@scout hi"),
+                             FakeClient([_reply("Hi.")]))
+    scout = posted[0]["spark"]
+    other = [s for s in sparks.all_sparks() if s.id != scout][0]
+
+    for entry_id, by, why in (
+        (mine["id"], scout, "your own"),
+        (posted[0]["id"], other.id, "your own"),
+        (9999, scout, "no longer"),
+    ):
+        with pytest.raises(teamchat.TeamChatError, match=why):
+            teamchat.edit("desk", entry_id, "changed", by)
+    for text, why in (("  ", "to nothing"), ("Hi.", "already")):
+        with pytest.raises(teamchat.TeamChatError, match=why):
+            teamchat.edit("desk", posted[0]["id"], text, scout)
+
+
+def test_versions_pile_up_in_order(team):
+    posted = teamchat.answer("desk", teamchat.say("desk", "@scout eta?"),
+                             FakeClient([_reply("Friday.")]))
+    scout, entry_id = posted[0]["spark"], posted[0]["id"]
+
+    teamchat.edit("desk", entry_id, "Thursday.", scout)
+    entry = teamchat.edit("desk", entry_id, "Today, done.", scout)
+
+    assert [v["text"] for v in entry["versions"]] == [  # nosec B101
+        "Friday.", "Thursday.",
+    ]
+    assert entry["text"] == "Today, done." and entry["edited"]  # nosec

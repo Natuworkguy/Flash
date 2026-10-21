@@ -83,6 +83,10 @@ You are shown the latest of the chat, then asked to post your message.
   one with an emoji, call react with its number: a thumbs up says you
   saw it or agree, with no message needed. When the reaction says it
   all, answer with only {quiet}.
+- To fix a message of yours (a mistake, or news that has changed since
+  you posted it), call edit_message with its number and what it should
+  say now, rather than posting it again. Everyone can still see what it
+  said before. When the edit says it all, answer with only {quiet}.
 """.strip()
 
 # How many messages a spark may post in one turn with send_message, so
@@ -107,6 +111,37 @@ SEND_MESSAGE_TOOL = {
                 },
             },
             "required": ["text"],
+        },
+    },
+}
+
+# How many of its own messages a spark may edit in one turn, and how many
+# versions of one message are kept.
+MAX_EDITED = 3
+MAX_VERSIONS = 20
+
+EDIT_MESSAGE_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "edit_message",
+        "description": (
+            "Change a message you posted in the team chat, by its number: "
+            "fix a mistake, or bring it up to date. What it said before "
+            "stays there to see. Only your own messages."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "message": {
+                    "type": "string",
+                    "description": "Its number, as in 12.",
+                },
+                "text": {
+                    "type": "string",
+                    "description": "What it says now, the whole of it.",
+                },
+            },
+            "required": ["message", "text"],
         },
     },
 }
@@ -554,7 +589,7 @@ def _said_line(entry: dict, by_id: dict) -> str:
     name = entry.get("name") or (spark.name if spark else "A spark")
     who = f"{name} ({spark.handle})" if spark else name
     if kind == SPARK:
-        return f"{who}: {text}"
+        return f"{who}{' (edited)' if entry.get('versions') else ''}: {text}"
     what = {
         "report": "filed a report", "failed": "could not finish a shift",
         "joined": "joined the team", "left": "left the team",
@@ -698,6 +733,65 @@ def react(
     return entry
 
 
+def edit(team_key: str, entry_id: int, text: str, by: str) -> dict:
+    """Change what the message numbered ENTRY_ID says to TEXT, as BY, the
+    spark that posted it. What it said before is kept, with when, for
+    anyone to look back at. The message, as it is now."""
+
+    team = _team(team_key)
+    text = undash(str(text or "")).strip()[:sparks.MESSAGE_CHARS]
+    if not text or _quiet(text):
+        raise TeamChatError("A message cannot be edited to nothing.")
+
+    def change(data: dict) -> dict:
+        entry = next(
+            (e for e in data["entries"] if e.get("id") == entry_id), None,
+        )
+        if entry is None or entry.get("retried"):
+            raise TeamChatError("That message is no longer in the chat.")
+        if entry.get("kind") != SPARK or entry.get("spark") != by:
+            raise TeamChatError("Only your own messages can be edited.")
+        if entry.get("failed"):
+            raise TeamChatError("A message that failed cannot be edited.")
+        if text == entry.get("text"):
+            raise TeamChatError("That is what it says already.")
+        versions = list(entry.get("versions") or [])
+        versions.append({
+            "text": entry.get("text", ""),
+            "at": entry.get("edited") or entry.get("at"),
+        })
+        entry["versions"] = versions[-MAX_VERSIONS:]
+        entry["text"] = text
+        entry["edited"] = time.time()
+        # As a reaction does: a page that has it sees it changed.
+        data["seq"] += 1
+        entry["changed"] = data["seq"]
+        return dict(entry)
+
+    return _change(team.id, change)
+
+
+def _editing(team_id: str, spark: sparks.Spark, edited: list[int]):
+    """edit_message, for SPARK: its own messages only."""
+
+    def put(args: dict) -> str:
+        if len(edited) >= MAX_EDITED:
+            return f"Error: that is {MAX_EDITED} edits this turn already."
+        try:
+            entry_id = int(str(args.get("message", "")).strip().lstrip("#"))
+            entry = edit(team_id, entry_id, str(args.get("text", "")),
+                         spark.id)
+        except ValueError as exc:  # TeamChatError is one too
+            if isinstance(exc, TeamChatError):
+                return f"Error: {exc}"
+            return "Error: give the message's number, as in 12."
+        edited.append(entry["id"])
+        sparks.tool_line(f"EditMessage(#{entry['id']})")
+        return "(edited: it shows what it says now, and what it said before)"
+
+    return put
+
+
 def _tell_author(
     team: sparks.Team, entry: dict, emoji: str, by: str, on: bool,
 ) -> None:
@@ -761,11 +855,14 @@ def _reply(
     kit = sparks.ChatKit(spark)
     sent: list[dict] = []
     reacted: list[str] = []
+    edited: list[int] = []
     tools = {
         **kit.tools, "send_message": _sending(team.id, spark, sent),
         "react": _reacting(team.id, spark, reacted),
+        "edit_message": _editing(team.id, spark, edited),
     }
-    schemas = [*kit.schemas, SEND_MESSAGE_TOOL, REACT_TOOL]
+    schemas = [*kit.schemas, SEND_MESSAGE_TOOL, REACT_TOOL,
+               EDIT_MESSAGE_TOOL]
     others = [s for s in _members(team.id) if s.id != spark.id]
     # A team can have several leads, equals at the top of it.
     leads = _leads(team.id)
@@ -822,7 +919,7 @@ def _reply(
     if entry is not None:
         return [*sent, _post(team.id, spark, entry, done=True)]
     _set_typing(team.id, spark.id, "")
-    if not sent and not reacted:
+    if not sent and not reacted and not edited:
         sparks.log(spark.id, "team_chat_quiet", team=team.name)
     return sent
 

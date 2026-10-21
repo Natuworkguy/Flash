@@ -544,7 +544,9 @@ have looked them over.
   on one, `@everyone` on all of them, and replying to a message calls on
   whoever wrote it. Sparks can bring a teammate in, send a few messages
   in a row, react with an emoji, or stay quiet when they have nothing to
-  add. A spark hears of a reaction to what it said, a message or a
+  add. A spark can edit a message of its own to fix it or bring it up to
+  date; it is marked Edited, and its arrows step back through every
+  version it has had. A spark hears of a reaction to what it said, a message or a
   report, by you or a teammate: in its chats, and on its next shift,
   without being called to one. Taken back, it is never told.
   Under a spark's message, the play button reads it aloud, and Retry
@@ -1020,7 +1022,9 @@ the terminal running `flash --web` stops it.
 In voice mode in the browser, the camera button shows Flash what you
 point it at: while it is on, what it sees at the moment you finish
 speaking goes with what you said, as a photo (it needs a model that can
-see images). And Settings, Voice, **Voice mode look** swaps the orb for a
+see images). It starts on the back camera; on a phone or tablet with
+more than one, the flip button beside it switches to the front and back,
+the front one shown as a mirror would. And Settings, Voice, **Voice mode look** swaps the orb for a
 companion, a face that blinks while it listens, perks up while you talk,
 looks up while it thinks, and moves its mouth as it speaks.
 
