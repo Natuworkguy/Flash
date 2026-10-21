@@ -774,9 +774,13 @@ offered any of it. Each action is one fixed step Flash takes itself: it
 never clicks, types, or runs a command the model wrote, and it will not
 open a script or installer, only apps by name.
 
-On a Mac, music and what is playing come from Spotify and Music, the
-first time asking you to let your terminal control them, and dark mode
-asks to control System Events. Windows uses the keyboard's media keys,
+On a Mac, Spotify and Music are asked directly, and are the ones Flash
+can say what is playing in; anything else playing, in a browser or any
+other app, gets the keyboard's media keys, which go to whatever played
+last. The first time, macOS asks to let the app Flash runs in (Terminal,
+iTerm and the like) control Spotify and Music, and, for the media keys,
+to turn it on under Privacy & Security > Accessibility. Dark mode asks
+to control System Events. Windows uses the keyboard's media keys,
 which every player answers, though it cannot tell what is playing. Linux
 uses `playerctl` for music and PipeWire, PulseAudio or ALSA for the
 volume.
