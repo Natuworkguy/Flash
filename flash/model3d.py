@@ -768,6 +768,235 @@ def parse_texture(value: Any, color: tuple, color_given: bool) \
                    ("pattern", name, tuple(color), tuple(b), scale))
 
 
+# --- Moving the parts -----------------------------------------------------
+
+MOTIONS = ("spin", "swing", "bob", "pulse")
+MAX_LOOP_SECONDS = 60.0
+MAX_KEYFRAMES = 200
+SAMPLES_PER_SECOND = 24
+# Every moving part's samples together, so a model full of them stays a
+# file of a sensible size: past this, they are sampled less often.
+MAX_SAMPLES = 150_000
+EASES = ("smooth", "linear", "step")
+_AXES = {"x": (1.0, 0.0, 0.0), "y": (0.0, 1.0, 0.0), "z": (0.0, 0.0, 1.0)}
+
+
+def _axis(value: Any, what: str, fallback: str):
+    """A direction to turn or move along: x, y or z (with a - to go the
+    other way), or [x, y, z]."""
+
+    if value is None:
+        value = fallback
+    if isinstance(value, str):
+        name = value.strip().lower()
+        sign = -1.0 if name.startswith("-") else 1.0
+        if name.lstrip("+-") not in _AXES:
+            raise ModelError(f"{what} must be x, y, z or [x, y, z]")
+        return tuple(sign * c for c in _AXES[name.lstrip("+-")])
+    vector = _vector(value, what, None)
+    if _length(vector) == 0:
+        raise ModelError(f"{what} must not be [0, 0, 0]")
+    return _unit(vector)
+
+
+def _turn_about(axis, degrees: float):
+    half = math.radians(degrees) / 2
+    sin = math.sin(half)
+    return (axis[0] * sin, axis[1] * sin, axis[2] * sin, math.cos(half))
+
+
+def _multiply(a, b):
+    """The quaternion that turns by B, then by A."""
+
+    ax, ay, az, aw = a
+    bx, by, bz, bw = b
+    return (
+        aw * bx + ax * bw + ay * bz - az * by,
+        aw * by - ax * bz + ay * bw + az * bx,
+        aw * bz + ax * by - ay * bx + az * bw,
+        aw * bw - ax * bx - ay * by - az * bz,
+    )
+
+
+class Motion:
+    """How a part moves, over and over: turning round, swinging, bobbing,
+    pulsing, and keyframes of its own, all measured from where it rests
+    and about its pivot. One loop of it lasts `duration` seconds; a
+    steady motion that would not fit a whole number of times in that is
+    stretched a little so it does, and the loop runs on without a jump."""
+
+    def __init__(self, spec: Any) -> None:
+        if not isinstance(spec, dict):
+            raise ModelError(
+                "animate must be an object, such as {\"spin\": {\"axis\": "
+                "\"y\", \"seconds\": 4}}"
+            )
+        known = set(MOTIONS) | {"keyframes", "ease", "delay", "pivot"}
+        unknown = sorted(set(spec) - known)
+        if unknown:
+            raise ModelError(
+                f"animate has no {', '.join(unknown)}; it takes "
+                f"{', '.join(MOTIONS)}, keyframes, ease, delay and pivot"
+            )
+        self.steady: dict[str, dict] = {}
+        for name in MOTIONS:
+            if spec.get(name) not in (None, False):
+                self.steady[name] = self._steady(name, spec[name])
+        self.keyframes = self._keyframes(spec.get("keyframes"))
+        if not self.steady and not self.keyframes:
+            raise ModelError(
+                f"animate needs one of {', '.join(MOTIONS)} or keyframes"
+            )
+        self.ease = str(spec.get("ease") or "smooth").strip().lower()
+        if self.ease not in EASES:
+            raise ModelError(f"animate.ease must be one of {', '.join(EASES)}")
+        self.pivot = _vector(spec.get("pivot"), "animate.pivot",
+                             (0.0, 0.0, 0.0))
+        lengths = [m["seconds"] for m in self.steady.values()]
+        if self.keyframes:
+            lengths.append(self.keyframes[-1]["time"])
+        self.duration = max(lengths)
+        if self.duration <= 0:
+            raise ModelError("animate: the last keyframe must be after 0 s")
+        if self.duration > MAX_LOOP_SECONDS:
+            raise ModelError(
+                f"animate: a loop can last at most {MAX_LOOP_SECONDS:g} s"
+            )
+        for motion in self.steady.values():
+            times = max(1, round(self.duration / motion["seconds"]))
+            motion["period"] = self.duration / times
+        self.delay = _number(spec.get("delay", 0), "animate.delay")
+        self.moves = "bob" in self.steady or any(
+            "move" in k for k in self.keyframes)
+        self.turns = "spin" in self.steady or "swing" in self.steady or any(
+            "turn" in k for k in self.keyframes)
+        self.scales = "pulse" in self.steady or any(
+            "scale" in k for k in self.keyframes)
+
+    @staticmethod
+    def _steady(name: str, value: Any) -> dict:
+        what = f"animate.{name}"
+        if value is True:
+            value = {}
+        elif isinstance(value, (int, float)) and not isinstance(value, bool):
+            value = {"seconds": value}
+        if not isinstance(value, dict):
+            raise ModelError(f"{what} must be an object, true, or seconds")
+        seconds = {"spin": 4.0, "swing": 2.0, "bob": 2.0, "pulse": 1.0}[name]
+        motion = {"seconds": _number(value.get("seconds", seconds),
+                                     f"{what}.seconds", positive=True)}
+        if name in ("spin", "swing", "bob"):
+            motion["axis"] = _axis(value.get("axis"), f"{what}.axis",
+                                   "z" if name == "swing" else "y")
+        if name == "spin" and value.get("reverse"):
+            motion["axis"] = tuple(-c for c in motion["axis"])
+        if name == "swing":
+            motion["degrees"] = _number(value.get("degrees", 20),
+                                        f"{what}.degrees")
+        if name == "bob":
+            motion["distance"] = _number(
+                value.get("distance", value.get("height", 0.1)),
+                f"{what}.distance",
+            )
+        if name == "pulse":
+            motion["amount"] = _number(value.get("amount", 0.1),
+                                       f"{what}.amount")
+        return motion
+
+    @staticmethod
+    def _keyframes(value: Any) -> list[dict]:
+        if value is None:
+            return []
+        if not isinstance(value, list) or len(value) < 2:
+            raise ModelError("animate.keyframes must list at least two")
+        if len(value) > MAX_KEYFRAMES:
+            raise ModelError(
+                f"animate.keyframes can have at most {MAX_KEYFRAMES}"
+            )
+        frames = []
+        for i, frame in enumerate(value):
+            what = f"animate.keyframes[{i}]"
+            if not isinstance(frame, dict):
+                raise ModelError(f"{what} must be an object")
+            kept = {"time": _number(frame.get("time"), f"{what}.time")}
+            if kept["time"] < 0:
+                raise ModelError(f"{what}.time must not be below 0")
+            for key, rest in (("move", (0.0,) * 3), ("turn", (0.0,) * 3),
+                              ("scale", (1.0,) * 3)):
+                if frame.get(key) is not None:
+                    kept[key] = _vector(frame[key], f"{what}.{key}", rest,
+                                        positive=key == "scale")
+            if len(kept) == 1:
+                raise ModelError(f"{what} needs a move, turn or scale")
+            frames.append(kept)
+        return sorted(frames, key=lambda f: f["time"])
+
+    def _keyed(self, key: str, at: float, rest):
+        frames = [f for f in self.keyframes if key in f]
+        if not frames:
+            return rest
+        if at <= frames[0]["time"]:
+            return frames[0][key]
+        for before, after in zip(frames, frames[1:]):
+            if at <= after["time"]:
+                gap = after["time"] - before["time"]
+                k = (at - before["time"]) / gap if gap else 1.0
+                if self.ease == "step":
+                    k = 1.0 if k >= 1 else 0.0
+                elif self.ease == "smooth":
+                    k = k * k * (3 - 2 * k)
+                return tuple(a + (b - a) * k
+                             for a, b in zip(before[key], after[key]))
+        return frames[-1][key]
+
+    def at(self, seconds: float):
+        """Where the part is SECONDS into the loop, from its rest: an
+        offset, a turn (as a quaternion) and a stretch."""
+
+        at = (seconds - self.delay) % self.duration
+
+        def wave(motion: dict) -> float:
+            return math.sin(2 * math.pi * at / motion["period"])
+
+        offset = self._keyed("move", at, (0.0, 0.0, 0.0))
+        if "bob" in self.steady:
+            bob = self.steady["bob"]
+            lift = bob["distance"] * wave(bob)
+            offset = tuple(o + lift * a for o, a in zip(offset, bob["axis"]))
+        turn = _quaternion(self._keyed("turn", at, (0.0, 0.0, 0.0)))
+        if "swing" in self.steady:
+            swing = self.steady["swing"]
+            turn = _multiply(
+                _turn_about(swing["axis"], swing["degrees"] * wave(swing)),
+                turn,
+            )
+        if "spin" in self.steady:
+            spin = self.steady["spin"]
+            turn = _multiply(
+                _turn_about(spin["axis"], 360 * at / spin["period"]), turn,
+            )
+        stretch = self._keyed("scale", at, (1.0, 1.0, 1.0))
+        if "pulse" in self.steady:
+            pulse = self.steady["pulse"]
+            grow = 1 + pulse["amount"] * wave(pulse)
+            stretch = tuple(s * grow for s in stretch)
+        return offset, turn, stretch
+
+    def times(self, rate: float) -> list[float]:
+        """When to sample the loop: evenly, and at every keyframe."""
+
+        count = max(2, math.ceil(self.duration * rate))
+        times = {round(self.duration * i / count, 6)
+                 for i in range(count + 1)}
+        for frame in self.keyframes:
+            times.add(round((frame["time"] + self.delay) % self.duration, 6))
+        return sorted(times)
+
+    def describe(self) -> str:
+        kinds = list(self.steady) + (["keyframes"] if self.keyframes else [])
+        return f"{', '.join(kinds)}, looping every {self.duration:.3g} s"
+
+
 # --- Placing the parts ----------------------------------------------------
 
 
@@ -837,6 +1066,8 @@ class Part:
             self.emissive = spec.get("emissive")
             if self.emissive is not None:
                 self.emissive = parse_color(self.emissive)
+            self.motion = (Motion(spec["animate"])
+                           if spec.get("animate") else None)
         except ModelError as exc:
             raise ModelError(f"{where}: {exc}") from None
         if not self.geometry.indices:
@@ -916,6 +1147,13 @@ def to_glb(parts: list[Part], title: str = "") -> bytes:
     texture_of: dict[tuple, int] = {}
     meshes: list[dict] = []
     nodes: list[dict] = []
+    top: list[int] = []
+    animations: list[dict] = []
+    moving = [p.motion for p in parts if p.motion]
+    rate = SAMPLES_PER_SECOND
+    if moving:
+        total = sum(m.duration for m in moving)
+        rate = max(4.0, min(rate, MAX_SAMPLES / total))
 
     def add(data: bytes, target: Optional[int]) -> int:
         view = {
@@ -1010,19 +1248,85 @@ def to_glb(parts: list[Part], title: str = "") -> bytes:
             }],
         })
         node: dict[str, Any] = {"name": part.name, "mesh": len(meshes) - 1}
-        if any(part.position):
+        motion = part.motion
+        pivot = motion.pivot if motion else (0.0, 0.0, 0.0)
+        place = tuple(p + q for p, q in zip(part.position, pivot))
+        if motion:
+            # A moving part hangs from a node at its pivot, which is what
+            # moves; the shape keeps its own turn and size under it.
+            node["name"] = f"{part.name} shape"
+            if any(pivot):
+                node["translation"] = [-c for c in pivot]
+        elif any(part.position):
             node["translation"] = list(part.position)
         if part.rotation != (0.0, 0.0, 0.0, 1.0):
             node["rotation"] = list(part.rotation)
         if part.scale != (1.0, 1.0, 1.0):
             node["scale"] = list(part.scale)
         nodes.append(node)
+        if not motion:
+            top.append(len(nodes) - 1)
+            continue
+        holder: dict[str, Any] = {
+            "name": part.name, "children": [len(nodes) - 1],
+        }
+        if any(place):
+            holder["translation"] = list(place)
+        nodes.append(holder)
+        top.append(len(nodes) - 1)
+
+        times = motion.times(rate)
+        poses = [motion.at(t) for t in times]
+        source = add(struct.pack(f"<{len(times)}f", *times), None)
+        accessors.append({
+            "bufferView": source, "componentType": _FLOAT,
+            "count": len(times), "type": "SCALAR",
+            "min": [times[0]], "max": [times[-1]],
+        })
+        clock = len(accessors) - 1
+        samplers: list[dict] = []
+        channels: list[dict] = []
+
+        def channel(path: str, values: list[tuple], kind: str) -> None:
+            flat = [c for v in values for c in v]
+            view = add(struct.pack(f"<{len(flat)}f", *flat), None)
+            accessors.append({
+                "bufferView": view, "componentType": _FLOAT,
+                "count": len(values), "type": kind,
+            })
+            samplers.append({
+                "input": clock, "output": len(accessors) - 1,
+                "interpolation": "LINEAR",
+            })
+            channels.append({
+                "sampler": len(samplers) - 1,
+                "target": {"node": len(nodes) - 1, "path": path},
+            })
+
+        if motion.moves:
+            channel("translation", [
+                tuple(p + o for p, o in zip(place, pose[0])) for pose in poses
+            ], "VEC3")
+        if motion.turns:
+            turns = [poses[0][1]]
+            # Each the same way round as the one before, so a turn
+            # between them never goes the long way.
+            for pose in poses[1:]:
+                q = pose[1]
+                if sum(a * b for a, b in zip(q, turns[-1])) < 0:
+                    q = tuple(-c for c in q)
+                turns.append(q)
+            channel("rotation", turns, "VEC4")
+        if motion.scales:
+            channel("scale", [pose[2] for pose in poses], "VEC3")
+        animations.append({
+            "name": part.name, "samplers": samplers, "channels": channels,
+        })
 
     document: dict[str, Any] = {
         "asset": {"version": "2.0", "generator": "Flash"},
         "scene": 0,
-        "scenes": [{"name": title or "Model",
-                    "nodes": list(range(len(nodes)))}],
+        "scenes": [{"name": title or "Model", "nodes": top}],
         "nodes": nodes,
         "meshes": meshes,
         "materials": materials,
@@ -1030,6 +1334,9 @@ def to_glb(parts: list[Part], title: str = "") -> bytes:
         "bufferViews": views,
         "buffers": [{"byteLength": len(binary)}],
     }
+    if animations:
+        # One for each moving part, each looping on its own.
+        document["animations"] = animations
     if images:
         # One texture per picture, each repeating across its part.
         document["images"] = images
@@ -1080,6 +1387,14 @@ def describe(parts: list[Part]) -> str:
         f"Overall size (x, y, z): {fmt(size)}, from ({fmt(low)}) to "
         f"({fmt(high)}).",
     ]
+    moving = [p for p in parts if p.motion]
+    if moving:
+        lines.append(
+            f"{len(moving)} part{'s' if len(moving) != 1 else ''} move"
+            f"{'s' if len(moving) == 1 else ''}: "
+            + "; ".join(f"{p.name} ({p.motion.describe()})" for p in moving)
+            + ". The size above is at rest; the viewer plays the motion."
+        )
     if low[1] < -1e-6 or low[1] > 1e-3:
         lines.append(
             f"Its lowest point is at y = {low[1]:.3g}, so it does not sit "

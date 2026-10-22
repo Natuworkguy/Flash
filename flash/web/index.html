@@ -2691,6 +2691,12 @@ body.resizing-viewer iframe { pointer-events: none; }
 .model-view .model-tools button:hover { background: var(--hover); color: var(--text); }
 .model-view .model-tools button[aria-pressed="true"] { background: var(--hover); color: var(--text); }
 .model-view .model-tools .hint { padding: 0 8px; font-size: 12px; color: var(--text-3); white-space: nowrap; }
+.model-view .model-motion { display: flex; align-items: center; gap: 4px; padding-right: 4px; margin-right: 2px; border-right: 1px solid var(--border); }
+.model-view .model-motion[hidden] { display: none; }
+.model-view .model-motion button[data-play] { min-width: 52px; }
+.model-view .model-motion button[data-speed] { min-width: 40px; font-variant-numeric: tabular-nums; }
+.model-view .model-motion input[type="range"] { width: 110px; accent-color: var(--accent); }
+.model-view .model-tools.moving .hint { display: none; }
 @media (max-width: 560px) { .model-view .model-tools .hint { display: none; } }
 
 /* A MIDI file: a piano roll, its tracks, and a transport to play it by.
@@ -5205,7 +5211,11 @@ function dropModel() {
 async function openModel(entry, body) {
   const view = body.appendChild(el("div", "model-view",
     `<div class="stage"></div><div class="model-note">Loading the model…</div>` +
-    `<div class="model-tools" hidden><button type="button" data-reset>Reset view</button>` +
+    `<div class="model-tools" hidden>` +
+    `<span class="model-motion" hidden><button type="button" data-play aria-pressed="true">Pause</button>` +
+    `<input type="range" data-time min="0" max="1" step="0.001" value="0" aria-label="Where the motion is">` +
+    `<button type="button" data-speed data-tip="Speed">1×</button></span>` +
+    `<button type="button" data-reset>Reset view</button>` +
     `<button type="button" data-spin aria-pressed="true">Spin</button>` +
     `<button type="button" data-wire aria-pressed="false">Wireframe</button>` +
     `<span class="hint">Drag to turn · scroll to zoom · right-drag to pan</span></div>`));
@@ -5234,8 +5244,44 @@ async function openModel(entry, body) {
   view.querySelector(".stage").addEventListener("pointerdown", () => press(spin, false));
   const wire = tools.querySelector("[data-wire]");
   wire.onclick = () => { const on = wire.getAttribute("aria-pressed") !== "true"; press(wire, on); mine.handle.wireframe(on); };
+  if (mine.handle.animated) showMotion(mine, view, tools);
   const size = modelSize(mine.handle);
-  if (size) $("#viewer-size").textContent = `${fileKind(entry)} · ${fileSize(entry.size)} · ${size}`;
+  const moves = mine.handle.animated ? ` · moves, ${Number(mine.handle.duration.toPrecision(2))} s loop` : "";
+  if (size) $("#viewer-size").textContent = `${fileKind(entry)} · ${fileSize(entry.size)} · ${size}${moves}`;
+}
+
+// A model that moves: pause and play it, drag through it, and set how
+// fast it goes. The bar follows the motion while it plays.
+const MOTION_SPEEDS = [1, 2, 0.25, 0.5];
+function showMotion(mine, view, tools) {
+  const handle = mine.handle;
+  const motion = tools.querySelector(".model-motion");
+  motion.hidden = false;
+  tools.classList.add("moving");
+  const play = motion.querySelector("[data-play]");
+  const time = motion.querySelector("[data-time]");
+  const speed = motion.querySelector("[data-speed]");
+  time.max = String(handle.duration);
+  const playing = (on) => {
+    handle.play(on);
+    play.setAttribute("aria-pressed", on ? "true" : "false");
+    play.textContent = on ? "Pause" : "Play";
+  };
+  play.onclick = () => playing(!handle.playing);
+  // Dragging the bar holds the motion where it is put.
+  time.oninput = () => { playing(false); handle.seek(Number(time.value)); };
+  let pace = 0;
+  speed.onclick = () => {
+    pace = (pace + 1) % MOTION_SPEEDS.length;
+    handle.speed(MOTION_SPEEDS[pace]);
+    speed.textContent = `${MOTION_SPEEDS[pace]}×`;
+  };
+  const follow = () => {
+    if (mine.dropped || !view.isConnected) return;
+    if (handle.playing) time.value = String(handle.time());
+    requestAnimationFrame(follow);
+  };
+  follow();
 }
 
 // The model's size, as the panel's subtitle shows it: 1.2 × 0.8 × 0.6 m.

@@ -13,7 +13,7 @@
   function parse(T, data, suffix) {
     return new Promise((resolve, reject) => {
       if (suffix === ".glb") {
-        new T.GLTFLoader().parse(data, "", (gltf) => resolve(gltf.scene), reject);
+        new T.GLTFLoader().parse(data, "", (gltf) => resolve({ root: gltf.scene, clips: gltf.animations || [] }), reject);
         return;
       }
       if (suffix === ".stl") {
@@ -30,7 +30,7 @@
         mesh.rotation.x = -Math.PI / 2;
         const group = new T.THREE.Group();
         group.add(mesh);
-        resolve(group);
+        resolve({ root: group, clips: [] });
         return;
       }
       if (suffix === ".obj") {
@@ -41,7 +41,7 @@
             node.material = new T.THREE.MeshStandardMaterial({ color: 0xb0b4bb, roughness: 0.55 });
           }
         });
-        resolve(group);
+        resolve({ root: group, clips: [] });
         return;
       }
       reject(new Error(`cannot show ${suffix} files`));
@@ -64,6 +64,9 @@
      HOLDER. Resolves to a handle: reset() puts the camera back,
      wireframe(on) shows the edges, spin(on) turns the model slowly, and
      dispose() lets go of the GPU once the panel shows something else.
+     A model that moves plays as it opens, every motion looping on its
+     own: play(on) pauses and resumes it, speed(x) sets how fast, and
+     time() and seek(seconds) read and set where it is, up to duration.
      OPTIONS: light (a light background), still (draw once, for a
      picture, with no animation). */
   async function show(holder, data, suffix, options) {
@@ -76,7 +79,8 @@
       if (!response.ok) throw new Error(response.statusText || `HTTP ${response.status}`);
       data = await response.arrayBuffer();
     }
-    const model = await parse(T, data, String(suffix || "").toLowerCase());
+    const parsed = await parse(T, data, String(suffix || "").toLowerCase());
+    const model = parsed.root;
 
     const renderer = new THREE.WebGLRenderer({
       antialias: true, alpha: true, preserveDrawingBuffer: !!opts.still,
@@ -192,9 +196,22 @@
     controls.autoRotateSpeed = 1.2;
     controls.addEventListener("start", () => { controls.autoRotate = false; });
 
+    // Its motion: every clip at once, each looping at its own length.
+    const mixer = parsed.clips.length ? new THREE.AnimationMixer(model) : null;
+    const duration = Math.max(0, ...parsed.clips.map((clip) => clip.duration));
+    let playing = !!mixer && !opts.still;
+    let rate = 1;
+    if (mixer) {
+      for (const clip of parsed.clips) mixer.clipAction(clip).play();
+      mixer.setTime(0);
+    }
+    const clock = new THREE.Clock();
+
     function tick() {
       if (!alive) return;
       frame = requestAnimationFrame(tick);
+      const delta = Math.min(clock.getDelta(), 0.1);
+      if (mixer && playing) mixer.update(delta * rate);
       controls.update();
       renderer.render(scene, camera);
     }
@@ -206,6 +223,13 @@
       meshes: counted.meshes,
       triangles: counted.triangles,
       reset,
+      animated: !!mixer,
+      duration,
+      play(on) { playing = !!mixer && !!on; },
+      get playing() { return playing; },
+      speed(x) { rate = Math.max(0.05, Number(x) || 1); },
+      time() { return mixer && duration ? mixer.time % duration : 0; },
+      seek(seconds) { if (mixer) mixer.setTime(Math.max(0, Number(seconds) || 0)); },
       spin(on) { controls.autoRotate = !!on; },
       wireframe(on) {
         model.traverse((node) => {
@@ -216,6 +240,7 @@
       dispose() {
         alive = false;
         cancelAnimationFrame(frame);
+        if (mixer) mixer.stopAllAction();
         if (watcher) watcher.disconnect();
         controls.dispose();
         scene.traverse((node) => {
