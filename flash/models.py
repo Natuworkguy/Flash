@@ -10,6 +10,7 @@ can be typed in.
 
 import sys
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Optional
@@ -196,12 +197,15 @@ def _describe(model) -> str:
 def installed_models(
     client,
     current: str = "",
+    pinned: Sequence[str] = (),
 ) -> Optional[list[Model]]:
     """Every model on this machine, as picker rows.
 
     The one in use leads the list, so opening the picker and pressing
-    Enter changes nothing. None when Ollama could not be asked, which is
-    not the same answer as the empty list a fresh install gives.
+    Enter changes nothing. The PINNED ones come next, in the order they
+    were pinned, then the rest by name. None when Ollama could not be
+    asked, which is not the same answer as the empty list a fresh
+    install gives.
     """
 
     listing = _listing(client)
@@ -210,6 +214,7 @@ def installed_models(
         return None
 
     active = full_name(current) if current else ""
+    order = {full_name(name): i for i, name in enumerate(pinned)}
     rows = [
         Model(
             full_name(model.model),
@@ -219,12 +224,15 @@ def installed_models(
             if providers.routed(model.model) else _describe(model),
             "" if providers.routed(model.model)
             else human_size(model.size or 0),
-            "active" if full_name(model.model) == active else "",
+            "active" if full_name(model.model) == active
+            else "pinned" if full_name(model.model) in order else "",
         )
         for model in listing
     ]
 
-    return sorted(rows, key=lambda row: (row.note != "active", row.name))
+    return sorted(rows, key=lambda row: (
+        row.note != "active", order.get(row.name, len(order)), row.name,
+    ))
 
 
 def _matching(models: list[Model], query: str) -> list[Model]:
@@ -611,6 +619,7 @@ def fetch_if_missing(client, name: str) -> bool:
 def pick_model(
     client,
     current: str = "",
+    pinned: Sequence[str] = (),
 ) -> Optional[str]:
     """The bare `/model` flow: pick one of this machine's models, or type
     the name of one to download. Returns the model to switch to, or None
@@ -620,7 +629,7 @@ def pick_model(
     if not can_pick():
         return None
 
-    rows = installed_models(client, current)
+    rows = installed_models(client, current, pinned)
 
     if rows is None:
         return None

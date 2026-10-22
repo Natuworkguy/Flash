@@ -53,7 +53,8 @@ from .theme import (
 
 # Single source of truth for both the completion dropdown and /help.
 COMMANDS = [
-    ("/model", "pick from the models here, or /model <name> to switch"),
+    ("/model", "pick from the models here, /model <name> to switch, "
+               "/model pin or unpin [name] to keep one at the top"),
     ("/btw", "a side question, even while Flash works, without interrupting"),
     ("/host", "switch Ollama server (/host <name|url>, add, remove, list)"),
     ("/loader", "pick the animation that turns while Flash works"),

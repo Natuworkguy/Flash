@@ -345,3 +345,40 @@ class TestThisComputer:
 
         assert workspace.remove_host("10.0.0.5")
         assert [h["name"] for h in workspace.hosts()] == ["This computer"]
+
+
+class TestFavoriteModels:
+    def test_none_until_one_is_pinned(self):
+        assert workspace.favorite_models("http://localhost:11434") == []
+
+    def test_pinned_in_order_and_unpinned(self):
+        host = "http://localhost:11434"
+        workspace.pin_model(host, "beta:8b")
+        workspace.pin_model(host, "alpha:8b")
+
+        assert workspace.favorite_models(host) == ["beta:8b", "alpha:8b"]
+        assert workspace.pin_model(host, "beta:8b", False) == ["alpha:8b"]
+        assert workspace.pin_model(host, "alpha:8b", False) == []
+
+    def test_each_host_keeps_its_own(self):
+        workspace.pin_model("http://localhost:11434", "alpha:8b")
+        workspace.pin_model("10.0.0.5", "gamma:12b")
+
+        # 127.0.0.1 is this computer too.
+        assert workspace.favorite_models("http://127.0.0.1:11434") == [
+            "alpha:8b",
+        ]
+        assert workspace.favorite_models("http://10.0.0.5:11434") == [
+            "gamma:12b",
+        ]
+
+    def test_pinning_again_does_not_repeat_it(self):
+        host = "http://localhost:11434"
+        workspace.pin_model(host, "alpha")
+        workspace.pin_model(host, "alpha:latest")
+
+        assert workspace.favorite_models(host) == ["alpha:latest"]
+
+    def test_a_name_is_needed(self):
+        with pytest.raises(WorkspaceError):
+            workspace.pin_model("http://localhost:11434", "  ")

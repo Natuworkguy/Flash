@@ -4024,7 +4024,13 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
         models = list_models(ai)
         return {"model": ai.Config.model or "", "models": models or [],
                 "reachable": models is not None,
+                "favorites": workspace.favorite_models(ai.Config.host),
                 **_spark_default(models)}
+
+    if name == "model-pin":
+        return {"favorites": workspace.pin_model(
+            ai.Config.host, arg, body.get("on") is not False,
+        )}
 
     if name == "hosts":
         return {"hosts": workspace.hosts_with_health(ai.Config.host),
@@ -4055,7 +4061,8 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
         up = state == "up"
         return {"host": url, "host_url": workspace.listed_url(url),
                 "models": (list_models(ai) or []) if up else [], "up": up,
-                "refused": state == "refused"}
+                "refused": state == "refused",
+                "favorites": workspace.favorite_models(url)}
 
     if name == "host-add":
         # The key, if the server asks for one, comes in the body rather

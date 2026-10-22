@@ -267,6 +267,51 @@ def remove_host(url: str) -> bool:
     return True
 
 
+# --- Favorite models -----------------------------------------------------
+
+
+def _model_key(name: str) -> str:
+    """A model's name as Ollama means it: one with no tag is :latest."""
+
+    name = name.strip()
+    return name if ":" in name.rsplit("/", 1)[-1] else f"{name}:latest"
+
+
+def favorite_models(host: str) -> list[str]:
+    """The models pinned to the top of HOST's list, the first pinned
+    first. Each host keeps its own, as each has its own models."""
+
+    pinned = _read("favorites.json", {})
+    found = pinned.get(host_key(host), []) if isinstance(pinned, dict) else []
+    return [m for m in found if isinstance(m, str) and m.strip()]
+
+
+def pin_model(host: str, model: str, on: bool = True) -> list[str]:
+    """Pin MODEL to the top of HOST's list, or unpin it with ON false.
+    Returns HOST's favorites as they are now."""
+
+    model = model.strip()
+    if not model:
+        raise WorkspaceError("name a model to pin")
+    key = host_key(host)
+    with _lock:
+        pinned = _read("favorites.json", {})
+        if not isinstance(pinned, dict):
+            pinned = {}
+        kept = [
+            m for m in pinned.get(key, [])
+            if isinstance(m, str) and _model_key(m) != _model_key(model)
+        ]
+        if on:
+            kept.append(model)
+        if kept:
+            pinned[key] = kept
+        else:
+            pinned.pop(key, None)
+        _write("favorites.json", pinned)
+    return kept
+
+
 def host_state(url: str, timeout: float = HOST_CHECK_SECONDS) -> str:
     """How the Ollama at URL answers, quickly: "up", "down", or
     "refused" when something in front of it wants a key it was not
