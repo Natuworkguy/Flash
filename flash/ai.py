@@ -2627,30 +2627,50 @@ def _mcp_command(arg: str) -> None:
 
 def _computer_command(arg: str) -> None:
     """/computer: whether Flash may do simple things on this computer,
-    shown, or switched with `/computer on` or `/computer off`."""
+    and which, shown, or switched: `/computer on`, `/computer off`, and
+    `/computer on imessage` or `/computer off music` for one of them."""
 
-    arg = arg.lower()
-    if arg in ("on", "off"):
-        set_config_var(computer.SETTING, "1" if arg == "on" else "0")
-    elif arg:
-        warn("Usage: /computer [on|off]")
-        return
-    if computer.enabled():
-        console.print(Text(
-            "Flash can act on this computer: play, pause and skip music, "
-            "set the volume, open and quit apps, open links and files, "
-            "lock the screen, copy to the clipboard and switch dark mode. "
-            "It never clicks, types or runs commands this way. "
-            "/computer off stops it.",
-            style=DIM,
-        ))
+    words = arg.lower().split()
+    if not words or words[0] not in ("on", "off") or len(words) > 2:
+        if words:
+            warn("Usage: /computer [on|off] [" + "|".join(computer.kinds())
+                 + "]")
+            return
+    elif len(words) == 1:
+        set_config_var(computer.SETTING, "1" if words[0] == "on" else "0")
     else:
+        if words[1] not in computer.kinds():
+            warn(f"{words[1]} is not one of them: "
+                 + ", ".join(computer.kinds()) + ".")
+            return
+        off = computer.off_after(words[1], words[0] == "on")
+        set_config_var(computer.OFF_SETTING, off)
+        # Switching one on means letting Flash act at all.
+        if words[0] == "on" and not computer.enabled():
+            set_config_var(computer.SETTING, "1")
+    if not computer.enabled():
         console.print(Text(
             "Flash does not act on this computer. /computer on lets it do "
             "simple things when you ask: pause the music, turn the volume "
             "down, open an app.",
             style=DIM,
         ))
+        return
+    console.print(Text(
+        "Flash can act on this computer when you ask. It never clicks, "
+        "types or runs commands this way. /computer off stops all of it; "
+        "/computer off <name> one of them.",
+        style=DIM,
+    ))
+    off = computer.switched_off()
+    for kind in computer.kinds():
+        title, what, _ = computer.KINDS[kind]
+        line = Text("  ")
+        line.append("off " if kind in off else "on  ",
+                    style=DIM if kind in off else f"bold {ACCENT}")
+        line.append(f"{kind:<10}", style="bold")
+        line.append(f"{title}: {what}", style=DIM)
+        console.print(line)
 
 
 def _notify_command(arg: str) -> None:

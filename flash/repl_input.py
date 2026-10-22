@@ -61,7 +61,8 @@ COMMANDS = [
     ("/instructions", "how every reply should be (<text> or clear)"),
     ("/auto", "toggle autonomous command mode (/auto on|off)"),
     ("/systemone", "a small model that reviews autonomous commands (on|off)"),
-    ("/computer", "let Flash pause music, set the volume, open apps (on|off)"),
+    ("/computer", "let Flash pause music, open apps, send iMessages "
+                  "(on|off [what])"),
     ("/mcp", "connect MCP servers' tools (add, remove, on, off, tools)"),
     ("/voice", "talk to Flash and hear its replies (on|off, models, pull)"),
     ("/background", "pixel-art scene behind the prompt (/background <name>)"),

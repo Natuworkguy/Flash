@@ -1,7 +1,8 @@
 """Simple things Flash can do on the computer it runs on, once the user
 lets it: play, pause and skip music, say what is playing, set the
 volume, open and quit apps, open a link, file or folder, lock the
-screen, put text on the clipboard, and switch dark mode.
+screen, put text on the clipboard, and switch dark mode. On a Mac, it
+can send an iMessage too, once the user says yes to it.
 
 Each is one fixed step through what the system already offers: scripts
 of Flash's own on a Mac, media keys and the system's own calls on
@@ -24,6 +25,9 @@ from typing import Optional
 from urllib.parse import urlparse
 
 SETTING = "COMPUTER_ACTIONS"
+# What the user has switched off of it, by KINDS' names, comma-separated:
+# everything is on until they do.
+OFF_SETTING = "COMPUTER_OFF"
 TIMEOUT = 10
 
 # What the model may ask for, and what each does, for its tool.
@@ -46,6 +50,26 @@ ACTIONS = {
     "sleep_display": "turn the display off",
     "copy": "put text on the clipboard, value the text",
     "dark_mode": "switch dark mode, value on or off",
+}
+# What the user can switch on and off one by one: its name, what
+# Settings calls it, what it lets Flash do, and its ACTIONS. "imessage"
+# is the send_imessage tool, on a Mac only.
+KINDS = {
+    "music": ("Music and video", "Play, pause and skip, and say what is "
+              "playing.", ("play_pause", "play", "pause", "next_track",
+                           "previous_track", "now_playing")),
+    "volume": ("Volume", "Set it, turn it up or down, mute it.",
+               ("set_volume", "volume_up", "volume_down", "mute",
+                "unmute")),
+    "apps": ("Apps", "Open and quit apps by name.",
+             ("open_app", "quit_app")),
+    "open": ("Links and files", "Open a link, a file or a folder.",
+             ("open",)),
+    "screen": ("Lock the screen", "Lock it, or turn the display off.",
+               ("lock_screen", "sleep_display")),
+    "clipboard": ("Clipboard", "Copy text to the clipboard.", ("copy",)),
+    "dark_mode": ("Dark mode", "Switch it on or off.", ("dark_mode",)),
+    "imessage": ("iMessages", "Send one, after you say yes to it.", ()),
 }
 # How much a volume step moves it, in percent.
 STEP = 10
@@ -77,6 +101,44 @@ def enabled() -> bool:
     )
 
 
+def kinds() -> list[str]:
+    """The KINDS there are on this computer: iMessages only on a Mac."""
+
+    return [k for k in KINDS if k != "imessage" or system() == "mac"]
+
+
+def switched_off() -> set[str]:
+    """The KINDS the user has switched off."""
+
+    said = os.environ.get(OFF_SETTING) or ""
+    return {k.strip().lower() for k in said.split(",")} & set(KINDS)
+
+
+def allowed(kind: str) -> bool:
+    """Whether Flash may do KIND: the computer on, and KIND not off."""
+
+    return enabled() and kind in kinds() and kind not in switched_off()
+
+
+def off_after(kind: str, on: bool) -> str:
+    """OFF_SETTING's value once KIND is switched ON or off."""
+
+    if kind not in KINDS:
+        raise ComputerError(
+            f"{kind!r} is not one of them. One of: {', '.join(KINDS)}."
+        )
+    off = switched_off() - {kind} if on else switched_off() | {kind}
+    return ",".join(k for k in KINDS if k in off)
+
+
+def allowed_actions() -> list[str]:
+    """ACTIONS the user has not switched off."""
+
+    off = switched_off()
+    return [action for action in ACTIONS
+            if not any(action in KINDS[k][2] for k in off)]
+
+
 def system() -> str:
     """"mac", "windows" or "linux"."""
 
@@ -85,7 +147,8 @@ def system() -> str:
     return "windows" if sys.platform.startswith("win") else "linux"
 
 
-def _run(argv: list[str], given: str = "") -> str:
+def _run(argv: list[str], given: str = "",
+         timeout: float = TIMEOUT) -> str:
     """Run ARGV, with GIVEN on its input, and return what it printed.
     Raises ComputerError when it could not run or failed."""
 
@@ -93,7 +156,7 @@ def _run(argv: list[str], given: str = "") -> str:
         # Fixed commands, never through a shell.
         done = subprocess.run(  # nosec B603
             argv, input=given, capture_output=True, text=True,
-            timeout=TIMEOUT, check=False,
+            timeout=timeout, check=False,
         )
     except FileNotFoundError:
         raise ComputerError(f"{argv[0]} is not on this computer.") from None
@@ -115,7 +178,14 @@ def do(action: str, value: str = "") -> str:
     value = str(value or "").strip()
     if action not in ACTIONS:
         raise ComputerError(
-            f"{action!r} is not an action. One of: {', '.join(ACTIONS)}."
+            f"{action!r} is not an action. One of: "
+            f"{', '.join(allowed_actions())}."
+        )
+    if action not in allowed_actions():
+        raise ComputerError(
+            f"The user has switched {action.replace('_', ' ')} off. They "
+            "can turn it back on in Settings, or with /computer on "
+            + next(k for k in KINDS if action in KINDS[k][2]) + "."
         )
     kind = system()
     if action in _MEDIA:
@@ -736,3 +806,175 @@ def _dark_mode(kind: str, value: str) -> str:
     else:
         raise ComputerError("No way to switch dark mode was found.")
     return f"Dark mode is {'on' if dark else 'off'}."
+
+
+# --- Messages ---------------------------------------------------------
+
+# At most this much text in one message.
+MESSAGE_CHARS = 10_000
+# Messages may have to open first, so it gets longer than the rest.
+MESSAGE_TIMEOUT = 30
+# A phone number as people write one, or an email address: either is
+# what iMessage sends to.
+_PHONE = re.compile(r"^\+?[\d\s().-]{6,24}$")
+_EMAIL = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
+# Everyone in Contacts whose name or nickname has the one asked for in
+# it, any case, with their numbers and addresses, ten at most.
+_CONTACTS_JS = """
+const want = %s;
+const people = Application("Contacts").people.whose({_or: [
+  {name: {_contains: want}}, {nickname: {_contains: want}}]})();
+const all = (list) => list.map((x) => ({label: String(x.label() || ""),
+  value: String(x.value() || "")}));
+JSON.stringify(people.slice(0, 10).map((p) => ({name: p.name(),
+  nickname: String(p.nickname() || ""), phones: all(p.phones()),
+  emails: all(p.emails())})));
+"""
+# Sent from the user's iMessage account in Messages, to the number or
+# address in argv[1], the text in argv[2]: both arguments, never script.
+_SEND = (
+    "on run argv",
+    'tell application "Messages"',
+    "set chosen to 1st account whose service type = iMessage",
+    "send (item 2 of argv) to participant (item 1 of argv) of chosen",
+    "end tell",
+    "end run",
+)
+
+
+def _is_number(text: str) -> bool:
+    return bool(_PHONE.match(text)) and sum(c.isdigit() for c in text) >= 6
+
+
+def _digits(number: str) -> str:
+    """A phone number as Messages takes it: "+1 (555) 010-2000" is
+    "+15550102000"."""
+
+    return re.sub(r"[^\d+]", "", number)
+
+
+def _label(raw: str) -> str:
+    """A Contacts label as it shows: "_$!<Mobile>!$_" is "Mobile"."""
+
+    return re.sub(r"^_\$!<(.*)>!\$_$", r"\1", raw)
+
+
+def _known_as(person: dict) -> str:
+    """PERSON's name, and their nickname when it is something else:
+    "Samantha Lee (Sam)"."""
+
+    nickname = str(person.get("nickname") or "").strip()
+    if nickname and nickname.lower() not in person["name"].lower():
+        return f"{person['name']} ({nickname})"
+    return person["name"]
+
+
+def _handle(person: dict) -> str:
+    """Where a message to PERSON goes: their mobile or iPhone number,
+    else any number, else an email address. "" when they have none."""
+
+    phones = person.get("phones") or []
+    for phone in phones:
+        if re.search(r"mobile|iphone|cell", _label(phone["label"]), re.I):
+            return phone["value"]
+    if phones:
+        return phones[0]["value"]
+    emails = person.get("emails") or []
+    return emails[0]["value"] if emails else ""
+
+
+def _not_allowed(exc: ComputerError, app: str) -> bool:
+    said = str(exc)
+    return "-1743" in said or "Not authorized" in said or \
+        "not allowed" in said.lower() and app in said
+
+
+def recipient(to: str) -> tuple[str, str]:
+    """Who TO is, for a message: (who to show, the number or address it
+    goes to). A number or address is taken as it is; a name or nickname
+    is looked up in Contacts. Raises ComputerError when it is no one, or
+    more than one person and it cannot tell which."""
+
+    if system() != "mac":
+        raise ComputerError("iMessages can only be sent from a Mac.")
+    to = " ".join(str(to or "").split())
+    if not to:
+        raise ComputerError("Say who the message is to: a name from "
+                            "Contacts, a phone number or an email address.")
+    if _EMAIL.match(to):
+        return to, to
+    if _is_number(to):
+        return to, _digits(to)
+    if len(to) > 80:
+        raise ComputerError("That is not a name, number or address.")
+    try:
+        found = json.loads(_jxa(_CONTACTS_JS % json.dumps(to)) or "[]")
+    except ComputerError as exc:
+        if _not_allowed(exc, "Contacts"):
+            raise ComputerError(
+                "macOS has to let the app Flash runs in (Terminal, iTerm "
+                "and the like) see Contacts before Flash can find someone "
+                "by name. Turn it on in System Settings > Privacy & "
+                "Security > Contacts, or give a phone number instead."
+            ) from None
+        raise
+    except ValueError:
+        found = []
+    if not found:
+        raise ComputerError(f"No one called {to} is in Contacts. Ask the "
+                            "user for their number.")
+    # The whole name, or the whole nickname, settles it among several.
+    exact = [p for p in found
+             if to.lower() in (p["name"].lower(),
+                               str(p.get("nickname") or "").lower())]
+    if len(found) > 1 and len(exact) == 1:
+        found = exact
+    if len(found) > 1:
+        raise ComputerError(
+            f"More than one person in Contacts is called {to}: "
+            + ", ".join(_known_as(p) for p in found)
+            + ". Ask the user which one."
+        )
+    person = found[0]
+    handle = _handle(person)
+    if not handle:
+        raise ComputerError(f"{person['name']} has no phone number or "
+                            "email address in Contacts.")
+    return _known_as(person), \
+        _digits(handle) if _is_number(handle) else handle
+
+
+def send_imessage(handle: str, text: str) -> str:
+    """Send TEXT to HANDLE, a number or address, as an iMessage from the
+    user's account in Messages. Raises ComputerError when it could not."""
+
+    if system() != "mac":
+        raise ComputerError("iMessages can only be sent from a Mac.")
+    text = str(text or "").strip()
+    if not text:
+        raise ComputerError("The message has nothing in it.")
+    if len(text) > MESSAGE_CHARS:
+        raise ComputerError(f"A message can be at most {MESSAGE_CHARS} "
+                            "characters.")
+    argv = ["osascript"]
+    for line in _SEND:
+        argv += ["-e", line]
+    try:
+        _run([*argv, handle, text], timeout=MESSAGE_TIMEOUT)
+    except ComputerError as exc:
+        said = str(exc)
+        if _not_allowed(exc, "Messages"):
+            raise ComputerError(
+                "macOS has to let the app Flash runs in (Terminal, iTerm "
+                "and the like) control Messages. Turn it on in System "
+                "Settings > Privacy & Security > Automation, then ask "
+                "again."
+            ) from None
+        if "account" in said.lower():
+            raise ComputerError(
+                "Messages is not signed in to iMessage on this Mac. Open "
+                "Messages and sign in with the Apple Account, then ask "
+                "again."
+            ) from None
+        raise
+    return f"Sent to {handle}."

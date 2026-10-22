@@ -109,6 +109,20 @@ PAGE = WEB_DIR / "index.html"
 DESIGN_KIT = WEB_DIR / "designkit.js"
 
 
+def _computer_kinds() -> dict:
+    """What Flash can do on this computer, one by one, for Settings'
+    switches, and which the user has switched off."""
+
+    return {
+        "computer_kinds": [
+            {"name": kind, "title": computer.KINDS[kind][0],
+             "what": computer.KINDS[kind][1]}
+            for kind in computer.kinds()
+        ],
+        "computer_off": sorted(computer.switched_off()),
+    }
+
+
 def with_design_kit(page: bytes) -> bytes:
     """A page with the side panel's design tools in it, before its
     closing body tag, or at its end when it has none."""
@@ -3168,6 +3182,7 @@ def status(ai) -> dict:
         "compact": bool(ai.Config.auto_compact),
         "model_titles": titles.enabled(),
         "computer": computer.enabled(),
+        **_computer_kinds(),
         "visuals": visuals.level(),
         # What a new chat says hello with, for the page to pick from by
         # the browser's clock.
@@ -3961,10 +3976,19 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
         return {"wait": wait.card()}
 
     if name == "computer-setting":
-        on = arg in ("on", "1", "true")
-        ai.set_config_var(computer.SETTING, "1" if on else "0")
+        # "on" or "off" for all of it, or "on music", "off imessage" for
+        # one thing it can do.
+        said, _, kind = arg.partition(" ")
+        on = said in ("on", "1", "true")
+        if kind:
+            if kind not in computer.kinds():
+                raise ValueError(f"{kind} is not something Flash can do here.")
+            ai.set_config_var(computer.OFF_SETTING,
+                              computer.off_after(kind, on))
+        else:
+            ai.set_config_var(computer.SETTING, "1" if on else "0")
         session.hub.publish({"type": "status"})
-        return {"computer": on}
+        return {"computer": computer.enabled(), **_computer_kinds()}
 
     if name == "titles-setting":
         on = arg in ("on", "1", "true")

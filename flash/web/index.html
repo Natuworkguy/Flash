@@ -1548,6 +1548,15 @@ body.page-projects #dock, body.page-settings #dock, body.page-tool #dock { displ
 .ext-settings .side input, .ext-settings .side select { font: 13.5px var(--sans); color: var(--text); background: var(--bg); border: 1px solid var(--border-strong); border-radius: 9px; padding: 7px 10px; width: 200px; max-width: 100%; outline: 0; }
 .ext-settings .side input[type="number"] { width: 96px; }
 .ext-settings .side input:focus, .ext-settings .side select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent); }
+/* What Flash may do on this computer, one switch each, sliding open
+   under "Let Flash act on this computer" while it is on. */
+.computer-kinds { display: grid; grid-template-rows: 0fr; opacity: 0; max-width: 620px; transition: grid-template-rows 0.34s var(--ease), opacity 0.26s var(--ease); }
+.computer-kinds.open { grid-template-rows: 1fr; opacity: 1; }
+.computer-kinds > .clip { overflow: hidden; min-height: 0; }
+.computer-kinds .rows { display: grid; gap: 8px; padding: 10px 0 0 22px; transform: translateY(-10px); transition: transform 0.34s var(--ease); }
+.computer-kinds.open .rows { transform: none; }
+.computer-kinds .setting-row { padding: 11px 14px; }
+.computer-kinds .setting-row + .setting-row { margin-top: 0; }
 .item-row .btn.small[aria-expanded="true"] { color: var(--text); background: var(--hover); border-color: var(--border-strong); }
 button.item-row:hover { background: var(--hover); }
 .item-row .main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
@@ -4022,6 +4031,7 @@ function toolIcon(label) {
   const name = label.split("(")[0].toLowerCase();
   if (/bash|shell/.test(name)) return "terminal";
   if (/inbox|email/.test(name)) return "mail";
+  if (/imessage/.test(name)) return "chat";
   if (/devtools/.test(name)) return "code";
   if (/^notify/.test(name)) return "bell";
   if (/^computer/.test(name)) return "monitor";
@@ -7135,18 +7145,48 @@ function drawGeneral(body) {
   fillSystemOne(systemOne);
 
   // Simple things on this computer, when asked: off until turned on.
-  body.insertAdjacentHTML("beforeend", `<h2 class="settings-section settings-gap">Your computer</h2><p class="settings-sub">Simple things Flash can do on the computer it runs on when you ask: play, pause and skip music, set the volume, open and quit apps, open links and files, lock the screen, copy to the clipboard, switch dark mode. It never clicks, types or runs commands this way.</p>`);
-  const computerRow = el("button", "setting-row computer-row", `<span class="what"><b>Let Flash act on this computer</b><span>“Stop the music”, “turn it down”, “open Spotify”. Off, Flash is not offered any of it.</span></span><span class="switch" aria-hidden="true"></span>`);
+  body.insertAdjacentHTML("beforeend", `<h2 class="settings-section settings-gap">Your computer</h2><p class="settings-sub">Simple things Flash can do on the computer it runs on when you ask: play, pause and skip music, set the volume, open and quit apps, open links and files, lock the screen, copy to the clipboard, switch dark mode, and on a Mac, send an iMessage once you say yes to it. It never clicks, types or runs commands this way.</p>`);
+  const computerRow = el("button", "setting-row computer-row", `<span class="what"><b>Let Flash act on this computer</b><span>“Stop the music”, “turn it down”, “open Spotify”. Off, Flash is not offered any of it. On, switch off anything you’d rather it didn’t do.</span></span><span class="switch" aria-hidden="true"></span>`);
   computerRow.type = "button";
   computerRow.setAttribute("role", "switch");
   computerRow.setAttribute("aria-checked", !!info.computer);
+  // Each thing it can do, on until switched off, shown while it is on.
+  const kinds = el("div", "computer-kinds", `<div class="clip"><div class="rows" role="group" aria-label="What Flash can do"></div></div>`);
+  const kindRows = kinds.querySelector(".rows");
+  const took = (said) => {
+    info.computer = said.computer;
+    info.computer_off = said.computer_off || [];
+    info.computer_kinds = said.computer_kinds || info.computer_kinds;
+  };
+  const showKinds = () => {
+    kinds.classList.toggle("open", !!info.computer);
+    kinds.inert = !info.computer;
+    kindRows.textContent = "";
+    for (const kind of info.computer_kinds || []) {
+      const row = el("button", "setting-row", `<span class="what"><b></b><span></span></span><span class="switch" aria-hidden="true"></span>`);
+      row.type = "button";
+      row.setAttribute("role", "switch");
+      row.querySelector("b").textContent = kind.title;
+      row.querySelector(".what span").textContent = kind.what;
+      row.setAttribute("aria-checked", !(info.computer_off || []).includes(kind.name));
+      row.onclick = async () => {
+        const on = row.getAttribute("aria-checked") !== "true";
+        row.setAttribute("aria-checked", on);
+        try { took(await command("computer-setting", `${on ? "on" : "off"} ${kind.name}`)); }
+        catch (error) { row.setAttribute("aria-checked", !on); showFailure(error); }
+      };
+      kindRows.appendChild(row);
+    }
+  };
   computerRow.onclick = async () => {
     const on = computerRow.getAttribute("aria-checked") !== "true";
     computerRow.setAttribute("aria-checked", on);
-    try { info.computer = (await command("computer-setting", on ? "on" : "off")).computer; }
+    try { took(await command("computer-setting", on ? "on" : "off")); showKinds(); }
     catch (error) { computerRow.setAttribute("aria-checked", !on); showFailure(error); }
   };
   body.appendChild(computerRow);
+  body.appendChild(kinds);
+  showKinds();
 
   body.insertAdjacentHTML("beforeend", `<h2 class="settings-section settings-gap">Notifications</h2><p class="settings-sub">Flash and your sparks can tap you on the shoulder when something can't wait: a pop-up here, or on your desktop when no page is open. Every chat and spark shares one limit.</p>`);
   const notifyOn = el("button", "setting-row notify-on-row", `<span class="what"><b>Let the agent notify you</b><span></span></span><span class="switch" aria-hidden="true"></span>`);

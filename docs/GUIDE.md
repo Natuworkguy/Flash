@@ -26,7 +26,7 @@ version; [CONFIGURATION.md](CONFIGURATION.md) lists every setting and
 - **Waits**: In the web UI, Flash can set a task aside until something happens, then pick it up in the same chat: "when CI goes green, deploy", "if Sam hasn't replied by Friday, follow up". Waits outlast restarts.
 - **Record a Meeting**: In the web UI, + > Record a meeting writes down what is said as it is said, on this computer, then hands the transcript to the model in a new chat for the summary, decisions and to-dos.
 - **Connectors**: Plug in any MCP server (GitHub, Notion, a database, your files) with `/mcp add` or Settings > Connectors, and its tools join Flash's own. Read-only tools run straight away; anything else asks first.
-- **Acts on Your Computer**: With `/computer on`, or the switch in the web UI's Settings, "stop the music", "turn it down" or "open Spotify" just happens: Flash plays, pauses and skips music, sets the volume, opens and quits apps, opens links and files, locks the screen, copies to the clipboard and switches dark mode. Off by default, and it never clicks, types or runs commands this way.
+- **Acts on Your Computer**: With `/computer on`, or the switch in the web UI's Settings, "stop the music", "turn it down" or "open Spotify" just happens: Flash plays, pauses and skips music, sets the volume, opens and quits apps, opens links and files, locks the screen, copies to the clipboard and switches dark mode. On a Mac, "text Sam I'm running late" sends an iMessage once you say yes. Off by default, and it never clicks, types or runs commands this way.
 - **Voice Mode**: `/voice on` downloads a Vosk speech model and a Piper voice, then lets you talk to Flash and hear its replies, with typing still available at any time. Flash talks warmly, like a person rather than a document, and its voice has a style of its own: Warm (the default: unhurried, friendly, a breath between sentences, questions that lift and exclamations with a little bounce), Lively, Calm, or Plain, picked with `/voice style` or under Voice models in the web UI's Settings, where you can hear it first. Kristin and HFC join the voices on offer, for a warmer sound still.
 - **Visible Plans**: For a multi-step task the AI posts a checklist up front and ticks each box as it finishes that step, so you can see where it is instead of waiting for the wall of text at the end.
 - **Knows What Just Broke**: With `/hook install`, Flash sees the commands you run in VS Code's terminal and whether they failed, so "why did that fail?" works without pasting anything.
@@ -175,8 +175,9 @@ python run.py
   without asking first.
 - `/systemone [on|off|model [name]]`: Show, switch, or pick the model for
   [System One](#system-one), which reviews autonomous commands.
-- `/computer [on|off]`: Let Flash do [simple things on your
-  computer](#your-computer), like pausing the music, or stop it.
+- `/computer [on|off] [name]`: Let Flash do [simple things on your
+  computer](#your-computer), like pausing the music, or stop it; with a
+  name (`imessage`, `music`), switch just that one.
 - `/mcp [add <name> <command or URL> | env <name> KEY=VALUE | remove |
   on | off | tools <name> | reload]`: List and change the
   [connectors](#connectors) whose tools Flash has.
@@ -850,9 +851,14 @@ UI, Flash can do simple things on the computer it runs on when you ask:
 - lock the screen or turn the display off
 - copy text to the clipboard
 - switch dark mode on or off
+- on a Mac, send an iMessage ("text Sam I'm running late")
 
 It is off until you turn it on, and while it is off the model is not
-offered any of it. Each action is one fixed step Flash takes itself: it
+offered any of it. Turned on, each of those gets a switch of its own
+under it in Settings, all on, so you can turn off just what you'd
+rather it didn't do, like sending iMessages. In the terminal,
+`/computer` lists them, and `/computer off imessage` or `/computer on
+music` switches one; the model isn't offered what's off. Each action is one fixed step Flash takes itself: it
 never clicks, types, or runs a command the model wrote, and it will not
 open a script or installer, only apps by name.
 
@@ -864,7 +870,18 @@ play on something already playing, and can tell you whether the key
 worked. The first time, macOS asks to let the app Flash runs in (Terminal,
 iTerm and the like) control Spotify and Music, and, for the media keys,
 to turn it on under Privacy & Security > Accessibility. Dark mode asks
-to control System Events. Windows uses the keyboard's media keys,
+to control System Events.
+
+An iMessage goes from your account in the Messages app. Flash shows who
+it's to and exactly what it says, and asks every time before sending,
+autonomous mode or not; a no means it isn't sent. A name or nickname
+("Mom") is looked up in Contacts, and the message goes to that person's
+mobile number, or their other number or email address when there is
+none. If more than one contact has that name, Flash asks you which one.
+The first time, macOS asks to let the app Flash runs in see Contacts
+and control Messages.
+
+Windows uses the keyboard's media keys,
 which every player answers, though it cannot tell what is playing. Linux
 uses `playerctl` for music and PipeWire, PulseAudio or ALSA for the
 volume.
