@@ -10031,20 +10031,36 @@ function addSharedSpark() {
   });
 }
 
-// A template that works on email, picked while email is not connected:
-// a line under the templates says so, with the way to connect it.
+// A template that works on email, picked while email is not connected,
+// or on iMessages that Flash may not read: a line under the templates
+// says so, with the way to set it up.
 async function needsEmail(row, needs) {
   row.parentElement.querySelector(".needs-email")?.remove();
   if (!needs) return;
-  let e;
-  try { e = (await command("email")).email; } catch (_) { return; }
-  if (e.configured || !row.isConnected) return;
-  const note = el("p", "needs-email", "This spark works on your email, which is not connected yet. ");
-  const go = el("button", "link-btn", "Connect it in Settings");
-  go.type = "button";
-  go.onclick = () => { closeForm(); showSettings("email"); };
-  note.appendChild(go);
-  row.after(note);
+  let note;
+  if (needs === "imessage") {
+    const can = (info.computer_kinds || []).some((k) => k.name === "imessage_read");
+    if (info.computer && can && !(info.computer_off || []).includes("imessage_read")) return;
+    note = el("p", "needs-email", can
+      ? "This spark reads your iMessages, which Flash may not read yet. "
+      : "This spark reads your iMessages, which Flash can only do on a Mac.");
+    if (can) {
+      const go = el("button", "link-btn", "Turn it on in Settings");
+      go.type = "button";
+      go.onclick = () => { closeForm(); showSettings("general"); };
+      note.appendChild(go);
+    }
+  } else {
+    let e;
+    try { e = (await command("email")).email; } catch (_) { return; }
+    if (e.configured || !row.isConnected) return;
+    note = el("p", "needs-email", "This spark works on your email, which is not connected yet. ");
+    const go = el("button", "link-btn", "Connect it in Settings");
+    go.type = "button";
+    go.onclick = () => { closeForm(); showSettings("email"); };
+    note.appendChild(go);
+  }
+  if (row.isConnected) row.after(note);
 }
 
 // The spark form's team and "reports to": the second lists the sparks on
@@ -10250,7 +10266,7 @@ function sparkForm(spark, inProjectId = "", template = "") {
         chip.title = t.blurb;
         chip.onclick = () => {
           row.querySelectorAll(".chip-btn").forEach((c) => c.classList.toggle("on", c === chip));
-          needsEmail(row, t.needs === "email");
+          needsEmail(row, t.needs);
           form.sparkname.value = t.name;
           form.title.value = t.title || "";
           form.goal.value = t.goal;
