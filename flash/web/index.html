@@ -7145,7 +7145,7 @@ function drawGeneral(body) {
   fillSystemOne(systemOne);
 
   // Simple things on this computer, when asked: off until turned on.
-  body.insertAdjacentHTML("beforeend", `<h2 class="settings-section settings-gap">Your computer</h2><p class="settings-sub">Simple things Flash can do on the computer it runs on when you ask: play, pause and skip music, set the volume, open and quit apps, open links and files, lock the screen, copy to the clipboard, switch dark mode, and on a Mac, send an iMessage once you say yes to it. It never clicks, types or runs commands this way.</p>`);
+  body.insertAdjacentHTML("beforeend", `<h2 class="settings-section settings-gap">Your computer</h2><p class="settings-sub">Simple things Flash can do on the computer it runs on when you ask: play, pause and skip music, set the volume, open and quit apps, open links and files, lock the screen, copy to the clipboard, switch dark mode, and on a Mac, read your recent iMessages and send one once you say yes to it. It never clicks, types or runs commands this way.</p>`);
   const computerRow = el("button", "setting-row computer-row", `<span class="what"><b>Let Flash act on this computer</b><span>“Stop the music”, “turn it down”, “open Spotify”. Off, Flash is not offered any of it. On, switch off anything you’d rather it didn’t do.</span></span><span class="switch" aria-hidden="true"></span>`);
   computerRow.type = "button";
   computerRow.setAttribute("role", "switch");

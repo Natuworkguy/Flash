@@ -851,12 +851,13 @@ UI, Flash can do simple things on the computer it runs on when you ask:
 - lock the screen or turn the display off
 - copy text to the clipboard
 - switch dark mode on or off
-- on a Mac, send an iMessage ("text Sam I'm running late")
+- on a Mac, read your recent iMessages ("what did Sam say?") and send
+  one ("text Sam I'm running late")
 
 It is off until you turn it on, and while it is off the model is not
 offered any of it. Turned on, each of those gets a switch of its own
 under it in Settings, all on, so you can turn off just what you'd
-rather it didn't do, like sending iMessages. In the terminal,
+rather it didn't do, like reading or sending iMessages. In the terminal,
 `/computer` lists them, and `/computer off imessage` or `/computer on
 music` switches one; the model isn't offered what's off. Each action is one fixed step Flash takes itself: it
 never clicks, types, or runs a command the model wrote, and it will not
@@ -871,6 +872,12 @@ worked. The first time, macOS asks to let the app Flash runs in (Terminal,
 iTerm and the like) control Spotify and Music, and, for the media keys,
 to turn it on under Privacy & Security > Accessibility. Dark mode asks
 to control System Events.
+
+Reading iMessages goes through what Messages keeps on your Mac, newest
+first, with who said it by their name in Contacts and group chats named;
+nothing is marked read. It needs Full Disk Access for the app Flash runs
+in (System Settings > Privacy & Security > Full Disk Access), which is
+how macOS guards your messages.
 
 An iMessage goes from your account in the Messages app. Flash shows who
 it's to and exactly what it says, and asks every time before sending,

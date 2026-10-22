@@ -550,3 +550,115 @@ def test_the_web_page_switches_one_off(monkeypatch):
     assert said["computer_kinds"][-1]["name"] == "imessage"  # nosec B101
     assert "send_imessage" not in {  # nosec B101
         t["function"]["name"] for t in tools.turn_tools()}
+
+
+# --- Reading iMessages ------------------------------------------------------
+
+
+def _styled(text: str) -> bytes:
+    """TEXT as Messages keeps it when it keeps only styled text."""
+
+    data = text.encode()
+    size = bytes([len(data)]) if len(data) < 0x81 else (
+        b"\x81" + len(data).to_bytes(2, "little"))
+    return (b"\x04\x0bstreamtyped\x81\xe8\x03\x84\x01@\x84\x84\x84\x12"
+            b"NSAttributedString\x00\x84\x84\x08NSObject\x00\x85\x92\x84"
+            b"\x84\x84\x08NSString\x01\x94\x84\x01+" + size + data
+            + b"\x86\x84\x02iI\x01")
+
+
+@pytest.fixture
+def messages(monkeypatch, tmp_path):
+    """A Messages history with Sam, a group chat, and one sent."""
+
+    import sqlite3
+
+    db = tmp_path / "chat.db"
+    with sqlite3.connect(db) as made:
+        made.executescript("""
+            CREATE TABLE handle (ROWID INTEGER PRIMARY KEY, id TEXT);
+            CREATE TABLE chat (ROWID INTEGER PRIMARY KEY, display_name TEXT,
+                               chat_identifier TEXT);
+            CREATE TABLE chat_handle_join (chat_id INTEGER,
+                                           handle_id INTEGER);
+            CREATE TABLE chat_message_join (chat_id INTEGER,
+                                            message_id INTEGER);
+            CREATE TABLE message (ROWID INTEGER PRIMARY KEY, date INTEGER,
+                is_from_me INTEGER, is_read INTEGER, text TEXT,
+                attributedBody BLOB, cache_has_attachments INTEGER,
+                handle_id INTEGER, item_type INTEGER);
+            INSERT INTO handle VALUES (1, '+15550102000'),
+                                      (2, 'bo@example.com');
+            INSERT INTO chat VALUES (1, '', '+15550102000'),
+                                    (2, 'Climbing', 'chat123');
+            INSERT INTO chat_handle_join VALUES (1, 1), (2, 1), (2, 2);
+        """)
+        rows = [
+            # Seconds since 2001, as nanoseconds: an hour apart.
+            (1, 1, 0, 1, "Are we still on for 7?", None, 0, 1),
+            (2, 1, 1, 1, "Yes, see you there", None, 0, 1),
+            (3, 2, 0, 0, None, _styled("Who's bringing the rope?"), 0, 2),
+            (4, 1, 0, 0, "Running late", None, 1, 1),
+        ]
+        for at, (rowid, chat, mine, read, text, body, attached,
+                 handle) in enumerate(rows):
+            made.execute(
+                "INSERT INTO message VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)",
+                (rowid, (750_000_000 + at * 3600) * 10**9, mine, read, text,
+                 body, attached, handle))
+            made.execute("INSERT INTO chat_message_join VALUES (?, ?)",
+                         (chat, rowid))
+    monkeypatch.setattr(computer, "MESSAGES_DB", db)
+    monkeypatch.setattr(computer, "_address_book",
+                        lambda: {"5550102000": "Sam Lee"})
+    return db
+
+
+def test_recent_imessages_read_newest_first_with_names(monkeypatch, ran,
+                                                       messages):
+    on(monkeypatch, "mac")
+
+    said = tools.read_imessages()
+
+    lines = said.splitlines()
+    assert lines[0] == "4 messages, newest first:"  # nosec B101
+    assert lines[1].endswith(  # nosec B101
+        "Sam Lee (unread): Running late [attachment]")
+    assert lines[2].endswith(  # nosec B101
+        "bo@example.com in Climbing (unread): Who's bringing the rope?")
+    assert lines[3].endswith("You to Sam Lee: Yes, see you there")  # nosec
+    assert lines[4].endswith("Sam Lee: Are we still on for 7?")  # nosec
+
+
+def test_unread_and_one_person_only(monkeypatch, ran, messages):
+    mac_messages(monkeypatch, ran)
+
+    unread = computer.read_imessages(unread_only=True)
+    assert unread.startswith("2 messages") and "Yes, see" not in unread
+
+    with_sam = tools.read_imessages(**{"with": "sam"})
+    assert "rope" not in with_sam and "Yes, see you there" in with_sam
+    assert with_sam.startswith("3 messages")  # nosec B101
+
+
+def test_reading_is_its_own_switch(monkeypatch, ran, messages):
+    on(monkeypatch, "mac")
+    monkeypatch.setenv(computer.OFF_SETTING, "imessage_read")
+
+    names = {t["function"]["name"] for t in tools.turn_tools()}
+    assert "read_imessages" not in names  # nosec B101
+    assert "send_imessage" in names  # nosec B101
+    assert "imessage_read" in tools.read_imessages()  # nosec B101
+
+
+def test_no_full_disk_access_says_how_to_give_it(monkeypatch, ran,
+                                                 messages):
+    on(monkeypatch, "mac")
+
+    def denied(*_, **__):
+        raise computer.sqlite3.OperationalError("unable to open database file")
+
+    monkeypatch.setattr(computer.sqlite3, "connect", denied)
+
+    with pytest.raises(computer.ComputerError, match="Full Disk Access"):
+        computer.read_imessages()

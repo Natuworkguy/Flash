@@ -2,7 +2,8 @@
 lets it: play, pause and skip music, say what is playing, set the
 volume, open and quit apps, open a link, file or folder, lock the
 screen, put text on the clipboard, and switch dark mode. On a Mac, it
-can send an iMessage too, once the user says yes to it.
+can read the user's recent iMessages, and send one once they say yes to
+it.
 
 Each is one fixed step through what the system already offers: scripts
 of Flash's own on a Mac, media keys and the system's own calls on
@@ -13,13 +14,16 @@ the user turns it on (COMPUTER_ACTIONS), since even a pause reaches
 outside the chat.
 """
 
+import contextlib
 import json
 import os
 import re
 import shutil
+import sqlite3
 import subprocess  # nosec B404
 import sys
 import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 from urllib.parse import urlparse
@@ -53,7 +57,8 @@ ACTIONS = {
 }
 # What the user can switch on and off one by one: its name, what
 # Settings calls it, what it lets Flash do, and its ACTIONS. "imessage"
-# is the send_imessage tool, on a Mac only.
+# is the send_imessage tool and "imessage_read" read_imessages, on a Mac
+# only.
 KINDS = {
     "music": ("Music and video", "Play, pause and skip, and say what is "
               "playing.", ("play_pause", "play", "pause", "next_track",
@@ -69,7 +74,9 @@ KINDS = {
                ("lock_screen", "sleep_display")),
     "clipboard": ("Clipboard", "Copy text to the clipboard.", ("copy",)),
     "dark_mode": ("Dark mode", "Switch it on or off.", ("dark_mode",)),
-    "imessage": ("iMessages", "Send one, after you say yes to it.", ()),
+    "imessage_read": ("Read iMessages", "Read your recent messages, to "
+                      "answer about them.", ()),
+    "imessage": ("Send iMessages", "Send one, after you say yes to it.", ()),
 }
 # How much a volume step moves it, in percent.
 STEP = 10
@@ -104,7 +111,8 @@ def enabled() -> bool:
 def kinds() -> list[str]:
     """The KINDS there are on this computer: iMessages only on a Mac."""
 
-    return [k for k in KINDS if k != "imessage" or system() == "mac"]
+    return [k for k in KINDS
+            if not k.startswith("imessage") or system() == "mac"]
 
 
 def switched_off() -> set[str]:
@@ -978,3 +986,172 @@ def send_imessage(handle: str, text: str) -> str:
             ) from None
         raise
     return f"Sent to {handle}."
+
+
+# Where Messages keeps every message, and the address book's own files:
+# only readable once macOS gives the app Flash runs in Full Disk Access.
+MESSAGES_DB = Path.home() / "Library" / "Messages" / "chat.db"
+ADDRESS_BOOK = Path.home() / "Library" / "Application Support" / "AddressBook"
+READ_LIMIT = 30
+MOST_READ = 200
+# Messages counts time from the start of 2001, in nanoseconds (seconds,
+# before macOS 10.13).
+_APPLE_EPOCH = datetime(2001, 1, 1, tzinfo=timezone.utc)
+_RECENT = """
+SELECT m.ROWID, m.date, m.is_from_me, m.is_read, m.text, m.attributedBody,
+       m.cache_has_attachments, h.id, c.display_name, c.chat_identifier,
+       (SELECT COUNT(*) FROM chat_handle_join j WHERE j.chat_id = c.ROWID)
+FROM message m
+LEFT JOIN handle h ON h.ROWID = m.handle_id
+LEFT JOIN chat_message_join cm ON cm.message_id = m.ROWID
+LEFT JOIN chat c ON c.ROWID = cm.chat_id
+WHERE m.item_type = 0 {where}
+ORDER BY m.date DESC
+LIMIT ?
+"""
+_FULL_DISK = (
+    "macOS keeps messages private until the app Flash runs in (Terminal, "
+    "iTerm and the like) has Full Disk Access. Turn it on in System "
+    "Settings > Privacy & Security > Full Disk Access, quit and reopen "
+    "that app, then ask again."
+)
+
+
+def _when(stamp) -> Optional[datetime]:
+    try:
+        stamp = int(stamp or 0)
+    except (TypeError, ValueError):
+        return None
+    if not stamp:
+        return None
+    seconds = stamp / 1e9 if stamp > 10**11 else stamp
+    # Stored in UTC; shown in this computer's time.
+    return (_APPLE_EPOCH + timedelta(seconds=seconds)).astimezone()
+
+
+def _body_text(blob) -> str:
+    """The words in a message macOS kept only as styled text (an
+    archived NSAttributedString), as it does for most since Ventura."""
+
+    if not blob:
+        return ""
+    data = bytes(blob)
+    at = data.find(b"NSString")
+    if at < 0:
+        return ""
+    data = data[at + len(b"NSString"):]
+    plus = data.find(b"+")
+    if plus < 0 or plus > 8:
+        return ""
+    data = data[plus + 1:]
+    if not data:
+        return ""
+    # The length: one byte, or a marker and two or four little-endian.
+    size, start = data[0], 1
+    if size == 0x81:
+        size, start = int.from_bytes(data[1:3], "little"), 3
+    elif size == 0x82:
+        size, start = int.from_bytes(data[1:5], "little"), 5
+    return data[start:start + size].decode("utf-8", "replace")
+
+
+def _key(handle: str) -> str:
+    """HANDLE as it is matched against Contacts: an address in lower
+    case, a number by its last ten digits."""
+
+    handle = str(handle or "").strip().lower()
+    if "@" in handle:
+        return handle
+    digits = re.sub(r"\D", "", handle)
+    return digits[-10:]
+
+
+def _address_book() -> dict[str, str]:
+    """Every number and address in Contacts, by _key, to who it is.
+    Empty when they cannot be read."""
+
+    names: dict[str, str] = {}
+    for db in sorted(ADDRESS_BOOK.glob("**/AddressBook-v22.abcddb")):
+        try:
+            with contextlib.closing(sqlite3.connect(
+                    f"file:{db}?mode=ro", uri=True, timeout=2)) as book:
+                for table, column in (("ZABCDPHONENUMBER", "ZFULLNUMBER"),
+                                      ("ZABCDEMAILADDRESS", "ZADDRESS")):
+                    rows = book.execute(
+                        "SELECT r.ZFIRSTNAME, r.ZLASTNAME, r.ZNICKNAME, "
+                        f"r.ZORGANIZATION, t.{column} FROM {table} t "  # nosec
+                        "JOIN ZABCDRECORD r ON r.Z_PK = t.ZOWNER"
+                    ).fetchall()
+                    for first, last, nickname, company, value in rows:
+                        name = " ".join(x for x in (first, last) if x) \
+                            or nickname or company
+                        if name and value and _key(value):
+                            names.setdefault(_key(value), name)
+        except sqlite3.Error:
+            continue
+    return names
+
+
+def read_imessages(with_: str = "", limit=READ_LIMIT,
+                   unread_only: bool = False) -> str:
+    """The user's newest iMessages and texts, newest first: everyone's,
+    or only those with WITH_ (a name or nickname from Contacts, a number
+    or an address). Raises ComputerError when they cannot be read."""
+
+    if system() != "mac":
+        raise ComputerError("iMessages can only be read on a Mac.")
+    try:
+        limit = max(1, min(int(limit or READ_LIMIT), MOST_READ))
+    except (TypeError, ValueError):
+        limit = READ_LIMIT
+    names = _address_book()
+    keys: set[str] = set()
+    who = " ".join(str(with_ or "").split())
+    if who:
+        shown, handle = recipient(who)
+        keys = {_key(handle)}
+        # Everyone's other numbers and addresses count too.
+        keys |= {k for k, n in names.items() if n == shown.split(" (")[0]}
+    if not MESSAGES_DB.exists():
+        raise ComputerError("There is no Messages history on this Mac.")
+    where = "AND m.is_read = 0 AND m.is_from_me = 0" if unread_only else ""
+    try:
+        with contextlib.closing(sqlite3.connect(
+                f"file:{MESSAGES_DB}?mode=ro", uri=True, timeout=5)) as db:
+            # Filtered here rather than in SQL: a number is matched by
+            # its digits, however it was written.
+            rows = db.execute(_RECENT.format(where=where),
+                              (limit * 20 if keys else limit,)).fetchall()
+    except sqlite3.Error as exc:
+        if "unable to open" in str(exc) or "authoriz" in str(exc):
+            raise ComputerError(_FULL_DISK) from None
+        raise ComputerError(f"Messages could not be read: {exc}") from None
+
+    lines = []
+    for (_, date, mine, read, text, body, attached, handle, group,
+         chat, people) in rows:
+        if keys and _key(handle or chat or "") not in keys:
+            continue
+        words = (text or _body_text(body)).replace("\ufffc", "").strip()
+        if attached:
+            words = (words + " [attachment]").strip()
+        if not words:
+            continue
+        sender = "You" if mine else names.get(_key(handle), handle or "?")
+        place = ""
+        if people and people > 1:
+            place = f" in {group or 'a group chat'}"
+        elif mine:
+            other = names.get(_key(chat or ""), chat or "")
+            place = f" to {other}" if other else ""
+        moment = _when(date)
+        stamp = moment.strftime("%a %b %d, %H:%M") if moment else "?"
+        new = "" if mine or read else " (unread)"
+        lines.append(f"{stamp} · {sender}{place}{new}: {words}")
+        if len(lines) >= limit:
+            break
+    if not lines:
+        return ("No unread messages." if unread_only else
+                f"No messages with {who}." if who else "No messages.")
+    return (f"{len(lines)} message{'s' if len(lines) != 1 else ''}, newest "
+            "first:\n" + "\n".join(lines))
