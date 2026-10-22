@@ -18,6 +18,7 @@ import shutil
 import subprocess  # nosec B404
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Optional
 from urllib.parse import urlparse
@@ -26,7 +27,8 @@ from urllib.parse import urlparse
 @dataclass(frozen=True)
 class Service:
     """A tunnel service: what it is called, the program it needs, how it
-    is started (with {port}), and how its public address looks."""
+    is started (with {port}), how its public address looks, and, when it
+    says the address before it can be reached, what it says once it can."""
 
     name: str
     title: str
@@ -35,6 +37,7 @@ class Service:
     argv: tuple
     address: str
     install: str
+    ready: str = ""
 
 
 SERVICES = {
@@ -45,10 +48,13 @@ SERVICES = {
             "cloudflared",
             ("cloudflared", "tunnel", "--no-autoupdate", "--url",
              "http://127.0.0.1:{port}"),
-            r"https://[-a-z0-9]+\.trycloudflare\.com",
+            # Not its API's own address, which a failure names.
+            r"https://(?!api\.)[-a-z0-9]+\.trycloudflare\.com",
             "brew install cloudflared, or see "
             "developers.cloudflare.com/cloudflare-one/connections/"
             "connect-networks/downloads",
+            # The address comes first, the connection to the edge after.
+            r"Registered tunnel connection",
         ),
         Service(
             "localhost.run", "localhost.run",
@@ -83,6 +89,11 @@ SERVICES = {
 }
 # How long a service has to say its address before it is given up on.
 START_SECONDS = 45.0
+# How long Flash keeps trying to reach itself through a new address, and
+# how long it lets the name settle first: a brand new name asked for too
+# soon can be remembered as not existing.
+CHECK_SECONDS = 40.0
+SETTLE_SECONDS = 3.0
 # What a tunnel that stopped is remembered as having said, for the why.
 SAID_LINES = 40
 
@@ -138,10 +149,12 @@ class Tunnel:
             "why": self.why, "since": self.since,
         }
 
-    def start(self, name: str, port: int,
-              wait: float = START_SECONDS) -> dict:
+    def start(self, name: str, port: int, wait: float = START_SECONDS,
+              check: Optional[Callable[[str], str]] = None) -> dict:
         """Start the tunnel through service NAME to PORT, and wait for its
-        public address. Raises TunnelError when it cannot be had."""
+        public address. CHECK, given the address, says why Flash cannot
+        be reached through it, or "" once it can: it is on only then.
+        Raises TunnelError when it cannot be had."""
 
         service = SERVICES.get(str(name or "").strip().lower())
         if service is None:
@@ -181,23 +194,59 @@ class Tunnel:
         if not self._found.wait(wait) or self.state != ON:
             why = self.why or (
                 f"{service.title} gave no address in {int(wait)} seconds"
+                + self._last()
             )
             self.stop()
             self.state, self.why = FAILED, why
             raise TunnelError(why)
+        if check is not None:
+            why = self._reach(check)
+            if why:
+                self.stop()
+                self.state, self.why = FAILED, why
+                raise TunnelError(why)
         return self.status()
+
+    def _reach(self, check: Callable[[str], str]) -> str:
+        """Why Flash cannot be reached through the tunnel, after trying
+        for a while; "" once it can."""
+
+        time.sleep(SETTLE_SECONDS)
+        deadline = time.monotonic() + CHECK_SECONDS
+        why = ""
+        while time.monotonic() < deadline and self.state == ON:
+            why = check(self.url)
+            if not why:
+                return ""
+            time.sleep(2.0)
+        if self.state != ON:
+            return self.why or "The tunnel stopped."
+        return (f"{self.url} did not reach Flash: {why}"
+                + self._last())
+
+    def _last(self) -> str:
+        """What the service said last, for a why."""
+
+        said = [line for line in self._said if not line.startswith("+")]
+        return f" It said: {said[-1]}" if said else ""
 
     def _read(self, process: subprocess.Popen, service: Service) -> None:
         pattern = re.compile(service.address, re.IGNORECASE)
+        ready = re.compile(service.ready, re.IGNORECASE) \
+            if service.ready else None
+        address = ""
         for line in process.stdout or ():
             line = line.strip()
             if not line:
                 continue
             self._said = (self._said + [line])[-SAID_LINES:]
             found = pattern.search(line)
-            if found and self.state == STARTING and \
-                    process is self._process:
-                self.url = found.group(0).rstrip("/").lower()
+            if found and not address:
+                address = found.group(0).rstrip("/").lower()
+            if address and self.state == STARTING and \
+                    process is self._process and (
+                        ready is None or ready.search(line)):
+                self.url = address
                 self.state, self.since = ON, time.time()
                 self._found.set()
         process.wait()

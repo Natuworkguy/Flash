@@ -20,6 +20,7 @@ request from a page has to come from this server's own origin.
 import base64
 import contextlib
 import hashlib
+import hmac
 import io
 import ipaddress
 import json
@@ -30,6 +31,8 @@ import socket
 import sys
 import threading
 import time
+import urllib.error
+import urllib.request
 import uuid
 import webbrowser
 from collections import Counter
@@ -889,6 +892,9 @@ class Session:
         # user has it on; and the port it forwards to (see _attach).
         self.tunnel = tunnel.Tunnel()
         self.port = 0
+        # What /tunnel-check/ answers to while Flash makes sure it can be
+        # reached through a new tunnel; "" the rest of the time.
+        self.tunnel_nonce = ""
         self.chats: dict[str, Chat] = {
             data["id"]: Chat.restore(data)
             for data in workspace.load_chats()
@@ -3946,7 +3952,8 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
             if not session.port:
                 raise ValueError("This Flash cannot open a tunnel.")
             try:
-                session.tunnel.start(arg, session.port)
+                session.tunnel.start(arg, session.port,
+                                     check=reaches(session))
             except tunnel.TunnelError as exc:
                 raise ValueError(str(exc)) from None
             _warn_public(session)
@@ -4801,6 +4808,18 @@ class Handler(BaseHTTPRequestHandler):
         url = urlparse(self.path)
         query = parse_qs(url.query)
 
+        if url.path.startswith("/tunnel-check/"):
+            # Flash asking itself through a new tunnel: the code it gave
+            # comes back, and nothing else is told.
+            given = url.path.removeprefix("/tunnel-check/")
+            wanted = self.server.session.tunnel_nonce
+            if wanted and hmac.compare_digest(given, wanted):
+                self._send(HTTPStatus.OK, wanted.encode(),
+                           "text/plain; charset=utf-8")
+            else:
+                self._refuse()
+            return
+
         name = url.path.removeprefix("/static/")
         if name in STATIC and url.path.startswith("/static/"):
             if not self._same_site():
@@ -5277,6 +5296,36 @@ def qr_text(url: str) -> str:
     out = io.StringIO()
     segno.make(url, error="m").terminal(out=out, compact=True, border=2)
     return out.getvalue()
+
+
+# What a tunnel service answers with when it cannot reach this computer.
+_UNREACHED = (502, 503, 504, 530)
+
+
+def reaches(session: "Session") -> Callable[[str], str]:
+    """A check for Tunnel.start: whether this Flash answers through the
+    public address, with a code only it knows. "" when it does, or why
+    not."""
+
+    def check(url: str) -> str:
+        nonce = secrets.token_urlsafe(16)
+        session.tunnel_nonce = nonce
+        try:
+            with urllib.request.urlopen(  # nosec B310  (the tunnel's https)
+                f"{url}/tunnel-check/{nonce}", timeout=8,
+            ) as got:
+                said = got.read(200).decode("utf-8", "replace").strip()
+        except urllib.error.HTTPError as exc:
+            return f"the service answered {exc.code}" + (
+                ", so it could not get through to Flash on this computer"
+                if exc.code in _UNREACHED else "")
+        except (urllib.error.URLError, OSError) as exc:
+            return str(getattr(exc, "reason", "") or exc)
+        finally:
+            session.tunnel_nonce = ""
+        return "" if said == nonce else "something other than Flash answered"
+
+    return check
 
 
 def tunnel_info(session: "Session") -> dict:

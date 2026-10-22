@@ -10916,7 +10916,7 @@ async function renderTunnel(box = document.querySelector(".tunnel-box")) {
       const s = r.services.find((x) => x.name === pick.value);
       if (!(await confirmPop(start, { title: "Put Flash on the internet?", text: `Anyone with the link can use Flash as you, from anywhere: run commands, change files, read your chats, send messages. ${s.title} carries everything. Only go on if you understand that.`, yes: "Put it online" }))) return;
       start.disabled = pick.disabled = true;
-      start.textContent = "Opening…";
+      start.textContent = "Opening and checking…";
       try {
         await command("tunnel", s.name, null);
         toast("Flash is on the internet. Turn it off when you are done");

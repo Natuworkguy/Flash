@@ -4400,7 +4400,11 @@ def _web_tunnel(arg: str) -> None:
         console.print(Text("Left as it was.", style=DIM))
         return
     try:
-        found = server.session.tunnel.start(arg, server.port)
+        console.print(Text("Opening it, and checking it reaches Flash…",
+                           style=DIM))
+        found = server.session.tunnel.start(
+            arg, server.port, check=web.reaches(server.session),
+        )
     except tunnel.TunnelError as exc:
         warn(str(exc))
         return
