@@ -595,6 +595,35 @@ def _inbox(
     return found
 
 
+def next_uids(folder: str = "INBOX") -> dict[str, int]:
+    """The uid the next email to FOLDER will get, in each account, by its
+    address: a change means something came in. A quick question of the
+    server, reading no email. An account that cannot be asked is left
+    out."""
+
+    found: dict[str, int] = {}
+    quoted = '"' + folder.replace("\\", "\\\\").replace('"', '\\"') + '"'
+    for account in _accounts():
+        try:
+            box = _imap(account)
+        except MailError:
+            continue
+        try:
+            status, data = box.status(quoted, "(UIDNEXT)")
+            said = b" ".join(d for d in data if isinstance(d, bytes))
+            number = re.search(rb"UIDNEXT (\d+)", said)
+            if status == "OK" and number:
+                found[account["address"]] = int(number.group(1))
+        except (imaplib.IMAP4.error, OSError):
+            pass
+        finally:
+            try:
+                box.logout()
+            except (OSError, imaplib.IMAP4.error):
+                pass
+    return found
+
+
 def read(uid: str, folder: str = "INBOX", account: str = "") -> dict:
     """The whole of message UID in ACCOUNT: its headers, its text, and
     the names of its attachments. It stays unread if it was.

@@ -40,7 +40,7 @@ from typing import Optional
 import ollama
 
 from . import agent as subagents
-from . import audit, cron, providers
+from . import audit, cron, providers, triggers
 from .dashes import undash
 from .models import full_name, installed_names
 from .paths import ENV_PATH, FLASH_DIR
@@ -439,6 +439,9 @@ class Spark:
     steers: list = field(default_factory=list)
     # A folder whose changes start a shift, besides the schedule.
     watch: str = ""
+    # What else starts one, while events are on (triggers.SETTING): a new
+    # email, a new iMessage, a change in an MCP server ("mcp:notes").
+    events: list = field(default_factory=list)
     # Why the next shift starts early, for it to be told.
     why: str = ""
     # What other sparks handed it, for its next shift: {from, text, at}.
@@ -2408,6 +2411,31 @@ TEMPLATES = [
             "share codes, or buy anything."
         ),
     },
+    {
+        "name": "Email Handler",
+        "title": "Email handler",
+        "needs": "email",
+        "blurb": "Starts on each new email and handles it your way",
+        # No schedule: a new email starts it, while events are on.
+        "events": ["email"],
+        "goal": (
+            "Each shift starts with the new email that came in. Handle "
+            "each one the way my lessons say. Until they say otherwise: "
+            "read it with read_email when the first lines are not enough, "
+            "sort it as needs me, worth knowing, or ignorable, and report "
+            "the ones that need me, one line each: who, what they want, "
+            "and by when. When one needs a reply you can write from what "
+            "you know, draft it with send_email as a reply to its uid: I "
+            "approve each one before it goes. If none needs me, reply "
+            "NOTHING NEW."
+        ),
+        "every": ON_CALL,
+        "boundaries": (
+            "Never delete, move, archive or mark email. Never sign up, "
+            "unsubscribe, click links, or buy anything. Never send an email "
+            "except as a reply I can approve."
+        ),
+    },
 ]
 
 SHARE_PREFIX = "flash-spark:"
@@ -2692,6 +2720,7 @@ def add_from(
         name, data["goal"], data.get("boundaries", ""),
         data.get("at") or data["every"],
         project, model=model, title=data.get("title", ""), paused=paused,
+        events=data.get("events") or (),
     )
     lessons = data.get("lessons") or []
     if lessons:
@@ -2736,11 +2765,11 @@ def parse_colour(value) -> str:
 def create(
     name: str, goal: str, boundaries: str = "", every="", project: str = "",
     watch: str = "", model: str = "", title: str = "", paused: bool = False,
-    colour: str = "",
+    colour: str = "", events=(),
 ) -> Spark:
     """Make a spark. Its first shift runs as soon as the keeper looks;
     made PAUSED, as soon as it is resumed. Without a COLOUR, it gets the
-    palette's next."""
+    palette's next. EVENTS start shifts too (triggers.parse)."""
 
     name = " ".join(str(name or "").split())[:NAME_CHARS]
     goal = str(goal or "").strip()[:GOAL_CHARS]
@@ -2752,6 +2781,10 @@ def create(
     project = resolve_project(project)
     watch = _watch_folder(watch)
     chosen = parse_colour(colour) if str(colour or "").strip() else ""
+    try:
+        events = triggers.parse(events)
+    except ValueError as exc:
+        raise SparkError(str(exc)) from None
 
     with _held():
         taken = {s.handle for s in all_sparks()}
@@ -2769,6 +2802,7 @@ def create(
             colour=chosen or COLOURS[len(taken) % len(COLOURS)],
             project=project,
             watch=watch,
+            events=events,
             model=_model_name(model),
             paused=bool(paused),
         )
@@ -2807,6 +2841,11 @@ def update(key: str, **changes) -> Spark:
             spark.project = resolve_project(changes["project"])
         if "watch" in changes:
             spark.watch = _watch_folder(changes["watch"])
+        if "events" in changes:
+            try:
+                spark.events = triggers.parse(changes["events"])
+            except ValueError as exc:
+                raise SparkError(str(exc)) from None
         if "model" in changes:
             model = _model_name(changes["model"])
             if model != spark.model:
@@ -2834,7 +2873,7 @@ def update(key: str, **changes) -> Spark:
     changed = {
         name: {"from": before.get(name), "to": after.get(name)}
         for name in ("name", "title", "goal", "boundaries", "every", "at",
-                     "project", "watch", "model", "colour")
+                     "project", "watch", "events", "model", "colour")
         if before.get(name) != after.get(name)
     }
     if changed:
@@ -4254,12 +4293,21 @@ def _opening(why: str, inbox: list) -> str:
     ]
     reactions = [item for item in inbox if item.get("reaction")]
     answers = [item for item in inbox if item.get("answer")]
+    happened = [item for item in inbox if item.get("event")]
     handed = [
         item for item in inbox
         if not (item.get("job") or item.get("rollup") or item.get("decision")
                 or item.get("mentioned") or item.get("answer")
-                or item.get("reaction"))
+                or item.get("reaction") or item.get("event"))
     ]
+    if happened:
+        parts.append(
+            "This shift started because of what just came in. Handle it "
+            "the way your goal says; it is what you are here for. Your "
+            "notes say what you have handled before:\n" + "\n\n".join(
+                f"{item.get('text', '')}" for item in happened
+            )
+        )
     if jobs:
         parts.append(
             "The user asked you, in a chat, to do this. Do it first, then "
@@ -4577,6 +4625,45 @@ def shift(spark_id: str, client=None) -> Optional[Report]:
         _team_news(spark, report, answered)
         _call_mentioned(spark, report)
     return report
+
+
+# What the keeper has seen of each event, to tell what is new.
+_events = triggers.Watcher()
+
+
+def event_tick(now: Optional[float] = None) -> list[Spark]:
+    """Start a shift of each spark whose event happened: a new email, a
+    new iMessage, a change in an MCP server. Looked at without the
+    model, only while events are on. The sparks it started."""
+
+    if not triggers.enabled():
+        return []
+    wanting: dict[str, list[Spark]] = {}
+    for spark in all_sparks():
+        if spark.paused:
+            continue
+        for event in spark.events:
+            wanting.setdefault(event, []).append(spark)
+    if not wanting:
+        return []
+    news = _events.look(set(wanting), now)
+    started = []
+    for event, said in news.items():
+        for spark in wanting[event]:
+
+            def tell(s: Spark, event=event, said=said) -> None:
+                s.inbox.append({
+                    "from": triggers.words(event), "text": said,
+                    "at": time.time(), "event": event,
+                })
+                del s.inbox[:-MAX_INBOX]
+                s.asked = True
+
+            started.append(_edit(spark.id, tell))
+            log(spark.id, "event", event=event, said=said[:400])
+    if started:
+        wake()
+    return started
 
 
 def answer_step(key: str, yes: bool, why: str = "") -> Spark:
@@ -5508,6 +5595,8 @@ def _keep(
             if ticks % WATCH_EVERY_TICKS == 0:
                 with contextlib.suppress(OSError):
                     watch_tick()
+            with contextlib.suppress(OSError, SparkError):
+                event_tick()
             for spark in due():
                 _safe_shift(spark.id, prepare, announce)
 

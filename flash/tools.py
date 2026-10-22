@@ -48,6 +48,7 @@ from . import (
     sparks,
     systemone,
     textures,
+    triggers,
     visuals,
 )
 from .browser import (
@@ -2312,9 +2313,11 @@ def give_spark(spark: str = "", job: str = "", chat: str = "") -> str:
 def make_spark(
     name: str, goal: str, every: Any = "", boundaries: str = "",
     project: str = "", model: str = "", paused: Any = False,
+    events: Any = "",
 ) -> str:
-    """Make a spark: an agent that works on GOAL on a schedule. PAUSED
-    makes it without starting it, to resume when the user wants."""
+    """Make a spark: an agent that works on GOAL on a schedule, or when
+    one of EVENTS comes in. PAUSED makes it without starting it, to
+    resume when the user wants."""
 
     paused = paused is True or str(paused).strip().lower() in ("true", "yes")
     try:
@@ -2339,13 +2342,23 @@ def make_spark(
         tool_result(result, style=ERROR)
         return result
 
+    try:
+        wanted = triggers.parse(events if isinstance(events, list)
+                                else str(events or ""))
+    except ValueError as exc:
+        tool_result(str(exc), style=ERROR)
+        return f"Error: {exc}"
+
     # It goes on working after this conversation is over, so it is the
     # person's to agree to, as a command would be.
     if not NO_COMMAND_CONFIRMATION:
         notify_needs_input()
         question = (
             f"Make a spark called {name} that works on this "
-            f"{schedule}, on {model}"
+            f"{schedule}"
+            + (f", and on {' or '.join(map(triggers.words, wanted))}"
+               if wanted else "")
+            + f", on {model}"
             f"{', paused until you resume it' if paused else ''}?\n{goal}"
         )
         answer = remote_answer(question)
@@ -2363,7 +2376,7 @@ def make_spark(
     try:
         spark = sparks.create(
             name, goal, boundaries, at or minutes, project, model=model,
-            paused=paused,
+            paused=paused, events=wanted,
         )
     except sparks.SparkError as exc:
         tool_result(str(exc), style=ERROR)
@@ -5735,6 +5748,20 @@ tools: list[dict[str, Any]] = [
                             "True to make it without starting it, when "
                             "the user wants it set up now and started "
                             "later. It runs once they resume it."
+                        ),
+                    },
+                    "events": {
+                        "type": "string",
+                        "description": (
+                            "Optional: what starts a shift the moment it "
+                            "comes in, space-separated: email (a new "
+                            "email), imessage (a new iMessage, on a Mac), "
+                            "mcp:<server> (a change in a connected MCP "
+                            "server, like mcp:notes for a new note). Use it "
+                            "for \"when I get an email...\" or \"when I "
+                            "add a note...\", with every \"on call\" so "
+                            "it spends nothing in between. Needs events "
+                            "on in the user's settings."
                         ),
                     },
                 },

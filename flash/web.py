@@ -77,6 +77,7 @@ from . import (
     teamchat,
     themes,
     titles,
+    triggers,
     updater,
     visuals,
     voice,
@@ -3182,6 +3183,7 @@ def status(ai) -> dict:
         "compact": bool(ai.Config.auto_compact),
         "model_titles": titles.enabled(),
         "computer": computer.enabled(),
+        "spark_events": triggers.enabled(),
         **_computer_kinds(),
         "visuals": visuals.level(),
         # What a new chat says hello with, for the page to pick from by
@@ -3975,6 +3977,12 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
         session.wait_changed(wait)
         return {"wait": wait.card()}
 
+    if name == "events-setting":
+        if arg in ("on", "off"):
+            triggers.set_enabled(arg == "on")
+            session.hub.publish({"type": "status"})
+        return {"on": triggers.enabled(), "kinds": triggers.kinds()}
+
     if name == "computer-setting":
         # "on" or "off" for all of it, or "on music", "off imessage" for
         # one thing it can do.
@@ -4512,6 +4520,7 @@ def _spark_command(name: str, arg: str, body: dict) -> dict:
                 str(body.get("title") or ""),
                 bool(body.get("paused")),
                 str(body.get("colour") or ""),
+                body.get("events") or (),
             )
         elif name == "spark-update":
             # The new name comes as "rename": "name" names the command.
@@ -4519,10 +4528,13 @@ def _spark_command(name: str, arg: str, body: dict) -> dict:
                       "boundaries": "boundaries", "project": "project",
                       "watch": "watch", "model": "model",
                       "title": "title", "colour": "colour"}
-            spark = sparks.update(arg, **{
+            changes = {
                 field: str(body[key])
                 for key, field in fields.items() if key in body
-            })
+            }
+            if "events" in body:
+                changes["events"] = body["events"] or ()
+            spark = sparks.update(arg, **changes)
         elif name == "spark-run":
             spark = sparks.run_now(arg)
         elif name == "spark-team":
