@@ -1919,13 +1919,14 @@ SYSTEM_ONE_TOOLS: list[dict[str, Any]] = [
 
 def available_tools() -> list[dict[str, Any]]:
     """The built-in tools that can work right now: email's only once it
-    is set up, and the computer's only once the user has allowed it, so
-    a model is not offered tools that can only fail."""
+    is set up, and the computer's only once the user has allowed it, and
+    only what they have not switched off of it, so a model is not
+    offered tools that can only fail."""
 
     return (
         tools
         + (EMAIL_TOOLS if mail.configured() else [])
-        + (COMPUTER_TOOLS if computer.enabled() else [])
+        + computer_tools()
     )
 
 
@@ -2401,45 +2402,142 @@ def make_spark(
     return result
 
 
-COMPUTER_TOOLS: list[dict[str, Any]] = [
+def computer_tools() -> list[dict[str, Any]]:
+    """The computer's tools, as far as the user allows them: none while
+    it is off, and only the actions they have not switched off."""
+
+    if not computer.enabled():
+        return []
+    actions = computer.allowed_actions()
+    found = []
+    if actions:
+        found.append({
+            "type": "function",
+            "function": {
+                "name": "computer",
+                "description": (
+                    "Do a simple thing on the user's computer, which they "
+                    "have allowed. Use it when they ask for one of these "
+                    "(\"stop the music\", \"turn it down\", \"open "
+                    "Spotify\"); it cannot click, type or run commands. "
+                    "Actions: "
+                    + "; ".join(f"{name}: {computer.ACTIONS[name]}"
+                                for name in actions)
+                    + "."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "action": {
+                            "type": "string",
+                            "enum": actions,
+                            "description": "What to do.",
+                        },
+                        "value": {
+                            "type": "string",
+                            "description": (
+                                "What the action needs, where it needs "
+                                "something: the volume level, the app's "
+                                "name, the link or path, the text, on or "
+                                "off."
+                            ),
+                        },
+                    },
+                    "required": ["action"],
+                },
+            },
+        })
+    if computer.allowed("imessage"):
+        found += IMESSAGE_TOOLS
+    return found
+
+
+# On a Mac, with the computer allowed: an iMessage, asked about every
+# time, as an email is.
+IMESSAGE_TOOLS: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
-            "name": "computer",
+            "name": "send_imessage",
             "description": (
-                "Do a simple thing on the user's computer, which they have "
-                "allowed: control the music or video playing, the volume, "
-                "open or quit an app, open a link, file or folder, lock "
-                "the screen, copy text to the clipboard, switch dark mode. "
-                "Use it when they ask for one of these (\"stop the "
-                "music\", \"turn it down\", \"open Spotify\"); it cannot "
-                "click, type or run commands. Actions: "
-                + "; ".join(f"{name}: {what}"
-                            for name, what in computer.ACTIONS.items())
-                + "."
+                "Send an iMessage from the user's Mac, in their name, "
+                "through Messages. The user sees it and says yes or no "
+                "before it goes. Use it when they ask to text or message "
+                "someone. Write it as they would, ready to send."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "action": {
-                        "type": "string",
-                        "enum": list(computer.ACTIONS),
-                        "description": "What to do.",
-                    },
-                    "value": {
+                    "to": {
                         "type": "string",
                         "description": (
-                            "What the action needs, where it needs "
-                            "something: the volume level, the app's name, "
-                            "the link or path, the text, on or off."
+                            "Who to: a name or nickname as it is in their "
+                            "Contacts, a phone number, or an email address."
                         ),
                     },
+                    "text": {
+                        "type": "string",
+                        "description": "The message, exactly as it goes.",
+                    },
                 },
-                "required": ["action"],
+                "required": ["to", "text"],
             },
         },
     },
 ]
+
+
+def send_imessage(to: str = "", text: str = "") -> str:
+    """Send TEXT to TO as an iMessage. Always asks first."""
+
+    to, text = str(to or "").strip(), str(text or "").strip()
+    tool_line(f"SendIMessage({to})")
+    if not computer.allowed("imessage"):
+        result = (
+            "Error: the user has not let Flash send iMessages. They can "
+            "turn it on in Settings or with /computer on imessage."
+            if computer.enabled() and "imessage" in computer.kinds() else
+            "Error: the user has not let Flash act on their computer. "
+            "They can turn it on in Settings or with /computer on."
+        )
+        tool_result(result, style=WARN)
+        return result
+    why = unfinished("send_imessage", {"to": to, "text": text})
+    if why:
+        tool_result(why.removeprefix("Error: "), style=ERROR)
+        return why
+    try:
+        name, handle = computer.recipient(to)
+    except computer.ComputerError as exc:
+        tool_result(str(exc), style=ERROR)
+        return f"Error: {exc}"
+
+    shown = name if name == handle else f"{name}, {handle}"
+    preview = f"To: {shown}\n\n{text}"
+    tool_result(preview)
+
+    # Asked every time, autonomous mode or not: it goes out in the user's
+    # name, and cannot be taken back.
+    notify_needs_input()
+    answer = remote_answer(f"Send this iMessage?\n{preview}")
+    if answer is None:
+        prompt = Text(f"  {BRANCH}  ", style=DIM)
+        prompt.append("Send this iMessage? ", style=DIM)
+        prompt.append("y", style=f"bold {ACCENT}")
+        prompt.append("/n ", style=DIM)
+        console.print(prompt, end="")
+        answer = typed()
+    if answer != "y":
+        tool_result("Not sent: the user said no", style=WARN)
+        return "Not sent: the user said no. Do not send it again."
+
+    try:
+        computer.send_imessage(handle, text)
+    except computer.ComputerError as exc:
+        tool_result(str(exc), style=ERROR)
+        return f"Error: {exc}"
+    tool_result(f"Sent to {shown}")
+    return f"Sent to {shown}."
 
 
 def computer_tool(action: str, value: Any = "") -> str:
@@ -5778,6 +5876,7 @@ FUNCTIONS = {
     "send_email": send_email,
     "notify_user": notify_user,
     "computer": computer_tool,
+    "send_imessage": send_imessage,
     "open_in_editor": open_in_editor,
     "ask_system_one": ask_system_one,
 }
@@ -5798,7 +5897,7 @@ SUBAGENT_TOOL_NAMES = (
 SPARK_TOOL_NAMES = SUBAGENT_TOOL_NAMES + ("send_email",)
 
 # Tools that ask every time, autonomous mode or not.
-ALWAYS_ASK_TOOL_NAMES = ("send_email",)
+ALWAYS_ASK_TOOL_NAMES = ("send_email", "send_imessage")
 
 # Tools that stop for a y/n unless autonomous mode is on. A sub-agent has
 # no terminal to ask from, so it only gets these in autonomous mode.

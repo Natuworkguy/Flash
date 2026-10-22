@@ -7,6 +7,7 @@ import sys
 import pytest
 
 from flash import ai, computer, tools, web
+from flash.theme import answer_from
 
 
 @pytest.fixture
@@ -20,7 +21,7 @@ def ran(monkeypatch):
     calls = Calls()
     answers: dict = {}
 
-    def run(argv, given=""):
+    def run(argv, given="", timeout=None):
         calls.append((list(argv), given))
         answer = answers.get(argv[0], "")
         if isinstance(answer, Exception):
@@ -354,4 +355,198 @@ def test_the_terminal_and_the_page_switch_it(monkeypatch):
 
     got = web.command(web.Session(), {"name": "computer-setting",
                                       "arg": "off"})
-    assert got == {"computer": False} and not computer.enabled()  # nosec
+    assert got["computer"] is False and not computer.enabled()  # nosec
+
+
+def test_the_terminal_switches_one_and_lists_them(monkeypatch):
+    monkeypatch.setattr(ai, "set_config_var",
+                        lambda name, value: monkeypatch.setenv(name, value))
+    monkeypatch.setattr(computer, "system", lambda: "mac")
+    monkeypatch.setenv(computer.SETTING, "0")
+    monkeypatch.delenv(computer.OFF_SETTING, raising=False)
+
+    ai._computer_command("off imessage")
+    assert computer.switched_off() == {"imessage"}  # nosec B101
+
+    # Switching one on lets Flash act at all.
+    ai._computer_command("on volume")
+    assert computer.enabled()  # nosec B101
+    assert not computer.allowed("imessage")  # nosec B101
+
+
+# --- iMessage -------------------------------------------------------------
+
+
+SAM = {"name": "Sam Lee",
+       "phones": [{"label": "_$!<Home>!$_", "value": "+1 555 0100"},
+                  {"label": "_$!<Mobile>!$_", "value": "+1 (555) 010-2000"}],
+       "emails": [{"label": "", "value": "sam@example.com"}]}
+
+
+def mac_messages(monkeypatch, ran, contacts=(SAM,)):
+    on(monkeypatch, "mac")
+    ran.answers["osascript"] = (
+        lambda argv: json.dumps(list(contacts))
+        if "Contacts" in " ".join(argv) else "")
+
+
+def sent(ran):
+    return [argv for argv, _ in ran if "Messages" in " ".join(argv)]
+
+
+def test_send_imessage_is_offered_only_on_a_mac(monkeypatch, ran):
+    def names():
+        return {t["function"]["name"] for t in tools.turn_tools()}
+
+    on(monkeypatch, "linux")
+    assert "send_imessage" not in names()  # nosec B101
+    on(monkeypatch, "mac")
+    assert "send_imessage" in names()  # nosec B101
+    monkeypatch.setenv(computer.SETTING, "0")
+    assert "send_imessage" not in names()  # nosec B101
+
+
+def test_an_imessage_goes_to_a_contacts_mobile_once_agreed(monkeypatch,
+                                                           ran):
+    mac_messages(monkeypatch, ran)
+    asked = []
+    with answer_from(lambda question: asked.append(question) or "y"):
+        said = tools.send_imessage("sam", "Running late, there by 7")
+
+    assert said == "Sent to Sam Lee, +15550102000."  # nosec B101
+    assert "To: Sam Lee, +15550102000" in asked[0]  # nosec B101
+    assert "Running late, there by 7" in asked[0]  # nosec B101
+    # Who to and what it says go in as arguments, never as script.
+    argv = sent(ran)[0]
+    assert argv[-2:] == ["+15550102000", "Running late, there by 7"]  # nosec
+    assert not any("Running late" in part for part in argv[:-1])  # nosec
+
+
+def test_an_imessage_asks_even_in_autonomous_mode(monkeypatch, ran):
+    mac_messages(monkeypatch, ran)
+    monkeypatch.setattr(tools, "NO_COMMAND_CONFIRMATION", True)
+    with answer_from(lambda question: "n"):
+        said = tools.send_imessage("+1 555 0100", "On my way")
+
+    assert said.startswith("Not sent")  # nosec B101
+    assert sent(ran) == []  # nosec B101
+
+
+def test_a_number_or_address_is_not_looked_up(monkeypatch, ran):
+    mac_messages(monkeypatch, ran)
+    assert computer.recipient("(555) 010-2000") == (  # nosec B101
+        "(555) 010-2000", "5550102000")
+    assert computer.recipient("bo@example.com") == (  # nosec B101
+        "bo@example.com", "bo@example.com")
+    assert ran == []  # nosec B101
+
+
+def test_two_contacts_with_the_name_are_asked_about_not_guessed(
+        monkeypatch, ran):
+    other = dict(SAM, name="Sam Ortiz")
+    mac_messages(monkeypatch, ran, (SAM, other))
+    asked = []
+    with answer_from(lambda question: asked.append(question) or "y"):
+        said = tools.send_imessage("sam", "Hi")
+
+    assert "Sam Lee, Sam Ortiz" in said and "which one" in said  # nosec
+    assert asked == [] and sent(ran) == []  # nosec B101
+
+    # The whole name settles it.
+    assert computer.recipient("sam lee")[0] == "Sam Lee"  # nosec B101
+
+
+@pytest.mark.parametrize("to, text, said", [
+    ("Sam", "placeholder", "placeholder"),
+    ("[recipient name]", "Hi", "placeholder"),
+    ("Nobody", "Hi", "No one called Nobody"),
+])
+def test_a_message_not_ready_is_never_put_to_the_user(monkeypatch, ran, to,
+                                                      text, said):
+    mac_messages(monkeypatch, ran, () if to == "Nobody" else (SAM,))
+    asked = []
+    with answer_from(lambda question: asked.append(question) or "y"):
+        result = tools.send_imessage(to, text)
+
+    assert result.startswith("Error:") and said in result  # nosec B101
+    assert asked == [] and sent(ran) == []  # nosec B101
+
+
+def test_messages_not_allowed_says_where_to_allow_it(monkeypatch, ran):
+    on(monkeypatch, "mac")
+    ran.answers["osascript"] = computer.ComputerError(
+        "osascript failed: execution error: Not authorized to send Apple "
+        "events to Messages. (-1743)")
+
+    with pytest.raises(computer.ComputerError, match="Automation"):
+        computer.send_imessage("+15550100", "Hi")
+
+
+def test_a_nickname_finds_the_contact(monkeypatch, ran):
+    mom = {"name": "Linda Lee", "nickname": "Mom",
+           "phones": [{"label": "_$!<Mobile>!$_", "value": "555 010 3000"}],
+           "emails": []}
+    momo = {"name": "Momo Park", "nickname": "",
+            "phones": [{"label": "", "value": "555 010 4000"}], "emails": []}
+    mac_messages(monkeypatch, ran, (mom, momo))
+    with answer_from(lambda question: "y"):
+        said = tools.send_imessage("mom", "Home soon")
+
+    # Both have "mom" in them; the whole nickname settles it.
+    assert said == "Sent to Linda Lee (Mom), 5550103000."  # nosec B101
+    looked = [argv for argv, _ in ran if "Contacts" in " ".join(argv)]
+    assert "nickname" in " ".join(looked[0])  # nosec B101
+
+
+# --- Switching one thing off ----------------------------------------------
+
+
+def test_what_is_switched_off_is_not_offered_or_done(monkeypatch, ran):
+    on(monkeypatch, "mac")
+    monkeypatch.setenv(computer.OFF_SETTING, "imessage,music")
+
+    names = {t["function"]["name"] for t in tools.turn_tools()}
+    assert "send_imessage" not in names  # nosec B101
+    offered = [t for t in tools.turn_tools()
+               if t["function"]["name"] == "computer"]
+    actions = offered[0]["function"]["parameters"]["properties"]["action"]
+    assert "pause" not in actions["enum"]  # nosec B101
+    assert "set_volume" in actions["enum"]  # nosec B101
+
+    said = tools.computer_tool("pause")
+    assert "switched pause off" in said and "on music" in said  # nosec
+    said = tools.send_imessage("+1 555 0100", "Hi")
+    assert "/computer on imessage" in said  # nosec B101
+    assert ran == []  # nosec B101
+
+
+def test_switching_one_back_on_keeps_the_rest_off(monkeypatch):
+    monkeypatch.setenv(computer.OFF_SETTING, "music,imessage")
+    assert computer.off_after("imessage", True) == "music"  # nosec B101
+    assert computer.off_after("volume", False) == (  # nosec B101
+        "music,volume,imessage")
+    with pytest.raises(computer.ComputerError):
+        computer.off_after("printer", False)
+
+
+def test_imessages_are_only_a_switch_on_a_mac(monkeypatch):
+    on(monkeypatch, "linux")
+    assert "imessage" not in computer.kinds()  # nosec B101
+    on(monkeypatch, "mac")
+    assert "imessage" in computer.kinds()  # nosec B101
+
+
+def test_the_web_page_switches_one_off(monkeypatch):
+    on(monkeypatch, "mac")
+    monkeypatch.delenv(computer.OFF_SETTING, raising=False)
+    monkeypatch.setattr(ai, "set_config_var",
+                        lambda name, value: monkeypatch.setenv(name, value))
+
+    said = web.command(web.Session(), {"name": "computer-setting",
+                                       "arg": "off imessage"})
+
+    assert said["computer"] is True  # nosec B101
+    assert said["computer_off"] == ["imessage"]  # nosec B101
+    assert said["computer_kinds"][-1]["name"] == "imessage"  # nosec B101
+    assert "send_imessage" not in {  # nosec B101
+        t["function"]["name"] for t in tools.turn_tools()}
