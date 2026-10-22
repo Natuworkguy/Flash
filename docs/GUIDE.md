@@ -1181,6 +1181,37 @@ drive Flash without it. The link travels unencrypted, though, so use
 firewall is probably blocking Python from accepting connections. On a
 Mac, allow it in System Settings, Network, Firewall.
 
+#### Open from anywhere, through a tunnel
+
+Below "Open on your network" in Settings, General, Network, a tunnel
+puts the web UI on a public https address, so you can open it away from
+home. Pick the service, then Open tunnel:
+
+| Service | Needs | Address |
+| --- | --- | --- |
+| Cloudflare quick tunnel | `cloudflared`, no account | random, new each time |
+| localhost.run | `ssh`, nothing else | random, new each time |
+| Tailscale Funnel | Tailscale signed in, Funnel allowed | your tailnet's, the same each time |
+| ngrok | `ngrok` with its authtoken added | ngrok's |
+
+Settings then shows the link, token and all, with a QR code, and every
+page shows a red bar with Turn off while it lasts. In the terminal,
+`/web tunnel` lists the services, `/web tunnel cloudflare` opens one
+(after a y/n), and `/web tunnel off` closes it. It also closes when
+Flash stops, and nothing ever opens one but you.
+
+**Think before you use it.** A tunnel puts Flash on the internet.
+Anyone who gets the link can use Flash as you, from anywhere: read
+every chat, run commands on your computer, change and delete files,
+and send email and messages in your name. The link is as good as your
+password, so never post it or send it where you wouldn't send a
+password. The service carries every request and can see what goes
+through it. Keep autonomous mode off while it's on, so every command
+still waits for your yes, and turn it off when you're done. If the link
+may have got out, Security, "Sign out all other browsers" makes a new
+one. Flash answers only to the tunnel's own address, not to any other
+under the same service.
+
 A browser that opens the link is signed in by a cookie until Flash
 stops, so each new `flash --web` takes its new link. To skip that, turn
 on Remember signed-in browsers under Settings, Security (off by

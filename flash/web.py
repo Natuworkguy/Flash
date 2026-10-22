@@ -78,6 +78,7 @@ from . import (
     themes,
     titles,
     triggers,
+    tunnel,
     updater,
     visuals,
     voice,
@@ -884,6 +885,10 @@ class Session:
         # Opens the server again listening on the network, or not. Set
         # by whatever runs the server (see _attach).
         self.switch_lan: Optional[Callable[[bool], None]] = None
+        # Flash on a public address, through a tunnel service, while the
+        # user has it on; and the port it forwards to (see _attach).
+        self.tunnel = tunnel.Tunnel()
+        self.port = 0
         self.chats: dict[str, Chat] = {
             data["id"]: Chat.restore(data)
             for data in workspace.load_chats()
@@ -1018,6 +1023,7 @@ class Session:
             ],
             "status": {
                 **status(ai), "lan": self.lan,
+                "tunnel": self.tunnel.status(),
                 "can_switch_lan": self.switch_lan is not None,
                 "update": self.updates.snapshot(),
                 "wake_always": self.always.snapshot(),
@@ -1320,6 +1326,7 @@ class Session:
     def close(self) -> None:
         self._stop_watching.set()
         self.always.stop()
+        self.tunnel.stop()
 
     def reopen(self) -> None:
         """Carry on under a new server after a LAN switch."""
@@ -3932,6 +3939,20 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
         session.fetch_voice_model(kind, arg)
         return voice_models(session)
 
+    if name == "tunnel":
+        if arg == "off":
+            session.tunnel.stop()
+        elif arg:
+            if not session.port:
+                raise ValueError("This Flash cannot open a tunnel.")
+            try:
+                session.tunnel.start(arg, session.port)
+            except tunnel.TunnelError as exc:
+                raise ValueError(str(exc)) from None
+            _warn_public(session)
+        session.hub.publish({"type": "status"})
+        return tunnel_info(session)
+
     if name == "lan":
         if session.switch_lan is None:
             raise ValueError("This Flash cannot reopen its server.")
@@ -4646,6 +4667,12 @@ class Handler(BaseHTTPRequestHandler):
         reached this server, and so is the machine's own name.
         """
 
+        # The tunnel's own public name, exactly, while it is on: what a
+        # request through it comes in as.
+        public = self.server.session.tunnel.host
+        if public and host.lower() in (public, public + ":443"):
+            return True
+
         name, _, port = host.rpartition(":")
         if port != str(self.server.server_address[1]):
             return False
@@ -4664,6 +4691,23 @@ class Handler(BaseHTTPRequestHandler):
 
         machine = socket.gethostname().lower().removesuffix(".local")
         return name in (machine, machine + ".local")
+
+    def _address(self) -> str:
+        """Where the browser is: through the tunnel, the address the
+        service says it came from, never this machine's, which the
+        tunnel's own program connects from."""
+
+        public = self.server.session.tunnel.host
+        host = self.headers.get("Host", "").lower()
+        if public and host in (public, public + ":443"):
+            given = (self.headers.get("CF-Connecting-IP")
+                     or self.headers.get("X-Forwarded-For", "")
+                     .split(",")[0]).strip()
+            try:
+                return str(ipaddress.ip_address(given))
+            except ValueError:
+                return "through the tunnel"
+        return self.client_address[0]
 
     def _same_site(self) -> bool:
         host = self.headers.get("Host", "")
@@ -4700,7 +4744,7 @@ class Handler(BaseHTTPRequestHandler):
         # browsers were signed in one by one.
         access = self.server.session.access
         cookie = self._cookie()
-        if access.browser(cookie, self.client_address[0]) is not None:
+        if access.browser(cookie, self._address()) is not None:
             self.browser = cookie
             return True
         self.browser = ""
@@ -4786,7 +4830,7 @@ class Handler(BaseHTTPRequestHandler):
             key = self.browser
             if not key:
                 key = self.server.session.access.sign_in(
-                    self.client_address[0],
+                    self._address(),
                     self.headers.get("User-Agent", ""),
                 )
                 self.server.session.hub.publish({"type": "browsers"})
@@ -5235,6 +5279,37 @@ def qr_text(url: str) -> str:
     return out.getvalue()
 
 
+def tunnel_info(session: "Session") -> dict:
+    """The tunnel, for Settings: its state, the link through it with the
+    token, a QR code of that, and the services to pick from."""
+
+    found = session.tunnel
+    link = ""
+    if found.state == tunnel.ON:
+        link = f"{found.url}/?token={session.access.token}"
+    return {
+        "tunnel": {**found.status(), "link": link,
+                   "svg": qr_svg(link) if link else ""},
+        "services": tunnel.services(),
+    }
+
+
+def _warn_public(session: "Session") -> None:
+    """Say in the terminal, loudly, that Flash is on the internet."""
+
+    found = session.tunnel
+    if found.state != tunnel.ON:
+        return
+    console.print(Text(
+        f"Flash is on the internet at {found.url}, through "
+        f"{tunnel.SERVICES[found.service].title}. Anyone with the link "
+        "can use Flash as you: read your chats, run commands, change "
+        "files, send messages. Turn it off in Settings, Network, when "
+        "you're done.",
+        style=WARN,
+    ))
+
+
 def phone_link(server: "Server") -> dict:
     """What the page's "open on your phone" panel shows."""
 
@@ -5378,6 +5453,7 @@ def _attach(server: "Server", standalone: bool) -> None:
     teamchat.watch()
     sparks.start()
     session.always.start()
+    session.port = server.port
     session.switch_lan = lambda on: threading.Timer(
         SWITCH_DELAY, _switch_lan, (server, on),
     ).start()
@@ -5460,6 +5536,12 @@ def start_background(
         target=_serve, args=(server, False, []), daemon=True,
     ).start()
     return server
+
+
+def running_background() -> Optional[Server]:
+    """The server /web started beside this session, if it runs."""
+
+    return _background
 
 
 def stop_background() -> bool:

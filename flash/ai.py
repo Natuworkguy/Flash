@@ -4326,8 +4326,12 @@ def _web_command(arg: str) -> None:
         ))
         return
 
+    if arg == "tunnel" or arg.startswith("tunnel "):
+        _web_tunnel(arg[len("tunnel"):].strip())
+        return
+
     if arg not in ("", "lan"):
-        warn("Usage: /web [lan|stop]")
+        warn("Usage: /web [lan|stop|tunnel [service|off]]")
         return
 
     try:
@@ -4341,6 +4345,73 @@ def _web_command(arg: str) -> None:
         "It runs until you quit Flash, or /web stop. Chats there are "
         "separate from this one.",
         style=DIM,
+    ))
+
+
+def _web_tunnel(arg: str) -> None:
+    """/web tunnel: the web UI on a public address, through a tunnel
+    service, shown, started (/web tunnel cloudflare), or stopped."""
+
+    from . import tunnel, web
+
+    server = web.running_background()
+    if not arg:
+        found = server.session.tunnel if server else None
+        if found is not None and found.state == tunnel.ON:
+            line = Text("Flash is on the internet at ", style=WARN)
+            line.append(found.url, style=f"bold {ACCENT}")
+            console.print(line)
+            console.print(Text("/web tunnel off takes it off.", style=DIM))
+        body = Text("Tunnel services:\n", style=DIM)
+        for service in tunnel.services():
+            body.append(f"  {service['name']:<14}", style=ACCENT)
+            body.append(
+                service["about"] + ("" if service["installed"] else
+                                    f" Install: {service['install']}.")
+                + "\n", style=DIM)
+        body.append(
+            "/web tunnel <service> puts the web UI on the internet. Anyone "
+            "with its link can use Flash as you.", style=DIM)
+        console.print(body)
+        return
+    if arg == "off":
+        if server is not None:
+            server.session.tunnel.stop()
+        console.print(Text("Flash is off the internet.", style=DIM))
+        return
+    if server is None:
+        try:
+            server = web.start_background()
+        except OSError as exc:
+            show_error(str(exc))
+            return
+    console.print(Text(
+        "This puts Flash on the internet. Anyone who gets the link can use "
+        "it as you, from anywhere: read your chats, run commands, change "
+        "files, send messages. The link is as good as your password. Keep "
+        "autonomous mode off, and turn it off when you're done.",
+        style=WARN,
+    ))
+    prompt = Text("  Put Flash on the internet? ", style=DIM)
+    prompt.append("y", style=f"bold {ACCENT}")
+    prompt.append("/n ", style=DIM)
+    console.print(prompt, end="")
+    if typed() != "y":
+        console.print(Text("Left as it was.", style=DIM))
+        return
+    try:
+        found = server.session.tunnel.start(arg, server.port)
+    except tunnel.TunnelError as exc:
+        warn(str(exc))
+        return
+    link = f"{found['url']}/?token={server.token}"
+    line = Text("On the internet at ", style=WARN)
+    line.append(link, style=f"bold {ACCENT}")
+    console.print(line)
+    console.print(Text(web.qr_text(link), no_wrap=True, overflow="ignore"))
+    console.print(Text(
+        "Keep the link to yourself. /web tunnel off ends it; so does "
+        "quitting Flash.", style=WARN,
     ))
 
 

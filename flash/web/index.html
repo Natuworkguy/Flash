@@ -1383,6 +1383,25 @@ body.page-projects #dock, body.page-settings #dock, body.page-tool #dock { displ
 .btn.danger.solid:hover { background: color-mix(in srgb, var(--del) 88%, #000); }
 /* Asking before something that cannot be undone: a small card by the
    button that asked, until it is answered. */
+/* Flash on the internet through a tunnel: said loudly, here in Settings
+   and on every page while it lasts. */
+.tunnel-warn { max-width: 620px; margin: 10px 0 0; padding: 12px 14px; border: 1px solid color-mix(in srgb, var(--del) 45%, transparent); border-radius: 14px; background: color-mix(in srgb, var(--del) 8%, var(--surface)); font-size: 13px; line-height: 1.5; color: var(--text-2, var(--text)); }
+.tunnel-warn b { color: var(--del); }
+.tunnel-warn ul { margin: 6px 0 0; padding-left: 18px; }
+.tunnel-box { margin-top: 10px; }
+.tunnel-row { flex-wrap: wrap; row-gap: 12px; }
+.tunnel-row .what { flex: 1 1 300px; }
+.tunnel-row .side { gap: 8px; flex-wrap: wrap; }
+.tunnel-row select { font: 13.5px var(--sans); color: var(--text); background: var(--bg); border: 1px solid var(--border-strong); border-radius: 9px; padding: 7px 10px; max-width: 280px; }
+.tunnel-on { border-color: color-mix(in srgb, var(--del) 55%, transparent); }
+.tunnel-on .what b { color: var(--del); }
+.tunnel-link { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; max-width: 620px; margin-top: 10px; }
+.tunnel-link .qr { width: 132px; height: 132px; background: #fff; border-radius: 10px; padding: 4px; flex: none; }
+.tunnel-link .qr svg { width: 100%; height: 100%; display: block; }
+.tunnel-link code { word-break: break-all; font-size: 12.5px; }
+#public-banner { position: fixed; top: 10px; left: 50%; transform: translateX(-50%); z-index: 70; display: flex; gap: 10px; align-items: center; padding: 7px 8px 7px 14px; border-radius: 999px; background: var(--del); color: #fff; font-size: 13px; font-weight: 500; box-shadow: var(--shadow); max-width: calc(100vw - 24px); }
+#public-banner[hidden] { display: none; }
+#public-banner button { font: inherit; font-size: 12.5px; color: var(--del); background: #fff; border: 0; border-radius: 999px; padding: 4px 10px; cursor: pointer; }
 .confirm-pop { position: fixed; z-index: 80; width: min(300px, calc(100vw - 24px)); padding: 14px 14px 12px; border-radius: 14px; border: 1px solid var(--border-strong); background: var(--surface); box-shadow: var(--shadow); animation: pop 0.14s var(--ease); transform-origin: var(--from, top right); }
 .confirm-pop b { display: block; font-size: 14.5px; font-weight: 600; color: var(--text); margin-bottom: 4px; }
 .confirm-pop p { margin: 0; font-size: 13.5px; line-height: 1.45; color: var(--text-2); }
@@ -7334,6 +7353,8 @@ function drawGeneral(body) {
 
   body.insertAdjacentHTML("beforeend", `<h2 class="settings-section settings-gap">Network</h2><p class="settings-sub">Who can reach Flash. A browser still has to open the link, with its random token, to get in.</p><div class="lan-box"></div>`);
   renderLan(body.querySelector(".lan-box"));
+  body.insertAdjacentHTML("beforeend", `<div class="tunnel-box"></div>`);
+  renderTunnel(body.querySelector(".tunnel-box"));
 
   body.insertAdjacentHTML("beforeend", `<h2 class="settings-section settings-gap">Updates</h2><p class="settings-sub">New versions come from the Flash repository on GitHub, the same as /update in the terminal.</p><div class="updates-box"></div>`);
   renderUpdates(body.querySelector(".updates-box"));
@@ -10825,6 +10846,114 @@ function renderLan(box = document.querySelector(".lan-box")) {
   box.appendChild(row);
 }
 
+// A tunnel: Flash on a public address, through a service the user picks.
+// Off until they turn it on, and loud about it the whole time it is on.
+const TUNNEL_RISKS = [
+  "Anyone who gets the link can use Flash as you, from anywhere in the world: read every chat, run commands on this computer, change and delete files, and send email and messages in your name.",
+  "The link is as good as your password. Never post it, paste it into a chat, or send it anywhere you would not send a password.",
+  "The tunnel service carries every request, and can see what goes through it.",
+  "Keep autonomous mode off while it is on, so every command still waits for your yes.",
+  "Turn it off when you are done. If the link may have got out, Security, “Sign out all other browsers” makes a new one.",
+];
+
+async function renderTunnel(box = document.querySelector(".tunnel-box")) {
+  if (!box) return;
+  let r;
+  try { r = await command("tunnel", "", null); } catch (error) { box.textContent = ""; return; }
+  if (!box.isConnected) return;
+  const t = r.tunnel;
+  box.textContent = "";
+  const row = el("div", `setting-row static tunnel-row${t.state === "on" ? " tunnel-on" : ""}`, `<span class="what"><b></b><span></span></span><span class="side"></span>`);
+  const title = row.querySelector("b");
+  const said = row.querySelector(".what span");
+  const side = row.querySelector(".side");
+  box.appendChild(row);
+  if (t.state === "on") {
+    const service = r.services.find((s) => s.name === t.service);
+    title.textContent = "Flash is on the internet";
+    said.textContent = `Through ${service ? service.title : t.service}, at ${t.url}. Anyone with the link below can use Flash as you.`;
+    const off = el("button", "btn small danger solid", "Turn off");
+    off.type = "button";
+    off.onclick = async () => {
+      off.disabled = true;
+      try { await command("tunnel", "off", null); toast("Flash is off the internet"); }
+      catch (error) { showFailure(error); }
+      renderTunnel(box);
+      showPublic();
+    };
+    side.appendChild(off);
+    const link = el("div", "tunnel-link", `<span class="qr" aria-label="QR code of the link"></span><span><code></code><br></span>`);
+    link.querySelector(".qr").innerHTML = t.svg;
+    link.querySelector("code").textContent = t.link;
+    const copyIt = el("button", "btn small", "Copy link");
+    copyIt.type = "button";
+    copyIt.onclick = () => copy(t.link, "link", copyIt);
+    link.querySelector("span:last-child").appendChild(copyIt);
+    box.appendChild(link);
+  } else {
+    title.textContent = "Open from anywhere, through a tunnel";
+    said.textContent = t.state === "failed" && t.why
+      ? `The last tunnel stopped: ${t.why}`
+      : "Puts Flash on a public https address, so you can open it away from home. A program from the service you pick forwards it to this computer.";
+    const pick = el("select");
+    pick.setAttribute("aria-label", "Tunnel service");
+    for (const s of r.services) {
+      const option = new Option(`${s.title}${s.installed ? "" : " (not installed)"}`, s.name);
+      option.title = s.about;
+      pick.add(option);
+    }
+    const first = r.services.find((s) => s.installed);
+    if (first) pick.value = first.name;
+    const start = el("button", "btn small danger", "Open tunnel");
+    start.type = "button";
+    const about = () => {
+      const s = r.services.find((x) => x.name === pick.value);
+      start.disabled = !s.installed;
+      said.textContent = s.installed ? s.about : `${s.title} needs its program: ${s.install}.`;
+    };
+    pick.onchange = about;
+    start.onclick = async () => {
+      const s = r.services.find((x) => x.name === pick.value);
+      if (!(await confirmPop(start, { title: "Put Flash on the internet?", text: `Anyone with the link can use Flash as you, from anywhere: run commands, change files, read your chats, send messages. ${s.title} carries everything. Only go on if you understand that.`, yes: "Put it online" }))) return;
+      start.disabled = pick.disabled = true;
+      start.textContent = "Opening…";
+      try {
+        await command("tunnel", s.name, null);
+        toast("Flash is on the internet. Turn it off when you are done");
+      } catch (error) { showFailure(error); }
+      renderTunnel(box);
+      showPublic();
+    };
+    side.append(pick, start);
+    if (first) about(); else { start.disabled = true; said.textContent += " None of the services' programs is installed yet."; }
+  }
+  const warn = el("div", "tunnel-warn", `<b>Read this first.</b> A tunnel takes Flash off your own network and puts it on the internet.<ul></ul>`);
+  for (const line of TUNNEL_RISKS) warn.querySelector("ul").appendChild(el("li", "", esc(line)));
+  box.appendChild(warn);
+}
+
+// On every page while the tunnel is on: who can reach Flash, and the way
+// to stop it.
+function showPublic() {
+  let banner = document.getElementById("public-banner");
+  const on = info.tunnel && info.tunnel.state === "on";
+  if (!banner) {
+    if (!on) return;
+    banner = el("div", "", `<span>Flash is on the internet through a tunnel</span>`);
+    banner.id = "public-banner";
+    banner.setAttribute("role", "status");
+    const off = el("button", "", "Turn off");
+    off.type = "button";
+    off.onclick = async () => {
+      try { await command("tunnel", "off", null); info.tunnel = { state: "off" }; showPublic(); renderTunnel(); toast("Flash is off the internet"); }
+      catch (error) { showFailure(error); }
+    };
+    banner.appendChild(off);
+    document.body.appendChild(banner);
+  }
+  banner.hidden = !on;
+}
+
 async function switchLan(on, from) {
   // From a phone, turning it off ends the page it is on: ask first.
   if (!on && remotePage() && !(await confirmPop(from && from.querySelector(".switch"), { title: "Turn off network access?", text: "This page is open over your network, so it disconnects, and only this computer can open Flash until it is turned back on.", yes: "Turn off" }))) return false;
@@ -13987,6 +14116,7 @@ function renderModelButtons() {
 
 function renderInfo() {
   renderAgents();
+  showPublic();
   syncScene();
   $("#settings-btn").classList.toggle("has-update", !!(info.update && info.update.available && !["updated", "restarting"].includes(info.update.state)));
   renderModelButtons();

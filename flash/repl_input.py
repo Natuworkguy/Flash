@@ -84,7 +84,8 @@ COMMANDS = [
     ("/stats", "what Flash has done for you so far"),
     ("/notify", "how often the agent may notify you (/notify 4 per 15m)"),
     ("/image", "send an image to the model (/image <path> [prompt])"),
-    ("/web", "open Flash in your browser (/web lan for your phone)"),
+    ("/web", "open Flash in your browser (lan for your phone, tunnel "
+             "for anywhere)"),
     ("/extension", "list, install, remove, or set up extensions"),
     ("/version", "show the current version and check for updates"),
     ("/update", "update Flash to the latest version (pipx installs)"),
