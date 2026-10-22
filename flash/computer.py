@@ -1155,3 +1155,50 @@ def read_imessages(with_: str = "", limit=READ_LIMIT,
                 f"No messages with {who}." if who else "No messages.")
     return (f"{len(lines)} message{'s' if len(lines) != 1 else ''}, newest "
             "first:\n" + "\n".join(lines))
+
+
+def newest_imessage() -> int:
+    """The newest message's number in Messages, to tell new ones by: 0
+    when there are none, or they cannot be read."""
+
+    if system() != "mac" or not MESSAGES_DB.exists():
+        return 0
+    try:
+        with contextlib.closing(sqlite3.connect(
+                f"file:{MESSAGES_DB}?mode=ro", uri=True, timeout=5)) as db:
+            found = db.execute("SELECT MAX(ROWID) FROM message").fetchone()
+    except sqlite3.Error:
+        return 0
+    return int(found[0] or 0) if found else 0
+
+
+def imessages_after(number: int, most: int = 20) -> list[str]:
+    """The messages that came in after message NUMBER, oldest first, a
+    line each as read_imessages shows them: none of the user's own."""
+
+    if system() != "mac" or not MESSAGES_DB.exists():
+        return []
+    names = _address_book()
+    where = f"AND m.ROWID > {int(number)} AND m.is_from_me = 0"
+    try:
+        with contextlib.closing(sqlite3.connect(
+                f"file:{MESSAGES_DB}?mode=ro", uri=True, timeout=5)) as db:
+            rows = db.execute(_RECENT.format(where=where),  # nosec B608
+                              (most,)).fetchall()
+    except sqlite3.Error:
+        return []
+    lines = []
+    for (_, date, _, _, text, body, attached, handle, group, _,
+         people) in reversed(rows):
+        words = (text or _body_text(body)).replace("\ufffc", "").strip()
+        if attached:
+            words = (words + " [attachment]").strip()
+        if not words:
+            continue
+        sender = names.get(_key(handle), handle or "?")
+        place = f" in {group or 'a group chat'}" if people and people > 1 \
+            else ""
+        moment = _when(date)
+        stamp = moment.strftime("%a %b %d, %H:%M") if moment else "?"
+        lines.append(f"{stamp} · {sender}{place}: {words}")
+    return lines

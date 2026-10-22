@@ -494,6 +494,41 @@ Besides its schedule, a spark can watch a folder: when files in it
 change, a shift starts, told which files (the form's "Watch a folder",
 or `/sparks watch scout ~/Downloads`).
 
+A spark can also start the moment something comes in: a new email, a
+new iMessage (on a Mac), or a change in a connected MCP server, like a
+new note in a notes app. Checking for those on a schedule costs a shift,
+and its tokens, on every look, mostly to find nothing. Instead, Flash
+looks itself, without the model:
+
+- for email, it asks the mail server what uid the next email will get;
+- for iMessages, it reads the newest message's number from Messages;
+- for an MCP server, it calls one read-only tool that needs no input
+  (a `search` or `list` tool, say) and compares the answer.
+
+Only when something is new does a shift start, told exactly what came
+in, to handle it as the spark's goal says. Turn it on in Settings,
+General, Sparks ("Start sparks when something comes in"), or with
+`/sparks events on`; it is off until you do. Then tick what starts each
+spark under "Start when" in its form, as many as you like, or:
+
+```text
+/sparks events                       on or off, and which sparks start on what
+/sparks events on                    turn it on (off turns it off)
+/sparks events scout mcp:notes       start Scout on a change in "notes"
+/sparks events inbox email imessage  start Inbox on new email or iMessages
+/sparks events inbox none            stop
+```
+
+With the schedule set to "Only when called on", a spark spends nothing
+until something comes in. The **Email Handler** template is made that
+way: it handles each new email the way its lessons say (sort it, say
+what needs you, draft replies you approve). `mcp:<server>/<tool>`
+watches a server by a tool you name. iMessages need "Read iMessages" on
+under Your computer. The first look at each only learns where things
+stand, so what was already there starts nothing. A server that allows
+one connection at a time is best watched from the Flash you have open,
+not a keeper of its own beside it.
+
 The new-spark form starts from a template if you like, among them
 Morning Brief, Repo Watch, Test Runner, Disk Guard, Dependency Check,
 Page Watch, Inbox and Messages (`/sparks templates`, `/sparks add "Repo

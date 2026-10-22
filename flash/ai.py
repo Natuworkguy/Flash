@@ -2673,6 +2673,51 @@ def _computer_command(arg: str) -> None:
         console.print(line)
 
 
+def _spark_events(key: str, extra: str) -> None:
+    """/sparks events: whether sparks start on what comes in, and which
+    do; `/sparks events on|off`, or `/sparks events <name> <events>`."""
+
+    from . import triggers
+
+    if key.lower() in ("on", "off") and not extra:
+        triggers.set_enabled(key.lower() == "on")
+    elif key:
+        if not extra:
+            warn("Usage: /sparks events <name> <email imessage "
+                 "mcp:<server> | none>")
+            return
+        spark = sparks.update(
+            key, events=() if extra.lower() == "none" else extra,
+        )
+        console.print(Text(
+            f"{spark.name} starts on "
+            + " and ".join(triggers.words(e) for e in spark.events) + "."
+            if spark.events else f"{spark.name} starts on nothing now.",
+            style=DIM,
+        ))
+        if spark.events and not triggers.enabled():
+            warn("  Events are off: /sparks events on turns them on.")
+        return
+    body = Text(
+        "Sparks start when something comes in: "
+        + ("on" if triggers.enabled() else "off") + ".\n", style=DIM,
+    )
+    given = [s for s in sparks.all_sparks() if s.events]
+    for spark in given:
+        body.append(f"  {spark.name:<16}", style=ACCENT)
+        body.append(" and ".join(triggers.words(e) for e in spark.events)
+                    + "\n", style=DIM)
+    if not given:
+        body.append("  No spark starts on anything yet.\n", style=DIM)
+    body.append(
+        "Flash looks for new email, iMessages and changes in MCP servers "
+        "itself, without the model, so nothing is spent until something "
+        "comes in. /sparks events on|off, /sparks events scout email "
+        "mcp:notes.", style=DIM,
+    )
+    console.print(body)
+
+
 def _notify_command(arg: str) -> None:
     """/notify: how often the agent may send you a notification, shown,
     or set: `/notify 4 per 15m`, `/notify off`, `/notify on`."""
@@ -3611,6 +3656,9 @@ def _sparks_command(arg: str) -> None:
                 f"{spark.name} wears {spark.colour} now.", style=DIM,
             ))
             return
+        if action == "events":
+            _spark_events(key, extra)
+            return
         if action == "watch" and key and extra:
             spark = sparks.update(
                 key, watch="" if extra.lower() == "none" else extra,
@@ -3747,6 +3795,7 @@ def _sparks_command(arg: str) -> None:
             "| project <name> <project|none> "
             "| approve|deny|stop|share <name> | add <code|template> [paused] "
             "| templates | goal <name> <text> | watch <name> <folder|none> "
+            "| events [on|off | <name> <email imessage mcp:server|none>] "
             "| model <name> [model] | title <name> <title|none> "
             "| colour <name> <ember|sky|mint|...|#rrggbb> "
             "| rounds [number|unlimited] | default [model|flash] "
