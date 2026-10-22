@@ -3764,8 +3764,9 @@ document.addEventListener("submit", (e) => {
 // inside code, or where a $ reads like a price rather than algebra.
 const MATH_RE = /\uE000(\d+)\uE001/g;
 const CODE_RE = /```[\s\S]*?(?:```|$)|~~~[\s\S]*?(?:~~~|$)|(`+)(?!`)[^\n]+?\1(?!`)/g;
-const DISPLAY_MATH_RE = /\$\$([\s\S]+?)\$\$|\\\[([\s\S]+?)\\\]/g;
-const INLINE_MATH_RE = /(?<![\\$])\$(?![\s$])([^$\n]+?)(?<![\s\\])\$(?!\$)(?!\d)|\\\(([\s\S]+?)\\\)/g;
+// A backslash before the \[ or \( means a backslash typed as text.
+const DISPLAY_MATH_RE = /\$\$([\s\S]+?)\$\$|(?<!\\)\\\[([\s\S]+?)\\\]/g;
+const INLINE_MATH_RE = /(?<![\\$])\$(?![\s$])([^$\n]+?)(?<![\s\\])\$(?!\$)(?!\d)|(?<!\\)\\\(([\s\S]+?)\\\)/g;
 const looksLikeMath = (body) => /[\\^_{}]/.test(body) || (body.length <= 3 && /[a-z]/i.test(body));
 
 function markdown(text) {
@@ -5982,8 +5983,10 @@ async function saveDocument(doc, quiet = false) {
 
 // The edited page, back into Markdown: what the file holds, and what
 // Flash reads. It writes only what the renderer reads back the same way.
+// Brackets stay as they are, since \[ would read as math, except a ] that
+// would close a link.
 function toMarkdown(root) {
-  const escapeText = (t) => t.replace(/\u00a0/g, " ").replace(/([\\`*~[\]|])/g, "\\$1").replace(/(?<![A-Za-z0-9])_|_(?![A-Za-z0-9])/g, "\\_");
+  const escapeText = (t) => t.replace(/\u00a0/g, " ").replace(/([\\`*~|])/g, "\\$1").replace(/\](?=\()/g, "\\]").replace(/(?<![A-Za-z0-9])_|_(?![A-Za-z0-9])/g, "\\_");
   const wrap = (mark, inner, close = mark) => {
     const lead = inner.match(/^\s*/)[0], tail = inner.match(/\s*$/)[0];
     const body = inner.trim();
@@ -5994,7 +5997,8 @@ function toMarkdown(root) {
     for (const child of node.childNodes) {
       if (child.nodeType === 3) { out += escapeText(child.nodeValue.replace(/\s+/g, " ")); continue; }
       if (child.nodeType !== 1) continue;
-      const tag = child.tagName;
+      // Upper case for HTML, but a formula's <math> is MathML: lower case.
+      const tag = child.tagName.toUpperCase();
       if (tag === "MATH") {
         const tex = (child.querySelector('annotation[encoding="application/x-tex"]') || {}).textContent || child.textContent;
         out += child.getAttribute("display") === "block" ? `$$${tex}$$` : `$${tex}$`;
@@ -6026,7 +6030,9 @@ function toMarkdown(root) {
         if (c.nodeType === 1 && (c.tagName === "UL" || c.tagName === "OL")) nested.push(c);
         else own.appendChild(c.cloneNode(true));
       }
-      lines.push(`${"  ".repeat(depth)}${marker}${inlineOf(own).trim()}`);
+      // An item that starts like a checkbox, [ ], keeps it as text.
+      const text = inlineOf(own).trim().replace(/^\[([ xX])\]/, "[$1\\]");
+      lines.push(`${"  ".repeat(depth)}${marker}${text}`);
       for (const sub of nested) lines.push(...listOf(sub, depth + 1));
     }
     return lines;
