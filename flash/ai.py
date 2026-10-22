@@ -33,6 +33,7 @@ from . import (
     connectors,
     context,
     extensions,
+    frontmatter,
     greetings,
     interrupt,
     learning,
@@ -4561,7 +4562,9 @@ def _render_markdown(console: Console, text: str, *, end: str = "\n") -> None:
     trailing cursor dot -- the full reply already arrived in one shot, so
     this is a paced typewriter effect rather than real token streaming."""
 
-    text = render_latex(serif.for_terminal(visuals.for_terminal(text)))
+    text = render_latex(serif.for_terminal(visuals.for_terminal(
+        frontmatter.for_terminal(text)
+    )))
 
     def render(body: str) -> Markdown:
         return Markdown(body, code_theme="monokai", hyperlinks=True)

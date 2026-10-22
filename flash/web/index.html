@@ -556,6 +556,10 @@ body.empty #suggestions { display: flex; flex-wrap: wrap; justify-content: cente
 .assistant th, .assistant td { padding: 8px 14px; text-align: left; border-bottom: 1px solid var(--border); }
 .assistant tr:last-child td { border-bottom: 0; }
 .assistant th { font-weight: 600; color: var(--text-2); background: var(--hover); }
+.assistant .front-matter th { width: 1%; white-space: nowrap; font-weight: 500; }
+.assistant .front-matter tr:last-child th { border-bottom: 0; }
+.front-item { display: inline-block; margin: 1px 6px 1px 0; padding: 1px 9px; border-radius: 999px; font-size: 13px; background: var(--hover); border: 1px solid var(--border); }
+pre.front-matter { font-family: var(--mono); font-size: 13px; padding: 10px 14px; border: 1px dashed var(--border); border-radius: 10px; white-space: pre-wrap; }
 code { font: 0.87em/1.5 var(--mono); }
 :not(pre) > code { background: var(--hover); border: 1px solid var(--border); padding: 1px 5px; border-radius: 5px; }
 pre { margin: 0 0 0.9em; background: var(--code-bg); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
@@ -3771,9 +3775,49 @@ const looksLikeMath = (body) => /[\\^_{}]/.test(body) || (body.length <= 3 && /[
 
 function markdown(text) {
   const spans = [];
-  let html = markdownBody(pullMath(String(text), spans));
+  const front = frontMatter(String(text));
+  let html = markdownBody(pullMath(front ? front.rest : String(text), spans));
   if (spans.length) html = html.replace(MATH_RE, (_, i) => renderMath(spans[+i]));
-  return html;
+  return front ? frontTable(front) + html : html;
+}
+
+// Front matter: the block of fields between --- lines that opens a post
+// or a page (title, date, tags), drawn as a table of them. Only at the
+// very top, and only when every line reads as a field, so a rule, a line
+// of text and another rule stay just that.
+function frontMatter(text) {
+  const m = text.match(/^\s*---[ \t]*\n([\s\S]*?)\n(?:---|\.\.\.)[ \t]*(?:\n|$)/);
+  if (!m) return null;
+  const fields = [];
+  let last = null;
+  for (const line of m[1].split("\n")) {
+    if (!line.trim() || /^\s*#/.test(line)) continue;
+    const field = line.match(/^([A-Za-z0-9_][\w .-]*?)\s*:(?:\s+(.*))?$/);
+    if (field) {
+      last = { key: field[1], value: unquote(field[2] || ""), items: [] };
+      if (/^\[.*\]$/.test(last.value)) { last.items = last.value.slice(1, -1).split(",").map((v) => unquote(v.trim())).filter(Boolean); last.value = ""; }
+      if (/^[|>][+-]?$/.test(last.value)) last.value = "";
+      fields.push(last);
+      continue;
+    }
+    // Under a field: a list of items, or more of its text, indented.
+    const item = line.match(/^\s*-\s+(.*)$/);
+    if (last && item) last.items.push(unquote(item[1].trim()));
+    else if (last && /^\s+\S/.test(line)) last.value = `${last.value} ${line.trim()}`.trim();
+    else return null;
+  }
+  if (!fields.length) return null;
+  return { fields, yaml: m[1], rest: text.slice(m[0].length) };
+}
+
+const unquote = (v) => v.trim().replace(/^(["'])(.*)\1$/, "$2");
+
+function frontTable(front) {
+  const rows = front.fields.map((f) => {
+    const value = f.items.length ? f.items.map((v) => `<span class="front-item">${inline(v)}</span>`).join("") : inline(f.value);
+    return `<tr><th>${esc(f.key)}</th><td>${value}</td></tr>`;
+  }).join("");
+  return `<div class="table-wrap front-matter" data-front="${esc(front.yaml)}"><table><tbody>${rows}</tbody></table></div>`;
 }
 
 function pullMath(text, spans) {
@@ -5777,6 +5821,8 @@ function editDocument(doc) {
     // A code block's label and Copy button, and rendered math, are not
     // text to type into: they stay whole.
     article.querySelectorAll(".code-head, math").forEach((n) => { n.contentEditable = "false"; });
+    // Front matter is edited as the fields themselves, not the table.
+    article.querySelectorAll("div.front-matter").forEach((n) => { const raw = el("pre", "front-matter"); raw.textContent = n.dataset.front; n.replaceWith(raw); });
     const block = el("select", "doc-block");
     block.setAttribute("aria-label", "Text style");
     block.innerHTML = `<option value="p">Text</option><option value="h1">Title</option><option value="h2">Heading</option><option value="h3">Subheading</option>`;
@@ -6045,7 +6091,8 @@ function toMarkdown(root) {
       if (child.nodeType === 3) { loose += escapeText(child.nodeValue.replace(/\s+/g, " ")); continue; }
       if (child.nodeType !== 1) continue;
       const tag = child.tagName;
-      if (/^H[1-6]$/.test(tag)) { flush(); const text = inlineOf(child).trim(); if (text) blocks.push(`${"#".repeat(+tag[1])} ${text}`); }
+      if (child.classList.contains("front-matter")) { flush(); blocks.push(`---\n${(child.dataset.front ?? child.textContent).replace(/\n+$/, "")}\n---`); }
+      else if (/^H[1-6]$/.test(tag)) { flush(); const text = inlineOf(child).trim(); if (text) blocks.push(`${"#".repeat(+tag[1])} ${text}`); }
       else if (tag === "DIV" && child.classList.contains("serif-block")) {
         flush();
         const inner = blocksOf(child).join("\n\n");
