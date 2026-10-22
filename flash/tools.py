@@ -162,9 +162,10 @@ To make a 3D model (an object, a prop, a room, a layout), use the
   cylinders, spheres, lathed profiles, extruded outlines, and blocky
   text for any words, logos, or signs, each with a colour and, where the
   real thing has one, a texture (wood, brick, marble, grass, fabric, or
-  a picture from a file), saves a
-  .glb, and shows it in a 3D viewer. Use send_3d_model to show a .glb,
-  .stl, or .obj file that already exists.
+  a picture from a file), and any part can move (a wheel turning, a
+  door swinging, a flag waving, a planet circling), saves a .glb, and
+  shows it in a 3D viewer that plays the motion. Use send_3d_model to
+  show a .glb, .stl, or .obj file that already exists.
 To make music (a tune, a chord progression, a drum beat), use the
   make_midi tool: it writes the tracks of notes you give it as a .mid
   and plays it to the user in a player with a piano roll. Use send_midi
@@ -4490,6 +4491,9 @@ tools: list[dict[str, Any]] = [
                 "table, brick on a wall, grass on a lawn, a picture on a "
                 "poster or a screen. Anything with words on "
                 "it (a logo, a sign, a title) gets a text part for them. "
+                "Make it move when the user asks for animation, or when "
+                "the real thing moves (a fan, a clock's hands, a "
+                "windmill, a bouncing ball): give those parts animate. "
                 "The result gives the model's overall size, "
                 "and a picture of it when you can see images: check both "
                 "and fix what is off. To revise, call again with the "
@@ -4684,6 +4688,38 @@ tools: list[dict[str, Any]] = [
                                     "description": (
                                         "A colour it glows, for lamps "
                                         "and screens."
+                                    ),
+                                },
+                                "animate": {
+                                    "type": "object",
+                                    "description": (
+                                        "How the part moves, looping "
+                                        "for ever, measured from where "
+                                        "it rests. Any of: spin "
+                                        "{axis: x|y|z, seconds per "
+                                        "turn (4), reverse}; swing "
+                                        "{axis (z), degrees each way "
+                                        "(20), seconds (2)}; bob "
+                                        "{axis (y), distance (0.1), "
+                                        "seconds (2)}; pulse {amount "
+                                        "it grows, 0.1, seconds (1)}; "
+                                        "keyframes [{time in seconds, "
+                                        "move [x,y,z] from rest, turn "
+                                        "[x,y,z] degrees, scale}], the "
+                                        "last the same as the first "
+                                        "for a smooth loop; ease "
+                                        "(smooth, linear or step); "
+                                        "delay in seconds, to set "
+                                        "parts out of step (a walk's "
+                                        "legs); pivot [x,y,z] from the "
+                                        "part's centre, the point it "
+                                        "turns about (a door's hinge, "
+                                        "a pendulum's top; a sun's "
+                                        "centre for a planet that "
+                                        "spins round it). Axes are "
+                                        "the model's own. Parts that "
+                                        "move together each get the "
+                                        "same animate."
                                     ),
                                 },
                             },
