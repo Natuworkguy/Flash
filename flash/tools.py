@@ -2447,9 +2447,81 @@ def computer_tools() -> list[dict[str, Any]]:
                 },
             },
         })
+    if computer.allowed("imessage_read"):
+        found += READ_IMESSAGES_TOOLS
     if computer.allowed("imessage"):
         found += IMESSAGE_TOOLS
     return found
+
+
+# On a Mac, with the computer allowed: the user's recent iMessages.
+READ_IMESSAGES_TOOLS: list[dict[str, Any]] = [
+    {
+        "type": "function",
+        "function": {
+            "name": "read_imessages",
+            "description": (
+                "Read the user's recent iMessages and texts on their Mac, "
+                "newest first: when, who from (by their name in Contacts), "
+                "and what was said, with group chats named. Use it when "
+                "they ask what someone said, whether anyone messaged, or "
+                "to catch up before replying. Nothing is marked read."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "with": {
+                        "type": "string",
+                        "description": (
+                            "Optional: only the conversation with this "
+                            "person, by a name or nickname in Contacts, a "
+                            "phone number or an email address."
+                        ),
+                    },
+                    "unread_only": {
+                        "type": "boolean",
+                        "description": "True for unread messages only.",
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": (
+                            f"How many, at most {computer.MOST_READ}. "
+                            f"Default {computer.READ_LIMIT}."
+                        ),
+                    },
+                },
+            },
+        },
+    },
+]
+
+
+def read_imessages(limit: Any = computer.READ_LIMIT,
+                   unread_only: Any = False, **given: Any) -> str:
+    """The user's recent iMessages, when they allow it."""
+
+    # "with" is a keyword in Python, so it comes in as given.
+    who = str(given.get("with") or "").strip()
+    unread = unread_only in (True, "true", "yes", 1)
+    tool_line("ReadIMessages(" + (who or ("unread" if unread else "recent"))
+              + ")")
+    if not computer.allowed("imessage_read"):
+        result = (
+            "Error: the user has not let Flash read their iMessages. They "
+            "can turn it on in Settings or with /computer on imessage_read."
+            if computer.enabled() and "imessage_read" in computer.kinds()
+            else "Error: the user has not let Flash act on their computer. "
+            "They can turn it on in Settings or with /computer on."
+        )
+        tool_result(result, style=WARN)
+        return result
+    try:
+        result = computer.read_imessages(who, limit, unread)
+    except computer.ComputerError as exc:
+        tool_result(str(exc), style=ERROR)
+        return f"Error: {exc}"
+    tool_result(result)
+    return result
 
 
 # On a Mac, with the computer allowed: an iMessage, asked about every
@@ -5877,6 +5949,7 @@ FUNCTIONS = {
     "notify_user": notify_user,
     "computer": computer_tool,
     "send_imessage": send_imessage,
+    "read_imessages": read_imessages,
     "open_in_editor": open_in_editor,
     "ask_system_one": ask_system_one,
 }
