@@ -17,7 +17,13 @@ def program(monkeypatch, tmp_path):
     as cloudflared does, then waits to be stopped."""
 
     said = tmp_path / "said.txt"
-    said.write_text(f"INF Requesting new quick Tunnel\n| {ADDRESS} |\n")
+    said.write_text(
+        "INF Requesting new quick Tunnel on trycloudflare.com...\n"
+        "INF |  Your quick Tunnel has been created! Visit it at (it may "
+        "take some time to be reachable):  |\n"
+        f"INF |  {ADDRESS}  |\n"
+        "INF Registered tunnel connection connIndex=0 protocol=quic\n"
+    )
     script = tmp_path / "cloudflared"
     script.write_text(
         f"#!{sys.executable}\n"
@@ -53,12 +59,43 @@ def test_a_service_not_installed_says_how_to_get_it(program):
 
 
 def test_a_tunnel_that_gives_no_address_fails_and_says_why(program):
-    program.write_text("ERR failed to sign in\n")
+    # What cloudflared says when it cannot get one: its API's address is
+    # not the tunnel's.
+    program.write_text(
+        "INF Requesting new quick Tunnel on trycloudflare.com...\n"
+        'failed to request quick Tunnel: Post "https://api.trycloudflare'
+        '.com/tunnel": dial tcp: lookup api.trycloudflare.com: no such '
+        "host\n")
     found = tunnel.Tunnel()
 
-    with pytest.raises(tunnel.TunnelError):
+    with pytest.raises(tunnel.TunnelError, match="no such host"):
         found.start("cloudflare", 7433, wait=1)
     assert found.state == tunnel.FAILED and found.host == ""  # nosec
+
+
+def test_the_address_counts_only_once_the_tunnel_is_connected(program):
+    program.write_text(f"INF |  {ADDRESS}  |\n")
+
+    with pytest.raises(tunnel.TunnelError, match="no address"):
+        tunnel.Tunnel().start("cloudflare", 7433, wait=1)
+
+
+def test_a_tunnel_that_does_not_reach_flash_is_taken_down(program,
+                                                          monkeypatch):
+    monkeypatch.setattr(tunnel, "SETTLE_SECONDS", 0)
+    monkeypatch.setattr(tunnel, "CHECK_SECONDS", 0.1)
+    found = tunnel.Tunnel()
+
+    with pytest.raises(tunnel.TunnelError, match="answered 502"):
+        found.start("cloudflare", 7433, wait=10,
+                    check=lambda url: "the service answered 502")
+    assert found.state == tunnel.FAILED and found.host == ""  # nosec
+
+    tried = []
+    found.start("cloudflare", 7433, wait=10,
+                check=lambda url: tried.append(url) or "")
+    assert tried == [ADDRESS] and found.state == tunnel.ON  # nosec
+    found.stop()
 
 
 def test_the_services_say_which_are_installed(program):
@@ -89,10 +126,11 @@ def ask(srv, host):
 
 
 def test_requests_through_the_tunnel_are_let_in_only_while_it_is_on(
-        server, program):
+        server, program, monkeypatch):
     public = "quiet-river-1234.trycloudflare.com"
     assert ask(server, public) == 403  # nosec B101
 
+    monkeypatch.setattr(web, "reaches", lambda session: lambda url: "")
     said = web.command(server.session, {"name": "tunnel",
                                         "arg": "cloudflare"})
     assert said["tunnel"]["state"] == tunnel.ON  # nosec B101
@@ -105,6 +143,16 @@ def test_requests_through_the_tunnel_are_let_in_only_while_it_is_on(
 
     web.command(server.session, {"name": "tunnel", "arg": "off"})
     assert ask(server, public) == 403  # nosec B101
+
+
+def test_flash_knows_its_own_answer_through_a_tunnel(server):
+    check = web.reaches(server.session)
+    here = f"http://127.0.0.1:{server.port}"
+
+    assert check(here) == ""  # nosec B101
+    # The code is good for that one look only.
+    assert server.session.tunnel_nonce == ""  # nosec B101
+    assert "answered 403" in check(here + "/nothing")  # nosec B101
 
 
 def test_closing_the_server_takes_the_tunnel_down(program):
