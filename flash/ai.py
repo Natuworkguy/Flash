@@ -4460,6 +4460,26 @@ def _switch_host(url: str) -> None:
         warn(f"{Config.model} is not on this host. /model picks one here.")
 
 
+def _pin_model(on: bool, name: str) -> None:
+    """/model pin and /model unpin: keep a model at the top of this
+    host's list, in the picker here and in the web UI's, or stop."""
+
+    from . import workspace
+
+    name = name or Config.model or ""
+    if not name:
+        warn("Name a model to pin: /model pin <model>")
+        return
+    pinned = workspace.pin_model(Config.host, name, on)
+    shown = Text(
+        f"{'Pinned' if on else 'Unpinned'} {name} on this host.",
+        style=DIM,
+    )
+    if pinned:
+        shown.append(f" Pinned here: {', '.join(pinned)}.", style=DIM)
+    console.print(shown)
+
+
 def _host_command(arg: str) -> None:
     """/host: pick, switch, list, add, or remove an Ollama server. The
     hosts are the web UI's, so one saved in either shows in both."""
@@ -5424,6 +5444,11 @@ def _main() -> None:
 
             if uin == "/model" or uin.startswith("/model "):
                 arg = uin[len("/model"):].strip()
+                action, _, named = arg.partition(" ")
+
+                if action.lower() in ("pin", "unpin"):
+                    _pin_model(action.lower() == "pin", named.strip())
+                    continue
 
                 if arg:
                     # Setting a model by hand stays allowed whatever the
@@ -5434,7 +5459,12 @@ def _main() -> None:
                     # Bare /model picks from what this machine holds.
                     # Picking nothing falls through to the summary below
                     # rather than leaving the screen bare.
-                    arg = pick_model(client, Config.model or "") or ""
+                    from . import workspace
+
+                    arg = pick_model(
+                        client, Config.model or "",
+                        workspace.favorite_models(Config.host),
+                    ) or ""
 
                 if arg:
                     set_config_var("MODEL", arg)

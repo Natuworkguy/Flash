@@ -2438,6 +2438,23 @@ class TestExtensionsInThePage:
             })
 
 
+class TestFavoriteModels:
+    def test_pinned_ones_come_with_the_models(self, monkeypatch):
+        monkeypatch.setattr(ai.Config, "host", "http://127.0.0.1:11434")
+        monkeypatch.setattr(web, "list_models", lambda _ai: ["a:1", "b:2"])
+
+        pinned = web.command(web.Session(), {
+            "name": "model-pin", "arg": "b:2", "on": True,
+        })
+        listed = web.command(web.Session(), {"name": "model"})
+
+        assert pinned == {"favorites": ["b:2"]}
+        assert listed["favorites"] == ["b:2"]
+        assert web.command(web.Session(), {
+            "name": "model-pin", "arg": "b:2", "on": False,
+        }) == {"favorites": []}
+
+
 class TestRemovingHosts:
     def test_the_host_in_use_cannot_be_removed(self, monkeypatch):
         web.workspace.add_host("Studio", "10.0.0.5")

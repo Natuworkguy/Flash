@@ -164,6 +164,21 @@ def test_installed_models_puts_the_active_one_first():
     assert not any(row.note for row in rows[1:])  # nosec B101
 
 
+def test_installed_models_puts_the_pinned_ones_next():
+    client = FakeClient(names=["beta3:8b", "gamma4:12b", "alpha3.1:8b",
+                               "delta:7b"])
+
+    rows = installed_models(client, "alpha3.1:8b", ["delta:7b", "gamma4:12b"])
+
+    # The active one, then the pinned in the order they were pinned.
+    assert [(row.name, row.note) for row in rows] == [  # nosec B101
+        ("alpha3.1:8b", "active"),
+        ("delta:7b", "pinned"),
+        ("gamma4:12b", "pinned"),
+        ("beta3:8b", ""),
+    ]
+
+
 def test_installed_models_describes_each_row():
     client = FakeClient(names=[
         _Entry(
