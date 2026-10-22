@@ -662,3 +662,29 @@ def test_no_full_disk_access_says_how_to_give_it(monkeypatch, ran,
 
     with pytest.raises(computer.ComputerError, match="Full Disk Access"):
         computer.read_imessages()
+
+
+# --- Sparks and iMessages ---------------------------------------------------
+
+
+def test_a_spark_can_read_imessages_and_asks_before_sending_one():
+    assert "read_imessages" in tools.SUBAGENT_TOOL_NAMES  # nosec B101
+    assert "send_imessage" in tools.SPARK_TOOL_NAMES  # nosec B101
+    assert "send_imessage" not in tools.SUBAGENT_TOOL_NAMES  # nosec B101
+    assert "send_imessage" in tools.ALWAYS_ASK_TOOL_NAMES  # nosec B101
+
+    from flash import sparks
+
+    label, detail = sparks.describe(
+        "send_imessage", {"to": "Sam", "text": "See you at 7"})
+    assert label == "Send an iMessage to Sam"  # nosec B101
+    assert detail == "See you at 7"  # nosec B101
+
+
+def test_the_messages_template_says_it_needs_imessages():
+    from flash import sparks
+
+    found = next(t for t in sparks.TEMPLATES if t["name"] == "Messages")
+    assert found["needs"] == "imessage"  # nosec B101
+    assert sparks.needs_imessage(sparks.Spark(  # nosec B101
+        id="x", name="Messages", goal=found["goal"]))

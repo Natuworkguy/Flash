@@ -101,6 +101,10 @@ def test_confirmed_tools_are_withheld_outside_autonomous_mode(monkeypatch):
 def test_autonomous_mode_gets_every_subagent_tool(monkeypatch):
     monkeypatch.setattr(tools, "NO_COMMAND_CONFIRMATION", True)
     monkeypatch.setattr(tools.mail, "configured", lambda: True)
+    # Reading iMessages too: on a Mac, allowed.
+    monkeypatch.setenv(tools.computer.SETTING, "1")
+    monkeypatch.delenv(tools.computer.OFF_SETTING, raising=False)
+    monkeypatch.setattr(tools.computer, "system", lambda: "mac")
     assert agent.allowed_tool_names() == tools.SUBAGENT_TOOL_NAMES  # nosec
 
 

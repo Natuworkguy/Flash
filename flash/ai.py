@@ -3559,6 +3559,15 @@ def _sparks_command(arg: str) -> None:
                     f"  {spark.name} works on your email, which is not "
                     "connected yet: /email connect sets it up."
                 )
+            if sparks.needs_imessage(spark) and not (
+                computer.allowed("imessage_read")
+            ):
+                warn(
+                    f"  {spark.name} works on your iMessages, which Flash "
+                    + ("may not read yet: /computer on imessage_read lets "
+                       "it." if computer.system() == "mac" else
+                       "can only read on a Mac.")
+                )
             console.print(Text(
                 f"Added {spark.name} ({spark.handle}), "
                 f"{sparks.schedule_words(spark)}, on {spark.model}"

@@ -2379,6 +2379,35 @@ TEMPLATES = [
             "except as a reply I can approve."
         ),
     },
+    {
+        "name": "Messages",
+        "title": "Messages keeper",
+        # Shown, when it is not, before one is made.
+        "needs": "imessage",
+        "blurb": "Sorts your iMessages, says what needs you, drafts replies",
+        "goal": (
+            "Read my iMessages with read_imessages for what has come in "
+            "since your last shift. Keep the time of the newest one you "
+            "have seen in your notes, and skip anything at or before it. "
+            "Read a whole conversation with read_imessages and its with "
+            "when one message is not enough to tell what is wanted. Sort "
+            "each new conversation: needs me (a question, a plan, someone "
+            "waiting on me), worth knowing, or ignorable (codes, "
+            "deliveries, automated texts). Report the ones that need me "
+            "first, one line each: who, what they want, and by when; then "
+            "the worth-knowing ones in a line or two; then how many you "
+            "skipped. When one needs a reply you can write from what you "
+            "know, draft it with send_imessage, short and in my voice: I "
+            "approve each one before it goes. If nothing new needs me, "
+            "reply NOTHING NEW."
+        ),
+        "every": 30,
+        "boundaries": (
+            "Never send an iMessage except as a reply I can approve, and "
+            "never to anyone who has not messaged me. Never click links, "
+            "share codes, or buy anything."
+        ),
+    },
 ]
 
 SHARE_PREFIX = "flash-spark:"
@@ -3145,6 +3174,11 @@ def describe(name: str, args: dict) -> tuple[str, str]:
         body = str(args.get("body") or "")
         cut = body[:1200] + ("\n..." if len(body) > 1200 else "")
         return label, (f"Subject: {subject}\n\n" if subject else "") + cut
+    if name == "send_imessage":
+        to = str(args.get("to") or "").strip()
+        text = str(args.get("text") or "")
+        cut = text[:1200] + ("\n..." if len(text) > 1200 else "")
+        return f"Send an iMessage to {to}" if to else "Send an iMessage", cut
     if name in ("edit", "multi_edit"):
         return f"Change {path}", json.dumps(
             {k: v for k, v in args.items() if k not in ("file_path", "path")},
@@ -3968,6 +4002,12 @@ def _about_email(spark: Spark) -> bool:
     return bool(_EMAIL_WORDS.search(
         "\n".join([spark.goal, spark.boundaries, *spark.lessons])
     ))
+
+
+def needs_imessage(spark: Spark) -> bool:
+    """Whether SPARK can only do its job with the user's iMessages."""
+
+    return bool(re.search(r"read_imessages|send_imessage", spark.goal))
 
 
 def needs_email(spark: Spark) -> bool:

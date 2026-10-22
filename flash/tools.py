@@ -5962,12 +5962,12 @@ FUNCTIONS = {
 SUBAGENT_TOOL_NAMES = (
     "shell", "glob", "grep", "read", "write", "edit", "multi_edit",
     "web_search", "fetch", "get_os", "get_date", "reason",
-    "check_inbox", "read_email", "notify_user",
+    "check_inbox", "read_email", "notify_user", "read_imessages",
 )
 
-# A spark's tools: a sub-agent's, and sending email, which it asks the
-# user about in its window, as it does any step that asks.
-SPARK_TOOL_NAMES = SUBAGENT_TOOL_NAMES + ("send_email",)
+# A spark's tools: a sub-agent's, and sending email or an iMessage, which
+# it asks the user about in its window, as it does any step that asks.
+SPARK_TOOL_NAMES = SUBAGENT_TOOL_NAMES + ("send_email", "send_imessage")
 
 # Tools that ask every time, autonomous mode or not.
 ALWAYS_ASK_TOOL_NAMES = ("send_email", "send_imessage")
@@ -6038,7 +6038,8 @@ def unfinished(name: str, args: dict) -> str:
 
 # Tools System One looks over before they run in autonomous mode: every
 # one that would otherwise have stopped for the user's yes. Sending
-# email is not among them, since it asks the user every time anyway.
+# email or an iMessage is not among them, since each asks the user every
+# time anyway.
 REVIEWED_TOOL_NAMES = CONFIRMED_TOOL_NAMES + ("make_spark",)
 
 _REVIEW_LABELS = {

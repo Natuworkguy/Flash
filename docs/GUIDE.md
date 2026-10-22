@@ -495,8 +495,10 @@ change, a shift starts, told which files (the form's "Watch a folder",
 or `/sparks watch scout ~/Downloads`).
 
 The new-spark form starts from a template if you like, among them
-Morning Brief, Repo Watch, Test Runner, Disk Guard, Dependency Check
-and Page Watch (`/sparks templates`, `/sparks add "Repo Watch"`). Any
+Morning Brief, Repo Watch, Test Runner, Disk Guard, Dependency Check,
+Page Watch, Inbox and Messages (`/sparks templates`, `/sparks add "Repo
+Watch"`). Messages, on a Mac, sorts your new iMessages, says which need
+you, and drafts replies that wait for your yes, every one. Any
 spark can be shared as a code (Share in its window, or `/sparks share
 scout`): whoever adds it with Add shared, or `/sparks add <code>`, sees
 its goal and boundaries first and gets a copy of their own, with its
