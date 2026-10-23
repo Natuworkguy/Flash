@@ -255,10 +255,10 @@ body.side-closed #sidebar { margin-left: -272px; }
 .chat .live { flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); margin-right: 12px; animation: pulse 1.2s ease-in-out infinite; transition: margin-right 0.14s; }
 /* Pointed at, a working chat's dot moves aside for the row's buttons,
    and the title makes room for both. */
-.chat:hover .live, .chat:focus-within .live { margin-right: 64px; }
-.chat:has(.live):hover .open, .chat:has(.live):focus-within .open { padding-right: 10px; }
+.chat:hover :is(.live, .waits), .chat:focus-within :is(.live, .waits) { margin-right: 64px; }
+.chat:has(.live, .waits):hover .open, .chat:has(.live, .waits):focus-within .open { padding-right: 10px; }
 @media (hover: none) {
-  .chat:hover .live, .chat:focus-within .live { margin-right: 8px; }
+  .chat:hover :is(.live, .waits), .chat:focus-within :is(.live, .waits) { margin-right: 8px; }
 }
 .side-foot { margin-top: auto; padding: 8px 0 12px; border-top: 1px solid var(--border); }
 .side-foot .side-row svg { color: var(--text-3); }
@@ -1661,7 +1661,7 @@ button.item-row:hover { background: var(--hover); }
 .spark-av[data-state="frozen"] .eye { height: calc(var(--s) * 0.09); }
 .spark-av .wait-clock { position: absolute; top: -14%; right: -14%; width: max(11px, calc(var(--s) * 0.42)); height: max(11px, calc(var(--s) * 0.42)); display: grid; place-items: center; border-radius: 50%; background: var(--surface); color: var(--text-2); box-shadow: 0 0 0 1px var(--border); }
 .spark-av .wait-clock svg { width: 78%; height: 78%; }
-.chat .waits { display: grid; place-items: center; flex: none; width: 16px; height: 16px; margin-right: 8px; color: var(--text-3); }
+.chat .waits { display: grid; place-items: center; flex: none; width: 16px; height: 16px; margin-right: 8px; color: var(--text-3); transition: margin-right 0.14s; }
 .chat .waits svg { width: 13px; height: 13px; }
 
 /* Waiting on you: a curious tilt, eyes up, and a question bobbing. */

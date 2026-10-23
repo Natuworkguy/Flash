@@ -4932,6 +4932,13 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(status)
         for name, value in (headers or {}).items():
             self.send_header(name, value)
+        # A request answered before its body was read (refused, too
+        # large) leaves that body on the connection, where it would be
+        # read as the start of the next request: hang up instead.
+        unread = self.command == "POST" and not self._body_read
+        if unread:
+            self.send_header("Connection", "close")
+            self.close_connection = True
         if self.server.closing.is_set():
             # A server replaced after a LAN switch still answers what
             # arrives on a connection the browser kept open, then hangs
@@ -5054,8 +5061,12 @@ class Handler(BaseHTTPRequestHandler):
         else:
             self._json({"error": "not found"}, HTTPStatus.NOT_FOUND)
 
+    # Whether this request's body has been read off the connection.
+    _body_read = True
+
     def do_POST(self) -> None:
         url = urlparse(self.path)
+        self._body_read = False
 
         if not self._authorized({}):
             self._refuse()
@@ -5084,7 +5095,9 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         try:
-            body = json.loads(self.rfile.read(length) or b"{}")
+            raw = self.rfile.read(length)
+            self._body_read = True
+            body = json.loads(raw or b"{}")
             if not isinstance(body, dict):
                 raise ValueError("expected an object")
             self._json(self._post(url.path, body))
