@@ -398,6 +398,12 @@ class Chat:
     # versions share: what the chat was from that message on, in the log
     # and in what the model saw, with None for the version showing now.
     branches: dict[str, list] = field(default_factory=dict)
+    # Its forks, by id: where each began (the fork it came from, and the
+    # place in that one's log it kept up to) and, for every fork but the
+    # one showing, its log, messages and edited versions, kept aside.
+    # Empty until it is first forked; the first fork is "main".
+    forks: dict[str, dict] = field(default_factory=dict)
+    fork: str = ""
 
     def summary(self) -> dict:
         return {
@@ -413,6 +419,7 @@ class Chat:
             "spark": self.spark,
             "updated": self.updated,
             "pinned": self.pinned,
+            "forks": len(self.forks),
             # What it is waiting for, while it is: a clock in the list.
             "waiting": [w.what for w in waits.for_chat(self.id)
                         if w.status == waits.WAITING],
@@ -433,6 +440,8 @@ class Chat:
             "branches": self.branches,
             "named": self.named,
             "pinned": self.pinned,
+            "forks": self.forks,
+            "fork": self.fork,
         }
 
     @classmethod
@@ -449,6 +458,8 @@ class Chat:
             branches=dict(data.get("branches") or {}),
             named=bool(data.get("named")),
             pinned=bool(data.get("pinned")),
+            forks=dict(data.get("forks") or {}),
+            fork=str(data.get("fork") or ""),
         )
 
 
@@ -1001,6 +1012,8 @@ class Session:
         chat.messages.clear()
         chat.log.clear()
         chat.branches.clear()
+        chat.forks.clear()
+        chat.fork = ""
         chat.partial = chat.thinking = ""
         workspace.delete_chat(chat.id)
         self.emit(chat, {"type": "cleared"})
@@ -1826,6 +1839,105 @@ class Session:
         self.hub.publish({
             "type": "rewound", "chat": chat.id, "keep": at, "tail": tail,
         })
+
+    # Forks --------------------------------------------------------
+
+    def fork(self, chat: Chat, at: int) -> str:
+        """Fork CHAT after the turn whose reply is at AT in its log: the
+        chat goes on from there as a new fork, and the way it went before
+        is kept as the fork it was. The same chat; only what it shows
+        changes. Returns the new fork's id."""
+
+        with self._lock:
+            if chat.busy or chat.queued:
+                raise ValueError("Wait for the reply to finish.")
+            if not 0 <= at < len(chat.log):
+                raise ValueError("That message is not in the chat any more.")
+            # The whole of that turn: up to the next message sent.
+            after = next((
+                i for i in range(at + 1, len(chat.log))
+                if chat.log[i]["type"] == "user"
+                and not chat.log[i].get("steer")
+            ), None)
+            keep = len(chat.log) if after is None else after
+            cut = len(chat.messages) if after is None \
+                else self._cut(chat, after)
+            if not chat.forks:
+                chat.forks["main"] = {
+                    "id": "main", "parent": "", "at": -1,
+                    "label": chat.title, "created": chat.created,
+                }
+                chat.fork = "main"
+            self._park(chat)
+            made = uuid.uuid4().hex[:8]
+            said = next((
+                str(e.get("text") or "") for e in reversed(chat.log[:keep])
+                if e["type"] in ("assistant", "user")
+                and str(e.get("text") or "").strip()
+            ), "")
+            chat.forks[made] = {
+                "id": made, "parent": chat.fork, "at": keep - 1,
+                "label": " ".join(said.split())[:80] or "Fork",
+                "created": time.time(),
+            }
+            del chat.log[keep:]
+            del chat.messages[cut:]
+            chat.branches = json.loads(json.dumps(chat.branches))
+            chat.fork = made
+        self._forked(chat)
+        return made
+
+    def _park(self, chat: Chat) -> None:
+        """Keep the fork showing aside, as it is now."""
+
+        chat.forks[chat.fork].update(
+            log=list(chat.log), messages=list(chat.messages),
+            branches=chat.branches,
+        )
+
+    def switch_fork(self, chat: Chat, fork_id: str) -> None:
+        """Show fork FORK_ID of CHAT, keeping the one showing aside."""
+
+        with self._lock:
+            if chat.busy or chat.queued:
+                raise ValueError("Wait for the reply to finish.")
+            found = chat.forks.get(fork_id)
+            if found is None:
+                raise ValueError("That fork is not in this chat.")
+            if fork_id == chat.fork:
+                return
+            self._park(chat)
+            chat.log = list(found.pop("log", None) or [])
+            chat.messages = list(found.pop("messages", None) or [])
+            chat.branches = found.pop("branches", None) or {}
+            chat.fork = fork_id
+        self._forked(chat)
+
+    def _forked(self, chat: Chat) -> None:
+        self.save(chat)
+        self.hub.publish({"type": "forked", "chat": chat.id,
+                          "log": chat.log, "forks": len(chat.forks)})
+        self.hub.publish({"type": "chats", "chat": chat.id})
+
+    def fork_tree(self, chat: Chat) -> list[dict]:
+        """CHAT's forks for the graph: each with where it came from, how
+        long it is, and its last words, the one showing marked."""
+
+        found = []
+        for fork in chat.forks.values():
+            showing = fork["id"] == chat.fork
+            log = chat.log if showing else fork.get("log") or []
+            said = [e for e in log if e.get("type") in ("user", "assistant")
+                    and str(e.get("text") or "").strip()]
+            last = " ".join(str(said[-1]["text"]).split())[:90] \
+                if said else ""
+            found.append({
+                "id": fork["id"], "parent": fork.get("parent", ""),
+                "label": fork.get("label", ""), "created":
+                fork.get("created", 0), "messages": len(said),
+                "last": last, "current": showing,
+            })
+        return found
 
     def retry(self, chat: Chat) -> None:
         """Run a turn that failed again, from its message.
@@ -3761,6 +3873,19 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
         except workspace.WorkspaceError as exc:
             raise ValueError(str(exc)) from None
         return {"file": info}
+
+    if name == "fork":
+        chat = session.chat(chat_id)
+        made = session.fork(chat, int(arg))
+        return {"fork": made, "forks": session.fork_tree(chat)}
+
+    if name == "fork-switch":
+        chat = session.chat(chat_id)
+        session.switch_fork(chat, arg)
+        return {"forks": session.fork_tree(chat)}
+
+    if name == "forks":
+        return {"forks": session.fork_tree(session.chat(chat_id))}
 
     if name == "pin":
         # "on" or "off", or nothing to flip it.

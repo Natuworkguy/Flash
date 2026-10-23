@@ -1220,6 +1220,12 @@ your chats, the latest first, grouped by chat: ones you sent and ones
 Flash made and showed you, like a post it wrote. Pick one and a copy
 goes with your next message, as if you had attached it again.
 
+**Forks**: the fork button under a reply forks the chat there. You
+carry on from that reply in the same chat, and the way it went before
+is kept. Once a chat has forks, a Forks button at the top shows them
+as a tree, each under the reply it forked from, forks of forks and
+all; pick one to carry on where it left off.
+
 **Pinned chats** stay at the top of the sidebar, under Pinned, whatever
 project they are in: the pin beside a chat (on hover), or `/pin` for the
 open one, pins and unpins it. Scrolled up in a chat, a down arrow over
