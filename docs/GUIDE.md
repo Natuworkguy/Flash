@@ -1226,6 +1226,18 @@ is kept. Once a chat has forks, a Forks button at the top shows them
 as a tree, each under the reply it forked from, forks of forks and
 all; pick one to carry on where it left off.
 
+**Briefing** (in the sidebar, `Alt+B`, or `/briefing`) is what came in
+while you were away, as a full-screen feed you swipe or scroll through
+one card at a time: unread email and iMessages, spark reports you have
+not read, waits that finished or gave up, chats that answered, waits
+coming up in the next day, and anything new a connector a spark watches
+said. It looks back one day. Each card can be answered (Reply), opened
+(the chat, the spark's report, or the email), asked about in a new chat
+(Ask Flash), or dismissed for good. `j`/`k` or the arrow keys move,
+`r`, `o`, `a` and `d` do the actions, and `Esc` closes it; the rail on
+the right shows where you are. A source that cannot be reached is left
+out and named at the end.
+
 **Pinned chats** stay at the top of the sidebar, under Pinned, whatever
 project they are in: the pin beside a chat (on hover), or `/pin` for the
 open one, pins and unpins it. Scrolled up in a chat, a down arrow over
