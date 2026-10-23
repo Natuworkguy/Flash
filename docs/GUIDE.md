@@ -166,6 +166,9 @@ python run.py
   question nor the answer joins the conversation, and the work in
   progress carries on undisturbed. The web UI takes `/btw` too, and
   shows the answer in a card above the message box until you close it.
+- `/briefing`: What came in while you were away, full screen, a card at
+  a time: unread email and iMessages, spark reports, finished waits,
+  what is coming up, and teams with news (see Briefing under Web UI).
 - `/loader [name]`: Pick the animation that turns while Flash works,
   from a list showing each one's frames. `/loader morph on` has it turn
   into another, at random, every 10 seconds. Where the terminal can't
@@ -1242,7 +1245,10 @@ chat said (Open goes to the team chat). Each card can be answered (Reply), opene
 (Ask Flash), or dismissed for good. `j`/`k` or the arrow keys move,
 `r`, `o`, `a` and `d` do the actions, and `Esc` closes it; the rail on
 the right shows where you are. A source that cannot be reached is left
-out and named at the end.
+out and named at the end. `/briefing` in the terminal opens the same
+feed full screen: Reply and Ask Flash start a message in the box, Open
+shows a spark's report, opens a team's chat, or the email in your
+browser, and `q` closes it.
 
 **Pinned chats** stay at the top of the sidebar, under Pinned, whatever
 project they are in: the pin beside a chat (on hover), or `/pin` for the
