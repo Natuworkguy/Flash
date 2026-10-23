@@ -492,6 +492,10 @@ class Spark:
     # itself until its period (BUDGET_PERIOD) is out. SPENT is
     # {"period", "tokens"}: the period's key, and what it used in it.
     budget_on: bool = False
+    # Its own permission mode: "" goes by Flash's, "ask" asks first,
+    # "auto" runs commands and edits, "ultra" asks about nothing (only
+    # where UltraAuto is offered). See mode_of.
+    mode: str = ""
     budget: int = 0
     # What the budget counts by: "hour", "day", "week" or "month".
     budget_period: str = "month"
@@ -561,6 +565,7 @@ class Spark:
         data["lead_name"] = " and ".join(data["lead_names"])
         data["used"] = used_this_period(self)
         data["period_words"] = this_period(self)
+        data["mode_used"] = mode_of(self)
         return data
 
 
@@ -3501,6 +3506,53 @@ def ultra() -> bool:
         _saved_on("ULTRA_AUTO", here)
 
 
+MODES = ("", "ask", "auto", "ultra")
+MODE_WORDS = {"": "Like Flash", "ask": "Ask first", "auto": "Auto",
+              "ultra": "UltraAuto"}
+
+
+def ultra_offered() -> bool:
+    """Whether UltraAuto may be picked at all (Offer UltraAuto)."""
+
+    from . import tools as flash_tools  # deferred: avoids a module cycle
+
+    return _saved_on("ULTRA_AUTO_ALLOWED", bool(flash_tools.ULTRA_AUTO))
+
+
+def mode_of(spark: Optional[Spark]) -> str:
+    """The mode SPARK works in: its own, or Flash's when it has none.
+    "ask", "auto" or "ultra". A spark set to UltraAuto where it is not
+    offered (any more) works in Auto."""
+
+    own = (spark.mode if spark is not None else "") or ""
+    if own == "ultra":
+        return "ultra" if ultra_offered() else "auto"
+    if own in ("ask", "auto"):
+        return own
+    return "ultra" if ultra() else "auto" if autonomous() else "ask"
+
+
+def set_mode(key: str, mode: str) -> Spark:
+    """Give a spark a permission mode of its own, or "" for Flash's."""
+
+    mode = {"follow": "", "flash": "", "default": "", "like-flash": ""}.get(
+        str(mode or "").strip().lower(), str(mode or "").strip().lower())
+    if mode not in MODES:
+        raise SparkError(
+            "A mode is follow (Flash's), ask, auto, or ultra.")
+    if mode == "ultra" and not ultra_offered():
+        raise SparkError(
+            "UltraAuto isn't offered. Turn on Offer UltraAuto in Settings "
+            "first.")
+
+    def change(spark: Spark) -> None:
+        spark.mode = mode
+
+    spark = _edit(key, change)
+    log(spark.id, "mode", mode=mode or "follow")
+    return spark
+
+
 def autonomous() -> bool:
     """Whether autonomous mode is on, as the user last set it (UltraAuto
     is, and more).
@@ -3951,7 +4003,7 @@ def _proposing(spark: Spark) -> dict[str, Callable[[dict], str]]:
         except SparkError as exc:
             return f"Error: {exc}"
         tool_line(f"ProposeHire({made['spark']['name']})")
-        if ultra():
+        if mode_of(spark) == "ultra":
             # Nobody is asked in UltraAuto: it is a yes.
             decide_hire(made["id"], True, ULTRA_YES)
             tool_result("Hired: UltraAuto said yes")
@@ -3972,7 +4024,7 @@ def _proposing(spark: Spark) -> dict[str, Callable[[dict], str]]:
         except SparkError as exc:
             return f"Error: {exc}"
         tool_line(f"ProposeRemoval({made['target_name']})")
-        if ultra():
+        if mode_of(spark) == "ultra":
             decide_hire(made["id"], True, ULTRA_YES)
             tool_result("Let go: UltraAuto said yes")
             return (f"(let go: {made['target_name']} is gone. UltraAuto is "
@@ -4201,8 +4253,7 @@ def _work(
     # With nowhere to ask (a team chat's answer), a connected app's tool
     # that changes things is only offered in autonomous mode, as a
     # command is.
-    asks = gate is not None or flash_tools.NO_COMMAND_CONFIRMATION or \
-        ultra()
+    asks = gate is not None or mode_of(spark) != "ask"
 
     def tools_now() -> list[dict]:
         # The connected MCP servers' tools too, looked at afresh each
@@ -4585,8 +4636,9 @@ def shift(spark_id: str, client=None) -> Optional[Report]:
     # autonomous mode they run, and otherwise the shift waits for the
     # user's answer.
     names = flash_tools.SPARK_TOOL_NAMES
-    auto = autonomous()
-    ultra_on = ultra()
+    # Its own mode, or Flash's.
+    auto = mode_of(spark) != "ask"
+    ultra_on = mode_of(spark) == "ultra"
 
     def gate(name: str) -> bool:
         # Sending email asks every time; the rest only out of

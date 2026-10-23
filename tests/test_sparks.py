@@ -2737,3 +2737,54 @@ def test_the_page_sets_a_team_project(project):
 
     assert shown["project"] == project.id  # nosec B101
     assert sparks.find_team("Crew").project == project.id  # nosec B101
+
+
+def test_a_spark_on_auto_runs_while_flash_asks_first(model, fake_shell):
+    made = sparks.create("Scout", "Keep the repo current.")
+    sparks.set_mode(made.id, "auto")
+    assert sparks.mode_of(sparks.find(made.id)) == "auto"
+
+    report = sparks.shift(made.id, client=FakeClient([
+        _reply("", ("shell", {"command": "git status"})),
+        _reply("Clean."),
+    ]))
+
+    assert fake_shell == ["git status"] and report.text == "Clean."
+    assert sparks.find(made.id).to_dict()["mode_used"] == "auto"
+
+
+def test_a_spark_that_asks_first_waits_in_autonomous_mode(
+        model, fake_shell, monkeypatch):
+    monkeypatch.setattr(tools, "NO_COMMAND_CONFIRMATION", True)
+    made = sparks.create("Scout", "Keep the repo current.")
+    sparks.set_mode(made.id, "ask")
+
+    sparks.shift(made.id, client=FakeClient([
+        _reply("", ("shell", {"command": "git pull"})),
+    ]))
+
+    assert fake_shell == []
+    assert sparks.find(made.id).pending["tool"] == "shell"
+
+
+def test_modes_follow_flash_unless_set(monkeypatch, tmp_path):
+    env = tmp_path / ".flash.env"
+    env.write_text("")
+    monkeypatch.setattr(sparks, "ENV_PATH", str(env))
+    made = sparks.create("Scout", "Watch the issues.")
+    assert sparks.mode_of(made) == "ask"
+    env.write_text("NO_COMMAND_CONFIRMATION=1\n")
+    assert sparks.mode_of(made) == "auto"
+
+    # UltraAuto only where it is offered; set where it no longer is, Auto.
+    with pytest.raises(sparks.SparkError, match="isn't offered"):
+        sparks.set_mode(made.id, "ultra")
+    env.write_text("ULTRA_AUTO_ALLOWED=1\n")
+    assert sparks.set_mode(made.id, "ultra").mode == "ultra"
+    assert sparks.mode_of(sparks.find(made.id)) == "ultra"
+    env.write_text("ULTRA_AUTO_ALLOWED=0\n")
+    assert sparks.mode_of(sparks.find(made.id)) == "auto"
+
+    assert sparks.set_mode(made.id, "follow").mode == ""
+    with pytest.raises(sparks.SparkError, match="A mode is"):
+        sparks.set_mode(made.id, "sometimes")

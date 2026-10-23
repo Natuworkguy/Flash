@@ -906,7 +906,7 @@ def _reply(
         ]
         # In UltraAuto an answer here gets every tool a shift has, and
         # what would ask is told yes: nobody is here to answer it.
-        ultra = sparks.ultra()
+        ultra = sparks.mode_of(spark) == "ultra"
         with sparks.answer_from(lambda question: "y") if ultra \
                 else contextlib.nullcontext():
             text = sparks._work(

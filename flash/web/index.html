@@ -10492,6 +10492,7 @@ function fillSpark(box, spark, again = false) {
     line.querySelector("span:last-child").textContent = `On ${spark.team_name}${spark.lead_name ? `, reporting to ${spark.lead_name}` : ""}`;
     box.querySelector(".spark-head .meta").after(line);
   }
+  if (spark.mode) box.querySelector(".spark-head .meta").textContent += ` · ${MODE_WORDS[spark.mode_used] || spark.mode_used}`;
   if (spark.budget_on) box.querySelector(".spark-head .meta").parentElement.appendChild(budgetMeter(spark));
   box.querySelector("[data-goal]").textContent = spark.goal;
   if (spark.boundaries) {
@@ -10958,7 +10959,8 @@ function sparkForm(spark, inProjectId = "", template = "") {
     <label class="field"><span>Project</span><select name="project"><option value="">No project</option>${[...projects].reverse().map((p) => `<option value="${esc(p.id)}"${editing && spark.project === p.id ? " selected" : ""}>${esc(p.name)}</option>`).join("")}</select><small>${projects.length ? "Its shifts work on the project's folder and follow its instructions, and a chat with it starts there." : "Make a project on the Projects page to give it one: a folder, and how to work in it."}</small></label>
     <label class="field"><span>Watch a folder <em class="count">optional</em></span><input name="watch" class="mono" placeholder="~/Downloads" autocomplete="off" spellcheck="false" role="combobox" aria-autocomplete="list" aria-expanded="false"><small>A change to its files starts a shift too, besides the schedule, and it is told which files changed. Tab takes a suggestion and shows what is inside it.</small></label>
     <div class="field events-field"><span>Start when <em class="count">optional</em></span><div class="event-checks" role="group" aria-label="Start when"></div><small class="events-said"></small></div>
-    <label class="field"><span>Boundaries</span><textarea name="boundaries" rows="2" placeholder="Only read. Never push, delete, or message anyone."></textarea><small>Lines it must not cross. Running commands and changing files also need autonomous mode, as for sub-agents.</small></label>
+    <label class="field"><span>Boundaries</span><textarea name="boundaries" rows="2" placeholder="Only read. Never push, delete, or message anyone."></textarea><small>Lines it must not cross.</small></label>
+    <label class="field"><span>Permissions</span><select name="mode"><option value="">Like Flash (${esc(MODE_WORDS[info.mode] || (info.auto ? "Auto" : "Ask first"))} now)</option><option value="ask"${editing && spark.mode === "ask" ? " selected" : ""}>Ask first</option><option value="auto"${editing && spark.mode === "auto" ? " selected" : ""}>Auto</option>${info.ultra_allowed || (editing && spark.mode === "ultra") ? `<option value="ultra"${editing && spark.mode === "ultra" ? " selected" : ""}>UltraAuto</option>` : ""}</select><small>Ask first: its commands, edits and anything that changes things wait for your yes. Auto: they run (System One still reviews them if it's on), but email still asks. UltraAuto: nothing asks. Like Flash follows the mode by the message box.</small></label>
     <label class="field"><span>Team <em class="count">optional</em></span><select name="team"><option value="">No team</option></select></label>
     <div class="field leads-field" hidden><span>Reports to <em class="count">one or more</em></span><div class="lead-chips" role="group" aria-label="Reports to"></div><small>Its own news goes up to each of them. Work one of them hands it goes back to that one, done in its project.</small></div>
     <label class="field check"><input type="checkbox" name="budget_on"${editing && spark.budget_on ? " checked" : ""}><span>Give it a budget. Past it, it pauses itself until the hour, day, week or month turns.</span></label>
@@ -10983,6 +10985,7 @@ function sparkForm(spark, inProjectId = "", template = "") {
         if (on !== !!was.budget_on || (on && ((tokens && tokens !== String(was.budget || "")) || period !== (was.budget_period || "month")))) {
           await command("spark-budget", id, null, { on, tokens: on ? tokens : "", period });
         }
+        if ((data.mode || "") !== (was.mode || "")) await command("spark-mode", id, null, { mode: data.mode || "" });
       };
       if (editing) {
         // Not "name": that is the command's own.
