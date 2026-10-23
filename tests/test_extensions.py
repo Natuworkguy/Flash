@@ -340,7 +340,7 @@ class TestWiring:
         manifest["tools"][0]["confirm"] = True
         (folder / extensions.MANIFEST).write_text(json.dumps(manifest))
         install(tmp_path, folder)
-        monkeypatch.setattr(tools, "typed", lambda: "n")
+        monkeypatch.setattr(tools, "yes_no", lambda: "n")
 
         assert tools.run_tool(("echo_word", {"word": "x"})) == (
             "Blocked by user"

@@ -122,6 +122,7 @@ from .theme import (
     tool_result,
     typed,
     warn,
+    yes_no,
 )
 from .theme import error as show_error
 from .tools import (
@@ -4547,7 +4548,7 @@ def _web_tunnel(arg: str) -> None:
     prompt.append("y", style=f"bold {ACCENT}")
     prompt.append("/n ", style=DIM)
     console.print(prompt, end="")
-    if typed() != "y":
+    if yes_no() != "y":
         console.print(Text("Left as it was.", style=DIM))
         return
     try:
@@ -5750,7 +5751,7 @@ def _run_update(*, force: bool = False) -> bool:
         ask.append("/n ", style=DIM)
         console.print(ask, end="")
         try:
-            answer = typed()
+            answer = yes_no()
         except EOFError:
             console.print()
             return True
@@ -5805,7 +5806,7 @@ def _confirm_url_prompt(prompt: str) -> bool:
     console.print(ask, end="")
 
     try:
-        answer = typed()
+        answer = yes_no()
     except EOFError:
         console.print()
         return False

@@ -615,6 +615,105 @@ def typed() -> str:
     return answer.strip().lower()
 
 
+def mouse_on() -> bool:
+    """Whether to take clicks: where the terminal is a real one that
+    reports them (nearly all do: VS Code's, iTerm, Terminal, Windows
+    Terminal), unless MOUSE=0 says not."""
+
+    import os
+
+    said = os.environ.get("MOUSE", "1").strip().lower()
+    if said in ("0", "off", "no", "false"):
+        return False
+    if os.environ.get("TERM", "") == "dumb":
+        return False
+    return sys.stdin.isatty() and console.is_terminal
+
+
+def yes_no() -> str:
+    """The answer to a yes-or-no question just printed: "y" or "n". Two
+    buttons under it take a click, and y, n, Enter, the arrows and Esc
+    work too. Without a terminal to draw them on, a typed line, as
+    typed() reads it."""
+
+    if not mouse_on():
+        return typed()
+
+    from prompt_toolkit.application import Application
+    from prompt_toolkit.key_binding import KeyBindings
+    from prompt_toolkit.layout import Layout, Window
+    from prompt_toolkit.layout.controls import FormattedTextControl
+    from prompt_toolkit.mouse_events import MouseEventType
+
+    picked = {"at": 0}
+
+    def choose(answer: str):
+        def handler(event) -> None:
+            if event.event_type == MouseEventType.MOUSE_UP:
+                app.exit(result=answer)
+            elif event.event_type == MouseEventType.MOUSE_MOVE:
+                picked["at"] = 0 if answer == "y" else 1
+        return handler
+
+    def render() -> StyleAndTextTuples:
+        out: StyleAndTextTuples = [("", "     ")]
+        for n, (answer, label) in enumerate((("y", " Yes "), ("n", " No "))):
+            on = picked["at"] == n
+            style = (f"bg:{ACCENT} #ffffff bold" if on and answer == "y"
+                     else "reverse bold" if on else f"{DIM_HEX}")
+            out.append((style, f"[{label}]", choose(answer)))
+            out.append(("", "  "))
+        out.append((DIM_HEX, "  y / n, or click"))
+        return out
+
+    keys = KeyBindings()
+
+    @keys.add("y")
+    def _yes(event) -> None:
+        event.app.exit(result="y")
+
+    @keys.add("n")
+    @keys.add("escape")
+    @keys.add("c-c")
+    def _no(event) -> None:
+        event.app.exit(result="n")
+
+    @keys.add("left")
+    @keys.add("right")
+    @keys.add("tab")
+    def _move(event) -> None:
+        picked["at"] = 1 - picked["at"]
+
+    @keys.add("enter")
+    def _enter(event) -> None:
+        event.app.exit(result="y" if picked["at"] == 0 else "n")
+
+    @keys.add("c-d")
+    def _eof(event) -> None:
+        event.app.exit(exception=EOFError)
+
+    app: Application = Application(
+        layout=Layout(Window(FormattedTextControl(render), height=1,
+                             always_hide_cursor=True)),
+        key_bindings=keys, mouse_support=True, erase_when_done=True,
+    )
+    try:
+        console.file.write("\n")
+        console.file.flush()
+        with screen_to_itself():
+            answer = app.run()
+    finally:
+        if console.asking:
+            console.asking = False
+            if _dock is not None:
+                _dock.resume()
+    said = "yes" if answer == "y" else "no"
+    # Under the question, where the buttons were: what was picked.
+    console.print(Text(f"     {said}", style=f"bold {ACCENT}" if answer ==
+                       "y" else DIM))
+    return answer
+
+
 def confirm(question: str) -> bool:
     """Ask QUESTION on one y/n line. True only for a plain yes."""
 
@@ -625,7 +724,7 @@ def confirm(question: str) -> bool:
     console.print(ask, end="")
 
     try:
-        answer = typed()
+        answer = yes_no()
     except EOFError:
         console.print()
         return False

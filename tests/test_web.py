@@ -493,7 +493,7 @@ class TestFlags:
 
 def test_tools_confirm_in_the_terminal_without_a_page(monkeypatch):
     # No answerer on this thread: the old y/n prompt is still used.
-    monkeypatch.setattr(tools, "typed", lambda: "n")
+    monkeypatch.setattr(tools, "yes_no", lambda: "n")
 
     assert tools.shell_tool("echo hi") == "Command blocked by user"
 

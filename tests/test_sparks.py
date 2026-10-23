@@ -1729,7 +1729,7 @@ def test_a_tool_that_asks_is_told_yes_in_autonomous_mode(
     def no_terminal():
         raise AssertionError("asked the terminal")
 
-    monkeypatch.setattr(tools, "typed", no_terminal)
+    monkeypatch.setattr(tools, "yes_no", no_terminal)
     made = sparks.create("Scout", "Say hi.")
     client = FakeClient([
         _reply("", ("shell", {"command": "echo hi-from-spark"})),
