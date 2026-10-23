@@ -1254,7 +1254,10 @@ this browser:
   between messages, and how round the corners are.
 - **Loading animation**: Dots, Bloom, Orbit, Pulse, Wave, Bounce, Grid,
   Snake, Arc, Cursor, Comet, Singularity (a black hole that pulls
-  every dot in, then blows them out), or an extension's. Turn on **Morph between
+  every dot in, then blows them out), Quill, or an extension's. While
+  Flash writes (its last step wrote a file or a document), a hand
+  guides a quill instead and it says Writing; **A quill while Flash
+  writes** turns that off (`LOADER_WRITING=0`). Turn on **Morph between
   loaders** and every 10 seconds it shrinks away into another, at
   random, for as long as Flash works. Both are the same settings as the
   terminal's `/loader` and `/loader morph`.
