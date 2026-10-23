@@ -869,12 +869,22 @@ one's tools, and turns them on and off.
 
 They are kept in `~/.flash/mcp.json`, readable only by you, in the
 `mcpServers` shape other MCP clients use, so a config written for one of
-them works pasted in as it is. Servers start in the background the first
-time Flash wants tools, and stop when it exits.
+them works pasted in as it is. Servers start in the background when
+Flash starts (the terminal, the web UI, or the sparks' keeper), so their
+tools are there for the first message and the first shift, and stop
+when it exits.
 
 A tool its server marks read-only runs straight away. Any other asks
 first, as a shell command does, unless autonomous mode is on, where
 [System One](#system-one) looks it over instead.
+
+Sparks have the connectors' tools too, in their shifts and in a chat
+with them, asked about the same way: a shift that reaches for one that
+changes things waits for your yes, out of autonomous mode. If a tool
+seems missing, because a server was added or crashed since, the model
+can call `refresh_tools`: it starts any server that isn't running, has
+each list its tools again, and the new ones are there from its next
+step.
 
 ### Your computer
 

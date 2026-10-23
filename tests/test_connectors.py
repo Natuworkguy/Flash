@@ -271,3 +271,95 @@ def test_a_server_elsewhere_over_http(monkeypatch):
         "Bearer t",
     }
     assert methods[-1] == "DELETE"  # nosec B101
+
+
+# --- Sparks, and refreshing tools -------------------------------------------
+
+
+class _Said:
+    def __init__(self, content="", calls=()):
+        self.content = content
+        self.tool_calls = [
+            type("Call", (), {"function": type("Fn", (), {
+                "name": name, "arguments": args})()})()
+            for name, args in calls
+        ]
+
+
+class _Model:
+    """Says each of SAID in turn, and keeps the tools it was offered."""
+
+    def __init__(self, *said):
+        self.said = list(said)
+        self.offered = []
+
+    def chat(self, model, messages, tools=None, options=None):
+        self.offered.append({t["function"]["name"] for t in tools or []})
+        return type("Response", (), {"message": self.said.pop(0)})()
+
+
+@pytest.fixture
+def spark_model(monkeypatch):
+    from flash import sparks
+
+    monkeypatch.setattr(sparks, "get_model_system_prompt", lambda h, m: "")
+    monkeypatch.setattr(tools, "MODEL_NAME", "test-model")
+    monkeypatch.setattr(tools, "OLLAMA_HOST", "http://localhost:11434")
+    monkeypatch.setattr(tools, "NO_COMMAND_CONFIRMATION", False)
+    monkeypatch.setattr(sparks, "autonomous", lambda: False)
+    return sparks
+
+
+def test_a_spark_has_the_connected_servers_tools(fake, spark_model):
+    sparks = spark_model
+    made = sparks.create("Scout", "Add things up.")
+    model = _Model(_Said("", [("fake__add", {"a": 2, "b": 3})]),
+                   _Said("It is 5."))
+
+    report = sparks.shift(made.id, client=model)
+
+    assert "fake__add" in model.offered[0]  # nosec B101
+    assert "refresh_tools" in model.offered[0]  # nosec B101
+    assert report.text == "It is 5." and not report.approval  # nosec
+
+
+def test_a_spark_asks_before_a_tool_that_changes_things(fake, spark_model):
+    sparks = spark_model
+    made = sparks.create("Scout", "Take notes.")
+
+    report = sparks.shift(made.id, client=_Model(
+        _Said("", [("fake__note", {"text": "hi"})])))
+
+    assert report.approval  # nosec B101
+    assert sparks.find(made.id).pending["tool"] == "fake__note"  # nosec
+
+
+def test_refresh_tools_starts_a_server_that_failed(fake):
+    server = connectors._servers["fake"]
+    server.stop(keep_state=True)
+    server.state = connectors.FAILED
+    assert "fake__add" not in {  # nosec B101
+        t["function"]["name"] for t in connectors.tool_schemas()}
+
+    said = tools.refresh_tools()
+
+    assert "fake: ready, with fake__add" in said  # nosec B101
+    assert "fake__add" in {  # nosec B101
+        t["function"]["name"] for t in connectors.tool_schemas()}
+
+
+def test_refresh_tools_with_none_set_up_says_how_to_add_one():
+    assert "Settings, Connectors" in tools.refresh_tools()  # nosec B101
+
+
+def test_flash_starts_the_servers_when_it_starts(monkeypatch):
+    started = []
+    monkeypatch.setattr(web.connectors, "start", lambda: started.append(1))
+    srv = web.Server(0)
+    try:
+        web._attach(srv, standalone=False)
+    finally:
+        srv.server_close()
+        web._background = None
+
+    assert started  # nosec B101

@@ -53,6 +53,8 @@ CALL_SECONDS = 120.0
 # How long the first turn that wants tools waits for servers still
 # starting, before going on without them.
 FIRST_WAIT_SECONDS = 10.0
+# How long refresh() waits for servers still starting.
+REFRESH_SECONDS = 15.0
 SEPARATOR = "__"
 NAME_CHARS = 64
 # What a server prints to its error output, kept for when it fails.
@@ -576,6 +578,28 @@ def start() -> None:
             thread = threading.Thread(target=server.start, daemon=True)
             _starting.append(thread)
             thread.start()
+
+
+def refresh(wait: float = REFRESH_SECONDS) -> list[Server]:
+    """Bring the servers up to date, for a model that is missing tools:
+    start the ones not running (one added since, one that failed), wait
+    a while for them, and have the running ones list their tools again.
+    Every configured server, as it stands then."""
+
+    _begun.set()
+    with _lock:
+        for name in list(_servers):
+            if _servers[name].state in (FAILED, OFF):
+                _servers.pop(name).stop()
+    start()
+    deadline = time.monotonic() + wait
+    while time.monotonic() < deadline and any(
+        s.state == STARTING for s in servers()
+    ):
+        time.sleep(0.2)
+    for server in _ready():
+        server._relist()
+    return servers()
 
 
 def reload() -> None:

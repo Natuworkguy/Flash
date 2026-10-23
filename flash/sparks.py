@@ -4119,9 +4119,16 @@ def _work(
         # anyway, so it is told so when it reaches for them, and says
         # so, rather than reporting that its tools are missing.
         offered = offered + flash_tools.EMAIL_TOOLS
-    schemas = [
-        t for t in offered if t["function"]["name"] in allowed
-    ] + own_tools
+    base = [t for t in offered if t["function"]["name"] in allowed]
+
+    def tools_now() -> list[dict]:
+        # The connected MCP servers' tools too, looked at afresh each
+        # step: a refresh_tools brings new ones in at once.
+        taken = frozenset(t["function"]["name"] for t in base + own_tools)
+        return base + own_tools + flash_tools.connectors.tool_schemas(taken)
+
+    def connected(name: str) -> bool:
+        return flash_tools.connectors.find(name) is not None
 
     # The model's own note on what it is doing ("now running the
     # tests"), shown in place of the bare step while there is one.
@@ -4153,7 +4160,7 @@ def _work(
                 })
             doing(note[0] or "Thinking")
             response = ask(
-                model=model, messages=messages, tools=schemas,
+                model=model, messages=messages, tools=tools_now(),
                 options=subagents.chat_options(),
             )
             spent(_tokens_of(response))
@@ -4178,13 +4185,17 @@ def _work(
             })
             for at, (name, args) in enumerate(calls):
                 why = ""
-                if gate is not None and name in allowed and gate(name):
+                if gate is not None and (name in allowed or connected(
+                        name)) and gate(name):
                     # Half written ("x", "placeholder"): back to the
                     # model to finish, never put to the user like that.
                     why = flash_tools.unfinished(name, args)
                     if not why:
                         raise NeedsApproval(name, args, calls[at + 1:])
-                result = why or _call(name, args, allowed, steps, own)
+                result = why or _call(
+                    name, args, allowed + ((name,) if connected(name) else ()),
+                    steps, own,
+                )
                 log(spark.id, "tool", tool=name, args=args,
                     result=str(result), during=audit_as)
                 messages.append({
@@ -4461,9 +4472,11 @@ def shift(spark_id: str, client=None) -> Optional[Report]:
 
     def gate(name: str) -> bool:
         # Sending email asks every time; the rest only out of
-        # autonomous mode.
+        # autonomous mode, as does a connected app's tool that changes
+        # things.
         return name in flash_tools.ALWAYS_ASK_TOOL_NAMES or (
-            not auto and name in flash_tools.CONFIRMED_TOOL_NAMES
+            not auto and (name in flash_tools.CONFIRMED_TOOL_NAMES
+                          or _connector_changes(name))
         )
 
     def record(kind: str, text: str, style: str) -> None:
@@ -4759,6 +4772,16 @@ def stop(key: str) -> Spark:
     return spark
 
 
+def _connector_changes(name: str) -> bool:
+    """Whether NAME is a connected MCP server's tool that its server does
+    not say only reads."""
+
+    from . import connectors  # deferred: only a connector's call needs it
+
+    found = connectors.find(name)
+    return found is not None and not connectors.read_only(found[1])
+
+
 def _call(
     name: str, args: dict, allowed: tuple[str, ...],
     steps: list[str], own: dict[str, Callable[[dict], str]],
@@ -4978,11 +5001,15 @@ class ChatKit:
         return "(stopping: your shift ends at its next step)"
 
     def offer(self, tools: list[dict]) -> list[dict]:
-        """Of TOOLS, the ones a spark may use here, and its own."""
+        """Of TOOLS, the ones a spark may use here, and its own: the
+        connected MCP servers' too."""
+
+        from . import connectors  # deferred: only a chat's offer needs it
 
         names = chat_tool_names()
         return [
             t for t in tools if t["function"]["name"] in names
+            or connectors.find(t["function"]["name"]) is not None
         ] + self.schemas
 
     def _learn(self, args: dict) -> str:
