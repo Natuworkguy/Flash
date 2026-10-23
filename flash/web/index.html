@@ -1653,6 +1653,14 @@ button.item-row:hover { background: var(--hover); }
 .spark-av[data-state="paused"]::before, .spark-av[data-state="paused"]::after { content: "z"; position: absolute; top: -8%; right: 6%; font: 700 calc(var(--s) * 0.26)/1 var(--sans); color: var(--text-2); opacity: 0; animation: spark-z 3s ease-out infinite; }
 .spark-av[data-state="paused"]::after { animation-delay: 1.5s; }
 
+/* Frozen until something comes in: still, eyes half shut, a small clock
+   at its shoulder. */
+.spark-av[data-state="frozen"] .eye { height: calc(var(--s) * 0.09); }
+.spark-av .wait-clock { position: absolute; top: -14%; right: -14%; width: max(11px, calc(var(--s) * 0.42)); height: max(11px, calc(var(--s) * 0.42)); display: grid; place-items: center; border-radius: 50%; background: var(--surface); color: var(--text-2); box-shadow: 0 0 0 1px var(--border); }
+.spark-av .wait-clock svg { width: 78%; height: 78%; }
+.chat .waits { display: grid; place-items: center; flex: none; width: 16px; height: 16px; margin-right: 8px; color: var(--text-3); }
+.chat .waits svg { width: 13px; height: 13px; }
+
 /* Waiting on you: a curious tilt, eyes up, and a question bobbing. */
 .spark-av[data-state="waiting"] { animation: spark-tilt 2.4s ease-in-out infinite; }
 .spark-av[data-state="waiting"] .eyes { animation: none; transform: translateY(calc(var(--s) * -0.04)); }
@@ -6563,6 +6571,11 @@ function drawEntry(entry, ctx) {
 // stands, and Cancel while it waits.
 const WAIT_HEADS = { waiting: "Waiting", done: "Done waiting", gave_up: "Stopped waiting", cancelled: "Cancelled" };
 
+// An event a wait or a frozen spark is waiting for, as said.
+function eventWords(e) {
+  return e === "email" ? "a new email" : e === "imessage" ? "a new iMessage" : `a change in ${e.slice(4).split("/")[0]}`;
+}
+
 function waitWhen(seconds) {
   const at = new Date(seconds * 1000);
   const today = new Date().toDateString() === at.toDateString();
@@ -6577,8 +6590,7 @@ function waitCard(w) {
   const every = `every ${w.every} min`;
   const open = w.status === "waiting";
   const say = (text) => how.append(text);
-  const EVENT_WORDS = (e) => e === "email" ? "a new email" : e === "imessage" ? "a new iMessage" : `a change in ${e.slice(4).split("/")[0]}`;
-  if (w.events && w.events.length) say(`${open ? "Until" : "For"} ${w.events.map(EVENT_WORDS).join(" or ")} comes in${w.keep ? ", every time, until cancelled" : ""}`);
+  if (w.events && w.events.length) say(`${open ? "Until" : "For"} ${w.events.map(eventWords).join(" or ")} comes in${w.keep ? ", every time, until cancelled" : ""}`);
   else if (w.command) { say(open ? "Running " : "Ran "); how.appendChild(el("code")).textContent = w.command; say(` ${every}`); }
   else if (w.check) say(`${open ? "Looking" : "Looked"} for: ${w.check}, ${every}`);
   else say(open ? `Until ${waitWhen(w.at)}` : `At ${waitWhen(w.at)}`);
@@ -6602,6 +6614,10 @@ function waitCard(w) {
 function waitChanged(event) {
   const chat = chats.get(event.chat);
   if (!chat) return;
+  // The clock in the list comes and goes with its waits.
+  const open = (chat.waiting || []).filter((what) => what !== event.what);
+  chat.waiting = event.status === "waiting" ? [...open, event.what] : open;
+  renderChats();
   const entry = chat.log.find((e) => e.type === "wait" && e.id === event.id);
   if (entry) { Object.assign(entry, event); delete entry.chat; }
   const card = messagesEl.querySelector(`[data-wait="${event.id}"]`);
@@ -7443,7 +7459,8 @@ const EVERY_CHOICES = [[15, "Every 15 minutes"], [30, "Every 30 minutes"], [60, 
 function sparkAvatar(spark, size = 36, i = 0) {
   const av = el("span", "spark-av", `<i class="face"><i class="eyes"><i class="eye"></i><i class="eye"></i></i></i>`);
   av.dataset.state = spark.status === "working" ? "working" : spark.waiting ? "waiting" : spark.paused ? "paused"
-    : spark.unavailable ? "unavailable" : spark.status === "failed" ? "failed" : onCall(spark) ? "oncall" : "idle";
+    : spark.unavailable ? "unavailable" : spark.status === "failed" ? "failed" : frozen(spark) ? "frozen"
+    : onCall(spark) ? "oncall" : "idle";
   // Too small for a "?" or z's to read beside it.
   av.classList.toggle("tiny", size < 20);
   av.style.setProperty("--c", spark.colour);
@@ -7451,6 +7468,7 @@ function sparkAvatar(spark, size = 36, i = 0) {
   av.style.setProperty("--i", i);
   av.setAttribute("aria-hidden", "true");
   if (spark.unread || spark.waiting) av.appendChild(el("span", "ping"));
+  else if (av.dataset.state === "frozen") av.appendChild(el("span", "wait-clock", icon("clock")));
   return av;
 }
 
@@ -7688,12 +7706,17 @@ function everyWords(minutes) {
 // hand-off, a job from Flash or an @mention, and never by the clock.
 function onCall(spark) { return !spark.at && spark.every === 0; }
 
+// Frozen: it put itself to sleep until something comes in.
+function frozen(spark) { return !!(spark.waiting_on && spark.waiting_on.length); }
+function frozenWords(spark) { return `Waiting for ${spark.waiting_on.map(eventWords).join(" or ")}`; }
+
 function sparkState(spark) {
   if (spark.waiting) return "Waiting for your approval";
   if (spark.answering) return "Answering you";
   if (spark.status === "working") return spark.activity ? `Working: ${spark.activity}` : "Working";
   if (spark.paused) return "Paused";
   if (spark.unavailable) return `Unavailable: ${spark.unavailable_model || "no model"} failed`;
+  if (frozen(spark)) return frozenWords(spark);
   if (onCall(spark)) return spark.status === "failed" ? "Last shift failed · On call" : "On call";
   const wait = Math.round((spark.next_run - Date.now() / 1000) / 60);
   const next = wait <= 0 ? "Starting soon" : wait < 120 ? `Next shift in ${wait} min` : wait < 2880 ? `Next shift in ${Math.round(wait / 60)} h` : `Next shift in ${Math.round(wait / 1440)} d`;
@@ -7708,6 +7731,7 @@ function sparkPresence(spark) {
   if (spark.paused) return ["paused", "Paused"];
   if (spark.unavailable) return ["failed", "Unavailable"];
   if (spark.status === "failed") return ["failed", "Last shift failed"];
+  if (frozen(spark)) return ["frozen", frozenWords(spark)];
   return ["idle", spark.unread ? `${spark.unread} new report${spark.unread === 1 ? "" : "s"}` : onCall(spark) ? "On call" : "Ready"];
 }
 
@@ -7719,6 +7743,7 @@ function sparkOnline(spark) {
   if (spark.unavailable && spark.status !== "working") return ["dnd", "Do not disturb: unavailable"];
   if (spark.status === "working" || spark.answering) return ["online", "Online: working"];
   if (spark.waiting) return ["online", "Online: needs you"];
+  if (frozen(spark)) return ["idle", `Idle: ${frozenWords(spark).toLowerCase()}`];
   if (onCall(spark)) return ["online", "Online: on call"];
   return ["idle", "Idle: between shifts"];
 }
@@ -13864,7 +13889,7 @@ function refreshLite() {
     const ids = state.chats.map((c) => c.id);
     for (const c of state.chats) {
       const known = chats.get(c.id);
-      if (known) Object.assign(known, { title: c.title, busy: c.busy, queued: c.queued, pending: c.pending || [], project: c.project, spark: c.spark, updated: c.updated });
+      if (known) Object.assign(known, { title: c.title, busy: c.busy, queued: c.queued, pending: c.pending || [], project: c.project, spark: c.spark, updated: c.updated, waiting: c.waiting || [] });
       else chats.set(c.id, { ...c, log: [], partial: "", thinking: "" });
     }
     for (const id of [...chats.keys()]) if (!ids.includes(id)) chats.delete(id);
@@ -14044,6 +14069,11 @@ function renderChats() {
     open.ondblclick = () => renameInSide(id, row);
     row.appendChild(open);
     if (chat.busy || chat.queued) row.appendChild(el("span", "live"));
+    else if (chat.waiting && chat.waiting.length) {
+      const clock = el("span", "waits", icon("clock"));
+      clock.title = `Waiting: ${chat.waiting.join("; ")}`;
+      row.appendChild(clock);
+    }
     const acts = el("span", "acts");
     acts.append(
       button("", "edit", "Rename", "", () => renameInSide(id, row)),

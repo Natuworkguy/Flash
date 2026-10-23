@@ -314,3 +314,15 @@ def test_an_event_wait_without_keep_is_over_once_one_comes_in(
 
     assert only(session).status == waits.DONE  # nosec B101
     assert "From Sam: Re" in session.woke[0]["text"]  # nosec B101
+
+
+def test_a_chat_says_what_it_is_waiting_for_in_the_list(session):
+    assert session.chat_.summary()["waiting"] == []  # nosec B101
+    web.wait_for(session, session.chat_, {
+        "what": "new texts", "then": "answer them", "events": "imessage",
+        "keep": True,
+    })
+    assert session.chat_.summary()["waiting"] == ["new texts"]  # nosec
+
+    waits.cancel(only(session).id)
+    assert session.chat_.summary()["waiting"] == []  # nosec B101

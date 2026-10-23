@@ -3625,7 +3625,7 @@ class TestSparkChats:
             "title": "", "colour": spark.colour, "project": "",
             "status": "idle", "paused": False, "waiting": False,
             "answering": False, "unread": 0, "activity": "",
-            "next_run": spark.next_run, "pending": {},
+            "next_run": spark.next_run, "waiting_on": [], "pending": {},
         }]
 
     def test_a_spark_is_made_paused_from_the_page(self):

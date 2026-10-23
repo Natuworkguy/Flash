@@ -391,6 +391,9 @@ class Chat:
             "project": self.project,
             "spark": self.spark,
             "updated": self.updated,
+            # What it is waiting for, while it is: a clock in the list.
+            "waiting": [w.what for w in waits.for_chat(self.id)
+                        if w.status == waits.WAITING],
         }
 
     def saved(self) -> dict:
@@ -1021,7 +1024,7 @@ class Session:
                  "status": s.status, "paused": s.paused,
                  "waiting": s.waiting, "answering": s.answering,
                  "unread": s.unread, "activity": s.activity,
-                 "next_run": s.next_run,
+                 "next_run": s.next_run, "waiting_on": s.waiting_on,
                  "pending": {k: s.pending[k] for k in ("label", "detail")
                              if k in s.pending},
                  "project": s.project if sparks.project_of(s) else ""}
