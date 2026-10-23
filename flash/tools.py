@@ -2648,6 +2648,35 @@ def computer_tool(action: str, value: Any = "") -> str:
     return result
 
 
+def refresh_tools() -> str:
+    """Bring the connected MCP servers up to date, and say what each has."""
+
+    tool_line("RefreshTools()")
+    found = connectors.refresh()
+    if not found:
+        result = ("No MCP servers are set up. The user adds them in "
+                  "Settings, Connectors, or with /mcp add.")
+        tool_result(result, style=WARN)
+        return result
+    lines = []
+    for server in found:
+        if server.state == connectors.READY:
+            names = ", ".join(
+                connectors.tool_name(server.name, str(t["name"]))
+                for t in server.tools) or "no tools"
+            lines.append(f"{server.name}: ready, with {names}")
+        elif server.state == connectors.STARTING:
+            lines.append(f"{server.name}: still starting; refresh again "
+                         "in a moment")
+        else:
+            why = server.why or server.state
+            lines.append(f"{server.name}: not running ({why})")
+    result = ("MCP servers, as they are now. Their tools are yours from "
+              "your next step:\n" + "\n".join(lines))
+    tool_result(result)
+    return result
+
+
 def get_date() -> str:
     """Return the current date using the local timezone."""
 
@@ -5503,6 +5532,21 @@ tools: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "refresh_tools",
+            "description": (
+                "Refresh the tools from the user's connected MCP servers: "
+                "start any that are not running (one just added, one that "
+                "failed), and have each list its tools again. Use it when "
+                "a tool you expect from a connected app is missing, then "
+                "use the new ones on your next step. It says which servers "
+                "are up and what tools each has."
+            ),
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "get_date",
             "description": (
                 "Return the current date in YYYY-MM-DD format using the "
@@ -5958,6 +6002,7 @@ FUNCTIONS = {
     "get_os": get_os,
     "reason": reason,
     "get_date": get_date,
+    "refresh_tools": refresh_tools,
     "plan": plan_tool,
     "check_step": check_step,
     "remember": remember,
@@ -5990,6 +6035,7 @@ SUBAGENT_TOOL_NAMES = (
     "shell", "glob", "grep", "read", "write", "edit", "multi_edit",
     "web_search", "fetch", "get_os", "get_date", "reason",
     "check_inbox", "read_email", "notify_user", "read_imessages",
+    "refresh_tools",
 )
 
 # A spark's tools: a sub-agent's, and sending email or an iMessage, which

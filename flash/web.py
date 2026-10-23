@@ -2917,7 +2917,8 @@ def _respond(
                 elif kit is not None and name in kit.tools:
                     output = kit.tools[name](args)
                     tool_count += 1
-                elif kit is not None and name not in sparks.chat_tool_names():
+                elif kit is not None and name not in sparks.chat_tool_names() \
+                        and flash_tools.connectors.find(name) is None:
                     output = f"Unknown tool: {name}."
                 elif name == "give_spark":
                     # Its report comes back to this chat, not only to
@@ -2942,6 +2943,13 @@ def _respond(
                     "content": flash_tools.trim_tool_output(output, name),
                     "tool_name": name,
                 })
+
+            if any(name == "refresh_tools" for name, _ in named):
+                # New tools from the connected apps, from the next step.
+                offered = flash_tools.turn_tools()
+                if kit is not None:
+                    offered = kit.offer(offered)
+                offered = offered + chat_tools(chat)
 
             images = flash_tools.take_pending_images()
             if images:
@@ -5501,6 +5509,9 @@ def _attach(server: "Server", standalone: bool) -> None:
     # to the page as soon as it is written.
     teamchat.watch()
     sparks.start()
+    # The MCP servers start with Flash, not with the first chat that
+    # wants their tools.
+    connectors.start()
     session.always.start()
     session.port = server.port
     session.switch_lan = lambda on: threading.Timer(

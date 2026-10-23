@@ -3910,6 +3910,8 @@ def _keep_sparks() -> None:
     # Started for always on, it goes when always on does. Run by hand
     # with always on off, it runs until stopped.
     wanted = keepalive.installed if keepalive.installed() else None
+    # Its sparks have the connected apps' tools from their first shift.
+    connectors.start()
     try:
         updated = sparks.serve(
             prepare=refresh_config, announce=announce, wanted=wanted,
@@ -5340,8 +5342,10 @@ def _main() -> None:
 
     client = _client()
 
-    # Sparks work for as long as Flash is open.
+    # Sparks work for as long as Flash is open, and the MCP servers start
+    # with it, so their tools are there for the first turn and shift.
     sparks.start()
+    connectors.start()
 
     _clear_screen()
 
@@ -6096,6 +6100,12 @@ def _main() -> None:
                         "content": trimmed,
                         "tool_name": name,
                     })
+
+                if any(_tool_call_name_args(c)[0] == "refresh_tools"
+                       for c in tool_calls):
+                    # New tools from the connected apps, from the next
+                    # step on.
+                    offered = turn_tools()
 
                 tool_images = take_pending_images()
                 if tool_images:
