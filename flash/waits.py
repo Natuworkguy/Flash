@@ -182,9 +182,10 @@ def _number(args: dict, key: str) -> Optional[float]:
 
 
 def make(chat_id: str, args: dict, cwd: str = "",
-         now: Optional[float] = None) -> Wait:
+         now: Optional[float] = None, counted: bool = True) -> Wait:
     """A wait from the model's wait_for call. Raises WaitError saying
-    what is wrong with it."""
+    what is wrong with it. COUNTED: it is a new one, so one too many for
+    its chat is refused."""
 
     now = time.time() if now is None else now
     what = " ".join(str(args.get("what") or "").split())[:WHAT_CHARS]
@@ -239,7 +240,7 @@ def make(chat_id: str, args: dict, cwd: str = "",
     with _lock:
         open_here = [w for w in _load()
                      if w.chat == chat_id and w.status == WAITING]
-    if len(open_here) >= MAX_OPEN_PER_CHAT:
+    if counted and len(open_here) >= MAX_OPEN_PER_CHAT:
         raise WaitError(
             f"This chat already waits for {MAX_OPEN_PER_CHAT} things. "
             "Cancel one first, with cancel_wait."
@@ -309,6 +310,82 @@ def cancel(wait_id: str, chat_id: str = "") -> Wait:
     if found.status != WAITING:
         raise WaitError(f"That wait is already {found.status}.")
     return end(found.id, CANCELLED, "Cancelled.")
+
+
+# What edit_wait can change: what wait_for is given.
+EDITABLE = ("what", "then", "at", "in_minutes", "command", "check",
+            "events", "keep", "every_minutes", "give_up_after_hours")
+
+
+def _as_args(wait: Wait) -> dict:
+    """WAIT as the wait_for call that would make it."""
+
+    given: dict = {
+        "what": wait.what, "then": wait.then, "check": wait.check,
+        "command": wait.command, "events": list(wait.events or []),
+        "keep": wait.keep, "every_minutes": wait.every,
+    }
+    if wait.at is not None:
+        given["at"] = datetime.fromtimestamp(wait.at).astimezone() \
+            .isoformat()
+    return given
+
+
+def edit(wait_id: str, chat_id: str, args: dict,
+         now: Optional[float] = None) -> tuple[Wait, Wait]:
+    """Change an open wait in place, keeping its id and its card: ARGS
+    are wait_for's, only what changes ("" takes one away), checked as
+    wait_for checks them. Returns the wait as it was and as it is now.
+    Raises WaitError saying what is wrong."""
+
+    now = time.time() if now is None else now
+    found = find(str(wait_id or "").strip())
+    if found is None or (chat_id and found.chat != chat_id):
+        raise WaitError(f"No wait {wait_id!r} in this chat.")
+    if found.status != WAITING:
+        raise WaitError(f"That wait is already {found.status}: set a new "
+                        "one with wait_for.")
+    changes = {k: args[k] for k in EDITABLE if k in args}
+    if not changes:
+        raise WaitError("Say what to change: " + ", ".join(EDITABLE) + ".")
+    given = {**_as_args(found), **changes}
+    if "in_minutes" in changes:
+        given.pop("at", None)
+    if not str(given.get("events") or "").strip("[] "):
+        # No events left: keep goes with them.
+        given["keep"] = given.get("keep") if "keep" in changes else False
+    # A time left as it was is not checked against now again: it may
+    # have come already, with the wait looking since.
+    timed = "at" in changes or "in_minutes" in changes
+    fresh = make(found.chat, given, found.cwd,
+                 now if timed else min(now, found.created or now),
+                 counted=False)
+
+    looked_for = ("at", "check", "command", "events")
+    moved = any(getattr(fresh, k) != getattr(found, k) for k in looked_for)
+    give_up = fresh.give_up
+    if "give_up_after_hours" not in changes and found.give_up is not None \
+            and fresh.give_up is not None and not moved:
+        # The same thing looked for: given up on when it was going to be.
+        give_up = found.give_up
+    with _lock:
+        before = Wait(**asdict(found))
+        found.what, found.then, found.keep = fresh.what, fresh.then, \
+            fresh.keep
+        found.at, found.check, found.command = fresh.at, fresh.check, \
+            fresh.command
+        found.events, found.every, found.give_up = fresh.events, \
+            fresh.every, give_up
+        if moved:
+            # Something else to look for: from scratch.
+            found.next, found.checks, found.found, found.said = \
+                fresh.next, 0, False, ""
+            _watchers.pop(found.id, None)
+        elif fresh.every != before.every and (found.at is None
+                                              or found.at <= now):
+            found.next = min(found.next, now + fresh.every * 60)
+        _save()
+    return before, found
 
 
 def due(now: Optional[float] = None) -> list[Wait]:

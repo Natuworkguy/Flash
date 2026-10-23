@@ -236,8 +236,10 @@ WAIT_FOR_EVENTS_TOOL = {
             "with you; your next shift starts the moment one comes in, "
             "told what it was. Use it to wait for an answer, or to handle "
             "messages as they come: call it again at the end of that "
-            "shift to keep waiting. Then end this shift with a short "
-            "report."
+            "shift to keep waiting. Calling it while frozen replaces what "
+            "you wait for, it does not add to it: give everything you "
+            "want to wake for each time. Then end this shift with a "
+            "short report."
         ),
         "parameters": {
             "type": "object",
@@ -4274,12 +4276,22 @@ def _waiting_for_events(spark: Spark):
         if not events:
             return ("Error: say what to wait for: email, imessage, "
                     "mcp:<server>.")
-        _edit(spark.id, lambda s: setattr(s, "waiting_on", events))
+        before: list = []
+
+        def freeze(found: Spark) -> None:
+            # In place of what it waited for: never as well as.
+            before[:] = list(found.waiting_on or [])
+            found.waiting_on = events
+
+        _edit(spark.id, freeze)
         said = " or ".join(triggers.words(e) for e in events)
+        was = " or ".join(triggers.words(e) for e in before)
+        instead = f" (instead of {was})" if before and before != events \
+            else ""
         tool_line(f"WaitForEvents({' '.join(events)})")
-        tool_result(f"Frozen until {said} comes in")
-        return (f"(frozen: your next shift starts when {said} comes in. "
-                "End this shift now, with a short report.)")
+        tool_result(f"Frozen until {said} comes in{instead}")
+        return (f"(frozen: your next shift starts when {said} comes "
+                f"in{instead}. End this shift now, with a short report.)")
 
     return wait
 

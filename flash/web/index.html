@@ -6624,11 +6624,11 @@ function waitChanged(event) {
   const chat = chats.get(event.chat);
   if (!chat) return;
   // The clock in the list comes and goes with its waits.
-  const open = (chat.waiting || []).filter((what) => what !== event.what);
+  const open = (chat.waiting || []).filter((what) => what !== event.what && what !== event.was);
   chat.waiting = event.status === "waiting" ? [...open, event.what] : open;
   renderChats();
   const entry = chat.log.find((e) => e.type === "wait" && e.id === event.id);
-  if (entry) { Object.assign(entry, event); delete entry.chat; }
+  if (entry) { Object.assign(entry, event); delete entry.chat; delete entry.was; }
   const card = messagesEl.querySelector(`[data-wait="${event.id}"]`);
   if (card && event.chat === current) card.replaceWith(waitCard(entry || event));
 }

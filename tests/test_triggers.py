@@ -252,3 +252,18 @@ def test_a_chat_waits_for_new_messages_and_keeps_waiting(monkeypatch):
     with pytest.raises(waits.WaitError, match="not both"):
         waits.make("c1", {"what": "x", "then": "y", "events": "email",
                           "check": "a reply is in"})
+
+
+def test_waiting_for_events_again_replaces_what_it_waits_for(monkeypatch):
+    spark = sparks.Spark(id="f3", name="Replier", goal="g",
+                         waiting_on=["imessage"])
+    monkeypatch.setattr(sparks, "_edit",
+                        lambda key, change: change(spark) or spark)
+    wait = sparks._waiting_for_events(spark)
+
+    said = wait({"events": "email"})
+
+    assert spark.waiting_on == ["email"]  # nosec B101  (not as well)
+    assert "instead of a new iMessage" in said  # nosec B101
+    description = sparks.WAIT_FOR_EVENTS_TOOL["function"]["description"]
+    assert "replaces what you wait for" in description  # nosec B101
