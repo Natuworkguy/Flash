@@ -126,3 +126,10 @@ def test_what_a_pick_does(monkeypatch):
     assert ran == ["teamchat t1"]  # nosec B101
     assert carried[1] == ('From my briefing (email, Ada): "Lunch?": '  # nosec
                           "Free at noon? ")
+
+
+def test_the_wheel_moves_between_cards(monkeypatch):
+    monkeypatch.setattr(briefing_view, "mouse_on", lambda: True)
+    # Down a card with the wheel, then open it: the team card.
+    action, card = run("\x1b[<65;10;10M" + "o", cards())
+    assert (action, card["id"]) == ("open", "team:t1:1")  # nosec B101

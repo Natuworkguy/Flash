@@ -99,7 +99,7 @@ from .theme import (
     tool_line,
     tool_notify,
     tool_result,
-    typed,
+    yes_no,
 )
 
 SCRATCH_DIR = mkdtemp(prefix="flash-scratch-", suffix="-temp")
@@ -511,7 +511,7 @@ def shell_tool(command: str, timeout=None, is_user=False) -> str:
                 prompt.append("/n ", style=DIM)
                 console.print(prompt, end="")
 
-                user_input = typed()
+                user_input = yes_no()
 
             if user_input != "y":
                 tool_result("Command blocked by user", style=WARN)
@@ -1054,7 +1054,7 @@ def _ask_change(
     console.print(prompt, end="")
 
     try:
-        answer = typed()
+        answer = yes_no()
     finally:
         # Closed on the way out whichever way it went, and even if the
         # read was interrupted, so a decided diff never lingers.
@@ -2125,7 +2125,7 @@ def _user_allows(question: str) -> bool:
         prompt.append("y", style=f"bold {ACCENT}")
         prompt.append("/n ", style=DIM)
         console.print(prompt, end="")
-        answer = typed()
+        answer = yes_no()
 
     if answer != "y":
         tool_result("Blocked by user", style=WARN)
@@ -2384,7 +2384,7 @@ def send_email(
         prompt.append("y", style=f"bold {ACCENT}")
         prompt.append("/n ", style=DIM)
         console.print(prompt, end="")
-        answer = typed()
+        answer = yes_no()
     if answer != "y":
         tool_result("Not sent: the user said no", style=WARN)
         return "Not sent: the user said no. Do not send it again."
@@ -2496,7 +2496,7 @@ def make_spark(
             prompt.append("y", style=f"bold {ACCENT}")
             prompt.append("/n ", style=DIM)
             console.print(prompt, end="")
-            answer = typed()
+            answer = yes_no()
         if answer != "y":
             tool_result("Blocked by user", style=WARN)
             return "Blocked by user"
@@ -2800,7 +2800,7 @@ def send_imessage(to: str = "", text: str = "") -> str:
         prompt.append("y", style=f"bold {ACCENT}")
         prompt.append("/n ", style=DIM)
         console.print(prompt, end="")
-        answer = typed()
+        answer = yes_no()
     if answer != "y":
         tool_result("Not sent: the user said no", style=WARN)
         return "Not sent: the user said no. Do not send it again."

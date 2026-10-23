@@ -24,6 +24,7 @@ from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.keys import Keys
 from prompt_toolkit.layout import Layout, Window
 from prompt_toolkit.layout.controls import FormattedTextControl
+from prompt_toolkit.mouse_events import MouseEventType
 from rich.text import Text
 
 from . import providers
@@ -40,6 +41,7 @@ from .theme import (
     Live,
     confirm,
     console,
+    mouse_on,
     tool_line,
     tool_result,
 )
@@ -331,22 +333,25 @@ def choose(
             visible[top:top + VISIBLE_ROWS], start=top
         ):
             selected = offset == index
-            out.append(
+            row: StyleAndTextTuples = [
                 (f"fg:{ACCENT}", f"  {CURSOR} ")
                 if selected
-                else ("", "    ")
-            )
-            out.append((
-                f"fg:{ACCENT} bold" if selected else "",
-                _fit(model.name, width).ljust(width),
-            ))
+                else ("", "    "),
+                (
+                    f"fg:{ACCENT} bold" if selected else "",
+                    _fit(model.name, width).ljust(width),
+                ),
+            ]
 
             if model.size:
-                out.append((f"fg:{DIM_HEX}", model.size.rjust(SIZE_WIDTH)))
+                row.append((f"fg:{DIM_HEX}", model.size.rjust(SIZE_WIDTH)))
 
             if model.note:
-                out.append((f"fg:{DIM_HEX}", f"  {model.note}"))
+                row.append((f"fg:{DIM_HEX}", f"  {model.note}"))
 
+            # A click picks the row; the wheel moves through the list.
+            handler = _clicked(offset)
+            out.extend((style, text, handler) for style, text, *_ in row)
             out.append(("", "\n"))
 
         if len(visible) > VISIBLE_ROWS:
@@ -364,6 +369,25 @@ def choose(
         out.append((f"fg:{DIM_HEX}", f"     {_fit(HINTS, columns - 6)}"))
 
         return out
+
+    def _clicked(offset: int):
+        def handler(event) -> None:
+            nonlocal index
+
+            if event.event_type == MouseEventType.SCROLL_UP:
+                move(-1)
+            elif event.event_type == MouseEventType.SCROLL_DOWN:
+                move(1)
+            elif event.event_type == MouseEventType.MOUSE_UP:
+                visible = rows()
+                if 0 <= offset < len(visible):
+                    index = offset
+                    get_app().exit(result=visible[offset].name)
+            else:
+                return NotImplemented
+            return None
+
+        return handler
 
     keys = KeyBindings()
 
@@ -440,6 +464,7 @@ def choose(
         ),
         key_bindings=keys,
         erase_when_done=True,
+        mouse_support=mouse_on(),
     )
 
     return app.run()

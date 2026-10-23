@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import textwrap
+from collections.abc import Callable
 from typing import Optional
 
 from prompt_toolkit.application import Application
@@ -18,9 +19,10 @@ from prompt_toolkit.formatted_text import StyleAndTextTuples
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.layout import Layout, Window
 from prompt_toolkit.layout.controls import FormattedTextControl
+from prompt_toolkit.mouse_events import MouseEventType
 
 from . import briefing
-from .theme import _UNICODE_OK, DIM_HEX
+from .theme import _UNICODE_OK, DIM_HEX, mouse_on
 
 HUES = {
     "email": "#4a8fe7", "imessage": "#34c759", "spark": "#9b7bff",
@@ -84,10 +86,25 @@ def _wrap(text: str, width: int) -> list[str]:
 
 def draw(cards: list[dict], at: int, columns: int, rows: int,
          shift: int = 0, said: str = "",
-         problems: tuple[str, ...] = ()) -> StyleAndTextTuples:
+         problems: tuple[str, ...] = (),
+         click: Optional[Callable[[str], None]] = None,
+         ) -> StyleAndTextTuples:
     """One card filling COLUMNS by ROWS, with the rail at the right and
     the keys at the foot; AT past the last card is the end. SHIFT moves
-    the card down (or up) that many rows, as it slides in."""
+    the card down (or up) that many rows, as it slides in. With CLICK,
+    a click on a key at the foot calls it with that key's action."""
+
+    def tapped(action: str):
+        def handler(event) -> object:
+            if event.event_type != MouseEventType.MOUSE_UP:
+                return NotImplemented
+            assert click is not None  # nosec B101
+            click(action)
+            return None
+        return handler
+
+    def key(style: str, text: str, action: str) -> tuple:
+        return (style, text, tapped(action)) if click else (style, text)
 
     width = max(20, min(WIDTH, columns - 8))
     pad = " " * max(2, (columns - width - 4) // 2)
@@ -145,10 +162,13 @@ def draw(cards: list[dict], at: int, columns: int, rows: int,
     for action in actions(card) if card else ():
         name = OPEN_NAMES.get(card["kind"], "chat") if action == "open" \
             else NAMES[action]
-        keys += [(f"fg:{hue} bold", KEYS[action]), ("", f" {name}   ")]
+        keys += [key(f"fg:{hue} bold", KEYS[action], action),
+                 key("", f" {name}   ", action)]
     if not card and total:
-        keys += [(f"fg:{hue} bold", "D"), ("", " dismiss all   ")]
-    keys += [(f"fg:{DIM_HEX}", "j/k move  q close")]
+        keys += [key(f"fg:{hue} bold", "D", "clear"),
+                 key("", " dismiss all   ", "clear")]
+    keys += [(f"fg:{DIM_HEX}", "j/k move  "),
+             key(f"fg:{DIM_HEX}", "q close", "close")]
     if said:
         keys += [(f"fg:{DIM_HEX}", f"   {said}")]
     while len(lines) < rows - 2:
@@ -182,8 +202,30 @@ def feed(cards: list[dict],
 
     def render() -> StyleAndTextTuples:
         size = get_app().output.get_size()
-        return draw(cards, state["at"], size.columns, size.rows,
-                    state["shift"], state["said"], problems)
+        drawn = draw(cards, state["at"], size.columns, size.rows,
+                     state["shift"], state["said"], problems,
+                     click=clicked)
+        # The wheel moves between cards, wherever it turns.
+        return [part if len(part) > 2 else (*part, wheel)
+                for part in drawn]
+
+    def wheel(event) -> object:
+        if event.event_type == MouseEventType.SCROLL_UP:
+            go(-1)
+        elif event.event_type == MouseEventType.SCROLL_DOWN:
+            go(1)
+        else:
+            return NotImplemented
+        return None
+
+    def clicked(action: str) -> None:
+        app = get_app()
+        if action == "close":
+            app.exit(result=None)
+        elif action == "clear":
+            clear_all()
+        else:
+            act(action)(app)
 
     async def slide(direction: int) -> None:
         for step in range(SLIDE_ROWS, -1, -1):
@@ -228,16 +270,20 @@ def feed(cards: list[dict],
     def _close(event) -> None:
         event.app.exit(result=None)
 
-    @keys.add("D")
-    def _clear(_event) -> None:
+    def clear_all() -> None:
         if state["at"] < len(cards) or not cards:
             return
         briefing.dismiss(c["id"] for c in cards)
         cards.clear()
         state.update(at=0, said="All dismissed")
 
+    @keys.add("D")
+    def _clear(_event) -> None:
+        clear_all()
+
     def act(action: str):
         def run(event) -> None:
+            app = getattr(event, "app", event)
             if state["at"] >= len(cards):
                 return
             card = cards[state["at"]]
@@ -249,7 +295,7 @@ def feed(cards: list[dict],
                 state["said"] = "Dismissed"
                 get_app().create_background_task(slide(1))
                 return
-            event.app.exit(result=(action, card))
+            app.exit(result=(action, card))
         return run
 
     for action, key in KEYS.items():
@@ -258,6 +304,6 @@ def feed(cards: list[dict],
     app: Application = Application(
         layout=Layout(Window(FormattedTextControl(render),
                              always_hide_cursor=True)),
-        key_bindings=keys, full_screen=True, mouse_support=False,
+        key_bindings=keys, full_screen=True, mouse_support=mouse_on(),
     )
     return app.run()
