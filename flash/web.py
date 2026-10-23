@@ -194,6 +194,13 @@ STATIC.update({
     for path in sorted((WEB_DIR / "three").glob("*.js"))
 })
 
+# Mermaid, which draws the diagrams in replies and documents: shipped
+# with Flash as well, and loaded only once a diagram shows.
+STATIC.update({
+    path.relative_to(WEB_DIR).as_posix(): KATEX_TYPES[path.suffix]
+    for path in sorted((WEB_DIR / "mermaid").glob("*.js"))
+})
+
 # How often an idle event stream says it is still there. Proxies and
 # some browsers drop a stream that has been silent for a minute.
 PING_SECONDS = 15

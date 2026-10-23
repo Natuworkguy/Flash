@@ -97,7 +97,8 @@ it goes:
   systems made from your code keep every design on brand.
 - **Answers with more than words.** Where they say it better, replies
   hold live charts, side-by-side comparisons, calculators you can change,
-  and buttons for what you say next.
+  diagrams (flowcharts, sequences, timelines), and buttons for what you
+  say next. A document can be a slide deck you present full screen.
 - **Talks.** `/voice on` and you talk to it, hands free, with speech
   recognition and a voice that run on your machine.
 

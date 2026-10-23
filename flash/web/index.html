@@ -573,6 +573,39 @@ code { font: 0.87em/1.5 var(--mono); }
 pre { margin: 0 0 0.9em; background: var(--code-bg); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
 pre .code-head { display: flex; justify-content: space-between; align-items: center; height: 36px; padding: 0 6px 0 14px; font: 12px var(--sans); color: var(--text-3); }
 pre code { display: block; padding: 2px 16px 14px; overflow-x: auto; font-size: 13.5px; line-height: 1.6; }
+/* A Mermaid diagram: drawn, with its code a click away. */
+.diagram { margin: 12px 0; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); overflow: hidden; }
+.diagram .code-head { display: flex; align-items: center; justify-content: space-between; padding: 4px 6px 4px 12px; font: 12px var(--mono); color: var(--text-3); border-bottom: 1px solid var(--border); }
+.diagram .diagram-acts { display: flex; gap: 2px; }
+.diagram-view { display: grid; place-items: center; padding: 16px; overflow-x: auto; min-height: 60px; }
+.diagram-view svg { max-width: 100%; height: auto; }
+.diagram-wait, .diagram-error { font-size: 13px; color: var(--text-3); }
+.diagram-error { color: var(--del); }
+.diagram > code { display: none; white-space: pre; overflow-x: auto; padding: 12px 14px; font: 13px/1.5 var(--mono); }
+.diagram.show-code > code { display: block; }
+.diagram.show-code .diagram-view { display: none; }
+/* A slide deck: Markdown with marp: true (or slides: true) at the top,
+   slides between --- lines, each a 16:9 page. */
+.doc.deck { display: flex; flex-direction: column; gap: 18px; }
+.deck-bar { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 13px; color: var(--text-3); }
+.deck-slide { position: relative; aspect-ratio: 16 / 9; container-type: inline-size; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); box-shadow: 0 2px 14px rgba(0, 0, 0, 0.08); overflow: hidden; }
+.slide-inner { position: absolute; inset: 0; padding: 6cqw 7cqw; font-size: 2.6cqw; line-height: 1.45; overflow: hidden; display: flex; flex-direction: column; justify-content: center; }
+.slide-inner > :first-child { margin-top: 0; }
+.slide-inner h1 { font-size: 2.2em; margin: 0 0 0.4em; }
+.slide-inner h2 { font-size: 1.6em; margin: 0 0 0.5em; }
+.slide-inner h3, .slide-inner h4 { font-size: 1.2em; }
+.slide-inner p, .slide-inner li { font-size: 1em; }
+.slide-inner pre, .slide-inner code { font-size: 0.8em; }
+.slide-no { position: absolute; right: 2.4cqw; bottom: 1.8cqw; font-size: 1.6cqw; color: var(--text-3); }
+.deck-slide .diagram { margin: 0.4em 0; border: 0; background: none; }
+.deck-slide .diagram .code-head { display: none; }
+.deck-slide .diagram-view { padding: 0; }
+.deck-slide .diagram-view svg { max-height: 34cqw; }
+.deck-bar [data-present] svg { width: 12px; height: 12px; margin-right: 6px; vertical-align: -1px; }
+#present { position: fixed; inset: 0; z-index: 90; background: #000; display: grid; place-items: center; }
+#present[hidden] { display: none; }
+#present .deck-slide { width: min(100vw, calc(100vh * 16 / 9)); border: 0; border-radius: 0; box-shadow: none; }
+#present .present-count { position: fixed; left: 50%; bottom: 14px; translate: -50% 0; font-size: 12px; color: rgba(255, 255, 255, 0.55); }
 .copy-code { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-3); padding: 5px 8px; border-radius: 7px; }
 .copy-code:hover { background: var(--hover); color: var(--text); }
 .copy-code svg { width: 14px; height: 14px; }
@@ -3191,6 +3224,7 @@ body.resizing-viewer iframe { pointer-events: none; }
     <div id="search-list" role="listbox"></div>
   </div>
 </div>
+<div id="present" hidden role="dialog" aria-label="Slides"></div>
 <div id="help" class="overlay" hidden><div class="dialog" role="dialog" aria-label="Keyboard shortcuts"><div class="inner" id="help-body"></div></div></div>
 <div id="phone" class="overlay" hidden><div class="dialog" role="dialog" aria-label="Open on your phone"><div class="inner" id="phone-body"></div></div></div>
 <div id="form" class="overlay" hidden><div class="dialog" role="dialog"><div class="inner" id="form-body"></div></div></div>
@@ -3515,6 +3549,152 @@ function inline(text) {
   s = s.replace(/\u0002(\d+)\u0002/g, (_, i) => links[+i]);
   s = s.replace(/\u0000(\d+)\u0000/g, (_, i) => `<code>${esc(codes[+i])}</code>`);
   return s.replace(/\u0001(\d+)\u0001/g, (_, i) => esc(kept[+i]));
+}
+
+// A ```mermaid block: a diagram, drawn once its fence closes (until
+// then, while it streams in, a word that it is coming). Drawn by
+// drawDiagrams, as it lands on the page.
+const diagramBlock = (src, closed) =>
+  `<div class="diagram" data-diagram="${closed ? "new" : "open"}"><div class="code-head"><span>diagram</span><span class="diagram-acts"><button class="copy-code" data-diagram-code>${icon("code")}Code</button><button class="copy-code" data-copy>${icon("copy")}Copy</button></span></div><div class="diagram-view"><span class="diagram-wait">Drawing the diagram…</span></div><code>${esc(src)}</code></div>`;
+
+// Mermaid is big, so it loads the first time a diagram shows. What it
+// drew is kept by its source and the theme, so a reply drawn again as
+// it streams does not draw its diagrams again.
+let mermaidLoading = null;
+const drawnDiagrams = new Map();
+let diagramCount = 0;
+
+function loadMermaid() {
+  mermaidLoading = mermaidLoading || loadScript("/static/mermaid/mermaid.min.js").catch((e) => { mermaidLoading = null; throw e; });
+  return mermaidLoading;
+}
+
+const darkPage = () => {
+  const theme = document.documentElement.dataset.theme;
+  return theme ? theme === "dark" : !matchMedia("(prefers-color-scheme: light)").matches;
+};
+
+async function drawDiagram(node) {
+  node.dataset.diagram = "drawing";
+  const src = node.querySelector(":scope > code").textContent;
+  const view = node.querySelector(".diagram-view");
+  const theme = darkPage() ? "dark" : "neutral";
+  const key = `${theme}\n${src}`;
+  try {
+    if (!drawnDiagrams.has(key)) {
+      await loadMermaid();
+      window.mermaid.initialize({ startOnLoad: false, securityLevel: "strict", theme, fontFamily: getComputedStyle(document.body).fontFamily });
+      const { svg } = await window.mermaid.render(`flash-diagram-${++diagramCount}`, src);
+      drawnDiagrams.set(key, svg);
+    }
+    view.innerHTML = drawnDiagrams.get(key);
+  } catch (error) {
+    // Not a diagram Mermaid can read: its code, with why.
+    view.innerHTML = `<span class="diagram-error"></span>`;
+    view.firstChild.textContent = `Couldn’t draw this diagram: ${String(error && error.message || error).split("\n")[0].slice(0, 160)}`;
+    node.classList.add("show-code");
+  }
+  node.dataset.diagram = "drawn";
+}
+
+function drawDiagrams(root = document) {
+  for (const node of root.querySelectorAll('.diagram[data-diagram="new"]')) drawDiagram(node);
+}
+
+// Wherever a diagram lands (a reply, a document, a slide), it is drawn.
+new MutationObserver((changes) => {
+  for (const change of changes) for (const node of change.addedNodes) {
+    if (node.nodeType !== 1) continue;
+    if (node.matches('.diagram[data-diagram="new"]')) drawDiagram(node);
+    else if (node.querySelector('.diagram[data-diagram="new"]')) drawDiagrams(node);
+  }
+}).observe(document.documentElement, { childList: true, subtree: true });
+
+document.addEventListener("click", (e) => {
+  const flip = e.target.closest("[data-diagram-code]");
+  if (!flip) return;
+  const node = flip.closest(".diagram");
+  node.classList.toggle("show-code");
+  flip.lastChild.textContent = node.classList.contains("show-code") ? "Diagram" : "Code";
+});
+
+// A slide deck: Markdown that says marp: true (or slides: true) at the
+// top, its slides between --- lines.
+function deckSlides(text) {
+  const front = frontMatter(String(text));
+  if (!front || !front.fields.some((f) => /^(marp|slides)$/i.test(f.key) && /^(true|yes|on)$/i.test(f.value))) return null;
+  const slides = [[]];
+  let fence = null;
+  for (const line of front.rest.replace(/\r\n/g, "\n").split("\n")) {
+    const f = line.match(/^\s*(```|~~~)/);
+    if (f) fence = fence ? (line.trim().startsWith(fence) ? null : fence) : f[1];
+    if (!fence && /^\s*---\s*$/.test(line)) slides.push([]);
+    else slides[slides.length - 1].push(line);
+  }
+  // Marp's directives are comments: not shown.
+  return slides.map((lines) => lines.join("\n").replace(/<!--[\s\S]*?-->/g, "").trim()).filter(Boolean);
+}
+
+const slideHtml = (text, n, of) =>
+  `<section class="deck-slide"><div class="slide-inner assistant">${markdown(text)}</div><span class="slide-no">${n} / ${of}</span></section>`;
+
+function deckHtml(slides) {
+  return `<div class="deck-bar"><span>${slides.length} slide${slides.length === 1 ? "" : "s"}</span><button type="button" class="btn small" data-present>${icon("play")}Present</button></div>` +
+    slides.map((text, i) => slideHtml(text, i + 1, slides.length)).join("");
+}
+
+// Present: one slide at a time, the whole screen. Arrows, Space and
+// clicks go on, Esc ends it.
+let presenting = null;
+function present(slides, from = 0) {
+  const box = $("#present");
+  presenting = { slides, at: Math.max(0, Math.min(from, slides.length - 1)) };
+  const show = () => {
+    const { at } = presenting;
+    box.innerHTML = slideHtml(slides[at], at + 1, slides.length) + `<span class="present-count">${at + 1} / ${slides.length} · Esc to end</span>`;
+  };
+  presenting.show = show;
+  show();
+  box.hidden = false;
+  if (box.requestFullscreen) box.requestFullscreen().catch(() => {});
+}
+
+function endPresenting() {
+  presenting = null;
+  $("#present").hidden = true;
+  $("#present").textContent = "";
+  if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+}
+
+function stepSlide(delta) {
+  if (!presenting) return;
+  const at = presenting.at + delta;
+  if (at < 0) return;
+  if (at >= presenting.slides.length) { endPresenting(); return; }
+  presenting.at = at;
+  presenting.show();
+}
+
+document.getElementById("present").addEventListener("click", (e) => stepSlide(e.clientX < innerWidth / 4 ? -1 : 1));
+document.addEventListener("fullscreenchange", () => { if (presenting && !document.fullscreenElement) endPresenting(); });
+document.addEventListener("keydown", (e) => {
+  if (!presenting) return;
+  const keys = { ArrowRight: 1, ArrowDown: 1, PageDown: 1, " ": 1, Enter: 1, ArrowLeft: -1, ArrowUp: -1, PageUp: -1, Backspace: -1 };
+  if (e.key === "Escape") endPresenting();
+  else if (e.key in keys) stepSlide(keys[e.key]);
+  else if (e.key === "Home") { presenting.at = 0; presenting.show(); }
+  else if (e.key === "End") { presenting.at = presenting.slides.length - 1; presenting.show(); }
+  else return;
+  e.preventDefault();
+  e.stopImmediatePropagation();
+}, true);
+
+// What a Markdown document shows as: its slides, or its text.
+function docHtml(text, article) {
+  const slides = deckSlides(text);
+  article.classList.toggle("deck", !!slides);
+  if (!slides) return markdown(text);
+  return deckHtml(slides);
 }
 
 const codeBlock = (lang, body) =>
@@ -3999,6 +4179,7 @@ function markdownBody(text) {
       // piece of the reply: a chart, a calculator, buttons.
       if (lang === "serif") html += `<div class="serif-block">${markdownBody(body.join("\n"))}</div>`;
       else if (lang === "ui") html += uiBlock(body.join("\n"), closed);
+      else if (lang === "mermaid") html += diagramBlock(body.join("\n"), closed);
       else html += codeBlock(fence[2], body.join("\n"));
       continue;
     }
@@ -5395,7 +5576,12 @@ function drawDocument(doc) {
   if (!article) return;
   if (doc.markdown) {
     article.className = "doc assistant";
-    article.innerHTML = markdown(doc.text);
+    article.innerHTML = docHtml(doc.text, article);
+    article.onclick = (e) => {
+      if (!e.target.closest("[data-present]")) return;
+      const slides = deckSlides(doc.text);
+      if (slides) present(slides);
+    };
   } else {
     article.className = "doc doc-plain";
     article.textContent = doc.text;
@@ -5802,7 +5988,7 @@ function textChange(before, after) {
 function drawDocText(doc, text) {
   const article = doc.body.querySelector(".doc");
   if (!article || doc.editing) return null;
-  if (doc.markdown) article.innerHTML = markdown(text);
+  if (doc.markdown) article.innerHTML = docHtml(text, article);
   else article.textContent = text;
   return article;
 }
@@ -16705,7 +16891,7 @@ $("#jump").onclick = () => toBottom(true, true);
 // A code block in a document copies the same way as one in a reply.
 $("#viewer-body").addEventListener("click", (e) => {
   const copyButton = e.target.closest("[data-copy]");
-  if (copyButton) copy(copyButton.closest("pre").querySelector("code").textContent, "code", copyButton);
+  if (copyButton) copy(copyButton.closest("pre, .diagram").querySelector("code").textContent, "code", copyButton);
 });
 // A click anywhere else puts away the comment button or box.
 document.addEventListener("mousedown", (e) => {
@@ -16714,7 +16900,7 @@ document.addEventListener("mousedown", (e) => {
 
 messagesEl.addEventListener("click", (e) => {
   const copyButton = e.target.closest("[data-copy]");
-  if (copyButton) { copy(copyButton.closest("pre").querySelector("code").textContent, "code", copyButton); return; }
+  if (copyButton) { copy(copyButton.closest("pre, .diagram").querySelector("code").textContent, "code", copyButton); return; }
   const head = e.target.closest(".tool > .head, .thinking > .head");
   if (head) head.parentNode.classList.toggle("open");
 });

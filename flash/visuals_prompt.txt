@@ -11,3 +11,5 @@ The kinds, with their fields:
 - {"type": "choices", "prompt": "...", "options": ["...", "..."]}. Buttons for the user's next message: clicking one sends its text as their reply. Use it to ask which way to go, with two to five short options.
 - {"type": "form", "title": "...", "fields": [{"id": "budget", "label": "Budget", "kind": "text" | "number" | "select" | "date", "options": ["..."], "placeholder": "..."}], "submit": "Plan my trip"}. Gathers details in one go; sending it posts the answers as the user's next message.
 - {"type": "checklist", "title": "...", "items": ["...", "..."]}. Things the user ticks off as they go.
+
+Diagrams that are more than a chain of stages (a flowchart that branches, who sends what to whom, classes or tables and how they relate, a timeline, a schedule, states and what moves between them) go in a ```mermaid block of Mermaid syntax instead, drawn in the reply and in documents: flowchart, sequenceDiagram, classDiagram, erDiagram, stateDiagram-v2, gantt, timeline, mindmap, pie. Quote labels that hold punctuation ("A[\"Pay (card)\"]"), and keep each diagram to what fits on a screen.
