@@ -15,6 +15,7 @@ last action actually did.
 
 import atexit
 import json
+import os
 import re
 import time
 from pathlib import Path
@@ -210,7 +211,7 @@ def capture(
     try:
         with sync_playwright() as driver:
             try:
-                browser = driver.chromium.launch()
+                browser = launch_chromium(driver)
             except PlaywrightError as exc:
                 return [], _launch_reason(exc)
 
@@ -248,6 +249,73 @@ def _first_line(exc: Exception) -> str:
     text = str(exc).strip()
 
     return text.splitlines()[0] if text else exc.__class__.__name__
+
+
+# What a Chromium download is called, in each kind of build, newest
+# kind first: the headless shell suits a page nobody watches.
+_CHROMIUM_NAMES = (
+    "chrome-headless-shell", "chrome-headless-shell.exe",
+    "Google Chrome for Testing", "Chromium", "chrome", "chrome.exe",
+)
+
+
+def _browser_caches() -> list[Path]:
+    """Where Playwright keeps the browsers it downloads, on any system."""
+
+    found = []
+    given = os.environ.get("PLAYWRIGHT_BROWSERS_PATH", "").strip()
+    if given and given != "0":
+        found.append(Path(given).expanduser())
+    home = Path.home()
+    found += [
+        home / "Library" / "Caches" / "ms-playwright",
+        home / ".cache" / "ms-playwright",
+        Path(os.environ.get("LOCALAPPDATA") or home) / "ms-playwright",
+    ]
+    return [path for path in found if path.is_dir()]
+
+
+def installed_chromiums() -> list[Path]:
+    """Every Chromium Playwright has downloaded, of whatever version, the
+    newest build first: the one this Playwright wants may not be among
+    them, and another version usually works as well."""
+
+    found: list[tuple[int, int, Path]] = []
+    for cache in _browser_caches():
+        for build in cache.glob("chromium*-*"):
+            number = build.name.rsplit("-", 1)[-1]
+            if not number.isdigit():
+                continue
+            for rank, name in enumerate(_CHROMIUM_NAMES):
+                for path in build.rglob(name):
+                    if path.is_file() and os.access(path, os.X_OK):
+                        found.append((-int(number), rank, path))
+    return [path for _, _, path in sorted(found)]
+
+
+def launch_chromium(driver: Any) -> Any:
+    """A headless Chromium from DRIVER: Playwright's own, or when that
+    one was never downloaded, another version it has, or Google Chrome.
+    Raises Playwright's error for the first when none of them starts."""
+
+    from playwright.sync_api import Error as PlaywrightError
+
+    try:
+        return driver.chromium.launch()
+    except PlaywrightError as exc:
+        if "playwright install" not in str(exc).lower() and \
+                "executable doesn't exist" not in str(exc).lower():
+            raise
+        first = exc
+    for path in installed_chromiums():
+        try:
+            return driver.chromium.launch(executable_path=str(path))
+        except PlaywrightError:
+            continue
+    try:
+        return driver.chromium.launch(channel="chrome")
+    except PlaywrightError:
+        raise first from None
 
 
 def _launch_reason(exc: Exception) -> str:
@@ -417,7 +485,7 @@ def open_page(url: str, *, width: int, height: int, wait_ms: int) -> str:
         return f"Chromium would not start: {_first_line(exc)}"
 
     try:
-        browser = driver.chromium.launch()
+        browser = launch_chromium(driver)
     except PlaywrightError as exc:
         driver.stop()
         return _launch_reason(exc)

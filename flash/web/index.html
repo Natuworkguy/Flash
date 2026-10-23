@@ -597,11 +597,15 @@ pre code { display: block; padding: 2px 16px 14px; overflow-x: auto; font-size: 
 .deck-slide { position: relative; aspect-ratio: 16 / 9; container-type: inline-size; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); box-shadow: 0 2px 14px rgba(0, 0, 0, 0.08); overflow: hidden; }
 .slide-inner { position: absolute; inset: 0; padding: 6cqw 7cqw; font-size: 2.6cqw; line-height: 1.45; overflow: hidden; display: flex; flex-direction: column; justify-content: center; }
 .slide-inner > :first-child { margin-top: 0; }
-.slide-inner h1 { font-size: 2.2em; margin: 0 0 0.4em; }
-.slide-inner h2 { font-size: 1.6em; margin: 0 0 0.5em; }
-.slide-inner h3, .slide-inner h4 { font-size: 1.2em; }
+.deck-slide .slide-inner.assistant h1 { font-size: 2.2em; margin: 0 0 0.4em; padding: 0; border: 0; }
+.deck-slide .slide-inner.assistant h2 { font-size: 1.6em; margin: 0 0 0.5em; padding: 0; border: 0; }
+.deck-slide .slide-inner.assistant :is(h3, h4) { font-size: 1.2em; }
 .slide-inner p, .slide-inner li { font-size: 1em; }
 .slide-inner pre, .slide-inner code { font-size: 0.8em; }
+.deck-slide.lead .slide-inner { align-items: center; text-align: center; }
+.deck-slide.lead .slide-inner.assistant h1 { font-size: 3em; letter-spacing: -0.02em; text-wrap: balance; }
+.deck-slide.lead .slide-inner.assistant h2 { font-size: 2.2em; text-wrap: balance; }
+.deck-slide.lead .slide-inner.assistant p { color: var(--text-2); font-size: 1.3em; }
 .slide-no { position: absolute; right: 2.4cqw; bottom: 1.8cqw; font-size: 1.6cqw; color: var(--text-3); }
 .deck-slide .diagram { margin: 0.4em 0; border: 0; background: none; }
 .deck-slide .diagram .code-head { display: none; }
@@ -3661,8 +3665,16 @@ function deckSlides(text) {
   return slides.map((lines) => lines.join("\n").replace(/<!--[\s\S]*?-->/g, "").trim()).filter(Boolean);
 }
 
+// A slide that is only headings, with at most one short line besides:
+// a title, a question, a quote. Shown centred and large.
+function leadSlide(text) {
+  const lines = text.split("\n").map((l) => l.trim()).filter(Boolean);
+  const rest = lines.filter((l) => !/^#{1,6}\s/.test(l));
+  return lines.length > rest.length && rest.length <= 1 && rest.every((l) => l.length <= 140 && !/^([-*+>|]|\d+[.)]|```|~~~)/.test(l));
+}
+
 const slideHtml = (text, n, of) =>
-  `<section class="deck-slide"><div class="slide-inner assistant">${markdown(text)}</div><span class="slide-no">${n} / ${of}</span></section>`;
+  `<section class="deck-slide${leadSlide(text) ? " lead" : ""}"><div class="slide-inner assistant">${markdown(text)}</div><span class="slide-no">${n} / ${of}</span></section>`;
 
 function deckHtml(slides) {
   return `<div class="deck-bar"><span>${slides.length} slide${slides.length === 1 ? "" : "s"}</span><button type="button" class="btn small" data-present>${icon("play")}Present</button></div>` +

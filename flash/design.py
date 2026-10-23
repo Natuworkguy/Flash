@@ -159,6 +159,8 @@ def export(file_id: str, fmt: str, out_dir: Path) -> Path:
     try:
         from playwright.sync_api import Error as PlaywrightError
         from playwright.sync_api import sync_playwright
+
+        from .browser import launch_chromium as browser_launch
     except ImportError as exc:
         raise DesignError(
             "Exporting needs Playwright: pip install playwright, then "
@@ -177,7 +179,7 @@ def export(file_id: str, fmt: str, out_dir: Path) -> Path:
     out = out_dir / f"{name}.{fmt}"
     try:
         with sync_playwright() as driver:
-            browser = driver.chromium.launch()
+            browser = browser_launch(driver)
             try:
                 page = browser.new_page(viewport={
                     "width": SLIDE_SIZE[0] if fmt == "pptx" else EXPORT_WIDTH,
