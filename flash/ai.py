@@ -4604,6 +4604,217 @@ def _instructions_command(arg: str) -> None:
     console.print(body)
 
 
+# --- Kept conversations: /resume, /fork, /forks ---------------------------
+
+_session: Optional[Any] = None
+
+
+def _keep_session(messages: list) -> None:
+    """Keep this conversation, so /resume can pick it up again."""
+
+    global _session
+    from . import sessions
+
+    if not messages and _session is None:
+        return
+    if _session is None:
+        _session = sessions.Session()
+    try:
+        sessions.save(_session, messages)
+    except OSError:
+        pass  # not kept this time; the next turn tries again
+
+
+def _start_session(messages: list) -> None:
+    """Keep this conversation as it is, and start the next one afresh."""
+
+    global _session
+    _keep_session(messages)
+    _session = None
+
+
+def _ago(when: float) -> str:
+    gone = max(0, time.time() - when)
+    if gone < 60:
+        return "just now"
+    if gone < 3600:
+        return f"{int(gone // 60)} min ago"
+    if gone < 86400:
+        return f"{int(gone // 3600)} h ago"
+    return f"{int(gone // 86400)} d ago"
+
+
+def _recap(messages: list, turns: int = 2) -> None:
+    """The end of a conversation picked up again, so you know where it
+    was: its last few turns, short."""
+
+    shown = [m for m in messages if m.get("role") in ("user", "assistant")
+             and str(m.get("content") or "").strip()
+             and not str(m.get("content")).startswith(STEER_NOTE)]
+    for message in shown[-2 * turns:]:
+        mine = message["role"] == "user"
+        text = " ".join(str(message["content"]).split())
+        line = Text(f"  {'You' if mine else 'Flash'}  ",
+                    style=f"bold {ACCENT}" if not mine else "bold")
+        line.append(text if len(text) <= 160 else text[:159] + ELLIPSIS,
+                    style=DIM)
+        console.print(line)
+
+
+def _resume_command(arg: str, messages: list) -> None:
+    """/resume: pick a kept conversation up again, from a list, the
+    latest first; /resume <words> picks the latest whose title has them."""
+
+    global _session
+    from . import sessions
+
+    listed = [s for s in sessions.listing()
+              if _session is None or s["id"] != _session.id]
+    words = arg.lower().strip()
+    if words:
+        listed = [s for s in listed if words in s["title"].lower()]
+    if not listed:
+        warn("No other conversations to pick up." if not words else
+             f"No conversation's title has {arg!r}.")
+        return
+    if words or not model_picker.can_pick():
+        if not words:
+            for s in listed[:20]:
+                console.print(Text(f"  {s['title'] or '(untitled)'}  ",
+                                   style="bold").append(
+                    f"{s['turns']} turns · {_ago(s['updated'])}", style=DIM))
+            console.print(Text("/resume <words from a title> picks one.",
+                               style=DIM))
+            return
+        chosen = listed[0]["id"]
+    else:
+        names: dict[str, str] = {}
+        rows = []
+        for s in listed:
+            name = s["title"] or "(untitled)"
+            while name in names:
+                name += " "
+            names[name] = s["id"]
+            where = s["cwd"].replace(str(Path.home()), "~", 1)
+            rows.append(model_picker.Model(
+                name=name, note=_ago(s["updated"]),
+                summary=f"{s['turns']} turn{'' if s['turns'] == 1 else 's'}"
+                + (f" · {s['forks']} forks" if s["forks"] else "")
+                + (f" · in {where}" if where else ""),
+            ))
+        picked = model_picker.choose(
+            rows, title="Pick up a conversation",
+            unmatched="nothing is called {typed!r}", empty="none kept yet",
+        )
+        if not picked or picked not in names:
+            return
+        chosen = names[picked]
+    if messages:
+        _keep_session(messages)
+    _session = sessions.load(chosen)
+    messages[:] = _session.messages
+    clear_collapsed()
+    plan.clear()
+    console.print(Text(f"Picked up: {_session.title or 'a conversation'}"
+                       + (f" (fork {_session.fork})"
+                          if _session.fork and _session.fork != sessions.MAIN
+                          else ""), style=f"bold {ACCENT}"))
+    if _session.cwd and _session.cwd != os.getcwd():
+        console.print(Text(f"  It was started in {_session.cwd}.",
+                           style=DIM))
+    _recap(messages)
+
+
+def _fork_command(arg: str, messages: list) -> None:
+    """/fork [n]: try another way, from here or N turns back. The way it
+    went is kept: /forks goes back to it."""
+
+    from . import sessions
+
+    try:
+        back = int(arg) if arg else 0
+    except ValueError:
+        warn("Usage: /fork, or /fork <turns back>")
+        return
+    if not messages:
+        warn("Nothing to fork yet.")
+        return
+    _keep_session(messages)
+    try:
+        made, kept = sessions.fork(_session, messages, back,
+                                   (STEER_NOTE, TOOL_IMAGE_NOTE))
+    except sessions.SessionError as exc:
+        warn(str(exc))
+        return
+    messages[:] = kept
+    clear_collapsed()
+    console.print(Text(
+        f"Forked ({made}). Carry on from "
+        + ("here" if not back else f"{back} turn{'' if back == 1 else 's'}"
+           " back")
+        + "; /forks goes back to the way it went.", style=DIM))
+    if back:
+        _recap(messages, 1)
+
+
+def _forks_command(arg: str, messages: list) -> None:
+    """/forks: this conversation's forks as a tree, to pick one from;
+    /forks rm <id> lets one go."""
+
+    from . import sessions
+
+    if _session is None or not _session.forks:
+        console.print(Text("No forks yet. /fork tries another way from "
+                           "here, or /fork 2 from two turns back.",
+                           style=DIM))
+        return
+    action, _, rest = arg.partition(" ")
+    try:
+        if action in ("rm", "remove", "delete") and rest.strip():
+            messages[:] = sessions.delete_fork(_session, messages,
+                                               rest.strip())
+            console.print(Text(f"Fork {rest.strip()} deleted.", style=DIM))
+            return
+        if action and action not in ("rm", "remove", "delete"):
+            messages[:] = sessions.switch(_session, messages, action)
+            console.print(Text(f"On fork {action}.", style=DIM))
+            _recap(messages, 1)
+            return
+    except sessions.SessionError as exc:
+        warn(str(exc))
+        return
+    rows = sessions.tree(_session, messages)
+    if not model_picker.can_pick():
+        for row in rows:
+            line = Text(f"  {row['lead']}")
+            line.append(row["id"], style=f"bold {ACCENT}" if row["current"]
+                        else "bold")
+            line.append(f"  {row['label']}  ", style="")
+            line.append(f"{row['turns']} turns"
+                        + (" · showing" if row["current"] else ""),
+                        style=DIM)
+            console.print(line)
+        return
+    picked = model_picker.choose(
+        [model_picker.Model(
+            name=f"{row['lead']}{row['label'] or row['id']}",
+            note="showing" if row["current"] else row["id"],
+            summary=f"{row['turns']} turns" + (
+                f" · last: {row['last']}" if row["last"] else ""),
+        ) for row in rows],
+        title="Forks (rm with /forks rm <id>)",
+        unmatched="nothing is called {typed!r}", empty="no forks",
+        start=next((i for i, r in enumerate(rows) if r["current"]), 0),
+    )
+    found = next((r for r in rows
+                  if f"{r['lead']}{r['label'] or r['id']}" == picked), None)
+    if found is None or found["current"]:
+        return
+    messages[:] = sessions.switch(_session, messages, found["id"])
+    console.print(Text(f"On fork {found['id']}.", style=DIM))
+    _recap(messages, 1)
+
+
 def _think_command(arg: str) -> None:
     """/think auto on|off: whether Flash may turn its thinking on by
     itself, for a message it judges needs it. Bare, says which it is."""
@@ -5965,6 +6176,18 @@ def _main() -> None:
                 _btw(asked_aside, messages)
                 continue
 
+            if uin == "/resume" or uin.startswith("/resume "):
+                _resume_command(uin[len("/resume"):].strip(), messages)
+                continue
+
+            if uin == "/fork" or uin.startswith("/fork "):
+                _fork_command(uin[len("/fork"):].strip(), messages)
+                continue
+
+            if uin == "/forks" or uin.startswith("/forks "):
+                _forks_command(uin[len("/forks"):].strip(), messages)
+                continue
+
             if uin == "/think" or uin.startswith("/think "):
                 _think_command(uin[len("/think"):].strip())
                 continue
@@ -6128,6 +6351,7 @@ def _main() -> None:
                 continue
 
             if uin == "/clear":
+                _start_session(messages)
                 messages.clear()
                 clear_collapsed()
                 # The prompt starts over anyway, so it can pick up what
@@ -6533,6 +6757,8 @@ def _main() -> None:
             # thinking turned on by the model.
             computeruse.end("terminal")
             end_thinking()
+            # Kept, for /resume.
+            _keep_session(messages)
             # A turn that got here without finishing failed, or was
             # stopped; nothing, when there was no turn.
             progress.end(False, error="Stopped." if stopped else "")
