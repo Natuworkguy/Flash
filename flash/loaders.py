@@ -166,10 +166,10 @@ BUILTIN: tuple[Loader, ...] = (
         "An open book, its pages turning",
     ),
     Loader(
-        "eye", "Eye",
-        ("◉", "◉", "◔", "◕", "◉", "—"),
-        ("o", "o", "O", "o", "-", "o"), 0.2,
-        "An eye looking about, and blinking",
+        "camera", "Camera",
+        ("[◎]  ", "[◉]  ", "[◎]  ", "[●]✦ ", "[◎]· ", "[◎]  "),
+        ("[o]  ", "[O]  ", "[o]  ", "[@]* ", "[o]. ", "[o]  "), 0.16,
+        "A camera focusing, then a flash",
     ),
     Loader(
         "plane", "Paper plane",
@@ -191,7 +191,7 @@ TASKS: dict[str, tuple[str, str, tuple[str, ...]]] = {
     "reading": ("book", "Reading", (
         "read", "read_email", "check_inbox", "read_imessages",
         "skill_view")),
-    "looking": ("eye", "Looking", (
+    "looking": ("camera", "Looking", (
         "screenshot", "open_page", "interact", "computer_use",
         "view_image", "devtools")),
     "sending": ("plane", "Sending", (

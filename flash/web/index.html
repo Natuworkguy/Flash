@@ -309,6 +309,13 @@ body:not(.side-closed) #top .when-closed { display: none; }
 .fork-node b { display: block; color: var(--text); font-size: 13px; margin-bottom: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .fork-node .last { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .fork-node small { display: block; margin-top: 6px; color: var(--text-3); }
+.fork-card { position: relative; }
+.fork-card .fork-node b { padding-right: 24px; }
+.fork-del { position: absolute; top: 6px; right: 6px; display: grid; place-items: center; width: 26px; height: 26px; padding: 0; border: 0; border-radius: 8px; background: var(--surface); color: var(--text-3); cursor: pointer; opacity: 0; transition: opacity 0.15s, color 0.15s, background 0.15s; }
+.fork-del svg { width: 14px; height: 14px; }
+.fork-card:hover .fork-del, .fork-del:focus-visible { opacity: 1; }
+.fork-del:hover { color: var(--del); background: color-mix(in srgb, var(--del) 12%, var(--surface)); }
+@media (hover: none) { .fork-del { opacity: 1; } }
 #title input {
   font: inherit; color: var(--text); background: transparent;
   border: 0; outline: 0; width: 320px; max-width: 60vw;
@@ -832,9 +839,9 @@ pre code { display: block; padding: 2px 16px 14px; overflow-x: auto; font-size: 
    swallows them, flares, and blows them back out to where they began. */
 .ld-singularity .hole { position: absolute; left: 50%; top: 50%; width: 0.36em; height: 0.36em; margin: -0.18em; border-radius: 50%; background: #000; box-shadow: 0 0 0 0.05em currentColor, 0 0 0.2em color-mix(in srgb, currentColor 70%, transparent); animation: hole 1.8s var(--ease) infinite; }
 .ld-singularity i { position: absolute; left: 50%; top: 50%; width: 0.15em; height: 0.15em; margin: -0.075em; border-radius: 50%; background: currentColor; animation: pulled 1.8s cubic-bezier(0.55, 0, 0.45, 1) infinite; animation-delay: calc(var(--k) * -0.03s); }
-/* Sketches: the quill, the magnifier, the terminal, the book, the eye
-   and the paper plane, in plain lines like a sketch, drawn frame by
-   frame (see SKETCHES), a few a second, like stop motion. */
+/* Sketches: the quill, the magnifier, the terminal, the book, the
+   camera and the paper plane, in plain lines like a sketch, drawn anew
+   every frame (see SKETCHES) so they move smoothly. */
 .ld-sketch { width: 2.6em; height: 1.4em; }
 .ld-sketch svg { width: 2.6em; height: 1.6em; overflow: visible; fill: none; stroke: currentColor; stroke-width: 1.3; stroke-linecap: round; stroke-linejoin: round; }
 .ld-sketch .vane { fill: color-mix(in srgb, currentColor 18%, transparent); }
@@ -6814,26 +6821,46 @@ function drawForksBtn() {
 }
 
 // The chat's forks as a tree, each under the one it came from; the one
-// showing is marked, and any other opens where it left off.
+// showing is marked, and any other opens where it left off. The bin on
+// each lets it go; with one fork left, the chat has none, and the Forks
+// button goes with them.
 async function openForks() {
   const { forks } = await command("forks");
+  const form = openForm(`<h2>Forks</h2><p class="sub">Every way this chat has gone, each under the reply it forked from. Pick one to carry on there.</p><div class="fork-tree-wrap"></div><div class="actions-row"><button type="button" class="btn" data-close>Close</button></div>`, () => false);
+  form.querySelector("[data-close]").onclick = closeForm;
+  drawForkTree(form, forks);
+}
+
+function drawForkTree(form, forks) {
   const kids = new Map();
   for (const f of forks) { if (!kids.has(f.parent)) kids.set(f.parent, []); kids.get(f.parent).push(f); }
   const branch = (f) => {
     const under = (kids.get(f.id) || []).sort((a, b) => a.created - b.created);
-    return `<li><button type="button" class="fork-node${f.current ? " current" : ""}" data-fork="${esc(f.id)}"><b>${f.parent ? esc(f.label) : "Main"}</b><span class="last">${esc(f.last || "Nothing yet")}</span><small>${f.messages} message${f.messages === 1 ? "" : "s"}${f.current ? " · showing" : ""}</small></button>${under.length ? `<ul>${under.map(branch).join("")}</ul>` : ""}</li>`;
+    return `<li><div class="fork-card"><button type="button" class="fork-node${f.current ? " current" : ""}" data-fork="${esc(f.id)}"><b>${f.id === "main" ? "Main" : esc(f.label)}</b><span class="last">${esc(f.last || "Nothing yet")}</span><small>${f.messages} message${f.messages === 1 ? "" : "s"}${f.current ? " · showing" : ""}</small></button><button type="button" class="fork-del" data-del="${esc(f.id)}" aria-label="Delete this fork" data-tip="Delete this fork">${icon("trash")}</button></div>${under.length ? `<ul>${under.map(branch).join("")}</ul>` : ""}</li>`;
   };
   const roots = forks.filter((f) => !f.parent || !forks.some((g) => g.id === f.parent));
-  const form = openForm(`<h2>Forks</h2><p class="sub">Every way this chat has gone, each under the reply it forked from. Pick one to carry on there.</p><div class="fork-tree-wrap"><ul class="fork-tree">${roots.map(branch).join("")}</ul></div><div class="actions-row"><button type="button" class="btn" data-close>Close</button></div>`, () => false);
-  form.querySelector("[data-close]").onclick = closeForm;
-  form.querySelectorAll("[data-fork]").forEach((node) => {
+  const wrap = form.querySelector(".fork-tree-wrap");
+  wrap.innerHTML = `<ul class="fork-tree">${roots.map(branch).join("")}</ul>`;
+  wrap.querySelectorAll("[data-fork]").forEach((node) => {
     node.onclick = async () => {
       if (node.classList.contains("current")) { closeForm(); return; }
       try { await command("fork-switch", node.dataset.fork); closeForm(); }
       catch (error) { showFailure(error); }
     };
   });
-  const showing = form.querySelector(".fork-node.current");
+  wrap.querySelectorAll("[data-del]").forEach((del) => {
+    del.onclick = async () => {
+      const fork = forks.find((f) => f.id === del.dataset.del);
+      const text = `${fork.current ? "You go back to the one it came from. " : ""}${kids.has(fork.id) ? "Its own forks stay, moved up a level. " : ""}This can't be undone.`;
+      if (!(await confirmPop(del, { title: "Delete this fork?", text, yes: "Delete" }))) return;
+      let left;
+      try { left = (await command("fork-delete", fork.id)).forks; } catch (error) { showFailure(error); return; }
+      if (!left.length) { closeForm(); toast("Fork deleted. This chat has no other forks now."); return; }
+      drawForkTree(form, left);
+      toast("Fork deleted");
+    };
+  });
+  const showing = wrap.querySelector(".fork-node.current");
   if (showing) showing.scrollIntoView({ block: "nearest", inline: "center" });
 }
 
@@ -7655,7 +7682,7 @@ function drawLookSettings(body) {
   };
   morph.style.marginTop = "12px";
   body.appendChild(morph);
-  const tasks = el("button", "setting-row loader-tasks-row", `<span class="what"><b>Dynamic loaders</b><span>The loader shows what Flash is doing: a hand guiding a quill while it writes, a magnifier while it searches, a terminal while it runs a command, a book while it reads, an eye while it looks at a page or your screen, and a paper plane while it sends.</span></span><span class="switch" aria-hidden="true"></span>`);
+  const tasks = el("button", "setting-row loader-tasks-row", `<span class="what"><b>Dynamic loaders</b><span>The loader shows what Flash is doing: a hand guiding a quill while it writes, a magnifier while it searches, a terminal while it runs a command, a book while it reads, a camera while it looks at a page or your screen, and a paper plane while it sends.</span></span><span class="switch" aria-hidden="true"></span>`);
   tasks.type = "button";
   tasks.setAttribute("role", "switch");
   tasks.setAttribute("aria-checked", info.loader_tasks !== false);
@@ -13026,87 +13053,112 @@ const LOADER_ART = {
   // The hole drawn last, over the dots, so the ones it pulls in are gone.
   // The nib at the pen's origin: the feather leans back over the hand.
   // The sketches, drawn a frame at a time by turnSketches.
-  ...Object.fromEntries(["quill", "magnifier", "terminal", "book", "eye", "plane"].map((id) => [id, () => `<svg viewBox="0 -4 44 26" data-sketch="${id}"></svg>`])),
+  ...Object.fromEntries(["quill", "magnifier", "terminal", "book", "camera", "plane"].map((id) => [id, () => `<svg viewBox="0 -4 44 26" data-sketch="${id}"></svg>`])),
   singularity: () => repeat(8, (k) => `<i style="--k:${k}"></i>`) + `<b class="hole"></b>`,
 };
 
-// The sketches, one frame at a time, each drawn outright rather than
-// tweened, so they move in steps, like stop motion, and never quite
-// hold still. Each: how many frames, how long each shows, and the
-// drawing of frame K, in a 44 by 26 box.
-const SKETCH_JITTER = [[0, 0, -3], [0.3, -0.4, 4], [-0.2, 0.3, -1], [0.2, 0.2, 5], [-0.3, -0.2, -4], [0.1, 0.4, 2]];
-const jitter = (k) => SKETCH_JITTER[k % SKETCH_JITTER.length];
-const f1 = (n) => +n.toFixed(1);
+// The sketches, in plain lines like a drawing, moving smoothly. Each is
+// drawn whole for a moment K, counted in steps of MS (K runs on between
+// whole numbers, so everything glides), with a slow, slight wobble, as
+// a hand-drawn line has. Each: how many steps, how long each lasts, the
+// one to hold when motion is reduced, and the drawing at K, in a 44 by
+// 26 box.
+const SKETCH_SWAY = [[0, 0, -1.5], [0.15, -0.2, 2], [-0.1, 0.15, -0.5], [0.1, 0.1, 2.5], [-0.15, -0.1, -2], [0.05, 0.2, 1]];
+const ease = (t) => t * t * (3 - 2 * t);
+const clamp01 = (t) => Math.max(0, Math.min(1, t));
+function jitter(k) {
+  const at = (k / 3) % SKETCH_SWAY.length;
+  const a = SKETCH_SWAY[Math.floor(at)], b = SKETCH_SWAY[(Math.floor(at) + 1) % SKETCH_SWAY.length];
+  const t = ease(at - Math.floor(at));
+  return a.map((v, i) => v + (b[i] - v) * t);
+}
+const f1 = (n) => +n.toFixed(2);
 
-// The quill: the ink so far, a loop at a time, and the hand on the end
-// of it; then the pen lifts away and the line fades.
+// The quill: the ink running out behind the nib, loop after loop; then
+// the pen lifts away and the line fades.
 const QUILL_LOOPS = 8;
 const QUILL_PEN = `<path class="vane" d="M4.5-5.5C7-11 11-16 16.5-20.5 15.5-14 11.5-9 6.8-4.8Z"/><path d="M0 0 15.5-19.5"/><path class="hand" d="M2.6-3C4-1.4 5.4-1.4 6-3 7-1 8.8-1 9.2-3.2 10.6-1.6 12-2 12-4.2 12-6.6 9.4-8.8 6.4-8.3Z"/><path d="M11.6-6.2 16.2-4M12-3 16.6-1"/>`;
+let QUILL_INK = "M3 18";
+for (let n = 0; n < QUILL_LOOPS; n++) QUILL_INK += n === 0 ? "c2-5 4-5 4.5 0" : (n % 2 ? "s2.5 5 4.5 0" : "s2.5-5 4.5 0");
 function quillFrame(k) {
-  const drawn = Math.min(QUILL_LOOPS, Math.ceil(k / 2));
-  let d = "M3 18";
-  for (let n = 0; n < drawn; n++) d += n === 0 ? "c2-5 4-5 4.5 0" : (n % 2 ? "s2.5 5 4.5 0" : "s2.5-5 4.5 0");
-  const [jx, jy, turn] = jitter(k);
   const end = QUILL_LOOPS * 2;
+  const drawn = Math.min(QUILL_LOOPS, k / 2);
+  const n = Math.min(QUILL_LOOPS - 1, Math.floor(drawn));
+  const part = drawn - n;
+  const [jx, jy, turn] = jitter(k);
   const lift = Math.max(0, k - end - 1);
   const x = 3 + drawn * 4.5 + jx + lift * 1.4;
-  const y = 18 + jy - lift * 2;
-  const fade = k > end + 2 ? Math.max(0, 1 - (k - end - 2) / 3) : 1;
-  return (drawn ? `<path d="${d}" opacity="${f1(fade)}"/>` : "") +
-    `<g transform="translate(${f1(x)} ${f1(y)}) rotate(${turn})" opacity="${(k > end + 3 ? 0 : 1)}">${QUILL_PEN}</g>`;
+  const y = 18 + (n % 2 ? 1 : -1) * 3.75 * Math.sin(Math.PI * part) + jy - lift * 2;
+  const fade = clamp01(1 - (k - end - 2) / 3);
+  const pen = clamp01(1 - (k - end - 2.5) / 1.5);
+  return (drawn > 0 ? `<path d="${QUILL_INK}" pathLength="1" stroke-dasharray="${f1(drawn / QUILL_LOOPS)} 2" opacity="${f1(fade)}"/>` : "") +
+    `<g transform="translate(${f1(x)} ${f1(y)}) rotate(${f1(turn)})" opacity="${f1(pen)}">${QUILL_PEN}</g>`;
 }
 
-// The magnifier: hopping from word to word over three lines of text.
+// The magnifier: gliding from word to word over three lines of text,
+// stopping on each.
 const MAG_SPOTS = [[9, 5], [17, 6], [26, 4], [34, 7], [31, 12], [22, 11], [13, 13], [9, 18], [19, 18], [30, 17]];
 function magnifierFrame(k) {
-  const [x, y] = MAG_SPOTS[Math.floor(k / 2)];
+  const s = k / 2;
+  const i = Math.floor(s) % MAG_SPOTS.length;
+  const [ax, ay] = MAG_SPOTS[i], [bx, by] = MAG_SPOTS[(i + 1) % MAG_SPOTS.length];
+  const t = ease(clamp01(((s - Math.floor(s)) - 0.45) / 0.55));
   const [jx, jy, turn] = jitter(k);
+  const x = ax + (bx - ax) * t, y = ay + (by - ay) * t;
   return `<path class="faint" d="M4 4h12M19 4h9M31 4h8M4 11h7M14 11h14M31 11h8M4 18h16M23 18h8M34 18h5"/>` +
-    `<g transform="translate(${f1(x + jx)} ${f1(y + jy)}) rotate(${turn})"><path d="M3.6 3.6 8.2 8.2" stroke-width="2.4"/><circle class="lens" r="5"/><path d="M-2.8-1.2a3 3 0 0 1 1.6-1.9"/></g>`;
+    `<g transform="translate(${f1(x + jx)} ${f1(y + jy)}) rotate(${f1(turn)})"><path d="M3.6 3.6 8.2 8.2" stroke-width="2.4"/><circle class="lens" r="5"/><path d="M-2.8-1.2a3 3 0 0 1 1.6-1.9"/></g>`;
 }
 
-// The terminal: a prompt types a command, its output comes, and the
+// The terminal: a prompt types a command, its output slides out, and the
 // next prompt waits with its cursor blinking.
 function terminalFrame(k) {
   const [jx, jy] = jitter(k);
-  const typed = Math.min(5, k);
-  const out = k >= 7 ? Math.min(2, k - 6) : 0;
-  const again = k >= 10 ? Math.min(3, k - 10) : 0;
+  const typed = Math.min(5, Math.floor(k));
+  const out = clamp01((k - 7) / 1.5);
+  const out2 = clamp01((k - 8) / 1.5);
+  const again = k >= 10 ? Math.min(3, Math.floor(k - 10)) : 0;
   const prompt = (y) => `M6 ${y - 1.6}l2 1.6-2 1.6`;
   let d = prompt(8);
   for (let i = 0; i < typed; i++) d += `M${10.5 + i * 3} 8h1.8`;
-  if (out > 0) d += "M6 12.5h22";
-  if (out > 1) d += "M6 16h14";
+  if (out > 0) d += `M6 12.5h${f1(22 * ease(out))}`;
+  if (out2 > 0) d += `M6 16h${f1(14 * ease(out2))}`;
   if (k >= 9) d += prompt(19.5);
   for (let i = 0; i < again; i++) d += `M${10.5 + i * 3} 19.5h1.8`;
   const row = k >= 9 ? 19.5 : 8;
   const col = 10.5 + (k >= 9 ? again : typed) * 3;
-  const cursor = k % 2 === 0 || k < 5 ? `<rect class="solid" stroke="none" x="${col}" y="${row - 1.7}" width="1.8" height="3.4"/>` : "";
+  const blink = k < 5 ? 1 : 0.5 + 0.5 * Math.cos(k * Math.PI);
+  const cursor = `<rect class="solid" stroke="none" x="${col}" y="${row - 1.7}" width="1.8" height="3.4" opacity="${f1(blink)}"/>`;
   return `<g transform="translate(${f1(jx * 0.5)} ${f1(jy * 0.5)})"><rect x="2" y="-2" width="40" height="25" rx="3"/><path d="M2 2.4h40"/><circle class="solid" stroke="none" cx="5" cy="0.2" r="0.7"/><circle class="solid" stroke="none" cx="7.4" cy="0.2" r="0.7"/><circle class="solid" stroke="none" cx="9.8" cy="0.2" r="0.7"/><path d="${d}"/>${cursor}</g>`;
 }
 
 // The book: open, its pages turning over one after another.
 function bookFrame(k) {
   const [jx, jy] = jitter(k);
-  const t = Math.min(1, (k % 12) / 7);
+  const t = ease(clamp01((k % 12) / 7));
   const lift = Math.sin(t * Math.PI);
   const x = 40 - t * 36;
   const mid = 22 + (x - 22) * 0.5;
-  const turning = k % 12 < 8 ? `<path class="page" d="M22 3C${f1(mid)} ${f1(1 - lift * 3)} ${f1(x)} ${f1(2.5 - lift * 2.5)} ${f1(x)} ${f1(2.5 - lift * 2.5)}V${f1(19.5 - lift * 2.5)}C${f1(x)} ${f1(19.5 - lift * 2.5)} ${f1(mid)} ${f1(17.5 - lift * 3)} 22 20Z"/>` : "";
+  const turning = k % 12 < 7.5 ? `<path class="page" d="M22 3C${f1(mid)} ${f1(1 - lift * 3)} ${f1(x)} ${f1(2.5 - lift * 2.5)} ${f1(x)} ${f1(2.5 - lift * 2.5)}V${f1(19.5 - lift * 2.5)}C${f1(x)} ${f1(19.5 - lift * 2.5)} ${f1(mid)} ${f1(17.5 - lift * 3)} 22 20Z"/>` : "";
   return `<g transform="translate(${f1(jx * 0.5)} ${f1(jy * 0.5)})"><path class="page" d="M22 3C17 1 9 1 4 3V20C9 18 17 18 22 20Z"/><path class="page" d="M22 3C27 1 35 1 40 3V20C35 18 27 18 22 20Z"/><path class="faint" d="M7 7h11M7 10.5h11M7 14h8M26 7h11M26 10.5h11M26 14h9"/>${turning}</g>`;
 }
 
-// The eye: looking about, and now and then a blink.
-const EYE_LOOKS = [[0, 0], [0, 0], [-7, 1], [-7, 1], [-7, 1], [0, 0], [7, -1], [7, -1], [7, -1], [0, 0], [0, 2], [0, 2], [0, 0], [0, 0], [0, 0], [0, 0]];
-function eyeFrame(k) {
-  const [jx, jy] = jitter(k);
-  const lashes = `<path d="M10 3.4 8.6 0.8M16.6 1.2 16.2-1.6M27.4 1.2 27.8-1.6M34 3.4 35.4 0.8"/>`;
-  const g = (inner) => `<g transform="translate(${f1(jx * 0.5)} ${f1(jy * 0.5)})">${inner}</g>`;
-  if (k === 13 || k === 14) return g(`<path d="M3 10C12 14.5 32 14.5 41 10"/>${lashes}`);
-  const [dx, dy] = EYE_LOOKS[k];
-  const half = k === 12 || k === 15;
-  const lid = half ? "M3 10C12 5 32 5 41 10C32 15 12 15 3 10Z" : "M3 10C12 0 32 0 41 10C32 20 12 20 3 10Z";
-  return g(`<path class="page" d="${lid}"/><circle cx="${22 + dx}" cy="${10 + dy}" r="${half ? 3.6 : 5.2}"/><circle class="solid" stroke="none" cx="${22 + dx}" cy="${10 + dy}" r="${half ? 1.6 : 2.3}"/>${lashes}`);
+// The camera: its lens turns to focus, the button goes down, a flash,
+// and the picture slides out of the top.
+function cameraFrame(k) {
+  const [jx, jy, turn] = jitter(k);
+  const focus = Math.sin((k / 6) * Math.PI);
+  const press = k >= 7 && k < 8.2 ? Math.sin(((k - 7) / 1.2) * Math.PI) : 0;
+  const flash = k >= 7.6 ? clamp01(1 - (k - 7.6) / 1.6) : 0;
+  const photo = ease(clamp01((k - 8.2) / 3)) * clamp01(1 - (k - 13.5) / 1.5);
+  const rays = flash > 0 ? `<g opacity="${f1(flash)}" stroke-width="1.1"><path d="M36 -3.5l2.6-2.6M38.5 0.5h3.4M33 -5.5v-3"/></g>` : "";
+  const print = photo > 0 ? `<g opacity="${f1(Math.min(1, photo * 2))}"><rect class="page" x="12" y="${f1(3 - photo * 7)}" width="14" height="${f1(photo * 7)}" rx="0.6"/></g>` : "";
+  return `<g transform="translate(${f1(jx * 0.5 + 3)} ${f1(jy * 0.5 + 1)}) rotate(${f1(turn * 0.4)} 19 12)">${print}` +
+    `<path class="page" d="M4 5.5h7l2-3h10l2 3h7a2 2 0 0 1 2 2V20a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V7.5a2 2 0 0 1 2-2Z"/>` +
+    `<rect x="${f1(30.5)}" y="${f1(1.8 + press * 1.2)}" width="4" height="${f1(1.8 - press * 1.2)}" rx="0.6"/>` +
+    `<circle class="lens" cx="19" cy="13.5" r="6"/><circle cx="19" cy="13.5" r="${f1(3.2 + focus * 0.9)}" class="faint"/>` +
+    `<path d="M${f1(19 + 2 * Math.cos(k * 0.7))} ${f1(13.5 - 2 * Math.sin(k * 0.7))}a2 2 0 0 1 ${f1(-1.2)} ${f1(-0.4)}" class="faint"/>` +
+    (flash > 0 ? `<circle class="solid" stroke="none" cx="19" cy="13.5" r="${f1(2.4 * flash)}" opacity="${f1(flash * 0.8)}"/>` : "") +
+    `<circle class="solid" stroke="none" cx="6.5" cy="9" r="0.9"/>${rays}</g>`;
 }
 
 // The paper plane: off along a looping path, its trail behind it, then
@@ -13122,12 +13174,13 @@ function planeFrame(k) {
   const flying = Math.min(k, 11);
   let trail = "";
   for (let i = 0; i < flying - 1; i += 2) {
-    const [x1, y1] = planeAt(i), [x2, y2] = planeAt(i + 0.8);
+    const [x1, y1] = planeAt(i), [x2, y2] = planeAt(Math.min(i + 0.8, flying - 0.6));
     trail += `M${f1(x1)} ${f1(y1)}L${f1(x2)} ${f1(y2)}`;
   }
-  const fade = k > 12 ? Math.max(0, 1 - (k - 12) / 3) : 1;
+  const fade = clamp01(1 - (k - 12) / 3);
+  const gone = clamp01(1 - (k - 10.5) / 1.2);
   const [x, y, angle] = planeAt(flying);
-  const plane = k <= 11 ? `<g transform="translate(${f1(x + jx)} ${f1(y + jy)}) rotate(${f1(angle + turn)})"><path class="page" d="M2 0-8-4.5-5.5 0-8 4.5Z"/><path d="M2 0-5.5 0M-5.5 0-6.5 2.6"/></g>` : "";
+  const plane = gone > 0 ? `<g opacity="${f1(gone)}" transform="translate(${f1(x + jx)} ${f1(y + jy)}) rotate(${f1(angle + turn)})"><path class="page" d="M2 0-8-4.5-5.5 0-8 4.5Z"/><path d="M2 0-5.5 0M-5.5 0-6.5 2.6"/></g>` : "";
   return (trail ? `<path class="faint" d="${trail}" opacity="${f1(fade)}"/>` : "") + plane;
 }
 
@@ -13136,20 +13189,21 @@ const SKETCHES = {
   magnifier: { frames: MAG_SPOTS.length * 2, ms: 120, rest: 0, draw: magnifierFrame },
   terminal: { frames: 18, ms: 130, rest: 12, draw: terminalFrame },
   book: { frames: 24, ms: 110, rest: 9, draw: bookFrame },
-  eye: { frames: EYE_LOOKS.length, ms: 160, rest: 0, draw: eyeFrame },
+  camera: { frames: 16, ms: 120, rest: 5, draw: cameraFrame },
   plane: { frames: 16, ms: 110, rest: 6, draw: planeFrame },
 };
 
+// Every frame the screen draws, while any sketch is on the page.
 (function turnSketches() {
   const now = performance.now();
   for (const svg of document.querySelectorAll(".ld-sketch svg[data-sketch]")) {
     const sketch = SKETCHES[svg.dataset.sketch];
     if (!sketch) continue;
     const since = svg.since ?? (svg.since = now);
-    const k = calm.matches ? sketch.rest : Math.floor((now - since) / sketch.ms) % sketch.frames;
+    const k = calm.matches ? sketch.rest : ((now - since) / sketch.ms) % sketch.frames;
     if (svg.frame !== k) { svg.frame = k; svg.innerHTML = sketch.draw(k); }
   }
-  setTimeout(() => requestAnimationFrame(turnSketches), 40);
+  requestAnimationFrame(turnSketches);
 })();
 
 const allLoaders = () => info.loaders || [];
@@ -13289,7 +13343,7 @@ const TASK_STEPS = [
   ["searching", "magnifier", "Searching", /^(Search|Fetch|Grep|Glob|Recall)\(/],
   ["running", "terminal", "Running", /^Bash\(/],
   ["reading", "book", "Reading", /^(Read|ReadEmail|CheckInbox|ReadIMessages|SkillView)\(/],
-  ["looking", "eye", "Looking", /^(Screenshot|OpenPage|Interact|ComputerUse|ViewImage|Devtools)\(/],
+  ["looking", "camera", "Looking", /^(Screenshot|OpenPage|Interact|ComputerUse|ViewImage|Devtools)\(/],
   ["sending", "plane", "Sending", /^(SendEmail|SendIMessage|Notify)\(/],
 ];
 function activityOf(chat) {
