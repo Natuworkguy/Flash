@@ -167,7 +167,7 @@ class TestKeysInTheLoop:
 
         saved, _ = self.run(monkeypatch, [TOGGLE_AUTO])
 
-        assert saved == {"NO_COMMAND_CONFIRMATION": "1"}
+        assert saved == {"NO_COMMAND_CONFIRMATION": "1", "ULTRA_AUTO": "0"}
 
     def test_shift_tab_redraws_the_banner_with_the_new_mode(
         self, monkeypatch
@@ -217,7 +217,7 @@ class TestKeysInTheLoop:
 
         saved, _ = self.run(monkeypatch, ["hello", TOGGLE_AUTO])
 
-        assert saved == {"NO_COMMAND_CONFIRMATION": "1"}
+        assert saved == {"NO_COMMAND_CONFIRMATION": "1", "ULTRA_AUTO": "0"}
         assert drawn == []
 
     def test_ctrl_o_expands(self, monkeypatch):

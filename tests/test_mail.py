@@ -344,6 +344,15 @@ def test_a_half_written_email_is_never_put_to_the_user(server, to, body,
     assert asked == [] and FakeSMTP.sent == []  # nosec B101
 
 
+def test_send_email_does_not_ask_in_ultra_auto(server, monkeypatch):
+    monkeypatch.setattr(tools, "ULTRA_AUTO", True)
+    with answer_from(lambda question: pytest.fail("asked in UltraAuto")):
+        said = tools.send_email("a@example.com", "Hi", "Hello")
+
+    assert said == "Sent to a@example.com."  # nosec B101
+    assert len(FakeSMTP.sent) == 1  # nosec B101
+
+
 def test_send_email_sends_once_agreed(server):
     with answer_from(lambda question: "y"):
         said = tools.send_email("a@example.com", "Hi", "Hello")

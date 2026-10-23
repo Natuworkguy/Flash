@@ -3469,8 +3469,41 @@ def _mark_available(spark_id: str) -> None:
     _changed()
 
 
+def _saved_on(name: str, otherwise: bool) -> bool:
+    """Whether setting NAME is on in the env file, or OTHERWISE when the
+    file does not say."""
+
+    from dotenv import dotenv_values
+
+    try:
+        saved = dotenv_values(ENV_PATH).get(name)
+    except OSError:
+        saved = None
+    if saved is None or not str(saved).strip():
+        return otherwise
+    try:
+        return int(str(saved).strip()) > 0
+    except ValueError:
+        return otherwise
+
+
+def ultra() -> bool:
+    """Whether UltraAuto is on, as the user last set it: allowed in
+    Settings, and picked. Nothing asks then, not even what asks in
+    autonomous mode."""
+
+    from . import tools as flash_tools  # deferred: avoids a module cycle
+
+    # This process's own setting, only where the file does not say: it
+    # was only ever on with UltraAuto allowed.
+    here = bool(flash_tools.ULTRA_AUTO)
+    return _saved_on("ULTRA_AUTO_ALLOWED", here) and \
+        _saved_on("ULTRA_AUTO", here)
+
+
 def autonomous() -> bool:
-    """Whether autonomous mode is on, as the user last set it.
+    """Whether autonomous mode is on, as the user last set it (UltraAuto
+    is, and more).
 
     From the env file, not this process's memory: the user may have
     switched it in another Flash, the terminal while this one serves the
@@ -3478,20 +3511,10 @@ def autonomous() -> bool:
     say does this process's own setting count.
     """
 
-    from dotenv import dotenv_values
-
     from . import tools as flash_tools  # deferred: avoids a module cycle
 
-    try:
-        saved = dotenv_values(ENV_PATH).get("NO_COMMAND_CONFIRMATION")
-    except OSError:
-        saved = None
-    if saved is None or not str(saved).strip():
-        return bool(flash_tools.NO_COMMAND_CONFIRMATION)
-    try:
-        return int(str(saved).strip()) > 0
-    except ValueError:
-        return bool(flash_tools.NO_COMMAND_CONFIRMATION)
+    return _saved_on("NO_COMMAND_CONFIRMATION",
+                     bool(flash_tools.NO_COMMAND_CONFIRMATION)) or ultra()
 
 
 # --- Documents -----------------------------------------------------------
@@ -3903,6 +3926,10 @@ PROPOSAL_TOOLS = [
 ]
 
 
+# Why a proposal was said yes to without the user: they switched it on.
+ULTRA_YES = "UltraAuto is on, so it was a yes without asking."
+
+
 def _proposing(spark: Spark) -> dict[str, Callable[[dict], str]]:
     """propose_hire and propose_removal, for SPARK."""
 
@@ -3924,6 +3951,12 @@ def _proposing(spark: Spark) -> dict[str, Callable[[dict], str]]:
         except SparkError as exc:
             return f"Error: {exc}"
         tool_line(f"ProposeHire({made['spark']['name']})")
+        if ultra():
+            # Nobody is asked in UltraAuto: it is a yes.
+            decide_hire(made["id"], True, ULTRA_YES)
+            tool_result("Hired: UltraAuto said yes")
+            return (f"(hired: {made['spark']['name']} is on your team now. "
+                    "UltraAuto is on, so the user was not asked.)")
         tool_result("Waiting for the user to say yes or no")
         return (
             f"(proposed: hiring {made['spark']['name']} waits on the user. "
@@ -3939,6 +3972,11 @@ def _proposing(spark: Spark) -> dict[str, Callable[[dict], str]]:
         except SparkError as exc:
             return f"Error: {exc}"
         tool_line(f"ProposeRemoval({made['target_name']})")
+        if ultra():
+            decide_hire(made["id"], True, ULTRA_YES)
+            tool_result("Let go: UltraAuto said yes")
+            return (f"(let go: {made['target_name']} is gone. UltraAuto is "
+                    "on, so the user was not asked.)")
         tool_result("Waiting for the user to say yes or no")
         return (
             f"(proposed: letting {made['target_name']} go waits on the user. "
@@ -4163,7 +4201,8 @@ def _work(
     # With nowhere to ask (a team chat's answer), a connected app's tool
     # that changes things is only offered in autonomous mode, as a
     # command is.
-    asks = gate is not None or flash_tools.NO_COMMAND_CONFIRMATION
+    asks = gate is not None or flash_tools.NO_COMMAND_CONFIRMATION or \
+        ultra()
 
     def tools_now() -> list[dict]:
         # The connected MCP servers' tools too, looked at afresh each
@@ -4547,11 +4586,14 @@ def shift(spark_id: str, client=None) -> Optional[Report]:
     # user's answer.
     names = flash_tools.SPARK_TOOL_NAMES
     auto = autonomous()
+    ultra_on = ultra()
 
     def gate(name: str) -> bool:
         # Sending email asks every time; the rest only out of
         # autonomous mode, as does a connected app's tool that changes
-        # things.
+        # things. In UltraAuto, nothing does.
+        if ultra_on:
+            return False
         return name in flash_tools.ALWAYS_ASK_TOOL_NAMES or (
             not auto and (name in flash_tools.CONFIRMED_TOOL_NAMES
                           or _connector_changes(name))

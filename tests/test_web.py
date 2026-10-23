@@ -362,8 +362,8 @@ class TestCommands:
 
         result = web.command(web.Session(), {"name": "auto"})
 
-        assert result == {"auto": True}
-        assert saved == {"NO_COMMAND_CONFIRMATION": "1"}
+        assert result["mode"] == "ask"  # nosec B101  (not refreshed here)
+        assert saved == {"NO_COMMAND_CONFIRMATION": "1", "ULTRA_AUTO": "0"}
 
     def test_unknown(self):
         with pytest.raises(ValueError):

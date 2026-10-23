@@ -432,6 +432,16 @@ def test_an_imessage_asks_even_in_autonomous_mode(monkeypatch, ran):
     assert sent(ran) == []  # nosec B101
 
 
+def test_an_imessage_does_not_ask_in_ultra_auto(monkeypatch, ran):
+    mac_messages(monkeypatch, ran)
+    monkeypatch.setattr(tools, "ULTRA_AUTO", True)
+    with answer_from(lambda question: pytest.fail("asked in UltraAuto")):
+        said = tools.send_imessage("+1 555 0100", "On my way")
+
+    assert said.startswith("Sent to")  # nosec B101
+    assert len(sent(ran)) == 1  # nosec B101
+
+
 def test_a_number_or_address_is_not_looked_up(monkeypatch, ran):
     mac_messages(monkeypatch, ran)
     assert computer.recipient("(555) 010-2000") == (  # nosec B101

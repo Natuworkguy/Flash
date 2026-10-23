@@ -172,7 +172,9 @@ python run.py
 - `/host [name|url]`: Pick or switch the Ollama server. `add <url>
   [name]`, `remove <name>`, and `list` manage the saved hosts.
 - `/auto [on|off]`: Toggle autonomous mode: commands and edits run
-  without asking first.
+  without asking first. `/auto ultra` switches to [UltraAuto](#ultraauto),
+  allowing it first after a warning, and `/auto ultra off` stops
+  offering it.
 - `/systemone [on|off|model [name]]`: Show, switch, or pick the model for
   [System One](#system-one), which reviews autonomous commands.
 - `/computer [on|off] [name]`: Let Flash do [simple things on your
@@ -221,7 +223,8 @@ python run.py
 - `Up` / `Down` step through earlier messages, saved across sessions in
   `~/.flash/history`. `/set` lines are never saved, since that is how
   API keys get typed in. `Ctrl+R` searches them.
-- `Shift+Tab` toggles autonomous mode, the same as `/auto`.
+- `Shift+Tab` goes round the modes, the same as `/auto`: ask first,
+  autonomous, then UltraAuto once it is allowed.
 - `Ctrl+O` prints in full any tool output that was cut short this turn.
   Output longer than 12 lines shows its first 5 lines, or its last 5 if
   the command failed, since the error is usually at the end. The model
@@ -337,6 +340,30 @@ Sub-agents keep running after a reply, and `/agents` watches all of them
 update in place (Ctrl+C goes back to the prompt). They cannot talk to you,
 so they get no tool that asks first: `shell` and `write` are only theirs
 in autonomous mode (`/auto on`).
+
+### UltraAuto
+
+A third mode, beside ask first and autonomous, for when you want Flash
+and its sparks to get on with it entirely. It is off until you allow it,
+under Settings > General > UltraAuto (read the warning, then "I
+understand: offer UltraAuto"), or with `/auto ultra` in the terminal,
+which shows the same warning and wants `ultra` typed back. Once allowed,
+the mode button by the message box offers it as a third choice, and
+Shift+Tab goes round all three.
+
+In UltraAuto nothing stops to ask you about anything:
+
+- commands and edits run, as in autonomous mode;
+- email and iMessages go out without you seeing them first;
+- a spark's proposals to hire or let go of a spark are a yes;
+- sparks answering in a team chat get every tool a shift has;
+- connected apps' tools that change things run, and a wait's command is
+  not put to you;
+- Computer Use takes the mouse and keyboard without asking.
+
+None of that can be taken back. [System One](#system-one), if it is on,
+still reviews each command and edit before it runs; nothing else does.
+Turning the setting off leaves UltraAuto at once, for autonomous mode.
 
 ### System One
 

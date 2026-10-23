@@ -59,7 +59,7 @@ COMMANDS = [
     ("/host", "switch Ollama server (/host <name|url>, add, remove, list)"),
     ("/loader", "pick the animation that turns while Flash works"),
     ("/instructions", "how every reply should be (<text> or clear)"),
-    ("/auto", "toggle autonomous command mode (/auto on|off)"),
+    ("/auto", "ask first or autonomous (/auto on|off), or UltraAuto (ultra)"),
     ("/systemone", "a small model that reviews autonomous commands (on|off)"),
     ("/computer", "let Flash pause music, open apps, send iMessages "
                   "(on|off [what]); use on|off: Computer Use, beta"),

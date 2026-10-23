@@ -252,6 +252,8 @@ class Config:
     max_output_tokens: int
     num_ctx: str
     no_command_confirmation: bool
+    ultra_allowed: bool
+    ultra_auto: bool
     system_one: bool
     show_stats: bool
     voice: bool
@@ -281,9 +283,14 @@ class Config:
             "MAX_OUTPUT_TOKENS", 8192, minimum=128
         )
         cls.num_ctx = (os.getenv("NUM_CTX") or "").strip().lower()
+        # UltraAuto: offered once allowed in Settings, and autonomous
+        # mode and more while on.
+        cls.ultra_allowed = bool(_int_env("ULTRA_AUTO_ALLOWED", 0, minimum=0))
+        cls.ultra_auto = cls.ultra_allowed and bool(
+            _int_env("ULTRA_AUTO", 0, minimum=0))
         cls.no_command_confirmation = bool(
             _int_env("NO_COMMAND_CONFIRMATION", 0, minimum=0)
-        )
+        ) or cls.ultra_auto
         # On only with a model to ask: "none" is how the picker says off.
         cls.system_one = bool(_int_env("SYSTEM_ONE", 0, minimum=0)) and \
             bool((os.getenv("SYSTEM_ONE_MODEL") or "").strip())
@@ -319,6 +326,55 @@ def set_config_var(name: str, value: str) -> None:
     os.environ[name] = value
     set_env_var(ENV_PATH, name, value)
     Config.refresh()
+
+
+# How much Flash asks: before commands and edits, not about those
+# (autonomous), or about nothing at all (UltraAuto, once allowed).
+MODES = ("ask", "auto", "ultra")
+MODE_WORDS = {"ask": "Ask first", "auto": "Auto", "ultra": "UltraAuto"}
+
+
+def mode() -> str:
+    """The mode in use: one of MODES."""
+
+    if Config.ultra_auto:
+        return "ultra"
+    return "auto" if Config.no_command_confirmation else "ask"
+
+
+def set_mode(name: str) -> str:
+    """Switch to mode NAME, saved. Raises ValueError for one that is not
+    there, or UltraAuto before it is allowed."""
+
+    name = {"on": "auto", "off": "ask", "autonomous": "auto",
+            "ultraauto": "ultra"}.get(name, name)
+    if name not in MODES:
+        raise ValueError(f"{name!r} is not a mode: ask, auto or ultra.")
+    if name == "ultra" and not Config.ultra_allowed:
+        raise ValueError(
+            "UltraAuto is not allowed yet: turn it on in Settings, or "
+            "with /auto ultra allow."
+        )
+    set_config_var("NO_COMMAND_CONFIRMATION", "0" if name == "ask" else "1")
+    set_config_var("ULTRA_AUTO", "1" if name == "ultra" else "0")
+    return name
+
+
+def next_mode() -> str:
+    """The mode after this one, as Shift+Tab goes round them: UltraAuto
+    only once allowed."""
+
+    offered = [m for m in MODES if m != "ultra" or Config.ultra_allowed]
+    return offered[(offered.index(mode()) + 1) % len(offered)] \
+        if mode() in offered else "ask"
+
+
+def allow_ultra(on: bool) -> None:
+    """Offer UltraAuto as a mode, or stop: off, out of it at once."""
+
+    set_config_var("ULTRA_AUTO_ALLOWED", "1" if on else "0")
+    if not on:
+        set_config_var("ULTRA_AUTO", "0")
 
 
 def unset_config_var(name: str) -> bool:
@@ -432,7 +488,10 @@ def _banner_lines(update_version: Optional[str] = None) -> list:
     lines = [title, Text(""), fields]
 
     notices = []
-    if Config.no_command_confirmation:
+    if Config.ultra_auto:
+        notices.append("UltraAuto, nothing asks first: not email, "
+                       "iMessages, hires or Computer Use")
+    elif Config.no_command_confirmation:
         notices.append("autonomous, commands run without confirmation")
     if systemone.enabled():
         if _system_one_too_old:
@@ -1709,7 +1768,8 @@ def _status_text(messages: list[dict]) -> str:
 
     if Config.no_command_confirmation:
         # "auto + S1": autonomous, with System One reviewing each call.
-        parts.append("auto + S1" if Config.system_one else "auto")
+        word = "ultra" if Config.ultra_auto else "auto"
+        parts.append(f"{word} + S1" if Config.system_one else word)
 
     if Config.voice:
         parts.append("voice")
@@ -4807,7 +4867,7 @@ KEYS = [
     ("Alt+Enter", "new line (or end the line with \\ and press Enter)"),
     ("Up / Down", "earlier messages, kept across sessions"),
     ("Ctrl+R", "search earlier messages"),
-    ("Shift+Tab", "toggle autonomous mode"),
+    ("Shift+Tab", "ask first, autonomous, then UltraAuto if allowed"),
     ("Ctrl+O", "show tool output that was cut short this turn"),
     ("Ctrl+C", "stop the model mid-answer"),
     ("Enter, while working", "steer: the model reads it before its next step"),
@@ -4815,19 +4875,63 @@ KEYS = [
 ]
 
 
-def _set_auto(on: bool) -> None:
-    """Autonomous mode on or off, from /auto, saying which."""
+ULTRA_WARNING = (
+    "UltraAuto never stops to ask you about anything. Flash and every "
+    "spark run commands and edits, send email and iMessages in your name, "
+    "hire and let go of sparks, change things through connected apps, and "
+    "take over the mouse and keyboard with Computer Use, all without a "
+    "word to you first. None of that can be taken back. System One still "
+    "reviews each step if it is on; nothing else does."
+)
 
-    set_config_var("NO_COMMAND_CONFIRMATION", "1" if on else "0")
-    state = "enabled" if on else "disabled"
-    console.print(
-        Text(f"Autonomous mode {state}.", style=f"bold {ACCENT}")
-    )
-    if on and systemone.enabled():
+
+def _set_auto(on) -> None:
+    """A mode from /auto (True or False for autonomous or not, or one of
+    MODES), saying which."""
+
+    name = on if isinstance(on, str) else ("auto" if on else "ask")
+    try:
+        name = set_mode(name)
+    except ValueError as exc:
+        warn(str(exc))
+        return
+    said = {"ask": "Autonomous mode disabled.",
+            "auto": "Autonomous mode enabled.",
+            "ultra": "UltraAuto on: nothing asks first."}[name]
+    colour = WARN if name == "ultra" else ACCENT
+    console.print(Text(said, style=f"bold {colour}"))
+    if name != "ask" and systemone.enabled():
         console.print(Text(
             f"  System One ({systemone.model()}) reviews each command and "
             "edit before it runs.", style=DIM,
         ))
+
+
+def _ultra_command(words: list[str]) -> None:
+    """/auto ultra: UltraAuto, allowed first (with a warning and a typed
+    yes) when it is not yet; /auto ultra off stops offering it."""
+
+    if words == ["off"]:
+        allow_ultra(False)
+        console.print(Text(
+            "UltraAuto is off and no longer offered."
+            + (" Autonomous mode is still on." if
+               Config.no_command_confirmation else ""),
+            style=DIM,
+        ))
+        return
+    if words:
+        warn("Usage: /auto ultra [off]")
+        return
+    if not Config.ultra_allowed:
+        warn(ULTRA_WARNING)
+        prompt = Text("  Type ultra to allow it: ", style=DIM)
+        console.print(prompt, end="")
+        if typed().strip().lower() != "ultra":
+            console.print(Text("  Not allowed.", style=DIM))
+            return
+        allow_ultra(True)
+    _set_auto("ultra")
 
 
 def _hard_breaks(text: str) -> str:
@@ -5431,10 +5535,7 @@ def _main() -> None:
         """Shift+Tab and Ctrl+O, pressed in the dock mid-turn."""
 
         if key == TOGGLE_AUTO:
-            set_config_var(
-                "NO_COMMAND_CONFIRMATION",
-                "0" if Config.no_command_confirmation else "1",
-            )
+            set_mode(next_mode())
         elif key == EXPAND:
             expand_collapsed()
 
@@ -5570,10 +5671,7 @@ def _main() -> None:
                     # forth. The feedback is the status bar's "auto",
                     # or on the opening screen, which has no status
                     # bar, the banner's autonomous notice.
-                    set_config_var(
-                        "NO_COMMAND_CONFIRMATION",
-                        "0" if Config.no_command_confirmation else "1",
-                    )
+                    set_mode(next_mode())
                     if banner_showing:
                         redraw_banner()
                     continue
@@ -5693,13 +5791,15 @@ def _main() -> None:
             if uin == "/auto" or uin.startswith("/auto "):
                 arg = uin[len("/auto"):].strip().lower()
                 if arg in ("", "toggle"):
-                    _set_auto(not Config.no_command_confirmation)
+                    _set_auto(next_mode())
                 elif arg in ("on", "enable", "true", "1"):
                     _set_auto(True)
-                elif arg in ("off", "disable", "false", "0"):
+                elif arg in ("off", "disable", "false", "0", "ask"):
                     _set_auto(False)
+                elif arg.split()[:1] == ["ultra"]:
+                    _ultra_command(arg.split()[1:])
                 else:
-                    warn("Usage: /auto [on|off|toggle]")
+                    warn("Usage: /auto [on|off|toggle|ultra [off]]")
                 continue
 
             if uin == "/stats":
