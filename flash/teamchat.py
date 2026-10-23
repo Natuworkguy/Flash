@@ -842,6 +842,16 @@ def _reacting(team_id: str, spark: sparks.Spark, reacted: list[str]):
     return put
 
 
+def _ultra_tools() -> tuple[str, ...]:
+    """In UltraAuto, every tool a shift has that can work now: commands,
+    edits, email and iMessages too."""
+
+    from . import tools as flash_tools  # deferred: avoids a module cycle
+
+    working = {t["function"]["name"] for t in flash_tools.available_tools()}
+    return tuple(n for n in flash_tools.SPARK_TOOL_NAMES if n in working)
+
+
 def _reply(
     team: sparks.Team, spark: sparks.Spark, client=None,
 ) -> list[dict]:
@@ -894,12 +904,18 @@ def _reply(
             {"role": "system", "content": system},
             {"role": "user", "content": _view(team, spark, entries)},
         ]
-        text = sparks._work(
-            spark, messages, tools, schemas, steps,
-            lambda doing: _set_typing(team.id, spark.id, doing),
-            sparks.MAX_CHAT_ROUNDS, sparks.CHAT_LAST_WORD, client,
-            audit_as="team chat",
-        )
+        # In UltraAuto an answer here gets every tool a shift has, and
+        # what would ask is told yes: nobody is here to answer it.
+        ultra = sparks.ultra()
+        with sparks.answer_from(lambda question: "y") if ultra \
+                else contextlib.nullcontext():
+            text = sparks._work(
+                spark, messages, tools, schemas, steps,
+                lambda doing: _set_typing(team.id, spark.id, doing),
+                sparks.MAX_CHAT_ROUNDS, sparks.CHAT_LAST_WORD, client,
+                names=_ultra_tools() if ultra else None,
+                audit_as="team chat",
+            )
         said = "" if not text or _quiet(text) else text
         # Its answer only repeating the message it just sent is not
         # another message.

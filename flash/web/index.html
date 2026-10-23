@@ -965,6 +965,10 @@ body.empty:not(.on-page) #project-btn { display: inline-flex; }
 #think-btn[aria-pressed="true"] svg { animation: think-glow 1.8s ease-in-out infinite; }
 @keyframes think-glow { 50% { filter: drop-shadow(0 0 4px color-mix(in srgb, var(--accent) 70%, transparent)); } }
 #auto-btn.on { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 45%, transparent); background: color-mix(in srgb, var(--accent) 10%, transparent); }
+#auto-btn.ultra { color: var(--del); border-color: color-mix(in srgb, var(--del) 55%, transparent); background: color-mix(in srgb, var(--del) 12%, transparent); }
+.menu .item .mode-row { display: flex; flex-direction: column; gap: 1px; padding: 2px 0; }
+.menu .item .mode-row small { color: var(--text-3); font-size: 12px; white-space: normal; max-width: 280px; }
+.menu .item .mode-row.ultra b { color: var(--del); }
 /* The plus: turns a quarter while its menu is open. */
 #plus-btn { width: 32px; padding: 0; justify-content: center; flex: none; }
 #plus-btn svg { width: 17px; height: 17px; transition: transform 0.34s var(--spring); }
@@ -1389,6 +1393,7 @@ body.page-projects #dock, body.page-settings #dock, body.page-tool #dock { displ
 .tunnel-warn b { color: var(--del); }
 .tunnel-warn ul { margin: 6px 0 0; padding-left: 18px; }
 .beta-chip { display: inline-block; margin-left: 8px; padding: 1px 7px; border-radius: 999px; font: 600 10.5px/1.5 var(--sans, inherit); letter-spacing: 0.04em; text-transform: uppercase; vertical-align: 2px; color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent); border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent); }
+.ultra-agree { margin: 10px 0 2px; }
 .computer-use-warn .use-missing { margin: 8px 0 0; color: var(--text); }
 .computer-use-warn kbd { font: 12px var(--mono); padding: 0 5px; border-radius: 5px; border: 1px solid var(--border-strong); background: var(--surface); }
 .tunnel-box { margin-top: 10px; }
@@ -7193,6 +7198,33 @@ function drawGeneral(body) {
   systemOne.setAttribute("role", "switch");
   body.appendChild(systemOne);
   fillSystemOne(systemOne);
+
+  // A third mode, offered only once switched on here: nothing asks.
+  body.insertAdjacentHTML("beforeend", `<h2 class="settings-section settings-gap">UltraAuto</h2><p class="settings-sub">A third mode beside Ask first and Auto. In UltraAuto, Flash and your sparks never stop to ask you about anything.</p>`);
+  const ultraRow = el("button", "setting-row ultra-row", `<span class="what"><b>Offer UltraAuto</b><span>Adds it to the mode button by the message box, to Shift Tab, and to /auto ultra in the terminal. Turning this off leaves UltraAuto at once.</span></span><span class="switch" aria-hidden="true"></span>`);
+  ultraRow.type = "button";
+  ultraRow.setAttribute("role", "switch");
+  ultraRow.setAttribute("aria-checked", !!info.ultra_allowed);
+  const ultraWarn = el("div", "tunnel-warn ultra-warn", `<b>Read this first. Nothing asks you in UltraAuto.</b><ul><li>Commands run and files change without a yes, as in Auto.</li><li>Email and iMessages go out in your name without you seeing them first.</li><li>Sparks hire and let go of sparks, and answer in team chats with every tool they have.</li><li>Connected apps’ tools that change things run, and waits run their commands, unasked.</li><li>Computer Use takes your mouse and keyboard without asking.</li><li>None of it can be taken back. System One still reviews each step, if it is on; nothing else does.</li></ul><p class="ultra-agree"><button type="button" class="btn small danger">I understand: offer UltraAuto</button></p>`);
+  const agree = ultraWarn.querySelector(".ultra-agree");
+  const setUltra = async (on) => {
+    ultraRow.setAttribute("aria-checked", on);
+    try { Object.assign(info, await command("ultra-setting", on ? "on" : "off")); renderInfo(); }
+    catch (error) { ultraRow.setAttribute("aria-checked", !on); showFailure(error); }
+    agree.hidden = !!info.ultra_allowed;
+  };
+  // On takes the button under the warning, not the switch alone.
+  ultraRow.onclick = () => {
+    if (ultraRow.getAttribute("aria-checked") === "true") { setUltra(false); return; }
+    agree.hidden = false;
+    ultraWarn.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    flash(agree.firstChild, "zap", 520);
+    agree.firstChild.focus();
+  };
+  agree.firstChild.onclick = () => setUltra(true);
+  agree.hidden = true;
+  body.appendChild(ultraRow);
+  body.appendChild(ultraWarn);
 
   // Simple things on this computer, when asked: off until turned on.
   body.insertAdjacentHTML("beforeend", `<h2 class="settings-section settings-gap">Your computer</h2><p class="settings-sub">Simple things Flash can do on the computer it runs on when you ask: play, pause and skip music, set the volume, open and quit apps, open links and files, lock the screen, copy to the clipboard, switch dark mode, and on a Mac, read your recent iMessages and send one once you say yes to it. It never clicks, types or runs commands this way.</p>`);
@@ -14188,13 +14220,17 @@ function renderInfo() {
   $("#settings-btn").classList.toggle("has-update", !!(info.update && info.update.available && !["updated", "restarting"].includes(info.update.state)));
   renderModelButtons();
   const auto = !!info.auto;
+  const ultra = info.mode === "ultra";
   const autoBtn = $("#auto-btn");
   const was = autoBtn.classList.contains("on");
-  autoBtn.classList.toggle("on", auto);
-  autoBtn.innerHTML = icon("bolt") + `<span>${auto ? "Auto" : "Ask first"}</span>`;
+  autoBtn.classList.toggle("on", auto && !ultra);
+  autoBtn.classList.toggle("ultra", ultra);
+  autoBtn.innerHTML = icon("bolt") + `<span>${MODE_WORDS[info.mode] || (auto ? "Auto" : "Ask first")}</span>`;
   if (auto && !was && autoBtn.dataset.ready) flash(autoBtn, "zap", 520);
   autoBtn.dataset.ready = "1";
-  autoBtn.dataset.tip = auto
+  autoBtn.dataset.tip = ultra
+    ? "UltraAuto: nothing asks first, not email, iMessages, hires or Computer Use" + (info.system_one ? ". System One still reviews each step" : "")
+    : auto
     ? (info.system_one ? "Runs commands and edits once System One has looked them over" : "Runs commands and edits without asking")
     : "Asks before commands and edits";
   drawWakePill();
@@ -15365,10 +15401,30 @@ function stepChat(delta) {
   if (next) switchTo(next);
 }
 
-async function toggleAuto() {
-  const { auto } = await command("auto", "toggle");
-  info.auto = auto;
+const MODE_WORDS = { ask: "Ask first", auto: "Auto", ultra: "UltraAuto" };
+
+async function setMode(mode) {
+  try { Object.assign(info, await command("auto", mode)); }
+  catch (error) { showFailure(error); }
   renderInfo();
+}
+
+// Shift Tab: round the modes there are, UltraAuto once it is allowed.
+async function toggleAuto() { await setMode("toggle"); }
+
+// The button: a toggle, or with UltraAuto allowed, a pick of three.
+function modeMenu() {
+  if (!info.ultra_allowed) return toggleAuto();
+  const about = {
+    ask: "Asks before commands and edits.",
+    auto: "Runs commands and edits without asking. Email, iMessages, hires and Computer Use still ask.",
+    ultra: "Never stops to ask about anything. Nothing it sends or changes can be taken back.",
+  };
+  const rows = Object.keys(MODE_WORDS).map((mode) => ({
+    mode, current: (info.mode || (info.auto ? "auto" : "ask")) === mode,
+    html: `<span class="mode-row${mode === "ultra" ? " ultra" : ""}"><b>${MODE_WORDS[mode]}</b><small>${about[mode]}</small></span>`,
+  }));
+  openMenu($("#auto-btn"), rows, (row) => setMode(row.mode), "", true);
 }
 
 async function setModel(name) {
@@ -16578,7 +16634,7 @@ $("#top-new").onclick = newChat;
 $("#close-side").onclick = toggleSide;
 $("#open-side").onclick = toggleSide;
 $("#scrim").onclick = closeSide;
-$("#auto-btn").onclick = toggleAuto;
+$("#auto-btn").onclick = modeMenu;
 $("#plus-btn").innerHTML = icon("plus");
 $("#plus-btn").onclick = () => (menuEl && !slashOpen ? closeMenu() : openPlus());
 $("#agents-btn").onclick = () => (menuEl ? closeMenu() : openAgents());

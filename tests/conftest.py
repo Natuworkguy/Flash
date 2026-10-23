@@ -197,10 +197,12 @@ def no_developer_config(monkeypatch):
     """
 
     monkeypatch.setattr(tools, "NO_COMMAND_CONFIRMATION", False)
+    monkeypatch.setattr(tools, "ULTRA_AUTO", False)
 
     # The same leak reaches every other setting in that file, so the
     # ones that change what a test does are cleared too.
-    for name in ("NO_COMMAND_CONFIRMATION", "BACKGROUND"):
+    for name in ("NO_COMMAND_CONFIRMATION", "BACKGROUND", "ULTRA_AUTO",
+                 "ULTRA_AUTO_ALLOWED", "COMPUTER_USE"):
         monkeypatch.delenv(name, raising=False)
 
     # No test starts a background learning review against a real model

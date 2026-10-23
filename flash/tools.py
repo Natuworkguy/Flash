@@ -332,11 +332,20 @@ MAX_TOOL_OUTPUT_CHARS = 1200
 
 def init(config, ):
     global NO_COMMAND_CONFIRMATION, OLLAMA_HOST, MODEL_NAME
-    global MAX_TOOL_OUTPUT_CHARS
+    global MAX_TOOL_OUTPUT_CHARS, ULTRA_AUTO
     NO_COMMAND_CONFIRMATION = config.no_command_confirmation
+    ULTRA_AUTO = bool(getattr(config, "ultra_auto", False))
     OLLAMA_HOST = config.host
     MODEL_NAME = config.model or ""
     MAX_TOOL_OUTPUT_CHARS = config.max_tool_output_chars
+
+
+def ultra_auto() -> bool:
+    """Whether UltraAuto is on, as the user last set it: from the env
+    file, as a spark reads autonomous mode, so a keeper serving sparks
+    goes by what was switched in another Flash."""
+
+    return sparks.ultra()
 
 
 # read already caps its own output by whole lines and tells the model how
@@ -2253,9 +2262,11 @@ def send_email(
     tool_result(preview)
 
     # Asked every time, autonomous mode or not: an email cannot be taken
-    # back, and it goes out in the user's name.
-    notify_needs_input()
-    answer = remote_answer(f"Send this email?\n{preview}")
+    # back, and it goes out in the user's name. Only UltraAuto does not.
+    ultra = ultra_auto()
+    if not ultra:
+        notify_needs_input()
+    answer = "y" if ultra else remote_answer(f"Send this email?\n{preview}")
     if answer is None:
         prompt = Text(f"  {BRANCH}  ", style=DIM)
         prompt.append("Send this email? ", style=DIM)
@@ -2666,9 +2677,12 @@ def send_imessage(to: str = "", text: str = "") -> str:
     tool_result(preview)
 
     # Asked every time, autonomous mode or not: it goes out in the user's
-    # name, and cannot be taken back.
-    notify_needs_input()
-    answer = remote_answer(f"Send this iMessage?\n{preview}")
+    # name, and cannot be taken back. Only UltraAuto does not.
+    ultra = ultra_auto()
+    if not ultra:
+        notify_needs_input()
+    answer = "y" if ultra else remote_answer(
+        f"Send this iMessage?\n{preview}")
     if answer is None:
         prompt = Text(f"  {BRANCH}  ", style=DIM)
         prompt.append("Send this iMessage? ", style=DIM)
@@ -2765,7 +2779,7 @@ def computer_use_tool(action: str = "", **args: Any) -> str:
         return result
     if not computeruse.holds(owner):
         keys = computeruse.stop_keys()
-        if not ULTRA_AUTO and not _user_allows(
+        if not ultra_auto() and not _user_allows(
             "Let Flash see your screen and use your mouse and keyboard "
             f"for this reply? Press {keys}, or move the mouse, to take it "
             "back."
@@ -6180,7 +6194,7 @@ SUBAGENT_TOOL_NAMES = (
 # it asks the user about in its window, as it does any step that asks.
 SPARK_TOOL_NAMES = SUBAGENT_TOOL_NAMES + ("send_email", "send_imessage")
 
-# Tools that ask every time, autonomous mode or not.
+# Tools that ask every time, autonomous mode or not: UltraAuto aside.
 ALWAYS_ASK_TOOL_NAMES = ("send_email", "send_imessage")
 
 # Tools that stop for a y/n unless autonomous mode is on. A sub-agent has

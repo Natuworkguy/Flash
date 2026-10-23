@@ -2242,7 +2242,7 @@ def _command_allowed(wait: "waits.Wait") -> bool:
 
     every = f"every {wait.every} minute{'s' if wait.every != 1 else ''}"
     return not wait.command or flash_tools.NO_COMMAND_CONFIRMATION or \
-        flash_tools.ULTRA_AUTO or flash_tools._user_allows(
+        flash_tools.ultra_auto() or flash_tools._user_allows(
             f"Wait for this, running it {every} until it succeeds?\n"
             f"{wait.command}"
         )
@@ -3340,6 +3340,8 @@ def status(ai) -> dict:
         "host_url": workspace.listed_url(host),
         "host_name": named,
         "auto": bool(ai.Config.no_command_confirmation),
+        "mode": ai.mode(),
+        "ultra_allowed": bool(ai.Config.ultra_allowed),
         "system_one": systemone.enabled(),
         "system_one_model": systemone.model() if systemone.enabled() else "",
         "compact": bool(ai.Config.auto_compact),
@@ -3463,6 +3465,8 @@ def system_one_state(ai, models: bool = False) -> dict:
         # The model in use, "" for None.
         "model": systemone.model() if systemone.enabled() else "",
         "auto": bool(ai.Config.no_command_confirmation),
+        "mode": ai.mode(),
+        "ultra_allowed": bool(ai.Config.ultra_allowed),
         "least": systemone.MIN_VERSION_TEXT,
         "counts": systemone.counts(),
         "version": "",
@@ -4204,13 +4208,21 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
         return {"compact": on}
 
     if name == "auto":
-        on = (
-            not ai.Config.no_command_confirmation
-            if arg in ("", "toggle") else arg in ("on", "1", "true")
-        )
-        ai.set_config_var("NO_COMMAND_CONFIRMATION", "1" if on else "0")
+        # "toggle" goes round the modes there are; "on" and "off" are
+        # autonomous or not, and "ask", "auto" and "ultra" say which.
+        ai.set_mode(ai.next_mode() if arg in ("", "toggle") else
+                    {"1": "auto", "true": "auto", "0": "ask",
+                     "false": "ask"}.get(arg, arg))
         session.hub.publish({"type": "status"})
-        return {"auto": on}
+        return {"auto": bool(ai.Config.no_command_confirmation),
+                "mode": ai.mode()}
+
+    if name == "ultra-setting":
+        ai.allow_ultra(arg in ("on", "1", "true"))
+        session.hub.publish({"type": "status"})
+        return {"ultra_allowed": bool(ai.Config.ultra_allowed),
+                "auto": bool(ai.Config.no_command_confirmation),
+                "mode": ai.mode()}
 
     if name == "system-one":
         # No arg: only what it is, for Settings. "models" scans the
