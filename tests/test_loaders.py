@@ -278,7 +278,7 @@ def test_the_quill_shows_while_flash_writes(monkeypatch):
     ("web_search", "searching", "magnifier", "Searching"),
     ("shell", "running", "terminal", "Running"),
     ("read", "reading", "book", "Reading"),
-    ("computer_use", "looking", "eye", "Looking"),
+    ("computer_use", "looking", "camera", "Looking"),
     ("send_email", "sending", "plane", "Sending"),
     ("agent", "", None, ""),
 ])
