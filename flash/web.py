@@ -3424,6 +3424,7 @@ def status(ai) -> dict:
         # turns, and every one there is to pick from.
         "loader": loaders.chosen(),
         "loader_morph": loaders.morphing(),
+        "loader_writing": loaders.writing_shown(),
         # Whether an extension follows voice mode: if none does, the page
         # does not tell Flash of every moment of it.
         "voice_hooks": voicehooks.wanted(),
@@ -4342,6 +4343,12 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
         ai.set_config_var(loaders.SETTING, found.id)
         session.hub.publish({"type": "status"})
         return {"loader": found.id}
+
+    if name == "loader-writing":
+        on = arg.lower() in ("on", "1", "true")
+        ai.set_config_var(loaders.WRITING_SETTING, "1" if on else "0")
+        session.hub.publish({"type": "status"})
+        return {"loader_writing": on}
 
     if name == "loader-morph":
         on = arg.lower() in ("on", "1", "true")

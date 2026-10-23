@@ -1379,9 +1379,11 @@ def _try_chat(
         else _load_thinking_states()
     state = _next_thinking_state(states)
     # The wait's loaders: the chosen one, or with morph, one after
-    # another, picked as the wait goes on and kept for it.
-    look = loaders.Run()
-    word = f"{state['now']}{ELLIPSIS}"
+    # another, picked as the wait goes on and kept for it. Right after
+    # a write, the quill, writing.
+    writing = loaders.for_activity(loaders.activity(messages))
+    look = loaders.Run(writing, morph=False) if writing else loaders.Run()
+    word = f"{'Writing' if writing else state['now']}{ELLIPSIS}"
     period = len(word) + 2 * GLIMMER_SPREAD
     stop_event = threading.Event()
     start = time.monotonic()

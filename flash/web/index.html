@@ -784,6 +784,26 @@ pre code { display: block; padding: 2px 16px 14px; overflow-x: auto; font-size: 
    swallows them, flares, and blows them back out to where they began. */
 .ld-singularity .hole { position: absolute; left: 50%; top: 50%; width: 0.36em; height: 0.36em; margin: -0.18em; border-radius: 50%; background: #000; box-shadow: 0 0 0 0.05em currentColor, 0 0 0.2em color-mix(in srgb, currentColor 70%, transparent); animation: hole 1.8s var(--ease) infinite; }
 .ld-singularity i { position: absolute; left: 50%; top: 50%; width: 0.15em; height: 0.15em; margin: -0.075em; border-radius: 50%; background: currentColor; animation: pulled 1.8s cubic-bezier(0.55, 0, 0.45, 1) infinite; animation-delay: calc(var(--k) * -0.03s); }
+/* Quill: a hand guiding a quill along a line, the ink drawn out
+   behind it in loops, in plain lines like a sketch. */
+.ld-quill { width: 2.6em; height: 1.4em; }
+.ld-quill svg { width: 2.6em; height: 1.6em; overflow: visible; fill: none; stroke: currentColor; stroke-width: 1.3; stroke-linecap: round; stroke-linejoin: round; }
+.ld-quill .ink { stroke-dasharray: 100; stroke-dashoffset: 100; animation: ink-out 2.6s linear infinite; }
+.ld-quill .pen { animation: guide 2.6s linear infinite; }
+/* A wobble that jumps between poses, like a few drawings in a row. */
+.ld-quill .feather { animation: sway 0.5s steps(3, jump-none) infinite alternate; transform-origin: 0 0; }
+.ld-quill .vane { fill: color-mix(in srgb, currentColor 18%, transparent); }
+.ld-quill .hand { fill: var(--bg); }
+/* Choppy on purpose: the pen and its ink move in steps, about twelve a
+   second, the same steps, so the nib stays on the end of the line. */
+@keyframes ink-out { 0% { stroke-dashoffset: 100; opacity: 1; animation-timing-function: steps(25, end); } 80% { stroke-dashoffset: 0; opacity: 1; animation-timing-function: steps(2, end); } 92%, 100% { stroke-dashoffset: 0; opacity: 0; } }
+@keyframes guide {
+  0% { transform: translate(3px, 18px); opacity: 1; animation-timing-function: steps(25, end); }
+  80% { transform: translate(38px, 18px); opacity: 1; animation-timing-function: steps(2, end); }
+  92% { transform: translate(40px, 15px); opacity: 0; }
+  100% { transform: translate(3px, 18px); opacity: 0; }
+}
+@keyframes sway { from { rotate: -6deg; translate: 0 0.8px; } to { rotate: 5deg; translate: 0.4px -1px; } }
 @keyframes pulled {
   0% { transform: rotate(calc(var(--k) * 45deg)) translateX(0.55em); opacity: 1; }
   52% { transform: rotate(calc(var(--k) * 45deg + 220deg)) translateX(0.05em) scale(0.4); opacity: 0.9; }
@@ -7340,6 +7360,17 @@ function drawLookSettings(body) {
   };
   morph.style.marginTop = "12px";
   body.appendChild(morph);
+  const writing = el("button", "setting-row loader-writing-row", `<span class="what"><b>A quill while Flash writes</b><span>When its last step wrote a file or a document, a hand guides a quill instead, and it says Writing.</span></span><span class="switch" aria-hidden="true"></span>`);
+  writing.type = "button";
+  writing.setAttribute("role", "switch");
+  writing.setAttribute("aria-checked", info.loader_writing !== false);
+  writing.onclick = async () => {
+    const on = writing.getAttribute("aria-checked") !== "true";
+    writing.setAttribute("aria-checked", on);
+    try { info.loader_writing = (await command("loader-writing", on ? "on" : "off")).loader_writing; }
+    catch (error) { writing.setAttribute("aria-checked", !on); showFailure(error); }
+  };
+  body.appendChild(writing);
 }
 
 // The standing instructions every reply follows, saved when they change.
@@ -12628,7 +12659,7 @@ function drawStreaming() {
   const waiting = chat && (chat.busy || chat.queued) && !chat.partial && !chat.thinking && !pendingAsk();
   // Put back where it already is, the loader would start its
   // animations over on every event; left alone, it keeps going.
-  if (waiting && streamNode && streamNode.classList.contains("loading") && streamNode === messagesEl.lastElementChild && (streamNode.dataset.speaker || "") === (chat.speaker || "")) return;
+  if (waiting && streamNode && streamNode.classList.contains("loading") && streamNode === messagesEl.lastElementChild && (streamNode.dataset.speaker || "") === (chat.speaker || "") && (streamNode.querySelector(".loader")?.dataset.activity || "") === activityOf(chat)) return;
   if (streamNode) { streamNode.remove(); streamNode = null; }
   if (!chat || !(chat.busy || chat.queued)) return;
   streamNode = el("div", "streaming");
@@ -12692,6 +12723,8 @@ const LOADER_ART = {
   arc: () => "<i></i>",
   cursor: () => "<i></i>",
   // The hole drawn last, over the dots, so the ones it pulls in are gone.
+  // The nib at the pen's origin: the feather leans back over the hand.
+  quill: () => `<svg viewBox="0 -4 44 26"><path class="ink" pathLength="100" d="M3 18c2-5 4-5 4.5 0s2.5 5 4.5 0 2.5-5 4.5 0 2.5 5 4.5 0 2.5-5 4.5 0 2.5 5 4.5 0 2.5-5 4.5 0 2.5 5 3.5 0"/><g class="pen"><g class="feather"><path class="vane" d="M4.5-5.5C7-11 11-16 16.5-20.5 15.5-14 11.5-9 6.8-4.8Z"/><path d="M0 0 15.5-19.5"/><path class="hand" d="M2.6-3C4-1.4 5.4-1.4 6-3 7-1 8.8-1 9.2-3.2 10.6-1.6 12-2 12-4.2 12-6.6 9.4-8.8 6.4-8.3Z"/><path d="M11.6-6.2 16.2-4M12-3 16.6-1"/></g></g></svg>`,
   singularity: () => repeat(8, (k) => `<i style="--k:${k}"></i>`) + `<b class="hole"></b>`,
 };
 
@@ -12824,12 +12857,26 @@ function glyphShift(loader) {
   setTimeout(() => requestAnimationFrame(turnGlyphs), 40);
 })();
 
+// What the wait is for: "writing" when the last step since the user's
+// message wrote a file or a document, so the quill shows, writing.
+const WRITING_STEP = /^(Write|Edit|MultiEdit|SendDocument|MakeDocument)\(/;
+function activityOf(chat) {
+  if (info.loader_writing === false) return "";
+  for (let i = chat.log.length - 1; i >= 0; i--) {
+    const e = chat.log[i];
+    if (e.type === "user") return "";
+    if (e.type === "tool") return WRITING_STEP.test(e.label || "") && allLoaders().some((l) => l.id === "quill") ? "writing" : "";
+  }
+  return "";
+}
+
 function loaderBlock(chat) {
   startedWaiting(chat.id);
   const node = el("div", "block loader", `<span class="ld-slot"></span><span class="word"></span><span class="elapsed"></span>`);
   node.since = performance.now() - (Date.now() - busySince.get(chat.id));
   node.stretch = stretchOf(chat.id);
-  node.firstChild.appendChild(spinner(runAt(chat.id, node.stretch), node.since));
+  node.dataset.activity = activityOf(chat);
+  node.firstChild.appendChild(spinner(node.dataset.activity ? loaderBy("quill") : runAt(chat.id, node.stretch), node.since));
   node.setAttribute("role", "status");
   node.dataset.chat = chat.id;
   node.wordAt = -1;
@@ -12840,6 +12887,7 @@ function loaderBlock(chat) {
 // Morph: the loader shrinks away, turning and blurring, as the next one
 // grows out of the same spot.
 function morphLoader(node) {
+  if (node.dataset.activity) return;
   const stretch = stretchOf(node.dataset.chat);
   if (stretch === node.stretch) return;
   node.stretch = stretch;
@@ -12866,7 +12914,7 @@ function tickLoader(node, first) {
       else { old.classList.add("out"); setTimeout(() => old.remove(), 320); }
     }
     const word = el("span");
-    word.textContent = `${words[((wordOffset.get(node.dataset.chat) || 0) + at) % words.length]}…`;
+    word.textContent = node.dataset.activity === "writing" ? "Writing…" : `${words[((wordOffset.get(node.dataset.chat) || 0) + at) % words.length]}…`;
     box.appendChild(word);
   }
   const seconds = Math.floor(age / 1000);
