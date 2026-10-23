@@ -1233,6 +1233,14 @@ conversations across restarts. Hosts, projects, and chats live in
 `~/.flash/web`, and removing a project never touches its folder or its
 chats.
 
+A project has a **memory** of its own, apart from yours: its
+conventions, decisions, the commands it runs, where things are. Flash
+adds to it in a project chat when something belongs to the project
+rather than to you (`remember` with `project`), every chat in the
+project starts with it, and `recall` searches it too. The project's
+page lists it under Memory, where you add, edit and forget entries.
+Deleting a project deletes its memory.
+
 **Making it yours.** Settings › General changes how the page looks, in
 this browser:
 

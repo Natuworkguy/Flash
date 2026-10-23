@@ -1600,35 +1600,72 @@ def check_step(index: Any) -> str:
     return plan.as_text()
 
 
-def remember(entry: str) -> str:
-    """Save a fact or preference to persistent memory for future sessions."""
+# How the project's memory is told apart in recall's results.
+PROJECT_MARK = "project "
 
-    tool_line(f"Remember({entry})")
-    result = add_memory(entry)
+
+def _project_memory(wanted: Any) -> tuple[Optional[Path], str]:
+    """The project memory a call asks for, or (None, why not) when it
+    asked for one outside a project; (None, "") when it did not ask."""
+
+    from . import memory
+
+    if wanted not in (True, "true", "yes", 1):
+        return None, ""
+    project = memory.current_project()
+    if not project:
+        return None, ("Error: this chat is not in a project, so there is "
+                      "no project memory. Leave project out to use the "
+                      "user's own memory.")
+    return memory.project_path(project), ""
+
+
+def remember(entry: str, project: Any = False) -> str:
+    """Save a fact or preference to persistent memory for future sessions:
+    the user's own, or with PROJECT, the project's this chat is in."""
+
+    tool_line(f"Remember({entry})" + (" in the project"
+                                      if project is True else ""))
+    path, why = _project_memory(project)
+    if why:
+        tool_result(why, style=ERROR)
+        return why
+    result = add_memory(entry, path)
+    if path is not None and result.startswith("Remembered"):
+        result = result.replace("Remembered", "Remembered for this project",
+                                1)
     tool_result(result)
     return result
 
 
 def recall(phrase: str) -> str:
-    """Search saved memory for every entry containing a phrase."""
+    """Search saved memory for every entry containing a phrase: the
+    user's, and the project's when the chat is in one."""
+
+    from . import memory
 
     tool_line(f"Recall({phrase})")
-    matches = search_memory(phrase)
-    result = (
-        "\n".join(f"{i}. {entry}" for i, entry in matches)
-        if matches
-        else "No matching memories."
-    )
+    lines = [f"{i}. {entry}" for i, entry in search_memory(phrase)]
+    if memory.current_project():
+        path = memory.project_path(memory.current_project())
+        lines += [f"{PROJECT_MARK}{i}. {entry}"
+                  for i, entry in search_memory(phrase, path)]
+    result = "\n".join(lines) if lines else "No matching memories."
     tool_result(result)
     return result
 
 
-def forget(index: int) -> str:
-    """Delete one saved memory entry by its 1-based index."""
+def forget(index: int, project: Any = False) -> str:
+    """Delete one saved memory entry by its 1-based index: the user's,
+    or with PROJECT, the project's."""
 
-    tool_line(f"Forget({index})")
+    tool_line(f"Forget({'project ' if project is True else ''}{index})")
+    path, why = _project_memory(project)
+    if why:
+        tool_result(why, style=ERROR)
+        return why
     try:
-        result = forget_memory(index)
+        result = forget_memory(index, path)
     except IndexError as exc:
         result = str(exc)
     tool_result(result)
@@ -5771,7 +5808,11 @@ tools: list[dict[str, Any]] = [
                 "Save a fact or user preference to persistent memory so it "
                 "is available in future sessions. Use it when the user "
                 "tells you something worth remembering long-term, not for "
-                "details only relevant to the current conversation."
+                "details only relevant to the current conversation. In a "
+                "project chat, set project for what belongs to the "
+                "project (its conventions, decisions, commands, where "
+                "things are): every chat in the project sees it. Leave it "
+                "out for what is about the user."
             ),
             "parameters": {
                 "type": "object",
@@ -5779,7 +5820,14 @@ tools: list[dict[str, Any]] = [
                     "entry": {
                         "type": "string",
                         "description": "The fact to remember, one sentence.",
-                    }
+                    },
+                    "project": {
+                        "type": "boolean",
+                        "description": (
+                            "Save it to this project's memory instead of "
+                            "the user's. Only in a project chat."
+                        ),
+                    },
                 },
                 "required": ["entry"],
             },
@@ -6113,7 +6161,8 @@ tools: list[dict[str, Any]] = [
                 "Delete one saved memory entry by its 1-based index (the "
                 "number shown next to it in recall's results; the first "
                 "saved entry is index 1, not 0). Deletes exactly that one "
-                "entry, never all of memory."
+                "entry, never all of memory. An entry recall listed as "
+                "\"project N.\" is the project's: pass project true."
             ),
             "parameters": {
                 "type": "object",
@@ -6122,7 +6171,11 @@ tools: list[dict[str, Any]] = [
                         "type": "integer",
                         "description": "1-based index of the entry to delete.",
                         "minimum": 1,
-                    }
+                    },
+                    "project": {
+                        "type": "boolean",
+                        "description": "It is in this project's memory.",
+                    },
                 },
                 "required": ["index"],
             },
