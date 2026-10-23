@@ -529,6 +529,14 @@ stand, so what was already there starts nothing. A server that allows
 one connection at a time is best watched from the Flash you have open,
 not a keeper of its own beside it.
 
+A spark can also freeze itself until something comes in, without any of
+this set up: in a shift, `wait_for_events` pauses its schedule until a
+new email, iMessage or change in an MCP server arrives, and its next
+shift starts with what came. That's how a spark waits for an answer, or
+handles messages as they come, calling it again at the end of each
+shift. Its window shows "frozen until a new email comes in", and Run now
+thaws it.
+
 The new-spark form starts from a template if you like, among them
 Morning Brief, Repo Watch, Test Runner, Disk Guard, Dependency Check,
 Page Watch, Inbox and Messages (`/sparks templates`, `/sparks add "Repo
@@ -811,14 +819,19 @@ your own words:
 - "in two hours, check the download finished and unzip it"
 - "when CI on #42 goes green, deploy it"
 - "if Sam hasn't replied by Friday morning, draft a follow-up"
+- "wait for new texts and answer them"
 
-It waits for one of three things: a time; a command that succeeds, run
+It waits for one of four things: a time; a command that succeeds, run
 every so often in the chat's folder (`gh pr checks 42`, `curl -f` on a
 URL, `test -f` on a file), which you say yes to once when the wait is
 set, unless autonomous mode is on; or something it looks for with its
 tools, in words ("a reply from Sam is in my inbox"), checked now and
-then without changing anything. A time and a condition together wait
-for the time, then start looking. A wait that keeps looking gives up
+then without changing anything; or something coming in: a new email, a
+new iMessage (on a Mac), or a change in a connected MCP server, looked
+for without the model, so nothing is spent until it comes. That last
+one can keep going: the chat wakes with each new one, answers it, and
+goes on waiting until you press Cancel or it gives up. A time and a
+condition together wait for the time, then start looking. A wait that keeps looking gives up
 after three days unless told otherwise, and Flash tells you it did.
 
 Each wait shows in its chat as a card with what it is waiting for, what

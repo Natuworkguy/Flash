@@ -13,7 +13,11 @@ ends. Each wait is one of:
   the wait is set, since it runs again and again unwatched;
 - a check in words ("their reply is in my inbox"): every so often a
   sub-agent looks with the tools a sub-agent has, changing nothing, and
-  says whether it is so.
+  says whether it is so;
+- an event: a new email, a new iMessage, a change in a connected MCP
+  server, looked for without the model (see triggers). One that KEEPs
+  waiting wakes its chat with each one that comes in, until cancelled:
+  "wait for new messages and answer them".
 
 A time and a check together wait for the time, then start checking. A
 check gives up after a while (three days unless told), and the chat is
@@ -34,6 +38,7 @@ from dataclasses import asdict, dataclass, fields
 from datetime import datetime
 from typing import Optional
 
+from . import triggers
 from .paths import FLASH_DIR
 
 WAITING = "waiting"
@@ -89,6 +94,10 @@ class Wait:
     # What the last try found, or why it ended.
     said: str = ""
     ended: Optional[float] = None
+    # Events it waits for (triggers.parse), and whether it goes on waiting
+    # after each one.
+    events: Optional[list] = None
+    keep: bool = False
 
     def card(self) -> dict:
         """What the page draws for it."""
@@ -99,6 +108,7 @@ class Wait:
             "every": self.every, "give_up": self.give_up,
             "next": self.next, "checks": self.checks, "found": self.found,
             "status": self.status, "said": self.said, "ended": self.ended,
+            "events": list(self.events or []), "keep": self.keep,
         }
 
 
@@ -181,6 +191,14 @@ def make(chat_id: str, args: dict, cwd: str = "",
     then = str(args.get("then") or "").strip()[:THEN_CHARS]
     check = " ".join(str(args.get("check") or "").split())
     command = str(args.get("command") or "").strip()
+    try:
+        events = triggers.parse(args.get("events") or "")
+    except ValueError as exc:
+        raise WaitError(str(exc)) from None
+    keep = args.get("keep") in (True, "true", "yes", 1)
+    if keep and not events:
+        raise WaitError("keep only goes with events: what to keep "
+                        "waiting for.")
     if not what:
         raise WaitError("Say what you are waiting for, in `what`.")
     if not then:
@@ -194,14 +212,18 @@ def make(chat_id: str, args: dict, cwd: str = "",
         if minutes <= 0:
             raise WaitError("in_minutes has to be more than 0.")
         at = now + minutes * 60
-    if at is None and not check and not command:
+    if at is None and not check and not command and not events:
         raise WaitError(
-            "Give a time to wait for (at, or in_minutes), a check, or a "
-            "command."
+            "Give a time to wait for (at, or in_minutes), a check, a "
+            "command, or events."
         )
+    if events and (check or command):
+        raise WaitError("Wait for events, or for a check or command, not "
+                        "both.")
     if at is not None and at > now + MAX_DAYS * 86400:
         raise WaitError(f"A wait can be at most {MAX_DAYS} days long.")
-    if at is not None and at <= now and not check and not command:
+    if at is not None and at <= now and not check and not command \
+            and not events:
         raise WaitError("That time has already passed.")
 
     every = _number(args, "every_minutes")
@@ -209,7 +231,7 @@ def make(chat_id: str, args: dict, cwd: str = "",
     every = int(max(least, min(MAX_EVERY, every or DEFAULT_EVERY)))
 
     give_up = None
-    if check or command:
+    if check or command or events:
         hours = _number(args, "give_up_after_hours")
         hours = DEFAULT_GIVE_UP_HOURS if hours is None else hours
         start = at if at is not None else now
@@ -227,6 +249,7 @@ def make(chat_id: str, args: dict, cwd: str = "",
         check=check, command=command, every=every, give_up=give_up,
         cwd=cwd, created=now,
         next=at if at is not None else now,
+        events=events or None, keep=keep,
     )
 
 
@@ -295,9 +318,21 @@ def due(now: Optional[float] = None) -> list[Wait]:
     return [w for w in waiting() if w.next <= now]
 
 
+# What each event wait has seen, to tell what is new: its own, so two
+# waits on the same thing each hear of it. The first look only learns.
+_watchers: dict[str, "triggers.Watcher"] = {}
+# How soon an event wait is looked at again: the watcher itself asks the
+# mail server less often.
+EVENT_SECONDS = 15
+
+
 def check(wait: Wait) -> tuple[bool, str]:
     """Whether what WAIT waits for is so now, and what was found."""
 
+    if wait.events:
+        watcher = _watchers.setdefault(wait.id, triggers.Watcher())
+        news = watcher.look(set(wait.events))
+        return bool(news), "\n\n".join(news.values())[:SAID_CHARS]
     if wait.command:
         return _run_command(wait)
     if wait.check:

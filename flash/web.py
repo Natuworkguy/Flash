@@ -1246,7 +1246,8 @@ class Session:
                 ))
             elif wait.give_up is not None and now >= wait.give_up:
                 self.end_wait(chat, wait, gave_up=True)
-            elif wait.found or not (wait.check or wait.command):
+            elif wait.found or not (wait.check or wait.command
+                                    or wait.events):
                 # Its time came, or a look already found it so: over, as
                 # soon as the chat is free to hear it.
                 self.end_wait(chat, wait)
@@ -1265,10 +1266,13 @@ class Session:
         if now is None or now.status != waits.WAITING:
             self._checking.discard(wait.id)
             return
+        later = waits.EVENT_SECONDS if now.events else now.every * 60
         changed = waits.update(
-            wait.id, said=said[:waits.SAID_CHARS], checks=now.checks + 1,
-            found=ready,
-            next=now.next if ready else time.time() + now.every * 60,
+            wait.id, checks=now.checks + 1, found=ready,
+            next=now.next if ready else time.time() + later,
+            # An event wait keeps what came in until its chat hears it.
+            **({"said": said[:waits.SAID_CHARS]}
+               if ready or not now.events else {}),
         )
         self._checking.discard(wait.id)
         self.wait_changed(changed)
@@ -1282,6 +1286,19 @@ class Session:
         with self._lock:
             if chat.busy or chat.queued:
                 return
+        if wait.keep and not gave_up:
+            # It goes on waiting: the chat hears this one, and the next
+            # look starts from here.
+            kept = waits.update(wait.id, found=False,
+                                next=time.time() + waits.EVENT_SECONDS)
+            self.wait_changed(kept)
+            self.send(chat, (
+                f"Something came in for your wait ({wait.what}):\n"
+                f"{wait.said}\n\nNow, as you planned: {wait.then}\n"
+                f"You go on waiting for more (wait id {wait.id}); "
+                "cancel_wait stops it."
+            ), wake=True, note=f"New for: {wait.what}")
+            return
         ended = waits.end(wait.id, waits.GAVE_UP if gave_up else waits.DONE,
                           wait.said)
         if ended is None:
@@ -1302,7 +1319,8 @@ class Session:
         else:
             why = (
                 f"It is {waits.when(ended)}, the time you were waiting for."
-                if not (ended.check or ended.command)
+                if not (ended.check or ended.command or ended.events)
+                else f"It came in:\n{ended.said}" if ended.events
                 else "What you were waiting for is so."
                 + (f" What the look found: {ended.said}" if ended.said
                    else "")
@@ -2088,10 +2106,15 @@ WAIT_TOOL = {
             "in this chat, knowing all you did: a time comes (\"in two "
             "hours, check the download\"), a command succeeds (\"when CI "
             "is green, deploy\": `gh pr checks 12`), or something you look "
-            "for with your tools is so (\"their reply is in my inbox\"). "
-            "It outlasts Flash restarting. Set it, tell the user what you "
-            "are waiting for, and end your turn: you are woken when it is "
-            "over, or told when you gave up. Give at or in_minutes for a "
+            "for with your tools is so (\"their reply is in my inbox\"), "
+            "or something comes in: a new email, a new iMessage, a change "
+            "in a connected app (events, looked for without the model). "
+            "With events and keep, you wake up for each one that comes in "
+            "and go on waiting: \"wait for new messages and answer "
+            "them\". It outlasts Flash restarting. Set it, tell the user "
+            "what you are waiting for, and end your turn: you are woken "
+            "when it is over, or told when you gave up. Give at or "
+            "in_minutes for a "
             "time, command or check for a condition, or a time and a "
             "condition to start looking then."
         ),
@@ -2120,6 +2143,16 @@ WAIT_TOOL = {
                 "check": {"type": "string", "description": (
                     "Or, in words, what has to be so: looked for with "
                     "your tools every so often, changing nothing."
+                )},
+                "events": {"type": "string", "description": (
+                    "Or what coming in ends the wait, space-separated: "
+                    "email (a new email), imessage (a new iMessage, on a "
+                    "Mac), mcp:<server> (a change in a connected MCP "
+                    "server). You are told what came in."
+                )},
+                "keep": {"type": "boolean", "description": (
+                    "With events: wake for each one and go on waiting, "
+                    "until cancel_wait or the user stops it."
                 )},
                 "every_minutes": {"type": "number", "description": (
                     f"How often to look. Default {waits.DEFAULT_EVERY}."
@@ -2180,7 +2213,17 @@ def wait_for(session: "Session", chat: Chat, args: dict) -> str:
     waits.add(wait)
     session.emit(chat, {"type": "wait", **wait.card()})
     session.ensure_watching()
-    if wait.command or wait.check:
+    if wait.events:
+        from . import triggers
+
+        said = (
+            f"Waiting (id {wait.id}) for "
+            + " or ".join(triggers.words(e) for e in wait.events)
+            + (", waking for each one that comes in" if wait.keep else "")
+            + f", for at most "
+            f"{round(((wait.give_up or 0) - wait.next) / 3600, 1):g} hours."
+        )
+    elif wait.command or wait.check:
         how = (f"running `{wait.command}`" if wait.command
                else f"looking for: {wait.check}")
         start = (f" from {waits.when(wait)}" if wait.at else "")

@@ -265,3 +265,52 @@ def test_the_model_is_offered_it_in_a_chat():
     names = [t["function"]["name"] for t in web.chat_tools(chat)]
 
     assert "wait_for" in names and "cancel_wait" in names  # nosec B101
+
+
+def test_new_messages_wake_the_chat_each_time_and_it_keeps_waiting(
+        session, monkeypatch):
+    came = [""]
+    monkeypatch.setattr(waits, "check", lambda wait: (bool(came[0]),
+                                                      came[0]))
+    said = web.wait_for(session, session.chat_, {
+        "what": "new texts", "then": "answer each one",
+        "events": "imessage", "keep": True,
+    })
+    assert "waking for each one" in said  # nosec B101
+
+    session.tick_waits()
+    settle(session)
+    assert session.woke == []  # nosec B101  (nothing yet)
+
+    for text in ("Sam: are you free?", "Bo: lunch?"):
+        came[0] = f"New iMessages:\n- {text}"
+        come(only(session).id)
+        session.tick_waits()
+        settle(session)
+        session.tick_waits()
+        came[0] = ""
+
+    assert [w["wake"] for w in session.woke] == [True, True]  # nosec
+    assert "Sam: are you free?" in session.woke[0]["text"]  # nosec B101
+    assert "Bo: lunch?" in session.woke[1]["text"]  # nosec B101
+    assert "answer each one" in session.woke[1]["text"]  # nosec B101
+    wait = only(session)
+    assert wait.status == waits.WAITING and not wait.found  # nosec B101
+    assert wait.next == pytest.approx(  # nosec B101
+        time.time() + waits.EVENT_SECONDS, abs=5)
+
+
+def test_an_event_wait_without_keep_is_over_once_one_comes_in(
+        session, monkeypatch):
+    monkeypatch.setattr(waits, "check",
+                        lambda wait: (True, "New email:\n- From Sam: Re"))
+    web.wait_for(session, session.chat_, {
+        "what": "Sam's reply", "then": "summarise it", "events": "email",
+    })
+
+    session.tick_waits()
+    settle(session)
+    session.tick_waits()
+
+    assert only(session).status == waits.DONE  # nosec B101
+    assert "From Sam: Re" in session.woke[0]["text"]  # nosec B101

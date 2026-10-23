@@ -226,6 +226,35 @@ KEEP_NOTES_TOOL = {
     },
 }
 
+WAIT_FOR_EVENTS_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "wait_for_events",
+        "description": (
+            "Freeze until something comes in: a new email, a new iMessage, "
+            "or a change in a connected MCP server. Your schedule waits "
+            "with you; your next shift starts the moment one comes in, "
+            "told what it was. Use it to wait for an answer, or to handle "
+            "messages as they come: call it again at the end of that "
+            "shift to keep waiting. Then end this shift with a short "
+            "report."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "events": {
+                    "type": "string",
+                    "description": (
+                        "What to wake for, space-separated: email, "
+                        "imessage, mcp:<server>."
+                    ),
+                },
+            },
+            "required": ["events"],
+        },
+    },
+}
+
 ROUND_LIMIT_MESSAGE = (
     "You have used every tool round this shift gets. Write your report "
     "now from what you have. Do not call any more tools."
@@ -442,6 +471,9 @@ class Spark:
     # What else starts one, while events are on (triggers.SETTING): a new
     # email, a new iMessage, a change in an MCP server ("mcp:notes").
     events: list = field(default_factory=list)
+    # What it froze itself until (wait_for_events): its schedule waits,
+    # and the first of these to come in starts its next shift.
+    waiting_on: list = field(default_factory=list)
     # Why the next shift starts early, for it to be told.
     why: str = ""
     # What other sparks handed it, for its next shift: {from, text, at}.
@@ -628,6 +660,11 @@ def schedule_words(spark) -> str:
 
     at = spark.get("at", "") if isinstance(spark, dict) else spark.at
     every = spark["every"] if isinstance(spark, dict) else spark.every
+    frozen = spark.get("waiting_on") if isinstance(spark, dict) \
+        else getattr(spark, "waiting_on", None)
+    if frozen:
+        return "frozen until " + " or ".join(map(triggers.words, frozen)) \
+            + " comes in"
     if not at and every == ON_CALL:
         return "only when called on"
     return cron.words(at) if at else f"every {every_words(every)}"
@@ -4228,6 +4265,25 @@ def _work(
     return undash(final).strip()
 
 
+def _waiting_for_events(spark: Spark):
+    def wait(args: dict) -> str:
+        try:
+            events = triggers.parse(args.get("events") or "")
+        except ValueError as exc:
+            return f"Error: {exc}"
+        if not events:
+            return ("Error: say what to wait for: email, imessage, "
+                    "mcp:<server>.")
+        _edit(spark.id, lambda s: setattr(s, "waiting_on", events))
+        said = " or ".join(triggers.words(e) for e in events)
+        tool_line(f"WaitForEvents({' '.join(events)})")
+        tool_result(f"Frozen until {said} comes in")
+        return (f"(frozen: your next shift starts when {said} comes in. "
+                "End this shift now, with a short report.)")
+
+    return wait
+
+
 def _keeping_notes(notes: list[str]):
     def keep(args: dict) -> str:
         notes[0] = str(args.get("notes", "")).strip()
@@ -4468,6 +4524,7 @@ def shift(spark_id: str, client=None) -> Optional[Report]:
     made: list[dict] = []
     own = {
         "keep_notes": _keeping_notes(notes),
+        "wait_for_events": _waiting_for_events(spark),
         "hand_off": _handing_off(spark),
         "ask_spark": _asking(spark),
         "make_document": _documenting(spark, made),
@@ -4539,7 +4596,8 @@ def shift(spark_id: str, client=None) -> Optional[Report]:
                 else contextlib.nullcontext():
             text = _work(
                 spark, messages, own,
-                [KEEP_NOTES_TOOL, HAND_OFF_TOOL, ASK_SPARK_TOOL,
+                [KEEP_NOTES_TOOL, WAIT_FOR_EVENTS_TOOL, HAND_OFF_TOOL,
+                 ASK_SPARK_TOOL,
                  MAKE_DOCUMENT_TOOL, *PROPOSAL_TOOLS],
                 steps, lambda doing: _set_activity(spark.id, doing),
                 shift_rounds(), ROUND_LIMIT_MESSAGE, client,
@@ -4658,13 +4716,15 @@ def event_tick(now: Optional[float] = None) -> list[Spark]:
     new iMessage, a change in an MCP server. Looked at without the
     model, only while events are on. The sparks it started."""
 
-    if not triggers.enabled():
-        return []
+    on = triggers.enabled()
     wanting: dict[str, list[Spark]] = {}
     for spark in all_sparks():
         if spark.paused:
             continue
-        for event in spark.events:
+        # One it froze itself for counts whatever the switch says: it
+        # asked for exactly that.
+        for event in dict.fromkeys(
+                [*(spark.events if on else []), *spark.waiting_on]):
             wanting.setdefault(event, []).append(spark)
     if not wanting:
         return []
@@ -4680,6 +4740,8 @@ def event_tick(now: Optional[float] = None) -> list[Spark]:
                 })
                 del s.inbox[:-MAX_INBOX]
                 s.asked = True
+                # Frozen until it came: thawed.
+                s.waiting_on = []
 
             started.append(_edit(spark.id, tell))
             log(spark.id, "event", event=event, said=said[:400])
@@ -5329,7 +5391,8 @@ def due(now: Optional[float] = None) -> list[Spark]:
         if s.status != WORKING and not s.waiting
         and (s.asked or (
             s.status != WAITING and not s.paused and not on_call(s)
-            and not s.unavailable and s.next_run <= now
+            and not s.unavailable and not s.waiting_on
+            and s.next_run <= now
         ))
     ]
 
@@ -5348,6 +5411,8 @@ def run_now(key: str) -> Spark:
                 "raise it or switch it off first."
             )
         spark.asked = True
+        # Run by hand: no longer frozen waiting for something.
+        spark.waiting_on = []
 
     spark = _edit(key, change)
     wake()
