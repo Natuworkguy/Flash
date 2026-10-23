@@ -7,12 +7,17 @@ from . import interrupt
 if interrupt.started_as_cli(sys.argv):
     interrupt.guard()
 
-import colorama
+try:
+    import colorama
+except ModuleNotFoundError:
+    # Not installed yet: flash.__main__ installs what Flash needs.
+    colorama = None
 
-colorama.just_fix_windows_console()
+if colorama is not None:
+    colorama.just_fix_windows_console()
 
-if sys.stdout.isatty():
-    print(
-        colorama.ansi.set_title("FLASH CLI"),
-        end=""
-    )
+    if sys.stdout.isatty():
+        print(
+            colorama.ansi.set_title("FLASH CLI"),
+            end=""
+        )
