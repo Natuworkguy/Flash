@@ -3825,6 +3825,9 @@ const CODE_RE = /```[\s\S]*?(?:```|$)|~~~[\s\S]*?(?:~~~|$)|(`+)(?!`)[^\n]+?\1(?!
 // A backslash before the \[ or \( means a backslash typed as text.
 const DISPLAY_MATH_RE = /\$\$([\s\S]+?)\$\$|(?<!\\)\\\[([\s\S]+?)\\\]/g;
 const INLINE_MATH_RE = /(?<![\\$])\$(?![\s$])([^$\n]+?)(?<![\s\\])\$(?!\$)(?!\d)|(?<!\\)\\\(([\s\S]+?)\\\)/g;
+// What \[...\] holds when it is math rather than words in brackets: a
+// command, a sub- or superscript, braces, or an operator.
+const BRACKET_MATH = /[\\^_{}=<>+*/|]|\d\s*-|-\s*\d/;
 const looksLikeMath = (body) => /[\\^_{}]/.test(body) || (body.length <= 3 && /[a-z]/i.test(body));
 
 function markdown(text) {
@@ -3879,7 +3882,10 @@ function pullMath(text, spans) {
   const code = [];
   text = text.replace(CODE_RE, (m) => { code.push(m); return `\uE002${code.length - 1}\uE003`; });
   const stash = (tex, display, raw) => { spans.push({ tex, display, raw }); return `\uE000${spans.length - 1}\uE001`; };
-  text = text.replace(DISPLAY_MATH_RE, (m, a, b) => stash(a ?? b, true, m));
+  // \[...\] is display math only when what is inside reads as math: an
+  // edited document keeps a plain [bracket] as \[bracket\], which is
+  // just text.
+  text = text.replace(DISPLAY_MATH_RE, (m, a, b) => (b !== undefined && !BRACKET_MATH.test(b) ? m : stash(a ?? b, true, m)));
   text = text.replace(INLINE_MATH_RE, (m, a, b) => (a !== undefined && !looksLikeMath(a) ? m : stash(a ?? b, false, m)));
   text = pullBareMath(text, stash);
   return text.replace(/\uE002(\d+)\uE003/g, (_, i) => code[+i]);
