@@ -785,25 +785,12 @@ pre code { display: block; padding: 2px 16px 14px; overflow-x: auto; font-size: 
 .ld-singularity .hole { position: absolute; left: 50%; top: 50%; width: 0.36em; height: 0.36em; margin: -0.18em; border-radius: 50%; background: #000; box-shadow: 0 0 0 0.05em currentColor, 0 0 0.2em color-mix(in srgb, currentColor 70%, transparent); animation: hole 1.8s var(--ease) infinite; }
 .ld-singularity i { position: absolute; left: 50%; top: 50%; width: 0.15em; height: 0.15em; margin: -0.075em; border-radius: 50%; background: currentColor; animation: pulled 1.8s cubic-bezier(0.55, 0, 0.45, 1) infinite; animation-delay: calc(var(--k) * -0.03s); }
 /* Quill: a hand guiding a quill along a line, the ink drawn out
-   behind it in loops, in plain lines like a sketch. */
+   behind it in loops, in plain lines like a sketch. Drawn frame by frame
+   (see quillFrame), a few a second, like stop motion. */
 .ld-quill { width: 2.6em; height: 1.4em; }
 .ld-quill svg { width: 2.6em; height: 1.6em; overflow: visible; fill: none; stroke: currentColor; stroke-width: 1.3; stroke-linecap: round; stroke-linejoin: round; }
-.ld-quill .ink { stroke-dasharray: 100; stroke-dashoffset: 100; animation: ink-out 2.6s linear infinite; }
-.ld-quill .pen { animation: guide 2.6s linear infinite; }
-/* A wobble that jumps between poses, like a few drawings in a row. */
-.ld-quill .feather { animation: sway 0.5s steps(3, jump-none) infinite alternate; transform-origin: 0 0; }
 .ld-quill .vane { fill: color-mix(in srgb, currentColor 18%, transparent); }
 .ld-quill .hand { fill: var(--bg); }
-/* Choppy on purpose: the pen and its ink move in steps, about twelve a
-   second, the same steps, so the nib stays on the end of the line. */
-@keyframes ink-out { 0% { stroke-dashoffset: 100; opacity: 1; animation-timing-function: steps(25, end); } 80% { stroke-dashoffset: 0; opacity: 1; animation-timing-function: steps(2, end); } 92%, 100% { stroke-dashoffset: 0; opacity: 0; } }
-@keyframes guide {
-  0% { transform: translate(3px, 18px); opacity: 1; animation-timing-function: steps(25, end); }
-  80% { transform: translate(38px, 18px); opacity: 1; animation-timing-function: steps(2, end); }
-  92% { transform: translate(40px, 15px); opacity: 0; }
-  100% { transform: translate(3px, 18px); opacity: 0; }
-}
-@keyframes sway { from { rotate: -6deg; translate: 0 0.8px; } to { rotate: 5deg; translate: 0.4px -1px; } }
 @keyframes pulled {
   0% { transform: rotate(calc(var(--k) * 45deg)) translateX(0.55em); opacity: 1; }
   52% { transform: rotate(calc(var(--k) * 45deg + 220deg)) translateX(0.05em) scale(0.4); opacity: 0.9; }
@@ -1603,6 +1590,9 @@ body.page-projects #dock, body.page-settings #dock, body.page-tool #dock { displ
 .loader-card:hover { transform: translateY(-2px); border-color: var(--border-strong); }
 .loader-card.on { border-color: transparent; box-shadow: 0 0 0 2px var(--accent); color: var(--text); }
 .loader-card .stage { height: 30px; display: grid; place-items: center; font-size: 24px; }
+.loader-card .stage .ld-quill { font-size: 15px; }
+.loader-card .term { display: grid; place-items: center; min-width: 5.5ch; padding: 2px 8px; border-radius: 6px; background: color-mix(in srgb, var(--text) 8%, transparent); font-size: 12px; color: var(--text-2); }
+.loader-card .term .ld { color: currentColor; top: 0; }
 .loader-card .stage svg.i { width: 24px; height: 24px; color: var(--accent); }
 .look-reset { margin-top: 14px; }
 :root.corners-square { --radius: 4px; }
@@ -7328,11 +7318,14 @@ function drawLookSettings(body) {
   const drawLoaders = () => {
     loaderGrid.textContent = "";
     const card = (id, name, stage, tip) => {
-      const node = el("button", "loader-card" + (info.loader === id ? " on" : ""), `<span class="stage"></span><span class="name"></span>`);
+      const node = el("button", "loader-card" + (info.loader === id ? " on" : ""), `<span class="stage"></span><span class="term" data-tip="In the terminal"></span><span class="name"></span>`);
       node.type = "button";
       node.setAttribute("role", "radio");
       node.setAttribute("aria-checked", info.loader === id);
       node.querySelector(".stage").appendChild(stage);
+      // And as the terminal draws it: its frames, in its font.
+      const loader = allLoaders().find((l) => l.id === id);
+      if (loader) node.querySelector(".term").appendChild(spinner({ ...loader, id: `terminal:${id}` }));
       node.querySelector(".name").textContent = name;
       if (tip) node.dataset.tip = tip;
       node.onclick = async () => {
@@ -12724,9 +12717,42 @@ const LOADER_ART = {
   cursor: () => "<i></i>",
   // The hole drawn last, over the dots, so the ones it pulls in are gone.
   // The nib at the pen's origin: the feather leans back over the hand.
-  quill: () => `<svg viewBox="0 -4 44 26"><path class="ink" pathLength="100" d="M3 18c2-5 4-5 4.5 0s2.5 5 4.5 0 2.5-5 4.5 0 2.5 5 4.5 0 2.5-5 4.5 0 2.5 5 4.5 0 2.5-5 4.5 0 2.5 5 3.5 0"/><g class="pen"><g class="feather"><path class="vane" d="M4.5-5.5C7-11 11-16 16.5-20.5 15.5-14 11.5-9 6.8-4.8Z"/><path d="M0 0 15.5-19.5"/><path class="hand" d="M2.6-3C4-1.4 5.4-1.4 6-3 7-1 8.8-1 9.2-3.2 10.6-1.6 12-2 12-4.2 12-6.6 9.4-8.8 6.4-8.3Z"/><path d="M11.6-6.2 16.2-4M12-3 16.6-1"/></g></g></svg>`,
+  quill: () => `<svg viewBox="0 -4 44 26">${quillFrame(0)}</svg>`,
   singularity: () => repeat(8, (k) => `<i style="--k:${k}"></i>`) + `<b class="hole"></b>`,
 };
+
+// The quill, one frame at a time: the ink so far, a loop at a time, and
+// the hand on the end of it, never quite still. Each frame is drawn
+// outright rather than tweened, so it moves in steps, like stop motion.
+const QUILL_LOOPS = 8;
+const QUILL_FRAMES = QUILL_LOOPS * 2 + 6;
+const QUILL_MS = 110;
+const QUILL_PEN = `<path class="vane" d="M4.5-5.5C7-11 11-16 16.5-20.5 15.5-14 11.5-9 6.8-4.8Z"/><path d="M0 0 15.5-19.5"/><path class="hand" d="M2.6-3C4-1.4 5.4-1.4 6-3 7-1 8.8-1 9.2-3.2 10.6-1.6 12-2 12-4.2 12-6.6 9.4-8.8 6.4-8.3Z"/><path d="M11.6-6.2 16.2-4M12-3 16.6-1"/>`;
+// A small wobble for each frame, the same each time round.
+const QUILL_JITTER = [[0, 0, -3], [0.3, -0.4, 4], [-0.2, 0.3, -1], [0.2, 0.2, 5], [-0.3, -0.2, -4], [0.1, 0.4, 2]];
+function quillFrame(k) {
+  const drawn = Math.min(QUILL_LOOPS, Math.ceil(k / 2));
+  let d = "M3 18";
+  for (let n = 0; n < drawn; n++) d += n === 0 ? "c2-5 4-5 4.5 0" : (n % 2 ? "s2.5 5 4.5 0" : "s2.5-5 4.5 0");
+  const [jx, jy, turn] = QUILL_JITTER[k % QUILL_JITTER.length];
+  const end = QUILL_LOOPS * 2;
+  // Then the pen lifts away and the line fades, and it starts again.
+  const lift = Math.max(0, k - end - 1);
+  const x = 3 + drawn * 4.5 + jx + lift * 1.4;
+  const y = 18 + jy - lift * 2;
+  const fade = k > end + 2 ? Math.max(0, 1 - (k - end - 2) / 3) : 1;
+  return (drawn ? `<path d="${d}" opacity="${fade.toFixed(2)}"/>` : "") +
+    `<g transform="translate(${x.toFixed(1)} ${y.toFixed(1)}) rotate(${turn})" opacity="${(k > end + 3 ? 0 : 1)}">${QUILL_PEN}</g>`;
+}
+(function turnQuills() {
+  const now = performance.now();
+  for (const svg of document.querySelectorAll(".ld-quill svg")) {
+    const since = svg.since ?? (svg.since = now);
+    const k = calm.matches ? QUILL_LOOPS * 2 : Math.floor((now - since) / QUILL_MS) % QUILL_FRAMES;
+    if (svg.frame !== k) { svg.frame = k; svg.innerHTML = quillFrame(k); }
+  }
+  setTimeout(() => requestAnimationFrame(turnQuills), 40);
+})();
 
 const allLoaders = () => info.loaders || [];
 const loaderBy = (id) => allLoaders().find((l) => l.id === id) || allLoaders()[0] || { id: "dots", frames: ["⣾"], seconds: 0.1 };
