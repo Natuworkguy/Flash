@@ -591,30 +591,56 @@ pre code { display: block; padding: 2px 16px 14px; overflow-x: auto; font-size: 
 .diagram.show-code > code { display: block; }
 .diagram.show-code .diagram-view { display: none; }
 /* A slide deck: Markdown with marp: true (or slides: true) at the top,
-   slides between --- lines, each a 16:9 page. */
+   slides between --- lines, each a 16:9 page in the deck's theme. */
 .doc.deck { display: flex; flex-direction: column; gap: 18px; }
 .deck-bar { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 13px; color: var(--text-3); }
-.deck-slide { position: relative; aspect-ratio: 16 / 9; container-type: inline-size; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); box-shadow: 0 2px 14px rgba(0, 0, 0, 0.08); overflow: hidden; }
-.slide-inner { position: absolute; inset: 0; padding: 6cqw 7cqw; font-size: 2.6cqw; line-height: 1.45; overflow: hidden; display: flex; flex-direction: column; justify-content: center; }
+.deck-bar [data-present] svg { width: 12px; height: 12px; margin-right: 6px; vertical-align: -1px; }
+.deck-slides { display: flex; flex-direction: column; gap: 18px; }
+/* Each theme: its background, ink, softer ink, accent, and a glow. */
+.deck-default { --t-inverse: var(--bg); --t-bg: var(--surface); --t-ink: var(--text); --t-muted: var(--text-2); --t-accent: var(--accent); --t-glow: transparent; }
+.deck-dark { --t-inverse: #111214; --t-bg: #111214; --t-ink: #f3f3f5; --t-muted: #a3a6b0; --t-accent: #7aa2ff; --t-glow: rgba(122, 162, 255, 0.16); }
+.deck-light { --t-inverse: #ffffff; --t-bg: #ffffff; --t-ink: #16181d; --t-muted: #5b6070; --t-accent: #2f6fec; --t-glow: rgba(47, 111, 236, 0.08); }
+.deck-ember { --t-inverse: #0e0b0a; --t-bg: #0e0b0a; --t-ink: #f6efe9; --t-muted: #a89b92; --t-accent: #ff7a2f; --t-glow: rgba(255, 122, 47, 0.32); }
+.deck-ocean { --t-inverse: #0b2a4a; --t-bg: linear-gradient(135deg, #0b2a4a, #0f5a7a); --t-ink: #eef7ff; --t-muted: #a9c7dd; --t-accent: #5fe0d6; --t-glow: rgba(95, 224, 214, 0.18); }
+.deck-paper { --t-inverse: #f6f1e7; --t-bg: #f6f1e7; --t-ink: #2b2620; --t-muted: #6f665b; --t-accent: #b5532c; --t-glow: transparent; --t-font: var(--serif, Newsreader, Georgia, serif); }
+.deck-midnight { --t-inverse: #0b0b1a; --t-bg: #0b0b1a; --t-ink: #ecebff; --t-muted: #a4a2c8; --t-accent: #a78bfa; --t-glow: rgba(167, 139, 250, 0.26); }
+.deck-mono { --t-inverse: #fafafa; --t-bg: #fafafa; --t-ink: #111111; --t-muted: #555555; --t-accent: #111111; --t-glow: transparent; --t-font: var(--mono); }
+.deck-forest { --t-inverse: #0f1a14; --t-bg: #0f1a14; --t-ink: #eef5ee; --t-muted: #9fb5a5; --t-accent: #7ddc8f; --t-glow: rgba(125, 220, 143, 0.18); }
+.deck-sunset { --t-inverse: #2a1033; --t-bg: linear-gradient(160deg, #2a1033, #6b1f3a 55%, #c2493b); --t-ink: #fff3ec; --t-muted: #f0c4b4; --t-accent: #ffc56b; --t-glow: rgba(255, 197, 107, 0.2); }
+.deck-slide { --bg-x: var(--s-bg, var(--t-bg)); --ink: var(--s-ink, var(--t-ink)); --acc: var(--s-accent, var(--t-accent)); position: relative; aspect-ratio: 16 / 9; container-type: inline-size; border: 1px solid var(--border); border-radius: 12px; background: radial-gradient(70% 60% at 50% 115%, var(--t-glow), transparent 70%), var(--bg-x); color: var(--ink); box-shadow: 0 2px 14px rgba(0, 0, 0, 0.08); overflow: hidden; }
+.deck-slide.pictured { background: linear-gradient(rgba(0, 0, 0, 0.45), rgba(0, 0, 0, 0.45)), var(--s-image) center / cover no-repeat; --ink: #fff; }
+.deck-slide.invert { background: var(--ink); color: var(--t-inverse); }
+.slide-inner { position: absolute; inset: 0; padding: 6cqw 7cqw; font-size: 2.6cqw; line-height: 1.45; overflow: hidden; display: flex; flex-direction: column; justify-content: center; font-family: var(--s-font, var(--t-font, inherit)); }
+.deck-slide .slide-inner.assistant { color: inherit; }
 .slide-inner > :first-child { margin-top: 0; }
-.deck-slide .slide-inner.assistant h1 { font-size: 2.2em; margin: 0 0 0.4em; padding: 0; border: 0; }
-.deck-slide .slide-inner.assistant h2 { font-size: 1.6em; margin: 0 0 0.5em; padding: 0; border: 0; }
+.deck-slide .slide-inner.assistant :is(h1, h2, h3, h4) { color: inherit; font-family: inherit; }
+.deck-slide .slide-inner.assistant h1 { font-size: 2.3em; letter-spacing: -0.02em; margin: 0 0 0.4em; padding: 0; border: 0; }
+.deck-slide .slide-inner.assistant h2 { font-size: 1.65em; letter-spacing: -0.01em; margin: 0 0 0.55em; padding: 0; border: 0; }
+/* A short bar in the accent over a slide's first heading. */
+.deck-slide:not(.lead) .slide-inner.assistant > :is(h1, h2):first-child::before { content: ""; display: block; width: 2.2em; height: 0.12em; margin-bottom: 0.45em; border-radius: 1em; background: var(--acc); }
 .deck-slide .slide-inner.assistant :is(h3, h4) { font-size: 1.2em; }
-.slide-inner p, .slide-inner li { font-size: 1em; }
-.slide-inner pre, .slide-inner code { font-size: 0.8em; }
+.deck-slide .slide-inner.assistant :is(p, li) { color: color-mix(in srgb, currentColor 82%, transparent); }
+.deck-slide .slide-inner.assistant :is(strong, a) { color: var(--acc); }
+.deck-slide .slide-inner.assistant li::marker { color: var(--acc); }
+.deck-slide .slide-inner.assistant li { margin: 0.25em 0; }
+.deck-slide .slide-inner.assistant blockquote { border: 0; margin: 0; padding: 0; font-size: 1.55em; line-height: 1.3; font-weight: 600; color: inherit; }
+.deck-slide .slide-inner.assistant blockquote::before { content: "“"; display: block; height: 0.55em; font-size: 2.4em; line-height: 1; color: var(--acc); }
+.deck-slide .slide-inner pre, .deck-slide .slide-inner code { font-size: 0.8em; }
 .deck-slide.lead .slide-inner { align-items: center; text-align: center; }
-.deck-slide.lead .slide-inner.assistant h1 { font-size: 3em; letter-spacing: -0.02em; text-wrap: balance; }
-.deck-slide.lead .slide-inner.assistant h2 { font-size: 2.2em; text-wrap: balance; }
-.deck-slide.lead .slide-inner.assistant p { color: var(--text-2); font-size: 1.3em; }
-.slide-no { position: absolute; right: 2.4cqw; bottom: 1.8cqw; font-size: 1.6cqw; color: var(--text-3); }
+.deck-slide.lead .slide-inner.assistant h1 { font-size: 3.2em; text-wrap: balance; }
+.deck-slide.lead .slide-inner.assistant h2 { font-size: 2.3em; text-wrap: balance; }
+.deck-slide.lead .slide-inner.assistant p { font-size: 1.3em; }
+.slide-no { position: absolute; right: 2.4cqw; bottom: 1.8cqw; font-size: 1.5cqw; color: currentColor; opacity: 0.5; }
 .deck-slide .diagram { margin: 0.4em 0; border: 0; background: none; }
 .deck-slide .diagram .code-head { display: none; }
 .deck-slide .diagram-view { padding: 0; }
 .deck-slide .diagram-view svg { max-height: 34cqw; }
-.deck-bar [data-present] svg { width: 12px; height: 12px; margin-right: 6px; vertical-align: -1px; }
 #present { position: fixed; inset: 0; z-index: 90; background: #000; display: grid; place-items: center; }
 #present[hidden] { display: none; }
-#present .deck-slide { width: min(100vw, calc(100vh * 16 / 9)); border: 0; border-radius: 0; box-shadow: none; }
+#present .present-stage { position: relative; width: min(100vw, calc(100vh * 16 / 9)); aspect-ratio: 16 / 9; overflow: hidden; perspective: 1800px; }
+#present .deck-slide { position: absolute; inset: 0; width: 100%; border: 0; border-radius: 0; box-shadow: none; }
+#present .deck-slide.leaving { z-index: 0; }
+#present .deck-slide:not(.leaving) { z-index: 1; }
 #present .present-count { position: fixed; left: 50%; bottom: 14px; translate: -50% 0; font-size: 12px; color: rgba(255, 255, 255, 0.55); }
 .copy-code { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-3); padding: 5px 8px; border-radius: 7px; }
 .copy-code:hover { background: var(--hover); color: var(--text); }
@@ -3661,19 +3687,72 @@ document.addEventListener("click", (e) => {
 
 // A slide deck: Markdown that says marp: true (or slides: true) at the
 // top, its slides between --- lines.
-function deckSlides(text) {
+// A slide deck: Markdown that says marp: true (or slides: true) at the
+// top, its slides between --- lines. The front matter styles the whole
+// deck (theme, accent, background, color, font, transition, paginate);
+// a comment in a slide styles that one, as Marp's do: <!-- _class: lead
+// invert -->, <!-- _background: #111 -->, <!-- _color: white -->,
+// <!-- _transition: zoom -->, and ![bg](url) puts a picture behind it.
+const DECK_THEMES = ["default", "dark", "light", "ember", "ocean", "paper", "midnight", "mono", "forest", "sunset"];
+const DECK_FONTS = { sans: "var(--sans)", serif: "var(--serif, Newsreader, Georgia, serif)", mono: "var(--mono)", rounded: "ui-rounded, 'SF Pro Rounded', var(--sans)" };
+const TRANSITIONS = ["none", "fade", "slide", "push", "zoom", "flip", "rise", "wipe"];
+
+const deckColour = (v) => (v && CSS.supports("color", v) ? v : "");
+const deckBackground = (v) => (v && CSS.supports("background", v) && !/url\(/i.test(v) ? v : "");
+const deckField = (front, key) => (front.fields.find((f) => f.key.toLowerCase() === key) || {}).value || "";
+
+function deckOf(text) {
   const front = frontMatter(String(text));
   if (!front || !front.fields.some((f) => /^(marp|slides)$/i.test(f.key) && /^(true|yes|on)$/i.test(f.value))) return null;
-  const slides = [[]];
+  const theme = deckField(front, "theme").toLowerCase();
+  const look = {
+    theme: DECK_THEMES.includes(theme) ? theme : "default",
+    accent: deckColour(deckField(front, "accent")),
+    background: deckBackground(deckField(front, "background") || deckField(front, "backgroundcolor")),
+    color: deckColour(deckField(front, "color")),
+    font: DECK_FONTS[deckField(front, "font").toLowerCase()] || "",
+    transition: TRANSITIONS.includes(deckField(front, "transition").toLowerCase()) ? deckField(front, "transition").toLowerCase() : "fade",
+    paginate: !/^(false|no|off)$/i.test(deckField(front, "paginate")),
+  };
+  const chunks = [[]];
   let fence = null;
   for (const line of front.rest.replace(/\r\n/g, "\n").split("\n")) {
     const f = line.match(/^\s*(```|~~~)/);
     if (f) fence = fence ? (line.trim().startsWith(fence) ? null : fence) : f[1];
-    if (!fence && /^\s*---\s*$/.test(line)) slides.push([]);
-    else slides[slides.length - 1].push(line);
+    if (!fence && /^\s*---\s*$/.test(line)) chunks.push([]);
+    else chunks[chunks.length - 1].push(line);
   }
-  // Marp's directives are comments: not shown.
-  return slides.map((lines) => lines.join("\n").replace(/<!--[\s\S]*?-->/g, "").trim()).filter(Boolean);
+  let carried = look.transition;
+  const slides = [];
+  for (const lines of chunks) {
+    let raw = lines.join("\n");
+    const said = {};
+    // Directives: "_name" is this slide's only; "name" holds from here on.
+    for (const m of raw.matchAll(/<!--\s*(_?)(class|background|backgroundColor|color|transition)\s*:\s*([^>]*?)\s*-->/gi)) {
+      const key = m[2].toLowerCase().replace("backgroundcolor", "background");
+      if (key === "transition" && !m[1]) carried = m[3].toLowerCase();
+      said[key] = m[3];
+    }
+    let image = "";
+    raw = raw.replace(/^\s*!\[bg[^\]]*\]\(\s*(https?:\/\/[^\s)]+|data:image\/[^\s)]+)\s*\)\s*$/gim, (_, url) => { image = url; return ""; });
+    // Comments are directives or speaker notes: never shown.
+    const body = raw.replace(/<!--[\s\S]*?-->/g, "").trim();
+    if (!body && !image) continue;
+    const classes = String(said.class || "").toLowerCase().split(/\s+/).filter((c) => ["lead", "invert", "left"].includes(c));
+    const transition = String(said.transition || carried).toLowerCase();
+    slides.push({
+      text: body, classes, image,
+      background: deckBackground(said.background), color: deckColour(said.color),
+      transition: TRANSITIONS.includes(transition) ? transition : look.transition,
+    });
+  }
+  return { look, slides };
+}
+
+// Its slides' Markdown, for what only needs the words.
+function deckSlides(text) {
+  const deck = deckOf(text);
+  return deck ? deck.slides.map((slide) => slide.text) : null;
 }
 
 // A slide that is only headings, with at most one short line besides:
@@ -3684,34 +3763,84 @@ function leadSlide(text) {
   return lines.length > rest.length && rest.length <= 1 && rest.every((l) => l.length <= 140 && !/^([-*+>|]|\d+[.)]|```|~~~)/.test(l));
 }
 
-const slideHtml = (text, n, of) =>
-  `<section class="deck-slide${leadSlide(text) ? " lead" : ""}"><div class="slide-inner assistant">${markdown(text)}</div><span class="slide-no">${n} / ${of}</span></section>`;
+// The deck's look, as the style of what holds its slides.
+function deckStyle(look) {
+  return [
+    look.accent && `--s-accent:${look.accent}`, look.background && `--s-bg:${look.background}`,
+    look.color && `--s-ink:${look.color}`, look.font && `--s-font:${look.font}`,
+  ].filter(Boolean).join(";");
+}
 
-function deckHtml(slides) {
+function slideHtml(slide, n, of, look) {
+  const s = typeof slide === "string" ? { text: slide, classes: [] } : slide;
+  const lead = s.classes.includes("lead") || (!s.classes.includes("left") && leadSlide(s.text));
+  const style = [
+    s.background && `--s-bg:${s.background}`, s.color && `--s-ink:${s.color}`,
+    s.image && `--s-image:url("${s.image.replace(/"/g, "%22")}")`,
+  ].filter(Boolean).join(";");
+  const cls = ["deck-slide", lead && "lead", s.classes.includes("invert") && "invert", s.image && "pictured"].filter(Boolean).join(" ");
+  const number = look && look.paginate === false ? "" : `<span class="slide-no">${n} / ${of}</span>`;
+  return `<section class="${cls}"${style ? ` style='${esc(style)}'` : ""}><div class="slide-inner assistant">${markdown(s.text)}</div>${number}</section>`;
+}
+
+function deckHtml(deck) {
+  const { look, slides } = deck;
   return `<div class="deck-bar"><span>${slides.length} slide${slides.length === 1 ? "" : "s"}</span><button type="button" class="btn small" data-present>${icon("play")}Present</button></div>` +
-    slides.map((text, i) => slideHtml(text, i + 1, slides.length)).join("");
+    `<div class="deck-slides deck-${look.theme}" style='${esc(deckStyle(look))}'>` +
+    slides.map((slide, i) => slideHtml(slide, i + 1, slides.length, look)).join("") + "</div>";
 }
 
 // Present: one slide at a time, the whole screen. Arrows, Space and
-// clicks go on, Esc ends it.
+// clicks go on, Esc ends it. Each slide comes in by its transition.
 let presenting = null;
-function present(slides, from = 0) {
+function present(deck, from = 0) {
   const box = $("#present");
-  presenting = { slides, at: Math.max(0, Math.min(from, slides.length - 1)) };
-  const show = () => {
+  const { look, slides } = deck;
+  presenting = { deck, at: Math.max(0, Math.min(from, slides.length - 1)), slides };
+  box.className = `deck-${look.theme}`;
+  box.setAttribute("style", deckStyle(look));
+  box.innerHTML = `<div class="present-stage"></div><span class="present-count"></span>`;
+  presenting.show = (delta = 0) => {
     const { at } = presenting;
-    box.innerHTML = slideHtml(slides[at], at + 1, slides.length) + `<span class="present-count">${at + 1} / ${slides.length} · Esc to end</span>`;
+    const stage = box.querySelector(".present-stage");
+    const old = stage.lastElementChild;
+    stage.insertAdjacentHTML("beforeend", slideHtml(slides[at], at + 1, slides.length, look));
+    const now = stage.lastElementChild;
+    box.querySelector(".present-count").textContent = `${at + 1} / ${slides.length} · Esc to end`;
+    // Going back plays the transition of the slide being left, backwards.
+    const kind = delta < 0 ? slides[at + 1].transition : slides[at].transition;
+    if (!old) return;
+    if (calm.matches || kind === "none" || !delta) { old.remove(); return; }
+    transit(old, now, kind, delta > 0 ? 1 : -1);
   };
-  presenting.show = show;
-  show();
+  presenting.show();
   box.hidden = false;
   if (box.requestFullscreen) box.requestFullscreen().catch(() => {});
+}
+
+// Slide OLD out and NOW in, the TRANSITION's way, D 1 forward or -1 back.
+const TRANSIT_MS = 560;
+function transit(old, now, transition, d) {
+  const ease = "cubic-bezier(0.2, 0.7, 0.2, 1)";
+  const moves = {
+    fade: [[{ opacity: 0 }, { opacity: 1 }], [{ opacity: 1 }, { opacity: 0 }]],
+    slide: [[{ transform: `translateX(${d * 100}%)` }, { transform: "none" }], [{ opacity: 1 }, { opacity: 1 }]],
+    push: [[{ transform: `translateX(${d * 100}%)` }, { transform: "none" }], [{ transform: "none" }, { transform: `translateX(${-d * 100}%)` }]],
+    zoom: [[{ opacity: 0, transform: "scale(0.82)" }, { opacity: 1, transform: "none" }], [{ opacity: 1, transform: "none" }, { opacity: 0, transform: "scale(1.12)" }]],
+    flip: [[{ opacity: 0, transform: `perspective(1800px) rotateY(${-d * 90}deg)` }, { opacity: 0, offset: 0.5, transform: `perspective(1800px) rotateY(${-d * 90}deg)` }, { opacity: 1, transform: "none" }], [{ transform: "none" }, { opacity: 0, offset: 0.5, transform: `perspective(1800px) rotateY(${d * 90}deg)` }, { opacity: 0, transform: `perspective(1800px) rotateY(${d * 90}deg)` }]],
+    rise: [[{ opacity: 0, transform: `translateY(${d * 10}%)` }, { opacity: 1, transform: "none" }], [{ opacity: 1 }, { opacity: 0 }]],
+    wipe: [[{ clipPath: d > 0 ? "inset(0 0 0 100%)" : "inset(0 100% 0 0)" }, { clipPath: "inset(0 0 0 0)" }], [{ opacity: 1 }, { opacity: 1 }]],
+  }[transition] || [[{ opacity: 0 }, { opacity: 1 }], [{ opacity: 1 }, { opacity: 0 }]];
+  old.classList.add("leaving");
+  now.animate(moves[0], { duration: TRANSIT_MS, easing: ease });
+  old.animate(moves[1], { duration: TRANSIT_MS, easing: ease, fill: "forwards" }).finished.then(() => old.remove(), () => old.remove());
 }
 
 function endPresenting() {
   presenting = null;
   $("#present").hidden = true;
   $("#present").textContent = "";
+  $("#present").removeAttribute("style");
   if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
 }
 
@@ -3721,7 +3850,7 @@ function stepSlide(delta) {
   if (at < 0) return;
   if (at >= presenting.slides.length) { endPresenting(); return; }
   presenting.at = at;
-  presenting.show();
+  presenting.show(delta);
 }
 
 document.getElementById("present").addEventListener("click", (e) => stepSlide(e.clientX < innerWidth / 4 ? -1 : 1));
@@ -3731,8 +3860,8 @@ document.addEventListener("keydown", (e) => {
   const keys = { ArrowRight: 1, ArrowDown: 1, PageDown: 1, " ": 1, Enter: 1, ArrowLeft: -1, ArrowUp: -1, PageUp: -1, Backspace: -1 };
   if (e.key === "Escape") endPresenting();
   else if (e.key in keys) stepSlide(keys[e.key]);
-  else if (e.key === "Home") { presenting.at = 0; presenting.show(); }
-  else if (e.key === "End") { presenting.at = presenting.slides.length - 1; presenting.show(); }
+  else if (e.key === "Home") { stepSlide(-presenting.at); }
+  else if (e.key === "End") { stepSlide(presenting.slides.length - 1 - presenting.at); }
   else return;
   e.preventDefault();
   e.stopImmediatePropagation();
@@ -3740,10 +3869,10 @@ document.addEventListener("keydown", (e) => {
 
 // What a Markdown document shows as: its slides, or its text.
 function docHtml(text, article) {
-  const slides = deckSlides(text);
-  article.classList.toggle("deck", !!slides);
-  if (!slides) return markdown(text);
-  return deckHtml(slides);
+  const deck = deckOf(text);
+  article.classList.toggle("deck", !!deck);
+  if (!deck) return markdown(text);
+  return deckHtml(deck);
 }
 
 const codeBlock = (lang, body) =>
@@ -5628,8 +5757,8 @@ function drawDocument(doc) {
     article.innerHTML = docHtml(doc.text, article);
     article.onclick = (e) => {
       if (!e.target.closest("[data-present]")) return;
-      const slides = deckSlides(doc.text);
-      if (slides) present(slides);
+      const deck = deckOf(doc.text);
+      if (deck && deck.slides.length) present(deck);
     };
   } else {
     article.className = "doc doc-plain";
