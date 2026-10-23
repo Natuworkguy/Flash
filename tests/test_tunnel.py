@@ -163,3 +163,27 @@ def test_closing_the_server_takes_the_tunnel_down(program):
     srv.server_close()
 
     assert srv.session.tunnel.state == tunnel.OFF  # nosec B101
+
+
+def test_a_refused_post_does_not_spill_into_the_next_request(server):
+    import socket
+
+    body = b'{"id":"zr2jzaht3e","data":"AAAA"}'
+    sock = socket.create_connection(("127.0.0.1", server.port), timeout=5)
+    # Refused (no token), and the page's next request on the same
+    # connection right behind it.
+    sock.sendall(
+        b"POST /api/voice/wake HTTP/1.1\r\nHost: 127.0.0.1\r\n"
+        b"Content-Type: application/json\r\n"
+        b"Content-Length: " + str(len(body)).encode() + b"\r\n\r\n" + body
+        + b"GET /api/state?lite=1 HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n")
+    said = b""
+    while True:
+        chunk = sock.recv(65536)
+        if not chunk:
+            break
+        said += chunk
+    sock.close()
+
+    assert said.startswith(b"HTTP/1.1 403")  # nosec B101
+    assert b"501" not in said and b"Unsupported method" not in said
