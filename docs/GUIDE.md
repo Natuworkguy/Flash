@@ -1234,7 +1234,10 @@ while you were away, as a full-screen feed you swipe or scroll through
 one card at a time: unread email and iMessages, spark reports you have
 not read, waits that finished or gave up, chats that answered, waits
 coming up in the next day, and anything new a connector a spark watches
-said. It looks back one day. Each card can be answered (Reply), opened
+said. It looks back one day. A team where something changed since your
+last briefing gets one card for the whole team: each spark's newest
+report as a line, what the ones at work are doing, and how much the team
+chat said (Open goes to the team chat). Each card can be answered (Reply), opened
 (the chat, the spark's report, or the email), asked about in a new chat
 (Ask Flash), or dismissed for good. `j`/`k` or the arrow keys move,
 `r`, `o`, `a` and `d` do the actions, and `Esc` closes it; the rail on

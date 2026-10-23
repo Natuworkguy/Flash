@@ -3932,8 +3932,12 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
         return {"forks": session.fork_tree(session.chat(chat_id))}
 
     if name == "briefing":
+        # "open" when the page opens it: teams then count from the last
+        # one. A refresh counts from the same time again.
         problems: list[str] = []
-        return {"cards": briefing.cards(session, problems=problems),
+        since = briefing.opened() if arg == "open" else None
+        return {"cards": briefing.cards(session, problems=problems,
+                                        since=since),
                 "problems": problems}
 
     if name == "briefing-dismiss":

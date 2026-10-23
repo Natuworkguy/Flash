@@ -33,6 +33,12 @@ FORGET_AFTER = 14 * DAY
 NEWS_KEPT = 30
 
 DISMISSED = "briefing.json"
+# When the briefing was last opened, and when the one before that was:
+# a team says what changed since then.
+SEEN = "briefing-seen.json"
+# The furthest back a team's news goes, however long since the last one.
+MOST_SINCE = 7 * DAY
+STATUS_CHARS = 160
 
 _lock = threading.Lock()
 _news: list[dict] = []
@@ -45,6 +51,7 @@ KINDS = {
     "chat": "Chat",
     "reminder": "Coming up",
     "news": "News",
+    "team": "Team",
 }
 
 
@@ -102,6 +109,34 @@ def undismiss(card_id: str) -> None:
             workspace._write(DISMISSED, kept)
 
 
+# --- Since the last briefing --------------------------------------------
+
+
+def _seen() -> dict:
+    found = workspace._read(SEEN, {})
+    return found if isinstance(found, dict) else {}
+
+
+def opened(now: Optional[float] = None) -> float:
+    """The briefing was opened: when the last one was, for what changed
+    since, kept for refreshing this one."""
+
+    now = time.time() if now is None else now
+    with _lock:
+        last = float(_seen().get("at") or 0)
+        since = max(last or now - LOOK_BACK, now - MOST_SINCE)
+        workspace._write(SEEN, {"at": now, "since": since})
+    return since
+
+
+def last_since(now: Optional[float] = None) -> float:
+    """What the briefing open now counts from: the one before it."""
+
+    now = time.time() if now is None else now
+    since = float(_seen().get("since") or 0)
+    return max(since or now - LOOK_BACK, now - MOST_SINCE)
+
+
 # --- Connector news ------------------------------------------------------
 
 
@@ -140,11 +175,13 @@ def _news_cards(now: float) -> list[dict]:
 # --- Sources -------------------------------------------------------------
 
 
-def _spark_cards(now: float) -> list[dict]:
+def _spark_cards(now: float, told: set[str]) -> list[dict]:
     from . import sparks
 
     cards = []
     for spark in sparks.all_sparks():
+        if spark.id in told:
+            continue
         for report in spark.reports:
             if report.read or report.quiet or now - report.at > LOOK_BACK:
                 continue
@@ -157,6 +194,64 @@ def _spark_cards(now: float) -> list[dict]:
                 colour=spark.colour, failed=report.failed,
                 approval=report.approval,
             ))
+    return cards
+
+
+def _first(text: str) -> str:
+    """A report's first line, as a status: plain, and short."""
+
+    line = next((ln for ln in _plain(text).splitlines() if ln.strip()), "")
+    return _clip(line, STATUS_CHARS, True)
+
+
+def _team_cards(since: float, told: set[str]) -> list[dict]:
+    """A card for each team where something changed since SINCE: what each
+    spark on it has to say for itself (its newest report, or what it is
+    doing now), and how much the team chat said. The sparks it speaks for
+    go in TOLD, so their reports are not cards of their own as well."""
+
+    from . import sparks, teamchat
+
+    cards = []
+    for team in sparks.teams():
+        members = sparks.members(team.id)
+        if not members:
+            continue
+        lines, latest, speaking = [], 0.0, []
+        for spark in members:
+            new = [r for r in spark.reports if r.at > since and not r.quiet]
+            if new:
+                report = max(new, key=lambda r: r.at)
+                mark = (" (needs you)" if report.approval
+                        else " (could not finish)" if report.failed else "")
+                lines.append(f"{spark.name}{mark}: {_first(report.text)}")
+                latest = max(latest, report.at)
+                speaking.append(spark.id)
+            elif spark.status == sparks.WORKING:
+                doing = _clip(spark.activity, STATUS_CHARS, True)
+                lines.append(f"{spark.name}: working"
+                             + (f", {doing[0].lower()}{doing[1:]}"
+                                if doing else ""))
+        said = [
+            e for e in teamchat._live(teamchat._read(team.id)["entries"])
+            if e.get("kind") == teamchat.SPARK and e.get("at", 0) > since
+        ]
+        if said:
+            latest = max(latest, max(e.get("at", 0) for e in said))
+            lines.append(f"{len(said)} new message"
+                         f"{'s' if len(said) != 1 else ''} in the team chat")
+        if not latest:
+            continue
+        quiet = len(members) - len(speaking)
+        if quiet and speaking:
+            lines.append(f"{quiet} other{'s' if quiet != 1 else ''}: "
+                         "nothing new")
+        told.update(speaking)
+        cards.append(_card(
+            "team", f"{team.id}:{int(latest)}", team.name, "\n".join(lines),
+            latest, team=team.id, colour=team.colour,
+            who=f"{len(speaking)} of {len(members)} with news",
+        ))
     return cards
 
 
@@ -279,16 +374,21 @@ def _plain(text: str) -> str:
 
 
 def cards(session: Any = None, now: Optional[float] = None,
-          problems: Optional[list[str]] = None) -> list[dict]:
+          problems: Optional[list[str]] = None,
+          since: Optional[float] = None) -> list[dict]:
     """Every card not dismissed, newest first; what was coming up goes
-    first of all. A source that fails is left out, and named in PROBLEMS."""
+    first of all. Teams say what changed since SINCE (the briefing before
+    this one). A source that fails is left out, and named in PROBLEMS."""
 
     now = time.time() if now is None else now
+    since = last_since(now) if since is None else since
+    told: set[str] = set()
     titles = {c.id: c.title
               for c in getattr(session, "chats", {}).values()} \
         if session is not None else {}
     sources = (
-        ("sparks", lambda: _spark_cards(now)),
+        ("teams", lambda: _team_cards(since, told)),
+        ("sparks", lambda: _spark_cards(now, told)),
         ("waits", lambda: _wait_cards(now, titles)),
         ("email", _email_cards),
         ("iMessage", lambda: _imessage_cards(now)),
