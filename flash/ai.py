@@ -30,6 +30,7 @@ from . import (
     background,
     checkpoint,
     computer,
+    computeruse,
     connectors,
     context,
     extensions,
@@ -2631,10 +2632,13 @@ def _computer_command(arg: str) -> None:
     `/computer on imessage` or `/computer off music` for one of them."""
 
     words = arg.lower().split()
+    if words[:1] == ["use"]:
+        _computer_use_command(words[1:])
+        return
     if not words or words[0] not in ("on", "off") or len(words) > 2:
         if words:
             warn("Usage: /computer [on|off] [" + "|".join(computer.kinds())
-                 + "]")
+                 + "], or /computer use [on|off]")
             return
     elif len(words) == 1:
         set_config_var(computer.SETTING, "1" if words[0] == "on" else "0")
@@ -2671,6 +2675,36 @@ def _computer_command(arg: str) -> None:
         line.append(f"{kind:<10}", style="bold")
         line.append(f"{title}: {what}", style=DIM)
         console.print(line)
+
+
+def _computer_use_command(words: list[str]) -> None:
+    """/computer use: whether Flash may see the screen and work the mouse
+    and keyboard (beta), shown, or switched with on or off."""
+
+    if words and words not in (["on"], ["off"]):
+        warn("Usage: /computer use [on|off]")
+        return
+    if words:
+        computeruse.set_enabled(words[0] == "on")
+    keys = computeruse.stop_keys()
+    if not computeruse.enabled():
+        console.print(Text(
+            "Computer Use (beta) is off. /computer use on lets Flash see "
+            "your screen and click and type itself, only for what its "
+            "tools cannot do, and only once you say yes.",
+            style=DIM,
+        ))
+        return
+    console.print(Text(
+        "Computer Use (beta) is on: when no tool can do it, Flash asks to "
+        "see your screen and use your mouse and keyboard, every reply, "
+        f"even in autonomous mode. Press {keys}, or move the mouse, to "
+        "take it back.",
+        style=DIM,
+    ))
+    why = computeruse.missing()
+    if why:
+        warn(why)
 
 
 def _spark_events(key: str, extra: str) -> None:
@@ -6187,6 +6221,8 @@ def _main() -> None:
             continue
         finally:
             end_dock(dock, stopped)
+            # A yes to Computer Use lasts the one reply.
+            computeruse.end("terminal")
             # A turn that got here without finishing failed, or was
             # stopped; nothing, when there was no turn.
             progress.end(False, error="Stopped." if stopped else "")

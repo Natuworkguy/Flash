@@ -1,6 +1,7 @@
 """AI Tool System"""
 
 import base64
+import contextlib
 import difflib
 import fnmatch
 import inspect
@@ -18,6 +19,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from collections.abc import Callable
 from datetime import datetime
 from html.parser import HTMLParser
 from pathlib import Path
@@ -33,6 +35,7 @@ from . import browser as page_devtools
 from . import (
     checkpoint,
     computer,
+    computeruse,
     connectors,
     design,
     editor,
@@ -320,6 +323,8 @@ def build_system_prompt(model_prompt: str = "") -> str:
 DEFAULT_SHELL_TIMEOUT = 15
 MAX_SHELL_TIMEOUT = 600
 NO_COMMAND_CONFIRMATION = False
+# UltraAuto: not even what asks in autonomous mode asks.
+ULTRA_AUTO = False
 OLLAMA_HOST = ""
 MODEL_NAME = ""
 MAX_TOOL_OUTPUT_CHARS = 1200
@@ -1928,6 +1933,7 @@ def available_tools() -> list[dict[str, Any]]:
         tools
         + (EMAIL_TOOLS if mail.configured() else [])
         + computer_tools()
+        + (computer_use_tools() if computeruse.enabled() else [])
     )
 
 
@@ -2467,6 +2473,64 @@ def computer_tools() -> list[dict[str, Any]]:
     return found
 
 
+def computer_use_tools() -> list[dict[str, Any]]:
+    """Computer Use's one tool, said for this computer."""
+
+    mac = computer.system() == "mac"
+    return [{
+        "type": "function",
+        "function": {
+            "name": "computer_use",
+            "description": (
+                "See the user's screen and work their mouse and keyboard "
+                "yourself (beta). ONLY for what no other tool can do: a "
+                "setting or button in an app with no other way in. Use "
+                "every other tool first (shell, files, the browser tools, "
+                "computer, connectors), as this is slow and the user is "
+                "asked before you get their computer. Start with "
+                "screenshot; each step after gives a fresh screenshot. x "
+                "and y are pixels in the latest screenshot. If the user "
+                "says no, moves the mouse or presses the stop keys, stop "
+                "and do not try again unless they ask. Never enter "
+                "passwords or payment details. "
+                + ("This is a Mac: shortcuts use cmd (cmd+c, cmd+tab). "
+                   if mac else "Shortcuts use ctrl (ctrl+c, alt+tab). ")
+                + "Actions: "
+                + "; ".join(f"{name}: {what}"
+                            for name, what in computeruse.ACTIONS.items())
+                + "."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string",
+                               "enum": list(computeruse.ACTIONS)},
+                    "x": {"type": "number"},
+                    "y": {"type": "number"},
+                    "to_x": {"type": "number",
+                             "description": "Where a drag ends."},
+                    "to_y": {"type": "number"},
+                    "button": {"type": "string",
+                               "enum": ["left", "right", "middle"]},
+                    "text": {"type": "string",
+                             "description": "What type types."},
+                    "keys": {"type": "string",
+                             "description": "For key: e.g. enter, tab, "
+                             "cmd+shift+4, ctrl+a."},
+                    "direction": {"type": "string",
+                                  "enum": ["up", "down", "left", "right"]},
+                    "amount": {"type": "integer",
+                               "description": "How far to scroll, in "
+                               "steps. Default 3."},
+                    "seconds": {"type": "number",
+                                "description": "How long wait waits."},
+                },
+                "required": ["action"],
+            },
+        },
+    }]
+
+
 # On a Mac, with the computer allowed: the user's recent iMessages.
 READ_IMESSAGES_TOOLS: list[dict[str, Any]] = [
     {
@@ -2646,6 +2710,79 @@ def computer_tool(action: str, value: Any = "") -> str:
         return result
     tool_result(result)
     return result
+
+
+# Which reply works the computer, on this thread, and how it is stopped
+# when the user takes the computer back: the terminal's, unless the web
+# UI says which chat's.
+_computer_user = threading.local()
+
+
+@contextlib.contextmanager
+def computer_user(owner: str, stop: Callable[[], None]):
+    """Computer Use steps run in here are OWNER's, stopped by STOP."""
+
+    before = getattr(_computer_user, "who", None)
+    _computer_user.who = (owner, stop)
+    try:
+        yield
+    finally:
+        _computer_user.who = before
+
+
+def computer_use_tool(action: str = "", **args: Any) -> str:
+    """One step of Computer Use, for the reply working the computer.
+    The first step of a reply asks the user, autonomous mode or not; only
+    UltraAuto does not."""
+
+    owner, stop = getattr(_computer_user, "who", None) or (
+        "terminal", computeruse.interrupt_terminal)
+    action = str(action or "").strip().lower()
+    tool_line(f"ComputerUse({action}"
+              + "".join(f", {args[k]}" for k in ("x", "y") if k in args)
+              + ")")
+    if not computeruse.enabled():
+        result = ("Error: Computer Use is off. The user can turn it on in "
+                  "Settings, Computer Use, or with /computer use on.")
+        tool_result(result, style=WARN)
+        return result
+    why = computeruse.missing()
+    if why:
+        tool_result(why, style=ERROR)
+        return f"Error: {why}"
+    if not model_sees_images(OLLAMA_HOST, MODEL_NAME):
+        result = (
+            f"Error: the active model ({MODEL_NAME}) has no vision "
+            "support, so it cannot see the screen. Tell the user Computer "
+            "Use needs a vision-capable model (/model)."
+        )
+        tool_result(result, style=ERROR)
+        return result
+    if computeruse.busy(owner):
+        result = ("Error: another chat is using the computer right now. "
+                  "Wait for it to finish.")
+        tool_result(result, style=WARN)
+        return result
+    if not computeruse.holds(owner):
+        keys = computeruse.stop_keys()
+        if not ULTRA_AUTO and not _user_allows(
+            "Let Flash see your screen and use your mouse and keyboard "
+            f"for this reply? Press {keys}, or move the mouse, to take it "
+            "back."
+        ):
+            return ("The user said no to Computer Use. Do it another way, "
+                    "or tell them what to do; do not ask again.")
+        computeruse.take(owner, stop)
+    try:
+        said, image = computeruse.do(action, args, owner)
+    except computeruse.UseError as exc:
+        tool_result(str(exc), style=ERROR)
+        return f"Error: {exc}"
+    if image:
+        _pending_images.append(image)
+    tool_result(said)
+    return said + (" The screenshot is included with this result: look "
+                   "at it before the next step." if image else "")
 
 
 def refresh_tools() -> str:
@@ -6020,6 +6157,7 @@ FUNCTIONS = {
     "send_email": send_email,
     "notify_user": notify_user,
     "computer": computer_tool,
+    "computer_use": computer_use_tool,
     "send_imessage": send_imessage,
     "read_imessages": read_imessages,
     "open_in_editor": open_in_editor,
