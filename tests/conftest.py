@@ -18,6 +18,7 @@ from flash import (
     notify,
     progress_mail,
     repl_input,
+    sessions,
     showcase,
     skills,
     sparks,
@@ -56,6 +57,9 @@ def isolated_home(tmp_path_factory, monkeypatch):
     # Every turn's tool list reads the installed extensions, so without
     # this the suite would pick up whatever the developer has installed.
     monkeypatch.setattr(extensions, "FLASH_DIR", home / ".flash")
+    # The terminal's kept conversations, and the one it is on.
+    monkeypatch.setattr(sessions, "FLASH_DIR", home / ".flash")
+    monkeypatch.setattr(ai, "_session", None)
     # The system prompt lists the saved design systems.
     monkeypatch.setattr(
         design, "SYSTEMS_DIR", home / ".flash" / "design-systems"

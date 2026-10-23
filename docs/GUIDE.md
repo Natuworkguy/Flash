@@ -166,6 +166,15 @@ python run.py
   question nor the answer joins the conversation, and the work in
   progress carries on undisturbed. The web UI takes `/btw` too, and
   shows the answer in a card above the message box until you close it.
+- `/resume [words]`: Pick up an earlier conversation from a list, the
+  latest first (or the latest whose title has the words). Every
+  terminal conversation is kept, in `~/.flash/sessions`, with its forks;
+  `/clear` starts a new one and keeps the old.
+- `/fork [n]`: Try another way from here, or from `n` turns back. The
+  way it went is kept.
+- `/forks`: This conversation's forks as a tree, to switch between;
+  `/forks <id>` switches, `/forks rm <id>` deletes one (its own forks
+  move up a level).
 - `/think auto on|off`: Whether Flash may turn its thinking on by itself
   for a message that needs careful reasoning (on by default).
 - `/briefing`: What came in while you were away, full screen, a card at
