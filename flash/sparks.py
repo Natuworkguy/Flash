@@ -4121,14 +4121,23 @@ def _work(
         offered = offered + flash_tools.EMAIL_TOOLS
     base = [t for t in offered if t["function"]["name"] in allowed]
 
+    # With nowhere to ask (a team chat's answer), a connected app's tool
+    # that changes things is only offered in autonomous mode, as a
+    # command is.
+    asks = gate is not None or flash_tools.NO_COMMAND_CONFIRMATION
+
     def tools_now() -> list[dict]:
         # The connected MCP servers' tools too, looked at afresh each
         # step: a refresh_tools brings new ones in at once.
         taken = frozenset(t["function"]["name"] for t in base + own_tools)
-        return base + own_tools + flash_tools.connectors.tool_schemas(taken)
+        return base + own_tools + [
+            t for t in flash_tools.connectors.tool_schemas(taken)
+            if asks or not _connector_changes(t["function"]["name"])
+        ]
 
     def connected(name: str) -> bool:
-        return flash_tools.connectors.find(name) is not None
+        return flash_tools.connectors.find(name) is not None and (
+            asks or not _connector_changes(name))
 
     # The model's own note on what it is doing ("now running the
     # tests"), shown in place of the bare step while there is one.
