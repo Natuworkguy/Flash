@@ -68,6 +68,7 @@ from .repl_input import (
     HEALTH_OK,
     HEALTH_UNKNOWN,
     MAX_MENU_ROWS,
+    MODEL_PICK,
     RESERVED_COMMANDS,
     RESIZE,
     STEER,
@@ -6077,6 +6078,10 @@ def _main() -> None:
                     if banner_showing:
                         redraw_banner()
                     continue
+
+                if uin == MODEL_PICK:
+                    # The model's name in the status line, clicked.
+                    uin = "/model"
 
                 if uin == EXPAND:
                     expand_collapsed()

@@ -29,6 +29,7 @@ from prompt_toolkit.layout.processors import (
     explode_text_fragments,
 )
 from prompt_toolkit.layout.screen import Screen
+from prompt_toolkit.mouse_events import MouseEventType
 from prompt_toolkit.renderer import Renderer
 from prompt_toolkit.styles import Style
 from prompt_toolkit.utils import get_cwidth
@@ -38,6 +39,7 @@ from .emojis import EMOJIS
 from .images import IMAGE_EXTENSIONS
 from .memory import MEMORY_PATH
 from .paths import ENV_PATH, FLASH_DIR
+from .theme import ACCENT as _ACCENT
 from .theme import (
     BAR_EMPTY,
     CHEVRON,
@@ -48,6 +50,7 @@ from .theme import (
     RESET_ANSI,
     SPARKLE,
     ansi,
+    mouse_on,
     ptk_sweep_reveal,
 )
 
@@ -663,6 +666,131 @@ MAX_MENU_ROWS = 12
 MIN_MENU_ROWS = 4
 
 
+# --- The status line under the mouse --------------------------------------
+#
+# The model's name in it takes a click (the picker) and lights up while
+# the pointer is over it. Taking clicks means the terminal sends the
+# prompt every mouse event, the wheel and drags too, which would leave
+# no way to scroll back or select text. So the first scroll, or a press
+# anywhere but the name, hands the mouse back to the terminal, and
+# typing takes it again.
+
+HOVER_SECONDS = 0.22
+
+
+class _Pointer:
+    hover_since = 0.0
+    aside = False
+
+
+_pointer = _Pointer()
+
+
+def mouse_wanted() -> bool:
+    """Whether the prompt takes mouse events now."""
+
+    return mouse_on() and not _pointer.aside
+
+
+def _step_aside() -> None:
+    if not _pointer.aside:
+        _pointer.aside = True
+        _pointer.hover_since = 0.0
+        app = get_app_or_none()
+        if app is not None:
+            app.invalidate()
+
+
+def take_mouse_back(_buffer=None) -> None:
+    """Typing: the prompt takes the mouse again."""
+
+    if _pointer.aside:
+        _pointer.aside = False
+        app = get_app_or_none()
+        if app is not None:
+            app.invalidate()
+
+
+def _on_model(event) -> object:
+    kind = event.event_type
+    if kind == MouseEventType.MOUSE_MOVE:
+        if not _pointer.hover_since:
+            _pointer.hover_since = time.monotonic()
+    elif kind == MouseEventType.MOUSE_UP:
+        app = get_app()
+        _pointer.hover_since = 0.0
+        _stand_down(app, MODEL_PICK)
+    elif kind in (MouseEventType.SCROLL_UP, MouseEventType.SCROLL_DOWN):
+        _step_aside()
+    return None
+
+
+def _elsewhere(event) -> object:
+    kind = event.event_type
+    if kind == MouseEventType.MOUSE_MOVE:
+        _pointer.hover_since = 0.0
+        return None
+    if kind in (MouseEventType.SCROLL_UP, MouseEventType.SCROLL_DOWN,
+                MouseEventType.MOUSE_DOWN):
+        _step_aside()
+        return None
+    return NotImplemented
+
+
+def _mix(a: str, b: str, t: float) -> str:
+    one = [int(a[i:i + 2], 16) for i in (1, 3, 5)]
+    two = [int(b[i:i + 2], 16) for i in (1, 3, 5)]
+    return "#" + "".join(f"{round(x + (y - x) * t):02x}"
+                         for x, y in zip(one, two))
+
+
+def clickable_status(fragments: StyleAndTextTuples,
+                     status: str) -> StyleAndTextTuples:
+    """FRAGMENTS, the prompt above the input, with the model's name in
+    the status line (STATUS's first part) taking clicks and lighting up
+    under the pointer, and every other part handing the mouse back on a
+    scroll or a press."""
+
+    model = (status or "").split("   ")[0].strip()
+    hovered = bool(_pointer.hover_since)
+    grown = min(1.0, (time.monotonic() - _pointer.hover_since)
+                / HOVER_SECONDS) if hovered else 0.0
+    # Eased, so it settles rather than stops.
+    grown = 1 - (1 - grown) ** 3
+    # One fragment a character, as ANSI gives them: run them together.
+    merged: list = []
+    for style, text, *rest in fragments:
+        if merged and not rest and len(merged[-1]) == 2 \
+                and merged[-1][0] == style:
+            merged[-1] = (style, merged[-1][1] + text)
+        else:
+            merged.append((style, text, *rest))
+    out: StyleAndTextTuples = []
+    found = False
+    for style, text, *rest in merged:
+        if found or not model or model not in text or HEALTH_DOT in text:
+            out.append((style, text, rest[0] if rest else _elsewhere))
+            continue
+        found = True
+        at = text.index(model)
+        before, after = text[:at], text[at + len(model):]
+        if before:
+            out.append((style, before, _elsewhere))
+        if hovered:
+            colour = _mix(DIM_HEX, _ACCENT, grown)
+            out.append((f"{style} fg:{colour} underline"
+                        + (" bold" if grown > 0.6 else ""), model, _on_model))
+            if after.startswith("  "):
+                # Where a space was: a mark that it opens something.
+                out.append((f"fg:{colour}", " \u25be", _on_model))
+                after = after[2:]
+        else:
+            out.append((style, model, _on_model))
+        if after:
+            out.append((style, after, _elsewhere))
+    return out
+
+
 def menu_headroom() -> int:
     """Blank rows to open above the input for the menu to draw into."""
 
@@ -763,6 +891,8 @@ TOGGLE_AUTO = "\x00auto"
 # cut short. The output is ordinary scrollback above the prompt, which
 # the prompt cannot draw into, so it stands down for the caller to.
 EXPAND = "\x00expand"
+# The model's name in the status line was clicked: open the picker.
+MODEL_PICK = "\x00model"
 
 # Whatever was half typed when that happened, handed back on the next
 # call so a resize does not cost someone their sentence.
@@ -1140,7 +1270,10 @@ def _frame_message(
         shown = shell_prompt(prompt_ansi) if is_shell_line(typed) \
             else prompt_ansi
         bar = status_prefix(now(status), now(health))
-        return ANSI(above() + rows_above_status() + bar + shown)
+        drawn = ANSI(above() + rows_above_status() + bar + shown)
+        if not mouse_wanted():
+            return drawn
+        return clickable_status(to_formatted_text(drawn), now(status) or "")
 
     def above() -> str:
         """Everything between the last message and the status line.
@@ -1235,8 +1368,13 @@ def read_line(
             history=SessionHistory(str(HISTORY_PATH)),
             key_bindings=key_bindings(),
             input_processors=[HideShellMark()],
+            mouse_support=Condition(mouse_wanted),
         )
+        _session.default_buffer.on_text_changed += take_mouse_back
         _snug(_session)
+    # A new prompt takes the mouse again, with nothing lit.
+    _pointer.aside = False
+    _pointer.hover_since = 0.0
 
     def watch_for_wake() -> None:
         if wake is None:
