@@ -953,6 +953,39 @@ which every player answers, though it cannot tell what is playing. Linux
 uses `playerctl` for music and PipeWire, PulseAudio or ALSA for the
 volume.
 
+### Computer Use (beta)
+
+For the things no tool can do, a setting deep in an app or a button in
+a program with no other way in, Flash can look at your screen and work
+the mouse and keyboard itself. Turn it on with `/computer use on`, or
+Settings > General > Computer Use in the web UI. It is separate from
+[Your computer](#your-computer), and off until you turn it on; while it
+is off the model is not offered it.
+
+Flash takes a screenshot, says where to click, what to type or which
+keys to press, and gets a fresh screenshot after each step. The model
+is told to use every other tool first, as this is slow and can click
+the wrong thing, and never to type passwords or card numbers.
+
+It asks before it takes your computer, every reply that wants it, even
+in autonomous mode; only UltraAuto skips the question. A yes lasts that
+one reply. While Flash has the computer:
+
+- press **Ctrl+Alt+Esc** (**Control+Option+Esc** on a Mac) to take it
+  back: the reply stops then and there. Flash never presses those keys
+  itself. In the web UI the same keys work too, wherever you are.
+- or just move the mouse: the next step sees the pointer isn't where
+  Flash left it, and stops.
+- the Stop button and Esc still stop the reply as usual.
+
+Only one chat has the computer at a time. It needs a model that can see
+images. On a Mac, the app Flash runs in needs Accessibility (for the
+mouse and keyboard) and Screen Recording (for the screenshots), under
+System Settings > Privacy & Security; screenshots are of the main
+display. Windows uses user32 and PowerShell. Linux needs `xdotool`, an
+X session, and a screenshot program (`gnome-screenshot`, `grim`,
+`scrot` or ImageMagick's `import`).
+
 ### Page screenshots
 
 The `screenshot` tool renders a local `.html` file or a URL in a headless

@@ -56,6 +56,7 @@ from . import (
     background,
     checkpoint,
     computer,
+    computeruse,
     connectors,
     context,
     design,
@@ -112,6 +113,17 @@ DEFAULT_PORT = 7433
 WEB_DIR = Path(__file__).parent / "web"
 PAGE = WEB_DIR / "index.html"
 DESIGN_KIT = WEB_DIR / "designkit.js"
+
+
+def _computer_use() -> dict:
+    """Computer Use's state, for Settings: on or off, the stop keys, and
+    what this computer lacks for it."""
+
+    return {
+        "computer_use": computeruse.enabled(),
+        "computer_use_keys": computeruse.stop_keys(),
+        "computer_use_missing": computeruse.missing(),
+    }
 
 
 def _computer_kinds() -> dict:
@@ -2793,17 +2805,21 @@ def run_turn(
     stopped = False
     flash_spoke = False
     tools_ran = 0
-    for number, spark in enumerate(speakers):
-        if chat.stop.is_set():
-            break
-        stopped, tools_ran = _respond(
-            session, chat, client, text, found, spark,
-            guest=spark is not None and spark.id != chat.spark,
-            first=number == 0,
-        )
-        flash_spoke = flash_spoke or spark is None
-        if stopped:
-            break
+    try:
+        for number, spark in enumerate(speakers):
+            if chat.stop.is_set():
+                break
+            stopped, tools_ran = _respond(
+                session, chat, client, text, found, spark,
+                guest=spark is not None and spark.id != chat.spark,
+                first=number == 0,
+            )
+            flash_spoke = flash_spoke or spark is None
+            if stopped:
+                break
+    finally:
+        # A yes to Computer Use lasts the one reply.
+        computeruse.end(chat.id)
 
     if delivered and not stopped:
         subagents.mark_delivered(delivered)
@@ -2960,6 +2976,11 @@ def _respond(
                     output = wait_for(session, chat, args)
                 elif name == "cancel_wait":
                     output = cancel_wait(session, chat, args)
+                elif name == "computer_use":
+                    # This chat's: the stop keys stop this reply.
+                    with flash_tools.computer_user(chat.id, chat.stop.set):
+                        output = flash_tools.run_tool((name, args))
+                    tool_count += 1
                 elif kit is not None and name in kit.tools:
                     output = kit.tools[name](args)
                     tool_count += 1
@@ -3250,6 +3271,7 @@ def status(ai) -> dict:
         "compact": bool(ai.Config.auto_compact),
         "model_titles": titles.enabled(),
         "computer": computer.enabled(),
+        **_computer_use(),
         "spark_events": triggers.enabled(),
         **_computer_kinds(),
         "visuals": visuals.level(),
@@ -4079,6 +4101,15 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
             ai.set_config_var(computer.SETTING, "1" if on else "0")
         session.hub.publish({"type": "status"})
         return {"computer": computer.enabled(), **_computer_kinds()}
+
+    if name == "computer-use-stop":
+        computeruse.taken_back()
+        return {}
+
+    if name == "computer-use-setting":
+        computeruse.set_enabled(arg in ("on", "1", "true"))
+        session.hub.publish({"type": "status"})
+        return _computer_use()
 
     if name == "titles-setting":
         on = arg in ("on", "1", "true")
