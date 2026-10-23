@@ -4790,7 +4790,11 @@ tools: list[dict[str, Any]] = [
                 "again. Write the file first; this only shows it. To flag "
                 "something for them in "
                 "it (unfinished work, a gap to fill, an open question, an "
-                "assumption to check), add comments pinned to passages."
+                "assumption to check), add comments pinned to passages. "
+                "It draws ```mermaid blocks as diagrams. For a slide deck, "
+                "put marp: true in front matter at the top and --- on a "
+                "line of its own between slides: it shows as slides the "
+                "user can present full screen."
             ),
             "parameters": {
                 "type": "object",

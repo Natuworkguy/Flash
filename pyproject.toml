@@ -51,6 +51,8 @@ flash = [
     "web/katex/*.txt",
     "web/three/*.js",
     "web/three/*.txt",
+    "web/mermaid/*.js",
+    "web/mermaid/*.txt",
     "web/*.txt",
 ]
 
