@@ -3211,6 +3211,9 @@ select:not([multiple]) { -webkit-appearance: none; appearance: none; background-
 #briefing { position: fixed; inset: 0; z-index: 65; display: flex; background: #0e0e0d; color: #f5f4ef; color-scheme: dark; animation: bf-in 0.32s var(--apple); }
 #briefing[hidden] { display: none; }
 @keyframes bf-in { from { opacity: 0; transform: translateY(24px) scale(0.985); } }
+/* Closing: the feed fades away and sinks a little, over what is under it. */
+#briefing.closing { animation: bf-out 0.3s var(--ease) forwards; pointer-events: none; }
+@keyframes bf-out { to { opacity: 0; transform: translateY(18px) scale(0.985); filter: blur(2px); } }
 #briefing .bf-feed { flex: 1; height: 100%; overflow-y: auto; scroll-snap-type: y mandatory; overscroll-behavior: contain; scrollbar-width: none; outline: none; }
 #briefing .bf-feed::-webkit-scrollbar { display: none; }
 #briefing .bf-top { position: absolute; top: 0; left: 0; right: 0; z-index: 2; display: flex; align-items: center; gap: 10px; padding: max(14px, env(safe-area-inset-top)) 18px 14px; pointer-events: none; background: linear-gradient(rgba(0, 0, 0, 0.45), transparent); }
@@ -3229,6 +3232,7 @@ select:not([multiple]) { -webkit-appearance: none; appearance: none; background-
 .bf-card[data-kind="reminder"] { --hue: #e0a84a; }
 .bf-card[data-kind="chat"] { --hue: #2bb3a3; }
 .bf-card[data-kind="news"] { --hue: #e5689b; }
+.bf-card[data-kind="team"] { --hue: var(--team, #5b8def); }
 .bf-card[data-kind="end"] { --hue: #62c073; align-items: center; }
 /* A large faint sign of the kind, behind the words. */
 .bf-card .bf-mark { position: absolute; right: -6vmin; top: 12%; width: 52vmin; height: 52vmin; color: var(--hue); opacity: 0.09; pointer-events: none; }
@@ -3286,7 +3290,7 @@ select:not([multiple]) { -webkit-appearance: none; appearance: none; background-
   #briefing .bf-rail { right: 8px; }
 }
 @media (prefers-reduced-motion: reduce) {
-  #briefing, .bf-card.going { animation: none; }
+  #briefing, #briefing.closing, .bf-card.going { animation: none; }
   .bf-inner { transition: none; transform: none; opacity: 1; }
 }
 </style>
@@ -16896,17 +16900,17 @@ document.addEventListener("mousedown", (e) => { if (menuEl && !menuEl.contains(e
 // stepped with j and k. Each card's actions answer it, open what it is
 // about, ask Flash about it, or take it out of the feed for good.
 
-const BRIEF_ICON = { email: "mail", imessage: "chat", spark: "spark", wait: "clock", reminder: "bell", chat: "reply", news: "globe" };
+const BRIEF_ICON = { email: "mail", imessage: "chat", spark: "spark", wait: "clock", reminder: "bell", chat: "reply", news: "globe", team: "users" };
 const briefing = { cards: [], at: 0, seen: new Set(), watch: null };
 const briefEl = document.getElementById("briefing");
 const briefFeed = briefEl.querySelector(".bf-feed");
 const briefRail = briefEl.querySelector(".bf-rail");
 
 function briefActions(card) {
-  const open = card.kind === "spark" ? "Report" : card.kind === "email" && card.link ? "Mail" : "Chat";
+  const open = card.kind === "spark" ? "Report" : card.kind === "email" && card.link ? "Mail" : card.kind === "team" ? "Team chat" : "Chat";
   const acts = [];
   if (["email", "imessage", "spark", "chat"].includes(card.kind)) acts.push({ act: "reply", label: "Reply", icon: "reply", key: "r" });
-  if (card.chat || card.kind === "spark" || (card.kind === "email" && card.link)) acts.push({ act: "open", label: open, icon: card.kind === "email" ? "external" : "chevRight", key: "o" });
+  if (card.chat || card.team || card.kind === "spark" || (card.kind === "email" && card.link)) acts.push({ act: "open", label: open, icon: card.kind === "email" ? "external" : "chevRight", key: "o" });
   acts.push({ act: "ask", label: "Ask Flash", icon: "bolt", key: "a" });
   acts.push({ act: "dismiss", label: "Dismiss", icon: "x", key: "d" });
   return acts;
@@ -16916,6 +16920,7 @@ function briefCard(card, i) {
   const sec = el("section", "bf-card");
   sec.dataset.kind = card.kind;
   sec.dataset.i = i;
+  if (card.kind === "team" && card.colour) sec.style.setProperty("--team", card.colour);
   sec.setAttribute("aria-roledescription", "card");
   const who = card.who && card.kind !== "imessage" ? `<div class="bf-who">${card.kind === "email" ? "From " : ""}${esc(card.who)}</div>` : "";
   const where = card.chat_title ? ` · ${esc(card.chat_title)}` : "";
@@ -16984,10 +16989,10 @@ function briefGo(i, smooth = true) {
   briefHere(i);
 }
 
-async function loadBriefing() {
+async function loadBriefing(open = false) {
   briefFeed.innerHTML = `<div class="bf-loading"><span>Gathering your briefing…</span></div>`;
   let r;
-  try { r = await command("briefing", "", null); } catch (error) { showFailure(error); r = { cards: [] }; }
+  try { r = await command("briefing", open ? "open" : "", null); } catch (error) { showFailure(error); r = { cards: [] }; }
   briefing.cards = r.cards || [];
   briefing.problems = (r.problems || []).length ? `Could not look at ${r.problems.map((p) => p.split(":")[0]).join(", ")}.` : "";
   briefing.at = 0;
@@ -16997,16 +17002,20 @@ async function loadBriefing() {
 async function openBriefing() {
   closeMenu();
   if (innerWidth <= 800) closeSide();
+  clearTimeout(briefing.closing);
+  briefEl.classList.remove("closing");
   briefEl.hidden = false;
   briefFeed.focus({ preventScroll: true });
-  await loadBriefing();
+  await loadBriefing(true);
   briefFeed.scrollTop = 0;
 }
 
 function closeBriefing() {
-  if (briefEl.hidden) return;
-  briefEl.hidden = true;
+  if (briefEl.hidden || briefEl.classList.contains("closing")) return;
   if (briefing.watch) briefing.watch.disconnect();
+  if (calm.matches) { briefEl.hidden = true; return; }
+  briefEl.classList.add("closing");
+  briefing.closing = setTimeout(() => { briefEl.hidden = true; briefEl.classList.remove("closing"); }, 300);
 }
 
 // A new chat, with what to say about the card already in the box.
@@ -17058,6 +17067,7 @@ function briefAct(act, i) {
   if (act === "open") {
     if (card.kind === "spark") { closeBriefing(); openSpark(card.spark); return; }
     if (card.kind === "email" && card.link) { window.open(card.link, "_blank", "noopener"); return; }
+    if (card.team) { closeBriefing(); openTeamChat(card.team); return; }
     if (card.chat && chats.has(card.chat)) { closeBriefing(); switchTo(card.chat); return; }
     toast("That chat is gone.");
     return;
@@ -17076,11 +17086,11 @@ briefFeed.addEventListener("click", (e) => {
   briefAct(b.dataset.act, Number(b.closest(".bf-card").dataset.i));
 });
 briefEl.querySelector(".bf-close").onclick = closeBriefing;
-briefEl.querySelector(".bf-refresh").onclick = loadBriefing;
+briefEl.querySelector(".bf-refresh").onclick = () => loadBriefing();
 briefEl.querySelector(".bf-close").innerHTML = icon("x");
 briefEl.querySelector(".bf-refresh").innerHTML = icon("retry");
 document.addEventListener("keydown", (e) => {
-  if (briefEl.hidden || e.metaKey || e.ctrlKey || e.altKey) return;
+  if (briefEl.hidden || briefEl.classList.contains("closing") || e.metaKey || e.ctrlKey || e.altKey) return;
   if (e.target.closest("input, textarea, select, [contenteditable]")) return;
   const step = { j: 1, ArrowDown: 1, PageDown: 1, " ": 1, k: -1, ArrowUp: -1, PageUp: -1 }[e.key];
   const acts = { r: "reply", o: "open", a: "ask", d: "dismiss", Delete: "dismiss" };

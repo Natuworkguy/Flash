@@ -179,3 +179,78 @@ def test_the_page_asks_for_it_and_dismisses(monkeypatch):
     web.command(session, {"name": "briefing-undo", "arg": "wait:w1"})
     said = web.command(session, {"name": "briefing"})
     assert len(said["cards"]) == 1  # nosec B101
+
+
+def a_team(monkeypatch, members, said=()):
+    from flash import teamchat
+
+    team = SimpleNamespace(id="t1", name="Launch crew", colour="#5ab0f2")
+    monkeypatch.setattr(sparks, "teams", lambda: [team])
+    monkeypatch.setattr(sparks, "members", lambda team_id: members)
+    monkeypatch.setattr(sparks, "all_sparks", lambda: members)
+    monkeypatch.setattr(teamchat, "_read", lambda team_id: {
+        "entries": [{"kind": kind, "at": at, "text": "x"}
+                    for kind, at in said]})
+    return team
+
+
+def member(spark_id, name, *reports, status=sparks.IDLE, activity=""):
+    return SimpleNamespace(id=spark_id, name=name, colour="#9b7bff",
+                           reports=list(reports), status=status,
+                           activity=activity)
+
+
+def test_a_team_says_what_changed_since_the_last_briefing(monkeypatch):
+    since = NOW - 3600
+    a_team(monkeypatch, [
+        member("a", "Scout",
+               sparks.Report(at=NOW - 7200, text="Old news."),
+               sparks.Report(at=NOW - 600, text="## Done\n**Shipped** v2.")),
+        member("b", "Fixer", sparks.Report(at=NOW - 300, text="May I merge?",
+                                           approval=True)),
+        member("c", "Tester", status=sparks.WORKING,
+               activity="Running the tests"),
+        member("d", "Sleepy"),
+    ], said=[("spark", NOW - 200), ("user", NOW - 100),
+             ("spark", NOW - 5000)])
+
+    cards = briefing.cards(None, now=NOW, since=since)
+
+    # One card for the team, and not one for each report as well.
+    assert [c["kind"] for c in cards] == ["team"]  # nosec B101
+    team = cards[0]
+    assert team["title"] == "Launch crew"  # nosec B101
+    assert team["body"].splitlines() == [  # nosec B101
+        "Scout: Done",
+        "Fixer (needs you): May I merge?",
+        "Tester: working, running the tests",
+        "1 new message in the team chat",
+        "2 others: nothing new",
+    ]
+    assert team["at"] == NOW - 200 and team["team"] == "t1"  # nosec B101
+    assert team["colour"] == "#5ab0f2"  # nosec B101
+
+
+def test_a_team_with_nothing_new_has_no_card(monkeypatch):
+    a_team(monkeypatch, [
+        member("a", "Scout", sparks.Report(at=NOW - 7200, text="Old.",
+                                           read=True)),
+        member("b", "Tester", status=sparks.WORKING),
+    ], said=[("user", NOW - 10)])
+
+    # Only working is not news by itself, nor is the user's own message.
+    cards = briefing.cards(None, now=NOW, since=NOW - 3600)
+    assert cards == []  # nosec B101
+
+
+def test_since_is_the_briefing_before_this_one():
+    first = briefing.opened(now=NOW)
+    assert first == NOW - briefing.LOOK_BACK  # nosec B101
+    assert briefing.last_since(NOW + 60) == first  # nosec B101  (refresh)
+
+    assert briefing.opened(now=NOW + 3600) == NOW  # nosec B101
+    assert briefing.last_since(NOW + 3700) == NOW  # nosec B101
+
+    # Weeks away: a week's news at most.
+    later = NOW + 30 * 86400
+    assert briefing.opened(now=later) == later - briefing.MOST_SINCE  # nosec
