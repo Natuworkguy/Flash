@@ -1215,6 +1215,11 @@ as a copy in `~/.flash/web/files`, so a chat still shows its files
 after the originals are gone. In the terminal, a PDF opens in your PDF
 viewer.
 
+**Files from other chats**: + > From another chat lists every file in
+your chats, the latest first, grouped by chat: ones you sent and ones
+Flash made and showed you, like a post it wrote. Pick one and a copy
+goes with your next message, as if you had attached it again.
+
 **Pinned chats** stay at the top of the sidebar, under Pinned, whatever
 project they are in: the pin beside a chat (on hover), or `/pin` for the
 open one, pins and unpins it. Scrolled up in a chat, a down arrow over

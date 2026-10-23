@@ -15051,6 +15051,7 @@ function openPlus() {
   const rows = [
     { html: `${icon("image")}<span class="label">Add photos</span>`, act: () => pickFiles("image/*") },
     { html: `${icon("clip")}<span class="label">Attach files</span>`, act: () => pickFiles("") },
+    { html: `${icon("chat")}<span class="label">From another chat</span><span class="desc">${icon("chevRight")}</span>`, act: openChatFiles },
   ];
   if (matchMedia("(pointer: coarse)").matches) rows.push({ html: `${icon("camera")}<span class="label">Take a photo</span>`, act: () => pickFiles("image/*", "environment") });
   if (navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia) rows.push({ html: `${icon("monitor")}<span class="label">Take a screenshot</span>`, act: screenshot });
@@ -15493,6 +15494,30 @@ async function pasteImage() {
 
 // Picking one names it at the start of the message; Flash reads the
 // skill when the message reaches it.
+// A file from any chat, attached again: one you sent, or one Flash
+// made and showed there, like a post. Grouped by the chat it is in.
+const FILE_ICONS = { image: "image", video: "record", pdf: "file", model: "cube", midi: "music" };
+async function openChatFiles() {
+  const { files } = await command("chat-files");
+  const rows = [];
+  let last = null;
+  for (const f of files) {
+    if (f.chat !== last) {
+      last = f.chat;
+      rows.push({ header: true, rule: rows.length > 0, html: esc(f.chat === current ? "This chat" : f.chat_title || "Chat") });
+    }
+    const who = f.by === "agent" ? "made by Flash" : "you sent it";
+    rows.push({ html: `${icon(FILE_ICONS[f.kind] || "file")}<span class="stack"><span class="label">${esc(f.name)}</span><span class="sub">${fileSize(f.size || 0)} · ${who}</span></span>`, file: f });
+  }
+  const attach = async (f) => {
+    if (attached.length >= MAX_ATTACHED) { toast(`Up to ${MAX_ATTACHED} files go with one message`); return; }
+    const { file } = await command("reuse-file", f.id, current, { file_name: f.name });
+    reattach([file]);
+    input.focus();
+  };
+  openPlusMenu(rows, (row) => { if (row.file) attach(row.file).catch(showFailure); }, "No files in your chats yet");
+}
+
 async function openSkillPicker() {
   const { skills: list } = await command("skills");
   const rows = [{ header: true, html: "Use a skill" }];
