@@ -363,3 +363,25 @@ def test_flash_starts_the_servers_when_it_starts(monkeypatch):
         web._background = None
 
     assert started  # nosec B101
+
+
+def test_a_team_chat_answer_has_the_reading_tools_and_refresh(fake,
+                                                              spark_model):
+    from flash import teamchat
+
+    sparks = spark_model
+    team = sparks.create_team("Ideas")
+    made = sparks.create("Scout", "Find ideas.")
+    sparks.set_team(made.id, team.id)
+    model = _Model(_Said("", [("fake__add", {"a": 1, "b": 2}),
+                              ("fake__note", {"text": "hi"})]),
+                   _Said("It is 3."))
+
+    teamchat._reply(sparks.find_team(team.id), sparks.find(made.id),
+                    client=model)
+
+    offered = model.offered[0]
+    assert "fake__add" in offered and "refresh_tools" in offered  # nosec
+    # Nowhere to ask in a team chat: a tool that changes things waits for
+    # autonomous mode, and is refused if called anyway.
+    assert "fake__note" not in offered  # nosec B101
