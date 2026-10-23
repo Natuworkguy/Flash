@@ -2651,6 +2651,11 @@ def project_prompt(found: "workspace.Project") -> str:
         )
     if found.instructions:
         lines += ["", found.instructions]
+    kept = memory.list_memory(memory.project_path(found.id))
+    lines += ["", "What you remember about this project (remember with "
+              "project true adds to it, and every chat in the project "
+              "sees it):"]
+    lines += [f"- {entry}" for entry in kept] or ["(nothing yet)"]
     return "\n".join(lines)
 
 
@@ -2920,17 +2925,19 @@ def run_turn(
     flash_spoke = False
     tools_ran = 0
     try:
-        for number, spark in enumerate(speakers):
-            if chat.stop.is_set():
-                break
-            stopped, tools_ran = _respond(
-                session, chat, client, text, found, spark,
-                guest=spark is not None and spark.id != chat.spark,
-                first=number == 0,
-            )
-            flash_spoke = flash_spoke or spark is None
-            if stopped:
-                break
+        # In a project, its memory is the tools' to reach.
+        with memory.in_project(found.id if found is not None else ""):
+            for number, spark in enumerate(speakers):
+                if chat.stop.is_set():
+                    break
+                stopped, tools_ran = _respond(
+                    session, chat, client, text, found, spark,
+                    guest=spark is not None and spark.id != chat.spark,
+                    first=number == 0,
+                )
+                flash_spoke = flash_spoke or spark is None
+                if stopped:
+                    break
     finally:
         # A yes to Computer Use lasts the one reply.
         computeruse.end(chat.id)
@@ -4394,6 +4401,9 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
 
     if name == "project-delete":
         workspace.delete_project(arg)
+        # What it remembered goes with it.
+        with contextlib.suppress(ValueError):
+            memory.project_path(arg).unlink(missing_ok=True)
         session.hub.publish({"type": "projects"})
         return {}
 
@@ -4448,11 +4458,16 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
     if name == "usage":
         return usage(session.chats.values())
 
+    # Memory commands with "project" in the body work on that project's
+    # memory instead of the user's.
+    kept_in = memory.project_path(str(body["project"])) \
+        if name.startswith("memory") and body.get("project") else None
+
     if name == "memory":
         return {
-            "entries": memory.list_memory(),
+            "entries": memory.list_memory(kept_in),
             "prompt": memory.IMPORT_PROMPT,
-            "path": str(memory.MEMORY_PATH),
+            "path": str(kept_in or memory.MEMORY_PATH),
         }
 
     if name == "memory-preview":
@@ -4478,13 +4493,13 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
             if name == "memory-add":
                 if not text:
                     raise ValueError("Nothing to remember.")
-                memory.add_memory(text)
+                memory.add_memory(text, kept_in)
             else:
-                memory.edit_memory(int(arg), text)
+                memory.edit_memory(int(arg), text, kept_in)
         except IndexError as exc:
             raise ValueError(str(exc)) from None
         learning.refresh()
-        return {"entries": memory.list_memory(), "text": text}
+        return {"entries": memory.list_memory(kept_in), "text": text}
 
     if name == "progress-email":
         return {"progress_email": _progress_email(ai, body)}
@@ -4494,11 +4509,11 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
 
     if name == "memory-forget":
         try:
-            memory.forget_memory(int(arg))
+            memory.forget_memory(int(arg), kept_in)
         except IndexError as exc:
             raise ValueError(str(exc)) from None
         learning.refresh()
-        return {"entries": memory.list_memory()}
+        return {"entries": memory.list_memory(kept_in)}
 
     if name == "context":
         return context_use(ai, session.chat(chat_id))

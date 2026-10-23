@@ -1608,6 +1608,7 @@ body.page-projects #dock, body.page-settings #dock, body.page-tool #dock { displ
 .btn.with-icon svg { width: 15px; height: 15px; }
 .btn.small { padding: 5px 11px; font-size: 13px; border-radius: 8px; }
 .btn[disabled] { opacity: 0.45; pointer-events: none; }
+.project-memory { margin-bottom: 28px; }
 .memories { list-style: none; margin: 0; padding: 0; border: 1px solid var(--border); border-radius: 14px; background: var(--surface); overflow: hidden; }
 .memories li { display: flex; align-items: flex-start; gap: 10px; padding: 10px 8px 10px 16px; font-size: 14.5px; line-height: 1.5; color: var(--text-2); border-top: 1px solid var(--border); overflow: hidden; }
 .memories li:first-child { border-top: 0; }
@@ -7067,6 +7068,18 @@ function drawProject() {
   drawNotes();
   page.appendChild(panel);
 
+  // What Flash remembers about the project: every chat in it starts
+  // with this, and Flash adds to it as it works there.
+  const memHead = el("div", "section-label", "Memory");
+  const memHost = el("div", "mem-list project-memory");
+  memHost.project = p.id;
+  const addMem = el("button", "link-btn", "Add");
+  addMem.type = "button";
+  addMem.onclick = () => addMemory(memHost);
+  memHead.appendChild(addMem);
+  page.append(memHead, memHost);
+  command("memory", "", null, { project: p.id }).then((m) => { if (memHost.isConnected) renderMemories(memHost, m.entries); }).catch(showFailure);
+
   // The sparks working on it: each opens its window, and a new one can
   // be made here, already given the project.
   const itsSparks = sparkList.filter((sp) => sp.project === p.id);
@@ -12131,7 +12144,9 @@ function renderMemories(host, entries) {
   if (!entries.length) {
     // Import memory is right above, so the empty state only points to it
     // rather than drawing a second one in the middle of its sentence.
-    host.innerHTML = `<div class="mem-empty"><b>Nothing saved yet</b>Flash saves what is worth keeping as you work. Or bring over what another AI already knows about you with Import memory.</div>`;
+    host.innerHTML = host.project
+      ? `<div class="mem-empty"><b>Nothing remembered yet</b>As Flash works in this project it keeps its conventions, decisions and where things are here, for every chat in it. Or add one yourself.</div>`
+      : `<div class="mem-empty"><b>Nothing saved yet</b>Flash saves what is worth keeping as you work. Or bring over what another AI already knows about you with Import memory.</div>`;
     return;
   }
   const list = el("ul", "memories");
@@ -12177,8 +12192,8 @@ function editMemory(host, item, index, text) {
     if (!save || !value || value === text) { renderMemories(host, host.entries); return; }
     try {
       const result = index
-        ? await command("memory-edit", String(index), null, { text: value })
-        : await command("memory-add", null, null, { text: value });
+        ? await command("memory-edit", String(index), null, { text: value, project: host.project || "" })
+        : await command("memory-add", null, null, { text: value, project: host.project || "" });
       freshMemories = [result.text];
       renderMemories(host, result.entries);
       toast(index ? "Memory updated" : "Memory added");
@@ -12204,13 +12219,13 @@ function addMemory(host) {
   }
   const item = list.appendChild(el("li"));
   editMemory(host, item, 0, "");
-  item.querySelector("textarea").placeholder = "A fact Flash should know, like \"I use pnpm, not npm\"";
+  item.querySelector("textarea").placeholder = host.project ? "Something about this project, like \"Tests run with pnpm test\"" : "A fact Flash should know, like \"I use pnpm, not npm\"";
   reveal(logEl, item, true, 80);
 }
 
 async function forgetMemory(host, item, index) {
   let result;
-  try { result = await command("memory-forget", String(index)); } catch (error) { showFailure(error); return; }
+  try { result = await command("memory-forget", String(index), null, { project: host.project || "" }); } catch (error) { showFailure(error); return; }
   const done = () => renderMemories(host, result.entries);
   if (calm.matches) { done(); return; }
   const h = item.offsetHeight;
