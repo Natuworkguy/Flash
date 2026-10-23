@@ -97,7 +97,7 @@ An extension is a folder, usually a GitHub repository, with a
 ```
 
 Only `name` is required, plus at least one command, tool, prompt,
-backgrounds folder, provider, theme, loader, events, or voice. Every path is relative to the extension's folder
+backgrounds folder, provider, theme, loader, events, voice, or ui. Every path is relative to the extension's folder
 and cannot point outside it.
 
 | Field | Meaning |
@@ -114,6 +114,7 @@ and cannot point outside it.
 | `events` | A program told when a turn starts, plans, waits on you, and ends. See below. |
 | `voice` | A program in the middle of voice mode: told what is said both ways, and able to change it. See below. |
 | `settings` | Choices the user makes for the extension, in its own settings panel. See below. |
+| `ui` | What it changes of the web page and the terminal: its own stylesheet and script, panels, buttons, a status line, the greeting, the banner. See below. |
 
 ### Commands
 
@@ -454,3 +455,82 @@ else:
 
 This sketch sends text only. A full provider would also turn tool
 results and images into the API's own format.
+
+### UI
+
+`ui` changes the web page and the terminal: what they say, buttons of
+its own, whole pages of its own, and, on the web, a stylesheet and a
+script with an API.
+
+```json
+"ui": {
+  "web": "web",
+  "css": "style.css",
+  "script": "main.js",
+  "panels": [
+    {"id": "radar", "label": "Radar", "icon": "globe", "file": "radar.html"}
+  ],
+  "buttons": [
+    {"id": "tldr", "label": "TL;DR", "icon": "bolt", "where": ["message"],
+     "prompt": "Sum this up in one line: $TEXT"},
+    {"id": "now", "label": "Weather now", "icon": "sun",
+     "where": ["header", "composer", "terminal"], "key": "m-w",
+     "run": ["python3", "./scripts/now.py"]},
+    {"id": "forecast", "label": "Forecast", "where": ["sidebar"],
+     "command": "forecast"}
+  ],
+  "status": {"run": ["python3", "./scripts/status.py"], "every": 30},
+  "greeting": "What's the sky doing?",
+  "suggestions": ["Forecast for Paris", "Will it rain today?"],
+  "placeholder": "Ask about the weather",
+  "banner": "banner.txt"
+}
+```
+
+| Field | Meaning |
+| --- | --- |
+| `web` | The folder the page loads the extension's files from, served at `/ext/<name>/` to signed-in browsers only. Only `.css`, `.js`, `.html`, `.json`, images and fonts in it are served. |
+| `css` | A stylesheet in `web`, added to the page: change any of it, hide what you don't want, bring your own fonts. |
+| `script` | A script in `web`, run in the page with `window.Flash` (below). |
+| `panels` | Up to 6 pages of the extension's own (`.html` in `web`), each a row in the sidebar that shows it in place of the chat. A panel reaches the same API as `parent.Flash`. |
+| `buttons` | Up to 12. See below. |
+| `status` | A program whose first line of output, up to 80 characters, shows under the message box on the web and in the terminal's status line, read again every `every` seconds (5 to 3600). |
+| `greeting`, `suggestions` | A new chat's greeting, and up to 8 suggestions offered under the box (and in the terminal's empty box). |
+| `placeholder` | What the empty box says, on the web and in the terminal. |
+| `banner` | A text file (up to 20 lines) shown under Flash's welcome box in the terminal. |
+
+**Buttons.** Each has an `id`, a `label`, an `icon` (one of the page's
+own icon names, such as `bolt`, `sun`, `globe`, `cube`, `mail`; a
+puzzle piece otherwise), and `where` it goes: `sidebar`, `header` (by
+the chat's title), `composer` (the + menu), `message` (under each
+reply), or `terminal` (a key in the terminal's box, given as `key`: `c-`
+for Ctrl or `m-` for Alt, and a letter Flash doesn't use itself).
+
+A button does one of three things:
+
+- `prompt`: sends it as a message, with `$TEXT` replaced by the reply it
+  was pressed on, or what is typed in the box. In the terminal, it fills
+  the box for you to send.
+- `command`: one of the extension's commands, given what is typed.
+- `run`: a program, given `{"button", "text", "chat"}` as JSON on stdin.
+  What it prints is shown. Printing JSON with `say` (shown), `insert`
+  (put in the box) or `send` (sent as a message) does that instead.
+
+**The page's API.** A `script`, and a panel as `parent.Flash`, gets:
+
+```js
+Flash.on("assistant", (event) => { /* every event the page hears; "*" for all */ });
+Flash.send("Will it rain?");       // send a message in the open chat
+Flash.insert("Draft: ");           // put text in the box
+Flash.toast("Saved");
+Flash.chat();                      // {id, title, log} of the open chat
+Flash.addButton({id: "hi", label: "Say hi", icon: "smile",
+                 where: ["composer", "header"],
+                 onClick: ({text}) => Flash.insert("Hi! " + text)});
+Flash.openPanel("/ext/weather/radar.html", "Radar");
+Flash.request("pin", "on");        // any of the page's own commands
+Flash.icon("sun");                 // an icon's SVG
+```
+
+A script and a panel run as part of the page, with everything it can
+do, so the install preview says plainly when an extension has one.

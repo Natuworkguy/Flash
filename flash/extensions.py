@@ -263,6 +263,8 @@ class Extension:
     events: Optional[Events] = None
     voice: Optional[Voice] = None
     settings: list[Setting] = field(default_factory=list)
+    # What it changes of the web page and the terminal (ext_ui.UI).
+    ui: Any = None
 
     def contents(self) -> list[str]:
         """What installing this adds, one line per kind of thing."""
@@ -309,6 +311,8 @@ class Extension:
             lines.append(
                 "settings: " + ", ".join(s.label for s in self.settings)
             )
+        if self.ui is not None:
+            lines += self.ui.contents()
 
         return lines
 
@@ -726,11 +730,17 @@ def load(root: Path) -> Extension:
             f"{len(settings)} settings; the most is {MAX_SETTINGS}")
     _unique([s.id for s in settings], "setting")
 
+    ui = None
+    if manifest.get("ui") is not None:
+        from . import ext_ui  # deferred: it reads this module's helpers
+
+        ui = ext_ui.parse(manifest["ui"], root, {c.name for c in commands})
+
     if not (commands or tools or prompt or backgrounds or providers
-            or themes or loaders or events or voice):
+            or themes or loaders or events or voice or ui):
         raise ExtensionError(
             f"{MANIFEST} declares nothing: no commands, tools, prompt, "
-            "backgrounds, providers, themes, loaders, events, or voice"
+            "backgrounds, providers, themes, loaders, events, voice, or ui"
         )
 
     try:
@@ -754,6 +764,7 @@ def load(root: Path) -> Extension:
         events=events,
         voice=voice,
         settings=settings,
+        ui=ui,
     )
 
 

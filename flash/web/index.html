@@ -3293,6 +3293,23 @@ select:not([multiple]) { -webkit-appearance: none; appearance: none; background-
   #briefing, #briefing.closing, .bf-card.going { animation: none; }
   .bf-inner { transition: none; transform: none; opacity: 1; }
 }
+
+/* Extensions' UI: panels in place of the chat, their buttons, and their
+   status line under the box. */
+#ext-panel { position: absolute; inset: 0; z-index: 30; display: flex; flex-direction: column; background: var(--bg); border-radius: inherit; overflow: hidden; }
+#ext-panel[hidden] { display: none; }
+#ext-panel header { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-bottom: 1px solid var(--border); }
+#ext-panel .ext-panel-name { font-weight: 600; flex: 1; }
+#ext-panel iframe { flex: 1; width: 100%; border: 0; background: var(--bg); }
+#ext-head { display: inline-flex; gap: 6px; margin-left: 4px; }
+#ext-head:empty { display: none; }
+.ext-pill svg { width: 14px; height: 14px; }
+.ext-pill span { margin-left: 6px; }
+.actions .ext-act { width: auto; padding: 0 8px; gap: 5px; font-size: 12px; }
+.actions .ext-act span { white-space: nowrap; }
+.fine .ext-status { margin-left: 10px; color: var(--text-3); font-variant-numeric: tabular-nums; }
+.fine .ext-status::before { content: "\00b7"; margin-right: 10px; }
+.ext-said { max-height: 60vh; overflow: auto; }
 </style>
 </head>
 <body class="empty">
@@ -3310,6 +3327,7 @@ select:not([multiple]) { -webkit-appearance: none; appearance: none; background-
     <button class="side-row" id="sparks-btn" data-tip="Sparks"></button>
     <div id="spark-roster" aria-label="Your sparks"></div>
     <button class="side-row" id="extensions-btn" data-tip="Extensions"></button>
+    <div id="ext-side"></div>
     <button class="side-label" id="recents-btn" type="button" aria-expanded="true" aria-controls="chats"><span>Recents</span><span class="count"></span><i></i></button>
     <nav id="chats"></nav>
     <div class="side-foot">
@@ -3330,9 +3348,11 @@ select:not([multiple]) { -webkit-appearance: none; appearance: none; background-
       <button id="crumb" hidden data-tip="Open project"></button>
       <button id="title" data-tip="Rename" data-keys="F2">New chat</button>
       <button type="button" class="pill" id="forks-btn" hidden data-tip="This chat's forks" aria-label="This chat's forks"></button>
+      <span id="ext-head"></span>
       <span id="wake-pill" role="status" hidden data-tip="Listening for “Hey Flash”" aria-label="Listening for “Hey Flash”"><span class="wake-dot"><i></i></span><span class="wake-label"><span>Voice</span></span></span>
     </header>
 
+    <section id="ext-panel" hidden aria-label="Extension"><header><span class="ext-panel-name"></span><button type="button" class="icon-btn ext-panel-close" aria-label="Close" data-tip="Close"></button></header><iframe title="Extension"></iframe></section>
     <section id="log" aria-live="polite">
       <div class="col" id="messages"></div>
     </section>
@@ -3391,7 +3411,7 @@ select:not([multiple]) { -webkit-appearance: none; appearance: none; background-
         </form>
         </div>
         <div id="suggestions"></div>
-        <div class="fine"><span class="caution">Flash runs commands on this machine. Check what it asks to do.</span><span class="tip" hidden></span></div>
+        <div class="fine"><span class="caution">Flash runs commands on this machine. Check what it asks to do.</span><span class="ext-status" hidden></span><span class="tip" hidden></span></div>
       </div>
     </div>
     <div id="drop" aria-hidden="true"><div class="card"></div></div>
@@ -6802,6 +6822,7 @@ function replyActions(text) {
     readButton(`reply:${text}`, () => blocks().map((b) => b && b.querySelector(".assistant")).filter(Boolean)),
     button("icon-btn", "retry", "Retry", "Alt R", retry),
     button("icon-btn", "fork", "Fork from here", "", () => forkFrom(row)),
+    ...extButtonsAt("message").map((b) => extButton(b, "icon-btn ext-act", () => row.dataset.text)),
   );
   return row;
 }
@@ -7280,7 +7301,8 @@ function drawChat() {
   if (inProject) $("#crumb").textContent = inProject.name;
   const withSpark = sparkOf(chat ? chat.spark : viewSpark);
   const who = withSpark ? withSpark.name : "Flash";
-  input.placeholder = empty ? (inProject ? `Message ${who} in ${inProject.name}` : `Message ${who}`) : `Reply to ${who}`;
+  const extPlaceholder = (extUI().find((e) => e.placeholder) || {}).placeholder;
+  input.placeholder = empty ? (inProject ? `Message ${who} in ${inProject.name}` : extPlaceholder && !withSpark ? extPlaceholder : `Message ${who}`) : `Reply to ${who}`;
   renderProjectBtn();
   renderSparkBtn();
   renderPending();
@@ -14588,6 +14610,7 @@ logEl.addEventListener("scroll", () => {
 function apply(event) {
   if (event.seq && event.seq <= lastSeq) return;
   if (event.seq) lastSeq = event.seq;
+  extEmit(event);
   if (event.type === "chats" || event.type === "status" || event.type === "projects") { refreshLite(); return; }
   // Flash ended the spoken conversation: voice mode goes off once its
   // reply is said.
@@ -15041,6 +15064,7 @@ function renderModelButtons() {
 
 function renderInfo() {
   renderAgents();
+  renderExtUI();
   showPublic();
   syncScene();
   $("#settings-btn").classList.toggle("has-update", !!(info.update && info.update.available && !["updated", "restarting"].includes(info.update.state)));
@@ -15084,9 +15108,10 @@ function greeting() {
 }
 
 function greet() {
-  const when = greeting();
   const inProject = projectOf(viewProject);
   const withSpark = !current && sparkOf(viewSpark);
+  const extGreeting = !withSpark && !inProject && (extUI().find((e) => e.greeting) || {}).greeting;
+  const when = extGreeting || greeting();
   $("#greeting").innerHTML = esc(when) + (withSpark ? `<span class="in">talking with ${esc(withSpark.name)}</span>` : inProject ? `<span class="in">in ${esc(inProject.name)}</span>` : "");
   $("#greeting").dataset.text = when;
   const name = inProject ? inProject.name : info.folder || "this project";
@@ -15101,6 +15126,10 @@ function greet() {
     ["Write tests", "Write tests for the code I changed most recently."],
     ["Review my changes", "Review my uncommitted changes and point out anything risky."],
   ];
+  if (!withSpark) {
+    const extra = extUI().flatMap((e) => e.suggestions).map((s) => [s, s]);
+    ideas.splice(0, Math.min(extra.length, 2), ...extra.slice(0, 6));
+  }
   const box = $("#suggestions");
   // Built again only when they change: rebuilding replays their entrance,
   // and the status refreshes far more often than the project does.
@@ -15652,6 +15681,7 @@ function openPlus() {
   rows.push({ header: true, rule: true, html: "" });
   const thinking = thinkBtn.getAttribute("aria-pressed") === "true";
   rows.push({ html: `${icon("think")}<span class="label">${thinking ? "Skip the harder think" : "Think harder"}</span><span class="desc">${thinking ? "" : "on the next message"}</span>`, act: () => setThink(!thinking) });
+  for (const b of extButtonsAt("composer")) rows.push({ html: `${icon(ICON[b.icon] ? b.icon : "puzzle")}<span class="label">${esc(b.label)}</span><span class="desc">${esc(b.extension || "")}</span>`, act: () => pressExt(b, input.value.trim()) });
   rows.push({ html: `${icon("chat")}<span class="label">Ask on the side</span><span class="desc">/btw, without interrupting</span>`, act: () => { input.value = "/btw " + input.value.replace(/^\/btw\s*/, ""); autosize(); updateSend(); input.focus(); input.setSelectionRange(input.value.length, input.value.length); } });
   rows.push({ html: `${icon("book")}<span class="label">Use a skill</span><span class="desc">${icon("chevRight")}</span>`, act: openSkillPicker });
   rows.push({ html: `${icon("spark")}<span class="label">Sparks</span><span class="desc">${icon("chevRight")}</span>`, act: openSparkPicker });
@@ -17120,6 +17150,137 @@ document.addEventListener("keydown", (e) => {
   e.preventDefault();
   e.stopImmediatePropagation();
 }, true);
+
+// Extensions' UI ------------------------------------------------------------
+// What an extension changes of the page (its manifest's "ui"): its own
+// stylesheet and script, panels in the sidebar, buttons in the sidebar,
+// the header, the + menu and under replies, a status line under the box,
+// and a new chat's greeting and suggestions. A script gets window.Flash:
+// listen to what happens, send and fill in messages, add buttons, open
+// panels. Panels are the extension's pages, shown in place of the chat,
+// and reach the same API as parent.Flash.
+
+const extLoaded = new Set();
+const extListeners = new Map();
+const extButtons = [];
+
+const extUI = () => info.extension_ui || [];
+
+function extEmit(event) {
+  for (const type of [event.type, "*"]) {
+    for (const fn of extListeners.get(type) || []) {
+      try { fn(event); } catch (error) { console.error("extension listener", error); }
+    }
+  }
+}
+
+// Every button: the manifests' and the ones scripts added.
+function extButtonsAt(where) {
+  const found = [];
+  for (const ext of extUI()) for (const b of ext.buttons) if (b.where.includes(where)) found.push({ ...b, extension: ext.name });
+  for (const b of extButtons) if (b.where.includes(where)) found.push(b);
+  return found;
+}
+
+async function pressExt(b, text = "") {
+  if (b.onClick) { try { await b.onClick({ text, chat: current }); } catch (error) { showFailure(error); } return; }
+  let r;
+  try { r = await command("ext-button", b.id, current, { extension: b.extension, text }); } catch (error) { showFailure(error); return; }
+  if (r.send) await send(r.send);
+  if (r.insert) typeIn(r.insert);
+  if (r.say) {
+    const form = openForm(`<h2></h2><div class="doc assistant ext-said"></div><div class="actions-row"><button type="button" class="btn" data-copy>Copy</button><button type="button" class="btn primary" data-close>Done</button></div>`, () => false);
+    form.querySelector("h2").textContent = b.label;
+    form.querySelector(".ext-said").innerHTML = markdown(r.say);
+    form.querySelector("[data-close]").onclick = closeForm;
+    form.querySelector("[data-copy]").onclick = (e) => copy(r.say, "text", e.currentTarget);
+  }
+}
+
+function extButton(b, cls, text = () => "") {
+  const node = el("button", cls, `${icon(ICON[b.icon] ? b.icon : "puzzle")}<span>${esc(b.label)}</span>`);
+  node.type = "button";
+  node.dataset.tip = b.label;
+  node.setAttribute("aria-label", b.label);
+  node.onclick = () => pressExt(b, text());
+  return node;
+}
+
+// An extension's page, in place of the chat, with a way back.
+function openExtPanel(url, label) {
+  const box = $("#ext-panel");
+  box.querySelector(".ext-panel-name").textContent = label;
+  const frame = box.querySelector("iframe");
+  if (frame.getAttribute("src") !== url) frame.src = url;
+  box.hidden = false;
+  if (innerWidth <= 800) closeSide();
+}
+function closeExtPanel() { $("#ext-panel").hidden = true; }
+
+function renderExtUI() {
+  for (const ext of extUI()) {
+    if (extLoaded.has(ext.name)) continue;
+    extLoaded.add(ext.name);
+    if (ext.css) document.head.appendChild(Object.assign(document.createElement("link"), { rel: "stylesheet", href: ext.css }));
+    if (ext.script) {
+      const script = Object.assign(document.createElement("script"), { src: ext.script, defer: true });
+      script.dataset.extension = ext.name;
+      document.body.appendChild(script);
+    }
+  }
+  const side = $("#ext-side");
+  side.textContent = "";
+  for (const ext of extUI()) {
+    for (const p of ext.panels) {
+      const row = el("button", "side-row ext-row", `${icon(ICON[p.icon] ? p.icon : "puzzle")}<span>${esc(p.label)}</span>`);
+      row.type = "button";
+      row.dataset.tip = `${p.label}, from ${ext.name}`;
+      row.onclick = () => openExtPanel(p.url, p.label);
+      side.appendChild(row);
+    }
+  }
+  for (const b of extButtonsAt("sidebar")) side.appendChild(extButton(b, "side-row ext-row"));
+  const head = $("#ext-head");
+  head.textContent = "";
+  for (const b of extButtonsAt("header")) head.appendChild(extButton(b, "pill ext-pill"));
+  renderExtStatus();
+}
+
+function renderExtStatus() {
+  const line = $(".fine .ext-status");
+  const said = (info.extension_status || []).map((s) => s.text).filter(Boolean);
+  line.hidden = !said.length;
+  line.textContent = said.join(" · ");
+  line.title = (info.extension_status || []).map((s) => `${s.name}: ${s.text}`).join("\n");
+}
+
+// Status lines change on their own clocks: asked for while any is shown.
+setInterval(async () => {
+  if (!extUI().some((e) => e.status) || document.hidden) return;
+  try { info.extension_status = (await command("ext-status", "", null)).status; renderExtStatus(); } catch { /* next time */ }
+}, 15000);
+
+window.Flash = Object.freeze({
+  version: () => info.version,
+  on(type, fn) { if (!extListeners.has(type)) extListeners.set(type, new Set()); extListeners.get(type).add(fn); return () => extListeners.get(type).delete(fn); },
+  send: (text) => send(String(text)),
+  insert: (text) => typeIn(String(text)),
+  toast: (text) => toast(String(text)),
+  request: (name, arg = "", extra = {}) => command(name, arg, current, extra),
+  chat: () => { const c = chats.get(current); return c ? { id: c.id, title: c.title, log: c.log.slice() } : null; },
+  icon: (name) => icon(ICON[name] ? name : "puzzle"),
+  openPanel: (url, label = "") => openExtPanel(url, label),
+  closePanel: closeExtPanel,
+  addButton(b) {
+    const where = Array.isArray(b.where) ? b.where : [b.where || "composer"];
+    const made = { id: String(b.id || b.label), label: String(b.label || "Button"), icon: b.icon || "", where, onClick: b.onClick };
+    extButtons.push(made);
+    renderExtUI();
+    return () => { extButtons.splice(extButtons.indexOf(made), 1); renderExtUI(); };
+  },
+});
+$("#ext-panel .ext-panel-close").innerHTML = icon("x");
+$("#ext-panel .ext-panel-close").onclick = closeExtPanel;
 
 // Slash commands ------------------------------------------------------------
 

@@ -46,7 +46,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from queue import Empty, Queue
 from typing import Any, Optional
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 import segno
 from rich.text import Text
@@ -61,6 +61,7 @@ from . import (
     connectors,
     context,
     design,
+    ext_ui,
     extensions,
     greetings,
     heyflash,
@@ -3608,6 +3609,12 @@ def status(ai) -> dict:
         "loaders": [loader.summary() for loader in loaders.all_loaders()],
         # Colour themes from extensions, beside the page's own.
         "themes": [t.summary() for t in themes.extension_themes()],
+        # What extensions change of the page, and their status lines.
+        "extension_ui": [e.ui.summary(e.name) for e in ext_ui.with_ui()],
+        "extension_status": [
+            {"name": name, "text": text}
+            for name, text in ext_ui.status_lines()
+        ],
     }
 
 
@@ -4565,6 +4572,18 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
         session.hub.publish({"type": "status"})
         return {"loader_tasks": on}
 
+    if name == "ext-status":
+        return {"status": [{"name": n, "text": t}
+                           for n, t in ext_ui.status_lines()]}
+
+    if name == "ext-button":
+        # An extension's button: what it does with TEXT, the reply or
+        # the box it was pressed on.
+        return ext_ui.pressed(
+            str(body.get("extension") or ""), arg,
+            str(body.get("text") or ""), chat_id,
+        )
+
     if name == "think-auto":
         on = arg.lower() in ("on", "1", "true")
         ai.set_config_var("THINK_AUTO", "1" if on else "0")
@@ -5316,6 +5335,16 @@ class Handler(BaseHTTPRequestHandler):
                 self._refuse_page()
             else:
                 self._refuse()
+            return
+
+        if url.path.startswith("/ext/"):
+            # An extension's web folder: its stylesheet, script, panels.
+            name, _, rest = url.path.removeprefix("/ext/").partition("/")
+            found = ext_ui.web_file(name, unquote(rest))
+            if found is None:
+                self._json({"error": "not found"}, HTTPStatus.NOT_FOUND)
+            else:
+                self._send(HTTPStatus.OK, *found)
             return
 
         if PAGE_PATHS.match(url.path):
