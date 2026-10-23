@@ -1251,7 +1251,9 @@ Deleting a project deletes its memory.
 this browser:
 
 - **Colors**: a palette for the whole page in light and dark: Flash,
-  Ocean, Forest, Grape, Rose, Sunset, Midnight, Graphite, High contrast,
+  Ocean, Forest, Grape, Rose, Sunset, Sunrise (warm cream and a bright
+  orange, with a stepped red into yellow stripe on the send button and
+  under the greeting), Midnight, Graphite, High contrast,
   and any an extension adds.
 - **Accent**: the colour of buttons, links and the loader. Pick a swatch
   or any colour.
