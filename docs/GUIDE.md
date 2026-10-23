@@ -1257,9 +1257,9 @@ this browser:
   every dot in, then blows them out), Quill, or an extension's. While
   Flash writes (its last step wrote a file or a document), a hand
   guides a quill instead and it says Writing; **A quill while Flash
-  writes** turns that off (`LOADER_WRITING=0`). Turn on **Morph between
-  loaders** and every 10 seconds it shrinks away into another, at
-  random, for as long as Flash works. Both are the same settings as the
+  writes** turns that off (`LOADER_WRITING=0`). Every 10 seconds it shrinks away into another, at
+  random, for as long as Flash works; turn off **Morph between
+  loaders** to keep to one. Both are the same settings as the
   terminal's `/loader` and `/loader morph`.
 
 **Hosts** are the Ollama servers Flash can talk to: this computer, and
