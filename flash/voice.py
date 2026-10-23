@@ -339,6 +339,28 @@ def piper_paths(name: str = "") -> tuple[Path, Path]:
     return onnx, onnx.with_suffix(".onnx.json")
 
 
+def engine_of(name: str) -> str:
+    """What runs model NAME: Vosk or Moonshine to listen, Piper or Kokoro
+    to speak."""
+
+    if is_kokoro(name):
+        return "Kokoro"
+    if is_moonshine(name):
+        return "Moonshine"
+    return "Vosk" if str(name or "").startswith("vosk") else "Piper"
+
+
+def by_engine(choices) -> list:
+    """CHOICES with each engine's together, in the order they first come,
+    and their own order kept within each."""
+
+    order: list[str] = []
+    for choice in choices:
+        if engine_of(choice.name) not in order:
+            order.append(engine_of(choice.name))
+    return sorted(choices, key=lambda c: order.index(engine_of(c.name)))
+
+
 def is_kokoro(name: str) -> bool:
     return str(name or "").startswith(KOKORO)
 

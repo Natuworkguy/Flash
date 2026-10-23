@@ -50,6 +50,7 @@ from . import (
     terminal,
     visuals,
 )
+from . import models as model_picker
 from .btw import question_of as btw_question
 from .cli import parse_args
 from .dashes import undash
@@ -5159,7 +5160,13 @@ def _voice_models() -> None:
         grid.add_column(no_wrap=True, justify="right")
         grid.add_column()
         in_use = voice.model_in_use(kind)
-        for choice in voice.KINDS[kind]:
+        engine = ""
+        for choice in voice.by_engine(voice.KINDS[kind]):
+            # Each engine's together, a line between them.
+            if voice.engine_of(choice.name) != engine:
+                engine = voice.engine_of(choice.name)
+                grid.add_row(Text(""), Text(f"── {engine} ", style=DIM),
+                             Text(""), Text(""))
             current = choice.name == in_use
             have = voice.model_installed(kind, choice.name)
             grid.add_row(
@@ -5172,10 +5179,46 @@ def _voice_models() -> None:
         console.print(grid)
         console.print()
     console.print(Text(
-        "  /voice pull <name> downloads one and switches to it, and "
+        "  /voice listen and /voice speak pick one from a list. "
+        "/voice pull <name> downloads one and switches to it, and "
         "/voice remove <name> deletes one. Part of a name will do: "
         "/voice pull ryan.", style=DIM,
     ))
+
+
+def _voice_pick(kind: str) -> None:
+    """/voice listen and /voice speak: pick what Flash listens or speaks
+    with from a list, each engine's together; a pick not downloaded yet
+    downloads first."""
+
+    from . import voice  # deferred: voice pulls in audio on demand
+
+    if not model_picker.can_pick():
+        _voice_models()
+        return
+    in_use = voice.model_in_use(kind)
+    choices = voice.by_engine(voice.KINDS[kind])
+    rows = [
+        model_picker.Model(
+            name=choice.name,
+            summary=f"{voice.engine_of(choice.name)}: {choice.label}",
+            size=_megabytes(choice.size),
+            note="in use" if choice.name == in_use else (
+                "downloaded" if voice.model_installed(kind, choice.name)
+                else ""),
+        )
+        for choice in choices
+    ]
+    start = next((i for i, c in enumerate(choices) if c.name == in_use), 0)
+    chosen = model_picker.choose(
+        rows,
+        title="Listen with" if kind == "listening" else "Speak with",
+        unmatched="nothing is called {typed!r}",
+        empty="no models",
+        start=start,
+    )
+    if chosen and any(c.name == chosen for c in choices):
+        _voice_pull(chosen)
 
 
 def _voice_download(kind: str, name: str) -> str:
@@ -5858,13 +5901,17 @@ def _main() -> None:
                     _voice_style(arg[len("style"):].strip())
                 elif arg == "models":
                     _voice_models()
+                elif arg in ("listen", "speak"):
+                    _voice_pick("listening" if arg == "listen"
+                                else "speaking")
                 elif arg == "pull" or arg.startswith("pull "):
                     _voice_pull(arg[len("pull"):].strip())
                 elif arg == "remove" or arg.startswith("remove "):
                     _voice_remove(arg[len("remove"):].strip())
                 else:
                     warn(
-                        "Usage: /voice [on|off|toggle|models|pull <name>|"
+                        "Usage: /voice [on|off|toggle|models|listen|speak|"
+                        "pull <name>|"
                         f"remove <name>|style [{'|'.join(voice_styles())}]]"
                     )
                 continue
