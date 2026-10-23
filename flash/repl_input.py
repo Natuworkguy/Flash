@@ -57,6 +57,7 @@ COMMANDS = [
                "/model pin or unpin [name] to keep one at the top"),
     ("/btw", "a side question, even while Flash works, without interrupting"),
     ("/host", "switch Ollama server (/host <name|url>, add, remove, list)"),
+    ("/briefing", "what came in while you were away, a card at a time"),
     ("/loader", "pick the animation that turns while Flash works"),
     ("/instructions", "how every reply should be (<text> or clear)"),
     ("/auto", "ask first or autonomous (/auto on|off), or UltraAuto (ultra)"),

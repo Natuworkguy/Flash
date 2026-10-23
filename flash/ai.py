@@ -4554,6 +4554,76 @@ def _instructions_command(arg: str) -> None:
     console.print(body)
 
 
+def _briefing_about(card: dict) -> str:
+    """A line for the box, to ask Flash about CARD."""
+
+    body = " ".join(str(card.get("body") or "").split())
+    body = body if len(body) <= 300 else body[:299] + "…"
+    who = f", {card['who']}" if card.get("who") else ""
+    return (f"From my briefing ({card['label'].lower()}{who}): "
+            f"\"{card['title']}\"" + (f": {body}" if body else "") + " ")
+
+
+def _briefing_command() -> None:
+    """/briefing: what came in while you were away, a card at a time,
+    full screen, as on the web. What the user picks on a card is done
+    once it closes: a reply or a question starts in the box."""
+
+    from . import briefing, briefing_view, sparks
+
+    console.print(Text("Gathering your briefing…", style=DIM))
+    problems: list[str] = []
+    cards = briefing.cards(None, problems=problems, since=briefing.opened())
+    missed = tuple(p.split(":")[0] for p in problems)
+    if not model_picker.can_pick():
+        for card in cards:
+            line = Text(f"{card['label']}: ", style="bold")
+            line.append(card["title"])
+            line.append(f"  {briefing_view.when(card)}", style=DIM)
+            console.print(line)
+        console.print(Text(
+            f"{len(cards)} card{'s' if len(cards) != 1 else ''}"
+            + (f"; could not look at {', '.join(missed)}" if missed else ""),
+            style=DIM,
+        ))
+        return
+    chosen = briefing_view.feed(cards, missed)
+    if not chosen:
+        return
+    action, card = chosen
+    kind = card["kind"]
+    if action == "ask":
+        carry(_briefing_about(card))
+    elif action == "reply" and kind == "email":
+        carry(f"Reply to the email from {card.get('who')} about "
+              f"\"{card['title']}\" (uid {card.get('uid')} in "
+              f"{card.get('account')}). Say: ")
+    elif action == "reply" and kind == "imessage":
+        to = f"the {card['place']} group" if card.get("place") \
+            else card.get("who")
+        carry(f"Reply to {to} on iMessage: ")
+    elif action == "reply" and kind == "spark":
+        _sparks_command(f"chat {card['spark']}")
+    elif action == "open" and kind == "team":
+        _sparks_command(f"teamchat {card['team']}")
+    elif action == "open" and kind == "email" and card.get("link"):
+        import webbrowser
+
+        webbrowser.open(card["link"])
+    elif action == "open" and kind == "spark":
+        spark = sparks.find(card["spark"])
+        report = next((r for r in (spark.reports if spark else [])
+                       if int(r.at) == int(card["at"])), None)
+        if report is None:
+            console.print(Text("That report is gone.", style=DIM))
+            return
+        console.print(Panel(
+            Markdown(report.text), title=card["title"], title_align="left",
+            box=ROUNDED, border_style=DIM, padding=(0, 1),
+        ))
+        sparks.mark_read(spark.id)
+
+
 def _loader_command(arg: str) -> None:
     """/loader: pick the animation that turns while Flash works, from a
     list with each one's frames, or name one; /loader morph [on|off] has
@@ -5820,6 +5890,10 @@ def _main() -> None:
             asked_aside = btw_question(uin)
             if asked_aside is not None:
                 _btw(asked_aside, messages)
+                continue
+
+            if uin == "/briefing":
+                _briefing_command()
                 continue
 
             if uin == "/loader" or uin.startswith("/loader "):
