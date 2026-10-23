@@ -139,7 +139,22 @@ BUILTIN: tuple[Loader, ...] = (
          "  .*.  ", " . o . ", ".  .  ."), 0.12,
         "A black hole that pulls every dot in, then blows them out",
     ),
+    Loader(
+        "quill", "Quill",
+        ("✎    ", "~✎   ", "~~✎  ", "~~~✎ ", "~~~~✎", "~~~~ ", "~~~  ",
+         "     "),
+        ("/    ", "~/   ", "~~/  ", "~~~/ ", "~~~~/", "~~~~ ", "~~~  ",
+         "     "), 0.16,
+        "A hand guiding a quill across the page",
+    ),
 )
+
+# While Flash writes (its latest step wrote a file or a document), the
+# writing loader shows instead of the chosen one, saying "Writing".
+WRITING_SETTING = "LOADER_WRITING"
+WRITING_LOADER = "quill"
+WRITING_TOOLS = ("write", "edit", "multi_edit", "send_document",
+                 "make_document")
 
 
 def _extension_loaders() -> list[Loader]:
@@ -179,6 +194,37 @@ def chosen() -> str:
 
     value = (os.environ.get(SETTING) or "").strip().lower()
     return value if find(value) is not None else DEFAULT
+
+
+def writing_shown() -> bool:
+    """Whether the quill takes over while Flash writes: on unless the
+    user turned it off."""
+
+    return (os.environ.get(WRITING_SETTING) or "1").strip().lower() not in (
+        "0", "off", "false", "no",
+    )
+
+
+def activity(messages: list) -> str:
+    """What the wait after MESSAGES is for, by the tool that ran last
+    since the user spoke: "writing" after one of WRITING_TOOLS, else ""."""
+
+    for message in reversed(messages or []):
+        role = message.get("role") if isinstance(message, dict) else None
+        if role == "user":
+            return ""
+        if role == "tool":
+            name = str(message.get("tool_name") or "")
+            return "writing" if name in WRITING_TOOLS else ""
+    return ""
+
+
+def for_activity(kind: str) -> Optional[Loader]:
+    """The loader that shows for KIND of work, when one does."""
+
+    if kind == "writing" and writing_shown():
+        return find(WRITING_LOADER)
+    return None
 
 
 def morphing() -> bool:
