@@ -1224,7 +1224,10 @@ goes with your next message, as if you had attached it again.
 carry on from that reply in the same chat, and the way it went before
 is kept. Once a chat has forks, a Forks button at the top shows them
 as a tree, each under the reply it forked from, forks of forks and
-all; pick one to carry on where it left off.
+all; pick one to carry on where it left off. The bin on a fork deletes
+it: its own forks move up a level, and if it was the one showing, you
+go back to the one it came from. Down to one fork, the chat has none,
+and the Forks button goes away.
 
 **Briefing** (in the sidebar, `Alt+B`, or `/briefing`) is what came in
 while you were away, as a full-screen feed you swipe or scroll through
@@ -1274,11 +1277,11 @@ this browser:
   between messages, and how round the corners are.
 - **Loading animation**: Dots, Bloom, Orbit, Pulse, Wave, Bounce, Grid,
   Snake, Arc, Cursor, Comet, Singularity (a black hole that pulls
-  every dot in, then blows them out), Quill, Magnifier, Terminal, Book, Eye, Paper plane, or an
+  every dot in, then blows them out), Quill, Magnifier, Terminal, Book, Camera, Paper plane, or an
   extension's. **Dynamic loaders** show what Flash is doing instead,
   saying so: a hand guiding a quill while it writes, a magnifier while
   it searches, a terminal while it runs a command, a book while it
-  reads, an eye while it looks at a page or your screen, a paper plane
+  reads, a camera while it looks at a page or your screen, a paper plane
   while it sends (`LOADER_TASKS=0` turns them off). Every 10 seconds it shrinks away into another, at
   random, for as long as Flash works; turn off **Morph between
   loaders** to keep to one. Both are the same settings as the
