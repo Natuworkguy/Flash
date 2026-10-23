@@ -7750,6 +7750,19 @@ function drawGeneral(body) {
   body.insertAdjacentHTML("beforeend", `<h2 class="settings-section settings-gap">Custom instructions</h2><p class="settings-sub">How you want every reply, in your own words, here and in the terminal: “use metric”, “no bullet points”, “answer in Spanish”. Memories are what Flash knows about you; these are how it answers.</p><div class="instructions-box"></div>`);
   drawInstructions(body.querySelector(".instructions-box"));
 
+  // Thinking: Flash turns it on by itself for a reply that needs it.
+  const auto = el("button", "setting-row", `<span class="what"><b>Think when it helps</b><span>Flash turns its thinking on by itself when a message needs careful reasoning, like tricky maths, a hard bug or a plan with many steps, and leaves it off for quick ones. Think harder in the + menu still turns it on for the next message.</span></span><span class="switch" aria-hidden="true"></span>`);
+  auto.type = "button";
+  auto.setAttribute("role", "switch");
+  auto.setAttribute("aria-checked", info.think_auto !== false);
+  auto.onclick = async () => {
+    const on = auto.getAttribute("aria-checked") !== "true";
+    auto.setAttribute("aria-checked", on);
+    try { info.think_auto = (await command("think-auto", on ? "on" : "off")).think_auto; }
+    catch (error) { auto.setAttribute("aria-checked", !on); showFailure(error); }
+  };
+  body.appendChild(auto);
+
   body.insertAdjacentHTML("beforeend", `<h2 class="settings-section settings-gap">Conversation</h2><p class="settings-sub">What happens when a chat outgrows the model's context window, where the last three exchanges always stay word for word, how chats are named, and how replies look.</p>`);
   const row = el("button", "setting-row", `<span class="what"><b>Summarize old messages</b><span>Have the model condense what no longer fits into a summary it keeps reading. Off, the oldest messages are dropped instead, which is faster and never loses detail from the ones kept.</span></span><span class="switch" aria-hidden="true"></span>`);
   row.type = "button";

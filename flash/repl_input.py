@@ -58,6 +58,8 @@ COMMANDS = [
     ("/btw", "a side question, even while Flash works, without interrupting"),
     ("/host", "switch Ollama server (/host <name|url>, add, remove, list)"),
     ("/briefing", "what came in while you were away, a card at a time"),
+    ("/think", "let Flash turn on thinking when a message needs it "
+               "(auto on|off)"),
     ("/loader", "pick the animation that turns while Flash works"),
     ("/instructions", "how every reply should be (<text> or clear)"),
     ("/auto", "ask first or autonomous (/auto on|off), or UltraAuto (ultra)"),

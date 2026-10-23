@@ -4517,6 +4517,71 @@ class TestThinkHarder:
             FakeClient.requests[-1]["messages"][0]["content"])
 
 
+class TestThinkWhenItHelps:
+    def names(self, asked):
+        return [t["function"]["name"] for t in asked.get("tools") or []]
+
+    def test_flash_turns_its_thinking_on_for_the_rest_of_the_reply(
+            self, monkeypatch):
+        monkeypatch.setattr(web, "_show_model", lambda host, model: {
+            "capabilities": ["thinking"]})
+        FakeClient.scripts = [
+            [part(calls=[call("think_harder", why="a subtle bug")]),
+             part(done=True, tokens=1)],
+            [part("Found it."), part(done=True, tokens=2)],
+            [part("Hi."), part(done=True, tokens=2)],
+        ]
+        session = web.Session()
+        chat = session.new_chat()
+
+        run(session, chat, "why does this race")
+
+        first, second = FakeClient.requests[-2:]
+        assert "think" not in first
+        assert "think_harder" in self.names(first)
+        assert second["think"] is True
+        assert "think_harder" not in self.names(second)
+        assert any(e.get("type") == "thought"
+                   and e["text"] == "Thinking harder: a subtle bug"
+                   for e in chat.log)
+
+        # The next reply starts without it.
+        run(session, chat, "thanks")
+        assert "think" not in FakeClient.requests[-1]
+
+    def test_not_offered_when_off_or_the_model_cannot(self, monkeypatch):
+        FakeClient.scripts = [[part("Hi."), part(done=True, tokens=2)]] * 2
+        session = web.Session()
+        chat = session.new_chat()
+
+        monkeypatch.setattr(web, "_show_model", lambda host, model: {
+            "capabilities": ["completion"]})
+        run(session, chat, "hi")
+        assert "think_harder" not in self.names(FakeClient.requests[-1])
+
+        monkeypatch.setattr(web, "_show_model", lambda host, model: {
+            "capabilities": ["thinking"]})
+        monkeypatch.setenv("THINK_AUTO", "0")
+        run(session, chat, "hi")
+        assert "think_harder" not in self.names(FakeClient.requests[-1])
+
+    def test_the_setting(self, monkeypatch):
+        from flash import ai
+
+        monkeypatch.setattr(ai, "set_config_var",
+                            lambda name, value: monkeypatch.setenv(name,
+                                                                   value))
+
+        class Hub:
+            def publish(self, event):
+                pass
+
+        session = SimpleNamespace(hub=Hub())
+        said = web.command(session, {"name": "think-auto", "arg": "off"})
+        assert said == {"think_auto": False}
+        assert web.tools_think_auto() is False
+
+
 class TestCustomInstructions:
     def test_kept_and_in_every_system_prompt(self):
         from flash import instructions, tools
