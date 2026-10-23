@@ -6,9 +6,9 @@ terminal that can't show the fancy ones. The web UI draws most of them
 in CSS, and any it has no drawing of from these same frames, so one an
 extension adds shows in both.
 
-LOADER in ~/.flash.env picks one. LOADER_MORPH=1 has it turn into
-another, at random, every MORPH_SECONDS for as long as the wait goes
-on. An extension adds its own with "loaders" in its manifest.
+LOADER in ~/.flash.env picks one. It turns into another, at random,
+every MORPH_SECONDS for as long as the wait goes on, unless
+LOADER_MORPH=0. An extension adds its own with "loaders" in its manifest.
 """
 
 import os
@@ -228,10 +228,11 @@ def for_activity(kind: str) -> Optional[Loader]:
 
 
 def morphing() -> bool:
-    """Whether the loader turns into another every MORPH_SECONDS."""
+    """Whether the loader turns into another every MORPH_SECONDS: on
+    unless the user turned it off."""
 
-    return (os.environ.get(MORPH_SETTING) or "").strip().lower() in (
-        "1", "on", "true", "yes",
+    return (os.environ.get(MORPH_SETTING) or "1").strip().lower() not in (
+        "0", "off", "false", "no",
     )
 
 

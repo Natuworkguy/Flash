@@ -241,8 +241,12 @@ class TestWeb:
                 web.command(session, {"name": "loader", "arg": gone})
 
     def test_the_morph_switch(self, monkeypatch):
+        # On until turned off.
         monkeypatch.setenv(loaders.MORPH_SETTING, "")
         session = web.Session()
+        assert web.status(ai)["loader_morph"] is True
+        assert web.command(session, {"name": "loader-morph", "arg": "off"}) \
+            == {"loader_morph": False}
         assert web.status(ai)["loader_morph"] is False
         assert web.command(session, {"name": "loader-morph", "arg": "on"}) \
             == {"loader_morph": True}
