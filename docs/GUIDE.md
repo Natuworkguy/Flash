@@ -1224,7 +1224,10 @@ goes with your next message, as if you had attached it again.
 carry on from that reply in the same chat, and the way it went before
 is kept. Once a chat has forks, a Forks button at the top shows them
 as a tree, each under the reply it forked from, forks of forks and
-all; pick one to carry on where it left off.
+all; pick one to carry on where it left off. The bin on a fork deletes
+it: its own forks move up a level, and if it was the one showing, you
+go back to the one it came from. Down to one fork, the chat has none,
+and the Forks button goes away.
 
 **Pinned chats** stay at the top of the sidebar, under Pinned, whatever
 project they are in: the pin beside a chat (on hover), or `/pin` for the

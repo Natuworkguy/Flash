@@ -1913,6 +1913,44 @@ class Session:
             chat.fork = fork_id
         self._forked(chat)
 
+    def delete_fork(self, chat: Chat, fork_id: str) -> None:
+        """Let fork FORK_ID of CHAT go. Its own forks move up to the one it
+        came from (or, for the first fork, under the oldest of them). The
+        one showing goes to where it came from first; with one fork left,
+        the chat has no forks at all."""
+
+        with self._lock:
+            if chat.busy or chat.queued:
+                raise ValueError("Wait for the reply to finish.")
+            gone = chat.forks.get(fork_id)
+            if gone is None:
+                raise ValueError("That fork is not in this chat.")
+            parent = gone.get("parent", "")
+            kids = sorted(
+                (f for f in chat.forks.values()
+                 if f.get("parent") == fork_id),
+                key=lambda f: f.get("created", 0),
+            )
+            if not parent and kids:
+                parent = kids[0]["id"]
+                kids[0]["parent"] = ""
+            for kid in kids:
+                if kid["id"] != parent:
+                    kid["parent"] = parent
+            if fork_id == chat.fork:
+                showing = parent if parent in chat.forks else next(
+                    f for f in chat.forks if f != fork_id)
+                found = chat.forks[showing]
+                chat.log = list(found.pop("log", None) or [])
+                chat.messages = list(found.pop("messages", None) or [])
+                chat.branches = found.pop("branches", None) or {}
+                chat.fork = showing
+            del chat.forks[fork_id]
+            if len(chat.forks) < 2:
+                chat.forks.clear()
+                chat.fork = ""
+        self._forked(chat)
+
     def _forked(self, chat: Chat) -> None:
         self.save(chat)
         self.hub.publish({"type": "forked", "chat": chat.id,
@@ -3882,6 +3920,11 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
     if name == "fork-switch":
         chat = session.chat(chat_id)
         session.switch_fork(chat, arg)
+        return {"forks": session.fork_tree(chat)}
+
+    if name == "fork-delete":
+        chat = session.chat(chat_id)
+        session.delete_fork(chat, arg)
         return {"forks": session.fork_tree(chat)}
 
     if name == "forks":
