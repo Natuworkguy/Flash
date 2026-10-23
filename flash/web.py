@@ -5068,6 +5068,8 @@ def _spark_command(name: str, arg: str, body: dict) -> dict:
                 arg, [str(p) for p in picked] if isinstance(picked, list)
                 else [str(body.get("lead") or "")],
             )
+        elif name == "spark-mode":
+            spark = sparks.set_mode(arg, str(body.get("mode") or ""))
         elif name == "spark-budget":
             spark = sparks.set_budget(
                 arg, bool(body.get("on")), body.get("tokens") or None,

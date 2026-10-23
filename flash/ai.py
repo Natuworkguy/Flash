@@ -3588,6 +3588,21 @@ def _spark_audit(key: str) -> None:
     console.print(body)
 
 
+def _spark_mode(key: str, mode: str) -> None:
+    """/sparks mode <name> [follow|ask|auto|ultra]: a spark's own
+    permission mode. Bare, says which it works in."""
+
+    spark = sparks.set_mode(key, mode) if mode else sparks.find(key)
+    if spark is None:
+        warn(f"There is no spark called {key}.")
+        return
+    used = sparks.MODE_WORDS[sparks.mode_of(spark)]
+    console.print(Text(
+        f"{spark.name}: {used}." if spark.mode else
+        f"{spark.name} follows Flash's mode: {used} now.", style=DIM,
+    ))
+
+
 def _sparks_command(arg: str) -> None:
     """/sparks and its actions: new, run, pause, resume, teach, every,
     at, remove, or a spark's name to read its reports."""
@@ -3859,6 +3874,9 @@ def _sparks_command(arg: str) -> None:
             return
         if action == "budget" and key:
             _spark_budget(key, extra)
+            return
+        if action == "mode" and key:
+            _spark_mode(key, extra)
             return
         if action == "audit" and key:
             _spark_audit(key)

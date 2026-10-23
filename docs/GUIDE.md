@@ -668,6 +668,13 @@ have looked them over.
 - **Budgets.** Off by default. Give a spark tokens per hour, day, week
   or month and it pauses itself once they are spent
   (`/sparks budget scout 50k day`).
+- **Permissions, per spark.** Each spark can have a mode of its own
+  instead of Flash's: Ask first (its commands, edits and anything that
+  changes things wait for your yes), Auto (they run, with System One
+  reviewing if it is on; email still asks), or UltraAuto (nothing asks,
+  only where UltraAuto is offered). Set it under Permissions when
+  editing a spark, or `/sparks mode scout ask|auto|ultra|follow`.
+  Left alone, a spark follows the mode by the message box.
 - **Audit log.** Every shift, tool call, approval and change is kept in
   an append-only log, each entry carrying the hash of the one before, so
   an edit by hand shows (`/sparks audit scout`).
