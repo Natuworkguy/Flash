@@ -1099,12 +1099,12 @@ Extensions add slash commands, tools the model can call, system prompt
 text, and backgrounds. Install one from GitHub:
 
 ```bash
-flash --extension-install github@username/my-ext
+flash install github@username/my-ext
 ```
 
 or with `/extension install github@username/my-ext` in a session. Flash
 shows what the extension adds and asks before installing it.
-`flash --extension-list` and `flash --extension-remove <name>` do the
+`flash list` and `flash remove <name>` do the
 rest. See [docs/EXTENSIONS.md](EXTENSIONS.md) to write your own.
 
 ### Learning
@@ -1404,7 +1404,7 @@ that prompt queued. Pass the same URL on the command line to test it without a
 browser:
 
 ```bash
-flash "flash://?prompt=What+is+Python"
+flash --uri "flash://?prompt=What+is+Python"
 ```
 
 The prompt is URL-encoded, so use `+` or `%20` for spaces. Flash always shows

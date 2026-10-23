@@ -382,11 +382,27 @@ class TestWiring:
 
 class TestFlags:
     def test_parsed(self):
-        args = parse_args(["--extension-install", "github@owner/repo"])
+        args = parse_args(["install", "github@owner/repo"])
 
         assert args.extension_install == "github@owner/repo"
-        assert parse_args(["--extension-remove", "demo"]).extension_remove
-        assert parse_args(["--extension-list"]).extension_list
+        assert parse_args(["remove", "demo"]).extension_remove == "demo"
+        assert parse_args(["list"]).extension_list
+        assert not parse_args([]).extension_list
+
+    @pytest.mark.parametrize("argv", [
+        ["install"], ["remove"], ["list", "x"], ["banana"],
+        ["--extension-install", "github@owner/repo"],
+    ])
+    def test_refused(self, argv, capsys):
+        with pytest.raises(SystemExit):
+            parse_args(argv)
+
+    def test_links_come_with_uri(self):
+        assert parse_args(["--uri", "flash://?prompt=hi"]).url == (
+            "flash://?prompt=hi")
+        # One a handler registered before --uri passes on its own.
+        assert parse_args(["flash://?prompt=hi"]).url == "flash://?prompt=hi"
+        assert parse_args([]).url is None
 
     def test_install_asks_then_installs(self, tmp_path, monkeypatch):
         folder = full(tmp_path / "src")

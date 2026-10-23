@@ -4391,7 +4391,7 @@ def _extension_command(arg: str) -> None:
 
 
 def _handle_extension_flags(args) -> bool:
-    """Run --extension-install/-remove/-list. False on a failure."""
+    """Run flash install, remove or list. False on a failure."""
 
     if args.extension_install:
         return _install_extension(args.extension_install)

@@ -79,7 +79,7 @@ def launch_command() -> list[str]:
 def _register_windows(command: list[str]) -> str:
     import winreg
 
-    line = " ".join(f'"{part}"' for part in command) + ' "%1"'
+    line = " ".join(f'"{part}"' for part in command) + ' --uri "%1"'
     root = winreg.HKEY_CURRENT_USER
 
     with winreg.CreateKey(root, rf"Software\Classes\{SCHEME}") as key:
@@ -122,7 +122,7 @@ def _desktop_path() -> Path:
 
 
 def _register_linux(command: list[str]) -> str:
-    exec_line = " ".join(command) + " %u"
+    exec_line = " ".join(command) + " --uri %u"
     path = _desktop_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
