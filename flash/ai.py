@@ -130,12 +130,15 @@ from .tools import (
     SCRATCH_DIR,
     build_system_prompt,
     clear_user_runs,
+    end_thinking,
     init,
     reason,
     run_extension_command,
     run_tool,
     shell_tool,
     take_pending_images,
+    think_tools,
+    thinking_harder,
     trim_tool_output,
     turn_tools,
     user_runs,
@@ -1224,6 +1227,21 @@ def _chat_options() -> dict:
     return options
 
 
+_think_levels: dict[tuple[str, str], Any] = {}
+
+
+def _think_level() -> Any:
+    """What the model takes to think longer, or None when it cannot: asked
+    of Ollama once for each model."""
+
+    from .sysprompt import think_level
+
+    key = (Config.host, Config.model or "")
+    if key not in _think_levels:
+        _think_levels[key] = think_level(*key) if key[1] else None
+    return _think_levels[key]
+
+
 def _chat(client: "ollama.Client", messages: list, tools_arg=None):
     if Config.model is None:
         raise FlashError(
@@ -1231,11 +1249,14 @@ def _chat(client: "ollama.Client", messages: list, tools_arg=None):
             f"in {ENV_PATH} file."
         )
 
+    # The reply turned its thinking on (think_harder): every step after.
+    level = _think_level() if thinking_harder() else None
     return client.chat(
         model=Config.model,  # pyright: ignore[reportArgumentType]
         messages=messages,
         tools=tools_arg,
         options=_chat_options(),
+        **({"think": level} if level is not None else {}),
     )
 
 
@@ -4554,6 +4575,29 @@ def _instructions_command(arg: str) -> None:
     console.print(body)
 
 
+def _think_command(arg: str) -> None:
+    """/think auto on|off: whether Flash may turn its thinking on by
+    itself, for a message it judges needs it. Bare, says which it is."""
+
+    from .tools import THINK_AUTO_SETTING, think_auto
+
+    words = arg.lower().split()
+    if words[:1] == ["auto"] and words[1:2] in (["on"], ["off"]):
+        set_config_var(THINK_AUTO_SETTING, "1" if words[1] == "on" else "0")
+    elif words:
+        console.print(Text("Use /think auto on or /think auto off.",
+                           style=WARN))
+        return
+    can = _think_level() is not None
+    console.print(Text(
+        ("Flash turns its thinking on when a message needs it"
+         if think_auto() else "Flash thinks only when you ask it to")
+        + ("." if can else f", but {Config.model} cannot think apart "
+           "from its answer."),
+        style=DIM,
+    ))
+
+
 def _briefing_about(card: dict) -> str:
     """A line for the box, to ask Flash about CARD."""
 
@@ -5892,6 +5936,10 @@ def _main() -> None:
                 _btw(asked_aside, messages)
                 continue
 
+            if uin == "/think" or uin.startswith("/think "):
+                _think_command(uin[len("/think"):].strip())
+                continue
+
             if uin == "/briefing":
                 _briefing_command()
                 continue
@@ -6272,7 +6320,8 @@ def _main() -> None:
             turn = Turn()
             # Followed by any extension that asked to be.
             progress.begin("terminal", title=uin, request=uin)
-            offered = turn_tools()
+            end_thinking()
+            offered = turn_tools() + think_tools(_think_level() is not None)
 
             def bar() -> Text:
                 return _bar_text(messages)
@@ -6364,7 +6413,12 @@ def _main() -> None:
                        for c in tool_calls):
                     # New tools from the connected apps, from the next
                     # step on.
-                    offered = turn_tools()
+                    offered = turn_tools() + think_tools(
+                        _think_level() is not None, thinking_harder())
+                if thinking_harder():
+                    # On already: not offered again.
+                    offered = [t for t in offered
+                               if t["function"]["name"] != "think_harder"]
 
                 tool_images = take_pending_images()
                 if tool_images:
@@ -6446,8 +6500,10 @@ def _main() -> None:
             continue
         finally:
             end_dock(dock, stopped)
-            # A yes to Computer Use lasts the one reply.
+            # A yes to Computer Use lasts the one reply, and so does
+            # thinking turned on by the model.
             computeruse.end("terminal")
+            end_thinking()
             # A turn that got here without finishing failed, or was
             # stopped; nothing, when there was no turn.
             progress.end(False, error="Stopped." if stopped else "")

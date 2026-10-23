@@ -374,6 +374,8 @@ class Chat:
     # The turn running now was asked to think harder: the model reasons
     # longer where it can, and is told to take its time.
     deep: bool = False
+    # The turn running now turned its own thinking on (think_harder).
+    thought_harder: bool = False
     # The user named it themselves: the model leaves the title alone.
     named: bool = False
     # Kept at the top of the list, under Pinned.
@@ -2544,17 +2546,20 @@ could go wrong, the alternatives, and a check of your reasoning, any
 numbers and any code. Take the time it needs, then answer."""
 
 
+def tools_think_auto() -> bool:
+    from . import tools as flash_tools  # deferred: tools imports a lot
+
+    return flash_tools.think_auto()
+
+
 def think_harder(model: str) -> Any:
     """What to ask MODEL for, to reason longer: the most it offers, or
     None for one that cannot reason apart from its answer."""
 
     from . import ai  # deferred: ai imports half of Flash
+    from .sysprompt import level_from
 
-    capabilities = _show_model(ai.Config.host, model).get("capabilities")
-    if not isinstance(capabilities, list) or "thinking" not in capabilities:
-        return None
-    # Some take a level rather than a yes.
-    return "high" if "gpt-oss" in model.lower() else True
+    return level_from(_show_model(ai.Config.host, model), model)
 
 
 def _show_model(host: str, model: str) -> dict:
@@ -2601,7 +2606,7 @@ def stream_reply(
         session.emit(chat, {"type": "token", "text": text})
 
     asked: dict = {}
-    if chat.deep:
+    if chat.deep or chat.thought_harder:
         think = think_harder(model or ai.Config.model or "")
         if think is not None:
             asked["think"] = think
@@ -3181,10 +3186,16 @@ def _respond(
         if first:
             checkpoint.start_turn(ai._turn_label(text))
 
+        # Flash may turn its own thinking on, for a reply that needs it.
+        chat.thought_harder = False
+        can_think = spark is None and not chat.deep \
+            and flash_tools.think_auto() \
+            and think_harder(model or "") is not None
         offered = flash_tools.turn_tools()
         if kit is not None:
             offered = kit.offer(offered)
-        offered = offered + chat_tools(chat)
+        offered = offered + chat_tools(chat) \
+            + flash_tools.think_tools(can_think)
         if guest:
             # A bit of the conversation, not all of it, and as a
             # transcript: whose words are whose stays plain, and a small
@@ -3240,6 +3251,15 @@ def _respond(
                         "text": str(args.get("thought", "")).strip(),
                     })
                     output = "(noted)"
+                elif name == "think_harder" and can_think:
+                    # Every step after this one thinks first.
+                    chat.thought_harder = True
+                    session.emit(chat, {
+                        "type": "thought",
+                        "text": "Thinking harder: "
+                        + str(args.get("why", "")).strip(),
+                    })
+                    output = flash_tools.THOUGHT_HARDER
                 elif name == "title_chat":
                     output = retitle(session, chat, args)
                 elif name == "end_conversation":
@@ -3290,7 +3310,12 @@ def _respond(
                 offered = flash_tools.turn_tools()
                 if kit is not None:
                     offered = kit.offer(offered)
-                offered = offered + chat_tools(chat)
+                offered = offered + chat_tools(chat) + flash_tools \
+                    .think_tools(can_think, chat.thought_harder)
+            if chat.thought_harder:
+                # On already: not offered again.
+                offered = [t for t in offered
+                           if t["function"]["name"] != "think_harder"]
 
             images = flash_tools.take_pending_images()
             if images:
@@ -3576,6 +3601,7 @@ def status(ai) -> dict:
         "loader": loaders.chosen(),
         "loader_morph": loaders.morphing(),
         "loader_tasks": loaders.tasks_shown(),
+        "think_auto": tools_think_auto(),
         # Whether an extension follows voice mode: if none does, the page
         # does not tell Flash of every moment of it.
         "voice_hooks": voicehooks.wanted(),
@@ -4538,6 +4564,12 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
         ai.set_config_var(loaders.TASKS_SETTING, "1" if on else "0")
         session.hub.publish({"type": "status"})
         return {"loader_tasks": on}
+
+    if name == "think-auto":
+        on = arg.lower() in ("on", "1", "true")
+        ai.set_config_var("THINK_AUTO", "1" if on else "0")
+        session.hub.publish({"type": "status"})
+        return {"think_auto": on}
 
     if name == "loader-morph":
         on = arg.lower() in ("on", "1", "true")

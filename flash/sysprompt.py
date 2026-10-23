@@ -3,7 +3,7 @@ import os
 import re
 import urllib.error
 import urllib.request
-from typing import Optional
+from typing import Any, Optional
 
 import ollama
 
@@ -49,6 +49,27 @@ def _show_url(host: str) -> str:
         host = f"http://{host}"
 
     return f"{host}/api/show"
+
+
+def think_level(host: str, model: str) -> Any:
+    """What to ask MODEL for, to reason longer: the most it offers, or
+    None for one that cannot reason apart from its answer."""
+
+    try:
+        shown = _show(host, model)
+    except Exception:  # noqa: BLE001
+        return None
+    return level_from(shown if isinstance(shown, dict) else {}, model)
+
+
+def level_from(shown: dict, model: str) -> Any:
+    """think_level, from what Ollama said of MODEL."""
+
+    capabilities = shown.get("capabilities")
+    if not isinstance(capabilities, list) or "thinking" not in capabilities:
+        return None
+    # Some take a level rather than a yes.
+    return "high" if "gpt-oss" in model.lower() else True
 
 
 def _show(host: str, model: str) -> dict:

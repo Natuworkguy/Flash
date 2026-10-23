@@ -166,6 +166,8 @@ python run.py
   question nor the answer joins the conversation, and the work in
   progress carries on undisturbed. The web UI takes `/btw` too, and
   shows the answer in a card above the message box until you close it.
+- `/think auto on|off`: Whether Flash may turn its thinking on by itself
+  for a message that needs careful reasoning (on by default).
 - `/briefing`: What came in while you were away, full screen, a card at
   a time: unread email and iMessages, spark reports, finished waits,
   what is coming up, and teams with news (see Briefing under Web UI).
@@ -1160,6 +1162,14 @@ next message: a model that can reason apart from its answer reasons
 longer, and every model is told to take its time and check its work. A
 Think pill in the box shows while it is set (a click on it skips it),
 and it lets go once the message is sent.
+
+**Think when it helps** (Settings, on by default) lets Flash turn its
+thinking on by itself: when a message needs careful reasoning, like
+tricky maths, a bug whose cause is not plain, or a plan with many
+steps, it says so ("Thinking harder: ...") and reasons at length for
+the rest of that reply. Quick questions stay quick. Only models that
+can reason apart from their answer are offered it. In the terminal,
+`/think auto on` or `/think auto off`.
 
 **Custom instructions**, in Settings, are how you want every reply, in
 your own words ("use metric", "no bullet points"), in the browser and

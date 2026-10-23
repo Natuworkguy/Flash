@@ -1969,6 +1969,80 @@ SYSTEM_ONE_TOOLS: list[dict[str, Any]] = [
 ]
 
 
+# Flash turning on thinking by itself, for a reply it judges needs it:
+# on unless the user turned it off.
+THINK_AUTO_SETTING = "THINK_AUTO"
+
+THINK_HARDER_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "think_harder",
+        "description": (
+            "Turn on your thinking for the rest of this reply: you reason "
+            "at length before each answer. Call it first, before anything "
+            "else, when the request is hard: tricky maths or logic, a bug "
+            "whose cause is not plain, a plan with many steps, a design "
+            "with real trade-offs, or anything where a quick answer would "
+            "likely be wrong. Not for chat, simple questions, quick "
+            "lookups or plain edits."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "why": {
+                    "type": "string",
+                    "description": "A few words on what makes it hard.",
+                }
+            },
+            "required": ["why"],
+        },
+    },
+}
+
+THOUGHT_HARDER = (
+    "Thinking is on for the rest of this reply. Work through it "
+    "carefully: what is really being asked, what could go wrong, the "
+    "alternatives, and a check of your reasoning, any numbers and any "
+    "code. Then carry on."
+)
+
+# The terminal's reply turned its thinking on. The web keeps its own,
+# on each chat.
+_thinking = {"on": False}
+
+
+def think_auto() -> bool:
+    return (os.environ.get(THINK_AUTO_SETTING) or "1").strip().lower() \
+        not in ("0", "false", "off", "no")
+
+
+def think_tools(can_think: bool, already: bool = False) -> list[dict]:
+    """THINK_HARDER_TOOL, when the model can think, the user lets Flash
+    decide, and this reply is not thinking already."""
+
+    return [THINK_HARDER_TOOL] if can_think and think_auto() \
+        and not already else []
+
+
+def thinking_harder() -> bool:
+    """Whether the terminal's reply turned its thinking on."""
+
+    return _thinking["on"]
+
+
+def end_thinking() -> None:
+    _thinking["on"] = False
+
+
+def think_harder_tool(why: str = "") -> str:
+    """The terminal's: thinking on for the rest of the reply."""
+
+    _thinking["on"] = True
+    tool_line(f"ThinkHarder({str(why or '').strip()})")
+    tool_result("Thinking harder for the rest of this reply.")
+    return THOUGHT_HARDER
+
+
 def available_tools() -> list[dict[str, Any]]:
     """The built-in tools that can work right now: email's only once it
     is set up, and the computer's only once the user has allowed it, and
@@ -6209,6 +6283,7 @@ FUNCTIONS = {
     "fetch": fetch,
     "get_os": get_os,
     "reason": reason,
+    "think_harder": think_harder_tool,
     "get_date": get_date,
     "refresh_tools": refresh_tools,
     "plan": plan_tool,
