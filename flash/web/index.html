@@ -6577,7 +6577,9 @@ function waitCard(w) {
   const every = `every ${w.every} min`;
   const open = w.status === "waiting";
   const say = (text) => how.append(text);
-  if (w.command) { say(open ? "Running " : "Ran "); how.appendChild(el("code")).textContent = w.command; say(` ${every}`); }
+  const EVENT_WORDS = (e) => e === "email" ? "a new email" : e === "imessage" ? "a new iMessage" : `a change in ${e.slice(4).split("/")[0]}`;
+  if (w.events && w.events.length) say(`${open ? "Until" : "For"} ${w.events.map(EVENT_WORDS).join(" or ")} comes in${w.keep ? ", every time, until cancelled" : ""}`);
+  else if (w.command) { say(open ? "Running " : "Ran "); how.appendChild(el("code")).textContent = w.command; say(` ${every}`); }
   else if (w.check) say(`${open ? "Looking" : "Looked"} for: ${w.check}, ${every}`);
   else say(open ? `Until ${waitWhen(w.at)}` : `At ${waitWhen(w.at)}`);
   if ((w.command || w.check) && w.at && open && w.at * 1000 > Date.now()) say(`, from ${waitWhen(w.at)}`);

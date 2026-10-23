@@ -143,8 +143,10 @@ def test_an_event_starts_the_spark_that_wants_it(monkeypatch):
 
 def test_nothing_is_looked_at_while_events_are_off(monkeypatch):
     monkeypatch.setenv(triggers.SETTING, "0")
-    monkeypatch.setattr(sparks, "all_sparks",
-                        lambda: pytest.fail("looked while off"))
+    given = sparks.Spark(id="o1", name="Other", goal="g", events=["email"])
+    monkeypatch.setattr(sparks, "all_sparks", lambda: [given])
+    monkeypatch.setattr(sparks._events, "look",
+                        lambda *a, **k: pytest.fail("looked while off"))
 
     assert sparks.event_tick() == []  # nosec B101
 
@@ -172,3 +174,81 @@ def test_make_spark_takes_events(monkeypatch):
     said = tools.make_spark("Builder", "Build ideas", model="m",
                             events="printer")
     assert said.startswith("Error:") and "mcp:<server>" in said  # nosec
+
+
+# --- Freezing until something comes in ---------------------------------------
+
+
+def test_a_frozen_spark_skips_its_schedule_until_its_event(monkeypatch):
+    monkeypatch.setenv(triggers.SETTING, "0")
+    frozen = sparks.Spark(id="f1", name="Replier", goal="g",
+                          waiting_on=["imessage"])
+    assert sparks.schedule_words(frozen) == (  # nosec B101
+        "frozen until a new iMessage comes in")
+    monkeypatch.setattr(sparks, "all_sparks", lambda: [frozen])
+    assert sparks.due(now=frozen.next_run + 10) == []  # nosec B101
+
+    def edit(key, change):
+        change(frozen)
+        return frozen
+
+    monkeypatch.setattr(sparks, "_edit", edit)
+    monkeypatch.setattr(sparks, "log", lambda *a, **k: None)
+    monkeypatch.setattr(sparks, "wake", lambda: None)
+    monkeypatch.setattr(sparks._events, "look", lambda events, now=None: {
+        "imessage": "New iMessages:\n- Sam Lee: are you free?"})
+
+    # Events off, and still woken: it asked for exactly this.
+    assert [s.id for s in sparks.event_tick()] == ["f1"]  # nosec B101
+    assert frozen.waiting_on == [] and frozen.asked  # nosec B101
+    assert "are you free?" in frozen.inbox[0]["text"]  # nosec B101
+
+
+def test_a_spark_freezes_itself_from_a_shift(monkeypatch):
+    spark = sparks.Spark(id="f2", name="Replier", goal="g")
+    monkeypatch.setattr(sparks, "_edit",
+                        lambda key, change: change(spark) or spark)
+    wait = sparks._waiting_for_events(spark)
+
+    said = wait({"events": "imessage email"})
+
+    assert spark.waiting_on == ["imessage", "email"]  # nosec B101
+    assert "End this shift" in said  # nosec B101
+    assert wait({"events": "printer"}).startswith("Error:")  # nosec B101
+
+    monkeypatch.setattr(sparks, "over_budget", lambda s: False)
+    monkeypatch.setattr(sparks, "wake", lambda: None)
+    sparks.run_now("f2")
+    assert spark.waiting_on == []  # nosec B101
+
+
+# --- Chats waiting for something to come in ----------------------------------
+
+
+def test_a_chat_waits_for_new_messages_and_keeps_waiting(monkeypatch):
+    from flash import waits
+
+    wait = waits.make("c1", {"what": "new texts", "then": "answer them",
+                             "events": "imessage", "keep": True}, now=100)
+    assert wait.events == ["imessage"] and wait.keep  # nosec B101
+    assert wait.give_up is not None  # nosec B101
+
+    newest = [7]
+    # Looked at again at once, not as the server spaces its looks.
+    monkeypatch.setattr(triggers, "EVERY", dict.fromkeys(triggers.EVERY, 0))
+    monkeypatch.setattr(computer, "allowed", lambda kind: True)
+    monkeypatch.setattr(computer, "newest_imessage", lambda: newest[0])
+    monkeypatch.setattr(computer, "imessages_after",
+                        lambda n: ["Thu 14:03 · Sam Lee: are you free?"])
+
+    assert waits.check(wait) == (False, "")  # nosec B101  (learns)
+    newest[0] = 8
+    found, said = waits.check(wait)
+    assert found and "Sam Lee: are you free?" in said  # nosec B101
+
+    with pytest.raises(waits.WaitError, match="keep only goes"):
+        waits.make("c1", {"what": "x", "then": "y", "keep": True,
+                          "in_minutes": 5})
+    with pytest.raises(waits.WaitError, match="not both"):
+        waits.make("c1", {"what": "x", "then": "y", "events": "email",
+                          "check": "a reply is in"})
