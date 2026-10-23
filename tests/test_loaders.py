@@ -247,3 +247,23 @@ class TestWeb:
         assert web.command(session, {"name": "loader-morph", "arg": "on"}) \
             == {"loader_morph": True}
         assert web.status(ai)["loader_morph"] is True
+
+
+def test_the_quill_shows_while_flash_writes(monkeypatch):
+    monkeypatch.delenv(loaders.WRITING_SETTING, raising=False)
+    wrote = [
+        {"role": "user", "content": "write the post"},
+        {"role": "assistant", "content": ""},
+        {"role": "tool", "tool_name": "read", "content": "..."},
+        {"role": "tool", "tool_name": "write", "content": "Created"},
+    ]
+    assert loaders.activity(wrote) == "writing"
+    assert loaders.for_activity("writing").id == "quill"
+
+    # Only since the user last spoke, and only after a write.
+    assert loaders.activity(wrote + [{"role": "user", "content": "ok"}]) == ""
+    assert loaders.activity(wrote[:3]) == ""
+    assert loaders.for_activity("") is None
+
+    monkeypatch.setenv(loaders.WRITING_SETTING, "0")
+    assert loaders.for_activity("writing") is None
