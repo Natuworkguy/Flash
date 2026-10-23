@@ -76,3 +76,27 @@ def test_mermaid_is_served_with_the_page():
     assert answer.getheader("Content-Type").startswith(  # nosec B101
         "text/javascript")
     assert b'globalThis["mermaid"]' in body  # nosec B101
+
+
+def lead(text: str) -> bool:
+    page = PAGE.read_text(encoding="utf-8")
+    script = (
+        page[page.index("function leadSlide("):page.index("const slideHtml")]
+        + f"console.log(JSON.stringify(leadSlide({json.dumps(text)})));\n"
+    )
+    done = subprocess.run(  # nosec B603
+        [node, "-e", script], capture_output=True, text=True, check=True,
+    )
+    return json.loads(done.stdout)
+
+
+@pytest.mark.skipif(node is None, reason="needs node")
+@pytest.mark.parametrize("text, centred", [
+    ("# Ember\n\nCatch the idea before it cools.", True),
+    ("## How many good ideas have you lost this week?", True),
+    ("## The problem\n\n- Find the phone\n- Unlock it", False),
+    ("## Two lines\n\nOne.\n\nTwo.", False),
+    ("Just a sentence, no heading.", False),
+])
+def test_a_title_or_question_slide_is_centred(text, centred):
+    assert lead(text) is centred  # nosec B101
