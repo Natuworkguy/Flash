@@ -15652,6 +15652,7 @@ function openPlus() {
   rows.push({ header: true, rule: true, html: "" });
   const thinking = thinkBtn.getAttribute("aria-pressed") === "true";
   rows.push({ html: `${icon("think")}<span class="label">${thinking ? "Skip the harder think" : "Think harder"}</span><span class="desc">${thinking ? "" : "on the next message"}</span>`, act: () => setThink(!thinking) });
+  rows.push({ html: `${icon("chat")}<span class="label">Ask on the side</span><span class="desc">/btw, without interrupting</span>`, act: () => { input.value = "/btw " + input.value.replace(/^\/btw\s*/, ""); autosize(); updateSend(); input.focus(); input.setSelectionRange(input.value.length, input.value.length); } });
   rows.push({ html: `${icon("book")}<span class="label">Use a skill</span><span class="desc">${icon("chevRight")}</span>`, act: openSkillPicker });
   rows.push({ html: `${icon("spark")}<span class="label">Sparks</span><span class="desc">${icon("chevRight")}</span>`, act: openSparkPicker });
   if (!input.value.trim()) rows.push({ html: `${icon("slash")}<span class="label">Commands</span>`, act: () => { input.value = "/"; autosize(); input.focus(); showSlash(); } });
