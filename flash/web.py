@@ -3598,6 +3598,7 @@ def voice_models(session: "Session") -> dict:
         return [
             {
                 "name": c.name, "size": c.size, "label": c.label,
+                "engine": voice.engine_of(c.name),
                 "installed": getattr(voice, installed)(c.name),
                 "current": c.name == in_use,
                 # A Kokoro voice or a Moonshine model, with what it
@@ -3608,7 +3609,7 @@ def voice_models(session: "Session") -> dict:
                     voice.is_moonshine(c.name) and not moonshine
                 ) else "",
             }
-            for c in getattr(voice, offered)
+            for c in voice.by_engine(getattr(voice, offered))
         ]
 
     kokoro = voice.kokoro_ready()

@@ -64,7 +64,7 @@ COMMANDS = [
     ("/computer", "let Flash pause music, open apps, send iMessages "
                   "(on|off [what]); use on|off: Computer Use, beta"),
     ("/mcp", "connect MCP servers' tools (add, remove, on, off, tools)"),
-    ("/voice", "talk to Flash and hear its replies (on|off, models, pull)"),
+    ("/voice", "talk to Flash and hear it (on|off, listen, speak, models)"),
     ("/background", "pixel-art scene behind the prompt (/background <name>)"),
     ("/set", f"set an env var, saved to {ENV_PATH} (/set NAME VALUE)"),
     ("/unset", "remove an env var (/unset NAME)"),

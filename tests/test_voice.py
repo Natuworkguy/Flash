@@ -1408,3 +1408,19 @@ def test_an_update_puts_moonshine_back_when_it_was_in(monkeypatch):
     assert updater.voice_packages() == [  # nosec B101
         *updater.VOICE_PACKAGES, updater.MOONSHINE_PACKAGE,
     ]
+
+
+def test_models_are_grouped_by_their_engine():
+    from flash import voice
+
+    assert voice.engine_of("vosk-model-small-en-us-0.15") == "Vosk"
+    assert voice.engine_of(f"{voice.MOONSHINE}tiny") == "Moonshine"
+    assert voice.engine_of("en_US-amy-low") == "Piper"
+    assert voice.engine_of(f"{voice.KOKORO}af_heart") == "Kokoro"
+
+    listening = [voice.engine_of(c.name)
+                 for c in voice.by_engine(voice.LISTENING)]
+    assert listening == sorted(listening, key=["Vosk", "Moonshine"].index)
+    speaking = [voice.engine_of(c.name)
+                for c in voice.by_engine(voice.SPEAKING)]
+    assert speaking == sorted(speaking, key=["Piper", "Kokoro"].index)

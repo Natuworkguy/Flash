@@ -972,6 +972,8 @@ body.voice-on .shell, body.voice-on #suggestions, body.voice-on #pending { displ
 .vm-head:first-child, .vm-missing + .vm-head { margin-top: 0; }
 .vm-head b { font-size: 14px; font-weight: 600; color: var(--text); }
 .vm-head span { font-size: 13px; color: var(--text-3); }
+.vm-engine { padding: 8px 14px 4px; font-size: 11.5px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-3); }
+.vm-engine.ruled { margin-top: 6px; border-top: 1px solid var(--border); padding-top: 12px; }
 .vm-list { border: 1px solid var(--border); border-radius: 14px; background: var(--surface); overflow: hidden; }
 .vm-styles { display: flex; flex-wrap: wrap; gap: 8px; align-items: stretch; margin-bottom: 4px; }
 .vm-style { flex: 1 1 140px; display: flex; flex-direction: column; gap: 3px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); text-align: left; transition: border-color 0.15s, background 0.15s; }
@@ -3161,6 +3163,10 @@ body.resizing-viewer iframe { pointer-events: none; }
   #log, #dock { view-transition-name: none; }
   .slide { opacity: 1; }
 }
+/* Every drop-down draws its own chevron, a little in from the edge,
+   rather than the browser's, which sits hard against it. */
+select:not([multiple]) { -webkit-appearance: none; appearance: none; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%238a8a8a' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E") !important; background-repeat: no-repeat !important; background-position: right 12px center !important; background-size: 13px !important; padding-right: 34px !important; }
+.ui-select select { background-image: none !important; }
 </style>
 </head>
 <body class="empty">
@@ -11220,7 +11226,13 @@ async function drawVoiceModels(box = document.querySelector(".voice-models")) {
     const needs = r[kind].find((m) => m.needs);
     if (needs) box.appendChild(installWidget(packagesIn(needs.needs), needs.needs, () => drawVoiceModels(box)));
     const list = box.appendChild(el("div", "vm-list"));
+    let engine = "";
     for (const m of r[kind]) {
+      // Each engine's models together, a line between them.
+      if (m.engine && m.engine !== engine) {
+        list.appendChild(el("div", "vm-engine" + (engine ? " ruled" : ""))).textContent = m.engine;
+        engine = m.engine;
+      }
       const fetching = r.downloading && r.downloading.kind === kind && r.downloading.name === m.name;
       const row = list.appendChild(el("div", "vm-row" + (m.current ? " current" : ""), `<span class="vm-mark">${m.current ? icon("check") : ""}</span><span class="vm-what"><b></b><small></small></span><span class="vm-act"></span>`));
       row.dataset.key = `${kind}:${m.name}`;
