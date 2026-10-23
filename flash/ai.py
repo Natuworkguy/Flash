@@ -520,6 +520,12 @@ def _banner_lines(update_version: Optional[str] = None) -> list:
             block.append(f"  {BULLET} {notice}", style=f"bold {ACCENT}")
         lines.extend([Text(""), block])
 
+    # Extensions' own banners, under Flash's.
+    from . import ext_ui
+
+    for _name, art in ext_ui.banners():
+        lines.extend([Text(""), Text(art, style=ACCENT)])
+
     return lines
 
 
@@ -1802,6 +1808,11 @@ def _status_text(messages: list[dict]) -> str:
 
     if learning.running():
         parts.append("learning")
+
+    # Extensions' status lines, as last read: never waited on here.
+    from . import ext_ui
+
+    parts += [line for _name, line in ext_ui.status_lines()]
 
     return "   ".join(parts)
 

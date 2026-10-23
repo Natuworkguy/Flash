@@ -465,6 +465,67 @@ def _sweep_edge(progress: float, label_len: int) -> float:
     return -_SWEEP_BAND + progress * span
 
 
+def _suggestions_now() -> list[str]:
+    """What the empty box suggests: an extension's own text, or its
+    suggestions ahead of Flash's."""
+
+    from . import ext_ui  # deferred: it reads the installed extensions
+
+    own = ext_ui.placeholder()
+    return [own] if own else ext_ui.suggestions() + _SUGGESTIONS
+
+
+def _ext_keys(keys: KeyBindings) -> None:
+    """Each extension button with a key, in the terminal's box: a prompt
+    or a command fills the box with what is typed, a program runs and
+    says what it says."""
+
+    from prompt_toolkit.application import run_in_terminal
+
+    from . import ext_ui  # deferred: it reads the installed extensions
+
+    for ext, button in ext_ui.terminal_buttons():
+        mod, _, letter = button.key.partition("-")
+        combo = (f"c-{letter}",) if mod == "c" else ("escape", letter)
+
+        def pressed(event, ext=ext, button=button) -> None:
+            buffer = event.current_buffer
+            typed = buffer.text
+            if button.prompt or button.command:
+                buffer.text = ext_ui.expand(button, typed) if button.prompt \
+                    else f"/{button.command} {typed}".rstrip()
+                buffer.cursor_position = len(buffer.text)
+                return
+
+            def run() -> dict:
+                from rich.markdown import Markdown
+                from rich.panel import Panel
+
+                from .theme import console
+
+                said = ext_ui.press(ext, button, typed)
+                if said.get("say"):
+                    console.print(Panel(
+                        Markdown(said["say"]), title=button.label,
+                        title_align="left", border_style=DIM_HEX,
+                        padding=(0, 1),
+                    ))
+                return said
+
+            async def go() -> None:
+                said = await run_in_terminal(run, in_executor=True)
+                text = said.get("send") or said.get("insert")
+                if text:
+                    buffer.text = text
+                    buffer.cursor_position = len(text)
+                if said.get("send"):
+                    buffer.validate_and_handle()
+
+            event.app.create_background_task(go())
+
+        keys.add(*combo)(pressed)
+
+
 def _suggestion_placeholder() -> StyleAndTextTuples:
     """Current animation frame: one suggestion's letters materializing in a
     coral sweep, holding, then erased by another sweep, cycling through
@@ -481,12 +542,13 @@ def _suggestion_placeholder() -> StyleAndTextTuples:
     if time.monotonic() < _exit_armed_until:
         return [(f"fg:{DIM_HEX}", EXIT_HINT)]
 
-    total = _CYCLE * len(_SUGGESTIONS)
+    shown = _suggestions_now()
+    total = _CYCLE * len(shown)
     pos = time.monotonic() % total
     idx = int(pos // _CYCLE)
     t = pos - idx * _CYCLE
 
-    label = f"{SPARKLE} {_SUGGESTIONS[idx]}"
+    label = f"{SPARKLE} {shown[idx]}"
 
     if t < _REVEAL:
         edge = _sweep_edge(t / _REVEAL, len(label))
@@ -842,6 +904,7 @@ def key_bindings() -> KeyBindings:
         _exit_armed_until = now + EXIT_PRESS_SECONDS
         event.app.invalidate()
 
+    _ext_keys(keys)
     return keys
 
 
