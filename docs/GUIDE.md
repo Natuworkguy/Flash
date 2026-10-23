@@ -1215,6 +1215,11 @@ as a copy in `~/.flash/web/files`, so a chat still shows its files
 after the originals are gone. In the terminal, a PDF opens in your PDF
 viewer.
 
+**Pinned chats** stay at the top of the sidebar, under Pinned, whatever
+project they are in: the pin beside a chat (on hover), or `/pin` for the
+open one, pins and unpins it. Scrolled up in a chat, a down arrow over
+the message box takes you back to the latest (`G` does too).
+
 **Projects** group chats about one codebase. A project is a folder plus
 instructions: every chat in it runs its tools in that folder, and the
 instructions go into its system prompt. Open them from Projects in the

@@ -375,6 +375,8 @@ class Chat:
     deep: bool = False
     # The user named it themselves: the model leaves the title alone.
     named: bool = False
+    # Kept at the top of the list, under Pinned.
+    pinned: bool = False
     # The model ended the spoken conversation this turn belongs to: voice
     # mode goes off once its reply is said.
     voice_ended: bool = False
@@ -410,6 +412,7 @@ class Chat:
             "project": self.project,
             "spark": self.spark,
             "updated": self.updated,
+            "pinned": self.pinned,
             # What it is waiting for, while it is: a clock in the list.
             "waiting": [w.what for w in waits.for_chat(self.id)
                         if w.status == waits.WAITING],
@@ -429,6 +432,7 @@ class Chat:
             "spark": self.spark,
             "branches": self.branches,
             "named": self.named,
+            "pinned": self.pinned,
         }
 
     @classmethod
@@ -444,6 +448,7 @@ class Chat:
             spark=str(data.get("spark") or ""),
             branches=dict(data.get("branches") or {}),
             named=bool(data.get("named")),
+            pinned=bool(data.get("pinned")),
         )
 
 
@@ -3707,6 +3712,15 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
         session.save(chat)
         session.hub.publish({"type": "chats", "chat": chat.id})
         return {}
+
+    if name == "pin":
+        # "on" or "off", or nothing to flip it.
+        chat = session.chat(chat_id)
+        chat.pinned = not chat.pinned if arg in ("", "toggle") else \
+            arg in ("on", "1", "true")
+        session.save(chat)
+        session.hub.publish({"type": "chats", "chat": chat.id})
+        return {"pinned": chat.pinned}
 
     if name == "clear":
         session.clear_chat(session.chat(chat_id))

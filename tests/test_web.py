@@ -4658,3 +4658,17 @@ def test_one_ctrl_c_stops_the_web_ui(monkeypatch):
     web.serve(open_browser=False)
 
     assert calls == [1]
+
+
+def test_a_pinned_chat_stays_pinned_across_a_restart():
+    session = web.Session()
+    chat = session.new_chat()
+
+    said = web.command(session, {"name": "pin", "arg": "", "chat": chat.id})
+    assert said == {"pinned": True}  # nosec B101
+    assert chat.summary()["pinned"] is True  # nosec B101
+    assert web.Chat.restore(chat.saved()).pinned  # nosec B101
+
+    said = web.command(session, {"name": "pin", "arg": "off",
+                                 "chat": chat.id})
+    assert said == {"pinned": False}  # nosec B101
