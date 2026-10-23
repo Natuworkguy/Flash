@@ -147,14 +147,61 @@ BUILTIN: tuple[Loader, ...] = (
          "     "), 0.16,
         "A hand guiding a quill across the page",
     ),
+    Loader(
+        "magnifier", "Magnifier",
+        ("⌕   ", " ⌕  ", "  ⌕ ", "   ⌕", "  ⌕ ", " ⌕  "),
+        ("o   ", " o  ", "  o ", "   o", "  o ", " o  "), 0.18,
+        "A magnifying glass hopping over the lines",
+    ),
+    Loader(
+        "terminal", "Terminal",
+        (">_   ", ">▪_  ", ">▪▪_ ", ">▪▪▪_", ">▪▪▪ ", ">▪▪▪_"),
+        (">_   ", ">._  ", ">.._ ", ">..._", ">... ", ">..._"), 0.16,
+        "A prompt typing out a command",
+    ),
+    Loader(
+        "book", "Book",
+        ("[|]", "[/]", "[—]", "[\\]", "[|]", "[|]"),
+        ("[|]", "[/]", "[-]", "[\\]", "[|]", "[|]"), 0.16,
+        "An open book, its pages turning",
+    ),
+    Loader(
+        "eye", "Eye",
+        ("◉", "◉", "◔", "◕", "◉", "—"),
+        ("o", "o", "O", "o", "-", "o"), 0.2,
+        "An eye looking about, and blinking",
+    ),
+    Loader(
+        "plane", "Paper plane",
+        ("➤    ", "·➤   ", "··➤  ", " ··➤ ", "  ··➤", "   ··", "     "),
+        (">    ", ".>   ", "..>  ", " ..> ", "  ..>", "   ..", "     "), 0.14,
+        "A paper plane flying off with its trail",
+    ),
 )
 
-# While Flash writes (its latest step wrote a file or a document), the
-# writing loader shows instead of the chosen one, saying "Writing".
+# While Flash does one of these (the last tool since the user spoke was
+# one of its tools), its loader shows instead of the chosen one, with
+# its word: a quill writing, a magnifier searching.
+TASKS: dict[str, tuple[str, str, tuple[str, ...]]] = {
+    "writing": ("quill", "Writing", (
+        "write", "edit", "multi_edit", "send_document", "make_document")),
+    "searching": ("magnifier", "Searching", (
+        "web_search", "fetch", "grep", "glob", "recall")),
+    "running": ("terminal", "Running", ("shell",)),
+    "reading": ("book", "Reading", (
+        "read", "read_email", "check_inbox", "read_imessages",
+        "skill_view")),
+    "looking": ("eye", "Looking", (
+        "screenshot", "open_page", "interact", "computer_use",
+        "view_image", "devtools")),
+    "sending": ("plane", "Sending", (
+        "send_email", "send_imessage", "notify_user")),
+}
+TASKS_SETTING = "LOADER_TASKS"
+# What it was called when only writing had one: still turns them off.
 WRITING_SETTING = "LOADER_WRITING"
 WRITING_LOADER = "quill"
-WRITING_TOOLS = ("write", "edit", "multi_edit", "send_document",
-                 "make_document")
+WRITING_TOOLS = TASKS["writing"][2]
 
 
 def _extension_loaders() -> list[Loader]:
@@ -196,18 +243,21 @@ def chosen() -> str:
     return value if find(value) is not None else DEFAULT
 
 
-def writing_shown() -> bool:
-    """Whether the quill takes over while Flash writes: on unless the
-    user turned it off."""
+def tasks_shown() -> bool:
+    """Whether a task's loader takes over while Flash does it: on unless
+    the user turned it off."""
 
-    return (os.environ.get(WRITING_SETTING) or "1").strip().lower() not in (
-        "0", "off", "false", "no",
-    )
+    said = os.environ.get(TASKS_SETTING) or os.environ.get(WRITING_SETTING)
+    return (said or "1").strip().lower() not in ("0", "off", "false", "no")
+
+
+# The name it had when only writing had a loader.
+writing_shown = tasks_shown
 
 
 def activity(messages: list) -> str:
     """What the wait after MESSAGES is for, by the tool that ran last
-    since the user spoke: "writing" after one of WRITING_TOOLS, else ""."""
+    since the user spoke: one of TASKS, or ""."""
 
     for message in reversed(messages or []):
         role = message.get("role") if isinstance(message, dict) else None
@@ -215,16 +265,23 @@ def activity(messages: list) -> str:
             return ""
         if role == "tool":
             name = str(message.get("tool_name") or "")
-            return "writing" if name in WRITING_TOOLS else ""
+            return next((kind for kind, (_, _, tools) in TASKS.items()
+                         if name in tools), "")
     return ""
 
 
 def for_activity(kind: str) -> Optional[Loader]:
     """The loader that shows for KIND of work, when one does."""
 
-    if kind == "writing" and writing_shown():
-        return find(WRITING_LOADER)
+    if kind in TASKS and tasks_shown():
+        return find(TASKS[kind][0])
     return None
+
+
+def word_for(kind: str) -> str:
+    """What the loader says for KIND of work."""
+
+    return TASKS[kind][1] if kind in TASKS else ""
 
 
 def morphing() -> bool:

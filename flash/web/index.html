@@ -810,13 +810,16 @@ pre code { display: block; padding: 2px 16px 14px; overflow-x: auto; font-size: 
    swallows them, flares, and blows them back out to where they began. */
 .ld-singularity .hole { position: absolute; left: 50%; top: 50%; width: 0.36em; height: 0.36em; margin: -0.18em; border-radius: 50%; background: #000; box-shadow: 0 0 0 0.05em currentColor, 0 0 0.2em color-mix(in srgb, currentColor 70%, transparent); animation: hole 1.8s var(--ease) infinite; }
 .ld-singularity i { position: absolute; left: 50%; top: 50%; width: 0.15em; height: 0.15em; margin: -0.075em; border-radius: 50%; background: currentColor; animation: pulled 1.8s cubic-bezier(0.55, 0, 0.45, 1) infinite; animation-delay: calc(var(--k) * -0.03s); }
-/* Quill: a hand guiding a quill along a line, the ink drawn out
-   behind it in loops, in plain lines like a sketch. Drawn frame by frame
-   (see quillFrame), a few a second, like stop motion. */
-.ld-quill { width: 2.6em; height: 1.4em; }
-.ld-quill svg { width: 2.6em; height: 1.6em; overflow: visible; fill: none; stroke: currentColor; stroke-width: 1.3; stroke-linecap: round; stroke-linejoin: round; }
-.ld-quill .vane { fill: color-mix(in srgb, currentColor 18%, transparent); }
-.ld-quill .hand { fill: var(--bg); }
+/* Sketches: the quill, the magnifier, the terminal, the book, the eye
+   and the paper plane, in plain lines like a sketch, drawn frame by
+   frame (see SKETCHES), a few a second, like stop motion. */
+.ld-sketch { width: 2.6em; height: 1.4em; }
+.ld-sketch svg { width: 2.6em; height: 1.6em; overflow: visible; fill: none; stroke: currentColor; stroke-width: 1.3; stroke-linecap: round; stroke-linejoin: round; }
+.ld-sketch .vane { fill: color-mix(in srgb, currentColor 18%, transparent); }
+.ld-sketch :is(.hand, .lens, .page) { fill: var(--bg); }
+.ld-sketch .lens { fill: color-mix(in srgb, currentColor 10%, var(--bg)); }
+.ld-sketch .faint { opacity: 0.45; }
+.ld-sketch .solid { fill: currentColor; }
 @keyframes pulled {
   0% { transform: rotate(calc(var(--k) * 45deg)) translateX(0.55em); opacity: 1; }
   52% { transform: rotate(calc(var(--k) * 45deg + 220deg)) translateX(0.05em) scale(0.4); opacity: 0.9; }
@@ -1616,7 +1619,7 @@ body.page-projects #dock, body.page-settings #dock, body.page-tool #dock { displ
 .loader-card:hover { transform: translateY(-2px); border-color: var(--border-strong); }
 .loader-card.on { border-color: transparent; box-shadow: 0 0 0 2px var(--accent); color: var(--text); }
 .loader-card .stage { height: 30px; display: grid; place-items: center; font-size: 24px; }
-.loader-card .stage .ld-quill { font-size: 15px; }
+.loader-card .stage .ld-sketch { font-size: 15px; }
 .loader-card .term { display: grid; place-items: center; min-width: 5.5ch; padding: 2px 8px; border-radius: 6px; background: color-mix(in srgb, var(--text) 8%, transparent); font-size: 12px; color: var(--text-2); }
 .loader-card .term .ld { color: currentColor; top: 0; }
 .loader-card .stage svg.i { width: 24px; height: 24px; color: var(--accent); }
@@ -7482,17 +7485,17 @@ function drawLookSettings(body) {
   };
   morph.style.marginTop = "12px";
   body.appendChild(morph);
-  const writing = el("button", "setting-row loader-writing-row", `<span class="what"><b>A quill while Flash writes</b><span>When its last step wrote a file or a document, a hand guides a quill instead, and it says Writing.</span></span><span class="switch" aria-hidden="true"></span>`);
-  writing.type = "button";
-  writing.setAttribute("role", "switch");
-  writing.setAttribute("aria-checked", info.loader_writing !== false);
-  writing.onclick = async () => {
-    const on = writing.getAttribute("aria-checked") !== "true";
-    writing.setAttribute("aria-checked", on);
-    try { info.loader_writing = (await command("loader-writing", on ? "on" : "off")).loader_writing; }
-    catch (error) { writing.setAttribute("aria-checked", !on); showFailure(error); }
+  const tasks = el("button", "setting-row loader-tasks-row", `<span class="what"><b>Dynamic loaders</b><span>The loader shows what Flash is doing: a hand guiding a quill while it writes, a magnifier while it searches, a terminal while it runs a command, a book while it reads, an eye while it looks at a page or your screen, and a paper plane while it sends.</span></span><span class="switch" aria-hidden="true"></span>`);
+  tasks.type = "button";
+  tasks.setAttribute("role", "switch");
+  tasks.setAttribute("aria-checked", info.loader_tasks !== false);
+  tasks.onclick = async () => {
+    const on = tasks.getAttribute("aria-checked") !== "true";
+    tasks.setAttribute("aria-checked", on);
+    try { info.loader_tasks = (await command("loader-tasks", on ? "on" : "off")).loader_tasks; }
+    catch (error) { tasks.setAttribute("aria-checked", !on); showFailure(error); }
   };
-  body.appendChild(writing);
+  body.appendChild(tasks);
 }
 
 // The standing instructions every reply follows, saved when they change.
@@ -12846,41 +12849,131 @@ const LOADER_ART = {
   cursor: () => "<i></i>",
   // The hole drawn last, over the dots, so the ones it pulls in are gone.
   // The nib at the pen's origin: the feather leans back over the hand.
-  quill: () => `<svg viewBox="0 -4 44 26">${quillFrame(0)}</svg>`,
+  // The sketches, drawn a frame at a time by turnSketches.
+  ...Object.fromEntries(["quill", "magnifier", "terminal", "book", "eye", "plane"].map((id) => [id, () => `<svg viewBox="0 -4 44 26" data-sketch="${id}"></svg>`])),
   singularity: () => repeat(8, (k) => `<i style="--k:${k}"></i>`) + `<b class="hole"></b>`,
 };
 
-// The quill, one frame at a time: the ink so far, a loop at a time, and
-// the hand on the end of it, never quite still. Each frame is drawn
-// outright rather than tweened, so it moves in steps, like stop motion.
+// The sketches, one frame at a time, each drawn outright rather than
+// tweened, so they move in steps, like stop motion, and never quite
+// hold still. Each: how many frames, how long each shows, and the
+// drawing of frame K, in a 44 by 26 box.
+const SKETCH_JITTER = [[0, 0, -3], [0.3, -0.4, 4], [-0.2, 0.3, -1], [0.2, 0.2, 5], [-0.3, -0.2, -4], [0.1, 0.4, 2]];
+const jitter = (k) => SKETCH_JITTER[k % SKETCH_JITTER.length];
+const f1 = (n) => +n.toFixed(1);
+
+// The quill: the ink so far, a loop at a time, and the hand on the end
+// of it; then the pen lifts away and the line fades.
 const QUILL_LOOPS = 8;
-const QUILL_FRAMES = QUILL_LOOPS * 2 + 6;
-const QUILL_MS = 110;
 const QUILL_PEN = `<path class="vane" d="M4.5-5.5C7-11 11-16 16.5-20.5 15.5-14 11.5-9 6.8-4.8Z"/><path d="M0 0 15.5-19.5"/><path class="hand" d="M2.6-3C4-1.4 5.4-1.4 6-3 7-1 8.8-1 9.2-3.2 10.6-1.6 12-2 12-4.2 12-6.6 9.4-8.8 6.4-8.3Z"/><path d="M11.6-6.2 16.2-4M12-3 16.6-1"/>`;
-// A small wobble for each frame, the same each time round.
-const QUILL_JITTER = [[0, 0, -3], [0.3, -0.4, 4], [-0.2, 0.3, -1], [0.2, 0.2, 5], [-0.3, -0.2, -4], [0.1, 0.4, 2]];
 function quillFrame(k) {
   const drawn = Math.min(QUILL_LOOPS, Math.ceil(k / 2));
   let d = "M3 18";
   for (let n = 0; n < drawn; n++) d += n === 0 ? "c2-5 4-5 4.5 0" : (n % 2 ? "s2.5 5 4.5 0" : "s2.5-5 4.5 0");
-  const [jx, jy, turn] = QUILL_JITTER[k % QUILL_JITTER.length];
+  const [jx, jy, turn] = jitter(k);
   const end = QUILL_LOOPS * 2;
-  // Then the pen lifts away and the line fades, and it starts again.
   const lift = Math.max(0, k - end - 1);
   const x = 3 + drawn * 4.5 + jx + lift * 1.4;
   const y = 18 + jy - lift * 2;
   const fade = k > end + 2 ? Math.max(0, 1 - (k - end - 2) / 3) : 1;
-  return (drawn ? `<path d="${d}" opacity="${fade.toFixed(2)}"/>` : "") +
-    `<g transform="translate(${x.toFixed(1)} ${y.toFixed(1)}) rotate(${turn})" opacity="${(k > end + 3 ? 0 : 1)}">${QUILL_PEN}</g>`;
+  return (drawn ? `<path d="${d}" opacity="${f1(fade)}"/>` : "") +
+    `<g transform="translate(${f1(x)} ${f1(y)}) rotate(${turn})" opacity="${(k > end + 3 ? 0 : 1)}">${QUILL_PEN}</g>`;
 }
-(function turnQuills() {
-  const now = performance.now();
-  for (const svg of document.querySelectorAll(".ld-quill svg")) {
-    const since = svg.since ?? (svg.since = now);
-    const k = calm.matches ? QUILL_LOOPS * 2 : Math.floor((now - since) / QUILL_MS) % QUILL_FRAMES;
-    if (svg.frame !== k) { svg.frame = k; svg.innerHTML = quillFrame(k); }
+
+// The magnifier: hopping from word to word over three lines of text.
+const MAG_SPOTS = [[9, 5], [17, 6], [26, 4], [34, 7], [31, 12], [22, 11], [13, 13], [9, 18], [19, 18], [30, 17]];
+function magnifierFrame(k) {
+  const [x, y] = MAG_SPOTS[Math.floor(k / 2)];
+  const [jx, jy, turn] = jitter(k);
+  return `<path class="faint" d="M4 4h12M19 4h9M31 4h8M4 11h7M14 11h14M31 11h8M4 18h16M23 18h8M34 18h5"/>` +
+    `<g transform="translate(${f1(x + jx)} ${f1(y + jy)}) rotate(${turn})"><path d="M3.6 3.6 8.2 8.2" stroke-width="2.4"/><circle class="lens" r="5"/><path d="M-2.8-1.2a3 3 0 0 1 1.6-1.9"/></g>`;
+}
+
+// The terminal: a prompt types a command, its output comes, and the
+// next prompt waits with its cursor blinking.
+function terminalFrame(k) {
+  const [jx, jy] = jitter(k);
+  const typed = Math.min(5, k);
+  const out = k >= 7 ? Math.min(2, k - 6) : 0;
+  const again = k >= 10 ? Math.min(3, k - 10) : 0;
+  const prompt = (y) => `M6 ${y - 1.6}l2 1.6-2 1.6`;
+  let d = prompt(8);
+  for (let i = 0; i < typed; i++) d += `M${10.5 + i * 3} 8h1.8`;
+  if (out > 0) d += "M6 12.5h22";
+  if (out > 1) d += "M6 16h14";
+  if (k >= 9) d += prompt(19.5);
+  for (let i = 0; i < again; i++) d += `M${10.5 + i * 3} 19.5h1.8`;
+  const row = k >= 9 ? 19.5 : 8;
+  const col = 10.5 + (k >= 9 ? again : typed) * 3;
+  const cursor = k % 2 === 0 || k < 5 ? `<rect class="solid" stroke="none" x="${col}" y="${row - 1.7}" width="1.8" height="3.4"/>` : "";
+  return `<g transform="translate(${f1(jx * 0.5)} ${f1(jy * 0.5)})"><rect x="2" y="-2" width="40" height="25" rx="3"/><path d="M2 2.4h40"/><circle class="solid" stroke="none" cx="5" cy="0.2" r="0.7"/><circle class="solid" stroke="none" cx="7.4" cy="0.2" r="0.7"/><circle class="solid" stroke="none" cx="9.8" cy="0.2" r="0.7"/><path d="${d}"/>${cursor}</g>`;
+}
+
+// The book: open, its pages turning over one after another.
+function bookFrame(k) {
+  const [jx, jy] = jitter(k);
+  const t = Math.min(1, (k % 12) / 7);
+  const lift = Math.sin(t * Math.PI);
+  const x = 40 - t * 36;
+  const mid = 22 + (x - 22) * 0.5;
+  const turning = k % 12 < 8 ? `<path class="page" d="M22 3C${f1(mid)} ${f1(1 - lift * 3)} ${f1(x)} ${f1(2.5 - lift * 2.5)} ${f1(x)} ${f1(2.5 - lift * 2.5)}V${f1(19.5 - lift * 2.5)}C${f1(x)} ${f1(19.5 - lift * 2.5)} ${f1(mid)} ${f1(17.5 - lift * 3)} 22 20Z"/>` : "";
+  return `<g transform="translate(${f1(jx * 0.5)} ${f1(jy * 0.5)})"><path class="page" d="M22 3C17 1 9 1 4 3V20C9 18 17 18 22 20Z"/><path class="page" d="M22 3C27 1 35 1 40 3V20C35 18 27 18 22 20Z"/><path class="faint" d="M7 7h11M7 10.5h11M7 14h8M26 7h11M26 10.5h11M26 14h9"/>${turning}</g>`;
+}
+
+// The eye: looking about, and now and then a blink.
+const EYE_LOOKS = [[0, 0], [0, 0], [-7, 1], [-7, 1], [-7, 1], [0, 0], [7, -1], [7, -1], [7, -1], [0, 0], [0, 2], [0, 2], [0, 0], [0, 0], [0, 0], [0, 0]];
+function eyeFrame(k) {
+  const [jx, jy] = jitter(k);
+  const lashes = `<path d="M10 3.4 8.6 0.8M16.6 1.2 16.2-1.6M27.4 1.2 27.8-1.6M34 3.4 35.4 0.8"/>`;
+  const g = (inner) => `<g transform="translate(${f1(jx * 0.5)} ${f1(jy * 0.5)})">${inner}</g>`;
+  if (k === 13 || k === 14) return g(`<path d="M3 10C12 14.5 32 14.5 41 10"/>${lashes}`);
+  const [dx, dy] = EYE_LOOKS[k];
+  const half = k === 12 || k === 15;
+  const lid = half ? "M3 10C12 5 32 5 41 10C32 15 12 15 3 10Z" : "M3 10C12 0 32 0 41 10C32 20 12 20 3 10Z";
+  return g(`<path class="page" d="${lid}"/><circle cx="${22 + dx}" cy="${10 + dy}" r="${half ? 3.6 : 5.2}"/><circle class="solid" stroke="none" cx="${22 + dx}" cy="${10 + dy}" r="${half ? 1.6 : 2.3}"/>${lashes}`);
+}
+
+// The paper plane: off along a looping path, its trail behind it, then
+// gone, and back again.
+function planeAt(i) {
+  const x = 3 + i * 3.6;
+  const y = 13 - 6 * Math.sin((i / 11) * Math.PI * 1.25);
+  const dy = -6 * Math.cos((i / 11) * Math.PI * 1.25) * (Math.PI * 1.25 / 11);
+  return [x, y, Math.atan2(dy, 3.6) * 180 / Math.PI];
+}
+function planeFrame(k) {
+  const [jx, jy, turn] = jitter(k);
+  const flying = Math.min(k, 11);
+  let trail = "";
+  for (let i = 0; i < flying - 1; i += 2) {
+    const [x1, y1] = planeAt(i), [x2, y2] = planeAt(i + 0.8);
+    trail += `M${f1(x1)} ${f1(y1)}L${f1(x2)} ${f1(y2)}`;
   }
-  setTimeout(() => requestAnimationFrame(turnQuills), 40);
+  const fade = k > 12 ? Math.max(0, 1 - (k - 12) / 3) : 1;
+  const [x, y, angle] = planeAt(flying);
+  const plane = k <= 11 ? `<g transform="translate(${f1(x + jx)} ${f1(y + jy)}) rotate(${f1(angle + turn)})"><path class="page" d="M2 0-8-4.5-5.5 0-8 4.5Z"/><path d="M2 0-5.5 0M-5.5 0-6.5 2.6"/></g>` : "";
+  return (trail ? `<path class="faint" d="${trail}" opacity="${f1(fade)}"/>` : "") + plane;
+}
+
+const SKETCHES = {
+  quill: { frames: QUILL_LOOPS * 2 + 6, ms: 110, rest: QUILL_LOOPS * 2, draw: quillFrame },
+  magnifier: { frames: MAG_SPOTS.length * 2, ms: 120, rest: 0, draw: magnifierFrame },
+  terminal: { frames: 18, ms: 130, rest: 12, draw: terminalFrame },
+  book: { frames: 24, ms: 110, rest: 9, draw: bookFrame },
+  eye: { frames: EYE_LOOKS.length, ms: 160, rest: 0, draw: eyeFrame },
+  plane: { frames: 16, ms: 110, rest: 6, draw: planeFrame },
+};
+
+(function turnSketches() {
+  const now = performance.now();
+  for (const svg of document.querySelectorAll(".ld-sketch svg[data-sketch]")) {
+    const sketch = SKETCHES[svg.dataset.sketch];
+    if (!sketch) continue;
+    const since = svg.since ?? (svg.since = now);
+    const k = calm.matches ? sketch.rest : Math.floor((now - since) / sketch.ms) % sketch.frames;
+    if (svg.frame !== k) { svg.frame = k; svg.innerHTML = sketch.draw(k); }
+  }
+  setTimeout(() => requestAnimationFrame(turnSketches), 40);
 })();
 
 const allLoaders = () => info.loaders || [];
@@ -12909,7 +13002,7 @@ const stretchOf = (id) => (info.loader_morph ? Math.floor((Date.now() - (busySin
 // counted from SINCE so it carries on where it was when drawn again.
 function spinner(loader, since = performance.now()) {
   const art = LOADER_ART[loader.id];
-  const node = el("span", `ld ld-${art ? loader.id : "frames"}`, art ? art() : `<span class="glyph"></span>`);
+  const node = el("span", `ld ld-${art ? loader.id : "frames"}${art && SKETCHES[loader.id] ? " ld-sketch" : ""}`, art ? art() : `<span class="glyph"></span>`);
   node.setAttribute("aria-hidden", "true");
   if (!art) {
     const glyph = node.firstChild;
@@ -13012,18 +13105,29 @@ function glyphShift(loader) {
   setTimeout(() => requestAnimationFrame(turnGlyphs), 40);
 })();
 
-// What the wait is for: "writing" when the last step since the user's
-// message wrote a file or a document, so the quill shows, writing.
-const WRITING_STEP = /^(Write|Edit|MultiEdit|SendDocument|MakeDocument)\(/;
+// What the wait is for, by the last step since the user's message: a
+// task with a loader of its own (writing, searching, running), shown
+// with its word while Flash does it. The labels are the tools' own.
+const TASK_STEPS = [
+  ["writing", "quill", "Writing", /^(Write|Edit|MultiEdit|SendDocument|MakeDocument)\(/],
+  ["searching", "magnifier", "Searching", /^(Search|Fetch|Grep|Glob|Recall)\(/],
+  ["running", "terminal", "Running", /^Bash\(/],
+  ["reading", "book", "Reading", /^(Read|ReadEmail|CheckInbox|ReadIMessages|SkillView)\(/],
+  ["looking", "eye", "Looking", /^(Screenshot|OpenPage|Interact|ComputerUse|ViewImage|Devtools)\(/],
+  ["sending", "plane", "Sending", /^(SendEmail|SendIMessage|Notify)\(/],
+];
 function activityOf(chat) {
-  if (info.loader_writing === false) return "";
+  if (info.loader_tasks === false) return "";
   for (let i = chat.log.length - 1; i >= 0; i--) {
     const e = chat.log[i];
     if (e.type === "user") return "";
-    if (e.type === "tool") return WRITING_STEP.test(e.label || "") && allLoaders().some((l) => l.id === "quill") ? "writing" : "";
+    if (e.type !== "tool") continue;
+    const step = TASK_STEPS.find(([, id, , re]) => re.test(e.label || "") && allLoaders().some((l) => l.id === id));
+    return step ? step[0] : "";
   }
   return "";
 }
+const taskStep = (kind) => TASK_STEPS.find(([k]) => k === kind);
 
 function loaderBlock(chat) {
   startedWaiting(chat.id);
@@ -13031,7 +13135,7 @@ function loaderBlock(chat) {
   node.since = performance.now() - (Date.now() - busySince.get(chat.id));
   node.stretch = stretchOf(chat.id);
   node.dataset.activity = activityOf(chat);
-  node.firstChild.appendChild(spinner(node.dataset.activity ? loaderBy("quill") : runAt(chat.id, node.stretch), node.since));
+  node.firstChild.appendChild(spinner(node.dataset.activity ? loaderBy(taskStep(node.dataset.activity)[1]) : runAt(chat.id, node.stretch), node.since));
   node.setAttribute("role", "status");
   node.dataset.chat = chat.id;
   node.wordAt = -1;
@@ -13069,7 +13173,7 @@ function tickLoader(node, first) {
       else { old.classList.add("out"); setTimeout(() => old.remove(), 320); }
     }
     const word = el("span");
-    word.textContent = node.dataset.activity === "writing" ? "Writing…" : `${words[((wordOffset.get(node.dataset.chat) || 0) + at) % words.length]}…`;
+    word.textContent = node.dataset.activity ? `${taskStep(node.dataset.activity)[2]}…` : `${words[((wordOffset.get(node.dataset.chat) || 0) + at) % words.length]}…`;
     box.appendChild(word);
   }
   const seconds = Math.floor(age / 1000);

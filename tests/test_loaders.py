@@ -178,7 +178,7 @@ class TestTerminalCommand:
                 Document("/loader m", cursor_position=9), None,
             )
         ]
-        assert offered == ["morph"]
+        assert offered == ["magnifier", "morph"]
 
 
 class TestExtensions:
@@ -264,10 +264,34 @@ def test_the_quill_shows_while_flash_writes(monkeypatch):
     assert loaders.activity(wrote) == "writing"
     assert loaders.for_activity("writing").id == "quill"
 
-    # Only since the user last spoke, and only after a write.
+    # Only since the user last spoke, and by the last step: a read is
+    # reading.
     assert loaders.activity(wrote + [{"role": "user", "content": "ok"}]) == ""
-    assert loaders.activity(wrote[:3]) == ""
+    assert loaders.activity(wrote[:3]) == "reading"
     assert loaders.for_activity("") is None
 
     monkeypatch.setenv(loaders.WRITING_SETTING, "0")
     assert loaders.for_activity("writing") is None
+
+
+@pytest.mark.parametrize("tool, kind, loader, word", [
+    ("web_search", "searching", "magnifier", "Searching"),
+    ("shell", "running", "terminal", "Running"),
+    ("read", "reading", "book", "Reading"),
+    ("computer_use", "looking", "eye", "Looking"),
+    ("send_email", "sending", "plane", "Sending"),
+    ("agent", "", None, ""),
+])
+def test_each_task_has_its_loader(monkeypatch, tool, kind, loader, word):
+    monkeypatch.delenv(loaders.TASKS_SETTING, raising=False)
+    monkeypatch.delenv(loaders.WRITING_SETTING, raising=False)
+    did = [{"role": "user", "content": "go"},
+           {"role": "tool", "tool_name": tool, "content": "..."}]
+
+    assert loaders.activity(did) == kind
+    found = loaders.for_activity(kind)
+    assert (found.id if found else None) == loader
+    assert loaders.word_for(kind) == word
+
+    monkeypatch.setenv(loaders.TASKS_SETTING, "off")
+    assert loaders.for_activity(kind) is None

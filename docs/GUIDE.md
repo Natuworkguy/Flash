@@ -1254,10 +1254,12 @@ this browser:
   between messages, and how round the corners are.
 - **Loading animation**: Dots, Bloom, Orbit, Pulse, Wave, Bounce, Grid,
   Snake, Arc, Cursor, Comet, Singularity (a black hole that pulls
-  every dot in, then blows them out), Quill, or an extension's. While
-  Flash writes (its last step wrote a file or a document), a hand
-  guides a quill instead and it says Writing; **A quill while Flash
-  writes** turns that off (`LOADER_WRITING=0`). Every 10 seconds it shrinks away into another, at
+  every dot in, then blows them out), Quill, Magnifier, Terminal, Book, Eye, Paper plane, or an
+  extension's. **Dynamic loaders** show what Flash is doing instead,
+  saying so: a hand guiding a quill while it writes, a magnifier while
+  it searches, a terminal while it runs a command, a book while it
+  reads, an eye while it looks at a page or your screen, a paper plane
+  while it sends (`LOADER_TASKS=0` turns them off). Every 10 seconds it shrinks away into another, at
   random, for as long as Flash works; turn off **Morph between
   loaders** to keep to one. Both are the same settings as the
   terminal's `/loader` and `/loader morph`.
