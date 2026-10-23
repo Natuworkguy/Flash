@@ -119,6 +119,10 @@ class Watcher:
                 said = ""
             if said:
                 news[event] = said[:TOLD_CHARS]
+                if kind == MCP:
+                    from . import briefing
+
+                    briefing.note(event, news[event])
         return news
 
     def _look(self, event: str) -> str:

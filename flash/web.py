@@ -54,6 +54,7 @@ from rich.text import Text
 from . import agent as subagents
 from . import (
     background,
+    briefing,
     checkpoint,
     computer,
     computeruse,
@@ -3886,6 +3887,21 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
 
     if name == "forks":
         return {"forks": session.fork_tree(session.chat(chat_id))}
+
+    if name == "briefing":
+        problems: list[str] = []
+        return {"cards": briefing.cards(session, problems=problems),
+                "problems": problems}
+
+    if name == "briefing-dismiss":
+        # One card's id, or "all" with the ids in "cards".
+        ids = body.get("cards") if arg == "all" else [arg]
+        briefing.dismiss(i for i in ids or [] if isinstance(i, str))
+        return {}
+
+    if name == "briefing-undo":
+        briefing.undismiss(arg)
+        return {}
 
     if name == "pin":
         # "on" or "off", or nothing to flip it.
