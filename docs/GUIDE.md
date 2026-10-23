@@ -534,7 +534,8 @@ this set up: in a shift, `wait_for_events` pauses its schedule until a
 new email, iMessage or change in an MCP server arrives, and its next
 shift starts with what came. That's how a spark waits for an answer, or
 handles messages as they come, calling it again at the end of each
-shift. Its window shows "frozen until a new email comes in", and Run now
+shift. Calling it again while frozen replaces what it waits for, rather
+than adding to it. Its window shows "frozen until a new email comes in", and Run now
 thaws it.
 
 The new-spark form starts from a template if you like, among them
@@ -833,6 +834,11 @@ one can keep going: the chat wakes with each new one, answers it, and
 goes on waiting until you press Cancel or it gives up. A time and a
 condition together wait for the time, then start looking. A wait that keeps looking gives up
 after three days unless told otherwise, and Flash tells you it did.
+
+Flash can change a wait it set without starting over ("make that four
+hours", "also watch for email", "check every five minutes"): the same
+wait and card, now waiting for what it says. A new command is put to
+you again, as when the wait was set.
 
 Each wait shows in its chat as a card with what it is waiting for, what
 it will do then, how its last look went, and Cancel. Waits are kept in

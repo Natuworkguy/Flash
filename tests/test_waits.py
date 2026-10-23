@@ -326,3 +326,150 @@ def test_a_chat_says_what_it_is_waiting_for_in_the_list(session):
 
     waits.cancel(only(session).id)
     assert session.chat_.summary()["waiting"] == []  # nosec B101
+
+
+# --- Changing a wait ---------------------------------------------------------
+
+
+def test_a_wait_is_changed_in_place(session, monkeypatch):
+    published = []
+    monkeypatch.setattr(session.hub, "publish", published.append)
+    web.wait_for(session, session.chat_, {
+        "what": "the download", "then": "unzip it", "in_minutes": 120,
+    })
+    wait = only(session)
+
+    said = web.edit_wait(session, session.chat_, {
+        "id": wait.id, "what": "the big download", "in_minutes": 240,
+    })
+
+    changed = only(session)
+    assert changed.id == wait.id and changed.then == "unzip it"  # nosec
+    assert changed.at == pytest.approx(time.time() + 4 * 3600,  # nosec
+                                       abs=5)
+    assert changed.next == changed.at  # nosec B101
+    assert said.startswith("Changed. Waiting") and wait.id in said  # nosec
+    # The same card, brought up to date, and the list told what it was.
+    cards = [e for e in session.chat_.log if e.get("type") == "wait"]
+    assert len(cards) == 1 and cards[0]["what"] == "the big download"
+    assert published[-1]["was"] == "the download"  # nosec B101
+    assert session.chat_.summary()["waiting"] == [  # nosec B101
+        "the big download"]
+
+
+def test_only_what_is_given_changes(session):
+    web.wait_for(session, session.chat_, {
+        "what": "Sam's reply", "then": "summarise it",
+        "check": "a reply from Sam is in my inbox", "every_minutes": 30,
+    })
+    wait = only(session)
+    give_up, next_look = wait.give_up, wait.next
+
+    web.edit_wait(session, session.chat_, {"id": wait.id,
+                                           "then": "draft an answer"})
+
+    changed = only(session)
+    assert changed.then == "draft an answer"  # nosec B101
+    assert changed.check == "a reply from Sam is in my inbox"  # nosec B101
+    assert (changed.give_up, changed.next) == (give_up, next_look)  # nosec
+
+    # From a check to events: looked for from scratch, and a check taken
+    # away with "".
+    waits.update(wait.id, checks=3)
+    web.edit_wait(session, session.chat_, {
+        "id": wait.id, "check": "", "events": "email", "keep": True,
+    })
+    changed = only(session)
+    assert changed.events == ["email"] and changed.keep  # nosec B101
+    assert changed.check == "" and changed.checks == 0  # nosec B101
+
+
+def test_a_new_command_is_asked_about_again(session, monkeypatch, tmp_path):
+    answers = ["y", "n", "y"]
+    asked = []
+    monkeypatch.setattr(tools, "remote_answer",
+                        lambda q: asked.append(q) or answers.pop(0))
+    monkeypatch.chdir(tmp_path)
+    web.wait_for(session, session.chat_, {
+        "what": "CI", "then": "deploy", "command": "gh pr checks 1",
+    })
+    wait = only(session)
+
+    said = web.edit_wait(session, session.chat_, {
+        "id": wait.id, "command": "gh pr checks 2"})
+    assert said.startswith("Blocked by user")  # nosec B101
+    assert only(session).command == "gh pr checks 1"  # nosec B101
+
+    web.edit_wait(session, session.chat_, {"id": wait.id,
+                                           "command": "gh pr checks 2"})
+    assert "gh pr checks 2" in asked[-1]  # nosec B101
+    assert only(session).command == "gh pr checks 2"  # nosec B101
+
+    # The same command, or anything else, is not asked about.
+    web.edit_wait(session, session.chat_, {"id": wait.id, "every_minutes": 5,
+                                           "command": "gh pr checks 2"})
+    assert len(asked) == 3 and only(session).every == 5  # nosec B101
+
+    # Autonomous: not asked at all.
+    monkeypatch.setattr(tools, "NO_COMMAND_CONFIRMATION", True)
+    web.edit_wait(session, session.chat_, {"id": wait.id,
+                                           "command": "gh pr checks 3"})
+    assert len(asked) == 3  # nosec B101
+
+
+@pytest.mark.parametrize("args, why", [
+    ({"id": "nope", "what": "x"}, "No wait"),
+    ({"id": "", "what": "x"}, "No wait"),
+    ({}, "Say what to change"),
+    ({"keep": True}, "keep only goes"),
+    ({"in_minutes": -5}, "more than 0"),
+    ({"events": "printer"}, "mcp:<server>"),
+])
+def test_a_change_is_checked_as_a_new_wait_is(session, args, why):
+    web.wait_for(session, session.chat_, {
+        "what": "the build", "then": "ship it", "in_minutes": 30,
+    })
+    wait = only(session)
+    given = {"id": wait.id, **args}
+
+    said = web.edit_wait(session, session.chat_, given)
+
+    assert said.startswith("Error:") and why in said  # nosec B101
+    assert only(session).what == "the build"  # nosec B101
+
+
+def test_only_an_open_wait_in_this_chat_is_changed(session):
+    web.wait_for(session, session.chat_, {
+        "what": "the build", "then": "ship it", "in_minutes": 30,
+    })
+    wait = only(session)
+    other = session.new_chat()
+    assert "No wait" in web.edit_wait(session, other, {  # nosec B101
+        "id": wait.id, "what": "x"})
+
+    waits.cancel(wait.id)
+    assert "already cancelled" in web.edit_wait(  # nosec B101
+        session, session.chat_, {"id": wait.id, "what": "x"})
+
+
+def test_a_wait_whose_time_came_can_still_be_changed(session):
+    web.wait_for(session, session.chat_, {
+        "what": "the build", "then": "ship it", "in_minutes": 1,
+        "check": "the build is done",
+    })
+    wait = only(session)
+    waits.update(wait.id, at=time.time() - 600, next=time.time() - 1)
+
+    said = web.edit_wait(session, session.chat_, {"id": wait.id,
+                                                  "then": "ship it twice"})
+
+    assert said.startswith("Changed.")  # nosec B101
+    assert only(session).then == "ship it twice"  # nosec B101
+
+
+def test_edit_wait_is_offered_beside_wait_for(session):
+    names = [t["function"]["name"] for t in web.chat_tools(session.chat_)]
+    assert names.index("edit_wait") == names.index("wait_for") + 1  # nosec
+    schema = web.EDIT_WAIT_TOOL["function"]["parameters"]
+    assert schema["required"] == ["id"]  # nosec B101
+    assert set(waits.EDITABLE) <= set(schema["properties"])  # nosec B101

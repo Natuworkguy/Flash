@@ -1347,8 +1347,10 @@ class Session:
             note = f"Done waiting: {ended.what}"
         self.send(chat, told, wake=True, note=note)
 
-    def wait_changed(self, wait: Optional["waits.Wait"]) -> None:
-        """Its card, in its chat and on every page, brought up to date."""
+    def wait_changed(self, wait: Optional["waits.Wait"],
+                     was: str = "") -> None:
+        """Its card, in its chat and on every page, brought up to date.
+        WAS: what it waited for before an edit, to take off the list."""
 
         if wait is None:
             return
@@ -1360,7 +1362,8 @@ class Session:
                     entry.update(card)
                     self.save(chat)
                     break
-        self.hub.publish({"type": "wait-state", "chat": wait.chat, **card})
+        self.hub.publish({"type": "wait-state", "chat": wait.chat, **card,
+                          **({"was": was} if was else {})})
 
     def close(self) -> None:
         self._stop_watching.set()
@@ -2199,12 +2202,73 @@ CANCEL_WAIT_TOOL = {
 }
 
 
+EDIT_WAIT_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "edit_wait",
+        "description": (
+            "Change something you are waiting for with wait_for, by its "
+            "id, in place: the same wait and card, now waiting for what "
+            "you say. Give only what changes, as wait_for takes it (what, "
+            "then, at or in_minutes, command, check, events, keep, "
+            "every_minutes, give_up_after_hours); \"\" takes one away. A "
+            "new command is put to the user again."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "id": {"type": "string"},
+                **WAIT_TOOL["function"]["parameters"]["properties"],
+            },
+            "required": ["id"],
+        },
+    },
+}
+
+
 def chat_tools(chat: Chat) -> list[dict]:
     """The tools for CHAT itself: retitling it, waiting for something,
     and in a spoken conversation, ending that."""
 
-    return [TITLE_TOOL, WAIT_TOOL, CANCEL_WAIT_TOOL,
+    return [TITLE_TOOL, WAIT_TOOL, EDIT_WAIT_TOOL, CANCEL_WAIT_TOOL,
             *([END_VOICE_TOOL] if chat.heard else [])]
+
+
+def _command_allowed(wait: "waits.Wait") -> bool:
+    """Whether WAIT's command may run again and again with nobody
+    watching: the user says yes to it once, unless autonomous."""
+
+    from . import tools as flash_tools  # deferred: tools imports a lot
+
+    every = f"every {wait.every} minute{'s' if wait.every != 1 else ''}"
+    return not wait.command or flash_tools.NO_COMMAND_CONFIRMATION or \
+        flash_tools.ULTRA_AUTO or flash_tools._user_allows(
+            f"Wait for this, running it {every} until it succeeds?\n"
+            f"{wait.command}"
+        )
+
+
+def _waiting_words(wait: "waits.Wait") -> str:
+    """What WAIT waits for, for the model."""
+
+    every = f"every {wait.every} minute{'s' if wait.every != 1 else ''}"
+    hours = f"{round(((wait.give_up or 0) - wait.next) / 3600, 1):g}"
+    if wait.events:
+        from . import triggers
+
+        return (
+            f"Waiting (id {wait.id}) for "
+            + " or ".join(triggers.words(e) for e in wait.events)
+            + (", waking for each one that comes in" if wait.keep else "")
+            + f", for at most {hours} hours."
+        )
+    if wait.command or wait.check:
+        how = (f"running `{wait.command}`" if wait.command
+               else f"looking for: {wait.check}")
+        start = (f" from {waits.when(wait)}" if wait.at else "")
+        return (f"Waiting (id {wait.id}): {how}, {every}{start}, until it "
+                f"is so, or for at most {hours} hours.")
+    return f"Waiting (id {wait.id}) until {waits.when(wait)}."
 
 
 def wait_for(session: "Session", chat: Chat, args: dict) -> str:
@@ -2216,45 +2280,53 @@ def wait_for(session: "Session", chat: Chat, args: dict) -> str:
         wait = waits.make(chat.id, args, cwd=os.getcwd())
     except waits.WaitError as exc:
         return f"Error: {exc}"
-    every = f"every {wait.every} minute{'s' if wait.every != 1 else ''}"
     flash_tools.tool_line(f"WaitFor({wait.what})")
     # Run again and again with nobody watching: the user says yes once.
-    if wait.command and not flash_tools.NO_COMMAND_CONFIRMATION and \
-            not flash_tools._user_allows(
-                f"Wait for this, running it {every} until it succeeds?\n"
-                f"{wait.command}"
-            ):
+    if not _command_allowed(wait):
         return "Blocked by user: no wait was set."
     waits.add(wait)
     session.emit(chat, {"type": "wait", **wait.card()})
     session.ensure_watching()
-    if wait.events:
-        from . import triggers
-
-        said = (
-            f"Waiting (id {wait.id}) for "
-            + " or ".join(triggers.words(e) for e in wait.events)
-            + (", waking for each one that comes in" if wait.keep else "")
-            + f", for at most "
-            f"{round(((wait.give_up or 0) - wait.next) / 3600, 1):g} hours."
-        )
-    elif wait.command or wait.check:
-        how = (f"running `{wait.command}`" if wait.command
-               else f"looking for: {wait.check}")
-        start = (f" from {waits.when(wait)}" if wait.at else "")
-        said = (
-            f"Waiting (id {wait.id}): {how}, {every}{start}, until it is "
-            f"so, or for at most "
-            f"{round(((wait.give_up or 0) - wait.next) / 3600, 1):g} hours."
-        )
-    else:
-        said = f"Waiting (id {wait.id}) until {waits.when(wait)}."
+    said = _waiting_words(wait)
     flash_tools.tool_result(said)
     return (
         f"{said} Tell the user, in a sentence, what you are waiting for "
         "and what you will do then, and end your turn. You are woken here "
         "when it is over."
     )
+
+
+def edit_wait(session: "Session", chat: Chat, args: dict) -> str:
+    """edit_wait: one of CHAT's waits, changed where it is."""
+
+    from . import tools as flash_tools  # deferred: tools imports a lot
+
+    wait_id = str(args.get("id") or "").strip()
+    found = waits.find(wait_id)
+    flash_tools.tool_line(f"EditWait({found.what if found else wait_id})")
+    if "command" in args and found is not None and found.chat == chat.id \
+            and str(args.get("command") or "").strip() not in ("",
+                                                               found.command):
+        # A new command is asked about before anything changes, as
+        # wait_for asks; one that fails to check is not asked about.
+        try:
+            trial = waits.make(chat.id, {**waits._as_args(found), **{
+                k: args[k] for k in waits.EDITABLE if k in args}},
+                found.cwd, counted=False)
+        except waits.WaitError:
+            trial = None
+        if trial is not None and not _command_allowed(trial):
+            return "Blocked by user: the wait was not changed."
+    try:
+        before, wait = waits.edit(wait_id, chat.id, args)
+    except waits.WaitError as exc:
+        flash_tools.tool_result(str(exc), style=flash_tools.ERROR)
+        return f"Error: {exc}"
+    session.wait_changed(wait, was=before.what)
+    session.ensure_watching()
+    said = _waiting_words(wait)
+    flash_tools.tool_result(said)
+    return f"Changed. {said} Tell the user, in a sentence, what changed."
 
 
 def cancel_wait(session: "Session", chat: Chat, args: dict) -> str:
@@ -2976,6 +3048,8 @@ def _respond(
                     output = wait_for(session, chat, args)
                 elif name == "cancel_wait":
                     output = cancel_wait(session, chat, args)
+                elif name == "edit_wait":
+                    output = edit_wait(session, chat, args)
                 elif name == "computer_use":
                     # This chat's: the stop keys stop this reply.
                     with flash_tools.computer_user(chat.id, chat.stop.set):
