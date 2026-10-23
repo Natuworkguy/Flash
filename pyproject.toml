@@ -29,7 +29,7 @@ kokoro = { file = ["requirements-kokoro.txt"] }
 moonshine = { file = ["requirements-moonshine.txt"] }
 
 [project.scripts]
-flash = "flash.ai:main"
+flash = "flash.__main__:main"
 
 [tool.setuptools.packages.find]
 where = ["."]

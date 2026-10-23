@@ -14,12 +14,14 @@ are kept, for a page that opens its logs later.
 """
 
 import importlib
+import re
 import shutil
 import subprocess  # nosec B404
 import sys
 import threading
 import time
 from collections.abc import Callable
+from pathlib import Path
 from typing import Optional
 
 # What can be installed, each with what has to run after it.
@@ -37,6 +39,72 @@ PACKAGES: dict[str, list[list[str]]] = {
 }
 KEPT_LINES = 400
 LINE_CHARS = 2000
+
+
+# Flash's own requirements, beside a clone of it.
+REQUIREMENTS = Path(__file__).resolve().parents[1] / "requirements.txt"
+# Where a package's import name is not its name.
+IMPORT_NAMES = {"dotenv": "python-dotenv", "docx": "python-docx",
+                "yaml": "pyyaml", "PIL": "pillow"}
+
+
+def required() -> list[str]:
+    """What Flash needs, as pip takes it: from requirements.txt beside a
+    clone, else from the installed package's own record."""
+
+    try:
+        lines = REQUIREMENTS.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        try:
+            from importlib.metadata import requires
+
+            lines = [r for r in requires("flash") or []
+                     if "extra ==" not in r]
+        except Exception:  # noqa: BLE001  (not installed as a package)
+            lines = []
+    return [line.strip() for line in lines
+            if line.strip() and not line.strip().startswith("#")]
+
+
+def _name(requirement: str) -> str:
+    return re.split(r"[\s;<>=!~\[]", requirement, maxsplit=1)[0] \
+        .lower().replace("_", "-")
+
+
+def requirement_for(module: str) -> Optional[str]:
+    """The requirement of Flash's that MODULE comes from, if one does."""
+
+    top = (module or "").split(".")[0]
+    wanted = IMPORT_NAMES.get(top, top).lower().replace("_", "-")
+    return next((r for r in required() if _name(r) == wanted), None)
+
+
+def repair(error: ModuleNotFoundError,
+           say: Callable[[str], None] = print) -> bool:
+    """ERROR is a package Flash needs, not installed: install everything
+    Flash needs into this Python, as setting it up would have. Whether it
+    did; False, doing nothing, for a module that is not Flash's."""
+
+    if requirement_for(error.name or "") is None:
+        return False
+    packages = required()
+    pipx = _pipx()
+    command = ([pipx, "inject", "flash", *packages] if pipx
+               else [sys.executable, "-m", "pip", "install", *packages])
+    say(f"{error.name} isn't installed. Installing what Flash needs, then "
+        "starting again.")
+    say("$ " + " ".join(command))
+    try:
+        code = subprocess.call(command)  # nosec B603  (Flash's own list)
+    except OSError as exc:
+        say(f"Could not run it: {exc}")
+        return False
+    if code != 0:
+        say(f"The install stopped with exit code {code}. Install them "
+            "yourself with: pip install -r requirements.txt")
+        return False
+    importlib.invalidate_caches()
+    return True
 
 
 class InstallError(ValueError):
