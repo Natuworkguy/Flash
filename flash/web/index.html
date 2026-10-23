@@ -362,6 +362,14 @@ body.empty #suggestions { display: flex; flex-wrap: wrap; justify-content: cente
 .btw-card .x { position: absolute; top: 6px; right: 6px; width: 28px; height: 28px; }
 .btw-card .x svg { width: 15px; height: 15px; }
 #pending { display: flex; flex-direction: column; gap: 6px; margin: 0 8px 8px; }
+#waiting-bar { display: flex; flex-direction: column; gap: 6px; margin: 0 8px 8px; }
+#waiting-bar[hidden] { display: none; }
+.waiting-row { display: flex; align-items: center; gap: 10px; padding: 6px 6px 6px 12px; border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--border)); border-radius: 12px; background: color-mix(in srgb, var(--accent) 6%, var(--surface)); font-size: 13.5px; animation: rise 0.25s var(--ease) both; }
+.waiting-row .ico { display: grid; place-items: center; color: var(--accent); }
+.waiting-row .ico svg { width: 15px; height: 15px; }
+.waiting-row .text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-2); }
+.waiting-row .text b { color: var(--text); font-weight: 600; }
+.waiting-row .btn { flex: none; }
 #pending[hidden] { display: none; }
 .pending-row { display: flex; align-items: center; gap: 10px; padding: 6px 6px 6px 12px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); font-size: 13.5px; animation: rise 0.25s var(--ease) both; }
 .pending-row .ico { display: grid; place-items: center; color: var(--text-3); }
@@ -3099,6 +3107,7 @@ body.resizing-viewer iframe { pointer-events: none; }
       <div class="col">
         <div id="hero"><h1 id="greeting">Good evening</h1></div>
         <div id="btw" hidden aria-label="Side questions"></div>
+        <div id="waiting-bar" hidden role="group" aria-label="What this chat waits for"></div>
         <div id="pending" hidden aria-label="Waiting messages"></div>
         <div id="recording" hidden role="group" aria-label="Screen recording">
           <span class="rec-dot" aria-hidden="true"></span>
@@ -6566,7 +6575,7 @@ function drawEntry(entry, ctx) {
       break;
     }
     case "note": richText(messagesEl.appendChild(el("div", "block note")), entry.text); break;
-    case "wait": messagesEl.appendChild(waitCard(entry)); break;
+    case "wait": messagesEl.appendChild(waitCard(entry)); queueWaitBar(); break;
     case "stats": {
       const reply = ctx.lastReply;
       const text = statsText(entry);
@@ -6604,7 +6613,7 @@ function waitCard(w) {
   const every = `every ${w.every} min`;
   const open = w.status === "waiting";
   const say = (text) => how.append(text);
-  if (w.events && w.events.length) say(`${open ? "Until" : "For"} ${w.events.map(eventWords).join(" or ")} comes in${w.keep ? ", every time, until cancelled" : ""}`);
+  if (w.events && w.events.length) say(`${open ? "Until" : "For"} ${w.events.map(eventWords).join(" or ")}${open ? " comes in" : ""}${w.keep ? ", every time, until cancelled" : ""}`);
   else if (w.command) { say(open ? "Running " : "Ran "); how.appendChild(el("code")).textContent = w.command; say(` ${every}`); }
   else if (w.check) say(`${open ? "Looking" : "Looked"} for: ${w.check}, ${every}`);
   else say(open ? `Until ${waitWhen(w.at)}` : `At ${waitWhen(w.at)}`);
@@ -6636,6 +6645,7 @@ function waitChanged(event) {
   if (entry) { Object.assign(entry, event); delete entry.chat; delete entry.was; }
   const card = messagesEl.querySelector(`[data-wait="${event.id}"]`);
   if (card && event.chat === current) card.replaceWith(waitCard(entry || event));
+  if (event.chat === current) queueWaitBar();
 }
 
 // A failed turn's Retry shows while the error is the chat's last word
@@ -14629,7 +14639,42 @@ function renderBtw() {
   box.scrollTop = box.scrollHeight;
 }
 
+// What the open chat waits for, over the message box, each with Cancel:
+// the cards say the same, but scrolled far up by then.
+let waitBarQueued = false;
+function renderWaitBar() {
+  waitBarQueued = false;
+  const box = $("#waiting-bar");
+  const chat = chats.get(current);
+  const open = (view === "chat" && chat && chat.log || []).filter((e) => e.type === "wait" && e.status === "waiting");
+  box.hidden = !open.length;
+  box.textContent = "";
+  for (const w of open) {
+    const row = el("div", "waiting-row", `<span class="ico">${icon("clock")}</span><span class="text"><b>Waiting:</b> </span>`);
+    const how = w.events && w.events.length
+      ? `until ${w.events.map(eventWords).join(" or ")} comes in${w.keep ? ", every time" : ""}`
+      : w.command || w.check ? `checking every ${w.every} min` : `until ${waitWhen(w.at)}`;
+    row.querySelector(".text").append(`${w.what}, ${how}`);
+    row.querySelector(".text").title = `${w.what}, ${how}. Then: ${w.then}`;
+    const stop = el("button", "btn small", "Cancel");
+    stop.type = "button";
+    stop.onclick = async () => {
+      stop.disabled = true;
+      try { await command("wait-cancel", w.id); }
+      catch (error) { showFailure(error); stop.disabled = false; }
+    };
+    row.appendChild(stop);
+    box.appendChild(row);
+  }
+}
+function queueWaitBar() {
+  if (waitBarQueued) return;
+  waitBarQueued = true;
+  queueMicrotask(renderWaitBar);
+}
+
 function renderPending() {
+  queueWaitBar();
   const box = $("#pending");
   const chat = chats.get(current);
   const items = (view === "chat" && chat && chat.pending) || [];
