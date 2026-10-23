@@ -3185,6 +3185,14 @@ body.resizing-viewer iframe { pointer-events: none; }
   #log, #dock { view-transition-name: none; }
   .slide { opacity: 1; }
 }
+/* Sunrise: its stepped stripe, red into yellow in five hard bands, on
+   the send button, under the greeting, and beside the chat that is
+   open. */
+:root[data-palette="sunrise"] { --stripes: linear-gradient(90deg, #e10500 0 20%, #fa500f 20% 40%, #ff8205 40% 60%, #ffaf00 60% 80%, #ffd800 80%); }
+:root[data-palette="sunrise"] #send:not(:disabled) { background: var(--stripes); color: #1a0a00; }
+:root[data-palette="sunrise"] #hero::after { content: ""; display: block; width: 112px; height: 6px; margin: 16px auto 0; background: var(--stripes); }
+:root[data-palette="sunrise"] .chat.current { box-shadow: inset 3px 0 0 #fa500f; }
+:root[data-palette="sunrise"] .ld { color: #fa500f; }
 /* Every drop-down draws its own chevron, a little in from the edge,
    rather than the browser's, which sits hard against it. */
 select:not([multiple]) { -webkit-appearance: none; appearance: none; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%238a8a8a' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E") !important; background-repeat: no-repeat !important; background-position: right 12px center !important; background-size: 13px !important; padding-right: 34px !important; }
@@ -16346,6 +16354,11 @@ const PALETTES = [
   { id: "sunset", name: "Sunset",
     dark: { bg: "#2a241e", sidebar: "#221d18", surface: "#352d25", accent: "#f59e3b", text: "#f8f2ea", "text-2": "#d3c6b6", "text-3": "#9c8f80", "code-bg": "#1f1a15" },
     light: { bg: "#fcf8f2", sidebar: "#f6efe4", surface: "#ffffff", accent: "#c86b0b", text: "#26190b", "text-2": "#47392a", "text-3": "#7f7060", "code-bg": "#f6efe5" } },
+  // Warm cream and near-black, a bright orange, and a stepped stripe of
+  // red into yellow for its accents.
+  { id: "sunrise", name: "Sunrise",
+    dark: { bg: "#1a1714", sidebar: "#141210", surface: "#24201b", accent: "#fa520f", "accent-text": "#1a0a00", text: "#fff8ee", "text-2": "#d9cfc2", "text-3": "#9e9385", "code-bg": "#12100e" },
+    light: { bg: "#fffaf0", sidebar: "#fbf3e3", surface: "#ffffff", accent: "#fa520f", "accent-text": "#ffffff", text: "#1e1a16", "text-2": "#463e35", "text-3": "#857a6d", "code-bg": "#f8efdf" } },
   { id: "midnight", name: "Midnight",
     dark: { bg: "#12141c", sidebar: "#0d0f15", surface: "#1b1e29", accent: "#7aa2f7", text: "#e6e9f2", "text-2": "#aab1c4", "text-3": "#737b91", "code-bg": "#0e1017" },
     light: { bg: "#f5f6fb", sidebar: "#eceef6", surface: "#ffffff", accent: "#3d5bd9", text: "#141826", "text-2": "#363c52", "text-3": "#6c7289", "code-bg": "#eef0f7" } },
@@ -16395,6 +16408,7 @@ function applyLook() {
 :root[data-theme="dark"] { ${vars({ ...palette.dark, ...accent })} }
 :root[data-theme="light"] { ${vars({ ...palette.light, ...accent })} }`;
   const root = document.documentElement;
+  root.dataset.palette = palette.id;
   root.classList.toggle("corners-square", look.corners === "square");
   root.classList.toggle("corners-round", look.corners === "round");
   if (root.dataset.theme) applyTheme(root.dataset.theme);
