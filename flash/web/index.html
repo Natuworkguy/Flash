@@ -220,6 +220,12 @@ body.side-closed #sidebar { margin-left: -272px; }
 .group-body { margin: 0 0 4px 26px; padding: 1px 0; border-left: 1px solid var(--border-strong); }
 .group-body .chat { width: calc(100% - 16px); margin-left: 8px; }
 .group.folded .group-body { display: none; }
+.pinned-chats { margin: 0 12px 6px; padding-bottom: 6px; border-bottom: 1px solid var(--border); }
+.pinned-chats .group-label { width: 100%; margin: 4px 0 2px; }
+.pinned-chats .pinned-body { margin: 0 -12px; }
+.pinned-chats .group-label { cursor: default; }
+.pinned-chats .group-label:hover { background: none; color: var(--text-3); }
+.pinned-chats .group-label svg { width: 12px; height: 12px; }
 .group-label { display: flex; align-items: center; gap: 4px; width: calc(100% - 16px); margin: 10px 8px 2px; padding: 5px 10px; border-radius: 8px; font-size: 12px; font-weight: 500; color: var(--text-3); text-align: left; transition: background 0.14s, color 0.14s; }
 .group-label:hover { background: var(--hover); color: var(--text-2); }
 .group-label .gcount { margin-left: auto; order: 2; font-variant-numeric: tabular-nums; opacity: 0; transition: opacity 0.2s; }
@@ -243,7 +249,7 @@ body.side-closed #sidebar { margin-left: -272px; }
    room. */
 .chat .acts { position: absolute; right: 4px; top: 50%; translate: 0 -50%; display: flex; gap: 2px; opacity: 0; pointer-events: none; transition: opacity 0.14s; }
 .chat:hover .acts, .chat:focus-within .acts { opacity: 1; pointer-events: auto; }
-.chat:hover .open, .chat:focus-within .open { padding-right: 62px; }
+.chat:hover .open, .chat:focus-within .open { padding-right: 90px; }
 .chat .acts button { width: 26px; height: 26px; border-radius: 7px; display: grid; place-items: center; color: var(--text-3); transition: background 0.14s, color 0.14s; }
 .chat .acts button:hover { color: var(--text); background: var(--hover); }
 .chat .acts svg { width: 14px; height: 14px; }
@@ -255,7 +261,7 @@ body.side-closed #sidebar { margin-left: -272px; }
 .chat .live { flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); margin-right: 12px; animation: pulse 1.2s ease-in-out infinite; transition: margin-right 0.14s; }
 /* Pointed at, a working chat's dot moves aside for the row's buttons,
    and the title makes room for both. */
-.chat:hover :is(.live, .waits), .chat:focus-within :is(.live, .waits) { margin-right: 64px; }
+.chat:hover :is(.live, .waits), .chat:focus-within :is(.live, .waits) { margin-right: 92px; }
 .chat:has(.live, .waits):hover .open, .chat:has(.live, .waits):focus-within .open { padding-right: 10px; }
 @media (hover: none) {
   .chat:hover :is(.live, .waits), .chat:focus-within :is(.live, .waits) { margin-right: 8px; }
@@ -3290,6 +3296,8 @@ const ICON = {
   mail: '<rect x="2" y="4" width="20" height="16" rx="2"/><path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7"/>',
   retry: '<path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/>',
   edit: '<path d="M17 3a2.8 2.8 0 0 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/>',
+  pin: '<path d="M12 17v5"/><path d="M9 4h6l-1 6.5 3.5 3.5V17h-11v-3l3.5-3.5Z"/>',
+  unpin: '<path d="M12 17v5"/><path d="M9 4h6l-1 6.5 3.5 3.5V17h-11v-3l3.5-3.5Z"/><path d="m3 3 18 18"/>',
   x: '<path d="M18 6 6 18M6 6l12 12"/>',
   lock: '<rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>',
   star: '<path d="m12 3.6 2.6 5.3 5.8.8-4.2 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8-4.2-4.1 5.8-.8z"/>',
@@ -13986,9 +13994,12 @@ let touchY = null;
 logEl.addEventListener("touchstart", (e) => { touchY = e.touches[0].clientY; }, { passive: true });
 logEl.addEventListener("touchmove", (e) => { if (touchY !== null && e.touches[0].clientY > touchY + 4) readingUp(); }, { passive: true });
 function placeJump() { $("#jump").style.bottom = ($("#dock").offsetHeight + 12) + "px"; }
+// Scrolled up to read: the way back down shows over the message box,
+// and goes once the bottom is in sight again.
 logEl.addEventListener("scroll", () => {
-  if (nearBottom()) { follow = true; $("#jump").hidden = true; }
-});
+  if (nearBottom()) { follow = true; $("#jump").hidden = true; return; }
+  if (!follow && view === "chat" && !document.body.classList.contains("empty") && $("#jump").hidden) { placeJump(); $("#jump").hidden = false; }
+}, { passive: true });
 
 // ---------------------------------------------------------------------------
 // Events from Flash
@@ -14288,12 +14299,22 @@ function renderChats() {
   // first; the rest follow under Chats.
   const groups = new Map();
   const loose = [];
+  // Pinned chats first, whatever project they are in.
+  const pinned = visibleChats().filter((id) => chats.get(id).pinned);
+  let pinnedBody = null;
+  if (pinned.length) {
+    const box = el("div", "pinned-chats", `<div class="group-label">${icon("pin")}<span>Pinned</span></div>`);
+    pinnedBody = el("div", "pinned-body");
+    box.appendChild(pinnedBody);
+    nav.appendChild(box);
+  }
   for (const id of visibleChats()) {
+    if (chats.get(id).pinned) continue;
     const p = chats.get(id).project && projectOf(chats.get(id).project);
     if (p) { if (!groups.has(p.id)) groups.set(p.id, []); groups.get(p.id).push(id); } else loose.push(id);
   }
   const folded = foldedProjects();
-  const places = [];
+  const places = pinned.map((id) => [id, pinnedBody]);
   for (const [pid, ids] of groups) {
     const p = projectOf(pid);
     const group = el("div", "group" + (folded.has(pid) ? " folded" : ""));
@@ -14359,6 +14380,7 @@ function renderChats() {
     }
     const acts = el("span", "acts");
     acts.append(
+      button("", chat.pinned ? "unpin" : "pin", chat.pinned ? "Unpin" : "Pin", "", () => pinChat(id)),
       button("", "edit", "Rename", "", () => renameInSide(id, row)),
       button("", "x", "Delete chat", "Alt Shift D", () => deleteChat(id)),
     );
@@ -15742,6 +15764,18 @@ function renameInSide(id, row) {
   field.onclick = (e) => e.stopPropagation();
 }
 
+// Pinned: kept at the top of the list, under Pinned. Flips it.
+async function pinChat(id = current) {
+  const chat = chats.get(id);
+  if (!chat) return;
+  chat.pinned = !chat.pinned;
+  renderChats();
+  try { chat.pinned = (await command("pin", chat.pinned ? "on" : "off", id)).pinned; }
+  catch (error) { chat.pinned = !chat.pinned; showFailure(error); }
+  renderChats();
+  toast(chat.pinned ? "Pinned" : "Unpinned");
+}
+
 function rename() {
   const chat = chats.get(current);
   if (!chat || view !== "chat" || document.body.classList.contains("empty")) return;
@@ -16286,6 +16320,7 @@ const ACTIONS = [
   { label: "Copy last code block", keys: "Alt Shift C", slash: "/code", run: copyLastCode },
   { label: "Expand all tool output", keys: "Ctrl O", slash: "/tools", run: toggleAllTools },
   { label: "Rename chat", keys: "F2", slash: "/rename", run: rename },
+  { label: "Pin or unpin this chat", keys: "", slash: "/pin", run: () => pinChat() },
   { label: "Clear this chat", keys: "Alt L", slash: "/clear", run: clearChat },
   { label: "Delete this chat", keys: "Alt Shift D", slash: "/delete", run: () => deleteChat() },
   { label: "Show or hide the sidebar", keys: "Ctrl B", slash: "/sidebar", run: toggleSide },
