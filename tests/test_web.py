@@ -4672,3 +4672,38 @@ def test_a_pinned_chat_stays_pinned_across_a_restart():
     said = web.command(session, {"name": "pin", "arg": "off",
                                  "chat": chat.id})
     assert said == {"pinned": False}  # nosec B101
+
+
+def test_a_file_from_another_chat_is_attached_again(tmp_path):
+    from flash import workspace
+
+    session = web.Session()
+    first = session.new_chat()
+    first.title = "Launch post"
+    post = tmp_path / "post.md"
+    post.write_text("# We shipped it\n", encoding="utf-8")
+    shown = workspace.keep_file(str(post))
+    first.log.append({"type": "file", **shown})
+    sent = workspace.keep_upload("notes.txt", b"my notes")
+    first.log.append({"type": "user", "text": "here", "files": [sent]})
+    other = session.new_chat()
+
+    files = web.command(session, {"name": "chat-files",
+                                  "chat": other.id})["files"]
+    assert [(f["name"], f["by"], f["chat_title"]) for f in files] == [
+        ("notes.txt", "you", "Launch post"),
+        ("post.md", "agent", "Launch post"),
+    ]  # nosec B101
+
+    got = web.command(session, {"name": "reuse-file", "arg": shown["id"],
+                                "file_name": "post.md",
+                                "chat": other.id})["file"]
+    # A copy of its own, as if sent fresh: the message carries it.
+    assert got["id"] != shown["id"] and got["name"] == "post.md"
+    path = workspace.upload_path(got["id"])
+    assert path.read_text(encoding="utf-8") == "# We shipped it\n"
+    assert web.attachments([got["id"]])[0]["name"] == "post.md"
+
+    with pytest.raises(ValueError, match="no longer kept"):
+        web.command(session, {"name": "reuse-file", "arg": "0" * 16,
+                              "chat": other.id})

@@ -2704,6 +2704,36 @@ def edited_note(paths: list[str]) -> str:
     )
 
 
+# How many files the picker for another chat's files offers at most.
+MOST_CHAT_FILES = 80
+
+
+def chat_files(session: "Session") -> list[dict]:
+    """Every file in every chat, to attach again elsewhere: those the
+    user attached and those the agent showed, the latest first, each
+    once, with the chat it is in."""
+
+    found: dict[str, dict] = {}
+    for chat in sorted(session.chats.values(), key=lambda c: c.updated,
+                       reverse=True):
+        for entry in reversed(chat.log):
+            kind = entry.get("type")
+            given = [entry] if kind == "file" else (
+                entry.get("files") or [] if kind == "user" else [])
+            for item in given:
+                file_id = str(item.get("id") or "")
+                if not file_id or file_id in found:
+                    continue
+                found[file_id] = {
+                    "id": file_id, "name": str(item.get("name") or ""),
+                    "kind": str(item.get("kind") or "file"),
+                    "size": item.get("size") or 0,
+                    "by": "agent" if kind == "file" else "you",
+                    "chat": chat.id, "chat_title": chat.title,
+                }
+    return list(found.values())[:MOST_CHAT_FILES]
+
+
 def attachments(files: Optional[list]) -> list[dict]:
     """The files a message carries, as the page shows them: those that
     are really there, and no more than MAX_ATTACHMENTS."""
@@ -3712,6 +3742,16 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
         session.save(chat)
         session.hub.publish({"type": "chats", "chat": chat.id})
         return {}
+
+    if name == "chat-files":
+        return {"files": chat_files(session)}
+
+    if name == "reuse-file":
+        try:
+            info = workspace.reuse_file(arg, str(body.get("file_name") or ""))
+        except workspace.WorkspaceError as exc:
+            raise ValueError(str(exc)) from None
+        return {"file": info}
 
     if name == "pin":
         # "on" or "off", or nothing to flip it.

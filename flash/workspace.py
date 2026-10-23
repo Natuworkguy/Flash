@@ -861,6 +861,25 @@ def keep_upload(
     return info
 
 
+def reuse_file(file_id: str, name: str = "") -> dict:
+    """A file already kept, one the user attached or one the agent
+    showed in any chat, attached again as a new upload: a copy, under
+    NAME (its name in that chat) where that still says what it is."""
+
+    path = upload_path(file_id)
+    if path is None and FILE_ID_RE.match(file_id or ""):
+        path = next((
+            store() / "files" / f"{file_id}{suffix}" for suffix in SHOWN_TYPES
+            if (store() / "files" / f"{file_id}{suffix}").is_file()
+        ), None)
+    if path is None:
+        raise WorkspaceError("that file is no longer kept")
+    given = Path(name or "").name
+    if not given or Path(given).suffix.lower() != path.suffix.lower():
+        given = path.name
+    return keep_upload(given, path.read_bytes())
+
+
 # --- Chats ---------------------------------------------------------------
 
 
