@@ -172,7 +172,7 @@ class TestTerminalCommand:
                 Document("/loader s", cursor_position=9), None,
             )
         ]
-        assert offered == ["snake"]
+        assert offered == ["snake", "singularity"]
         offered = [
             c.text for c in SlashCommandCompleter().get_completions(
                 Document("/loader m", cursor_position=9), None,

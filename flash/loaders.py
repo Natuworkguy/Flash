@@ -131,6 +131,14 @@ BUILTIN: tuple[Loader, ...] = (
         ("*.  ", ".*. ", " .*.", "  .*", " .*.", ".*. "), 0.12,
         "A star with a tail, back and forth",
     ),
+    Loader(
+        "singularity", "Singularity",
+        ("·  ●  ·", " · ● · ", "  ·●·  ", "   ●   ", "   ◉   ",
+         "  ·✺·  ", " · ○ · ", "·  ∘  ·"),
+        (".  o  .", " . o . ", "  .o.  ", "   o   ", "   O   ",
+         "  .*.  ", " . o . ", ".  .  ."), 0.12,
+        "A black hole that pulls every dot in, then blows them out",
+    ),
 )
 
 

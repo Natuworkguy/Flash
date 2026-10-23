@@ -1235,7 +1235,8 @@ this browser:
   system), text size, how wide the conversation runs, the spacing
   between messages, and how round the corners are.
 - **Loading animation**: Dots, Bloom, Orbit, Pulse, Wave, Bounce, Grid,
-  Snake, Arc, Cursor, Comet, or an extension's. Turn on **Morph between
+  Snake, Arc, Cursor, Comet, Singularity (a black hole that pulls
+  every dot in, then blows them out), or an extension's. Turn on **Morph between
   loaders** and every 10 seconds it shrinks away into another, at
   random, for as long as Flash works. Both are the same settings as the
   terminal's `/loader` and `/loader morph`.
