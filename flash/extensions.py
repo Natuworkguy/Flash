@@ -3,7 +3,7 @@
 An extension is a folder with a `flash-extension.json` at its root,
 usually a GitHub repository, installed with
 
-    flash --extension-install github@owner/repo
+    flash install github@owner/repo
 
 or `/extension install github@owner/repo` from inside a session. It is
 copied into ~/.flash/extensions/<name>, and from then on every session

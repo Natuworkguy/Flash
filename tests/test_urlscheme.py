@@ -59,6 +59,21 @@ def test_cli_accepts_url_and_scheme_flags():
     assert args.unregister_url_scheme  # nosec B101
 
 
+def test_the_handler_passes_links_with_uri(monkeypatch, tmp_path):
+    from flash import urlscheme
+
+    monkeypatch.setattr(urlscheme, "_desktop_path",
+                        lambda: tmp_path / "flash.desktop")
+    monkeypatch.setattr(urlscheme.subprocess, "run",
+                        lambda *a, **kw: None, raising=False)
+    urlscheme._register_linux(["/usr/bin/flash"])
+    entry = (tmp_path / "flash.desktop").read_text()
+    assert "Exec=/usr/bin/flash --uri %u" in entry  # nosec B101
+
+    args = parse_args(["--uri", "flash://?prompt=hi"])
+    assert args.url == "flash://?prompt=hi"  # nosec B101
+
+
 def test_cli_accepts_update_flags():
     args = parse_args([])
     assert not args.update  # nosec B101

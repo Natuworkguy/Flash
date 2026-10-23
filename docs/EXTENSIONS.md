@@ -14,9 +14,9 @@ An extension adds to Flash without changing Flash. It can bring:
 From the shell:
 
 ```bash
-flash --extension-install github@owner/repo
-flash --extension-list
-flash --extension-remove <name>
+flash install github@owner/repo
+flash list
+flash remove <name>
 ```
 
 Or from inside a session:
