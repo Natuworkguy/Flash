@@ -27,7 +27,7 @@ version; [CONFIGURATION.md](CONFIGURATION.md) lists every setting and
 - **Waits**: In the web UI, Flash can set a task aside until something happens, then pick it up in the same chat: "when CI goes green, deploy", "if Sam hasn't replied by Friday, follow up". Waits outlast restarts.
 - **Record a Meeting**: In the web UI, + > Record a meeting writes down what is said as it is said, on this computer, then hands the transcript to the model in a new chat for the summary, decisions and to-dos.
 - **Connectors**: Plug in any MCP server (GitHub, Notion, a database, your files) with `/mcp add` or Settings > Connectors, and its tools join Flash's own. Read-only tools run straight away; anything else asks first.
-- **Acts on Your Computer**: With `/computer on`, or the switch in the web UI's Settings, "stop the music", "turn it down" or "open Spotify" just happens: Flash plays, pauses and skips music, sets the volume, opens and quits apps, opens links and files, locks the screen, copies to the clipboard and switches dark mode. On a Mac, "text Sam I'm running late" sends an iMessage once you say yes. Off by default, and it never clicks, types or runs commands this way.
+- **Acts on Your Computer**: With `/computer on`, or the switch in the web UI's Settings, "stop the music", "turn it down" or "open Spotify" just happens: Flash plays, pauses and skips music, sets the volume, opens and quits apps, opens links and files, locks the screen, copies to the clipboard and switches dark mode. On a Mac, "text Sam I'm running late" sends an iMessage once you say yes, and "mark Sam's messages read" marks them read: Messages shows each conversation for a moment, then you are back where you were (group chats are left, as Messages cannot be told to open one). Off by default, and it never clicks, types or runs commands this way.
 - **Voice Mode**: `/voice on` downloads a Vosk speech model and a Piper voice, then lets you talk to Flash and hear its replies, with typing still available at any time. Flash talks warmly, like a person rather than a document, and its voice has a style of its own: Warm (the default: unhurried, friendly, a breath between sentences, questions that lift and exclamations with a little bounce), Lively, Calm, or Plain, picked with `/voice style` or under Voice models in the web UI's Settings, where you can hear it first. Kristin and HFC join the voices on offer, for a warmer sound still.
 - **Visible Plans**: For a multi-step task the AI posts a checklist up front and ticks each box as it finishes that step, so you can see where it is instead of waiting for the wall of text at the end.
 - **Knows What Just Broke**: With `/hook install`, Flash sees the commands you run in VS Code's terminal and whether they failed, so "why did that fail?" works without pasting anything.
@@ -1278,8 +1278,10 @@ last briefing gets one card for the whole team: each spark's newest
 report as a line, what the ones at work are doing, and how much the team
 chat said (Open goes to the team chat). Each card can be answered (Reply), opened
 (the chat, the spark's report, or the email), asked about in a new chat
-(Ask Flash), or dismissed for good. `j`/`k` or the arrow keys move,
-`r`, `o`, `a` and `d` do the actions, and `Esc` closes it; the rail on
+(Ask Flash), or dismissed for good. An iMessage from one person can be
+marked read (Mark read, `m`): Messages shows the conversation for a
+moment, and every card from it goes. `j`/`k` or the arrow keys move,
+`r`, `o`, `a`, `d` and `m` do the actions, and `Esc` closes it; the rail on
 the right shows where you are. A source that cannot be reached is left
 out and named at the end. `/briefing` in the terminal opens the same
 feed full screen: Reply and Ask Flash start a message in the box, Open

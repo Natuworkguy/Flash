@@ -17138,6 +17138,7 @@ function briefActions(card) {
   const open = card.kind === "spark" ? "Report" : card.kind === "email" && card.link ? "Mail" : card.kind === "team" ? "Team chat" : "Chat";
   const acts = [];
   if (["email", "imessage", "spark", "chat"].includes(card.kind)) acts.push({ act: "reply", label: "Reply", icon: "reply", key: "r" });
+  if (card.kind === "imessage" && card.markable) acts.push({ act: "read", label: "Mark read", icon: "check", key: "m" });
   if (card.chat || card.team || card.kind === "spark" || (card.kind === "email" && card.link)) acts.push({ act: "open", label: open, icon: card.kind === "email" ? "external" : "chevRight", key: "o" });
   acts.push({ act: "ask", label: "Ask Flash", icon: "bolt", key: "a" });
   acts.push({ act: "dismiss", label: "Dismiss", icon: "x", key: "d" });
@@ -17259,6 +17260,26 @@ function briefCompose(text) {
   input.setSelectionRange(text.length, text.length);
 }
 
+// Mark an iMessage card's conversation read in Messages: it comes to the
+// front for a moment, and every card from that conversation goes.
+async function briefMarkRead(i) {
+  const card = briefing.cards[i];
+  if (!card || briefMarkRead.busy) return;
+  const same = briefing.cards.filter((c) => c.kind === "imessage" && !c.place && c.who === card.who);
+  briefMarkRead.busy = true;
+  toast(`Marking ${card.who} read…`);
+  let said;
+  try { said = await command("briefing-mark-read", card.id, null, { with: card.who, cards: same.map((c) => c.id) }); }
+  catch (error) { showFailure(error); return; }
+  finally { briefMarkRead.busy = false; }
+  if (!said.marked) { toast(said.said); return; }
+  briefing.cards = briefing.cards.filter((c) => !same.includes(c));
+  briefing.at = Math.min(i, briefing.cards.length);
+  drawBriefing();
+  briefGo(briefing.at, false);
+  toast(`Marked ${card.who} read`);
+}
+
 function briefAbout(card) {
   const body = card.body.length > 400 ? card.body.slice(0, 399) + "…" : card.body;
   return `From my briefing (${card.label.toLowerCase()}${card.who ? `, ${card.who}` : ""}): "${card.title}"${body ? `\n${body}` : ""}\n\n`;
@@ -17293,6 +17314,7 @@ function briefAct(act, i) {
   }
   if (!card) return;
   if (act === "dismiss") { briefDismiss(i); return; }
+  if (act === "read") { briefMarkRead(i); return; }
   if (act === "ask") { briefCompose(briefAbout(card)); return; }
   if (act === "open") {
     if (card.kind === "spark") { closeBriefing(); openSpark(card.spark); return; }
@@ -17323,7 +17345,7 @@ document.addEventListener("keydown", (e) => {
   if (briefEl.hidden || briefEl.classList.contains("closing") || e.metaKey || e.ctrlKey || e.altKey) return;
   if (e.target.closest("input, textarea, select, [contenteditable]")) return;
   const step = { j: 1, ArrowDown: 1, PageDown: 1, " ": 1, k: -1, ArrowUp: -1, PageUp: -1 }[e.key];
-  const acts = { r: "reply", o: "open", a: "ask", d: "dismiss", Delete: "dismiss" };
+  const acts = { r: "reply", o: "open", a: "ask", d: "dismiss", Delete: "dismiss", m: "read" };
   if (e.key === "Escape") closeBriefing();
   else if (step) briefGo(briefing.at + (e.shiftKey && e.key === " " ? -1 : step));
   else if (e.key === "Home") briefGo(0);

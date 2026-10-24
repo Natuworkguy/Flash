@@ -3986,6 +3986,19 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
         briefing.dismiss(i for i in ids or [] if isinstance(i, str))
         return {}
 
+    if name == "briefing-mark-read":
+        # An iMessage card's conversation, by who it is with: marked read
+        # in Messages, and its cards ("cards") out of the feed.
+        try:
+            said = computer.mark_imessages_read(str(body.get("with") or ""))
+        except computer.ComputerError as exc:
+            raise ValueError(str(exc)) from None
+        marked = said.startswith("Marked read")
+        if marked:
+            ids = body.get("cards") or [arg]
+            briefing.dismiss(i for i in ids if isinstance(i, str))
+        return {"said": said, "marked": marked}
+
     if name == "briefing-undo":
         briefing.undismiss(arg)
         return {}

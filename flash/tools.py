@@ -2592,6 +2592,8 @@ def computer_tools() -> list[dict[str, Any]]:
         found += READ_IMESSAGES_TOOLS
     if computer.allowed("imessage"):
         found += IMESSAGE_TOOLS
+    if computer.allowed("imessage_mark"):
+        found += MARK_IMESSAGES_TOOLS
     return found
 
 
@@ -2665,7 +2667,8 @@ READ_IMESSAGES_TOOLS: list[dict[str, Any]] = [
                 "newest first: when, who from (by their name in Contacts), "
                 "and what was said, with group chats named. Use it when "
                 "they ask what someone said, whether anyone messaged, or "
-                "to catch up before replying. Nothing is marked read."
+                "to catch up before replying. Nothing is marked read: "
+                "mark_imessages_read does that, when they ask."
             ),
             "parameters": {
                 "type": "object",
@@ -2717,6 +2720,62 @@ def read_imessages(limit: Any = computer.READ_LIMIT,
         return result
     try:
         result = computer.read_imessages(who, limit, unread)
+    except computer.ComputerError as exc:
+        tool_result(str(exc), style=ERROR)
+        return f"Error: {exc}"
+    tool_result(result)
+    return result
+
+
+# On a Mac, with the computer allowed: marking iMessages read.
+MARK_IMESSAGES_TOOLS: list[dict[str, Any]] = [
+    {
+        "type": "function",
+        "function": {
+            "name": "mark_imessages_read",
+            "description": (
+                "Mark the user's unread iMessages read on their Mac: all "
+                "of them, or one person's. Only when they ask. Messages "
+                "comes to the front and shows each conversation for a "
+                "moment, then the app they were in comes back; anyone "
+                "they send read receipts to sees them as read. Group "
+                "chats are left unread. Says what was marked."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "with": {
+                        "type": "string",
+                        "description": (
+                            "Optional: only the conversation with this "
+                            "person, by a name or nickname in Contacts, a "
+                            "phone number or an email address."
+                        ),
+                    },
+                },
+            },
+        },
+    },
+]
+
+
+def mark_imessages_read(**given: Any) -> str:
+    """Mark the user's unread iMessages read, when they allow it."""
+
+    who = str(given.get("with") or "").strip()
+    tool_line(f"MarkIMessagesRead({who or 'all'})")
+    if not computer.allowed("imessage_mark"):
+        result = (
+            "Error: the user has not let Flash mark iMessages read. They "
+            "can turn it on in Settings or with /computer on imessage_mark."
+            if computer.enabled() and "imessage_mark" in computer.kinds()
+            else "Error: the user has not let Flash act on their computer. "
+            "They can turn it on in Settings or with /computer on."
+        )
+        tool_result(result, style=WARN)
+        return result
+    try:
+        result = computer.mark_imessages_read(who)
     except computer.ComputerError as exc:
         tool_result(str(exc), style=ERROR)
         return f"Error: {exc}"
@@ -6306,6 +6365,7 @@ FUNCTIONS = {
     "computer_use": computer_use_tool,
     "send_imessage": send_imessage,
     "read_imessages": read_imessages,
+    "mark_imessages_read": mark_imessages_read,
     "open_in_editor": open_in_editor,
     "ask_system_one": ask_system_one,
 }

@@ -359,6 +359,9 @@ def _imessage_cards(now: float) -> list[dict]:
     if not computer.allowed("imessage_read"):
         return []
     said = computer.read_imessages(unread_only=True, limit=MOST_EACH)
+    # Mark read, where Flash may: a conversation with one person, as
+    # Messages cannot be told to open a group's.
+    can_mark = computer.allowed("imessage_mark")
     cards = []
     for line in said.splitlines():
         found = _IMESSAGE_LINE.match(line.strip())
@@ -370,7 +373,7 @@ def _imessage_cards(now: float) -> list[dict]:
         cards.append(_card(
             "imessage", key, who + (f" in {place}" if place else ""),
             found["words"], _stamp(found["stamp"], now), who=who,
-            place=place,
+            place=place, markable=can_mark and not place,
         ))
     return cards
 
