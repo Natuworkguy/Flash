@@ -183,6 +183,19 @@ body.side-closed #sidebar { margin-left: -272px; }
 }
 #new-chat .plus svg { width: 14px; height: 14px; stroke-width: 2.4; }
 .side-label { padding: 18px 18px 6px; font-size: 12px; color: var(--text-3); font-weight: 500; }
+/* A short window: the rows close up, so the whole panel, Settings and
+   all, stays in view, and the chats scroll in what is left. */
+@media (max-height: 760px) {
+  .side-row { padding-block: 6px; }
+  .side-top { height: 48px; }
+  .side-label { padding-top: 12px; }
+  #recents-btn { margin-top: 6px; }
+  .side-foot { padding: 4px 0 6px; }
+}
+@media (max-height: 600px) {
+  .side-row { padding-block: 4px; }
+  #spark-roster { max-height: 18vh; }
+}
 /* Recents folds away: the list shrinks to nothing, the chevron turns. */
 #recents-btn { display: flex; align-items: center; gap: 4px; width: calc(100% - 16px); margin: 12px 8px 2px; padding: 6px 10px; border-radius: 8px; text-align: left; transition: background 0.14s, color 0.14s; }
 #recents-btn:hover { background: var(--hover); color: var(--text-2); }
@@ -194,7 +207,7 @@ body.side-closed #sidebar { margin-left: -272px; }
 #recents-btn[aria-expanded="false"] .count { opacity: 1; }
 /* Open, Recents keeps room for a few chats however short the window:
    the list of sparks above gives way first. */
-#chats { flex: 1 1 0; min-height: min(180px, 26vh); overflow-y: auto; padding-bottom: 8px; transition: flex-grow 0.32s var(--ease), opacity 0.2s var(--ease), padding 0.32s var(--ease); }
+#chats { flex: 1 1 0; min-height: min(112px, 14vh); overflow-y: auto; padding-bottom: 8px; transition: flex-grow 0.32s var(--ease), opacity 0.2s var(--ease), padding 0.32s var(--ease); }
 #chats.folded { flex-grow: 0; min-height: 0; opacity: 0; padding-bottom: 0; overflow: hidden; }
 #chats.folded.gone { visibility: hidden; }
 .chat {
@@ -1933,7 +1946,7 @@ button.item-row:hover { background: var(--hover); }
 #sparks-btn.busy svg { color: var(--working); filter: drop-shadow(0 0 4px color-mix(in srgb, var(--working) 60%, transparent)); }
 /* The team, in the sidebar: each spark's face, name and title, and what
    it is doing: who is on the team, not which conversations there are. */
-#spark-roster { flex: 0 1 auto; min-height: min(84px, 12vh); max-height: 34vh; overflow-y: auto; padding: 4px 0 2px; transition: max-height 0.32s var(--ease), opacity 0.2s var(--ease), padding 0.32s var(--ease); }
+#spark-roster { flex: 0 1 auto; min-height: min(60px, 8vh); max-height: 28vh; overflow-y: auto; padding: 4px 0 2px; transition: max-height 0.32s var(--ease), opacity 0.2s var(--ease), padding 0.32s var(--ease); }
 #spark-roster:empty { display: none; }
 /* Squeezed by a short window, the sparks, and the sidebar itself, fade
    out where there is more below. */
