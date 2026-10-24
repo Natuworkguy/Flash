@@ -7897,6 +7897,12 @@ function drawGeneral(body) {
     info.computer = said.computer;
     info.computer_off = said.computer_off || [];
     info.computer_kinds = said.computer_kinds || info.computer_kinds;
+    if ("computer_use" in said) Object.assign(info, {
+      computer_use: said.computer_use,
+      computer_use_keys: said.computer_use_keys,
+      computer_use_mouse: said.computer_use_mouse,
+      computer_use_missing: said.computer_use_missing,
+    });
   };
   const showKinds = () => {
     kinds.classList.toggle("open", !!info.computer);
@@ -7921,7 +7927,7 @@ function drawGeneral(body) {
   computerRow.onclick = async () => {
     const on = computerRow.getAttribute("aria-checked") !== "true";
     computerRow.setAttribute("aria-checked", on);
-    try { took(await command("computer-setting", on ? "on" : "off")); showKinds(); }
+    try { took(await command("computer-setting", on ? "on" : "off")); showKinds(); showUse(); }
     catch (error) { computerRow.setAttribute("aria-checked", !on); showFailure(error); }
   };
   body.appendChild(computerRow);
@@ -7935,11 +7941,29 @@ function drawGeneral(body) {
   useRow.type = "button";
   useRow.setAttribute("role", "switch");
   useRow.setAttribute("aria-checked", !!info.computer_use);
-  const useWarn = el("div", "tunnel-warn computer-use-warn", `<b>While it has your computer</b><ul><li>Press <kbd class="use-keys"></kbd> to stop it at once, or just move the mouse: either takes it back and stops the reply.</li><li>Don’t leave it alone with anything you can’t undo: email, payments, deleting files.</li><li>It never types passwords or card numbers. Sign in yourself first.</li><li>On a Mac, the app Flash runs in needs Accessibility and Screen Recording, in System Settings &gt; Privacy &amp; Security. It needs a model that can see images.</li></ul><p class="use-missing" hidden></p>`);
+  const useWarn = el("div", "tunnel-warn computer-use-warn", `<b>While it has your computer</b><ul><li class="use-stop"></li><li>Don’t leave it alone with anything you can’t undo: email, payments, deleting files.</li><li>It never types passwords or card numbers. Sign in yourself first.</li><li>On a Mac, the app Flash runs in needs Accessibility and Screen Recording, in System Settings &gt; Privacy &amp; Security. It needs a model that can see images.</li></ul><p class="use-missing" hidden></p>`);
+  // It goes further than acting on this computer, so it needs that on.
+  const useNeeds = el("p", "settings-sub computer-use-needs", "Turn on Let Flash act on this computer first: Computer Use needs it.");
+  // Whether moving the mouse takes it back, on unless switched off.
+  const mouseRow = el("button", "setting-row computer-use-mouse-row", `<span class="what"><b>Moving the mouse stops it</b><span>On, touching the mouse takes your computer back and stops the reply. Off, you can use the mouse while it works, and only the stop keys stop it.</span></span><span class="switch" aria-hidden="true"></span>`);
+  mouseRow.type = "button";
+  mouseRow.setAttribute("role", "switch");
   const showUse = () => {
     useRow.setAttribute("aria-checked", !!info.computer_use);
+    useRow.disabled = !info.computer;
+    useNeeds.hidden = !!info.computer;
     useWarn.hidden = !info.computer_use;
-    useWarn.querySelector(".use-keys").textContent = info.computer_use_keys || "Ctrl+Alt+Esc";
+    mouseRow.hidden = !info.computer_use;
+    const mouse = info.computer_use_mouse !== false;
+    mouseRow.setAttribute("aria-checked", mouse);
+    const stop = useWarn.querySelector(".use-stop");
+    stop.textContent = "";
+    stop.append("Press ");
+    const keys = document.createElement("kbd");
+    keys.textContent = info.computer_use_keys || "Ctrl+Alt+Esc";
+    stop.append(keys, mouse
+      ? " to stop it at once, or just move the mouse: either takes it back and stops the reply."
+      : " to stop it at once: it takes your computer back and stops the reply.");
     const missing = useWarn.querySelector(".use-missing");
     missing.textContent = info.computer_use_missing || "";
     missing.hidden = !info.computer_use_missing;
@@ -7950,7 +7974,15 @@ function drawGeneral(body) {
     try { Object.assign(info, await command("computer-use-setting", on ? "on" : "off")); showUse(); }
     catch (error) { useRow.setAttribute("aria-checked", !on); showFailure(error); }
   };
+  mouseRow.onclick = async () => {
+    const on = mouseRow.getAttribute("aria-checked") !== "true";
+    mouseRow.setAttribute("aria-checked", on);
+    try { Object.assign(info, await command("computer-use-mouse", on ? "on" : "off")); showUse(); }
+    catch (error) { mouseRow.setAttribute("aria-checked", !on); showFailure(error); }
+  };
   body.appendChild(useRow);
+  body.appendChild(useNeeds);
+  body.appendChild(mouseRow);
   body.appendChild(useWarn);
   showUse();
 

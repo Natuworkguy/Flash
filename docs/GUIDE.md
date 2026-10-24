@@ -1013,9 +1013,11 @@ volume.
 For the things no tool can do, a setting deep in an app or a button in
 a program with no other way in, Flash can look at your screen and work
 the mouse and keyboard itself. Turn it on with `/computer use on`, or
-Settings > General > Computer Use in the web UI. It is separate from
-[Your computer](#your-computer), and off until you turn it on; while it
-is off the model is not offered it.
+Settings > General > Computer Use in the web UI. It goes further than
+[Your computer](#your-computer), so it needs that on first (`/computer
+on`, or Let Flash act on this computer); turning that off turns this off
+too. It is off until you turn it on; while it is off the model is not
+offered it.
 
 Flash takes a screenshot, says where to click, what to type or which
 keys to press, and gets a fresh screenshot after each step. The model
@@ -1030,7 +1032,9 @@ one reply. While Flash has the computer:
   back: the reply stops then and there. Flash never presses those keys
   itself. In the web UI the same keys work too, wherever you are.
 - or just move the mouse: the next step sees the pointer isn't where
-  Flash left it, and stops.
+  Flash left it, and stops. To keep using the mouse while it works,
+  switch off Moving the mouse stops it in Settings, or `/computer use
+  mouse off`; then only the stop keys take it back.
 - the Stop button and Esc still stop the reply as usual.
 
 Only one chat has the computer at a time. It needs a model that can see

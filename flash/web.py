@@ -124,6 +124,7 @@ def _computer_use() -> dict:
     return {
         "computer_use": computeruse.enabled(),
         "computer_use_keys": computeruse.stop_keys(),
+        "computer_use_mouse": computeruse.mouse_stops(),
         "computer_use_missing": computeruse.missing(),
     }
 
@@ -4477,8 +4478,12 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
                               computer.off_after(kind, on))
         else:
             ai.set_config_var(computer.SETTING, "1" if on else "0")
+            if not on:
+                # Computer Use goes with it: it needs this on.
+                computeruse.end()
         session.hub.publish({"type": "status"})
-        return {"computer": computer.enabled(), **_computer_kinds()}
+        return {"computer": computer.enabled(), **_computer_kinds(),
+                **_computer_use()}
 
     if name == "computer-use-stop":
         computeruse.taken_back()
@@ -4486,6 +4491,12 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
 
     if name == "computer-use-setting":
         computeruse.set_enabled(arg in ("on", "1", "true"))
+        session.hub.publish({"type": "status"})
+        return _computer_use()
+
+    if name == "computer-use-mouse":
+        # Whether moving the mouse takes the computer back.
+        computeruse.set_mouse_stops(arg in ("on", "1", "true"))
         session.hub.publish({"type": "status"})
         return _computer_use()
 

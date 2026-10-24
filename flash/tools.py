@@ -2612,7 +2612,8 @@ def computer_use_tools() -> list[dict[str, Any]]:
                 "asked before you get their computer. Start with "
                 "screenshot; each step after gives a fresh screenshot. x "
                 "and y are pixels in the latest screenshot. If the user "
-                "says no, moves the mouse or presses the stop keys, stop "
+                "says no, takes the computer back or presses the stop "
+                "keys, stop "
                 "and do not try again unless they ask. Never enter "
                 "passwords or payment details. "
                 + ("This is a Mac: shortcuts use cmd (cmd+c, cmd+tab). "
@@ -2889,10 +2890,9 @@ def computer_use_tool(action: str = "", **args: Any) -> str:
         tool_result(result, style=WARN)
         return result
     if not computeruse.holds(owner):
-        keys = computeruse.stop_keys()
         if not ultra_auto() and not _user_allows(
             "Let Flash see your screen and use your mouse and keyboard "
-            f"for this reply? Press {keys}, or move the mouse, to take it "
+            f"for this reply? {computeruse.how_to_stop()} to take it "
             "back."
         ):
             return ("The user said no to Computer Use. Do it another way, "
