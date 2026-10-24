@@ -4304,7 +4304,11 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
         return {"values": extensions.shown_values(ext)}
 
     if name == "extension-remove":
-        if not extensions.remove(arg):
+        try:
+            removed = extensions.remove(arg)
+        except extensions.ExtensionError as exc:
+            raise ValueError(str(exc)) from None
+        if not removed:
             raise ValueError(f"No extension called {arg!r}.")
         # Its scenes, commands and prompt text went with it.
         session.hub.publish({"type": "status"})

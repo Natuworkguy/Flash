@@ -73,9 +73,11 @@ import json
 import os
 import re
 import shutil
+import stat
 import subprocess  # nosec B404
 import sys
 import tempfile
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
@@ -799,6 +801,10 @@ def _scan() -> tuple[list[Extension], list[str]]:
     for folder in folders:
         if folder.name.startswith("."):
             continue
+        # An extension removed while something held its folder open:
+        # emptied, and nothing to report.
+        if not any(folder.iterdir()):
+            continue
         try:
             found.append(load(folder))
         except ExtensionError as exc:
@@ -1351,15 +1357,62 @@ def install(checkout: Path, spec: str) -> Extension:
     shutil.copytree(checkout, incoming)
 
     if target.exists():
-        shutil.rmtree(target)
-    incoming.rename(target)
+        left = empty_folder(target)
+        if left:
+            shutil.rmtree(incoming, ignore_errors=True)
+            raise ExtensionError(
+                f"Could not replace {len(left)} of the old copy's files, "
+                f"such as {left[0]}. Close what has them open and try "
+                "again.")
+        with contextlib.suppress(OSError):
+            target.rmdir()
+    if target.exists():
+        # Held open, so it stays: the new copy goes into it instead.
+        shutil.copytree(incoming, target, dirs_exist_ok=True)
+        shutil.rmtree(incoming, ignore_errors=True)
+    else:
+        incoming.rename(target)
 
     reload()
     return load(target)
 
 
+def empty_folder(folder: Path) -> list[str]:
+    """Delete everything inside FOLDER, from the deepest up: each file,
+    then each folder once it is empty. A read-only one, as git leaves
+    its objects on Windows, is made writable first. A link is removed,
+    never followed. What could not be removed, relative to FOLDER."""
+
+    left: list[str] = []
+
+    def gone(path: Path, remove: Callable[[Path], None]) -> None:
+        try:
+            remove(path)
+        except PermissionError:
+            try:
+                os.chmod(path, stat.S_IWRITE | stat.S_IREAD)
+                remove(path)
+            except OSError:
+                left.append(str(path.relative_to(folder)))
+        except FileNotFoundError:
+            pass
+        except OSError:
+            left.append(str(path.relative_to(folder)))
+
+    for top, dirs, files in os.walk(folder, topdown=False):
+        here = Path(top)
+        for name in files:
+            gone(here / name, Path.unlink)
+        for name in dirs:
+            path = here / name
+            gone(path, Path.unlink if path.is_symlink() else Path.rmdir)
+    return left
+
+
 def remove(name: str) -> bool:
-    """Delete an installed extension. False if there was none."""
+    """Delete an installed extension: everything in its folder, then the
+    folder if it can go. False if there was none; ExtensionError if some
+    of it could not be removed."""
 
     name = name.strip().lower()
 
@@ -1372,7 +1425,17 @@ def remove(name: str) -> bool:
     if not target.is_dir():
         return False
 
-    shutil.rmtree(target)
+    left = empty_folder(target)
+    if left:
+        reload()
+        raise ExtensionError(
+            f"Could not remove {len(left)} of {name}'s files, such as "
+            f"{left[0]}. Close what has them open and remove it again."
+        )
+    # The folder itself too, if it can go: on Windows something may still
+    # hold it open, and then it stays, empty, and is passed over.
+    with contextlib.suppress(OSError):
+        target.rmdir()
     # Its settings go with it; an update, which installs over it, keeps
     # them.
     try:
