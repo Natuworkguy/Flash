@@ -6,6 +6,7 @@ import pytest
 
 from flash import (
     ai,
+    briefing,
     connectors,
     design,
     extensions,
@@ -57,6 +58,9 @@ def isolated_home(tmp_path_factory, monkeypatch):
     # Every turn's tool list reads the installed extensions, so without
     # this the suite would pick up whatever the developer has installed.
     monkeypatch.setattr(extensions, "FLASH_DIR", home / ".flash")
+    # The briefing's dot looks for new cards on a thread of its own, and
+    # says so with an event: not in tests, which ask has_new themselves.
+    monkeypatch.setattr(briefing, "new_waiting", lambda *a, **kw: False)
     # The terminal's kept conversations, and the one it is on.
     monkeypatch.setattr(sessions, "FLASH_DIR", home / ".flash")
     monkeypatch.setattr(ai, "_session", None)
