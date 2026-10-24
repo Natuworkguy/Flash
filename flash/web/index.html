@@ -3301,6 +3301,9 @@ select:not([multiple]) { -webkit-appearance: none; appearance: none; background-
 #ext-panel header { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-bottom: 1px solid var(--border); }
 #ext-panel .ext-panel-name { font-weight: 600; flex: 1; }
 #ext-panel iframe { flex: 1; width: 100%; border: 0; background: var(--bg); }
+#briefing-btn .new-dot { margin-left: auto; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent); animation: new-dot-in 0.4s var(--spring); }
+#briefing-btn .new-dot[hidden] { display: none; }
+@keyframes new-dot-in { from { transform: scale(0); } }
 #ext-head { display: inline-flex; gap: 6px; margin-left: 4px; }
 #ext-head:empty { display: none; }
 .ext-pill svg { width: 14px; height: 14px; }
@@ -15068,6 +15071,7 @@ function renderModelButtons() {
 function renderInfo() {
   renderAgents();
   renderExtUI();
+  $("#briefing-btn .new-dot").hidden = !info.briefing_new;
   showPublic();
   syncScene();
   $("#settings-btn").classList.toggle("has-update", !!(info.update && info.update.available && !["updated", "restarting"].includes(info.update.state)));
@@ -17048,6 +17052,8 @@ async function loadBriefing(open = false) {
 
 async function openBriefing() {
   closeMenu();
+  info.briefing_new = false;
+  $("#briefing-btn .new-dot").hidden = true;
   if (innerWidth <= 800) closeSide();
   clearTimeout(briefing.closing);
   briefEl.classList.remove("closing");
@@ -18082,7 +18088,7 @@ $("#sidebar").addEventListener("scroll", rosterMore, { passive: true });
 addEventListener("resize", rosterMore);
 $("#extensions-btn").innerHTML = icon("puzzle") + "<span>Extensions</span>";
 $("#search-btn").innerHTML = icon("search") + "<span>Search</span>";
-$("#briefing-btn").innerHTML = icon("feed") + "<span>Briefing</span>";
+$("#briefing-btn").innerHTML = icon("feed") + "<span>Briefing</span><span class=\"new-dot\" hidden aria-label=\"New\"></span>";
 $("#briefing-btn").onclick = openBriefing;
 $("#recents-btn i").innerHTML = icon("chevDown");
 $("#recents-btn").onclick = () => foldRecents($("#recents-btn").getAttribute("aria-expanded") === "true");

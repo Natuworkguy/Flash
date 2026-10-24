@@ -1077,6 +1077,9 @@ class Session:
                 "can_switch_lan": self.switch_lan is not None,
                 "update": self.updates.snapshot(),
                 "wake_always": self.always.snapshot(),
+                # Cards the last briefing did not show: a dot by it.
+                "briefing_new": briefing.new_waiting(
+                    self, lambda: self.hub.publish({"type": "status"})),
             },
         }
 
@@ -3969,9 +3972,11 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
         # one. A refresh counts from the same time again.
         problems: list[str] = []
         since = briefing.opened() if arg == "open" else None
-        return {"cards": briefing.cards(session, problems=problems,
-                                        since=since),
-                "problems": problems}
+        shown = briefing.cards(session, problems=problems, since=since)
+        if arg == "open":
+            briefing.mark_seen(c["id"] for c in shown)
+            session.hub.publish({"type": "status"})
+        return {"cards": shown, "problems": problems}
 
     if name == "briefing-dismiss":
         # One card's id, or "all" with the ids in "cards".
