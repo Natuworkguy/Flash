@@ -254,3 +254,16 @@ def test_since_is_the_briefing_before_this_one():
     # Weeks away: a week's news at most.
     later = NOW + 30 * 86400
     assert briefing.opened(now=later) == later - briefing.MOST_SINCE  # nosec
+
+
+def test_new_until_the_briefing_shows_it():
+    waits.add(waits.Wait(id="w1", chat="c", what="a", then="b",
+                         status=waits.DONE, ended=time.time() - 10))
+    assert briefing.has_new() is True  # nosec B101
+
+    briefing.mark_seen(c["id"] for c in briefing.cards())
+    assert briefing.has_new() is False  # nosec B101
+
+    waits.add(waits.Wait(id="w2", chat="c", what="b", then="c",
+                         status=waits.DONE, ended=time.time() - 5))
+    assert briefing.has_new() is True  # nosec B101

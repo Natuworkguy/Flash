@@ -125,8 +125,55 @@ def opened(now: Optional[float] = None) -> float:
     with _lock:
         last = float(_seen().get("at") or 0)
         since = max(last or now - LOOK_BACK, now - MOST_SINCE)
-        workspace._write(SEEN, {"at": now, "since": since})
+        workspace._write(SEEN, {**_seen(), "at": now, "since": since})
     return since
+
+
+def mark_seen(card_ids: Iterable[str]) -> None:
+    """The cards the briefing just showed: not new any more."""
+
+    with _lock:
+        seen = _seen()
+        seen["ids"] = sorted({str(i) for i in card_ids})[:500]
+        workspace._write(SEEN, seen)
+    _new["value"] = False
+    _new["at"] = time.time()
+
+
+def has_new(session: Any = None) -> bool:
+    """Whether a card is in the feed that the last briefing did not show."""
+
+    shown = set(_seen().get("ids") or [])
+    return any(c["id"] not in shown for c in cards(session))
+
+
+# What has_new last said, and when: looked at again, on a thread of its
+# own, once it is older than NEW_EVERY, so asking never waits on email.
+NEW_EVERY = 120
+_new: dict = {"value": False, "at": 0.0, "running": False}
+
+
+def new_waiting(session: Any = None,
+                changed: Optional[Any] = None) -> bool:
+    """has_new, as last found; CHANGED is called when a look in the
+    background finds it different."""
+
+    now = time.time()
+    if now - _new["at"] >= NEW_EVERY and not _new["running"]:
+        _new["running"] = True
+
+        def look() -> None:
+            try:
+                found = has_new(session)
+            except Exception:  # noqa: BLE001  (a source down: no dot)
+                found = _new["value"]
+            was = _new["value"]
+            _new.update(value=found, at=time.time(), running=False)
+            if found != was and changed is not None:
+                changed()
+
+        threading.Thread(target=look, daemon=True).start()
+    return bool(_new["value"])
 
 
 def last_since(now: Optional[float] = None) -> float:
