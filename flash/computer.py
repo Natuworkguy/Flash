@@ -26,7 +26,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 SETTING = "COMPUTER_ACTIONS"
 # What the user has switched off of it, by KINDS' names, comma-separated:
@@ -57,8 +57,8 @@ ACTIONS = {
 }
 # What the user can switch on and off one by one: its name, what
 # Settings calls it, what it lets Flash do, and its ACTIONS. "imessage"
-# is the send_imessage tool and "imessage_read" read_imessages, on a Mac
-# only.
+# is the send_imessage tool, "imessage_read" read_imessages and
+# "imessage_mark" mark_imessages_read, on a Mac only.
 KINDS = {
     "music": ("Music and video", "Play, pause and skip, and say what is "
               "playing.", ("play_pause", "play", "pause", "next_track",
@@ -76,6 +76,8 @@ KINDS = {
     "dark_mode": ("Dark mode", "Switch it on or off.", ("dark_mode",)),
     "imessage_read": ("Read iMessages", "Read your recent messages, to "
                       "answer about them.", ()),
+    "imessage_mark": ("Mark iMessages read", "When you ask: Messages shows "
+                      "each chat for a moment, then you are back.", ()),
     "imessage": ("Send iMessages", "Send one, after you say yes to it.", ()),
 }
 # How much a volume step moves it, in percent.
@@ -1155,6 +1157,116 @@ def read_imessages(with_: str = "", limit=READ_LIMIT,
                 f"No messages with {who}." if who else "No messages.")
     return (f"{len(lines)} message{'s' if len(lines) != 1 else ''}, newest "
             "first:\n" + "\n".join(lines))
+
+
+# Each conversation with something unread in it: who it is with, its
+# name (a group's), how many are in it, and how many are unread.
+_UNREAD_CHATS = """
+SELECT c.chat_identifier, c.display_name,
+       (SELECT COUNT(*) FROM chat_handle_join j WHERE j.chat_id = c.ROWID),
+       COUNT(*)
+FROM message m
+JOIN chat_message_join cm ON cm.message_id = m.ROWID
+JOIN chat c ON c.ROWID = cm.chat_id
+WHERE m.item_type = 0 AND m.is_from_me = 0 AND m.is_read = 0
+GROUP BY c.ROWID
+ORDER BY MAX(m.date) DESC
+"""
+# How long Messages shows each chat, for it to count as read, and how
+# many it opens at most in one go.
+MARK_PAUSE = 1.5
+MOST_MARKED = 12
+
+
+def _unread_chats() -> list[tuple[str, str, int, int]]:
+    try:
+        with contextlib.closing(sqlite3.connect(
+                f"file:{MESSAGES_DB}?mode=ro", uri=True, timeout=5)) as db:
+            return [(str(ident or ""), str(name or ""), int(people or 0),
+                     int(count or 0))
+                    for ident, name, people, count
+                    in db.execute(_UNREAD_CHATS).fetchall()]
+    except sqlite3.Error as exc:
+        if "unable to open" in str(exc) or "authoriz" in str(exc):
+            raise ComputerError(_FULL_DISK) from None
+        raise ComputerError(f"Messages could not be read: {exc}") from None
+
+
+def _front_app() -> str:
+    """The bundle id of the app in front, to come back to; "" if it
+    cannot be told."""
+
+    try:
+        front = _run(["lsappinfo", "front"])
+        said = _run(["lsappinfo", "info", "-only", "bundleid", front])
+    except ComputerError:
+        return ""
+    found = re.search(r'"CFBundleIdentifier"="([^"]+)"', said)
+    return found.group(1) if found else ""
+
+
+def mark_imessages_read(with_: str = "") -> str:
+    """Mark the user's unread iMessages read: everyone's, or only those
+    with WITH_. Messages has no command for it, and its history is not
+    Flash's to write, so Messages is shown each conversation for a
+    moment, as the user would open it, and the app that was in front
+    comes back. Group chats cannot be opened that way, so are left."""
+
+    if system() != "mac":
+        raise ComputerError("iMessages can only be marked read on a Mac.")
+    if not MESSAGES_DB.exists():
+        raise ComputerError("There is no Messages history on this Mac.")
+    names = _address_book()
+    who = " ".join(str(with_ or "").split())
+    keys: set[str] = set()
+    if who:
+        shown, handle = recipient(who)
+        keys = {_key(handle)}
+        keys |= {k for k, n in names.items() if n == shown.split(" (")[0]}
+    unread = _unread_chats()
+    singles = [(ident, count) for ident, _, people, count in unread
+               if people <= 1 and (not keys or _key(ident) in keys)]
+    groups = [(name or "a group chat", count)
+              for _, name, people, count in unread
+              if people > 1 and not keys]
+    if not singles and not groups:
+        return f"Nothing from {who} is unread." if who \
+            else "No unread messages."
+
+    def named(ident: str) -> str:
+        return names.get(_key(ident), ident)
+
+    opened = singles[:MOST_MARKED]
+    if opened:
+        back = _front_app()
+        for ident, _ in opened:
+            _run(["open", f"imessage://{quote(ident, safe='+@.')}"])
+            time.sleep(MARK_PAUSE)
+        if back and back != "com.apple.MobileSMS":
+            with contextlib.suppress(ComputerError):
+                _run(["open", "-b", back])
+    left = {ident for ident, _, people, _ in _unread_chats() if people <= 1}
+    done = [f"{named(i)} ({n})" for i, n in opened if i not in left]
+    stuck = [named(i) for i, _ in opened if i in left]
+    said = []
+    if done:
+        said.append("Marked read: " + ", ".join(done) + ".")
+    if stuck:
+        said.append(
+            "Still unread: " + ", ".join(stuck) + ". Messages may not have "
+            "shown them long enough, or was in another Space; opening "
+            "them in Messages clears them."
+        )
+    if len(singles) > MOST_MARKED:
+        said.append(f"{len(singles) - MOST_MARKED} more conversations are "
+                    "unread: ask again for the rest.")
+    if groups:
+        said.append(
+            "Group chats are left as they are, as Messages cannot be told "
+            "to open one: " + ", ".join(f"{g} ({n})" for g, n in groups)
+            + "."
+        )
+    return " ".join(said)
 
 
 def newest_imessage() -> int:

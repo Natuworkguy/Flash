@@ -698,3 +698,77 @@ def test_the_messages_template_says_it_needs_imessages():
     assert found["needs"] == "imessage"  # nosec B101
     assert sparks.needs_imessage(sparks.Spark(  # nosec B101
         id="x", name="Messages", goal=found["goal"]))
+
+
+# --- Marking iMessages read --------------------------------------------------
+
+
+def _read_on_open(ran, messages):
+    """Messages marks a conversation read once it is shown."""
+
+    import sqlite3
+
+    def shown(argv):
+        if argv[0] == "open" and argv[1].startswith("imessage://"):
+            with sqlite3.connect(messages) as db:
+                db.execute(
+                    "UPDATE message SET is_read = 1 WHERE ROWID IN (SELECT "
+                    "cm.message_id FROM chat_message_join cm JOIN chat c "
+                    "ON c.ROWID = cm.chat_id WHERE c.chat_identifier = ?)",
+                    (argv[1].removeprefix("imessage://"),))
+        return ""
+
+    ran.answers["open"] = shown
+    ran.answers["lsappinfo"] = (
+        lambda argv: '"CFBundleIdentifier"="com.apple.Terminal"'
+        if "info" in argv else "ASN:0x0-0x1:")
+
+
+def test_marking_read_shows_each_chat_then_goes_back(monkeypatch, ran,
+                                                     messages):
+    on(monkeypatch, "mac")
+    monkeypatch.setattr(computer, "MARK_PAUSE", 0)
+    _read_on_open(ran, messages)
+
+    said = tools.mark_imessages_read()
+
+    opened = [argv for argv, _ in ran if argv[0] == "open"]
+    assert opened == [["open", "imessage://+15550102000"],  # nosec B101
+                      ["open", "-b", "com.apple.Terminal"]]
+    assert "Marked read: Sam Lee (1)." in said  # nosec B101
+    assert "Climbing (1)" in said and "Group chats" in said  # nosec B101
+    assert "Running late" not in computer.read_imessages(  # nosec B101
+        unread_only=True)
+
+
+def test_marking_one_persons_read_and_nothing_left(monkeypatch, ran,
+                                                   messages):
+    mac_messages(monkeypatch, ran)
+    monkeypatch.setattr(computer, "MARK_PAUSE", 0)
+    _read_on_open(ran, messages)
+    ran.answers["osascript"] = lambda argv: json.dumps([SAM])
+
+    said = computer.mark_imessages_read("sam")
+    assert said == "Marked read: Sam Lee (1)."  # nosec B101
+    again = computer.mark_imessages_read("sam")
+    assert again == "Nothing from sam is unread."  # nosec B101
+
+
+def test_a_chat_messages_did_not_clear_is_said(monkeypatch, ran, messages):
+    on(monkeypatch, "mac")
+    monkeypatch.setattr(computer, "MARK_PAUSE", 0)
+
+    said = computer.mark_imessages_read()
+    assert "Still unread: Sam Lee." in said  # nosec B101
+
+
+def test_marking_read_is_its_own_switch(monkeypatch, ran, messages):
+    on(monkeypatch, "mac")
+    names = {t["function"]["name"] for t in tools.turn_tools()}
+    assert "mark_imessages_read" in names  # nosec B101
+
+    monkeypatch.setenv(computer.OFF_SETTING, "imessage_mark")
+    names = {t["function"]["name"] for t in tools.turn_tools()}
+    assert "mark_imessages_read" not in names  # nosec B101
+    assert "imessage_mark" in tools.mark_imessages_read()  # nosec B101
+    assert not any(argv[0] == "open" for argv, _ in ran)  # nosec B101

@@ -104,6 +104,12 @@ def test_unread_email_and_imessages(monkeypatch):
         "Sam", "on my way", NOW - 120)
     assert (kim["title"], kim["place"]) == (  # nosec B101
         "Kim in Climbing", "Climbing")
+    assert not sam["markable"]  # nosec B101  (not switched on)
+
+    monkeypatch.setattr(computer, "allowed", lambda kind: True)
+    sam, kim = briefing.cards(None, now=NOW)[1:]
+    # A group chat cannot be marked read.
+    assert sam["markable"] and not kim["markable"]  # nosec B101
 
 
 def test_chats_that_answered_lately_without_markdown():
@@ -267,3 +273,35 @@ def test_new_until_the_briefing_shows_it():
     waits.add(waits.Wait(id="w2", chat="c", what="b", then="c",
                          status=waits.DONE, ended=time.time() - 5))
     assert briefing.has_new() is True  # nosec B101
+
+
+def test_marking_an_imessage_read_takes_its_cards_out(monkeypatch):
+    asked = []
+
+    def mark(who):
+        asked.append(who)
+        return "Marked read: Sam (2)." if who == "Sam" else \
+            "Still unread: Kim."
+
+    monkeypatch.setattr(computer, "mark_imessages_read", mark)
+    session = SimpleNamespace(chats={})
+
+    said = web.command(session, {
+        "name": "briefing-mark-read", "arg": "imessage:a", "with": "Sam",
+        "cards": ["imessage:a", "imessage:b"]})
+    assert said["marked"] and asked == ["Sam"]  # nosec B101
+    assert {"imessage:a", "imessage:b"} <= set(  # nosec B101
+        briefing.dismissed())
+
+    said = web.command(session, {
+        "name": "briefing-mark-read", "arg": "imessage:c", "with": "Kim"})
+    assert not said["marked"]  # nosec B101
+    assert "imessage:c" not in briefing.dismissed()  # nosec B101
+
+    def fails(who):
+        raise computer.ComputerError("Full Disk Access")
+
+    monkeypatch.setattr(computer, "mark_imessages_read", fails)
+    with pytest.raises(ValueError, match="Full Disk"):
+        web.command(session, {"name": "briefing-mark-read", "arg": "x",
+                              "with": "Sam"})
