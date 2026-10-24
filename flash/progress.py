@@ -21,6 +21,14 @@ and its program is run once for each, with the event as JSON on stdin:
 "change" ("set", or "done" with the step's "index"), and "ask" the
 "question" a step is waiting on the user for.
 
+"mention" is a spark calling on the user with @user, in its report or
+in its team's chat, whenever it happens, a turn or not (see pings.py):
+
+    {"event": "mention", "spark": "k2", "name": "Scout",
+     "handle": "@scout", "colour": "#d97757", "where": "team",
+     "team": "t1", "text": "@user the deploy needs your sign-off",
+     "at": 1760100000.0}
+
 Only the turn the user is waiting on is reported: a turn is followed on
 the thread it runs on, so a sub-agent's or a spark's work, on threads of
 their own, is not. Events go out one at a time, in order, from a thread
@@ -36,7 +44,7 @@ import time
 import uuid
 from typing import Any, Optional
 
-EVENTS = ("turn-start", "plan", "ask", "turn-end")
+EVENTS = ("turn-start", "plan", "ask", "turn-end", "mention")
 
 QUEUE_SIZE = 64
 SUMMARY_CHARS = 280
@@ -77,8 +85,6 @@ def _deliver() -> None:
 
 
 def _emit(event: str, **data: Any) -> None:
-    global _worker
-
     from . import progress_mail
 
     current = getattr(_turn, "now", None)
@@ -86,7 +92,22 @@ def _emit(event: str, **data: Any) -> None:
         progress_mail.wants(event) or _subscribers(event)
     ):
         return
-    payload = {"event": event, **current, "at": time.time(), **data}
+    _queue_event(event, {"event": event, **current, "at": time.time(),
+                         **data})
+
+
+def tell(event: str, **data: Any) -> None:
+    """EVENT, whatever turn this thread is in or not: for news that is
+    no turn's, as a spark's @user."""
+
+    if not _subscribers(event):
+        return
+    _queue_event(event, {"event": event, "at": time.time(), **data})
+
+
+def _queue_event(event: str, payload: dict) -> None:
+    global _worker
+
     with _worker_lock:
         if _worker is None or not _worker.is_alive():
             _worker = threading.Thread(target=_deliver, daemon=True)

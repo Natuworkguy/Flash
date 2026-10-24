@@ -14756,6 +14756,7 @@ function apply(event) {
   if (event.type === "sparks") { sparksChanged(); return; }
   if (event.type === "browsers") { if (view === "settings" && settingsTab === "security") renderBrowsers(); return; }
   if (event.type === "notify") { notified(event); return; }
+  if (event.type === "ping") { pinged(event); return; }
   if (event.type === "team-chat") { teamChatChanged(event.team); return; }
   if (event.type === "btw") { btwEvent(event); return; }
   if (event.type === "doc-changed") { docChanged(event); return; }
@@ -14858,7 +14859,7 @@ function notified(event) {
     try {
       // One per notification, however many tabs are open on Flash.
       const shown = new Notification(title, { body: text, tag: `flash-${event.seq || Date.now()}`, icon: "/static/logo-icon.svg" });
-      shown.onclick = () => { window.focus(); if (chat) switchTo(chat.id); shown.close(); };
+      shown.onclick = () => { window.focus(); if (event.open) event.open(); else if (chat) switchTo(chat.id); shown.close(); };
     } catch (_) { /* a browser that will not show it still has the toast */ }
   } else if (can && Notification.permission === "default" && !notified.asking) {
     notified.asking = true;
@@ -14874,6 +14875,46 @@ function notified(event) {
       if (notified.title) { document.title = notified.title; notified.title = ""; }
     }, { once: true });
   }
+}
+
+// A spark wrote @user: a ping, and who it was and what it said, as any
+// notification is shown; clicked, it opens where it was said.
+let pingCtx = null;
+function playPing() {
+  try {
+    const Audio = window.AudioContext || window.webkitAudioContext;
+    if (!Audio) return;
+    pingCtx = pingCtx || new Audio();
+    if (pingCtx.state === "suspended") pingCtx.resume();
+    const now = pingCtx.currentTime + 0.02;
+    // Two bright notes, the second higher, each ringing out.
+    for (const [freq, at] of [[1318.5, 0], [1760, 0.1]]) {
+      const tone = pingCtx.createOscillator();
+      const gain = pingCtx.createGain();
+      tone.type = "sine";
+      tone.frequency.value = freq;
+      gain.gain.setValueAtTime(0.0001, now + at);
+      gain.gain.exponentialRampToValueAtTime(0.2, now + at + 0.012);
+      gain.gain.exponentialRampToValueAtTime(0.0001, now + at + 0.7);
+      tone.connect(gain).connect(pingCtx.destination);
+      tone.start(now + at);
+      tone.stop(now + at + 0.75);
+    }
+  } catch (_) { /* no sound; the toast still shows */ }
+}
+// A browser plays nothing until the page is used: the first click or key
+// readies the sound for later.
+for (const kind of ["pointerdown", "keydown"]) {
+  document.addEventListener(kind, () => {
+    if (pingCtx) return;
+    const Audio = window.AudioContext || window.webkitAudioContext;
+    if (Audio) try { pingCtx = new Audio(); } catch (_) { /* none */ }
+  }, { once: true });
+}
+function pinged(event) {
+  playPing();
+  const open = () => (event.where === "team" && event.team ? openTeamChat(event.team) : openSpark(event.spark));
+  notified({ title: `${event.name} mentioned you`, text: event.text, seq: event.seq, open });
 }
 
 // What a live entry does beyond being drawn: a question takes the keys,
@@ -17537,6 +17578,8 @@ const mentionOf = (sp) => sp.handle.slice(1).replace(/-spark$/, "");
 // Offered first in the pickers, and drawn as a chip of its own.
 const EVERYONE_PICK = { id: "", name: "everyone", handle: "@everyone", colour: "var(--accent)", title: "Every spark answers", everyone: true };
 const everyoneIcon = () => `<span class="everyone-face">${icon("users")}</span>`;
+// @user: a spark calling on the user, drawn as a chip saying so.
+const USER_PICK = { id: "", name: "you", handle: "@user", colour: "var(--accent)", title: "You", user: true };
 
 // @mentions drawn as chips in each spark's colour, in a chat and in a
 // team's chat alike: @scout, @scout-spark or @Scout, of a spark in
@@ -17549,6 +17592,7 @@ function chipMentions(root, sparks = sparkList, compact = false) {
   const find = (name) => {
     const key = name.toLowerCase();
     if (key === "everyone") return EVERYONE_PICK;
+    if (key === "user") return USER_PICK;
     return sparks.find((sp) => mentionOf(sp).toLowerCase() === key || sp.handle.slice(1).toLowerCase() === key || sp.name.toLowerCase().replace(/\s+/g, "-") === key);
   };
   // Code, a link, or a chip already made, within ROOT; a link ROOT sits
@@ -17575,7 +17619,7 @@ function chipMentions(root, sparks = sparkList, compact = false) {
       made.append(text.slice(last, start));
       const chip = el("span", (compact ? "mention compact" : "mention") + (sp.everyone ? " everyone" : ""));
       // In a title the row is what a click opens, not the spark.
-      if (!compact && !sp.everyone) chip.dataset.spark = sp.id;
+      if (!compact && !sp.everyone && !sp.user) chip.dataset.spark = sp.id;
       chip.style.setProperty("--c", sp.colour);
       chip.textContent = `@${sp.name}`;
       chip.title = sp.handle;

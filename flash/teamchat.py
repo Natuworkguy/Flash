@@ -26,7 +26,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Optional
 
-from . import sparks
+from . import pings, sparks
 from .dashes import undash
 
 # How many entries a team's chat keeps, oldest dropped first.
@@ -67,6 +67,8 @@ You are shown the latest of the chat, then asked to post your message.
   have found. Do not repeat what a teammate already said.
 - To bring a teammate in, @mention them by handle in your message, and
   they answer after you. Only do that when they are really needed.
+- @user pings the user, with a sound, wherever they are. Use it only
+  when you need them now: a sign-off, a question only they can answer.
 - Do not speak for the user or for another spark.
 - Real work goes in a shift: call take_on, then say you are on it.
 - While a shift of yours runs, the room can change it: call steer_shift
@@ -631,7 +633,10 @@ def _post(team_id: str, spark: sparks.Spark, entry: dict,
             "kind": SPARK, "spark": spark.id, "name": spark.name, **entry,
         })
 
-    return _change(team_id, change)
+    posted = _change(team_id, change)
+    # An @user in it pings the user.
+    pings.ping(spark, str(entry.get("text") or ""), "team", team_id)
+    return posted
 
 
 def _sending(team_id: str, spark: sparks.Spark, sent: list[dict]):

@@ -1,5 +1,6 @@
 """Main App"""
 
+import contextlib
 import io
 import json
 import os
@@ -39,6 +40,7 @@ from . import (
     interrupt,
     learning,
     loaders,
+    pings,
     plan,
     progress,
     providers,
@@ -59,7 +61,7 @@ from .images import resolve_image_path
 from .latex import render_latex
 from .memory import forget_memory, list_memory
 from .models import fetch_if_missing, pick_model
-from .notify import notify_reply_ready, notify_spark
+from .notify import desktop, notify_reply_ready, notify_spark
 from .paths import ENV_PATH
 from .repl_input import (
     EXPAND,
@@ -4046,6 +4048,16 @@ def _keep_listening() -> None:
         console.print(Text("Stopped.", style=DIM))
 
 
+def _terminal_ping(said: dict) -> None:
+    """A spark wrote @user: the terminal's bell, and the desktop's own
+    notification, as nothing is drawn over the prompt."""
+
+    with contextlib.suppress(OSError, ValueError):
+        sys.__stdout__.write("\a")
+        sys.__stdout__.flush()
+    desktop(f"{said['name']} mentioned you", said["text"])
+
+
 def _keep_sparks() -> None:
     """`flash --sparks`: the keeper alone, until stopped.
 
@@ -5912,6 +5924,8 @@ def _main() -> None:
     # with it, so their tools are there for the first turn and shift.
     sparks.start()
     connectors.start()
+    # A spark's @user rings the terminal's bell and shows on the desktop.
+    pings.on_ping(_terminal_ping)
 
     _clear_screen()
 

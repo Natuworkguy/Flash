@@ -509,9 +509,16 @@ def _events(entry: Any, root: Path) -> Events:
     if not isinstance(entry, dict):
         raise ExtensionError(f"{where} has to be an object")
     wanted = entry.get("on", list(EVENTS))
-    if not isinstance(wanted, list) or not wanted or not all(
-        isinstance(name, str) and name in EVENTS for name in wanted
+    if not isinstance(wanted, list) or not all(
+        isinstance(name, str) for name in wanted
     ):
+        raise ExtensionError(
+            f'{where}: "on" has to list some of {", ".join(EVENTS)}'
+        )
+    # One this Flash does not know yet is left out, so an extension made
+    # for a newer Flash still installs; it needs one it knows.
+    wanted = [name for name in wanted if name in EVENTS]
+    if not wanted:
         raise ExtensionError(
             f'{where}: "on" has to list some of {", ".join(EVENTS)}'
         )

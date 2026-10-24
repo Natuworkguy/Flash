@@ -40,7 +40,7 @@ from typing import Optional
 import ollama
 
 from . import agent as subagents
-from . import audit, cron, providers, triggers
+from . import audit, cron, pings, providers, triggers
 from .dashes import undash
 from .models import full_name, installed_names
 from .paths import ENV_PATH, FLASH_DIR
@@ -2780,10 +2780,16 @@ EVERYONE_MOST = 12
 
 
 def _not_reserved(name: str) -> None:
-    if handle_of(name).lstrip("@").removesuffix("-spark") == EVERYONE:
+    word = handle_of(name).lstrip("@").removesuffix("-spark")
+    if word == EVERYONE:
         raise SparkError(
             "Everyone is kept for @everyone, which calls on every spark. "
             "Pick another name."
+        )
+    if word == pings.USER:
+        raise SparkError(
+            "User is kept for @user, which sparks call the user by. Pick "
+            "another name."
         )
 
 
@@ -4093,7 +4099,7 @@ def _team_lines(spark: Spark) -> str:
         "=== The other sparks: hand_off sends one work, ask_spark asks "
         "one something, and an @mention by handle in your report brings "
         "one in: it gets the report on its next shift, or now if it is on "
-        "call ==="
+        "call. @user pings the user: only when you need them now ==="
     )
     for other in others:
         first = other.goal.splitlines()[0][:120]
@@ -4810,6 +4816,8 @@ def shift(spark_id: str, client=None) -> Optional[Report]:
             _roll_up(spark, report)
         _team_news(spark, report, answered)
         _call_mentioned(spark, report)
+        # An @user in it pings the user.
+        pings.ping(spark, report.text, "report")
     return report
 
 
