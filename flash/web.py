@@ -74,6 +74,7 @@ from . import (
     loaders,
     meeting,
     memory,
+    pings,
     progress,
     providers,
     showcase,
@@ -6036,6 +6037,8 @@ def _attach(server: "Server", standalone: bool) -> None:
     teamchat.on_change(
         lambda team: session.hub.publish({"type": "team-chat", "team": team})
     )
+    # A spark's @user: the page plays a ping and says who it was.
+    pings.on_ping(lambda said: session.hub.publish({"type": "ping", **said}))
     # A terminal's Flash, or the keeper, talking in a team's chat is news
     # to the page as soon as it is written.
     teamchat.watch()

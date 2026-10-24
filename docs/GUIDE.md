@@ -633,7 +633,11 @@ have looked them over.
   on one, `@everyone` on all of them, and replying to a message calls on
   whoever wrote it. Sparks can bring a teammate in, send a few messages
   in a row, react with an emoji, or stay quiet when they have nothing to
-  add. A spark can edit a message of its own to fix it or bring it up to
+  add. A spark that needs you writes `@user`, there or in a report: the
+  web UI plays a ping and says who it was (click it to go there), the
+  terminal rings its bell and shows a desktop notification, and
+  extensions hear of it (flash-isola shows a banner in Isola). Pings
+  share the notification limit (`/notify`). A spark can edit a message of its own to fix it or bring it up to
   date; it is marked Edited, and its arrows step back through every
   version it has had. A spark hears of a reaction to what it said, a message or a
   report, by you or a teammate: in its chats, and on its next shift,
