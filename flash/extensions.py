@@ -68,6 +68,7 @@ environment. A tool gets its arguments as JSON on stdin and answers
 on stdout; a command gets whatever was typed after it as arguments.
 """
 
+import contextlib
 import json
 import os
 import re
@@ -185,6 +186,9 @@ class Setting:
     options: list[str] = field(default_factory=list)
     minimum: Optional[float] = None
     maximum: Optional[float] = None
+    # A text setting that is a secret, such as an API key: shown as
+    # bullets, and its value never sent to a page or printed.
+    secret: bool = False
 
     def check(self, value: Any) -> Any:
         """VALUE as this setting keeps it, or ExtensionError."""
@@ -224,7 +228,8 @@ class Setting:
             "id": self.id, "label": self.label, "type": self.type,
             "default": self.default, "help": self.help,
             "options": self.options, "min": self.minimum,
-            "max": self.maximum,
+            "max": self.maximum, "secret": self.secret,
+            **({"default": ""} if self.secret else {}),
         }
 
 
@@ -580,6 +585,7 @@ def _setting(entry: Any, index: int) -> Setting:
         options=options,
         minimum=bounds[0] if kind == "number" else None,
         maximum=bounds[1] if kind == "number" else None,
+        secret=kind == "text" and entry.get("secret") is True,
     )
     fallback = {"switch": False, "text": "", "number": 0,
                 "select": options[0] if options else ""}[kind]
@@ -1008,8 +1014,26 @@ def set_setting(extension: Extension, setting_id: str,
     values[setting.id] = setting.check(value)
     path = _settings_path(extension.name)
     path.parent.mkdir(parents=True, exist_ok=True)
+    # Only this user may read it: a secret setting is kept in it.
+    path.touch(mode=0o600)
     path.write_text(json.dumps(values, indent=2), encoding="utf-8")
+    with contextlib.suppress(OSError):
+        os.chmod(path, 0o600)
     return values
+
+
+def shown_values(extension: Extension) -> dict[str, Any]:
+    """EXTENSION's settings as a page or a list may show them: a secret
+    one only as whether it is set ("" or SECRET_SET), never itself."""
+
+    values = settings_values(extension)
+    for setting in extension.settings:
+        if setting.secret:
+            values[setting.id] = SECRET_SET if values.get(setting.id) else ""
+    return values
+
+
+SECRET_SET = "\u2022" * 8
 
 
 def _env_value(value: Any) -> str:

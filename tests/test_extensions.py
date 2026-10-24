@@ -695,3 +695,39 @@ class TestSettings:
                 "name": "extension-setting", "arg": "tuned",
                 "id": "size", "value": "huge",
             })
+
+
+def test_a_secret_setting_is_used_but_never_shown(tmp_path):
+    import os
+    import stat
+
+    from flash import web
+
+    folder = make(tmp_path / "src", {
+        "name": "keyed",
+        "prompt": "p.md",
+        "settings": [{"id": "api_key", "label": "API key", "secret": True}],
+    }, {"p.md": "hi"})
+    dest = extensions.extensions_dir() / "keyed"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    import shutil
+    shutil.copytree(folder, dest)
+    extensions.reload()
+    ext = extensions.find("keyed")
+
+    assert ext.settings[0].secret
+    assert extensions.shown_values(ext) == {"api_key": ""}
+    extensions.set_setting(ext, "api_key", "sk-very-secret")
+
+    assert extensions.environment(ext)["FLASH_SETTING_API_KEY"] == (
+        "sk-very-secret")
+    assert extensions.shown_values(ext)["api_key"] == extensions.SECRET_SET
+    said = web.command(None, {"name": "extension-setting", "arg": "keyed",
+                              "id": "api_key", "value": "sk-other"})
+    assert "sk-other" not in str(said) and "sk-very" not in str(said)
+    info = web._extension_info(ext)
+    assert "sk-other" not in str(info)
+    if os.name != "nt":
+        mode = stat.S_IMODE(
+            os.stat(extensions._settings_path("keyed")).st_mode)
+        assert mode == 0o600

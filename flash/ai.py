@@ -4234,7 +4234,7 @@ def _extension_settings(arg: str) -> None:
     if not ext.settings:
         console.print(Text(f"{ext.name} has no settings.", style=DIM))
         return
-    values = extensions.settings_values(ext)
+    values = extensions.shown_values(ext)
     body = Text(f"\n{ext.name} settings\n\n", style="bold")
     for setting in ext.settings:
         value = values[setting.id]
@@ -4265,11 +4265,11 @@ def _set_extension_setting(arg: str) -> None:
         warn(EXTENSION_USAGE)
         return
     try:
-        values = extensions.set_setting(ext, setting_id, value.strip())
+        extensions.set_setting(ext, setting_id, value.strip())
     except extensions.ExtensionError as exc:
         warn(str(exc))
         return
-    now = values[setting_id]
+    now = extensions.shown_values(ext)[setting_id]
     shown = ("on" if now else "off") if isinstance(now, bool) else now
     console.print(Text(f"{ext.name}: {setting_id} is {shown}.", style=DIM))
 
