@@ -4391,7 +4391,13 @@ def _remove_extension(name: str) -> bool:
         warn("Usage: /extension remove <name>")
         return False
 
-    if not extensions.remove(name):
+    try:
+        removed = extensions.remove(name)
+    except extensions.ExtensionError as exc:
+        _extensions_changed()
+        warn(str(exc))
+        return False
+    if not removed:
         warn(f"No extension called {name!r} is installed.")
         return False
 

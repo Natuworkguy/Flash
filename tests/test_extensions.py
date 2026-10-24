@@ -731,3 +731,50 @@ def test_a_secret_setting_is_used_but_never_shown(tmp_path):
         mode = stat.S_IMODE(
             os.stat(extensions._settings_path("keyed")).st_mode)
         assert mode == 0o600
+
+
+def test_removing_empties_it_from_the_deepest_up(tmp_path, monkeypatch):
+    import os
+    import stat
+
+    folder = make(tmp_path / "src", {"name": "deep", "prompt": "p.md"},
+                  {"p.md": "hi", "a/b/c.txt": "x", "a/d.txt": "y"})
+    dest = extensions.extensions_dir() / "deep"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    import shutil
+    shutil.copytree(folder, dest)
+    # Read-only, as git leaves its objects.
+    os.chmod(dest / "a" / "b" / "c.txt", stat.S_IREAD)
+    # A link out is removed, not followed.
+    outside = tmp_path / "keep"
+    outside.mkdir()
+    (outside / "mine.txt").write_text("mine")
+    if os.name != "nt":
+        (dest / "link").symlink_to(outside, target_is_directory=True)
+    extensions.reload()
+
+    assert extensions.remove("deep") is True
+    assert not dest.exists()
+    assert (outside / "mine.txt").read_text() == "mine"
+    assert extensions.find("deep") is None
+
+
+def test_a_folder_left_empty_is_passed_over(monkeypatch):
+    left = extensions.extensions_dir() / "held"
+    left.mkdir(parents=True)
+    extensions.reload()
+
+    assert extensions.problems() == []
+    assert extensions.installed() == []
+
+
+def test_what_could_not_go_is_said(tmp_path, monkeypatch):
+    folder = make(tmp_path / "src", {"name": "stuck", "prompt": "p.md"},
+                  {"p.md": "hi"})
+    import shutil
+    shutil.copytree(folder, extensions.extensions_dir() / "stuck")
+    extensions.reload()
+    monkeypatch.setattr(extensions, "empty_folder", lambda f: ["p.md"])
+
+    with pytest.raises(ExtensionError, match="Could not remove 1"):
+        extensions.remove("stuck")
