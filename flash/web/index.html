@@ -436,6 +436,8 @@ body.empty #suggestions { display: flex; flex-wrap: wrap; justify-content: cente
   font-family: var(--chat-font, var(--sans)); font-size: calc(15px * var(--chat-scale, 1));
   white-space: pre-wrap; word-wrap: break-word;
 }
+.user pre.user-code { margin: 6px 0; padding: 0; border-radius: 10px; background: var(--code-bg); }
+.user pre.user-code code { padding: 8px 12px; font-size: 0.87em; white-space: pre-wrap; overflow-wrap: anywhere; }
 .sent-comments { width: min(460px, 88%); border: 1px solid var(--border); border-radius: 18px 18px 6px 18px; background: var(--surface); overflow: hidden; box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04); }
 .sent-comments .head { width: 100%; display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-bottom: 1px solid var(--border); text-align: left; color: var(--text); }
 .sent-comments button.head { transition: background 0.12s; }
@@ -1059,6 +1061,15 @@ body.voice-on .shell, body.voice-on #suggestions, body.voice-on #pending { displ
   max-height: 40vh; min-height: 24px; padding: 0 6px 0 0;
 }
 #input::placeholder { color: var(--text-3); opacity: 1; }
+/* Code between backticks, shown as it is typed: the words are drawn by
+   a layer under the box, the same size and font so the caret stays
+   true, and the box's own text is see-through while there is any. */
+.input-shade { position: absolute; pointer-events: none; overflow: hidden; white-space: pre-wrap; overflow-wrap: break-word; font: 400 16px/1.5 var(--chat-font, var(--sans)); padding: 0 6px 0 0; color: var(--text); }
+.input-shade[hidden] { display: none; }
+.input-shade .code { background: var(--hover); box-shadow: 0 0 0 1px var(--border); border-radius: 4px; color: var(--accent); -webkit-box-decoration-break: clone; box-decoration-break: clone; }
+.input-shade .tick { color: var(--text-3); }
+#composer.shaded #input { color: transparent; caret-color: var(--text); }
+#composer.shaded #input::selection { color: transparent; background: color-mix(in srgb, var(--accent) 28%, transparent); }
 .composer-row { display: flex; align-items: center; gap: 6px; margin-top: 10px; container-type: inline-size; min-width: 0; }
 /* A narrow box (a side panel open, a small window) keeps every button in
    it: labels give way to their icons, Hey Flash to its dot, and the
@@ -6972,6 +6983,44 @@ function commentsBlock(sent, text, steered) {
   return wrap;
 }
 
+// Code between backticks in what the user wrote: `inline`, ``with a `
+// in it``, or a ``` fence ``` of its own. Sent, it is code without its
+// backticks; typed (TICKS), the backticks stay, dimmed, so what is drawn
+// lines up letter for letter with the box.
+const CODE_BITS_RE = /```[^\n`]*\n?[\s\S]*?```|``[^\n]+?``|`[^`\n]+`/g;
+function codeBits(text, ticks = false) {
+  const out = document.createDocumentFragment();
+  let last = 0;
+  for (const found of text.matchAll(CODE_BITS_RE)) {
+    const bit = found[0];
+    out.append(text.slice(last, found.index));
+    last = found.index + bit.length;
+    const fence = bit.startsWith("```");
+    const wide = fence ? 3 : bit.startsWith("``") ? 2 : 1;
+    if (ticks) {
+      const code = el("span", "code");
+      code.append(el("span", "tick"), bit.slice(wide, -wide), el("span", "tick"));
+      code.firstChild.textContent = code.lastChild.textContent = bit.slice(0, wide);
+      out.append(code);
+    } else if (fence) {
+      const body = bit.slice(3, -3).replace(/^[^\n`]*\n/, "").replace(/\n$/, "");
+      const pre = el("pre", "user-code");
+      pre.appendChild(el("code")).textContent = body;
+      out.append(pre);
+      // The block is a line of its own: the breaks around it are its.
+      if (out.childNodes.length > 1) {
+        const before = pre.previousSibling;
+        if (before && before.nodeType === 3) before.nodeValue = before.nodeValue.replace(/\n$/, "");
+      }
+      if (text[last] === "\n") last += 1;
+    } else {
+      out.appendChild(el("code")).textContent = bit.slice(wide, -wide).replace(/^ (.*) $/, "$1");
+    }
+  }
+  out.append(text.slice(last));
+  return out;
+}
+
 function userBlock(entry, at) {
   const { text, steer: steered, files } = entry;
   const sent = !(files && files.length) && parseComments(text);
@@ -6981,7 +7030,7 @@ function userBlock(entry, at) {
   if (files && files.length) wrap.appendChild(sentFiles(files));
   if (text) {
     const said = wrap.appendChild(el("div", "user"));
-    said.textContent = text;
+    said.append(codeBits(text));
     chipMentions(said);
   }
   wrap.dataset.raw = text;
@@ -17959,7 +18008,43 @@ function autosize() {
   input.style.height = "auto";
   input.style.height = Math.min(input.scrollHeight, innerHeight * 0.4) + "px";
   placeJump();
+  shadeInput();
 }
+
+// Code between backticks shows as code while it is typed: drawn by a
+// layer under the box (see .input-shade), kept to the box's place,
+// size and scroll, and redrawn whenever its text changes, by the user
+// or by Flash (a draft, a sent message cleared).
+const inputShade = el("div", "input-shade");
+inputShade.setAttribute("aria-hidden", "true");
+inputShade.hidden = true;
+input.before(inputShade);
+function shadeInput() {
+  const text = input.value;
+  const shaded = /`/.test(text) && CODE_BITS_RE.test(text);
+  CODE_BITS_RE.lastIndex = 0;
+  input.closest("#composer").classList.toggle("shaded", shaded);
+  inputShade.hidden = !shaded;
+  if (!shaded) { inputShade.textContent = ""; return; }
+  inputShade.textContent = "";
+  // A last empty line, as the box keeps one.
+  inputShade.append(codeBits(text, true), "\u200b");
+  Object.assign(inputShade.style, {
+    top: `${input.offsetTop}px`, left: `${input.offsetLeft}px`,
+    width: `${input.clientWidth}px`, height: `${input.clientHeight}px`,
+  });
+  inputShade.scrollTop = input.scrollTop;
+}
+{
+  const value = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value");
+  Object.defineProperty(input, "value", {
+    configurable: true,
+    get() { return value.get.call(this); },
+    set(text) { value.set.call(this, text); queueMicrotask(shadeInput); },
+  });
+}
+input.addEventListener("scroll", () => { inputShade.scrollTop = input.scrollTop; });
+new ResizeObserver(() => { if (!inputShade.hidden) shadeInput(); }).observe(input);
 
 input.addEventListener("input", () => { autosize(); updateSend(); showSlash(); showEmoji(input, $("#composer")); sentAt = -1; });
 
