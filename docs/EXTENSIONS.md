@@ -185,7 +185,9 @@ lists them and `/extension set <name> <setting> <value>` changes one.
   {"id": "every", "label": "Check every", "type": "number",
    "default": 5, "min": 1, "max": 60},
   {"id": "size", "label": "Size", "type": "select",
-   "options": ["small", "large"], "default": "small"}
+   "options": ["small", "large"], "default": "small"},
+  {"id": "api_key", "label": "API key", "secret": true,
+   "help": "Overrides WEATHER_API_KEY."}
 ]
 ```
 
@@ -198,6 +200,7 @@ lists them and `/extension set <name> <setting> <value>` changes one.
 | `help` | A line under its name. |
 | `options` | A select's choices. |
 | `min`, `max` | A number's bounds. |
+| `secret` | `true` for a text setting that is a secret, such as an API key. It shows as bullets in the panel, with a Clear button, and is never sent back to the page or printed in the terminal, only whether it is set. Its file can only be read by you. |
 
 Every program the extension runs is handed them: all of them as a JSON
 object in `FLASH_SETTINGS`, and each one in `FLASH_SETTING_<ID>` (the id

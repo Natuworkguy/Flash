@@ -3829,7 +3829,7 @@ def _extension_info(ext: "extensions.Extension") -> dict:
         "tools": [t.name for t in ext.tools],
         # Its own settings panel: each choice, and what the user picked.
         "settings": [s.summary() for s in ext.settings],
-        "values": extensions.settings_values(ext) if ext.settings else {},
+        "values": extensions.shown_values(ext) if ext.settings else {},
     }
 
 
@@ -4296,12 +4296,12 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
         if ext is None:
             raise ValueError(f"No extension called {arg!r}.")
         try:
-            values = extensions.set_setting(
+            extensions.set_setting(
                 ext, str(body.get("id") or ""), body.get("value"),
             )
         except extensions.ExtensionError as exc:
             raise ValueError(str(exc)) from None
-        return {"values": values}
+        return {"values": extensions.shown_values(ext)}
 
     if name == "extension-remove":
         if not extensions.remove(arg):
