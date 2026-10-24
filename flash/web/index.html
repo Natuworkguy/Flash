@@ -297,8 +297,11 @@ body:not(.side-closed) #top .when-closed { display: none; }
 #title {
   margin-left: 6px; padding: 5px 10px; border-radius: 8px;
   font-size: 14px; font-weight: 500; color: var(--text-2);
-  max-width: 50%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  max-width: 50%; overflow: hidden; white-space: nowrap;
 }
+/* A title too long for its place fades out at the end, rather than
+   being cut off with dots. */
+#title.clipped { -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 56px), transparent); mask-image: linear-gradient(to right, #000 calc(100% - 56px), transparent); }
 #title:hover { background: var(--hover); color: var(--text); }
 #forks-btn { margin-left: 4px; gap: 6px; }
 #forks-btn svg { width: 14px; height: 14px; }
@@ -17589,6 +17592,14 @@ function chipMentions(root, sparks = sparkList, compact = false) {
 
 // A chat's title, with its @mentions in their sparks' colours: a word
 // in a line, not a chip, so a row keeps its height and its "…".
+// Whether the title at the top runs past its place, for its fade.
+{
+  const title = $("#title");
+  const clip = () => title.classList.toggle("clipped", !title.querySelector("input") && title.scrollWidth > title.clientWidth + 1);
+  new ResizeObserver(clip).observe(title);
+  new MutationObserver(clip).observe(title, { childList: true, characterData: true, subtree: true });
+}
+
 function setTitle(node, text) {
   node.textContent = text;
   return chipMentions(node, sparkList, true);
