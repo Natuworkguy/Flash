@@ -2741,6 +2741,9 @@ def _computer_command(arg: str) -> None:
             return
     elif len(words) == 1:
         set_config_var(computer.SETTING, "1" if words[0] == "on" else "0")
+        if words[0] == "off":
+            # Computer Use goes with it: it needs this on.
+            computeruse.end()
     else:
         if words[1] not in computer.kinds():
             warn(f"{words[1]} is not one of them: "
@@ -2780,12 +2783,28 @@ def _computer_use_command(words: list[str]) -> None:
     """/computer use: whether Flash may see the screen and work the mouse
     and keyboard (beta), shown, or switched with on or off."""
 
+    if words[:1] == ["mouse"] and words[1:] in (["on"], ["off"]):
+        computeruse.set_mouse_stops(words[1] == "on")
+        console.print(Text(
+            "Moving the mouse takes the computer back and stops the reply."
+            if words[1] == "on" else
+            "Moving the mouse no longer stops it; "
+            f"{computeruse.stop_keys()} still does.", style=DIM))
+        return
     if words and words not in (["on"], ["off"]):
-        warn("Usage: /computer use [on|off]")
+        warn("Usage: /computer use [on|off], or /computer use mouse "
+             "[on|off]")
         return
     if words:
-        computeruse.set_enabled(words[0] == "on")
-    keys = computeruse.stop_keys()
+        try:
+            computeruse.set_enabled(words[0] == "on")
+        except ValueError as exc:
+            warn(f"{exc} /computer on does that.")
+            return
+    if computeruse.switched_on() and not computer.enabled():
+        warn("Computer Use is switched on, but it needs Let Flash act on "
+             "this computer too: /computer on.")
+        return
     if not computeruse.enabled():
         console.print(Text(
             "Computer Use (beta) is off. /computer use on lets Flash see "
@@ -2797,8 +2816,8 @@ def _computer_use_command(words: list[str]) -> None:
     console.print(Text(
         "Computer Use (beta) is on: when no tool can do it, Flash asks to "
         "see your screen and use your mouse and keyboard, every reply, "
-        f"even in autonomous mode. Press {keys}, or move the mouse, to "
-        "take it back.",
+        f"even in autonomous mode. {computeruse.how_to_stop()} to take it "
+        "back. /computer use mouse on|off: whether moving the mouse does.",
         style=DIM,
     ))
     why = computeruse.missing()

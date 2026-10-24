@@ -76,20 +76,68 @@ class TakenBack(UseError):
     """The user took the computer back: the reply stops."""
 
 
-def enabled() -> bool:
+MOUSE_SETTING = "COMPUTER_USE_MOUSE_STOPS"
+NEEDS_COMPUTER = ("Turn on Let Flash act on this computer first: Computer "
+                  "Use goes further than it, so it needs it on.")
+
+
+def switched_on() -> bool:
+    """Computer Use's own switch, whatever the rest is."""
+
     from .notify import _saved
 
     return _saved(SETTING).strip().lower() in ("1", "on", "true", "yes")
 
 
+def enabled() -> bool:
+    """Whether Flash may use the computer: its own switch on, and Let
+    Flash act on this computer on, which it goes further than."""
+
+    from . import computer
+
+    return switched_on() and computer.enabled()
+
+
 def set_enabled(on: bool) -> None:
+    """Switch it on or off: on only with Let Flash act on this computer
+    on, or ValueError."""
+
+    from . import computer
     from .envfile import set_env_var
     from .paths import ENV_PATH
 
+    if on and not computer.enabled():
+        raise ValueError(NEEDS_COMPUTER)
     os.environ[SETTING] = "1" if on else "0"
     set_env_var(ENV_PATH, SETTING, os.environ[SETTING])
     if not on:
         end()
+
+
+def mouse_stops() -> bool:
+    """Whether moving the mouse takes the computer back and stops the
+    reply. On unless the user turned it off; the stop keys always do."""
+
+    from .notify import _saved
+
+    return _saved(MOUSE_SETTING).strip().lower() not in (
+        "0", "off", "false", "no")
+
+
+def set_mouse_stops(on: bool) -> None:
+    from .envfile import set_env_var
+    from .paths import ENV_PATH
+
+    os.environ[MOUSE_SETTING] = "1" if on else "0"
+    set_env_var(ENV_PATH, MOUSE_SETTING, os.environ[MOUSE_SETTING])
+
+
+def how_to_stop() -> str:
+    """What takes the computer back, as said to the user."""
+
+    keys = stop_keys()
+    return f"Press {keys}, or move the mouse," if mouse_stops() \
+        else f"Press {keys}"
 
 
 def system() -> str:
@@ -294,7 +342,9 @@ def _check_pointer(owner: str) -> None:
     with _lock:
         left = _holder.get("pointer") if _holder.get("owner") == owner \
             else None
-    if left is None:
+    # Turned off: the user can move the mouse while Flash works, and
+    # only the stop keys take it back.
+    if left is None or not mouse_stops():
         return
     now = pointer()
     if abs(now[0] - left[0]) > MOVED or abs(now[1] - left[1]) > MOVED:

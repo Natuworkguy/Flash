@@ -2,13 +2,15 @@
 
 import pytest
 
-from flash import computeruse, tools
+from flash import computer, computeruse, tools
 
 
 @pytest.fixture(autouse=True)
 def use_on(monkeypatch, tmp_path):
     monkeypatch.setattr("flash.notify.ENV_PATH", tmp_path / ".env")
     monkeypatch.setenv(computeruse.SETTING, "1")
+    monkeypatch.setenv(computer.SETTING, "1")
+    monkeypatch.delenv(computeruse.MOUSE_SETTING, raising=False)
     monkeypatch.setattr(computeruse, "system", lambda: "linux")
     monkeypatch.setattr(computeruse, "missing", lambda: "")
     monkeypatch.setattr(computeruse, "_watch", lambda: None)
@@ -88,6 +90,21 @@ def test_moving_the_mouse_takes_it_back(monkeypatch, screen):
         computeruse.do("click", {"x": 10, "y": 10}, "c1")
     assert stopped == [True] and not computeruse.holds("c1")  # nosec B101
     assert len(screen) == 1  # nosec B101  (the click never happened)
+
+
+def test_the_mouse_can_be_left_out_of_it(monkeypatch, screen):
+    computeruse.set_mouse_stops(False)
+    assert not computeruse.mouse_stops()  # nosec B101
+    assert "mouse" not in computeruse.how_to_stop()  # nosec B101
+    computeruse.take("c1", lambda: None)
+    computeruse.do("screenshot", {}, "c1")
+    computeruse.do("move", {"x": 10, "y": 10}, "c1")
+    monkeypatch.setattr(computeruse, "pointer", lambda: (400.0, 300.0))
+    computeruse.do("click", {"x": 10, "y": 10}, "c1")
+    assert computeruse.holds("c1")  # nosec B101
+
+    computeruse.set_mouse_stops(True)
+    assert "move the mouse" in computeruse.how_to_stop()  # nosec B101
 
 
 def test_the_stop_keys_stop_the_reply_that_has_it(screen):
@@ -178,3 +195,43 @@ def test_the_web_turns_it_on_and_says_the_stop_keys(monkeypatch):
                                    "arg": "off"})
     assert said["computer_use"] is False  # nosec B101
     assert said["computer_use_keys"] == "Ctrl+Alt+Esc"  # nosec B101
+
+
+def test_it_needs_flash_to_act_on_this_computer(monkeypatch):
+    monkeypatch.setenv(computer.SETTING, "0")
+    assert computeruse.switched_on()  # nosec B101
+    assert not computeruse.enabled()  # nosec B101
+    names = {t["function"]["name"] for t in tools.available_tools()}
+    assert "computer_use" not in names  # nosec B101
+    with pytest.raises(ValueError, match="act on this computer"):
+        computeruse.set_enabled(True)
+    computeruse.set_enabled(False)
+
+    monkeypatch.setenv(computer.SETTING, "1")
+    computeruse.set_enabled(True)
+    assert computeruse.enabled()  # nosec B101
+
+
+def test_the_web_sets_the_mouse_and_turning_off_acting_ends_it(
+        monkeypatch):
+    from flash import web
+
+    class Hub:
+        def publish(self, event):
+            pass
+
+    class Session:
+        hub = Hub()
+
+    said = web.command(Session(), {"name": "computer-use-mouse",
+                                   "arg": "off"})
+    assert said["computer_use_mouse"] is False  # nosec B101
+
+    ended = []
+    monkeypatch.setattr(computeruse, "end", lambda *a: ended.append(1))
+    monkeypatch.setattr("flash.ai.set_config_var",
+                        lambda name, value: monkeypatch.setenv(name, value))
+    said = web.command(Session(), {"name": "computer-setting",
+                                   "arg": "off"})
+    assert said["computer"] is False  # nosec B101
+    assert said["computer_use"] is False and ended  # nosec B101
