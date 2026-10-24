@@ -33,6 +33,8 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Optional
 
+from . import screenglow
+
 SETTING = "COMPUTER_USE"
 TIMEOUT = 15
 # How long a yes lasts with nothing done under it: a reply that ends, or
@@ -206,6 +208,8 @@ def take(owner: str, stop: Optional[Callable[[], None]] = None) -> None:
         _holder.update(owner=owner, stop=stop, at=time.monotonic(),
                        pointer=None)
     _watch()
+    # A glow around the screen while it is Flash's.
+    screenglow.show(system())
 
 
 def end(owner: Optional[str] = None) -> None:
@@ -219,6 +223,7 @@ def end(owner: Optional[str] = None) -> None:
 
 def _release() -> None:
     _holder.clear()
+    screenglow.hide()
     process = _watching.pop("process", None)
     _watching.pop("thread", None)
     if process is not None and process.poll() is None:
@@ -530,7 +535,8 @@ def screenshot() -> tuple[bytes, tuple[int, int]]:
     """The main screen, at most MOST_WIDTH wide, as PNG bytes and its
     size. Remembers how its pixels map to the screen's points."""
 
-    with tempfile.TemporaryDirectory(prefix="flash-screen-") as folder:
+    with tempfile.TemporaryDirectory(prefix="flash-screen-") as folder, \
+            screenglow.out_of_shot():
         path = Path(folder) / "screen.png"
         kind = system()
         if kind == "mac":

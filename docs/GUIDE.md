@@ -1026,7 +1026,9 @@ the wrong thing, and never to type passwords or card numbers.
 
 It asks before it takes your computer, every reply that wants it, even
 in autonomous mode; only UltraAuto skips the question. A yes lasts that
-one reply. While Flash has the computer:
+one reply. While Flash has the computer, a soft glow breathes around the
+edges of your screen, so it is plain whose mouse it is; clicks go
+through it, and it steps out of every screenshot Flash takes. Then:
 
 - press **Ctrl+Alt+Esc** (**Control+Option+Esc** on a Mac) to take it
   back: the reply stops then and there. Flash never presses those keys

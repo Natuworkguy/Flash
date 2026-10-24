@@ -19,6 +19,7 @@ from flash import (
     notify,
     progress_mail,
     repl_input,
+    screenglow,
     sessions,
     showcase,
     skills,
@@ -61,6 +62,8 @@ def isolated_home(tmp_path_factory, monkeypatch):
     # The briefing's dot looks for new cards on a thread of its own, and
     # says so with an event: not in tests, which ask has_new themselves.
     monkeypatch.setattr(briefing, "new_waiting", lambda *a, **kw: False)
+    # No test puts a real glow around the screen.
+    monkeypatch.setattr(screenglow, "_launch", lambda *a: None)
     # The terminal's kept conversations, and the one it is on.
     monkeypatch.setattr(sessions, "FLASH_DIR", home / ".flash")
     monkeypatch.setattr(ai, "_session", None)
