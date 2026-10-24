@@ -14999,7 +14999,7 @@ function renderChats() {
     acts.append(
       button("", chat.pinned ? "unpin" : "pin", chat.pinned ? "Unpin" : "Pin", "", () => pinChat(id)),
       button("", "edit", "Rename", "", () => renameInSide(id, row)),
-      button("", "x", "Delete chat", "Alt Shift D", () => deleteChat(id)),
+      button("", "x", "Delete chat", "Alt Shift D", (b) => deleteChat(id, b)),
     );
     row.appendChild(acts);
     holder.appendChild(row);
@@ -16364,9 +16364,18 @@ async function clearChat() {
   await command("clear");
 }
 
-async function deleteChat(id = current) {
+async function deleteChat(id = current, anchor = null) {
   if (!id) return;
   const row = document.querySelector(`.chat[data-chat="${id}"]`);
+  const chat = chats.get(id);
+  const named = chat && chat.title && chat.title !== "New chat" ? `“${chat.title}”` : "this chat";
+  const forks = chat && chat.forks > 1 ? `, its ${chat.forks} forks` : "";
+  const ok = await confirmPop(anchor || (row && row.isConnected ? row : $("#title")), {
+    title: `Delete ${named}?`,
+    text: `Its messages${forks} and anything sent in it go for good. This can't be undone.`,
+    yes: "Delete",
+  });
+  if (!ok) return;
   if (row && !calm.matches) {
     await row.animate(
       [{ height: row.offsetHeight + "px", opacity: 1 }, { height: "0px", opacity: 0, transform: "translateX(-8px)" }],
