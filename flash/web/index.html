@@ -3243,7 +3243,7 @@ select:not([multiple]) { -webkit-appearance: none; appearance: none; background-
 .bf-chip { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px 4px 8px; border-radius: 999px; font-weight: 600; font-size: 12.5px; color: #fff; background: color-mix(in srgb, var(--hue) 70%, #000 0%); }
 .bf-chip svg { width: 14px; height: 14px; }
 .bf-who { font-size: 15px; font-weight: 600; color: rgba(245, 244, 239, 0.86); }
-.bf-title { margin: 0; font-family: var(--brand); font-size: clamp(26px, 5.2vw, 44px); line-height: 1.08; font-weight: 700; letter-spacing: -0.02em; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
+.bf-title { margin: 0; padding-bottom: 0.12em; font-family: var(--brand); font-size: clamp(26px, 5.2vw, 44px); line-height: 1.12; font-weight: 700; letter-spacing: -0.02em; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
 .bf-body { font-size: clamp(15px, 2.1vw, 17.5px); line-height: 1.5; color: rgba(245, 244, 239, 0.82); white-space: pre-line; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 7; -webkit-box-orient: vertical; overflow: hidden; max-width: 62ch; }
 .bf-card.open .bf-body { -webkit-line-clamp: unset; display: block; max-height: 46vh; overflow-y: auto; }
 .bf-more { align-self: flex-start; padding: 0; border: 0; background: none; color: #fff; font: inherit; font-size: 14px; font-weight: 600; cursor: pointer; opacity: 0.8; }
@@ -3267,7 +3267,7 @@ select:not([multiple]) { -webkit-appearance: none; appearance: none; background-
 .bf-end { grid-column: 1 / -1; justify-self: center; text-align: center; display: flex; flex-direction: column; align-items: center; gap: 14px; }
 .bf-end .bf-tick { display: grid; place-items: center; width: 76px; height: 76px; border-radius: 50%; background: var(--hue); color: #fff; }
 .bf-end .bf-tick svg { width: 38px; height: 38px; stroke-width: 2.4; }
-.bf-end .bf-title { font-size: clamp(26px, 5vw, 38px); }
+.bf-end .bf-title { font-size: clamp(26px, 5vw, 38px); display: block; overflow: visible; }
 .bf-end .bf-body { margin: 0 auto; }
 .bf-end .row { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; margin-top: 6px; }
 .bf-end .btn { color: #f5f4ef; background: rgba(255, 255, 255, 0.1); border-color: rgba(255, 255, 255, 0.16); }
