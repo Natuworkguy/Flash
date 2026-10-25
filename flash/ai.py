@@ -4515,6 +4515,61 @@ def _btw(question: str, history: list, working_on: str = "") -> None:
     ))
 
 
+def _secret_command(arg: str) -> None:
+    """/secret list, set NAME, rm NAME: the vault, keys and passwords
+    Flash uses by name without seeing them."""
+
+    import getpass
+
+    from . import vault
+
+    action, _, name = arg.partition(" ")
+    name = name.strip()
+    try:
+        if action in ("", "list"):
+            have = vault.names()
+            console.print(Text(
+                ("Your secrets: " + ", ".join(have) + ". Flash uses each "
+                 "as {{secret:NAME}}, and never sees them.") if have else
+                "No secrets yet. /secret set NAME keeps one.", style=DIM))
+            console.print(Text(f"Their key is kept in {vault.where_kept()}.",
+                               style=DIM))
+        elif action == "set" and name:
+            value = getpass.getpass(f"  Value for {name} (not shown): ")
+            console.print(Text(vault.set_secret(name, value), style=DIM))
+            learning.refresh()
+        elif action in ("rm", "remove", "delete") and name:
+            console.print(Text(
+                f"Removed {name}." if vault.delete(name)
+                else f"There is no secret called {name}.", style=DIM))
+            learning.refresh()
+        else:
+            warn("Usage: /secret list, /secret set NAME, /secret rm NAME")
+    except (vault.VaultError, ImportError, OSError) as exc:
+        warn(str(exc))
+    except (EOFError, KeyboardInterrupt):
+        console.print(Text("Not kept.", style=DIM))
+
+
+def _capture_keys(line: str) -> str:
+    """LINE with any key pasted into it kept in the vault, and its name
+    in its place; the input history forgets the key too."""
+
+    from . import repl_input, vault
+
+    try:
+        line, kept = vault.capture(line)
+    except Exception:  # noqa: BLE001  (no vault: the line as it was)
+        return line
+    if kept:
+        console.print(Text(vault.note(kept), style=DIM))
+        with contextlib.suppress(OSError):
+            path = repl_input.HISTORY_PATH
+            path.write_text(vault.scrub(path.read_text(encoding="utf-8")),
+                            encoding="utf-8")
+    return line
+
+
 def _rate_command(line: str, history: list) -> None:
     """/good and /bad [why]: the last reply was good or bad, and Flash
     learns from it now, in the background."""
@@ -6319,6 +6374,10 @@ def _main() -> None:
                 _resume_command(uin[len("/resume"):].strip(), messages)
                 continue
 
+            if uin == "/secret" or uin.startswith("/secret "):
+                _secret_command(uin[len("/secret"):].strip())
+                continue
+
             if uin.split(" ", 1)[0] in ("/good", "/bad"):
                 _rate_command(uin, messages)
                 continue
@@ -6697,6 +6756,8 @@ def _main() -> None:
             # Riding inside the user's own message, not beside it, keeps
             # roles alternating for templates that require it, and lets
             # history trimming keep or drop the two together.
+            if not woken:
+                uin = _capture_keys(uin)
             agent_news, delivered_ids = subagents.notices()
             looked_at = time.time()
             ran = "" if woken else terminal.since(terminal_seen)

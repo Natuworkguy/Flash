@@ -1029,6 +1029,34 @@ which every player answers, though it cannot tell what is playing. Linux
 uses `playerctl` for music and PipeWire, PulseAudio or ALSA for the
 volume.
 
+### Secrets
+
+Keys, tokens and passwords Flash can use without ever seeing them.
+Keep one with `/secret set NAME` (it asks for the value without showing
+it), or in Settings > Security > Secrets; `/secret list` and
+`/secret rm NAME` do the rest. They are encrypted on disk, with the key
+in the macOS Keychain, Windows's data protection, or the Secret Service
+on Linux (a file only you can read where there is none).
+
+Flash knows only their names, and writes `{{secret:NAME}}` where one
+goes. In a shell command it becomes an environment variable, so the
+command you see, approve and keep has only the name; in a connector's
+or an extension's arguments it is put in as the call is made. Whatever
+a tool says back has every secret hidden behind its name again, before
+Flash, the screen or a saved chat sees it.
+
+Paste a key into a message (a GitHub, GitLab, Slack, AWS, Google, npm
+or hub token, an `sk-` key, or a line like `password: ...`) and it is
+taken out and kept in the vault, and the message goes on with its name
+in its place. The same key pasted again is the same secret.
+
+Text that comes from outside (a web page, an email, search results,
+messages, a connected app or an extension) is screened for words that
+try to give Flash orders: "ignore your previous instructions", "you are
+now", "don't tell the user", "send the API keys to...". Flash sees it
+marked as something to read, not to obey, and will not remember it.
+It goes by the words, so it marks rather than drops.
+
 ### Computer Use (beta)
 
 For the things no tool can do, a setting deep in an app or a button in

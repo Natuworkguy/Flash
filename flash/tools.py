@@ -517,6 +517,19 @@ def shell_tool(command: str, timeout=None, is_user=False) -> str:
                 tool_result("Command blocked by user", style=WARN)
                 return "Command blocked by user"
 
+    # A secret named in it is read from the environment, so the command
+    # shown, asked about and kept has only its name.
+    from . import vault
+
+    env: Optional[dict] = None
+    if vault.PLACEHOLDER.search(command):
+        try:
+            command, secrets = vault.for_shell(command, os.name == "nt")
+        except vault.VaultError as exc:
+            tool_result(str(exc), style=ERROR)
+            return f"Error: {exc}"
+        env = {**os.environ, **secrets}
+
     args: Union[list[str], str]
     if os.name == "nt":
         args = [
@@ -538,7 +551,7 @@ def shell_tool(command: str, timeout=None, is_user=False) -> str:
             # output live as it's produced, instead of waiting for the
             # whole command to finish before showing anything.
             output, returncode = _run_shell_streaming(  # nosec B604
-                args, shell=shell, seconds=seconds
+                args, shell=shell, seconds=seconds, env=env,
             )
             _note_user_run(command, f"exit {returncode}", output)
             if not output.strip():
@@ -554,6 +567,7 @@ def shell_tool(command: str, timeout=None, is_user=False) -> str:
                 timeout=seconds,
                 check=False,
                 stdin=subprocess.DEVNULL,
+                env=env,
             )
         else:
             result = subprocess.run(
@@ -564,6 +578,7 @@ def shell_tool(command: str, timeout=None, is_user=False) -> str:
                 timeout=seconds,
                 check=False,
                 stdin=subprocess.DEVNULL,
+                env=env,
             )
     except subprocess.TimeoutExpired:
         message = (
@@ -1624,8 +1639,20 @@ def remember(entry: str, project: Any = False) -> str:
     """Save a fact or preference to persistent memory for future sessions:
     the user's own, or with PROJECT, the project's this chat is in."""
 
+    from . import guard, vault
+
     tool_line(f"Remember({entry})" + (" in the project"
                                       if project is True else ""))
+    found = guard.signs(entry)
+    if found:
+        result = ("Not remembered: it reads like instructions to an "
+                  f"assistant ({found[0]}), which is not a fact about the "
+                  "user. If the user asked for it, say so and ask them to "
+                  "add it themselves.")
+        tool_result(result, style=WARN)
+        return result
+    with contextlib.suppress(Exception):
+        entry = vault.scrub(entry)
     path, why = _project_memory(project)
     if why:
         tool_result(why, style=ERROR)
@@ -2150,7 +2177,14 @@ def _extension_tool(name: str, args: dict) -> Optional[str]:
     ):
         return "Blocked by user"
 
-    result = extensions.call_tool(extension, tool, args)
+    from . import vault
+
+    try:
+        given = vault.expand_args(args)
+    except vault.VaultError as exc:
+        tool_result(str(exc), style=ERROR)
+        return f"Error: {exc}"
+    result = extensions.call_tool(extension, tool, given)
     tool_result(
         result, style=ERROR if result.startswith(("(exit", "Error")) else DIM
     )
@@ -2177,7 +2211,14 @@ def _connector_tool(name: str, args: dict) -> Optional[str]:
             ):
         return "Blocked by user"
 
-    result, images = connectors.call(server, tool, args)
+    from . import vault
+
+    try:
+        given = vault.expand_args(args)
+    except vault.VaultError as exc:
+        tool_result(str(exc), style=ERROR)
+        return f"Error: {exc}"
+    result, images = connectors.call(server, tool, given)
     _pending_images.extend(images)
     tool_result(result, style=ERROR if result.startswith("Error") else DIM)
     return result
@@ -6543,14 +6584,41 @@ def run_tool(call):
 
     if func is None:
         answered = _extension_tool(name, args)
+        source = "an extension"
         if answered is None:
             answered = _connector_tool(name, args)
-        return f"Unknown tool: {name}" if answered is None else answered
+            source = "a connected app"
+        if answered is None:
+            return f"Unknown tool: {name}"
+        return _from_outside(answered, source)
 
     try:
-        return func(**args)
+        return _from_outside(func(**args), OUTSIDE.get(name, ""))
     except Exception as e:  # noqa: BLE001
         return f"{e.__class__.__name__}: {e}"
+
+
+# Tools whose words come from someone other than the user: marked when
+# they read like orders to an assistant (guard.py).
+OUTSIDE = {
+    "fetch": "a web page", "web_search": "search results",
+    "open_page": "a web page", "interact": "a web page",
+    "read_email": "an email", "check_inbox": "the user's inbox",
+    "read_imessages": "messages",
+}
+
+
+def _from_outside(result: Any, source: str) -> Any:
+    """RESULT with every secret's value hidden behind its name, and, from
+    SOURCE outside, marked if it tries to give orders."""
+
+    if not isinstance(result, str):
+        return result
+    from . import guard, vault
+
+    with contextlib.suppress(Exception):
+        result = vault.scrub(result)
+    return guard.screen(result, source) if source else result
 
 
 def _missing_arguments(func, args: dict) -> list[str]:

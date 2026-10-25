@@ -513,9 +513,23 @@ def tool_notify(title: str, message: str) -> bool:
     }), ""))
 
 
+def _scrub(text: str) -> str:
+    """TEXT with any secret's value hidden behind its name (vault.py)."""
+
+    try:
+        from .vault import scrub
+
+        return scrub(text)
+    except Exception:  # noqa: BLE001  (no vault, nothing to hide)
+        return text
+
+
 def tool_result(text: str, *, style: str = DIM) -> None:
     """Print an indented result block under the most recent tool_line()."""
 
+    # A secret's value never reaches the screen or a saved chat.
+    if text:
+        text = _scrub(text)
     sink = _sink()
     if sink:
         sink("result", text or "", style)

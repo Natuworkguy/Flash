@@ -59,6 +59,8 @@ COMMANDS = [
     ("/model", "pick from the models here, /model <name> to switch, "
                "/model pin or unpin [name] to keep one at the top"),
     ("/btw", "a side question, even while Flash works, without interrupting"),
+    ("/secret", "keys and passwords Flash uses by name, never seeing them "
+                "(list, set NAME, rm NAME)"),
     ("/good", "the last reply was good: Flash learns what worked "
               "(/good <why>)"),
     ("/bad", "the last reply was bad: Flash learns what to do "
