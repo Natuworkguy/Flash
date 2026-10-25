@@ -59,6 +59,8 @@ COMMANDS = [
     ("/model", "pick from the models here, /model <name> to switch, "
                "/model pin or unpin [name] to keep one at the top"),
     ("/btw", "a side question, even while Flash works, without interrupting"),
+    ("/debate", "two sides argue a question out, then a summary "
+                "(/debate a vs b: question for two models)"),
     ("/host", "switch Ollama server (/host <name|url>, add, remove, list)"),
     ("/briefing", "what came in while you were away, a card at a time"),
     ("/doctor", "check that everything Flash needs works, and how to fix "

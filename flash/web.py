@@ -488,7 +488,7 @@ class Ask:
 KEPT = {
     "user", "assistant", "tool", "result", "diff", "ask", "answered",
     "error", "stats", "note", "thought", "file", "plan", "browser", "wait",
-    "seen",
+    "seen", "debate",
 }
 
 
@@ -1723,6 +1723,51 @@ class Session:
         say(question=question)
         threading.Thread(target=answer, daemon=True).start()
         return asked_id
+
+    def debate(self, chat: Chat, text: str) -> str:
+        """Argue a question out (debate.py), in CHAT, on a thread of its
+        own: each side's words stream to the page as "debate-live"
+        events, and the whole debate is kept in the chat at the end, its
+        summary in what the model sees, to go on from."""
+
+        from . import ai  # deferred: ai imports half of Flash
+        from . import debate as argue
+
+        question, models = argue.parse(text)
+        if not question:
+            raise ValueError(argue.USAGE)
+        if chat.busy or chat.queued:
+            raise ValueError("Wait for the reply to finish first.")
+        judge = ai.Config.model or ""
+        if not judge:
+            raise ValueError("No model is set. Pick one with Alt+M.")
+        debate_id = uuid.uuid4().hex[:8]
+
+        def say(event: dict) -> None:
+            self.hub.publish({"type": "debate-live", "chat": chat.id,
+                              "id": debate_id, **event})
+
+        def go() -> None:
+            try:
+                done = argue.run(
+                    question, ai._client(), models, judge,
+                    history=list(chat.messages),
+                    options=ai._chat_options(), say=say,
+                    stopped=chat.stop.is_set,
+                )
+            except Exception as exc:  # noqa: BLE001
+                say({"done": True, "error": f"{exc.__class__.__name__}: "
+                     f"{exc}"})
+                return
+            chat.messages.extend(argue.note(done))
+            self.emit(chat, {"type": "debate", "id": debate_id, **done})
+            self.save(chat)
+            say({"done": True})
+
+        chat.stop.clear()
+        say({"question": question, "sides": argue.SIDES})
+        threading.Thread(target=go, daemon=True).start()
+        return debate_id
 
     # Editing -------------------------------------------------------
 
@@ -5570,6 +5615,16 @@ class Handler(BaseHTTPRequestHandler):
             return {
                 "chat": chat.id,
                 "id": session.btw(chat, str(body.get("text", ""))),
+            }
+
+        if path == "/api/debate":
+            chat_id = str(body.get("chat") or "")
+            chat = (
+                session.chat(chat_id) if chat_id else session.new_chat()
+            )
+            return {
+                "chat": chat.id,
+                "id": session.debate(chat, str(body.get("text", ""))),
             }
 
         if path == "/api/upload":

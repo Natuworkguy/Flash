@@ -4515,6 +4515,58 @@ def _btw(question: str, history: list, working_on: str = "") -> None:
     ))
 
 
+def _debate_command(line: str, history: list) -> None:
+    """/debate: two sides argue a question out, a turn at a time, then a
+    summary, which joins the conversation to go on from."""
+
+    from . import debate
+
+    question, models = debate.parse(line)
+    if not question:
+        warn(debate.USAGE)
+        return
+    if not Config.model:
+        warn("No model is set. Pick one with /model.")
+        return
+    colours = (ACCENT, "#5b8def")
+    # Each turn is shown whole at the end; meanwhile, who is speaking.
+    started: set = set()
+
+    with console.status("The sides are arguing", spinner="dots") as live:
+        def say(event: dict) -> None:
+            if "turn" in event and event["turn"] not in started:
+                started.add(event["turn"])
+                live.update(f"{debate.SIDES[event['side']]} is speaking")
+            elif "summary" in event and "summary" not in started:
+                started.add("summary")
+                live.update("Summing up")
+
+        try:
+            done = debate.run(question, _client(), models, Config.model,
+                              history=history, options=_chat_options(),
+                              say=say)
+        except Exception as exc:  # noqa: BLE001
+            warn(f"  The debate stopped: {exc}")
+            return
+    console.print(Text(f"  Debate: {done['question']}", style="bold"))
+    for turn in done["turns"]:
+        name = done["sides"][turn["side"]]
+        console.print(Panel(
+            Markdown(turn["text"] or "(nothing)"),
+            border_style=colours[turn["side"]],
+            title=Text(name, style=f"bold {colours[turn['side']]}"),
+            title_align="left" if turn["side"] == 0 else "right",
+            padding=(0, 1),
+        ))
+    if done["summary"]:
+        console.print(Panel(
+            Markdown(done["summary"]), border_style=DIM,
+            title=Text("Summary", style="bold"), title_align="left",
+            padding=(0, 1),
+        ))
+    history.extend(debate.note(done))
+
+
 def _web_command(arg: str) -> None:
     """/web, /web lan, /web stop: the browser UI beside this session."""
 
@@ -6244,6 +6296,10 @@ def _main() -> None:
 
             if uin == "/resume" or uin.startswith("/resume "):
                 _resume_command(uin[len("/resume"):].strip(), messages)
+                continue
+
+            if uin == "/debate" or uin.startswith("/debate "):
+                _debate_command(uin, messages)
                 continue
 
             if uin == "/fork" or uin.startswith("/fork "):
