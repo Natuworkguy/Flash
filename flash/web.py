@@ -4029,6 +4029,11 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
         briefing.dismiss(i for i in ids or [] if isinstance(i, str))
         return {}
 
+    if name == "doctor":
+        from . import doctor
+
+        return {"checks": [c.to_dict() for c in doctor.run()]}
+
     if name == "chat-seen":
         # The page has the chat open, the reply in front of the user: not
         # news for the briefing. Kept without counting as a change.

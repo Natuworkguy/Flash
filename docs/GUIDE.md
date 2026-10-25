@@ -177,6 +177,11 @@ python run.py
   move up a level).
 - `/think auto on|off`: Whether Flash may turn its thinking on by itself
   for a message that needs careful reasoning (on by default).
+- `/doctor`: Checks that everything Flash needs works (Python and its
+  packages, Ollama and your model, Flash's folder, extensions,
+  connectors, sparks, and on a Mac the permissions Computer Use and
+  iMessages need) and says how to fix what does not. `flash doctor` in a
+  terminal, or Settings > Health check in the web UI, does the same.
 - `/briefing`: What came in while you were away, full screen, a card at
   a time: unread email and iMessages, spark reports, finished waits,
   what is coming up, and teams with news (see Briefing under Web UI).

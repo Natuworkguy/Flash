@@ -61,6 +61,8 @@ COMMANDS = [
     ("/btw", "a side question, even while Flash works, without interrupting"),
     ("/host", "switch Ollama server (/host <name|url>, add, remove, list)"),
     ("/briefing", "what came in while you were away, a card at a time"),
+    ("/doctor", "check that everything Flash needs works, and how to fix "
+                "what does not"),
     ("/resume", "pick up an earlier conversation (or /resume <words>)"),
     ("/fork", "try another way from here, or /fork <n> turns back"),
     ("/forks", "this conversation's forks as a tree; /forks rm <id>"),
