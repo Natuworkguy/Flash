@@ -4534,6 +4534,11 @@ def notify_user(message: str, title: str = "") -> str:
 
     if not tool_notify(title, message):
         desktop_notify(title, message)
+    # And in the briefing, for when it was missed.
+    from . import briefing
+
+    with contextlib.suppress(Exception):
+        briefing.notice("notify", title, message)
     tool_result(f"Sent: {message}")
     return "Sent. The user has been notified."
 

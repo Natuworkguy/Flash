@@ -4927,6 +4927,10 @@ def _briefing_command() -> None:
         carry(f"Reply to {to} on iMessage: ")
     elif action == "reply" and kind == "spark":
         _sparks_command(f"chat {card['spark']}")
+    elif action in ("reply", "open") and kind == "ping":
+        # Where it was said: the team's chat, or a chat with the spark.
+        _sparks_command(f"teamchat {card['team']}" if card.get("team")
+                        else f"chat {card['spark']}")
     elif action == "open" and kind == "team":
         _sparks_command(f"teamchat {card['team']}")
     elif action == "open" and kind == "email" and card.get("link"):

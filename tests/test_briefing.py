@@ -305,3 +305,46 @@ def test_marking_an_imessage_read_takes_its_cards_out(monkeypatch):
     with pytest.raises(ValueError, match="Full Disk"):
         web.command(session, {"name": "briefing-mark-read", "arg": "x",
                               "with": "Sam"})
+
+
+def test_a_reply_the_user_has_read_is_not_news():
+    log = [{"type": "user", "text": "hi"},
+           {"type": "assistant", "text": "Hello"}]
+    read = chat("a", list(log))
+    read.seen = 2
+    unread = chat("b", list(log))
+    unread.seen = 1
+    session = SimpleNamespace(chats={"a": read, "b": unread})
+
+    assert [c["chat"] for c in briefing.cards(session, now=NOW)] == [  # nosec
+        "b"]
+
+
+def test_the_page_marks_a_chat_read():
+    made = web.Chat(id="c1", log=[{"type": "user", "text": "hi"},
+                                  {"type": "assistant", "text": "Hi"}])
+    session = SimpleNamespace(chats={"c1": made})
+
+    web.command(session, {"name": "chat-seen", "chat": "c1"})
+    assert made.seen == 2  # nosec B101
+    assert web.Chat.restore(made.saved()).seen == 2  # nosec B101
+
+
+def test_pings_and_notifications_come_as_cards():
+    briefing.notice("ping", "Scout mentioned you", "@user sign off?",
+                    now=NOW - 30, spark="s1", who="Scout", colour="#123456",
+                    team="t1", where="team")
+    briefing.notice("notify", "Build done", "All green.", now=NOW - 20)
+    briefing.notice("notify", "Old", "Too old.", now=NOW - 3 * 86400)
+
+    cards = briefing.cards(None, now=NOW)
+
+    assert [(c["kind"], c["title"]) for c in cards] == [  # nosec B101
+        ("notify", "Build done"), ("ping", "Scout mentioned you")]
+    ping = cards[1]
+    assert (ping["team"], ping["colour"], ping["label"]) == (  # nosec B101
+        "t1", "#123456", "Mention")
+
+    from flash import briefing_view
+
+    assert briefing_view.actions(ping)[0] == "reply"  # nosec B101

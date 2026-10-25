@@ -410,6 +410,9 @@ class Chat:
     # Empty until it is first forked; the first fork is "main".
     forks: dict[str, dict] = field(default_factory=dict)
     fork: str = ""
+    # How much of its log the user has had open on the page: a reply
+    # past that is one they have not read, for the briefing.
+    seen: int = 0
 
     def summary(self) -> dict:
         return {
@@ -448,6 +451,7 @@ class Chat:
             "pinned": self.pinned,
             "forks": self.forks,
             "fork": self.fork,
+            "seen": self.seen,
         }
 
     @classmethod
@@ -466,6 +470,7 @@ class Chat:
             pinned=bool(data.get("pinned")),
             forks=dict(data.get("forks") or {}),
             fork=str(data.get("fork") or ""),
+            seen=int(data.get("seen") or 0),
         )
 
 
@@ -483,6 +488,7 @@ class Ask:
 KEPT = {
     "user", "assistant", "tool", "result", "diff", "ask", "answered",
     "error", "stats", "note", "thought", "file", "plan", "browser", "wait",
+    "seen",
 }
 
 
@@ -2727,6 +2733,42 @@ def _sink(session: Session, chat: Chat):
     return sink
 
 
+# The start of each kind of image a tool hands the model, for the name
+# its copy is kept under.
+_IMAGE_STARTS = ((b"\x89PNG", ".png"), (b"\xff\xd8", ".jpg"),
+                 (b"GIF8", ".gif"), (b"RIFF", ".webp"), (b"BM", ".bmp"))
+
+
+def _show_seen(session: Session, chat: Chat, images: list) -> None:
+    """What a tool showed the model (Computer Use's screenshots, a page's,
+    an image it viewed), shown to the user too, under that tool."""
+
+    import tempfile
+
+    kept = []
+    with tempfile.TemporaryDirectory(prefix="flash-seen-") as folder:
+        for n, image in enumerate(images):
+            data = image
+            if isinstance(image, str):
+                try:
+                    data = base64.b64decode(image)
+                except ValueError:
+                    continue
+            if not isinstance(data, (bytes, bytearray)):
+                continue
+            suffix = next((ext for start, ext in _IMAGE_STARTS
+                           if data.startswith(start)), "")
+            if not suffix:
+                continue
+            path = os.path.join(folder, f"seen-{n + 1}{suffix}")
+            with open(path, "wb") as out:
+                out.write(data)
+            with contextlib.suppress(workspace.WorkspaceError, OSError):
+                kept.append(workspace.keep_file(path))
+    if kept:
+        session.emit(chat, {"type": "seen", "images": kept})
+
+
 def _finish_reply(
     session: Session, chat: Chat, reply: Streamed,
     spark: "Optional[sparks.Spark]" = None,
@@ -3325,6 +3367,7 @@ def _respond(
 
             images = flash_tools.take_pending_images()
             if images:
+                _show_seen(session, chat, images)
                 convo.append(
                     ai._message("user", ai.TOOL_IMAGE_NOTE, images)
                 )
@@ -3984,6 +4027,16 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
         # One card's id, or "all" with the ids in "cards".
         ids = body.get("cards") if arg == "all" else [arg]
         briefing.dismiss(i for i in ids or [] if isinstance(i, str))
+        return {}
+
+    if name == "chat-seen":
+        # The page has the chat open, the reply in front of the user: not
+        # news for the briefing. Kept without counting as a change.
+        chat = session.chats.get(chat_id)
+        if chat is not None and chat.seen != len(chat.log):
+            chat.seen = len(chat.log)
+            if chat.log:
+                workspace.save_chat(chat.saved())
         return {}
 
     if name == "briefing-mark-read":

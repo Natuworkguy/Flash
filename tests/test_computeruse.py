@@ -235,3 +235,22 @@ def test_the_web_sets_the_mouse_and_turning_off_acting_ends_it(
                                    "arg": "off"})
     assert said["computer"] is False  # nosec B101
     assert said["computer_use"] is False and ended  # nosec B101
+
+
+def test_the_user_sees_what_the_model_saw():
+    from flash import web
+
+    shown = []
+
+    class Session:
+        def emit(self, chat, event):
+            shown.append(event)
+
+    png = (b"\x89PNG\r\n\x1a\n" + b"\x00" * 64)
+    web._show_seen(Session(), None, [png, b"not an image", "@@"])
+
+    [event] = shown
+    assert event["type"] == "seen"  # nosec B101
+    [image] = event["images"]
+    assert image["kind"] == "image" and image["name"].endswith(".png")  # nosec
+    assert "seen" in web.KEPT  # nosec B101
