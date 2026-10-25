@@ -731,6 +731,25 @@ pre code { display: block; padding: 2px 16px 14px; overflow-x: auto; font-size: 
 .tool .body { border-top: 1px solid var(--border); padding: 10px 14px; font: 12.5px/1.55 var(--mono); color: var(--text-2); white-space: pre-wrap; word-break: break-word; max-height: 420px; overflow: auto; background: var(--code-bg); }
 .tool .body.error { color: var(--del); }
 /* What a tool showed the model, under it, open or not. */
+/* A debate: the two sides, one on each side, then the summary. */
+.debate { border: 1px solid var(--border); border-radius: var(--radius); padding: 14px; display: flex; flex-direction: column; gap: 12px; }
+.debate-head { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.debate-chip { flex: none; display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px 3px 7px; border-radius: 999px; font-size: 12px; font-weight: 600; color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent); }
+.debate-chip svg { width: 13px; height: 13px; }
+.debate-q { font-weight: 600; color: var(--text); min-width: 0; }
+.debate-turns { display: flex; flex-direction: column; gap: 10px; }
+.debate-turn { max-width: 86%; padding: 10px 14px; border-radius: 16px; background: var(--surface); border: 1px solid var(--border); font-size: 14.5px; line-height: 1.55; animation: rise 0.25s var(--ease) both; }
+.debate-turn.side-0 { align-self: flex-start; border-bottom-left-radius: 6px; border-left: 3px solid var(--accent); }
+.debate-turn.side-1 { align-self: flex-end; border-bottom-right-radius: 6px; border-right: 3px solid #5b8def; }
+.debate .who { font-size: 11.5px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; color: var(--text-3); margin-bottom: 4px; }
+.debate-turn.side-0 .who { color: var(--accent); }
+.debate-turn.side-1 .who { color: #5b8def; text-align: right; }
+.debate .said > :first-child { margin-top: 0; }
+.debate .said > :last-child { margin-bottom: 0; }
+.debate-turn.speaking .who::after { content: " · speaking"; font-weight: 500; text-transform: none; letter-spacing: 0; }
+.debate-summary { padding: 12px 14px; border-radius: 12px; background: var(--hover); font-size: 14.5px; line-height: 1.6; }
+.debate-wait { font-size: 13px; color: var(--text-3); }
+.debate-error { font-size: 13px; color: var(--del); }
 .doctor-list { list-style: none; margin: 12px 0 0; padding: 0; border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
 .doctor-list li { display: flex; gap: 10px; padding: 10px 14px; font-size: 13.5px; }
 .doctor-list li + li { border-top: 1px solid var(--border); }
@@ -7287,6 +7306,13 @@ function drawEntry(entry, ctx) {
     case "file": messagesEl.appendChild(entry.kind === "image" ? inlineImage(entry) : attachment(entry)); break;
     case "browser": drawBrowserFrame(entry); break;
     case "seen": seenImages(ctx.tool, entry.images || []); break;
+    case "debate": {
+      const live = messagesEl.querySelector(`.debate[data-debate="${entry.id}"]`);
+      if (live) live.remove();
+      debates.delete(entry.id);
+      messagesEl.appendChild(debateCard(entry));
+      break;
+    }
     case "result": if (ctx.tool) addResult(ctx.tool, entry.text, entry.error, entry.warn); break;
     case "diff": if (ctx.tool) addDiff(ctx.tool, entry.text); break;
     case "plan": if (ctx.tool) addPlan(ctx.tool, entry.steps || []); break;
@@ -14859,6 +14885,7 @@ function apply(event) {
   if (event.type === "ping") { pinged(event); return; }
   if (event.type === "team-chat") { teamChatChanged(event.team); return; }
   if (event.type === "btw") { btwEvent(event); return; }
+  if (event.type === "debate-live") { debateLive(event); return; }
   if (event.type === "doc-changed") { docChanged(event); return; }
   if (event.type === "doc-proposal") { docProposal(event); return; }
   if (event.type === "answered") docAnswered(event);
@@ -15706,6 +15733,58 @@ function stopReply() {
   return true;
 }
 
+// Debates (/debate): two sides argue a question out in the chat, then a
+// summary. Drawn as it is argued, from "debate-live" events, until the
+// whole debate is kept in the chat and drawn from there.
+const debates = new Map();
+
+async function startDebate(text) {
+  if (!current) await createChat(viewProject || "", viewSpark || "");
+  try { await api("/api/debate", { chat: current, text }); }
+  catch (error) { showFailure(error); }
+}
+
+function debateLive(event) {
+  let d = debates.get(event.id);
+  if (!d) { d = { id: event.id, chat: event.chat, question: "", sides: ["For", "Against"], turns: [], summary: "", error: "", done: false }; debates.set(event.id, d); }
+  if (event.question) { d.question = event.question; d.sides = event.sides || d.sides; }
+  if (event.turn !== undefined) {
+    if (!d.turns[event.turn]) d.turns[event.turn] = { side: event.side, text: "" };
+    d.turns[event.turn].text += event.text || "";
+  }
+  if (event.summary) d.summary += event.summary;
+  if (event.error) d.error = event.error;
+  if (event.done) { d.done = true; if (!d.error) { debates.delete(event.id); return; } }
+  if (event.chat !== current || view !== "chat") return;
+  const old = messagesEl.querySelector(`.debate[data-debate="${event.id}"]`);
+  const card = debateCard(d, true);
+  if (old) old.replaceWith(card); else messagesEl.appendChild(card);
+  keepUp();
+}
+
+function debateCard(d, live = false) {
+  const card = el("div", "block debate" + (live && !d.done ? " live" : ""), `<div class="debate-head"><span class="debate-chip">${icon("users")}<span>Debate</span></span><span class="debate-q"></span></div><div class="debate-turns"></div>`);
+  card.dataset.debate = d.id;
+  card.querySelector(".debate-q").textContent = d.question;
+  const turns = card.querySelector(".debate-turns");
+  (d.turns || []).forEach((t, n) => {
+    if (!t) return;
+    const turn = turns.appendChild(el("div", `debate-turn side-${t.side}`, `<div class="who"></div><div class="said"></div>`));
+    turn.querySelector(".who").textContent = (d.sides || [])[t.side] || (t.side ? "Against" : "For");
+    const said = turn.querySelector(".said");
+    if (t.text) said.innerHTML = markdown(t.text);
+    else said.textContent = "…";
+    if (live && !d.summary && n === d.turns.length - 1) turn.classList.add("speaking");
+  });
+  if (live && !d.turns.length && !d.error) turns.appendChild(el("div", "debate-wait", "The sides are getting ready…"));
+  if (d.summary) {
+    const sum = card.appendChild(el("div", "debate-summary", `<div class="who">Summary</div><div class="said"></div>`));
+    sum.querySelector(".said").innerHTML = markdown(d.summary);
+  }
+  if (d.error) card.appendChild(el("div", "debate-error")).textContent = d.error;
+  return card;
+}
+
 // Side questions, per chat: asked with /btw, answered on the side from
 // what the chat holds, never added to it. Kept by this page only.
 const btws = new Map();
@@ -15958,6 +16037,7 @@ function openPlus() {
   rows.push({ html: `${icon("think")}<span class="label">${thinking ? "Skip the harder think" : "Think harder"}</span><span class="desc">${thinking ? "" : "on the next message"}</span>`, act: () => setThink(!thinking) });
   for (const b of extButtonsAt("composer")) rows.push({ html: `${icon(ICON[b.icon] ? b.icon : "puzzle")}<span class="label">${esc(b.label)}</span><span class="desc">${esc(b.extension || "")}</span>`, act: () => pressExt(b, input.value.trim()) });
   rows.push({ html: `${icon("chat")}<span class="label">Ask on the side</span><span class="desc">/btw, without interrupting</span>`, act: () => { input.value = "/btw " + input.value.replace(/^\/btw\s*/, ""); autosize(); updateSend(); input.focus(); input.setSelectionRange(input.value.length, input.value.length); } });
+  rows.push({ html: `${icon("users")}<span class="label">Debate it</span><span class="desc">/debate, two sides argue it out</span>`, act: () => { input.value = "/debate " + input.value.replace(/^\/debate\s*/, ""); autosize(); updateSend(); input.focus(); input.setSelectionRange(input.value.length, input.value.length); } });
   rows.push({ html: `${icon("book")}<span class="label">Use a skill</span><span class="desc">${icon("chevRight")}</span>`, act: openSkillPicker });
   rows.push({ html: `${icon("spark")}<span class="label">Sparks</span><span class="desc">${icon("chevRight")}</span>`, act: openSparkPicker });
   if (!input.value.trim()) rows.push({ html: `${icon("slash")}<span class="label">Commands</span>`, act: () => { input.value = "/"; autosize(); input.focus(); showSlash(); } });
@@ -17636,6 +17716,7 @@ const ACTIONS = [
   { label: "Retry last message", keys: "Alt R", slash: "/retry", run: retry },
   { label: "Edit last message", keys: "Alt E", slash: "/edit", run: () => editLast() },
   { label: "Side question, without interrupting", keys: "", slash: "/btw", run: () => { input.value = "/btw "; autosize(); input.focus(); } },
+  { label: "Argue a question out: two sides, then a summary", keys: "", slash: "/debate", run: () => { input.value = "/debate "; autosize(); input.focus(); } },
   { label: "Undo the last turn's file changes", keys: "Alt Z", slash: "/undo", run: undo },
   { label: "Stop the reply", keys: "Esc", slash: "/stop", run: stopReply },
   { label: "Copy last reply", keys: "Alt C", slash: "/copy", run: copyLastReply },
@@ -17661,6 +17742,12 @@ function runSlash(text) {
     if (!arg) { toast("Ask something after /btw, like /btw what does this function return?"); return true; }
     clearInput();
     askOnTheSide(arg);
+    return true;
+  }
+  if (word === "/debate") {
+    if (!arg) { toast("Give a question after /debate, like /debate should I rewrite this in Rust?"); return true; }
+    clearInput();
+    startDebate(arg);
     return true;
   }
   if (word === "/rename" && arg) { const c = chats.get(current); if (c) { c.title = arg; renderChats(); setTitle($("#title"), arg); } command("rename", arg); clearInput(); return true; }
