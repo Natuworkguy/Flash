@@ -188,7 +188,13 @@ python run.py
   and disagree, what held up, what it turns on, and which way Flash
   leans. `/debate alpha:8b vs beta:8b: question` gives each side its own
   model. The summary joins the conversation, so you can ask about it.
-  In the web UI it is in the + menu too, as Debate it.
+  In the web UI it is in the + menu too, as Debate it. While it runs,
+  Stop (or Esc) ends it there, keeping what was said, and the box under
+  it steers it ("think about the team size"): both sides take it in from
+  their next turn, and so does the summary. Done, Keep debating goes on
+  for more rounds and a new summary, steered by what you type beside it
+  if anything. In the terminal, Ctrl+C stops it, and `/debate more
+  [what to argue next]` keeps the last one going.
 - `/doctor`: Checks that everything Flash needs works (Python and its
   packages, Ollama and your model, Flash's folder, extensions,
   connectors, sparks, and on a Mac the permissions Computer Use and

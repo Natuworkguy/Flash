@@ -49,7 +49,9 @@ SECOND = ("Argue the strongest case against the other side's answer: a "
           "different answer, or why theirs fails.")
 
 JUDGE_PROMPT = """
-You have watched a debate between {a} and {b} on the user's question.
+You have watched a debate between {a} and {b} on the user's question,
+which the user may have steered along the way: weigh what they asked
+for.
 Sum it up for the user, plainly, with these headings:
 **Where they agree**, **Where they disagree**, **What held up** (the
 strongest arguments on each side, and any that fell apart),
@@ -88,8 +90,16 @@ def _history(messages: list[dict]) -> list[dict]:
     return kept
 
 
+# A turn the user put in to steer it, among the sides' turns.
+USER = -1
+
+
 def _transcript(turns: list[dict], names: list[str]) -> str:
-    return "\n\n".join(f"{names[t['side']]}:\n{t['text']}" for t in turns)
+    def who(side: int) -> str:
+        return "The user, steering the debate" if side == USER \
+            else names[side]
+
+    return "\n\n".join(f"{who(t['side'])}:\n{t['text']}" for t in turns)
 
 
 def run(
@@ -102,11 +112,18 @@ def run(
     options: Optional[dict] = None,
     say: Optional[Callable[[dict], None]] = None,
     stopped: Callable[[], bool] = lambda: False,
+    turns: Optional[list[dict]] = None,
+    steers: Callable[[], list[str]] = lambda: [],
 ) -> dict:
     """Argue QUESTION out. MODELS are the two sides' (one for both, or
-    two); JUDGE sums it up. SAY hears each piece as it comes: {"turn": n,
-    "side": 0 or 1, "text": piece}, then {"summary": piece}. The whole
-    debate, at the end: question, sides, turns, summary."""
+    two); JUDGE sums it up. TURNS goes on from a debate already had, for
+    ROUNDS more. STEERS gives what the user has said to steer it since
+    it last asked, taken in before each turn as a turn of theirs.
+
+    SAY hears each piece as it comes: {"turn": n, "side": 0 or 1, "text":
+    piece}, {"turn": n, "side": -1, "text": steer}, then {"summary":
+    piece}. The whole debate, at the end: question, sides, turns,
+    summary, and whether it was stopped."""
 
     question = " ".join(str(question or "").split())
     if not question:
@@ -118,13 +135,26 @@ def run(
     say = say or (lambda event: None)
     rounds = max(1, min(int(rounds or ROUNDS), MOST_ROUNDS))
     context = _history(history or [])
-    turns: list[dict] = []
+    turns = [dict(t) for t in turns or []]
+
+    def take_steers() -> None:
+        for steer in steers():
+            steer = " ".join(str(steer or "").split())
+            if steer:
+                say({"turn": len(turns), "side": USER, "text": steer})
+                turns.append({"side": USER, "text": steer})
+
     for _ in range(rounds):
         for side in (0, 1):
             if stopped():
                 break
-            stance = FIRST if not turns else SECOND if len(turns) == 1 \
+            take_steers()
+            spoken = sum(1 for t in turns if t["side"] != USER)
+            stance = FIRST if not spoken else SECOND if spoken == 1 \
                 else "Carry on: answer their last turn, and press your case."
+            if turns and turns[-1]["side"] == USER:
+                stance += (" The user has just steered the debate: take "
+                           "what they said into account first.")
             system = SIDE_PROMPT.format(me=names[side], them=names[1 - side],
                                         stance=stance)
             asked = [{"role": "system", "content": system}, *context,
@@ -135,28 +165,39 @@ def run(
             n = len(turns)
             text = btw.ask(client, models[side], asked, options,
                            on_text=lambda piece, n=n, side=side: say(
-                               {"turn": n, "side": side, "text": piece}))
-            turns.append({"side": side, "text": text})
+                               {"turn": n, "side": side, "text": piece}),
+                           stopped=stopped)
+            if text:
+                turns.append({"side": side, "text": text})
     summary = ""
-    if turns and not stopped():
+    if not stopped():
+        take_steers()
+    if any(t["side"] != USER for t in turns) and not stopped():
         asked = [{"role": "system",
                   "content": JUDGE_PROMPT.format(a=names[0], b=names[1])},
                  {"role": "user", "content": f"The question: {question}"
                   f"\n\nThe debate:\n\n{_transcript(turns, names)}"}]
         summary = btw.ask(client, judge, asked, options,
-                          on_text=lambda piece: say({"summary": piece}))
+                          on_text=lambda piece: say({"summary": piece}),
+                          stopped=stopped)
     return {"question": question, "sides": names, "models": models,
-            "turns": turns, "summary": summary}
+            "turns": turns, "summary": summary,
+            "stopped": bool(stopped())}
 
 
 def note(debate: dict) -> list[dict]:
     """What the conversation keeps of DEBATE, for it to go on from: the
-    question, and the summary as the answer."""
+    question, and the summary as the answer; stopped before one, what
+    each side said."""
 
+    head = (f"(A debate between {debate['sides'][0]} and "
+            f"{debate['sides'][1]}, {len(debate['turns'])} turns")
+    if debate.get("summary"):
+        said = f"{head}. The summary:)\n\n{debate['summary']}"
+    else:
+        said = (f"{head}, stopped by the user before the end:)\n\n"
+                + _transcript(debate["turns"], debate["sides"]))
     return [
         {"role": "user", "content": f"Debate this: {debate['question']}"},
-        {"role": "assistant", "content":
-         f"(A debate between {debate['sides'][0]} and {debate['sides'][1]}"
-         f", {len(debate['turns'])} turns. The summary:)\n\n"
-         f"{debate['summary']}"},
+        {"role": "assistant", "content": said},
     ]
