@@ -8,8 +8,12 @@ project_path.
 """
 
 import contextlib
+import hashlib
+import json
 import re
+import shutil
 import threading
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -64,6 +68,101 @@ def _write(path: Optional[Path], entries: list[str]) -> None:
                       encoding="utf-8")
 
 
+# --- When each was added, and how often it was recalled -----------------
+#
+# Kept beside the memory file, by each entry's words, so a tidy-up can
+# tell an entry nobody has needed in months from one recalled every day.
+# Entries saved before it was kept have none.
+
+
+def _key(entry: str) -> str:
+    return hashlib.sha256(" ".join(entry.lower().split()).encode()) \
+        .hexdigest()[:16]
+
+
+def _meta_file(path: Optional[Path]) -> Path:
+    target = _file(path)
+    return target.with_name(target.name + ".meta.json")
+
+
+def _meta(path: Optional[Path]) -> dict:
+    try:
+        found = json.loads(_meta_file(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return found if isinstance(found, dict) else {}
+
+
+def _save_meta(path: Optional[Path], meta: dict) -> None:
+    keep = {_key(e) for e in list_memory(path)}
+    meta = {k: v for k, v in meta.items() if k in keep}
+    with contextlib.suppress(OSError):
+        target = _meta_file(path)
+        if not meta:
+            target.unlink(missing_ok=True)
+            return
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(json.dumps(meta, indent=1), encoding="utf-8")
+
+
+def _noted(path: Optional[Path], entry: str,
+           like: Optional[list[str]] = None) -> None:
+    """ENTRY was saved now; or written from LIKE, whose history it takes:
+    the earliest added, every recall."""
+
+    meta = _meta(path)
+    now = time.time()
+    olds = [meta.get(_key(e), {}) for e in like or []]
+    added = min([float(o.get("added") or now) for o in olds] + [now])
+    meta[_key(entry)] = {
+        "added": added,
+        "recalled": sum(int(o.get("recalled") or 0) for o in olds),
+        "last": max([float(o.get("last") or 0) for o in olds] + [0.0]),
+    }
+    _save_meta(path, meta)
+
+
+def usage(path: Optional[Path] = None) -> list[dict]:
+    """Each entry, in order, with when it was added and how often and
+    when it was last recalled (0 for never, or for before it was kept)."""
+
+    meta = _meta(path)
+    out = []
+    for entry in list_memory(path):
+        found = meta.get(_key(entry), {})
+        out.append({
+            "entry": entry,
+            "added": float(found.get("added") or 0),
+            "recalled": int(found.get("recalled") or 0),
+            "last": float(found.get("last") or 0),
+        })
+    return out
+
+
+def backup(path: Optional[Path] = None) -> Optional[Path]:
+    """A copy of the memory as it is now, before something tidies it:
+    the newest MAX_BACKUPS are kept. Where it went, or None."""
+
+    source = _file(path)
+    if not source.exists():
+        return None
+    # Beside where it lives: the user's in ~/.flash, as Flash's own are.
+    folder = (source.parent / ".flash" if source == MEMORY_PATH
+              else source.parent) / "memory-backups"
+    try:
+        folder.mkdir(parents=True, exist_ok=True)
+        copy = folder / time.strftime(f"{source.stem}-%Y%m%d-%H%M%S.md")
+        shutil.copyfile(source, copy)
+        for old in sorted(folder.glob(f"{source.stem}-*.md"))[:-MAX_BACKUPS]:
+            old.unlink(missing_ok=True)
+    except OSError:
+        return None
+    return copy
+
+
+MAX_BACKUPS = 20
+
+
 def load_memory(path: Optional[Path] = None) -> str:
     """Return the saved memory content, or "" if none exists."""
 
@@ -93,6 +192,7 @@ def add_memory(entry: str, path: Optional[Path] = None) -> str:
     entries = list_memory(path)
     entries.append(entry)
     _write(path, entries)
+    _noted(path, entry)
     return f"Remembered: {entry}"
 
 
@@ -124,6 +224,7 @@ def edit_memory(index: int, entry: str,
     old = entries[index - 1]
     entries[index - 1] = entry
     _write(path, entries)
+    _noted(path, entry, like=[old])
     return f'Changed memory "{old}" to "{entry}".'
 
 
@@ -142,19 +243,51 @@ def forget_memory(index: int, path: Optional[Path] = None) -> str:
     return f'Deleted memory "{removed}".'
 
 
+def merge_memories(indexes: list[int], entry: str,
+                   path: Optional[Path] = None) -> str:
+    """Put ENTRY in place of the entries at INDEXES (1-based, two or
+    more), where the first of them was: one entry for what they said."""
+
+    entry = " ".join(str(entry or "").split())
+    if not entry:
+        raise ValueError("Say what the merged memory is.")
+    entries = list_memory(path)
+    wanted = sorted({int(i) for i in indexes})
+    if len(wanted) < 2:
+        raise ValueError("Merging takes two entries or more.")
+    for index in wanted:
+        _check_index(entries, index)
+    olds = [entries[i - 1] for i in wanted]
+    kept = [e for n, e in enumerate(entries, start=1) if n not in wanted]
+    kept.insert(wanted[0] - 1, entry)
+    _write(path, kept)
+    _noted(path, entry, like=olds)
+    return f'Merged {len(olds)} memories into "{entry}".'
+
+
 def search_memory(phrase: str,
                   path: Optional[Path] = None) -> list[tuple[int, str]]:
-    """Return (1-based index, entry) for every entry containing `phrase`."""
+    """Return (1-based index, entry) for every entry containing `phrase`,
+    and count each as recalled."""
 
     phrase = phrase.strip().lower()
     if not phrase:
         return []
 
-    return [
+    found = [
         (i, entry)
         for i, entry in enumerate(list_memory(path), start=1)
         if phrase in entry.lower()
     ]
+    if found:
+        meta = _meta(path)
+        now = time.time()
+        for _, entry in found:
+            had = meta.setdefault(_key(entry), {})
+            had["recalled"] = int(had.get("recalled") or 0) + 1
+            had["last"] = now
+        _save_meta(path, meta)
+    return found
 
 
 def parse_import(text: str) -> list[str]:
