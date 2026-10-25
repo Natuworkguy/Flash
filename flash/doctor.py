@@ -159,6 +159,22 @@ def _connectors() -> list[Check]:
     return found
 
 
+def _vault() -> Check:
+    from . import vault
+
+    have = vault.names()
+    if not have:
+        return Check("Secrets", OFF, "None kept.")
+    unreadable = [n for n in have if vault.get(n) is None]
+    if unreadable:
+        return Check(
+            "Secrets", FAIL, "Cannot be opened: " + ", ".join(unreadable)
+            + ". Their key is gone from " + vault.where_kept() + ".",
+            "Remove them with /secret rm NAME and keep them again.")
+    return Check("Secrets", OK, f"{len(have)}, with the key in "
+                 f"{vault.where_kept()}.")
+
+
 def _sparks() -> Check:
     from . import keepalive, sparks
 
@@ -225,6 +241,7 @@ def run(host: str = "", model: str = "") -> list[Check]:
     found.append(_folder())
     for part in (_extensions, _connectors):
         found += part()
+    found.append(_vault())
     found.append(_sparks())
     found += _mac() if sys.platform == "darwin" else \
         _computer_use_elsewhere()

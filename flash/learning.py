@@ -168,8 +168,15 @@ def prompt_block() -> str:
     global _snapshot
 
     if _snapshot is None:
+        from . import vault  # the names of the user's secrets, never more
+
+        try:
+            secrets = vault.prompt_block()
+        except Exception:  # noqa: BLE001
+            secrets = ""
         _snapshot = "\n\n".join(
-            part for part in (memory_block(), skills.listing()) if part
+            part for part in (memory_block(), skills.listing(), secrets)
+            if part
         )
 
     return _snapshot

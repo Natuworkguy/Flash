@@ -62,6 +62,16 @@ def isolated_home(tmp_path_factory, monkeypatch):
     # The briefing's dot looks for new cards on a thread of its own, and
     # says so with an event: not in tests, which ask has_new themselves.
     monkeypatch.setattr(briefing, "new_waiting", lambda *a, **kw: False)
+    # The vault in the temp home, its key in a file, never a keychain.
+    from flash import vault
+
+    monkeypatch.setattr(vault, "FLASH_DIR", home / ".flash")
+    monkeypatch.setattr(vault, "_load_key", lambda: (
+        vault._key_file().read_bytes() if vault._key_file().exists()
+        else None))
+    monkeypatch.setattr(vault, "_store_key", lambda key: (
+        vault._write_private(vault._key_file(), key) or "a file"))
+    vault._cache.clear()
     # No test puts a real glow around the screen.
     monkeypatch.setattr(screenglow, "_launch", lambda *a: None)
     # The terminal's kept conversations, and the one it is on.

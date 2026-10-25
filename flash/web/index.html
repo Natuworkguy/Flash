@@ -755,6 +755,11 @@ pre code { display: block; padding: 2px 16px 14px; overflow-x: auto; font-size: 
 .rate-why { display: flex; gap: 8px; margin-top: 6px; max-width: 520px; animation: rise 0.2s var(--ease) both; }
 .rate-why input { flex: 1; min-width: 0; padding: 7px 11px; border: 1px solid var(--border-strong); border-radius: 10px; background: var(--surface); color: var(--text); font: inherit; font-size: 13.5px; }
 .rate-why input:focus { outline: none; border-color: var(--accent); }
+.secret-add { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+.secret-add input { flex: 1 1 160px; min-width: 0; padding: 8px 12px; border: 1px solid var(--border-strong); border-radius: 10px; background: var(--surface); color: var(--text); font: inherit; font-size: 13.5px; }
+.secret-add input:focus { outline: none; border-color: var(--accent); }
+.secret-row .what span { font-family: var(--mono); font-size: 12px; }
+.secret-where { margin-top: 8px; font-size: 12px; }
 .doctor-list { list-style: none; margin: 12px 0 0; padding: 0; border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
 .doctor-list li { display: flex; gap: 10px; padding: 10px 14px; font-size: 13.5px; }
 .doctor-list li + li { border-top: 1px solid var(--border); }
@@ -12345,6 +12350,42 @@ async function drawSecurity(body) {
   body.querySelector(".settings-sub").after(remember);
   const r = await renderBrowsers(body.querySelector(".browser-list"));
   if (r) { remember.setAttribute("aria-checked", !!r.remember); sayRemembering(body, r.remember); }
+  drawSecrets(body);
+}
+
+// The vault: keys and passwords Flash uses by name and never sees. Only
+// names come back from the server; a value goes one way, in.
+async function drawSecrets(body) {
+  body.insertAdjacentHTML("beforeend", `<h2 class="settings-section settings-gap">Secrets</h2><p class="settings-sub secrets-sub">Keys, tokens and passwords Flash can use without seeing them: it writes <code>{{secret:NAME}}</code> where one goes, and the value is put in as a command runs. Anything a tool says back has them hidden again. A key you paste into a message is kept here by itself.</p><div class="secret-list"></div><form class="secret-add"><input name="name" placeholder="Name, like github-token" maxlength="40" autocomplete="off" spellcheck="false" aria-label="Name"><input name="value" type="password" placeholder="Value" autocomplete="new-password" aria-label="Value"><button type="submit" class="btn">Keep it</button></form>`);
+  const list = body.querySelector(".secret-list");
+  const show = (r) => {
+    list.textContent = "";
+    body.querySelector(".secrets-sub").dataset.kept = r.kept_in;
+    for (const name of r.secrets) {
+      const row = list.appendChild(el("div", "setting-row static secret-row", `<span class="what"><b></b><span></span></span><span class="side"></span>`));
+      row.querySelector("b").textContent = name;
+      row.querySelector(".what span").textContent = `{{secret:${name}}}`;
+      const rm = row.querySelector(".side").appendChild(el("button", "btn danger small", "Remove"));
+      rm.type = "button";
+      rm.onclick = async () => {
+        if (!(await confirmPop(rm, { title: `Remove ${name}?`, text: "Flash can't use it any more; anything that names it fails until it is added again.", yes: "Remove" }))) return;
+        try { show(await command("secret-delete", name, null)); } catch (error) { showFailure(error); }
+      };
+    }
+    if (!r.secrets.length) list.appendChild(el("p", "settings-sub", "None yet."));
+    list.appendChild(el("p", "settings-sub secret-where")).textContent = `Encrypted, with the key in ${r.kept_in}.`;
+  };
+  const form = body.querySelector(".secret-add");
+  form.onsubmit = async (e) => {
+    e.preventDefault();
+    const name = form.querySelector('[name="name"]').value.trim();
+    try {
+      show(await command("secret-set", name, null, { value: form.querySelector('[name="value"]').value }));
+      form.reset();
+      toast(`Kept ${name}`);
+    } catch (error) { showFailure(error); }
+  };
+  try { show(await command("secrets", "", null)); } catch (error) { showFailure(error); }
 }
 
 const REMEMBER_DAYS = 180;

@@ -1604,6 +1604,16 @@ class Session:
         attached = attachments(files)
         if not text and not attached:
             return {}
+        if not wake:
+            # A key pasted in goes to the vault; the message, kept and
+            # sent, has only its name.
+            text, kept = _capture(text)
+            if kept:
+                from . import vault
+
+                self.hub.publish({"type": "notify", "chat": chat.id,
+                                  "title": "Kept in your vault",
+                                  "text": vault.note(kept)})
 
         with self._lock:
             if chat.busy or chat.queued:
@@ -2776,6 +2786,17 @@ def _sink(session: Session, chat: Chat):
                 })
 
     return sink
+
+
+def _capture(text: str) -> tuple[str, list[str]]:
+    """TEXT with any key in it kept in the vault (vault.capture)."""
+
+    from . import vault
+
+    try:
+        return vault.capture(text)
+    except Exception:  # noqa: BLE001  (no vault: the text as it was)
+        return text, []
 
 
 # The start of each kind of image a tool hands the model, for the name
@@ -4096,6 +4117,21 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
                 model=ai.Config.model or "")
         session.save(chat)
         return {"rating": entry.get("rating", "")}
+
+    if name in ("secrets", "secret-set", "secret-delete"):
+        # The vault: names only ever come back, never a value.
+        from . import vault
+
+        try:
+            if name == "secret-set":
+                vault.set_secret(arg, str(body.get("value") or ""))
+                learning.refresh()
+            elif name == "secret-delete":
+                vault.delete(arg)
+                learning.refresh()
+        except vault.VaultError as exc:
+            raise ValueError(str(exc)) from None
+        return {"secrets": vault.names(), "kept_in": vault.where_kept()}
 
     if name == "doctor":
         from . import doctor
