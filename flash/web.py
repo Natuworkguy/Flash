@@ -956,6 +956,9 @@ class Session:
         # each chat has been woken for one, with no message in between.
         self.agents: dict[str, str] = {}
         self.wakes: dict[str, int] = {}
+        # Debates being argued now, by id: their chat, how to stop it,
+        # and what the user has said to steer it, not yet taken in.
+        self.debating: dict[str, dict] = {}
         # Each running turn's message: where it is in the chat's log, and
         # what the model was given, so a turn that fails can be taken
         # back out and tried again.
@@ -1734,28 +1737,72 @@ class Session:
         threading.Thread(target=answer, daemon=True).start()
         return asked_id
 
-    def debate(self, chat: Chat, text: str) -> str:
+    def stop_debate(self, debate_id: str = "", chat: str = "") -> int:
+        """Stop the debate DEBATE_ID, or every one in CHAT: what was said
+        so far is kept. How many were stopped."""
+
+        stopped = 0
+        for key, going in list(self.debating.items()):
+            if key == debate_id or (chat and going["chat"] == chat):
+                going["stop"].set()
+                stopped += 1
+        return stopped
+
+    def steer_debate(self, debate_id: str, text: str) -> None:
+        """Steer DEBATE_ID: both sides take TEXT in from their next turn,
+        and so does the summary."""
+
+        text = " ".join(str(text or "").split())[:1000]
+        going = self.debating.get(debate_id)
+        if going is None:
+            raise ValueError("That debate is over. Keep debating to go on.")
+        if not text:
+            raise ValueError("Say how to steer it.")
+        going["steers"].append(text)
+
+    def debate(self, chat: Chat, text: str = "", continues: str = "",
+               steer: str = "") -> str:
         """Argue a question out (debate.py), in CHAT, on a thread of its
         own: each side's words stream to the page as "debate-live"
         events, and the whole debate is kept in the chat at the end, its
-        summary in what the model sees, to go on from."""
+        summary in what the model sees, to go on from. CONTINUES is a
+        debate kept in the chat to keep going, from where it got to;
+        STEER, what the user wants it to turn to."""
 
         from . import ai  # deferred: ai imports half of Flash
         from . import debate as argue
 
-        question, models = argue.parse(text)
+        before: Optional[dict] = None
+        if continues:
+            before = next((e for e in reversed(chat.log)
+                           if e.get("type") == "debate"
+                           and e.get("id") == continues), None)
+            if before is None:
+                raise ValueError("That debate is gone.")
+            question, models = before["question"], before.get("models", [])
+        else:
+            question, models = argue.parse(text)
         if not question:
             raise ValueError(argue.USAGE)
         if chat.busy or chat.queued:
             raise ValueError("Wait for the reply to finish first.")
+        if any(g["chat"] == chat.id for g in self.debating.values()):
+            raise ValueError("A debate is going on in this chat already.")
         judge = ai.Config.model or ""
         if not judge:
             raise ValueError("No model is set. Pick one with Alt+M.")
         debate_id = uuid.uuid4().hex[:8]
+        going = {"chat": chat.id, "stop": threading.Event(),
+                 "steers": [steer] if steer.strip() else []}
+        self.debating[debate_id] = going
 
         def say(event: dict) -> None:
             self.hub.publish({"type": "debate-live", "chat": chat.id,
                               "id": debate_id, **event})
+
+        def steers() -> list[str]:
+            taken, going["steers"] = going["steers"], []
+            return taken
 
         def go() -> None:
             try:
@@ -1763,19 +1810,29 @@ class Session:
                     question, ai._client(), models, judge,
                     history=list(chat.messages),
                     options=ai._chat_options(), say=say,
-                    stopped=chat.stop.is_set,
+                    stopped=going["stop"].is_set,
+                    turns=(before or {}).get("turns"), steers=steers,
                 )
             except Exception as exc:  # noqa: BLE001
                 say({"done": True, "error": f"{exc.__class__.__name__}: "
                      f"{exc}"})
                 return
-            chat.messages.extend(argue.note(done))
-            self.emit(chat, {"type": "debate", "id": debate_id, **done})
-            self.save(chat)
-            say({"done": True})
+            finally:
+                self.debating.pop(debate_id, None)
+            grew = len(done["turns"]) > len((before or {}).get("turns", []))
+            if grew:
+                chat.messages.extend(argue.note(done))
+                self.emit(chat, {"type": "debate", "id": debate_id, **done,
+                                 **({"continues": continues}
+                                    if continues else {})})
+                self.save(chat)
+            say({"done": True, "stopped": done["stopped"],
+                 "empty": not grew})
 
-        chat.stop.clear()
-        say({"question": question, "sides": argue.SIDES})
+        say({"question": question, "sides": argue.SIDES,
+             "turns": (before or {}).get("turns", []),
+             "names": (before or {}).get("sides", []),
+             "continues": continues})
         threading.Thread(target=go, daemon=True).start()
         return debate_id
 
@@ -5683,8 +5740,20 @@ class Handler(BaseHTTPRequestHandler):
             )
             return {
                 "chat": chat.id,
-                "id": session.debate(chat, str(body.get("text", ""))),
+                "id": session.debate(
+                    chat, str(body.get("text", "")),
+                    continues=str(body.get("continues") or ""),
+                    steer=str(body.get("steer") or "")),
             }
+
+        if path == "/api/debate-steer":
+            session.steer_debate(str(body.get("id") or ""),
+                                 str(body.get("text") or ""))
+            return {}
+
+        if path == "/api/debate-stop":
+            return {"stopped": session.stop_debate(
+                str(body.get("id") or ""), str(body.get("chat") or ""))}
 
         if path == "/api/upload":
             try:

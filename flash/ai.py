@@ -4591,41 +4591,84 @@ def _rate_command(line: str, history: list) -> None:
         "Thanks. Flash will learn from it.", style=DIM))
 
 
+# The last debate here, for /debate more to keep going.
+_last_debate: dict = {}
+
+
 def _debate_command(line: str, history: list) -> None:
     """/debate: two sides argue a question out, a turn at a time, then a
-    summary, which joins the conversation to go on from."""
+    summary, which joins the conversation to go on from. Ctrl+C stops it
+    and keeps what was said; /debate more [steer] keeps the last one
+    going, steered by what follows it if anything does."""
 
     from . import debate
 
-    question, models = debate.parse(line)
+    rest = line[len("/debate"):].strip()
+    before: dict = {}
+    steer = ""
+    if rest == "more" or rest.startswith("more "):
+        before = dict(_last_debate)
+        if not before:
+            warn("There is no debate to keep going. /debate <question> "
+                 "starts one.")
+            return
+        question, models = before["question"], before.get("models", [])
+        steer = rest[len("more"):].strip()
+    else:
+        question, models = debate.parse(line)
     if not question:
         warn(debate.USAGE)
         return
     if not Config.model:
         warn("No model is set. Pick one with /model.")
         return
-    colours = (ACCENT, "#5b8def")
-    # Each turn is shown whole at the end; meanwhile, who is speaking.
-    started: set = set()
+    # What has been said, as it comes, so a Ctrl+C keeps it.
+    heard: dict = {}
+    pieces: dict = {"summary": ""}
 
     with console.status("The sides are arguing", spinner="dots") as live:
         def say(event: dict) -> None:
-            if "turn" in event and event["turn"] not in started:
-                started.add(event["turn"])
-                live.update(f"{debate.SIDES[event['side']]} is speaking")
-            elif "summary" in event and "summary" not in started:
-                started.add("summary")
-                live.update("Summing up")
+            if "turn" in event:
+                n = event["turn"]
+                if n not in heard:
+                    heard[n] = {"side": event["side"], "text": ""}
+                    if event["side"] != debate.USER:
+                        live.update(f"{debate.SIDES[event['side']]} is "
+                                    "speaking (Ctrl+C stops it)")
+                heard[n]["text"] += event.get("text", "")
+            elif "summary" in event:
+                if not pieces["summary"]:
+                    live.update("Summing up")
+                pieces["summary"] += event["summary"]
 
         try:
             done = debate.run(question, _client(), models, Config.model,
                               history=history, options=_chat_options(),
-                              say=say)
+                              say=say, turns=before.get("turns"),
+                              steers=lambda: [steer] if steer else [])
+        except KeyboardInterrupt:
+            turns = list(before.get("turns", [])) + [
+                heard[n] for n in sorted(heard) if heard[n]["text"].strip()]
+            done = {"question": question,
+                    "sides": before.get("sides") or list(debate.SIDES),
+                    "models": models, "turns": turns, "summary": "",
+                    "stopped": True}
         except Exception as exc:  # noqa: BLE001
             warn(f"  The debate stopped: {exc}")
             return
-    console.print(Text(f"  Debate: {done['question']}", style="bold"))
-    for turn in done["turns"]:
+    new = done["turns"][len(before.get("turns", [])):]
+    if not new:
+        console.print(Text("Stopped before anyone said anything.",
+                           style=DIM))
+        return
+    colours = (ACCENT, "#5b8def")
+    console.print(Text(f"  Debate: {done['question']}"
+                       + (" (going on)" if before else ""), style="bold"))
+    for turn in new:
+        if turn["side"] == debate.USER:
+            console.print(Text(f"  You: {turn['text']}", style=DIM),
+                          justify="center")
+            continue
         name = done["sides"][turn["side"]]
         console.print(Panel(
             Markdown(turn["text"] or "(nothing)"),
@@ -4640,6 +4683,12 @@ def _debate_command(line: str, history: list) -> None:
             title=Text("Summary", style="bold"), title_align="left",
             padding=(0, 1),
         ))
+    elif done.get("stopped"):
+        console.print(Text("Stopped before the summary.", style=DIM))
+    console.print(Text("/debate more [what to argue next] keeps it going.",
+                       style=DIM))
+    _last_debate.clear()
+    _last_debate.update(done)
     history.extend(debate.note(done))
 
 

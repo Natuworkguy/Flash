@@ -80,3 +80,91 @@ def test_the_web_argues_it_out_in_the_chat(monkeypatch):
 
     with pytest.raises(ValueError, match="after /debate"):
         session.debate(chat, "/debate")
+
+
+def test_steering_and_going_on_from_where_it_got_to():
+    client = Client()
+    first = debate.run("q", client, [], "m", rounds=1)
+    asked = iter([["think about cost"], []])
+    more = debate.run("q", client, [], "m", rounds=1, turns=first["turns"],
+                      steers=lambda: next(asked, []))
+
+    assert [t["side"] for t in more["turns"]] == [0, 1, -1, 0, 1]  # nosec
+    assert more["turns"][2]["text"] == "think about cost"  # nosec B101
+    # The side after the steer hears it, and is told to take it in.
+    model, messages = client.asked[-3]
+    assert "The user, steering the debate:\nthink about cost" in (  # nosec
+        messages[-1]["content"])
+    assert "just steered" in messages[0]["content"]  # nosec B101
+    note = debate.note(more)[1]["content"]
+    assert note.endswith("summary")  # nosec B101
+
+
+def test_a_stop_mid_turn_keeps_what_was_said():
+    calls = []
+
+    class Slow(Client):
+        def chat(self, model, messages, options=None, stream=True):
+            calls.append(model)
+            return [SimpleNamespace(message=SimpleNamespace(content=w))
+                    for w in ("one ", "two ", "three")]
+
+    seen = []
+    stop = []
+
+    def say(event):
+        seen.append(event)
+        if event.get("text"):
+            stop.append(True)
+
+    done = debate.run("q", Slow(), [], "m", say=say,
+                      stopped=lambda: bool(stop))
+    assert done["stopped"] and done["summary"] == ""  # nosec B101
+    [turn] = done["turns"]
+    assert turn["side"] == 0 and "three" not in turn["text"]  # nosec B101
+    assert "stopped by the user" in debate.note(done)[1]["content"]  # nosec
+
+
+def test_the_web_steers_stops_and_keeps_debating(monkeypatch):
+    import threading
+    import time
+
+    import pytest
+
+    from flash import ai, web
+
+    gate = threading.Event()
+
+    class Waits(Client):
+        def chat(self, model, messages, options=None, stream=True):
+            gate.wait(2)
+            return super().chat(model, messages, options, stream)
+
+    monkeypatch.setattr(ai, "_client", Waits)
+    monkeypatch.setattr(ai.Config, "model", "m")
+    session = web.Session()
+    chat = session.new_chat()
+
+    first = session.debate(chat, "/debate tabs?")
+    with pytest.raises(ValueError, match="already"):
+        session.debate(chat, "/debate again?")
+    session.steer_debate(first, "be brief")
+    gate.set()
+    for _ in range(100):
+        if first not in session.debating:
+            break
+        time.sleep(0.02)
+    [kept] = [e for e in chat.log if e["type"] == "debate"]
+    assert {"side": -1, "text": "be brief"} in kept["turns"]  # nosec B101
+
+    again = session.debate(chat, continues=first, steer="now cost")
+    for _ in range(100):
+        if again not in session.debating:
+            break
+        time.sleep(0.02)
+    latest = [e for e in chat.log if e["type"] == "debate"][-1]
+    assert latest["continues"] == first  # nosec B101
+    assert len(latest["turns"]) > len(kept["turns"])  # nosec B101
+    with pytest.raises(ValueError, match="over"):
+        session.steer_debate(again, "x")
+    assert session.stop_debate(chat=chat.id) == 0  # nosec B101

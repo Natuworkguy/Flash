@@ -736,7 +736,9 @@ pre code { display: block; padding: 2px 16px 14px; overflow-x: auto; font-size: 
 .debate-head { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .debate-chip { flex: none; display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px 3px 7px; border-radius: 999px; font-size: 12px; font-weight: 600; color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent); }
 .debate-chip svg { width: 13px; height: 13px; }
-.debate-q { font-weight: 600; color: var(--text); min-width: 0; }
+.debate-q { flex: 1; font-weight: 600; color: var(--text); min-width: 0; }
+.debate-stop { flex: none; display: inline-flex; align-items: center; gap: 6px; }
+.debate-stop svg { width: 12px; height: 12px; }
 .debate-turns { display: flex; flex-direction: column; gap: 10px; }
 .debate-turn { max-width: 86%; padding: 10px 14px; border-radius: 16px; background: var(--surface); border: 1px solid var(--border); font-size: 14.5px; line-height: 1.55; animation: rise 0.25s var(--ease) both; }
 .debate-turn.side-0 { align-self: flex-start; border-bottom-left-radius: 6px; border-left: 3px solid var(--accent); }
@@ -749,6 +751,15 @@ pre code { display: block; padding: 2px 16px 14px; overflow-x: auto; font-size: 
 .debate-turn.speaking .who::after { content: " · speaking"; font-weight: 500; text-transform: none; letter-spacing: 0; }
 .debate-summary { padding: 12px 14px; border-radius: 12px; background: var(--hover); font-size: 14.5px; line-height: 1.6; }
 .debate-wait { font-size: 13px; color: var(--text-3); }
+.debate[hidden] { display: none; }
+.debate-steer { align-self: center; display: flex; align-items: center; gap: 7px; max-width: 80%; padding: 5px 12px; border-radius: 999px; background: color-mix(in srgb, var(--accent) 12%, transparent); font-size: 13px; color: var(--text-2); }
+.debate-steer svg { flex: none; width: 13px; height: 13px; color: var(--accent); }
+.debate-steer b { color: var(--text); font-weight: 600; }
+.debate-more { display: flex; gap: 8px; }
+.debate-more input { flex: 1; min-width: 0; padding: 7px 11px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); color: var(--text); font: inherit; font-size: 13.5px; }
+.debate-more input:focus { outline: none; border-color: var(--accent); }
+.debate-more .btn { flex: none; display: inline-flex; align-items: center; gap: 6px; }
+.debate-more .btn svg { width: 13px; height: 13px; }
 .debate-error { font-size: 13px; color: var(--del); }
 .actions .rate.on { color: var(--accent); }
 .actions .rate[data-rate="bad"].on { color: var(--del); }
@@ -7357,6 +7368,8 @@ function drawEntry(entry, ctx) {
     case "debate": {
       const live = messagesEl.querySelector(`.debate[data-debate="${entry.id}"]`);
       if (live) live.remove();
+      // Kept going: this one has all the earlier one had, and more.
+      if (entry.continues) messagesEl.querySelector(`.debate[data-debate="${entry.continues}"]`)?.remove();
       debates.delete(entry.id);
       messagesEl.appendChild(debateCard(entry));
       break;
@@ -15801,6 +15814,7 @@ async function createChat(project = "", spark = "") {
 
 function stopReply() {
   const chat = chats.get(current);
+  if (stopDebate()) return true;
   if (!chat || !(chat.busy || chat.queued)) return false;
   command("stop").then((r) => {
     // Anything that was waiting comes back to the box, not lost.
@@ -15831,18 +15845,41 @@ async function startDebate(text) {
 function debateLive(event) {
   let d = debates.get(event.id);
   if (!d) { d = { id: event.id, chat: event.chat, question: "", sides: ["For", "Against"], turns: [], summary: "", error: "", done: false }; debates.set(event.id, d); }
-  if (event.question) { d.question = event.question; d.sides = event.sides || d.sides; }
+  if (event.question) {
+    d.question = event.question;
+    d.sides = (event.names && event.names.length ? event.names : event.sides) || d.sides;
+    d.turns = (event.turns || []).map((t) => ({ ...t }));
+    d.continues = event.continues || "";
+    // The one it goes on from steps aside while it does.
+    if (d.continues) messagesEl.querySelector(`.debate[data-debate="${d.continues}"]`)?.setAttribute("hidden", "");
+  }
   if (event.turn !== undefined) {
     if (!d.turns[event.turn]) d.turns[event.turn] = { side: event.side, text: "" };
     d.turns[event.turn].text += event.text || "";
   }
   if (event.summary) d.summary += event.summary;
   if (event.error) d.error = event.error;
-  if (event.done) { d.done = true; if (!d.error) { debates.delete(event.id); return; } }
+  if (event.done) {
+    d.done = true;
+    if (!d.error) {
+      debates.delete(event.id);
+      // Stopped before anyone said a word: nothing is kept, so it goes.
+      if (event.empty) {
+        messagesEl.querySelector(`.debate[data-debate="${event.id}"]`)?.remove();
+        if (d.continues) messagesEl.querySelector(`.debate[data-debate="${d.continues}"]`)?.removeAttribute("hidden");
+        if (event.chat === current) toast(d.continues ? "Stopped before anyone said more" : "Debate stopped before it began");
+      }
+      return;
+    }
+  }
   if (event.chat !== current || view !== "chat") return;
   const old = messagesEl.querySelector(`.debate[data-debate="${event.id}"]`);
   const card = debateCard(d, true);
-  if (old) old.replaceWith(card); else messagesEl.appendChild(card);
+  if (!old || d.done) { if (old) old.replaceWith(card); else messagesEl.appendChild(card); keepUp(); return; }
+  // Redrawn but for the steer box, which may be half typed in.
+  const form = old.querySelector(".debate-more");
+  for (const node of [...old.children]) if (node !== form && !node.matches(".debate-head")) node.remove();
+  for (const node of [...card.children]) if (!node.matches(".debate-head, .debate-more")) (form ? old.insertBefore(node, form) : old.appendChild(node));
   keepUp();
 }
 
@@ -15850,9 +15887,21 @@ function debateCard(d, live = false) {
   const card = el("div", "block debate" + (live && !d.done ? " live" : ""), `<div class="debate-head"><span class="debate-chip">${icon("users")}<span>Debate</span></span><span class="debate-q"></span></div><div class="debate-turns"></div>`);
   card.dataset.debate = d.id;
   card.querySelector(".debate-q").textContent = d.question;
+  if (live && !d.done) {
+    const stop = card.querySelector(".debate-head").appendChild(el("button", "btn small debate-stop", `${icon("stop")}<span>Stop</span>`));
+    stop.type = "button";
+    stop.dataset.tip = "Stop the debate: what was said so far is kept";
+    stop.onclick = () => stopDebate(d.id);
+  }
   const turns = card.querySelector(".debate-turns");
   (d.turns || []).forEach((t, n) => {
     if (!t) return;
+    if (t.side === -1) {
+      // The user steering it, between the sides' turns.
+      const steer = turns.appendChild(el("div", "debate-steer", `${icon("steer")}<span><b>You</b> <span></span></span>`));
+      steer.querySelector("span span").textContent = t.text;
+      return;
+    }
     const turn = turns.appendChild(el("div", `debate-turn side-${t.side}`, `<div class="who"></div><div class="said"></div>`));
     turn.querySelector(".who").textContent = (d.sides || [])[t.side] || (t.side ? "Against" : "For");
     const said = turn.querySelector(".said");
@@ -15865,8 +15914,46 @@ function debateCard(d, live = false) {
     const sum = card.appendChild(el("div", "debate-summary", `<div class="who">Summary</div><div class="said"></div>`));
     sum.querySelector(".said").innerHTML = markdown(d.summary);
   }
+  if (d.stopped && !d.summary) card.appendChild(el("div", "debate-wait", "Stopped before the summary."));
   if (d.error) card.appendChild(el("div", "debate-error")).textContent = d.error;
+  // Going: steer it. Done: keep it going, steered or not.
+  if (live && !d.done) card.appendChild(debateSteer(d, false));
+  else if (!live) card.appendChild(debateSteer(d, true));
   return card;
+}
+
+function debateSteer(d, again) {
+  const form = el("form", "debate-more", `<input type="text" maxlength="1000" aria-label="Steer the debate"><button type="submit" class="btn small"></button>`);
+  const field = form.querySelector("input");
+  const go = form.querySelector("button");
+  field.placeholder = again ? "Steer it (optional): what should they argue next?" : "Steer it: what should they turn to?";
+  go.innerHTML = again ? `${icon("retry")}<span>Keep debating</span>` : `${icon("steer")}<span>Steer</span>`;
+  form.onsubmit = async (e) => {
+    e.preventDefault();
+    const text = field.value.trim();
+    if (!again && !text) { field.focus(); return; }
+    go.disabled = true;
+    try {
+      if (again) await api("/api/debate", { chat: current, continues: d.id, steer: text });
+      else { await api("/api/debate-steer", { id: d.id, text }); toast("Steered: they take it in from the next turn"); }
+      field.value = "";
+    } catch (error) { showFailure(error); }
+    go.disabled = false;
+  };
+  return form;
+}
+
+// Stop debate ID, or every one in the chat on the page: what each side
+// said so far is kept. Whether there was one to stop.
+function stopDebate(id = "") {
+  const going = [...debates.values()].filter((d) => !d.done && (id ? d.id === id : d.chat === current));
+  if (!going.length) return false;
+  for (const d of going) {
+    const button = messagesEl.querySelector(`.debate[data-debate="${d.id}"] .debate-stop`);
+    if (button) { button.disabled = true; button.lastChild.textContent = "Stopping…"; }
+  }
+  api("/api/debate-stop", id ? { id } : { chat: current }).catch(showFailure);
+  return true;
 }
 
 // Side questions, per chat: asked with /btw, answered on the side from

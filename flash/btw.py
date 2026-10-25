@@ -89,8 +89,10 @@ def ask(
     messages: list[dict],
     options: Optional[dict] = None,
     on_text: Optional[Callable[[str], None]] = None,
+    stopped: Optional[Callable[[], bool]] = None,
 ) -> str:
-    """The answer, streamed to ON_TEXT a piece at a time as it comes."""
+    """The answer, streamed to ON_TEXT a piece at a time as it comes; cut
+    off where it got to once STOPPED says so."""
 
     guard = DashGuard()
     said: list[str] = []
@@ -98,6 +100,12 @@ def ask(
         model=model, messages=messages, options=options or {}, stream=True,
     )
     for part in parts:
+        if stopped is not None and stopped():
+            # Closing the stream is what tells Ollama to stop.
+            close = getattr(parts, "close", None)
+            if close is not None:
+                close()
+            break
         message = getattr(part, "message", None)
         piece = getattr(message, "content", "") or ""
         piece = guard.feed(piece) if piece else ""

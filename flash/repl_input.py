@@ -66,7 +66,8 @@ COMMANDS = [
     ("/bad", "the last reply was bad: Flash learns what to do "
              "differently (/bad <why>)"),
     ("/debate", "two sides argue a question out, then a summary "
-                "(/debate a vs b: question for two models)"),
+                "(/debate a vs b: question for two models; /debate more "
+                "[steer] keeps it going)"),
     ("/host", "switch Ollama server (/host <name|url>, add, remove, list)"),
     ("/briefing", "what came in while you were away, a card at a time"),
     ("/doctor", "check that everything Flash needs works, and how to fix "
