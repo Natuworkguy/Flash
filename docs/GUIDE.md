@@ -177,6 +177,11 @@ python run.py
   move up a level).
 - `/think auto on|off`: Whether Flash may turn its thinking on by itself
   for a message that needs careful reasoning (on by default).
+- `/good [why]` and `/bad [why]`: The last reply was good or bad. Flash
+  reviews it in the background, right away, and keeps what to repeat or
+  what to do differently, as a skill or a remembered preference. In the
+  web UI, the thumbs under each reply do the same; a thumbs down asks
+  what was wrong, which you can skip. Clicking it again takes it back.
 - `/debate <question>`: Two sides argue it out, two turns each: the
   first argues the answer it finds strongest, the second the best case
   against, each answering the other. Then a summary: where they agree

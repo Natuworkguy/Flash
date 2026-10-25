@@ -4074,6 +4074,29 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
         briefing.dismiss(i for i in ids or [] if isinstance(i, str))
         return {}
 
+    if name == "rate":
+        # A reply rated good or bad (or the rating taken back), at "at"
+        # in the chat's log: kept on it, and learned from now.
+        chat = session.chat(chat_id)
+        try:
+            at = int(body.get("at"))
+            entry = chat.log[at]
+        except (TypeError, ValueError, IndexError):
+            raise ValueError("That reply is gone.") from None
+        if entry.get("type") != "assistant" or arg not in (
+                "good", "bad", "clear"):
+            raise ValueError("Only a reply can be rated good or bad.")
+        if arg == "clear":
+            entry.pop("rating", None)
+        else:
+            entry["rating"] = arg
+            learning.rated(
+                chat.messages, str(entry.get("text") or ""), arg == "good",
+                str(body.get("why") or ""), host=ai.Config.host,
+                model=ai.Config.model or "")
+        session.save(chat)
+        return {"rating": entry.get("rating", "")}
+
     if name == "doctor":
         from . import doctor
 

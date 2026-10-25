@@ -4515,6 +4515,27 @@ def _btw(question: str, history: list, working_on: str = "") -> None:
     ))
 
 
+def _rate_command(line: str, history: list) -> None:
+    """/good and /bad [why]: the last reply was good or bad, and Flash
+    learns from it now, in the background."""
+
+    word, _, why = line.partition(" ")
+    reply = next((m.get("content") for m in reversed(history)
+                  if m.get("role") == "assistant"
+                  and isinstance(m.get("content"), str)
+                  and m["content"].strip()), "")
+    if not reply:
+        warn("There is no reply to rate yet.")
+        return
+    if not learning.rated(history, reply, word == "/good", why.strip(),
+                          host=Config.host, model=Config.model or ""):
+        warn("No model is set to learn with. Pick one with /model.")
+        return
+    console.print(Text(
+        "Thanks. Flash will keep doing that." if word == "/good" else
+        "Thanks. Flash will learn from it.", style=DIM))
+
+
 def _debate_command(line: str, history: list) -> None:
     """/debate: two sides argue a question out, a turn at a time, then a
     summary, which joins the conversation to go on from."""
@@ -6296,6 +6317,10 @@ def _main() -> None:
 
             if uin == "/resume" or uin.startswith("/resume "):
                 _resume_command(uin[len("/resume"):].strip(), messages)
+                continue
+
+            if uin.split(" ", 1)[0] in ("/good", "/bad"):
+                _rate_command(uin, messages)
                 continue
 
             if uin == "/debate" or uin.startswith("/debate "):
