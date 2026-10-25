@@ -6996,7 +6996,7 @@ async function rateReply(row, entry, rating) {
   const again = entry.rating === rating;
   const send = async (why = "") => {
     try {
-      const said = await command("rate", again ? "clear" : rating, null, { at, why });
+      const said = await command("rate", again ? "clear" : rating, current, { at, why });
       entry.rating = said.rating || undefined;
       showRating(row, said.rating);
       if (!again) toast(rating === "good" ? "Thanks. Flash will keep doing that." : "Thanks. Flash will learn from it.");
