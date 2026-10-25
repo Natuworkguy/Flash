@@ -4584,6 +4584,90 @@ def notify_user(message: str, title: str = "") -> str:
     return "Sent. The user has been notified."
 
 
+def debate_tool(question: str = "", context: str = "", rounds: Any = 2,
+                sides: Any = None) -> str:
+    """Have two sides argue QUESTION out (debate.py), and say what came
+    of it: the summary, for the model to go on from. The user watches it
+    in the web UI as it is argued, and can stop it there."""
+
+    import uuid
+
+    from . import debate as argue
+    from . import learning, providers
+    from .theme import tool_debate, tool_debate_poll
+
+    question = " ".join(str(question or "").split())
+    tool_line(f"Debate({question[:120]})")
+    if not question:
+        return "Error: say what the question is."
+    models = [str(m).strip() for m in sides if str(m).strip()][:2] \
+        if isinstance(sides, list) else []
+    try:
+        rounds = max(1, min(int(rounds or argue.ROUNDS), argue.MOST_ROUNDS))
+    except (TypeError, ValueError):
+        rounds = argue.ROUNDS
+    debate_id = uuid.uuid4().hex[:8]
+    history = [{"role": "user", "content": str(context).strip()}] \
+        if str(context or "").strip() else []
+    shown = tool_debate({"id": debate_id, "question": question,
+                         "sides": list(argue.SIDES), "turns": [],
+                         "by": "flash"})
+    heard: dict = {}
+
+    def say(event: dict) -> None:
+        if "turn" in event:
+            had = heard.setdefault(event["turn"],
+                                   {"side": event["side"], "text": ""})
+            had["text"] += event.get("text", "")
+        if shown:
+            tool_debate({"id": debate_id, **event})
+
+    stopped = [False]
+
+    def stopping() -> bool:
+        stopped[0] = stopped[0] or bool(
+            tool_debate_poll(debate_id).get("stopped"))
+        return stopped[0]
+
+    def steers() -> list:
+        return list(tool_debate_poll(debate_id, take=True).get("steers")
+                    or [])
+
+    try:
+        done = argue.run(question, providers.client(OLLAMA_HOST), models,
+                         MODEL_NAME, history=history, rounds=rounds,
+                         options=learning.chat_options(), say=say,
+                         stopped=stopping, steers=steers)
+    except KeyboardInterrupt:
+        done = {"question": question, "sides": list(argue.SIDES),
+                "models": models, "summary": "", "stopped": True,
+                "turns": [heard[n] for n in sorted(heard)
+                          if heard[n]["text"].strip()]}
+    except Exception as exc:  # noqa: BLE001
+        if shown:
+            tool_debate({"id": debate_id, "done": True,
+                         "error": f"{exc.__class__.__name__}: {exc}"})
+        result = f"Error: the debate could not run: {exc}"
+        tool_result(result, style=ERROR)
+        return result
+    if shown:
+        tool_debate({"id": debate_id, "done": True, "kept": done,
+                     "stopped": done["stopped"],
+                     "empty": not done["turns"]})
+    if done["summary"]:
+        result = (f"The debate is shown to the user. Its summary:\n\n"
+                  f"{done['summary']}")
+    elif done["turns"]:
+        said = argue._transcript(done["turns"], done["sides"])
+        result = ("The user stopped the debate before its summary. What "
+                  f"was said:\n\n{said}")
+    else:
+        result = "The user stopped the debate before it began."
+    tool_result(result if not shown else
+                (done["summary"].splitlines() or ["Stopped."])[0])
+    return result
+
+
 # Tool schema expected by Ollama function calling.
 tools: list[dict[str, Any]] = [
     {
@@ -5883,6 +5967,55 @@ tools: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "debate",
+            "description": (
+                "Have two sides argue a question out in front of the "
+                "user: one argues the answer it finds strongest, the other "
+                "the best case against, each answering the other, then a "
+                "summary of where they agree, where they do not, what held "
+                "up and what it turns on. Use it when the user faces a real "
+                "decision with trade-offs, or asks you to weigh options or "
+                "steelman both sides: not for facts you can look up, and "
+                "not more than once a turn. It takes a while. The user "
+                "watches it, can steer or stop it, and you get the summary "
+                "to answer from: do not repeat it, say what you make of it."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "question": {
+                        "type": "string",
+                        "description": "The question, as one line.",
+                    },
+                    "context": {
+                        "type": "string",
+                        "description": (
+                            "What the sides need to know that the question "
+                            "does not say: the user's situation, "
+                            "constraints, what you have found. They see "
+                            "nothing else of the conversation."
+                        ),
+                    },
+                    "rounds": {
+                        "type": "integer",
+                        "description": "Turns each side gets, 1 to 4. "
+                        "Default 2.",
+                    },
+                    "sides": {
+                        "type": "array", "items": {"type": "string"},
+                        "description": (
+                            "Optional: a model for each side, when the "
+                            "user asked for particular ones."
+                        ),
+                    },
+                },
+                "required": ["question"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "reason",
             "description": (
                 "Share a short line of reasoning or a plan with the user "
@@ -6411,6 +6544,7 @@ FUNCTIONS = {
     "computer_use": computer_use_tool,
     "send_imessage": send_imessage,
     "read_imessages": read_imessages,
+    "debate": debate_tool,
     "mark_imessages_read": mark_imessages_read,
     "open_in_editor": open_in_editor,
     "ask_system_one": ask_system_one,
@@ -6430,7 +6564,8 @@ SUBAGENT_TOOL_NAMES = (
 
 # A spark's tools: a sub-agent's, and sending email or an iMessage, which
 # it asks the user about in its window, as it does any step that asks.
-SPARK_TOOL_NAMES = SUBAGENT_TOOL_NAMES + ("send_email", "send_imessage")
+SPARK_TOOL_NAMES = SUBAGENT_TOOL_NAMES + ("send_email", "send_imessage",
+                                          "debate")
 
 # Tools that ask every time, autonomous mode or not: UltraAuto aside.
 ALWAYS_ASK_TOOL_NAMES = ("send_email", "send_imessage")

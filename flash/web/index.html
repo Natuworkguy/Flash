@@ -15850,6 +15850,7 @@ function debateLive(event) {
     d.sides = (event.names && event.names.length ? event.names : event.sides) || d.sides;
     d.turns = (event.turns || []).map((t) => ({ ...t }));
     d.continues = event.continues || "";
+    d.by = event.by || "";
     // The one it goes on from steps aside while it does.
     if (d.continues) messagesEl.querySelector(`.debate[data-debate="${d.continues}"]`)?.setAttribute("hidden", "");
   }
@@ -15887,6 +15888,8 @@ function debateCard(d, live = false) {
   const card = el("div", "block debate" + (live && !d.done ? " live" : ""), `<div class="debate-head"><span class="debate-chip">${icon("users")}<span>Debate</span></span><span class="debate-q"></span></div><div class="debate-turns"></div>`);
   card.dataset.debate = d.id;
   card.querySelector(".debate-q").textContent = d.question;
+  // One Flash started itself, to weigh something up for you.
+  if (d.by === "flash") card.querySelector(".debate-chip span").textContent = "Flash started a debate";
   if (live && !d.done) {
     const stop = card.querySelector(".debate-head").appendChild(el("button", "btn small debate-stop", `${icon("stop")}<span>Stop</span>`));
     stop.type = "button";

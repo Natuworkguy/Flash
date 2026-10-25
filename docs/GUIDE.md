@@ -195,6 +195,10 @@ python run.py
   for more rounds and a new summary, steered by what you type beside it
   if anything. In the terminal, Ctrl+C stops it, and `/debate more
   [what to argue next]` keeps the last one going.
+  Flash, and your sparks, can start one themselves, when you face a
+  real decision with trade-offs or ask them to weigh options: it shows
+  in the chat as "Flash started a debate", to steer or stop like your
+  own, and Flash answers from its summary.
 - `/doctor`: Checks that everything Flash needs works (Python and its
   packages, Ollama and your model, Flash's folder, extensions,
   connectors, sparks, and on a Mac the permissions Computer Use and

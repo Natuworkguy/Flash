@@ -168,3 +168,59 @@ def test_the_web_steers_stops_and_keeps_debating(monkeypatch):
     with pytest.raises(ValueError, match="over"):
         session.steer_debate(again, "x")
     assert session.stop_debate(chat=chat.id) == 0  # nosec B101
+
+
+def test_the_agent_starts_a_debate_and_gets_the_summary(monkeypatch):
+    from flash import providers, tools
+
+    client = Client()
+    monkeypatch.setattr(providers, "client", lambda host: client)
+    monkeypatch.setattr(tools, "MODEL_NAME", "m")
+    said = tools.run_tool(("debate", {"question": "monorepo or not?",
+                                      "context": "Two teams, one deploy.",
+                                      "rounds": 1}))
+    assert said.endswith("Its summary:\n\nsummary")  # nosec B101
+    # The sides were told what the agent knew.
+    assert {"role": "user", "content": "Two teams, one deploy."} in (  # nosec
+        client.asked[0][1])
+    assert "debate" in tools.SPARK_TOOL_NAMES  # nosec B101
+    assert tools.run_tool(("debate", {"question": " "})).startswith(  # nosec
+        "Error")
+
+
+def test_the_page_shows_steers_and_stops_the_agents_debate(monkeypatch):
+    from flash import providers, theme, tools, web
+
+    client = Client()
+    monkeypatch.setattr(providers, "client", lambda host: client)
+    monkeypatch.setattr(tools, "MODEL_NAME", "m")
+    session = web.Session()
+    chat = session.new_chat()
+    sink = web._sink(session, chat)
+    live = []
+    session.hub.publish = lambda event: live.append(event) or event
+    steered = []
+
+    real = sink
+
+    def watching(kind, text, style):
+        # The user steers once the first side has spoken, then stops it.
+        if kind == "debate-poll" and len(client.asked) == 1 and \
+                not steered:
+            debate_id = next(iter(session.debating))
+            session.steer_debate(debate_id, "think about cost")
+            steered.append(debate_id)
+        if kind == "debate-poll" and len(client.asked) == 3:
+            session.stop_debate(chat=chat.id)
+        return real(kind, text, style)
+
+    with theme.capture_tool_output(watching):
+        said = tools.debate_tool("tabs?", rounds=2)
+
+    assert said.startswith("The user stopped the debate")  # nosec B101
+    [kept] = [e for e in chat.log if e["type"] == "debate"]
+    assert kept["by"] == "flash" and kept["stopped"]  # nosec B101
+    assert {"side": -1, "text": "think about cost"} in kept["turns"]  # nosec
+    assert not session.debating  # nosec B101
+    first = next(e for e in live if e["type"] == "debate-live")
+    assert first["by"] == "flash" and first["chat"] == chat.id  # nosec

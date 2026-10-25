@@ -2803,6 +2803,33 @@ def _sink(session: Session, chat: Chat):
                 "text": str(shown.get("message") or ""),
             })
             return True
+        if kind == "debate":
+            # A debate the agent started: live on the page as it goes,
+            # stopped and steered as one the user starts, and kept in the
+            # chat once it is done.
+            event = json.loads(text)
+            kept = event.pop("kept", None)
+            if "question" in event and not event.get("done"):
+                session.debating[event["id"]] = {
+                    "chat": chat.id, "stop": threading.Event(),
+                    "steers": []}
+            if event.get("done"):
+                session.debating.pop(event["id"], None)
+            if kept and kept.get("turns"):
+                session.emit(chat, {"type": "debate", "id": event["id"],
+                                    "by": "flash", **kept})
+            session.hub.publish({"type": "debate-live", "chat": chat.id,
+                                 **event})
+            return True
+        if kind == "debate-poll":
+            asked = json.loads(text)
+            going = session.debating.get(asked["id"]) or {}
+            steers: list = []
+            if asked.get("take") and going:
+                steers, going["steers"] = going["steers"], []
+            stop = going.get("stop")
+            return {"stopped": chat.stop.is_set()
+                    or bool(stop and stop.is_set()), "steers": steers}
         if kind == "line":
             session.emit(chat, {"type": "tool", "label": text})
         elif kind == "result":
