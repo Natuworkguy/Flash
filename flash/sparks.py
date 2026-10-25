@@ -2456,6 +2456,32 @@ TEMPLATES = [
         ),
     },
     {
+        "name": "Memory Keeper",
+        "title": "Memory keeper",
+        "blurb": "Tidies what Flash remembers about you, every night",
+        "goal": (
+            "Look over everything Flash remembers about me with "
+            "tidy_memory list. Merge entries that say the same thing into "
+            "one with tidy_memory merge. Rewrite vague ones with "
+            "tidy_memory edit so each makes sense on its own and starts "
+            "with its kind: [Person], [Project], [Preference], [Place] or "
+            "[Fact]. Forget an entry only when another says the same, or "
+            "a newer one says it is no longer true. When two entries "
+            "contradict each other, change neither: ask me which is right. "
+            "When one is months old and has never been recalled, ask me "
+            "whether it still holds. Report what you changed, one line "
+            "each, then your questions. If nothing needed changing, reply "
+            "NOTHING NEW."
+        ),
+        "every": 1440,
+        "at": "0 3 * * *",
+        "boundaries": (
+            "Only change Flash's memory, and only with tidy_memory. Never "
+            "forget something just because it is old or rarely used: ask "
+            "me. Never add anything I did not say."
+        ),
+    },
+    {
         "name": "Email Handler",
         "title": "Email handler",
         "needs": "email",
@@ -4184,6 +4210,105 @@ def needs_imessage(spark: Spark) -> bool:
     return bool(re.search(r"read_imessages|send_imessage", spark.goal))
 
 
+def tidies_memory(spark: Spark) -> bool:
+    """Whether SPARK's job is the user's memory: it has tidy_memory."""
+
+    return "tidy_memory" in spark.goal
+
+
+TIDY_MEMORY_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "tidy_memory",
+        "description": (
+            "Read and tidy what Flash remembers about the user. list shows "
+            "every entry, numbered, with when it was added and how often "
+            "it has been recalled. merge puts one entry in place of two or "
+            "more; edit rewrites one; forget removes one, with why. Each "
+            "change answers with the list as it now is: numbers move, so "
+            "use the new ones. A copy is kept before the first change."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "action": {"type": "string",
+                           "enum": ["list", "merge", "edit", "forget"]},
+                "indexes": {
+                    "type": "array", "items": {"type": "integer"},
+                    "description": "For merge: the entries to merge.",
+                },
+                "index": {"type": "integer",
+                          "description": "For edit or forget: the entry."},
+                "text": {"type": "string",
+                         "description": "For merge or edit: the entry as "
+                         "it should read."},
+                "why": {"type": "string",
+                        "description": "For forget: why it can go."},
+            },
+            "required": ["action"],
+        },
+    },
+}
+
+
+def _memory_list() -> str:
+    from . import memory
+
+    found = memory.usage()
+    if not found:
+        return "Flash remembers nothing about the user yet."
+    lines = []
+    for n, item in enumerate(found, start=1):
+        added = _since(item["added"]).replace(
+            "never: this is your first shift", "before this was kept")
+        recalled = (f"recalled {item['recalled']} time"
+                    f"{'' if item['recalled'] == 1 else 's'}, last "
+                    f"{_since(item['last'])}") if item["recalled"] \
+            else "never recalled"
+        lines.append(f"{n}. {item['entry']}  (added {added}; {recalled})")
+    return "\n".join(lines)
+
+
+def _tidying(spark: Spark) -> Callable[[dict], str]:
+    """tidy_memory, for SPARK: the user's memory, backed up before its
+    first change, every change in its log."""
+
+    from . import memory
+
+    backed: list[bool] = []
+
+    def tidy(args: dict) -> str:
+        action = str(args.get("action") or "list").strip().lower()
+        tool_line(f"TidyMemory({action})")
+        if action == "list":
+            return _memory_list()
+        if not backed:
+            memory.backup()
+            backed.append(True)
+        try:
+            if action == "merge":
+                said = memory.merge_memories(
+                    [int(i) for i in args.get("indexes") or []],
+                    str(args.get("text") or ""))
+            elif action == "edit":
+                said = memory.edit_memory(int(args.get("index") or 0),
+                                          str(args.get("text") or ""))
+            elif action == "forget":
+                why = " ".join(str(args.get("why") or "").split())
+                if not why:
+                    return "Error: say why it can go."
+                said = memory.forget_memory(int(args.get("index") or 0))
+                said += f" ({why})"
+            else:
+                return "Error: action is list, merge, edit or forget."
+        except (IndexError, ValueError, TypeError) as exc:
+            return f"Error: {exc}"
+        log(spark.id, "memory", action=action, said=said)
+        return f"{said}\n\nNow:\n{_memory_list()}"
+
+    return tidy
+
+
 def needs_email(spark: Spark) -> bool:
     """Whether SPARK can only do its job with the user's email."""
 
@@ -4638,6 +4763,8 @@ def shift(spark_id: str, client=None) -> Optional[Report]:
         "make_document": _documenting(spark, made),
         **_proposing(spark),
     }
+    if tidies_memory(spark):
+        own["tidy_memory"] = _tidying(spark)
     # Every tool a sub-agent has, the ones that ask first too: in
     # autonomous mode they run, and otherwise the shift waits for the
     # user's answer.
@@ -4710,7 +4837,8 @@ def shift(spark_id: str, client=None) -> Optional[Report]:
                 spark, messages, own,
                 [KEEP_NOTES_TOOL, WAIT_FOR_EVENTS_TOOL, HAND_OFF_TOOL,
                  ASK_SPARK_TOOL,
-                 MAKE_DOCUMENT_TOOL, *PROPOSAL_TOOLS],
+                 MAKE_DOCUMENT_TOOL, *PROPOSAL_TOOLS,
+                 *([TIDY_MEMORY_TOOL] if "tidy_memory" in own else [])],
                 steps, lambda doing: _set_activity(spark.id, doing),
                 shift_rounds(), ROUND_LIMIT_MESSAGE, client,
                 names=names, gate=gate,
