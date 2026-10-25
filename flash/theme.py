@@ -10,7 +10,7 @@ import sys
 import threading
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
-from typing import Optional
+from typing import Any, Optional
 
 from prompt_toolkit.formatted_text import StyleAndTextTuples
 from rich.console import Console
@@ -322,7 +322,9 @@ def ansi(colour: str) -> str:
     return f"\033[38;2;{red};{green};{blue}m"
 
 
-ToolSink = Callable[[str, str, str], Optional[bool]]
+# What a sink answers: whether it took the output, for most kinds; for
+# a question ("debate-poll"), its answer.
+ToolSink = Callable[[str, str, str], Any]
 
 _capture = threading.local()
 
@@ -480,6 +482,28 @@ def tool_document(path: str, comments: list[dict]) -> bool:
         return False
     sink("document", json.dumps({"path": path, "comments": comments}), "")
     return True
+
+
+def tool_debate(event: dict) -> bool:
+    """Hand a debate the agent started (the debate tool) to whoever is
+    drawing it, a piece at a time: True when something took it, as the
+    web UI does; the terminal shows the summary once it is in."""
+
+    sink = _sink()
+    if sink is None:
+        return False
+    sink("debate", json.dumps(event), "")
+    return True
+
+
+def tool_debate_poll(debate_id: str, take: bool = False) -> dict:
+    """Whether the user has stopped debate DEBATE_ID (or the turn), and,
+    with TAKE, what they have said to steer it since last asked."""
+
+    sink = _sink()
+    said = sink("debate-poll", json.dumps({"id": debate_id, "take": take}),
+                "") if sink else None
+    return said if isinstance(said, dict) else {}
 
 
 def tool_plan(steps: list[dict]) -> bool:
