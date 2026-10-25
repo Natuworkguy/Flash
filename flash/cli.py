@@ -7,6 +7,8 @@ from typing import Optional
 from .version import __version__
 
 EXTENSION_COMMANDS = ("install", "remove", "list")
+# Commands of their own, not about extensions.
+OTHER_COMMANDS = ("doctor",)
 
 
 def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
@@ -22,10 +24,11 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     parser.add_argument(
         "command",
         nargs="?",
-        choices=EXTENSION_COMMANDS,
+        choices=EXTENSION_COMMANDS + OTHER_COMMANDS,
         help=(
             "extensions: install SOURCE (github@owner/repo, or "
-            "path@/some/folder for one on disk), remove NAME, or list"
+            "path@/some/folder for one on disk), remove NAME, or list; "
+            "doctor checks that everything Flash needs works"
         ),
     )
     parser.add_argument(

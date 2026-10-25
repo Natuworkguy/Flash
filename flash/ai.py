@@ -4048,6 +4048,20 @@ def _keep_listening() -> None:
         console.print(Text("Stopped.", style=DIM))
 
 
+def _doctor_command() -> int:
+    """/doctor and `flash doctor`: whether everything Flash needs works,
+    and how to fix what does not. How many checks failed."""
+
+    from . import doctor
+
+    styles = {doctor.OK: "green", doctor.WARN: WARN,
+              doctor.FAIL: ERROR, doctor.OFF: DIM, "fix": DIM}
+    with console.status("Checking", spinner="dots"):
+        checks = doctor.run(Config.host, Config.model or "")
+    return doctor.report(checks, lambda line, state: console.print(
+        Text(line, style=styles.get(state, ""))))
+
+
 def _terminal_ping(said: dict) -> None:
     """A spark wrote @user: the terminal's bell, and the desktop's own
     notification, as nothing is drawn over the prompt."""
@@ -5878,6 +5892,9 @@ def _main() -> None:
     if args.update:
         sys.exit(0 if _run_update(force=args.force) else 1)
 
+    if args.command == "doctor":
+        sys.exit(1 if _doctor_command() else 0)
+
     if (
         args.extension_install
         or args.extension_remove
@@ -6243,6 +6260,10 @@ def _main() -> None:
 
             if uin == "/briefing":
                 _briefing_command()
+                continue
+
+            if uin == "/doctor":
+                _doctor_command()
                 continue
 
             if uin == "/loader" or uin.startswith("/loader "):

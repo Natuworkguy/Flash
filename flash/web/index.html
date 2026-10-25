@@ -731,6 +731,19 @@ pre code { display: block; padding: 2px 16px 14px; overflow-x: auto; font-size: 
 .tool .body { border-top: 1px solid var(--border); padding: 10px 14px; font: 12.5px/1.55 var(--mono); color: var(--text-2); white-space: pre-wrap; word-break: break-word; max-height: 420px; overflow: auto; background: var(--code-bg); }
 .tool .body.error { color: var(--del); }
 /* What a tool showed the model, under it, open or not. */
+.doctor-list { list-style: none; margin: 12px 0 0; padding: 0; border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+.doctor-list li { display: flex; gap: 10px; padding: 10px 14px; font-size: 13.5px; }
+.doctor-list li + li { border-top: 1px solid var(--border); }
+.doctor-list .mark { flex: none; display: grid; place-items: center; width: 20px; height: 20px; border-radius: 50%; margin-top: 1px; }
+.doctor-list .mark svg { width: 12px; height: 12px; }
+.doctor-list .doctor-ok .mark { background: color-mix(in srgb, #3fb950 22%, transparent); color: #3fb950; }
+.doctor-list .doctor-warn .mark { background: color-mix(in srgb, var(--warn) 22%, transparent); color: var(--warn); }
+.doctor-list .doctor-fail .mark { background: color-mix(in srgb, var(--del) 22%, transparent); color: var(--del); }
+.doctor-list .doctor-off .mark { color: var(--text-3); }
+.doctor-list .what { display: flex; flex-direction: column; gap: 2px; min-width: 0; color: var(--text-2); }
+.doctor-list .what b { color: var(--text); font-weight: 600; }
+.doctor-list small { color: var(--text-3); font-family: var(--mono); font-size: 12px; overflow-wrap: anywhere; }
+.doctor-list small:empty { display: none; }
 .seen-strip { border-top: 1px solid var(--border); padding: 8px 12px 10px; }
 .seen-strip.block { border: 1px solid var(--border); border-radius: var(--radius); }
 .seen-label { display: flex; align-items: center; gap: 6px; margin-bottom: 7px; font-size: 12px; color: var(--text-3); }
@@ -8248,6 +8261,30 @@ function drawGeneral(body) {
 
   body.insertAdjacentHTML("beforeend", `<h2 class="settings-section settings-gap">Updates</h2><p class="settings-sub">New versions come from the Flash repository on GitHub, the same as /update in the terminal.</p><div class="updates-box"></div>`);
   renderUpdates(body.querySelector(".updates-box"));
+
+  // Whether everything Flash leans on works, as flash doctor says.
+  body.insertAdjacentHTML("beforeend", `<h2 class="settings-section settings-gap">Health check</h2><p class="settings-sub">Looks at Python and Flash's packages, Ollama and your model, Flash's folder, extensions, connectors, sparks and macOS's permissions, and says how to fix anything that isn't right. It only looks. The same as <code>flash doctor</code> in a terminal.</p><div class="doctor-box"><button type="button" class="btn">Run the check</button><ul class="doctor-list" hidden></ul></div>`);
+  const doctorBox = body.querySelector(".doctor-box");
+  doctorBox.querySelector(".btn").onclick = async (e) => {
+    const b = e.currentTarget;
+    const list = doctorBox.querySelector(".doctor-list");
+    b.disabled = true;
+    b.textContent = "Checking…";
+    try {
+      const { checks } = await command("doctor", "", null);
+      list.textContent = "";
+      for (const c of checks) {
+        const item = list.appendChild(el("li", `doctor-${c.state}`, `<span class="mark"></span><span class="what"><b></b><span></span><small></small></span>`));
+        item.querySelector(".mark").innerHTML = icon({ ok: "check", warn: "alert", fail: "x", off: "dot" }[c.state] || "dot");
+        item.querySelector("b").textContent = c.name;
+        item.querySelector(".what > span").textContent = c.said;
+        item.querySelector("small").textContent = c.state === "ok" ? "" : c.fix;
+      }
+      list.hidden = false;
+    } catch (error) { showFailure(error); }
+    b.disabled = false;
+    b.textContent = "Run it again";
+  };
 
   body.insertAdjacentHTML("beforeend", `<h2 class="settings-section settings-gap">Restart</h2>`);
   const again = el("div", "setting-row static", `<span class="what"><b>Restart Flash</b><span></span></span><span class="side"></span>`);
