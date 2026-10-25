@@ -1024,7 +1024,10 @@ too. It is off until you turn it on; while it is off the model is not
 offered it.
 
 Flash takes a screenshot, says where to click, what to type or which
-keys to press, and gets a fresh screenshot after each step. The model
+keys to press, and gets a fresh screenshot after each step. In the web
+UI each of those screenshots shows under its step, as What Flash saw,
+as does any image a tool shows the model (a page's screenshot, an image
+it looked at); click one to see it whole. The model
 is told to use every other tool first, as this is slow and can click
 the wrong thing, and never to type passwords or card numbers.
 
@@ -1271,9 +1274,10 @@ and the Forks button goes away.
 **Briefing** (in the sidebar, `Alt+B`, or `/briefing`) is what came in
 while you were away, as a full-screen feed you swipe or scroll through
 one card at a time: unread email and iMessages, spark reports you have
-not read, waits that finished or gave up, chats that answered, waits
-coming up in the next day, and anything new a connector a spark watches
-said. It looks back one day. A team where something changed since your
+not read, waits that finished or gave up, chats that answered that you
+have not opened since, waits coming up in the next day, anything new a
+connector a spark watches said, a spark's `@user`, and the notifications
+Flash sent you. It looks back one day. A team where something changed since your
 last briefing gets one card for the whole team: each spark's newest
 report as a line, what the ones at work are doing, and how much the team
 chat said (Open goes to the team chat). Each card can be answered (Reply), opened

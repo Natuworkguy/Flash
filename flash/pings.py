@@ -67,7 +67,7 @@ def ping(spark: Any, text: str, where: str, team: str = "") -> bool:
     """SPARK wrote TEXT, in its report (WHERE "report") or in TEAM's
     chat ("team"): if it says @user, ping the user. Whether it did."""
 
-    from . import notify, progress
+    from . import briefing, notify, progress
 
     if not mentions_user(text):
         return False
@@ -84,4 +84,9 @@ def ping(spark: Any, text: str, where: str, team: str = "") -> bool:
         with contextlib.suppress(Exception):
             listener(dict(said))
     progress.tell("mention", **said)
+    # And in the briefing, for when it was missed.
+    with contextlib.suppress(Exception):
+        briefing.notice("ping", f"{spark.name} mentioned you", said["text"],
+                        spark=spark.id, who=spark.name, colour=spark.colour,
+                        team=team, where=where)
     return True

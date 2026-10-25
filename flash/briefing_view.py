@@ -28,6 +28,7 @@ HUES = {
     "email": "#4a8fe7", "imessage": "#34c759", "spark": "#9b7bff",
     "wait": "#f08a4b", "reminder": "#e0a84a", "chat": "#2bb3a3",
     "news": "#e5689b", "team": "#5b8def", "end": "#62c073",
+    "ping": "#d97757", "notify": "#c98bff",
 }
 # What each kind of card can do here. A web chat is not in the terminal:
 # its card can be asked about or dismissed.
@@ -36,12 +37,15 @@ ACTIONS = {
     "imessage": ("reply", "ask", "dismiss"),
     "spark": ("reply", "open", "ask", "dismiss"),
     "team": ("open", "ask", "dismiss"),
+    # A ping is answered where it was said: its team's chat, or the spark.
+    "ping": ("reply", "open", "ask", "dismiss"),
 }
 DEFAULT_ACTIONS = ("ask", "dismiss")
 KEYS = {"reply": "r", "open": "o", "ask": "a", "dismiss": "d"}
 NAMES = {"reply": "reply", "open": "open", "ask": "ask Flash",
          "dismiss": "dismiss"}
-OPEN_NAMES = {"spark": "report", "team": "team chat", "email": "mail"}
+OPEN_NAMES = {"spark": "report", "team": "team chat", "email": "mail",
+              "ping": "where it was said"}
 WIDTH = 72
 BODY_LINES = 9
 # A card moving in: how far it starts away, in rows, and each step's wait.
@@ -110,8 +114,9 @@ def draw(cards: list[dict], at: int, columns: int, rows: int,
     pad = " " * max(2, (columns - width - 4) // 2)
     total = len(cards)
     card = cards[at] if at < total else None
-    hue = (card.get("colour") if card and card["kind"] == "team" else
-           None) or HUES[card["kind"] if card else "end"]
+    hue = (card.get("colour") if card and card["kind"] in ("team", "ping")
+           else None) or HUES.get(card["kind"] if card else "end",
+                                  HUES["end"])
 
     head: StyleAndTextTuples = [("bold", " Briefing")]
     if total:

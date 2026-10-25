@@ -1,8 +1,9 @@
 """The briefing: what came in while you were away, as a feed of cards.
 
 Each card is one short thing Flash knows about: a spark's report, a wait
-that finished, an unread email or iMessage, a chat that answered, a wait
-coming up soon, or something new in a connector. The page shows them one
+that finished, an unread email or iMessage, a chat that answered that
+you have not read, a wait coming up soon, something new in a connector,
+a spark's @user, or a notification Flash sent you. The page shows them one
 at a time, full screen, newest first. A card that is dismissed stays gone.
 """
 
@@ -31,6 +32,10 @@ MOST_CARDS = 40
 FORGET_AFTER = 14 * DAY
 # What connectors said that was new, for the feed: kept this long.
 NEWS_KEPT = 30
+# Pings and notifications, kept on disk so a keeper's reach an open
+# Flash: this many, newest last.
+NOTICES = "briefing-notices.json"
+NOTICES_KEPT = 50
 
 DISMISSED = "briefing.json"
 # When the briefing was last opened, and when the one before that was:
@@ -52,6 +57,8 @@ KINDS = {
     "reminder": "Coming up",
     "news": "News",
     "team": "Team",
+    "ping": "Mention",
+    "notify": "Notification",
 }
 
 
@@ -201,6 +208,41 @@ def note(source: str, text: str, now: Optional[float] = None) -> None:
             return
         _news.append({"key": key, "source": source, "text": text, "at": now})
         del _news[:-NEWS_KEPT]
+
+
+def notice(kind: str, title: str, body: str, now: Optional[float] = None,
+           **extra: Any) -> None:
+    """A ping or a notification ("ping" or "notify"), for the feed: one
+    the user may have missed when it came."""
+
+    now = time.time() if now is None else now
+    item = {"kind": kind, "title": str(title or ""), "body": str(body or ""),
+            "at": now, **extra}
+    item["key"] = hashlib.sha256(
+        f"{kind}\n{title}\n{body}\n{now}".encode()).hexdigest()[:16]
+    with _lock:
+        found = workspace._read(NOTICES, [])
+        kept = [n for n in found if isinstance(n, dict)] \
+            if isinstance(found, list) else []
+        kept = [n for n in kept if now - float(n.get("at") or 0) < LOOK_BACK]
+        workspace._write(NOTICES, (kept + [item])[-NOTICES_KEPT:])
+
+
+def _notice_cards(now: float) -> list[dict]:
+    found = workspace._read(NOTICES, [])
+    cards = []
+    for item in found if isinstance(found, list) else []:
+        if not isinstance(item, dict) or item.get("kind") not in KINDS:
+            continue
+        at = float(item.get("at") or 0)
+        if now - at > LOOK_BACK:
+            continue
+        extra = {k: v for k, v in item.items()
+                 if k not in ("kind", "title", "body", "at", "key")}
+        cards.append(_card(item["kind"], str(item.get("key") or ""),
+                           item.get("title") or "", item.get("body") or "",
+                           at, **extra))
+    return cards
 
 
 def _news_cards(now: float) -> list[dict]:
@@ -396,10 +438,14 @@ def _chat_cards(session: Any, now: float) -> list[dict]:
     for chat in list(getattr(session, "chats", {}).values()):
         if chat.busy or now - chat.updated > LOOK_BACK:
             continue
-        last = next((e for e in reversed(chat.log)
-                     if e.get("type") in ("assistant", "user")), None)
+        at = next((n for n in range(len(chat.log) - 1, -1, -1)
+                   if chat.log[n].get("type") in ("assistant", "user")), -1)
+        last = chat.log[at] if at >= 0 else None
         if not last or last.get("type") != "assistant" or \
                 not str(last.get("text") or "").strip():
+            continue
+        # A reply the user has had open on the page is not news.
+        if at < getattr(chat, "seen", 0):
             continue
         cards.append(_card(
             "chat", f"{chat.id}:{int(chat.updated)}", chat.title,
@@ -444,6 +490,7 @@ def cards(session: Any = None, now: Optional[float] = None,
         ("iMessage", lambda: _imessage_cards(now)),
         ("chats", lambda: _chat_cards(session, now) if session else []),
         ("connectors", lambda: _news_cards(now)),
+        ("pings and notifications", lambda: _notice_cards(now)),
     )
     found: list[dict] = []
     for name, source in sources:

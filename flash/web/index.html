@@ -730,6 +730,17 @@ pre code { display: block; padding: 2px 16px 14px; overflow-x: auto; font-size: 
 .tool.blocked .ico svg { color: var(--warn); }
 .tool .body { border-top: 1px solid var(--border); padding: 10px 14px; font: 12.5px/1.55 var(--mono); color: var(--text-2); white-space: pre-wrap; word-break: break-word; max-height: 420px; overflow: auto; background: var(--code-bg); }
 .tool .body.error { color: var(--del); }
+/* What a tool showed the model, under it, open or not. */
+.seen-strip { border-top: 1px solid var(--border); padding: 8px 12px 10px; }
+.seen-strip.block { border: 1px solid var(--border); border-radius: var(--radius); }
+.seen-label { display: flex; align-items: center; gap: 6px; margin-bottom: 7px; font-size: 12px; color: var(--text-3); }
+.seen-label svg { width: 13px; height: 13px; }
+.seen-row { display: flex; gap: 8px; overflow-x: auto; scrollbar-width: thin; }
+.seen-thumb { flex: none; display: block; padding: 0; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; background: var(--code-bg); cursor: zoom-in; transition: border-color 0.15s, transform 0.2s var(--spring); }
+.seen-thumb:hover { border-color: var(--border-strong); transform: translateY(-1px); }
+.seen-thumb img { display: block; height: 120px; width: auto; max-width: 280px; object-fit: cover; }
+.seen-thumb.broken img { display: none; }
+.seen-thumb.broken::after { content: "Gone"; display: grid; place-items: center; width: 120px; height: 80px; font-size: 12px; color: var(--text-3); }
 .tool .command { display: flex; align-items: baseline; gap: 10px; border-top: 1px solid var(--border); padding: 10px 14px; font: 12.5px/1.55 var(--mono); background: var(--code-bg); color: var(--text); }
 .tool .command .prompt { color: var(--accent); flex: none; user-select: none; }
 .tool .command code { flex: 1; min-width: 0; white-space: pre-wrap; word-break: break-word; font: inherit; color: inherit; background: none; border: 0; padding: 0; border-radius: 0; }
@@ -3263,12 +3274,44 @@ select:not([multiple]) { -webkit-appearance: none; appearance: none; background-
 .bf-card[data-kind="chat"] { --hue: #2bb3a3; }
 .bf-card[data-kind="news"] { --hue: #e5689b; }
 .bf-card[data-kind="team"] { --hue: var(--team, #5b8def); }
+.bf-card[data-kind="ping"] { --hue: var(--team, #d97757); }
+.bf-card[data-kind="notify"] { --hue: #c98bff; }
 .bf-card[data-kind="end"] { --hue: #62c073; align-items: center; }
 /* A large faint sign of the kind, behind the words. */
 .bf-card .bf-mark { position: absolute; right: -6vmin; top: 12%; width: 52vmin; height: 52vmin; color: var(--hue); opacity: 0.09; pointer-events: none; }
 .bf-card .bf-mark svg { width: 100%; height: 100%; stroke-width: 1.2; }
 .bf-inner { min-width: 0; display: flex; flex-direction: column; gap: 12px; transform: translateY(14px); opacity: 0.4; transition: transform 0.5s var(--apple), opacity 0.5s var(--apple); }
 .bf-card.here .bf-inner { transform: none; opacity: 1; }
+/* Between cards: where scroll position can drive it, each card's words,
+   actions and sign rise into place as it comes in, and lift away,
+   blurring, as it goes, moving with the finger the whole way. */
+@supports (animation-timeline: view()) {
+  /* Timed by where the whole card is, not where each part sits in it. */
+  .bf-card { view-timeline: --bf-card block; }
+  /* Its edges melt into the next card's rather than meeting in a line. */
+  .bf-card:not([data-kind="end"]) { -webkit-mask-image: linear-gradient(transparent, #000 7%, #000 93%, transparent); mask-image: linear-gradient(transparent, #000 7%, #000 93%, transparent); }
+  .bf-card .bf-inner, .bf-card .bf-actions, .bf-card .bf-end { transition: none; transform: none; opacity: 1; animation: bf-through linear both; animation-timeline: --bf-card; }
+  .bf-card .bf-actions { animation-name: bf-through-side; }
+  .bf-card .bf-mark { animation: bf-mark-through linear both; animation-timeline: --bf-card; }
+  @keyframes bf-through {
+    0% { opacity: 0; transform: translateY(22vh) scale(0.94); filter: blur(8px); }
+    42%, 58% { opacity: 1; transform: none; filter: none; }
+    100% { opacity: 0; transform: translateY(-16vh) scale(0.96); filter: blur(8px); }
+  }
+  @keyframes bf-through-side {
+    0% { opacity: 0; transform: translateX(28px) translateY(10vh); }
+    45%, 55% { opacity: 1; transform: none; }
+    100% { opacity: 0; transform: translateX(28px) translateY(-8vh); }
+  }
+  @keyframes bf-mark-through {
+    0% { opacity: 0; transform: translateY(30vh) rotate(-12deg) scale(0.8); }
+    50% { opacity: 0.09; transform: none; }
+    100% { opacity: 0; transform: translateY(-30vh) rotate(10deg) scale(1.1); }
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .bf-card .bf-inner, .bf-card .bf-actions, .bf-card .bf-end, .bf-card .bf-mark { animation: none; }
+}
 .bf-meta { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 13px; color: rgba(245, 244, 239, 0.7); }
 .bf-chip { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px 4px 8px; border-radius: 999px; font-weight: 600; font-size: 12.5px; color: #fff; background: color-mix(in srgb, var(--hue) 70%, #000 0%); }
 .bf-chip svg { width: 14px; height: 14px; }
@@ -4685,6 +4728,25 @@ function addResult(card, text, error, warn) {
   // A tool that needs a package says so: install it from here.
   const wanted = packagesIn(text);
   if (wanted.length) slideBox(card).appendChild(installWidget(wanted, ""));
+}
+
+// What a tool showed the model, a screenshot of the screen or a page, an
+// image it looked at: small, under that tool, open or not, to open whole.
+function seenImages(card, images) {
+  if (!images.length) return;
+  const strip = el("div", "seen-strip", `<span class="seen-label">${icon("image")}<span>What Flash saw</span></span><div class="seen-row"></div>`);
+  const row = strip.querySelector(".seen-row");
+  for (const image of images) {
+    const thumb = row.appendChild(el("button", "seen-thumb", `<img alt="" loading="lazy" decoding="async">`));
+    thumb.type = "button";
+    thumb.setAttribute("aria-label", "Open what Flash saw");
+    const img = thumb.querySelector("img");
+    img.src = fileUrl(image);
+    img.onerror = () => thumb.classList.add("broken");
+    thumb.onclick = () => openViewer(image);
+  }
+  if (card) card.appendChild(strip);
+  else messagesEl.appendChild(strip).classList.add("block");
 }
 
 // A plan draws as boxes to tick, left open: it is there to be watched.
@@ -7211,6 +7273,7 @@ function drawEntry(entry, ctx) {
     case "tool": ctx.tool = toolCard(entry.label); messagesEl.appendChild(ctx.tool); break;
     case "file": messagesEl.appendChild(entry.kind === "image" ? inlineImage(entry) : attachment(entry)); break;
     case "browser": drawBrowserFrame(entry); break;
+    case "seen": seenImages(ctx.tool, entry.images || []); break;
     case "result": if (ctx.tool) addResult(ctx.tool, entry.text, entry.error, entry.warn); break;
     case "diff": if (ctx.tool) addDiff(ctx.tool, entry.text); break;
     case "plan": if (ctx.tool) addPlan(ctx.tool, entry.steps || []); break;
@@ -14826,7 +14889,7 @@ function apply(event) {
         if (streamNode) { streamNode.remove(); streamNode = null; }
         drawCtx.index = chat.log.length - 1;
         drawEntry(entry, drawCtx);
-        if (entry.type === "assistant") placeActions();
+        if (entry.type === "assistant") { placeActions(); markSeen(); }
         markRetry();
         drawStreaming();
         updateSend();
@@ -16465,6 +16528,20 @@ async function openSparkPicker() {
   openPlusMenu(rows, (row) => (row.browse ? showPage("sparks") : startSparkChat(row.spark)), "");
 }
 
+// The chat on the page, with the tab in front, has been read: its reply
+// is not news for the briefing. Said once for each length of its log.
+const seenSent = new Map();
+function markSeen() {
+  clearTimeout(markSeen.timer);
+  markSeen.timer = setTimeout(() => {
+    const chat = view === "chat" && !document.hidden && chats.get(current);
+    if (!chat || !chat.log.length || seenSent.get(chat.id) === chat.log.length) return;
+    seenSent.set(chat.id, chat.log.length);
+    command("chat-seen", "", chat.id).catch(() => seenSent.delete(chat.id));
+  }, 400);
+}
+document.addEventListener("visibilitychange", markSeen);
+
 function switchTo(id, nav) {
   if (!chats.has(id)) return;
   current = id;
@@ -16474,6 +16551,7 @@ function switchTo(id, nav) {
   refreshContext();
   // Inside the change: a view transition applies it a moment later, and
   // until then the old chat is still what is on the page.
+  markSeen();
   morph(() => {
     drawChat();
     const pending = pendingAsk();
@@ -17128,18 +17206,18 @@ document.addEventListener("mousedown", (e) => { if (menuEl && !menuEl.contains(e
 // stepped with j and k. Each card's actions answer it, open what it is
 // about, ask Flash about it, or take it out of the feed for good.
 
-const BRIEF_ICON = { email: "mail", imessage: "chat", spark: "spark", wait: "clock", reminder: "bell", chat: "reply", news: "globe", team: "users" };
+const BRIEF_ICON = { email: "mail", imessage: "chat", spark: "spark", wait: "clock", reminder: "bell", chat: "reply", news: "globe", team: "users", ping: "spark", notify: "bell" };
 const briefing = { cards: [], at: 0, seen: new Set(), watch: null };
 const briefEl = document.getElementById("briefing");
 const briefFeed = briefEl.querySelector(".bf-feed");
 const briefRail = briefEl.querySelector(".bf-rail");
 
 function briefActions(card) {
-  const open = card.kind === "spark" ? "Report" : card.kind === "email" && card.link ? "Mail" : card.kind === "team" ? "Team chat" : "Chat";
+  const open = card.kind === "spark" ? "Report" : card.kind === "email" && card.link ? "Mail" : card.kind === "team" || (card.kind === "ping" && card.team) ? "Team chat" : card.kind === "ping" ? "Spark" : "Chat";
   const acts = [];
-  if (["email", "imessage", "spark", "chat"].includes(card.kind)) acts.push({ act: "reply", label: "Reply", icon: "reply", key: "r" });
+  if (["email", "imessage", "spark", "chat", "ping"].includes(card.kind)) acts.push({ act: "reply", label: "Reply", icon: "reply", key: "r" });
   if (card.kind === "imessage" && card.markable) acts.push({ act: "read", label: "Mark read", icon: "check", key: "m" });
-  if (card.chat || card.team || card.kind === "spark" || (card.kind === "email" && card.link)) acts.push({ act: "open", label: open, icon: card.kind === "email" ? "external" : "chevRight", key: "o" });
+  if (card.chat || card.team || card.kind === "spark" || card.kind === "ping" || (card.kind === "email" && card.link)) acts.push({ act: "open", label: open, icon: card.kind === "email" ? "external" : "chevRight", key: "o" });
   acts.push({ act: "ask", label: "Ask Flash", icon: "bolt", key: "a" });
   acts.push({ act: "dismiss", label: "Dismiss", icon: "x", key: "d" });
   return acts;
@@ -17149,7 +17227,7 @@ function briefCard(card, i) {
   const sec = el("section", "bf-card");
   sec.dataset.kind = card.kind;
   sec.dataset.i = i;
-  if (card.kind === "team" && card.colour) sec.style.setProperty("--team", card.colour);
+  if ((card.kind === "team" || card.kind === "ping") && card.colour) sec.style.setProperty("--team", card.colour);
   sec.setAttribute("aria-roledescription", "card");
   const who = card.who && card.kind !== "imessage" ? `<div class="bf-who">${card.kind === "email" ? "From " : ""}${esc(card.who)}</div>` : "";
   const where = card.chat_title ? ` · ${esc(card.chat_title)}` : "";
@@ -17318,6 +17396,7 @@ function briefAct(act, i) {
   if (act === "ask") { briefCompose(briefAbout(card)); return; }
   if (act === "open") {
     if (card.kind === "spark") { closeBriefing(); openSpark(card.spark); return; }
+    if (card.kind === "ping" && !card.team) { closeBriefing(); openSpark(card.spark); return; }
     if (card.kind === "email" && card.link) { window.open(card.link, "_blank", "noopener"); return; }
     if (card.team) { closeBriefing(); openTeamChat(card.team); return; }
     if (card.chat && chats.has(card.chat)) { closeBriefing(); switchTo(card.chat); return; }
@@ -17328,6 +17407,9 @@ function briefAct(act, i) {
     if (card.kind === "email") briefCompose(`Reply to the email from ${card.who} about "${card.title}" (uid ${card.uid} in ${card.account}). Say: `);
     else if (card.kind === "imessage") briefCompose(`Reply to ${card.place ? `the ${card.place} group` : card.who} on iMessage: `);
     else if (card.kind === "spark") { closeBriefing(); startSparkChat(card.spark); }
+    // A ping is answered where it was said: the team's chat, or a chat
+    // with the spark.
+    else if (card.kind === "ping") { closeBriefing(); if (card.team) openTeamChat(card.team); else startSparkChat(card.spark); }
     else if (card.chat && chats.has(card.chat)) { closeBriefing(); switchTo(card.chat); }
   }
 }

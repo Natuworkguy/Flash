@@ -44,6 +44,11 @@ def test_a_spark_in_the_team_chat_pings_the_user(team, heard):  # noqa: F811
     assert said["text"] == "@user the fix needs your sign-off"  # nosec B101
     assert heard["told"] == [("mention", said)]  # nosec B101
 
+    from flash import briefing
+
+    [card] = [c for c in briefing.cards(None) if c["kind"] == "ping"]
+    assert card["title"] == "Scout mentioned you"  # nosec B101
+
 
 def test_the_limit_holds_pings_back(team, heard, monkeypatch):  # noqa: F811
     monkeypatch.setattr(notify, "take_notify_turn", lambda *a: 30)
