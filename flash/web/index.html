@@ -13486,8 +13486,8 @@ function quillFrame(k) {
   const y = 18 + (n % 2 ? 1 : -1) * 3.75 * Math.sin(Math.PI * part) + jy - lift * 2;
   const fade = clamp01(1 - (k - end - 2) / 3);
   const pen = clamp01(1 - (k - end - 2.5) / 1.5);
-  return (drawn > 0 ? `<path d="${QUILL_INK}" pathLength="1" stroke-dasharray="${f1(drawn / QUILL_LOOPS)} 2" opacity="${f1(fade)}"/>` : "") +
-    `<g transform="translate(${f1(x)} ${f1(y)}) rotate(${f1(turn)})" opacity="${f1(pen)}">${QUILL_PEN}</g>`;
+  return `<g transform="translate(0 -7)">` + (drawn > 0 ? `<path d="${QUILL_INK}" pathLength="1" stroke-dasharray="${f1(drawn / QUILL_LOOPS)} 2" opacity="${f1(fade)}"/>` : "") +
+    `<g transform="translate(${f1(x)} ${f1(y)}) rotate(${f1(turn)})" opacity="${f1(pen)}">${QUILL_PEN}</g></g>`;
 }
 
 // The magnifier: gliding from word to word over three lines of text,
@@ -13500,8 +13500,8 @@ function magnifierFrame(k) {
   const t = ease(clamp01(((s - Math.floor(s)) - 0.45) / 0.55));
   const [jx, jy, turn] = jitter(k);
   const x = ax + (bx - ax) * t, y = ay + (by - ay) * t;
-  return `<path class="faint" d="M4 4h12M19 4h9M31 4h8M4 11h7M14 11h14M31 11h8M4 18h16M23 18h8M34 18h5"/>` +
-    `<g transform="translate(${f1(x + jx)} ${f1(y + jy)}) rotate(${f1(turn)})"><path d="M3.6 3.6 8.2 8.2" stroke-width="2.4"/><circle class="lens" r="5"/><path d="M-2.8-1.2a3 3 0 0 1 1.6-1.9"/></g>`;
+  return `<g transform="translate(0 -5)"><path class="faint" d="M4 4h12M19 4h9M31 4h8M4 11h7M14 11h14M31 11h8M4 18h16M23 18h8M34 18h5"/>` +
+    `<g transform="translate(${f1(x + jx)} ${f1(y + jy)}) rotate(${f1(turn)})"><path d="M3.6 3.6 8.2 8.2" stroke-width="2.4"/><circle class="lens" r="5"/><path d="M-2.8-1.2a3 3 0 0 1 1.6-1.9"/></g></g>`;
 }
 
 // The terminal: a prompt types a command, its output slides out, and the
@@ -13576,7 +13576,7 @@ function planeFrame(k) {
   const gone = clamp01(1 - (k - 10.5) / 1.2);
   const [x, y, angle] = planeAt(flying);
   const plane = gone > 0 ? `<g opacity="${f1(gone)}" transform="translate(${f1(x + jx)} ${f1(y + jy)}) rotate(${f1(angle + turn)})"><path class="sheet" d="M2 0-8-4.5-5.5 0-8 4.5Z"/><path d="M2 0-5.5 0M-5.5 0-6.5 2.6"/></g>` : "";
-  return (trail ? `<path class="faint" d="${trail}" opacity="${f1(fade)}"/>` : "") + plane;
+  return `<g transform="translate(0 -3.5)">` + (trail ? `<path class="faint" d="${trail}" opacity="${f1(fade)}"/>` : "") + plane + `</g>`;
 }
 
 const SKETCHES = {
