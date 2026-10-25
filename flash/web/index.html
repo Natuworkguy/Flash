@@ -750,6 +750,11 @@ pre code { display: block; padding: 2px 16px 14px; overflow-x: auto; font-size: 
 .debate-summary { padding: 12px 14px; border-radius: 12px; background: var(--hover); font-size: 14.5px; line-height: 1.6; }
 .debate-wait { font-size: 13px; color: var(--text-3); }
 .debate-error { font-size: 13px; color: var(--del); }
+.actions .rate.on { color: var(--accent); }
+.actions .rate[data-rate="bad"].on { color: var(--del); }
+.rate-why { display: flex; gap: 8px; margin-top: 6px; max-width: 520px; animation: rise 0.2s var(--ease) both; }
+.rate-why input { flex: 1; min-width: 0; padding: 7px 11px; border: 1px solid var(--border-strong); border-radius: 10px; background: var(--surface); color: var(--text); font: inherit; font-size: 13.5px; }
+.rate-why input:focus { outline: none; border-color: var(--accent); }
 .doctor-list { list-style: none; margin: 12px 0 0; padding: 0; border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
 .doctor-list li { display: flex; gap: 10px; padding: 10px 14px; font-size: 13.5px; }
 .doctor-list li + li { border-top: 1px solid var(--border); }
@@ -6940,7 +6945,7 @@ function statsText(entry) {
 
 // Under the last words of a turn, for all of its words: copied and read
 // aloud together, in order (see placeActions).
-function replyActions(text) {
+function replyActions(text, entry) {
   const row = el("div", "actions");
   row.dataset.text = text;
   const blocks = () => row.blocks || [row.closest(".block")];
@@ -6949,9 +6954,47 @@ function replyActions(text) {
     readButton(`reply:${text}`, () => blocks().map((b) => b && b.querySelector(".assistant")).filter(Boolean)),
     button("icon-btn", "retry", "Retry", "Alt R", retry),
     button("icon-btn", "fork", "Fork from here", "", () => forkFrom(row)),
-    ...extButtonsAt("message").map((b) => extButton(b, "icon-btn ext-act", () => row.dataset.text)),
   );
+  if (entry) {
+    const up = button("icon-btn rate", "thumbUp", "Good reply: Flash learns what worked", "", () => rateReply(row, entry, "good"));
+    const down = button("icon-btn rate", "thumbDown", "Bad reply: Flash learns what to do differently", "", () => rateReply(row, entry, "bad"));
+    up.dataset.rate = "good";
+    down.dataset.rate = "bad";
+    row.append(up, down);
+    showRating(row, entry.rating);
+  }
+  row.append(...extButtonsAt("message").map((b) => extButton(b, "icon-btn ext-act", () => row.dataset.text)));
   return row;
+}
+
+// A reply rated good or bad: kept on it, and Flash reviews it now to
+// learn from it. A bad one can say why, in a line.
+function showRating(row, rating) {
+  for (const b of row.querySelectorAll("[data-rate]")) b.classList.toggle("on", b.dataset.rate === rating);
+}
+
+async function rateReply(row, entry, rating) {
+  const blocks = (row.blocks || [row.closest(".block")]).filter(Boolean);
+  const at = Math.max(...blocks.map((b) => Number(b.dataset.log)).filter((n) => Number.isFinite(n)));
+  if (!Number.isFinite(at)) return;
+  const again = entry.rating === rating;
+  const send = async (why = "") => {
+    try {
+      const said = await command("rate", again ? "clear" : rating, null, { at, why });
+      entry.rating = said.rating || undefined;
+      showRating(row, said.rating);
+      if (!again) toast(rating === "good" ? "Thanks. Flash will keep doing that." : "Thanks. Flash will learn from it.");
+    } catch (error) { showFailure(error); }
+  };
+  row.parentElement.querySelector(".rate-why")?.remove();
+  if (again || rating === "good") { send(); return; }
+  showRating(row, "bad");
+  const box = el("form", "rate-why", `<input type="text" maxlength="400" placeholder="What was wrong? (optional)" aria-label="What was wrong"><button type="submit" class="btn small primary">Send</button>`);
+  const field = box.querySelector("input");
+  box.onsubmit = (e) => { e.preventDefault(); box.remove(); send(field.value.trim()); };
+  field.onkeydown = (e) => { if (e.key === "Escape") { box.remove(); send(); } };
+  row.after(box);
+  field.focus();
 }
 
 // Fork the chat after this reply: it goes on from here, the way it went
@@ -7274,7 +7317,7 @@ function assistantBlock(entry) {
     wrap.dataset.raw = entry.text;
     wrap.dataset.reply = "1";
     wrap.appendChild(chipMentions(el("div", "assistant", markdown(entry.text))));
-    wrap.appendChild(replyActions(entry.text));
+    wrap.appendChild(replyActions(entry.text, entry));
     frag.appendChild(wrap);
   }
   return frag;

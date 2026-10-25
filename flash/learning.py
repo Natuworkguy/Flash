@@ -190,6 +190,9 @@ class Review:
     skills: bool
     memory: bool
     started: float = field(default_factory=time.time)
+    # A review the user asked for by rating a reply: what they thought
+    # of which reply, and why, if they said.
+    rating: str = ""
     actions: list[str] = field(default_factory=list)
     reply: str = ""
     error: str = ""
@@ -227,9 +230,63 @@ def running() -> bool:
 
 
 def _task(review: Review) -> str:
+    if review.rating:
+        return review.rating
     if review.skills and review.memory:
         return BOTH_TASK
     return SKILLS_TASK if review.skills else MEMORY_TASK
+
+
+RATED_GOOD = (
+    "The user marked this reply of yours as a good one:\n\n{reply}\n{why}\n"
+    "Work out what made it good for them (its approach, format, length, "
+    "tone) and, only if that is a way of working worth repeating for a "
+    "class of task, save it as a skill or a remembered preference. A "
+    "reply that was simply right needs nothing saved."
+)
+
+RATED_BAD = (
+    "The user marked this reply of yours as a bad one:\n\n{reply}\n{why}\n"
+    "Work out what was wrong with it from the conversation and what they "
+    "said, and save what to do differently next time: correct the skill "
+    "that led to it, or save the preference it went against. Save "
+    "nothing you would have to guess at."
+)
+
+RATED_REPLY_CHARS = 3000
+
+
+def rated(
+    messages: list[dict],
+    reply: str,
+    good: bool,
+    why: str = "",
+    *,
+    host: str,
+    model: str,
+    start: Callable[..., Any] = threading.Thread,
+) -> Optional[Review]:
+    """The user rated REPLY, in the conversation MESSAGES: a review now,
+    of that, on a thread of its own. Not counted against the reviews
+    after turns, and run even while one of those is."""
+
+    if not model:
+        return None
+    reply = str(reply or "").strip()
+    if len(reply) > RATED_REPLY_CHARS:
+        reply = reply[:RATED_REPLY_CHARS] + "\n(cut)"
+    why = " ".join(str(why or "").split())
+    task = (RATED_GOOD if good else RATED_BAD).format(
+        reply="\n".join(f"> {line}" for line in reply.splitlines()),
+        why=f"\nWhy, in their words: {why}\n" if why else "")
+    review = Review(skills=True, memory=True, rating=task)
+    worker = start(
+        target=_run,
+        args=(review, [dict(m) for m in messages], host, model),
+        daemon=True,
+    )
+    worker.start()
+    return review
 
 
 def review_messages(review: Review, messages: list[dict]) -> list[dict]:
