@@ -13285,7 +13285,7 @@ function projectForm(p) {
     async (data) => {
       const folders = [...form.querySelectorAll(".folder-rows input")].map((f) => f.value.trim()).filter(Boolean);
       if (editing) {
-        const updated = await command("project-update", p.id, null, { name: data.label, path: data.path, instructions: data.instructions, folders });
+        const updated = await command("project-update", p.id, null, { label: data.label, path: data.path, instructions: data.instructions, folders });
         Object.assign(p, updated);
         drawPage();
       } else {

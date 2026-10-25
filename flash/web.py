@@ -4920,6 +4920,10 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
             key: str(body[key]) for key in ("name", "path", "instructions")
             if key in body
         }
+        # "name" is the command's own name in the body, so the page sends
+        # the project's new name as "label".
+        if "label" in body:
+            changes["name"] = str(body["label"])
         if "folders" in body:
             changes["folders"] = body["folders"] or []
         updated = workspace.update_project(arg, **changes)
