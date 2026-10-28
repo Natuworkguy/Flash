@@ -60,6 +60,8 @@ COMMANDS = [
     ("/model", "pick from the models here, /model <name> to switch, "
                "/model pin or unpin [name] to keep one at the top"),
     ("/btw", "a side question, even while Flash works, without interrupting"),
+    ("/fallbacks", "models to try when one fails: /fallbacks a > b > c "
+                   "(* for any model; clear a)"),
     ("/secret", "keys and passwords Flash uses by name, never seeing them "
                 "(list, set NAME, rm NAME)"),
     ("/good", "the last reply was good: Flash learns what worked "
@@ -414,6 +416,10 @@ class SlashCommandCompleter(Completer):
                 if typed and word.startswith(typed.lower()):
                     yield Completion(word, start_position=-len(typed),
                                      display_meta="keep a model at the top")
+            if "auto".startswith(typed.lower()):
+                yield Completion("auto", start_position=-len(typed),
+                                 display_meta="System One picks one for "
+                                 "each message")
             return
 
         if text.startswith("/host "):

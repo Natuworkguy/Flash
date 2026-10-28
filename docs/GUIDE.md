@@ -159,7 +159,21 @@ python run.py
 
 - `/help` or `/?`: Display the help message.
 - `/model`: Pick from the models on this machine, or type a name to
-  download one. `/model <name>` switches straight to one.
+  download one. `/model <name>` switches straight to one. Models from
+  extensions are listed first, and still listed when Ollama is not
+  running. In the web UI each chat keeps its own model: the menu
+  switches this chat's, and "Make it the default" sets the one new
+  chats start on.
+  `/model auto`: Auto. For each message, System One picks which model
+  answers, from the ones you pin to the top of the menu (or
+  `AUTO_MODELS=a,b,c`): a small one for chat, a big one for hard work.
+  Without System One, the first of them answers. A note says which.
+- `/fallbacks model > another > a third`: When a model fails before it
+  answers (its host is down, its provider errors, it is not there),
+  Flash tries the next, then the next, then gives up; a note says so.
+  `*` stands for every model without its own, `/fallbacks` lists them
+  and `/fallbacks clear model` takes them off. In the web UI it is
+  "Fallbacks for ..." in the model menu.
 - `/btw <question>`: Ask something on the side, even while Flash is
   working. It is answered at once from what the conversation already
   holds, with no tools, and shown apart from the chat: neither the

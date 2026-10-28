@@ -84,7 +84,18 @@ def test_ollama_names_are_never_routed():
 def test_its_models_are_listed_beside_ollamas(echo, client):
     names = [m.model for m in client.list().models]
 
-    assert names == ["alpha3.1:latest", "@echo/echo-1", "@echo/plain"]
+    # The extension's first, then Ollama's.
+    assert names == ["@echo/echo-1", "@echo/plain", "alpha3.1:latest"]
+
+
+def test_extension_models_are_listed_with_ollama_down(echo, monkeypatch):
+    class Down(Ollama):
+        def list(self):
+            raise ConnectionError("Failed to connect to Ollama")
+
+    monkeypatch.setattr(ollama, "Client", Down)
+    names = [m.model for m in providers.client("x").list().models]
+    assert names == ["@echo/echo-1", "@echo/plain"]
 
 
 def test_a_chat_goes_to_the_provider_and_comes_back_as_ollamas(
@@ -191,3 +202,105 @@ def test_the_picker_shows_them_as_they_are(echo, client):
     first = rows[0]
     assert first.name == "@echo/echo-1" and first.note == "active"
     assert "@echo provider" in first.summary and first.size == ""
+
+
+class TestFallbacksAndAuto:
+    def test_a_failing_model_falls_back_in_order(self, echo, monkeypatch):
+        from flash import modelchain
+
+        class Flaky(Ollama):
+            def chat(self, **kwargs):
+                self.asked.append(kwargs["model"])
+                if kwargs["model"] != "gamma:12b":
+                    raise ollama.ResponseError("model is gone", 404)
+                return SimpleNamespace(
+                    message=SimpleNamespace(content="from gamma"))
+
+        monkeypatch.setattr(ollama, "Client", Flaky)
+        modelchain.set_fallbacks("alpha:8b", ["beta:8b", "gamma:12b"])
+        client = providers.client("x")
+        reply = client.chat(model="alpha:8b", messages=[])
+        assert reply.message.content == "from gamma"
+        assert client._inner.asked == ["alpha:8b", "beta:8b", "gamma:12b"]
+        said = modelchain.notes(client)
+        assert said == ["alpha:8b (model is gone), beta:8b (model is gone) "
+                        "failed, so **gamma:12b** answered."]
+
+    def test_every_model_failing_says_each(self, monkeypatch):
+        from flash import modelchain
+
+        class Down(Ollama):
+            def chat(self, **kwargs):
+                raise ollama.ResponseError("down", 503)
+
+        monkeypatch.setattr(ollama, "Client", Down)
+        modelchain.set_fallbacks("*", ["beta:8b"])
+        with pytest.raises(ollama.ResponseError, match="beta:8b"):
+            providers.client("x").chat(model="alpha:8b", messages=[])
+
+    def test_a_stream_falls_back_only_before_it_starts(self, monkeypatch):
+        from flash import modelchain
+
+        class Streams(Ollama):
+            def chat(self, **kwargs):
+                def pieces():
+                    if kwargs["model"] == "alpha:8b":
+                        raise ollama.ResponseError("not loaded", 500)
+                    yield SimpleNamespace(message=SimpleNamespace(
+                        content=kwargs["model"]))
+                return pieces()
+
+        monkeypatch.setattr(ollama, "Client", Streams)
+        modelchain.set_fallbacks("alpha:8b", ["beta:8b"])
+        parts = providers.client("x").chat(model="alpha:8b", messages=[],
+                                           stream=True)
+        assert [p.message.content for p in parts] == ["beta:8b"]
+
+    def test_chains(self):
+        from flash import modelchain
+
+        assert modelchain.parse_chain("a > b -> c, d") == \
+            ("a", ["b", "c", "d"])
+        modelchain.set_fallbacks("a", ["b", "a", "b", "c"])
+        assert modelchain.fallbacks("a") == ["b", "c"]
+        with pytest.raises(ValueError):
+            modelchain.set_fallbacks("a", ["auto"])
+        modelchain.set_fallbacks("a", [])
+        assert modelchain.fallbacks("a") == []
+
+    def test_auto_picks_once_a_message(self, monkeypatch):
+        from flash import modelchain, systemone, workspace
+
+        modelchain.forget_picks()
+        monkeypatch.setattr(ollama, "Client", Ollama)
+        monkeypatch.setattr(workspace, "favorite_models",
+                            lambda host: ["small:2b", "big:120b-cloud"])
+        monkeypatch.setattr(systemone, "enabled", lambda: True)
+        monkeypatch.setattr(systemone, "model", lambda: "judge")
+        asked = []
+
+        def ask(host, state, questions, name=""):
+            asked.append(state)
+            return {"pick": {"choice": "big:120b-cloud"}}
+
+        monkeypatch.setattr(systemone, "ask", ask)
+        client = providers.client("x")
+        said = [{"role": "user", "content": "Prove this theorem"}]
+        client.chat(model="auto", messages=said)
+        client.chat(model="auto", messages=said + [
+            {"role": "assistant", "content": "", "tool_calls": []}])
+        assert [a["model"] for a in client._inner.asked] == [
+            "big:120b-cloud", "big:120b-cloud"]
+        assert len(asked) == 1
+        assert modelchain.notes(client) == [
+            "Auto picked **big:120b-cloud** (System One)."]
+        assert client.show("auto").capabilities[0] == "completion"
+
+    def test_auto_without_system_one_takes_the_first(self, monkeypatch):
+        from flash import modelchain, systemone
+
+        modelchain.forget_picks()
+        monkeypatch.setattr(systemone, "enabled", lambda: False)
+        monkeypatch.setenv("AUTO_MODELS", "small:2b, big:9b")
+        assert modelchain.pick("x", [{"role": "user", "content": "hi"}])[0] \
+            == "small:2b"

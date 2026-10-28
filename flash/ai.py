@@ -1261,13 +1261,19 @@ def _chat(client: "ollama.Client", messages: list, tools_arg=None):
 
     # The reply turned its thinking on (think_harder): every step after.
     level = _think_level() if thinking_harder() else None
-    return client.chat(
+    answer = client.chat(
         model=Config.model,  # pyright: ignore[reportArgumentType]
         messages=messages,
         tools=tools_arg,
         options=_chat_options(),
         **({"think": level} if level is not None else {}),
     )
+    # Auto's pick, or the fallback that answered: said, dimly.
+    from . import modelchain
+
+    for said in modelchain.notes(client):
+        console.print(Text("  " + said.replace("**", ""), style=DIM))
+    return answer
 
 
 # Sub-agents send the same options: Ollama reloads a model whenever the
@@ -4365,6 +4371,44 @@ def _list_extensions() -> None:
     console.print(body)
 
 
+def _fallbacks_command(arg: str) -> None:
+    """/fallbacks lists them; /fallbacks a > b > c sets a's; /fallbacks
+    clear a takes them off; * stands for every model."""
+
+    from . import modelchain
+
+    if not arg:
+        chains = modelchain.all_fallbacks()
+        if not chains:
+            console.print(Text(
+                "No fallbacks. /fallbacks model > another > a third "
+                "tries them in turn when model fails; * for every model.",
+                style=DIM))
+            return
+        for model, chain in chains.items():
+            line = Text(f"  {model}", style=f"bold {ACCENT}")
+            line.append(" > " + " > ".join(chain), style=DIM)
+            console.print(line)
+        return
+    action, _, rest = arg.partition(" ")
+    try:
+        if action.lower() in ("clear", "rm", "remove", "off"):
+            which = rest.strip() or Config.model or ""
+            modelchain.set_fallbacks(which, [])
+            console.print(Text(f"No fallbacks for {which}.", style=DIM))
+            return
+        model, chain = modelchain.parse_chain(arg)
+        if not chain:
+            # Just fallbacks: for the model in use.
+            model, chain = Config.model or "", [model]
+        modelchain.set_fallbacks(model, chain)
+    except ValueError as exc:
+        warn(str(exc))
+        return
+    console.print(Text(f"When {model} fails: " + " > ".join(chain)
+                       + ", then it fails.", style=DIM))
+
+
 def _install_extension(spec: str) -> bool:
     """Fetch, show, confirm, install. False only on an actual failure."""
 
@@ -6439,7 +6483,17 @@ def _main() -> None:
                     _pin_model(action.lower() == "pin", named.strip())
                     continue
 
-                if arg:
+                from . import modelchain
+
+                if arg and modelchain.is_auto(arg):
+                    arg = modelchain.AUTO
+                    offered = modelchain.auto_models(Config.host)
+                    console.print(Text(
+                        "Auto: System One picks the model for each "
+                        "message, from " + (", ".join(offered) or
+                                            "the models you pin") + ".",
+                        style=DIM))
+                elif arg:
                     # Setting a model by hand stays allowed whatever the
                     # backend says, so a declined or failed download is
                     # not a reason to leave MODEL where it was.
@@ -6481,6 +6535,10 @@ def _main() -> None:
 
             if uin == "/secret" or uin.startswith("/secret "):
                 _secret_command(uin[len("/secret"):].strip())
+                continue
+
+            if uin == "/fallbacks" or uin.startswith("/fallbacks "):
+                _fallbacks_command(uin[len("/fallbacks"):].strip())
                 continue
 
             if uin.split(" ", 1)[0] in ("/good", "/bad"):

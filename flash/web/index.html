@@ -3220,6 +3220,15 @@ body.resizing-viewer iframe { pointer-events: none; }
 /* The model new chats start on. */
 .menu .default-tag { margin-left: auto; flex: none; font-size: 11px; color: var(--text-3); padding: 1px 7px; border: 1px solid var(--border); border-radius: 999px; }
 .menu .default-tag + .fav { margin-left: 6px; }
+.fallback-list { list-style: none; counter-reset: fb; margin: 0 0 12px; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.fallback-list li { counter-increment: fb; display: flex; align-items: center; gap: 10px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); animation: rise 0.2s var(--ease) both; }
+.fallback-list li::before { content: counter(fb); flex: none; width: 20px; height: 20px; border-radius: 50%; display: grid; place-items: center; font-size: 11px; font-weight: 600; color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent); }
+.fallback-list li.fallback-none { color: var(--text-3); counter-increment: none; }
+.fallback-list li.fallback-none::before { content: none; }
+.fallback-list .mono { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 13px var(--mono); }
+.fallback-list .moves { display: flex; gap: 2px; }
+.fallback-add { display: flex; gap: 8px; margin-bottom: 8px; }
+.fallback-add select { flex: 1; min-width: 0; font: 14px var(--sans); color: var(--text); background: var(--bg); border: 1px solid var(--border-strong); border-radius: 10px; padding: 7px 10px; }
 .menu .item .desc svg { width: 14px; height: 14px; display: block; }
 .menu .empty { padding: 10px; color: var(--text-3); font-size: 13px; }
 .menu .label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -3701,6 +3710,7 @@ const ICON = {
   chevRight: '<path d="m9 6 6 6-6 6"/>',
   chevLeft: '<path d="m15 6-6 6 6 6"/>',
   chevDown: '<path d="m6 9 6 6 6-6"/>',
+  chevUp: '<path d="m6 15 6-6 6 6"/>',
   bolt: '<path d="M13 2 4 14h7l-1 8 9-12h-7Z"/>',
   feed: '<rect x="5" y="2" width="14" height="20" rx="3"/><path d="M10.5 9.2v5.6l4.4-2.8Z"/>',
   think: '<path d="M9.5 18h5M10.5 21h3"/><path d="M12 3a6 6 0 0 0-3.7 10.7c.7.6 1.2 1.4 1.2 2.3h5c0-.9.5-1.7 1.2-2.3A6 6 0 0 0 12 3Z"/>',
@@ -15721,7 +15731,7 @@ function modelParts(name) {
 function renderModelButtons() {
   const local = !info.host_name || info.host_name === "This computer";
   const full = chatModel();
-  const html = `<span class="name">${local ? "" : `<span class="host">${esc(info.host_name)} · </span>`}${esc(shortModel(full) || "No model")}</span>` +
+  const html = `<span class="name">${local ? "" : `<span class="host">${esc(info.host_name)} · </span>`}${esc(full === "auto" ? "Auto" : shortModel(full) || "No model")}</span>` +
     (info.system_one && info.system_one_model ? `<span class="s1">${esc(shortModel(info.system_one_model))}</span>` : "") + icon("chevDown");
   for (const b of document.querySelectorAll(".model-pick")) {
     b.innerHTML = html;
@@ -17228,6 +17238,45 @@ function modeMenu() {
   openMenu($("#auto-btn"), rows, (row) => setMode(row.mode), "", true);
 }
 
+// The models to try, in order, when MODEL fails, before giving up: added
+// from the host's list, moved up and down, taken off.
+async function fallbackForm(model) {
+  let said;
+  try { said = await command("fallbacks", model, null); } catch (error) { showFailure(error); return; }
+  let chain = [...said.chain];
+  const form = openForm(`
+    <h2>Fallbacks</h2>
+    <p class="sub">When <b class="mono">${esc(model)}</b> fails before it answers (its host is down, its provider errors, it is not there), Flash tries these in turn, then gives up.</p>
+    <ol class="fallback-list"></ol>
+    <div class="fallback-add"><select aria-label="Add a fallback"></select><button type="button" class="btn small">Add</button></div>
+    <div class="dialog-buttons"><button type="button" class="btn" data-cancel>Cancel</button><button type="submit" class="btn primary">Save</button></div>`,
+    async () => {
+      await command("fallbacks-set", model, null, { chain });
+      toast(chain.length ? `If ${shortModel(model)} fails: ${chain.map(shortModel).join(" › ")}` : `No fallbacks for ${shortModel(model)}`);
+    });
+  form.querySelector("[data-cancel]").onclick = closeForm;
+  const list = form.querySelector(".fallback-list");
+  const select = form.querySelector(".fallback-add select");
+  const draw = () => {
+    list.textContent = "";
+    chain.forEach((m, i) => {
+      const li = list.appendChild(el("li", "", `<span class="mono"></span><span class="moves"><button type="button" class="icon-btn" data-up aria-label="Try sooner">${icon("chevUp")}</button><button type="button" class="icon-btn" data-down aria-label="Try later">${icon("chevDown")}</button><button type="button" class="icon-btn" data-gone aria-label="Take off">${icon("x")}</button></span>`));
+      li.querySelector(".mono").textContent = m;
+      li.querySelector("[data-up]").disabled = i === 0;
+      li.querySelector("[data-down]").disabled = i === chain.length - 1;
+      li.querySelector("[data-up]").onclick = () => { [chain[i - 1], chain[i]] = [chain[i], chain[i - 1]]; draw(); };
+      li.querySelector("[data-down]").onclick = () => { [chain[i + 1], chain[i]] = [chain[i], chain[i + 1]]; draw(); };
+      li.querySelector("[data-gone]").onclick = () => { chain.splice(i, 1); draw(); };
+    });
+    if (!chain.length) list.appendChild(el("li", "fallback-none", "None yet: it fails on its own."));
+    const left = models.filter((m) => m !== model && !chain.includes(m));
+    select.innerHTML = left.length ? left.map((m) => `<option value="${esc(m)}">${esc(m)}</option>`).join("") : `<option value="">No other models here</option>`;
+    select.disabled = !left.length;
+  };
+  form.querySelector(".fallback-add .btn").onclick = () => { if (select.value && chain.length < 6) { chain.push(select.value); draw(); } };
+  draw();
+}
+
 // Each chat has its own model; a new one starts on the default, which
 // the model menu can make any model.
 let newChatModel = "";
@@ -17755,6 +17804,8 @@ function drawModelMenu(focusHosts, keepSelection) {
       const pinnedAt = (m) => favorites.findIndex((f) => sameModel(f, m));
       const pinned = chatty.filter((m) => pinnedAt(m) >= 0).sort((a, b) => pinnedAt(a) - pinnedAt(b));
       const rest = chatty.filter((m) => pinnedAt(m) < 0);
+      // Auto: System One picks for each message.
+      rows.push({ html: `${icon("spark")}<span class="label">Auto</span><span class="desc">System One picks for each message</span>`, value: "auto", current: using === "auto" });
       [...pinned, ...rest].forEach((m, i) => {
         const on = i < pinned.length;
         const star = `<span class="fav${on ? " on" : ""}" data-fav="${esc(m)}" data-tip="${on ? "Unpin (*)" : "Pin to the top (*)"}">${icon(on ? "starFill" : "star")}</span>`;
@@ -17763,7 +17814,8 @@ function drawModelMenu(focusHosts, keepSelection) {
       });
       if (!chatty.length) rows.push({ header: true, html: '<span class="menu-note">No models on this host</span>' });
       // This chat's own model, for every new one too.
-      if (using && !sameModel(using, info.model)) rows.push({ html: `${icon("check")}<span class="label">Make <b>${esc(shortModel(using))}</b> the default</span>`, makeDefault: using, cls: "add" });
+      if (using && !sameModel(using, info.model)) rows.push({ html: `${icon("check")}<span class="label">Make <b>${esc(using === "auto" ? "Auto" : shortModel(using))}</b> the default</span>`, makeDefault: using, cls: "add" });
+      if (using && using !== "auto") rows.push({ html: `${icon("retry")}<span class="label">Fallbacks for <b>${esc(shortModel(using))}</b>…</span>`, fallbacks: using, cls: "add" });
     }
   }
   const s1 = info.system_one ? info.system_one_model : "";
@@ -17817,6 +17869,7 @@ async function pickModelRow(row) {
   }
   if (row.s1) { pickSystemOne(row.s1); input.focus(); return; }
   if (row.makeDefault) { setDefaultModel(row.makeDefault); input.focus(); return; }
+  if (row.fallbacks) { fallbackForm(row.fallbacks); return; }
   if (row.add) { hostForm(); return; }
   if (row.host) { if (!row.current) await switchHost(row.host, true); else openModels(true); return; }
   if (row.value) { setModel(row.value); input.focus(); }
