@@ -2659,9 +2659,20 @@ def _ask_spark_model() -> str:
 
 
 MCP_USAGE = (
-    "Usage: /mcp [add <name> <command or URL> | env <name> KEY=VALUE | "
-    "remove <name> | on <name> | off <name> | tools <name> | reload]"
+    "Usage: /mcp [add <name> <command or URL> [--start <command>] | "
+    "edit <name> <command or URL> [--start <command>] | env <name> "
+    "KEY=VALUE | remove <name> | on <name> | off <name> | tools <name> | "
+    "reload]"
 )
+
+
+def _start_part(rest: str) -> tuple[str, str]:
+    """REST without its --start COMMAND, and that command."""
+
+    found = re.search(r"\s--start\s+(.+)$", " " + rest)
+    if not found:
+        return rest, ""
+    return (" " + rest)[:found.start()].strip(), found.group(1).strip()
 
 
 def _show_connectors() -> None:
@@ -2723,7 +2734,15 @@ def _mcp_command(arg: str) -> None:
             connectors.start()
             _settled_connector("", 2.0)
         elif what == "add" and len(words) == 3:
-            connectors.add(words[1], words[2])
+            target, begin = _start_part(words[2])
+            connectors.add(words[1], target, None, begin)
+            _settled_connector(words[1])
+        elif what == "edit" and len(words) == 3:
+            target, begin = _start_part(words[2])
+            spec = connectors.read_config().get(words[1]) or {}
+            keys = {k: "" for k in {**(spec.get("env") or {}),
+                                    **(spec.get("headers") or {})}}
+            connectors.edit(words[1], target, keys, begin)
             _settled_connector(words[1])
         elif what == "env" and len(words) == 3 and "=" in words[2]:
             found = connectors.read_config()

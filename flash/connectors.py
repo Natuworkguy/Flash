@@ -16,10 +16,13 @@ written for another one can be pasted in whole:
 
 One with a command is a program Flash starts and talks to over its
 standard input and output; one with a url is a server elsewhere, spoken
-to over HTTP. Either way its tools join Flash's own, named
-<server>__<tool>. A tool its server marks read-only runs straight away;
-any other asks first, as a shell command does, unless autonomous mode
-is on.
+to over HTTP. One with a url can have a start command too: a program
+Flash runs first, and stops with it, that serves that url once it is up
+("start": {"command": "python", "args": ["mymcp/server.py"]}, then
+"url": "http://localhost:1234/mcp"). Either way its tools join Flash's
+own, named <server>__<tool>. A tool its server marks read-only runs
+straight away; any other asks first, as a shell command does, unless
+autonomous mode is on.
 
 Servers start in the background the first time tools are wanted, so a
 slow one (npx fetching a package) never holds up Flash starting, and
@@ -122,26 +125,82 @@ def check_name(name: str) -> str:
     return name
 
 
-def spec_from(target: str, env: Optional[dict] = None) -> dict:
-    """A server's entry from what was typed: a URL, or a command and its
-    arguments. ENV is its environment, or a URL's headers."""
+# A url typed without its scheme: localhost:1234/mcp, 127.0.0.1:8000.
+_BARE_URL = re.compile(r"^(localhost|127\.0\.0\.1|\[::1\]|[\w.-]+\.\w+)"
+                       r"(:\d+)?(/\S*)?$", re.IGNORECASE)
 
-    target = str(target or "").strip()
-    if not target:
-        raise ConnectorError("Give the server's command, or its URL.")
-    extra = {str(k): str(v) for k, v in (env or {}).items()}
-    if re.match(r"^https?://", target, re.IGNORECASE):
-        return {"url": target, **({"headers": extra} if extra else {})}
+
+def _command(text: str) -> dict:
+    """A command line as {"command", "args"}; a .py file alone runs on
+    Flash's own Python."""
+
     import shlex
+    import sys
 
     try:
-        words = shlex.split(target, posix=os.name != "nt")
+        words = shlex.split(str(text), posix=os.name != "nt")
     except ValueError as exc:
         raise ConnectorError(f"That command does not parse: {exc}") from None
-    return {
-        "command": words[0], "args": words[1:],
-        **({"env": extra} if extra else {}),
-    }
+    if not words:
+        raise ConnectorError("Give the command that starts it.")
+    if words[0].endswith(".py"):
+        words = [sys.executable, *words]
+    return {"command": words[0], "args": words[1:]}
+
+
+def _url(text: str) -> str:
+    text = str(text or "").strip()
+    if re.match(r"^https?://", text, re.IGNORECASE):
+        return text
+    if _BARE_URL.match(text):
+        local = re.match(r"^(localhost|127\.|\[::1\])", text)
+        return ("http://" if local else "https://") + text
+    return ""
+
+
+def spec_from(target: str, env: Optional[dict] = None,
+              start: str = "") -> dict:
+    """A server's entry from what was typed: a URL, or a command and its
+    arguments. ENV is its environment, or a URL's headers. START, with a
+    URL: the command that runs the server serving it."""
+
+    target = str(target or "").strip()
+    start = str(start or "").strip()
+    if not target:
+        raise ConnectorError("Give the server's command, or its URL.")
+    # "run X then connect to URL", as said.
+    said = re.match(r"^(?:run\s+)?(.+?)\s+(?:then\s+(?:connect\s+to\s+)?"
+                    r"|->\s*|=>\s*)(\S+)$", target, re.IGNORECASE)
+    if said and _url(said.group(2)) and not start:
+        start, target = said.group(1), said.group(2)
+    extra = {str(k): str(v) for k, v in (env or {}).items()}
+    url = _url(target)
+    if url:
+        return {"url": url,
+                **({"start": {**_command(start),
+                              **({"env": extra} if extra else {})}}
+                   if start else {}),
+                **({"headers": extra} if extra and not start else {})}
+    if start:
+        raise ConnectorError("A start command goes with a URL to connect "
+                             "to once it is up.")
+    return {**_command(target), **({"env": extra} if extra else {})}
+
+
+def target_of(spec: dict) -> tuple[str, str]:
+    """What spec_from would be given for SPEC: (target, start)."""
+
+    import shlex
+
+    def line(part: dict) -> str:
+        words = [part.get("command") or "", *(part.get("args") or [])]
+        return " ".join(shlex.quote(str(w)) for w in words)
+
+    if "url" in spec:
+        begin = spec.get("start")
+        return str(spec["url"]), line(begin) if isinstance(begin, dict) \
+            else str(begin or "")
+    return line(spec), ""
 
 
 # --- Talking to one server --------------------------------------------
@@ -411,6 +470,9 @@ class Server:
     def __init__(self, name: str, spec: dict) -> None:
         self.name = name
         self.spec = spec
+        # The program a url server is started with, while it runs.
+        self._process: Optional[subprocess.Popen] = None
+        self._started: list[str] = []
         self.state = OFF
         self.why = ""
         self.tools: list[dict] = []
@@ -433,16 +495,22 @@ class Server:
         self.why = ""
         link: Optional[_Link] = None
         try:
+            begin = self.spec.get("start") if self.remote else None
+            if begin:
+                self._launch(begin if isinstance(begin, dict)
+                             else _command(str(begin)))
             link = (
                 _HttpLink(self.spec, self._answer) if self.remote
                 else _StdioLink(self.spec, self._answer)
             )
             self._link = link
-            told = self._request("initialize", {
+            hello = {
                 "protocolVersion": PROTOCOL_VERSION,
                 "capabilities": {},
                 "clientInfo": {"name": "flash", "version": __version__},
-            }, START_SECONDS)
+            }
+            told = self._first_hello(hello) if begin else \
+                self._request("initialize", hello, START_SECONDS)
             info = told.get("serverInfo") or {}
             self.title = str(info.get("title") or info.get("name") or "")
             if isinstance(link, _HttpLink):
@@ -465,21 +533,82 @@ class Server:
                 self.why = str(exc) if isinstance(exc, ConnectorError) \
                     else f"{exc.__class__.__name__}: {exc}"
                 self.said = link.problem() if link is not None else ""
+                if not self.said and self._started:
+                    self.said = "\n".join(self._started[-5:])
                 self.stop(keep_state=True)
                 return
         if link is not None and self._link is not link:
             link.close()
 
+    def _launch(self, begin: dict) -> None:
+        """Run the program that serves this url, its output kept for
+        when it fails."""
+
+        env = {**os.environ, **{
+            str(k): str(v) for k, v in (begin.get("env") or {}).items()}}
+        command = str(begin.get("command") or "")
+        found = shutil.which(command, path=env.get("PATH")) or command
+        cwd = begin.get("cwd")
+        try:
+            self._process = subprocess.Popen(  # nosec B603
+                [found, *[str(a) for a in begin.get("args") or []]],
+                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT, env=env,
+                cwd=str(Path(cwd).expanduser()) if cwd else None,
+                text=True, encoding="utf-8", errors="replace",
+                start_new_session=os.name != "nt")
+        except OSError as exc:
+            raise ConnectorError(f"Could not start {command}: {exc}") \
+                from None
+        self._started = []
+        process = self._process
+
+        def read() -> None:
+            for said in process.stdout or ():
+                self._started.append(said.rstrip())
+                del self._started[:-KEPT_LINES]
+
+        threading.Thread(target=read, daemon=True).start()
+
+    def _first_hello(self, hello: dict) -> dict:
+        """Say hello until the program it started answers at the url, or
+        it gives up, or the program does."""
+
+        deadline = time.monotonic() + START_SECONDS
+        while True:
+            process = self._process
+            if process is not None and process.poll() is not None:
+                last = self._started[-1] if self._started else ""
+                raise ConnectorError(
+                    f"Its start command stopped (exit {process.returncode})"
+                    + (f": {last}" if last else "."))
+            try:
+                return self._request("initialize", hello, 3.0)
+            except ConnectorError:
+                if time.monotonic() > deadline:
+                    raise
+            time.sleep(0.4)
+
     def stop(self, keep_state: bool = False) -> None:
         link, self._link = self._link, None
         if link is not None:
             link.close()
+        process, self._process = self._process, None
+        if process is not None and process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(3)
+            except subprocess.TimeoutExpired:
+                process.kill()
         if not keep_state:
             self.state = OFF
             self.tools = []
 
     def problem(self) -> str:
-        return self._link.problem() if self._link is not None else self.said
+        said = self._link.problem() if self._link is not None else self.said
+        if not said and self._started:
+            said = "\n".join(self._started[-5:])
+        return said
 
     def _request(self, method: str, params: dict, seconds: float) -> dict:
         if self._link is None:
@@ -755,9 +884,13 @@ def listing() -> list[dict]:
             [str(spec.get("command") or ""),
              *[str(a) for a in spec.get("args") or []]]
         )
+        target, begin = target_of(spec)
         shown.append({
             "name": server.name,
             "where": where,
+            # For the edit form: what was typed, never a secret's value.
+            "target": target,
+            "start": begin,
             "remote": server.remote,
             "on": _enabled(spec),
             "state": server.state if _enabled(spec) else OFF,
@@ -775,13 +908,41 @@ def listing() -> list[dict]:
     return shown
 
 
-def add(name: str, target: str, env: Optional[dict] = None) -> None:
+def add(name: str, target: str, env: Optional[dict] = None,
+        begin: str = "") -> None:
     """Add a server, or replace the one of that name, and start it."""
 
     name = check_name(name)
     found = read_config()
-    found[name] = spec_from(target, env)
+    found[name] = spec_from(target, env, begin)
     write_config(found)
+    start()
+
+
+def edit(name: str, target: str, env: Optional[dict] = None,
+         begin: str = "", rename: str = "") -> None:
+    """Change server NAME: what it runs or reaches, its start command,
+    and its environment or headers, where ENV gives a key with no value
+    to keep the one it has. RENAME gives it a new name."""
+
+    found = read_config()
+    if name not in found:
+        raise ConnectorError(f"No connector called {name!r}.")
+    old = found[name]
+    had = {**(old.get("env") or {}), **(old.get("headers") or {}),
+           **((old.get("start") or {}).get("env") or {}
+              if isinstance(old.get("start"), dict) else {})}
+    kept = {k: (v if v else had.get(k, "")) for k, v in (env or {}).items()}
+    spec = spec_from(target, kept, begin)
+    if old.get("disabled"):
+        spec["disabled"] = True
+    new = check_name(rename) if rename else name
+    if new != name and new in found:
+        raise ConnectorError(f"There is a connector called {new!r} already.")
+    rebuilt = {}
+    for key, value in found.items():
+        rebuilt[new if key == name else key] = spec if key == name else value
+    write_config(rebuilt)
     start()
 
 
