@@ -186,9 +186,14 @@ python run.py
   first argues the answer it finds strongest, the second the best case
   against, each answering the other. Then a summary: where they agree
   and disagree, what held up, what it turns on, and which way Flash
-  leans. `/debate alpha:8b vs beta:8b: question` gives each side its own
-  model. The summary joins the conversation, so you can ask about it.
-  In the web UI it is in the + menu too, as Debate it. While it runs,
+  leans. Parts go between semicolons, in any order:
+  `/debate alpha:8b vs beta:8b; rounds 4; Should I rewrite this in C?`
+  gives each side its own model and has each speak four times (up to
+  10). Tab completes the models, `vs` and `rounds`, in the terminal and
+  the web UI. The summary joins the conversation, so you can ask about
+  it. In the web UI, `/debate` on its own or Debate it in the + menu
+  opens a form: the question, a model for each side facing each other
+  across a VS, and a slider for the rounds. While it runs,
   Stop (or Esc) ends it there, keeping what was said, and the box under
   it steers it ("think about the team size"): both sides take it in from
   their next turn, and so does the summary. Done, Keep debating goes on

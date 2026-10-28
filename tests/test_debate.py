@@ -224,3 +224,36 @@ def test_the_page_shows_steers_and_stops_the_agents_debate(monkeypatch):
     assert not session.debating  # nosec B101
     first = next(e for e in live if e["type"] == "debate-live")
     assert first["by"] == "flash" and first["chat"] == chat.id  # nosec
+
+
+class TestRoundsAndSuggestions:
+    def test_parts_between_semicolons(self):
+        found = debate.parse_full(
+            "/debate a:8b vs b:8b; rounds 4; Should I rewrite this in C?")
+        assert found == {"question": "Should I rewrite this in C?",
+                         "models": ["a:8b", "b:8b"], "rounds": 4}
+
+    def test_any_order_and_the_old_way(self):
+        assert debate.parse_full("/debate Why; rounds 3; a vs b") == {
+            "question": "Why", "models": ["a", "b"], "rounds": 3}
+        assert debate.parse_full("/debate a vs b: why; not?") == {
+            "question": "why; not?", "models": ["a", "b"], "rounds": 0}
+        assert debate.parse("/debate just; asking") == ("just; asking", [])
+
+    def test_rounds_are_held_in_bounds(self):
+        assert debate.parse_full("rounds 99; q")["rounds"] == \
+            debate.MOST_ROUNDS
+
+    def test_suggestions(self):
+        names = ["alpha:8b", "beta:8b"]
+
+        def said(typed):
+            return [s[0] for s in debate.suggest(typed, names)]
+
+        assert said("") == ["rounds ", "alpha:8b ", "beta:8b "]
+        assert said("alpha:8b ") == ["vs "]
+        assert said("alpha:8b vs ") == ["beta:8b"]
+        assert said("alpha:8b vs beta:8b; ") == ["rounds "]
+        assert said("alpha:8b vs beta:8b; rounds 1")[:2] == ["1; ", "10; "]
+        assert said("alpha:8b vs beta:8b; rounds 4; Should I") == []
+        assert said("mo") == ["more"]

@@ -482,6 +482,13 @@ class Chat:
         )
 
 
+def _int(value: Any, default: int = 0) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
 def chat_model(chat: Optional[Chat]) -> str:
     """The model CHAT talks to: its own, or Flash's default."""
 
@@ -1777,7 +1784,8 @@ class Session:
         going["steers"].append(text)
 
     def debate(self, chat: Chat, text: str = "", continues: str = "",
-               steer: str = "") -> str:
+               steer: str = "", models: Optional[list] = None,
+               rounds: int = 0) -> str:
         """Argue a question out (debate.py), in CHAT, on a thread of its
         own: each side's words stream to the page as "debate-live"
         events, and the whole debate is kept in the chat at the end, its
@@ -1797,14 +1805,19 @@ class Session:
                 raise ValueError("That debate is gone.")
             question, models = before["question"], before.get("models", [])
         else:
-            question, models = argue.parse(text)
+            asked = argue.parse_full(text)
+            question = asked["question"]
+            # Picked in the page's form, or named in the text.
+            models = [str(m) for m in models or [] if str(m).strip()][:2] \
+                or asked["models"]
+            rounds = rounds or asked["rounds"]
         if not question:
             raise ValueError(argue.USAGE)
         if chat.busy or chat.queued:
             raise ValueError("Wait for the reply to finish first.")
         if any(g["chat"] == chat.id for g in self.debating.values()):
             raise ValueError("A debate is going on in this chat already.")
-        judge = ai.Config.model or ""
+        judge = chat_model(chat)
         if not judge:
             raise ValueError("No model is set. Pick one with Alt+M.")
         debate_id = uuid.uuid4().hex[:8]
@@ -1828,6 +1841,7 @@ class Session:
                     options=ai._chat_options(), say=say,
                     stopped=going["stop"].is_set,
                     turns=(before or {}).get("turns"), steers=steers,
+                    rounds=int(rounds or argue.ROUNDS),
                 )
             except Exception as exc:  # noqa: BLE001
                 say({"done": True, "error": f"{exc.__class__.__name__}: "
@@ -5868,7 +5882,9 @@ class Handler(BaseHTTPRequestHandler):
                 "id": session.debate(
                     chat, str(body.get("text", "")),
                     continues=str(body.get("continues") or ""),
-                    steer=str(body.get("steer") or "")),
+                    steer=str(body.get("steer") or ""),
+                    models=list(body.get("models") or []),
+                    rounds=_int(body.get("rounds"))),
             }
 
         if path == "/api/debate-steer":

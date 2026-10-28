@@ -4660,8 +4660,11 @@ def _debate_command(line: str, history: list) -> None:
             return
         question, models = before["question"], before.get("models", [])
         steer = rest[len("more"):].strip()
+        rounds = 0
     else:
-        question, models = debate.parse(line)
+        asked = debate.parse_full(line)
+        question, models, rounds = (asked["question"], asked["models"],
+                                    asked["rounds"])
     if not question:
         warn(debate.USAGE)
         return
@@ -4691,7 +4694,8 @@ def _debate_command(line: str, history: list) -> None:
             done = debate.run(question, _client(), models, Config.model,
                               history=history, options=_chat_options(),
                               say=say, turns=before.get("turns"),
-                              steers=lambda: [steer] if steer else [])
+                              steers=lambda: [steer] if steer else [],
+                              rounds=rounds or debate.ROUNDS)
         except KeyboardInterrupt:
             turns = list(before.get("turns", [])) + [
                 heard[n] for n in sorted(heard) if heard[n]["text"].strip()]
