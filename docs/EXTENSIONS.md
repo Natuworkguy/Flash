@@ -15,17 +15,30 @@ From the shell:
 
 ```bash
 flash install github@owner/repo
+flash install github@owner/repo#dev   # another branch
+flash install git@https://gitlab.com/owner/repo.git
+flash update <name>                    # pull it again; every one with no name
 flash list
 flash remove <name>
 ```
+
+Add `-y` to answer yes to every question, for scripts and setup.
 
 Or from inside a session:
 
 ```text
 /extension install github@owner/repo
+/extension update <name>
 /extension                      # list what is installed
 /extension remove <name>
 ```
+
+`github@owner/repo#branch` installs from that branch instead of the
+default one, and updating it later pulls the same branch.
+
+`git@` takes any repository git can clone: `git@https://host/x.git`,
+`git@ssh://host/x.git`, or `git@github.com:owner/repo.git` as a host
+shows it to copy, each with `#branch` if you want one.
 
 `path@/some/folder` installs from a folder on disk instead of GitHub,
 which is how you try out an extension while you are writing it.
@@ -45,8 +58,10 @@ To update, install a newer bundle the same way.
 
 Before anything is installed, Flash shows what the extension adds and
 asks you to confirm. Installed extensions live in
-`~/.flash/extensions/<name>`. To update one, install it again: Flash
-replaces the old copy. If an extension's commands or tools clash with a
+`~/.flash/extensions/<name>`. To update one, use `flash update <name>`
+or its Update button on the Extensions page, or install it again. The
+copy you have is never deleted first: the new one is put beside it and
+swapped in, and if anything goes wrong on the way the old one stays. If an extension's commands or tools clash with a
 built-in, or with another installed extension, the install is refused.
 
 Extensions run programs on your machine as you. Only install extensions
@@ -202,6 +217,11 @@ lists them and `/extension set <name> <setting> <value>` changes one.
 | `min`, `max` | A number's bounds. |
 | `secret` | `true` for a text setting that is a secret, such as an API key. It shows as bullets in the panel, with a Clear button, and is never sent back to the page or printed in the terminal, only whether it is set. Its file can only be read by you. |
 
+Any text setting can also be one of the secrets Flash keeps (`/secret`):
+pick it from the "Use a secret" menu beside the box, or set it to
+`{{secret:NAME}}`. The panel shows the secret's name on a chip, and the
+extension's programs are handed the secret itself.
+
 Every program the extension runs is handed them: all of them as a JSON
 object in `FLASH_SETTINGS`, and each one in `FLASH_SETTING_<ID>` (the id
 in capitals), `1` or `0` for a switch. They are kept in
@@ -332,6 +352,47 @@ text as the one before left it; once one answers a `heard`, the rest
 are not asked. A program that fails, or takes longer than its timeout,
 changes nothing. Only conversations with Flash itself go through: voice
 mode in a team's chat does not.
+
+### Speech
+
+An extension can add voices to speak with and models to listen with.
+They show first in voice settings, named `@<extension>/<name>`, with
+nothing to download.
+
+```json
+"speech": [
+  {"name": "aura", "kind": "speaking", "label": "Aura, bright",
+   "rate": 24000, "run": ["python", "./speak.py"]},
+  {"name": "ears", "kind": "listening", "label": "Cloud listening",
+   "run": ["python", "./hear.py"]}
+]
+```
+
+A voice is given `{"text": "...", "pace": 1.0}` as JSON on stdin (pace
+above 1 is slower) and writes the speech to stdout: a WAV file, or raw
+16-bit mono audio at `rate`. A listening model is given 16 kHz mono
+16-bit audio on stdin once the speaker stops, and writes what was said.
+"Hey Flash" still listens with a Vosk model.
+
+### Briefing
+
+An extension can add cards to the briefing. Its program runs when the
+briefing is read, and writes a JSON list:
+
+```json
+"briefing": {"run": ["python", "./brief.py"], "timeout": 10}
+```
+
+```json
+[{"title": "Build passed", "body": "All 412 tests green.",
+  "id": "build-881", "url": "https://ci.example.com/881"}]
+```
+
+Each card has a `title` and `body`, and maybe an `id` (so a dismissed
+card stays dismissed), `at` (a Unix time), `url`, and `label` (the
+extension's name if left out). A Python program can also add a card
+whenever it likes, since it can import Flash:
+`from flash import briefing; briefing.notice("extension", title, body)`.
 
 ### Providers
 

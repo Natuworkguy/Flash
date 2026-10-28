@@ -778,3 +778,227 @@ def test_what_could_not_go_is_said(tmp_path, monkeypatch):
 
     with pytest.raises(ExtensionError, match="Could not remove 1"):
         extensions.remove("stuck")
+
+
+def git_repo(folder, branches=("main",)):
+    """A git repository of an extension, with each of BRANCHES saying
+    its name in its prompt."""
+
+    repo = make(folder, {"name": "branchy", "prompt": "prompt.md"},
+                {"prompt.md": "main\n"})
+    git = ["git", "-C", str(repo), "-c", "user.name=t",
+           "-c", "user.email=t@example.com"]
+    subprocess.run([*git, "init", "-q", "-b", "main"], check=True)
+    subprocess.run([*git, "add", "-A"], check=True)
+    subprocess.run([*git, "commit", "-qm", "first"], check=True)
+    for branch in branches[1:]:
+        subprocess.run([*git, "checkout", "-qb", branch], check=True)
+        (repo / "prompt.md").write_text(f"{branch}\n", encoding="utf-8")
+        subprocess.run([*git, "commit", "-qam", branch], check=True)
+        subprocess.run([*git, "checkout", "-q", "main"], check=True)
+    return repo
+
+
+class TestBranchesAndGit:
+    @pytest.mark.parametrize("spec, kind, target", [
+        ("github@owner/repo#dev", "github", "owner/repo#dev"),
+        ("github@owner/repo.git#feature/x", "github",
+         "owner/repo#feature/x"),
+        ("git@https://example.com/a/b.git", "git",
+         "https://example.com/a/b.git"),
+        ("git@https://example.com/a/b.git#next", "git",
+         "https://example.com/a/b.git#next"),
+        ("git@github.com:owner/repo.git", "git",
+         "git@github.com:owner/repo.git"),
+        ("git@ssh://host/x", "git", "ssh://host/x"),
+    ])
+    def test_sources(self, spec, kind, target):
+        assert extensions.parse_source(spec) == (kind, target)
+
+    @pytest.mark.parametrize("spec", [
+        "github@owner/repo#--upload-pack=x",
+        "github@owner/repo#a..b",
+        "git@--upload-pack=x",
+        "git@/some/folder",
+        "git@ftp://host/x",
+    ])
+    def test_refused(self, spec):
+        with pytest.raises(ExtensionError):
+            extensions.parse_source(spec)
+
+    def test_a_branch_is_cloned(self, tmp_path):
+        repo = git_repo(tmp_path / "repo", ("main", "dev"))
+        for branch, said in (("", "main"), ("#dev", "dev")):
+            checkout = extensions.fetch(f"git@file://{repo}{branch}")
+            try:
+                assert (checkout / "prompt.md").read_text().strip() == said
+            finally:
+                extensions.discard(checkout)
+
+    def test_a_missing_branch_says_so(self, tmp_path):
+        repo = git_repo(tmp_path / "repo")
+        with pytest.raises(ExtensionError, match="nope branch"):
+            extensions.fetch(f"git@file://{repo}#nope")
+
+    def test_github_branch_is_asked_for(self, monkeypatch):
+        seen = {}
+
+        def fake_run(command, **kwargs):
+            seen["command"] = command
+            return subprocess.CompletedProcess(command, 128, "", "no")
+
+        monkeypatch.setattr(extensions.subprocess, "run", fake_run)
+        monkeypatch.setattr(extensions.shutil, "which", lambda _name: "git")
+        with pytest.raises(ExtensionError):
+            extensions.fetch("github@owner/repo#dev")
+        assert "https://github.com/owner/repo.git" in seen["command"]
+        at = seen["command"].index("--branch")
+        assert seen["command"][at + 1] == "dev"
+
+
+class TestUpdating:
+    def test_update_pulls_from_where_it_came_from(self, tmp_path):
+        repo = git_repo(tmp_path / "repo", ("main", "dev"))
+        spec = f"git@file://{repo}#dev"
+        checkout = extensions.fetch(spec)
+        try:
+            extensions.install(checkout, spec)
+        finally:
+            extensions.discard(checkout)
+        assert extensions.update_source("branchy") == spec
+
+    def test_nothing_to_update_from(self, tmp_path):
+        with pytest.raises(ExtensionError, match="No extension"):
+            extensions.update_source("ghost")
+
+    def test_a_failed_swap_keeps_the_old_copy(self, tmp_path, monkeypatch):
+        old = install(tmp_path)
+        folder = make(tmp_path / "v2", {
+            "name": "demo", "prompt": "p.md"}, {"p.md": "new"})
+        checkout = extensions.fetch(f"path@{folder}")
+        real = type(checkout).rename
+
+        def rename(self, target):
+            if self.name.endswith(".incoming"):
+                raise OSError("disk said no")
+            return real(self, target)
+
+        monkeypatch.setattr(type(checkout), "rename", rename)
+        try:
+            with pytest.raises(ExtensionError, match="is kept"):
+                extensions.install(checkout, f"path@{folder}")
+        finally:
+            extensions.discard(checkout)
+        extensions.reload()
+        kept = extensions.find("demo")
+        assert kept is not None and kept.commands
+        assert (old.path / "echo.py").exists()
+
+    def test_cli_update_and_yes(self):
+        args = parse_args(["update", "demo", "-y"])
+        assert args.extension_update == "demo" and args.yes
+        assert parse_args(["update"]).extension_update == ""
+        assert parse_args([]).extension_update is None
+
+
+class TestSecretSettings:
+    def test_a_text_setting_can_be_a_kept_secret(self, tmp_path):
+        from flash import vault
+
+        folder = make(tmp_path / "s", {
+            "name": "keyed", "prompt": "p.md",
+            "settings": [{"id": "key", "label": "Key", "type": "text",
+                          "secret": True}]}, {"p.md": "x"})
+        ext = install(tmp_path, folder)
+        vault.set_secret("API_KEY", "sk-real-value")
+        extensions.set_setting(ext, "key", "{{secret:API_KEY}}")
+        assert extensions.shown_values(ext)["key"] == "{{secret:API_KEY}}"
+        env = extensions.environment(ext)
+        assert env["FLASH_SETTING_KEY"] == "sk-real-value"
+        assert json.loads(env["FLASH_SETTINGS"])["key"] == "sk-real-value"
+        vault.delete("API_KEY")
+        assert extensions.environment(ext)["FLASH_SETTING_KEY"] == ""
+
+    def test_a_typed_secret_is_still_hidden(self, tmp_path):
+        folder = make(tmp_path / "s", {
+            "name": "keyed", "prompt": "p.md",
+            "settings": [{"id": "key", "label": "Key", "type": "text",
+                          "secret": True}]}, {"p.md": "x"})
+        ext = install(tmp_path, folder)
+        extensions.set_setting(ext, "key", "typed-in")
+        assert extensions.shown_values(ext)["key"] == extensions.SECRET_SET
+
+
+SPEAKER = """\
+import json, sys, struct
+asked = json.load(sys.stdin)
+sys.stdout.buffer.write(struct.pack("<4h", 1, 2, 3, len(asked["text"])))
+"""
+
+HEARER = """\
+import sys
+pcm = sys.stdin.buffer.read()
+print("heard", len(pcm), "bytes")
+"""
+
+BRIEFER = """\
+import json
+print(json.dumps([{"title": "Build passed", "body": "All green.",
+                   "id": "b1", "url": "https://example.com/b1"},
+                  {"title": "", "body": ""}]))
+"""
+
+
+class TestSpeechAndBriefing:
+    def speechy(self, tmp_path):
+        return install(tmp_path, make(tmp_path / "sp", {
+            "name": "talky",
+            "speech": [
+                {"name": "aura", "kind": "speaking", "label": "Aura",
+                 "rate": 16000, "run": ["python", "./speak.py"]},
+                {"name": "ears", "kind": "listening",
+                 "run": ["python", "./hear.py"]},
+            ],
+            "briefing": {"run": ["python", "./brief.py"]},
+        }, {"speak.py": SPEAKER, "hear.py": HEARER, "brief.py": BRIEFER}))
+
+    def test_contents(self, tmp_path):
+        lines = self.speechy(tmp_path).contents()
+        assert "voices: @talky/aura" in lines
+        assert "listening models: @talky/ears" in lines
+        assert "cards in the briefing" in lines
+
+    def test_bad_kind(self, tmp_path):
+        make(tmp_path, {"name": "x", "speech": [
+            {"name": "a", "kind": "singing", "run": ["x"]}]})
+        with pytest.raises(ExtensionError, match="kind"):
+            extensions.load(tmp_path)
+
+    def test_voice_and_listening(self, tmp_path, monkeypatch):
+        from flash import voice
+
+        self.speechy(tmp_path)
+        assert [c.name for c in voice.offered("speaking")][0] == \
+            "@talky/aura"
+        assert voice.voice_installed("@talky/aura")
+        assert not voice.voice_installed("@talky/gone")
+        assert voice.engine_of("@talky/aura") == "talky"
+        monkeypatch.setenv("VOICE_PIPER_VOICE", "@talky/aura")
+        wav, why = voice.synthesize("hello")
+        assert not why and wav[:4] == b"RIFF"
+        monkeypatch.setenv("VOICE_VOSK_MODEL", "@talky/ears")
+        assert voice.transcribe(b"\x00\x01" * 10) == ("heard 20 bytes", "")
+        assert voice.wake_model() != "@talky/ears"
+        with pytest.raises(ValueError, match="extension"):
+            voice.remove_model("speaking", "@talky/aura")
+
+    def test_briefing_cards(self, tmp_path):
+        from flash import briefing
+
+        self.speechy(tmp_path)
+        cards = [c for c in briefing.cards() if c["kind"] == "extension"]
+        assert len(cards) == 1
+        assert cards[0]["title"] == "Build passed"
+        assert cards[0]["label"] == "talky"
+        assert cards[0]["url"] == "https://example.com/b1"
+        assert cards[0]["id"] == "extension:talky:b1"

@@ -252,6 +252,32 @@ class Provider:
 
 
 @dataclass
+class Speech:
+    """A voice to speak with, or a model to listen with, run by a
+    program. A voice is given {"text", "pace"} as JSON on stdin and
+    writes the speech to stdout: a WAV file, or raw 16-bit mono audio at
+    RATE. A listening model is given 16 kHz mono 16-bit audio on stdin
+    and writes what was said."""
+
+    name: str
+    kind: str
+    label: str
+    run: list[str]
+    rate: int = 22050
+    timeout: int = DEFAULT_TIMEOUT
+
+
+@dataclass
+class Briefing:
+    """A program that adds cards to the briefing: run when it is read,
+    it writes a JSON list of {"title", "body"}, and maybe "id", "at" (a
+    Unix time), "url" and "label"."""
+
+    run: list[str]
+    timeout: int = 10
+
+
+@dataclass
 class Extension:
     """One installed (or about to be installed) extension."""
 
@@ -272,6 +298,8 @@ class Extension:
     settings: list[Setting] = field(default_factory=list)
     # What it changes of the web page and the terminal (ext_ui.UI).
     ui: Any = None
+    speech: list[Speech] = field(default_factory=list)
+    briefing: Optional[Briefing] = None
 
     def contents(self) -> list[str]:
         """What installing this adds, one line per kind of thing."""
@@ -318,6 +346,14 @@ class Extension:
             lines.append(
                 "settings: " + ", ".join(s.label for s in self.settings)
             )
+        for kind, said in (("speaking", "voices"),
+                           ("listening", "listening models")):
+            names = [s.name for s in self.speech if s.kind == kind]
+            if names:
+                lines.append(f"{said}: " + ", ".join(
+                    f"@{self.name}/{n}" for n in names))
+        if self.briefing is not None:
+            lines.append("cards in the briefing")
         if self.ui is not None:
             lines += self.ui.contents()
 
@@ -555,6 +591,49 @@ def _voice(entry: Any, root: Path) -> Voice:
     )
 
 
+SPEECH_KINDS = ("speaking", "listening")
+
+
+def _speech(entry: Any, root: Path, index: int) -> Speech:
+    where = f"speech[{index}]"
+    if not isinstance(entry, dict):
+        raise ExtensionError(f"{where} has to be an object")
+    name = _text(entry.get("name"), f"{where}.name", required=True).lower()
+    if not NAME_RE.match(name):
+        raise ExtensionError(
+            f"{where}: {name!r} is not a name (lowercase letters, digits, "
+            "- and _)")
+    kind = entry.get("kind")
+    if kind not in SPEECH_KINDS:
+        raise ExtensionError(
+            f'{where}: "kind" is "speaking" (a voice) or "listening"')
+    rate = entry.get("rate", 22050)
+    if not isinstance(rate, int) or isinstance(rate, bool) \
+            or not 8000 <= rate <= 96000:
+        raise ExtensionError(f'{where}: "rate" is a sample rate, in Hz')
+    timeout = DEFAULT_TIMEOUT
+    if entry.get("timeout") is not None:
+        timeout = _timeout(entry.get("timeout"), where)
+    return Speech(
+        name=name, kind=kind,
+        label=_text(entry.get("label"), f"{where}.label") or name,
+        run=_argv(entry.get("run"), root, where), rate=rate,
+        timeout=timeout,
+    )
+
+
+def _briefing(entry: Any, root: Path) -> Briefing:
+    where = '"briefing"'
+    if not isinstance(entry, dict):
+        raise ExtensionError(f"{where} has to be an object")
+    timeout = 10
+    if entry.get("timeout") is not None:
+        # Run while someone waits for the feed to open.
+        timeout = min(_timeout(entry.get("timeout"), where), 30)
+    return Briefing(run=_argv(entry.get("run"), root, where),
+                    timeout=timeout)
+
+
 def _setting(entry: Any, index: int) -> Setting:
     where = f"setting {index + 1}"
     if not isinstance(entry, dict):
@@ -745,6 +824,16 @@ def load(root: Path) -> Extension:
             f"{len(settings)} settings; the most is {MAX_SETTINGS}")
     _unique([s.id for s in settings], "setting")
 
+    speech = [
+        _speech(entry, root, index)
+        for index, entry in enumerate(_entries(manifest, "speech"))
+    ]
+    _unique([s.name for s in speech], "speech model")
+    briefing = (
+        _briefing(manifest["briefing"], root)
+        if manifest.get("briefing") is not None else None
+    )
+
     ui = None
     if manifest.get("ui") is not None:
         from . import ext_ui  # deferred: it reads this module's helpers
@@ -752,10 +841,12 @@ def load(root: Path) -> Extension:
         ui = ext_ui.parse(manifest["ui"], root, {c.name for c in commands})
 
     if not (commands or tools or prompt or backgrounds or providers
-            or themes or loaders or events or voice or ui):
+            or themes or loaders or events or voice or ui or speech
+            or briefing):
         raise ExtensionError(
             f"{MANIFEST} declares nothing: no commands, tools, prompt, "
-            "backgrounds, providers, themes, loaders, events, voice, or ui"
+            "backgrounds, providers, themes, loaders, events, voice, "
+            "speech, briefing, or ui"
         )
 
     try:
@@ -780,6 +871,8 @@ def load(root: Path) -> Extension:
         voice=voice,
         settings=settings,
         ui=ui,
+        speech=speech,
+        briefing=briefing,
     )
 
 
@@ -1041,17 +1134,38 @@ def shown_values(extension: Extension) -> dict[str, Any]:
 
     values = settings_values(extension)
     for setting in extension.settings:
-        if setting.secret:
+        # One of the vault's secrets, by name, is no secret itself: it is
+        # shown as which, so the page can say so.
+        if setting.secret and not secret_ref(values.get(setting.id)):
             values[setting.id] = SECRET_SET if values.get(setting.id) else ""
     return values
 
 
 SECRET_SET = "\u2022" * 8
+# A text setting can be one of the vault's secrets instead of a value of
+# its own: {{secret:NAME}}, handed to its programs as the secret.
+SECRET_REF_RE = re.compile(r"^\{\{secret:([A-Za-z0-9_.-]{1,64})\}\}$")
+
+
+def secret_ref(value: Any) -> str:
+    """The vault secret VALUE names, as {{secret:NAME}}; "" if none."""
+
+    found = SECRET_REF_RE.match(value.strip()) if isinstance(value, str) \
+        else None
+    return found.group(1) if found else ""
 
 
 def _env_value(value: Any) -> str:
     if isinstance(value, bool):
         return "1" if value else "0"
+    if isinstance(value, str) and "{{secret:" in value:
+        from . import vault
+
+        try:
+            return vault.expand(value)
+        except vault.VaultError:
+            # A secret since taken out of the vault: none, not its name.
+            return ""
     return str(value)
 
 
@@ -1060,7 +1174,9 @@ def environment(extension: Extension) -> dict[str, str]:
     env["FLASH_EXTENSION_DIR"] = str(extension.path)
     if extension.settings:
         values = settings_values(extension)
-        env["FLASH_SETTINGS"] = json.dumps(values)
+        env["FLASH_SETTINGS"] = json.dumps(
+            {k: _env_value(v) if isinstance(v, str) else v
+             for k, v in values.items()})
         for setting_id, value in values.items():
             env[f"FLASH_SETTING_{setting_id.upper()}"] = _env_value(value)
     # Run on Flash's own Python, a Python program can import flash too,
@@ -1103,13 +1219,133 @@ def call_tool(extension: Extension, tool: Tool, arguments: dict) -> str:
     return output or "(no output)"
 
 
+# Speech -----------------------------------------------------------------
+
+
+def speech_models(kind: str) -> list[tuple[Extension, Speech]]:
+    """Every installed extension's voices ("speaking") or listening
+    models ("listening")."""
+
+    return [(e, s) for e in installed() for s in e.speech if s.kind == kind]
+
+
+def speech_name(extension: Extension, speech: Speech) -> str:
+    """How Settings and VOICE_* name it: @extension/name."""
+
+    return f"@{extension.name}/{speech.name}"
+
+
+def find_speech(name: str, kind: str = ""
+                ) -> Optional[tuple[Extension, Speech]]:
+    for extension, speech in speech_models(kind) if kind else [
+            (e, s) for e in installed() for s in e.speech]:
+        if speech_name(extension, speech) == name:
+            return extension, speech
+    return None
+
+
+def _run_bytes(extension: Extension, run: list[str], given: bytes,
+               timeout: int, what: str) -> bytes:
+    try:
+        result = subprocess.run(  # nosec B603
+            argv(extension, run), input=given, capture_output=True,
+            timeout=timeout, check=False, env=environment(extension),
+        )
+    except subprocess.TimeoutExpired:
+        raise ExtensionError(
+            f"{what} took longer than {timeout} seconds") from None
+    except OSError as exc:
+        raise ExtensionError(f"could not start {what}: {exc}") from None
+    if result.returncode:
+        why = result.stderr.decode("utf-8", "replace").strip()
+        raise ExtensionError(
+            f"{what} stopped with exit {result.returncode}"
+            + (f": {why.splitlines()[-1]}" if why else ""))
+    return result.stdout
+
+
+def speak_pcm(extension: Extension, speech: Speech, text: str,
+              pace: float = 1.0) -> tuple[bytes, int]:
+    """TEXT said by the extension's voice: 16-bit mono audio, and its
+    sample rate."""
+
+    out = _run_bytes(extension, speech.run, json.dumps(
+        {"text": text, "pace": pace}).encode("utf-8"), speech.timeout,
+        speech_name(extension, speech))
+    if out[:4] == b"RIFF":
+        import io
+        import wave
+
+        with wave.open(io.BytesIO(out)) as wav:
+            if wav.getsampwidth() != 2 or wav.getnchannels() != 1:
+                raise ExtensionError(
+                    f"{speech_name(extension, speech)} has to write 16-bit "
+                    "mono audio")
+            return wav.readframes(wav.getnframes()), wav.getframerate()
+    return out[:len(out) - len(out) % 2], speech.rate
+
+
+def transcribe_pcm(extension: Extension, speech: Speech,
+                   pcm: bytes) -> str:
+    """What was said in PCM (16 kHz mono 16-bit), as the extension's
+    listening model hears it."""
+
+    out = _run_bytes(extension, speech.run, pcm, speech.timeout,
+                     speech_name(extension, speech))
+    return " ".join(out.decode("utf-8", "replace").split())
+
+
+# The briefing --------------------------------------------------------------
+
+
+def briefing_cards() -> list[tuple[Extension, list[dict]]]:
+    """What each extension with a briefing program has for it now, as
+    the program wrote it; one that fails is left out."""
+
+    found = []
+    for extension in installed():
+        if extension.briefing is None:
+            continue
+        try:
+            out = _run_bytes(extension, extension.briefing.run, b"",
+                             extension.briefing.timeout,
+                             f"{extension.name}'s briefing")
+            cards = json.loads(out.decode("utf-8", "replace") or "[]")
+        except (ExtensionError, ValueError):
+            continue
+        if isinstance(cards, dict):
+            cards = [cards]
+        if isinstance(cards, list):
+            found.append((extension, [c for c in cards
+                                      if isinstance(c, dict)]))
+    return found
+
+
 # Installing ------------------------------------------------------------
 
 
+# A branch to install from, after the repository: github@owner/repo#dev.
+BRANCH_RE = re.compile(r"^[A-Za-z0-9._/-]{1,100}$")
+
+
+def split_branch(target: str) -> tuple[str, str]:
+    """TARGET without the branch after its #, and that branch ("" for
+    the repository's default)."""
+
+    where, _, branch = target.partition("#")
+    branch = branch.strip()
+    if branch and (not BRANCH_RE.match(branch) or ".." in branch
+                   or branch.startswith("-")):
+        raise ExtensionError(f"{branch!r} is not a branch name.")
+    return where.strip(), branch
+
+
 def parse_source(spec: str) -> tuple[str, str]:
-    """`github@owner/repo` or `path@folder`, as (kind, target). A path
-    can also be a git bundle, a file with `.bundle` in its name, as
-    `git bundle create` makes to carry a repository about as one file."""
+    """`github@owner/repo`, `git@<any git URL>` or `path@folder`, as
+    (kind, target). A repository can name a branch after a #:
+    `github@owner/repo#dev`, `git@https://host/x.git#next`. A path can
+    also be a git bundle, a file with `.bundle` in its name, as `git
+    bundle create` makes to carry a repository about as one file."""
 
     kind, at, target = spec.strip().partition("@")
     kind = kind.lower()
@@ -1118,25 +1354,43 @@ def parse_source(spec: str) -> tuple[str, str]:
     if not at or not target:
         raise ExtensionError(
             f"{spec!r} is not an extension source. Use "
-            "github@owner/repo, or path@/some/folder or "
-            "path@/some/file.bundle for one on disk."
+            "github@owner/repo, git@<repository URL>, or "
+            "path@/some/folder or path@/some/file.bundle for one on disk."
         )
 
     if kind == "github":
-        target = target.removesuffix("/").removesuffix(".git")
-        if not GITHUB_RE.match(target):
+        where, branch = split_branch(target)
+        where = where.removesuffix("/").removesuffix(".git")
+        if not GITHUB_RE.match(where):
             raise ExtensionError(
-                f"{target!r} is not a GitHub repository; expected "
+                f"{where!r} is not a GitHub repository; expected "
                 "owner/repo"
             )
-        return kind, target
+        return kind, where + (f"#{branch}" if branch else "")
+
+    if kind == "git":
+        where, branch = split_branch(target)
+        # git@github.com:owner/repo.git, as GitHub shows it to copy: the
+        # @ that split it off was the URL's own.
+        if re.match(r"^[\w.-]+:[^/]", where):
+            where = f"git@{where}"
+        # Any host git can clone from: https, ssh (git@host:x/y.git), or
+        # a file:// URL. Never something git would read as an option.
+        if where.startswith("-") or not re.match(
+                r"^(https?://|ssh://|git://|file://|[\w.-]+@[\w.-]+:)",
+                where):
+            raise ExtensionError(
+                f"{where!r} is not a git repository URL: it starts "
+                "https://, ssh://, git://, file://, or user@host:")
+        return kind, where + (f"#{branch}" if branch else "")
 
     if kind == "path":
         return kind, str(Path(target).expanduser().resolve())
 
     raise ExtensionError(
         f"Unknown extension source {kind!r}. Use github@owner/repo, "
-        "path@/some/folder, or path@/some/file.bundle."
+        "git@<repository URL>, path@/some/folder, or "
+        "path@/some/file.bundle."
     )
 
 
@@ -1273,14 +1527,20 @@ def fetch(spec: str) -> Path:
             )
             return checkout
 
+        where, branch = split_branch(target)
+        url = f"https://github.com/{where}.git" if kind == "github" \
+            else where
+        shown = f"github.com/{where}" if kind == "github" else where
         result = _git([
             "clone", "--depth", "1", "--quiet",
-            f"https://github.com/{target}.git", str(checkout),
+            *(["--branch", branch] if branch else []),
+            "--", url, str(checkout),
         ])
         if result.returncode:
             why = _last_line(result)
             raise ExtensionError(
-                f"Could not download github.com/{target}"
+                f"Could not download {shown}"
+                + (f"'s {branch} branch" if branch else "")
                 + (f": {why}" if why else ".")
             )
 
@@ -1289,6 +1549,19 @@ def fetch(spec: str) -> Path:
     except BaseException:
         shutil.rmtree(staging, ignore_errors=True)
         raise
+
+
+def update_source(name: str) -> str:
+    """Where the extension NAME was installed from, to pull it again."""
+
+    extension = find(name)
+    if extension is None:
+        raise ExtensionError(f"No extension called {name!r} is installed.")
+    if not extension.source:
+        raise ExtensionError(
+            f"{extension.name} does not say where it came from, so it "
+            "cannot be pulled again. Install it again from its source.")
+    return extension.source
 
 
 def discard(checkout: Path) -> None:
@@ -1357,28 +1630,43 @@ def install(checkout: Path, spec: str) -> Extension:
     root.mkdir(parents=True, exist_ok=True)
     target = root / extension.name
 
-    # Copied in beside the old one and swapped, so a copy that fails
-    # partway leaves the working version where it was.
+    # Copied in beside the old one and swapped: the old one moves aside,
+    # the new one takes its place, and only then is the old one emptied.
+    # Anything that goes wrong on the way puts the old one back, so an
+    # update never leaves less than there was.
     incoming = root / f".{extension.name}.incoming"
+    previous = root / f".{extension.name}.previous"
     shutil.rmtree(incoming, ignore_errors=True)
     shutil.copytree(checkout, incoming)
 
+    if previous.exists():
+        empty_folder(previous)
+        with contextlib.suppress(OSError):
+            previous.rmdir()
+    moved = False
     if target.exists():
-        left = empty_folder(target)
-        if left:
+        try:
+            target.rename(previous)
+            moved = True
+        except OSError:
+            # Held open (Windows), so it stays where it is: the new
+            # copy goes into it instead, file by file.
+            shutil.copytree(incoming, target, dirs_exist_ok=True)
+            shutil.rmtree(incoming, ignore_errors=True)
+    if not target.exists():
+        try:
+            incoming.rename(target)
+        except OSError as exc:
+            if moved:
+                previous.rename(target)
             shutil.rmtree(incoming, ignore_errors=True)
             raise ExtensionError(
-                f"Could not replace {len(left)} of the old copy's files, "
-                f"such as {left[0]}. Close what has them open and try "
-                "again.")
+                f"Could not put the new copy in place: {exc}. The one "
+                "you had is kept.") from None
+    if moved:
+        empty_folder(previous)
         with contextlib.suppress(OSError):
-            target.rmdir()
-    if target.exists():
-        # Held open, so it stays: the new copy goes into it instead.
-        shutil.copytree(incoming, target, dirs_exist_ok=True)
-        shutil.rmtree(incoming, ignore_errors=True)
-    else:
-        incoming.rename(target)
+            previous.rmdir()
 
     reload()
     return load(target)

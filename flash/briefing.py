@@ -59,6 +59,7 @@ KINDS = {
     "team": "Team",
     "ping": "Mention",
     "notify": "Notification",
+    "extension": "Extension",
 }
 
 
@@ -474,6 +475,36 @@ def _plain(text: str) -> str:
     return text.strip()
 
 
+def _extension_cards(now: float) -> list[dict]:
+    """What extensions add: each one with a briefing program is asked,
+    and one can also call notice("extension", ...) from its own code."""
+
+    from . import extensions
+
+    cards = []
+    for extension, found in extensions.briefing_cards():
+        for index, item in enumerate(found[:MOST_EACH]):
+            title = str(item.get("title") or "")
+            body = str(item.get("body") or "")
+            if not title and not body:
+                continue
+            key = str(item.get("id") or hashlib.sha256(
+                f"{title}\n{body}".encode()).hexdigest()[:16])
+            try:
+                at = float(item.get("at") or now - index)
+            except (TypeError, ValueError):
+                at = now - index
+            url = str(item.get("url") or "")
+            card = _card("extension", f"{extension.name}:{key}", title,
+                         body, at, source=extension.name,
+                         **({"url": url} if url.startswith(
+                             ("https://", "http://")) else {}))
+            card["label"] = _clip(str(item.get("label") or
+                                      extension.name), 40, True)
+            cards.append(card)
+    return cards
+
+
 # --- The feed ------------------------------------------------------------
 
 
@@ -499,6 +530,7 @@ def cards(session: Any = None, now: Optional[float] = None,
         ("chats", lambda: _chat_cards(session, now) if session else []),
         ("connectors", lambda: _news_cards(now)),
         ("pings and notifications", lambda: _notice_cards(now)),
+        ("extensions", lambda: _extension_cards(now)),
     )
     found: list[dict] = []
     for name, source in sources:

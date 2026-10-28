@@ -106,7 +106,7 @@ def wake_model() -> str:
     first."""
 
     name = vosk_model()
-    if not is_moonshine(name):
+    if not is_moonshine(name) and not is_extension(name):
         return name
     for choice in LISTENING:
         if not is_moonshine(choice.name) and listening_installed(
@@ -339,10 +339,41 @@ def piper_paths(name: str = "") -> tuple[Path, Path]:
     return onnx, onnx.with_suffix(".onnx.json")
 
 
+def is_extension(name: str) -> bool:
+    """A voice or listening model from an extension: @extension/name."""
+
+    return str(name or "").startswith("@")
+
+
+def _extension_speech(name: str, kind: str):
+    from . import extensions
+
+    return extensions.find_speech(name, kind)
+
+
+def extension_choices(kind: str) -> list[Choice]:
+    """What extensions add to KIND ("listening" or "speaking"): nothing
+    to download, so no size."""
+
+    from . import extensions
+
+    return [Choice(extensions.speech_name(e, s), 0, s.label)
+            for e, s in extensions.speech_models(kind)]
+
+
+def offered(kind: str) -> tuple[Choice, ...]:
+    """Every model of KIND Settings offers: extensions' first, then
+    Flash's own."""
+
+    return (*extension_choices(kind), *KINDS[kind])
+
+
 def engine_of(name: str) -> str:
     """What runs model NAME: Vosk or Moonshine to listen, Piper or Kokoro
-    to speak."""
+    to speak, or the extension it comes from."""
 
+    if is_extension(name):
+        return str(name)[1:].split("/", 1)[0]
     if is_kokoro(name):
         return "Kokoro"
     if is_moonshine(name):
@@ -397,6 +428,8 @@ def moonshine_ready() -> bool:
 
 
 def listening_installed(name: str) -> bool:
+    if is_extension(name):
+        return _extension_speech(name, "listening") is not None
     if is_moonshine(name):
         return name in MOONSHINE_MODELS and all(
             (MODELS_DIR / name / file).is_file() for file in MOONSHINE_FILES
@@ -405,6 +438,8 @@ def listening_installed(name: str) -> bool:
 
 
 def voice_installed(name: str) -> bool:
+    if is_extension(name):
+        return _extension_speech(name, "speaking") is not None
     paths = kokoro_paths() if is_kokoro(name) else piper_paths(name)
     return all(path.is_file() for path in paths)
 
@@ -706,7 +741,7 @@ def find_model(query: str) -> tuple[str, Choice]:
     wanted = " ".join(str(query or "").split()).lower()
     if not wanted:
         raise ValueError("Name a model. /voice models lists them.")
-    every = [(kind, c) for kind, offered in KINDS.items() for c in offered]
+    every = [(kind, c) for kind in KINDS for c in offered(kind)]
     exact = [(kind, c) for kind, c in every if c.name.lower() == wanted]
     if exact:
         return exact[0]
@@ -739,11 +774,19 @@ def download_model(
     """Fetch the model NAME of KIND. Returns "" once it is in, CANCELLED
     when called off, or why it could not be had."""
 
+    if is_extension(name):
+        # Its extension runs it: nothing to fetch.
+        return "" if model_installed(kind, name) else \
+            f"{name} is not installed: its extension is gone."
     fetch = download_listening if kind == "listening" else download_voice
     return fetch(name, on_progress, stop)
 
 
 def remove_model(kind: str, name: str) -> None:
+    if is_extension(name):
+        raise ValueError(
+            f"{name} comes with an extension: remove the extension to take "
+            "it out.")
     (remove_listening if kind == "listening" else remove_voice)(name)
 
 
@@ -990,9 +1033,55 @@ class MoonshineHearing:
             self._stream.close()
 
 
+class ExtensionHearing:
+    """Hearing through an extension's listening model: the audio is kept
+    as it comes, and heard whole once the speaker stops, so there are no
+    words while they talk."""
+
+    def __init__(self, found) -> None:
+        self._extension, self._speech = found
+        self._pcm = bytearray()
+
+    def feed(self, pcm: bytes) -> str:
+        self._pcm += pcm
+        return ""
+
+    def words(self) -> str:
+        return ""
+
+    def pieces(self) -> list[str]:
+        return []
+
+    def ended(self) -> list[str]:
+        return [self.final()]
+
+    def final(self) -> str:
+        from . import extensions
+
+        if not self._pcm:
+            return ""
+        try:
+            return extensions.transcribe_pcm(
+                self._extension, self._speech, bytes(self._pcm))
+        except extensions.ExtensionError:
+            return ""
+        finally:
+            self._pcm = bytearray()
+
+    def close(self) -> None:
+        self._pcm = bytearray()
+
+
 def _hearing(live: bool = True):
     """What hears speech with the listening model in use. Returns
     `(hearing, "")`, or `(None, reason)` when it cannot be used."""
+
+    if is_extension(vosk_model()):
+        found = _extension_speech(vosk_model(), "listening")
+        if found is None:
+            return None, (f"{vosk_model()} is not installed: its extension "
+                          "is gone. Pick another listening model.")
+        return ExtensionHearing(found), ""
 
     moonshine = is_moonshine(vosk_model())
     try:
@@ -1203,6 +1292,13 @@ def _load_speaker():
     global _speaker
 
     name = piper_voice()
+    if is_extension(name):
+        found = _extension_speech(name, "speaking")
+        if found is None:
+            raise RuntimeError(f"{name} is not installed: its extension is "
+                               "gone. Pick another voice.")
+        voice = _ExtensionVoice(*found)
+        return voice, voice.rate
     if is_kokoro(name):
         if _speaker is None or _speaker[0] != name:
             _speaker = (name, _KokoroVoice(name), KOKORO_RATE)
@@ -1343,11 +1439,46 @@ class _KokoroVoice:
         return (clipped * 32767).astype("<i2").tobytes()
 
 
+class _ExtensionVoice:
+    """An extension's voice, speaking as a Piper voice is asked to."""
+
+    def __init__(self, extension, speech) -> None:
+        self.extension = extension
+        self.speech = speech
+        self.rate = speech.rate
+
+    def pcm(self, text: str, pace: float = 1.0) -> bytes:
+        from . import extensions
+
+        try:
+            pcm, rate = extensions.speak_pcm(
+                self.extension, self.speech, text, pace)
+        except extensions.ExtensionError as exc:
+            raise RuntimeError(str(exc)) from None
+        if rate != self.rate:
+            pcm = _resample(pcm, rate, self.rate)
+        return pcm
+
+
+def _resample(pcm: bytes, rate: int, wanted: int) -> bytes:
+    """16-bit mono PCM at RATE, at WANTED instead: the nearest sample."""
+
+    import array
+
+    samples = array.array("h", pcm[:len(pcm) - len(pcm) % 2])
+    count = int(len(samples) * wanted / rate)
+    out = array.array("h", (samples[min(len(samples) - 1,
+                                        int(i * rate / wanted))]
+                            for i in range(count)))
+    return out.tobytes()
+
+
 def _said(voice, text: str, settings: dict):
     """TEXT in VOICE, with SETTINGS, in whichever API this Piper has, or
-    in Kokoro, which takes the pace and leaves the rest."""
+    in Kokoro or an extension's voice, which take the pace and leave the
+    rest."""
 
-    if isinstance(voice, _KokoroVoice):
+    if isinstance(voice, (_KokoroVoice, _ExtensionVoice)):
         yield voice.pcm(text, settings.get("length_scale", 1.0))
         return
 

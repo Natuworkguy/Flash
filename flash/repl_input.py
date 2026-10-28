@@ -273,8 +273,8 @@ def _voice_completions(rest: str):
     action = action.lower()
     if action in ("pull", "remove"):
         query = after.strip().lower()
-        for kind, offered in voice.KINDS.items():
-            for choice in offered:
+        for kind in voice.KINDS:
+            for choice in voice.offered(kind):
                 if query in choice.name.lower():
                     yield Completion(
                         choice.name, start_position=-len(after),
