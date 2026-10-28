@@ -5,8 +5,7 @@ is. Clicks go through it.
 
 It is drawn by a small process of its own: AppKit through JavaScript
 for Automation on a Mac, WPF through PowerShell on Windows, and four
-thin Tk windows on Linux. It steps out of every screenshot (the model
-never sees it), and it goes away by itself if Flash does.
+thin Tk windows on Linux. It goes away by itself if Flash does.
 """
 
 import contextlib

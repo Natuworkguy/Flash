@@ -535,8 +535,9 @@ def screenshot() -> tuple[bytes, tuple[int, int]]:
     """The main screen, at most MOST_WIDTH wide, as PNG bytes and its
     size. Remembers how its pixels map to the screen's points."""
 
-    with tempfile.TemporaryDirectory(prefix="flash-screen-") as folder, \
-            screenglow.out_of_shot():
+    # The glow stays in the shot: it is the edge of the screen, and
+    # hiding it for each one made it flicker.
+    with tempfile.TemporaryDirectory(prefix="flash-screen-") as folder:
         path = Path(folder) / "screen.png"
         kind = system()
         if kind == "mac":

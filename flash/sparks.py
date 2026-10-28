@@ -3334,7 +3334,10 @@ def shift_rounds_number() -> int:
 
 
 def shift_rounds_unlimited() -> bool:
-    return _saved("SPARK_SHIFT_UNLIMITED").lower() in ("1", "true", "on")
+    """No limit on a shift's rounds of tools, unless the user set one."""
+
+    return _saved("SPARK_SHIFT_UNLIMITED").lower() not in (
+        "0", "false", "off", "no")
 
 
 def shift_rounds() -> Optional[int]:
