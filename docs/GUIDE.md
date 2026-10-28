@@ -262,6 +262,10 @@ python run.py
   reports. `/sparks chat <name> [message]` talks with one. `/sparks teach <name> <lesson>`, `like <name>`, `dislike <name> [why]`, `run`, `pause`, `resume`,
   `every <name> <30m|2h|daily>`, `title <name> <title>` and `remove` look after them.
   `/sparks always on|off` keeps them working with Flash closed.
+  `/sparks takeover` runs them on this Flash when another is running
+  them; `/sparks takeover auto on` does that by itself whenever this
+  Flash starts (off until you turn it on; also a checkbox on the Sparks
+  page's notice). A Flash open on someone's screen is never stopped.
   `/sparks rounds [1-100|unlimited]` shows or sets how many rounds of
   tools a shift gets before it writes its report (12 unless changed;
   also in Settings in the web UI, where the limit can be switched off).

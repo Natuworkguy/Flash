@@ -426,6 +426,45 @@ def _other(beat: Optional[dict]) -> str:
     return ""
 
 
+# Taking over by itself, when Flash starts and another Flash's keeper is
+# running the sparks: off unless the user turned it on.
+AUTO_TAKEOVER = "SPARKS_AUTO_TAKEOVER"
+
+
+def auto_takeover() -> bool:
+    return (os.environ.get(AUTO_TAKEOVER) or "").strip().lower() in (
+        "1", "on", "true", "yes")
+
+
+def set_auto_takeover(on: bool) -> None:
+    from .envfile import set_env_var
+    from .paths import ENV_PATH
+
+    os.environ[AUTO_TAKEOVER] = "1" if on else "0"
+    set_env_var(ENV_PATH, AUTO_TAKEOVER, "1" if on else "0")
+
+
+def take_over_if_wanted(say=None) -> str:
+    """With auto takeover on, run the sparks here in place of another
+    Flash's keeper. What happened, in words ("" for nothing), told to
+    SAY too."""
+
+    if not auto_takeover():
+        return ""
+    beat = sparks.keeper()
+    other = _other(beat)
+    if not other:
+        return ""
+    try:
+        take_over()
+        said = f"Took over your sparks from {other}."
+    except KeepAliveError as exc:
+        said = f"Could not take over your sparks: {exc}"
+    if say is not None:
+        say(said)
+    return said
+
+
 # How long a takeover waits for the keeper it replaced to go, and for
 # this Flash to take its place.
 TAKEOVER_SECONDS = 15.0

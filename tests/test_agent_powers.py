@@ -59,3 +59,25 @@ def test_request_extension_installs_once_allowed(tmp_path, monkeypatch):
     said = tools.request_extension(f"path@{folder}", "for tone")
     assert said.startswith("Installed helper")
     assert extensions.find("helper") is not None
+
+
+def test_auto_takeover_is_off_until_asked(monkeypatch):
+    from flash import keepalive, sparks
+
+    took = []
+    monkeypatch.setattr(sparks, "keeper", lambda: {"pid": 1, "code": "/x"})
+    monkeypatch.setattr(keepalive, "take_over", lambda: took.append(1))
+    monkeypatch.delenv("SPARKS_AUTO_TAKEOVER", raising=False)
+    assert keepalive.take_over_if_wanted() == ""
+    keepalive.set_auto_takeover(True)
+    said = []
+    assert "Took over" in keepalive.take_over_if_wanted(said.append)
+    assert took and said
+
+    def refuse():
+        raise keepalive.KeepAliveError("it is open")
+
+    monkeypatch.setattr(keepalive, "take_over", refuse)
+    assert "it is open" in keepalive.take_over_if_wanted()
+    keepalive.set_auto_takeover(False)
+    assert not keepalive.auto_takeover()

@@ -3707,6 +3707,15 @@ def _sparks_command(arg: str) -> None:
         if action == "takeover":
             from . import keepalive
 
+            if rest.lower().startswith("auto"):
+                said = rest.lower().split()[1:] or [""]
+                if said[0] in ("on", "off"):
+                    keepalive.set_auto_takeover(said[0] == "on")
+                console.print(Text(
+                    "Taking over from another Flash when this one starts: "
+                    + ("on." if keepalive.auto_takeover() else "off."),
+                    style=DIM))
+                return
             try:
                 state = keepalive.take_over()
             except keepalive.KeepAliveError as exc:
@@ -6295,6 +6304,11 @@ def _main() -> None:
     # Sparks work for as long as Flash is open, and the MCP servers start
     # with it, so their tools are there for the first turn and shift.
     sparks.start()
+    from . import keepalive
+
+    threading.Thread(target=keepalive.take_over_if_wanted, kwargs={
+        "say": lambda said: console.print(Text(f"  {said}", style=DIM))},
+        daemon=True).start()
     connectors.start()
     # A spark's @user rings the terminal's bell and shows on the desktop.
     pings.on_ping(_terminal_ping)
