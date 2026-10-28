@@ -1374,9 +1374,11 @@ html[data-nav="back"]::view-transition-new(content) { animation: nav-in-left 0.4
    accent's own warm family. */
 @property --turn { syntax: "<angle>"; inherits: false; initial-value: 0deg; }
 .shell { position: relative; }
-.shell > #composer { position: relative; z-index: 1; }
+.shell > #composer { position: relative; z-index: 1; border-radius: var(--composer-radius, 22px); }
+/* The ring lies exactly on the composer's own border, which steps
+   aside while it shows: one line, not two, at any corner setting. */
 .glow, .shell::after {
-  content: ""; position: absolute; inset: -1px; border-radius: 23px; pointer-events: none;
+  content: ""; position: absolute; inset: 0; border-radius: var(--composer-radius, 22px); pointer-events: none;
   background: conic-gradient(from var(--turn), var(--accent), #e9a15a, #e5708a, var(--accent), #f0c27a, var(--accent));
   opacity: 0; transition: opacity 0.6s var(--ease);
   animation: turn 4s linear infinite;
@@ -1389,6 +1391,7 @@ html[data-nav="back"]::view-transition-new(content) { animation: nav-in-left 0.4
 }
 body.working .glow { opacity: 0.32; }
 body.working .shell::after { opacity: 0.9; }
+body.working .shell > #composer, body.working .shell > #composer:focus-within { border-color: transparent; }
 @keyframes turn { to { --turn: 360deg; } }
 /* A glint of light runs once across the greeting each time the
    welcome screen appears: a copy of its words laid over them, clear
@@ -1748,12 +1751,12 @@ body.page-projects #dock, body.page-settings #dock, body.page-tool #dock { displ
 .look-reset { margin-top: 14px; }
 :root.corners-square { --radius: 4px; }
 :root.corners-square .user { border-radius: 8px; }
-:root.corners-square #composer { border-radius: 8px; }
+:root.corners-square #composer, :root.corners-square .shell { --composer-radius: 8px; }
 :root.corners-square main { border-radius: 6px; }
 :root.corners-square .setting-row, :root.corners-square .loader-card { border-radius: 8px; }
 :root.corners-round { --radius: 18px; }
 :root.corners-round .user { border-radius: 24px 24px 8px 24px; }
-:root.corners-round #composer { border-radius: 30px; }
+:root.corners-round #composer, :root.corners-round .shell { --composer-radius: 30px; }
 :root.corners-round main { border-radius: 22px; }
 :root.corners-round .setting-row, :root.corners-round .loader-card { border-radius: 20px; }
 @media (max-width: 560px) { .appearance { grid-template-columns: 1fr 1fr; } }
@@ -2492,7 +2495,7 @@ body.all-stopped .org-node, body.all-stopped .spark-card { animation: all-halt 0
 .menu .item:hover .fav, .menu .item.sel .fav, .menu .fav.on { opacity: 1; }
 .menu .fav.on { color: var(--accent); }
 .menu .fav:hover { color: var(--text); background: var(--hover); }
-.menu .fav svg { width: 14px; height: 14px; }
+.menu .fav svg { width: 14px; height: 14px; display: block; }
 .menu .menu-note { font-weight: 400; }
 .menu .item.add { color: var(--text-3); }
 .menu .item.add svg { width: 16px; height: 16px; }
@@ -3152,8 +3155,13 @@ body.resizing-viewer iframe { pointer-events: none; }
 }
 .menu .item { display: flex; align-items: center; gap: 10px; width: 100%; padding: 8px 10px; border-radius: 9px; font-size: 14px; text-align: left; color: var(--text-2); }
 .menu .item.sel { background: var(--hover); color: var(--text); }
-.menu .item .check { margin-left: auto; color: var(--accent); }
-.menu .item .check svg { width: 16px; height: 16px; }
+.menu .item .check { margin-left: auto; display: grid; place-items: center; flex: none; color: var(--accent); }
+.menu .item .check svg { width: 16px; height: 16px; display: block; }
+/* The model's name sits high in its line, as the monospace does: a
+   pixel down, level with the star and the check. */
+.menu .item .label.full { position: relative; top: 1px; }
+/* A star and a check: the star pushes them both right, side by side. */
+.menu .item .fav + .check { margin-left: 2px; }
 .menu .item .desc svg { width: 14px; height: 14px; display: block; }
 .menu .empty { padding: 10px; color: var(--text-3); font-size: 13px; }
 .menu .label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -9158,7 +9166,16 @@ async function tcFetch(first = false) {
   teamChat.loading = false;
   if (!teamChat.id || r.team !== teamChat.id) return;
   const log = $("#team-chat .tc-log");
-  const near = log.scrollHeight - log.scrollTop - log.clientHeight < 120;
+  // Followed down only while the reader is at the bottom: one who has
+  // scrolled up to read stays where they are, however much comes in.
+  if (!log.dataset.follows) {
+    log.dataset.follows = "1";
+    log.addEventListener("scroll", () => {
+      teamChat.atEnd = log.scrollHeight - log.scrollTop - log.clientHeight < 32;
+    }, { passive: true });
+  }
+  if (first) teamChat.atEnd = true;
+  const near = teamChat.atEnd !== false;
   if (first && !r.entries.length) {
     log.appendChild(el("div", "tc-empty", `<b>This is the start of ${esc(teamChat.team.name)}'s chat.</b><span>Say hello. ${tcLeadCount() > 1 ? "The leads answer" : "The lead answers"}, or @mention a spark to hear from it. Reports and news from the team land here too, and every spark reads the latest of it on its shifts.</span>`));
   } else if (r.entries.length) {
@@ -9178,7 +9195,9 @@ async function tcFetch(first = false) {
   });
   teamChat.seq = Math.max(teamChat.seq, r.seq);
   tcTyping(r.typing);
-  if (first || near || r.entries.some((e) => e.kind === "user")) log.scrollTo({ top: log.scrollHeight, behavior: first || calm.matches ? "auto" : "smooth" });
+  const mine = r.entries.some((e) => e.kind === "user");
+  if (first || mine || (near && r.entries.length)) log.scrollTo({ top: log.scrollHeight, behavior: first || calm.matches ? "auto" : "smooth" });
+  else if (near) log.scrollTop = log.scrollHeight;
   // Someone is typing, maybe in a keeper elsewhere: look again soon.
   clearTimeout(teamChat.timer);
   teamChat.timer = setTimeout(() => tcFetch(), r.typing.length ? 1500 : 6000);
@@ -13533,7 +13552,15 @@ function bookFrame(k) {
   const lift = Math.sin(t * Math.PI);
   const x = 40 - t * 36;
   const mid = 22 + (x - 22) * 0.5;
-  const turning = k % 12 < 7.5 ? `<path class="sheet" d="M22 3C${f1(mid)} ${f1(1 - lift * 3)} ${f1(x)} ${f1(2.5 - lift * 2.5)} ${f1(x)} ${f1(2.5 - lift * 2.5)}V${f1(19.5 - lift * 2.5)}C${f1(x)} ${f1(19.5 - lift * 2.5)} ${f1(mid)} ${f1(17.5 - lift * 3)} 22 20Z"/>` : "";
+  // The page as it turns, with its lines of text on it: they lift and
+  // narrow with the page, so the words never vanish part way over.
+  let words = "";
+  for (const [row, long] of [[7, 0.85], [10.5, 0.85], [14, 0.6]]) {
+    const from = 22 + (x - 22) * 0.17, to = 22 + (x - 22) * long;
+    words += `M${f1(from)} ${f1(row - lift * 2.6)}L${f1(to)} ${f1(row - lift * 2.8)}`;
+  }
+  const turning = k % 12 < 7.5 ? `<path class="sheet" d="M22 3C${f1(mid)} ${f1(1 - lift * 3)} ${f1(x)} ${f1(2.5 - lift * 2.5)} ${f1(x)} ${f1(2.5 - lift * 2.5)}V${f1(19.5 - lift * 2.5)}C${f1(x)} ${f1(19.5 - lift * 2.5)} ${f1(mid)} ${f1(17.5 - lift * 3)} 22 20Z"/>` +
+    (Math.abs(x - 22) > 3 ? `<path class="faint" d="${words}"/>` : "") : "";
   return `<g transform="translate(${f1(jx * 0.5)} ${f1(jy * 0.5 - 4)})"><path class="sheet" d="M22 3C17 1 9 1 4 3V20C9 18 17 18 22 20Z"/><path class="sheet" d="M22 3C27 1 35 1 40 3V20C35 18 27 18 22 20Z"/><path class="faint" d="M7 7h11M7 10.5h11M7 14h8M26 7h11M26 10.5h11M26 14h9"/>${turning}</g>`;
 }
 
@@ -17045,7 +17072,10 @@ async function copy(text, what, from) {
   // The button says it worked, so there is no toast to read as well.
   if (from) {
     const was = from.innerHTML;
-    from.innerHTML = was.replace(/<svg[\s\S]*?<\/svg>/, icon("check")).replace(/Copy$/, "Copied");
+    // An icon becomes a tick; "Copy" or "Copy link", in words, "Copied".
+    from.innerHTML = /<svg/.test(was)
+      ? was.replace(/<svg[\s\S]*?<\/svg>/, icon("check")).replace(/Copy$/, "Copied")
+      : was.replace(/^Copy\b.*$/, "Copied");
     flash(from, "done", 1300);
     clearTimeout(from._restore);
     from._restore = setTimeout(() => { from.innerHTML = was; }, 1300);

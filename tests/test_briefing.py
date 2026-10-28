@@ -8,6 +8,8 @@ import pytest
 from flash import briefing, computer, mail, sparks, waits, web
 
 NOW = time.mktime((2026, 10, 23, 9, 0, 0, 0, 0, -1))
+# The real one: every test has a stand-in (see conftest).
+NEW_WAITING = briefing.new_waiting
 
 
 @pytest.fixture(autouse=True)
@@ -348,3 +350,17 @@ def test_pings_and_notifications_come_as_cards():
     from flash import briefing_view
 
     assert briefing_view.actions(ping)[0] == "reply"  # nosec B101
+
+
+def test_reading_something_has_the_dot_looked_at_again(monkeypatch):
+    briefing._new.update(value=True, at=time.time(), running=False)
+    looked = []
+    monkeypatch.setattr(briefing, "has_new",
+                        lambda session=None: looked.append(1) or False)
+    monkeypatch.setattr(briefing.threading, "Thread",
+                        lambda target, daemon: SimpleNamespace(
+                            start=target))
+    assert NEW_WAITING() is True and not looked  # nosec B101
+    briefing.stale()
+    NEW_WAITING()
+    assert looked and NEW_WAITING() is False  # nosec B101

@@ -106,6 +106,7 @@ def dismiss(card_ids: Iterable[str], now: Optional[float] = None) -> int:
             if card_id:
                 kept[str(card_id)[:200]] = now
         workspace._write(DISMISSED, kept)
+    stale()
     return len(kept)
 
 
@@ -181,6 +182,13 @@ def new_waiting(session: Any = None,
 
         threading.Thread(target=look, daemon=True).start()
     return bool(_new["value"])
+
+
+def stale() -> None:
+    """Something was read or dismissed: the dot is looked at again next
+    time it is asked, not once NEW_EVERY is up."""
+
+    _new["at"] = 0.0
 
 
 def last_since(now: Optional[float] = None) -> float:
