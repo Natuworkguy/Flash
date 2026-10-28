@@ -4762,6 +4762,42 @@ def calendar_tool(action: str = "list", start: str = "", end: str = "",
 TUTOR_ACTIONS = ("add", "measure", "plan", "graph", "subjects", "forget")
 
 
+def listen_to_audio(path: str) -> str:
+    """An audio file, measured: loudness, silence, pitch, tone, tempo."""
+
+    from . import sound
+
+    tool_line(f"ListenToAudio({path})")
+    try:
+        result = sound.describe(sound.listen(path))
+    except (sound.SoundError, OSError, subprocess.SubprocessError) as exc:
+        result = f"Error: {exc}"
+        tool_result(result, style=ERROR)
+        return result
+    tool_result(result.splitlines()[0])
+    return result
+
+
+def make_sound(notes: str, out: str = "sound.wav", wave: str = "sine",
+               bpm: Any = 120, volume: Any = 0.5) -> str:
+    """A WAV played from a short score."""
+
+    from . import sound
+
+    tool_line(f"MakeSound({notes[:40]})")
+    try:
+        made = sound.make(notes, Path(out or "sound.wav"), wave,
+                          float(bpm or 120),
+                          float(volume if volume is not None else 0.5))
+    except (sound.SoundError, ValueError, OSError) as exc:
+        result = f"Error: {exc}"
+        tool_result(result, style=ERROR)
+        return result
+    result = f"Made {made['path']}: {made['seconds']:g} s."
+    tool_result(result)
+    return result
+
+
 def make_video(html: str = "", out: str = "video.mp4", seconds: Any = 0,
                fps: Any = 0, width: Any = 0, height: Any = 0) -> str:
     """An HTML composition, rendered frame by frame to an MP4."""
@@ -6330,6 +6366,52 @@ tools: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "listen_to_audio",
+            "description": (
+                "Hear an audio file (wav, mp3, m4a, ogg, flac, or a "
+                "video's sound) as measurements: length, loudness, "
+                "clipping, silence and where the sound is, its pitch as a "
+                "note, how bright it sounds, and its tempo. For speech, "
+                "transcribe it instead."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {"path": {"type": "string"}},
+                "required": ["path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "make_sound",
+            "description": (
+                "Make a WAV from a score: notes like C4, F#3 or Eb5 (or a "
+                "number of Hz) separated by spaces; C4+E4+G4 is a chord; "
+                ":2 after one holds it two beats; rest is silence. "
+                "\"C4 E4 G4 C5:2\" is a rising arpeggio. For alerts, "
+                "jingles, tones and test signals."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "notes": {"type": "string"},
+                    "out": {"type": "string", "description": (
+                        "Where to save the .wav (sound.wav here).")},
+                    "wave": {"type": "string", "enum": [
+                        "sine", "square", "saw", "triangle", "noise"]},
+                    "bpm": {"type": "number",
+                            "description": "Beats a minute (120)."},
+                    "volume": {"type": "number",
+                               "description": "0 to 1 (0.5)."},
+                },
+                "required": ["notes"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "make_video",
             "description": (
                 "Make an MP4 from an HTML composition: write a page that "
@@ -7224,6 +7306,8 @@ FUNCTIONS = {
     "calendar": calendar_tool,
     "tutor": tutor,
     "make_video": make_video,
+    "listen_to_audio": listen_to_audio,
+    "make_sound": make_sound,
     "play_music": play_music,
     "request_connector": request_connector,
     "request_extension": request_extension,
