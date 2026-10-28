@@ -1347,7 +1347,9 @@ def test_the_latest_report_is_rated_from_the_terminal():
 
 def test_a_shift_gets_as_many_tool_rounds_as_the_user_set(monkeypatch):
     monkeypatch.delenv("SPARK_SHIFT_ROUNDS", raising=False)
-    assert sparks.shift_rounds() == sparks.SHIFT_ROUNDS_DEFAULT
+    # No limit until the user sets one.
+    assert sparks.shift_rounds() is None
+    assert sparks.shift_rounds_number() == sparks.SHIFT_ROUNDS_DEFAULT
 
     assert sparks.set_shift_rounds("3") == 3
     made = sparks.create("Scout", "Watch the issues.")

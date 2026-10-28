@@ -1,6 +1,7 @@
 """REPL input with a dropdown menu of slash-command suggestions."""
 
 import asyncio
+import contextlib
 import json
 import os
 import shutil
@@ -1629,8 +1630,13 @@ class Dock:
         with self._cv:
             while self._in_prompt:
                 app = self._app
-                if app is not None and not app.is_done:
-                    app.loop.call_soon_threadsafe(self._aside, app)
+                # An app still starting has no loop yet: it is asked once
+                # it has one, on the next pass.
+                loop = getattr(app, "loop", None) if app is not None \
+                    else None
+                if loop is not None and not app.is_done:
+                    with contextlib.suppress(RuntimeError):
+                        loop.call_soon_threadsafe(self._aside, app)
                 self._cv.wait(timeout=0.05)
 
     @staticmethod
