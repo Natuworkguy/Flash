@@ -89,3 +89,50 @@ def test_the_user_can_take_the_browser_from_another_thread(tmp_path):
     finally:
         browser.take_control(False)
         browser.close_session()
+
+
+def _dash():
+    from pathlib import Path
+
+    from flash import browser
+
+    pytest.importorskip("playwright")
+    game = Path(__file__).parent.parent / "flash" / "games" / "dash.html"
+    why = browser.open_page(game.as_uri(), width=900, height=420, wait_ms=100)
+    if why:
+        pytest.skip(why)
+    return browser
+
+
+def test_a_reflex_runs_every_frame_and_sees_the_canvas():
+    browser = _dash()
+    try:
+        # Doing nothing, the square runs into the first spike.
+        said, why = browser.play(
+            "api.memory.red = api.memory.red || "
+            "api.find('#ff3b5c', 236, 0, api.width) >= 0;",
+            seconds=5, until="window.dash.over && document.title",
+            start_keys=["r"])
+        assert not why
+        assert "crashed at" in said
+        assert "actions" in said
+    finally:
+        browser.close_session()
+
+
+@pytest.mark.skipif(
+    not __import__("os").environ.get("FLASH_SLOW_TESTS"),
+    reason="twenty seconds of real time: FLASH_SLOW_TESTS=1 runs it")
+def test_the_agents_reflex_beats_flash_dash():
+    from pathlib import Path
+
+    policy = (Path(__file__).parent.parent / "flash" / "games"
+              / "dash-policy.js").read_text()
+    browser = _dash()
+    try:
+        said, why = browser.play(policy, seconds=40, start_keys=["r"],
+                                 until="window.dash.over && document.title")
+        assert not why
+        assert "Flash Dash: won" in said
+    finally:
+        browser.close_session()

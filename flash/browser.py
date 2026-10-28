@@ -1317,6 +1317,63 @@ def inspect(target: str, properties: Optional[list] = None) -> tuple[str, str]:
     return "\n".join(parts), ""
 
 
+# Real time --------------------------------------------------------------
+
+# A game that moves sixty times a second cannot wait for a model to look
+# and think between frames. So the model writes a reflex instead: a short
+# JavaScript policy the page runs every frame, reading the canvas's
+# pixels and pressing keys or clicking, faster than any person, for as
+# long as it is asked. It watches how the run went, changes the policy,
+# and runs again.
+MOST_PLAY_SECONDS = 120
+
+
+def _play_js() -> str:
+    return (Path(__file__).parent / "web" / "play.js").read_text(
+        encoding="utf-8")
+
+
+def _play(policy: str, seconds: float = 20, until: str = "",
+          canvas: str = "", start_keys: Optional[list] = None
+          ) -> tuple[str, str]:
+    """Run POLICY every frame for SECONDS, or until UNTIL is true.
+    Returns (what happened, "") or ("", why not)."""
+
+    if not is_open():
+        return "", NO_PAGE
+    if taken():
+        return "", TAKEN
+    seconds = max(0.5, min(float(seconds or 20), MOST_PLAY_SECONDS))
+    page = _session.page
+    try:
+        found = page.evaluate(
+            _play_js(),
+            [policy, seconds, until or "", canvas or "",
+             [str(k) for k in start_keys or []]])
+    except Exception as exc:  # noqa: BLE001
+        return "", _first_line(exc)
+    if found.get("error") and not found.get("frames"):
+        return "", found["error"]
+    lines = [
+        f"Ran {found['frames']} frames in {found['seconds']}s, "
+        f"{found['actions']} actions"
+        + (f"; stopped: {found['stopped']}" if found.get("stopped") else "")
+        + ".",
+        f"The page's title now: {found.get('title') or '(none)'}",
+    ]
+    if not found.get("canvas"):
+        lines.append("There is no canvas on the page: px and find see "
+                     "nothing; act on the page with tap and click.")
+    if found.get("error"):
+        lines.append(f"The policy threw: {found['error']}")
+    if found.get("log"):
+        lines.append("What it logged:\n" + "\n".join(found["log"]))
+    return "\n".join(lines), ""
+
+
+play = None  # made below, on the browser's thread
+
+
 # One thread for the browser ------------------------------------------------
 
 # Playwright's objects answer only on the thread that made them, and the
@@ -1437,6 +1494,7 @@ def _user_act(kind: str, x: float = 0, y: float = 0, text: str = "",
 
 
 viewport = _on_browser_thread(_viewport)
+play = _on_browser_thread(_play)
 live_frame = _on_browser_thread(_live_frame)
 user_act = _on_browser_thread(_user_act)
 
