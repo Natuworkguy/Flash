@@ -31,13 +31,15 @@ is a failure, shown to the user as Ollama's own errors are.
 from __future__ import annotations
 
 import base64
+import itertools
 import json
+import os
 import subprocess  # nosec B404 -- running the extension's program
 import threading
 import time
 from collections.abc import Iterator
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 import ollama
 from ollama import ChatResponse, ListResponse, ResponseError, ShowResponse
@@ -403,25 +405,87 @@ def chat(
 # The client -------------------------------------------------------------
 
 
+def _peeked(pieces: Iterator) -> Iterator:
+    """PIECES, with the first taken already: a stream that fails at once
+    fails here, where another model can still be tried."""
+
+    try:
+        first = next(pieces)
+    except StopIteration:
+        return iter(())
+    return itertools.chain([first], pieces)
+
+
+def _why(exc: BaseException) -> str:
+    said = str(getattr(exc, "error", "") or exc).strip().splitlines()
+    return (said[0] if said else exc.__class__.__name__)[:200]
+
+
 class Client:
     """An ollama.Client that also knows the providers' models: a chat
-    with one of them goes to its provider, they are listed beside
-    Ollama's, and shown from what their provider said. Everything else
-    is Ollama's, untouched."""
+    with one of them goes to its provider, they are listed first, beside
+    Ollama's, and shown from what their provider said. A chat with
+    "auto" goes to the model Auto picks, and one that fails goes on down
+    its fallbacks (modelchain.py). Everything else is Ollama's,
+    untouched.
 
-    def __init__(self, inner: ollama.Client) -> None:
+    What it did of its own accord, Auto's pick or a fallback, waits in
+    take_notes() for whoever shows the turn."""
+
+    def __init__(self, inner: ollama.Client, host: str = "") -> None:
         self._inner = inner
+        self._host = host
+        self._notes: list[dict] = []
 
     def __getattr__(self, name: str):
         return getattr(self._inner, name)
 
-    def chat(self, *args, **kwargs):
-        model = kwargs.get("model", args[0] if args else "")
+    def take_notes(self) -> list[dict]:
+        taken, self._notes = self._notes, []
+        return taken
+
+    def _one(self, model: str, **kwargs):
         if not routed(model):
-            return self._inner.chat(*args, **kwargs)
-        kwargs.pop("model", None)
-        rest = dict(zip(("messages", "tools", "stream", "think"), args[1:]))
-        return chat(model, **{**rest, **kwargs})
+            return self._inner.chat(model=model, **kwargs)
+        return chat(model, **kwargs)
+
+    def chat(self, *args, **kwargs):
+        from . import modelchain  # deferred: it reads the workspace
+
+        kwargs = {**dict(zip(("model", "messages", "tools", "stream",
+                              "think"), args)), **kwargs}
+        model = str(kwargs.pop("model", "") or "")
+        model, how = modelchain.resolve(
+            self._host, model, kwargs.get("messages"),
+            default=os.getenv("MODEL", ""))
+        if how:
+            self._notes.append({"kind": "auto", "model": model, "how": how})
+        chain = [model, *modelchain.fallbacks(model)]
+        stream = bool(kwargs.get("stream"))
+        failed: list[tuple[str, str]] = []
+        last: Optional[BaseException] = None
+        for name in chain:
+            try:
+                answer = self._one(name, **kwargs)
+                if stream:
+                    answer = _peeked(iter(answer))
+            except (KeyboardInterrupt, SystemExit):
+                raise
+            except Exception as exc:
+                if len(chain) == 1:
+                    raise
+                failed.append((name, _why(exc)))
+                last = exc
+                continue
+            if failed:
+                self._notes.append({"kind": "fallback", "model": name,
+                                    "failed": failed})
+            return answer
+        raise ResponseError(
+            "Every model failed: " + "; ".join(
+                f"{name} ({why})" for name, why in failed),
+            getattr(last, "status_code", -1),
+        )
 
     def list(self) -> ListResponse:
         extra = [
@@ -432,13 +496,23 @@ class Client:
             return self._inner.list()
         try:
             found = list(self._inner.list().models)
-        except (OSError, ResponseError, ValueError):
-            # Ollama down, with providers to offer: offer those.
+        except Exception:  # noqa: BLE001  (Ollama down, or not here at all)
+            # With providers to offer: offer those.
             found = []
-        # Ollama's listing as it came, not checked over again.
-        return ListResponse.model_construct(models=[*found, *extra])
+        # The providers' first, then Ollama's listing as it came, not
+        # checked over again.
+        return ListResponse.model_construct(models=[*extra, *found])
 
     def show(self, model: str) -> ShowResponse:
+        from . import modelchain
+
+        if modelchain.is_auto(model):
+            # Whatever Auto picks: said to do all of it.
+            return ShowResponse.model_validate({
+                "capabilities": ["completion", "tools", "vision",
+                                 "thinking"],
+                "parameters": "", "model_info": {},
+            })
         if not routed(model):
             return self._inner.show(model)
         payload = show_payload(model)
@@ -462,4 +536,5 @@ def client(host: str) -> Client:
 
     from . import workspace  # deferred: only a client needs its key
 
-    return Client(ollama.Client(host=host, **workspace.client_options(host)))
+    return Client(ollama.Client(host=host, **workspace.client_options(host)),
+                  host)

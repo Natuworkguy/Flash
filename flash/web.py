@@ -76,6 +76,7 @@ from . import (
     loaders,
     meeting,
     memory,
+    modelchain,
     pings,
     progress,
     providers,
@@ -2772,6 +2773,9 @@ def stream_reply(
         stream=True,
         **asked,
     )
+    # Auto's pick, or a model that failed and the one that took over.
+    for said in modelchain.notes(client):
+        session.emit(chat, {"type": "note", "text": said})
 
     try:
         for part in parts:
@@ -3917,9 +3921,11 @@ def list_models(ai) -> Optional[list[str]]:
         return None
 
     models = getattr(found["listed"], "models", None) or []
+    # Extensions' models first, then Ollama's.
     return sorted(
-        str(getattr(m, "model", "") or "") for m in models
-        if getattr(m, "model", "")
+        (str(getattr(m, "model", "") or "") for m in models
+         if getattr(m, "model", "")),
+        key=lambda name: (not name.startswith("@"), name),
     )
 
 
@@ -4305,6 +4311,22 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
     if name == "briefing-undo":
         briefing.undismiss(arg)
         return {}
+
+    if name == "fallbacks":
+        # Every model's fallbacks, and ARG's, or the default's.
+        model = arg.strip() or ai.Config.model or ""
+        return {"chains": modelchain.all_fallbacks(), "model": model,
+                "chain": modelchain.fallbacks(model),
+                "auto": modelchain.auto_models(ai.Config.host,
+                                               ai.Config.model or "")}
+
+    if name == "fallbacks-set":
+        try:
+            chain = modelchain.set_fallbacks(
+                arg, [str(m) for m in body.get("chain") or []])
+        except ValueError as exc:
+            raise ValueError(str(exc)) from None
+        return {"model": arg, "chain": chain}
 
     if name == "ext-command":
         # An extension's slash command, typed in the box: a prompt one
