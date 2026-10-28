@@ -4835,6 +4835,32 @@ def request_connector(name: str, target: str, why: str = "",
     return result
 
 
+def search_files(query: str, folder: str = ".", limit: int = 8) -> str:
+    """The passages in a folder that best answer QUERY, numbered for
+    citing."""
+
+    from . import ai, filesearch, providers
+
+    tool_line(f"SearchFiles({query})"
+              + (f" in {folder}" if folder not in ("", ".") else ""))
+    try:
+        client = providers.client(ai.Config.host)
+    except Exception:  # noqa: BLE001  (words alone, then)
+        client = None
+    try:
+        hits, how = filesearch.search(query, folder or ".",
+                                      _clamp(limit, 1, 20, 8), client)
+    except (ValueError, OSError) as exc:
+        result = f"Error: {exc}"
+        tool_result(result, style=ERROR)
+        return result
+    tool_result(f"{len(hits)} passages, by {how}")
+    if not hits:
+        return filesearch.cited(hits, folder)
+    return ("Cite these as [e1], [e2]... where the answer uses them.\n\n"
+            + filesearch.cited(hits, folder or "."))
+
+
 def request_extension(source: str, why: str = "") -> str:
     """Ask the user to install a Flash extension; in UltraAuto, install
     it."""
@@ -6281,6 +6307,30 @@ tools: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "search_files",
+            "description": (
+                "Find the passages in a folder of files (notes, documents, "
+                "PDFs, code) that answer a question, by its words and its "
+                "meaning, rather than an exact pattern as grep does. Each "
+                "comes numbered [eN] with its file and lines: cite them."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string",
+                              "description": "The question, in words."},
+                    "folder": {"type": "string",
+                               "description": "The folder (default: here)."},
+                    "limit": {"type": "integer",
+                              "description": "How many passages (8)."},
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "request_extension",
             "description": (
                 "Ask the user to install a Flash extension, as "
@@ -7021,6 +7071,7 @@ FUNCTIONS = {
     "play_music": play_music,
     "request_connector": request_connector,
     "request_extension": request_extension,
+    "search_files": search_files,
     "web_search": web_search,
     "fetch": fetch,
     "get_os": get_os,
