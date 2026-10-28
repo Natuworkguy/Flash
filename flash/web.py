@@ -3839,6 +3839,7 @@ def status(ai) -> dict:
         # turns, and every one there is to pick from.
         "loader": loaders.chosen(),
         "loader_morph": loaders.morphing(),
+        "loader_eggs": loaders.eggs_on(),
         "loader_tasks": loaders.tasks_shown(),
         "think_auto": tools_think_auto(),
         # Whether an extension follows voice mode: if none does, the page
@@ -4923,6 +4924,18 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
         return {"ultra_allowed": bool(ai.Config.ultra_allowed),
                 "auto": bool(ai.Config.no_command_confirmation),
                 "mode": ai.mode()}
+
+    if name == "system-one-reviews":
+        return {"reviews": list(reversed(systemone.reviews()[-30:]))}
+
+    if name == "system-one-rate":
+        try:
+            rated = systemone.rate_review(
+                arg, str(body.get("rating") or ""),
+                str(body.get("why") or ""), str(body.get("reason") or ""))
+        except systemone.SystemOneError as exc:
+            raise ValueError(str(exc)) from None
+        return {"review": rated}
 
     if name == "system-one":
         # No arg: only what it is, for Settings. "models" scans the
@@ -6536,7 +6549,8 @@ def start_background(
     which interfaces a server listens on is fixed when it opens.
     """
 
-    if _background is not None and _background.lan == lan:
+    if _background is not None and _background.lan == lan and (
+            port is None or _background.server_address[1] == port):
         return _background
 
     stop_background()

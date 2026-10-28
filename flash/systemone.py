@@ -534,6 +534,8 @@ class Verdict:
     safe: float
     on_task: Optional[float]
     model: str
+    # Its entry in the review log, to be rated by.
+    id: str = ""
 
     @property
     def reason(self) -> str:
@@ -578,6 +580,12 @@ def review(
             "criteria": ON_TASK_ANSWERS,
         }
 
+    # What the user said of earlier reviews, so it learns where it was
+    # too careful, or not careful enough.
+    lessons = feedback()
+    if lessons:
+        state["user_feedback_on_earlier_reviews"] = lessons
+
     use = model()
     answers = ask(host, state, questions, use)
     safe = _probability(answers.get("safe"))
@@ -589,7 +597,99 @@ def review(
         on_task is None or on_task >= REVIEW_THRESHOLD
     )
     _tally(allowed)
-    return Verdict(allowed, safe, on_task, use)
+    verdict = Verdict(allowed, safe, on_task, use)
+    verdict.id = _log_review(tool, shown, verdict)
+    return verdict
+
+
+# --- The review log, and the user's ratings of it ----------------------------
+
+REVIEWS_FILE = "systemone-reviews.json"
+REVIEWS_KEPT = 200
+LESSONS = 8
+_reviews_lock = threading.Lock()
+
+
+def _reviews_path() -> Path:
+    from .paths import FLASH_DIR
+
+    return FLASH_DIR / REVIEWS_FILE
+
+
+def reviews() -> list[dict]:
+    """The reviews System One made, oldest first: {id, at, tool,
+    arguments, allowed, reason, model, rating, why}."""
+
+    try:
+        found = json.loads(_reviews_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    return [r for r in found if isinstance(r, dict)] \
+        if isinstance(found, list) else []
+
+
+def _save_reviews(found: list[dict]) -> None:
+    path = _reviews_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(found[-REVIEWS_KEPT:], indent=1),
+                    encoding="utf-8")
+
+
+def _log_review(tool: str, shown: str, verdict: Verdict) -> str:
+    import time
+    import uuid
+
+    entry = {"id": uuid.uuid4().hex[:8], "at": time.time(), "tool": tool,
+             "arguments": _clip(shown, 300), "allowed": verdict.allowed,
+             "reason": verdict.reason, "model": verdict.model,
+             "rating": "", "why": ""}
+    with _reviews_lock:
+        try:
+            _save_reviews([*reviews(), entry])
+        except OSError:
+            return ""
+    return entry["id"]
+
+
+def rate_review(review_id: str = "", rating: str = "", why: str = "",
+                reason: str = "") -> dict:
+    """The user's word on a review: "good" (it judged right), "bad" (it
+    did not), or "" to take it back. By REVIEW_ID, or the latest one
+    that stopped a call for REASON, or the latest stop of all."""
+
+    if rating not in ("good", "bad", ""):
+        raise SystemOneError("Rate a review good or bad.")
+    with _reviews_lock:
+        found = reviews()
+        if review_id:
+            pick = next((r for r in found if r["id"] == review_id), None)
+        else:
+            pick = next((r for r in reversed(found) if not r.get("allowed")
+                         and (not reason or r.get("reason") == reason)),
+                        None)
+        if pick is None:
+            raise SystemOneError("There is no such review.")
+        pick["rating"] = rating
+        pick["why"] = str(why or "").strip()[:300]
+        _save_reviews(found)
+    return pick
+
+
+def feedback() -> list[str]:
+    """The user's latest ratings, as lines System One reads."""
+
+    out = []
+    for r in reversed(reviews()):
+        if not r.get("rating"):
+            continue
+        did = "allowed" if r.get("allowed") else "stopped"
+        right = "right" if r["rating"] == "good" else "wrong"
+        line = (f"You {did} {r.get('tool')} {r.get('arguments', '')}; the "
+                f"user said that was {right}")
+        out.append(line + (f": {r['why']}" if r.get("why") else "."))
+        if len(out) >= LESSONS:
+            break
+    return out
 
 
 _counts = {"reviewed": 0, "stopped": 0}

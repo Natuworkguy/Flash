@@ -179,6 +179,37 @@ BUILTIN: tuple[Loader, ...] = (
     ),
 )
 
+# Never offered in a list: about one wait in EGG_CHANCE, Flash would
+# rather not, and says so. /loader procrastinate has it every time;
+# LOADER_EGGS=0 never.
+EGG = Loader(
+    "procrastinate", "Procrastinating",
+    ("(-_-)   z", "(-_-)  zZ", "(-_-) zZz", "(o_o)  ▯ ", "(o_o) ▯· ",
+     "(-_-)   z"),
+    ("(-_-)   z", "(-_-)  zZ", "(-_-) zZz", "(o_o)  [] ", "(o_o) []. ",
+     "(-_-)   z"), 0.32,
+    "A stick figure on the couch, scrolling instead",
+)
+EGG_WORD = "Procrastinating"
+EGG_CHANCE = 1 / 40
+EGGS_SETTING = "LOADER_EGGS"
+
+
+def eggs_on() -> bool:
+    return (os.environ.get(EGGS_SETTING) or "1").strip().lower() not in (
+        "0", "off", "false", "no")
+
+
+def egg(rng: Optional[random.Random] = None) -> Optional[Loader]:
+    """The easter egg for this wait, when it is its turn: always while
+    it is the chosen loader, else now and then."""
+
+    if chosen() == EGG.id:
+        return EGG
+    roll = (rng or random).random()  # nosec B311 -- for looks
+    return EGG if eggs_on() and roll < EGG_CHANCE else None
+
+
 # While Flash does one of these (the last tool since the user spoke was
 # one of its tools), its loader shows instead of the chosen one, with
 # its word: a quill writing, a magnifier searching.
@@ -228,7 +259,7 @@ def find(loader_id: str) -> Optional[Loader]:
     wanted = (loader_id or "").strip().lower()
     return next(
         (
-            loader for loader in all_loaders()
+            loader for loader in [*all_loaders(), EGG]
             if loader.id == wanted or loader.name.lower() == wanted
         ),
         None,
