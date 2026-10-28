@@ -4844,7 +4844,8 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
         session.hub.publish({"type": "status"})
         return {"background": scene["name"], "scene": scene}
 
-    if name in ("connectors", "connector-add", "connector-remove",
+    if name in ("connectors", "connector-add", "connector-edit",
+                "connector-remove",
                 "connector-switch", "connector-reload"):
         return _connector_command(name, arg, body)
 
@@ -5205,18 +5206,23 @@ def _connector_command(name: str, arg: str, body: dict) -> dict:
     to them. Never a token: only the names of what each is given."""
 
     try:
+        env: dict = {}
+        for line in str(body.get("env") or "").splitlines():
+            if not line.strip():
+                continue
+            if "=" not in line:
+                raise connectors.ConnectorError(
+                    f"{line.strip()!r} is not KEY=VALUE."
+                )
+            key, value = line.split("=", 1)
+            env[key.strip()] = value.strip()
         if name == "connector-add":
-            env: dict = {}
-            for line in str(body.get("env") or "").splitlines():
-                if not line.strip():
-                    continue
-                if "=" not in line:
-                    raise connectors.ConnectorError(
-                        f"{line.strip()!r} is not KEY=VALUE."
-                    )
-                key, value = line.split("=", 1)
-                env[key.strip()] = value.strip()
-            connectors.add(arg, str(body.get("target") or ""), env)
+            connectors.add(arg, str(body.get("target") or ""), env,
+                           str(body.get("start") or ""))
+        elif name == "connector-edit":
+            connectors.edit(arg, str(body.get("target") or ""), env,
+                            str(body.get("start") or ""),
+                            str(body.get("rename") or ""))
         elif name == "connector-remove":
             connectors.remove(arg)
         elif name == "connector-switch":

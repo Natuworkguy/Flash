@@ -986,7 +986,21 @@ A command is a program Flash starts on this computer and talks to over
 its standard input and output; a URL is a server elsewhere, spoken to
 over HTTP. `/mcp env` gives a command its environment and a URL its
 headers. In the web UI, Settings > Connectors does the same, shows each
-one's tools, and turns them on and off.
+one's tools, turns them on and off, and edits them (keys keep their
+values unless you type new ones; `/mcp edit` in the terminal).
+
+A server of your own that you start, then reach at an address, is both:
+a start command Flash runs first (and stops with itself), and the URL
+it connects to once that answers.
+
+```text
+/mcp add mine localhost:1234/mcp --start python mymcp/server.py
+/mcp add mine run mymcp/server.py then connect to localhost:1234/mcp
+```
+
+A `.py` file runs on Flash's own Python. In Settings, Start command
+shows under the URL. If the program stops before it answers, the
+connector says why, with the last lines it printed.
 
 They are kept in `~/.flash/mcp.json`, readable only by you, in the
 `mcpServers` shape other MCP clients use, so a config written for one of

@@ -385,3 +385,83 @@ def test_a_team_chat_answer_has_the_reading_tools_and_refresh(fake,
     # Nowhere to ask in a team chat: a tool that changes things waits for
     # autonomous mode, and is refused if called anyway.
     assert "fake__note" not in offered  # nosec B101
+
+
+STARTED_SERVER = """\
+import json, sys, time
+from http.server import BaseHTTPRequestHandler, HTTPServer
+time.sleep(0.8)  # a server that takes a moment to come up
+
+class H(BaseHTTPRequestHandler):
+    def log_message(self, *a):
+        pass
+
+    def do_POST(self):
+        m = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+        if "id" not in m:
+            self.send_response(202); self.end_headers(); return
+        if m["method"] == "initialize":
+            r = {"protocolVersion": "2025-06-18", "capabilities": {},
+                 "serverInfo": {"name": "mine"}}
+        else:
+            r = {"tools": [{"name": "hello", "inputSchema": {
+                "type": "object", "properties": {}}}]}
+        b = json.dumps({"jsonrpc": "2.0", "id": m["id"], "result": r})
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        self.wfile.write(b.encode())
+
+HTTPServer(("127.0.0.1", int(sys.argv[1])), H).serve_forever()
+"""
+
+
+def test_a_start_command_then_its_url(tmp_path, monkeypatch):
+    import socket
+
+    for name in ("HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy"):
+        monkeypatch.delenv(name, raising=False)
+    script = tmp_path / "server.py"
+    script.write_text(STARTED_SERVER)
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+    # As it would be said: run it, then connect.
+    connectors.add("mine", f'run "{script}" {port} then connect to '
+                           f"localhost:{port}/mcp")
+    spec = connectors.read_config()["mine"]
+    assert spec["url"] == f"http://localhost:{port}/mcp"
+    assert spec["start"]["command"] == sys.executable
+    found = ready("mine", 20)
+    assert found["state"] == connectors.READY, found
+    assert connectors.find("mine__hello") is not None
+    assert found["target"] == spec["url"]
+    assert str(script) in found["start"]
+    running = next(s for s in connectors.servers() if s.name == "mine")
+    process = running._process
+    connectors.stop_all()
+    assert process.poll() is not None
+
+
+def test_a_start_command_that_dies_says_so(tmp_path):
+    script = tmp_path / "broken.py"
+    script.write_text("import sys\nprint('no port given')\nsys.exit(3)\n")
+    connectors.add("broken", "http://127.0.0.1:9/mcp", None,
+                   f'"{script}"')
+    found = ready("broken", 20)
+    assert found["state"] == connectors.FAILED
+    assert "exit 3" in found["why"]
+    assert "no port given" in found["said"]
+
+
+def test_editing_keeps_secret_values():
+    connectors.add("ed", "http://example.com/mcp", {"Authorization": "t"})
+    connectors.edit("ed", "https://example.org/mcp", {"Authorization": ""},
+                    rename="ed2")
+    found = connectors.read_config()
+    assert "ed" not in found
+    assert found["ed2"] == {"url": "https://example.org/mcp",
+                            "headers": {"Authorization": "t"}}
+    with pytest.raises(connectors.ConnectorError):
+        connectors.edit("nope", "x")
+    connectors.remove("ed2")

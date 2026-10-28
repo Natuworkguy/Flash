@@ -1628,6 +1628,8 @@ body.page-projects #dock, body.page-settings #dock, body.page-tool #dock { displ
 .email-default-note { font-size: 12.5px; color: var(--text-3); margin: 10px 0 0; }
 .email-card .what { flex: 1; }
 .email-actions { display: flex; flex-wrap: wrap; gap: 6px; flex: none; align-self: center; }
+.email-form .field[hidden] { display: none; }
+.email-form .field > span i { font-style: normal; color: var(--text-3); font-weight: 400; }
 .email-form-title { font-size: 14px; font-weight: 600; margin: 0 0 12px; }
 .field input[readonly] { color: var(--text-3); }
 @media (max-width: 640px) { .email-card { flex-wrap: wrap; } .email-actions { width: 100%; padding-left: 50px; } }
@@ -13299,40 +13301,63 @@ function connectorCard(body, server) {
     try { drawConnectors(body, await command("connector-remove", server.name)); toast(`Removed ${server.name}`); }
     catch (error) { showFailure(error); }
   };
-  card.querySelector(".email-actions").append(remove);
+  const edit = el("button", "btn small", "Edit");
+  edit.type = "button";
+  edit.onclick = () => drawConnectorForm(body, server);
+  card.querySelector(".email-actions").append(edit, remove);
   return card;
 }
 
-function drawConnectorForm(body) {
+// Adding a connector, or with SERVER, changing one: its name, what it
+// runs or reaches, a command to start first for a URL, and its keys,
+// whose values are never shown (left empty, a key keeps its value).
+function drawConnectorForm(body, server = null) {
   const host = body.querySelector(".conn-form-host");
   host.innerHTML = `<form class="email-form" autocomplete="off">
-    <h3 class="email-form-title">Add a connector</h3>
+    <h3 class="email-form-title">${server ? "Edit the connector" : "Add a connector"}</h3>
     <label class="field"><span>Name</span><input name="name" class="mono" placeholder="github" required pattern="[A-Za-z0-9_-]{1,32}"><small>Letters, digits, - and _. Its tools are called name__tool.</small></label>
-    <label class="field"><span>Command or URL</span><input name="target" class="mono" placeholder="npx -y @modelcontextprotocol/server-github" required><small>A command Flash starts on this computer, or the address of a server elsewhere.</small></label>
-    <label class="field"><span>Keys</span><textarea name="env" class="mono" rows="3" placeholder="GITHUB_PERSONAL_ACCESS_TOKEN=..."></textarea><small>One KEY=VALUE a line: what the command is given, or for a URL, the headers it is sent (Authorization=Bearer ...). Kept in the config file, readable only by you.</small></label>
+    <label class="field"><span>Command or URL</span><input name="target" class="mono" placeholder="npx -y @modelcontextprotocol/server-github" required><small>A command Flash starts on this computer, or the address of a server: <code>localhost:1234/mcp</code> works too.</small></label>
+    <label class="field conn-start"><span>Start command <i>(optional, with a URL)</i></span><input name="start" class="mono" placeholder="python mymcp/server.py"><small>Run first, and stopped with Flash: once it serves the URL above, Flash connects to it.</small></label>
+    <label class="field"><span>Keys</span><textarea name="env" class="mono" rows="3" placeholder="GITHUB_PERSONAL_ACCESS_TOKEN=..."></textarea><small>One KEY=VALUE a line: what the command is given, or for a URL, the headers it is sent (Authorization=Bearer ...). Kept in the config file, readable only by you.${server ? " A key with nothing after = keeps the value it has." : ""}</small></label>
     <div class="form-error"></div>
-    <div class="buttons"><button type="button" class="btn" data-cancel>Cancel</button><button type="submit" class="btn primary">Add</button></div>
+    <div class="buttons"><button type="button" class="btn" data-cancel>Cancel</button><button type="submit" class="btn primary">${server ? "Save" : "Add"}</button></div>
   </form>`;
+  const startRow = host.querySelector(".conn-start");
+  const isUrl = (v) => /^(https?:\/\/|localhost|127\.|\[::1\]|[\w-]+\.[\w.-]+(:\d+)?\/)/i.test(v.trim());
   const form = host.querySelector("form");
+  const field = (n) => form.querySelector(`[name="${n}"]`);
+  const showStart = () => { startRow.hidden = !isUrl(field("target").value) && !field("start").value; };
+  field("target").addEventListener("input", showStart);
+  if (server) {
+    field("name").value = server.name;
+    field("target").value = server.target || server.where;
+    field("start").value = server.start || "";
+    field("env").value = (server.secrets || []).map((k) => `${k}=`).join("\n");
+  }
+  showStart();
   const error = form.querySelector(".form-error");
   form.querySelector("[data-cancel]").onclick = () => drawConnectors(body);
   form.onsubmit = async (ev) => {
     ev.preventDefault();
     const submit = form.querySelector("[type=submit]");
     submit.disabled = true;
-    submit.textContent = "Adding…";
+    submit.textContent = server ? "Saving…" : "Adding…";
     error.textContent = "";
+    const name = field("name").value.trim();
     try {
-      const c = await command("connector-add", form.name.value.trim(), null, { target: form.target.value, env: form.env.value });
-      toast(`Added ${form.name.value.trim()}`);
+      const c = server
+        ? await command("connector-edit", server.name, null, { target: field("target").value, start: field("start").value, env: field("env").value, rename: name })
+        : await command("connector-add", name, null, { target: field("target").value, start: field("start").value, env: field("env").value });
+      toast(server ? `Saved ${name}` : `Added ${name}`);
       drawConnectors(body, c);
     } catch (err) {
       richText(error, err.message);
       submit.disabled = false;
-      submit.textContent = "Add";
+      submit.textContent = server ? "Save" : "Add";
     }
   };
-  form.name.focus();
+  field("name").focus();
+  host.scrollIntoView({ block: "nearest", behavior: calm.matches ? "auto" : "smooth" });
 }
 
 async function drawMemory(body) {
