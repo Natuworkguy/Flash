@@ -4230,6 +4230,10 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
             chat.seen = len(chat.log)
             if chat.log:
                 workspace.save_chat(chat.saved())
+            # Its card may have been all the briefing's dot was for.
+            briefing.stale()
+            if getattr(session, "hub", None) is not None:
+                session.hub.publish({"type": "status"})
         return {}
 
     if name == "briefing-mark-read":
@@ -5406,6 +5410,7 @@ def _spark_command(name: str, arg: str, body: dict) -> dict:
             spark = sparks.set_paused(arg, name == "spark-pause")
         elif name == "spark-read":
             spark = sparks.mark_read(arg)
+            briefing.stale()
         elif name == "spark-teach":
             at = body.get("at")
             spark = sparks.teach(
