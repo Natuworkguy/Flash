@@ -1110,7 +1110,11 @@ the wrong thing, and never to type passwords or card numbers.
 
 It asks before it takes your computer, every reply that wants it, even
 in autonomous mode; only UltraAuto skips the question. A yes lasts that
-one reply. While Flash has the computer, a soft glow breathes around the
+one reply. Saying no, you can say why (a box beside Deny in the web UI,
+a line after `n` in the terminal), and Flash takes that into account
+instead of guessing. If the screen has gone to sleep, Flash wakes it
+before its first step; it cannot get past a locked screen, and the
+screenshot shows it that. While Flash has the computer, a soft glow breathes around the
 edges of your screen, so it is plain whose mouse it is; clicks go
 through it. Then:
 
@@ -1168,6 +1172,36 @@ typed into next, and the JavaScript errors the page threw, with a
 screenshot attached. The `eval` action runs JavaScript against the live
 page and returns the result, which is how the AI inspects state a picture
 cannot show.
+
+In the web UI the browser shows in the side panel as Flash works.
+**Take control** there makes it yours: the page plays live, and your
+clicks, scrolls and typing go to it (type an address into the bar to go
+somewhere). Flash waits while you have it, log in for it, say, or get
+past a cookie wall, and **Hand back** gives it back; Flash looks again
+before its next step.
+
+### Real-time games
+
+A game that moves sixty times a second cannot wait for a model to look
+and think between frames. So with `play_realtime` the AI writes a
+reflex instead: a few lines of JavaScript the page runs every frame,
+reading the canvas's pixels and pressing keys or clicking, for as long
+as it asks. It sees how the run went (frames, actions, what it logged,
+a screenshot), changes the reflex and runs it again, the way a person
+practises.
+
+```prompt
+Open flash-dash and beat it.
+```
+
+`flash-dash` is a demo that comes with Flash: a square that runs on its
+own, spikes to jump, bars hanging low that a jump under hits, and a
+speed-up halfway, with jump windows a few frames wide. Jumping a fixed
+distance before each spike gets about halfway. The reflex in
+`flash/games/dash-policy.js` beats it every time: it measures the speed
+from how far the spikes move between frames, works out every frame a
+jump could start on and still land clear, and jumps in the middle of
+them.
 
 Both tools need Playwright's Chromium, which `install.sh` and
 `install.ps1` download for you. Installing Flash another way means

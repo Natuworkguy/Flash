@@ -356,7 +356,8 @@ def ultra_auto() -> bool:
 # whole: a trim through the middle of it takes away the very numbers the
 # next click has to name.
 _SELF_LIMITING_TOOLS = {
-    "read", "open_page", "interact", "devtools", "check_inbox",
+    "read", "open_page", "interact", "devtools", "play_realtime",
+    "check_inbox",
     "read_email",
 }
 
@@ -4413,6 +4414,10 @@ def open_page(
     shape = f"{view_width}x{view_height}"
     tool_line(f"OpenPage({target}, {shape})")
 
+    # The demo game that ships with Flash, by name.
+    if str(target).strip().lower() in GAMES:
+        target = str(GAMES[str(target).strip().lower()])
+
     url, why = resolve_target(target)
     if url is None:
         result = f"Error: {why}"
@@ -4490,6 +4495,34 @@ def interact(
         return result
 
     return _page_report(note, full_page=bool(full_page))
+
+
+GAMES = {"flash-dash": Path(__file__).parent / "games" / "dash.html"}
+
+
+def play_realtime(policy: str, seconds: Any = 20, until: str = "",
+                  canvas: str = "", start_keys: Any = None) -> str:
+    """Run a reflex the model wrote, every frame, in the open page: for a
+    game that moves faster than a turn can look and think."""
+
+    policy = str(policy or "")
+    tool_line(f"PlayRealtime({_clamp(seconds, 1, 120, 20)}s, "
+              f"{len(policy)} chars)")
+    if not policy.strip():
+        result = "Error: give the policy, JavaScript run every frame."
+        tool_result(result, style=ERROR)
+        return result
+    keys = start_keys if isinstance(start_keys, list) else [
+        k for k in str(start_keys or "").split(",") if k]
+    said, why = page_devtools.play(
+        policy, seconds=_clamp(seconds, 1, 120, 20), until=str(until or ""),
+        canvas=str(canvas or ""), start_keys=keys)
+    if why:
+        result = _page_report(f"That did not run: {why}")
+        tool_result(why, style=ERROR)
+        return result
+    tool_result(said.splitlines()[0])
+    return _page_report(said)
 
 
 DEVTOOLS_ACTIONS = ("network", "request", "console", "run", "inspect")
@@ -5873,6 +5906,54 @@ tools: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "play_realtime",
+            "description": (
+                "Play a real-time game, or drive anything too fast to take "
+                "a turn per move, in the page open_page opened. You cannot "
+                "look and think once a frame, so write a reflex: "
+                "JavaScript the page runs every frame, reading the canvas's "
+                "pixels and pressing keys or clicking, then see how the run "
+                "went (frames, actions, what it logged, the page's title, "
+                "a screenshot) and improve it. The policy gets `api`: "
+                "api.px(x, y) -> [r, g, b]; api.find(colour, y, x0, x1, "
+                "tol) -> first x of that colour on row y, or -1; "
+                "api.runs(colour, y, x0, x1, tol) -> [[x0, x1], ...] every "
+                "run of it; api.findDown(colour, x, y0, y1, tol) -> first "
+                "y down column x; api.tap(key), api.press(key), "
+                "api.release(key), api.click(x, y), api.move(x, y) in the "
+                "canvas's pixels; api.memory, kept across frames; api.t "
+                "seconds and api.frame; api.log(...) to see later; "
+                "api.width and api.height. Colours as \"#rrggbb\". Look "
+                "at a screenshot first to learn the colours and where "
+                "things are; measure speeds from how far things move "
+                "between frames. open_page('flash-dash') opens a demo: a "
+                "precise jumping game to practise on."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "policy": {"type": "string", "description": (
+                        "The body of a function of api, run every frame.")},
+                    "seconds": {"type": "integer", "description": (
+                        "How long to run it, at most 120. Default 20.")},
+                    "until": {"type": "string", "description": (
+                        "A JavaScript expression of api that ends the run "
+                        "when true, such as document.title.includes('won')"
+                        " or the game over.")},
+                    "canvas": {"type": "string", "description": (
+                        "A selector for the canvas to read, when there is "
+                        "more than one. The first by default.")},
+                    "start_keys": {"type": "string", "description": (
+                        "Keys tapped once before it starts, comma "
+                        "separated, such as r to restart.")},
+                },
+                "required": ["policy"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "devtools",
             "description": (
                 "A browser's developer tools, for the page open_page has "
@@ -6537,6 +6618,7 @@ FUNCTIONS = {
     "open_page": open_page,
     "interact": interact,
     "devtools": devtools,
+    "play_realtime": play_realtime,
     "web_search": web_search,
     "fetch": fetch,
     "get_os": get_os,

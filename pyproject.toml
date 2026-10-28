@@ -43,6 +43,7 @@ flash = [
     "thinking_states.json",
     "suggestions.json",
     "backgrounds/*.scene",
+    "games/*.html",
     "web/*.html",
     "web/*.js",
     "web/*.woff2",

@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Flash Dash</title>
+<style>
+  :root { color-scheme: dark; }
+  html, body { margin: 0; height: 100%; background: #0e0f16; color: #e8e6f0; font: 15px/1.4 system-ui, sans-serif; }
+  body { display: grid; place-items: center; }
+  .wrap { display: flex; flex-direction: column; align-items: center; gap: 10px; }
+  canvas { display: block; border-radius: 12px; box-shadow: 0 10px 40px -10px #000; }
+  .say { color: #9a98ad; font-size: 13px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <canvas id="game" width="800" height="300" aria-label="Flash Dash"></canvas>
+  <div class="say" id="say">Space, Up or a click jumps. One try per run: R starts over.</div>
+</div>
+<script>
+// Flash Dash: a square runs right on its own; Space, Up or a click jumps.
+// Spikes in tight runs, and bars hanging low that a jump under them hits,
+// with spikes right after: jump a frame early and the bar has you, a frame
+// late and the spikes do. Past the middle it runs faster. The level is
+// the same every time, and the simulation steps at a fixed rate whatever
+// the screen's, so timing is all that matters.
+const W = 800, H = 300, GROUND = 240, SIZE = 30, PX = 150;
+const SPEED = 360, FAST = 430, SPEEDUP = 3800, GRAVITY = 2400, JUMP = 640, STEP = 1 / 240;
+const SPIKE = 30, BAR = GROUND - SIZE - 45;
+const COLORS = { sky: "#151726", ground: "#2b2d42", line: "#565a7a", spike: "#ff3b5c", bar: "#7c5cff", player: "#ffd23f", eye: "#151726" };
+// Spikes ("s", where, how many) and hanging bars ("c", where, how long),
+// in the level's pixels.
+const LEVEL = [
+  ["s", 700, 1], ["s", 1060, 2], ["s", 1400, 3],
+  ["c", 1800, 150], ["s", 1980, 2],
+  ["s", 2400, 4], ["s", 2640, 1],
+  ["c", 3050, 200], ["s", 3280, 1],
+  ["s", 3600, 4], ["s", 3840, 1],
+  ["c", 3950, 140], ["s", 4120, 3],
+  ["s", 4520, 4], ["s", 4760, 2],
+  ["c", 5200, 230], ["s", 5460, 2],
+  ["s", 5850, 4], ["s", 6090, 1],
+  ["c", 6480, 180], ["s", 6690, 3],
+  ["s", 7100, 4], ["s", 7340, 2],
+];
+const END = 7900;
+const canvas = document.getElementById("game");
+const ctx = canvas.getContext("2d", { willReadFrequently: true });
+const state = { x: 0, y: 0, vy: 0, ground: true, over: false, won: false, jumps: 0, held: false };
+window.dash = state;
+
+const ALL = LEVEL.filter(([k]) => k === "s").flatMap(([, at, n]) => Array.from({ length: n }, (_, k) => at + k * SPIKE));
+const BARS = LEVEL.filter(([k]) => k === "c").map(([, at, n]) => [at, at + n]);
+
+function jump() {
+  if (state.over) return;
+  if (state.ground) { state.vy = -JUMP; state.ground = false; state.jumps++; }
+}
+function reset() { Object.assign(state, { x: 0, y: 0, vy: 0, ground: true, over: false, won: false, jumps: 0 }); document.title = "Flash Dash"; }
+
+addEventListener("keydown", (e) => {
+  if (e.code === "Space" || e.code === "ArrowUp" || e.key === " ") { e.preventDefault(); jump(); }
+  if (e.key === "r" || e.key === "R") reset();
+});
+canvas.addEventListener("mousedown", jump);
+
+function step(dt) {
+  if (state.over) return;
+  state.x += (state.x >= SPEEDUP ? FAST : SPEED) * dt;
+  if (!state.ground) {
+    state.vy += GRAVITY * dt;
+    state.y += state.vy * dt;
+    if (state.y >= 0) { state.y = 0; state.vy = 0; state.ground = true; }
+  }
+  // Hit: the square's box against each spike's inner box, as forgiving
+  // as the eye expects and no more.
+  const left = state.x + PX, right = left + SIZE, bottom = GROUND + state.y;
+  for (const s of ALL) {
+    if (s + SPIKE < left - SIZE || s > right) continue;
+    const inLeft = s + 8, inRight = s + SPIKE - 8, top = GROUND - SPIKE + 10;
+    if (right > inLeft && left < inRight && bottom > top) { state.over = true; document.title = `Flash Dash: crashed at ${progress()}%`; return; }
+  }
+  for (const [a, b] of BARS) {
+    if (right > a && left < b && bottom - SIZE < BAR) { state.over = true; document.title = `Flash Dash: crashed at ${progress()}%`; return; }
+  }
+  if (state.x >= END) { state.over = true; state.won = true; document.title = "Flash Dash: won"; }
+}
+const progress = () => Math.min(100, Math.floor((state.x / END) * 100));
+state.progress = progress;
+
+function draw() {
+  ctx.fillStyle = COLORS.sky; ctx.fillRect(0, 0, W, H);
+  ctx.fillStyle = COLORS.ground; ctx.fillRect(0, GROUND, W, H - GROUND);
+  ctx.fillStyle = COLORS.line; ctx.fillRect(0, GROUND, W, 2);
+  ctx.fillStyle = COLORS.spike;
+  for (const s of ALL) {
+    const x = s - state.x;
+    if (x < -SPIKE || x > W) continue;
+    ctx.beginPath(); ctx.moveTo(x, GROUND); ctx.lineTo(x + SPIKE / 2, GROUND - SPIKE); ctx.lineTo(x + SPIKE, GROUND); ctx.fill();
+  }
+  ctx.fillStyle = COLORS.bar;
+  for (const [a, b] of BARS) {
+    const x = a - state.x, w = b - a;
+    if (x + w < 0 || x > W) continue;
+    ctx.fillRect(x, 0, w, BAR);
+  }
+  const finish = END - state.x + PX + SIZE;
+  if (finish < W) { ctx.fillStyle = "#3ddc97"; ctx.fillRect(finish, 0, 6, GROUND); }
+  ctx.fillStyle = COLORS.player; ctx.fillRect(PX, GROUND - SIZE + state.y, SIZE, SIZE);
+  ctx.fillStyle = COLORS.eye; ctx.fillRect(PX + 18, GROUND - SIZE + state.y + 8, 6, 6);
+  ctx.fillStyle = "#e8e6f0"; ctx.font = "600 14px system-ui"; ctx.fillText(`${progress()}%`, 14, 24);
+  if (state.over) { ctx.fillStyle = state.won ? "#3ddc97" : COLORS.spike; ctx.font = "700 28px system-ui"; ctx.fillText(state.won ? "Level complete" : "Crashed. R to retry", 270, 120); }
+}
+
+let last = performance.now(), carry = 0;
+function frame(now) {
+  carry += Math.min(0.1, (now - last) / 1000);
+  last = now;
+  while (carry >= STEP) { step(STEP); carry -= STEP; }
+  draw();
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
