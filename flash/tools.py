@@ -4759,6 +4759,57 @@ def calendar_tool(action: str = "list", start: str = "", end: str = "",
     return result
 
 
+TUTOR_ACTIONS = ("add", "measure", "plan", "graph", "subjects", "forget")
+
+
+def tutor(action: str = "plan", subject: str = "",
+          propositions: Optional[list] = None, id: str = "",
+          right: Any = False, limit: Any = 5) -> str:
+    """What the user is learning, as a graph of propositions: teach and
+    test them in order, and keep track of what they know."""
+
+    from . import tutor as graph
+
+    action = str(action or "plan").strip().lower()
+    tool_line(f"Tutor({action} {subject} {id}".strip() + ")")
+    try:
+        if action == "add":
+            added = graph.add(subject, propositions or [])
+            result = f"Added {len(added)}: " + ", ".join(added) + "."
+        elif action == "measure":
+            said = graph.measure(subject, id, _truthy(right))
+            result = (f"{said['id']}: now {said['known']:.0%} known"
+                      + (", known" if said["is_known"] else "")
+                      + f"; review in {said['review_in_days']} days.")
+        elif action == "plan":
+            steps = graph.plan(subject, _clamp(limit, 1, 20, 5))
+            result = "\n".join(
+                f"{s['do']} {s['id']} ({s['known']:.0%}): {s['text']}"
+                for s in steps) or "Everything is known, and no review " \
+                "is due: add what comes next."
+        elif action == "graph":
+            held = graph.describe(subject)
+            result = "\n".join(
+                [f"{held['subject']}: {held['known']} of {held['of']} known."]
+                + [f"{p['id']} ({p['known']:.0%})"
+                   + (f" needs {', '.join(p['needs'])}" if p["needs"] else "")
+                   + f": {p['text']}" for p in held["propositions"]])
+        elif action == "subjects":
+            result = ", ".join(graph.subjects()) or "Nothing yet."
+        elif action == "forget":
+            graph.forget(subject)
+            result = f"Forgot {subject}."
+        else:
+            result = "Error: action is one of " + ", ".join(TUTOR_ACTIONS) \
+                + "."
+    except graph.TutorError as exc:
+        result = f"Error: {exc}"
+        tool_result(result, style=ERROR)
+        return result
+    tool_result(result.splitlines()[0][:120])
+    return result
+
+
 def make_project(name: str = "", path: str = "",
                  instructions: str = "") -> str:
     """Make a project of the work in this chat, and move the chat in."""
@@ -6250,6 +6301,46 @@ tools: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "tutor",
+            "description": (
+                "Teach the user a subject and track what they know. 'add' "
+                "cuts it into propositions, each one checkable claim with "
+                "an id and the ids it needs first. 'plan' says what to do "
+                "next: teach (new), practice (shaky) or review (due). Teach "
+                "one, then ask one question on it, and 'measure' whether "
+                "they got it right; never tell them the answer before they "
+                "try. 'graph' shows it all; 'subjects' lists them."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string",
+                               "enum": list(TUTOR_ACTIONS)},
+                    "subject": {"type": "string"},
+                    "propositions": {
+                        "type": "array",
+                        "description": "For add.",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "id": {"type": "string"},
+                                "text": {"type": "string"},
+                                "needs": {"type": "array",
+                                          "items": {"type": "string"}}},
+                            "required": ["id", "text"]}},
+                    "id": {"type": "string",
+                           "description": "The proposition, for measure."},
+                    "right": {"type": "boolean",
+                              "description": "Whether they got it right."},
+                    "limit": {"type": "integer"},
+                },
+                "required": ["action"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "make_project",
             "description": (
                 "Make the work in this chat a project, and move the chat "
@@ -7068,6 +7159,7 @@ FUNCTIONS = {
     "play_realtime": play_realtime,
     "make_project": make_project,
     "calendar": calendar_tool,
+    "tutor": tutor,
     "play_music": play_music,
     "request_connector": request_connector,
     "request_extension": request_extension,
