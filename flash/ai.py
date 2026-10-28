@@ -4540,6 +4540,68 @@ def _calendar_google() -> None:
                        style=f"bold {ACCENT}"))
 
 
+def _compare_command(arg: str) -> None:
+    """/compare a vs b: prompt, blind; /compare board, the tally."""
+
+    from rich.markdown import Markdown
+    from rich.panel import Panel
+
+    from . import compare
+
+    if arg.strip() in ("board", "tally", "scores"):
+        lines = compare.standings()
+        for line in lines or ["No comparisons yet. " + compare.USAGE]:
+            console.print(Text(f"  {line}", style=DIM))
+        return
+    try:
+        models, prompt = compare.parse(arg)
+    except ValueError as exc:
+        warn(str(exc))
+        return
+    with console.status("Both are answering", spinner="dots"):
+        done = compare.run(_client(), models, prompt, _chat_options())
+    for label, said in zip(("A", "B"), done["answers"]):
+        console.print(Panel(Markdown(said or "(nothing)"), title=label,
+                            title_align="left", border_style=DIM))
+    choice = console.input(Text("  Which is better? a, b or tie: ",
+                                style=DIM)).strip().lower()[:3]
+    try:
+        told = compare.pick(done["id"], choice)
+    except ValueError as exc:
+        warn(str(exc))
+        return
+    line = Text(f"  A was {told['a']}, B was {told['b']}.",
+                style=f"bold {ACCENT}")
+    console.print(line)
+
+
+def _model_fit(client) -> None:
+    """/model fit: which models on this machine fit it, and how big a
+    model it could take."""
+
+    from . import hardware
+
+    here = hardware.machine()
+    console.print(Text(f"  This computer: {here.describe()}. It runs "
+                       f"{here.biggest()} quickly.", style=DIM))
+    try:
+        listed = getattr(client.list(), "models", None) or []
+    except Exception as exc:  # noqa: BLE001  (Ollama not answering)
+        warn(f"  Ollama did not answer: {exc}")
+        return
+    style = {hardware.FITS: ACCENT, hardware.TIGHT: WARN,
+             hardware.TOO_BIG: ERROR}
+    for model in listed:
+        size = int(getattr(model, "size", 0) or 0)
+        said = hardware.fit(size)
+        line = Text(f"  {getattr(model, 'model', '')}")
+        if size:
+            line.append(f"  {size / hardware.GB:.1f} GB", style=DIM)
+        if said:
+            line.append(f"  {said}", style=style[said])
+        console.print(line)
+
+
 def _fallbacks_command(arg: str) -> None:
     """/fallbacks lists them; /fallbacks a > b > c sets a's; /fallbacks
     clear a takes them off; * stands for every model."""
@@ -6676,6 +6738,10 @@ def _main() -> None:
                     _pin_model(action.lower() == "pin", named.strip())
                     continue
 
+                if action.lower() == "fit":
+                    _model_fit(client)
+                    continue
+
                 from . import modelchain
 
                 if arg and modelchain.is_auto(arg):
@@ -6728,6 +6794,10 @@ def _main() -> None:
 
             if uin == "/secret" or uin.startswith("/secret "):
                 _secret_command(uin[len("/secret"):].strip())
+                continue
+
+            if uin == "/compare" or uin.startswith("/compare "):
+                _compare_command(uin[len("/compare"):].strip())
                 continue
 
             if uin == "/calendar" or uin.startswith("/calendar "):

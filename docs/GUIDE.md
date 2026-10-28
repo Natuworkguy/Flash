@@ -196,6 +196,13 @@ python run.py
   Connecting Google needs an OAuth client of your own (Google Cloud
   console: turn on the Google Calendar API, then make a Desktop app
   client); its secret and the sign-in are kept in the vault.
+- `/compare a vs b: question`: Both models answer it, shown as A and B in
+  an order chosen at random; you pick the better (or call it even), and
+  only then see which was which. `/compare board` is the tally, which
+  says over time which model does best for what you ask.
+- `/model fit`: How much this computer can run quickly (its memory, its
+  graphics card's), and whether each of your models fits, is tight, or
+  is too big. The web UI's model menu marks the tight and too big ones.
 - `/fallbacks model > another > a third`: When a model fails before it
   answers (its host is down, its provider errors, it is not there),
   Flash tries the next, then the next, then gives up; a note says so.

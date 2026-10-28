@@ -3950,6 +3950,9 @@ def _spark_default(models: Optional[list[str]]) -> dict:
     }
 
 
+MODEL_SIZES: dict[str, int] = {}
+
+
 def list_models(ai) -> Optional[list[str]]:
     """The models on the current host, or None if it did not answer."""
 
@@ -3970,6 +3973,9 @@ def list_models(ai) -> Optional[list[str]]:
         return None
 
     models = getattr(found["listed"], "models", None) or []
+    # Their sizes, for whether each fits this computer.
+    MODEL_SIZES.update({str(getattr(m, "model", "")): int(
+        getattr(m, "size", 0) or 0) for m in models})
     # Extensions' models first, then Ollama's.
     return sorted(
         (str(getattr(m, "model", "") or "") for m in models
@@ -4360,6 +4366,22 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
     if name == "briefing-undo":
         briefing.undismiss(arg)
         return {}
+
+    if name == "compare":
+        from . import compare
+
+        if arg in ("board", "tally"):
+            return {"standings": compare.standings()}
+        try:
+            models, prompt = compare.parse(arg)
+        except ValueError as exc:
+            raise ValueError(str(exc)) from None
+        return compare.run(ai._client(), models, prompt, ai._chat_options())
+
+    if name == "compare-pick":
+        from . import compare
+
+        return compare.pick(arg, str(body.get("choice") or ""))
 
     if name == "music":
         # Said by voice with no player on the page that heard it: the
@@ -5082,7 +5104,15 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
             ai.set_config_var("MODEL", arg)
             session.hub.publish({"type": "status"})
         models = list_models(ai)
+        from . import hardware
+
         return {"model": ai.Config.model or "", "models": models or [],
+                # The ones that would not run quickly here, and why.
+                "fits": {m: hardware.fit(MODEL_SIZES.get(m, 0))
+                         for m in models or []
+                         if hardware.fit(MODEL_SIZES.get(m, 0)) in (
+                             hardware.TIGHT, hardware.TOO_BIG)},
+                "machine": hardware.machine().describe(),
                 "reachable": models is not None,
                 "favorites": workspace.favorite_models(ai.Config.host),
                 **_spark_default(models)}
@@ -6526,6 +6556,14 @@ def phone_link(server: "Server") -> dict:
     }
 
 
+def over_ssh() -> bool:
+    """Whether this Flash runs in an SSH session: a browser opened here
+    would open on the far computer, or nowhere."""
+
+    return bool(os.environ.get("SSH_CONNECTION") or os.environ.get(
+        "SSH_TTY")) and not os.environ.get("DISPLAY", "").startswith(":")
+
+
 def announce(server: "Server") -> None:
     """Say where the web UI is, with a QR code for a phone."""
 
@@ -6716,7 +6754,12 @@ def serve(
     _attach(server, standalone=True)
     server.session.updates.check_in_background()
 
-    if open_browser:
+    if open_browser and over_ssh():
+        console.print(Text(
+            "Over SSH, so no browser here: forward the port (ssh -L "
+            f"{server.port}:localhost:{server.port} ...) and open the "
+            "link above where you are.", style=DIM))
+    elif open_browser:
         webbrowser.open(server.url)
 
     running = [server]
