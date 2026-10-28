@@ -45,7 +45,8 @@ LINE_CHARS = 2000
 REQUIREMENTS = Path(__file__).resolve().parents[1] / "requirements.txt"
 # Where a package's import name is not its name.
 IMPORT_NAMES = {"dotenv": "python-dotenv", "docx": "python-docx",
-                "yaml": "pyyaml", "PIL": "pillow"}
+                "yaml": "pyyaml", "PIL": "pillow",
+                "dateutil": "python-dateutil"}
 
 
 def required() -> list[str]:

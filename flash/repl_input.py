@@ -60,6 +60,8 @@ COMMANDS = [
     ("/model", "pick from the models here, /model <name> to switch, "
                "/model pin or unpin [name] to keep one at the top"),
     ("/btw", "a side question, even while Flash works, without interrupting"),
+    ("/calendar", "what is on (or /calendar 30 for a month); feed add NAME "
+                  "URL; google to connect Google Calendar"),
     ("/fallbacks", "models to try when one fails: /fallbacks a > b > c "
                    "(* for any model; clear a)"),
     ("/secret", "keys and passwords Flash uses by name, never seeing them "

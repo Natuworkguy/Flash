@@ -21,6 +21,7 @@ import base64
 import contextlib
 import hashlib
 import hmac
+import html
 import io
 import ipaddress
 import json
@@ -50,6 +51,7 @@ from queue import Empty, Queue
 from typing import Any, Optional
 from urllib.parse import parse_qs, unquote, urlparse
 
+import httpx
 import segno
 from rich.text import Text
 
@@ -175,6 +177,12 @@ PAGE_PATHS = re.compile(
     r"|settings(?:/(?:general|usage|memory|email|connectors|security))?)?"
     r"/?$"
 )
+
+OAUTH_PAGE = """<!doctype html><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Flash</title><body style="font:16px system-ui;background:#262624;
+color:#f5f4ee;display:grid;place-items:center;height:100vh;margin:0">
+<p>{said}</p><script>setTimeout(() => window.close(), 1500)</script>"""
 
 STATIC = {"orbit.woff2": "font/woff2", "logo-icon.svg": "image/svg+xml"}
 
@@ -4330,6 +4338,48 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
         briefing.undismiss(arg)
         return {}
 
+    if name == "calendar":
+        from . import calendars
+
+        problems: list[str] = []
+        found = calendars.events(problems=problems) if arg == "events" \
+            else []
+        return {"feeds": calendars.feeds(),
+                "google": calendars.google_connected(),
+                "events": [e.summary() for e in found],
+                "problems": problems,
+                "redirect": f"http://127.0.0.1:{session.port}/oauth/google"
+                if session.port else ""}
+
+    if name == "calendar-feed":
+        from . import calendars
+
+        try:
+            if body.get("remove"):
+                calendars.remove_feed(arg)
+            else:
+                calendars.add_feed(arg, str(body.get("url") or ""))
+        except calendars.CalendarError as exc:
+            raise ValueError(str(exc)) from None
+        return {"feeds": calendars.feeds()}
+
+    if name == "calendar-google":
+        from . import calendars
+
+        if arg == "off":
+            calendars.google_sign_out()
+            return {"google": False}
+        if not session.port:
+            raise ValueError("This Flash has no web address to sign in at.")
+        try:
+            url, _ = calendars.google_sign_in_url(
+                str(body.get("client_id") or ""),
+                str(body.get("client_secret") or ""),
+                f"http://127.0.0.1:{session.port}/oauth/google")
+        except calendars.CalendarError as exc:
+            raise ValueError(str(exc)) from None
+        return {"url": url}
+
     if name == "fallbacks":
         # Every model's fallbacks, and ARG's, or the default's.
         model = arg.strip() or ai.Config.model or ""
@@ -5776,6 +5826,26 @@ class Handler(BaseHTTPRequestHandler):
                            "text/plain; charset=utf-8")
             else:
                 self._refuse()
+            return
+
+        if url.path == "/oauth/google":
+            # Google, sending the browser back after signing in: the
+            # state Flash made is the proof, as the page's cookie may be
+            # for another name for this computer.
+            from . import calendars
+
+            try:
+                calendars.google_finish(
+                    (query.get("code") or [""])[0],
+                    (query.get("state") or [""])[0])
+                said = ("Google Calendar is connected. You can close this "
+                        "tab.")
+                self.server.session.hub.publish({"type": "calendar"})
+            except (calendars.CalendarError, httpx.HTTPError) as exc:
+                said = f"Google Calendar did not connect: {exc}"
+            self._send(HTTPStatus.OK, OAUTH_PAGE.format(
+                said=html.escape(said)).encode(),
+                "text/html; charset=utf-8")
             return
 
         name = url.path.removeprefix("/static/")

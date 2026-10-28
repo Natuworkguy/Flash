@@ -4435,6 +4435,111 @@ def _list_extensions() -> None:
     console.print(body)
 
 
+CALENDAR_USAGE = ("Usage: /calendar [days] | feed add NAME URL | feed rm "
+                  "NAME | google [off]")
+
+
+def _calendar_command(arg: str) -> None:
+    """/calendar: what is on; feeds to read; Google Calendar, signed in."""
+
+    from datetime import datetime, timedelta
+
+    from . import calendars
+
+    words = arg.split()
+    try:
+        if not words or words[0].isdigit():
+            days = int(words[0]) if words else 7
+            problems: list[str] = []
+            now = datetime.now().astimezone()
+            found = calendars.events(
+                now.isoformat(), (now + timedelta(days=days)).isoformat(),
+                problems=problems)
+            for event in found:
+                console.print(Text("  " + calendars.describe(event)))
+            if not found:
+                console.print(Text(f"  Nothing on in the next {days} days.",
+                                   style=DIM))
+            for problem in problems:
+                warn(f"  {problem}")
+            return
+        if words[0] == "feed" and len(words) >= 2:
+            if words[1] == "add" and len(words) == 4:
+                calendars.add_feed(words[2], words[3])
+                console.print(Text(f"Reading {words[2]}.", style=DIM))
+                return
+            if words[1] in ("rm", "remove") and len(words) == 3:
+                gone = calendars.remove_feed(words[2])
+                console.print(Text("Removed." if gone else "No such feed.",
+                                   style=DIM))
+                return
+        if words[0] == "google":
+            if words[1:] == ["off"]:
+                calendars.google_sign_out()
+                console.print(Text("Google Calendar disconnected.",
+                                   style=DIM))
+                return
+            _calendar_google()
+            return
+    except calendars.CalendarError as exc:
+        warn(str(exc))
+        return
+    warn(CALENDAR_USAGE)
+
+
+def _calendar_google() -> None:
+    """Sign in to Google Calendar: Google's page in the browser, back to a
+    one-off page on this computer that takes the code."""
+
+    import webbrowser
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+    from urllib.parse import parse_qs, urlparse
+
+    from . import calendars
+
+    console.print(Text(
+        "  Needs an OAuth client of your own: in Google Cloud console, turn "
+        "on the Google Calendar API, then Credentials > Create credentials "
+        "> OAuth client ID > Desktop app.", style=DIM))
+    client_id = console.input("  Client ID: ").strip()
+    client_secret = console.input("  Client secret: ", password=True).strip()
+    got: dict = {}
+
+    class Back(BaseHTTPRequestHandler):
+        def log_message(self, *args) -> None:
+            pass
+
+        def do_GET(self) -> None:
+            query = parse_qs(urlparse(self.path).query)
+            got["code"] = (query.get("code") or [""])[0]
+            got["state"] = (query.get("state") or [""])[0]
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.end_headers()
+            self.wfile.write(b"<p style='font:16px system-ui'>Back to "
+                             b"Flash: you can close this tab.</p>")
+
+    server = HTTPServer(("127.0.0.1", 0), Back)
+    server.timeout = 180
+    url, _ = calendars.google_sign_in_url(
+        client_id, client_secret,
+        f"http://127.0.0.1:{server.server_port}/")
+    console.print(Text("  Opening Google's sign-in. If it does not open:",
+                       style=DIM))
+    console.print(Text(f"  {url}", style=ACCENT))
+    webbrowser.open(url)
+    try:
+        server.handle_request()
+    finally:
+        server.server_close()
+    if not got.get("code"):
+        warn("  No sign-in came back.")
+        return
+    calendars.google_finish(got["code"], got["state"])
+    console.print(Text("Google Calendar is connected.",
+                       style=f"bold {ACCENT}"))
+
+
 def _fallbacks_command(arg: str) -> None:
     """/fallbacks lists them; /fallbacks a > b > c sets a's; /fallbacks
     clear a takes them off; * stands for every model."""
@@ -6623,6 +6728,10 @@ def _main() -> None:
 
             if uin == "/secret" or uin.startswith("/secret "):
                 _secret_command(uin[len("/secret"):].strip())
+                continue
+
+            if uin == "/calendar" or uin.startswith("/calendar "):
+                _calendar_command(uin[len("/calendar"):].strip())
                 continue
 
             if uin == "/fallbacks" or uin.startswith("/fallbacks "):

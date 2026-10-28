@@ -12,3 +12,4 @@ python-docx
 winotify; platform_system == "Windows"
 segno
 cryptography
+python-dateutil
