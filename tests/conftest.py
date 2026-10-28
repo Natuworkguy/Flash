@@ -10,6 +10,7 @@ from flash import (
     connectors,
     design,
     extensions,
+    filesearch,
     heyflash,
     instructions,
     learning,
@@ -108,6 +109,8 @@ def isolated_home(tmp_path_factory, monkeypatch):
     monkeypatch.setattr(sparks, "_told", set())
     # The web UI's saved hosts, projects, and chats.
     monkeypatch.setattr(workspace, "FLASH_DIR", home / ".flash")
+    # Search indexes of folders.
+    monkeypatch.setattr(filesearch, "FLASH_DIR", home / ".flash")
     # Progress emails: off, and their log in the temp home.
     monkeypatch.setattr(progress_mail, "FLASH_DIR", home / ".flash")
     for name in [n for n in os.environ if n.startswith("PROGRESS_EMAIL")]:
