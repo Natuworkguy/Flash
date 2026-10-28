@@ -6,10 +6,10 @@ in the background over what just happened and writes down what is
 worth keeping, as a new or corrected skill or a remembered fact, so
 the next session starts out knowing it.
 
-The design follows Hermes Agent's. The review is a separate pass after
-the reply has gone out, never part of the user's turn, and it only
-runs once there has been enough work to learn from: SKILL_REVIEW_AFTER
-tool calls since the last one, or MEMORY_REVIEW_EVERY messages.
+The review is a separate pass after the reply has gone out, never part
+of the user's turn, and it only runs once there has been enough work
+to learn from: SKILL_REVIEW_AFTER tool calls since the last one, or
+MEMORY_REVIEW_EVERY messages.
 """
 
 import os
