@@ -52,3 +52,40 @@ def test_another_fault_is_not_hidden_by_trying_other_chromiums():
 
     with pytest.raises(PlaywrightError, match="closed"):
         browser.launch_chromium(Driver())
+
+
+def test_the_user_can_take_the_browser_from_another_thread(tmp_path):
+    import threading
+
+    from flash import browser
+
+    pytest.importorskip("playwright")
+    page = tmp_path / "p.html"
+    page.write_text("<button id=b onclick=\"document.title='clicked'\" "
+                    "style='position:absolute;left:0;top:0;width:200px;"
+                    "height:80px'>Hi</button><input id=i>")
+    why = browser.open_page(page.as_uri(), width=400, height=300, wait_ms=0)
+    if why:
+        pytest.skip(why)
+    seen = {}
+
+    def server_thread():
+        seen["take"] = browser.take_control(True)
+        seen["agent"] = browser.interact("click", selector="#b")
+        browser.user_act("click", 50, 40)
+        seen["title"] = browser.where()[1]
+        seen["frame"] = browser.live_frame()[:3]
+        browser.take_control(False)
+
+    try:
+        thread = threading.Thread(target=server_thread)
+        thread.start()
+        thread.join(60)
+        assert seen["take"]["width"] == 400
+        assert seen["agent"] == ("", browser.TAKEN)
+        assert seen["title"] == "clicked"
+        assert seen["frame"] == b"\xff\xd8\xff"
+        assert browser.interact("fill", selector="#i", value="x")[1] == ""
+    finally:
+        browser.take_control(False)
+        browser.close_session()
