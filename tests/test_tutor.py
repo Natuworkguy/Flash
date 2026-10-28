@@ -76,3 +76,117 @@ def test_tool():
     assert "0 of 3 known" in run(action="graph", subject="Calc")
     assert run(action="plan", subject="Nope").startswith("Error")
     assert "tutor" in [t["function"]["name"] for t in tools.tools]
+
+
+# Subjects learned by doing -------------------------------------------------
+
+import shutil  # noqa: E402
+
+HELLO_C = {"id": "printf", "text": "printf prints formatted text.",
+           "exercise": {"task": "Print hello, 42.", "language": "C",
+                        "expect": "hello, 42\n"}}
+LINUX = {"id": "mkdir-mv", "text": "mkdir makes a folder; mv moves files.",
+         "exercise": {"task": "Put notes.txt in a new folder, archive.",
+                      "language": "linux",
+                      "files": {"notes.txt": "keep me"},
+                      "expect": "notes.txt\ngone",
+                      "verify": ("ls archive; "
+                                 "test ! -e notes.txt && echo gone")}}
+
+
+def test_exercises_are_checked_when_added():
+    with pytest.raises(tutor.TutorError, match="task and a language"):
+        tutor.add("C", [{"id": "a", "text": "A.",
+                         "exercise": {"task": "x", "language": "cobol"}}])
+    with pytest.raises(tutor.TutorError, match="inside"):
+        tutor.add("C", [{"id": "a", "text": "A.", "exercise": {
+            "task": "x", "language": "c", "files": {"../x": ""}}}])
+    with pytest.raises(tutor.TutorError, match="regex"):
+        tutor.add("C", [{"id": "a", "text": "A.", "exercise": {
+            "task": "x", "language": "c", "expect": "(", "match": "regex"}}])
+    tutor.add("C", [HELLO_C])
+    assert tutor.exercise("C", "printf")["language"] == "c"
+    assert tutor.plan("C", now=0)[0]["exercise"]["task"] == "Print hello, 42."
+
+
+def test_matches():
+    assert tutor.matches("a\nb\n", "a  \r\nb")
+    assert not tutor.matches("a", "a b")
+    assert tutor.matches("42", "the answer is 42", "contains")
+    assert tutor.matches(r"^\d+$", "x\n17\n", "regex")
+
+
+@pytest.mark.skipif(not shutil.which("cc"), reason="needs a C compiler")
+def test_c_answers_are_compiled_run_and_measured():
+    tutor.add("C", [HELLO_C])
+    good = tutor.check("C", "printf", '#include <stdio.h>\n'
+                       'int main(void){printf("hello, %d\\n", 42);}\n', now=0)
+    assert good["right"] and good["measured"]["known"] > tutor.START
+    broken = tutor.check("C", "printf", "int main(void){ return x; }", now=0)
+    assert not broken["right"] and not broken["built"]
+    assert "x" in broken["stderr"]
+    wrong = tutor.check("C", "printf", '#include <stdio.h>\n'
+                        'int main(void){puts("hello");}\n', now=0)
+    assert wrong["built"] and not wrong["right"]
+    assert wrong["measured"]["review_in_days"] == 1
+
+
+@pytest.mark.skipif(not shutil.which("cc"), reason="needs a C compiler")
+def test_a_loop_that_never_ends_is_stopped(monkeypatch):
+    monkeypatch.setattr(tutor, "RUN_SECONDS", 1)
+    tutor.add("C", [HELLO_C])
+    said = tutor.check("C", "printf", "int main(void){for(;;);}", now=0)
+    assert said["timed_out"] and not said["right"]
+
+
+def test_shell_answers_are_verified_by_what_they_changed():
+    tutor.add("Linux", [LINUX])
+    good = tutor.check("Linux", "mkdir-mv",
+                       "mkdir archive\nmv notes.txt archive/\n", now=0)
+    assert good["right"], good
+    assert good["stdout"] == "notes.txt\ngone\n"
+    wrong = tutor.check("Linux", "mkdir-mv", "mkdir archive\n", now=0)
+    assert not wrong["right"]
+
+
+def test_missing_toolchains_measure_nothing(monkeypatch):
+    tutor.add("C", [HELLO_C])
+    monkeypatch.setattr(tutor.shutil, "which", lambda _: None)
+    with pytest.raises(tutor.TutorError, match="not installed"):
+        tutor.check("C", "printf", "int main(){}")
+    assert tutor.describe("C")["propositions"][0]["known"] == tutor.START
+    with pytest.raises(tutor.TutorError, match="no exercise"):
+        tutor.add("S", [{"id": "a", "text": "A."}])
+        tutor.check("S", "a", "x")
+
+
+@pytest.mark.parametrize("lang,code,out", [
+    ("python", "print(6 * 7)", "42"),
+    ("cpp", "#include <iostream>\nint main(){std::cout << 42;}", "42"),
+    ("javascript", "console.log(6 * 7)", "42"),
+    ("rust", "fn main(){ println!(\"{}\", 6 * 7); }", "42"),
+    ("go", "package main\nimport \"fmt\"\nfunc main(){ fmt.Println(42) }",
+     "42"),
+    ("java", "class Main { public static void main(String[] a) {"
+     " System.out.println(42); } }", "42"),
+])
+def test_every_language_runs(lang, code, out):
+    if any(not shutil.which(n) for n in tutor.LANGUAGES[lang]["needs"]):
+        pytest.skip(f"{lang} is not installed")
+    ran = tutor.run(lang, code)
+    assert ran["built"] and ran["stdout"].strip() == out, ran
+
+
+def test_check_tool(monkeypatch):
+    monkeypatch.setattr(tools, "_user_allows", lambda *a, **_: True)
+    run = tools.FUNCTIONS["tutor"]
+    run(action="add", subject="Linux", propositions=[LINUX])
+    assert "exercise (shell)" in run(action="plan", subject="Linux")
+    out = run(action="check", subject="Linux", id="mkdir-mv",
+              answer="mkdir archive && mv notes.txt archive")
+    assert out.startswith("Right.") and "known" in out
+    out = run(action="check", subject="Linux", id="mkdir-mv", answer="ls")
+    assert out.startswith("Not yet.") and "A right answer prints" in out
+    monkeypatch.setattr(tools, "_user_allows", lambda *a, **_: False)
+    assert "said no" in run(action="check", subject="Linux", id="mkdir-mv",
+                            answer="ls")

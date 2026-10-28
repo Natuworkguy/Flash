@@ -4759,7 +4759,8 @@ def calendar_tool(action: str = "list", start: str = "", end: str = "",
     return result
 
 
-TUTOR_ACTIONS = ("add", "measure", "plan", "graph", "subjects", "forget")
+TUTOR_ACTIONS = ("add", "measure", "check", "plan", "graph", "subjects",
+                 "forget")
 
 
 def listen_to_audio(path: str) -> str:
@@ -4827,9 +4828,47 @@ def make_video(html: str = "", out: str = "video.mp4", seconds: Any = 0,
     return result
 
 
+def _exercise_line(task: Optional[dict]) -> str:
+    if not task:
+        return ""
+    return (f"\n  exercise ({task['language']}): {task['task']}"
+            + (f"\n  starter:\n{task['starter']}" if task["starter"] else ""))
+
+
+def _checked(said: dict) -> str:
+    """A run of the learner's answer, for the model to explain."""
+
+    parts = ["Right." if said["right"] else "Not yet."]
+    if not said["built"]:
+        parts.append("It did not compile:\n" + said["stderr"])
+    elif said["timed_out"]:
+        parts.append("It ran too long and was stopped (a loop that never "
+                     "ends, or it waits for input).")
+    else:
+        if said.get("answer_output") is not None and \
+                said["answer_output"] != said["stdout"]:
+            parts.append("Their answer printed:\n"
+                         + (said["answer_output"] or "(nothing)"))
+            parts.append("The check printed:\n"
+                         + (said["stdout"] or "(nothing)"))
+        else:
+            parts.append("It printed:\n" + (said["stdout"] or "(nothing)"))
+        if said["exit"]:
+            parts.append(f"It exited with {said['exit']}.")
+        if said["stderr"].strip():
+            parts.append("Errors and warnings:\n" + said["stderr"])
+        if not said["right"]:
+            parts.append(f"A right answer prints ({said['match']}):\n"
+                         + said["expected"])
+    measured = said["measured"]
+    parts.append(f"{measured['id']}: now {measured['known']:.0%} known; "
+                 f"review in {measured['review_in_days']} days.")
+    return "\n".join(parts)
+
+
 def tutor(action: str = "plan", subject: str = "",
           propositions: Optional[list] = None, id: str = "",
-          right: Any = False, limit: Any = 5) -> str:
+          right: Any = False, answer: str = "", limit: Any = 5) -> str:
     """What the user is learning, as a graph of propositions: teach and
     test them in order, and keep track of what they know."""
 
@@ -4846,10 +4885,19 @@ def tutor(action: str = "plan", subject: str = "",
             result = (f"{said['id']}: now {said['known']:.0%} known"
                       + (", known" if said["is_known"] else "")
                       + f"; review in {said['review_in_days']} days.")
+        elif action == "check":
+            task = graph.exercise(subject, id)
+            if not NO_COMMAND_CONFIRMATION and not ultra_auto() and \
+                    not _user_allows(
+                        f"Run your {task['language']} answer to "
+                        f"{graph._key(id)} on this computer, to check it?"):
+                return "The user said no to running it."
+            result = _checked(graph.check(subject, id, answer))
         elif action == "plan":
             steps = graph.plan(subject, _clamp(limit, 1, 20, 5))
             result = "\n".join(
                 f"{s['do']} {s['id']} ({s['known']:.0%}): {s['text']}"
+                + _exercise_line(s["exercise"])
                 for s in steps) or "Everything is known, and no review " \
                 "is due: add what comes next."
         elif action == "graph":
@@ -4858,6 +4906,8 @@ def tutor(action: str = "plan", subject: str = "",
                 [f"{held['subject']}: {held['known']} of {held['of']} known."]
                 + [f"{p['id']} ({p['known']:.0%})"
                    + (f" needs {', '.join(p['needs'])}" if p["needs"] else "")
+                   + (f" [{p['exercise']['language']} exercise]"
+                      if p["exercise"] else "")
                    + f": {p['text']}" for p in held["propositions"]])
         elif action == "subjects":
             result = ", ".join(graph.subjects()) or "Nothing yet."
@@ -6454,7 +6504,14 @@ tools: list[dict[str, Any]] = [
                 "next: teach (new), practice (shaky) or review (due). Teach "
                 "one, then ask one question on it, and 'measure' whether "
                 "they got it right; never tell them the answer before they "
-                "try. 'graph' shows it all; 'subjects' lists them."
+                "try. For a programming language or the command line (C, "
+                "Python, Linux, git...), give propositions an exercise: a "
+                "small task, its language (shell for Linux), and the exact "
+                "output a right answer prints. The user writes the answer "
+                "themselves; pass it word for word to 'check', which runs "
+                "it and measures it, then explain what its output or "
+                "compiler errors mean. Never write their answer for them. "
+                "'graph' shows it all; 'subjects' lists them."
             ),
             "parameters": {
                 "type": "object",
@@ -6471,10 +6528,54 @@ tools: list[dict[str, Any]] = [
                                 "id": {"type": "string"},
                                 "text": {"type": "string"},
                                 "needs": {"type": "array",
-                                          "items": {"type": "string"}}},
+                                          "items": {"type": "string"}},
+                                "exercise": {
+                                    "type": "object",
+                                    "description": (
+                                        "For subjects learned by doing."),
+                                    "properties": {
+                                        "task": {"type": "string"},
+                                        "language": {"type": "string",
+                                                     "enum": [
+                                                         "c", "cpp",
+                                                         "python",
+                                                         "javascript",
+                                                         "rust", "go",
+                                                         "java", "shell"]},
+                                        "expect": {
+                                            "type": "string",
+                                            "description": (
+                                                "What a right answer "
+                                                "prints.")},
+                                        "match": {
+                                            "type": "string",
+                                            "enum": ["exact", "contains",
+                                                     "regex"]},
+                                        "stdin": {"type": "string"},
+                                        "starter": {
+                                            "type": "string",
+                                            "description": (
+                                                "Code to start from.")},
+                                        "files": {
+                                            "type": "object",
+                                            "description": (
+                                                "Files the task starts "
+                                                "with: {name: content}.")},
+                                        "verify": {
+                                            "type": "string",
+                                            "description": (
+                                                "A shell script run after "
+                                                "the answer; its output is "
+                                                "checked instead, for tasks "
+                                                "that change files.")},
+                                    },
+                                    "required": ["task", "language"]}},
                             "required": ["id", "text"]}},
-                    "id": {"type": "string",
-                           "description": "The proposition, for measure."},
+                    "id": {"type": "string", "description": (
+                        "The proposition, for measure and check.")},
+                    "answer": {"type": "string", "description": (
+                        "For check: the user's code or commands, exactly "
+                        "as they wrote them.")},
                     "right": {"type": "boolean",
                               "description": "Whether they got it right."},
                     "limit": {"type": "integer"},
