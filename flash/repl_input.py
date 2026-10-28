@@ -67,8 +67,8 @@ COMMANDS = [
     ("/bad", "the last reply was bad: Flash learns what to do "
              "differently (/bad <why>)"),
     ("/debate", "two sides argue a question out, then a summary "
-                "(/debate a vs b: question for two models; /debate more "
-                "[steer] keeps it going)"),
+                "(/debate a vs b; rounds 4; question picks models and how "
+                "long; /debate more [steer] keeps it going)"),
     ("/host", "switch Ollama server (/host <name|url>, add, remove, list)"),
     ("/briefing", "what came in while you were away, a card at a time"),
     ("/doctor", "check that everything Flash needs works, and how to fix "
@@ -320,6 +320,40 @@ def _host_completions(rest: str):
                                  display_meta=host["url"])
 
 
+# The models there are, for /debate and /model to offer: asked for on a
+# thread of their own, never while a key waits, and kept a while.
+_models_known: dict = {"names": [], "at": 0.0, "asking": False}
+MODELS_KEPT_SECONDS = 30.0
+
+
+def _known_models() -> list[str]:
+    import threading
+    import time
+
+    now = time.monotonic()
+    if not _models_known["asking"] and \
+            now - _models_known["at"] > MODELS_KEPT_SECONDS:
+        _models_known["asking"] = True
+
+        def ask() -> None:
+            try:
+                from . import ai, providers
+
+                listed = providers.client(ai.Config.host).list()
+                _models_known["names"] = sorted(
+                    str(getattr(m, "model", "") or "")
+                    for m in getattr(listed, "models", None) or []
+                    if getattr(m, "model", ""))
+            except Exception:  # noqa: BLE001, S110  # nosec B110
+                pass  # none to offer, this time
+            finally:
+                _models_known["at"] = time.monotonic()
+                _models_known["asking"] = False
+
+        threading.Thread(target=ask, daemon=True).start()
+    return list(_models_known["names"])
+
+
 class SlashCommandCompleter(Completer):
     """Suggests / commands as the line is typed, image file paths as the
     argument to /image (auto-quoting suggestions that contain spaces),
@@ -360,6 +394,26 @@ class SlashCommandCompleter(Completer):
 
         if text.startswith("/voice "):
             yield from _voice_completions(text[len("/voice "):])
+            return
+
+        if text.startswith("/debate "):
+            from . import debate  # deferred: wanted once /debate is typed
+
+            for said, cut, meta in debate.suggest(text[len("/debate "):],
+                                                  _known_models()):
+                yield Completion(said, start_position=-cut,
+                                 display=said.strip(), display_meta=meta)
+            return
+
+        if text.startswith("/model ") and " " not in text[len("/model "):]:
+            typed = text[len("/model "):]
+            for name in _known_models():
+                if typed.lower() in name.lower():
+                    yield Completion(name, start_position=-len(typed))
+            for word in ("pin", "unpin"):
+                if typed and word.startswith(typed.lower()):
+                    yield Completion(word, start_position=-len(typed),
+                                     display_meta="keep a model at the top")
             return
 
         if text.startswith("/host "):

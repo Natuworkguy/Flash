@@ -21,12 +21,13 @@ from typing import Any, Optional
 from . import btw
 
 ROUNDS = 2
-MOST_ROUNDS = 4
+MOST_ROUNDS = 10
 # How much of the chat comes along, as for a side question.
 HISTORY_CHARS = 12_000
 
 USAGE = ("Give a question after /debate, like /debate should I rewrite "
-         "this in Rust? Two models: /debate alpha:8b vs beta:8b: question")
+         "this in Rust? Two models and how long: /debate alpha:8b vs "
+         "beta:8b; rounds 4; question")
 
 SIDES = ("For", "Against")
 
@@ -62,16 +63,87 @@ Do not take a side in the other sections. Be brief.
 """.strip()
 
 
-def parse(text: str) -> tuple[str, list[str]]:
-    """The question in "/debate ..." or after it, and the models named
-    for the sides, if any: "a vs b: question"."""
+VS_RE = re.compile(r"^(\S+)\s+vs\.?\s+(\S+)$", re.I)
+ROUNDS_RE = re.compile(r"^rounds?\s*[:=]?\s*(\d{1,2})$", re.I)
+
+
+def parse_full(text: str) -> dict:
+    """What "/debate ..." asks for: {"question", "models", "rounds"}.
+    Parts go between semicolons, in any order: "a vs b" names a model
+    for each side, "rounds N" how many times each speaks, and the rest
+    is the question: "/debate a vs b; rounds 4; Should I rewrite this in
+    C?". "a vs b: question" still names the models, as it used to."""
 
     text = re.sub(r"^/debate\b", "", str(text or "").strip()).strip()
-    # Model names have colons in them: a colon and a space ends them.
-    found = re.match(r"^(\S+)\s+vs\.?\s+(\S+?):\s+(.+)$", text, re.S)
+    models: list[str] = []
+    rounds = 0
+    asked: list[str] = []
+    for part in text.split(";") if ";" in text else [text]:
+        part = part.strip()
+        vs = VS_RE.match(part)
+        many = ROUNDS_RE.match(part)
+        if vs and not models:
+            models = [vs.group(1), vs.group(2)]
+        elif many and not rounds:
+            rounds = int(many.group(1))
+        elif part:
+            asked.append(part)
+    question = "; ".join(asked)
+    if not models:
+        # Model names have colons in them: a colon and a space ends them.
+        found = re.match(r"^(\S+)\s+vs\.?\s+(\S+?):\s+(.+)$", question,
+                         re.S)
+        if found:
+            question = found.group(3).strip()
+            models = [found.group(1), found.group(2)]
+    return {"question": question, "models": models,
+            "rounds": max(1, min(rounds, MOST_ROUNDS)) if rounds else 0}
+
+
+def suggest(typed: str, models: list[str]) -> list[tuple[str, int, str]]:
+    """What can come next in TYPED, what follows "/debate ": each as
+    (text, how much of the end of TYPED it replaces, what it is). MODELS
+    are the ones to offer for the sides."""
+
+    done, _, seg = typed.rpartition(";")
+    lead = seg.lstrip()
+    found = re.match(r"^(\S+)\s+vs\.?\s+(\S*)$", lead, re.I)
     if found:
-        return found.group(3).strip(), [found.group(1), found.group(2)]
-    return text, []
+        q = found.group(2)
+        return [(m, len(q), "the second side's model") for m in models
+                if q.lower() in m.lower() and m != found.group(1)][:12]
+    found = re.match(r"^(\S+)\s+(\S*)$", lead)
+    if found and found.group(1) in models and \
+            "vs".startswith(found.group(2).lower()):
+        return [("vs ", len(found.group(2)), "then the second side's model")]
+    found = re.match(r"^rounds?\s+(\d*)$", lead, re.I)
+    if found:
+        q = found.group(1)
+        return [(f"{n}; ", len(q), "each side speaks this many times"
+                 + (" (the usual)" if n == ROUNDS else ""))
+                for n in range(1, MOST_ROUNDS + 1) if str(n).startswith(q)]
+    if " " in lead:
+        return []  # the question, being written
+    word = lead.lower()
+    out: list[tuple[str, int, str]] = []
+    if not done and word and "more".startswith(word):
+        out.append(("more", len(lead), "keep the last debate going"))
+    if not re.search(r"(^|;)\s*rounds?\b", done, re.I) and \
+            "rounds".startswith(word):
+        out.append(("rounds ", len(lead), "how many times each side speaks "
+                    f"({ROUNDS} if not said)"))
+    if not any(VS_RE.match(p.strip()) for p in done.split(";")):
+        out += [(f"{m} ", len(lead), "the first side's model")
+                for m in models if word in m.lower()][:12]
+    return out
+
+
+def parse(text: str) -> tuple[str, list[str]]:
+    """The question in "/debate ..." or after it, and the models named
+    for the sides, if any (parse_full has the rounds too)."""
+
+    found = parse_full(text)
+    return found["question"], found["models"]
 
 
 def _history(messages: list[dict]) -> list[dict]:

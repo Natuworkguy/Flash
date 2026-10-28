@@ -751,6 +751,27 @@ pre code { display: block; padding: 2px 16px 14px; overflow-x: auto; font-size: 
 /* What a tool showed the model, under it, open or not. */
 /* A debate: the two sides, one on each side, then the summary. */
 .debate { border: 1px solid var(--border); border-radius: var(--radius); padding: 14px; display: flex; flex-direction: column; gap: 12px; }
+/* Starting one: the two sides face each other across a VS. */
+.debate-form-head { display: flex; align-items: center; gap: 10px; }
+.debate-form-head svg { width: 22px; height: 22px; color: var(--accent); }
+.debate-arena { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 12px; margin: 4px 0 14px; }
+.debate-side { display: flex; flex-direction: column; gap: 8px; padding: 12px; border-radius: 14px; background: var(--surface); border: 1px solid var(--border); min-width: 0; }
+.debate-side.side-0 { border-left: 3px solid var(--accent); animation: debate-in-l 0.42s var(--spring) both; }
+.debate-side.side-1 { border-right: 3px solid #5b8def; animation: debate-in-r 0.42s var(--spring) both; text-align: right; }
+.debate-side-name { font-size: 12px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--accent); }
+.debate-side.side-1 .debate-side-name { color: #5b8def; }
+.debate-side select { width: 100%; min-width: 0; font: 14px var(--sans); color: var(--text); background: var(--bg); border: 1px solid var(--border-strong); border-radius: 10px; padding: 8px 10px; outline: 0; }
+.debate-side select:focus-visible { border-color: var(--accent); }
+.debate-side.side-1 select { text-align: right; }
+.debate-vs { display: grid; place-items: center; width: 42px; height: 42px; border-radius: 50%; font: 800 14px/1 var(--sans); letter-spacing: 0.02em; color: #fff; background: linear-gradient(135deg, var(--accent), #5b8def); box-shadow: 0 6px 18px -6px color-mix(in srgb, var(--accent) 60%, transparent); animation: debate-vs 0.5s var(--spring) 0.18s both; }
+.debate-rounds > span { display: flex; align-items: baseline; gap: 8px; }
+.debate-rounds b { color: var(--text); font-variant-numeric: tabular-nums; }
+.debate-rounds small { color: var(--text-3); font-weight: 400; }
+.debate-rounds input[type=range] { width: 100%; accent-color: var(--accent); }
+@keyframes debate-in-l { from { opacity: 0; transform: translateX(-18px); } }
+@keyframes debate-in-r { from { opacity: 0; transform: translateX(18px); } }
+@keyframes debate-vs { from { opacity: 0; transform: scale(0.3) rotate(-25deg); } }
+@media (max-width: 520px) { .debate-arena { grid-template-columns: 1fr; } .debate-vs { justify-self: center; } .debate-side.side-1 { text-align: left; } }
 .debate-head { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .debate-chip { flex: none; display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px 3px 7px; border-radius: 999px; font-size: 12px; font-weight: 600; color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent); }
 .debate-chip svg { width: 13px; height: 13px; }
@@ -16086,10 +16107,79 @@ function stopReply() {
 // whole debate is kept in the chat and drawn from there.
 const debates = new Map();
 
-async function startDebate(text) {
+async function startDebate(text, models = [], rounds = 0) {
   if (!current) await createChat(viewProject || "", viewSpark || "");
-  try { await api("/api/debate", { chat: current, text }); }
+  try { await api("/api/debate", { chat: current, text, models, rounds }); }
   catch (error) { showFailure(error); }
+}
+
+// What can come next after "/debate ", as debate.suggest has it in the
+// terminal: a model for each side, "vs" between them, "rounds N", then
+// the question. Each as [shown, what it is, the whole box after it].
+function debateArgs(typed) {
+  if (!models.length && !debateArgs.asked) {
+    debateArgs.asked = true;
+    command("model").then((r) => { models = r.models || []; if (input.value.startsWith("/debate ")) showSlash(); }, () => {});
+  }
+  const cut = typed.lastIndexOf(";");
+  const done = cut < 0 ? "" : typed.slice(0, cut + 1);
+  const lead = typed.slice(cut + 1).replace(/^\s+/, "");
+  const before = "/debate " + typed.slice(0, typed.length - lead.length);
+  const put = (text, about, gone) => [text.trim(), about, before + lead.slice(0, lead.length - gone) + text];
+  let m = lead.match(/^(\S+)\s+vs\.?\s+(\S*)$/i);
+  if (m) return models.filter((x) => x !== m[1] && x.toLowerCase().includes(m[2].toLowerCase())).slice(0, 12).map((x) => put(x + "; ", "the second side's model", m[2].length));
+  m = lead.match(/^(\S+)\s+(\S*)$/);
+  if (m && models.includes(m[1]) && "vs".startsWith(m[2].toLowerCase())) return [put("vs ", "then the second side's model", m[2].length)];
+  m = lead.match(/^rounds?\s+(\d*)$/i);
+  if (m) return Array.from({ length: 10 }, (_, i) => String(i + 1)).filter((n) => n.startsWith(m[1])).map((n) => put(`${n}; `, `each side speaks ${n === "1" ? "once" : `${n} times`}${n === "2" ? " (the usual)" : ""}`, m[1].length));
+  if (/\s/.test(lead)) return [];
+  const word = lead.toLowerCase();
+  const rows = [];
+  if (!done && word && "more".startsWith(word)) rows.push(put("more", "keep the last debate going", lead.length));
+  if (!/(^|;)\s*rounds?\b/i.test(done) && "rounds".startsWith(word)) rows.push(put("rounds ", "how many times each side speaks (2 if not said)", lead.length));
+  if (!done.split(";").some((p) => /^\s*\S+\s+vs\.?\s+\S+\s*$/i.test(p))) rows.push(...models.filter((x) => x.toLowerCase().includes(word)).slice(0, 12).map((x) => put(x + " ", "the first side's model", lead.length)));
+  return rows;
+}
+
+// Start one by hand: the question, a model for each side facing each
+// other across the VS, and how long they go.
+function debateForm(question = "") {
+  const pick = (side) => `<select name="${side}" class="debate-pick"><option value="">This chat's model${chatModel() ? ` (${esc(shortModel(chatModel()))})` : ""}</option>${models.map((m) => `<option value="${esc(m)}">${esc(m)}</option>`).join("")}</select>`;
+  const form = openForm(`
+    <h2 class="debate-form-head">${icon("users")}<span>Start a debate</span></h2>
+    <p class="sub">Two sides argue it out, answering each other, then Flash sums up where they agree, where they don't, and what it turns on.</p>
+    <label class="field"><span>The question</span><textarea name="question" rows="2" placeholder="Should I rewrite this in C?" required></textarea></label>
+    <div class="debate-arena">
+      <div class="debate-side side-0"><span class="debate-side-name">For</span>${pick("a")}</div>
+      <span class="debate-vs" aria-hidden="true">VS</span>
+      <div class="debate-side side-1"><span class="debate-side-name">Against</span>${pick("b")}</div>
+    </div>
+    <label class="field debate-rounds"><span>Rounds <b class="debate-rounds-n">2</b><small class="debate-rounds-say">each side speaks twice</small></span><input type="range" name="rounds" min="1" max="10" value="2"></label>
+    <div class="dialog-buttons"><button type="button" class="btn" data-cancel>Cancel</button><button type="submit" class="btn primary with-icon">${icon("users")}<span>Start debating</span></button></div>`,
+    async (data) => {
+      const asked = String(data.question || "").trim();
+      if (!asked) throw new Error("Ask a question for them to argue.");
+      const sides = [data.a, data.b].filter(Boolean);
+      // One picked: the other side is the chat's own.
+      const both = sides.length === 1 ? (data.a ? [data.a, chatModel()] : [chatModel(), data.b]) : sides;
+      startDebate(asked, both, Number(data.rounds) || 2);
+    });
+  form.querySelector("[name=question]").value = question;
+  form.querySelector("[data-cancel]").onclick = closeForm;
+  const range = form.querySelector("[name=rounds]");
+  const said = () => {
+    const n = Number(range.value);
+    form.querySelector(".debate-rounds-n").textContent = n;
+    form.querySelector(".debate-rounds-say").textContent = `each side speaks ${n === 1 ? "once" : n === 2 ? "twice" : `${n} times`}`;
+    range.style.setProperty("--fill", `${((n - 1) / 9) * 100}%`);
+  };
+  range.oninput = said;
+  said();
+  // The models fill in when the host answers, if they had not yet.
+  if (!models.length) command("model").then((r) => {
+    models = r.models || [];
+    for (const select of form.querySelectorAll(".debate-pick")) for (const m of models) select.appendChild(el("option")).textContent = m;
+  }, () => {});
 }
 
 function debateLive(event) {
@@ -16461,7 +16551,7 @@ function openPlus() {
   rows.push({ html: `${icon("think")}<span class="label">${thinking ? "Skip the harder think" : "Think harder"}</span><span class="desc">${thinking ? "" : "on the next message"}</span>`, act: () => setThink(!thinking) });
   for (const b of extButtonsAt("composer")) rows.push({ html: `${icon(ICON[b.icon] ? b.icon : "puzzle")}<span class="label">${esc(b.label)}</span><span class="desc">${esc(b.extension || "")}</span>`, act: () => pressExt(b, input.value.trim()) });
   rows.push({ html: `${icon("chat")}<span class="label">Ask on the side</span><span class="desc">/btw, without interrupting</span>`, act: () => { input.value = "/btw " + input.value.replace(/^\/btw\s*/, ""); autosize(); updateSend(); input.focus(); input.setSelectionRange(input.value.length, input.value.length); } });
-  rows.push({ html: `${icon("users")}<span class="label">Debate it</span><span class="desc">/debate, two sides argue it out</span>`, act: () => { input.value = "/debate " + input.value.replace(/^\/debate\s*/, ""); autosize(); updateSend(); input.focus(); input.setSelectionRange(input.value.length, input.value.length); } });
+  rows.push({ html: `${icon("users")}<span class="label">Debate it</span><span class="desc">/debate, two sides argue it out</span>`, act: () => { const q = input.value.replace(/^\/debate\s*/, "").trim(); clearInput(); debateForm(q); } });
   rows.push({ html: `${icon("book")}<span class="label">Use a skill</span><span class="desc">${icon("chevRight")}</span>`, act: openSkillPicker });
   rows.push({ html: `${icon("spark")}<span class="label">Sparks</span><span class="desc">${icon("chevRight")}</span>`, act: openSparkPicker });
   if (!input.value.trim()) rows.push({ html: `${icon("slash")}<span class="label">Commands</span>`, act: () => { input.value = "/"; autosize(); input.focus(); showSlash(); } });
@@ -18180,7 +18270,7 @@ const ACTIONS = [
   { label: "Retry last message", keys: "Alt R", slash: "/retry", run: retry },
   { label: "Edit last message", keys: "Alt E", slash: "/edit", run: () => editLast() },
   { label: "Side question, without interrupting", keys: "", slash: "/btw", run: () => { input.value = "/btw "; autosize(); input.focus(); } },
-  { label: "Argue a question out: two sides, then a summary", keys: "", slash: "/debate", run: () => { input.value = "/debate "; autosize(); input.focus(); } },
+  { label: "Argue a question out: two sides, then a summary", keys: "", slash: "/debate", run: () => debateForm() },
   { label: "Undo the last turn's file changes", keys: "Alt Z", slash: "/undo", run: undo },
   { label: "Stop the reply", keys: "Esc", slash: "/stop", run: stopReply },
   { label: "Copy last reply", keys: "Alt C", slash: "/copy", run: copyLastReply },
@@ -18266,8 +18356,8 @@ function runSlash(text) {
     return true;
   }
   if (word === "/debate") {
-    if (!arg) { toast("Give a question after /debate, like /debate should I rewrite this in Rust?"); return true; }
     clearInput();
+    if (!arg) { debateForm(); return true; }
     startDebate(arg);
     return true;
   }
@@ -18326,6 +18416,8 @@ async function showSlashArgs(word, query) {
     closeMenu();
     slashOpen = false;
     updateSend();
+    // A debate goes on being built: what comes after this, next.
+    if (word === "/debate") showSlash();
   }, "", true);
   slashOpen = true;
 }
