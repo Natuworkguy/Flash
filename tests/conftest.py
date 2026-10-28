@@ -74,6 +74,10 @@ def isolated_home(tmp_path_factory, monkeypatch):
     vault._cache.clear()
     # No test puts a real glow around the screen.
     monkeypatch.setattr(screenglow, "_launch", lambda *a: None)
+    # Nor wakes this machine's screen.
+    from flash import computeruse
+
+    monkeypatch.setattr(computeruse, "wake", lambda force=False: False)
     # The terminal's kept conversations, and the one it is on.
     monkeypatch.setattr(sessions, "FLASH_DIR", home / ".flash")
     monkeypatch.setattr(ai, "_session", None)

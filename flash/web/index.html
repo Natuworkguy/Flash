@@ -732,6 +732,8 @@ pre code { display: block; padding: 2px 16px 14px; overflow-x: auto; font-size: 
 .tool.blocked .ico svg { color: var(--warn); }
 .tool .body { border-top: 1px solid var(--border); padding: 10px 14px; font: 12.5px/1.55 var(--mono); color: var(--text-2); white-space: pre-wrap; word-break: break-word; max-height: 420px; overflow: auto; background: var(--code-bg); }
 .tool .body.error { color: var(--del); }
+.ask .ask-why { flex: 1 1 200px; min-width: 0; font: 13.5px var(--sans); color: var(--text); background: var(--bg); border: 1px solid var(--border-strong); border-radius: 999px; padding: 6px 12px; outline: 0; }
+.ask .ask-why:focus { border-color: var(--accent); }
 .s1-card-rate { display: flex; align-items: center; gap: 8px; padding: 6px 12px 8px; border-top: 1px solid var(--border); font-size: 12.5px; color: var(--text-3); }
 .s1-thumbs { display: inline-flex; gap: 2px; }
 .s1-thumbs .rate.on { color: var(--accent); }
@@ -888,7 +890,7 @@ pre code { display: block; padding: 2px 16px 14px; overflow-x: auto; font-size: 
 .ask .q { font-weight: 500; }
 .ask pre { margin: 10px 0 0; }
 .ask pre code { padding: 10px 14px; }
-.ask .buttons { display: flex; gap: 8px; margin-top: 14px; }
+.ask .buttons { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
 .btn { padding: 8px 16px; border-radius: 10px; font-size: 14px; font-weight: 500; border: 1px solid var(--border-strong); transition: background 0.12s, transform 0.08s; }
 .btn:hover { background: var(--hover); }
 .btn:active { transform: scale(0.98); }
@@ -5046,15 +5048,29 @@ function askCard(entry) {
   no.type = "button"; no.dataset.tip = "Deny"; no.dataset.keys = "N";
   no.onclick = () => answer(entry.id, "n");
   card.querySelector(".buttons").append(yes, no);
+  // Asked for the computer: a no can say why, so Flash knows what to do
+  // instead. Left empty, it is a plain no.
+  if (/see your screen/i.test(first)) {
+    const why = el("input", "ask-why");
+    why.type = "text";
+    why.maxLength = 500;
+    why.placeholder = "Why not? (optional)";
+    why.setAttribute("aria-label", "Why not, if you want to say");
+    why.onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); answer(entry.id, "n", why.value.trim()); } e.stopPropagation(); };
+    no.onclick = () => answer(entry.id, "n", why.value.trim());
+    card.querySelector(".buttons").appendChild(why);
+  }
   return card;
 }
 
-function settleAsk(card, value) {
+function settleAsk(card, value, why = "") {
   // Folds down from the full card to its one-line record.
   const from = card.offsetHeight;
   card.classList.add("done");
   const q = card.querySelector(".q");
   q.innerHTML = icon(value === "y" ? "check" : "x") + `<span>${value === "y" ? "Allowed" : "Denied"}: ${esc(q.textContent)}</span>`;
+  card.querySelector(".ask-why")?.remove();
+  if (why) q.lastChild.append(` (${why})`);
   if (!calm.matches && from) {
     card.animate([{ height: from + "px" }, { height: card.offsetHeight + "px" }], { duration: 260, easing: "cubic-bezier(0.2, 0, 0, 1)" });
   }
@@ -7659,7 +7675,7 @@ function drawEntry(entry, ctx) {
     case "diff": if (ctx.tool) addDiff(ctx.tool, entry.text); break;
     case "plan": if (ctx.tool) addPlan(ctx.tool, entry.steps || []); break;
     case "ask": messagesEl.appendChild(askCard(entry)); break;
-    case "answered": { const card = messagesEl.querySelector(`[data-ask="${entry.id}"]`); if (card) settleAsk(card, entry.answer); break; }
+    case "answered": { const card = messagesEl.querySelector(`[data-ask="${entry.id}"]`); if (card) settleAsk(card, entry.answer, entry.why); break; }
     case "error": {
       const node = el("div", "block error", icon("alert") + "<span></span>");
       richText(node.lastChild, entry.text);
@@ -17868,7 +17884,7 @@ function toggleSide() {
 
 const pendingAsk = () => messagesEl.querySelector(".ask:not(.done)");
 function focusAsk() { const card = pendingAsk(); if (card) { card.focus({ preventScroll: true }); reveal(logEl, card, true, 16); } }
-async function answer(id, value) { buzz(value === "y" ? 10 : 6); await api("/api/answer", { id, answer: value }).catch(showFailure); input.focus(); }
+async function answer(id, value, why = "") { buzz(value === "y" ? 10 : 6); await api("/api/answer", { id, answer: value, why }).catch(showFailure); input.focus(); }
 function answerPending(value) { const card = pendingAsk(); if (!card) return false; answer(card.dataset.ask, value); return true; }
 
 // Reading: j / k -------------------------------------------------------------

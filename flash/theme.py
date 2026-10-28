@@ -384,7 +384,22 @@ def remote_answer(question: str) -> Optional[str]:
     if answerer is None:
         return None
 
-    return (answerer(question) or "").strip().lower()
+    said, _, why = (answerer(question) or "").strip().partition("\n")
+    _capture.why = why.strip()
+    return said.strip().lower()
+
+
+def set_denial_why(why: str) -> None:
+    _capture.why = why
+
+
+def denial_why() -> str:
+    """Why the user said no to the last question on this thread, if they
+    said: once, then it is gone."""
+
+    why = getattr(_capture, "why", "") or ""
+    _capture.why = ""
+    return why
 
 
 # Past this many lines a tool's output is cut down on screen, since a

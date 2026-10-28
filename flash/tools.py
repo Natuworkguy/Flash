@@ -88,10 +88,12 @@ from .theme import (
     Live,
     capturing,
     console,
+    denial_why,
     dock_active,
     glimmer,
     plural,
     remote_answer,
+    set_denial_why,
     tool_browser,
     tool_diff,
     tool_document,
@@ -2139,9 +2141,22 @@ def run_extension_command(
     return ""
 
 
-def _user_allows(question: str) -> bool:
+def _why_not() -> str:
+    """In the terminal, after a no: why, if they want to say. Enter
+    skips it."""
+
+    try:
+        said = console.input(Text("  ⎿  Why not? (optional, Enter skips) ",
+                                  style=DIM))
+    except (EOFError, KeyboardInterrupt):
+        return ""
+    return " ".join(said.split())[:500]
+
+
+def _user_allows(question: str, ask_why: bool = False) -> bool:
     """Ask the user QUESTION, yes or no, wherever they are: the web page
-    when one is asking, else the terminal."""
+    when one is asking, else the terminal. ASK_WHY: after a no in the
+    terminal, ask why too (denial_why() has it, as for the page's)."""
 
     notify_needs_input()
     answer = remote_answer(question)
@@ -2153,6 +2168,8 @@ def _user_allows(question: str) -> bool:
         prompt.append("/n ", style=DIM)
         console.print(prompt, end="")
         answer = yes_no()
+        if answer != "y" and ask_why:
+            set_denial_why(_why_not())
 
     if answer != "y":
         tool_result("Blocked by user", style=WARN)
@@ -2993,10 +3010,13 @@ def computer_use_tool(action: str = "", **args: Any) -> str:
         if not ultra_auto() and not _user_allows(
             "Let Flash see your screen and use your mouse and keyboard "
             f"for this reply? {computeruse.how_to_stop()} to take it "
-            "back."
+            "back.", ask_why=True,
         ):
-            return ("The user said no to Computer Use. Do it another way, "
-                    "or tell them what to do; do not ask again.")
+            why = denial_why()
+            return ("The user said no to Computer Use"
+                    + (f', and why: "{why}"' if why else "")
+                    + ". Do it another way, or tell them what to do; do "
+                    "not ask again.")
         computeruse.take(owner, stop)
     try:
         said, image = computeruse.do(action, args, owner)

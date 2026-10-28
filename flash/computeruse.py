@@ -55,6 +55,7 @@ LOOK_EVERY = 0.05
 
 ACTIONS = {
     "screenshot": "look at the screen",
+    "wake": "wake the screen if it is asleep, then look",
     "click": "click at x, y (button left, right or middle)",
     "double_click": "double-click at x, y",
     "right_click": "right-click at x, y",
@@ -310,6 +311,64 @@ def _mac_watch() -> bool:
 _shot: dict = {}
 
 
+# A screen asleep shows nothing and takes no clicks: before acting after a
+# while away, Flash wakes it, and gives it a moment to light up. It can
+# not get past a locked screen: the screenshot shows that, and says so.
+WAKE_AFTER = 45.0
+WAKE_SETTLE = 1.2
+_woken = {"at": 0.0}
+
+
+def _wake_command() -> list[list[str]]:
+    kind = system()
+    if kind == "mac":
+        # Says the user is active: the display wakes, and stays up.
+        return [["caffeinate", "-u", "-t", "3"]]
+    if kind == "linux":
+        found = []
+        if shutil.which("xset"):
+            found.append(["xset", "dpms", "force", "on"])
+        if shutil.which("loginctl"):
+            found.append(["loginctl", "unlock-session"])
+        return found
+    return []
+
+
+def wake(force: bool = False) -> bool:
+    """Wake the screen if it may have slept: after WAKE_AFTER seconds of
+    no actions, or FORCE. Whether it tried."""
+
+    now = time.monotonic()
+    if not force and now - _woken["at"] < WAKE_AFTER:
+        _woken["at"] = now
+        return False
+    _woken["at"] = now
+    tried = False
+    if system() == "windows":
+        with contextlib.suppress(Exception):
+            import ctypes
+
+            kernel = ctypes.windll.kernel32  # type: ignore[attr-defined]
+            # ES_CONTINUOUS off, ES_DISPLAY_REQUIRED | ES_SYSTEM_REQUIRED:
+            # the display turns on, once.
+            kernel.SetThreadExecutionState(0x00000002 | 0x00000001)
+            user32 = _user32()
+            # A nudge of the pointer and back, as a person's would.
+            user32.mouse_event(0x0001, 1, 0, 0, 0)
+            user32.mouse_event(0x0001, -1, 0, 0, 0)
+            tried = True
+    for argv in _wake_command():
+        with contextlib.suppress(OSError, subprocess.SubprocessError):
+            # Fixed programs, never through a shell, left to run.
+            subprocess.Popen(  # nosec B603
+                argv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                start_new_session=True)
+            tried = True
+    if tried:
+        time.sleep(WAKE_SETTLE)
+    return tried
+
+
 def do(action: str, args: dict, owner: str) -> tuple[str, Optional[bytes]]:
     """Do ACTION with ARGS for OWNER, which has the computer. Returns
     what happened, and a screenshot after it (PNG bytes). Raises
@@ -322,11 +381,13 @@ def do(action: str, args: dict, owner: str) -> tuple[str, Optional[bytes]]:
     why = missing()
     if why:
         raise UseError(why)
+    # Asleep since it was last used, or never used: woken first.
+    woke = wake(force=action == "wake")
     if action == "wait":
         seconds = min(MOST_WAIT, max(0.0, _number(args.get("seconds"), 1)))
         time.sleep(seconds)
         said = f"Waited {seconds:g} seconds."
-    elif action == "screenshot":
+    elif action in ("screenshot", "wake"):
         said = ""
     else:
         _check_pointer(owner)
@@ -337,6 +398,8 @@ def do(action: str, args: dict, owner: str) -> tuple[str, Optional[bytes]]:
             _holder["at"] = time.monotonic()
     image, size = screenshot()
     shown = f"The screen now, {size[0]}x{size[1]}."
+    if woke:
+        shown = "Woke the screen first. " + shown
     return (f"{said} {shown}".strip(), image)
 
 

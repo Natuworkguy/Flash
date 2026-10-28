@@ -92,7 +92,7 @@ def test_a_wait_command_is_not_asked_about_in_ultra(monkeypatch):
     ultra_on()
     monkeypatch.setattr(tools, "NO_COMMAND_CONFIRMATION", False)
     monkeypatch.setattr(tools, "_user_allows",
-                        lambda q: pytest.fail("asked in UltraAuto"))
+                        lambda q, **_: pytest.fail("asked in UltraAuto"))
     wait = waits.make("c1", {"what": "CI", "then": "deploy",
                              "command": "true"})
     assert web._command_allowed(wait)  # nosec B101
