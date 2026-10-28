@@ -1386,6 +1386,26 @@ def delivery(sentence: str, style: Style) -> tuple[dict, float]:
     }, breath
 
 
+# A voice that makes a whole piece before any of it plays (Kokoro, an
+# extension's) starts sooner on a short one: a long sentence is said in
+# parts, cut at a comma or the like past this many characters.
+FIRST_PART_CHARS = 90
+
+
+def _parts(sentence: str) -> list[str]:
+    if len(sentence) <= FIRST_PART_CHARS:
+        return [sentence]
+    out, rest = [], sentence
+    while len(rest) > FIRST_PART_CHARS:
+        cut = max(rest.rfind(mark, 30, FIRST_PART_CHARS + 40)
+                  for mark in (", ", "; ", ": ", " - "))
+        if cut < 0:
+            break
+        out.append(rest[:cut + 1].strip())
+        rest = rest[cut + 1:].strip()
+    return [*out, rest] if rest else out
+
+
 def _pcm_chunks(voice, text: str, rate: int = 22050):
     """Yield raw 16-bit audio for `text`, across Piper's two APIs: a
     sentence at a time, each said as the voice style has it, with a
@@ -1395,13 +1415,16 @@ def _pcm_chunks(voice, text: str, rate: int = 22050):
     if not text:
         return
 
+    whole = isinstance(voice, (_KokoroVoice, _ExtensionVoice))
     style = STYLES[voice_style()]
-    if not style.feeling:
+    if not style.feeling and not whole:
         yield from _said(voice, text, {})
         return
     for sentence in sentences(text):
-        settings, breath = delivery(sentence, style)
-        yield from _said(voice, sentence, settings)
+        settings, breath = delivery(sentence, style) if style.feeling \
+            else ({}, 0.0)
+        for part in _parts(sentence) if whole else [sentence]:
+            yield from _said(voice, part, settings)
         if breath:
             yield b"\x00\x00" * int(rate * breath)
 
@@ -1537,7 +1560,8 @@ def speak(text: str) -> tuple[str, bool]:
             dtype="int16",
             channels=1,
         ) as stream:
-            for chunk in _pcm_chunks(voice, text, rate):
+            for chunk in ahead(_pcm_chunks(voice, text, rate),
+                               barge.heard):
                 for start in range(0, len(chunk or b""), slice_bytes):
                     if barge.heard.is_set():
                         interrupted = True
@@ -1550,6 +1574,10 @@ def speak(text: str) -> tuple[str, bool]:
                     # the device finish the buffered sentence.
                     _abort(stream)
                     break
+            # Cut off while the next piece was still being made.
+            if not interrupted and barge.heard.is_set():
+                interrupted = True
+                _abort(stream)
     except KeyboardInterrupt:
         # Cutting the reply short is a normal way to use voice mode, not
         # a failure worth reporting.
@@ -1558,6 +1586,54 @@ def speak(text: str) -> tuple[str, bool]:
         return f"could not play the reply: {exc}", False
 
     return "", interrupted
+
+
+# How many pieces of speech are made ahead of the one playing: the next
+# sentence is being made while this one is said, so there is no gap.
+AHEAD = 2
+
+
+def ahead(pieces, stop: Optional[threading.Event] = None):
+    """PIECES, made on a thread of their own, AHEAD of the one being
+    taken: while one plays, the next is made. Stops making them when
+    STOP is set."""
+
+    import queue
+
+    made: queue.Queue = queue.Queue(maxsize=AHEAD)
+    done = object()
+    failed: list = []
+
+    def make() -> None:
+        try:
+            for piece in pieces:
+                while True:
+                    if stop is not None and stop.is_set():
+                        return
+                    try:
+                        made.put(piece, timeout=0.1)
+                        break
+                    except queue.Full:
+                        continue
+        except Exception as exc:  # noqa: BLE001  (raised where it is taken)
+            failed.append(exc)
+        finally:
+            while True:
+                try:
+                    made.put(done, timeout=0.1)
+                    return
+                except queue.Full:
+                    if stop is not None and stop.is_set():
+                        return
+
+    threading.Thread(target=make, daemon=True).start()
+    while True:
+        piece = made.get()
+        if piece is done:
+            break
+        yield piece
+    if failed:
+        raise failed[0]
 
 
 def _abort(stream) -> None:
