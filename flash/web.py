@@ -505,6 +505,8 @@ class Ask:
     question: str
     answer: Optional[str] = None
     done: threading.Event = field(default_factory=threading.Event)
+    # Why the user said no, when they said.
+    why: str = ""
 
 
 # Events that are part of the conversation and drawn again on reload.
@@ -1548,16 +1550,20 @@ class Session:
             answer = entry.answer or "n"
             self.emit(chat, {
                 "type": "answered", "id": entry.id, "answer": answer,
+                **({"why": entry.why} if entry.why else {}),
             })
-            return answer
+            # The reason, on a line of its own after the answer.
+            return f"{answer}\n{entry.why}" if entry.why else answer
 
         return ask
 
-    def answer(self, ask_id: str, answer: str) -> bool:
+    def answer(self, ask_id: str, answer: str, why: str = "") -> bool:
         entry = self.asks.get(ask_id)
         if entry is None:
             return False
         entry.answer = "y" if str(answer).lower().startswith("y") else "n"
+        if entry.answer == "n":
+            entry.why = " ".join(str(why or "").split())[:500]
         entry.done.set()
         return True
 
@@ -6077,7 +6083,8 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/answer":
             return {
                 "ok": session.answer(
-                    str(body.get("id", "")), str(body.get("answer", ""))
+                    str(body.get("id", "")), str(body.get("answer", "")),
+                    str(body.get("why") or ""),
                 )
             }
 

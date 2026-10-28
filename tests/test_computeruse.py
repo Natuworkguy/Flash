@@ -47,7 +47,7 @@ def test_it_asks_even_in_autonomous_mode_and_once_a_reply(
     asked = []
     answers = [False, True]
     monkeypatch.setattr(tools, "_user_allows",
-                        lambda q: asked.append(q) or answers.pop(0))
+                        lambda q, **_: asked.append(q) or answers.pop(0))
 
     said = tools.computer_use_tool("screenshot")
     assert "said no" in said and screen == []  # nosec B101
@@ -73,7 +73,7 @@ def test_it_asks_even_in_autonomous_mode_and_once_a_reply(
 def test_ultra_auto_does_not_ask(monkeypatch, screen):
     monkeypatch.setattr(tools, "ULTRA_AUTO", True)
     monkeypatch.setattr(tools, "_user_allows",
-                        lambda q: pytest.fail("asked in UltraAuto"))
+                        lambda q, **_: pytest.fail("asked in UltraAuto"))
 
     assert "The screen now" in tools.computer_use_tool("screenshot")  # nosec
 
@@ -119,7 +119,7 @@ def test_the_stop_keys_stop_the_reply_that_has_it(screen):
 def test_one_chat_at_a_time(monkeypatch, screen):
     computeruse.take("other", lambda: None)
     monkeypatch.setattr(tools, "_user_allows",
-                        lambda q: pytest.fail("asked while busy"))
+                        lambda q, **_: pytest.fail("asked while busy"))
 
     with tools.computer_user("c1", lambda: None):
         said = tools.computer_use_tool("screenshot")
@@ -254,3 +254,48 @@ def test_the_user_sees_what_the_model_saw():
     [image] = event["images"]
     assert image["kind"] == "image" and image["name"].endswith(".png")  # nosec
     assert "seen" in web.KEPT  # nosec B101
+
+
+# The real one: the conftest stands in for it in every test.
+WAKE_REAL = computeruse.wake
+
+
+def test_the_screen_is_woken_only_after_a_while(monkeypatch):
+    ran = []
+    monkeypatch.setattr(computeruse, "system", lambda: "mac")
+    monkeypatch.setattr(computeruse.subprocess, "Popen",
+                        lambda argv, **kw: ran.append(argv))
+    monkeypatch.setattr(computeruse.time, "sleep", lambda s: None)
+    monkeypatch.setattr(computeruse, "_woken", {"at": 0.0})
+    monkeypatch.setattr(computeruse.time, "monotonic", lambda: 1000.0)
+
+    assert WAKE_REAL() is True
+    assert ran == [["caffeinate", "-u", "-t", "3"]]
+    assert WAKE_REAL() is False
+    assert WAKE_REAL(force=True) is True
+
+
+def test_a_no_can_say_why(monkeypatch):
+    from flash import theme, web
+
+    session = web.Session()
+    session.hub = web.Hub()
+    chat = session.new_chat()
+    ask = session.answerer(chat)
+    seen = {}
+
+    def answer_soon():
+        import time
+
+        while not session.asks:
+            time.sleep(0.01)
+        session.answer(next(iter(session.asks)), "n", "  I'm  presenting ")
+
+    import threading
+
+    threading.Thread(target=answer_soon).start()
+    monkeypatch.setattr(theme._capture, "answerer", ask, raising=False)
+    seen["answer"] = theme.remote_answer("Let Flash see your screen?")
+    assert seen["answer"] == "n"
+    assert theme.denial_why() == "I'm presenting"
+    assert theme.denial_why() == ""
