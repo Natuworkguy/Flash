@@ -60,6 +60,8 @@ COMMANDS = [
     ("/model", "pick from the models here, /model <name> to switch, "
                "/model pin or unpin [name] to keep one at the top"),
     ("/btw", "a side question, even while Flash works, without interrupting"),
+    ("/compare", "two models answer blind, you pick the better: /compare a "
+                 "vs b: question; /compare board for the tally"),
     ("/calendar", "what is on (or /calendar 30 for a month); feed add NAME "
                   "URL; google to connect Google Calendar"),
     ("/fallbacks", "models to try when one fails: /fallbacks a > b > c "

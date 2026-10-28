@@ -766,6 +766,18 @@ pre code { display: block; padding: 2px 16px 14px; overflow-x: auto; font-size: 
 .debate { border: 1px solid var(--border); border-radius: var(--radius); padding: 14px; display: flex; flex-direction: column; gap: 12px; }
 /* Starting one: the two sides face each other across a VS. */
 .debate-form-head { display: flex; align-items: center; gap: 10px; }
+.compare { border: 1px solid var(--border); border-radius: var(--radius); padding: 14px; display: flex; flex-direction: column; gap: 12px; }
+.compare-head { display: flex; align-items: center; gap: 8px; }
+.compare-head svg { width: 16px; height: 16px; color: var(--accent); }
+.compare-q { color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.compare-sides { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+@media (max-width: 700px) { .compare-sides { grid-template-columns: 1fr; } }
+.compare-side { border: 1px solid var(--border); border-radius: 12px; padding: 10px 12px; min-width: 0; background: var(--surface); transition: border-color 0.3s, box-shadow 0.3s; }
+.compare-side.won { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.compare-label { display: inline-block; font-size: 12px; font-weight: 700; color: var(--accent); margin-bottom: 4px; }
+.compare-body { font-size: 14.5px; line-height: 1.55; overflow-wrap: anywhere; }
+.compare-pick { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; }
+.compare-said { color: var(--text-2); font-weight: 600; }
 .debate-form-head svg { width: 22px; height: 22px; color: var(--accent); }
 .debate-arena { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 12px; margin: 4px 0 14px; }
 .debate-side { display: flex; flex-direction: column; gap: 8px; padding: 12px; border-radius: 14px; background: var(--surface); border: 1px solid var(--border); min-width: 0; }
@@ -3261,7 +3273,9 @@ body.resizing-viewer iframe { pointer-events: none; }
 .menu .item .fav + .check { margin-left: 2px; }
 /* The model new chats start on. */
 .menu .default-tag { margin-left: auto; flex: none; font-size: 11px; color: var(--text-3); padding: 1px 7px; border: 1px solid var(--border); border-radius: 999px; }
-.menu .default-tag + .fav { margin-left: 6px; }
+.menu .default-tag + .fav, .menu .default-tag + .default-tag { margin-left: 6px; }
+.menu .default-tag.fit-tight { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 40%, transparent); }
+.menu .default-tag.fit-big { color: var(--del); border-color: color-mix(in srgb, var(--del) 40%, transparent); }
 .fallback-list { list-style: none; counter-reset: fb; margin: 0 0 12px; padding: 0; display: flex; flex-direction: column; gap: 6px; }
 .fallback-list li { counter-increment: fb; display: flex; align-items: center; gap: 10px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); animation: rise 0.2s var(--ease) both; }
 .fallback-list li::before { content: counter(fb); flex: none; width: 20px; height: 20px; border-radius: 50%; display: grid; place-items: center; font-size: 11px; font-weight: 600; color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent); }
@@ -16590,6 +16604,36 @@ async function startDebate(text, models = [], rounds = 0) {
   catch (error) { showFailure(error); }
 }
 
+// Blind: both answer, shown as A and B in an order nobody knows until a
+// pick is made; then the names, and the tally.
+async function startCompare(arg) {
+  if (!arg || arg === "board") {
+    const r = await command("compare", "board", null).catch(showFailure);
+    if (r) toast(r.standings.length ? r.standings.slice(0, 5).join("\n") : "No comparisons yet. /compare a vs b: question");
+    return;
+  }
+  const card = messagesEl.appendChild(el("div", "block compare", `<div class="compare-head">${icon("users")}<b>Blind comparison</b><span class="compare-q"></span></div><div class="compare-sides"><div class="compare-side"><span class="compare-label">A</span><div class="compare-body"><span class="spin"></span></div></div><div class="compare-side"><span class="compare-label">B</span><div class="compare-body"><span class="spin"></span></div></div></div><div class="compare-pick" hidden><button type="button" class="btn" data-c="a">A is better</button><button type="button" class="btn" data-c="tie">Even</button><button type="button" class="btn" data-c="b">B is better</button></div>`));
+  card.querySelector(".compare-q").textContent = arg.replace(/^\S+\s+vs\.?\s+\S+?[:;]\s+/, "");
+  toBottom(true, true);
+  let r;
+  try { r = await command("compare", arg, null); } catch (error) { card.remove(); showFailure(error); return; }
+  card.querySelectorAll(".compare-body").forEach((b, i) => { b.innerHTML = markdown(r.answers[i] || "(nothing)"); });
+  const picks = card.querySelector(".compare-pick");
+  picks.hidden = false;
+  picks.onclick = async (e) => {
+    const b = e.target.closest("[data-c]");
+    if (!b) return;
+    let told;
+    try { told = await command("compare-pick", r.id, null, { choice: b.dataset.c }); } catch (error) { showFailure(error); return; }
+    picks.innerHTML = `<span class="compare-said"></span>`;
+    picks.querySelector(".compare-said").textContent = `A was ${told.a}, B was ${told.b}.`;
+    const labels = card.querySelectorAll(".compare-label");
+    labels[0].textContent = `A · ${shortModel(told.a)}`;
+    labels[1].textContent = `B · ${shortModel(told.b)}`;
+    if (told.choice !== "tie") card.querySelectorAll(".compare-side")[told.choice === "a" ? 0 : 1].classList.add("won");
+  };
+}
+
 // What can come next after "/debate ", as debate.suggest has it in the
 // terminal: a model for each side, "vs" between them, "rounds N", then
 // the question. Each as [shown, what it is, the whole box after it].
@@ -17747,6 +17791,9 @@ async function fallbackForm(model) {
 // Each chat has its own model; a new one starts on the default, which
 // the model menu can make any model.
 let newChatModel = "";
+// Models that would not run quickly on this computer, and what it has.
+let modelFits = {};
+let machineSaid = "";
 
 function chatModel() {
   const chat = current && chats.get(current);
@@ -18212,7 +18259,7 @@ async function openModels(focusHosts = false) {
   drawModelMenu(focusHosts);
   const stillOpen = () => menuEl && !slashOpen && menuEl.dataset.kind === "models";
   command("model").then(
-    (r) => { models = r.models || []; favorites = r.favorites || []; modelsReachable = r.reachable !== false; },
+    (r) => { models = r.models || []; favorites = r.favorites || []; modelFits = r.fits || {}; machineSaid = r.machine || ""; modelsReachable = r.reachable !== false; },
     () => { modelsReachable = false; },
   ).finally(() => {
     modelsLoading = false;
@@ -18276,7 +18323,8 @@ function drawModelMenu(focusHosts, keepSelection) {
       [...pinned, ...rest].forEach((m, i) => {
         const on = i < pinned.length;
         const star = `<span class="fav${on ? " on" : ""}" data-fav="${esc(m)}" data-tip="${on ? "Unpin (*)" : "Pin to the top (*)"}">${icon(on ? "starFill" : "star")}</span>`;
-        const tag = sameModel(m, info.model) ? '<span class="default-tag">Default</span>' : "";
+        const fitTag = modelFits[m] ? `<span class="default-tag fit-${modelFits[m] === "tight" ? "tight" : "big"}" data-tip="${modelFits[m] === "tight" ? "Runs, with less room for a long chat" : "Too big for this computer to run quickly"} (${esc(machineSaid)})">${modelFits[m] === "tight" ? "Tight" : "Too big"}</span>` : "";
+        const tag = (sameModel(m, info.model) ? '<span class="default-tag">Default</span>' : "") + fitTag;
         rows.push({ html: modelParts(m) + tag + star, value: m, current: m === using, rule: pinned.length > 0 && i === pinned.length });
       });
       if (!chatty.length) rows.push({ header: true, html: '<span class="menu-note">No models on this host</span>' });
@@ -18791,6 +18839,7 @@ const ACTIONS = [
   { label: "Edit last message", keys: "Alt E", slash: "/edit", run: () => editLast() },
   { label: "Side question, without interrupting", keys: "", slash: "/btw", run: () => { input.value = "/btw "; autosize(); input.focus(); } },
   { label: "Argue a question out: two sides, then a summary", keys: "", slash: "/debate", run: () => debateForm() },
+  { label: "Two models answer blind; you pick the better", keys: "", slash: "/compare", run: () => { input.value = "/compare "; autosize(); input.focus(); } },
   { label: "Undo the last turn's file changes", keys: "Alt Z", slash: "/undo", run: undo },
   { label: "Stop the reply", keys: "Esc", slash: "/stop", run: stopReply },
   { label: "Copy last reply", keys: "Alt C", slash: "/copy", run: copyLastReply },
@@ -18875,6 +18924,7 @@ function runSlash(text) {
     askOnTheSide(arg);
     return true;
   }
+  if (word === "/compare") { clearInput(); startCompare(arg); return true; }
   if (word === "/debate") {
     clearInput();
     if (!arg) { debateForm(); return true; }
