@@ -1629,6 +1629,7 @@ body.page-projects #dock, body.page-settings #dock, body.page-tool #dock { displ
 .email-card .what { flex: 1; }
 .email-actions { display: flex; flex-wrap: wrap; gap: 6px; flex: none; align-self: center; }
 .email-form .field[hidden] { display: none; }
+.other-keeper .auto-takeover { display: flex; align-items: center; gap: 6px; flex-basis: 100%; font-size: 12.5px; color: var(--text-3); cursor: pointer; }
 .email-form .field > span i { font-style: normal; color: var(--text-3); font-weight: 400; }
 .email-form-title { font-size: 14px; font-weight: 600; margin: 0 0 12px; }
 .field input[readonly] { color: var(--text-3); }
@@ -9239,6 +9240,15 @@ function otherKeeperBanner(a) {
     }
   };
   banner.appendChild(fix);
+  // From now on, by itself, whenever this Flash starts.
+  const auto = el("label", "auto-takeover", `<input type="checkbox"><span>Always take over when this Flash starts</span>`);
+  const box = auto.querySelector("input");
+  command("sparks-auto-takeover", "", null).then((r) => { box.checked = !!r.auto; }, () => {});
+  box.onchange = async () => {
+    try { await command("sparks-auto-takeover", box.checked ? "on" : "off", null); toast(box.checked ? "This Flash takes over its sparks when it starts" : "No more taking over by itself"); }
+    catch (error) { box.checked = !box.checked; showFailure(error); }
+  };
+  banner.appendChild(auto);
   return banner;
 }
 

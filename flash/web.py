@@ -4621,6 +4621,11 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
             raise ValueError(str(exc)) from None
         return {"always": keepalive.status(), "how": how}
 
+    if name == "sparks-auto-takeover":
+        if arg:
+            keepalive.set_auto_takeover(arg in ("on", "1", "true"))
+        return {"auto": keepalive.auto_takeover()}
+
     if name == "sparks-takeover":
         try:
             return {"always": keepalive.take_over()}
@@ -6541,6 +6546,12 @@ def _attach(server: "Server", standalone: bool) -> None:
     # to the page as soon as it is written.
     teamchat.watch()
     sparks.start()
+    # Another Flash running them, and this one set to take over: done in
+    # the background, as it waits for that keeper to go.
+    threading.Thread(target=keepalive.take_over_if_wanted, kwargs={
+        "say": lambda said: session.hub.publish(
+            {"type": "notify", "title": "Sparks", "text": said})},
+        daemon=True).start()
     # The MCP servers start with Flash, not with the first chat that
     # wants their tools.
     connectors.start()
