@@ -511,6 +511,16 @@ def tool_debate(event: dict) -> bool:
     return True
 
 
+def tool_project(event: dict) -> Optional[dict]:
+    """Make the chat this turn is in a project (make_project): what the
+    page made of it, or None where there is no chat to move (the
+    terminal)."""
+
+    sink = _sink()
+    said = sink("project", json.dumps(event), "") if sink else None
+    return said if isinstance(said, dict) else None
+
+
 def tool_debate_poll(debate_id: str, take: bool = False) -> dict:
     """Whether the user has stopped debate DEBATE_ID (or the turn), and,
     with TAKE, what they have said to steer it since last asked."""

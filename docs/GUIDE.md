@@ -168,6 +168,10 @@ python run.py
   answers, from the ones you pin to the top of the menu (or
   `AUTO_MODELS=a,b,c`): a small one for chat, a big one for hard work.
   Without System One, the first of them answers. A note says which.
+- **Make this a project**: when an experiment in a chat turns into
+  something you are building, Flash can make it a project (a name, its
+  folder, instructions every chat in it gets) and move the chat into it.
+  Ask it, or it offers when it fits.
 - `/fallbacks model > another > a third`: When a model fails before it
   answers (its host is down, its provider errors, it is not there),
   Flash tries the next, then the next, then gives up; a note says so.
@@ -1008,6 +1012,11 @@ them works pasted in as it is. Servers start in the background when
 Flash starts (the terminal, the web UI, or the sparks' keeper), so their
 tools are there for the first message and the first shift, and stop
 when it exits.
+
+Flash can ask for one itself, when a task needs a tool it lacks: it says
+which server and why, and adds it on your yes (in UltraAuto, without
+asking). It asks to install an extension the same way, showing what the
+extension adds.
 
 A tool its server marks read-only runs straight away. Any other asks
 first, as a shell command does, unless autonomous mode is on, where

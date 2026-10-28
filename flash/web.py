@@ -2861,6 +2861,17 @@ def _sink(session: Session, chat: Chat):
             session.hub.publish({"type": "debate-live", "chat": chat.id,
                                  **event})
             return True
+        if kind == "project":
+            # "Make this a project": made, and this chat moved into it.
+            asked = json.loads(text)
+            made = workspace.create_project(
+                str(asked.get("name") or ""), str(asked.get("path") or ""),
+                str(asked.get("instructions") or ""))
+            chat.project = made.id
+            session.save(chat)
+            session.hub.publish({"type": "projects"})
+            session.hub.publish({"type": "chats", "chat": chat.id})
+            return {"id": made.id, "name": made.name, "path": made.path}
         if kind == "debate-poll":
             asked = json.loads(text)
             going = session.debating.get(asked["id"]) or {}
