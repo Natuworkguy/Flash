@@ -50,3 +50,40 @@ def test_the_cli_and_the_page_ask_for_it(monkeypatch):
     monkeypatch.setattr(models, "installed_names", lambda client: None)
     said = web.command(None, {"name": "doctor"})
     assert said["checks"][0]["name"] == "Python"  # nosec B101
+
+
+def test_a_fix_that_is_a_command_runs_on_request(monkeypatch):
+    monkeypatch.setattr(models, "installed_names", lambda client: {"b:1"})
+    monkeypatch.setattr(doctor.shutil, "which", lambda name: "/bin/" + name)
+    checks = doctor.run("http://x", "alpha:8b")
+    [model] = [c for c in checks if c.name == "Model"]
+    assert model.fixable and model.command == ["ollama", "pull",  # nosec
+                                               "alpha:8b"]
+    assert doctor.hint(checks) == (  # nosec B101
+        "Run flash doctor --fix to fix 1 fixable issue.")
+
+    ran = []
+
+    def run(argv, **kw):
+        ran.append(argv)
+        return doctor.subprocess.CompletedProcess(argv, 0, "pulled\n", "")
+
+    monkeypatch.setattr(doctor.subprocess, "run", run)
+    lines = []
+    assert doctor.fix_all(checks, lambda line, state: lines.append(  # nosec
+        line)) == 1
+    assert ran == [["ollama", "pull", "alpha:8b"]]  # nosec B101
+    assert any("pulled" in line for line in lines)  # nosec B101
+
+
+def test_the_page_runs_one_fix(monkeypatch):
+    monkeypatch.setattr(models, "installed_names", lambda client: None)
+    monkeypatch.setattr(doctor, "run_fix", lambda check: (True, "ok"))
+    monkeypatch.setattr(doctor.shutil, "which", lambda name: "/bin/" + name)
+    monkeypatch.setattr(doctor.sys, "platform", "linux")
+    said = web.command(None, {"name": "doctor"})
+    [ollama] = [c for c in said["checks"] if c["name"] == "Ollama"]
+    assert ollama["fixable"] and ollama["background"]  # nosec B101
+    said = web.command(None, {"name": "doctor-fix", "arg": "Ollama"})
+    assert said["ok"] and said["checks"]  # nosec B101
+    assert cli.parse_args(["doctor", "--fix"]).fix  # nosec B101

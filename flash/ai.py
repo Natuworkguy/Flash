@@ -4048,18 +4048,34 @@ def _keep_listening() -> None:
         console.print(Text("Stopped.", style=DIM))
 
 
-def _doctor_command() -> int:
+def _doctor_command(fix: bool = False, cli: bool = False) -> int:
     """/doctor and `flash doctor`: whether everything Flash needs works,
-    and how to fix what does not. How many checks failed."""
+    and how to fix what does not; with FIX, the commands that fix it are
+    run, and it looks again. How many checks failed."""
 
     from . import doctor
 
     styles = {doctor.OK: "green", doctor.WARN: WARN,
               doctor.FAIL: ERROR, doctor.OFF: DIM, "fix": DIM}
+
+    def say(line: str, state: str) -> None:
+        console.print(Text(line, style=styles.get(state, "")))
+
     with console.status("Checking", spinner="dots"):
         checks = doctor.run(Config.host, Config.model or "")
-    return doctor.report(checks, lambda line, state: console.print(
-        Text(line, style=styles.get(state, ""))))
+    failed = doctor.report(checks, say)
+    if fix and doctor.fixable(checks):
+        console.print()
+        doctor.fix_all(checks, say)
+        console.print()
+        with console.status("Checking again", spinner="dots"):
+            checks = doctor.run(Config.host, Config.model or "")
+        failed = doctor.report(checks, say)
+    hint = doctor.hint(checks, "flash doctor --fix" if cli
+                       else "/doctor fix")
+    if hint:
+        console.print(Text(hint, style=f"bold {ACCENT}"))
+    return failed
 
 
 def _terminal_ping(said: dict) -> None:
@@ -6070,7 +6086,7 @@ def _main() -> None:
         sys.exit(0 if _run_update(force=args.force) else 1)
 
     if args.command == "doctor":
-        sys.exit(1 if _doctor_command() else 0)
+        sys.exit(1 if _doctor_command(fix=args.fix, cli=True) else 0)
 
     if (
         args.extension_install
@@ -6451,8 +6467,8 @@ def _main() -> None:
                 _briefing_command()
                 continue
 
-            if uin == "/doctor":
-                _doctor_command()
+            if uin in ("/doctor", "/doctor fix"):
+                _doctor_command(fix=uin.endswith("fix"))
                 continue
 
             if uin == "/loader" or uin.startswith("/loader "):

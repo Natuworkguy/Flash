@@ -204,6 +204,9 @@ python run.py
   connectors, sparks, and on a Mac the permissions Computer Use and
   iMessages need) and says how to fix what does not. `flash doctor` in a
   terminal, or Settings > Health check in the web UI, does the same.
+  What a command can fix (a missing package, a model to pull, Ollama to
+  start) it offers to run: `/doctor fix` or `flash doctor --fix` runs
+  them all and looks again, and in Settings each has a Run button.
 - `/briefing`: What came in while you were away, full screen, a card at
   a time: unread email and iMessages, spark reports, finished waits,
   what is coming up, and teams with news (see Briefing under Web UI).

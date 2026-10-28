@@ -3,9 +3,10 @@ and, for what is not, how to fix it.
 
 Each check says ok, warn (works, but something is missing or off),
 fail (something Flash needs is broken) or off (not set up, which is
-fine), in a line, with the fix for anything not ok. Nothing is changed:
-it only looks. Run as `flash doctor`, `/doctor` in the terminal, or from
-Settings in the web UI.
+fine), in a line, with the fix for anything not ok. Looking changes
+nothing. A fix that is a command to run (installing a package, pulling
+a model, starting Ollama) is run when asked: `flash doctor --fix`,
+`/doctor fix`, or its Run button in Settings in the web UI.
 """
 
 from __future__ import annotations
@@ -14,9 +15,11 @@ import importlib.util
 import os
 import re
 import shutil
+import subprocess  # nosec B404
 import sys
 from collections.abc import Callable
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
+from pathlib import Path
 from typing import Optional
 
 OK, WARN, FAIL, OFF = "ok", "warn", "fail", "off"
@@ -31,9 +34,17 @@ class Check:
     state: str
     said: str
     fix: str = ""
+    # The command that fixes it, when one does; BACKGROUND for one that
+    # keeps running, started and left to it (`ollama serve`).
+    command: list[str] = field(default_factory=list)
+    background: bool = False
 
     def to_dict(self) -> dict:
-        return asdict(self)
+        return {**asdict(self), "fixable": self.fixable}
+
+    @property
+    def fixable(self) -> bool:
+        return bool(self.command) and self.state in (WARN, FAIL)
 
 
 def _python() -> Check:
@@ -60,7 +71,8 @@ def _packages() -> Check:
     if missing:
         return Check(
             "Packages", FAIL, "Missing: " + ", ".join(missing) + ".",
-            f"{sys.executable} -m pip install " + " ".join(missing))
+            f"{sys.executable} -m pip install " + " ".join(missing),
+            command=[sys.executable, "-m", "pip", "install", *missing])
     return Check("Packages", OK, "Everything Flash needs is installed.")
 
 
@@ -75,10 +87,18 @@ def _ollama(host: str, model: str) -> list[Check]:
     except Exception:  # noqa: BLE001  (any failure is the same answer)
         here = None
     if here is None:
+        local = re.search(r"//(localhost|127\.0\.0\.1)(:|/|$)", host)
+        start: list[str] = []
+        if local and sys.platform == "darwin" and \
+                Path("/Applications/Ollama.app").exists():
+            start = ["open", "-a", "Ollama"]
+        elif local and shutil.which("ollama"):
+            start = ["ollama", "serve"]
         return [Check(
             "Ollama", FAIL, f"Flash cannot reach Ollama at {host}.",
             "Start it (open the Ollama app, or run `ollama serve`), or "
             "install it from ollama.com. Another host goes in OLLAMA_HOST.",
+            command=start, background=start[:1] == ["ollama"],
         )]
     found = [Check("Ollama", OK,
                    f"Ollama at {host}, with {len(here)} model"
@@ -92,7 +112,9 @@ def _ollama(host: str, model: str) -> list[Check]:
     elif models.full_name(model) not in here and model not in here:
         found.append(Check("Model", FAIL, f"{model} is not in Ollama.",
                            f"ollama pull {model}, or pick another with "
-                           "/model."))
+                           "/model.",
+                           command=["ollama", "pull", model]
+                           if shutil.which("ollama") else []))
     else:
         found.append(Check("Model", OK, model))
     return found
@@ -266,3 +288,61 @@ def report(checks: list[Check],
         f"{failed} to fix, {warned} to look at.",
         FAIL if failed else WARN if warned else OK)
     return failed
+
+
+def fixable(checks: list[Check]) -> list[Check]:
+    return [c for c in checks if c.fixable]
+
+
+def hint(checks: list[Check], how: str = "flash doctor --fix") -> str:
+    """The line saying how many can be fixed by a command, and how; ""
+    when none can."""
+
+    count = len(fixable(checks))
+    if not count:
+        return ""
+    return (f"Run {how} to fix {count} fixable "
+            f"issue{'' if count == 1 else 's'}.")
+
+
+FIX_TIMEOUT = 30 * 60
+
+
+def run_fix(check: Check) -> tuple[bool, str]:
+    """Run CHECK's command: whether it worked, and what it said (its
+    last lines). One that keeps running is started and left to run."""
+
+    if not check.command:
+        return False, "There is no command that fixes this."
+    try:
+        if check.background:
+            subprocess.Popen(  # nosec B603 -- a fixed command
+                check.command, stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                start_new_session=True)
+            return True, f"Started {' '.join(check.command)}."
+        done = subprocess.run(  # nosec B603 -- a fixed command
+            check.command, capture_output=True, text=True,
+            timeout=FIX_TIMEOUT, check=False)
+    except FileNotFoundError:
+        return False, f"{check.command[0]} is not on this computer."
+    except (OSError, subprocess.SubprocessError) as exc:
+        return False, str(exc)
+    said = "\n".join((done.stdout + done.stderr).strip().splitlines()[-6:])
+    return done.returncode == 0, said or "Done."
+
+
+def fix_all(checks: list[Check],
+            say: Optional[Callable[[str, str], None]] = None) -> int:
+    """Run every fix there is a command for, saying each; how many
+    worked."""
+
+    say = say or (lambda line, state: print(line))
+    worked = 0
+    for check in fixable(checks):
+        say(f"Fixing {check.name}: {' '.join(check.command)}", "fix")
+        ok, said = run_fix(check)
+        worked += ok
+        say(("  ✓ " if ok else "  ✗ ") + said.replace("\n", "\n    "),
+            OK if ok else FAIL)
+    return worked

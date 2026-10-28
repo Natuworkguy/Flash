@@ -784,6 +784,10 @@ pre code { display: block; padding: 2px 16px 14px; overflow-x: auto; font-size: 
 .doctor-list .what b { color: var(--text); font-weight: 600; }
 .doctor-list small { color: var(--text-3); font-family: var(--mono); font-size: 12px; overflow-wrap: anywhere; }
 .doctor-list small:empty { display: none; }
+.doctor-list .what { flex: 1; }
+.doctor-list .doctor-run { flex: none; align-self: center; }
+.doctor-list .doctor-summary { justify-content: flex-end; }
+.doctor-list .doctor-summary[hidden] { display: none; }
 .seen-strip { border-top: 1px solid var(--border); padding: 8px 12px 10px; }
 .seen-strip.block { border: 1px solid var(--border); border-radius: var(--radius); }
 .seen-label { display: flex; align-items: center; gap: 6px; margin-bottom: 7px; font-size: 12px; color: var(--text-3); }
@@ -8357,6 +8361,50 @@ function drawGeneral(body) {
   body.insertAdjacentHTML("beforeend", `<h2 class="settings-section settings-gap">Updates</h2><p class="settings-sub">New versions come from the Flash repository on GitHub, the same as /update in the terminal.</p><div class="updates-box"></div>`);
   renderUpdates(body.querySelector(".updates-box"));
 
+  // A check whose fix is a command has a Run button for it, and all of
+  // them a Fix all; each run looks at everything again after.
+  const drawDoctor = (list, checks) => {
+    list.textContent = "";
+    for (const c of checks) {
+      const item = list.appendChild(el("li", `doctor-${c.state}`, `<span class="mark"></span><span class="what"><b></b><span></span><small></small></span>`));
+      item.querySelector(".mark").innerHTML = icon({ ok: "check", warn: "alert", fail: "x", off: "dot" }[c.state] || "dot");
+      item.querySelector("b").textContent = c.name;
+      item.querySelector(".what > span").textContent = c.said;
+      item.querySelector("small").textContent = c.state === "ok" ? "" : c.fix;
+      if (c.fixable) {
+        const run = item.appendChild(el("button", "btn small primary doctor-run", "Run"));
+        run.type = "button";
+        run.dataset.tip = c.command.join(" ");
+        run.onclick = () => fixOne(list, c, run);
+      }
+    }
+    const fixes = checks.filter((c) => c.fixable);
+    const summary = list.appendChild(el("li", "doctor-summary"));
+    if (fixes.length > 1) {
+      const all = summary.appendChild(el("button", "btn small", `Fix all ${fixes.length}`));
+      all.type = "button";
+      all.onclick = async () => {
+        all.disabled = true;
+        for (const c of fixes) {
+          const run = [...list.querySelectorAll(".doctor-run")].find((b) => b.dataset.tip === c.command.join(" "));
+          if (run) await fixOne(list, c, run, false);
+        }
+        try { drawDoctor(list, (await command("doctor", "", null)).checks); } catch (error) { showFailure(error); }
+      };
+    }
+    summary.hidden = fixes.length < 2;
+    list.hidden = false;
+  };
+  const fixOne = async (list, c, run, redraw = true) => {
+    run.disabled = true;
+    run.textContent = "Running…";
+    try {
+      const r = await command("doctor-fix", c.name, null);
+      toast(r.ok ? `${c.name}: fixed` : `${c.name}: ${r.said.split("\n").pop()}`);
+      if (redraw) drawDoctor(list, r.checks);
+      else { run.textContent = r.ok ? "Done" : "Failed"; }
+    } catch (error) { showFailure(error); run.disabled = false; run.textContent = "Run"; }
+  };
   // Whether everything Flash leans on works, as flash doctor says.
   body.insertAdjacentHTML("beforeend", `<h2 class="settings-section settings-gap">Health check</h2><p class="settings-sub">Looks at Python and Flash's packages, Ollama and your model, Flash's folder, extensions, connectors, sparks and macOS's permissions, and says how to fix anything that isn't right. It only looks. The same as <code>flash doctor</code> in a terminal.</p><div class="doctor-box"><button type="button" class="btn">Run the check</button><ul class="doctor-list" hidden></ul></div>`);
   const doctorBox = body.querySelector(".doctor-box");
@@ -8367,15 +8415,7 @@ function drawGeneral(body) {
     b.textContent = "Checking…";
     try {
       const { checks } = await command("doctor", "", null);
-      list.textContent = "";
-      for (const c of checks) {
-        const item = list.appendChild(el("li", `doctor-${c.state}`, `<span class="mark"></span><span class="what"><b></b><span></span><small></small></span>`));
-        item.querySelector(".mark").innerHTML = icon({ ok: "check", warn: "alert", fail: "x", off: "dot" }[c.state] || "dot");
-        item.querySelector("b").textContent = c.name;
-        item.querySelector(".what > span").textContent = c.said;
-        item.querySelector("small").textContent = c.state === "ok" ? "" : c.fix;
-      }
-      list.hidden = false;
+      drawDoctor(list, checks);
     } catch (error) { showFailure(error); }
     b.disabled = false;
     b.textContent = "Run it again";
