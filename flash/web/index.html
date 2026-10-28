@@ -1633,6 +1633,16 @@ body.page-projects #dock, body.page-settings #dock, body.page-tool #dock { displ
 .cal-feed-form input { flex: 1 1 180px; min-width: 0; font: 14px var(--sans); color: var(--text); background: var(--bg); border: 1px solid var(--border-strong); border-radius: 10px; padding: 8px 12px; outline: 0; }
 .cal-feed-form input.mono { font-family: var(--mono); font-size: 13px; flex-basis: 300px; }
 .cal-google { margin-top: 10px; }
+#music-bar { display: flex; align-items: center; gap: 10px; margin: 0 auto 8px; max-width: var(--col, 760px); padding: 6px 8px; border: 1px solid var(--border); border-radius: 14px; background: var(--surface); animation: rise 0.25s var(--ease) both; }
+#music-bar[hidden] { display: none; }
+#music-bar .music-art { width: 64px; height: 36px; border-radius: 8px; overflow: hidden; flex: none; background: var(--bg); }
+#music-bar .music-art iframe { width: 64px; height: 36px; display: block; pointer-events: none; }
+#music-bar .music-what { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+#music-bar .music-title { font-size: 13.5px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#music-bar .music-said { font-size: 12px; color: var(--text-3); }
+#music-bar.playing .music-said { color: var(--accent); }
+#music-bar .music-volume { width: 90px; accent-color: var(--accent); }
+@media (max-width: 520px) { #music-bar .music-volume { display: none; } }
 .other-keeper .auto-takeover { display: flex; align-items: center; gap: 6px; flex-basis: 100%; font-size: 12.5px; color: var(--text-3); cursor: pointer; }
 .email-form .field > span i { font-style: normal; color: var(--text-3); font-weight: 400; }
 .email-form-title { font-size: 14px; font-weight: 600; margin: 0 0 12px; }
@@ -3644,6 +3654,7 @@ select:not([multiple]) { -webkit-appearance: none; appearance: none; background-
           <button type="button" class="icon-btn voice-end" data-tip="End voice mode" data-keys="Esc" aria-label="End voice mode"></button>
         </div>
         <div class="shell"><div class="glow" aria-hidden="true"></div>
+        <div id="music-bar" hidden aria-label="Music"><span class="music-art"><span id="music-frame"></span></span><span class="music-what"><b class="music-title"></b><small class="music-said">Flash's player</small></span><button type="button" class="icon-btn music-toggle" aria-label="Pause"></button><input type="range" class="music-volume" min="0" max="100" value="70" aria-label="Volume"><button type="button" class="icon-btn music-close" aria-label="Stop"></button></div>
         <form id="composer" autocomplete="off">
           <div id="tray" hidden aria-label="Attached"></div>
           <textarea id="input" rows="1" placeholder="Message Flash" aria-label="Message Flash"></textarea>
@@ -14624,6 +14635,7 @@ async function startVoice(team = null, how = "button") {
 }
 
 function endVoice() {
+  musicDuck(false);
   if (!voice.on) return;
   voiceTell("end");
   setTimeout(startWake, 800);
@@ -14796,6 +14808,14 @@ async function voiceLoop() {
     if (!voice.on) return;
     if (!heard || !heard.text || heard.alone) continue;
     showHeard(heard.text);
+    // "Pause the music", "next song", "turn it down": done here, and a
+    // wake-word turn goes back to listening for the next "Hey Flash".
+    if (heard.music) {
+      await musicIntent(heard.music);
+      if (voice.how === "wake") { endVoice(); return; }
+      musicDuck(false);
+      continue;
+    }
     if (heard.exit) { endVoice(); toast("Voice mode off"); return; }
     if (heard.pause) { if (!(await pausedUntilResume())) return; continue; }
     // Started with "Hey Flash": a ping says the request is in, words and
@@ -15463,10 +15483,93 @@ function sendWake() {
   for (const part of parts) { pcm.set(part, at); at += part.length; }
   wake.sending = true;
   api("/api/voice/wake", { id: wake.id, data: base64Of(new Uint8Array(pcm.buffer)) })
-    .then((heard) => { if (heard.woke && wake.on) { stopWake(); startVoice(null, "wake"); } })
+    .then((heard) => { if (heard.woke && wake.on) { musicDuck(true); stopWake(); startVoice(null, "wake"); } })
     .catch(() => {})
     .finally(() => { wake.sending = false; });
 }
+
+// Music, in Flash's own player: YouTube's, at the foot of the page, its
+// picture small beside its name. Hearing "Hey Flash", it dips until the
+// rest is heard, and comes back; nothing else touches it.
+const music = { player: null, api: null, title: "", playing: false, ducked: false, volume: 70 };
+
+function youtubeApi() {
+  if (music.api) return music.api;
+  music.api = new Promise((resolve) => {
+    window.onYouTubeIframeAPIReady = () => resolve(window.YT);
+    const script = document.createElement("script");
+    script.src = "https://www.youtube.com/iframe_api";
+    document.head.appendChild(script);
+  });
+  return music.api;
+}
+
+function drawMusic() {
+  const bar = $("#music-bar");
+  bar.hidden = !music.title;
+  bar.querySelector(".music-title").textContent = music.title;
+  bar.querySelector(".music-said").textContent = music.ducked ? "Listening…" : music.playing ? "Playing in Flash" : "Paused";
+  const toggle = bar.querySelector(".music-toggle");
+  toggle.innerHTML = icon(music.playing ? "pause" : "play");
+  toggle.setAttribute("aria-label", music.playing ? "Pause" : "Play");
+  bar.classList.toggle("playing", music.playing);
+}
+
+async function musicPlay(id, title) {
+  music.title = title;
+  music.playing = true;
+  drawMusic();
+  const YT = await youtubeApi();
+  if (music.player) { music.player.loadVideoById(id); return; }
+  music.player = new YT.Player("music-frame", {
+    width: 64, height: 36, videoId: id,
+    playerVars: { autoplay: 1, playsinline: 1, controls: 0, disablekb: 1, modestbranding: 1 },
+    events: {
+      onReady: (e) => { e.target.setVolume(music.volume); e.target.playVideo(); },
+      onStateChange: (e) => { music.playing = e.data === 1 || e.data === 3; drawMusic(); },
+      onError: () => { toast("YouTube would not play that one here"); },
+    },
+  });
+}
+
+function musicDo(action, value) {
+  const p = music.player;
+  if (!p || !music.title) return false;
+  if (action === "pause") p.pauseVideo();
+  else if (action === "resume" || action === "play") p.playVideo();
+  else if (action === "stop") { p.stopVideo(); music.title = ""; music.playing = false; }
+  else if (action === "volume") { music.volume = Math.max(0, Math.min(100, Number(value) || 0)); p.setVolume(music.volume); $("#music-bar .music-volume").value = music.volume; }
+  drawMusic();
+  return true;
+}
+
+function musicDuck(on) {
+  if (!music.player || !music.title || music.ducked === on) return;
+  music.ducked = on;
+  if (music.player.setVolume) music.player.setVolume(on ? Math.round(music.volume * 0.15) : music.volume);
+  drawMusic();
+}
+
+// Said by voice: Flash's player when it has a song, else whatever app
+// plays music on this computer.
+async function musicIntent(said) {
+  musicDuck(false);
+  const step = 15;
+  const mine = { pause: "pause", resume: "resume", next: "next", louder: "volume", quieter: "volume" }[said];
+  const level = said === "louder" ? music.volume + step : music.volume - step;
+  if (music.title && musicDo(mine, level)) { toast(said === "pause" ? "Paused" : said === "resume" ? "Playing" : `Volume ${music.volume}`); return; }
+  try { const r = await command("music", said, null); toast(r.said); } catch (error) { showFailure(error); }
+}
+
+function onMusic(event) {
+  if (event.action === "play") musicPlay(event.id, event.title);
+  else musicDo(event.action, event.value);
+}
+
+$("#music-bar .music-toggle").onclick = () => musicDo(music.playing ? "pause" : "resume");
+$("#music-bar .music-close").onclick = () => { musicDo("stop"); command("music", "stop", null).catch(() => {}); };
+$("#music-bar .music-close").innerHTML = icon("x");
+$("#music-bar .music-volume").oninput = (e) => musicDo("volume", e.target.value);
 
 function stopWake() {
   if (!wake.on) return;
@@ -15589,6 +15692,7 @@ function apply(event) {
   if (event.seq) lastSeq = event.seq;
   extEmit(event);
   if (event.type === "chats" || event.type === "status" || event.type === "projects") { refreshLite(); return; }
+  if (event.type === "music") { onMusic(event); return; }
   if (event.type === "calendar") { const box = document.querySelector(".cal-box"); if (box) drawCalendarSettings(box); toast("Google Calendar is connected"); return; }
   // Flash ended the spoken conversation: voice mode goes off once its
   // reply is said.

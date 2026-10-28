@@ -172,6 +172,18 @@ python run.py
   something you are building, Flash can make it a project (a name, its
   folder, instructions every chat in it gets) and move the chat into it.
   Ask it, or it offers when it fits.
+- **Music**: "Play Blue in Green by Miles Davis" plays it with no browser
+  tab: from YouTube in a small player above the message box in the web
+  UI (its picture, pause, volume, stop), or in the terminal through mpv
+  when it and yt-dlp are installed. "On Spotify" plays it in Spotify on
+  a Mac (with a free Spotify app's `SPOTIFY_CLIENT_ID` and
+  `SPOTIFY_CLIENT_SECRET` in the vault, Flash finds the song itself;
+  without, it opens Spotify's search), and "on Apple Music" plays it
+  from your Music library. While it plays, "Hey Flash, pause the music"
+  works: the music dips only once "Hey Flash" is heard, for as long as
+  it takes to hear the rest, then comes back, so listening is untouched
+  until you call. "Resume the music", "next song", "turn it up" and
+  "turn it down" work too, on Flash's player or any app's.
 - `/calendar`: What is on for the next week (`/calendar 30` for a
   month), from every calendar Flash reads: its own, iCal feeds
   (`/calendar feed add Work <address>`: Google Calendar gives each

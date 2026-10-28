@@ -511,6 +511,15 @@ def tool_debate(event: dict) -> bool:
     return True
 
 
+def tool_music(event: dict) -> Optional[str]:
+    """Hand music to the page's player (play_music): what it did, in
+    words, or None where there is no page to play it (the terminal)."""
+
+    sink = _sink()
+    said = sink("music", json.dumps(event), "") if sink else None
+    return said if isinstance(said, str) else None
+
+
 def tool_project(event: dict) -> Optional[dict]:
     """Make the chat this turn is in a project (make_project): what the
     page made of it, or None where there is no chat to move (the

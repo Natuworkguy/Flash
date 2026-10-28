@@ -99,6 +99,7 @@ from .theme import (
     tool_document,
     tool_file,
     tool_line,
+    tool_music,
     tool_notify,
     tool_project,
     tool_result,
@@ -4638,6 +4639,63 @@ def notify_user(message: str, title: str = "") -> str:
     return "Sent. The user has been notified."
 
 
+def play_music(query: str = "", service: str = "youtube",
+               action: str = "play", value: Any = 0) -> str:
+    """Play a song by name without a browser tab, or pause, resume, stop
+    or turn down what plays."""
+
+    from . import computer, music
+
+    action = str(action or "play").strip().lower()
+    service = str(service or "youtube").strip().lower().replace(" ", "_")
+    tool_line(f"Music({action} {query or ''})".replace(" )", ")"))
+    try:
+        if action == "play":
+            if not str(query or "").strip():
+                raise music.MusicError("Name the song, or give its link.")
+            if service == "spotify":
+                result = music.play_spotify(query)
+            elif service in ("apple_music", "apple", "music"):
+                result = music.play_apple_music(query)
+            else:
+                found = music.find_youtube(query)
+                said = tool_music({"action": "play", **found})
+                if said is not None:
+                    result = said
+                elif music.terminal_can_play():
+                    result = music.terminal_play(found)
+                    if not music.wait_until_started():
+                        raise music.MusicError(
+                            f"mpv could not play {found['url']}.")
+                else:
+                    raise music.MusicError(
+                        "Here in the terminal it plays through mpv and "
+                        "yt-dlp, which are not installed; or ask in the web "
+                        "UI, which plays it itself.")
+        elif action in ("pause", "resume", "stop", "next", "volume"):
+            level = int(_clamp(value, 0, 100, 50))
+            said = tool_music({"action": action, "value": level})
+            if said is not None:
+                result = said
+            elif music.playing_here():
+                result = music.terminal_control(action, level)
+            else:
+                # An app's music: the computer's own controls.
+                result = computer.do({
+                    "pause": "pause", "resume": "play", "stop": "pause",
+                    "next": "next_track", "volume": "set_volume",
+                }[action], str(level))
+        else:
+            raise music.MusicError("action is one of "
+                                   + ", ".join(music.ACTIONS) + ".")
+    except (music.MusicError, computer.ComputerError) as exc:
+        result = f"Error: {exc}"
+        tool_result(result, style=ERROR)
+        return result
+    tool_result(result)
+    return result
+
+
 CALENDAR_ACTIONS = ("list", "add", "update", "delete", "calendars")
 
 
@@ -6093,6 +6151,37 @@ tools: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "play_music",
+            "description": (
+                "Play a song, an album or a video's sound by name, with no "
+                "browser tab: on YouTube (the default) it plays in Flash's "
+                "own small player, or in the terminal through mpv; on "
+                "Spotify or Apple Music, in that app on a Mac. Then pause, "
+                "resume, stop or set the volume (0-100) of whatever plays, "
+                "Flash's player or an app's. The user can also say \"Hey "
+                "Flash, pause the music\" without you."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": (
+                        "What to play: a song and artist, or a link.")},
+                    "service": {"type": "string",
+                                "enum": ["youtube", "spotify",
+                                         "apple_music"]},
+                    "action": {"type": "string",
+                               "enum": ["play", "pause", "resume", "stop",
+                                        "next", "volume"]},
+                    "value": {"type": "integer",
+                              "description": "The volume, 0-100."},
+                },
+                "required": ["action"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "calendar",
             "description": (
                 "The user's calendars: Flash's own, any iCal feeds they "
@@ -6929,6 +7018,7 @@ FUNCTIONS = {
     "play_realtime": play_realtime,
     "make_project": make_project,
     "calendar": calendar_tool,
+    "play_music": play_music,
     "request_connector": request_connector,
     "request_extension": request_extension,
     "web_search": web_search,

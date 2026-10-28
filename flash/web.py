@@ -936,6 +936,8 @@ class Session:
         # turn: chat id -> the paths, told to the model with its next
         # message so it reads them again rather than writing over them.
         self.edited: dict[str, list[str]] = {}
+        # What the page's music player plays: {"id", "title", "playing"}.
+        self.music: dict = {}
         # An agent's edit to a file shown as a document reaches the page
         # as it lands.
         livedocs.listen(self.document_changed)
@@ -2869,6 +2871,27 @@ def _sink(session: Session, chat: Chat):
             session.hub.publish({"type": "debate-live", "chat": chat.id,
                                  **event})
             return True
+        if kind == "music":
+            # The page's player: one for all the pages, as the music is.
+            asked = json.loads(text)
+            action = asked.get("action")
+            now = session.music
+            if action == "play":
+                session.music = {"id": asked["id"], "title": asked["title"],
+                                 "playing": True}
+            elif not now:
+                return None
+            elif action == "stop":
+                session.music = {}
+            elif action in ("pause", "resume"):
+                now["playing"] = action == "resume"
+            session.hub.publish({"type": "music", **asked})
+            if action == "play":
+                return f"Playing {asked['title']} in Flash's own player."
+            return {"pause": "Paused.", "resume": "Playing again.",
+                    "stop": "Stopped.", "volume": "Volume set.",
+                    "next": "One song plays at a time: play another."}.get(
+                        action, "Done.")
         if kind == "project":
             # "Make this a project": made, and this chat moved into it.
             asked = json.loads(text)
@@ -4337,6 +4360,26 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
     if name == "briefing-undo":
         briefing.undismiss(arg)
         return {}
+
+    if name == "music":
+        # Said by voice with no player on the page that heard it: the
+        # music another page plays, else an app's on this computer.
+        if arg == "stop":
+            session.music = {}
+            session.hub.publish({"type": "music", "action": "stop"})
+            return {"said": "Stopped."}
+        if session.music and arg in ("pause", "resume"):
+            session.music["playing"] = arg == "resume"
+            session.hub.publish({"type": "music", "action": arg})
+            return {"said": "Paused." if arg == "pause" else "Playing."}
+        wanted = {"pause": "pause", "resume": "play", "next": "next_track",
+                  "louder": "volume_up", "quieter": "volume_down"}.get(arg)
+        if not wanted:
+            raise ValueError(f"Not a thing to do to music: {arg!r}.")
+        try:
+            return {"said": computer.do(wanted)}
+        except computer.ComputerError as exc:
+            raise ValueError(str(exc)) from None
 
     if name == "calendar":
         from . import calendars
