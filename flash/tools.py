@@ -100,6 +100,7 @@ from .theme import (
     tool_file,
     tool_line,
     tool_notify,
+    tool_project,
     tool_result,
     yes_no,
 )
@@ -4637,6 +4638,129 @@ def notify_user(message: str, title: str = "") -> str:
     return "Sent. The user has been notified."
 
 
+def make_project(name: str = "", path: str = "",
+                 instructions: str = "") -> str:
+    """Make a project of the work in this chat, and move the chat in."""
+
+    from . import workspace
+
+    name = " ".join(str(name or "").split())[:80]
+    tool_line(f"MakeProject({name or path})")
+    if not name and not path:
+        result = "Error: give the project a name, and the folder it is in."
+        tool_result(result, style=ERROR)
+        return result
+    asked = {"name": name, "path": str(path or os.getcwd()),
+             "instructions": str(instructions or "")[:4000]}
+    try:
+        said = tool_project(asked)
+        if said is None:
+            made = workspace.create_project(**asked)
+            said = {"id": made.id, "name": made.name, "path": made.path}
+            where = "It is in the web UI's Projects."
+        else:
+            where = "This chat is in it now."
+    except (workspace.WorkspaceError, OSError, ValueError) as exc:
+        result = f"Error: {exc}"
+        tool_result(result, style=ERROR)
+        return result
+    result = f"Made the project {said['name']}, at {said['path']}. {where}"
+    tool_result(result)
+    return result
+
+
+def request_connector(name: str, target: str, why: str = "",
+                      start: str = "") -> str:
+    """Ask the user to add an MCP server; in UltraAuto, add it."""
+
+    from . import connectors
+
+    tool_line(f"RequestConnector({name}: {target})")
+    try:
+        spec = connectors.spec_from(target, None, start)
+        connectors.check_name(name)
+    except connectors.ConnectorError as exc:
+        result = f"Error: {exc}"
+        tool_result(result, style=ERROR)
+        return result
+    shown = target + (f" (started with {start})" if start else "")
+    if name in connectors.read_config():
+        result = f"Error: there is a connector called {name} already."
+        tool_result(result, style=ERROR)
+        return result
+    if not ultra_auto() and not _user_allows(
+        f"Add the MCP server {name}, {shown}?"
+        + (f" Flash says: {why}" if why else "")
+        + " Its tools join Flash's; a command runs on this computer."
+    ):
+        why_not = denial_why()
+        return ("The user said no to adding it"
+                + (f': "{why_not}"' if why_not else "") + ".")
+    found = connectors.read_config()
+    found[name] = spec
+    connectors.write_config(found)
+    servers = connectors.refresh()
+    server = next((s for s in servers if s.name == name), None)
+    state = server.state if server else "unknown"
+    if state == connectors.READY:
+        result = (f"Added {name}: its tools are "
+                  + ", ".join(connectors.tool_name(name, t["name"])
+                              for t in server.tools) + ".")
+    else:
+        result = (f"Added {name}, but it is {state}"
+                  + (f": {server.why}" if server and server.why else ".")
+                  + " The user can fix it in Settings > Connectors.")
+    tool_result(result.split(":")[0])
+    return result
+
+
+def request_extension(source: str, why: str = "") -> str:
+    """Ask the user to install a Flash extension; in UltraAuto, install
+    it."""
+
+    tool_line(f"RequestExtension({source})")
+    try:
+        spec = extensions.canonical(source)
+        checkout = extensions.fetch(source)
+    except (extensions.ExtensionError, OSError) as exc:
+        result = f"Error: {exc}"
+        tool_result(result, style=ERROR)
+        return result
+    try:
+        try:
+            ext = extensions.load(checkout)
+        except extensions.ExtensionError as exc:
+            result = f"Error: {spec} is not a Flash extension: {exc}"
+            tool_result(result, style=ERROR)
+            return result
+        clash = extensions.clashes(ext, frozenset(), frozenset(FUNCTIONS))
+        if clash:
+            result = f"Error: it cannot be installed: {'; '.join(clash)}."
+            tool_result(result, style=ERROR)
+            return result
+        adds = "; ".join(ext.contents()) or "nothing Flash would use"
+        if not ultra_auto() and not _user_allows(
+            f"Install the extension {ext.name} from {spec}? It adds "
+            f"{adds}." + (f" Flash says: {why}" if why else "")
+            + " Extensions run programs on this computer as you."
+        ):
+            why_not = denial_why()
+            return ("The user said no to installing it"
+                    + (f': "{why_not}"' if why_not else "") + ".")
+        installed = extensions.install(checkout, source)
+    except (extensions.ExtensionError, OSError) as exc:
+        result = f"Error: could not install it: {exc}"
+        tool_result(result, style=ERROR)
+        return result
+    finally:
+        extensions.discard(checkout)
+    extensions.reload()
+    result = (f"Installed {installed.name}: {adds}. Its tools are offered "
+              "from the next message.")
+    tool_result(f"Installed {installed.name}")
+    return result
+
+
 def debate_tool(question: str = "", context: str = "", rounds: Any = 2,
                 sides: Any = None) -> str:
     """Have two sides argue QUESTION out (debate.py), and say what came
@@ -5906,6 +6030,85 @@ tools: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "make_project",
+            "description": (
+                "Make the work in this chat a project, and move the chat "
+                "into it: when an experiment turns into something the user "
+                "is actually building or shipping, or they ask to keep it "
+                "together. A project has a folder, and instructions every "
+                "chat in it gets. Say so when you do."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string",
+                             "description": "A short name for it."},
+                    "path": {"type": "string", "description": (
+                        "The folder the work is in. Where Flash runs, if "
+                        "left out.")},
+                    "instructions": {"type": "string", "description": (
+                        "What every chat in it should know: the stack, "
+                        "conventions, the goal. Optional.")},
+                },
+                "required": ["name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "request_connector",
+            "description": (
+                "Ask the user to add an MCP server, when a task needs a "
+                "tool Flash does not have and a server offers it (GitHub, "
+                "a database, a calendar). They are asked, unless "
+                "UltraAuto is on; its tools are yours from the next step. "
+                "Never put a secret in target: say what key it needs, and "
+                "the user adds it in Settings > Connectors."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": (
+                        "Its name: letters, digits, - and _.")},
+                    "target": {"type": "string", "description": (
+                        "The command that runs it (npx -y "
+                        "@modelcontextprotocol/server-github), or its URL.")},
+                    "start": {"type": "string", "description": (
+                        "With a URL: a command to run first, that serves "
+                        "it.")},
+                    "why": {"type": "string",
+                            "description": "Why, in a sentence."},
+                },
+                "required": ["name", "target"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "request_extension",
+            "description": (
+                "Ask the user to install a Flash extension, as "
+                "github@owner/repo (#branch for another branch), "
+                "git@<url>, or path@/folder. They see what it adds and are "
+                "asked, unless UltraAuto is on."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "source": {"type": "string",
+                               "description": "Where it comes from."},
+                    "why": {"type": "string",
+                            "description": "Why, in a sentence."},
+                },
+                "required": ["source"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "play_realtime",
             "description": (
                 "Play a real-time game, or drive anything too fast to take "
@@ -6619,6 +6822,9 @@ FUNCTIONS = {
     "interact": interact,
     "devtools": devtools,
     "play_realtime": play_realtime,
+    "make_project": make_project,
+    "request_connector": request_connector,
+    "request_extension": request_extension,
     "web_search": web_search,
     "fetch": fetch,
     "get_os": get_os,
