@@ -37,6 +37,11 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
         help="what to install or remove",
     )
     parser.add_argument(
+        "--fix",
+        action="store_true",
+        help="with doctor, run the commands that fix what it found",
+    )
+    parser.add_argument(
         "--uri",
         metavar="URL",
         help="a flash://?prompt=... URL to open in a new session",

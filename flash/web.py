@@ -4222,6 +4222,19 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
 
         return {"checks": [c.to_dict() for c in doctor.run()]}
 
+    if name == "doctor-fix":
+        # The fix for the check named ARG, as the check now finds it, then
+        # every check again.
+        from . import doctor
+
+        found = next((c for c in doctor.run() if c.name == arg
+                      and c.fixable), None)
+        if found is None:
+            raise ValueError("That is fine now, or has no command to fix it.")
+        ok, said = doctor.run_fix(found)
+        return {"ok": ok, "said": said,
+                "checks": [c.to_dict() for c in doctor.run()]}
+
     if name == "chat-seen":
         # The page has the chat open, the reply in front of the user: not
         # news for the briefing. Kept without counting as a change.
