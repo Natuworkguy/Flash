@@ -1424,3 +1424,35 @@ def test_models_are_grouped_by_their_engine():
     speaking = [voice.engine_of(c.name)
                 for c in voice.by_engine(voice.SPEAKING)]
     assert speaking == sorted(speaking, key=["Piper", "Kokoro"].index)
+
+
+def test_the_next_piece_is_made_while_one_plays():
+    import threading
+    import time
+
+    made = []
+
+    def pieces():
+        for n in range(3):
+            made.append((n, time.monotonic()))
+            time.sleep(0.05)
+            yield n
+
+    taken = []
+    for piece in voice.ahead(pieces()):
+        taken.append((piece, time.monotonic()))
+        time.sleep(0.2)  # "playing" it
+    assert [p for p, _ in taken] == [0, 1, 2]
+    # Piece 1 was being made before piece 0 had finished playing.
+    assert made[1][1] < taken[0][1] + 0.2
+    stop = threading.Event()
+    stop.set()
+    assert list(voice.ahead(iter([1, 2]), stop)) in ([], [1], [1, 2])
+
+
+def test_a_long_sentence_is_said_in_parts():
+    long = ("This is a long sentence about the weather, which goes on for a "
+            "while, and then it goes on a little more before it stops.")
+    parts = voice._parts(long)
+    assert len(parts) > 1 and " ".join(parts) == long
+    assert voice._parts("Short.") == ["Short."]
