@@ -732,6 +732,17 @@ pre code { display: block; padding: 2px 16px 14px; overflow-x: auto; font-size: 
 .tool.blocked .ico svg { color: var(--warn); }
 .tool .body { border-top: 1px solid var(--border); padding: 10px 14px; font: 12.5px/1.55 var(--mono); color: var(--text-2); white-space: pre-wrap; word-break: break-word; max-height: 420px; overflow: auto; background: var(--code-bg); }
 .tool .body.error { color: var(--del); }
+.s1-card-rate { display: flex; align-items: center; gap: 8px; padding: 6px 12px 8px; border-top: 1px solid var(--border); font-size: 12.5px; color: var(--text-3); }
+.s1-thumbs { display: inline-flex; gap: 2px; }
+.s1-thumbs .rate.on { color: var(--accent); }
+.s1-head { margin: 14px 0 2px; font-size: 14px; font-weight: 600; }
+.s1-list { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px; max-width: 720px; }
+.s1-list li { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); }
+.s1-verdict { flex: none; font-size: 11px; font-weight: 600; padding: 2px 7px; border-radius: 999px; color: var(--add); background: color-mix(in srgb, var(--add) 14%, transparent); }
+.s1-list li.stopped .s1-verdict { color: var(--warn); background: color-mix(in srgb, var(--warn) 14%, transparent); }
+.s1-what { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.s1-what code { font: 12px var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.s1-what small { color: var(--text-3); font-size: 11.5px; }
 /* A reply's tool calls, once it is done: one row saying how many, each
    tool's icon in it, that opens to the calls themselves. */
 .tool-batch { border: 1px solid var(--border); border-radius: var(--radius); font-size: 13.5px; }
@@ -974,6 +985,10 @@ pre code { display: block; padding: 2px 16px 14px; overflow-x: auto; font-size: 
 .ld-sketch .lens { fill: color-mix(in srgb, currentColor 10%, var(--bg)); }
 .ld-sketch .faint { opacity: 0.45; }
 .ld-sketch .solid { fill: currentColor; }
+.ld-procrastinate.ld-sketch { width: 3em; }
+.ld-procrastinate.ld-sketch svg { width: 3em; }
+.block.loader.lingering { transition: opacity 0.4s var(--ease), transform 0.4s var(--ease); }
+.block.loader.lingering.gone { opacity: 0; transform: translateX(12px); }
 @keyframes pulled {
   0% { transform: rotate(calc(var(--k) * 45deg)) translateX(0.55em); opacity: 1; }
   52% { transform: rotate(calc(var(--k) * 45deg + 220deg)) translateX(0.05em) scale(0.4); opacity: 0.9; }
@@ -3336,8 +3351,21 @@ body.resizing-viewer iframe { pointer-events: none; }
 /* Listening for "Hey Flash": a quiet sign at the top right, so it is
    never on without showing it, and out of the message box. Only a sign:
    it is turned off in Settings, never by a stray click. */
-#wake-pill { margin-left: auto; flex: none; display: inline-flex; align-items: center; gap: 7px; padding: 5px 10px; border-radius: 99px; font-size: 12.5px; color: var(--text-3); cursor: default; user-select: none; }
-#wake-pill[hidden] { display: none; }
+#status-pills { margin-left: auto; flex: none; display: inline-flex; align-items: center; }
+.status-pill { flex: none; display: inline-flex; align-items: center; gap: 7px; padding: 5px 10px; border-radius: 99px; font-size: 12.5px; color: var(--text-3); cursor: default; user-select: none; }
+.status-pill[hidden] { display: none; }
+/* The tunnel: it drops in from the top, says "Tunnel", and parks as a
+   dot just behind the voice one. Click it to turn it off. */
+#tunnel-pill { font: inherit; font-size: 12.5px; background: none; border: 0; cursor: pointer; position: relative; z-index: 0; animation: tunnel-drop 0.6s var(--spring) both; }
+#tunnel-pill:hover { color: var(--text-2); }
+#tunnel-pill .wake-dot i { background: var(--del); animation-delay: -1.2s; }
+#tunnel-pill:not([hidden]) + #wake-pill:not([hidden]) { position: relative; z-index: 1; }
+/* Parked: its dot tucked just behind the voice one, the left of it still
+   showing, and still a way in to turn the tunnel off. */
+#tunnel-pill, #wake-pill { transition: gap 0.55s var(--ease) 0.8s, padding 0.55s var(--ease) 0.8s, margin 0.55s var(--ease) 0.8s; }
+#tunnel-pill.settled:not([hidden]):has(+ #wake-pill.settled:not([hidden])) { padding-right: 0; margin-right: -3px; }
+#tunnel-pill.settled:not([hidden]) + #wake-pill.settled { padding-left: 0; }
+@keyframes tunnel-drop { from { opacity: 0; transform: translateY(-160%); } 60% { opacity: 1; } }
 .wake-sense-row .side { gap: 10px; }
 .voice-look-row select { font: 13.5px var(--sans); color: var(--text); background: var(--bg); border: 1px solid var(--border-strong); border-radius: 9px; padding: 7px 10px; outline: 0; }
 .wake-sense-row input[type=range] { width: 160px; accent-color: var(--accent); }
@@ -3346,15 +3374,15 @@ body.resizing-viewer iframe { pointer-events: none; }
    the right, a letter at a time, into the side, fading out short of the
    window's edge, and the dot slides after it, into the room it left, and
    breathes there. */
-#wake-pill { transition: gap 0.55s var(--ease) 0.8s; }
-#wake-pill.settled { gap: 0; }
-#wake-pill .wake-dot { display: inline-flex; }
-#wake-pill .wake-label { display: inline-block; overflow: hidden; white-space: nowrap; padding-right: 16px; margin-right: -16px; transition: max-width 0.55s var(--ease) 0.8s, padding 0.55s var(--ease) 0.8s, margin 0.55s var(--ease) 0.8s;
+.status-pill { transition: gap 0.55s var(--ease) 0.8s; }
+.status-pill.settled { gap: 0; }
+.status-pill .wake-dot { display: inline-flex; }
+.status-pill .wake-label { display: inline-block; overflow: hidden; white-space: nowrap; padding-right: 16px; margin-right: -16px; transition: max-width 0.55s var(--ease) 0.8s, padding 0.55s var(--ease) 0.8s, margin 0.55s var(--ease) 0.8s;
   -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 16px), transparent); mask-image: linear-gradient(to right, #000 calc(100% - 16px), transparent); }
-#wake-pill .wake-label > span { display: inline-block; transition: transform 0.9s cubic-bezier(0.55, 0, 0.75, 0.2); }
-#wake-pill.settled .wake-label > span { transform: translateX(calc(100% + 16px)); }
-#wake-pill.settled .wake-label { max-width: 0 !important; padding-right: 0; margin-right: 0; }
-#wake-pill .wake-dot i { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); animation: wake-breathe 2.4s ease-in-out infinite; }
+.status-pill .wake-label > span { display: inline-block; transition: transform 0.9s cubic-bezier(0.55, 0, 0.75, 0.2); }
+.status-pill.settled .wake-label > span { transform: translateX(calc(100% + 16px)); }
+.status-pill.settled .wake-label { max-width: 0 !important; padding-right: 0; margin-right: 0; }
+.status-pill .wake-dot i { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); animation: wake-breathe 2.4s ease-in-out infinite; }
 @keyframes wake-breathe { 50% { opacity: 0.35; transform: scale(0.8); } }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
@@ -3554,7 +3582,7 @@ select:not([multiple]) { -webkit-appearance: none; appearance: none; background-
       <button id="title" data-tip="Rename" data-keys="F2">New chat</button>
       <button type="button" class="pill" id="forks-btn" hidden data-tip="This chat's forks" aria-label="This chat's forks"></button>
       <span id="ext-head"></span>
-      <span id="wake-pill" role="status" hidden data-tip="Listening for “Hey Flash”" aria-label="Listening for “Hey Flash”"><span class="wake-dot"><i></i></span><span class="wake-label"><span>Voice</span></span></span>
+      <span id="status-pills"><button type="button" id="tunnel-pill" class="status-pill" hidden data-tip="Flash is on the internet through a tunnel" aria-label="Flash is on the internet through a tunnel"><span class="wake-dot"><i></i></span><span class="wake-label"><span>Tunnel</span></span></button><span id="wake-pill" class="status-pill" role="status" hidden data-tip="Listening for “Hey Flash”" aria-label="Listening for “Hey Flash”"><span class="wake-dot"><i></i></span><span class="wake-label"><span>Voice</span></span></span></span>
     </header>
 
     <section id="ext-panel" hidden aria-label="Extension"><header><span class="ext-panel-name"></span><button type="button" class="icon-btn ext-panel-close" aria-label="Close" data-tip="Close"></button></header><iframe title="Extension"></iframe></section>
@@ -4888,6 +4916,43 @@ function batchTools(live) {
   }
 }
 
+// What System One looked over lately: each to rate, right or wrong, and
+// it reads what you said before its next reviews.
+async function drawSystemOneReviews(box) {
+  let r;
+  try { r = await command("system-one-reviews", "", null); } catch (_) { return; }
+  if (!box.isConnected || !r.reviews.length) return;
+  box.innerHTML = `<h3 class="s1-head">Its recent reviews</h3><p class="settings-sub">Rate them: it learns from what you say, where it was too careful and where not careful enough.</p><ul class="s1-list"></ul>`;
+  const list = box.querySelector(".s1-list");
+  for (const review of r.reviews.slice(0, 12)) {
+    const li = list.appendChild(el("li", review.allowed ? "allowed" : "stopped", `<span class="s1-verdict"></span><span class="s1-what"><code></code><small></small></span><span class="s1-rate"></span>`));
+    li.querySelector(".s1-verdict").textContent = review.allowed ? "Allowed" : "Stopped";
+    li.querySelector("code").textContent = `${review.tool} ${review.arguments}`.slice(0, 120);
+    li.querySelector("small").textContent = review.reason;
+    li.querySelector(".s1-rate").appendChild(s1RateButtons(review.id, review.rating, ""));
+  }
+}
+
+// Thumbs for one review: by its id, or (on a card in a chat) the latest
+// one that stopped a call for REASON.
+function s1RateButtons(id, rating, reason) {
+  const box = el("span", "s1-thumbs");
+  const draw = (now) => {
+    box.textContent = "";
+    for (const [value, name, tip] of [["good", "thumbUp", "System One judged this right"], ["bad", "thumbDown", "System One got this wrong"]]) {
+      const b = button("icon-btn rate" + (now === value ? " on" : ""), name, tip, "", async () => {
+        const next = now === value ? "" : value;
+        try { await command("system-one-rate", id, null, { rating: next, reason }); } catch (error) { showFailure(error); return; }
+        draw(next);
+        if (next) toast("Thanks. System One learns from that.");
+      });
+      box.appendChild(b);
+    }
+  };
+  draw(rating || "");
+  return box;
+}
+
 function addResult(card, text, error, warn) {
   card.classList.remove("running");
   if (error) card.classList.add("failed");
@@ -4903,6 +4968,13 @@ function addResult(card, text, error, warn) {
   // A tool that needs a package says so: install it from here.
   const wanted = packagesIn(text);
   if (wanted.length) slideBox(card).appendChild(installWidget(wanted, ""));
+  // Stopped by System One: right or wrong, it hears which.
+  const stopped = String(text || "").match(/^Stopped by System One: (.+)$/m);
+  if (stopped) {
+    const row = el("div", "s1-card-rate", `<span>Was System One right to stop this?</span>`);
+    row.appendChild(s1RateButtons("", "", stopped[1].trim()));
+    card.appendChild(row);
+  }
 }
 
 // What a tool showed the model, a screenshot of the screen or a page, an
@@ -7977,6 +8049,8 @@ function drawLookSettings(body) {
       grid.appendChild(card);
     });
   };
+  // Drawn again from outside, when the background changes it.
+  grid.redraw = drawPalettes;
 
   body.insertAdjacentHTML("beforeend", `<h2 class="settings-section settings-gap">Accent</h2><p class="settings-sub">The colour of buttons, links and the loader. The first keeps the palette's own.</p><div class="swatches" role="radiogroup" aria-label="Accent"></div>`);
   const swatches = body.querySelector(".swatches");
@@ -8126,6 +8200,18 @@ function drawGeneral(body) {
 
   body.insertAdjacentHTML("beforeend", `<h2 class="settings-section settings-gap">Background</h2><p class="settings-sub">A pixel-art scene behind a new chat, the same ones <code>/background</code> shows in the terminal. Add your own as <code>.scene</code> files in <code>~/.flash/backgrounds</code>.</p><div class="scene-grid" role="radiogroup" aria-label="Background"></div>`);
   drawSceneCards(body.querySelector(".scene-grid"));
+  const sync = el("button", "setting-row", `<span class="what"><b>Colors follow the background</b><span>The palette changes with the scene: Sunset Ridge is Sunset, Coral Shallows is Ocean, Fern Hollow is Forest, Midnight City is Midnight. With no scene, the palette you had comes back.</span></span><span class="switch" aria-hidden="true"></span>`);
+  sync.type = "button";
+  sync.setAttribute("role", "switch");
+  sync.setAttribute("aria-checked", !!look.syncScene);
+  sync.onclick = () => {
+    const on = !look.syncScene;
+    sync.setAttribute("aria-checked", on);
+    setLook({ syncScene: on, beforeScene: on ? look.palette || "flash" : "" });
+    if (on) followScene(); else if (look.beforeScene !== undefined) setLook({ palette: look.beforeScene || look.palette });
+    document.querySelector(".palette-grid")?.redraw?.();
+  };
+  body.appendChild(sync);
 
   body.insertAdjacentHTML("beforeend", `<h2 class="settings-section settings-gap">Custom instructions</h2><p class="settings-sub">How you want every reply, in your own words, here and in the terminal: “use metric”, “no bullet points”, “answer in Spanish”. Memories are what Flash knows about you; these are how it answers.</p><div class="instructions-box"></div>`);
   drawInstructions(body.querySelector(".instructions-box"));
@@ -8195,6 +8281,8 @@ function drawGeneral(body) {
   systemOne.setAttribute("role", "switch");
   body.appendChild(systemOne);
   fillSystemOne(systemOne);
+  body.insertAdjacentHTML("beforeend", `<div class="s1-reviews"></div>`);
+  drawSystemOneReviews(body.querySelector(".s1-reviews"));
 
   // A third mode, offered only once switched on here: nothing asks.
   body.insertAdjacentHTML("beforeend", `<h2 class="settings-section settings-gap">UltraAuto</h2><p class="settings-sub">A third mode beside Ask first and Auto. In UltraAuto, Flash and your sparks never stop to ask you about anything.</p>`);
@@ -11962,6 +12050,18 @@ function showScene(scene) {
   sceneName = scene ? scene.name : "";
   document.body.classList.toggle("has-scene", !!scene);
   if (scene) paintScene($("#scene"), scene);
+  followScene();
+}
+
+// With "Colors follow the background" on: the palette that goes with the
+// scene, a built-in one by its pair or one named as the scene is; with
+// no scene, or none to match, the palette from before.
+const SCENE_PALETTES = { sunset: "sunset", reef: "ocean", forest: "forest", midnight: "midnight" };
+function followScene() {
+  if (!look.syncScene) return;
+  const wanted = sceneName && (SCENE_PALETTES[sceneName] || (allPalettes().some((p) => p.id === sceneName) ? sceneName : ""));
+  const palette = wanted || look.beforeScene || "flash";
+  if (look.palette !== palette) { setLook({ palette }); document.querySelector(".palette-grid")?.redraw?.(); }
 }
 
 // Another page, or the terminal, may have picked a different one.
@@ -12242,27 +12342,38 @@ async function renderTunnel(box = document.querySelector(".tunnel-box")) {
   box.appendChild(warn);
 }
 
-// On every page while the tunnel is on: who can reach Flash, and the way
-// to stop it.
+// On every page while the tunnel is on: a pill by the voice one, that
+// drops in, says "Tunnel", and parks as a red dot behind it. A click
+// says who can reach Flash, and turns it off.
+let tunnelSettling = null;
 function showPublic() {
-  let banner = document.getElementById("public-banner");
-  const on = info.tunnel && info.tunnel.state === "on";
-  if (!banner) {
-    if (!on) return;
-    banner = el("div", "", `<span>Flash is on the internet through a tunnel</span>`);
-    banner.id = "public-banner";
-    banner.setAttribute("role", "status");
-    const off = el("button", "", "Turn off");
-    off.type = "button";
-    off.onclick = async () => {
-      try { await command("tunnel", "off", null); info.tunnel = { state: "off" }; showPublic(); renderTunnel(); toast("Flash is off the internet"); }
-      catch (error) { showFailure(error); }
-    };
-    banner.appendChild(off);
-    document.body.appendChild(banner);
-  }
-  banner.hidden = !on;
+  const pill = $("#tunnel-pill");
+  const on = !!(info.tunnel && info.tunnel.state === "on");
+  if (pill.hidden === !on) return;
+  pill.hidden = !on;
+  clearTimeout(tunnelSettling);
+  pill.classList.remove("settled");
+  const word = pill.querySelector(".wake-label");
+  word.style.maxWidth = "";
+  if (!on) return;
+  tunnelSettling = setTimeout(() => {
+    word.style.maxWidth = `${word.offsetWidth}px`;
+    word.getBoundingClientRect();
+    pill.classList.add("settled");
+  }, WAKE_SETTLE_MS);
 }
+$("#tunnel-pill").onclick = () => {
+  const url = info.tunnel && info.tunnel.url;
+  openMenu($("#tunnel-pill"), [
+    { header: true, html: `<span class="menu-note"><b>Flash is on the internet.</b> Anyone with the link can reach the sign-in page${url ? `:<br><span class="mono">${esc(url)}</span>` : "."}</span>` },
+    { html: `${icon("x")}<span class="label">Turn off the tunnel</span>`, off: true },
+    { html: `${icon("settings")}<span class="label">Tunnel settings</span>`, settings: true },
+  ], async (row) => {
+    if (row.settings) { showSettings("general"); return; }
+    try { await command("tunnel", "off", null); info.tunnel = { state: "off" }; showPublic(); renderTunnel(); toast("Flash is off the internet"); }
+    catch (error) { showFailure(error); }
+  });
+};
 
 async function switchLan(on, from) {
   // From a phone, turning it off ends the page it is on: ask first.
@@ -13679,6 +13790,8 @@ function startedWaiting(id) {
   if (!busySince.has(id)) {
     busySince.set(id, Date.now());
     wordOffset.set(id, Math.floor(Math.random() * words.length));
+    // Now and then, Flash would rather not.
+    if (info.loader === EGG.id || (info.loader_eggs !== false && Math.random() < EGG_CHANCE)) procrastinating.add(id);
   }
 }
 
@@ -13699,7 +13812,7 @@ const LOADER_ART = {
   // The hole drawn last, over the dots, so the ones it pulls in are gone.
   // The nib at the pen's origin: the feather leans back over the hand.
   // The sketches, drawn a frame at a time by turnSketches.
-  ...Object.fromEntries(["quill", "magnifier", "terminal", "book", "camera", "plane"].map((id) => [id, () => `<svg viewBox="0 -4 44 26" data-sketch="${id}"></svg>`])),
+  ...Object.fromEntries(["quill", "magnifier", "terminal", "book", "camera", "plane", "procrastinate"].map((id) => [id, () => `<svg viewBox="0 -4 44 26" data-sketch="${id}"></svg>`])),
   singularity: () => repeat(8, (k) => `<i style="--k:${k}"></i>`) + `<b class="hole"></b>`,
 };
 
@@ -13838,7 +13951,29 @@ function planeFrame(k) {
   return `<g transform="translate(0 -3.5)">` + (trail ? `<path class="faint" d="${trail}" opacity="${f1(fade)}"/>` : "") + plane + `</g>`;
 }
 
+// Procrastinating: a stick figure sprawled on a couch, feet up, thumbing
+// through a phone, a z drifting off now and then. An easter egg: about
+// one wait in forty, and it stays ten seconds after the reply is in.
+function procrastinateFrame(k) {
+  const t = (k / 24) * Math.PI * 2;
+  const tap = Math.sin(t * 3) * 0.9;
+  const couch = `<path class="faint" d="M2 19.5H39M3 19.5V12.5Q3 10.5 5 10.5H6.5M39 19.5V15.5Q39 14 37.5 14H34"/>`;
+  const body = `<path d="M13 11.2 22 15.2"/><path d="M22 15.2 28.6 11.6 35 ${f1(12.6 + tap)}"/><path d="M22 15.2 28 13.2 34.6 ${f1(10.6 - tap * 0.6)}"/><path d="M13.2 11.4 17.6 15.4"/><path d="M13 11.2 11.8 5.6"/>`;
+  const head = `<circle class="hand" cx="9.6" cy="8.8" r="2.6"/>`;
+  let screen = "";
+  for (let i = 0; i < 3; i++) {
+    const y = 1.9 + ((k * 0.55 + i * 1.5) % 4.2);
+    screen += `M10.9 ${f1(y)}H${f1(13 - (i % 2) * 0.7)}`;
+  }
+  const phone = `<rect class="sheet" x="10.2" y="1" width="3.6" height="5.6" rx="0.8"/><path class="faint" d="${screen}"/>`;
+  const p = (k % 12) / 12;
+  const zx = 6.2 - p * 2.4, zy = 6 - p * 7;
+  const z = `<path opacity="${f1(clamp01(1 - p * 1.1))}" d="M${f1(zx)} ${f1(zy)}h1.5l-1.5 1.7h1.5"/>`;
+  return couch + body + head + phone + z;
+}
+
 const SKETCHES = {
+  procrastinate: { frames: 24, ms: 150, rest: 4, draw: procrastinateFrame },
   quill: { frames: QUILL_LOOPS * 2 + 6, ms: 110, rest: QUILL_LOOPS * 2, draw: quillFrame },
   magnifier: { frames: MAG_SPOTS.length * 2, ms: 120, rest: 0, draw: magnifierFrame },
   terminal: { frames: 18, ms: 130, rest: 12, draw: terminalFrame },
@@ -13861,7 +13996,12 @@ const SKETCHES = {
 })();
 
 const allLoaders = () => info.loaders || [];
-const loaderBy = (id) => allLoaders().find((l) => l.id === id) || allLoaders()[0] || { id: "dots", frames: ["⣾"], seconds: 0.1 };
+// Never offered: it turns up now and then, or with /loader procrastinate.
+const EGG = { id: "procrastinate", name: "Procrastinating", frames: ["(-_-) z"], seconds: 0.2 };
+const EGG_CHANCE = 1 / 40;
+const EGG_LINGER_MS = 10000;
+const procrastinating = new Set();
+const loaderBy = (id) => (id === EGG.id ? EGG : null) || allLoaders().find((l) => l.id === id) || allLoaders()[0] || { id: "dots", frames: ["⣾"], seconds: 0.1 };
 
 // Each chat's loaders for the reply it is waiting on: the chosen one,
 // and with morph on, a different one at random every MORPH_MS, picked
@@ -13871,6 +14011,7 @@ const MORPH_MS = 10000;
 const BLEND_MS = 700;
 const runs = new Map();
 function runAt(id, stretch) {
+  if (procrastinating.has(id)) return EGG;
   if (!runs.has(id)) runs.set(id, [loaderBy(info.loader).id]);
   const chain = runs.get(id);
   while (chain.length <= stretch) {
@@ -14013,6 +14154,26 @@ function activityOf(chat) {
 }
 const taskStep = (kind) => TASK_STEPS.find(([k]) => k === kind);
 
+// The reply is in, but the procrastinator is not done procrastinating:
+// it stays at the end of the chat ten more seconds, then wanders off.
+function lingerProcrastinating(id) {
+  const node = el("div", "block loader lingering", `<span class="ld-slot"></span><span class="word"><span>Procrastinating…</span></span><span class="elapsed shown">10 more seconds</span>`);
+  node.firstChild.appendChild(spinner(EGG));
+  messagesEl.appendChild(node);
+  keepUp();
+  const started = Date.now();
+  const clock = node.querySelector(".elapsed");
+  const tick = setInterval(() => {
+    const left = Math.max(0, Math.ceil((EGG_LINGER_MS - (Date.now() - started)) / 1000));
+    clock.textContent = left === 1 ? "1 more second" : `${left} more seconds`;
+    if (!node.isConnected || current !== id || left === 0) {
+      clearInterval(tick);
+      node.classList.add("gone");
+      setTimeout(() => node.remove(), 400);
+    }
+  }, 250);
+}
+
 function loaderBlock(chat) {
   startedWaiting(chat.id);
   const node = el("div", "block loader", `<span class="ld-slot"></span><span class="word"></span><span class="elapsed"></span>`);
@@ -14057,7 +14218,7 @@ function tickLoader(node, first) {
       else { old.classList.add("out"); setTimeout(() => old.remove(), 320); }
     }
     const word = el("span");
-    word.textContent = node.dataset.activity ? `${taskStep(node.dataset.activity)[2]}…` : `${words[((wordOffset.get(node.dataset.chat) || 0) + at) % words.length]}…`;
+    word.textContent = node.dataset.activity ? `${taskStep(node.dataset.activity)[2]}…` : procrastinating.has(node.dataset.chat) ? "Procrastinating…" : `${words[((wordOffset.get(node.dataset.chat) || 0) + at) % words.length]}…`;
     box.appendChild(word);
   }
   const seconds = Math.floor(age / 1000);
@@ -15258,7 +15419,7 @@ function apply(event) {
     case "speaker": chat.speaker = event.spark; if (here) drawStreaming(); return;
     case "busy":
       chat.busy = event.busy;
-      if (event.busy) startedWaiting(chat.id); else { busySince.delete(chat.id); runs.delete(chat.id); }
+      if (event.busy) startedWaiting(chat.id); else { busySince.delete(chat.id); runs.delete(chat.id); if (procrastinating.delete(chat.id) && here) lingerProcrastinating(chat.id); }
       if (event.busy) chat.queued = false;
       else { chat.partial = ""; chat.thinking = ""; chat.speaker = ""; refreshContext(); }
       renderChats();

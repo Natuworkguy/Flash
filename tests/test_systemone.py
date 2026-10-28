@@ -603,3 +603,32 @@ def test_the_host_key_rides_along(monkeypatch):
     systemone.server_version("http://10.0.0.5:11434")
 
     assert seen["get"] == {"authorization": "Bearer s3cret"}  # nosec B101
+
+
+class TestReviewRatings:
+    def test_reviews_are_logged_rated_and_fed_back(self, monkeypatch):
+        asked = []
+
+        def ask(host, state, questions, name=""):
+            asked.append(state)
+            return {"safe": {"noul": 0.1}, "on_task": {"noul": 0.9}}
+
+        monkeypatch.setattr(systemone, "ask", ask)
+        monkeypatch.setattr(systemone, "model", lambda: "judge")
+        systemone.set_request("clean the build folder")
+        verdict = systemone.review("x", "shell", {"command": "rm -r build"})
+        assert not verdict.allowed and verdict.id
+        logged = systemone.reviews()[-1]
+        assert logged["tool"] == "shell" and not logged["allowed"]
+
+        systemone.rate_review(reason=verdict.reason, rating="bad",
+                              why="build is safe to delete")
+        assert systemone.reviews()[-1]["rating"] == "bad"
+        systemone.review("x", "shell", {"command": "rm -r dist"})
+        lessons = asked[-1]["user_feedback_on_earlier_reviews"]
+        assert "stopped shell" in lessons[0]
+        assert "wrong: build is safe to delete" in lessons[0]
+
+    def test_rating_needs_a_review(self):
+        with pytest.raises(systemone.SystemOneError):
+            systemone.rate_review("nope", "good")

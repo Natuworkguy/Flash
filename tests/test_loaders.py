@@ -295,3 +295,13 @@ def test_each_task_has_its_loader(monkeypatch, tool, kind, loader, word):
 
     monkeypatch.setenv(loaders.TASKS_SETTING, "off")
     assert loaders.for_activity(kind) is None
+
+
+def test_the_procrastinating_egg(monkeypatch):
+    monkeypatch.delenv("LOADER", raising=False)
+    assert loaders.find("procrastinate") is loaders.EGG
+    assert loaders.EGG not in loaders.all_loaders()
+    monkeypatch.setenv("LOADER_EGGS", "0")
+    assert all(loaders.egg() is None for _ in range(200))
+    monkeypatch.setenv("LOADER", "procrastinate")
+    assert loaders.egg() is loaders.EGG

@@ -1422,8 +1422,13 @@ def _try_chat(
     # that one, saying what it does.
     kind = loaders.activity(messages)
     doing = loaders.for_activity(kind)
-    look = loaders.Run(doing, morph=False) if doing else loaders.Run()
-    word = f"{loaders.word_for(kind) if doing else state['now']}{ELLIPSIS}"
+    # Now and then, Flash would rather not.
+    lazy = None if doing else loaders.egg()
+    look = loaders.Run(doing or lazy, morph=False) if doing or lazy \
+        else loaders.Run()
+    said = loaders.word_for(kind) if doing else \
+        loaders.EGG_WORD if lazy else state["now"]
+    word = f"{said}{ELLIPSIS}"
     period = len(word) + 2 * GLIMMER_SPREAD
     stop_event = threading.Event()
     start = time.monotonic()
@@ -2455,6 +2460,37 @@ def _system_one_command(arg: str) -> None:
 
     if action in ("", "status"):
         _system_one_status()
+        return
+
+    if action == "reviews":
+        found = systemone.reviews()[-10:]
+        if not found:
+            console.print(Text("No reviews yet.", style=DIM))
+            return
+        for n, r in enumerate(reversed(found), 1):
+            line = Text(f"  {n}. ", style=DIM)
+            line.append("allowed " if r["allowed"] else "stopped ",
+                        style=ACCENT if r["allowed"] else WARN)
+            line.append(f"{r['tool']} {r['arguments'][:60]}")
+            if r.get("rating"):
+                line.append(f"  ({r['rating']})", style=DIM)
+            console.print(line)
+        console.print(Text("  /systemone good|bad N [why] rates one; it "
+                           "learns from what you say.", style=DIM))
+        return
+
+    if action in ("good", "bad"):
+        number, _, why = rest.partition(" ")
+        found = systemone.reviews()[-10:]
+        try:
+            pick = list(reversed(found))[int(number or "1") - 1]
+            systemone.rate_review(pick["id"], action, why)
+        except (ValueError, IndexError, systemone.SystemOneError):
+            warn("Usage: /systemone good|bad N [why], N from "
+                 "/systemone reviews (1 is the latest).")
+            return
+        console.print(Text("Thanks. System One reads that from now on.",
+                           style=DIM))
         return
 
     if action in ("on", "enable", "true", "1"):
@@ -4805,12 +4841,31 @@ def _web_command(arg: str) -> None:
         _web_tunnel(arg[len("tunnel"):].strip())
         return
 
-    if arg not in ("", "lan"):
-        warn("Usage: /web [lan|stop|tunnel [service|off]]")
+    # Parts between semicolons or spaces, in any order: lan, port N.
+    lan = False
+    port: Optional[int] = None
+    words = arg.replace(";", " ").split()
+    i = 0
+    while i < len(words):
+        word = words[i]
+        if word == "lan":
+            lan = True
+        elif word == "port" and i + 1 < len(words) and \
+                words[i + 1].isdigit():
+            port = int(words[i + 1])
+            i += 1
+        elif word.startswith("port=") and word[5:].isdigit():
+            port = int(word[5:])
+        else:
+            warn("Usage: /web [lan] [port N] | stop | tunnel [service|off]")
+            return
+        i += 1
+    if port is not None and not 1 <= port <= 65535:
+        warn("A port is a number from 1 to 65535.")
         return
 
     try:
-        server = web.start_background(lan=arg == "lan")
+        server = web.start_background(port=port, lan=lan)
     except OSError as exc:
         show_error(str(exc))
         return
