@@ -1813,11 +1813,16 @@ def voice_command(text: str, speaking: str = "") -> dict:
     from the reply itself, echoing back through the microphone.
     """
 
+    from . import music
+
     words = _words(text)
+    # "Pause the music" is for the music, not voice mode.
+    wants = music.intent(text)
     return {
-        "exit": is_exit_phrase(text),
-        "pause": " ".join(words) in PAUSE_PHRASES,
-        "resume": RESUME_WORD in words,
+        "music": wants,
+        "exit": is_exit_phrase(text) and not wants,
+        "pause": " ".join(words) in PAUSE_PHRASES and not wants,
+        "resume": RESUME_WORD in words and not wants,
         "interrupt": _heard_interruption(text)
         and not _heard_interruption(speaking),
         # Only the interrupt word, with nothing playing to cut off.
