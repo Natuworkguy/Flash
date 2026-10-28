@@ -677,10 +677,8 @@ HEALTH_HEX = {
 def input_rule() -> str:
     """The horizontal rule that frames the input area.
 
-    A rule above the prompt and another below it, which is how the
-    current crop of agent TUIs mark out where you type: Hermes names
-    them input_rule_top and input_rule_bot, Pi calls the result a
-    rounded editor. Plain rules rather than a box with sides, because
+    A rule above the prompt and another below it mark out where you
+    type. Plain rules rather than a box with sides, because
     the completion dropdown renders between the two and a box would
     have to leave its walls off those rows.
 
