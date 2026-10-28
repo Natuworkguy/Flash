@@ -4638,6 +4638,69 @@ def notify_user(message: str, title: str = "") -> str:
     return "Sent. The user has been notified."
 
 
+CALENDAR_ACTIONS = ("list", "add", "update", "delete", "calendars")
+
+
+def calendar_tool(action: str = "list", start: str = "", end: str = "",
+                  query: str = "", title: str = "", where: str = "",
+                  notes: str = "", all_day: Any = False, id: str = "",
+                  calendar: str = "") -> str:
+    """Read the user's calendars, and change them."""
+
+    from . import calendars
+
+    action = str(action or "list").strip().lower()
+    tool_line(f"Calendar({action} {title or query or id or start}".strip()
+              + ")")
+    try:
+        if action == "list":
+            problems: list[str] = []
+            found = calendars.events(start, end, query, problems)
+            lines = [calendars.describe(e) for e in found] or [
+                "Nothing on then."]
+            lines += [f"(Could not read: {p})" for p in problems]
+            result = "\n".join(lines)
+        elif action == "calendars":
+            names = ["flash (Flash's own)"] + [
+                f"feed:{n} (read-only)" for n in calendars.feeds()]
+            if calendars.google_connected():
+                names += [f"google:{c['id']} ({c['name']}"
+                          + (", main" if c["primary"] else "")
+                          + ("" if c["writable"] else ", read-only") + ")"
+                          for c in calendars.google_calendars()]
+            else:
+                names.append("Google Calendar is not connected.")
+            result = "\n".join(names)
+        elif action == "add":
+            if not NO_COMMAND_CONFIRMATION and not _user_allows(
+                    f"Add {title!r} at {start} to your calendar?"):
+                return "The user said no to adding it."
+            made = calendars.add(title, start, end, _truthy(all_day), where,
+                                 notes, calendar)
+            result = "Added: " + calendars.describe(made)
+        elif action == "update":
+            made = calendars.update(
+                id, title=title, start=start, end=end, where=where,
+                notes=notes,
+                **({"all_day": _truthy(all_day)} if all_day else {}))
+            result = "Changed: " + calendars.describe(made)
+        elif action == "delete":
+            if not ultra_auto() and not _user_allows(
+                    f"Delete the calendar event {id}?"):
+                return "The user said no to deleting it."
+            calendars.delete(id)
+            result = f"Deleted {id}."
+        else:
+            result = ("Error: action is one of "
+                      + ", ".join(CALENDAR_ACTIONS) + ".")
+    except calendars.CalendarError as exc:
+        result = f"Error: {exc}"
+        tool_result(result, style=ERROR)
+        return result
+    tool_result(result.splitlines()[0][:120])
+    return result
+
+
 def make_project(name: str = "", path: str = "",
                  instructions: str = "") -> str:
     """Make a project of the work in this chat, and move the chat in."""
@@ -6030,6 +6093,48 @@ tools: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "calendar",
+            "description": (
+                "The user's calendars: Flash's own, any iCal feeds they "
+                "added (read-only), and Google Calendar when connected, "
+                "read together. 'list' what is on (today to a week on, "
+                "unless start and end say), or find something with query; "
+                "'add' an event (to Google's main calendar when connected, "
+                "else Flash's own, or the calendar named); 'update' or "
+                "'delete' one by the id list gives in [brackets]; "
+                "'calendars' names them. Times are ISO 8601, local unless "
+                "they say a zone: work out dates like 'next Tuesday' from "
+                "today's date first."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string",
+                               "enum": list(CALENDAR_ACTIONS)},
+                    "start": {"type": "string", "description": (
+                        "ISO 8601: when it starts, or where a list starts.")},
+                    "end": {"type": "string", "description": (
+                        "ISO 8601: when it ends (an hour on, if left out), "
+                        "or where a list ends.")},
+                    "query": {"type": "string",
+                              "description": "Words to find, for list."},
+                    "title": {"type": "string"},
+                    "where": {"type": "string"},
+                    "notes": {"type": "string"},
+                    "all_day": {"type": "boolean"},
+                    "id": {"type": "string", "description": (
+                        "The event's id, for update and delete.")},
+                    "calendar": {"type": "string", "description": (
+                        "Where to add it: flash, google, or "
+                        "google:<calendar id>.")},
+                },
+                "required": ["action"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "make_project",
             "description": (
                 "Make the work in this chat a project, and move the chat "
@@ -6823,6 +6928,7 @@ FUNCTIONS = {
     "devtools": devtools,
     "play_realtime": play_realtime,
     "make_project": make_project,
+    "calendar": calendar_tool,
     "request_connector": request_connector,
     "request_extension": request_extension,
     "web_search": web_search,

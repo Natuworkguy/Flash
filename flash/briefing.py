@@ -475,6 +475,25 @@ def _plain(text: str) -> str:
     return text.strip()
 
 
+def _calendar_cards(now: float) -> list[dict]:
+    """What is on in the next day, from the user's calendars."""
+
+    from . import calendars
+
+    if not (calendars._own() or calendars.feeds()
+            or calendars.google_connected()):
+        return []
+    cards = []
+    for event in calendars.coming_up(LOOK_AHEAD / 3600):
+        at = calendars.parse_time(event.start).timestamp()
+        body = " · ".join(p for p in (
+            "All day" if event.all_day else "", event.where,
+            event.notes.split("\n")[0][:200]) if p)
+        cards.append(_card("reminder", f"cal:{event.id}", event.title, body,
+                           at, due=at, calendar=event.calendar))
+    return cards
+
+
 def _extension_cards(now: float) -> list[dict]:
     """What extensions add: each one with a briefing program is asked,
     and one can also call notice("extension", ...) from its own code."""
@@ -531,6 +550,7 @@ def cards(session: Any = None, now: Optional[float] = None,
         ("connectors", lambda: _news_cards(now)),
         ("pings and notifications", lambda: _notice_cards(now)),
         ("extensions", lambda: _extension_cards(now)),
+        ("calendars", lambda: _calendar_cards(now)),
     )
     found: list[dict] = []
     for name, source in sources:

@@ -172,6 +172,18 @@ python run.py
   something you are building, Flash can make it a project (a name, its
   folder, instructions every chat in it gets) and move the chat into it.
   Ask it, or it offers when it fits.
+- `/calendar`: What is on for the next week (`/calendar 30` for a
+  month), from every calendar Flash reads: its own, iCal feeds
+  (`/calendar feed add Work <address>`: Google Calendar gives each
+  calendar a "Secret address in iCal format"; read-only), and Google
+  Calendar itself once connected (`/calendar google`, or Settings >
+  Connectors > Calendar), both ways. Ask Flash what is on, to find a
+  free afternoon, or to book, move or cancel something, and it does,
+  adding to Google's main calendar when connected and its own when not.
+  What starts in the next day shows in the briefing as Coming up.
+  Connecting Google needs an OAuth client of your own (Google Cloud
+  console: turn on the Google Calendar API, then make a Desktop app
+  client); its secret and the sign-in are kept in the vault.
 - `/fallbacks model > another > a third`: When a model fails before it
   answers (its host is down, its provider errors, it is not there),
   Flash tries the next, then the next, then gives up; a note says so.
