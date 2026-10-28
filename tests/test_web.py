@@ -4772,3 +4772,28 @@ def test_a_file_from_another_chat_is_attached_again(tmp_path):
     with pytest.raises(ValueError, match="no longer kept"):
         web.command(session, {"name": "reuse-file", "arg": "0" * 16,
                               "chat": other.id})
+
+
+class TestChatModels:
+    def test_each_chat_has_its_own_model(self, monkeypatch):
+        monkeypatch.setattr(ai.Config, "model", "alpha:8b")
+        session = web.Session()
+        session.hub = web.Hub()
+        plain = session.chat(web.command(session, {"name": "new"})["chat"])
+        picked = web.command(session, {"name": "new", "model": "beta:8b"})
+        assert picked["model"] == "beta:8b"
+        other = session.chat(picked["chat"])
+        assert web.chat_model(plain) == "alpha:8b"
+        assert web.chat_model(other) == "beta:8b"
+
+        web.command(session, {"name": "chat-model", "chat": plain.id,
+                              "arg": "gamma:12b"})
+        assert web.chat_model(plain) == "gamma:12b"
+        assert plain.summary()["model"] == "gamma:12b"
+        assert web.Chat.restore(plain.saved()).model == "gamma:12b"
+        # Back to the default, which moves with MODEL.
+        web.command(session, {"name": "chat-model", "chat": plain.id,
+                              "arg": ""})
+        monkeypatch.setattr(ai.Config, "model", "delta:7b")
+        assert web.chat_model(plain) == "delta:7b"
+        assert web.chat_model(None) == "delta:7b"

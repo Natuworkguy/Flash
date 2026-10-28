@@ -27,7 +27,9 @@ import json
 import os
 import re
 import secrets
+import shlex
 import socket
+import subprocess  # nosec B404
 import sys
 import threading
 import time
@@ -168,6 +170,7 @@ HTML_SANDBOX = "sandbox allow-scripts allow-forms allow-popups allow-modals"
 # opens whatever the address names: a chat, a project, a settings tab.
 PAGE_PATHS = re.compile(
     r"^/(?:c/[0-9a-f]{8}|p/[0-9a-f]{8}|projects|skills|sparks|extensions"
+    r"|briefing"
     r"|settings(?:/(?:general|usage|memory|email|connectors|security))?)?"
     r"/?$"
 )
@@ -413,6 +416,8 @@ class Chat:
     # How much of its log the user has had open on the page: a reply
     # past that is one they have not read, for the briefing.
     seen: int = 0
+    # The model it talks to; "" for Flash's default (MODEL).
+    model: str = ""
 
     def summary(self) -> dict:
         return {
@@ -428,6 +433,7 @@ class Chat:
             "spark": self.spark,
             "updated": self.updated,
             "pinned": self.pinned,
+            "model": self.model,
             "forks": len(self.forks),
             # What it is waiting for, while it is: a clock in the list.
             "waiting": [w.what for w in waits.for_chat(self.id)
@@ -452,6 +458,7 @@ class Chat:
             "forks": self.forks,
             "fork": self.fork,
             "seen": self.seen,
+            "model": self.model,
         }
 
     @classmethod
@@ -471,7 +478,16 @@ class Chat:
             forks=dict(data.get("forks") or {}),
             fork=str(data.get("fork") or ""),
             seen=int(data.get("seen") or 0),
+            model=str(data.get("model") or ""),
         )
+
+
+def chat_model(chat: Optional[Chat]) -> str:
+    """The model CHAT talks to: its own, or Flash's default."""
+
+    from . import ai  # deferred: ai imports half of Flash
+
+    return (chat.model if chat is not None else "") or ai.Config.model or ""
 
 
 @dataclass
@@ -1700,8 +1716,8 @@ class Session:
             raise ValueError(side.USAGE)
         spark = sparks.find(chat.spark) if chat.spark else None
         model = (
-            sparks.model_of(spark, ai.Config.model or "") if spark
-            else ai.Config.model
+            sparks.model_of(spark, chat_model(chat)) if spark
+            else chat_model(chat)
         )
         if not model:
             raise ValueError("No model is set. Pick one with Alt+M.")
@@ -2208,8 +2224,8 @@ class Session:
         )
         spark = sparks.find(chat.spark) if chat.spark else None
         model = (
-            sparks.model_of(spark, ai.Config.model or "") if spark
-            else ai.Config.model
+            sparks.model_of(spark, chat_model(chat)) if spark
+            else chat_model(chat)
         )
         if not asked.strip() or not model:
             return
@@ -3236,8 +3252,8 @@ def run_turn(
     # Each needs a model to answer on: Flash its own, a spark the one it
     # was given, or Flash's.
     if not all(
-        sparks.model_of(s, ai.Config.model or "") if s is not None
-        else ai.Config.model
+        sparks.model_of(s, chat_model(chat)) if s is not None
+        else chat_model(chat)
         for s in speakers
     ):
         # Tried again once one is picked.
@@ -3261,9 +3277,9 @@ def run_turn(
             part for part in (news, edited_note(edited)) if part
         )
     said, images = outgoing(ai, text, files)
-    if images and not model_sees_images(ai.Config.host, ai.Config.model):
+    if images and not model_sees_images(ai.Config.host, chat_model(chat)):
         session.emit(chat, {"type": "note", "text": (
-            f"{ai.Config.model} reports no vision support; the image is "
+            f"{chat_model(chat)} reports no vision support; the image is "
             "sent anyway, but expect an error."
         )})
     content = "\n\n".join(part for part in (news, said) if part)
@@ -3335,8 +3351,8 @@ def _respond(
     used: list[str] = []
     # A spark answers on its own model, the one it was given.
     model = (
-        sparks.model_of(spark, ai.Config.model or "") if spark is not None
-        else ai.Config.model
+        sparks.model_of(spark, chat_model(chat)) if spark is not None
+        else chat_model(chat)
     ) or ""
     started = time.monotonic()
     tokens = 0
@@ -3758,6 +3774,12 @@ def status(ai) -> dict:
     return {
         "version": __version__,
         "model": ai.Config.model or "",
+        # Extensions' slash commands, for the box to offer and run.
+        "ext_commands": [
+            {"slash": f"/{c.name}", "label": c.description or e.name,
+             "ext": e.name}
+            for e, c in extensions.commands()
+        ],
         "host": host,
         # The entry in the host list that is in use, by the URL the list
         # gives it: 127.0.0.1 is listed as This computer's localhost.
@@ -4118,9 +4140,13 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
     chat_id = str(body.get("chat", "") or "")
 
     if name == "new":
-        return {"chat": session.new_chat(
+        chat = session.new_chat(
             str(body.get("project") or ""), str(body.get("spark") or ""),
-        ).id}
+        )
+        # Picked for it before it had a message.
+        if body.get("model"):
+            chat.model = str(body["model"]).strip()
+        return {"chat": chat.id, "model": chat.model}
 
     if name == "delete":
         session.delete_chat(chat_id)
@@ -4265,6 +4291,43 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
     if name == "briefing-undo":
         briefing.undismiss(arg)
         return {}
+
+    if name == "ext-command":
+        # An extension's slash command, typed in the box: a prompt one
+        # comes back to be sent, a program's output to be shown.
+        found = extensions.find_command(arg.strip())
+        if found is None:
+            raise ValueError(f"No extension has {arg.split(' ', 1)[0]}.")
+        ext, command, rest = found
+        if command.prompt is not None:
+            return {"send": extensions.expand_prompt(command, rest)}
+        try:
+            words = shlex.split(rest) if rest else []
+        except ValueError as exc:
+            raise ValueError(f"Could not read its arguments: {exc}") from None
+        try:
+            done = subprocess.run(  # nosec B603  (its own program, no shell)
+                extensions.argv(ext, command.run or []) + words,
+                capture_output=True, text=True, timeout=command.timeout,
+                cwd=ext.path, env=extensions.environment(ext), check=False,
+            )
+        except subprocess.TimeoutExpired:
+            return {"say": f"/{command.name} took longer than "
+                           f"{command.timeout} seconds."}
+        except OSError as exc:
+            return {"say": f"Could not start /{command.name}: {exc}"}
+        outputs = (done.stdout.strip(), done.stderr.strip())
+        said = "\n".join(p for p in outputs if p)
+        return {"say": said[:8000] or f"/{command.name} said nothing.",
+                "failed": done.returncode != 0}
+
+    if name == "chat-model":
+        # This chat's own model; "" to go back to the default.
+        chat = session.chat(chat_id)
+        chat.model = arg.strip()
+        session.save(chat)
+        session.hub.publish({"type": "chats", "chat": chat.id})
+        return {"model": chat.model, "default": ai.Config.model or ""}
 
     if name == "pin":
         # "on" or "off", or nothing to flip it.

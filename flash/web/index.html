@@ -236,9 +236,11 @@ body.side-closed #sidebar { margin-left: -272px; }
 .pinned-chats { margin: 0 12px 6px; padding-bottom: 6px; border-bottom: 1px solid var(--border); }
 .pinned-chats .group-label { width: 100%; margin: 4px 0 2px; }
 .pinned-chats .pinned-body { margin: 0 -12px; }
-.pinned-chats .group-label { cursor: default; }
-.pinned-chats .group-label:hover { background: none; color: var(--text-3); }
-.pinned-chats .group-label svg { width: 12px; height: 12px; }
+.pinned-chats .group-label > svg { width: 12px; height: 12px; }
+.pinned-chats.folded .pinned-body, .projects-section.folded .projects-body { display: none; }
+.pinned-chats.folded .group-label i, .projects-section.folded .group-label i { opacity: 1; transform: rotate(-90deg); }
+.pinned-chats.folded .group-label .gcount, .projects-section.folded .group-label .gcount { opacity: 1; }
+.pinned-body, .projects-body { animation: rise 0.2s var(--ease) both; }
 .group-label { display: flex; align-items: center; gap: 4px; width: calc(100% - 16px); margin: 10px 8px 2px; padding: 5px 10px; border-radius: 8px; font-size: 12px; font-weight: 500; color: var(--text-3); text-align: left; transition: background 0.14s, color 0.14s; }
 .group-label:hover { background: var(--hover); color: var(--text-2); }
 .group-label .gcount { margin-left: auto; order: 2; font-variant-numeric: tabular-nums; opacity: 0; transition: opacity 0.2s; }
@@ -730,6 +732,22 @@ pre code { display: block; padding: 2px 16px 14px; overflow-x: auto; font-size: 
 .tool.blocked .ico svg { color: var(--warn); }
 .tool .body { border-top: 1px solid var(--border); padding: 10px 14px; font: 12.5px/1.55 var(--mono); color: var(--text-2); white-space: pre-wrap; word-break: break-word; max-height: 420px; overflow: auto; background: var(--code-bg); }
 .tool .body.error { color: var(--del); }
+/* A reply's tool calls, once it is done: one row saying how many, each
+   tool's icon in it, that opens to the calls themselves. */
+.tool-batch { border: 1px solid var(--border); border-radius: var(--radius); font-size: 13.5px; }
+.tool-batch + .tool, .tool + .tool-batch, .tool-batch + .thinking, .thinking + .tool-batch { margin-top: 8px; }
+.tool-batch > .head { display: flex; align-items: center; gap: 10px; width: 100%; padding: 9px 12px; color: var(--text-2); text-align: left; border-radius: inherit; }
+.tool-batch > .head:hover { background: var(--hover); }
+.tool-batch .icos { display: inline-flex; flex: none; }
+.tool-batch .icos svg { width: 16px; height: 16px; color: var(--text-3); display: block; padding: 2px; box-sizing: content-box; border-radius: 6px; background: var(--bg); }
+.tool-batch .icos > span + span { margin-left: -6px; }
+.tool-batch .icos .failed svg { color: var(--del); }
+.tool-batch .label { flex: 1; min-width: 0; }
+.tool-batch .summary { color: var(--text-3); font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 45%; }
+.tool-batch .chev svg { width: 15px; height: 15px; color: var(--text-3); transition: transform 0.15s; display: block; }
+.tool-batch.open > .head .chev svg { transform: rotate(90deg); }
+.tool-batch .batch-list { padding: 0 8px 8px; }
+.tool-batch .batch-list > .tool { animation: rise 0.22s var(--ease) both; animation-delay: calc(var(--i, 0) * 30ms); }
 /* What a tool showed the model, under it, open or not. */
 /* A debate: the two sides, one on each side, then the summary. */
 .debate { border: 1px solid var(--border); border-radius: var(--radius); padding: 14px; display: flex; flex-direction: column; gap: 12px; }
@@ -1349,7 +1367,7 @@ body.empty .suggestion { animation: rise-far 0.5s var(--ease) both; animation-de
 /* Opening: rows from 0fr to 1fr, which animates to the content's height. */
 .slide { display: grid; grid-template-rows: 0fr; transition: grid-template-rows 0.26s var(--ease), opacity 0.2s; opacity: 0; }
 .slide > .inner { min-height: 0; overflow: hidden; }
-.tool.open > .slide, .thinking.open > .slide { grid-template-rows: 1fr; opacity: 1; }
+.tool.open > .slide, .thinking.open > .slide, .tool-batch.open > .slide { grid-template-rows: 1fr; opacity: 1; }
 
 /* A checkmark that draws itself. */
 .ask.done .q svg path { stroke-dasharray: 26; stroke-dashoffset: 26; animation: draw 0.42s var(--ease) 0.08s forwards; }
@@ -2602,6 +2620,12 @@ body.all-stopped .org-node, body.all-stopped .spark-card { animation: all-halt 0
 .tc-chip.everyone svg { width: 13px; height: 13px; color: var(--accent); }
 .mention.compact, .mention.compact:hover { padding: 0; background: none; border-radius: 0; cursor: inherit; color: color-mix(in srgb, var(--c) 82%, var(--text)); }
 .tc-msg.mine .mention { color: #fff; background: rgba(255, 255, 255, 0.22); }
+/* Under the message, out of the way until it is hovered: then it glides
+   down from under it. Open, it stays. */
+.tc-steps-wrap { display: grid; grid-template-rows: 0fr; opacity: 0; transform: translateY(-6px); transition: grid-template-rows 0.26s var(--ease), opacity 0.2s, transform 0.26s var(--ease); }
+.tc-steps-wrap > .tc-steps { min-height: 0; overflow: hidden; }
+.tc-msg:hover .tc-steps-wrap, .tc-msg:focus-within .tc-steps-wrap, .tc-steps-wrap:has(details[open]) { grid-template-rows: 1fr; opacity: 1; transform: none; }
+@media (hover: none) { .tc-steps-wrap { grid-template-rows: 1fr; opacity: 1; transform: none; } }
 .tc-steps { font-size: 12px; color: var(--text-3); padding-left: 4px; }
 .tc-steps summary { cursor: pointer; }
 .tc-steps ul { margin: 4px 0 0; padding-left: 18px; font-family: var(--mono, ui-monospace, monospace); font-size: 11.5px; }
@@ -3172,10 +3196,14 @@ body.resizing-viewer iframe { pointer-events: none; }
 .menu .item .label.full { position: relative; top: 1px; }
 /* A star and a check: the star pushes them both right, side by side. */
 .menu .item .fav + .check { margin-left: 2px; }
+/* The model new chats start on. */
+.menu .default-tag { margin-left: auto; flex: none; font-size: 11px; color: var(--text-3); padding: 1px 7px; border: 1px solid var(--border); border-radius: 999px; }
+.menu .default-tag + .fav { margin-left: 6px; }
 .menu .item .desc svg { width: 14px; height: 14px; display: block; }
 .menu .empty { padding: 10px; color: var(--text-3); font-size: 13px; }
 .menu .label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .menu .slash { font-family: var(--mono); font-size: 13px; color: var(--text); flex: none; }
+.menu .slash-ext { margin-left: auto; flex: none; font-size: 11px; color: var(--text-3); padding: 1px 7px; border: 1px solid var(--border); border-radius: 999px; }
 .menu .desc { color: var(--text-3); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .overlay {
@@ -3842,7 +3870,12 @@ function routeFor() {
   return `/${view}`;
 }
 
+// Opened at /briefing: the briefing shows once the page has loaded.
+let briefingRouted = false;
+
 function syncUrl() {
+  // The briefing keeps its address while it is up.
+  if (briefingRouted || document.getElementById("briefing")?.hidden === false) return;
   const path = routeFor();
   const replace = replaceUrl;
   replaceUrl = false;
@@ -3868,12 +3901,20 @@ function routeTo(path) {
     settingsTab = m[1] || "general";
   } else if ((m = path.match(/^\/(projects|skills|sparks|extensions)\/?$/))) {
     view = m[1];
+  } else if (/^\/briefing\/?$/.test(path)) {
+    // The briefing, over a new chat: it opens once the page is in.
+    briefingRouted = true;
   } else if (path !== "/") {
     replaceUrl = true;
   }
 }
 
 window.addEventListener("popstate", () => {
+  // Back out of the briefing to where it was opened from, or forward
+  // into it again.
+  const toBriefing = /^\/briefing\/?$/.test(location.pathname);
+  if (toBriefing) { if (briefEl.hidden) openBriefing(false); return; }
+  if (!briefEl.hidden) { closeBriefing(); return; }
   routeTo(location.pathname);
   closeMenu();
   renderChats();
@@ -4782,6 +4823,38 @@ function toolCard(label) {
     slideBox(card).appendChild(command);
   }
   return card;
+}
+
+// Once a reply is done, tool calls one after another fold into one row,
+// "Used 3 tools", that opens to them; while it runs they stay as they
+// come. A row of one is left as it is.
+function batchTools(live) {
+  const runs = [];
+  let run = [];
+  for (const node of messagesEl.children) {
+    if (node.classList.contains("tool") && !node.classList.contains("running") && !node.querySelector(".checklist")) { run.push(node); continue; }
+    if (run.length) runs.push(run);
+    run = [];
+  }
+  // The last run may still be growing.
+  if (run.length && !live) runs.push(run);
+  for (const cards of runs) {
+    if (cards.length < 2) continue;
+    const failed = cards.filter((c) => c.classList.contains("failed")).length;
+    const batch = el("div", "block tool-batch", `<button class="head" type="button" aria-expanded="false"><span class="icos"></span><span class="label"></span><span class="summary"></span><span class="chev">${icon("chevRight")}</span></button>`);
+    const names = cards.map((c) => c.querySelector(".label").textContent);
+    const icos = batch.querySelector(".icos");
+    [...new Set(names.map(toolIcon))].slice(0, 4).forEach((name) => icos.appendChild(el("span", "", icon(name))));
+    if (failed) icos.lastChild.classList.add("failed");
+    batch.querySelector(".label").textContent = `Used ${cards.length} tools`;
+    const kinds = [...new Set(names.map((n) => n.split("(")[0]))];
+    batch.querySelector(".summary").textContent = failed ? `${failed} failed` : kinds.slice(0, 3).join(", ") + (kinds.length > 3 ? ", …" : "");
+    cards[0].before(batch);
+    const list = el("div", "batch-list");
+    cards.forEach((card, i) => { card.style.setProperty("--i", i); list.appendChild(card); });
+    slideBox(batch).appendChild(list);
+    if (allOpen) batch.classList.add("open");
+  }
 }
 
 function addResult(card, text, error, warn) {
@@ -7542,11 +7615,13 @@ function drawChat() {
   document.body.classList.toggle("empty", empty);
   if (!empty) {
     chat.log.forEach((entry, index) => { drawCtx.index = index; drawEntry(entry, drawCtx); });
+    batchTools(chat.busy || chat.queued);
     markLatest();
     markRetry();
     drawStreaming();
   }
   setTitle($("#title"), chat ? chat.title : "New chat");
+  renderModelButtons();
   document.title = chat && chat.title !== "New chat" ? `${chat.title} · Flash` : "Flash";
   const inProject = projectOf(chat ? chat.project : viewProject);
   $("#crumb").hidden = !inProject;
@@ -9378,7 +9453,7 @@ function tcEntry(entry, fresh) {
     const list = el("ul");
     entry.steps.forEach((step) => { const li = el("li"); li.textContent = step; list.appendChild(li); });
     used.appendChild(list);
-    col.appendChild(used);
+    col.appendChild(el("div", "tc-steps-wrap")).appendChild(used);
   }
   row.appendChild(col);
   row.dataset.id = entry.id;
@@ -15156,7 +15231,7 @@ function apply(event) {
       if (event.busy) chat.queued = false;
       else { chat.partial = ""; chat.thinking = ""; chat.speaker = ""; refreshContext(); }
       renderChats();
-      if (here) { drawStreaming(); updateSend(); markRetry(); markLatest(); }
+      if (here) { drawStreaming(); updateSend(); markRetry(); markLatest(); if (!event.busy) batchTools(false); }
       // The browser in the panel is live only while the turn runs.
       if (here && viewing && viewing.kind === "browser") openBrowser(viewing.run, viewing.at);
       break;
@@ -15326,6 +15401,7 @@ async function loadState() {
   renderChats();
   renderInfo();
   drawChat();
+  if (briefingRouted) { briefingRouted = false; openBriefing(false); }
   if (info.update) onUpdate();
   for (const event of buffered) apply(event);
   buffered = [];
@@ -15345,7 +15421,7 @@ function refreshLite() {
     const ids = state.chats.map((c) => c.id);
     for (const c of state.chats) {
       const known = chats.get(c.id);
-      if (known) Object.assign(known, { title: c.title, busy: c.busy, queued: c.queued, pending: c.pending || [], project: c.project, spark: c.spark, updated: c.updated, waiting: c.waiting || [] });
+      if (known) Object.assign(known, { title: c.title, busy: c.busy, queued: c.queued, pending: c.pending || [], project: c.project, spark: c.spark, model: c.model || "", updated: c.updated, waiting: c.waiting || [] });
       else chats.set(c.id, { ...c, log: [], partial: "", thinking: "" });
     }
     for (const id of [...chats.keys()]) if (!ids.includes(id)) chats.delete(id);
@@ -15464,10 +15540,22 @@ function renderChats() {
   // Pinned chats first, whatever project they are in.
   const pinned = visibleChats().filter((id) => chats.get(id).pinned);
   let pinnedBody = null;
+  // A section folds away from its label, and stays folded until opened.
+  const sectionHead = (label, count, key, box, lead = "") => {
+    const fold = pref(key, "open") === "folded";
+    box.classList.toggle("folded", fold);
+    const head = el("button", "group-label", `${lead}<span>${label}</span><span class="gcount"></span><i>${icon("chevDown")}</i>`);
+    head.type = "button";
+    head.querySelector(".gcount").textContent = count;
+    head.setAttribute("aria-expanded", !fold);
+    head.dataset.tip = `${fold ? "Show" : "Hide"} ${label.toLowerCase()}`;
+    head.onclick = () => { savePref(key, fold ? "open" : "folded"); renderChats(); };
+    return head;
+  };
   if (pinned.length) {
-    const box = el("div", "pinned-chats", `<div class="group-label">${icon("pin")}<span>Pinned</span></div>`);
+    const box = el("div", "pinned-chats");
     pinnedBody = el("div", "pinned-body");
-    box.appendChild(pinnedBody);
+    box.append(sectionHead("Pinned", pinned.length, "pinned-chats", box, icon("pin")), pinnedBody);
     nav.appendChild(box);
   }
   for (const id of visibleChats()) {
@@ -15477,6 +15565,13 @@ function renderChats() {
   }
   const folded = foldedProjects();
   const places = pinned.map((id) => [id, pinnedBody]);
+  let projectsHolder = nav;
+  if (groups.size) {
+    const box = el("div", "projects-section");
+    projectsHolder = el("div", "projects-body");
+    box.append(sectionHead("Projects", groups.size, "projects-section", box), projectsHolder);
+    nav.appendChild(box);
+  }
   for (const [pid, ids] of groups) {
     const p = projectOf(pid);
     const group = el("div", "group" + (folded.has(pid) ? " folded" : ""));
@@ -15490,7 +15585,7 @@ function renderChats() {
     head.dataset.tip = "Double-click to open the project";
     const body = el("div", "group-body");
     group.append(head, body);
-    nav.appendChild(group);
+    projectsHolder.appendChild(group);
     for (const id of ids) places.push([id, body]);
   }
   // Under projects, the chats in none fold away too, as a project's do.
@@ -15604,7 +15699,7 @@ function modelParts(name) {
 
 function renderModelButtons() {
   const local = !info.host_name || info.host_name === "This computer";
-  const full = info.model || "";
+  const full = chatModel();
   const html = `<span class="name">${local ? "" : `<span class="host">${esc(info.host_name)} · </span>`}${esc(shortModel(full) || "No model")}</span>` +
     (info.system_one && info.system_one_model ? `<span class="s1">${esc(shortModel(info.system_one_model))}</span>` : "") + icon("chevDown");
   for (const b of document.querySelectorAll(".model-pick")) {
@@ -15954,8 +16049,10 @@ function checkSent(chatId, before) {
 }
 
 async function createChat(project = "", spark = "") {
-  const { chat: id } = await command("new", "", null, { project, spark });
-  if (!chats.has(id)) chats.set(id, { id, title: "New chat", busy: false, queued: false, log: [], partial: "", thinking: "", project, spark, updated: Date.now() / 1000 });
+  const model = newChatModel;
+  newChatModel = "";
+  const { chat: id } = await command("new", "", null, { project, spark, model });
+  if (!chats.has(id)) chats.set(id, { id, title: "New chat", busy: false, queued: false, log: [], partial: "", thinking: "", project, spark, model, updated: Date.now() / 1000 });
   if (!order.includes(id)) order.push(id);
   current = id;
   view = "chat";
@@ -17041,10 +17138,36 @@ function modeMenu() {
   openMenu($("#auto-btn"), rows, (row) => setMode(row.mode), "", true);
 }
 
+// Each chat has its own model; a new one starts on the default, which
+// the model menu can make any model.
+let newChatModel = "";
+
+function chatModel() {
+  const chat = current && chats.get(current);
+  return (chat ? chat.model : newChatModel) || info.model || "";
+}
+
 async function setModel(name) {
-  await command("model", name);
-  info.model = name;
+  const chat = current && chats.get(current);
+  if (chat) {
+    try { await command("chat-model", sameModel(name, info.model) ? "" : name); }
+    catch (error) { showFailure(error); return; }
+    chat.model = sameModel(name, info.model) ? "" : name;
+  } else if (!info.model) {
+    // Nothing to fall back on yet: the first one picked is the default.
+    await setDefaultModel(name);
+    return;
+  } else newChatModel = sameModel(name, info.model) ? "" : name;
   renderInfo();
+}
+
+async function setDefaultModel(name) {
+  try { await command("model", name); } catch (error) { showFailure(error); return; }
+  info.model = name;
+  const chat = current && chats.get(current);
+  if (chat && sameModel(chat.model, name)) { chat.model = ""; command("chat-model", "").catch(() => {}); }
+  renderInfo();
+  toast(`New chats start on **${shortModel(name)}**`);
 }
 
 async function undo() { const { message } = await command("undo"); toast(message); }
@@ -17219,7 +17342,7 @@ function copyLastCode() {
 
 function toggleAllTools() {
   allOpen = !allOpen;
-  messagesEl.querySelectorAll(".tool").forEach((card) => card.classList.toggle("open", allOpen));
+  messagesEl.querySelectorAll(".tool, .tool-batch").forEach((card) => card.classList.toggle("open", allOpen));
 }
 
 // "light", "dark", or "system", which follows the computer.
@@ -17529,14 +17652,15 @@ function drawModelMenu(focusHosts, keepSelection) {
     }
     rows.push({ html: `${icon("plus")}<span class="label">Add host…</span>`, add: true, cls: "add" });
   }
-  rows.push(sectionRow("model", "Model", shortModel(info.model) || "None", true));
+  const using = chatModel();
+  rows.push(sectionRow("model", "Model", shortModel(using) || "None", true));
   if (!folded.model) {
     if (modelsLoading && !models.length) rows.push({ header: true, html: '<span class="menu-note">Loading models…</span>' });
     else if (!modelsReachable && !modelsLoading && activeHost && activeHost.refused) rows.push({ header: true, html: '<span class="menu-note">This host wants an API key. Add it again with its key under Add host.</span>' });
     else if (!modelsReachable && !modelsLoading) rows.push({ header: true, html: '<span class="menu-note">This host is not answering. Pick another above.</span>' });
     else {
       // A model that can only judge is System One's, below: it cannot chat.
-      const chatty = models.filter((m) => m === info.model || !(systemOne.judge_only || []).includes(m));
+      const chatty = models.filter((m) => m === using || m === info.model || !(systemOne.judge_only || []).includes(m));
       // Pinned ones first, the first pinned first, with a line under them.
       const pinnedAt = (m) => favorites.findIndex((f) => sameModel(f, m));
       const pinned = chatty.filter((m) => pinnedAt(m) >= 0).sort((a, b) => pinnedAt(a) - pinnedAt(b));
@@ -17544,9 +17668,12 @@ function drawModelMenu(focusHosts, keepSelection) {
       [...pinned, ...rest].forEach((m, i) => {
         const on = i < pinned.length;
         const star = `<span class="fav${on ? " on" : ""}" data-fav="${esc(m)}" data-tip="${on ? "Unpin (*)" : "Pin to the top (*)"}">${icon(on ? "starFill" : "star")}</span>`;
-        rows.push({ html: modelParts(m) + star, value: m, current: m === info.model, rule: pinned.length > 0 && i === pinned.length });
+        const tag = sameModel(m, info.model) ? '<span class="default-tag">Default</span>' : "";
+        rows.push({ html: modelParts(m) + tag + star, value: m, current: m === using, rule: pinned.length > 0 && i === pinned.length });
       });
       if (!chatty.length) rows.push({ header: true, html: '<span class="menu-note">No models on this host</span>' });
+      // This chat's own model, for every new one too.
+      if (using && !sameModel(using, info.model)) rows.push({ html: `${icon("check")}<span class="label">Make <b>${esc(shortModel(using))}</b> the default</span>`, makeDefault: using, cls: "add" });
     }
   }
   const s1 = info.system_one ? info.system_one_model : "";
@@ -17599,6 +17726,7 @@ async function pickModelRow(row) {
     return;
   }
   if (row.s1) { pickSystemOne(row.s1); input.focus(); return; }
+  if (row.makeDefault) { setDefaultModel(row.makeDefault); input.focus(); return; }
   if (row.add) { hostForm(); return; }
   if (row.host) { if (!row.current) await switchHost(row.host, true); else openModels(true); return; }
   if (row.value) { setModel(row.value); input.focus(); }
@@ -17753,7 +17881,10 @@ async function loadBriefing(open = false) {
   drawBriefing();
 }
 
-async function openBriefing() {
+async function openBriefing(push = true) {
+  // An address of its own, so it can be linked to, bookmarked, and left
+  // with Back.
+  if (push && !/^\/briefing\/?$/.test(location.pathname)) history.pushState(null, "", "/briefing");
   closeMenu();
   info.briefing_new = false;
   $("#briefing-btn .new-dot").hidden = true;
@@ -17768,6 +17899,9 @@ async function openBriefing() {
 
 function closeBriefing() {
   if (briefEl.hidden || briefEl.classList.contains("closing")) return;
+  // Off its address, onto the page under it. Replaced, not gone back
+  // from: whatever is opened next (a chat about a card) comes after.
+  if (/^\/briefing\/?$/.test(location.pathname)) history.replaceState(null, "", routeFor());
   if (briefing.watch) briefing.watch.disconnect();
   if (calm.matches) { briefEl.hidden = true; return; }
   briefEl.classList.add("closing");
@@ -18062,7 +18196,64 @@ const ACTIONS = [
   { label: "Keyboard shortcuts", keys: "?", slash: "/help", run: () => openHelp() },
   { label: "Send the document's comments to Flash", keys: "Ctrl Shift Enter", slash: "/comments", run: sendOpenComments },
   { label: "Restart the server with a new link", keys: "Ctrl Alt Shift R", slash: "/restart", run: restartServer },
+  { label: "Health check: what works and how to fix the rest", keys: "", slash: "/doctor", run: () => runDoctorFromSlash() },
+  { label: "Good reply: Flash learns what worked", keys: "", slash: "/good", run: () => rateLast("good") },
+  { label: "Bad reply: Flash learns what to do differently", keys: "", slash: "/bad", run: () => rateLast("bad") },
+  { label: "Fork the chat after the last reply", keys: "", slash: "/fork", run: () => { const rows = document.querySelectorAll("[data-reply] .actions"); if (rows.length) forkFrom(rows[rows.length - 1]); } },
+  { label: "This chat's forks", keys: "", slash: "/forks", run: () => openForks() },
+  { label: "Secrets Flash keeps", keys: "", slash: "/secrets", run: () => showSettings("security") },
+  { label: "Memory", keys: "", slash: "/memory", run: () => showSettings("memory") },
+  { label: "Connectors (MCP)", keys: "", slash: "/mcp", run: () => showSettings("connectors") },
+  { label: "Usage", keys: "", slash: "/usage", run: () => showSettings("usage") },
+  { label: "Email accounts", keys: "", slash: "/email", run: () => showSettings("email") },
 ];
+
+// The last reply, rated as its thumbs do.
+function rateLast(rating) {
+  const rows = document.querySelectorAll("[data-reply] .actions");
+  const row = rows[rows.length - 1];
+  if (!row) { toast("There is no reply to rate yet."); return; }
+  row.querySelectorAll(".rate")[rating === "good" ? 0 : 1]?.click();
+}
+
+function runDoctorFromSlash() {
+  showSettings("general");
+  requestAnimationFrame(() => {
+    const box = document.querySelector(".doctor-box");
+    if (!box) return;
+    box.scrollIntoView({ block: "center", behavior: calm.matches ? "auto" : "smooth" });
+    box.querySelector(".btn")?.click();
+  });
+}
+
+// What can follow a command, offered as it is typed: QUERY is what is
+// typed after it; each gives [value, what it is] pairs.
+const SLASH_ARGS = {
+  "/model": async (query) => {
+    if (!models.length) { try { models = (await command("model")).models || []; } catch (_) { /* none to offer */ } }
+    return models.filter((m) => m.toLowerCase().includes(query.toLowerCase())).slice(0, 12)
+      .map((m) => [m, sameModel(m, chatModel()) ? "This chat's" : sameModel(m, info.model) ? "Default" : ""]);
+  },
+  "/theme": async () => [["light", "Light"], ["dark", "Dark"]],
+  "/background": async (query) => {
+    let found = [];
+    try { found = (await command("backgrounds")).scenes || []; } catch (_) { /* none */ }
+    return [["off", "No background"], ...found.map((s) => [s.name, s.title])].filter(([v]) => v.includes(query.toLowerCase())).slice(0, 12);
+  },
+  "/rename": async () => { const c = chats.get(current); return c && c.title !== "New chat" ? [[c.title, "Its name now"]] : []; },
+  "/wake": async () => [["on", "Listen for Hey Flash"], ["off", "Stop listening"]],
+};
+
+// Extensions' commands, as the server lists them.
+const extCommands = () => (info.ext_commands || []).filter((c) => !ACTIONS.some((a) => a.slash === c.slash));
+
+async function runExtCommand(text) {
+  clearInput();
+  let said;
+  try { said = await command("ext-command", text); } catch (error) { showFailure(error); return; }
+  if (said.send) { await send(said.send); return; }
+  if (said.say) toast(said.say.length > 400 ? said.say.slice(0, 400) + "…" : said.say, said.failed ? 6000 : 4000);
+}
 
 function runSlash(text) {
   const [word, ...rest] = text.split(/\s+/);
@@ -18081,6 +18272,10 @@ function runSlash(text) {
     return true;
   }
   if (word === "/rename" && arg) { const c = chats.get(current); if (c) { c.title = arg; renderChats(); setTitle($("#title"), arg); } command("rename", arg); clearInput(); return true; }
+  if (word === "/theme" && /^(light|dark)$/i.test(arg)) { if ((document.documentElement.dataset.theme || "light") !== arg.toLowerCase()) toggleTheme(); clearInput(); return true; }
+  if (word === "/wake" && /^(on|off)$/i.test(arg)) { setWake(arg.toLowerCase() === "on"); clearInput(); return true; }
+  if (word === "/background" && arg) { clearInput(); command("background", arg).then(() => toast(arg === "off" ? "Background off" : `Background: ${arg}`), showFailure); return true; }
+  if (extCommands().some((c) => c.slash === word)) { runExtCommand(text); return true; }
   const action = ACTIONS.find((a) => a.slash === word);
   if (!action) return false;
   clearInput();
@@ -18090,14 +18285,48 @@ function runSlash(text) {
 function clearInput() { input.value = ""; autosize(); closeMenu(); slashOpen = false; updateSend(); }
 
 let slashOpen = false;
+let slashAsked = 0;
 function showSlash() {
   const value = input.value;
+  const typed = value.match(/^(\/[\w-]+)\s+([^\n]*)$/);
+  if (typed && (SLASH_ARGS[typed[1]] || (typed[1] === "/debate" && typeof debateArgs === "function"))) { showSlashArgs(typed[1], typed[2]); return; }
   if (!value.startsWith("/") || /\s/.test(value)) { if (slashOpen) closeMenu(); slashOpen = false; return; }
-  const rows = ACTIONS.filter((a) => a.slash.startsWith(value)).map((a) => ({
+  const own = ACTIONS.filter((a) => a.slash.startsWith(value)).map((a) => ({
     html: `<span class="slash">${esc(a.slash)}</span><span class="desc">${esc(a.label)}</span>`, action: a,
   }));
+  const theirs = extCommands().filter((c) => c.slash.startsWith(value)).map((c) => ({
+    html: `<span class="slash">${esc(c.slash)}</span><span class="desc">${esc(c.label)}</span><span class="slash-ext">${esc(c.ext)}</span>`, ext: c,
+  }));
+  const rows = [...own, ...theirs];
   if (!rows.length) { closeMenu(); slashOpen = false; return; }
-  openMenu($("#composer"), rows, (row) => { clearInput(); row.action.run(); }, "", true);
+  openMenu($("#composer"), rows, (row) => {
+    // One that takes something after it waits for it.
+    if (row.ext) { input.value = row.ext.slash + " "; autosize(); input.focus(); showSlash(); return; }
+    if (SLASH_ARGS[row.action.slash] || row.action.slash === "/debate") { input.value = row.action.slash + " "; autosize(); input.focus(); showSlash(); return; }
+    clearInput(); row.action.run();
+  }, "", true);
+  slashOpen = true;
+}
+
+// What can follow the command typed so far, as it is typed.
+async function showSlashArgs(word, query) {
+  const asked = ++slashAsked;
+  const found = word === "/debate" ? debateArgs(query) : await SLASH_ARGS[word](query.trim());
+  if (asked !== slashAsked || !input.value.startsWith(word)) return;
+  if (!found.length) { if (slashOpen) closeMenu(); slashOpen = false; return; }
+  const rows = found.map(([value, about, replace]) => ({
+    html: `<span class="slash">${esc(value)}</span>${about ? `<span class="desc">${esc(about)}</span>` : ""}`, value, replace,
+  }));
+  openMenu($("#composer"), rows, (row) => {
+    // A pick fills in what was being typed; Enter again runs it.
+    input.value = row.replace !== undefined ? row.replace : `${word} ${row.value}`;
+    autosize();
+    input.focus();
+    input.setSelectionRange(input.value.length, input.value.length);
+    closeMenu();
+    slashOpen = false;
+    updateSend();
+  }, "", true);
   slashOpen = true;
 }
 
@@ -18743,8 +18972,12 @@ document.addEventListener("mousedown", (e) => {
 messagesEl.addEventListener("click", (e) => {
   const copyButton = e.target.closest("[data-copy]");
   if (copyButton) { copy(copyButton.closest("pre, .diagram").querySelector("code").textContent, "code", copyButton); return; }
-  const head = e.target.closest(".tool > .head, .thinking > .head");
-  if (head) head.parentNode.classList.toggle("open");
+  const head = e.target.closest(".tool > .head, .thinking > .head, .tool-batch > .head");
+  if (head) {
+    const box = head.parentNode;
+    box.classList.toggle("open");
+    if (box.classList.contains("tool-batch")) head.setAttribute("aria-expanded", box.classList.contains("open"));
+  }
 });
 
 const typing = () => { const a = document.activeElement; return a && (a.tagName === "TEXTAREA" || a.tagName === "INPUT"); };
