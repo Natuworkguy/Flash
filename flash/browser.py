@@ -17,6 +17,7 @@ import atexit
 import json
 import os
 import re
+import threading
 import time
 from pathlib import Path
 from typing import Any, Optional
@@ -1314,3 +1315,143 @@ def inspect(target: str, properties: Optional[list] = None) -> tuple[str, str]:
     ))
     parts.append("HTML:\n" + html)
     return "\n".join(parts), ""
+
+
+# One thread for the browser ------------------------------------------------
+
+# Playwright's objects answer only on the thread that made them, and the
+# page outlives the turn that opened it: the user can take it over from
+# the web page, on a thread of the server's. So every call that touches
+# the browser runs on this one thread, whoever asks.
+_worker: dict[str, Any] = {"pool": None, "ident": None}
+
+
+def _pool():
+    from concurrent.futures import ThreadPoolExecutor
+
+    if _worker["pool"] is None:
+        def mark() -> None:
+            _worker["ident"] = threading.get_ident()
+
+        _worker["pool"] = ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="flash-browser",
+            initializer=mark)
+    return _worker["pool"]
+
+
+def _on_browser_thread(fn):
+    import functools
+
+    @functools.wraps(fn)
+    def run(*args, **kwargs):
+        if threading.get_ident() == _worker["ident"]:
+            return fn(*args, **kwargs)
+        try:
+            return _pool().submit(fn, *args, **kwargs).result()
+        except RuntimeError as exc:
+            # Flash is exiting and the thread is gone: do it here.
+            if "shutdown" not in str(exc):
+                raise
+            return fn(*args, **kwargs)
+
+    return run
+
+
+# Taking it over --------------------------------------------------------------
+
+# While the user has the browser, the agent's actions wait: each is told
+# so, and to look again once it is handed back.
+_control = {"taken": False, "since": 0.0}
+TAKEN = ("The user has taken control of the browser. Do nothing to it "
+         "until they hand it back; then look again, as they may have "
+         "changed the page.")
+
+
+def taken() -> bool:
+    return bool(_control["taken"])
+
+
+def take_control(on: bool = True) -> dict:
+    """The user takes the browser (ON) or hands it back. Says where it
+    is."""
+
+    if on and not is_open():
+        raise PageProblem("There is no browser open to take over.")
+    _control["taken"] = bool(on)
+    _control["since"] = time.time() if on else 0.0
+    url, title = where()
+    size = viewport()
+    return {"taken": taken(), "url": url, "title": title, **size}
+
+
+def _viewport() -> dict:
+    page = _session.page if is_open() else None
+    size = getattr(page, "viewport_size", None) or {}
+    return {"width": int(size.get("width") or 0),
+            "height": int(size.get("height") or 0)}
+
+
+def _live_frame(quality: int = 60) -> bytes:
+    """What the page looks like now, as a JPEG, for the user to watch."""
+
+    if not is_open():
+        return b""
+    try:
+        return _session.page.screenshot(type="jpeg", quality=quality)
+    except Exception:  # noqa: BLE001
+        return b""
+
+
+def _user_act(kind: str, x: float = 0, y: float = 0, text: str = "",
+              key: str = "", dx: float = 0, dy: float = 0) -> str:
+    """Something the user did to the page while it is theirs."""
+
+    if not taken():
+        raise PageProblem("Take control of the browser first.")
+    if not is_open():
+        raise PageProblem(NO_PAGE)
+    page = _session.page
+    if kind == "click":
+        page.mouse.click(x, y)
+    elif kind == "dblclick":
+        page.mouse.dblclick(x, y)
+    elif kind == "move":
+        page.mouse.move(x, y)
+    elif kind == "scroll":
+        page.mouse.move(x, y)
+        page.mouse.wheel(dx, dy)
+    elif kind == "type":
+        page.keyboard.type(text[:2000])
+    elif kind == "key":
+        page.keyboard.press(key[:40])
+    elif kind == "goto":
+        target = text.strip()
+        if not re.match(r"^https?://", target):
+            target = "https://" + target
+        page.goto(target, wait_until="load", timeout=NAVIGATION_TIMEOUT_MS)
+    elif kind == "back":
+        page.go_back(timeout=NAVIGATION_TIMEOUT_MS)
+    else:
+        raise PageProblem(f"Unknown action {kind!r}.")
+    return page.url
+
+
+viewport = _on_browser_thread(_viewport)
+live_frame = _on_browser_thread(_live_frame)
+user_act = _on_browser_thread(_user_act)
+
+_interact = interact
+
+
+def _interact_unless_taken(action: str, **kwargs) -> tuple[str, str]:
+    if taken():
+        return "", TAKEN
+    return _interact(action, **kwargs)
+
+
+interact = _interact_unless_taken
+
+for _name in ("open_page", "interact", "snapshot", "elements", "where",
+              "close_session", "network", "request", "console",
+              "run_script", "inspect"):
+    globals()[_name] = _on_browser_thread(globals()[_name])

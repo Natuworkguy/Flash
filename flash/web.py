@@ -5832,6 +5832,17 @@ class Handler(BaseHTTPRequestHandler):
             )})
         elif url.path == "/api/qr":
             self._json(phone_link(self.server))
+        elif url.path == "/api/browser/frame":
+            # The agent's browser as it is now, for the user watching or
+            # driving it.
+            from . import browser
+
+            frame = browser.live_frame()
+            if frame:
+                self._send(HTTPStatus.OK, frame, "image/jpeg")
+            else:
+                self._json({"error": "no browser open"},
+                           HTTPStatus.NOT_FOUND)
         else:
             self._json({"error": "not found"}, HTTPStatus.NOT_FOUND)
 
@@ -5921,6 +5932,39 @@ class Handler(BaseHTTPRequestHandler):
                     models=list(body.get("models") or []),
                     rounds=_int(body.get("rounds"))),
             }
+
+        if path == "/api/browser/control":
+            # The user takes the agent's browser, or hands it back: the
+            # chat hears which, and where it was left.
+            from . import browser
+
+            try:
+                said = browser.take_control(bool(body.get("on")))
+            except browser.PageProblem as exc:
+                raise ValueError(str(exc)) from None
+            chat_id = str(body.get("chat") or "")
+            if chat_id in session.chats:
+                chat = session.chat(chat_id)
+                note = ("You took over Flash's browser. Flash waits until "
+                        "you hand it back." if said["taken"] else
+                        f"You handed the browser back, at {said['url']}.")
+                session.emit(chat, {"type": "note", "text": note})
+            return said
+
+        if path == "/api/browser/act":
+            from . import browser
+
+            try:
+                url = browser.user_act(
+                    str(body.get("kind") or ""),
+                    float(body.get("x") or 0), float(body.get("y") or 0),
+                    str(body.get("text") or ""), str(body.get("key") or ""),
+                    float(body.get("dx") or 0), float(body.get("dy") or 0))
+            except browser.PageProblem as exc:
+                raise ValueError(str(exc)) from None
+            except Exception as exc:  # noqa: BLE001  (the page's own error)
+                raise ValueError(str(exc).splitlines()[0]) from None
+            return {"url": url}
 
         if path == "/api/debate-steer":
             session.steer_debate(str(body.get("id") or ""),

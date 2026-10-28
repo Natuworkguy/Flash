@@ -2952,6 +2952,14 @@ body.all-stopped .org-node, body.all-stopped .spark-card { animation: all-halt 0
 .browser-bar .url { flex: 1; min-width: 0; margin-left: 4px; padding: 6px 12px; border-radius: 999px; background: var(--bg); border: 1px solid var(--border); font: 12.5px var(--mono); color: var(--text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .browser-bar .live { display: inline-flex; align-items: center; gap: 6px; margin-left: 6px; font-size: 12px; font-weight: 600; color: var(--accent); }
 .browser-bar .live[hidden] { display: none; }
+.browser-bar .take { margin-left: 6px; display: inline-flex; align-items: center; gap: 6px; flex: none; }
+.browser-bar .take svg { width: 14px; height: 14px; }
+.browser-bar .take[hidden] { display: none; }
+.browser-view.driving { outline: 0; }
+.browser-view.driving .take { background: var(--accent); color: var(--accent-text, #fff); border-color: transparent; }
+.browser-view.driving .browser-shot { box-shadow: inset 0 0 0 2px var(--accent); }
+.browser-view.driving .browser-shot img { cursor: crosshair; }
+.browser-view.driving .url { color: var(--text); outline: 0; cursor: text; }
 .browser-bar .live::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); animation: pulse-dot 1.4s var(--ease) infinite; }
 @keyframes pulse-dot { 50% { opacity: 0.35; } }
 .browser-shot { flex: 1; min-height: 0; overflow: auto; padding: 14px; }
@@ -3739,6 +3747,7 @@ const ICON = {
   chevLeft: '<path d="m15 6-6 6 6 6"/>',
   chevDown: '<path d="m6 9 6 6 6-6"/>',
   chevUp: '<path d="m6 15 6-6 6 6"/>',
+  pointer: '<path d="M5 3l14 7-6 2-2 6z"/>',
   bolt: '<path d="M13 2 4 14h7l-1 8 9-12h-7Z"/>',
   feed: '<rect x="5" y="2" width="14" height="20" rx="3"/><path d="M10.5 9.2v5.6l4.4-2.8Z"/>',
   think: '<path d="M9.5 18h5M10.5 21h3"/><path d="M12 3a6 6 0 0 0-3.7 10.7c.7.6 1.2 1.4 1.2 2.3h5c0-.9.5-1.7 1.2-2.3A6 6 0 0 0 12 3Z"/>',
@@ -5115,6 +5124,8 @@ function attachment(entry) {
 // frame, and the panel plays it live beside the chat as it goes.
 
 const browserFrames = (run) => ((chats.get(current) || { log: [] }).log).filter((e) => e.type === "browser" && e.run === run);
+// The runs in this chat, in order: the last one is the browser still open.
+const browserRuns = () => [...new Set(((chats.get(current) || { log: [] }).log).filter((e) => e.type === "browser").map((e) => e.run))];
 const hostOf = (url) => { try { const u = new URL(url); return u.protocol === "file:" ? u.pathname.split("/").pop() : u.host; } catch (_) { return url; } };
 
 function browserCard(entry) {
@@ -5166,7 +5177,7 @@ function openBrowser(run, at) {
     dropModel();
     dropMidi();
     body.textContent = "";
-    view = body.appendChild(el("div", "browser-view", `<div class="browser-bar"><button type="button" class="icon-btn" data-prev aria-label="Previous step" data-tip="Previous step">${icon("chevRight")}</button><button type="button" class="icon-btn" data-next aria-label="Next step" data-tip="Next step">${icon("chevRight")}</button><span class="url"></span><span class="live" hidden>Live</span></div><div class="browser-shot"><img alt=""></div><div class="browser-step"></div>`));
+    view = body.appendChild(el("div", "browser-view", `<div class="browser-bar"><button type="button" class="icon-btn" data-prev aria-label="Previous step" data-tip="Previous step">${icon("chevRight")}</button><button type="button" class="icon-btn" data-next aria-label="Next step" data-tip="Next step">${icon("chevRight")}</button><span class="url"></span><span class="live" hidden>Live</span><button type="button" class="btn small take" data-tip="Click, type and scroll in Flash's browser yourself; Flash waits">${icon("pointer")}<span>Take control</span></button></div><div class="browser-shot"><img alt=""></div><div class="browser-step"></div>`));
     view.dataset.run = run;
   }
   view.querySelector(".url").textContent = frame.url;
@@ -5182,12 +5193,86 @@ function openBrowser(run, at) {
   next.disabled = i === frames.length - 1;
   prev.onclick = () => openBrowser(run, i - 1);
   next.onclick = () => openBrowser(run, i + 1);
+  // Only the newest run's browser is still open to be taken over.
+  const newest = browserRuns().at(-1) === run;
+  const take = view.querySelector(".take");
+  take.hidden = !newest && !driving;
+  take.onclick = () => (driving ? handBack() : takeControl(view));
   viewer.setAttribute("aria-hidden", "false");
   if (!already) {
     void viewer.offsetWidth;
     viewer.classList.add("open");
   }
   markOpenCard();
+}
+
+// Taking over the agent's browser: the panel shows the page live, and a
+// click, a scroll or a key on it goes to the page. Flash waits until it
+// is handed back, then looks again.
+let driving = null;
+
+async function takeControl(view) {
+  let said;
+  try { said = await api("/api/browser/control", { on: true, chat: current }); }
+  catch (error) { showFailure(error); return; }
+  const img = view.querySelector("img");
+  const shot = view.querySelector(".browser-shot");
+  view.classList.add("driving");
+  view.tabIndex = 0;
+  view.focus();
+  view.querySelector(".take span").textContent = "Hand back";
+  const url = view.querySelector(".url");
+  url.contentEditable = "plaintext-only";
+  url.textContent = said.url;
+  driving = { view, size: { width: said.width, height: said.height }, stop: false, last: "" };
+  const act = (body) => api("/api/browser/act", body).then((r) => { if (r.url && document.activeElement !== url) url.textContent = r.url; }, (error) => toast(error.message || String(error)));
+  const at = (e) => {
+    const box = img.getBoundingClientRect();
+    return { x: ((e.clientX - box.left) / box.width) * driving.size.width, y: ((e.clientY - box.top) / box.height) * driving.size.height };
+  };
+  img.onclick = (e) => { if (driving) act({ kind: "click", ...at(e) }); view.focus(); };
+  img.ondblclick = (e) => { if (driving) act({ kind: "dblclick", ...at(e) }); };
+  shot.onwheel = (e) => { if (!driving) return; e.preventDefault(); act({ kind: "scroll", ...at(e), dx: e.deltaX, dy: e.deltaY }); };
+  view.onkeydown = (e) => {
+    if (!driving || e.target === url) return;
+    if (e.metaKey || e.ctrlKey) return;
+    e.preventDefault();
+    if (e.key.length === 1) act({ kind: "type", text: e.key });
+    else act({ kind: "key", key: e.key });
+  };
+  url.onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); act({ kind: "goto", text: url.textContent.trim() }); view.focus(); } };
+  // The page, a few times a second, while it is theirs.
+  const tick = async () => {
+    if (!driving || driving.stop) return;
+    try {
+      const r = await fetch("/api/browser/frame", { credentials: "same-origin", cache: "no-store" });
+      if (r.ok) {
+        const blob = URL.createObjectURL(await r.blob());
+        if (driving.last) URL.revokeObjectURL(driving.last);
+        driving.last = blob;
+        img.src = blob;
+      }
+    } catch (_) { /* tried again next tick */ }
+    setTimeout(tick, 300);
+  };
+  tick();
+  toast("The browser is yours. Flash waits until you hand it back.");
+}
+
+async function handBack() {
+  if (!driving) return;
+  const { view } = driving;
+  driving.stop = true;
+  driving = null;
+  view.classList.remove("driving");
+  view.querySelector(".take span").textContent = "Take control";
+  view.querySelector(".url").contentEditable = "false";
+  const img = view.querySelector("img");
+  img.onclick = img.ondblclick = null;
+  view.querySelector(".browser-shot").onwheel = null;
+  view.onkeydown = null;
+  try { await api("/api/browser/control", { on: false, chat: current }); toast("Handed back to Flash"); }
+  catch (error) { showFailure(error); }
 }
 
 // A new frame, live: the panel follows it when it is on this run's
@@ -7114,6 +7199,8 @@ function toMarkdown(root) {
 function closeViewer() {
   const viewer = $("#viewer");
   if (!viewer.classList.contains("open")) return false;
+  // Closed while the user drove the browser: it goes back to Flash.
+  if (driving) handBack();
   viewer.classList.remove("open");
   viewer.setAttribute("aria-hidden", "true");
   viewing = null;
