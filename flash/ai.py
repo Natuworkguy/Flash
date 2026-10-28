@@ -4248,8 +4248,9 @@ def _hook_command(arg: str) -> None:
 
 
 EXTENSION_USAGE = (
-    "Usage: /extension [list] | install github@owner/repo | "
-    "remove <name> | settings <name> | set <name> <setting> <value>"
+    "Usage: /extension [list] | install github@owner/repo[#branch] | "
+    "install git@<URL>[#branch] | update [name] | remove <name> | "
+    "settings <name> | set <name> <setting> <value>"
 )
 
 
@@ -4447,6 +4448,27 @@ def _install_extension(spec: str) -> bool:
     return True
 
 
+def _update_extensions(name: str = "") -> bool:
+    """Pull NAME again from where it was installed from (every
+    extension, with no NAME). The old copy stays until the new one is
+    in place: an update that fails leaves it as it was."""
+
+    names = [name] if name else [e.name for e in extensions.installed()]
+    if not names:
+        console.print(Text("No extensions are installed.", style=DIM))
+        return True
+    worked = True
+    for each in names:
+        try:
+            source = extensions.update_source(each)
+        except extensions.ExtensionError as exc:
+            warn(str(exc))
+            worked = False
+            continue
+        worked = _install_extension(source) and worked
+    return worked
+
+
 def _remove_extension(name: str) -> bool:
     if not name:
         warn("Usage: /extension remove <name>")
@@ -4476,8 +4498,13 @@ def _extension_command(arg: str) -> None:
 
     if action in ("", "list", "ls"):
         _list_extensions()
-    elif action in ("install", "add", "update") and rest:
+    elif action in ("install", "add") and rest:
         _install_extension(rest)
+    elif action in ("update", "upgrade", "pull"):
+        if "@" in rest:
+            _install_extension(rest)
+        else:
+            _update_extensions(rest)
     elif action in ("remove", "uninstall", "rm"):
         _remove_extension(rest)
     elif action == "settings" and rest:
@@ -4496,6 +4523,9 @@ def _handle_extension_flags(args) -> bool:
 
     if args.extension_remove:
         return _remove_extension(args.extension_remove)
+
+    if args.extension_update is not None:
+        return _update_extensions(args.extension_update)
 
     _list_extensions()
     return True
@@ -5765,7 +5795,7 @@ def _voice_models() -> None:
         grid.add_column()
         in_use = voice.model_in_use(kind)
         engine = ""
-        for choice in voice.by_engine(voice.KINDS[kind]):
+        for choice in voice.by_engine(voice.offered(kind)):
             # Each engine's together, a line between them.
             if voice.engine_of(choice.name) != engine:
                 engine = voice.engine_of(choice.name)
@@ -5801,7 +5831,7 @@ def _voice_pick(kind: str) -> None:
         _voice_models()
         return
     in_use = voice.model_in_use(kind)
-    choices = voice.by_engine(voice.KINDS[kind])
+    choices = voice.by_engine(voice.offered(kind))
     rows = [
         model_picker.Model(
             name=choice.name,
@@ -6082,6 +6112,11 @@ def _main() -> None:
         _handle_scheme_flags(args)
         return
 
+    if getattr(args, "yes", False):
+        from . import theme
+
+        theme.assume_yes()
+
     if args.update:
         sys.exit(0 if _run_update(force=args.force) else 1)
 
@@ -6092,6 +6127,7 @@ def _main() -> None:
         args.extension_install
         or args.extension_remove
         or args.extension_list
+        or args.extension_update is not None
     ):
         sys.exit(0 if _handle_extension_flags(args) else 1)
 

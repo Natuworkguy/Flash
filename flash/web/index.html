@@ -1815,6 +1815,12 @@ body.page-projects #dock, body.page-settings #dock, body.page-tool #dock { displ
 .ext-settings .side { display: flex; align-items: center; gap: 6px; }
 .ext-settings .side input[type="password"] { letter-spacing: 0.12em; }
 .ext-settings .ext-clear[hidden] { display: none; }
+/* A text setting set to one of the vault's secrets: its name on a chip,
+   in place of the box. */
+.ext-settings .secret-chip { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 999px; background: var(--accent-soft, color-mix(in srgb, var(--accent) 14%, transparent)); color: var(--text); font: 12px/1.3 var(--mono, ui-monospace, monospace); }
+.ext-settings .secret-chip svg { width: 13px; height: 13px; color: var(--accent); }
+.ext-settings .secret-chip[hidden], .ext-settings .side [hidden] { display: none; }
+.ext-settings .secret-pick { max-width: 140px; }
 .ext-settings .side input:focus, .ext-settings .side select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent); }
 /* What Flash may do on this computer, one switch each, sliding open
    under "Let Flash act on this computer" while it is on. */
@@ -11554,11 +11560,12 @@ async function drawExtensions(body) {
     host.appendChild(warn);
   }
   if (!r.extensions.length) {
-    host.appendChild(el("div", "mem-empty", `<b>No extensions installed</b>Install one with <code>github@owner/repo</code>, <code>path@/some/folder</code> while you write your own, or <code>path@/some/file.bundle</code> for one passed around as a git bundle.`));
+    host.appendChild(el("div", "mem-empty", `<b>No extensions installed</b>Install one with <code>github@owner/repo</code> (add <code>#branch</code> for another branch), <code>git@</code> and any repository URL, <code>path@/some/folder</code> while you write your own, or <code>path@/some/file.bundle</code> for one passed around as a git bundle.`));
     return;
   }
   const list = el("div", "item-list");
   r.extensions.forEach((ext, i) => {
+    ext.secrets = r.secrets || [];
     const row = el("div", "item-row", `<span class="main"><span class="top"><span class="name"></span><span class="ver"></span></span><span class="desc"></span><span class="chips"></span><span class="src"></span></span>`);
     row.style.setProperty("--i", i);
     row.querySelector(".name").textContent = ext.name;
@@ -11586,6 +11593,14 @@ async function drawExtensions(body) {
         open.setAttribute("aria-expanded", shown);
       };
       row.appendChild(open);
+    }
+    if (ext.source) {
+      // Pulled again and shown before it goes in, like an install; the
+      // copy in place stays until the new one is.
+      const update = el("button", "btn small", "Update");
+      update.type = "button";
+      update.onclick = () => extensionForm({ update: ext.name, spec: ext.source });
+      row.appendChild(update);
     }
     const remove = el("button", "btn small remove", "Remove");
     remove.type = "button";
@@ -11638,18 +11653,23 @@ function extensionPanel(ext) {
       for (const option of s.options) control.appendChild(el("option")).textContent = option;
     } else if (s.secret) {
       // A secret, such as an API key: bullets as it is typed, and never
-      // sent back here once saved, only whether there is one.
+      // sent back here once saved, only whether there is one. Or one of
+      // the vault's secrets, picked by name.
       control = el("input");
       control.type = "password";
       control.autocomplete = "off";
       control.spellcheck = false;
       const clear = el("button", "btn small ext-clear", "Clear");
       clear.type = "button";
+      const pick = secretPicker(ext, s, save);
       const mark = () => {
         const set = !!ext.values[s.id];
         control.placeholder = set ? "\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022 saved" : "Not set";
-        clear.hidden = !set;
+        control.hidden = pick.mark();
+        // The chip has its own way out.
+        clear.hidden = !set || control.hidden;
       };
+      pick.changed = mark;
       mark();
       control.onchange = async () => {
         const typed = control.value.trim();
@@ -11660,7 +11680,7 @@ function extensionPanel(ext) {
       };
       clear.onclick = async () => { await save(s.id, "", () => {}); mark(); };
       control.setAttribute("aria-label", s.label);
-      row.querySelector(".side").append(control, clear);
+      row.querySelector(".side").append(pick.chip, control, pick.select, clear);
       panel.appendChild(row);
       continue;
     } else {
@@ -11681,19 +11701,65 @@ function extensionPanel(ext) {
       save(s.id, s.type === "number" ? Number(control.value) : control.value, () => { control.value = kept = before; });
     };
     row.querySelector(".side").appendChild(control);
+    if (s.type === "text") {
+      const pick = secretPicker(ext, s, save);
+      pick.changed = () => {
+        control.hidden = pick.mark();
+        if (!control.hidden) control.value = kept = ext.values[s.id] || "";
+      };
+      pick.changed();
+      row.querySelector(".side").append(pick.chip, pick.select);
+    }
     panel.appendChild(row);
   }
   return shell;
 }
 
+const SECRET_REF = /^\{\{secret:([A-Za-z0-9_.-]{1,64})\}\}$/;
+
+// For a text setting: a menu of the vault's secrets, to use one of them
+// instead of typing a value, and the chip that shows which one it is.
+// mark() redraws both and says whether a secret is in use.
+function secretPicker(ext, s, save) {
+  const chip = el("span", "secret-chip", `${icon("lock")}<span></span><button type="button" class="icon-btn" aria-label="Stop using this secret">${icon("x")}</button>`);
+  const select = el("select", "secret-pick");
+  select.setAttribute("aria-label", `Use a kept secret for ${s.label}`);
+  const picker = { chip, select, changed: () => {} };
+  picker.mark = () => {
+    const found = SECRET_REF.exec(String(ext.values[s.id] || ""));
+    chip.hidden = !found;
+    if (found) chip.querySelector("span").textContent = found[1];
+    select.textContent = "";
+    select.appendChild(el("option")).textContent = ext.secrets.length ? "Use a secret…" : "No secrets kept";
+    select.options[0].value = "";
+    for (const name of ext.secrets) {
+      const option = select.appendChild(el("option"));
+      option.value = option.textContent = name;
+    }
+    select.disabled = !ext.secrets.length;
+    select.hidden = !!found;
+    return !!found;
+  };
+  select.onchange = async () => {
+    const name = select.value;
+    if (!name) return;
+    await save(s.id, `{{secret:${name}}}`, () => {});
+    picker.changed();
+  };
+  chip.querySelector("button").onclick = async () => { await save(s.id, "", () => {}); picker.changed(); };
+  return picker;
+}
+
 // Fetched and shown first, installed only on a second, deliberate yes:
 // the same checks the terminal makes before /extension install.
-function extensionForm() {
+const SOURCE_HINT = "github@owner/repo, github@owner/repo#branch, git@https://host/repo.git, path@/some/folder, or path@/some/file.bundle";
+
+function extensionForm(given = {}) {
   let staged = null;
   const form = openForm(`
-    <h2>Install an extension</h2>
-    <p class="sub">From GitHub, or from a folder or a git bundle on the computer Flash runs on.</p>
-    <label class="field"><span>Source</span><input name="spec" class="mono" placeholder="github@owner/repo" autocomplete="off" spellcheck="false"><small class="source-hint">github@owner/repo, path@/some/folder, or path@/some/file.bundle</small></label>
+    <h2>${given.update ? "Update" : "Install an extension"}</h2>
+    <p class="sub">${given.update ? "Pulled again from where it came from. The copy you have stays until the new one is in place." : "From GitHub or any git repository, on any branch, or from a folder or a git bundle on the computer Flash runs on."}</p>
+    <label class="field"><span>Source</span><input name="spec" class="mono" placeholder="github@owner/repo" autocomplete="off" spellcheck="false"><small class="source-hint">${SOURCE_HINT}</small></label>
     <div class="preview-host"></div>
     <div class="dialog-buttons"><button type="button" class="btn" data-cancel>Cancel</button><button type="submit" class="btn primary">Check it</button></div>`,
     async (data) => {
@@ -11723,7 +11789,10 @@ function extensionForm() {
     const spec = form.spec.value.trim();
     const bundle = /^path@/i.test(spec) && /\.bundle/i.test(spec.split(/[\\/]/).pop());
     hint.classList.toggle("is-bundle", bundle);
-    hint.innerHTML = bundle ? `${icon("cube")}<span>A git bundle: Flash installs the branch it carries.</span>` : "github@owner/repo, path@/some/folder, or path@/some/file.bundle";
+    const branch = !bundle && /^(github|git)@[^#]+#(.+)$/i.exec(spec);
+    hint.classList.toggle("is-bundle", bundle || !!branch);
+    hint.innerHTML = bundle ? `${icon("cube")}<span>A git bundle: Flash installs the branch it carries.</span>` : SOURCE_HINT;
+    if (branch) { hint.innerHTML = `${icon("fork")}<span></span>`; hint.querySelector("span").textContent = `From its ${branch[2]} branch.`; }
   });
   const showPreview = () => {
     const box = el("div", "ext-preview", `<div><span class="name"></span> <span class="ver"></span></div><div class="sub"></div><ul></ul>`);
@@ -11742,6 +11811,23 @@ function extensionForm() {
   };
   form.querySelector("[data-cancel]").onclick = () => { if (staged) command("extension-cancel").catch(() => {}); closeForm(); };
   form.spec.addEventListener("input", () => { staged = null; host.textContent = ""; });
+  if (given.spec) {
+    form.spec.value = given.spec;
+    form.spec.dispatchEvent(new Event("input"));
+  }
+  if (given.update) {
+    // Fetched straight away: there is nothing to type.
+    submit.disabled = true;
+    submit.textContent = "Fetching…";
+    command("extension-update", given.update).then((found) => {
+      staged = found;
+      showPreview();
+    }).catch((error) => {
+      form.querySelector(".form-error").textContent = error.message || String(error);
+      form.spec.readOnly = false;
+      submit.textContent = "Check it";
+    }).finally(() => { submit.disabled = false; });
+  }
 }
 
 // Background scenes ----------------------------------------------------------

@@ -752,14 +752,27 @@ def yes_no() -> str:
     return answer
 
 
+# Set by -y on the command line: every confirm() is a yes, said as one.
+ASSUME_YES = False
+
+
+def assume_yes(on: bool = True) -> None:
+    global ASSUME_YES
+    ASSUME_YES = bool(on)
+
+
 def confirm(question: str) -> bool:
-    """Ask QUESTION on one y/n line. True only for a plain yes."""
+    """Ask QUESTION on one y/n line. True only for a plain yes, or
+    always under -y."""
 
     ask = Text(f"  {question} ", style=DIM)
     ask.append("y", style=f"bold {ACCENT}")
     ask.append("/n ", style=DIM)
 
     console.print(ask, end="")
+    if ASSUME_YES:
+        console.print("y (-y)", style=DIM)
+        return True
 
     try:
         answer = yes_no()

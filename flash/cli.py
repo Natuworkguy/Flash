@@ -6,7 +6,7 @@ from typing import Optional
 
 from .version import __version__
 
-EXTENSION_COMMANDS = ("install", "remove", "list")
+EXTENSION_COMMANDS = ("install", "update", "remove", "list")
 # Commands of their own, not about extensions.
 OTHER_COMMANDS = ("doctor",)
 
@@ -26,15 +26,24 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
         nargs="?",
         choices=EXTENSION_COMMANDS + OTHER_COMMANDS,
         help=(
-            "extensions: install SOURCE (github@owner/repo, or "
-            "path@/some/folder for one on disk), remove NAME, or list; "
+            "extensions: install SOURCE (github@owner/repo, "
+            "github@owner/repo#branch, git@<repository URL>, or "
+            "path@/some/folder for one on disk), update [NAME] (pull it "
+            "again from where it came from; all of them with no NAME), "
+            "remove NAME, or list; "
             "doctor checks that everything Flash needs works"
         ),
     )
     parser.add_argument(
         "target",
         nargs="?",
-        help="what to install or remove",
+        help="what to install, update or remove",
+    )
+    parser.add_argument(
+        "-y", "--yes",
+        action="store_true",
+        help="answer yes to every question, as for installing an "
+             "extension",
     )
     parser.add_argument(
         "--fix",
@@ -123,7 +132,7 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
         parser.error(f"flash {args.command} needs "
                      + ("a source, like github@owner/repo"
                         if args.command == "install" else "a name"))
-    if args.target and args.command not in ("install", "remove"):
+    if args.target and args.command not in ("install", "update", "remove"):
         parser.error(f"unexpected {args.target!r}")
     # What the rest of Flash reads.
     args.extension_install = args.target if args.command == "install" \
@@ -131,6 +140,9 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     args.extension_remove = args.target if args.command == "remove" \
         else None
     args.extension_list = args.command == "list"
+    # "" for every extension.
+    args.extension_update = (args.target or "") \
+        if args.command == "update" else None
     args.url = args.uri
     if args.force and not args.update:
         parser.error("--force can only be used with --update")

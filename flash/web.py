@@ -3975,7 +3975,7 @@ def voice_models(session: "Session") -> dict:
     """Every voice model Settings offers, and where each one stands."""
 
     def listed(kind: str) -> list[dict]:
-        offered, installed, setting, _ = VOICE_KINDS[kind]
+        _, installed, setting, _ = VOICE_KINDS[kind]
         in_use = getattr(voice, setting)()
         return [
             {
@@ -3991,7 +3991,7 @@ def voice_models(session: "Session") -> dict:
                     voice.is_moonshine(c.name) and not moonshine
                 ) else "",
             }
-            for c in voice.by_engine(getattr(voice, offered))
+            for c in voice.by_engine(voice.offered(kind))
         ]
 
     kokoro = voice.kokoro_ready()
@@ -4553,10 +4553,23 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
         return _spark_command(name, arg, body)
 
     if name == "extensions":
+        from . import vault
+
         return {
             "extensions": [_extension_info(e) for e in extensions.installed()],
             "problems": extensions.problems(),
+            # What a text setting can be set to instead of a value.
+            "secrets": vault.names(),
         }
+
+    if name == "extension-update":
+        # Pulled again from where it came from, and shown first like any
+        # install: the copy in place stays until the new one is.
+        try:
+            source = extensions.update_source(arg)
+        except extensions.ExtensionError as exc:
+            raise ValueError(str(exc)) from None
+        return _stage_extension(session, source)
 
     if name == "extension-preview":
         return _stage_extension(session, arg)
@@ -4659,8 +4672,8 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
         kind = str(body.get("kind") or "")
         if kind not in VOICE_KINDS:
             raise ValueError("pick listening or speaking")
-        offered, installed, setting, remove = VOICE_KINDS[kind]
-        if arg not in {c.name for c in getattr(voice, offered)}:
+        _, installed, setting, remove = VOICE_KINDS[kind]
+        if arg not in {c.name for c in voice.offered(kind)}:
             raise ValueError(f"{arg!r} is not a model Flash offers")
         if name == "voice-model-remove":
             if arg == getattr(voice, setting)():
