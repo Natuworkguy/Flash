@@ -4762,6 +4762,35 @@ def calendar_tool(action: str = "list", start: str = "", end: str = "",
 TUTOR_ACTIONS = ("add", "measure", "plan", "graph", "subjects", "forget")
 
 
+def make_video(html: str = "", out: str = "video.mp4", seconds: Any = 0,
+               fps: Any = 0, width: Any = 0, height: Any = 0) -> str:
+    """An HTML composition, rendered frame by frame to an MP4."""
+
+    from . import video
+
+    target = Path(out or "video.mp4").expanduser()
+    if target.suffix.lower() != ".mp4":
+        target = target.with_suffix(".mp4")
+    tool_line(f"MakeVideo({target})")
+    try:
+        length = float(seconds or 0)
+    except (TypeError, ValueError):
+        length = 0.0
+    try:
+        made = video.render(str(html or ""), target, length,
+                            float(_clamp(fps, 0, video.MOST_FPS, 0)),
+                            _clamp(width, 0, video.MOST_SIDE, 0),
+                            _clamp(height, 0, video.MOST_SIDE, 0))
+    except (video.VideoError, OSError) as exc:
+        result = f"Error: {exc}"
+        tool_result(result, style=ERROR)
+        return result
+    result = (f"Made {made['path']}: {made['seconds']:g} s, "
+              f"{made['width']}x{made['height']} at {made['fps']} fps.")
+    tool_result(result)
+    return result
+
+
 def tutor(action: str = "plan", subject: str = "",
           propositions: Optional[list] = None, id: str = "",
           right: Any = False, limit: Any = 5) -> str:
@@ -6301,6 +6330,40 @@ tools: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "make_video",
+            "description": (
+                "Make an MP4 from an HTML composition: write a page that "
+                "animates with CSS animations, the Web Animations API, "
+                "requestAnimationFrame or a canvas, and it is rendered "
+                "frame by frame on an exact clock, so heavy pages come out "
+                "smooth. A page may define window.flashSeek(seconds) to "
+                "draw any moment itself. Give the page as HTML, or the path "
+                "of an .html file. Its <html data-duration data-width "
+                "data-height data-fps> can set the rest. Needs ffmpeg."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "html": {"type": "string", "description": (
+                        "The page's HTML, or a path to an .html file.")},
+                    "out": {"type": "string", "description": (
+                        "Where to save the .mp4 (video.mp4 here).")},
+                    "seconds": {"type": "number",
+                                "description": "Its length (5)."},
+                    "fps": {"type": "integer",
+                            "description": "Frames a second (30)."},
+                    "width": {"type": "integer",
+                              "description": "Pixels (1280)."},
+                    "height": {"type": "integer",
+                               "description": "Pixels (720)."},
+                },
+                "required": ["html"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "tutor",
             "description": (
                 "Teach the user a subject and track what they know. 'add' "
@@ -7160,6 +7223,7 @@ FUNCTIONS = {
     "make_project": make_project,
     "calendar": calendar_tool,
     "tutor": tutor,
+    "make_video": make_video,
     "play_music": play_music,
     "request_connector": request_connector,
     "request_extension": request_extension,
