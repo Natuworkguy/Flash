@@ -35,6 +35,19 @@ picks up whatever the manifest declares:
       ]
     }
 
+"knowledge" is a folder of guides for Flash's knowledge base, each a
+<name>.md with a description of when to read it:
+
+    ---
+    name: deploy
+    description: Ship a branch to staging and production with Acme
+    ---
+    1. Run /deploy staging first ...
+
+The model sees each guide's name and description on every turn, named
+<extension>-<name> (here "standup-deploy"), and reads one in full when
+a task matches it, as it does the user's own skills.
+
 "settings" are choices the user makes for the extension, each a
 switch, a line of text, a number or a pick from a list; the web UI
 shows them in the extension's own settings panel, and /extension set
@@ -300,6 +313,8 @@ class Extension:
     ui: Any = None
     speech: list[Speech] = field(default_factory=list)
     briefing: Optional[Briefing] = None
+    # A folder of guides for the knowledge base (skills.knowledge).
+    knowledge: Optional[Path] = None
 
     def contents(self) -> list[str]:
         """What installing this adds, one line per kind of thing."""
@@ -322,6 +337,9 @@ class Extension:
             )
         if self.backgrounds is not None:
             lines.append(f"backgrounds: {self.backgrounds.name}/")
+        if self.knowledge is not None:
+            guides = sorted(p.stem for p in self.knowledge.glob("*.md"))
+            lines.append("knowledge base: " + ", ".join(guides))
         if self.providers:
             lines.append(
                 "model providers: "
@@ -718,6 +736,45 @@ def _listed(manifest: dict, key: str, root: Path) -> list:
     return value
 
 
+MOST_GUIDES = 50
+
+
+def _knowledge(root: Path, folder: Any) -> Path:
+    """The extension's folder of guides, each checked as a skill is."""
+
+    from . import skills
+
+    if not isinstance(folder, str) or not folder:
+        raise ExtensionError('"knowledge" has to be a folder path')
+    path = _inside(root, folder, '"knowledge"')
+    if not path.is_dir():
+        raise ExtensionError(f'"knowledge": {folder} is not a folder')
+    guides = sorted(path.glob("*.md"))
+    if not guides:
+        raise ExtensionError(f'"knowledge": {folder} has no .md guides')
+    if len(guides) > MOST_GUIDES:
+        raise ExtensionError(f'"knowledge": at most {MOST_GUIDES} guides')
+    for guide in guides:
+        try:
+            fields, body = skills._parse(guide.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError) as exc:
+            raise ExtensionError(f'"knowledge": {guide.name}: {exc}')
+        name = (fields.get("name") or guide.stem).strip().lower()
+        if not skills.NAME_RE.match(name):
+            raise ExtensionError(
+                f'"knowledge": {guide.name}: {name!r} is not a name '
+                "(lowercase letters, digits and -)")
+        if not fields.get("description"):
+            raise ExtensionError(
+                f'"knowledge": {guide.name} needs a description: line at '
+                "the top, between --- lines, saying when to read it")
+        if not body or len(body) > skills.MAX_SKILL_CHARS:
+            raise ExtensionError(
+                f'"knowledge": {guide.name} has to hold a guide of at most '
+                f"{skills.MAX_SKILL_CHARS} characters")
+    return path
+
+
 def load(root: Path) -> Extension:
     """Read and check the extension at ROOT.
 
@@ -765,6 +822,10 @@ def load(root: Path) -> Extension:
         backgrounds = _inside(root, folder, '"backgrounds"')
         if not backgrounds.is_dir():
             raise ExtensionError(f'"backgrounds": {folder} is not a folder')
+
+    knowledge = None
+    if manifest.get("knowledge") is not None:
+        knowledge = _knowledge(root, manifest["knowledge"])
 
     commands = [
         _command(entry, root, index)
@@ -842,11 +903,11 @@ def load(root: Path) -> Extension:
 
     if not (commands or tools or prompt or backgrounds or providers
             or themes or loaders or events or voice or ui or speech
-            or briefing):
+            or briefing or knowledge):
         raise ExtensionError(
             f"{MANIFEST} declares nothing: no commands, tools, prompt, "
             "backgrounds, providers, themes, loaders, events, voice, "
-            "speech, briefing, or ui"
+            "speech, briefing, ui, or knowledge"
         )
 
     try:
@@ -864,6 +925,7 @@ def load(root: Path) -> Extension:
         commands=commands,
         tools=tools,
         backgrounds=backgrounds,
+        knowledge=knowledge,
         providers=providers,
         themes=themes,
         loaders=loaders,

@@ -146,8 +146,9 @@ class TestReviewOwnership:
 
 class TestPrompt:
     def test_nothing_saved_adds_nothing(self):
-        assert learning.prompt_block() == ""
-        assert tools.build_system_prompt() == tools.SYSTEM_PROMPT
+        # Nothing but the knowledge base that comes with Flash.
+        assert learning.prompt_block() == skills.knowledge_listing()
+        assert learning.prompt_block().startswith("=== Knowledge base ===")
 
     def test_skills_and_memory_go_inside_the_prompt(self):
         create()
