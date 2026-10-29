@@ -22,6 +22,12 @@ theirs, and a pass nobody is watching does not get to rewrite it.
 `by:` says who wrote it, for the web UI's label: `flash` for one the
 model made with skill_manage, `you` for one made in the page. A skill
 from before the field existed has none, unless the review wrote it.
+
+The knowledge base is guides that come with Flash, in flash/knowledge,
+and with extensions (a "knowledge" folder in their manifest): how to do
+each kind of thing well with Flash's tools. They are read the same way
+and listed the same way, and cannot be changed: a skill the user saves
+under a guide's name is used instead of it.
 """
 
 import re
@@ -62,10 +68,60 @@ class Skill:
     managed: bool
     path: Path
     by: str = ""
+    # Where a guide in the knowledge base comes from: "flash", or the
+    # extension's name. "" for the user's own skills.
+    builtin: str = ""
 
 
 def skills_dir() -> Path:
     return FLASH_DIR / "skills"
+
+
+KNOWLEDGE_DIR = Path(__file__).parent / "knowledge"
+
+
+def _guides(folder: Path, source: str, prefix: str = "") -> list[Skill]:
+    """The guides in FOLDER, each a <name>.md with a description."""
+
+    found = []
+    try:
+        files = sorted(folder.glob("*.md"))
+    except OSError:
+        return []
+    for file in files:
+        try:
+            fields, body = _parse(file.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError):
+            continue
+        name = (fields.get("name") or file.stem).strip().lower()
+        if prefix and not name.startswith(prefix + "-"):
+            name = f"{prefix}-{name}"
+        if not NAME_RE.match(name) or not body:
+            continue
+        found.append(Skill(name=name, description=fields.get(
+            "description", ""), body=body[:MAX_SKILL_CHARS], managed=False,
+            path=file, builtin=source))
+    return found
+
+
+def knowledge() -> list[Skill]:
+    """The knowledge base: Flash's own guides, then each extension's,
+    by name, the first to take a name keeping it."""
+
+    from . import extensions  # deferred: extensions imports a lot
+
+    found = _guides(KNOWLEDGE_DIR, "flash")
+    for extension in extensions.installed():
+        if extension.knowledge is not None:
+            found += _guides(extension.knowledge, extension.name,
+                             extension.name)
+    taken: set[str] = set()
+    kept = []
+    for guide in found:
+        if guide.name not in taken:
+            taken.add(guide.name)
+            kept.append(guide)
+    return kept
 
 
 def _check_name(name: str) -> str:
@@ -154,25 +210,57 @@ def all_skills() -> list[Skill]:
     return found
 
 
-def find(name: str) -> Optional[Skill]:
+def find(name: str, guides: bool = True) -> Optional[Skill]:
+    """The user's skill called NAME, else (with GUIDES) the knowledge
+    base's guide."""
+
     try:
         name = _check_name(name)
     except SkillError:
         return None
 
     folder = skills_dir() / name
-    if not (folder / SKILL_FILE).is_file():
-        return None
+    if (folder / SKILL_FILE).is_file():
+        try:
+            return load(folder)
+        except SkillError:
+            pass
 
-    try:
-        return load(folder)
-    except SkillError:
-        return None
+    if guides:
+        return next((g for g in knowledge() if g.name == name), None)
+    return None
+
+
+def knowledge_listing() -> str:
+    """The knowledge base's block for the system prompt: its guides'
+    names and what each is for, the user's skills of the same name
+    standing in for theirs."""
+
+    own = {s.name for s in all_skills()}
+    guides = [g for g in knowledge() if g.name not in own]
+    if not guides:
+        return ""
+    lines = [f"- {g.name}: {g.description}"
+             + (f" (from {g.builtin})" if g.builtin != "flash" else "")
+             for g in guides]
+    return (
+        "=== Knowledge base ===\n"
+        "Guides to doing things well with your tools. Before a task one "
+        "covers, call skill_view with its name and follow it; read "
+        "several when a task spans them.\n" + "\n".join(lines)
+    )
 
 
 def listing() -> str:
-    """The skills block for the system prompt, or "" with none saved."""
+    """The skills block for the system prompt, with the knowledge base
+    before it; "" with neither."""
 
+    guides = knowledge_listing()
+    own = _own_listing()
+    return "\n\n".join(part for part in (guides, own) if part)
+
+
+def _own_listing() -> str:
     skills = all_skills()
 
     if not skills:
@@ -207,8 +295,17 @@ def view(name: str, path: str = "") -> str:
     skill = find(name)
 
     if skill is None:
-        known = ", ".join(s.name for s in all_skills()) or "none saved yet"
+        known = ", ".join(s.name for s in all_skills() + knowledge()) \
+            or "none saved yet"
         raise SkillError(f"No skill called {name!r}. Skills: {known}.")
+
+    if skill.builtin:
+        if path:
+            raise SkillError(f"{skill.name} is a guide, with no other files")
+        source = "Flash" if skill.builtin == "flash" else \
+            f"the {skill.builtin} extension"
+        return (f"Guide: {skill.name} (from {source})\n"
+                f"{skill.description}\n\n{skill.body}")
 
     if not path:
         head = f"Skill: {skill.name}\n{skill.description}\n\n"
@@ -284,7 +381,11 @@ def manage(
         )
 
     name = _check_name(name)
-    existing = find(name)
+    existing = find(name, guides=False)
+    if existing is None and action != "create" and find(name) is not None:
+        raise SkillError(
+            f"{name} is a guide in the knowledge base, which cannot be "
+            "changed: create a skill of the same name to use instead of it")
 
     if action == "create":
         if existing is not None:
@@ -345,7 +446,7 @@ def manage(
 def remove(name: str) -> bool:
     """Delete a skill for /skills remove. False if there was none."""
 
-    skill = find(name)
+    skill = find(name, guides=False)
     if skill is None:
         return False
     shutil.rmtree(skill.path)

@@ -5,6 +5,8 @@ An extension adds to Flash without changing Flash. It can bring:
 - **Slash commands** that send a prompt to the model, or run a program.
 - **Tools** the model can call, answered by a program.
 - **System prompt text** sent on every turn.
+- **Guides for the knowledge base**: how to do things with the extension,
+  read by the model only when a task needs them.
 - **Backgrounds** for `/background`.
 - **Model providers**: models from somewhere other than Ollama, such as
   another local server or a hosted API.
@@ -393,6 +395,42 @@ card stays dismissed), `at` (a Unix time), `url`, and `label` (the
 extension's name if left out). A Python program can also add a card
 whenever it likes, since it can import Flash:
 `from flash import briefing; briefing.notice("extension", title, body)`.
+
+### Knowledge
+
+Flash comes with a knowledge base: guides to doing each kind of task
+well with its tools, from teaching a course to making a video. The model
+sees every guide's name and one-line description on each turn, and
+reads one in full with `skill_view` when a task matches it. An extension
+can add guides of its own, so the model knows how to use what it brings:
+
+```json
+"knowledge": "knowledge"
+```
+
+The folder holds one `<name>.md` per guide (at most 50), each with a
+description saying when to read it, then the guide, under 8000
+characters:
+
+~~~markdown
+---
+name: deploy
+description: Ship a branch to staging and production with Acme
+---
+1. Run /deploy staging, and wait for its health check.
+2. ...
+
+## Examples
+
+```
+deploy_status {"environment": "staging"}
+```
+~~~
+
+A guide is listed as `<extension>-<name>` (here `acme-deploy`), so it
+never clashes with Flash's own or another extension's. Steps, pitfalls
+and a tool call or two with real arguments make the best guides. A skill
+the user saves under a guide's name is used instead of it.
 
 ### Providers
 

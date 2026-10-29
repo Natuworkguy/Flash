@@ -357,7 +357,11 @@ class TestWiring:
         )
 
     def test_no_extensions_leaves_the_prompt_alone(self):
-        assert tools.build_system_prompt() == tools.SYSTEM_PROMPT
+        from flash import skills
+
+        # Only Flash's own knowledge base is listed.
+        assert tools.build_system_prompt() == tools._flash_system_prompt(
+            skills.knowledge_listing())
 
     def test_scenes_join_the_backgrounds(self, tmp_path):
         install(tmp_path)

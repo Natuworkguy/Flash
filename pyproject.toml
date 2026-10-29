@@ -44,6 +44,7 @@ flash = [
     "suggestions.json",
     "backgrounds/*.scene",
     "games/*.html",
+    "knowledge/*.md",
     "web/*.html",
     "web/*.js",
     "web/*.woff2",
