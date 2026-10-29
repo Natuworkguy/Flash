@@ -766,6 +766,17 @@ pre code { display: block; padding: 2px 16px 14px; overflow-x: auto; font-size: 
 /* A course the tutor teaches: a path of lessons, each with a question or code to write, marked at once. */
 .course { border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); padding: 16px; display: flex; flex-direction: column; gap: 14px; }
 .course-head { display: flex; align-items: center; gap: 10px; min-width: 0; flex-wrap: wrap; }
+/* Pinned to the top of the chat: takes no room, floats over the messages, shows once the card is scrolled away. */
+.course-pins { position: sticky; top: 8px; z-index: 6; height: 0; display: flex; flex-direction: column; gap: 6px; pointer-events: none; }
+.course-pin { display: flex; align-items: center; gap: 10px; padding: 7px 8px 7px 12px; border: 1px solid var(--border); border-radius: 14px; background: var(--surface); box-shadow: 0 6px 20px rgba(0, 0, 0, .18); opacity: 0; transform: translateY(-8px); transition: opacity .2s, transform .2s; }
+.course-pin.away { opacity: 1; transform: none; pointer-events: auto; }
+.course-pin .pin-icon { color: var(--accent); display: grid; }
+.course-pin .pin-icon svg { width: 17px; height: 17px; }
+.course-pin .pin-what { display: flex; flex-direction: column; min-width: 0; flex: 1; line-height: 1.25; }
+.course-pin .pin-what b { font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.course-pin .pin-next { font-size: 12px; color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.course-pin .pin-count { font-size: 12px; color: var(--text-2); font-variant-numeric: tabular-nums; }
+.course-pin .pin-jump { width: 30px; height: 30px; }
 .course-full { flex: none; }
 .course-full svg { width: 16px; height: 16px; }
 /* Full screen: the course alone, centred, scrolling on its own. */
@@ -16868,6 +16879,41 @@ function courseCard(entry) {
   return card;
 }
 
+// A course stays in reach however long the chat gets: a bar pinned to the
+// top of the chat, there while the card itself is out of sight, to carry on
+// (full screen) or jump back to it.
+let coursePinWatch = null;
+
+function drawCoursePin(card) {
+  const data = card._data;
+  if (!data || !card.isConnected && !card._home) return;
+  let holder = messagesEl.querySelector(".course-pins");
+  if (!holder) holder = messagesEl.insertBefore(el("div", "course-pins"), messagesEl.firstChild);
+  let pin = holder.querySelector(`.course-pin[data-course="${CSS.escape(data.key)}"]`);
+  if (!pin) {
+    pin = holder.appendChild(el("div", "course-pin", `<span class="pin-icon">${icon("book")}</span><span class="pin-what"><b></b><span class="pin-next"></span></span><span class="pin-count"></span><button type="button" class="btn small primary pin-go">Continue</button><button type="button" class="icon-btn pin-jump" data-tip="Go to the course" aria-label="Go to the course">${icon("up")}</button>`));
+    pin.dataset.course = data.key;
+    pin.querySelector(".pin-go").onclick = () => {
+      const now = messagesEl.querySelector(`.course[data-course="${CSS.escape(data.key)}"]`) || card;
+      if (!now.classList.contains("full")) courseFullScreen(now);
+    };
+    pin.querySelector(".pin-jump").onclick = () => {
+      const now = messagesEl.querySelector(`.course[data-course="${CSS.escape(data.key)}"]`) || card;
+      now.scrollIntoView({ block: "start", behavior: "smooth" });
+    };
+    coursePinWatch ||= new IntersectionObserver((seen) => seen.forEach((e) => {
+      const shown = messagesEl.querySelector(`.course-pin[data-course="${CSS.escape(e.target.dataset.course)}"]`);
+      if (shown) shown.classList.toggle("away", !e.isIntersecting);
+    }), { root: $("#log"), threshold: 0.15 });
+    coursePinWatch.observe(card);
+  }
+  pin.querySelector("b").textContent = data.subject;
+  const next = data.steps.find((st) => st.id === data.current);
+  pin.querySelector(".pin-next").textContent = next ? `Next: ${next.title}` : "Unit complete";
+  pin.querySelector(".pin-count").textContent = `${data.passed}/${data.of}`;
+  pin.querySelector(".pin-go").textContent = next ? "Continue" : "Open";
+}
+
 // The course alone on the screen: the browser's full screen where it
 // allows an element there, the whole window where it does not (iPhones).
 function courseFullScreen(card) {
@@ -16925,6 +16971,7 @@ async function loadCourse(card, open = card._open, keepStep = false) {
   card.querySelector(".course-bar i").style.width = `${data.of ? (100 * data.passed) / data.of : 0}%`;
   if (!keepStep || !card._open) card._open = data.step ? data.step.id : null;
   drawCoursePath(card);
+  drawCoursePin(card);
   if (!keepStep) drawCourseStep(card, data.step);
 }
 
