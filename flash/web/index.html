@@ -17057,7 +17057,12 @@ function drawCourseCode(card, box, st) {
 }
 
 function courseChanged(event) {
-  document.querySelectorAll(`.course[data-course="${CSS.escape(event.subject)}"]`).forEach((card) => loadCourse(card, card._open, !!card.querySelector(".course-step").childElementCount));
+  // A lesson being worked on stays as it is; "Unit complete", or nothing
+  // yet, gives way to whatever comes next, such as a unit just added.
+  document.querySelectorAll(`.course[data-course="${CSS.escape(event.subject)}"]`).forEach((card) => {
+    const working = !!card._open && !!card.querySelector(".course-step .kind");
+    loadCourse(card, working ? card._open : null, working);
+  });
 }
 
 function debateCard(d, live = false) {
