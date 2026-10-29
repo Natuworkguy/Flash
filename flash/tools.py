@@ -6518,9 +6518,14 @@ tools: list[dict[str, Any]] = [
                 "they got it right; never tell them the answer before they "
                 "try. Give each one a short title, a lesson (a few short "
                 "Markdown paragraphs that teach it, with an example), and "
-                "either a quiz (a question with 2 to 6 choices and the "
-                "answer's place, from 0) or, for a programming language or "
-                "the command line, an exercise. Six to twelve small ones "
+                "something to answer, mixing the kinds through a unit: a "
+                "quiz (2 to 6 choices and the answer's place, from 0), a "
+                "blank (a sentence with ___ to type into, and the answers "
+                "that count), an order (3 to 8 items, given in the right "
+                "order, that the user puts back in order) or, for a "
+                "programming language or the command line, an exercise. "
+                "Only a unit's first step, with no needs, may be just a "
+                "lesson. Six to twelve small ones "
                 "make a good first unit. On the web page the subject shows "
                 "as an interactive course the user works through on their "
                 "own. For a programming language or the command line (C, "
@@ -6569,6 +6574,39 @@ tools: list[dict[str, Any]] = [
                                     },
                                     "required": ["question", "choices",
                                                  "answer"]},
+                                "blank": {
+                                    "type": "object",
+                                    "description": (
+                                        "Type the answer: a sentence with "
+                                        "___ where it goes."),
+                                    "properties": {
+                                        "prompt": {"type": "string"},
+                                        "accept": {"type": "array",
+                                                   "items": {
+                                                       "type": "string"},
+                                                   "description": (
+                                                       "Answers that "
+                                                       "count, any case.")},
+                                        "explain": {"type": "string"},
+                                    },
+                                    "required": ["prompt", "accept"]},
+                                "order": {
+                                    "type": "object",
+                                    "description": (
+                                        "Put in order: steps, a sequence, "
+                                        "words of a line of code."),
+                                    "properties": {
+                                        "prompt": {"type": "string"},
+                                        "items": {"type": "array",
+                                                  "items": {
+                                                      "type": "string"},
+                                                  "description": (
+                                                      "In the right order: "
+                                                      "they are shown "
+                                                      "shuffled.")},
+                                        "explain": {"type": "string"},
+                                    },
+                                    "required": ["prompt", "items"]},
                                 "needs": {"type": "array",
                                           "items": {"type": "string"}},
                                 "exercise": {

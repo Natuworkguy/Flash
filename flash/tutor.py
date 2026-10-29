@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import datetime as dt
 import os
+import random
 import re
 import shutil
 import subprocess  # nosec B404
@@ -134,12 +135,23 @@ def add(subject: str, propositions: list[dict]) -> list[str]:
             old = props.get(pid, {})
             exercise = _exercise(given.get("exercise"), pid)
             quiz = _quiz(given.get("quiz"), pid)
+            blank = _blank(given.get("blank"), pid)
+            order = _order(given.get("order"), pid)
+            needs = [_key(n) for n in given.get("needs") or []
+                     if _key(n) and _key(n) != pid]
+            if needs and not (exercise or quiz or blank or order):
+                raise TutorError(
+                    f"{pid} has nothing to answer. Every step after a "
+                    "unit's introduction needs one of: quiz {question, "
+                    "choices, answer}, blank {prompt, accept}, order "
+                    "{prompt, items}, or exercise {task, language, expect}."
+                    " Add the steps again, each with one.")
             props[pid] = {"text": text, "exercise": exercise, "quiz": quiz,
+                          "blank": blank, "order": order,
                           "title": str(given.get("title") or "").strip()[:60],
                           "lesson": str(given.get("lesson") or "").strip()[
                               :MOST_LESSON],
-                          "needs": [_key(n) for n in given.get("needs") or []
-                                    if _key(n) and _key(n) != pid],
+                          "needs": needs,
                           "known": old.get("known", START),
                           "seen": old.get("seen", 0),
                           "right": old.get("right", 0),
@@ -230,6 +242,52 @@ def _quiz(given: Any, pid: str) -> Optional[dict]:
                          "or its place among them, from 0.")
     return {"question": question, "choices": choices, "answer": answer,
             "explain": str(given.get("explain") or "").strip()}
+
+
+def _blank(given: Any, pid: str) -> Optional[dict]:
+    """A sentence to finish by typing: the answers that count, or None."""
+
+    if not given:
+        return None
+    if not isinstance(given, dict):
+        raise TutorError(f"{pid}: a blank is {{prompt, accept}}.")
+    prompt = str(given.get("prompt") or "").strip()
+    accept = given.get("accept")
+    accept = [accept] if isinstance(accept, str) else accept or []
+    accept = [str(a).strip() for a in accept if str(a).strip()]
+    if not prompt or not accept:
+        raise TutorError(f"{pid}: a blank needs a prompt (with ___ where "
+                         "the answer goes) and accept, the answers that "
+                         "count.")
+    return {"prompt": prompt, "accept": accept,
+            "explain": str(given.get("explain") or "").strip()}
+
+
+def _order(given: Any, pid: str) -> Optional[dict]:
+    """Things to put in order, given in the right order, or None."""
+
+    if not given:
+        return None
+    if not isinstance(given, dict):
+        raise TutorError(f"{pid}: an order is {{prompt, items}}.")
+    prompt = str(given.get("prompt") or "").strip()
+    items = [str(i).strip() for i in given.get("items") or []
+             if str(i).strip()]
+    if not prompt or not 3 <= len(items) <= 8 or \
+            len(set(items)) != len(items):
+        raise TutorError(f"{pid}: an order needs a prompt and 3 to 8 "
+                         "different items, in the right order.")
+    return {"prompt": prompt, "items": items,
+            "explain": str(given.get("explain") or "").strip()}
+
+
+def _same(a: str, b: str) -> bool:
+    """Typed answers match whatever their case, spacing or full stop."""
+
+    def tidy(text: str) -> str:
+        return " ".join(str(text).lower().split()).strip(" .!")
+
+    return tidy(a) == tidy(b)
 
 
 def _safe_name(name: Any) -> bool:
@@ -510,8 +568,11 @@ def streak(days: list[str], today: Optional[dt.date] = None) -> int:
 
 
 def kind_of(prop: dict) -> str:
-    return "code" if prop.get("exercise") else "quiz" if prop.get("quiz") \
-        else "read"
+    for kind, key in (("code", "exercise"), ("quiz", "quiz"),
+                      ("blank", "blank"), ("order", "order")):
+        if prop.get(key):
+            return kind
+    return "read"
 
 
 def course(subject: str, now: Optional[float] = None) -> dict:
@@ -555,7 +616,19 @@ def step(subject: str, pid: str) -> dict:
         raise TutorError(f"There is no lesson {pid!r} in {subject!r}.")
     quiz = prop.get("quiz")
     task = prop.get("exercise")
+    blank = prop.get("blank")
+    order = prop.get("order")
+    shuffled = None
+    if order:
+        # Shuffled the same way each time it is shown, never in order.
+        shuffled = list(order["items"])
+        random.Random(_key(pid)).shuffle(shuffled)  # nosec B311
+        if shuffled == order["items"]:
+            shuffled = shuffled[1:] + shuffled[:1]
     return {"id": _key(pid), "title": title_of(_key(pid), prop),
+            "blank": {"prompt": blank["prompt"]} if blank else None,
+            "order": {"prompt": order["prompt"], "items": shuffled}
+            if order else None,
             "kind": kind_of(prop), "text": prop["text"],
             "lesson": prop.get("lesson") or "",
             "known": prop["known"], "seen": prop["seen"],
@@ -566,17 +639,32 @@ def step(subject: str, pid: str) -> dict:
                           "starter")} if task else None}
 
 
-def answer(subject: str, pid: str, choice: int,
+def answer(subject: str, pid: str, given: Any,
            now: Optional[float] = None) -> dict:
-    """A tapped answer to PID's quiz, marked and measured."""
+    """An answer given on the page, marked and measured: a choice's place
+    for a quiz, the words typed for a blank, the items in the order put
+    for an order."""
 
     prop = _subject(_load(), subject)["props"].get(_key(pid))
-    if prop is None or not prop.get("quiz"):
+    kind = kind_of(prop) if prop else ""
+    if kind == "quiz":
+        quiz = prop["quiz"]
+        try:
+            right = int(given) == quiz["answer"]
+        except (TypeError, ValueError):
+            right = False
+        said = {"answer": quiz["answer"], "explain": quiz["explain"]}
+    elif kind == "blank":
+        blank = prop["blank"]
+        right = any(_same(given or "", a) for a in blank["accept"])
+        said = {"answer": blank["accept"][0], "explain": blank["explain"]}
+    elif kind == "order":
+        order = prop["order"]
+        right = [str(i) for i in given or []] == order["items"]
+        said = {"answer": order["items"], "explain": order["explain"]}
+    else:
         raise TutorError(f"{pid} has no question to answer.")
-    quiz = prop["quiz"]
-    right = int(choice) == quiz["answer"]
-    return {"right": right, "answer": quiz["answer"],
-            "explain": quiz["explain"],
+    return {"right": right, **said,
             "measured": measure(subject, pid, right, now)}
 
 
