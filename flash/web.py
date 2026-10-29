@@ -3870,6 +3870,7 @@ def status(ai) -> dict:
         "system_one": systemone.enabled(),
         "system_one_model": systemone.model() if systemone.enabled() else "",
         "compact": bool(ai.Config.auto_compact),
+        "compact_amount": ai.Config.compact_amount,
         "model_titles": titles.enabled(),
         "computer": computer.enabled(),
         **_computer_use(),
@@ -5086,6 +5087,16 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
         return {"visuals": level}
 
     if name == "compact-setting":
+        if arg.startswith("amount"):
+            # How much each compaction takes, in percent of the history.
+            try:
+                amount = max(0, min(ai.COMPACT_MOST, int(arg.split()[-1])))
+            except ValueError:
+                raise ValueError("The amount is a percent, 0 to "
+                                 f"{ai.COMPACT_MOST}.") from None
+            ai.set_config_var("COMPACT_AMOUNT", str(amount))
+            session.hub.publish({"type": "status"})
+            return {"compact_amount": amount}
         on = arg in ("on", "1", "true")
         ai.set_config_var("AUTO_COMPACT", "1" if on else "0")
         session.hub.publish({"type": "status"})

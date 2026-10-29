@@ -765,6 +765,8 @@ pre code { display: block; padding: 2px 16px 14px; overflow-x: auto; font-size: 
 /* A debate: the two sides, one on each side, then the summary. */
 /* A course the tutor teaches: a path of lessons, each with a question or code to write, marked at once. */
 .course { border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); padding: 16px; display: flex; flex-direction: column; gap: 14px; }
+/* A setting that only matters while the one above it is on. */
+.setting-row.compact-amount.off { opacity: 0.45; pointer-events: none; }
 .course-head { display: flex; align-items: center; gap: 10px; min-width: 0; flex-wrap: wrap; }
 /* Pinned to the top of the chat: takes no room, floats over the messages, shows once the card is scrolled away. */
 .course-pins { position: sticky; top: 8px; z-index: 6; height: 0; display: flex; flex-direction: column; gap: 6px; pointer-events: none; }
@@ -8485,8 +8487,33 @@ function drawGeneral(body) {
     row.setAttribute("aria-checked", on);
     try { info.compact = (await command("compact-setting", on ? "on" : "off")).compact; }
     catch (error) { row.setAttribute("aria-checked", !on); showFailure(error); }
+    amount.classList.toggle("off", !info.compact);
   };
   body.appendChild(row);
+  // How much each summary takes at once: just what no longer fits, or more, for room until the next.
+  const amount = el("div", "setting-row static visuals-row compact-amount", `<span class="what"><b>How much to summarize</b><span>Just enough summarizes only what no longer fits, a little at a time. More summarizes a bigger share of the chat at once, so it happens less often and leaves room for the turns after.</span></span><span class="side"><span class="seg" role="radiogroup" aria-label="How much to summarize"></span></span>`);
+  amount.classList.toggle("off", !info.compact);
+  const amountSeg = amount.querySelector(".seg");
+  const markAmount = (n) => {
+    for (const b of amountSeg.children) { const on = +b.dataset.amount === n; b.classList.toggle("on", on); b.setAttribute("aria-checked", on); }
+  };
+  for (const [n, name] of [[0, "Just enough"], [25, "A quarter"], [50, "Half"], [75, "Most"]]) {
+    const b = el("button", "");
+    b.type = "button";
+    b.textContent = name;
+    b.dataset.amount = n;
+    b.setAttribute("role", "radio");
+    b.onclick = async () => {
+      const was = info.compact_amount || 0;
+      markAmount(n);
+      try { info.compact_amount = (await command("compact-setting", `amount ${n}`)).compact_amount; }
+      catch (error) { markAmount(was); showFailure(error); }
+    };
+    amountSeg.appendChild(b);
+  }
+  // A value set by hand that is not one of the four: the nearest is shown.
+  markAmount([0, 25, 50, 75].reduce((a, b) => Math.abs(b - (info.compact_amount || 0)) < Math.abs(a - (info.compact_amount || 0)) ? b : a));
+  body.appendChild(amount);
   const named = el("button", "setting-row titles-row", `<span class="what"><b>Let the model title chats</b><span>After a chat's first reply, the model names it in a few words. Off, a chat is named after its first message. A name you give a chat yourself always stays.</span></span><span class="switch" aria-hidden="true"></span>`);
   named.type = "button";
   named.setAttribute("role", "switch");
