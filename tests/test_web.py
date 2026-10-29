@@ -4797,3 +4797,35 @@ class TestChatModels:
         monkeypatch.setattr(ai.Config, "model", "delta:7b")
         assert web.chat_model(plain) == "delta:7b"
         assert web.chat_model(None) == "delta:7b"
+
+
+def test_course_commands_and_card(monkeypatch):
+    from flash import tutor
+
+    session = web.Session()
+    chat = session.new_chat()
+    sink = web._sink(session, chat)
+    tutor.add("C", [
+        {"id": "main", "text": "Start in main.", "quiz": {
+            "question": "Where?", "choices": ["top", "main"], "answer": 1}},
+        {"id": "hi", "needs": ["main"], "text": "Print.", "exercise": {
+            "task": "Print hi", "language": "python", "expect": "hi"}}])
+    # Once in the chat, however often the agent teaches it.
+    assert sink("course", '{"subject": "C"}', "")
+    assert sink("course", '{"subject": "C"}', "")
+    assert [e for e in chat.log if e.get("type") == "course"] == [
+        {"type": "course", "subject": "c"}]
+    shown = web.command(session, {"name": "course", "arg": "c"})
+    assert shown["step"]["id"] == "main" and "answer" not in \
+        shown["step"]["quiz"]
+    said = web.command(session, {"name": "course-answer", "arg": "c",
+                                 "id": "main", "choice": 1})
+    assert said["right"]
+    assert web.command(session, {"name": "course", "arg": "c"})[
+        "step"]["id"] == "hi"
+    ran = web.command(session, {"name": "course-run", "arg": "c",
+                                "id": "hi", "code": "print('hi')"})
+    assert ran["right"]
+    with pytest.raises(ValueError):
+        web.command(session, {"name": "course-answer", "arg": "c",
+                              "id": "hi", "choice": 0})

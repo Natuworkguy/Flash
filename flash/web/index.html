@@ -763,6 +763,75 @@ pre code { display: block; padding: 2px 16px 14px; overflow-x: auto; font-size: 
 .tool-batch .batch-list > .tool { animation: rise 0.22s var(--ease) both; animation-delay: calc(var(--i, 0) * 30ms); }
 /* What a tool showed the model, under it, open or not. */
 /* A debate: the two sides, one on each side, then the summary. */
+/* A course the tutor teaches: a path of lessons, each with a question or code to write, marked at once. */
+.course { border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); padding: 16px; display: flex; flex-direction: column; gap: 14px; }
+.course-head { display: flex; align-items: center; gap: 10px; min-width: 0; flex-wrap: wrap; }
+.course-chip { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; color: var(--accent); text-transform: uppercase; letter-spacing: .04em; }
+.course-chip svg { width: 14px; height: 14px; }
+.course-name { font-weight: 650; font-size: 16px; min-width: 0; overflow-wrap: anywhere; }
+.course-stats { margin-left: auto; display: flex; gap: 12px; font-size: 13px; color: var(--text-2); font-variant-numeric: tabular-nums; }
+.course-stats span { display: inline-flex; align-items: center; gap: 4px; }
+.course-stats svg { width: 15px; height: 15px; }
+.course-stats .hot { color: #f59e0b; }
+.course-bar { height: 8px; border-radius: 99px; background: color-mix(in srgb, var(--text-3) 22%, transparent); overflow: hidden; }
+.course-bar i { display: block; height: 100%; width: 0; border-radius: inherit; background: var(--add); transition: width .5s cubic-bezier(.2, .8, .2, 1); }
+.course-path { display: flex; align-items: center; gap: 0; overflow-x: auto; padding: 6px 2px 10px; scrollbar-width: thin; }
+.course-node { flex: none; display: flex; flex-direction: column; align-items: center; gap: 6px; width: 74px; background: none; border: 0; padding: 0; color: var(--text-3); font: inherit; font-size: 11px; cursor: pointer; text-align: center; }
+.course-node .dot { width: 40px; height: 40px; border-radius: 50%; display: grid; place-items: center; border: 2px solid color-mix(in srgb, var(--text-3) 45%, transparent); background: var(--bg, transparent); transition: transform .15s; }
+.course-node .dot svg { width: 18px; height: 18px; }
+.course-node:hover:not([disabled]) .dot { transform: scale(1.08); }
+.course-node .label { line-height: 1.25; max-height: 2.5em; overflow: hidden; }
+.course-node.known .dot { background: var(--add); border-color: var(--add); color: #fff; }
+.course-node.passed .dot { border-color: var(--add); color: var(--add); background: color-mix(in srgb, var(--add) 14%, transparent); }
+.course-node.review .dot { border-color: #f59e0b; color: #f59e0b; }
+.course-node.ready .dot { border-color: var(--accent); color: var(--accent); }
+.course-node.locked { cursor: default; opacity: .55; }
+.course-node.open .dot { box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 30%, transparent); }
+.course-node.open .label { color: var(--text); font-weight: 600; }
+.course-node.next .dot { animation: course-pulse 1.8s ease-in-out infinite; }
+@keyframes course-pulse { 50% { box-shadow: 0 0 0 7px color-mix(in srgb, var(--accent) 18%, transparent); } }
+.course-link { flex: none; width: 18px; height: 2px; margin-bottom: 22px; background: color-mix(in srgb, var(--text-3) 35%, transparent); }
+.course-link.done { background: var(--add); }
+.course-step { display: flex; flex-direction: column; gap: 12px; border-top: 1px solid var(--border); padding-top: 14px; }
+.course-step .kind { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; color: var(--text-3); }
+.course-step h3 { margin: 0; font-size: 18px; }
+.course-lesson { line-height: 1.6; }
+.course-lesson > :first-child { margin-top: 0; }
+.course-q { font-weight: 600; }
+.course-choices { display: grid; gap: 8px; }
+.course-choice { text-align: left; padding: 11px 14px; border: 1px solid var(--border); border-bottom-width: 3px; border-radius: 10px; background: none; color: inherit; font: inherit; cursor: pointer; transition: transform .08s, border-color .15s; }
+.course-choice:hover:not([disabled]) { border-color: var(--accent); }
+.course-choice:active:not([disabled]) { transform: translateY(2px); border-bottom-width: 1px; margin-bottom: 2px; }
+.course-choice.right { border-color: var(--add); background: color-mix(in srgb, var(--add) 14%, transparent); }
+.course-choice.wrong { border-color: var(--del); background: color-mix(in srgb, var(--del) 14%, transparent); }
+.course-choice[disabled] { cursor: default; }
+.course-task > :first-child { margin-top: 0; }
+.course-task > :last-child { margin-bottom: 0; }
+.course-task { padding: 10px 12px; border-left: 3px solid var(--accent); background: color-mix(in srgb, var(--accent) 8%, transparent); border-radius: 0 8px 8px 0; }
+.course-expect { font: 12.5px var(--mono); color: var(--text-2); }
+.course-expect pre, .course-out pre { margin: 6px 0 0; padding: 10px 12px; border-radius: 8px; background: color-mix(in srgb, var(--text) 7%, transparent); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 260px; overflow: auto; }
+.course-editor { position: relative; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; background: color-mix(in srgb, var(--text) 5%, transparent); }
+.course-editor:focus-within { border-color: var(--accent); }
+.course-editor .lang { position: absolute; top: 6px; right: 10px; font: 11px var(--mono); color: var(--text-3); pointer-events: none; }
+.course-editor textarea { display: block; width: 100%; min-height: 180px; resize: vertical; border: 0; outline: 0; padding: 12px 14px; background: none; color: var(--text); font: 13.5px/1.55 var(--mono); tab-size: 4; white-space: pre; }
+.course-buttons { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.course-buttons .hint { font-size: 12px; color: var(--text-3); margin-left: auto; }
+.course-out { font: 12.5px var(--mono); color: var(--text-2); }
+.course-out.bad pre { color: var(--del); }
+.course-feedback { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border-radius: 10px; font-weight: 600; flex-wrap: wrap; animation: course-in .25s ease-out; }
+.course-feedback.right { background: color-mix(in srgb, var(--add) 16%, transparent); color: var(--add); }
+.course-feedback.wrong { background: color-mix(in srgb, var(--del) 14%, transparent); color: var(--del); }
+.course-feedback .why { flex-basis: 100%; font-weight: 400; color: var(--text-2); }
+.course-feedback .why > :first-child { margin-top: 0; }
+.course-feedback .why > :last-child { margin-bottom: 0; }
+.course-buttons .btn { display: inline-flex; align-items: center; gap: 6px; }
+.course-buttons .btn svg { width: 15px; height: 15px; }
+.course-feedback .btn { margin-left: auto; }
+.course-xp { animation: course-xp 1s ease-out forwards; }
+@keyframes course-xp { 0% { transform: scale(.6); opacity: 0; } 40% { transform: scale(1.25); opacity: 1; } 100% { transform: scale(1); } }
+@keyframes course-in { from { transform: translateY(6px); opacity: 0; } }
+.course-done { text-align: center; padding: 10px 0 4px; display: flex; flex-direction: column; align-items: center; gap: 10px; }
+.course-done b { font-size: 17px; }
 .debate { border: 1px solid var(--border); border-radius: var(--radius); padding: 14px; display: flex; flex-direction: column; gap: 12px; }
 /* Starting one: the two sides face each other across a VS. */
 .debate-form-head { display: flex; align-items: center; gap: 10px; }
@@ -3786,6 +3855,7 @@ const ICON = {
   calendar: '<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/>',
   pointer: '<path d="M5 3l14 7-6 2-2 6z"/>',
   bolt: '<path d="M13 2 4 14h7l-1 8 9-12h-7Z"/>',
+  flame: '<path d="M12 3c.5 3.5 5 5.5 5 10a5 5 0 0 1-10 0c0-2 1-3.5 2-4.5.3 1.5 1 2.5 2 3 0-3 .5-6 1-8.5Z"/>',
   feed: '<rect x="5" y="2" width="14" height="20" rx="3"/><path d="M10.5 9.2v5.6l4.4-2.8Z"/>',
   think: '<path d="M9.5 18h5M10.5 21h3"/><path d="M12 3a6 6 0 0 0-3.7 10.7c.7.6 1.2 1.4 1.2 2.3h5c0-.9.5-1.7 1.2-2.3A6 6 0 0 0 12 3Z"/>',
   spark: '<circle cx="10" cy="13" r="7"/><path d="M8 11.5v2M12 11.5v2"/><path d="M19 2.5v4M17 4.5h4"/>',
@@ -7697,6 +7767,7 @@ function drawEntry(entry, ctx) {
     case "file": messagesEl.appendChild(entry.kind === "image" ? inlineImage(entry) : attachment(entry)); break;
     case "browser": drawBrowserFrame(entry); break;
     case "seen": seenImages(ctx.tool, entry.images || []); break;
+    case "course": messagesEl.querySelector(`.course[data-course="${CSS.escape(entry.subject)}"]`)?.remove(); messagesEl.appendChild(courseCard(entry)); break;
     case "debate": {
       const live = messagesEl.querySelector(`.debate[data-debate="${entry.id}"]`);
       if (live) live.remove();
@@ -15725,6 +15796,7 @@ function apply(event) {
   if (event.type === "team-chat") { teamChatChanged(event.team); return; }
   if (event.type === "btw") { btwEvent(event); return; }
   if (event.type === "debate-live") { debateLive(event); return; }
+  if (event.type === "course-changed") { courseChanged(event); return; }
   if (event.type === "doc-changed") { docChanged(event); return; }
   if (event.type === "doc-proposal") { docProposal(event); return; }
   if (event.type === "answered") docAnswered(event);
@@ -16745,6 +16817,189 @@ function debateLive(event) {
   for (const node of [...old.children]) if (node !== form && !node.matches(".debate-head")) node.remove();
   for (const node of [...card.children]) if (!node.matches(".debate-head, .debate-more")) (form ? old.insertBefore(node, form) : old.appendChild(node));
   keepUp();
+}
+
+// ---------------------------------------------------------------------------
+// Courses: a subject the tutor teaches, worked through in the chat. Its path,
+// then one step at a time: the lesson, then a question to tap or code to run,
+// marked here at once. Nothing goes to the model unless "Ask Flash" is pressed.
+
+const courseDrafts = new Map();
+// Where to start when an exercise brings no code of its own.
+const COURSE_STARTER = {
+  c: "#include <stdio.h>\n\nint main(void) {\n    \n    return 0;\n}\n",
+  cpp: "#include <iostream>\n\nint main() {\n    \n    return 0;\n}\n",
+  rust: "fn main() {\n    \n}\n",
+  go: "package main\n\nimport \"fmt\"\n\nfunc main() {\n    fmt.Println()\n}\n",
+  java: "class Main {\n    public static void main(String[] args) {\n        \n    }\n}\n",
+};
+const COURSE_LANG = { c: "C", cpp: "C++", python: "Python", javascript: "JavaScript", rust: "Rust", go: "Go", java: "Java", shell: "Shell" };
+
+function courseCard(entry) {
+  const card = el("div", "block course", `<div class="course-head"><span class="course-chip">${icon("book")}<span>Course</span></span><span class="course-name"></span><span class="course-stats"><span class="streak" data-tip="Days in a row">${icon("flame")}<b>0</b></span><span class="xp" data-tip="Points">${icon("bolt")}<b>0</b> XP</span><span class="count"></span></span></div><div class="course-bar"><i></i></div><div class="course-path"></div><div class="course-step"></div>`);
+  card.dataset.course = entry.subject;
+  card._open = null;
+  loadCourse(card);
+  return card;
+}
+
+async function loadCourse(card, open = card._open, keepStep = false) {
+  let data;
+  try { data = await command("course", card.dataset.course, current, open ? { id: open } : {}); }
+  catch (error) { card.querySelector(".course-step").textContent = error.message; return; }
+  card._data = data;
+  card.querySelector(".course-name").textContent = data.subject;
+  const streak = card.querySelector(".streak");
+  streak.querySelector("b").textContent = data.streak;
+  streak.classList.toggle("hot", data.streak > 0);
+  card.querySelector(".xp b").textContent = data.xp;
+  card.querySelector(".count").textContent = `${data.passed}/${data.of}`;
+  card.querySelector(".count").dataset.tip = `${data.known} of ${data.of} mastered`;
+  card.querySelector(".course-bar i").style.width = `${data.of ? (100 * data.passed) / data.of : 0}%`;
+  if (!keepStep || !card._open) card._open = data.step ? data.step.id : null;
+  drawCoursePath(card);
+  if (!keepStep) drawCourseStep(card, data.step);
+}
+
+function drawCoursePath(card) {
+  const data = card._data, path = card.querySelector(".course-path");
+  path.innerHTML = "";
+  data.steps.forEach((st, n) => {
+    if (n) path.appendChild(el("span", "course-link" + (["known", "passed"].includes(data.steps[n - 1].state) ? " done" : "")));
+    const glyph = st.state === "known" || st.state === "passed" ? "check" : st.state === "locked" ? "lock" : st.kind === "code" ? "code" : st.kind === "quiz" ? "puzzle" : "book";
+    const node = path.appendChild(el("button", `course-node ${st.state}` + (st.id === card._open ? " open" : "") + (st.id === data.current ? " next" : ""), `<span class="dot">${icon(glyph)}</span><span class="label"></span>`));
+    node.type = "button";
+    node.querySelector(".label").textContent = st.title;
+    node.dataset.tip = st.state === "locked" ? "Finish the lessons before it first" : st.state === "review" ? "Due for review" : st.state === "passed" ? `${st.title}: passed, comes back for review` : st.title;
+    if (st.state === "locked") node.disabled = true;
+    else node.onclick = () => { card._open = st.id; loadCourse(card, st.id); };
+  });
+  path.querySelector(".open")?.scrollIntoView({ block: "nearest", inline: "center" });
+}
+
+function drawCourseStep(card, st) {
+  const box = card.querySelector(".course-step");
+  box.innerHTML = "";
+  if (!st) {
+    const done = box.appendChild(el("div", "course-done", `<b>Unit complete</b><span class="settings-sub">Everything here is known, and nothing is due for review yet.</span>`));
+    const more = done.appendChild(el("button", "btn primary", "Next unit with Flash"));
+    more.type = "button";
+    more.onclick = () => send(`Teach me the next unit of ${card._data.subject}.`);
+    return;
+  }
+  const kind = { code: "Write code", quiz: "Question", read: "Lesson" }[st.kind];
+  box.appendChild(el("div", "kind", kind));
+  box.appendChild(el("h3", "", "")).textContent = st.title;
+  const lesson = box.appendChild(el("div", "course-lesson"));
+  lesson.innerHTML = markdown(st.lesson || st.text);
+  if (st.kind === "quiz") drawCourseQuiz(card, box, st);
+  else if (st.kind === "code") drawCourseCode(card, box, st);
+  else {
+    const row = box.appendChild(el("div", "course-buttons"));
+    const got = row.appendChild(el("button", "btn primary", "Got it"));
+    got.type = "button";
+    got.onclick = async () => { got.disabled = true; try { await command("course-read", card.dataset.course, current, { id: st.id }); card._open = null; loadCourse(card, null); } catch (error) { toast(error.message); got.disabled = false; } };
+    courseAskButton(row, card, st);
+  }
+}
+
+function courseAskButton(row, card, st, extra = () => "") {
+  const ask = row.appendChild(el("button", "btn", `${icon("chat")}<span>Ask Flash</span>`));
+  ask.type = "button";
+  ask.onclick = () => send(`I'm on "${st.title}" in my ${card._data.subject} course. ${extra() || "Can you explain it another way?"}`);
+  return ask;
+}
+
+function courseFeedback(card, box, right, title, why, after) {
+  box.querySelector(".course-feedback")?.remove();
+  const bar = box.appendChild(el("div", `course-feedback ${right ? "right" : "wrong"}`, `<span></span>${right ? `<span class="course-xp">+10 XP</span>` : ""}`));
+  bar.firstChild.textContent = title;
+  const next = bar.appendChild(el("button", `btn ${right ? "primary" : ""}`, right ? "Continue" : "Try again"));
+  next.type = "button";
+  if (why) bar.appendChild(el("span", "why", "")).innerHTML = markdown(why);
+  next.onclick = after;
+  if (right) next.focus({ preventScroll: true });
+  bar.scrollIntoView({ block: "nearest", behavior: "smooth" });
+}
+
+function drawCourseQuiz(card, box, st) {
+  box.appendChild(el("div", "course-q", "")).textContent = st.quiz.question;
+  const list = box.appendChild(el("div", "course-choices"));
+  const buttons = st.quiz.choices.map((choice, n) => {
+    const b = list.appendChild(el("button", "course-choice", ""));
+    b.type = "button";
+    b.textContent = choice;
+    b.onclick = async () => {
+      buttons.forEach((x) => { x.disabled = true; });
+      let said;
+      try { said = await command("course-answer", card.dataset.course, current, { id: st.id, choice: n }); }
+      catch (error) { toast(error.message); buttons.forEach((x) => { x.disabled = false; }); return; }
+      buttons[said.answer]?.classList.add("right");
+      if (!said.right) b.classList.add("wrong");
+      courseFeedback(card, box, said.right, said.right ? "Right!" : `Not quite: it is "${st.quiz.choices[said.answer]}"`, said.explain,
+        () => { if (said.right) { card._open = null; loadCourse(card, null); } else drawCourseStep(card, st); });
+      loadCourse(card, st.id, true);
+    };
+    return b;
+  });
+  const row = box.appendChild(el("div", "course-buttons"));
+  courseAskButton(row, card, st);
+}
+
+function drawCourseCode(card, box, st) {
+  const task = st.exercise;
+  box.appendChild(el("div", "course-task", "")).innerHTML = markdown(task.task);
+  if (task.expect) {
+    const expect = box.appendChild(el("div", "course-expect", `Expected output${task.match === "contains" ? " (somewhere in it)" : task.match === "regex" ? " (matching)" : ""}<pre></pre>`));
+    expect.querySelector("pre").textContent = task.expect;
+  }
+  const key = `${card.dataset.course}/${st.id}`;
+  const editor = box.appendChild(el("div", "course-editor", `<span class="lang"></span><textarea spellcheck="false" autocapitalize="off" autocomplete="off" aria-label="Your code"></textarea>`));
+  editor.querySelector(".lang").textContent = COURSE_LANG[task.language] || task.language;
+  const code = editor.querySelector("textarea");
+  const starter = (task.starter || COURSE_STARTER[task.language] || "").replace(/\\n/g, "\n");
+  code.value = courseDrafts.get(key) ?? starter;
+  code.rows = Math.min(24, Math.max(8, code.value.split("\n").length + 2));
+  code.oninput = () => courseDrafts.set(key, code.value);
+  const row = box.appendChild(el("div", "course-buttons"));
+  const run = row.appendChild(el("button", "btn primary", `${icon("play")}<span>Run</span>`));
+  run.type = "button";
+  const reset = row.appendChild(el("button", "btn", "Reset"));
+  reset.type = "button";
+  reset.onclick = () => { code.value = starter; courseDrafts.delete(key); code.focus(); };
+  let last = null;
+  courseAskButton(row, card, st, () => `My code:\n\n\`\`\`${task.language}\n${code.value}\n\`\`\`\n` + (last ? `\n${last.built ? `It printed:\n\n\`\`\`\n${last.stdout || "(nothing)"}\n\`\`\`` : `It did not compile:\n\n\`\`\`\n${last.stderr}\n\`\`\``}\n\nWhat am I getting wrong? Don't give me the answer, give me a hint.` : "\nCan you give me a hint?"));
+  row.appendChild(el("span", "hint", navigator.platform.includes("Mac") ? "⌘ Enter runs it" : "Ctrl Enter runs it"));
+  const out = box.appendChild(el("div", "course-out"));
+  code.onkeydown = (e) => {
+    if (e.key === "Tab" && !e.shiftKey) { e.preventDefault(); code.setRangeText("    ", code.selectionStart, code.selectionEnd, "end"); courseDrafts.set(key, code.value); }
+    else if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); run.click(); }
+  };
+  run.onclick = async () => {
+    run.disabled = true;
+    out.className = "course-out";
+    out.textContent = "Running…";
+    box.querySelector(".course-feedback")?.remove();
+    let said;
+    try { said = await command("course-run", card.dataset.course, current, { id: st.id, code: code.value }); }
+    catch (error) { out.textContent = ""; toast(error.message); run.disabled = false; return; }
+    last = said;
+    run.disabled = false;
+    out.innerHTML = "";
+    if (!said.built) { out.className = "course-out bad"; out.append("It did not compile"); out.appendChild(el("pre")).textContent = said.stderr; }
+    else {
+      out.append(said.timed_out ? "It ran too long and was stopped" : "Output");
+      out.appendChild(el("pre")).textContent = (said.answer_output ?? said.stdout) || "(nothing)";
+      if (said.stderr.trim()) { out.append("Warnings and errors"); out.appendChild(el("pre")).textContent = said.stderr; }
+    }
+    courseFeedback(card, box, said.right, said.right ? "It works!" : !said.built ? "Fix the errors, then run it again" : "Not yet: compare its output with what is expected", "",
+      () => { if (said.right) { courseDrafts.delete(key); card._open = null; loadCourse(card, null); } else code.focus(); });
+    loadCourse(card, st.id, true);
+  };
+}
+
+function courseChanged(event) {
+  document.querySelectorAll(`.course[data-course="${CSS.escape(event.subject)}"]`).forEach((card) => loadCourse(card, card._open, !!card.querySelector(".course-step").childElementCount));
 }
 
 function debateCard(d, live = false) {

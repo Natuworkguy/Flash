@@ -522,7 +522,7 @@ class Ask:
 KEPT = {
     "user", "assistant", "tool", "result", "diff", "ask", "answered",
     "error", "stats", "note", "thought", "file", "plan", "browser", "wait",
-    "seen", "debate",
+    "seen", "debate", "course",
 }
 
 
@@ -2892,6 +2892,19 @@ def _sink(session: Session, chat: Chat):
                     "stop": "Stopped.", "volume": "Volume set.",
                     "next": "One song plays at a time: play another."}.get(
                         action, "Done.")
+        if kind == "course":
+            # A subject the agent teaches: its course, once in the chat,
+            # and every card showing it brought up to date.
+            from . import tutor
+
+            key = tutor._key(json.loads(text).get("subject"))
+            if not key:
+                return False
+            if not any(e.get("type") == "course" and e.get("subject") == key
+                       for e in chat.log if isinstance(e, dict)):
+                session.emit(chat, {"type": "course", "subject": key})
+            session.hub.publish({"type": "course-changed", "subject": key})
+            return True
         if kind == "project":
             # "Make this a project": made, and this chat moved into it.
             asked = json.loads(text)
@@ -4202,6 +4215,33 @@ def _install_staged(session: Session, staged_id: str) -> dict:
     return _extension_info(ext)
 
 
+def _course_command(session: Session, name: str, subject: str,
+                    body: dict) -> dict:
+    """A course card's: what to show, and answers given on it, marked
+    without the model."""
+
+    from . import tutor
+
+    pid = str(body.get("id") or "")
+    if name == "course":
+        found = tutor.course(subject)
+        found["step"] = tutor.step(subject, pid or found["current"]) \
+            if pid or found["current"] else None
+        return found
+    if name == "course-answer":
+        said = tutor.answer(subject, pid, int(body.get("choice", -1)))
+    elif name == "course-run":
+        # Run because the user pressed Run on code they wrote.
+        said = tutor.check(subject, pid, str(body.get("code") or ""))
+    elif name == "course-read":
+        said = tutor.understood(subject, pid)
+    else:
+        raise ValueError(f"Not a course command: {name}.")
+    session.hub.publish({"type": "course-changed",
+                         "subject": tutor._key(subject)})
+    return said
+
+
 def command(session: Session, body: dict, browser: str = "") -> dict:
     """The page's commands: models, modes, chats, undo.
 
@@ -4377,6 +4417,9 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
         except ValueError as exc:
             raise ValueError(str(exc)) from None
         return compare.run(ai._client(), models, prompt, ai._chat_options())
+
+    if name.startswith("course"):
+        return _course_command(session, name, arg, body)
 
     if name == "compare-pick":
         from . import compare
