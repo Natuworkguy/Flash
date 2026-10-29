@@ -3717,7 +3717,9 @@ def _sparks_command(arg: str) -> None:
                     style=DIM))
                 return
             try:
-                state = keepalive.take_over()
+                # "stop" stops another Flash open elsewhere, the user
+                # having said so.
+                state = keepalive.take_over(force=rest.lower() == "stop")
             except keepalive.KeepAliveError as exc:
                 warn(str(exc))
                 return
@@ -4246,7 +4248,9 @@ def _always_words(state: dict) -> str:
         return (
             f"Your sparks are being run by {state['other']}, so their "
             "shifts use its code and its tools, not this one's. "
-            "/sparks takeover runs them on this one."
+            "/sparks takeover runs them on this one"
+            + (" (/sparks takeover stop quits that Flash first, as it is "
+               "open elsewhere)." if state.get("other_open") else ".")
         )
     if not state["installed"]:
         return (

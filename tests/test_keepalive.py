@@ -201,7 +201,7 @@ class TestStatus:
 
         assert keepalive.status() == {
             "installed": False, "running": False, "since": None,
-            "here": False, "other": "",
+            "here": False, "other": "", "other_open": False,
         }
 
     def test_on_and_running(self, monkeypatch):
@@ -316,6 +316,74 @@ class TestTakeOver:
         with pytest.raises(keepalive.KeepAliveError, match="Close it"):
             keepalive.take_over()
         assert stopped == [] and self.done == []
+
+    def test_an_open_flash_is_stopped_when_the_user_says_so(
+            self, monkeypatch, tmp_path):
+        stopped = []
+        monkeypatch.setattr(
+            sparks, "keeper",
+            lambda: None if stopped else dict(self.OTHER),
+        )
+        monkeypatch.setattr(sparks, "alive", lambda pid: not stopped)
+        monkeypatch.setattr(keepalive, "_headless_keeper", lambda pid: False)
+        monkeypatch.setattr(keepalive, "QUIT_SECONDS", 0.1)
+        monkeypatch.setattr(keepalive, "_stop_process",
+                            lambda pid, hard=False: stopped.append(
+                                (pid, hard)))
+
+        keepalive.take_over(force=True)
+
+        # Asked to quit, and it did: nothing harder needed.
+        assert stopped == [(4242, False)]
+        # Always on was set up, so it is set up again from here.
+        assert self.done == ["off", "on"]
+
+    def test_an_open_flash_that_will_not_quit_is_made_to(self, monkeypatch):
+        stopped = []
+        monkeypatch.setattr(
+            sparks, "keeper",
+            lambda: None if len(stopped) > 1 else dict(self.OTHER),
+        )
+        monkeypatch.setattr(sparks, "alive", lambda pid: len(stopped) < 2)
+        monkeypatch.setattr(keepalive, "_headless_keeper", lambda pid: False)
+        monkeypatch.setattr(keepalive, "QUIT_SECONDS", 0.05)
+        monkeypatch.setattr(keepalive, "_stop_process",
+                            lambda pid, hard=False: stopped.append(hard))
+
+        keepalive.take_over(force=True)
+
+        assert stopped == [False, True]
+
+    def test_stopping_leaves_always_on_as_it_was(self, monkeypatch):
+        stopped = []
+        monkeypatch.setattr(keepalive, "installed", lambda: False)
+        monkeypatch.setattr(
+            sparks, "keeper",
+            lambda: None if stopped else dict(self.OTHER),
+        )
+        monkeypatch.setattr(sparks, "alive", lambda pid: not stopped)
+        monkeypatch.setattr(keepalive, "_headless_keeper", lambda pid: False)
+        monkeypatch.setattr(keepalive, "_stop_process",
+                            lambda pid, hard=False: stopped.append(pid))
+
+        keepalive.take_over(force=True)
+
+        assert stopped == [4242] and self.done == []
+
+    def test_this_flash_is_never_stopped(self, monkeypatch):
+        import os
+
+        monkeypatch.setattr(keepalive, "_stop_process",
+                            lambda pid, hard=False: pytest.fail("stopped"))
+        with pytest.raises(keepalive.KeepAliveError, match="this Flash"):
+            keepalive._stop_open_flash(os.getpid())
+
+    def test_status_says_when_the_other_is_open(self, monkeypatch):
+        monkeypatch.setattr(sparks, "keeper", lambda: dict(self.OTHER))
+        monkeypatch.setattr(keepalive, "_headless_keeper", lambda pid: False)
+        assert keepalive.status()["other_open"]
+        monkeypatch.setattr(keepalive, "_headless_keeper", lambda pid: True)
+        assert not keepalive.status()["other_open"]
 
     def test_the_system_keeper_is_set_up_again_from_here(self, monkeypatch):
         beats = [dict(self.OTHER, always=True)]
