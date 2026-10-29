@@ -784,12 +784,13 @@ body.course-open { overflow: hidden; }
 .course-stats .hot { color: #f59e0b; }
 .course-bar { height: 8px; border-radius: 99px; background: color-mix(in srgb, var(--text-3) 22%, transparent); overflow: hidden; }
 .course-bar i { display: block; height: 100%; width: 0; border-radius: inherit; background: var(--add); transition: width .5s cubic-bezier(.2, .8, .2, 1); }
-.course-path { display: flex; align-items: center; gap: 0; overflow-x: auto; padding: 6px 2px 10px; scrollbar-width: thin; }
-.course-node { flex: none; display: flex; flex-direction: column; align-items: center; gap: 6px; width: 74px; background: none; border: 0; padding: 0; color: var(--text-3); font: inherit; font-size: 11px; cursor: pointer; text-align: center; }
+/* Nodes line up by their circles, whatever their labels' length; room above for the pulsing ring. */
+.course-path { display: flex; align-items: flex-start; gap: 0; overflow-x: auto; overflow-y: hidden; padding: 10px 8px 12px; scrollbar-width: thin; }
+.course-node { flex: none; display: flex; flex-direction: column; align-items: center; gap: 6px; width: 88px; background: none; border: 0; padding: 0; color: var(--text-3); font: inherit; font-size: 11px; cursor: pointer; text-align: center; }
 .course-node .dot { width: 40px; height: 40px; border-radius: 50%; display: grid; place-items: center; border: 2px solid color-mix(in srgb, var(--text-3) 45%, transparent); background: var(--bg, transparent); transition: transform .15s; }
 .course-node .dot svg { width: 18px; height: 18px; }
 .course-node:hover:not([disabled]) .dot { transform: scale(1.08); }
-.course-node .label { line-height: 1.25; max-height: 2.5em; overflow: hidden; }
+.course-node .label { line-height: 1.3; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; padding-bottom: 1px; }
 .course-node.known .dot { background: var(--add); border-color: var(--add); color: #fff; }
 .course-node.passed .dot { border-color: var(--add); color: var(--add); background: color-mix(in srgb, var(--add) 14%, transparent); }
 .course-node.review .dot { border-color: #f59e0b; color: #f59e0b; }
@@ -799,7 +800,7 @@ body.course-open { overflow: hidden; }
 .course-node.open .label { color: var(--text); font-weight: 600; }
 .course-node.next .dot { animation: course-pulse 1.8s ease-in-out infinite; }
 @keyframes course-pulse { 50% { box-shadow: 0 0 0 7px color-mix(in srgb, var(--accent) 18%, transparent); } }
-.course-link { flex: none; width: 18px; height: 2px; margin-bottom: 22px; background: color-mix(in srgb, var(--text-3) 35%, transparent); }
+.course-link { flex: none; width: 14px; height: 2px; margin-top: 19px; background: color-mix(in srgb, var(--text-3) 35%, transparent); }
 .course-link.done { background: var(--add); }
 .course-step { display: flex; flex-direction: column; gap: 12px; border-top: 1px solid var(--border); padding-top: 14px; }
 .course-step .kind { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; color: var(--text-3); }
