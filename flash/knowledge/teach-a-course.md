@@ -10,13 +10,15 @@ Use the tutor tool whenever someone wants to learn something: a language, a tool
    - text: the idea in one sentence
    - needs: the ids it builds on
    - lesson: two to four short Markdown paragraphs that teach it, with a small example (a code block for code)
-   - a way to check it:
+   - something to answer, mixing the kinds through a unit so it stays lively:
      - quiz: question, 2 to 6 choices, answer (the right choice's place, from 0), explain (one sentence on why)
+     - blank: a prompt with ___ where the answer goes, and accept, every answer that counts ("printf", "printf()"); case and spacing never matter
+     - order: a prompt and 3 to 8 items given in the right order, which the user puts back in order (steps of a process, lines of a program, words of a statement)
      - exercise, for programming and the command line: task, language (c, cpp, python, javascript, rust, go, java, or shell for Linux), expect (exactly what a right answer prints), optional starter code, files the task starts with, and verify (a shell script whose output is checked instead, for tasks that change files)
-   - A step with neither is a read-only lesson; use that only for an introduction.
+   - Only a unit's first step, with no needs, may be just a lesson with nothing to answer. Any other is refused.
 3. Reply in a sentence or two. Do not paste the lessons or ask their questions in chat: the card shows them and marks answers itself.
 4. When they ask for help on a step ("Ask Flash" sends their code and its output), give a hint that points at the mistake, never the full answer.
-5. When the card says the unit is complete, or they ask for more, add the next unit's steps with needs on the earlier ones.
+5. When the card says the unit is complete, or they ask for more, call tutor graph to see what is there, then add the next unit: new ideas only (never re-teach a step that exists), each with needs on earlier ones and something to answer.
 
 In the terminal there is no card: teach one step at a time, ask its question, and record the answer with measure (right true or false). For exercises pass their code word for word to check. Never call measure without an answer they gave.
 
@@ -26,6 +28,11 @@ Pitfalls:
 - A quiz's wrong choices should be plausible mistakes, not jokes.
 
 ## Examples
+
+Type the answer, and put in order.
+```
+tutor {"action": "add", "subject": "C", "propositions": [{"id": "include", "title": "Headers", "needs": ["main"], "text": "#include brings in a library's declarations.", "lesson": "`#include <stdio.h>` lets you use `printf`.", "blank": {"prompt": "To use printf, write #include <___> at the top.", "accept": ["stdio.h"], "explain": "stdio.h declares the standard input and output functions."}}, {"id": "compile-steps", "title": "Building", "needs": ["include"], "text": "C is preprocessed, compiled, linked, then run.", "lesson": "Your source goes through several stages before it runs.", "order": {"prompt": "Put the stages in order", "items": ["Preprocess", "Compile", "Link", "Run"], "explain": "Headers are pulled in first; the linker joins compiled pieces."}}]}
+```
 
 Start a unit (two of its steps shown).
 ```

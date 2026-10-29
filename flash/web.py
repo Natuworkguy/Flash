@@ -4229,7 +4229,8 @@ def _course_command(session: Session, name: str, subject: str,
             if pid or found["current"] else None
         return found
     if name == "course-answer":
-        said = tutor.answer(subject, pid, int(body.get("choice", -1)))
+        said = tutor.answer(subject, pid, body.get(
+            "answer", body.get("choice")))
     elif name == "course-run":
         # Run because the user pressed Run on code they wrote.
         said = tutor.check(subject, pid, str(body.get("code") or ""))

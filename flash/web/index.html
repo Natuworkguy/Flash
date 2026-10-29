@@ -817,6 +817,19 @@ body.course-open { overflow: hidden; }
 .course-choice[disabled] { cursor: default; }
 .course-task > :first-child { margin-top: 0; }
 .course-task > :last-child { margin-bottom: 0; }
+.course-blank { display: block; font-size: 16px; line-height: 2.2; }
+.course-blank input { font: 15px var(--mono); padding: 4px 10px; margin: 0 4px; border: 0; border-bottom: 2px solid var(--accent); border-radius: 6px 6px 0 0; background: color-mix(in srgb, var(--text) 6%, transparent); color: var(--text); outline: 0; min-width: 6ch; max-width: 100%; }
+.course-blank input.right { border-color: var(--add); color: var(--add); }
+.course-blank input.wrong { border-color: var(--del); color: var(--del); }
+.course-order { display: flex; flex-wrap: wrap; gap: 8px; min-height: 46px; padding: 6px; border-radius: 10px; }
+.course-order.placed { border: 1px dashed var(--border-strong, var(--border)); }
+.course-order.pool:empty { display: none; }
+.course-order.placed:empty::before { content: attr(data-empty); color: var(--text-3); font-size: 13px; align-self: center; padding-left: 6px; }
+.course-chip-item { padding: 8px 12px; border: 1px solid var(--border); border-bottom-width: 3px; border-radius: 10px; background: var(--surface); color: inherit; font: inherit; cursor: pointer; transition: transform .08s; }
+.course-chip-item:active:not([disabled]) { transform: translateY(2px); }
+.course-chip-item.right { border-color: var(--add); background: color-mix(in srgb, var(--add) 14%, transparent); }
+.course-chip-item.wrong { border-color: var(--del); background: color-mix(in srgb, var(--del) 14%, transparent); }
+.course-chip-item[disabled] { cursor: default; }
 .course-task { padding: 10px 12px; border-left: 3px solid var(--accent); background: color-mix(in srgb, var(--accent) 8%, transparent); border-radius: 0 8px 8px 0; }
 .course-expect { font: 12.5px var(--mono); color: var(--text-2); }
 .course-expect pre, .course-out pre { margin: 6px 0 0; padding: 10px 12px; border-radius: 8px; background: color-mix(in srgb, var(--text) 7%, transparent); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 260px; overflow: auto; }
@@ -16920,7 +16933,7 @@ function drawCoursePath(card) {
   path.innerHTML = "";
   data.steps.forEach((st, n) => {
     if (n) path.appendChild(el("span", "course-link" + (["known", "passed"].includes(data.steps[n - 1].state) ? " done" : "")));
-    const glyph = st.state === "known" || st.state === "passed" ? "check" : st.state === "locked" ? "lock" : st.kind === "code" ? "code" : st.kind === "quiz" ? "puzzle" : "book";
+    const glyph = st.state === "known" || st.state === "passed" ? "check" : st.state === "locked" ? "lock" : { code: "code", quiz: "puzzle", blank: "keyboard", order: "numbers" }[st.kind] || "book";
     const node = path.appendChild(el("button", `course-node ${st.state}` + (st.id === card._open ? " open" : "") + (st.id === data.current ? " next" : ""), `<span class="dot">${icon(glyph)}</span><span class="label"></span>`));
     node.type = "button";
     node.querySelector(".label").textContent = st.title;
@@ -16941,12 +16954,14 @@ function drawCourseStep(card, st) {
     more.onclick = () => send(`Teach me the next unit of ${card._data.subject}.`);
     return;
   }
-  const kind = { code: "Write code", quiz: "Question", read: "Lesson" }[st.kind];
+  const kind = { code: "Write code", quiz: "Question", blank: "Type the answer", order: "Put in order", read: "Lesson" }[st.kind];
   box.appendChild(el("div", "kind", kind));
   box.appendChild(el("h3", "", "")).textContent = st.title;
   const lesson = box.appendChild(el("div", "course-lesson"));
   lesson.innerHTML = markdown(st.lesson || st.text);
   if (st.kind === "quiz") drawCourseQuiz(card, box, st);
+  else if (st.kind === "blank") drawCourseBlank(card, box, st);
+  else if (st.kind === "order") drawCourseOrder(card, box, st);
   else if (st.kind === "code") drawCourseCode(card, box, st);
   else {
     const row = box.appendChild(el("div", "course-buttons"));
@@ -17002,6 +17017,76 @@ function drawCourseQuiz(card, box, st) {
   });
   const row = box.appendChild(el("div", "course-buttons"));
   courseAskButton(row, card, st);
+}
+
+// Marking any answer given on the card, then what to do next.
+async function courseMark(card, box, st, given, show) {
+  let said;
+  try { said = await command("course-answer", card.dataset.course, current, { id: st.id, answer: given }); }
+  catch (error) { toast(error.message); return null; }
+  show(said);
+  const right = Array.isArray(said.answer) ? said.answer.join(" → ") : said.answer;
+  courseFeedback(card, box, said.right, said.right ? "Right!" : `Not quite: it is "${right}"`, said.explain,
+    () => { if (said.right) { card._open = null; loadCourse(card, null); } else drawCourseStep(card, st); });
+  loadCourse(card, st.id, true);
+  return said;
+}
+
+function drawCourseBlank(card, box, st) {
+  const [before, after = ""] = st.blank.prompt.split(/_{2,}/);
+  const line = box.appendChild(el("label", "course-blank"));
+  line.append(before);
+  const field = line.appendChild(el("input"));
+  field.type = "text";
+  field.autocomplete = "off";
+  field.spellcheck = false;
+  field.setAttribute("aria-label", "Your answer");
+  field.size = 12;
+  line.append(after);
+  const row = box.appendChild(el("div", "course-buttons"));
+  const check = row.appendChild(el("button", "btn primary", "Check"));
+  check.type = "button";
+  check.disabled = true;
+  courseAskButton(row, card, st);
+  field.oninput = () => { check.disabled = !field.value.trim(); field.size = Math.max(12, field.value.length + 2); };
+  field.onkeydown = (e) => { if (e.key === "Enter" && !check.disabled) { e.preventDefault(); check.click(); } };
+  check.onclick = async () => {
+    check.disabled = field.disabled = true;
+    const said = await courseMark(card, box, st, field.value, (r) => field.classList.add(r.right ? "right" : "wrong"));
+    if (!said) check.disabled = field.disabled = false;
+  };
+  requestAnimationFrame(() => field.focus({ preventScroll: true }));
+}
+
+function drawCourseOrder(card, box, st) {
+  box.appendChild(el("div", "course-q", "")).textContent = st.order.prompt;
+  const placed = box.appendChild(el("div", "course-order placed"));
+  const pool = box.appendChild(el("div", "course-order pool"));
+  const row = box.appendChild(el("div", "course-buttons"));
+  const check = row.appendChild(el("button", "btn primary", "Check"));
+  check.type = "button";
+  check.disabled = true;
+  courseAskButton(row, card, st);
+  placed.dataset.empty = "Tap them in order";
+  const chips = st.order.items.map((text) => {
+    const chip = pool.appendChild(el("button", "course-chip-item", ""));
+    chip.type = "button";
+    chip.textContent = text;
+    chip.onclick = () => {
+      (chip.parentElement === pool ? placed : pool).appendChild(chip);
+      check.disabled = pool.childElementCount > 0;
+    };
+    return chip;
+  });
+  check.onclick = async () => {
+    check.disabled = true;
+    chips.forEach((c) => { c.disabled = true; });
+    const given = [...placed.children].map((c) => c.textContent);
+    const said = await courseMark(card, box, st, given, (r) => {
+      [...placed.children].forEach((c, n) => c.classList.add(c.textContent === r.answer[n] ? "right" : "wrong"));
+    });
+    if (!said) { check.disabled = false; chips.forEach((c) => { c.disabled = false; }); }
+  };
 }
 
 function drawCourseCode(card, box, st) {

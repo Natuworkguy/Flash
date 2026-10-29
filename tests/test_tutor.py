@@ -9,8 +9,11 @@ PROPS = [
     {"id": "slope", "text": "Slope is rise over run."},
     {"id": "limit", "text": "A limit is the value a function nears."},
     {"id": "derivative", "text": "A derivative is the slope at a point.",
-     "needs": ["slope", "limit"]},
+     "needs": ["slope", "limit"],
+     "blank": {"prompt": "A derivative is the ___ at a point.",
+               "accept": ["slope"]}},
 ]
+Q = {"quiz": {"question": "?", "choices": ["a", "b"], "answer": 0}}
 
 
 def test_plan_teaches_groundwork_first():
@@ -48,10 +51,10 @@ def test_reviews_come_due_with_widening_gaps():
 
 def test_bad_graphs_are_refused():
     with pytest.raises(tutor.TutorError, match="not given"):
-        tutor.add("S", [{"id": "a", "text": "A.", "needs": ["b"]}])
+        tutor.add("S", [{"id": "a", "text": "A.", "needs": ["b"], **Q}])
     with pytest.raises(tutor.TutorError, match="loop"):
-        tutor.add("S", [{"id": "a", "text": "A.", "needs": ["b"]},
-                        {"id": "b", "text": "B.", "needs": ["a"]}])
+        tutor.add("S", [{"id": "a", "text": "A.", "needs": ["b"], **Q},
+                        {"id": "b", "text": "B.", "needs": ["a"], **Q}])
     with pytest.raises(tutor.TutorError, match="no subject"):
         tutor.plan("Nothing")
 
@@ -273,3 +276,42 @@ def test_the_tool_puts_the_course_on_the_page(monkeypatch):
     out = tools.FUNCTIONS["tutor"](action="add", subject="C",
                                    propositions=COURSE)
     assert shown == ["C"] and "Do not repeat a lesson" in out
+
+
+def test_every_step_after_the_introduction_has_something_to_answer():
+    with pytest.raises(tutor.TutorError, match="nothing to answer"):
+        tutor.add("S", [{"id": "a", "text": "A."},
+                        {"id": "b", "text": "B.", "needs": ["a"]}])
+    assert tutor.subjects() == []
+
+
+def test_type_the_answer():
+    tutor.add("C", [{"id": "inc", "text": "Headers.", "blank": {
+        "prompt": "#include <___>", "accept": ["stdio.h", "stdio"],
+        "explain": "It declares printf."}}])
+    shown = tutor.step("C", "inc")
+    assert shown["kind"] == "blank"
+    assert shown["blank"] == {"prompt": "#include <___>"}
+    assert tutor.answer("C", "inc", "  STDIO.H. ", now=0)["right"]
+    wrong = tutor.answer("C", "inc", "math.h", now=0)
+    assert not wrong["right"] and wrong["answer"] == "stdio.h"
+    with pytest.raises(tutor.TutorError, match="accept"):
+        tutor.add("C", [{"id": "x", "text": "X.",
+                         "blank": {"prompt": "___"}}])
+
+
+def test_put_in_order():
+    items = ["Preprocess", "Compile", "Link", "Run"]
+    tutor.add("C", [{"id": "build", "text": "Stages.", "order": {
+        "prompt": "In order", "items": items}}])
+    shown = tutor.step("C", "build")["order"]
+    assert sorted(shown["items"]) == sorted(items)
+    assert shown["items"] != items
+    assert tutor.step("C", "build")["order"] == shown  # the same each time
+    assert tutor.answer("C", "build", items, now=0)["right"]
+    wrong = tutor.answer("C", "build", list(reversed(items)), now=0)
+    assert not wrong["right"] and wrong["answer"] == items
+    for bad in ({"prompt": "P", "items": ["a", "b"]},
+                {"prompt": "P", "items": ["a", "a", "b"]}):
+        with pytest.raises(tutor.TutorError, match="3 to 8"):
+            tutor.add("C", [{"id": "x", "text": "X.", "order": bad}])
