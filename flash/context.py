@@ -249,6 +249,25 @@ def trim(messages: list[dict], budget: int) -> Trimmed:
     return Trimmed(kept=kept, dropped=dropped, tokens=total_tokens(kept))
 
 
+def make_room(messages: list[dict], target: int) -> Trimmed:
+    """Drop the oldest blocks until MESSAGES fit TARGET, never touching
+    the last few: for compacting more than is needed right now, so the
+    next turns have room before the window fills again."""
+
+    kept_blocks = [list(block) for block in blocks(messages)]
+    dropped: list[dict] = []
+
+    def flat() -> list[dict]:
+        return [message for block in kept_blocks for message in block]
+
+    while len(kept_blocks) > KEEP_RECENT_BLOCKS and \
+            total_tokens(flat()) > target:
+        dropped.extend(kept_blocks.pop(0))
+
+    kept = flat()
+    return Trimmed(kept=kept, dropped=dropped, tokens=total_tokens(kept))
+
+
 def transcript(messages: list[dict]) -> str:
     """The messages as plain text, for handing to a summarizer."""
 

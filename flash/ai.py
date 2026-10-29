@@ -244,6 +244,11 @@ def _opt_int_env(
         return None
 
 
+# The most a compaction may take at once: the last few exchanges stay
+# word for word whatever this says.
+COMPACT_MOST = 90
+
+
 class Config:
     """App configuration, re-derived from the environment on demand."""
 
@@ -255,6 +260,7 @@ class Config:
     max_history_messages: Optional[int]
     max_history_chars: Optional[int]
     auto_compact: bool
+    compact_amount: int
     max_tool_rounds: int
     max_tool_output_chars: int
     max_output_tokens: int
@@ -279,6 +285,10 @@ class Config:
             "MAX_HISTORY_CHARS", minimum=1000
         )
         cls.auto_compact = bool(_int_env("AUTO_COMPACT", 0, minimum=0))
+        # How much of the history a compaction takes at once, in percent:
+        # 0 for just what no longer fits.
+        cls.compact_amount = min(
+            COMPACT_MOST, _int_env("COMPACT_AMOUNT", 0, minimum=0))
         cls.max_tool_rounds = _int_env("MAX_TOOL_ROUNDS", 10, minimum=1)
         cls.max_tool_output_chars = _int_env(
             "MAX_TOOL_OUTPUT_CHARS", 1200, minimum=500
@@ -1150,6 +1160,13 @@ def _fit_and_compact(
     dropped = _trim_history(messages)
 
     if dropped and Config.auto_compact:
+        if Config.compact_amount:
+            # Compacting more than will fit now: a bigger summary less
+            # often, and room for the next turns before it fills again.
+            room = context.make_room(messages, int(
+                _history_budget() * (1 - Config.compact_amount / 100)))
+            messages[:] = room.kept
+            dropped = dropped + room.dropped
         _compact(console, client, messages, dropped)
         # The summary takes up room of its own, so make sure the
         # result still fits rather than trusting that it does.

@@ -191,3 +191,69 @@ class TestFitAndCompact:
 
         assert client.calls == []
         assert messages == [user("short"), assistant("also short")]
+
+
+class TestCompactAmount:
+    """How much of the history one compaction takes."""
+
+    def chat(self, n=12, size=150):
+        return [m for i in range(n)
+                for m in (user(f"q{i} " + "x" * size), assistant(f"a{i}"))]
+
+    def test_make_room_never_touches_the_last_exchanges(self):
+        messages = self.chat()
+        room = context.make_room(messages, 0)
+        assert [m["content"] for m in room.kept] == [
+            m["content"] for m in messages[-2 * context.KEEP_RECENT_BLOCKS:]]
+        assert room.dropped == messages[:-2 * context.KEEP_RECENT_BLOCKS]
+
+    def run(self, monkeypatch, amount, budget=400):
+        monkeypatch.setattr(ai, "_history_budget", lambda: budget)
+        monkeypatch.setattr(Config, "auto_compact", True)
+        monkeypatch.setattr(Config, "compact_amount", amount)
+        client = FakeClient("the gist")
+        messages = self.chat()
+        _fit_and_compact(ai.console, client, messages)
+        return messages, client
+
+    def test_just_enough_keeps_as_much_as_fits(self, monkeypatch):
+        messages, _ = self.run(monkeypatch, 0)
+        assert context.total_tokens(messages) > 0.6 * 400
+
+    def test_more_takes_more_at_once(self, monkeypatch):
+        light, _ = self.run(monkeypatch, 0)
+        heavy, client = self.run(monkeypatch, 75)
+        kept = [m for m in heavy if not context.is_summary(m)]
+        assert len(kept) < len([m for m in light
+                                if not context.is_summary(m)])
+        assert len(client.calls) == 1
+        # The last exchanges are never part of it.
+        last = [m["content"] for m in heavy[-2:]]
+        assert last == ["q11 " + "x" * 150, "a11"]
+        assert context.total_tokens(heavy) <= 400
+
+    def test_off_ignores_the_amount(self, monkeypatch):
+        monkeypatch.setattr(ai, "_history_budget", lambda: 400)
+        monkeypatch.setattr(Config, "auto_compact", False)
+        monkeypatch.setattr(Config, "compact_amount", 75)
+        messages = self.chat()
+        _fit_and_compact(ai.console, FakeClient(), messages)
+        assert context.total_tokens(messages) > 0.6 * 400
+
+    def test_the_setting(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(ai, "ENV_PATH", str(tmp_path / ".env"))
+        monkeypatch.setenv("COMPACT_AMOUNT", "500")
+        Config.refresh()
+        assert Config.compact_amount == ai.COMPACT_MOST
+        from flash import web
+
+        session = web.Session()
+        said = web.command(session, {"name": "compact-setting",
+                                     "arg": "amount 50"})
+        assert said == {"compact_amount": 50}
+        assert Config.compact_amount == 50
+        with pytest.raises(ValueError, match="percent"):
+            web.command(session, {"name": "compact-setting",
+                                  "arg": "amount lots"})
+        monkeypatch.delenv("COMPACT_AMOUNT", raising=False)
+        Config.refresh()
