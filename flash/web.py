@@ -4787,7 +4787,8 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
 
     if name == "sparks-takeover":
         try:
-            return {"always": keepalive.take_over()}
+            # "stop": the user said to stop another Flash open elsewhere.
+            return {"always": keepalive.take_over(force=arg == "stop")}
         except keepalive.KeepAliveError as exc:
             raise ValueError(str(exc)) from None
 

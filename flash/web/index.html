@@ -1760,7 +1760,7 @@ body.page-projects #dock, body.page-settings #dock, body.page-tool #dock { displ
 #music-bar.playing .music-said { color: var(--accent); }
 #music-bar .music-volume { width: 90px; accent-color: var(--accent); }
 @media (max-width: 520px) { #music-bar .music-volume { display: none; } }
-.other-keeper .auto-takeover { display: flex; align-items: center; gap: 6px; flex-basis: 100%; font-size: 12.5px; color: var(--text-3); cursor: pointer; }
+.other-keeper .auto-takeover { display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--text-3); cursor: pointer; }
 .email-form .field > span i { font-style: normal; color: var(--text-3); font-weight: 400; }
 .email-form-title { font-size: 14px; font-weight: 600; margin: 0 0 12px; }
 .field input[readonly] { color: var(--text-3); }
@@ -1780,10 +1780,12 @@ body.page-projects #dock, body.page-settings #dock, body.page-tool #dock { displ
 .connector-card .switch[aria-checked="true"] { background: var(--accent); }
 .connector-card .switch[aria-checked="true"]::after { transform: translateX(16px); }
 .connector-card .name-row .said { font-size: 12.5px; }
-.other-keeper { display: flex; align-items: center; gap: 12px; padding: 12px 14px; margin: 0 0 16px; border-radius: var(--radius); border: 1px solid color-mix(in srgb, var(--warn) 45%, transparent); background: color-mix(in srgb, var(--warn) 9%, transparent); font-size: 13.5px; }
+/* The words beside the icon, the button and the switch on a row under them. */
+.other-keeper { display: grid; grid-template-columns: auto 1fr; align-items: start; column-gap: 12px; row-gap: 10px; padding: 12px 14px; margin: 0 0 16px; border-radius: var(--radius); border: 1px solid color-mix(in srgb, var(--warn) 45%, transparent); background: color-mix(in srgb, var(--warn) 9%, transparent); font-size: 13.5px; }
 .other-keeper .ico { color: var(--warn); display: grid; flex: none; }
 .other-keeper .ico svg { width: 18px; height: 18px; }
-.other-keeper .words { flex: 1; min-width: 0; }
+.other-keeper .words { min-width: 0; line-height: 1.45; }
+.other-keeper .keeper-actions { grid-column: 2; display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; }
 .other-keeper .btn { flex: none; }
 @media (max-width: 560px) { .other-keeper { flex-wrap: wrap; } }
 .needs-email { font-size: 13px; color: var(--warn); margin: -4px 0 14px; }
@@ -9360,7 +9362,8 @@ let sparksAlways = { installed: false, running: false, here: false };
 // Another Flash's keeper runs the sparks: its code, its tools. One
 // press puts this one in its place.
 function otherKeeperBanner(a) {
-  const banner = el("div", "other-keeper", `<span class="ico">${icon("alert")}</span><span class="words"></span>`);
+  const banner = el("div", "other-keeper", `<span class="ico">${icon("alert")}</span><span class="words"></span><div class="keeper-actions"></div>`);
+  const actions = banner.querySelector(".keeper-actions");
   banner.querySelector(".words").textContent = `Your sparks are being run by ${a.other}, so their shifts use its code and tools, not this one's.`;
   const fix = el("button", "btn", "Run them on this Flash");
   fix.type = "button";
@@ -9377,7 +9380,20 @@ function otherKeeperBanner(a) {
       fix.disabled = false;
     }
   };
-  banner.appendChild(fix);
+  // An open Flash will not hand over by itself: stopping it is the way.
+  if (!a.other_open) actions.appendChild(fix);
+  // A Flash open somewhere else is only stopped when the user says so:
+  // anything unsaved in it goes with it.
+  if (a.other_open) {
+    const stop = el("button", "btn danger", "Stop the other Flash");
+    stop.type = "button";
+    stop.onclick = () => openForm(`<h2>Stop the other Flash?</h2><p class="sub">It is open somewhere else on this computer. Stopping it quits it, and anything it was in the middle of is lost: a reply being written, a shift halfway through. Then this Flash runs your sparks.</p><div class="dialog-buttons"><button type="button" class="btn" data-cancel>Cancel</button><button type="submit" class="btn danger">Stop it</button></div>`, async () => {
+      sparksAlways = (await command("sparks-takeover", "stop", null)).always;
+      toast("Stopped the other Flash: your sparks run on this one now");
+      banner.remove();
+    }).querySelector("[data-cancel]").onclick = closeForm;
+    actions.appendChild(stop);
+  }
   // From now on, by itself, whenever this Flash starts.
   const auto = el("label", "auto-takeover", `<input type="checkbox"><span>Always take over when this Flash starts</span>`);
   const box = auto.querySelector("input");
@@ -9386,7 +9402,7 @@ function otherKeeperBanner(a) {
     try { await command("sparks-auto-takeover", box.checked ? "on" : "off", null); toast(box.checked ? "This Flash takes over its sparks when it starts" : "No more taking over by itself"); }
     catch (error) { box.checked = !box.checked; showFailure(error); }
   };
-  banner.appendChild(auto);
+  actions.appendChild(auto);
   return banner;
 }
 

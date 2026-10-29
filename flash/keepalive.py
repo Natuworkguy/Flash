@@ -22,6 +22,7 @@ login onward (flash/heyflash.py). Every function here takes the service
 it is about, SPARKS when it is not said.
 """
 
+import json
 import os
 import shutil
 import subprocess  # nosec B404
@@ -408,7 +409,17 @@ def status() -> dict:
         # words ("another Flash, at ..."), or "" when it is this one or
         # none is running.
         "other": _other(beat),
+        # Whether that other Flash is one open on someone's screen, which
+        # a takeover only stops when told to (take_over(force=True)).
+        "other_open": _open_elsewhere(beat),
     }
+
+
+def _open_elsewhere(beat: Optional[dict]) -> bool:
+    if not _other(beat):
+        return False
+    pid = int((beat or {}).get("pid") or 0)
+    return not (beat or {}).get("always") and not _headless_keeper(pid)
 
 
 def _other(beat: Optional[dict]) -> str:
@@ -493,16 +504,44 @@ def _headless_keeper(pid: int) -> bool:
     return "--sparks" in line and ("flash" in line or "run.py" in line)
 
 
-def _stop_process(pid: int) -> None:
+def _stop_process(pid: int, hard: bool = False) -> None:
+    """Ask PID to quit; HARD makes it."""
+
     if os.name == "nt":
         _run(["taskkill", "/PID", str(pid), "/F"])
     else:
         import signal
 
         try:
-            os.kill(pid, signal.SIGTERM)
+            os.kill(pid, signal.SIGKILL if hard else signal.SIGTERM)
         except OSError:
             pass
+
+
+# How long an open Flash told to quit has, before it is made to.
+QUIT_SECONDS = 5.0
+
+
+def _stop_open_flash(pid: int) -> None:
+    """Quit the Flash in process PID: asked first, so it can tidy up and
+    its keeper lets go, then made to if it will not."""
+
+    if pid == os.getpid() or pid <= 0:
+        raise KeepAliveError("That is this Flash.")
+    _stop_process(pid)
+    if not _wait_for(lambda: not sparks.alive(pid), QUIT_SECONDS):
+        _stop_process(pid, hard=True)
+        _wait_for(lambda: not sparks.alive(pid), QUIT_SECONDS)
+    if os.name != "nt" and sparks.alive(pid):
+        raise KeepAliveError(f"Process {pid} would not stop.")
+    # It is gone: its heartbeat goes with it.
+    try:
+        beat = sparks.sparks_dir() / sparks.HEARTBEAT
+        held = json.loads(beat.read_text(encoding="utf-8"))
+        if int(held.get("pid") or 0) == pid:
+            beat.unlink()
+    except (OSError, ValueError):
+        pass
 
 
 def _wait_for(done, seconds: float) -> bool:
@@ -514,14 +553,15 @@ def _wait_for(done, seconds: float) -> bool:
     return done()
 
 
-def take_over() -> dict:
+def take_over(force: bool = False) -> dict:
     """Have this Flash run the sparks, in place of another that does.
 
     Always on is set up again from this Flash, which replaces the keeper
     the system started. A keeper the system did not start, a stray
     `flash --sparks`, is stopped. A Flash open on someone's screen is
-    not: that is theirs to close, and a KeepAliveError says so. Waits
-    for the change, and returns status() once it shows.
+    only stopped with FORCE, the user having said so: anything unsaved
+    in it is lost. Without, a KeepAliveError says so. Waits for the
+    change, and returns status() once it shows.
     """
 
     beat = sparks.keeper()
@@ -529,15 +569,23 @@ def take_over() -> dict:
         return status()
     pid = int(beat.get("pid") or 0)
     headless = beat.get("always") or _headless_keeper(pid)
-    if not headless:
+    if not headless and not force:
         raise KeepAliveError(
             f"Your sparks are being run by a Flash that is open, in "
-            f"process {pid}: {_other(beat)}. Close it, and this one takes "
-            "over."
+            f"process {pid}: {_other(beat)}. Close it, or stop it from "
+            "here (/sparks takeover stop), and this one takes over."
         )
-    if installed():
-        turn_off()
-    turn_on()
+    if not headless:
+        _stop_open_flash(pid)
+        # Always on stays as the user had it: set up again from this
+        # Flash if it was, else this open Flash picks the sparks up.
+        if installed():
+            turn_off()
+            turn_on()
+    else:
+        if installed():
+            turn_off()
+        turn_on()
     replaced = _wait_for(lambda: sparks.keeper() is None or int(
         (sparks.keeper() or {}).get("pid") or 0
     ) != pid, TAKEOVER_SECONDS / 2)
