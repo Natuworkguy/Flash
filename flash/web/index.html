@@ -766,6 +766,15 @@ pre code { display: block; padding: 2px 16px 14px; overflow-x: auto; font-size: 
 /* A course the tutor teaches: a path of lessons, each with a question or code to write, marked at once. */
 .course { border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); padding: 16px; display: flex; flex-direction: column; gap: 14px; }
 .course-head { display: flex; align-items: center; gap: 10px; min-width: 0; flex-wrap: wrap; }
+.course-full { flex: none; }
+.course-full svg { width: 16px; height: 16px; }
+/* Full screen: the course alone, centred, scrolling on its own. */
+.course.full { position: fixed; inset: 0; z-index: 2000; margin: 0; border: 0; border-radius: 0; overflow-y: auto; padding: max(24px, env(safe-area-inset-top)) max(16px, calc((100vw - 860px) / 2)) max(32px, env(safe-area-inset-bottom)); background: var(--bg); }
+.course:fullscreen { background: var(--bg); overflow-y: auto; }
+.course.full .course-name { font-size: 20px; }
+.course.full .course-step h3 { font-size: 24px; }
+.course.full .course-lesson { font-size: 16px; }
+body.course-open { overflow: hidden; }
 .course-chip { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; color: var(--accent); text-transform: uppercase; letter-spacing: .04em; }
 .course-chip svg { width: 14px; height: 14px; }
 .course-name { font-weight: 650; font-size: 16px; min-width: 0; overflow-wrap: anywhere; }
@@ -16837,12 +16846,55 @@ const COURSE_STARTER = {
 const COURSE_LANG = { c: "C", cpp: "C++", python: "Python", javascript: "JavaScript", rust: "Rust", go: "Go", java: "Java", shell: "Shell" };
 
 function courseCard(entry) {
-  const card = el("div", "block course", `<div class="course-head"><span class="course-chip">${icon("book")}<span>Course</span></span><span class="course-name"></span><span class="course-stats"><span class="streak" data-tip="Days in a row">${icon("flame")}<b>0</b></span><span class="xp" data-tip="Points">${icon("bolt")}<b>0</b> XP</span><span class="count"></span></span></div><div class="course-bar"><i></i></div><div class="course-path"></div><div class="course-step"></div>`);
+  const card = el("div", "block course", `<div class="course-head"><span class="course-chip">${icon("book")}<span>Course</span></span><span class="course-name"></span><span class="course-stats"><span class="streak" data-tip="Days in a row">${icon("flame")}<b>0</b></span><span class="xp" data-tip="Points">${icon("bolt")}<b>0</b> XP</span><span class="count"></span></span><button type="button" class="icon-btn course-full" data-tip="Full screen" aria-label="Full screen">${icon("expand")}</button></div><div class="course-bar"><i></i></div><div class="course-path"></div><div class="course-step"></div>`);
   card.dataset.course = entry.subject;
   card._open = null;
+  card.querySelector(".course-full").onclick = () => courseFullScreen(card);
   loadCourse(card);
   return card;
 }
+
+// The course alone on the screen: the browser's full screen where it
+// allows an element there, the whole window where it does not (iPhones).
+function courseFullScreen(card) {
+  const on = document.fullscreenElement === card || card.classList.contains("full");
+  if (on) {
+    if (document.fullscreenElement === card) document.exitFullscreen().catch(() => {});
+    else courseFull(card, false);
+    return;
+  }
+  if (card.requestFullscreen) card.requestFullscreen().then(() => courseFull(card, true)).catch(() => courseFull(card, true));
+  else courseFull(card, true);
+}
+
+function courseFull(card, on) {
+  // Without the browser's full screen, the card goes to the top of the page
+  // while it fills the window, out from under the chat's own layers, and
+  // back to its place in the chat after.
+  if (on && !document.fullscreenElement && !card._home) {
+    card._home = document.createComment("course");
+    card.replaceWith(card._home);
+    document.body.appendChild(card);
+  } else if (!on && card._home) {
+    card._home.replaceWith(card);
+    card._home = null;
+  }
+  card.classList.toggle("full", on);
+  document.body.classList.toggle("course-open", on);
+  const button = card.querySelector(".course-full");
+  button.innerHTML = icon(on ? "shrink" : "expand");
+  button.dataset.tip = button.ariaLabel = on ? "Exit full screen" : "Full screen";
+  if (on) card.querySelector(".course-path .open")?.scrollIntoView({ block: "nearest", inline: "center" });
+}
+
+document.addEventListener("fullscreenchange", () => {
+  document.querySelectorAll(".course.full").forEach((card) => { if (document.fullscreenElement !== card) courseFull(card, false); });
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape" || document.fullscreenElement) return;
+  const card = document.querySelector(".course.full");
+  if (card) { e.stopPropagation(); courseFull(card, false); }
+}, true);
 
 async function loadCourse(card, open = card._open, keepStep = false) {
   let data;
@@ -16907,7 +16959,11 @@ function drawCourseStep(card, st) {
 function courseAskButton(row, card, st, extra = () => "") {
   const ask = row.appendChild(el("button", "btn", `${icon("chat")}<span>Ask Flash</span>`));
   ask.type = "button";
-  ask.onclick = () => send(`I'm on "${st.title}" in my ${card._data.subject} course. ${extra() || "Can you explain it another way?"}`);
+  ask.onclick = () => {
+    // The answer comes in the chat: out of full screen to read it.
+    if (card.classList.contains("full")) courseFullScreen(card);
+    send(`I'm on "${st.title}" in my ${card._data.subject} course. ${extra() || "Can you explain it another way?"}`);
+  };
   return ask;
 }
 
