@@ -520,6 +520,15 @@ def tool_music(event: dict) -> Optional[str]:
     return said if isinstance(said, str) else None
 
 
+def tool_course(subject: str) -> bool:
+    """Show SUBJECT's course on the page, in the chat this turn is in
+    (tutor): False where there is no page (the terminal)."""
+
+    sink = _sink()
+    return bool(sink("course", json.dumps({"subject": subject}), "")) \
+        if sink else False
+
+
 def tool_project(event: dict) -> Optional[dict]:
     """Make the chat this turn is in a project (make_project): what the
     page made of it, or None where there is no chat to move (the

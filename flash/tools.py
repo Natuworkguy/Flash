@@ -95,6 +95,7 @@ from .theme import (
     remote_answer,
     set_denial_why,
     tool_browser,
+    tool_course,
     tool_diff,
     tool_document,
     tool_file,
@@ -4868,7 +4869,7 @@ def _checked(said: dict) -> str:
 
 def tutor(action: str = "plan", subject: str = "",
           propositions: Optional[list] = None, id: str = "",
-          right: Any = False, answer: str = "", limit: Any = 5) -> str:
+          right: Any = None, answer: str = "", limit: Any = 5) -> str:
     """What the user is learning, as a graph of propositions: teach and
     test them in order, and keep track of what they know."""
 
@@ -4881,6 +4882,10 @@ def tutor(action: str = "plan", subject: str = "",
             added = graph.add(subject, propositions or [])
             result = f"Added {len(added)}: " + ", ".join(added) + "."
         elif action == "measure":
+            if right is None or str(right).strip() == "":
+                raise graph.TutorError(
+                    "Say whether they got it right (right: true or false). "
+                    "Only measure an answer they gave.")
             said = graph.measure(subject, id, _truthy(right))
             result = (f"{said['id']}: now {said['known']:.0%} known"
                       + (", known" if said["is_known"] else "")
@@ -4921,6 +4926,13 @@ def tutor(action: str = "plan", subject: str = "",
         result = f"Error: {exc}"
         tool_result(result, style=ERROR)
         return result
+    if action in ("add", "plan", "measure", "check", "graph") and \
+            tool_course(subject):
+        result += ("\n\nThe course is on the page as a card the user works "
+                   "through: each lesson, its question or exercise, and "
+                   "marking are there. Do not repeat a lesson or ask its "
+                   "question in your reply: say a sentence or two, and "
+                   "help when they ask.")
     tool_result(result.splitlines()[0][:120])
     return result
 
@@ -6504,7 +6516,14 @@ tools: list[dict[str, Any]] = [
                 "next: teach (new), practice (shaky) or review (due). Teach "
                 "one, then ask one question on it, and 'measure' whether "
                 "they got it right; never tell them the answer before they "
-                "try. For a programming language or the command line (C, "
+                "try. Give each one a short title, a lesson (a few short "
+                "Markdown paragraphs that teach it, with an example), and "
+                "either a quiz (a question with 2 to 6 choices and the "
+                "answer's place, from 0) or, for a programming language or "
+                "the command line, an exercise. Six to twelve small ones "
+                "make a good first unit. On the web page the subject shows "
+                "as an interactive course the user works through on their "
+                "own. For a programming language or the command line (C, "
                 "Python, Linux, git...), give propositions an exercise: a "
                 "small task, its language (shell for Linux), and the exact "
                 "output a right answer prints. The user writes the answer "
@@ -6526,7 +6545,30 @@ tools: list[dict[str, Any]] = [
                             "type": "object",
                             "properties": {
                                 "id": {"type": "string"},
-                                "text": {"type": "string"},
+                                "text": {"type": "string", "description": (
+                                    "The claim, in one sentence.")},
+                                "title": {"type": "string", "description": (
+                                    "A few words, for the path.")},
+                                "lesson": {"type": "string", "description": (
+                                    "Markdown that teaches it, with an "
+                                    "example.")},
+                                "quiz": {
+                                    "type": "object",
+                                    "properties": {
+                                        "question": {"type": "string"},
+                                        "choices": {"type": "array",
+                                                    "items": {
+                                                        "type": "string"}},
+                                        "answer": {"type": "integer",
+                                                   "description": (
+                                                       "The right choice's "
+                                                       "place, from 0.")},
+                                        "explain": {"type": "string",
+                                                    "description": (
+                                                        "Why, shown after.")},
+                                    },
+                                    "required": ["question", "choices",
+                                                 "answer"]},
                                 "needs": {"type": "array",
                                           "items": {"type": "string"}},
                                 "exercise": {

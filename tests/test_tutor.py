@@ -190,3 +190,86 @@ def test_check_tool(monkeypatch):
     monkeypatch.setattr(tools, "_user_allows", lambda *a, **_: False)
     assert "said no" in run(action="check", subject="Linux", id="mkdir-mv",
                             answer="ls")
+
+
+# The course on the page ------------------------------------------------------
+
+COURSE = [
+    {"id": "what", "title": "What C is", "text": "C is compiled.",
+     "lesson": "C is **compiled**."},
+    {"id": "main", "needs": ["what"], "text": "Programs start in main.",
+     "quiz": {"question": "Where does it start?",
+              "choices": ["The top", "main", "printf"], "answer": 1,
+              "explain": "main is called first."}},
+    {"id": "hello", "needs": ["main"], "text": "printf prints.",
+     "exercise": {"task": "Print hi", "language": "python", "expect": "hi"}},
+]
+
+
+def test_quizzes_are_checked_when_added():
+    for bad in ({"question": "Q", "choices": ["a"], "answer": 0},
+                {"question": "Q", "choices": ["a", "b"], "answer": 5},
+                {"question": "", "choices": ["a", "b"], "answer": 0}):
+        with pytest.raises(tutor.TutorError):
+            tutor.add("C", [{"id": "a", "text": "A.", "quiz": bad}])
+    tutor.add("C", [{"id": "a", "text": "A.", "quiz": {
+        "question": "Q", "choices": ["x", "Yes"], "answer": "yes"}}])
+    assert tutor._load()["c"]["props"]["a"]["quiz"]["answer"] == 1
+
+
+def test_a_course_walked_through():
+    tutor.add("C", COURSE)
+    first = tutor.course("C", now=0)
+    assert [s["state"] for s in first["steps"]] == [
+        "ready", "locked", "locked"]
+    assert first["current"] == "what" and first["passed"] == 0
+    assert tutor.step("C", "what")["kind"] == "read"
+    tutor.understood("C", "what", now=0)
+    step = tutor.step("C", "main")
+    assert step["quiz"] == {"question": "Where does it start?",
+                            "choices": ["The top", "main", "printf"]}
+    wrong = tutor.answer("C", "main", 0, now=0)
+    assert not wrong["right"] and wrong["answer"] == 1
+    # Not passed: it is still next, and what follows stays shut.
+    assert tutor.course("C", now=0)["current"] == "main"
+    right = tutor.answer("C", "main", 1, now=0)
+    assert right["right"] and right["explain"] == "main is called first."
+    # One right answer opens the next lesson; mastery comes later.
+    now = tutor.course("C", now=0)
+    assert now["current"] == "hello"
+    assert [s["state"] for s in now["steps"]] == ["known", "passed", "ready"]
+    assert now["xp"] == tutor.XP_RIGHT and now["streak"] == 1
+    # It comes back when due.
+    assert tutor.course("C", now=2 * tutor.DAY)["steps"][1]["state"] == \
+        "review"
+    with pytest.raises(tutor.TutorError, match="answered, not just read"):
+        tutor.understood("C", "main")
+
+
+def test_streak():
+    import datetime as dt
+
+    today = dt.date(2026, 10, 29)
+    assert tutor.streak([], today) == 0
+    assert tutor.streak(["2026-10-27", "2026-10-28", "2026-10-29"],
+                        today) == 3
+    # Not yet today: yesterday's run still counts.
+    assert tutor.streak(["2026-10-27", "2026-10-28"], today) == 2
+    assert tutor.streak(["2026-10-26"], today) == 0
+
+
+def test_measure_needs_an_answer(monkeypatch):
+    run = tools.FUNCTIONS["tutor"]
+    run(action="add", subject="C", propositions=COURSE)
+    out = run(action="measure", subject="C", id="what")
+    assert out.startswith("Error") and "right" in out
+    assert tutor.describe("C")["propositions"][0]["known"] == tutor.START
+
+
+def test_the_tool_puts_the_course_on_the_page(monkeypatch):
+    shown = []
+    monkeypatch.setattr(tools, "tool_course",
+                        lambda s: shown.append(s) or True)
+    out = tools.FUNCTIONS["tutor"](action="add", subject="C",
+                                   propositions=COURSE)
+    assert shown == ["C"] and "Do not repeat a lesson" in out

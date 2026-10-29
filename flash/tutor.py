@@ -13,8 +13,13 @@ comes back for review after a day, then two, four, and so on, and a
 wrong answer brings it back the next day.
 
 The plan is what to do next: reviews that are due, then the weakest
-propositions whose groundwork is known. Only the agent uses this, as a
-tool: there is nothing to open.
+propositions whose groundwork is known.
+
+On the web page a subject is a course, drawn in the chat: its path of
+lessons, each a short explanation, then a question to tap an answer to
+or code to write and run, marked at once, with points for each right
+answer and a streak of days practised. Answers given there never go
+through the model; "Ask Flash" does.
 
 Subjects learned by doing, like C or Linux, give a proposition an
 exercise: a task, the language it is answered in (shell, for the
@@ -27,6 +32,7 @@ what anyone thinks of it.
 
 from __future__ import annotations
 
+import datetime as dt
 import os
 import re
 import shutil
@@ -48,6 +54,8 @@ START, LEARN, GUESS, SLIP = 0.2, 0.15, 0.2, 0.1
 KNOWN = 0.9
 MOST_INTERVAL_DAYS = 120
 _lock = threading.Lock()
+XP_RIGHT = 10
+MOST_LESSON = 6000
 RUN_SECONDS = 10
 MOST_OUTPUT = 8000
 MATCHES = ("exact", "contains", "regex")
@@ -125,7 +133,11 @@ def add(subject: str, propositions: list[dict]) -> list[str]:
                 continue
             old = props.get(pid, {})
             exercise = _exercise(given.get("exercise"), pid)
-            props[pid] = {"text": text, "exercise": exercise,
+            quiz = _quiz(given.get("quiz"), pid)
+            props[pid] = {"text": text, "exercise": exercise, "quiz": quiz,
+                          "title": str(given.get("title") or "").strip()[:60],
+                          "lesson": str(given.get("lesson") or "").strip()[
+                              :MOST_LESSON],
                           "needs": [_key(n) for n in given.get("needs") or []
                                     if _key(n) and _key(n) != pid],
                           "known": old.get("known", START),
@@ -190,6 +202,36 @@ def _exercise(given: Any, pid: str) -> Optional[dict]:
             "files": {str(n): str(c) for n, c in files.items()}}
 
 
+def _quiz(given: Any, pid: str) -> Optional[dict]:
+    """A question with choices, as it is kept: the right one by its
+    place, or None."""
+
+    if not given:
+        return None
+    if not isinstance(given, dict):
+        raise TutorError(f"{pid}: a quiz is {{question, choices, answer}}.")
+    question = str(given.get("question") or "").strip()
+    choices = [str(c).strip() for c in given.get("choices") or []
+               if str(c).strip()]
+    if not question or not 2 <= len(choices) <= 6:
+        raise TutorError(f"{pid}: a quiz needs a question and 2 to 6 "
+                         "choices.")
+    answer = given.get("answer")
+    if isinstance(answer, str) and not answer.strip().isdigit():
+        found = [i for i, c in enumerate(choices)
+                 if c.lower() == answer.strip().lower()]
+        answer = found[0] if found else None
+    try:
+        answer = int(answer)
+    except (TypeError, ValueError):
+        answer = -1
+    if not 0 <= answer < len(choices):
+        raise TutorError(f"{pid}: the quiz's answer is one of its choices, "
+                         "or its place among them, from 0.")
+    return {"question": question, "choices": choices, "answer": answer,
+            "explain": str(given.get("explain") or "").strip()}
+
+
 def _safe_name(name: Any) -> bool:
     path = Path(str(name or ""))
     return bool(str(name or "").strip()) and not path.is_absolute() \
@@ -242,6 +284,10 @@ def measure(subject: str, pid: str, right: bool,
         days = min(MOST_INTERVAL_DAYS, 2 ** max(0, prop["streak"] - 1)) \
             if right else 1
         prop["due"] = now + days * DAY
+        held = _subject(data, subject)
+        held["xp"] = held.get("xp", 0) + (XP_RIGHT if right else 0)
+        today = local_day(now).isoformat()
+        held["days"] = sorted(set(held.get("days", [])) | {today})[-400:]
         workspace._write(FILE, data)
     return {"id": _key(pid), "known": prop["known"],
             "is_known": prop["known"] >= KNOWN, "review_in_days": days}
@@ -249,32 +295,38 @@ def measure(subject: str, pid: str, right: bool,
 
 def plan(subject: str, limit: int = 5, now: Optional[float] = None
          ) -> list[dict]:
-    """What to do next: reviews that are due, then the least known
-    propositions whose groundwork is known."""
+    """What to do next: reviews that are due, then, in the path's order,
+    the propositions not yet passed whose groundwork is."""
 
     now = time.time() if now is None else now
     props = _subject(_load(), subject)["props"]
+    order = {pid: n for n, pid in enumerate(_ordered(props))}
     due, ready = [], []
     for pid, prop in props.items():
-        if prop["known"] >= KNOWN:
+        if passed(prop):
             if prop["due"] and prop["due"] <= now:
-                due.append(("review", pid, prop))
-        elif all(props[n]["known"] >= KNOWN for n in prop["needs"]):
+                due.append(("review" if prop["known"] >= KNOWN
+                            else "practice", pid, prop))
+        elif all(passed(props[n]) for n in prop["needs"]):
             ready.append(("teach" if not prop["seen"] else "practice",
                           pid, prop))
     due.sort(key=lambda d: d[2]["due"])
-    ready.sort(key=lambda r: (r[2]["known"], len(r[2]["needs"])))
+    ready.sort(key=lambda r: order[r[1]])
     return [{"do": do, "id": pid, "text": prop["text"],
              "known": prop["known"], "exercise": prop.get("exercise")}
             for do, pid, prop in (due + ready)[:limit]]
 
 
-def describe(subject: str) -> dict[str, Any]:
-    """How far the user is: how many propositions are known, and the
-    graph, groundwork first."""
+def passed(prop: dict) -> bool:
+    """Answered right at least once, or known: what comes after it opens.
+    How well it is known still decides when it comes back."""
 
-    held = _subject(_load(), subject)
-    props = held["props"]
+    return prop.get("right", 0) > 0 or prop["known"] >= KNOWN
+
+
+def _ordered(props: dict) -> list[str]:
+    """The propositions, each after what it needs."""
+
     order: list[str] = []
 
     def place(pid: str) -> None:
@@ -284,8 +336,18 @@ def describe(subject: str) -> dict[str, Any]:
             place(need)
         order.append(pid)
 
-    for pid in sorted(props):
+    for pid in props:
         place(pid)
+    return order
+
+
+def describe(subject: str) -> dict[str, Any]:
+    """How far the user is: how many propositions are known, and the
+    graph, groundwork first."""
+
+    held = _subject(_load(), subject)
+    props = held["props"]
+    order = _ordered(props)
     known = sum(1 for p in props.values() if p["known"] >= KNOWN)
     return {"subject": held["name"], "known": known, "of": len(props),
             "propositions": [{"id": pid, "text": props[pid]["text"],
@@ -414,3 +476,126 @@ def forget(subject: str) -> None:
         _subject(data, subject)
         data.pop(_key(subject))
         workspace._write(FILE, data)
+
+
+# The course, as the page draws it ------------------------------------------
+
+
+def local_day(stamp: float) -> dt.date:
+    """The day STAMP falls on, here."""
+
+    return dt.datetime.fromtimestamp(stamp, dt.timezone.utc).astimezone() \
+        .date()
+
+
+def title_of(pid: str, prop: dict) -> str:
+    if prop.get("title"):
+        return prop["title"]
+    words = pid.replace("-", " ").strip()
+    return words[:1].upper() + words[1:]
+
+
+def streak(days: list[str], today: Optional[dt.date] = None) -> int:
+    """How many days in a row, up to today or yesterday, were practised."""
+
+    have = set(days)
+    day = today or local_day(time.time())
+    if day.isoformat() not in have:
+        day -= dt.timedelta(days=1)
+    count = 0
+    while day.isoformat() in have:
+        count += 1
+        day -= dt.timedelta(days=1)
+    return count
+
+
+def kind_of(prop: dict) -> str:
+    return "code" if prop.get("exercise") else "quiz" if prop.get("quiz") \
+        else "read"
+
+
+def course(subject: str, now: Optional[float] = None) -> dict:
+    """SUBJECT as a course: its path, groundwork first, each step known,
+    up next, to review, or waiting on what it needs; and which is next."""
+
+    now = time.time() if now is None else now
+    held = describe(subject)
+    data = _subject(_load(), subject)
+    props = data["props"]
+    nexts = plan(subject, 1, now)
+    current = nexts[0]["id"] if nexts else None
+    steps = []
+    for p in held["propositions"]:
+        prop = props[p["id"]]
+        if passed(prop):
+            state = "review" if prop["due"] and prop["due"] <= now \
+                else "known" if prop["known"] >= KNOWN else "passed"
+        elif all(passed(props[n]) for n in prop["needs"]):
+            state = "ready"
+        else:
+            state = "locked"
+        steps.append({"id": p["id"], "title": title_of(p["id"], prop),
+                      "kind": kind_of(prop), "state": state,
+                      "known": prop["known"]})
+    return {"subject": held["subject"], "key": _key(subject),
+            "known": held["known"], "of": held["of"],
+            "passed": sum(1 for p in props.values() if passed(p)),
+            "xp": data.get("xp", 0),
+            "streak": streak(data.get("days", []),
+                             local_day(now)),
+            "steps": steps, "current": current}
+
+
+def step(subject: str, pid: str) -> dict:
+    """One step, to show: its lesson, and its question or exercise,
+    without the quiz's answer."""
+
+    prop = _subject(_load(), subject)["props"].get(_key(pid))
+    if prop is None:
+        raise TutorError(f"There is no lesson {pid!r} in {subject!r}.")
+    quiz = prop.get("quiz")
+    task = prop.get("exercise")
+    return {"id": _key(pid), "title": title_of(_key(pid), prop),
+            "kind": kind_of(prop), "text": prop["text"],
+            "lesson": prop.get("lesson") or "",
+            "known": prop["known"], "seen": prop["seen"],
+            "quiz": {"question": quiz["question"],
+                     "choices": quiz["choices"]} if quiz else None,
+            "exercise": {k: task[k] for k in
+                         ("task", "language", "expect", "match",
+                          "starter")} if task else None}
+
+
+def answer(subject: str, pid: str, choice: int,
+           now: Optional[float] = None) -> dict:
+    """A tapped answer to PID's quiz, marked and measured."""
+
+    prop = _subject(_load(), subject)["props"].get(_key(pid))
+    if prop is None or not prop.get("quiz"):
+        raise TutorError(f"{pid} has no question to answer.")
+    quiz = prop["quiz"]
+    right = int(choice) == quiz["answer"]
+    return {"right": right, "answer": quiz["answer"],
+            "explain": quiz["explain"],
+            "measured": measure(subject, pid, right, now)}
+
+
+def understood(subject: str, pid: str, now: Optional[float] = None) -> dict:
+    """A step with nothing to answer, read: it counts as known."""
+
+    now = time.time() if now is None else now
+    with _lock:
+        data = _load()
+        props = _subject(data, subject)["props"]
+        prop = props.get(_key(pid))
+        if prop is None:
+            raise TutorError(f"There is no lesson {pid!r} in {subject!r}.")
+        if kind_of(prop) != "read":
+            raise TutorError(f"{pid} is answered, not just read.")
+        prop.update(known=max(prop["known"], KNOWN), seen=prop["seen"] + 1,
+                    streak=max(prop["streak"], 1), due=now + 7 * DAY)
+        held = _subject(data, subject)
+        held["days"] = sorted(set(held.get("days", []))
+                              | {local_day(now).isoformat()})
+        workspace._write(FILE, data)
+    return {"id": _key(pid), "known": prop["known"]}
