@@ -5943,6 +5943,8 @@ def _keep(
                     watch_tick()
             with contextlib.suppress(OSError, SparkError):
                 event_tick()
+            if ticks % CHECK_EVERY_TICKS == 0:
+                _journal_tick()
             for spark in due():
                 _safe_shift(spark.id, prepare, announce)
 
@@ -5956,6 +5958,20 @@ def _keep(
     if holding:
         _give_floor()
     return False
+
+
+def _journal_tick() -> None:
+    """The journal, caught up once a day by whichever keeper holds the
+    floor: a day's chats written up once the day is over."""
+
+    from . import journal
+    from . import tools as flash_tools  # deferred: avoids a module cycle
+
+    host = flash_tools.OLLAMA_HOST or subagents.OLLAMA_HOST_DEFAULT
+    # A model that fails costs today's write-up, not the keeper: it is
+    # tried again tomorrow, with the days it missed.
+    with contextlib.suppress(Exception):
+        journal.tick(lambda: providers.client(host), flash_tools.MODEL_NAME)
 
 
 def _safe_shift(

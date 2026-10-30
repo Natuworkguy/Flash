@@ -1994,6 +1994,16 @@ body.page-projects #dock, body.page-settings #dock, body.page-tool #dock { displ
 }
 .memories li.fresh { animation: fresh 1.8s var(--ease) both; animation-delay: calc(var(--i, 0) * 0.04s); }
 @keyframes fresh { 0% { opacity: 0; transform: translateY(6px); background: color-mix(in srgb, var(--accent) 16%, transparent); } 25% { opacity: 1; transform: none; } 100% { background: transparent; } }
+.journal-tools { display: grid; gap: 10px; margin-bottom: 8px; }
+.journal-tools .setting-row { max-width: none; width: 100%; margin: 0; }
+.journal-search input { width: 100%; }
+.journal-entry { border: 1px solid var(--border); border-radius: 14px; background: var(--surface); padding: 12px 16px; margin-top: 10px; }
+.journal-entry summary { cursor: pointer; font-weight: 600; font-size: 14px; list-style: none; display: flex; align-items: center; gap: 8px; }
+.journal-entry summary::-webkit-details-marker { display: none; }
+.journal-entry summary::before { content: ""; width: 6px; height: 6px; border-right: 1.5px solid var(--text-3); border-bottom: 1.5px solid var(--text-3); transform: rotate(-45deg); transition: transform 0.15s; }
+.journal-entry[open] summary::before { transform: rotate(45deg); }
+.journal-entry .md { margin-top: 8px; font-size: 14px; }
+.journal-entry .md ul { margin: 0; padding-left: 20px; }
 .mem-empty { border: 1px dashed var(--border-strong); border-radius: 14px; padding: 28px 22px; text-align: center; color: var(--text-3); font-size: 14px; }
 .mem-empty b { display: block; color: var(--text); font-size: 15px; font-weight: 600; margin-bottom: 6px; }
 .mem-empty .btn { margin-top: 14px; }
@@ -3711,6 +3721,7 @@ select:not([multiple]) { -webkit-appearance: none; appearance: none; background-
     <button class="side-row" id="briefing-btn" data-tip="Briefing" data-keys="Alt B"></button>
     <button class="side-row" id="projects-btn" data-tip="Projects" data-keys="Alt P"></button>
     <button class="side-row" id="skills-btn" data-tip="Skills"></button>
+    <button class="side-row" id="journal-btn" data-tip="Journal"></button>
     <button class="side-row" id="sparks-btn" data-tip="Sparks"></button>
     <div id="spark-roster" aria-label="Your sparks"></div>
     <button class="side-row" id="extensions-btn" data-tip="Extensions"></button>
@@ -4117,7 +4128,7 @@ function routeTo(path) {
   } else if ((m = path.match(/^\/settings(?:\/(general|usage|memory|email|connectors|security))?\/?$/))) {
     view = "settings";
     settingsTab = m[1] || "general";
-  } else if ((m = path.match(/^\/(projects|skills|sparks|extensions)\/?$/))) {
+  } else if ((m = path.match(/^\/(projects|skills|journal|sparks|extensions)\/?$/))) {
     view = m[1];
   } else if (/^\/briefing\/?$/.test(path)) {
     // The briefing, over a new chat: it opens once the page is in.
@@ -8015,11 +8026,11 @@ function drawPage() {
   document.body.classList.toggle("page-projects", view === "projects");
   document.body.classList.toggle("page-project", view === "project");
   document.body.classList.toggle("page-settings", view === "settings");
-  document.body.classList.toggle("page-tool", view === "skills" || view === "sparks" || view === "extensions");
+  document.body.classList.toggle("page-tool", view === "skills" || view === "journal" || view === "sparks" || view === "extensions");
   messagesEl.textContent = "";
   streamNode = null;
   $("#crumb").hidden = true;
-  const pages = { projects: drawProjects, settings: drawSettings, skills: drawSkillsPage, sparks: drawSparksPage, extensions: drawExtensionsPage };
+  const pages = { projects: drawProjects, settings: drawSettings, skills: drawSkillsPage, journal: drawJournalPage, sparks: drawSparksPage, extensions: drawExtensionsPage };
   (pages[view] || drawProject)();
   renderPending();
   renderBtw();
@@ -8968,6 +8979,74 @@ function toolPage(title, draw) {
 }
 const drawSkillsPage = () => toolPage("Skills", drawSkills);
 const drawExtensionsPage = () => toolPage("Extensions", drawExtensions);
+const drawJournalPage = () => toolPage("Journal", drawJournal);
+
+// Journal --------------------------------------------------------------------
+// A few lines on each day, written by Flash once the day is over, from the
+// chats it held; finished weeks and months get a summary of their own.
+
+async function drawJournal(body) {
+  let r;
+  try { r = await command("journal"); } catch (error) { showFailure(error); return; }
+  if (!body.isConnected) return;
+  body.innerHTML = `<div class="mem-head"><p class="sub">Each night Flash writes up the day's chats: what you worked on, what was decided, what was left open. Finished weeks and months get a summary of their own, and Flash can look things up here when you ask what you were doing.</p></div><div class="journal-tools"><label class="field journal-search"><input type="search" placeholder="Search the journal" aria-label="Search the journal"></label></div><div class="host"></div><div class="mem-path"></div>`;
+  const keep = el("button", "setting-row", `<span class="what"><b>Keep a journal</b><span>Written once a day by the Flash that runs your sparks, with the model you use. Off, nothing new is written; what is here stays.</span></span><span class="switch" aria-hidden="true"></span>`);
+  keep.type = "button";
+  keep.setAttribute("role", "switch");
+  keep.setAttribute("aria-checked", !!r.on);
+  keep.onclick = async () => {
+    const on = keep.getAttribute("aria-checked") !== "true";
+    keep.setAttribute("aria-checked", on);
+    try { r.on = (await command("journal-setting", on ? "on" : "off")).on; }
+    catch (error) { keep.setAttribute("aria-checked", !on); showFailure(error); }
+  };
+  body.querySelector(".journal-tools").appendChild(keep);
+  const host = body.querySelector(".host");
+  const all = () => {
+    host.textContent = "";
+    if (!r.entries.length) {
+      host.innerHTML = `<div class="mem-empty"><b>Nothing written yet</b>The first entry comes the night after a day with chats in it.</div>`;
+      return;
+    }
+    const kinds = [["month", "Months"], ["week", "Weeks"], ["day", "Days"]];
+    for (const [kind, label] of kinds) {
+      const these = r.entries.filter((e) => e.kind === kind);
+      if (!these.length) continue;
+      host.appendChild(el("h2", "settings-section settings-gap", label));
+      these.forEach((entry, i) => host.appendChild(journalEntry(entry, i, kind !== "day")));
+    }
+  };
+  all();
+  const search = body.querySelector(".journal-search input");
+  let asked = 0;
+  search.oninput = () => {
+    const query = search.value.trim();
+    const mine = ++asked;
+    if (!query) { all(); return; }
+    setTimeout(async () => {
+      if (mine !== asked) return;
+      let found;
+      try { found = (await command("journal-search", query)).found; } catch (error) { showFailure(error); return; }
+      if (mine !== asked || !body.isConnected) return;
+      host.textContent = "";
+      if (!found.length) { host.innerHTML = `<div class="mem-empty"><b>Nothing found</b>No entry has all of those words.</div>`; return; }
+      found.forEach((hit, i) => host.appendChild(journalEntry({ heading: hit.heading, text: hit.lines.join("\n") }, i, false)));
+    }, 180);
+  };
+  const days = r.entries.filter((e) => e.kind === "day").length;
+  body.querySelector(".mem-path").textContent = `${days} day${days === 1 ? "" : "s"}${r.more ? ` shown, ${r.more} older (search finds them)` : ""} · saved in ${r.path}`;
+}
+
+function journalEntry(entry, i, folded) {
+  const box = el("details", "journal-entry");
+  box.open = !folded;
+  box.style.setProperty("--i", i);
+  const head = box.appendChild(el("summary"));
+  head.textContent = entry.heading;
+  const text = String(entry.text || "").replace(/^# .*\n+/, "");
+  box.appendChild(el("div", "md", markdown(text)));
+  return box;
+}
 
 // Sparks ---------------------------------------------------------------------
 // Agents that keep working on one goal, on a schedule, for as long as Flash
@@ -13800,6 +13879,7 @@ async function importMemory() {
 function markSide() {
   $("#projects-btn").classList.toggle("active", view === "projects" || view === "project");
   $("#skills-btn").classList.toggle("active", view === "skills");
+  $("#journal-btn").classList.toggle("active", view === "journal");
   $("#sparks-btn").classList.toggle("active", view === "sparks");
   $("#extensions-btn").classList.toggle("active", view === "extensions");
   $("#settings-btn").classList.toggle("active", view === "settings");
@@ -19339,6 +19419,7 @@ const ACTIONS = [
   { label: "Update Flash", keys: "", slash: "/update", run: () => { showSettings("general"); checkUpdates(); } },
   { label: "Briefing", keys: "Alt B", slash: "/briefing", run: openBriefing },
   { label: "Skills", keys: "", slash: "/skills", run: () => showPage("skills") },
+  { label: "Journal: what you did, day by day", keys: "", slash: "/journal", run: () => showPage("journal") },
   { label: "Sparks", keys: "", slash: "/sparks", run: () => showPage("sparks") },
   { label: "Background", keys: "", slash: "/background", run: () => showSettings("general") },
   { label: "Extensions", keys: "", slash: "/extensions", run: () => showPage("extensions") },
@@ -20134,6 +20215,7 @@ $("#spark-btn").onclick = (e) => {
 };
 $("#projects-btn").onclick = showProjects;
 $("#skills-btn").onclick = () => showPage("skills");
+$("#journal-btn").onclick = () => showPage("journal");
 $("#sparks-btn").onclick = () => showPage("sparks");
 $("#extensions-btn").onclick = () => showPage("extensions");
 $("#crumb").onclick = () => { const c = chats.get(current); const id = c ? c.project : viewProject; if (id) openProject(id, "back"); };
@@ -20270,6 +20352,7 @@ $("#top-new").innerHTML = icon("compose");
 $("#new-chat .plus").innerHTML = icon("plus");
 $("#projects-btn").innerHTML = icon("folder") + "<span>Projects</span>";
 $("#skills-btn").innerHTML = icon("book") + "<span>Skills</span>";
+$("#journal-btn").innerHTML = icon("calendar") + "<span>Journal</span>";
 $("#sparks-btn").innerHTML = icon("spark") + "<span>Sparks</span><span class=\"count\"></span><span class=\"fold\" role=\"button\" tabindex=\"0\" hidden>" + icon("chevDown") + "</span>";
 // The chevron folds the roster; the rest of the row opens the page.
 $("#sparks-btn .fold").addEventListener("click", (e) => {

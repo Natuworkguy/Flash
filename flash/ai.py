@@ -5410,6 +5410,41 @@ def _forks_command(arg: str, messages: list) -> None:
     _recap(messages, 1)
 
 
+def _journal_command(arg: str, client: "ollama.Client") -> None:
+    """/journal: the latest entries. /journal 2026-10 reads one (a day,
+    a week like 2026-W44, or a month); /journal now writes up the days
+    not written yet; /journal on|off; anything else searches it."""
+
+    from . import journal
+
+    words = arg.lower().split()
+    if words in (["on"], ["off"]):
+        set_config_var(journal.SETTING, "1" if words[0] == "on" else "0")
+        console.print(Text(
+            "Flash keeps a journal of your days." if words[0] == "on"
+            else "The journal is off: nothing new is written.", style=DIM))
+        return
+    if words == ["now"]:
+        if not Config.model:
+            show_error("Model is not set. Use `/model <model>` to set it.")
+            return
+        written = journal.catch_up(
+            client, Config.model, options=_chat_options(),
+            doing=lambda text: tool_line(text))
+        console.print(Text(
+            f"Wrote {len(written)} entr{'y' if len(written) == 1 else 'ies'}."
+            if written else "Nothing to write: every day with chats in it "
+            "has its entry. Today is written once it is over.", style=DIM))
+        return
+    if not arg:
+        said = journal.answer("list")
+    elif journal._KEY_RE.match(arg):
+        said = journal.answer("read", arg)
+    else:
+        said = journal.answer("search", query=arg)
+    console.print(Markdown(said) if said.startswith("#") else Text(said))
+
+
 def _review_command(arg: str, messages: list[dict]) -> None:
     """/review [branch|commit|a..b]: the change reviewed for bugs. What
     it found joins the conversation as Flash's answer, so "fix them" is
@@ -7049,6 +7084,10 @@ def _main() -> None:
 
             if uin == "/context":
                 _render_context(messages)
+                continue
+
+            if uin == "/journal" or uin.startswith("/journal "):
+                _journal_command(uin[len("/journal"):].strip(), client)
                 continue
 
             if uin == "/review" or uin.startswith("/review "):

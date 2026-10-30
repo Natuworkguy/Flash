@@ -523,6 +523,26 @@ can only judge are left out of the chat models above them. `/systemone`
 shows how many calls it has reviewed and stopped this session, and the
 status bar reads `auto + S1` while it is at work.
 
+### Journal
+
+Once a day is over, Flash writes it up: a few bullets on what you
+worked on, what was decided and what was left open, from that day's
+chats in the browser and the terminal. A finished week gets a summary
+of its days, and a finished month one of its own. Ask "what was I
+doing in March?" or "when did I fix the login bug?" and Flash looks it
+up with its `journal` tool.
+
+The Journal page in the sidebar shows the entries and searches them,
+and has the switch to turn it off. In the terminal, `/journal` lists
+them, `/journal 2026-10` reads a month (or a day, or a week like
+`2026-W44`), any other words search, and `/journal now` writes up the
+days not written yet. A day with no chats gets no entry.
+
+It is written by the Flash that runs your sparks, with the model you
+use, so it needs a Flash open (or sparks always on). Days missed while
+none was open are caught up, a week back at most. Entries are Markdown
+files in `~/.flash/journal`.
+
 ### Sparks
 
 A sub-agent does one job and is gone. A spark keeps a job. Make one with

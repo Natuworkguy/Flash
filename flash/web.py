@@ -173,6 +173,7 @@ HTML_SANDBOX = "sandbox allow-scripts allow-forms allow-popups allow-modals"
 # opens whatever the address names: a chat, a project, a settings tab.
 PAGE_PATHS = re.compile(
     r"^/(?:c/[0-9a-f]{8}|p/[0-9a-f]{8}|projects|skills|sparks|extensions"
+    r"|journal"
     r"|briefing"
     r"|settings(?:/(?:general|usage|memory|email|connectors|security))?)?"
     r"/?$"
@@ -3179,6 +3180,10 @@ def inside(folder: Optional[str]):
         os.chdir(before)
 
 
+# The days the journal page shows; older ones are a search away.
+JOURNAL_DAYS_SHOWN = 60
+
+
 # Where a chat in the browser is, for what the prompt says differs from
 # the terminal: there is no ! here to run a command with.
 WEB_PROMPT = (
@@ -4665,6 +4670,41 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
     if name == "review":
         session.review_chat(session.chat(chat_id), arg)
         return {}
+
+    if name == "journal":
+        from . import journal
+
+        keys = journal.entries()
+        days = [k for k in keys if k.count("-") == 2][:JOURNAL_DAYS_SHOWN]
+        shown = days + [k for k in keys if k.count("-") != 2]
+        return {
+            "on": journal.enabled(),
+            "entries": [
+                {"key": k, "heading": journal.heading(k),
+                 "kind": "week" if "W" in k else "day" if k.count("-") == 2
+                 else "month", "text": journal.read(k)}
+                for k in shown
+            ],
+            "more": max(0, len([k for k in keys if k.count("-") == 2])
+                        - len(days)),
+            "path": str(journal.folder()),
+        }
+
+    if name == "journal-search":
+        from . import journal
+
+        return {"found": [
+            {"key": k, "heading": journal.heading(k), "lines": lines}
+            for k, lines in journal.search(arg)
+        ]}
+
+    if name == "journal-setting":
+        from . import journal
+
+        on = arg.lower() in ("on", "1", "true")
+        ai.set_config_var(journal.SETTING, "1" if on else "0")
+        session.hub.publish({"type": "status"})
+        return {"on": on}
 
     if name == "retry":
         session.retry(session.chat(chat_id))

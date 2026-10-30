@@ -1596,6 +1596,21 @@ def review_code(target: Any = "", model: str = "") -> str:
     return said
 
 
+def journal_tool(action: str = "list", key: str = "",
+                 query: str = "") -> str:
+    """Read the user's journal: its entries, one of them, or a search."""
+
+    from . import journal
+
+    action = str(action or "list").strip().lower()
+    what = str(key or query or "").strip()
+    tool_line(f"Journal({action}{' ' + what if what else ''})")
+    said = journal.answer(action, str(key or ""), str(query or ""))
+    first = said.splitlines()[0] if said else ""
+    tool_result(first, style=ERROR if said.startswith("Error") else DIM)
+    return said
+
+
 def _plan_steps(steps: Any) -> list[str]:
     """Coerce whatever the model sent into a list of step descriptions.
 
@@ -7057,6 +7072,38 @@ tools: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "journal",
+            "description": (
+                "The user's journal: a few lines on each day, written "
+                "from their chats once the day was over, with a summary "
+                "of each finished week and month. Use it for what they "
+                "did, worked on or decided on a day or in a span of time "
+                "(\"what was I doing in March?\", \"when did I fix the "
+                "login bug?\"). list shows the entries; read one by its "
+                "key; search finds the ones with every word given."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string",
+                               "enum": ["list", "read", "search"]},
+                    "key": {
+                        "type": "string",
+                        "description": (
+                            "For read: a day (2026-10-29), a week "
+                            "(2026-W44) or a month (2026-10)."
+                        ),
+                    },
+                    "query": {"type": "string",
+                              "description": "For search: the words."},
+                },
+                "required": ["action"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "review_code",
             "description": (
                 "Review a code change for bugs, from git: the "
@@ -7556,6 +7603,7 @@ FUNCTIONS = {
     "get_date": get_date,
     "refresh_tools": refresh_tools,
     "review_code": review_code,
+    "journal": journal_tool,
     "plan": plan_tool,
     "check_step": check_step,
     "remember": remember,

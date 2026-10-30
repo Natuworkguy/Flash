@@ -153,6 +153,7 @@ Commands
 | `/skills` | What Flash has learned |
 | `/compact` | Summarize to free up context |
 | `/review` | Review your uncommitted changes for bugs (or a branch: `/review main`) |
+| `/journal` | What you did, day by day, written from your chats |
 | `/extension` | List, install or remove extensions |
 | `!<command>` | Run a shell command yourself |
 

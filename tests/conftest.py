@@ -81,6 +81,13 @@ def isolated_home(tmp_path_factory, monkeypatch):
     monkeypatch.setattr(computeruse, "wake", lambda force=False: False)
     # The terminal's kept conversations, and the one it is on.
     monkeypatch.setattr(sessions, "FLASH_DIR", home / ".flash")
+    # The journal, written by the sparks keeper: in the temp home, and
+    # off unless a test turns it on, so no keeper asks a fake model to
+    # write one.
+    from flash import journal
+
+    monkeypatch.setattr(journal, "FLASH_DIR", home / ".flash")
+    monkeypatch.setenv(journal.SETTING, "0")
     monkeypatch.setattr(ai, "_session", None)
     # The system prompt lists the saved design systems.
     monkeypatch.setattr(
