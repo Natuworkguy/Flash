@@ -152,6 +152,7 @@ Commands
 | `/agents` | Watch sub-agents work live |
 | `/skills` | What Flash has learned |
 | `/compact` | Summarize to free up context |
+| `/review` | Review your uncommitted changes for bugs (or a branch: `/review main`) |
 | `/extension` | List, install or remove extensions |
 | `!<command>` | Run a shell command yourself |
 

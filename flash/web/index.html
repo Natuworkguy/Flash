@@ -17572,6 +17572,7 @@ function openPlus() {
   for (const b of extButtonsAt("composer")) rows.push({ html: `${icon(ICON[b.icon] ? b.icon : "puzzle")}<span class="label">${esc(b.label)}</span><span class="desc">${esc(b.extension || "")}</span>`, act: () => pressExt(b, input.value.trim()) });
   rows.push({ html: `${icon("chat")}<span class="label">Ask on the side</span><span class="desc">/btw, without interrupting</span>`, act: () => { input.value = "/btw " + input.value.replace(/^\/btw\s*/, ""); autosize(); updateSend(); input.focus(); input.setSelectionRange(input.value.length, input.value.length); } });
   rows.push({ html: `${icon("users")}<span class="label">Debate it</span><span class="desc">/debate, two sides argue it out</span>`, act: () => { const q = input.value.replace(/^\/debate\s*/, "").trim(); clearInput(); debateForm(q); } });
+  rows.push({ html: `${icon("code")}<span class="label">Review my changes</span><span class="desc">/review, for bugs</span>`, act: () => reviewChat("") });
   rows.push({ html: `${icon("book")}<span class="label">Use a skill</span><span class="desc">${icon("chevRight")}</span>`, act: openSkillPicker });
   rows.push({ html: `${icon("spark")}<span class="label">Sparks</span><span class="desc">${icon("chevRight")}</span>`, act: openSparkPicker });
   if (!input.value.trim()) rows.push({ html: `${icon("slash")}<span class="label">Commands</span>`, act: () => { input.value = "/"; autosize(); input.focus(); showSlash(); } });
@@ -18334,6 +18335,16 @@ async function clearChat() {
 async function compactChat() {
   if (!current) return;
   try { await command("compact"); } catch (error) { showFailure(error); }
+}
+
+// A review of the uncommitted changes, or of TARGET (a branch, commit
+// or range), in this chat, in its project's folder; what it finds is
+// Flash's answer, so the next message can be "fix them".
+async function reviewChat(target = "") {
+  try {
+    if (!current) await createChat(viewProject || "", viewSpark || "");
+    await command("review", target);
+  } catch (error) { showFailure(error); }
 }
 
 async function deleteChat(id = current, anchor = null) {
@@ -19354,6 +19365,7 @@ const ACTIONS = [
   { label: "Rename chat", keys: "F2", slash: "/rename", run: rename },
   { label: "Pin or unpin this chat", keys: "", slash: "/pin", run: () => pinChat() },
   { label: "Summarize this chat to free up room", keys: "", slash: "/compact", run: compactChat },
+  { label: "Review your changes for bugs", keys: "", slash: "/review", run: () => reviewChat("") },
   { label: "Clear this chat", keys: "Alt L", slash: "/clear", run: clearChat },
   { label: "Delete this chat", keys: "Alt Shift D", slash: "/delete", run: () => deleteChat() },
   { label: "Show or hide the sidebar", keys: "Ctrl B", slash: "/sidebar", run: toggleSide },
@@ -19432,6 +19444,7 @@ function runSlash(text) {
     return true;
   }
   if (word === "/compare") { clearInput(); startCompare(arg); return true; }
+  if (word === "/review") { clearInput(); reviewChat(arg); return true; }
   if (word === "/debate") {
     clearInput();
     if (!arg) { debateForm(); return true; }

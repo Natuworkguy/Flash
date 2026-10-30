@@ -5410,6 +5410,26 @@ def _forks_command(arg: str, messages: list) -> None:
     _recap(messages, 1)
 
 
+def _review_command(arg: str, messages: list[dict]) -> None:
+    """/review [branch|commit|a..b]: the change reviewed for bugs. What
+    it found joins the conversation as Flash's answer, so "fix them" is
+    the next message rather than a paste."""
+
+    from .tools import review_code
+
+    if not Config.model:
+        show_error("Model is not set. Use `/model <model>` to set it.")
+        return
+    said = review_code(arg)
+    if said.startswith("Error:"):
+        return
+    messages += [
+        _message("user", "Review " + (arg or "my uncommitted changes")
+                 + " for bugs."),
+        _message("assistant", said),
+    ]
+
+
 def _think_command(arg: str) -> None:
     """/think auto on|off: whether Flash may turn its thinking on by
     itself, for a message it judges needs it. Bare, says which it is."""
@@ -7029,6 +7049,10 @@ def _main() -> None:
 
             if uin == "/context":
                 _render_context(messages)
+                continue
+
+            if uin == "/review" or uin.startswith("/review "):
+                _review_command(uin[len("/review"):].strip(), messages)
                 continue
 
             if uin == "/compact":

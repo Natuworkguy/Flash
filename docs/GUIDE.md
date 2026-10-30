@@ -305,6 +305,15 @@ python run.py
 - `/clear`: Clear the conversation history.
 - `/undo`: Take back the file changes from the last turn.
 - `/compact`: Summarize the conversation to free up room. It works in the browser too, from the message box or the command palette.
+- `/review`: Review your uncommitted changes for bugs. `/review main`
+  reviews what this branch adds to main, and `/review a..b` a range of
+  commits. One pass lists what might be wrong, a second tries to
+  explain each one away, and only what survives is shown, at its file
+  and line, with how sure it is. The findings stay in the conversation,
+  so "fix them" is the next message. In the browser it is `/review`, or
+  Review my changes in the + menu, and runs in the chat's project
+  folder. Flash can also run it on its own work with the `review_code`
+  tool.
 - `/context`: Show how much of the context window is in use.
 - `/stats`: What Flash has done for you so far, in the terminal and the
   web UI together: replies, tokens, and how much of it ran on a local

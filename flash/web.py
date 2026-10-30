@@ -1069,44 +1069,26 @@ class Session:
         workspace.delete_chat(chat.id)
         self.emit(chat, {"type": "cleared"})
 
-    def compact_chat(self, chat: Chat) -> None:
-        """/compact: CHAT so far, summarized, in place of its messages,
-        to free up room. It runs on a thread of its own, with the chat
-        busy meanwhile, so a message sent while it works waits its turn."""
-
-        from . import ai  # deferred: ai imports half of Flash
-        from . import tools as flash_tools
+    def _chat_job(self, chat: Chat, job: Callable[[], None]) -> None:
+        """Run JOB for CHAT on a thread of its own, its tool output in
+        the chat, as a turn's would be. The chat is busy meanwhile, so a
+        message sent while it works waits its turn, and runs after."""
 
         with self._lock:
             if chat.busy or chat.queued:
-                raise ValueError(
-                    "Wait for the reply to finish, then compact.")
-            if not chat.messages:
-                raise ValueError("There is nothing to compact yet.")
-            if not chat_model(chat):
-                raise ValueError("No model is set. Pick one with Alt+M.")
+                raise ValueError("Wait for the reply to finish first.")
             chat.busy = True
         self.emit(chat, {"type": "busy", "busy": True})
 
         def work() -> None:
             following = None
             try:
+                found = (workspace.project(chat.project)
+                         if chat.project else None)
                 with self.turn_lock, \
-                        capture_tool_output(_sink(self, chat)):
-                    flash_tools.tool_line(
-                        f"Compact({len(chat.messages)} messages)")
-                    was = context.total_tokens(chat.messages)
-                    summary = ai._summarize(
-                        ai.console, ai._client(), list(chat.messages))
-                    if summary is None:
-                        flash_tools.tool_result(
-                            "The model returned no summary; the chat is "
-                            "kept as it was.", style=WARN)
-                    else:
-                        chat.messages[:] = [context.summary_message(summary)]
-                        flash_tools.tool_result(
-                            f"{was} tokens of history down to "
-                            f"{context.total_tokens(chat.messages)}")
+                        capture_tool_output(_sink(self, chat)), \
+                        inside(found.path if found else None):
+                    job()
             except Exception as exc:  # noqa: BLE001
                 self.emit(chat, {
                     "type": "error",
@@ -1128,6 +1110,66 @@ class Session:
                 )
 
         threading.Thread(target=work, daemon=True).start()
+
+    def compact_chat(self, chat: Chat) -> None:
+        """/compact: CHAT so far, summarized, in place of its messages,
+        to free up room."""
+
+        from . import ai  # deferred: ai imports half of Flash
+        from . import tools as flash_tools
+
+        if chat.busy or chat.queued:
+            raise ValueError("Wait for the reply to finish, then compact.")
+        if not chat.messages:
+            raise ValueError("There is nothing to compact yet.")
+        if not chat_model(chat):
+            raise ValueError("No model is set. Pick one with Alt+M.")
+
+        def job() -> None:
+            flash_tools.tool_line(f"Compact({len(chat.messages)} messages)")
+            was = context.total_tokens(chat.messages)
+            summary = ai._summarize(
+                ai.console, ai._client(), list(chat.messages))
+            if summary is None:
+                flash_tools.tool_result(
+                    "The model returned no summary; the chat is kept as "
+                    "it was.", style=WARN)
+                return
+            chat.messages[:] = [context.summary_message(summary)]
+            flash_tools.tool_result(
+                f"{was} tokens of history down to "
+                f"{context.total_tokens(chat.messages)}")
+
+        self._chat_job(chat, job)
+
+    def review_chat(self, chat: Chat, target: str = "") -> None:
+        """/review: the change TARGET names (the uncommitted one by
+        default), reviewed for bugs in CHAT, in its project's folder.
+        What it found joins the conversation, as Flash's answer to
+        being asked, so "fix them" is the obvious next message."""
+
+        from . import tools as flash_tools
+
+        if chat.busy or chat.queued:
+            raise ValueError("Wait for the reply to finish, then review.")
+        model = chat_model(chat)
+        if not model:
+            raise ValueError("No model is set. Pick one with Alt+M.")
+        target = " ".join(str(target or "").split())
+
+        def job() -> None:
+            said = flash_tools.review_code(target, model=model)
+            if said.startswith("Error:"):
+                return
+            asked = "Review " + (f"{target}" if target
+                                 else "my uncommitted changes") \
+                + " for bugs."
+            chat.messages += [
+                {"role": "user", "content": asked},
+                {"role": "assistant", "content": said},
+            ]
+
+        self._chat_job(chat, job)
 
     def emit(self, chat: Chat, event: dict) -> dict:
         event = {**event, "chat": chat.id}
@@ -4618,6 +4660,10 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
 
     if name == "compact":
         session.compact_chat(session.chat(chat_id))
+        return {}
+
+    if name == "review":
+        session.review_chat(session.chat(chat_id), arg)
         return {}
 
     if name == "retry":
