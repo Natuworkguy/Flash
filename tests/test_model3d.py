@@ -464,3 +464,52 @@ def test_the_result_names_what_moves():
     assert "1 part moves: blade (spin, looping every 2 s)" in (  # nosec B101
         model3d.describe(built)
     )
+
+
+def test_parts_can_say_what_they_are_and_move_when_clicked():
+    built = model3d.build_parts([
+        {"shape": "box", "name": "door", "size": [0.6, 1, 0.03],
+         "position": [0, 0.5, 0], "info": "  The front   door. ",
+         "on_click": {"turn": [0, 90, 0], "pivot": [0.3, 0.5, 0]}},
+        {"shape": "box", "name": "drawer", "size": [0.5, 0.2, 0.4],
+         "position": [0, 1.2, 0], "on_click": {"move": [0, 0, 0.3],
+                                               "seconds": 9}},
+        {"shape": "box", "name": "plain", "size": 0.2},
+    ])
+    assert built[0].info == "The front door."
+    assert built[0].click.extras() == {
+        "move": [0.0, 0.0, 0.0], "turn": [0.0, 90.0, 0.0],
+        "pivot": [0.3, 0.5, 0.0], "seconds": 0.6}
+    # Its own centre when no pivot is given, and five seconds at most.
+    assert built[1].click.pivot == (0.0, 1.2, 0.0)
+    assert built[1].click.seconds == 5.0
+
+    nodes = {n["name"]: n for n in _read_glb(model3d.to_glb(built))["nodes"]}
+    assert nodes["door"]["extras"]["flash"] == {
+        "name": "door", "info": "The front door.",
+        "click": built[0].click.extras()}
+    assert "info" not in nodes["drawer"]["extras"]["flash"]
+    assert "extras" not in nodes["plain"]
+
+
+@pytest.mark.parametrize("spec, message", [
+    ({"on_click": "open"}, "on_click must be an object"),
+    ({"on_click": {"spin": 1}}, "on_click has no spin"),
+    ({"on_click": {"seconds": 1}}, "needs a move or a turn"),
+    ({"on_click": {"move": [0, 1, 0]}, "animate": {"spin": {}}},
+     "not both"),
+    ({"info": "x" * 301}, "at most 300"),
+])
+def test_bad_interactions_are_refused(spec, message):
+    with pytest.raises(model3d.ModelError, match=message):
+        model3d.build_parts([{"shape": "box", "size": 1, **spec}])
+
+
+def test_the_result_says_what_clicks(tmp_path, monkeypatch):
+    monkeypatch.setattr(tools, "_model_preview", lambda path: "")
+    said = make_3d_model(str(tmp_path / "box.glb"), [
+        {"shape": "box", "name": "lid", "size": 1, "info": "A lid.",
+         "on_click": {"move": [0, 0.5, 0]}},
+    ])
+    assert "In the viewer: Clicking lid moves it" in said
+    assert "1 part say what they are" in said

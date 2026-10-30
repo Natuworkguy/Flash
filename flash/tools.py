@@ -4054,8 +4054,19 @@ def make_3d_model(
         + (f": {note}" if note else "")
     )
     shown = _show_model(model_path, label)
+    clicks = [p.name for p in built if p.click]
+    told = sum(1 for p in built if p.info)
+    more = " and more" if len(clicks) > 8 else ""
+    interactive = (
+        (f"Clicking {', '.join(clicks[:8])}{more} moves it, and clicking "
+         "again moves it back. " if clicks else "")
+        + (f"{told} part{plural(told)} say what they are when pointed "
+           "at. " if told else "")
+    )
+    if interactive:
+        interactive = "In the viewer: " + interactive.strip() + "\n"
     return (
-        f"Saved {model_path} ({kilobytes} KB).\n"
+        f"Saved {model_path} ({kilobytes} KB).\n{interactive}"
         f"{model3d.describe(built)}\n{shown}\n{_model_preview(model_path)}"
         "\nTo change it, call make_3d_model again with the whole list "
         "of parts, changed, and the same path."
@@ -5705,6 +5716,10 @@ tools: list[dict[str, Any]] = [
                 "Make it move when the user asks for animation, or when "
                 "the real thing moves (a fan, a clock's hands, a "
                 "windmill, a bouncing ball): give those parts animate. "
+                "Make it interactive when the user wants to explore it, "
+                "or the real thing has parts that open: give parts info "
+                "(shown when pointed at) and on_click (a door opens, a "
+                "drawer slides out, a lid lifts). "
                 "The result gives the model's overall size, "
                 "and a picture of it when you can see images: check both "
                 "and fix what is off. To revise, call again with the "
@@ -5931,6 +5946,37 @@ tools: list[dict[str, Any]] = [
                                         "the model's own. Parts that "
                                         "move together each get the "
                                         "same animate."
+                                    ),
+                                },
+                                "info": {
+                                    "type": "string",
+                                    "description": (
+                                        "What this part is, shown when "
+                                        "the user points at it or taps "
+                                        "it in the viewer, with its "
+                                        "name: a sentence or two (\"The "
+                                        "left ventricle pumps blood to "
+                                        "the body\"). Give every part "
+                                        "worth knowing about one when "
+                                        "the model is for learning or "
+                                        "exploring."
+                                    ),
+                                },
+                                "on_click": {
+                                    "type": "object",
+                                    "description": (
+                                        "What the part does when the "
+                                        "user clicks it, undone by the "
+                                        "next click: move [x,y,z] "
+                                        "metres from rest, turn [x,y,z] "
+                                        "degrees, pivot [x,y,z] the "
+                                        "point in the model it turns "
+                                        "about (a door's hinge edge; "
+                                        "its own centre if left out), "
+                                        "seconds it takes (0.6). Doors "
+                                        "open, drawers slide out, lids "
+                                        "lift, buttons press in. Not "
+                                        "with animate on the same part."
                                     ),
                                 },
                             },

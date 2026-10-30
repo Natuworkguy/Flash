@@ -3219,6 +3219,11 @@ body.resizing-viewer iframe { pointer-events: none; }
 .model-view .model-motion button[data-speed] { min-width: 40px; font-variant-numeric: tabular-nums; }
 .model-view .model-motion input[type="range"] { width: 110px; accent-color: var(--accent); }
 .model-view .model-tools.moving .hint { display: none; }
+/* A part pointed at: its name, what it is, and what a click does. */
+.model-part-card { display: grid; gap: 3px; padding: 9px 12px; border-radius: 12px; background: color-mix(in srgb, var(--surface) 92%, transparent); border: 1px solid var(--border); box-shadow: var(--shadow); backdrop-filter: blur(8px); font-size: 13px; line-height: 1.45; color: var(--text-2); animation: rise-far 0.2s var(--apple) both; }
+.model-part-card b { color: var(--text); font-size: 13.5px; }
+.model-part-card em { font-style: normal; font-size: 12px; color: var(--accent); }
+.model-part-card[hidden] { display: none; }
 @media (max-width: 560px) { .model-view .model-tools .hint { display: none; } }
 
 /* A MIDI file: a piano roll, its tracks, and a transport to play it by.
@@ -6438,8 +6443,15 @@ async function openModel(entry, body) {
   const wire = tools.querySelector("[data-wire]");
   wire.onclick = () => { const on = wire.getAttribute("aria-pressed") !== "true"; press(wire, on); mine.handle.wireframe(on); };
   if (mine.handle.animated) showMotion(mine, view, tools);
+  // Parts that say what they are, or move when clicked: say how.
+  if (mine.handle.told || mine.handle.clickable) {
+    tools.querySelector(".hint").textContent = mine.handle.clickable
+      ? "Click a part to open it · point at one to see what it is"
+      : "Point at a part to see what it is";
+  }
   const size = modelSize(mine.handle);
-  const moves = mine.handle.animated ? ` · moves, ${Number(mine.handle.duration.toPrecision(2))} s loop` : "";
+  const moves = (mine.handle.animated ? ` · moves, ${Number(mine.handle.duration.toPrecision(2))} s loop` : "")
+    + (mine.handle.clickable ? ` · ${mine.handle.clickable} part${mine.handle.clickable === 1 ? "" : "s"} to click` : "");
   if (size) $("#viewer-size").textContent = `${fileKind(entry)} · ${fileSize(entry.size)} · ${size}${moves}`;
 }
 
