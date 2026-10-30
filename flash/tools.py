@@ -1570,6 +1570,32 @@ def ask_system_one(
     return f"System One ({systemone.model()}): {answer}"
 
 
+def review_code(target: Any = "", model: str = "") -> str:
+    """Review a change for bugs: what might be wrong, then each of
+    those checked on its own, and only what holds up reported."""
+
+    from . import ai, review  # deferred: ai imports this module
+
+    target = " ".join(str(target or "").split())
+    model = str(model or MODEL_NAME or "")
+    tool_line(f"Review({target or 'uncommitted changes'})")
+    if not model:
+        result = "Error: no model is set to review with."
+        tool_result(result, style=ERROR)
+        return result
+    try:
+        found = review.review(
+            ai._client(), model, target, options=ai._chat_options(),
+            doing=tool_result,
+        )
+    except review.ReviewError as exc:
+        tool_result(str(exc), style=ERROR)
+        return f"Error: {exc}"
+    said = review.report(found)
+    tool_result(said, style=WARN if found.findings else DIM)
+    return said
+
+
 def _plan_steps(steps: Any) -> list[str]:
     """Coerce whatever the model sent into a list of step descriptions.
 
@@ -7031,6 +7057,34 @@ tools: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "review_code",
+            "description": (
+                "Review a code change for bugs, from git: the "
+                "uncommitted changes by default, or what a branch has "
+                "that another does not, or a range of commits. It reads "
+                "the change, lists what might be wrong, checks each on "
+                "its own, and reports only what holds up, at its file "
+                "and line. Use it when the user asks for a review, or "
+                "before you call a big change of your own done."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "target": {
+                        "type": "string",
+                        "description": (
+                            "Empty for the uncommitted changes; a branch "
+                            "or commit (e.g. main) for what this branch "
+                            "adds to it; or a range like abc123..HEAD."
+                        ),
+                    },
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "plan",
             "description": (
                 "Post the steps you are about to take as a checklist the "
@@ -7501,6 +7555,7 @@ FUNCTIONS = {
     "think_harder": think_harder_tool,
     "get_date": get_date,
     "refresh_tools": refresh_tools,
+    "review_code": review_code,
     "plan": plan_tool,
     "check_step": check_step,
     "remember": remember,

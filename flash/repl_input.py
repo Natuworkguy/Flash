@@ -107,6 +107,8 @@ COMMANDS = [
     ("/clear", "clear saved context"),
     ("/undo", "take back the file changes from the last turn"),
     ("/compact", "summarize the conversation to free up room"),
+    ("/review", "review your uncommitted changes for bugs (or /review "
+                "main, /review a..b)"),
     ("/context", "show how much of the window is in use"),
     ("/stats", "what Flash has done for you so far"),
     ("/notify", "how often the agent may notify you (/notify 4 per 15m)"),

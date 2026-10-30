@@ -14,6 +14,7 @@ Pitfalls:
 - An edit whose old_string appears twice fails: include more surrounding lines.
 - Never delete or skip a failing test to get green.
 - For a task with several steps, post a plan first and tick steps as you go.
+- Before calling a big change done, run review_code on it and fix what it finds.
 
 ## Examples
 
