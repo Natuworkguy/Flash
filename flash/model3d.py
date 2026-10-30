@@ -1028,6 +1028,46 @@ def _rotate(q, v):
     )
 
 
+# What a part may say about itself in the viewer, on hover or a tap.
+MAX_INFO = 300
+CLICK_KEYS = ("move", "turn", "pivot", "seconds")
+
+
+class Click:
+    """A move a part makes when the user clicks it in the viewer, and
+    makes back on the next click: a door swinging open, a drawer sliding
+    out, a lid lifting, a button pressed in. MOVE is metres from where
+    it rests, TURN degrees about the model's own axes, PIVOT the point
+    (in the model) it turns about, its own centre unless given."""
+
+    def __init__(self, spec: Any, centre) -> None:
+        if not isinstance(spec, dict):
+            raise ModelError(
+                "on_click must be an object, such as {\"turn\": [0, 90, "
+                "0], \"pivot\": [0.45, 1, 0]} for a door on its hinge"
+            )
+        unknown = sorted(set(spec) - set(CLICK_KEYS))
+        if unknown:
+            raise ModelError(
+                f"on_click has no {', '.join(unknown)}; it takes "
+                f"{', '.join(CLICK_KEYS)}"
+            )
+        self.move = _vector(spec.get("move"), "on_click.move",
+                            (0.0, 0.0, 0.0))
+        self.turn = _vector(spec.get("turn"), "on_click.turn",
+                            (0.0, 0.0, 0.0))
+        if not any(self.move) and not any(self.turn):
+            raise ModelError("on_click needs a move or a turn")
+        self.pivot = _vector(spec.get("pivot"), "on_click.pivot", centre)
+        seconds = _number(spec.get("seconds", 0.6), "on_click.seconds",
+                          positive=True)
+        self.seconds = min(5.0, max(0.1, seconds))
+
+    def extras(self) -> dict:
+        return {"move": list(self.move), "turn": list(self.turn),
+                "pivot": list(self.pivot), "seconds": self.seconds}
+
+
 class Part:
     """One part, built and placed."""
 
@@ -1068,6 +1108,17 @@ class Part:
                 self.emissive = parse_color(self.emissive)
             self.motion = (Motion(spec["animate"])
                            if spec.get("animate") else None)
+            self.info = " ".join(str(spec.get("info") or "").split())
+            if len(self.info) > MAX_INFO:
+                raise ModelError(
+                    f"info can be at most {MAX_INFO} characters")
+            self.click = (Click(spec["on_click"], self.position)
+                          if spec.get("on_click") else None)
+            if self.click and self.motion:
+                raise ModelError(
+                    "a part moves on its own (animate) or when it is "
+                    "clicked (on_click), not both"
+                )
         except ModelError as exc:
             raise ModelError(f"{where}: {exc}") from None
         if not self.geometry.indices:
@@ -1263,6 +1314,15 @@ def to_glb(parts: list[Part], title: str = "") -> bytes:
             node["rotation"] = list(part.rotation)
         if part.scale != (1.0, 1.0, 1.0):
             node["scale"] = list(part.scale)
+        # What the viewer does with it: says what it is when pointed at,
+        # and moves when it is clicked.
+        said: dict[str, Any] = {}
+        if part.info:
+            said["info"] = part.info
+        if part.click:
+            said["click"] = part.click.extras()
+        if said:
+            node["extras"] = {"flash": {"name": part.name, **said}}
         nodes.append(node)
         if not motion:
             top.append(len(nodes) - 1)

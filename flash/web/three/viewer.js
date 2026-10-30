@@ -206,12 +206,14 @@
       mixer.setTime(0);
     }
     const clock = new THREE.Clock();
+    const touch = opts.still ? null : interactive(T, THREE, holder, renderer, camera, model);
 
     function tick() {
       if (!alive) return;
       frame = requestAnimationFrame(tick);
       const delta = Math.min(clock.getDelta(), 0.1);
       if (mixer && playing) mixer.update(delta * rate);
+      if (touch) touch.update(delta);
       controls.update();
       renderer.render(scene, camera);
     }
@@ -224,6 +226,11 @@
       triangles: counted.triangles,
       reset,
       animated: !!mixer,
+      // How many parts say what they are, and how many move when clicked.
+      told: touch ? touch.told : 0,
+      clickable: touch ? touch.clickable : 0,
+      // Click a part by its name, as the user would: true if it moved.
+      click(name) { return touch ? touch.toggle(name) : false; },
       duration,
       play(on) { playing = !!mixer && !!on; },
       get playing() { return playing; },
@@ -239,6 +246,7 @@
       },
       dispose() {
         alive = false;
+        if (touch) touch.dispose();
         cancelAnimationFrame(frame);
         if (mixer) mixer.stopAllAction();
         if (watcher) watcher.disconnect();
@@ -254,6 +262,139 @@
         renderer.dispose();
         renderer.forceContextLoss();
         renderer.domElement.remove();
+      },
+    };
+  }
+
+  /* Parts that answer the pointer: the model put what each says about
+     itself, and what it does when clicked, in its glTF extras (read as
+     userData.flash). Pointing at one lights it and shows its name and
+     info; clicking one that moves plays its move, and the next click
+     plays it back. A tap does on a phone what pointing does with a mouse. */
+  function interactive(T, THREE, holder, renderer, camera, model) {
+    const parts = [];
+    model.traverse((node) => { if (node.userData && node.userData.flash) parts.push(node); });
+    if (!parts.length) return null;
+    if (getComputedStyle(holder).position === "static") holder.style.position = "relative";
+    const card = document.createElement("div");
+    card.className = "model-part-card";
+    card.hidden = true;
+    Object.assign(card.style, { position: "absolute", pointerEvents: "none", zIndex: 2, maxWidth: "260px" });
+    holder.appendChild(card);
+    const deg = Math.PI / 180;
+    // each part's own materials, so lighting one up lights only it
+    for (const part of parts) {
+      part.traverse((n) => {
+        if (!n.isMesh) return;
+        const own = [].concat(n.material).map((m) => m.clone());
+        n.material = own.length > 1 ? own : own[0];
+      });
+      const f = part.userData.flash;
+      if (f.click) {
+        part.userData.rest = { position: part.position.clone(), quaternion: part.quaternion.clone() };
+        part.userData.amount = 0;
+        part.userData.target = 0;
+      }
+    }
+    const caster = new THREE.Raycaster();
+    const pointer = new THREE.Vector2();
+    let hovered = null;
+    function partAt(event) {
+      const box = renderer.domElement.getBoundingClientRect();
+      pointer.set(((event.clientX - box.left) / box.width) * 2 - 1, -((event.clientY - box.top) / box.height) * 2 + 1);
+      caster.setFromCamera(pointer, camera);
+      for (const hit of caster.intersectObject(model, true)) {
+        for (let node = hit.object; node; node = node.parent) if (node.userData && node.userData.flash) return node;
+      }
+      return null;
+    }
+    function glow(part, on) {
+      part.traverse((n) => {
+        if (!n.isMesh) return;
+        for (const m of [].concat(n.material)) {
+          if (!m.emissive) continue;
+          if (on) { m.userData.was = m.emissive.clone(); m.emissive.setRGB(0.1, 0.11, 0.15); }
+          else if (m.userData.was) m.emissive.copy(m.userData.was);
+        }
+      });
+    }
+    function show(part, event) {
+      const f = part.userData.flash;
+      card.innerHTML = "";
+      const name = document.createElement("b");
+      name.textContent = f.name || part.name;
+      card.appendChild(name);
+      if (f.info) { const said = document.createElement("span"); said.textContent = f.info; card.appendChild(said); }
+      if (f.click) { const how = document.createElement("em"); how.textContent = part.userData.target ? "Click to put it back" : "Click to move it"; card.appendChild(how); }
+      const box = holder.getBoundingClientRect();
+      card.hidden = false;
+      const x = Math.min(event.clientX - box.left + 14, box.width - card.offsetWidth - 8);
+      const y = Math.max(8, event.clientY - box.top - card.offsetHeight - 10);
+      card.style.left = `${Math.max(8, x)}px`;
+      card.style.top = `${y}px`;
+    }
+    function point(part, event) {
+      if (part !== hovered) {
+        if (hovered) glow(hovered, false);
+        hovered = part;
+        if (part) glow(part, true);
+      }
+      renderer.domElement.style.cursor = part && part.userData.flash.click ? "pointer" : "";
+      if (part) show(part, event); else card.hidden = true;
+    }
+    function toggle(which) {
+      const part = typeof which === "string" ? parts.find((p) => (p.userData.flash.name || p.name) === which) : which;
+      if (!part || !part.userData.flash.click) return false;
+      part.userData.target = part.userData.target ? 0 : 1;
+      return true;
+    }
+    let down = null;
+    const el = renderer.domElement;
+    const onMove = (event) => { if (event.pointerType === "mouse" && !event.buttons) point(partAt(event), event); };
+    const onDown = (event) => { down = { x: event.clientX, y: event.clientY }; };
+    const onUp = (event) => {
+      if (!down || Math.hypot(event.clientX - down.x, event.clientY - down.y) > 5) { down = null; return; }
+      down = null;
+      const part = partAt(event);
+      if (part) toggle(part);
+      point(part, event);
+      if (event.pointerType !== "mouse") setTimeout(() => { if (hovered === part) point(null, event); }, 3500);
+    };
+    const onLeave = () => { if (hovered) glow(hovered, false); hovered = null; card.hidden = true; };
+    el.addEventListener("pointermove", onMove);
+    el.addEventListener("pointerdown", onDown);
+    el.addEventListener("pointerup", onUp);
+    el.addEventListener("pointerleave", onLeave);
+    const turned = new THREE.Quaternion();
+    const euler = new THREE.Euler();
+    const offset = new THREE.Vector3();
+    return {
+      told: parts.filter((p) => p.userData.flash.info).length,
+      clickable: parts.filter((p) => p.userData.flash.click).length,
+      toggle,
+      update(delta) {
+        for (const part of parts) {
+          const c = part.userData.flash.click;
+          if (!c || part.userData.amount === part.userData.target) continue;
+          const step = delta / Math.max(0.05, c.seconds);
+          const a = part.userData.amount = part.userData.target > part.userData.amount
+            ? Math.min(1, part.userData.amount + step) : Math.max(0, part.userData.amount - step);
+          const k = a < 0.5 ? 2 * a * a : 1 - Math.pow(-2 * a + 2, 2) / 2;   // smooth in and out
+          const rest = part.userData.rest;
+          euler.set(c.turn[0] * deg * k, c.turn[1] * deg * k, c.turn[2] * deg * k);
+          turned.setFromEuler(euler);
+          const pivot = new THREE.Vector3(...c.pivot);
+          offset.copy(rest.position).sub(pivot).applyQuaternion(turned);
+          part.position.copy(pivot).add(offset).add(new THREE.Vector3(...c.move).multiplyScalar(k));
+          part.quaternion.copy(turned).multiply(rest.quaternion);
+        }
+      },
+      dispose() {
+        el.removeEventListener("pointermove", onMove);
+        el.removeEventListener("pointerdown", onDown);
+        el.removeEventListener("pointerup", onUp);
+        el.removeEventListener("pointerleave", onLeave);
+        card.remove();
       },
     };
   }
