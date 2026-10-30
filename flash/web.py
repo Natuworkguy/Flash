@@ -6945,12 +6945,70 @@ def _serve(server: "Server", standalone: bool, running: list) -> None:
         _attach(server, standalone)
 
 
+# Where the web UI that is running says it is, for flash://open to find
+# it: its link, token and all, in a file only this user can read.
+RUNNING_FILE = "running.json"
+
+
+def _running_path() -> Path:
+    return workspace.store() / RUNNING_FILE
+
+
+def note_running(server: "Server") -> None:
+    """Write down SERVER's link, for another Flash to open."""
+
+    path = _running_path()
+    with contextlib.suppress(OSError):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as out:
+            json.dump({"pid": os.getpid(), "port": server.port,
+                       "url": server.url}, out)
+
+
+def forget_running(server: "Server") -> None:
+    path = _running_path()
+    with contextlib.suppress(OSError, ValueError):
+        if json.loads(path.read_text(encoding="utf-8")).get("pid") \
+                == os.getpid():
+            path.unlink()
+
+
+def running_url() -> Optional[str]:
+    """The link of a web UI running on this machine, or None: one that
+    was written down and still answers on its port."""
+
+    try:
+        found = json.loads(_running_path().read_text(encoding="utf-8"))
+        port, url = int(found["port"]), str(found["url"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    try:
+        with socket.create_connection((HOST, port), timeout=0.5):
+            return url
+    except OSError:
+        return None
+
+
+def open_ui(port: int = DEFAULT_PORT, lan: bool = False) -> None:
+    """flash://open: the web UI in the browser, the one already running
+    if there is one, else a new one, served from here."""
+
+    url = running_url()
+    if url:
+        console.print(Text("Opening Flash in your browser.", style=DIM))
+        webbrowser.open(url)
+        return
+    serve(port=port, open_browser=True, lan=lan)
+
+
 def serve(
     port: int = DEFAULT_PORT, open_browser: bool = True, lan: bool = False
 ) -> None:
     """Run the web UI until Ctrl+C."""
 
     server = _listen(port, lan)
+    note_running(server)
     announce(server)
     console.print(Text("Ctrl+C stops it.", style=DIM))
     # One press: serving is all this process does, so there is nothing a
@@ -6974,6 +7032,7 @@ def serve(
     except KeyboardInterrupt:
         console.print(Text("Stopped.", style=DIM))
     finally:
+        forget_running(server)
         running[0].server_close()
 
 
@@ -6996,6 +7055,7 @@ def start_background(
 
     stop_background()
     server = _listen(DEFAULT_PORT if port is None else port, lan)
+    note_running(server)
     _attach(server, standalone=False)
     server.session.updates.check_in_background()
     threading.Thread(
@@ -7016,6 +7076,7 @@ def stop_background() -> bool:
     if _background is None:
         return False
 
+    forget_running(_background)
     _background.shutdown()
     _background.server_close()
     _background = None

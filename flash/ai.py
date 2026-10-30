@@ -153,7 +153,13 @@ from .updater import (
     is_newer,
     perform_update,
 )
-from .urlscheme import SchemeError, parse_flash_url, register, unregister
+from .urlscheme import (
+    SchemeError,
+    is_open_url,
+    parse_flash_url,
+    register,
+    unregister,
+)
 from .version import __version__
 from .voice import (
     ensure_models,
@@ -6511,6 +6517,18 @@ def _main() -> None:
 
     if args.listen:
         _keep_listening()
+        return
+
+    # flash://open: the web UI, wherever it is running, or here.
+    if args.url and is_open_url(args.url):
+        from . import web
+
+        try:
+            web.open_ui(port=args.port or web.DEFAULT_PORT, lan=args.lan)
+        except OSError as exc:
+            show_error(str(exc))
+            input("\n\nPress any key to continue ")
+            sys.exit(1)
         return
 
     if args.web:

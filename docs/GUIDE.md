@@ -55,6 +55,13 @@ Once installed, run it with:
 flash
 ```
 
+To install the dev version instead, where changes land before a release
+(`-Dev` with `install.ps1` on Windows):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Natuworkguy/Flash/main/install.sh | bash -s -- --dev
+```
+
 To uninstall:
 
 ```bash
@@ -1644,6 +1651,10 @@ browser:
 ```bash
 flash --uri "flash://?prompt=What+is+Python"
 ```
+
+`flash://open` opens the web UI instead: the one already running on this
+computer, in a new tab, or a new one if none is (served from the window the
+link opened, until Ctrl+C there). It carries no prompt, so nothing is asked.
 
 The prompt is URL-encoded, so use `+` or `%20` for spaces. Flash always shows
 the prompt and asks before sending it to the model. Any web page can open a
