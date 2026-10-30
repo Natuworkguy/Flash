@@ -1069,6 +1069,66 @@ class Session:
         workspace.delete_chat(chat.id)
         self.emit(chat, {"type": "cleared"})
 
+    def compact_chat(self, chat: Chat) -> None:
+        """/compact: CHAT so far, summarized, in place of its messages,
+        to free up room. It runs on a thread of its own, with the chat
+        busy meanwhile, so a message sent while it works waits its turn."""
+
+        from . import ai  # deferred: ai imports half of Flash
+        from . import tools as flash_tools
+
+        with self._lock:
+            if chat.busy or chat.queued:
+                raise ValueError(
+                    "Wait for the reply to finish, then compact.")
+            if not chat.messages:
+                raise ValueError("There is nothing to compact yet.")
+            if not chat_model(chat):
+                raise ValueError("No model is set. Pick one with Alt+M.")
+            chat.busy = True
+        self.emit(chat, {"type": "busy", "busy": True})
+
+        def work() -> None:
+            following = None
+            try:
+                with self.turn_lock, \
+                        capture_tool_output(_sink(self, chat)):
+                    flash_tools.tool_line(
+                        f"Compact({len(chat.messages)} messages)")
+                    was = context.total_tokens(chat.messages)
+                    summary = ai._summarize(
+                        ai.console, ai._client(), list(chat.messages))
+                    if summary is None:
+                        flash_tools.tool_result(
+                            "The model returned no summary; the chat is "
+                            "kept as it was.", style=WARN)
+                    else:
+                        chat.messages[:] = [context.summary_message(summary)]
+                        flash_tools.tool_result(
+                            f"{was} tokens of history down to "
+                            f"{context.total_tokens(chat.messages)}")
+            except Exception as exc:  # noqa: BLE001
+                self.emit(chat, {
+                    "type": "error",
+                    "text": f"{exc.__class__.__name__}: {exc}",
+                })
+            finally:
+                with self._lock:
+                    following = self._take_next(chat)
+                    chat.busy = False
+                self.save(chat)
+                self.emit(chat, {"type": "busy", "busy": False})
+                self.hub.publish({"type": "status"})
+            if following is not None:
+                self._publish_pending(chat)
+                self._begin(
+                    chat, following["text"], bool(following.get("note")),
+                    following.get("files") or [],
+                    note=following.get("note") or "",
+                )
+
+        threading.Thread(target=work, daemon=True).start()
+
     def emit(self, chat: Chat, event: dict) -> dict:
         event = {**event, "chat": chat.id}
         if event["type"] in KEPT:
@@ -4554,6 +4614,10 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
 
     if name == "clear":
         session.clear_chat(session.chat(chat_id))
+        return {}
+
+    if name == "compact":
+        session.compact_chat(session.chat(chat_id))
         return {}
 
     if name == "retry":
