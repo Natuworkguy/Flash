@@ -52,7 +52,8 @@ flash --web --lan   # ... and on your phone, with a QR code to scan
 ```
 
 The installer uses [pipx](https://pipx.pypa.io/); on Windows, run
-`install.ps1` in PowerShell. `--uninstall` (`-Uninstall` on Windows)
+`install.ps1` in PowerShell. `--dev` (`-Dev` on Windows) installs the
+dev branch, where changes land first, and `--uninstall` (`-Uninstall`)
 takes Flash back out. Point it at another machine with `/host`, or add hosts
 in the web UI's model menu. A clone works too: `pip install -r
 requirements.txt && python3 run.py`.

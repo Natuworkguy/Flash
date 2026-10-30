@@ -1,9 +1,11 @@
 """The ``flash://`` URL scheme: parsing and OS handler registration.
 
 A ``flash://?prompt=What+is+Python`` link opens Flash with that prompt
-queued for the first turn. Because any web page can open such a link, the
-prompt is always shown and confirmed before it is sent (see ai.py), and
-slash commands and ``!`` shell escapes are rejected outright here.
+queued for the first turn, and ``flash://open`` opens the web UI: the
+one already running, or a new one. Because any web page can open such a
+link, the prompt is always shown and confirmed before it is sent (see
+ai.py), and slash commands and ``!`` shell escapes are rejected outright
+here.
 """
 
 import os
@@ -25,6 +27,16 @@ def looks_like_flash_url(text: str) -> bool:
     """True if TEXT is meant to be a flash: URL rather than a prompt."""
 
     return text.strip().lower().startswith(f"{SCHEME}:")
+
+
+def is_open_url(url: str) -> bool:
+    """True for ``flash://open``: open the web UI, nothing else. It
+    carries nothing a page could put words in, so it needs no asking."""
+
+    parts = urlsplit(url.strip())
+    where = (parts.netloc or parts.path).strip("/").lower()
+    return parts.scheme.lower() == SCHEME and where == "open" \
+        and not parts.query
 
 
 def _clean(prompt: str) -> str:
