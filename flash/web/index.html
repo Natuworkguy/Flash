@@ -14014,7 +14014,7 @@ function projectForm(p) {
   const editing = !!p;
   const form = openForm(`
     <h2>${editing ? "Edit project" : "New project"}</h2>
-    <p class="sub">${editing ? "" : "Chats in a project run in its folder, with its instructions."}</p>
+    <p class="sub">${editing ? "" : "Chats in a project run in its folder, with its instructions, and follow the AGENTS.md in it when there is one."}</p>
     <label class="field"><span>Name</span><input name="label" placeholder="Name it after the codebase" autocomplete="off"></label>
     <label class="field"><span>Folder</span><input name="path" class="mono" autocomplete="off" spellcheck="false" role="combobox" aria-autocomplete="list" aria-expanded="false"><small>A folder on the computer Flash runs on. Tab takes a suggestion and shows what is inside it.</small></label>
     <div class="field more-folders"><span>More folders</span><div class="folder-rows"></div><button type="button" class="link-btn add-folder">${icon("plus")}Add a folder</button><small>Optional. Folders the project also takes in, like a backend beside its frontend. Chats start in the folder above and reach these by their full paths.</small></div>

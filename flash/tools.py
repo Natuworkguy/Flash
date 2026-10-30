@@ -309,7 +309,8 @@ def build_system_prompt(model_prompt: str = "") -> str:
         part
         for part in (
             extensions.system_prompt(), instructions.prompt_block(),
-            learning.prompt_block(), sparks.roster_block(),
+            instructions.agents_block(), learning.prompt_block(),
+            sparks.roster_block(),
         )
         if part
     )

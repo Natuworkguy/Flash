@@ -4624,6 +4624,72 @@ class TestCustomInstructions:
         assert instructions.read() == ""
 
 
+class TestAgentsFile:
+    def test_the_folders_own_is_read(self, tmp_path):
+        from flash import instructions
+
+        (tmp_path / ".git").mkdir()
+        (tmp_path / "AGENTS.md").write_text("Run make test before you finish.")
+
+        block = instructions.agents_block(tmp_path)
+        assert "Run make test before you finish." in block
+        assert str(tmp_path / "AGENTS.md") in block
+
+    def test_the_nearest_above_up_to_the_top_of_the_repository(
+        self, tmp_path
+    ):
+        from flash import instructions
+
+        (tmp_path / "AGENTS.md").write_text("Outside the repository.")
+        repo = tmp_path / "repo"
+        (repo / ".git").mkdir(parents=True)
+        (repo / "AGENTS.md").write_text("Use tabs.")
+        deep = repo / "src" / "lib"
+        deep.mkdir(parents=True)
+        assert instructions.agents_file(deep) == repo / "AGENTS.md"
+
+        (repo / "AGENTS.md").unlink()
+        # The one above the repository belongs to something else.
+        assert instructions.agents_file(deep) is None
+
+    def test_none_long_or_empty(self, tmp_path):
+        from flash import instructions
+
+        (tmp_path / ".git").mkdir()
+        assert instructions.agents_block(tmp_path) == ""
+        (tmp_path / "FLASH.md").write_text("  \n")
+        assert instructions.agents_block(tmp_path) == ""
+        long = "x" * (instructions.MAX_AGENTS_CHARS + 50)
+        (tmp_path / "FLASH.md").write_text(long)
+        block = instructions.agents_block(tmp_path)
+        assert "[the rest of the file is cut]" in block
+        assert "x" * (instructions.MAX_AGENTS_CHARS + 1) not in block
+
+    def test_a_project_chat_follows_its_folders(self, tmp_path, monkeypatch):
+        folder = tmp_path / "proj"
+        (folder / ".git").mkdir(parents=True)
+        (folder / "AGENTS.md").write_text("Never touch the vendor folder.")
+        made = workspace.create_project("Proj", str(folder))
+        seen = {}
+
+        def where(**kwargs):
+            seen["system"] = kwargs["messages"][0]["content"]
+            return iter([part("ok"), part(done=True)])
+
+        monkeypatch.setattr(FakeClient, "chat", lambda self, **kw: where(**kw))
+        # Flash's whole prompt, which the other tests here leave out.
+        monkeypatch.setattr(ai, "_session_system_prompt",
+                            lambda heard=False: tools.build_system_prompt())
+        session = web.Session()
+
+        run(session, session.new_chat(made.id), "hi")
+        assert "Never touch the vendor folder." in seen["system"]
+
+        # Outside the project, the folder's notes are not read.
+        run(session, session.new_chat(), "hi")
+        assert "Never touch the vendor folder." not in seen["system"]
+
+
 class TestChatTools:
     def test_a_misread_chat_is_retitled_once_understood(self):
         session = web.Session()

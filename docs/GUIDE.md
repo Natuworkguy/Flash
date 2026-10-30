@@ -1375,6 +1375,14 @@ the terminal alike; `/instructions <text>` sets them from the terminal
 and `/instructions clear` removes them. They are kept in
 `~/.flash/instructions.md`.
 
+A project's own notes for coding agents are read too. When the folder
+Flash works in (the project's, in the browser, or the one you started
+it in, in the terminal) has an `AGENTS.md`, or the nearest folder above
+it up to the top of the repository does, Flash follows it in every
+chat there: how to build and test the project, and the conventions to
+keep. A `FLASH.md` works the same way, for notes meant only for Flash.
+Up to 12,000 characters of it are read.
+
 Flash can retitle the chat it is in, when the title it has is wrong: a
 chat named after a message it misread is renamed once it understands
 (a title you gave it yourself stays). And in voice mode it can end the
