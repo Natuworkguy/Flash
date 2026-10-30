@@ -1313,6 +1313,10 @@ body.voice-on .shell, body.voice-on #suggestions, body.voice-on #pending { displ
 .input-shade .code { background: var(--hover); box-shadow: 0 0 0 1px var(--border); border-radius: 4px; color: var(--accent); -webkit-box-decoration-break: clone; box-decoration-break: clone; }
 .input-shade .tick { color: var(--text-3); }
 #composer.shaded #input { color: transparent; caret-color: var(--text); }
+/* A draft with a code block in it is written in monospace, the box and
+   the layer under it alike, so the caret still lands where it shows. */
+#composer.code-draft #input, #composer.code-draft .input-shade { font-family: var(--mono); font-size: 14.5px; }
+#composer.code-draft .input-shade .code { color: var(--text); }
 #composer.shaded #input::selection { color: transparent; background: color-mix(in srgb, var(--accent) 28%, transparent); }
 .composer-row { display: flex; align-items: center; gap: 6px; margin-top: 10px; container-type: inline-size; min-width: 0; }
 /* A narrow box (a side panel open, a small window) keeps every button in
@@ -20028,6 +20032,9 @@ inputShade.hidden = true;
 input.before(inputShade);
 function shadeInput() {
   const text = input.value;
+  // A code block, from its opening fence: the whole box goes monospace,
+  // the only way a textarea's caret stays true to what it shows.
+  input.closest("#composer").classList.toggle("code-draft", text.includes("```"));
   const shaded = /`/.test(text) && CODE_BITS_RE.test(text);
   CODE_BITS_RE.lastIndex = 0;
   input.closest("#composer").classList.toggle("shaded", shaded);
