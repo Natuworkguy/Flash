@@ -3057,6 +3057,30 @@ body.all-stopped .org-node, body.all-stopped .spark-card { animation: all-halt 0
 .attachment .thumb img { width: 100%; height: 100%; object-fit: cover; }
 .attachment .thumb .badge { font: 700 10px/1 var(--sans); letter-spacing: 0.04em; color: var(--accent); }
 .attachment .info { flex: 1; min-width: 0; }
+/* A sound: play, its waveform, the time, speed and a download. */
+.audio-card {
+  display: flex; align-items: center; gap: 12px; width: min(520px, 100%);
+  padding: 10px 12px 10px 10px; border: 1px solid var(--border); border-radius: 14px; background: var(--surface);
+  transition: border-color 0.14s, box-shadow 0.2s;
+}
+.audio-card:hover, .audio-card.on { border-color: var(--border-strong); box-shadow: var(--composer-shadow); }
+.audio-card .audio-play { flex: none; width: 40px; height: 40px; border-radius: 50%; display: grid; place-items: center; background: var(--accent); color: var(--accent-text); transition: transform 0.2s var(--spring); }
+.audio-card .audio-play:hover { transform: scale(1.06); }
+.audio-card .audio-play:active { transform: scale(0.94); }
+.audio-card .audio-play svg { width: 18px; height: 18px; }
+.audio-card .audio-main { flex: 1; min-width: 0; display: grid; gap: 4px; }
+.audio-card .audio-top { display: flex; align-items: baseline; gap: 10px; font-size: 13px; }
+.audio-card .audio-top .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); font-weight: 500; }
+.audio-card .audio-top .time { flex: none; color: var(--text-3); font-variant-numeric: tabular-nums; font-size: 12px; }
+.audio-card .audio-wave { display: block; width: 100%; height: 30px; cursor: pointer; touch-action: none; }
+.audio-card .audio-speed { flex: none; min-width: 40px; padding: 4px 6px; border-radius: 8px; font-size: 12px; color: var(--text-2); font-variant-numeric: tabular-nums; }
+.audio-card .audio-speed:hover, .audio-card .audio-save:hover { background: var(--hover); color: var(--text); }
+.audio-card .audio-save { flex: none; width: 30px; height: 30px; display: grid; place-items: center; border-radius: 8px; color: var(--text-3); }
+.audio-card .audio-save svg { width: 16px; height: 16px; }
+.audio-card.broken .audio-wave { opacity: 0.3; }
+.user-files .audio-card { width: min(420px, 100%); }
+.audio-panel { position: absolute; inset: 0; display: grid; place-items: center; padding: 24px; }
+.audio-panel .audio-card { width: 100%; max-width: 560px; }
 .inline-image {
   position: relative; display: block; padding: 0; overflow: hidden; cursor: zoom-in;
   max-width: min(480px, 100%); width: fit-content; border-radius: 14px;
@@ -5279,6 +5303,123 @@ function inlineImage(entry) {
   return card;
 }
 
+// A sound in the chat: play and pause, its waveform to see where it is
+// and to click or drag to a moment, the time, a speed for long
+// readings, and a download. The file is fetched whole, once, so it seeks
+// anywhere and its shape can be drawn; one that is in view is fetched
+// before it is played, so the shape is there to see.
+const AUDIO_SPEEDS = [1, 1.25, 1.5, 2, 0.75];
+const AUDIO_PRELOAD_BYTES = 15 * 1024 * 1024;
+let audioNow = null;
+const audioTime = (s) => (isFinite(s) && s > 0 ? `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}` : "0:00");
+function audioPeaks(buffer, count) {
+  const data = buffer.getChannelData(0), step = Math.max(1, Math.floor(data.length / count)), peaks = [];
+  for (let i = 0; i < count; i++) {
+    let top = 0;
+    for (let j = i * step, end = Math.min(data.length, j + step); j < end; j += 4) top = Math.max(top, Math.abs(data[j]));
+    peaks.push(top);
+  }
+  const loudest = Math.max(0.01, ...peaks);
+  return peaks.map((v) => v / loudest);
+}
+function audioPlayer(entry) {
+  const card = el("div", "block audio-card");
+  card.dataset.file = entry.id;
+  card.innerHTML = `<button type="button" class="audio-play" aria-label="Play">${icon("play")}</button>` +
+    `<div class="audio-main"><div class="audio-top"><span class="name"></span><span class="time">0:00</span></div>` +
+    `<canvas class="audio-wave" aria-label="Where it is: click or drag to move"></canvas></div>` +
+    `<button type="button" class="audio-speed" data-tip="Speed">1×</button>` +
+    `<a class="audio-save" data-tip="Download" aria-label="Download">${icon("download")}</a>`;
+  card.querySelector(".name").textContent = entry.name;
+  const save = card.querySelector(".audio-save");
+  save.href = fileUrl(entry, true);
+  save.download = entry.name;
+  const play = card.querySelector(".audio-play"), time = card.querySelector(".time");
+  const wave = card.querySelector(".audio-wave"), speed = card.querySelector(".audio-speed");
+  const audio = new Audio();
+  audio.preload = "metadata";
+  let peaks = null, loading = null, pace = 0;
+  const length = () => (isFinite(audio.duration) ? audio.duration : 0);
+  function draw() {
+    const w = Math.max(1, wave.clientWidth), h = Math.max(1, wave.clientHeight), ratio = devicePixelRatio || 1;
+    if (wave.width !== Math.round(w * ratio)) { wave.width = Math.round(w * ratio); wave.height = Math.round(h * ratio); }
+    const g = wave.getContext("2d"), style = getComputedStyle(card);
+    g.setTransform(ratio, 0, 0, ratio, 0, 0);
+    g.clearRect(0, 0, w, h);
+    const bars = Math.max(8, Math.floor(w / 3)), done = length() ? audio.currentTime / length() : 0;
+    for (let i = 0; i < bars; i++) {
+      const v = peaks ? peaks[Math.floor((i / bars) * peaks.length)] : 0.12;
+      const bh = Math.max(2, v * (h - 4));
+      g.fillStyle = i / bars < done ? style.getPropertyValue("--accent") : style.getPropertyValue("--text-3");
+      g.globalAlpha = i / bars < done ? 1 : 0.55;
+      g.fillRect(i * 3, (h - bh) / 2, 2, bh);
+    }
+    time.textContent = audio.currentTime > 0 ? `${audioTime(audio.currentTime)} / ${audioTime(length())}` : audioTime(length());
+  }
+  function load() {
+    if (loading) return loading;
+    loading = (async () => {
+      const response = await fetch(fileUrl(entry), { credentials: "same-origin" });
+      if (!response.ok) throw new Error(response.statusText || `HTTP ${response.status}`);
+      const blob = await response.blob();
+      audio.src = URL.createObjectURL(blob);
+      try {
+        const Ctx = window.AudioContext || window.webkitAudioContext;
+        const ctx = new Ctx();
+        peaks = audioPeaks(await ctx.decodeAudioData(await blob.arrayBuffer()), 400);
+        ctx.close();
+      } catch (_) { /* a format the page cannot decode still plays */ }
+      draw();
+    })();
+    loading.catch(() => { card.classList.add("broken"); time.textContent = "Could not load it"; });
+    return loading;
+  }
+  const playing = (on) => {
+    play.innerHTML = icon(on ? "pause" : "play");
+    play.setAttribute("aria-label", on ? "Pause" : "Play");
+    card.classList.toggle("on", on);
+  };
+  card.play = async () => {
+    await load();
+    if (audioNow && audioNow !== audio) audioNow.pause();
+    audioNow = audio;
+    await audio.play();
+  };
+  play.onclick = () => (audio.paused ? card.play().catch(() => {}) : audio.pause());
+  audio.onplay = () => playing(true);
+  audio.onpause = () => playing(false);
+  audio.onended = () => { playing(false); draw(); };
+  audio.ontimeupdate = draw;
+  audio.onloadedmetadata = draw;
+  speed.onclick = () => {
+    pace = (pace + 1) % AUDIO_SPEEDS.length;
+    audio.playbackRate = AUDIO_SPEEDS[pace];
+    speed.textContent = `${AUDIO_SPEEDS[pace]}×`;
+  };
+  const seek = (event) => {
+    const box = wave.getBoundingClientRect();
+    if (!length()) return;
+    audio.currentTime = Math.max(0, Math.min(1, (event.clientX - box.left) / box.width)) * length();
+    draw();
+  };
+  wave.addEventListener("pointerdown", (event) => {
+    load().then(() => seek(event));
+    wave.setPointerCapture(event.pointerId);
+    const move = (e) => seek(e);
+    wave.addEventListener("pointermove", move);
+    wave.addEventListener("pointerup", () => wave.removeEventListener("pointermove", move), { once: true });
+  });
+  // drawn once it has a width, and fetched once it is seen, when it is small enough
+  const seen = new IntersectionObserver((found) => {
+    if (!found.some((f) => f.isIntersecting)) return;
+    seen.disconnect();
+    if ((entry.size || 0) <= AUDIO_PRELOAD_BYTES) load(); else audio.src = fileUrl(entry);
+  });
+  requestAnimationFrame(() => { draw(); seen.observe(card); });
+  new ResizeObserver(draw).observe(wave);
+  return card;
+}
+
 function attachment(entry) {
   const card = el("button", "block attachment");
   card.type = "button";
@@ -5287,7 +5428,7 @@ function attachment(entry) {
     ? `<img alt="" loading="lazy" src="${fileUrl(entry)}">`
     : entry.kind === "doc" ? `<span class="doc-thumb">${icon("file")}</span>`
     : entry.kind === "model" ? `<span class="doc-thumb">${icon("cube")}</span>`
-    : entry.kind === "midi" ? `<span class="doc-thumb">${icon("music")}</span>`
+    : entry.kind === "midi" || entry.kind === "audio" ? `<span class="doc-thumb">${icon("music")}</span>`
     : `<span class="badge">${fileKind(entry)}</span>`;
   card.innerHTML = `<span class="thumb">${thumb}</span><span class="info"><div class="name"></div>` +
     `<div class="meta"></div></span><span class="chev">${icon("chevRight")}</span>`;
@@ -5507,6 +5648,9 @@ function openViewer(entry) {
     openModel(entry, body);
   } else if (entry.kind === "midi") {
     openMidi(entry, body);
+  } else if (entry.kind === "audio") {
+    const holder = body.appendChild(el("div", "audio-panel"));
+    holder.appendChild(audioPlayer(entry));
   } else if (entry.kind === "video") {
     const clip = el("video");
     clip.controls = true;
@@ -7748,6 +7892,7 @@ function sentFiles(files) {
   const images = files.filter((f) => f.kind === "image").length;
   const box = el("div", "user-files" + (images > 1 ? " many" : ""));
   for (const f of files) {
+    if (f.kind === "audio") { box.appendChild(audioPlayer(f)); continue; }
     if (f.kind === "video") {
       const clip = box.appendChild(el("div", "clip", `<video controls preload="metadata" playsinline></video><span class="tag"></span>`));
       clip.querySelector("video").src = fileUrl(f);
@@ -7830,7 +7975,7 @@ function drawEntry(entry, ctx) {
       break;
     }
     case "tool": ctx.tool = toolCard(entry.label); messagesEl.appendChild(ctx.tool); break;
-    case "file": messagesEl.appendChild(entry.kind === "image" ? inlineImage(entry) : attachment(entry)); break;
+    case "file": messagesEl.appendChild(entry.kind === "image" ? inlineImage(entry) : entry.kind === "audio" ? audioPlayer(entry) : attachment(entry)); break;
     case "browser": drawBrowserFrame(entry); break;
     case "seen": seenImages(ctx.tool, entry.images || []); break;
     case "course": messagesEl.querySelector(`.course[data-course="${CSS.escape(entry.subject)}"]`)?.remove(); messagesEl.appendChild(courseCard(entry)); break;
@@ -16133,8 +16278,14 @@ function pinged(event) {
 // and a file the agent sends pops out on the right.
 function arrived(entry) {
   if (entry.type === "ask") focusAsk();
-  // A picture shows where it is, in the chat; anything else pops out.
-  if (entry.type === "file" && entry.kind !== "image") openViewer(entry);
+  // A picture or a sound shows where it is, in the chat; anything else
+  // pops out. A reading asked for starts playing as it arrives.
+  if (entry.type === "file" && entry.kind === "audio") {
+    if (entry.play) {
+      const card = [...document.querySelectorAll(".audio-card")].reverse().find((c) => c.dataset.file === entry.id);
+      card?.play().catch(() => toast("Press play to hear it."));
+    }
+  } else if (entry.type === "file" && entry.kind !== "image") openViewer(entry);
 }
 
 let routed = false;

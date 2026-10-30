@@ -90,10 +90,12 @@ from .theme import (
     console,
     denial_why,
     dock_active,
+    drawn_elsewhere,
     glimmer,
     plural,
     remote_answer,
     set_denial_why,
+    tool_audio,
     tool_browser,
     tool_course,
     tool_diff,
@@ -4133,6 +4135,150 @@ def _show_midi(midi_path: Path, label: str) -> str:
     return "It opened in the user's default player, with its path on screen."
 
 
+def _show_audio(audio_path: Path, label: str, play: bool = False) -> str:
+    """Put a sound file in front of the user: a player in the chat in
+    the browser, the default player in the terminal. How it went."""
+
+    if tool_audio(str(audio_path), play):
+        tool_result(label)
+        return ("It is in the chat in a player: " + (
+            "it started playing as it arrived, and they can pause it, move "
+            "through it, speed it up and download it." if play else
+            "they can play it, move through it, speed it up and download it."))
+    problem = _open_with_spinner(audio_path)
+    tool_result(label + (f" ({problem})" if problem else ""))
+    console.print(
+        Text(f"{' ' * RESULT_INDENT}{_display_path(audio_path)}", style=DIM)
+    )
+    if problem:
+        return (f"Could not open it: {problem}. Its path is on screen; "
+                "tell the user where the file is.")
+    return "It opened in the user's default player, with its path on screen."
+
+
+def send_audio(path: str, caption: str = "", play: Any = False) -> str:
+    """Play the user a sound file that already exists."""
+
+    from .workspace import AUDIO_TYPES, MAX_SHOWN_BYTES
+
+    tool_line(f"SendAudio({path})")
+    audio_path = Path(path).expanduser()
+    problem = (
+        f"no file at {audio_path}" if not audio_path.is_file()
+        else f"{audio_path.suffix or 'that'} is not a sound file this can "
+             f"play: use {', '.join(AUDIO_TYPES)}"
+        if audio_path.suffix.lower() not in AUDIO_TYPES
+        else f"{audio_path.name} is over 50 MB"
+        if audio_path.stat().st_size > MAX_SHOWN_BYTES else ""
+    )
+    if problem:
+        result = f"Error: {problem}."
+        tool_result(result, style=ERROR)
+        return result
+    size = audio_path.stat().st_size
+    note = str(caption or "").strip()
+    label = f"{audio_path.name} ({max(1, round(size / 1024))} KB)" + (
+        f": {note}" if note else "")
+    return f"Sent {audio_path.name}.\n" + _show_audio(
+        audio_path, label, _truthy(play))
+
+
+def read_aloud(text: str = "", url: str = "", path: str = "",
+               out: str = "") -> str:
+    """Read an article, a document or some text aloud in Flash's voice:
+    straight away in the terminal, as a player in the chat in the
+    browser."""
+
+    from . import readaloud
+
+    shown = str(text or "")
+    what = url or path or (shown[:40] + ("…" if len(shown) > 40 else ""))
+    tool_line(f"ReadAloud({what})")
+    title = ""
+    try:
+        if url:
+            address = url.strip()
+            if not address.lower().startswith(FETCH_SCHEMES):
+                raise readaloud.ReadError("only http:// and https:// pages")
+            request = urllib.request.Request(
+                address, headers={"User-Agent": FETCH_USER_AGENT})
+            with urllib.request.urlopen(  # nosec B310 -- scheme checked
+                    request, timeout=FETCH_TIMEOUT_SECONDS) as response:
+                charset = response.headers.get("Content-Type", "")
+                body = response.read(FETCH_MAX_BYTES)
+            kind = charset or "text/html"
+            page = body.decode("utf-8", "replace")
+            if "html" in kind:
+                title, _, _ = _readable(body, kind)
+                body = readaloud.article(page).encode("utf-8")
+                kind = "text/html; charset=utf-8"
+            _, _, words = _readable(body, kind)
+        elif path:
+            source = Path(path).expanduser()
+            if not source.is_file():
+                raise readaloud.ReadError(f"no file at {source}")
+            title = source.stem
+            if source.suffix.lower() in (".pdf", ".docx"):
+                words, reason = extract_document_text(source)
+                if words is None:
+                    raise readaloud.ReadError(reason)
+            else:
+                words = source.read_text(encoding="utf-8", errors="replace")
+        else:
+            words = str(text or "")
+        said, cut = readaloud.prepare(words)
+    except (readaloud.ReadError, urllib.error.URLError, OSError,
+            ValueError) as exc:
+        result = f"Error: could not read it aloud: {exc}"
+        tool_result(result, style=ERROR)
+        return result
+
+    count = readaloud.words(said)
+    minutes = max(1, round(count / 160))
+    left = (" The rest was too long to read: it stops about an hour in."
+            if cut else "")
+    heading = f"{title}. " if title and not said.startswith(title) else ""
+
+    if drawn_elsewhere() and not out:
+        target = Path(SCRATCH_DIR) / readaloud.default_name(title or "reading")
+    elif out:
+        target = Path(out).expanduser()
+    else:
+        target = None
+
+    if target is None:
+        # The terminal: read it now, through the speakers.
+        tool_result(f"{count} words, about {minutes} min. Ctrl+C stops it.")
+        try:
+            read, stopped = readaloud.speak(heading + said, doing=tool_result)
+        except readaloud.ReadError as exc:
+            result = f"Error: could not read it aloud: {exc}"
+            tool_result(result, style=ERROR)
+            return result
+        if stopped:
+            return (f"The user stopped the reading after part {read} of "
+                    f"{len(readaloud.pieces(said))}. Do not read it again "
+                    "unless they ask." + left)
+        return (f"Read aloud: {count} words, about {minutes} minutes. It "
+                "has been heard; do not repeat it as text." + left)
+
+    try:
+        made = readaloud.record(heading + said, target, doing=tool_result)
+    except (readaloud.ReadError, OSError,
+            subprocess.TimeoutExpired) as exc:
+        result = f"Error: could not read it aloud: {exc}"
+        tool_result(result, style=ERROR)
+        return result
+    seconds = made["seconds"]
+    label = (f"{title or 'Reading'} ({int(seconds // 60)}:"
+             f"{int(seconds % 60):02d} read aloud)")
+    shown = _show_audio(made["path"], label, play=not out)
+    return (f"Read aloud into {made['path']}: {count} words, "
+            f"{int(seconds // 60)} min {int(seconds % 60)} s. {shown} Do "
+            "not repeat the text in your reply; say a line about what it "
+            "is." + left)
+
+
 def make_midi(
     path: str, tracks: Any, tempo: Any = 120, time_signature: str = "4/4",
     title: str = "", caption: str = "",
@@ -4849,6 +4995,9 @@ def make_sound(notes: str, out: str = "sound.wav", wave: str = "sine",
         tool_result(result, style=ERROR)
         return result
     result = f"Made {made['path']}: {made['seconds']:g} s."
+    if tool_audio(str(made["path"])):
+        tool_result(result)
+        return result + " It is in the chat in a player."
     tool_result(result)
     return result
 
@@ -6130,6 +6279,62 @@ tools: list[dict[str, Any]] = [
                     },
                 },
                 "required": ["path", "tracks"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "read_aloud",
+            "description": (
+                "Read something aloud in Flash's voice: an article from "
+                "its url (the article itself, not the page's menus), a "
+                "document or text file from its path (PDF and Word too), "
+                "or text you give. Use it when the user asks to hear "
+                "something (\"read me this article\", \"read this "
+                "aloud\"), instead of writing it out. In the browser it "
+                "becomes a player in the chat that starts playing; in "
+                "the terminal it plays through the speakers. Give one of "
+                "url, path or text, as written, not summarised, unless "
+                "they asked for a summary read aloud."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url": {"type": "string",
+                            "description": "A web page to read."},
+                    "path": {"type": "string",
+                             "description": "A file to read."},
+                    "text": {"type": "string",
+                             "description": "The words to read."},
+                    "out": {"type": "string", "description": (
+                        "Optional: where to save the recording (.m4a, "
+                        ".mp3 or .wav), when the user wants a file.")},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "send_audio",
+            "description": (
+                "Play the user a sound file that already exists (mp3, "
+                "wav, ogg, opus, m4a, aac or flac): a player in the chat "
+                "in the browser, their default player in the terminal."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string",
+                             "description": "The sound file."},
+                    "caption": {"type": "string", "description": (
+                        "Optional single line shown with it.")},
+                    "play": {"type": "boolean", "description": (
+                        "Start playing as it arrives, when they asked to "
+                        "hear it now.")},
+                },
+                "required": ["path"],
             },
         },
     },
@@ -7649,6 +7854,8 @@ FUNCTIONS = {
     "get_date": get_date,
     "refresh_tools": refresh_tools,
     "review_code": review_code,
+    "read_aloud": read_aloud,
+    "send_audio": send_audio,
     "journal": journal_tool,
     "plan": plan_tool,
     "check_step": check_step,

@@ -1464,8 +1464,21 @@ out in a panel on the right, with its name and size across the top and
 buttons to download it or open it in a tab. A 3D model from
 `make_3d_model` or `send_3d_model` opens there in a viewer: drag to turn
 it, scroll to zoom, right-drag to pan, with buttons to reset the view,
-stop it spinning, and see its wireframe. A card stays in the chat to
-open it again, and `Alt V` shows or hides the panel. Each file is kept
+stop it spinning, and see its wireframe. A model made to explore is
+interactive: point at a part to see its name and what it is, and click
+a door, a drawer or a lid to open it (click again to close it). A card
+stays in the chat to open it again, and `Alt V` shows or hides the panel.
+
+**Sound** plays in the chat itself, in a player with its waveform: click
+or drag on it to move, change the speed, or download it. That goes for
+sound files Flash makes or sends (`make_sound`, `send_audio`) and for
+ones you attach. **Reading aloud**: ask "read me this article" with a
+link, or to read a document or some text, and Flash reads it in the
+voice chosen for voice mode, with its `read_aloud` tool: the article,
+not the page's menus, a paragraph at a time. In the browser the reading
+arrives as a player that starts by itself; in the terminal it plays
+through your speakers, and Ctrl+C stops it. Ask for a file and it saves
+one (`.m4a` with ffmpeg, else `.wav`). Each file is kept
 as a copy in `~/.flash/web/files`, so a chat still shows its files
 after the originals are gone. In the terminal, a PDF opens in your PDF
 viewer.

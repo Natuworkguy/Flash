@@ -3054,12 +3054,16 @@ def _sink(session: Session, chat: Chat):
                 "title": str(shown.get("title") or ""),
                 "note": str(shown.get("note") or ""),
             })
-        elif kind in ("file", "document"):
-            shown = json.loads(text) if kind == "document" else {"path": text}
+        elif kind in ("file", "document", "audio"):
+            shown = json.loads(text) if kind != "file" else {"path": text}
             try:
                 kept = workspace.keep_file(shown["path"])
                 if shown.get("comments"):
                     kept["comments"] = shown["comments"]
+                if shown.get("play"):
+                    # Played as it arrives; not again when the chat is
+                    # opened later.
+                    kept["play"] = True
                 session.emit(chat, {"type": "file", **kept})
             except (workspace.WorkspaceError, OSError) as exc:
                 session.emit(chat, {
