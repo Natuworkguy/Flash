@@ -523,7 +523,7 @@ class Ask:
 KEPT = {
     "user", "assistant", "tool", "result", "diff", "ask", "answered",
     "error", "stats", "note", "thought", "file", "plan", "browser", "wait",
-    "seen", "debate", "course",
+    "seen", "debate", "course", "chess",
 }
 
 
@@ -3008,6 +3008,12 @@ def _sink(session: Session, chat: Chat):
                 session.emit(chat, {"type": "course", "subject": key})
             session.hub.publish({"type": "course-changed", "subject": key})
             return True
+        if kind == "chess":
+            # A lesson: a board in the chat, stepped through there.
+            lesson = json.loads(text)
+            session.emit(chat, {"type": "chess", "id": uuid.uuid4().hex[:12],
+                                **lesson})
+            return True
         if kind == "project":
             # "Make this a project": made, and this chat moved into it.
             asked = json.loads(text)
@@ -4379,6 +4385,20 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
     if name == "delete":
         session.delete_chat(chat_id)
         return {}
+
+    if name == "chess-step":
+        # Where the user is in a lesson, so the chat opens there again.
+        chat = session.chat(chat_id)
+        for event in chat.log:
+            if isinstance(event, dict) and event.get("type") == "chess" \
+                    and event.get("id") == arg:
+                event["at"] = max(0, int(body.get("at") or 0))
+                event["solved"] = sorted({
+                    int(n) for n in body.get("solved") or []
+                    if str(n).isdigit()})
+                session.save(chat)
+                return {}
+        raise ValueError("That lesson is not in this chat.")
 
     if name == "rename":
         chat = session.chat(chat_id)

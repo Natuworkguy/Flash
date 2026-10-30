@@ -764,6 +764,58 @@ pre code { display: block; padding: 2px 16px 14px; overflow-x: auto; font-size: 
 /* What a tool showed the model, under it, open or not. */
 /* A debate: the two sides, one on each side, then the summary. */
 /* A course the tutor teaches: a path of lessons, each with a question or code to write, marked at once. */
+.chess { border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); padding: 16px; display: flex; flex-direction: column; gap: 12px; outline: none; --chess-light: #efdcbc; --chess-dark: #b78a62; }
+.chess:focus-visible { box-shadow: 0 0 0 2px var(--accent); }
+.chess-head { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.chess-title { font-weight: 600; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chess-count { font-size: 12px; color: var(--text-3); font-variant-numeric: tabular-nums; }
+.chess-bar { height: 4px; border-radius: 2px; background: var(--border); overflow: hidden; }
+.chess-bar i { display: block; height: 100%; background: var(--accent); transition: width .3s ease; }
+.chess-body { display: flex; gap: 16px; flex-wrap: wrap; align-items: flex-start; }
+.chess-board { position: relative; width: min(100%, 400px); aspect-ratio: 1; border-radius: 6px; overflow: hidden; touch-action: none; user-select: none; -webkit-user-select: none; flex-shrink: 0; }
+.chess-squares { position: absolute; inset: 0; display: grid; grid-template-columns: repeat(8, 1fr); grid-template-rows: repeat(8, 1fr); }
+.chess-sq { position: relative; }
+.chess-sq.light { background: var(--chess-light); }
+.chess-sq.dark { background: var(--chess-dark); }
+.chess-sq .file, .chess-sq .rank { position: absolute; font-size: 10px; font-weight: 600; line-height: 1; pointer-events: none; }
+.chess-sq .file { right: 3px; bottom: 2px; }
+.chess-sq .rank { left: 3px; top: 3px; }
+.chess-sq.light .file, .chess-sq.light .rank { color: var(--chess-dark); }
+.chess-sq.dark .file, .chess-sq.dark .rank { color: var(--chess-light); }
+.chess-sq.last::before, .chess-sq.picked::before, .chess-sq.mark::before, .chess-sq.wrong::before { content: ""; position: absolute; inset: 0; }
+.chess-sq.last::before { background: rgba(240, 200, 40, .42); }
+.chess-sq.picked::before { background: rgba(60, 130, 80, .5); }
+.chess-sq.mark::before { background: rgba(230, 90, 60, .45); }
+.chess-sq.wrong::before { background: rgba(220, 40, 40, .55); animation: chess-wrong .5s ease-out; }
+.chess-sq.can::after { content: ""; position: absolute; left: 50%; top: 50%; width: 30%; height: 30%; transform: translate(-50%, -50%); border-radius: 50%; background: rgba(20, 60, 30, .32); }
+.chess-sq.can.take::after { width: 84%; height: 84%; background: none; border: 4px solid rgba(20, 60, 30, .32); box-sizing: border-box; }
+@keyframes chess-wrong { 0%, 100% { opacity: 1; } 50% { opacity: .4; } }
+.chess-pieces { position: absolute; inset: 0; }
+.chess-piece { position: absolute; left: 0; top: 0; width: 12.5%; height: 12.5%; display: grid; place-items: center; font-size: min(38px, 9.4cqw); line-height: 1; font-family: "Segoe UI Symbol", "Apple Symbols", "Noto Sans Symbols 2", "DejaVu Sans", serif; transition: transform .22s ease, opacity .2s ease; cursor: default; }
+.chess-board { container-type: inline-size; }
+.chess-piece.white { color: #fff; -webkit-text-stroke: 1.2px #2a2a2a; text-shadow: 0 1px 2px rgba(0, 0, 0, .35); }
+.chess-piece.black { color: #1d1d1d; -webkit-text-stroke: .6px #1d1d1d; text-shadow: 0 1px 2px rgba(0, 0, 0, .25); }
+.chess-piece.taken { opacity: 0; }
+.chess-piece.lifted { transition: none; z-index: 2; font-size: min(44px, 11cqw); cursor: grabbing; }
+.chess-arrows { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+.chess-arrows .arrow line { stroke: rgba(30, 140, 80, .82); stroke-width: .17; stroke-linecap: round; }
+.chess-arrows .arrow polygon { fill: rgba(30, 140, 80, .82); }
+.chess-promote { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; gap: 6px; background: rgba(0, 0, 0, .45); z-index: 3; }
+.chess-promote[hidden] { display: none; }
+.chess-piece-pick { width: 18%; aspect-ratio: 1; border-radius: 10px; border: none; background: var(--chess-light); font-size: min(40px, 10cqw); font-family: "Segoe UI Symbol", "Apple Symbols", "Noto Sans Symbols 2", "DejaVu Sans", serif; cursor: pointer; }
+.chess-piece-pick.white { color: #fff; -webkit-text-stroke: 1.2px #2a2a2a; }
+.chess-piece-pick.black { color: #1d1d1d; }
+.chess-side { flex: 1 1 220px; min-width: 0; display: flex; flex-direction: column; gap: 10px; }
+.chess-turn { display: flex; flex-direction: column; gap: 2px; }
+.chess-turn b { font-size: 15px; }
+.chess-turn span { font-size: 12px; color: var(--text-3); }
+.chess-san { font-family: var(--mono); font-size: 16px; }
+.chess-say > :first-child { margin-top: 0; }
+.chess-say > :last-child { margin-bottom: 0; }
+.chess-feedback.hint { background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--text); }
+.chess-buttons .chess-ask { margin-left: auto; }
+.chess-open .chess-piece { cursor: grab; }
+@media (prefers-reduced-motion: reduce) { .chess-piece, .chess-bar i { transition: none; } .chess-sq.wrong::before { animation: none; } }
 .course { border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); padding: 16px; display: flex; flex-direction: column; gap: 14px; }
 /* A setting that only matters while the one above it is on. */
 .setting-row.compact-amount.off { opacity: 0.45; pointer-events: none; }
@@ -3976,6 +4028,9 @@ const ICON = {
   chip: '<rect x="5" y="5" width="14" height="14" rx="2"/><rect x="9" y="9" width="6" height="6" rx="1"/><path d="M9 2v3M15 2v3M9 19v3M15 19v3M19 9h3M19 15h3M2 9h3M2 15h3"/>',
   server: '<rect x="3" y="4" width="18" height="7" rx="2"/><rect x="3" y="13" width="18" height="7" rx="2"/><path d="M7 7.5h.01M7 16.5h.01"/>',
   more: '<circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/>',
+  chess: '<circle cx="12" cy="5.5" r="2.5"/><path d="M10 8.5 9 14h6l-1-5.5"/><path d="M8 14h8l1 4H7Z"/><path d="M5 21h14"/>',
+  flipBoard: '<path d="M7 20V4M4 7l3-3 3 3"/><path d="M17 4v16M14 17l3 3 3-3"/>',
+  eye: '<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/>',
 };
 const icon = (name) => `<svg class="i" viewBox="0 0 24 24" aria-hidden="true">${ICON[name]}</svg>`;
 
@@ -7978,6 +8033,7 @@ function drawEntry(entry, ctx) {
     case "file": messagesEl.appendChild(entry.kind === "image" ? inlineImage(entry) : entry.kind === "audio" ? audioPlayer(entry) : attachment(entry)); break;
     case "browser": drawBrowserFrame(entry); break;
     case "seen": seenImages(ctx.tool, entry.images || []); break;
+    case "chess": messagesEl.appendChild(chessCard(entry)); break;
     case "course": messagesEl.querySelector(`.course[data-course="${CSS.escape(entry.subject)}"]`)?.remove(); messagesEl.appendChild(courseCard(entry)); break;
     case "debate": {
       const live = messagesEl.querySelector(`.debate[data-debate="${entry.id}"]`);
@@ -17179,6 +17235,393 @@ function debateLive(event) {
   for (const node of [...old.children]) if (node !== form && !node.matches(".debate-head")) node.remove();
   for (const node of [...card.children]) if (!node.matches(".debate-head, .debate-more")) (form ? old.insertBefore(node, form) : old.appendChild(node));
   keepUp();
+}
+
+// ---------------------------------------------------------------------------
+// Chess lessons: a board in the chat, stepped through a move at a time.
+// Flash's moves play themselves; a move the user is asked to find is played
+// on the board, by dragging or by tapping the piece and then its square, and
+// marked at once against the legal moves the lesson brought with it. Nothing
+// goes to the model unless "Ask Flash" is pressed.
+
+const CHESS_GLYPH = { k: "♚", q: "♛", r: "♜", b: "♝", n: "♞", p: "♟" };
+const CHESS_NAME = { k: "king", q: "queen", r: "rook", b: "bishop", n: "knight", p: "pawn" };
+const chessSq = (name) => (+name[1] - 1) * 8 + "abcdefgh".indexOf(name[0]);
+const chessName = (sq) => "abcdefgh"[sq % 8] + (Math.floor(sq / 8) + 1);
+
+function chessBoard(fen) {
+  const board = Array(64).fill(null);
+  fen.split(" ")[0].split("/").forEach((row, i) => {
+    let file = 0;
+    for (const ch of row) {
+      if (/\d/.test(ch)) file += +ch;
+      else board[(7 - i) * 8 + file++] = ch;
+    }
+  });
+  return board;
+}
+
+// The move a step leaves on the board: the reply when there is one.
+function chessLastMove(st) {
+  if (!st) return null;
+  const uci = st.reply || st.move || (st.answers || [])[0];
+  return uci ? [chessSq(uci.slice(0, 2)), chessSq(uci.slice(2, 4))] : null;
+}
+
+function chessCard(entry) {
+  const card = el("div", "block chess", `<div class="chess-head"><span class="course-chip">${icon("chess")}<span>Chess</span></span><span class="chess-title"></span><span class="chess-count"></span><button type="button" class="icon-btn chess-flip" data-tip="Turn the board" aria-label="Turn the board">${icon("flipBoard")}</button></div><div class="chess-bar"><i></i></div><div class="chess-body"><div class="chess-board" role="img"><div class="chess-squares"></div><div class="chess-pieces"></div><svg class="chess-arrows" viewBox="0 0 8 8" aria-hidden="true"></svg><div class="chess-promote" hidden></div></div><div class="chess-side"><div class="chess-turn"></div><div class="chess-say"></div><div class="chess-feedback-box"></div><div class="course-buttons chess-buttons"></div></div></div>`);
+  card.dataset.chess = entry.id;
+  card.tabIndex = 0;
+  card.querySelector(".chess-title").textContent = entry.title;
+  const steps = entry.steps || [];
+  card._chess = { entry, steps, at: Math.min(entry.at || 0, steps.length), solved: new Set(entry.solved || []), flip: entry.side === "black", sel: null, wrong: 0, open: false, fen: entry.start, last: null, timers: [] };
+  card.querySelector(".chess-flip").onclick = () => { card._chess.flip = !card._chess.flip; chessSquares(card); chessPlace(card, card._chess.fen); chessMarks(card, card._chess.shownMarks); };
+  card.addEventListener("keydown", (e) => {
+    if (e.target.closest("input, textarea")) return;
+    if (e.key === "ArrowRight") { card.querySelector(".chess-next:not([disabled])")?.click(); e.preventDefault(); }
+    if (e.key === "ArrowLeft") { card.querySelector(".chess-back:not([disabled])")?.click(); e.preventDefault(); }
+  });
+  chessPointer(card);
+  chessSquares(card);
+  chessShow(card, card._chess.at, false);
+  return card;
+}
+
+// Where square SQ is drawn, in squares from the top left.
+function chessXY(card, sq) {
+  const f = sq % 8, r = Math.floor(sq / 8);
+  return card._chess.flip ? [7 - f, r] : [f, 7 - r];
+}
+
+function chessSquares(card) {
+  const box = card.querySelector(".chess-squares");
+  box.innerHTML = "";
+  for (let y = 0; y < 8; y++) for (let x = 0; x < 8; x++) {
+    const sq = card._chess.flip ? y * 8 + (7 - x) : (7 - y) * 8 + x;
+    const cell = box.appendChild(el("div", "chess-sq " + ((sq % 8 + Math.floor(sq / 8)) % 2 ? "light" : "dark")));
+    cell.dataset.sq = sq;
+    if (y === 7) cell.appendChild(el("span", "file", "abcdefgh"[sq % 8]));
+    if (x === 0) cell.appendChild(el("span", "rank", String(Math.floor(sq / 8) + 1)));
+  }
+  chessLit(card);
+}
+
+function chessPut(card, node, sq) {
+  const [x, y] = chessXY(card, sq);
+  node.dataset.sq = sq;
+  node.style.transform = `translate(${x * 100}%, ${y * 100}%)`;
+}
+
+function chessPlace(card, fen) {
+  const s = card._chess, box = card.querySelector(".chess-pieces");
+  s.fen = fen;
+  box.innerHTML = "";
+  chessBoard(fen).forEach((piece, sq) => {
+    if (!piece) return;
+    const white = piece === piece.toUpperCase(), kind = piece.toLowerCase();
+    const node = box.appendChild(el("div", `chess-piece ${white ? "white" : "black"}`, CHESS_GLYPH[kind] + "︎"));
+    node.dataset.piece = piece;
+    node.setAttribute("aria-label", `${white ? "White" : "Black"} ${CHESS_NAME[kind]} on ${chessName(sq)}`);
+    chessPut(card, node, sq);
+  });
+  const turn = fen.split(" ")[1] === "w" ? "White" : "Black";
+  card.querySelector(".chess-board").setAttribute("aria-label", `Chess board, ${turn} to move`);
+  chessLit(card);
+}
+
+// The squares lit: the last move, the piece picked up and where it can go.
+function chessLit(card) {
+  const s = card._chess, st = s.steps[s.at];
+  const targets = s.sel === null || !st?.legal ? [] : Object.keys(st.legal).filter((u) => u.startsWith(chessName(s.sel))).map((u) => chessSq(u.slice(2, 4)));
+  const board = chessBoard(s.fen);
+  card.classList.toggle("chess-open", s.open);
+  card.querySelectorAll(".chess-sq").forEach((cell) => {
+    const sq = +cell.dataset.sq;
+    cell.classList.toggle("last", !!s.last && s.last.includes(sq));
+    cell.classList.toggle("picked", s.sel === sq);
+    cell.classList.toggle("can", targets.includes(sq));
+    cell.classList.toggle("take", targets.includes(sq) && !!board[sq]);
+    cell.classList.toggle("mark", (s.shownMarks?.marks || []).includes(chessName(sq)));
+  });
+}
+
+function chessMarks(card, shown) {
+  const s = card._chess, svg = card.querySelector(".chess-arrows");
+  s.shownMarks = shown || null;
+  svg.innerHTML = "";
+  for (const pair of shown?.arrows || []) {
+    if (pair.length < 4) continue;
+    const [ax, ay] = chessXY(card, chessSq(pair.slice(0, 2))), [bx, by] = chessXY(card, chessSq(pair.slice(2, 4)));
+    const x1 = ax + 0.5, y1 = ay + 0.5, x2 = bx + 0.5, y2 = by + 0.5;
+    const len = Math.hypot(x2 - x1, y2 - y1) || 1, dx = (x2 - x1) / len, dy = (y2 - y1) / len;
+    const tipX = x2 - dx * 0.12, tipY = y2 - dy * 0.12, baseX = tipX - dx * 0.42, baseY = tipY - dy * 0.42;
+    const nx = -dy * 0.26, ny = dx * 0.26;
+    svg.insertAdjacentHTML("beforeend", `<g class="arrow"><line x1="${x1 + dx * 0.22}" y1="${y1 + dy * 0.22}" x2="${baseX}" y2="${baseY}"/><polygon points="${tipX},${tipY} ${baseX + nx},${baseY + ny} ${baseX - nx},${baseY - ny}"/></g>`);
+  }
+  chessLit(card);
+}
+
+function chessLater(card, ms, fn) {
+  card._chess.timers.push(setTimeout(fn, matchMedia("(prefers-reduced-motion: reduce)").matches ? 0 : ms));
+}
+
+// Plays UCI on the board, sliding the piece (and the rook, castling), then
+// draws AFTER, which has the rest right: a capture en passant, a promotion.
+function chessAnimate(card, uci, after, done) {
+  const s = card._chess, box = card.querySelector(".chess-pieces");
+  const from = chessSq(uci.slice(0, 2)), to = chessSq(uci.slice(2, 4));
+  const at = (sq) => box.querySelector(`.chess-piece[data-sq="${sq}"]:not(.taken)`);
+  at(to)?.classList.add("taken");
+  const mover = at(from);
+  if (mover) {
+    mover.classList.remove("lifted");
+    chessPut(card, mover, to);
+    if (mover.dataset.piece.toLowerCase() === "k" && Math.abs(to - from) === 2) {
+      const rook = at(to > from ? from + 3 : from - 4);
+      if (rook) chessPut(card, rook, to > from ? from + 1 : from - 1);
+    }
+  }
+  s.sel = null;
+  s.last = [from, to];
+  chessLit(card);
+  chessLater(card, 240, () => { chessPlace(card, after); done?.(); });
+}
+
+function chessSave(card) {
+  const s = card._chess;
+  s.entry.at = s.at;
+  s.entry.solved = [...s.solved];
+  command("chess-step", s.entry.id, current, { at: s.at, solved: [...s.solved] }).catch(() => {});
+}
+
+function chessButton(row, label, cls, onclick, glyph = "") {
+  const b = row.appendChild(el("button", `btn ${cls}`, `${glyph ? icon(glyph) : ""}<span></span>`));
+  b.type = "button";
+  b.lastChild.textContent = label;
+  b.onclick = onclick;
+  return b;
+}
+
+function chessShow(card, at, play = true) {
+  const s = card._chess, steps = s.steps;
+  s.timers.forEach(clearTimeout);
+  s.timers = [];
+  s.at = Math.max(0, Math.min(at, steps.length));
+  s.sel = null;
+  s.wrong = 0;
+  s.open = false;
+  card.querySelector(".chess-promote").hidden = true;
+  card.querySelector(".chess-feedback-box").innerHTML = "";
+  card.querySelector(".chess-count").textContent = `${Math.min(s.at + 1, steps.length)}/${steps.length}`;
+  card.querySelector(".chess-bar i").style.width = `${steps.length ? (100 * s.at) / steps.length : 0}%`;
+  if (s.at === steps.length) return chessDone(card);
+  const st = steps[s.at], turn = card.querySelector(".chess-turn"), say = card.querySelector(".chess-say");
+  say.innerHTML = st.say ? markdown(st.say) : "";
+  s.last = chessLastMove(steps[s.at - 1]);
+  chessMarks(card, null);
+  const row = card.querySelector(".chess-buttons");
+  row.innerHTML = "";
+  const back = chessButton(row, "Back", "chess-back", () => chessShow(card, s.at - 1), "chevLeft");
+  back.disabled = s.at === 0;
+  const next = chessButton(row, s.at === steps.length - 1 ? "Finish" : "Next", "primary chess-next", () => chessShow(card, s.at + 1), "chevRight");
+  if (st.ask) {
+    s.open = true;
+    chessPlace(card, st.fen);
+    chessMarks(card, { arrows: st.arrows, marks: st.marks });
+    const who = st.turn === "w" ? "White" : "Black";
+    turn.innerHTML = `<b></b><span></span>`;
+    turn.firstChild.textContent = `${who} to play`;
+    turn.lastChild.textContent = "Find the move: drag the piece, or tap it and then its square.";
+    next.hidden = true;
+    if (st.hint) chessButton(row, "Hint", "chess-hint", () => chessFeedback(card, "hint", "Hint", st.hint), "think");
+    const show = chessButton(row, "Show me", "chess-show", () => chessAnswer(card, st.answers[0], "shown"), "eye");
+    show.hidden = true;
+  } else {
+    turn.innerHTML = st.san ? `<b class="chess-san"></b>` : "";
+    if (st.san) {
+      const [, side, , , , full] = st.fen.split(" ");
+      turn.firstChild.textContent = `${full}${side === "w" ? "." : "..."} ${st.san}`;
+    }
+    chessPlace(card, st.fen);
+    const finish = () => {
+      chessMarks(card, { arrows: st.arrows, marks: st.marks });
+      if (st.end) chessFeedback(card, "right", st.end === "checkmate" ? "Checkmate" : "Stalemate");
+    };
+    if (st.move) {
+      if (play) chessLater(card, 380, () => chessAnimate(card, st.move, st.after, finish));
+      else { s.last = [chessSq(st.move.slice(0, 2)), chessSq(st.move.slice(2, 4))]; chessPlace(card, st.after); finish(); }
+    } else finish();
+  }
+  chessAskButton(row, card, st);
+  if (s.at !== (s.entry.at || 0)) chessSave(card);
+}
+
+function chessAskButton(row, card, st) {
+  const s = card._chess;
+  chessButton(row, "Ask Flash", "chess-ask", () => {
+    const where = `In my chess lesson "${s.entry.title}", at step ${s.at + 1} (position ${st.fen})`;
+    const question = st.ask ? (s.open ? "can you give me a bigger hint, without the move?" : `why is ${st.answer_san[0]} the move?`) : st.san ? `why ${st.san}?` : "can you explain this position?";
+    send(`${where}: ${question}`);
+  }, "chat");
+}
+
+function chessFeedback(card, kind, title, why = "", button = null) {
+  const box = card.querySelector(".chess-feedback-box");
+  box.innerHTML = "";
+  const bar = box.appendChild(el("div", `course-feedback chess-feedback ${kind}`, "<span></span>"));
+  bar.firstChild.textContent = title;
+  if (button) bar.appendChild(button);
+  if (why) bar.appendChild(el("span", "why", "")).innerHTML = markdown(why);
+}
+
+// The user's move on an answer step: right, or legal but not it.
+function chessTry(card, uci) {
+  const s = card._chess, st = s.steps[s.at];
+  if (st.answers.includes(uci)) return chessAnswer(card, uci, s.wrong ? "later" : "first");
+  s.wrong++;
+  s.sel = null;
+  chessPlace(card, st.fen);
+  const cell = card.querySelector(`.chess-sq[data-sq="${chessSq(uci.slice(2, 4))}"]`);
+  cell?.classList.add("wrong");
+  chessLater(card, 600, () => cell?.classList.remove("wrong"));
+  chessFeedback(card, "wrong", `${st.legal[uci]} is legal, but not the move here. Try again.`, s.wrong >= 2 && st.hint ? st.hint : "");
+  const show = card.querySelector(".chess-show");
+  if (show) show.hidden = false;
+  buzz();
+}
+
+// The position after UCI alone, drawn from FEN: enough to slide a piece to.
+function chessAfter(fen, uci) {
+  const b = chessBoard(fen), f = chessSq(uci.slice(0, 2)), t = chessSq(uci.slice(2, 4)), piece = b[f];
+  const white = piece === piece.toUpperCase();
+  if (piece.toLowerCase() === "p" && (t - f) % 8 && !b[t]) b[t + (white ? -8 : 8)] = null;
+  if (piece.toLowerCase() === "k" && Math.abs(t - f) === 2) { const rf = t > f ? f + 3 : f - 4; b[t > f ? f + 1 : f - 1] = b[rf]; b[rf] = null; }
+  b[t] = uci[4] ? (white ? uci[4].toUpperCase() : uci[4]) : piece;
+  b[f] = null;
+  const rows = [];
+  for (let r = 7; r >= 0; r--) {
+    let row = "", empty = 0;
+    for (let c = 0; c < 8; c++) { const p = b[r * 8 + c]; if (!p) empty++; else { row += (empty || "") + p; empty = 0; } }
+    rows.push(row + (empty || ""));
+  }
+  return `${rows.join("/")} ${white ? "b" : "w"} - - 0 1`;
+}
+
+// An answer step settled: HOW is "first" (found on the first try), "later",
+// or "shown" (Show me). The lesson's own move is the one it goes on with, so
+// another right move is played, then taken back for it.
+function chessAnswer(card, uci, how) {
+  const s = card._chess, st = s.steps[s.at], main = st.answers[0];
+  s.open = false;
+  if (how === "first") s.solved.add(s.at);
+  else s.solved.delete(s.at);
+  card.querySelector(".chess-hint")?.remove();
+  card.querySelector(".chess-show")?.remove();
+  chessMarks(card, null);
+  const end = () => { if (st.end) chessFeedback(card, "right", st.end === "checkmate" ? "Checkmate" : "Stalemate"); };
+  const lessonMove = () => chessAnimate(card, main, st.mid, () => {
+    if (st.reply) chessLater(card, 520, () => chessAnimate(card, st.reply, st.after, end));
+    else end();
+  });
+  if (uci === main) lessonMove();
+  else chessAnimate(card, uci, chessAfter(st.fen, uci), () => chessLater(card, 900, () => { chessPlace(card, st.fen); s.last = chessLastMove(s.steps[s.at - 1]); chessLit(card); chessLater(card, 200, lessonMove); }));
+  const reply = st.reply ? ` ${st.turn === "w" ? "Black" : "White"} answers ${st.reply_san}.` : "";
+  const also = uci !== main ? ` The lesson goes on with ${st.answer_san[0]}.` : "";
+  if (how === "shown") chessFeedback(card, "hint", `The move was ${st.answer_san[0]}.${reply}`);
+  else chessFeedback(card, "right", `Right: ${st.legal[uci]}.${also}${reply}`);
+  const next = card.querySelector(".chess-next");
+  if (next) { next.hidden = false; next.focus({ preventScroll: true }); }
+  chessSave(card);
+}
+
+function chessDone(card) {
+  const s = card._chess, steps = s.steps, last = steps[steps.length - 1];
+  const asks = steps.filter((st) => st.ask).length;
+  s.last = chessLastMove(last);
+  chessPlace(card, last.after);
+  chessMarks(card, null);
+  card.querySelector(".chess-count").textContent = `${steps.length}/${steps.length}`;
+  card.querySelector(".chess-bar i").style.width = "100%";
+  const turn = card.querySelector(".chess-turn");
+  turn.innerHTML = "<b>Lesson complete</b>";
+  card.querySelector(".chess-say").textContent = asks ? `You found ${s.solved.size} of ${asks} move${asks === 1 ? "" : "s"} on the first try.` : "";
+  const row = card.querySelector(".chess-buttons");
+  row.innerHTML = "";
+  chessButton(row, "Back", "chess-back", () => chessShow(card, steps.length - 1), "chevLeft");
+  chessButton(row, "Again", "", () => { s.solved.clear(); chessShow(card, 0); }, "retry");
+  chessButton(row, "Next lesson", "primary", () => send(`I finished the chess lesson "${s.entry.title}". Teach me the next one.`), "chevRight");
+  chessButton(row, "Ask Flash", "chess-ask", () => send(`I finished the chess lesson "${s.entry.title}" (it ends at ${last.after}). Can you go over what I should take from it?`), "chat");
+  if (s.at !== (s.entry.at || 0)) chessSave(card);
+}
+
+// Moving a piece on an answer step: dragged, or tapped and then its square.
+function chessPointer(card) {
+  const board = card.querySelector(".chess-board");
+  const squareAt = (e) => {
+    const box = board.getBoundingClientRect();
+    const x = Math.floor(((e.clientX - box.left) / box.width) * 8), y = Math.floor(((e.clientY - box.top) / box.height) * 8);
+    if (x < 0 || x > 7 || y < 0 || y > 7) return null;
+    return card._chess.flip ? y * 8 + (7 - x) : (7 - y) * 8 + x;
+  };
+  const movesFrom = (sq) => {
+    const st = card._chess.steps[card._chess.at];
+    return Object.keys(st?.legal || {}).filter((u) => u.startsWith(chessName(sq)));
+  };
+  let drag = null;
+  board.addEventListener("pointerdown", (e) => {
+    const s = card._chess;
+    if (!s.open || e.button > 0) return;
+    const sq = squareAt(e);
+    if (sq === null) return;
+    if (s.sel !== null && s.sel !== sq && movesFrom(s.sel).some((u) => u.slice(2, 4) === chessName(sq))) {
+      chessMoveTo(card, s.sel, sq);
+      return;
+    }
+    if (!movesFrom(sq).length) { s.sel = null; chessLit(card); return; }
+    e.preventDefault();
+    s.sel = sq;
+    chessLit(card);
+    const node = board.querySelector(`.chess-piece[data-sq="${sq}"]`);
+    const box = board.getBoundingClientRect();
+    drag = { node, x: e.clientX, y: e.clientY, box, moved: false, id: e.pointerId };
+    board.setPointerCapture(e.pointerId);
+  });
+  board.addEventListener("pointermove", (e) => {
+    if (!drag || e.pointerId !== drag.id) return;
+    if (!drag.moved && Math.hypot(e.clientX - drag.x, e.clientY - drag.y) < 4) return;
+    drag.moved = true;
+    const size = drag.box.width / 8;
+    drag.node.classList.add("lifted");
+    drag.node.style.transform = `translate(${e.clientX - drag.box.left - size / 2}px, ${e.clientY - drag.box.top - size / 2}px)`;
+  });
+  const drop = (e) => {
+    if (!drag || e.pointerId !== drag.id) return;
+    const was = drag;
+    drag = null;
+    if (!was.moved) return;
+    const s = card._chess, to = squareAt(e);
+    if (to !== null && to !== s.sel && movesFrom(s.sel).some((u) => u.slice(2, 4) === chessName(to))) chessMoveTo(card, s.sel, to);
+    else { was.node.classList.remove("lifted"); chessPut(card, was.node, +was.node.dataset.sq); }
+  };
+  board.addEventListener("pointerup", drop);
+  board.addEventListener("pointercancel", drop);
+}
+
+function chessMoveTo(card, from, to) {
+  const s = card._chess, st = s.steps[s.at];
+  const moves = Object.keys(st.legal).filter((u) => u.startsWith(chessName(from) + chessName(to)));
+  if (moves.length === 1) return chessTry(card, moves[0]);
+  // A pawn reaching the last rank: which piece it becomes.
+  const pick = card.querySelector(".chess-promote");
+  const white = st.turn === "w";
+  pick.innerHTML = "";
+  for (const kind of "qrnb") {
+    const b = pick.appendChild(el("button", `chess-piece-pick ${white ? "white" : "black"}`, CHESS_GLYPH[kind] + "︎"));
+    b.type = "button";
+    b.setAttribute("aria-label", CHESS_NAME[kind]);
+    b.onclick = () => { pick.hidden = true; chessTry(card, chessName(from) + chessName(to) + kind); };
+  }
+  pick.hidden = false;
 }
 
 // ---------------------------------------------------------------------------

@@ -547,6 +547,15 @@ def tool_course(subject: str) -> bool:
         if sink else False
 
 
+def tool_chess(lesson: dict) -> bool:
+    """Show a chess LESSON (chess.build_lesson) on the page, as a board
+    the user steps through: False where there is no page (the
+    terminal)."""
+
+    sink = _sink()
+    return bool(sink("chess", json.dumps(lesson), "")) if sink else False
+
+
 def tool_project(event: dict) -> Optional[dict]:
     """Make the chat this turn is in a project (make_project): what the
     page made of it, or None where there is no chat to move (the

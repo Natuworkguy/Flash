@@ -97,6 +97,7 @@ from .theme import (
     set_denial_why,
     tool_audio,
     tool_browser,
+    tool_chess,
     tool_course,
     tool_diff,
     tool_document,
@@ -4250,6 +4251,153 @@ def smart_home(action: str = "list", device: str = "", brightness: Any = None,
                    if others else "")
 
 
+CHESS_PIECES = dict(zip("KQRBNPkqrbnp", "♔♕♖♗♘♙♚♛♜♝♞♟"))
+
+
+def _chess_board(fen: str, flip: bool, last=None) -> Text:
+    """The position drawn in the terminal, the last move's squares
+    marked."""
+
+    from . import chess
+
+    board = chess.Position.from_fen(fen).board
+    marked = set(last or ())
+    out = Text()
+    ranks = range(8) if flip else range(7, -1, -1)
+    files = list(range(7, -1, -1) if flip else range(8))
+    for rank in ranks:
+        out.append(f"{' ' * RESULT_INDENT}{rank + 1} ", style=DIM)
+        for file in files:
+            sq = rank * 8 + file
+            piece = board[sq]
+            light = (rank + file) % 2 == 1
+            back = "#a9a95a" if sq in marked else (
+                "#d9c4a0" if light else "#a07850")
+            out.append(f" {CHESS_PIECES[piece] if piece else ' '} ",
+                       style=f"bold black on {back}")
+        out.append("\n")
+    out.append(" " * (RESULT_INDENT + 2) + "".join(
+        f" {chess.FILES[f]} " for f in files), style=DIM)
+    return out
+
+
+def _chess_in_terminal(lesson: dict) -> str:
+    """Play LESSON here: each step's board and words, Flash's moves made
+    on Enter, and the user's typed in and checked. What happened, for
+    the model."""
+
+    from . import chess
+
+    flip = lesson["side"] == "black"
+    interactive = sys.stdin.isatty() and not capturing()
+    found, asked, last = 0, 0, None
+    for n, step in enumerate(lesson["steps"], start=1):
+        pos = chess.Position.from_fen(step["fen"])
+        console.print(Text(f"{' ' * RESULT_INDENT}Step {n} of "
+                           f"{len(lesson['steps'])}", style=DIM))
+        if step.get("ask"):
+            asked += 1
+            console.print(_chess_board(step["fen"], flip, last))
+            if step["say"]:
+                console.print(Text(f"{' ' * RESULT_INDENT}{step['say']}"))
+            who = "White" if step["turn"] == "w" else "Black"
+            tries, right = 0, False
+            while interactive:
+                said = console.input(Text(
+                    f"{' ' * RESULT_INDENT}{who} to play. Your move "
+                    "(? for a hint, Enter to see it, q to stop): ",
+                    style=DIM)).strip()
+                if said.lower() == "q":
+                    return (f"The user stopped at step {n} of "
+                            f"{len(lesson['steps'])}, having found "
+                            f"{found} of {asked - 1} moves.")
+                if said == "?":
+                    console.print(Text(f"{' ' * RESULT_INDENT}"
+                                       f"{step['hint'] or 'No hint here.'}",
+                                       style=DIM))
+                    continue
+                if not said:
+                    break
+                tries += 1
+                try:
+                    move = pos.uci(pos.find(said))
+                except chess.ChessError:
+                    console.print(Text(f"{' ' * RESULT_INDENT}{said} is not "
+                                       "a legal move here.", style=WARN))
+                    continue
+                if move in step["answers"]:
+                    right = True
+                    found += tries == 1
+                    break
+                console.print(Text(f"{' ' * RESULT_INDENT}"
+                                   f"{step['legal'][move]} is legal, but not "
+                                   "the move here.", style=WARN))
+            first = step["answer_san"][0]
+            console.print(Text(f"{' ' * RESULT_INDENT}"
+                               + (f"Right: {first}." if right
+                                  else f"The move was {first}.")
+                               + (f" {('White', 'Black')[step['turn'] == 'w']}"
+                                  f" answers {step['reply_san']}."
+                                  if step.get("reply") else ""),
+                               style=ACCENT if right else DIM))
+            played = step.get("reply") or step["answers"][0]
+            last = (chess.square(played[:2]), chess.square(played[2:4]))
+            continue
+        if step.get("move"):
+            console.print(Text(f"{' ' * RESULT_INDENT}{step['san']}",
+                               style=f"bold {ACCENT}"))
+            last = (chess.square(step["move"][:2]),
+                    chess.square(step["move"][2:4]))
+        console.print(_chess_board(step["after"], flip, last))
+        if step["say"]:
+            console.print(Text(f"{' ' * RESULT_INDENT}{step['say']}"))
+        if step["end"]:
+            console.print(Text(f"{' ' * RESULT_INDENT}{step['end'].title()}.",
+                               style=f"bold {ACCENT}"))
+        if interactive and n < len(lesson["steps"]):
+            said = console.input(Text(f"{' ' * RESULT_INDENT}Enter for the "
+                                      "next step, q to stop: ", style=DIM))
+            if said.strip().lower() == "q":
+                return (f"The user stopped at step {n} of "
+                        f"{len(lesson['steps'])}.")
+    if not interactive:
+        return ("Shown in the terminal, every step at once, since nobody "
+                "is at it to play the moves.\n" + chess.summary(lesson))
+    return (f"The user went through the whole lesson and found {found} of "
+            f"{asked} moves on the first try.\n" + chess.summary(lesson))
+
+
+def teach_chess(title: str = "", steps: Any = None, start: str = "",
+                side: str = "white") -> str:
+    """Teach chess a move at a time: a lesson the user steps through on
+    a board, every move checked against the rules first."""
+
+    from . import chess
+
+    tool_line(f"ChessLesson({title or 'chess'})")
+    try:
+        if isinstance(steps, str):
+            steps = json.loads(steps)
+        lesson = chess.build_lesson(title, steps, start, side)
+    except (chess.ChessError, ValueError) as exc:
+        result = (f"Error: {exc}. Nothing was shown: fix it and call "
+                  "teach_chess again with the whole lesson.")
+        tool_result(result, style=ERROR)
+        return result
+    asks = sum(1 for s in lesson["steps"] if s.get("ask"))
+    label = (f"{len(lesson['steps'])} step{plural(len(lesson['steps']))}, "
+             f"{asks} move{plural(asks)} to find")
+    if tool_chess(lesson):
+        tool_result(label)
+        return ("It is in the chat as a board the user steps through: "
+                "your moves play themselves, and the moves they find are "
+                "marked there at once. Do not repeat the lesson in your "
+                "reply; say in a line what it covers.\n"
+                + chess.summary(lesson))
+    tool_result(label)
+    return _chess_in_terminal(lesson)
+
+
 def read_aloud(text: str = "", url: str = "", path: str = "",
                out: str = "") -> str:
     """Read an article, a document or some text aloud in Flash's voice:
@@ -6399,6 +6547,89 @@ tools: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "teach_chess",
+            "description": (
+                "Teach chess move by move: an opening, a tactic, an "
+                "endgame, a famous game, or a mistake from the user's "
+                "own game. The lesson is a list of steps on one board, "
+                "from the start or from a FEN position: a step plays a "
+                "move and says why, or asks the user to find the move "
+                "(answer), with a hint, and can play the other side's "
+                "reply. In the browser it is a board in the chat they "
+                "step through and move pieces on, their moves marked at "
+                "once; in the terminal it plays there. Every move is "
+                "checked against the rules first: an illegal one comes "
+                "back as an error naming the step and the legal moves, "
+                "so fix it and send the whole lesson again. Moves are "
+                "written as usual (e4, Nf3, exd5, O-O, e8=Q) or as "
+                "squares (e2e4)."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string", "description": (
+                        "What the lesson is, like \"The Italian Game\" "
+                        "or \"Knight forks\".")},
+                    "steps": {
+                        "type": "array",
+                        "description": (
+                            "In order, each from where the last left "
+                            "off. Short steps: one move and a sentence "
+                            "or two each. Ask the user to find the key "
+                            "moves, not every move."),
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "say": {"type": "string", "description": (
+                                    "What to tell them at this step: "
+                                    "why the move is played, or what to "
+                                    "look for. Markdown.")},
+                                "move": {"type": "string", "description": (
+                                    "A move to play and show them.")},
+                                "answer": {"type": "string", "description": (
+                                    "Instead of move: the move they must "
+                                    "find, or several good ones comma "
+                                    "separated (the first is played).")},
+                                "hint": {"type": "string", "description": (
+                                    "With answer: a nudge, without "
+                                    "giving the move away.")},
+                                "reply": {"type": "string", "description": (
+                                    "With answer: the other side's move "
+                                    "after theirs.")},
+                                "arrows": {
+                                    "type": "array",
+                                    "items": {"type": "string"},
+                                    "description": (
+                                        "Arrows to draw, as square pairs "
+                                        "like e2e4: after the step's "
+                                        "move, or while they think on an "
+                                        "answer step (so never the "
+                                        "answer itself)."),
+                                },
+                                "highlight": {
+                                    "type": "array",
+                                    "items": {"type": "string"},
+                                    "description": "Squares to mark, like f7.",
+                                },
+                            },
+                        },
+                    },
+                    "start": {"type": "string", "description": (
+                        "Optional: the position to start from, as FEN. "
+                        "The usual starting position when left out.")},
+                    "side": {"type": "string", "enum": ["white", "black"],
+                             "description": (
+                                 "Whose side the board is seen from: the "
+                                 "side the user plays. White when left "
+                                 "out.")},
+                },
+                "required": ["title", "steps"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "read_aloud",
             "description": (
                 "Read something aloud in Flash's voice: an article from "
@@ -7969,6 +8200,7 @@ FUNCTIONS = {
     "refresh_tools": refresh_tools,
     "review_code": review_code,
     "read_aloud": read_aloud,
+    "teach_chess": teach_chess,
     "smart_home": smart_home,
     "send_audio": send_audio,
     "journal": journal_tool,
