@@ -2121,13 +2121,16 @@ def think_harder_tool(why: str = "") -> str:
 
 
 def available_tools() -> list[dict[str, Any]]:
-    """The built-in tools that can work right now: email's only once it
-    is set up, and the computer's only once the user has allowed it, and
-    only what they have not switched off of it, so a model is not
-    offered tools that can only fail."""
+    """The built-in tools that can work right now: email's and the smart
+    home's only once each is set up, and the computer's only once the
+    user has allowed it, and only what they have not switched off of
+    it, so a model is not offered tools that can only fail."""
 
+    from . import smarthome
+
+    home = smarthome.connected()
     return (
-        tools
+        [t for t in tools if home or t["function"]["name"] != "smart_home"]
         + (EMAIL_TOOLS if mail.configured() else [])
         + computer_tools()
         + (computer_use_tools() if computeruse.enabled() else [])
@@ -4181,6 +4184,70 @@ def send_audio(path: str, caption: str = "", play: Any = False) -> str:
         f": {note}" if note else "")
     return f"Sent {audio_path.name}.\n" + _show_audio(
         audio_path, label, _truthy(play))
+
+
+SMART_HOME_VERBS = {
+    "turn_on": "Turn on", "turn_off": "Turn off", "toggle": "Switch",
+    "set": "Change", "activate": "Run", "lock": "Lock", "unlock": "Unlock",
+    "open": "Open", "close": "Close", "stop": "Stop",
+}
+
+
+def smart_home(action: str = "list", device: str = "", brightness: Any = None,
+               color: str = "", temperature: Any = None, mode: str = "",
+               position: Any = None, percentage: Any = None,
+               volume: Any = None) -> str:
+    """Read and control the user's smart home, through Home Assistant."""
+
+    from . import smarthome
+
+    action = str(action or "list").strip().lower()
+    device = str(device or "").strip()
+    tool_line(f"SmartHome({action}{' ' + device if device else ''})")
+    try:
+        if action == "list":
+            said = smarthome.listing(device)
+            tool_result(f"{len(said.splitlines())} device"
+                        f"{plural(len(said.splitlines()))}")
+            return said
+        if not device:
+            raise smarthome.HomeError("say which device")
+        found = smarthome.find(device)
+        if not found:
+            raise smarthome.HomeError(
+                f"no device called {device!r}; list them with action list")
+        if action == "state":
+            said = "\n".join(smarthome.describe(e) for e in found[:10])
+            tool_result(said.splitlines()[0])
+            return said
+        entity = found[0]
+        value = {k: v for k, v in (
+            ("brightness", brightness), ("color", color),
+            ("temperature", temperature), ("mode", mode),
+            ("position", position), ("percentage", percentage),
+            ("volume", volume)) if v not in (None, "")}
+        smarthome.service_for(entity, action, value)  # checked before asking
+        name = entity.get("attributes", {}).get("friendly_name") or \
+            entity["entity_id"]
+        guarded = smarthome.guarded(entity, action)
+        if (guarded and not ultra_auto()) or (
+                not guarded and not NO_COMMAND_CONFIRMATION):
+            details = ", ".join(f"{k} {v}" for k, v in value.items())
+            question = (f"{SMART_HOME_VERBS.get(action, action)} {name}"
+                        + (f" ({details})" if details else "") + "?")
+            if not _user_allows(question, ask_why=True):
+                why = denial_why()
+                return ("The user said no" + (f': "{why}"' if why else "")
+                        + ". Leave it as it is.")
+        said = smarthome.run(entity, action, value)
+    except (smarthome.HomeError, ValueError, TypeError) as exc:
+        result = f"Error: {exc}"
+        tool_result(result, style=ERROR)
+        return result
+    tool_result(said)
+    others = [e["entity_id"] for e in found[1:4]]
+    return said + (f"\n(Also matched, left alone: {', '.join(others)}.)"
+                   if others else "")
 
 
 def read_aloud(text: str = "", url: str = "", path: str = "",
@@ -6285,6 +6352,53 @@ tools: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "smart_home",
+            "description": (
+                "The user's smart home, through Home Assistant: lights, "
+                "plugs, thermostats, blinds, locks, fans, speakers, "
+                "scenes and sensors. list shows the devices and how each "
+                "is (device narrows it, like \"kitchen\" or "
+                "\"temperature\"); state reads one; turn_on, turn_off "
+                "and toggle switch one; set changes a light's brightness "
+                "(0-100) or color, a thermostat's temperature or mode, "
+                "blinds' position, a fan's percentage or a speaker's "
+                "volume; activate runs a scene or script; lock, unlock, "
+                "open, close and stop. Name devices as the user does; a "
+                "change may ask the user first."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string", "enum": [
+                        "list", "state", "turn_on", "turn_off", "toggle",
+                        "set", "activate", "lock", "unlock", "open",
+                        "close", "stop"]},
+                    "device": {"type": "string", "description": (
+                        "Its name in Home Assistant (\"living room "
+                        "lamp\"), or its entity id.")},
+                    "brightness": {"type": "number",
+                                   "description": "For set: 0 to 100."},
+                    "color": {"type": "string", "description": (
+                        "For set: a colour name (warm white, blue...) or "
+                        "a hex code.")},
+                    "temperature": {"type": "number", "description": (
+                        "For set: a thermostat's target.")},
+                    "mode": {"type": "string", "description": (
+                        "For set: heat, cool, auto or off.")},
+                    "position": {"type": "number", "description": (
+                        "For set: blinds, 0 shut to 100 open.")},
+                    "percentage": {"type": "number",
+                                   "description": "For set: a fan's speed."},
+                    "volume": {"type": "number",
+                               "description": "For set: 0 to 100."},
+                },
+                "required": ["action"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "read_aloud",
             "description": (
                 "Read something aloud in Flash's voice: an article from "
@@ -7855,6 +7969,7 @@ FUNCTIONS = {
     "refresh_tools": refresh_tools,
     "review_code": review_code,
     "read_aloud": read_aloud,
+    "smart_home": smart_home,
     "send_audio": send_audio,
     "journal": journal_tool,
     "plan": plan_tool,

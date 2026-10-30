@@ -530,6 +530,24 @@ can only judge are left out of the chat models above them. `/systemone`
 shows how many calls it has reviewed and stopped this session, and the
 status bar reads `auto + S1` while it is at work.
 
+### Smart home
+
+Flash controls your smart home through [Home Assistant](https://www.home-assistant.io),
+which already talks to nearly every brand of light, plug, thermostat,
+blind, lock and speaker. Connect it once in Settings, Connectors (or
+`/smarthome connect http://homeassistant.local:8123` in the terminal)
+with its address and a long-lived access token, made on your Home
+Assistant profile page under Security. The token is kept in Flash's
+vault.
+
+Then ask as you would anyone: "turn off the kitchen lights", "set the
+living room lamp to 30% warm white", "what's the temperature
+outside?", "start movie night". Devices are found by the names they
+have in Home Assistant. A change asks you first unless autonomous mode
+is on, and unlocking a door, opening a garage door or touching the
+alarm always asks. `/smarthome` lists your devices and how each is, and
+`/smarthome kitchen` narrows the list. `/smarthome off` disconnects.
+
 ### Journal
 
 Once a day is over, Flash writes it up: a few bullets on what you

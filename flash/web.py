@@ -4675,6 +4675,53 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
         session.review_chat(session.chat(chat_id), arg)
         return {}
 
+    if name == "smarthome":
+        from . import smarthome
+
+        found = {"connected": smarthome.connected(),
+                 "url": smarthome.address()}
+        if found["connected"] and arg == "check":
+            try:
+                found["said"] = smarthome.check()
+                found["devices"] = len(
+                    [x for x in smarthome.listing().splitlines() if x])
+            except smarthome.HomeError as exc:
+                found["error"] = str(exc)
+        return found
+
+    if name == "smarthome-connect":
+        from . import smarthome, vault
+
+        url = str(body.get("url") or "").strip().rstrip("/")
+        token = str(body.get("token") or "").strip()
+        if not url or not token:
+            raise ValueError("Give Home Assistant's address and a token.")
+        if not url.startswith(("http://", "https://")):
+            url = "http://" + url
+        was = (smarthome.address(), vault.get(smarthome.TOKEN))
+        ai.set_config_var(smarthome.URL_SETTING, url)
+        vault.set_secret(smarthome.TOKEN, token)
+        try:
+            said = smarthome.check()
+            count = len([x for x in smarthome.listing().splitlines() if x])
+        except smarthome.HomeError as exc:
+            # Not kept: what worked before stays.
+            ai.set_config_var(smarthome.URL_SETTING, was[0])
+            if was[1]:
+                vault.set_secret(smarthome.TOKEN, was[1])
+            else:
+                vault.delete(smarthome.TOKEN)
+            raise ValueError(str(exc)) from None
+        return {"connected": True, "url": url, "said": said,
+                "devices": count}
+
+    if name == "smarthome-off":
+        from . import smarthome, vault
+
+        ai.set_config_var(smarthome.URL_SETTING, "")
+        vault.delete(smarthome.TOKEN)
+        return {"connected": False}
+
     if name == "journal":
         from . import journal
 

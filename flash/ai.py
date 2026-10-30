@@ -5171,6 +5171,49 @@ def _web_tunnel(arg: str) -> None:
     ))
 
 
+def _smarthome_command(arg: str) -> None:
+    """/smarthome: the devices and how each is. /smarthome connect
+    <address> connects Home Assistant (the token is asked for, and kept
+    in the vault); /smarthome off forgets it; anything else narrows the
+    list, like /smarthome kitchen."""
+
+    from . import smarthome, vault
+
+    words = arg.split()
+    try:
+        if words[:1] == ["connect"]:
+            if len(words) < 2:
+                show_error("Use /smarthome connect "
+                           "http://homeassistant.local:8123")
+                return
+            url = words[1].rstrip("/")
+            if not url.startswith(("http://", "https://")):
+                url = "http://" + url
+            console.print(Text(
+                "  A long-lived access token: in Home Assistant, your "
+                "profile, Security, Create token.", style=DIM))
+            token = console.input("  Token: ", password=True).strip()
+            if not token:
+                return
+            set_config_var(smarthome.URL_SETTING, url)
+            vault.set_secret(smarthome.TOKEN, token)
+            said = smarthome.check()
+            count = len(
+                [x for x in smarthome.listing().splitlines() if x])
+            console.print(Text(
+                f"Connected: {said}. {count} devices to control.",
+                style=DIM))
+            return
+        if words == ["off"]:
+            set_config_var(smarthome.URL_SETTING, "")
+            vault.delete(smarthome.TOKEN)
+            console.print(Text("Smart home disconnected.", style=DIM))
+            return
+        console.print(Text(smarthome.listing(arg.strip())))
+    except smarthome.HomeError as exc:
+        show_error(str(exc))
+
+
 def _instructions_command(arg: str) -> None:
     """/instructions: the standing instructions for every reply; with
     text, replaces them; /instructions clear removes them."""
@@ -7102,6 +7145,10 @@ def _main() -> None:
 
             if uin == "/context":
                 _render_context(messages)
+                continue
+
+            if uin == "/smarthome" or uin.startswith("/smarthome "):
+                _smarthome_command(uin[len("/smarthome"):].strip())
                 continue
 
             if uin == "/journal" or uin.startswith("/journal "):

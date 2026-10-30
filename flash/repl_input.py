@@ -109,6 +109,8 @@ COMMANDS = [
     ("/compact", "summarize the conversation to free up room"),
     ("/review", "review your uncommitted changes for bugs (or /review "
                 "main, /review a..b)"),
+    ("/smarthome", "your lights, plugs, thermostat and more, through Home "
+                   "Assistant (connect <address>, off, <words> to narrow)"),
     ("/journal", "what you did, day by day (<day|week|month>, <words> to "
                  "search, now, on|off)"),
     ("/context", "show how much of the window is in use"),

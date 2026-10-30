@@ -13671,9 +13671,10 @@ async function drawConnectors(body, given = null) {
     try { c = await command("connectors"); } catch (error) { showFailure(error); return; }
   }
   if (!body.isConnected) return;
-  body.innerHTML = `<h2 class="settings-section">Connectors</h2><p class="settings-sub">Other programs' tools, through the Model Context Protocol: GitHub, Notion, a database, your files, anything with an MCP server. Each one's tools join Flash's own. A tool its server marks read-only runs straight away; any other asks you first, unless autonomous mode is on. The usual <code>mcpServers</code> config works pasted into <code></code> as it is.</p><div class="email-list conn-list"></div><div class="buttons email-buttons"></div><div class="conn-form-host"></div><div class="cal-box"></div>`;
+  body.innerHTML = `<h2 class="settings-section">Connectors</h2><p class="settings-sub">Other programs' tools, through the Model Context Protocol: GitHub, Notion, a database, your files, anything with an MCP server. Each one's tools join Flash's own. A tool its server marks read-only runs straight away; any other asks you first, unless autonomous mode is on. The usual <code>mcpServers</code> config works pasted into <code></code> as it is.</p><div class="email-list conn-list"></div><div class="buttons email-buttons"></div><div class="conn-form-host"></div><div class="cal-box"></div><div class="home-box"></div>`;
   body.querySelectorAll(".settings-sub code")[1].textContent = shortPath(c.path);
   drawCalendarSettings(body.querySelector(".cal-box"));
+  drawSmartHome(body.querySelector(".home-box"));
   const list = body.querySelector(".conn-list");
   for (const server of c.connectors) list.appendChild(connectorCard(body, server));
   const add = el("button", "btn with-icon", `${icon("plus")}<span>Add a connector</span>`);
@@ -13692,6 +13693,42 @@ async function drawConnectors(body, given = null) {
   if (c.connectors.some((s) => s.state === "starting")) {
     setTimeout(() => { if (body.isConnected && settingsTab === "connectors") drawConnectors(body); }, 1000);
   }
+}
+
+// Smart home: Home Assistant's address and a token, and then Flash reads
+// and controls what it does: lights, plugs, thermostats, blinds, locks.
+async function drawSmartHome(box) {
+  let r;
+  try { r = await command("smarthome", "check"); } catch (_) { return; }
+  if (!box.isConnected) return;
+  box.innerHTML = `<h2 class="settings-section settings-gap">Smart home</h2><p class="settings-sub">Flash reads and controls your lights, plugs, thermostat, blinds, locks and speakers through Home Assistant, whatever their brand. Changes ask you first unless autonomous mode is on; locks, alarms and garage doors always ask.</p>
+    <div class="email-card home-card"><span class="email-icon">${icon("bolt")}</span><span class="what"><span class="name-row"><b>Home Assistant</b><span class="state"></span></span><span class="said"></span></span><span class="email-actions"></span></div>`;
+  const card = box.querySelector(".home-card"), actions = card.querySelector(".email-actions");
+  card.querySelector(".state").textContent = r.connected ? (r.error ? "Not answering" : "Connected") : "";
+  card.querySelector(".said").textContent = r.connected
+    ? (r.error || `${r.url} · ${r.devices} device${r.devices === 1 ? "" : "s"} to control. Ask “turn off the kitchen lights” or “what's the temperature inside?”`)
+    : "Not connected. You need its address and a long-lived access token, made on your Home Assistant profile page under Security.";
+  if (r.connected) {
+    const off = el("button", "btn small danger", "Disconnect");
+    off.type = "button";
+    off.onclick = async () => { try { await command("smarthome-off"); drawSmartHome(box); } catch (error) { showFailure(error); } };
+    actions.append(off);
+    return;
+  }
+  const connect = el("button", "btn small primary", "Connect");
+  connect.type = "button";
+  connect.onclick = () => {
+    openForm(`<h2>Connect Home Assistant</h2><p class="sub">Its address, as you open it in a browser, and a long-lived access token: in Home Assistant, click your name, then Security, then Create token. The token goes in Flash's vault.</p>
+      <label class="field"><span>Address</span><input name="url" class="mono" required placeholder="http://homeassistant.local:8123"></label>
+      <label class="field"><span>Token</span><input name="token" class="mono" type="password" required></label>
+      <div class="dialog-buttons"><button type="button" class="btn" data-cancel>Cancel</button><button type="submit" class="btn primary">Connect</button></div>`,
+      async (data) => {
+        const said = await command("smarthome-connect", "", null, data);
+        toast(`Connected: ${said.devices} device${said.devices === 1 ? "" : "s"} to control`);
+        drawSmartHome(box);
+      });
+  };
+  actions.append(connect);
 }
 
 // Calendars: iCal feeds to read, and Google Calendar both ways, signed in
