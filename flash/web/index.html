@@ -18325,6 +18325,13 @@ async function clearChat() {
   await command("clear");
 }
 
+// The chat so far, summarized in place of its messages; the summary
+// shows up in the chat as a tool step when it is done.
+async function compactChat() {
+  if (!current) return;
+  try { await command("compact"); } catch (error) { showFailure(error); }
+}
+
 async function deleteChat(id = current, anchor = null) {
   if (!id) return;
   const row = document.querySelector(`.chat[data-chat="${id}"]`);
@@ -19342,6 +19349,7 @@ const ACTIONS = [
   { label: "Expand all tool output", keys: "Ctrl O", slash: "/tools", run: toggleAllTools },
   { label: "Rename chat", keys: "F2", slash: "/rename", run: rename },
   { label: "Pin or unpin this chat", keys: "", slash: "/pin", run: () => pinChat() },
+  { label: "Summarize this chat to free up room", keys: "", slash: "/compact", run: compactChat },
   { label: "Clear this chat", keys: "Alt L", slash: "/clear", run: clearChat },
   { label: "Delete this chat", keys: "Alt Shift D", slash: "/delete", run: () => deleteChat() },
   { label: "Show or hide the sidebar", keys: "Ctrl B", slash: "/sidebar", run: toggleSide },

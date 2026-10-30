@@ -304,7 +304,7 @@ python run.py
   stop it.
 - `/clear`: Clear the conversation history.
 - `/undo`: Take back the file changes from the last turn.
-- `/compact`: Summarize the conversation to free up room.
+- `/compact`: Summarize the conversation to free up room. It works in the browser too, from the message box or the command palette.
 - `/context`: Show how much of the context window is in use.
 - `/stats`: What Flash has done for you so far, in the terminal and the
   web UI together: replies, tokens, and how much of it ran on a local

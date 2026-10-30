@@ -4624,6 +4624,64 @@ class TestCustomInstructions:
         assert instructions.read() == ""
 
 
+class TestCompactInTheBrowser:
+    def wait(self, chat):
+        deadline = time.monotonic() + 5
+        time.sleep(0.05)
+        while chat.busy or chat.queued:
+            assert time.monotonic() < deadline, "it never finished"
+            time.sleep(0.02)
+
+    def test_the_chat_so_far_becomes_a_summary(self, monkeypatch):
+        FakeClient.scripts = [[part("Sure."), part(done=True)]]
+        asked = []
+        monkeypatch.setattr(
+            ai, "_summarize", lambda console, client, messages: (
+                asked.append(messages) or "They planned a trip to Lisbon."))
+        session = web.Session()
+        chat = session.new_chat()
+        chat.auto_title = False
+        run(session, chat, "Help me plan a trip to Lisbon.")
+        assert len(chat.messages) == 2
+
+        assert web.command(session, {"name": "compact",
+                                     "chat": chat.id}) == {}
+        self.wait(chat)
+
+        assert len(asked[0]) == 2
+        assert len(chat.messages) == 1
+        assert "They planned a trip to Lisbon." in \
+            chat.messages[0]["content"]
+        shown = [e.get("label") for e in chat.log if e["type"] == "tool"]
+        assert "Compact(2 messages)" in shown
+
+    def test_refused_when_empty_or_busy(self):
+        session = web.Session()
+        chat = session.new_chat()
+        with pytest.raises(ValueError, match="nothing to compact"):
+            session.compact_chat(chat)
+        chat.messages.append({"role": "user", "content": "hi"})
+        chat.busy = True
+        with pytest.raises(ValueError, match="Wait for the reply"):
+            session.compact_chat(chat)
+
+    def test_no_summary_keeps_the_chat(self, monkeypatch):
+        monkeypatch.setattr(ai, "_summarize", lambda *args: None)
+        session = web.Session()
+        chat = session.new_chat()
+        chat.messages[:] = [{"role": "user", "content": "hi"},
+                            {"role": "assistant", "content": "hello"}]
+
+        session.compact_chat(chat)
+        self.wait(chat)
+
+        assert len(chat.messages) == 2
+
+    def test_on_the_page(self):
+        page = web.PAGE.read_text()
+        assert 'slash: "/compact", run: compactChat' in page
+
+
 class TestAgentsFile:
     def test_the_folders_own_is_read(self, tmp_path):
         from flash import instructions
