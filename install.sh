@@ -17,18 +17,25 @@ uninstall() {
 }
 
 
-if [ "${1:-}" == "--uninstall" ]; then
-    uninstall
-
-    exit 0
-fi
+# --dev installs the dev branch, where changes land before a release.
+BRANCH="main"
+for arg in "$@"; do
+    case "$arg" in
+        --uninstall) uninstall; exit 0 ;;
+        --dev) BRANCH="dev" ;;
+        *) echo "Unknown option: $arg (use --dev or --uninstall)"; exit 1 ;;
+    esac
+done
 
 REPO_URL="https://github.com/Natuworkguy/Flash"
 TEMP_DIR="$(mktemp -d)"
 REPO_DIR="$TEMP_DIR/flash"
 
+if [ "$BRANCH" = "dev" ]; then
+    echo "Installing the dev version of Flash."
+fi
 
-git clone "$REPO_URL" "$REPO_DIR"  || {
+git clone --branch "$BRANCH" "$REPO_URL" "$REPO_DIR"  || {
     echo "Failed to clone repository. Please check your internet connection and try again.";
     exit 1;
 }

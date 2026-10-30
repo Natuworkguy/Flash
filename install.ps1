@@ -6,7 +6,9 @@
 #>
 
 param(
-    [switch]$Uninstall
+    [switch]$Uninstall,
+    # The dev branch, where changes land before a release.
+    [switch]$Dev
 )
 
 $ErrorActionPreference = "Stop"
@@ -92,7 +94,9 @@ try {
         exit 1
     }
 
-    git clone $RepoUrl $RepoDir
+    $Branch = if ($Dev) { "dev" } else { "main" }
+    if ($Dev) { Write-Host "Installing the dev version of Flash." }
+    git clone --branch $Branch $RepoUrl $RepoDir
     if ($LASTEXITCODE -ne 0) {
         Write-Host "Failed to clone repository. Please check your internet connection and try again."
         exit 1
