@@ -465,6 +465,24 @@ def tool_file(path: str) -> bool:
     return True
 
 
+def drawn_elsewhere() -> bool:
+    """Whether this thread's tool output goes to a page, not here."""
+
+    return _sink() is not None
+
+
+def tool_audio(path: str, play: bool = False) -> bool:
+    """Hand a sound file to whoever is drawing, to play in the chat:
+    PLAY starts it as it arrives, as a reading asked for does. False in
+    the terminal, which plays it its own way."""
+
+    sink = _sink()
+    if sink is None:
+        return False
+    sink("audio", json.dumps({"path": path, "play": bool(play)}), "")
+    return True
+
+
 def tool_browser(
     path: str, *, run: str, url: str, title: str = "", note: str = "",
 ) -> bool:
