@@ -511,6 +511,37 @@ class TestPairing:
         )
         assert status == 403
 
+    def test_a_device_can_be_renamed(self, server):
+        access = server.session.access
+        access.sign_in("10.0.0.5", "FlashDevice/1.0 Apple Watch")
+        device = [b for b in access.listing("", set()) if b["paired"]][0]
+        web.command(server.session, {"name": "device-rename",
+                                     "arg": device["id"],
+                                     "to": "  My   simulator  "})
+        renamed = [b for b in access.listing("", set()) if b["paired"]][0]
+        assert renamed["device"] == "My simulator"
+        assert renamed["named"] is True
+        assert renamed["kind"] == "Apple Watch"
+
+        # Nothing given: its own description again.
+        web.command(server.session, {"name": "device-rename",
+                                     "arg": device["id"], "to": ""})
+        back = [b for b in access.listing("", set()) if b["paired"]][0]
+        assert back["device"] == "Apple Watch" and not back["named"]
+
+    def test_renaming_a_device_that_is_gone(self, server):
+        with pytest.raises(ValueError):
+            web.command(server.session, {"name": "device-rename",
+                                         "arg": "nope", "to": "x"})
+
+    def test_where_flash_can_be_reached(self):
+        session = web.Session()
+        assert web.command(session, {"name": "addresses"}) == {
+            "addresses": []}
+        session.lan, session.port = True, 7433
+        found = web.command(session, {"name": "addresses"})["addresses"]
+        assert found == [f"http://{web.lan_address()}:7433"]
+
     def test_one_chat_with_its_log(self):
         session = web.Session()
         chat_id = web.command(session, {"name": "new"})["chat"]

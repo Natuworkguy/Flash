@@ -709,6 +709,23 @@ class Access:
         del self._browsers[key]
         self._gone.add(key)
 
+    def rename(self, browser_id: str, name: str) -> bool:
+        """Give the browser the page knows as BROWSER_ID a name of the
+        user's own, or its own description back when NAME is empty."""
+
+        name = " ".join(str(name or "").split())[:DEVICE_NAME_CHARS]
+        with self._lock:
+            found = [b for b in self._browsers.values()
+                     if b["id"] == browser_id]
+            for b in found:
+                if name:
+                    b["name"] = name
+                else:
+                    b.pop("name", None)
+        if found:
+            self.remember()
+        return bool(found)
+
     def sign_out(self, browser_id: str) -> list[str]:
         """Sign out the browser the page knows as BROWSER_ID."""
 
@@ -754,7 +771,9 @@ class Access:
         shown = [
             {
                 "id": b["id"],
-                "device": describe_agent(b.get("agent", "")),
+                "device": b.get("name") or describe_agent(b.get("agent", "")),
+                "named": bool(b.get("name")),
+                "kind": describe_agent(b.get("agent", "")),
                 "phone": _is_phone(b.get("agent", "")),
                 "paired": DEVICE_AGENT in b.get("agent", ""),
                 "address": b.get("address", ""),
@@ -771,6 +790,8 @@ class Access:
 
 
 # Checked in order: several browsers name the ones they are built on.
+# The longest name the user can give a signed-in device.
+DEVICE_NAME_CHARS = 40
 # How long a pairing code lasts, and how many wrong tries end it.
 PAIR_SECONDS = 300
 PAIR_TRIES = 5
@@ -5266,6 +5287,17 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
             session.pairing.cancel()
             return {}
         return {**session.pairing.start(), "addresses": session.addresses()}
+
+    if name == "addresses":
+        # Where this Flash can be reached from now: a device away from
+        # home learns the public address without typing it.
+        return {"addresses": session.addresses()}
+
+    if name == "device-rename":
+        if not session.access.rename(arg, str(body.get("to") or "")):
+            raise ValueError("That device is not signed in any more.")
+        session.hub.publish({"type": "browsers"})
+        return {}
 
     if name == "chat-view":
         # One chat, log and all: what a small screen asks for instead
