@@ -19,6 +19,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import zipfile
 from collections.abc import Callable
 from datetime import datetime
 from html.parser import HTMLParser
@@ -4319,6 +4320,30 @@ def learn_from_recording(path: str) -> str:
     return said
 
 
+def check_office_file(path: str) -> str:
+    """Open a spreadsheet, deck or document as the user will, and say
+    what is wrong with it before it is handed over."""
+
+    from . import officecheck
+
+    tool_line(f"CheckFile({path})")
+    sees = model_sees_images(OLLAMA_HOST, MODEL_NAME)
+    try:
+        report = officecheck.check(Path(path), images=sees)
+    except (officecheck.CheckError, OSError, zipfile.BadZipFile,
+            subprocess.SubprocessError) as exc:
+        result = f"Error: could not check it: {exc}"
+        tool_result(result, style=ERROR)
+        return result
+    _pending_images.extend(report.images)
+    found = len(report.findings)
+    tool_result(f"{report.pages} page{plural(report.pages)}, "
+                + (f"{found} problem{plural(found)}" if found
+                   else "nothing found"),
+                style=WARN if found else DIM)
+    return report.text()
+
+
 CHESS_PIECES = dict(zip("KQRBNPkqrbnp", "♔♕♖♗♘♙♚♛♜♝♞♟"))
 
 
@@ -6615,6 +6640,31 @@ tools: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "check_office_file",
+            "description": (
+                "Check a spreadsheet, deck or document you made (xlsx, "
+                "pptx, docx, their OpenDocument kinds, or pdf) before "
+                "handing it over: it is opened as the user will open "
+                "it, every formula recalculated, and you get what is "
+                "wrong (formulas ending in #REF! or #DIV/0!, blank "
+                "pages, empty slides, placeholder text left in) and the "
+                "pages as pictures, to look for text running out of its "
+                "box or a table cut off. Fix and check again until it "
+                "is clean."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string",
+                             "description": "The file to check."},
+                },
+                "required": ["path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "learn_from_recording",
             "description": (
                 "Watch a screen recording of the user doing a task (a "
@@ -8326,6 +8376,7 @@ FUNCTIONS = {
     "teach_chess": teach_chess,
     "verify": verify,
     "learn_from_recording": learn_from_recording,
+    "check_office_file": check_office_file,
     "smart_home": smart_home,
     "send_audio": send_audio,
     "journal": journal_tool,
