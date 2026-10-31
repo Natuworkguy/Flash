@@ -4288,6 +4288,37 @@ def verify(commands: Any = None, folder: str = "") -> str:
     return checking.report(root, results)
 
 
+def learn_from_recording(path: str) -> str:
+    """Watch a screen recording of the user doing a task: its stills,
+    with what they said over each, to save the task as a skill."""
+
+    from . import demo, voice
+
+    tool_line(f"LearnFromRecording({path})")
+    video = Path(path).expanduser()
+    if not model_sees_images(OLLAMA_HOST, MODEL_NAME):
+        result = (f"Error: the active model ({MODEL_NAME}) cannot see "
+                  "images, so it cannot watch a recording. Tell the user "
+                  "to switch to a vision-capable model with /model.")
+        tool_result(result, style=ERROR)
+        return result
+    try:
+        stills, unheard = demo.read(video, voice.transcribe)
+    except (demo.DemoError, OSError, subprocess.SubprocessError) as exc:
+        result = f"Error: could not read the recording: {exc}"
+        tool_result(result, style=ERROR)
+        return result
+    for still in stills:
+        _pending_images.append(still["jpeg"])
+    spoken = sum(1 for s in stills if s["said"])
+    tool_result(f"{len(stills)} still{plural(len(stills))}"
+                + (f", words over {spoken}" if spoken else ""))
+    said = demo.note(str(video), stills)
+    if unheard:
+        said += f"\n(The user's words could not be heard: {unheard}.)"
+    return said
+
+
 CHESS_PIECES = dict(zip("KQRBNPkqrbnp", "♔♕♖♗♘♙♚♛♜♝♞♟"))
 
 
@@ -6584,6 +6615,29 @@ tools: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "learn_from_recording",
+            "description": (
+                "Watch a screen recording of the user doing a task (a "
+                "video file: mp4, mov, webm, mkv), to learn it: you see "
+                "stills caught each time the screen changed, with what "
+                "they said over each. Then save the procedure as a skill "
+                "with skill_manage, so you can do it for them with "
+                "computer_use next time. Use it when they say \"watch "
+                "how I do this\" or give you a recording to learn from."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string",
+                             "description": "The recording's path."},
+                },
+                "required": ["path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "verify",
             "description": (
                 "Run the project's own checks after changing code: its "
@@ -8271,6 +8325,7 @@ FUNCTIONS = {
     "read_aloud": read_aloud,
     "teach_chess": teach_chess,
     "verify": verify,
+    "learn_from_recording": learn_from_recording,
     "smart_home": smart_home,
     "send_audio": send_audio,
     "journal": journal_tool,

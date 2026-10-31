@@ -64,6 +64,7 @@ from . import (
     computeruse,
     connectors,
     context,
+    demo,
     design,
     ext_ui,
     extensions,
@@ -3340,47 +3341,15 @@ def recording_stills(body: dict) -> tuple[list[dict], str]:
                                validate=True)[:MAX_NARRATION_BYTES]
     except (ValueError, TypeError):
         pcm = b""
-    if not stills or len(pcm) < voice.SAMPLE_RATE:  # under half a second
-        return stills, ""
-    per_second = voice.SAMPLE_RATE * 2
-    for number, still in enumerate(stills):
-        start = int(still["at"] * per_second) & ~1
-        end = (
-            int(stills[number + 1]["at"] * per_second) & ~1
-            if number + 1 < len(stills) else len(pcm)
-        )
-        if end - start < per_second // 2:
-            continue
-        said, why = voice.transcribe(pcm[start:end])
-        if why:
-            # No listening model: the stills go without the words.
-            return stills, why
-        still["said"] = said
-    return stills, ""
+    # No listening model: the stills go without the words.
+    return stills, demo.said_over(stills, pcm, voice.transcribe)
 
 
 def recording_note(info: dict) -> str:
     """What the model is told of a screen recording it is shown the
     stills of."""
 
-    stills = workspace.recording_stills(info["id"])
-    lines = [
-        f"Attached screen recording: {info['path']}. The images with "
-        f"this message are {len(stills)} stills from it, in order, each "
-        "caught as the screen changed:"
-    ]
-    for number, still in enumerate(stills, start=1):
-        at = int(still["at"])
-        line = f"{number}. at {at // 60}:{at % 60:02d}"
-        if still["said"]:
-            line += f", the user saying: \"{still['said']}\""
-        lines.append(line)
-    lines.append(
-        "If it shows how the user does something, work out the steps "
-        "from it and save them as a skill with skill_manage, so you can "
-        "do it for them; ask about anything the stills do not show."
-    )
-    return "\n".join(lines)
+    return demo.note(info["path"], workspace.recording_stills(info["id"]))
 
 
 def outgoing(ai, text: str, files: Optional[list]) -> tuple[str, list]:

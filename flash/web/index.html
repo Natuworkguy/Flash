@@ -12281,13 +12281,22 @@ async function openSkill(name) {
     <p class="sub"></p>
     <div class="skill-read assistant"></div>
     <div class="dialog-buttons"><button type="button" class="btn danger" data-delete>Delete</button><span class="spacer"></span>
-      <button type="button" class="btn" data-cancel>Close</button><button type="button" class="btn primary" data-edit>Edit</button></div>`, async () => {});
+      <button type="button" class="btn" data-cancel>Close</button><button type="button" class="btn" data-edit>Edit</button><button type="button" class="btn primary with-icon" data-run>${icon("play")}<span>Do it now</span></button></div>`, async () => {});
   form.querySelector("h2").textContent = skill.name;
   if (skill.by === "flash") form.querySelector("h2").insertAdjacentHTML("beforeend", ` <span class="made-by">Made by Flash</span>`);
   form.querySelector(".sub").textContent = skill.description;
   form.querySelector(".skill-read").innerHTML = markdown(skill.content);
   form.querySelector("[data-cancel]").onclick = closeForm;
   form.querySelector("[data-edit]").onclick = () => skillForm(skill);
+  // In a chat of its own, unless one is open and empty to hold it.
+  form.querySelector("[data-run]").onclick = async () => {
+    closeForm();
+    try {
+      const open = chats.get(current);
+      if (view !== "chat" || !open || (open.log || []).length) await createChat(viewProject || "", viewSpark || "");
+      send(`Use the ${skill.name} skill: do it for me now. Ask me for anything it needs that it does not say.`);
+    } catch (error) { showFailure(error); }
+  };
   const del = form.querySelector("[data-delete]");
   del.onclick = async () => {
     if (!del.classList.contains("sure")) { del.classList.add("sure"); del.textContent = "Delete it?"; return; }
