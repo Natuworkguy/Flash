@@ -6,9 +6,10 @@ description: Change code in a project: find the right place, edit it safely, tes
 2. read the files you will change, and enough around them to follow the conventions: naming, error handling, comment style, test layout.
 3. Change with edit (one block) or multi_edit (several in one file). Copy old_string from read's output, without the line numbers. Use write only for new files.
 4. Match the surrounding code. Change only what the task needs; do not reformat or refactor unrelated lines.
-5. Run the project's own checks with shell: its tests, linter and type checker (look in package.json, pyproject.toml, Makefile, CONTRIBUTING). Run the narrowest tests first, then the suite.
-6. Read failures carefully, fix the cause, and run again until clean. Say plainly if something still fails.
-7. open_in_editor to show the user a spot in VS Code when they ask where something is.
+5. Run the project's own checks with verify: it finds its tests, linter and type checker (pyproject.toml, package.json, Cargo.toml, go.mod, Makefile) and runs them. Give commands for a narrower test first when the suite is slow.
+6. When verify fails, start from the failing tests and the files and lines it points at: trace the cause, fix it, and verify again until it passes. Say plainly if something still fails, and why it is not from this change.
+7. End by saying which checks ran and passed. A change is done when its checks pass. If you finish without checking, you are sent back once to verify.
+8. open_in_editor to show the user a spot in VS Code when they ask where something is.
 
 Pitfalls:
 - An edit whose old_string appears twice fails: include more surrounding lines.
@@ -35,7 +36,11 @@ multi_edit {"path": "src/app.py", "edits": [{"old_string": "import os\n", "new_s
 ```
 
 ```
-shell {"command": "python -m pytest -q tests/test_dates.py", "timeout": 300}
+verify {"commands": ["python -m pytest -q tests/test_dates.py"]}
+```
+
+```
+verify {}
 ```
 
 ```
