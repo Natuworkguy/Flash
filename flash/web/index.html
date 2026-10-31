@@ -1919,6 +1919,17 @@ body.page-projects #dock, body.page-settings #dock, body.page-tool #dock { displ
 .lan-warn { font-size: 13px !important; color: var(--text-3); margin-top: 10px !important; }
 #phone .dialog-buttons { justify-content: center; margin-top: 16px; }
 .setting-row .side { flex: none; display: flex; align-items: center; }
+/* The wake word: one quiet field, a mic before it, a check to save that
+   shows only once it changed. */
+.word-edit { display: flex; align-items: center; gap: 6px; height: 36px; padding: 0 4px 0 10px; border: 1px solid var(--border-strong); border-radius: 10px; background: var(--bg); transition: border-color 0.15s, box-shadow 0.15s; }
+.word-edit:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 16%, transparent); }
+.word-edit .word-mic { display: flex; color: var(--text-3); }
+.word-edit .word-mic svg { width: 14px; height: 14px; }
+.word-edit input { width: 140px; min-width: 0; border: 0; outline: 0; background: none; color: var(--text); font: 500 14px var(--sans); padding: 0; }
+.word-edit .word-save { display: grid; place-items: center; width: 28px; height: 28px; border: 0; border-radius: 7px; background: var(--accent); color: var(--bg); cursor: pointer; animation: course-in .18s ease-out; }
+.word-edit .word-save[hidden] { display: none; }
+.word-edit .word-save svg { width: 15px; height: 15px; }
+.word-edit .word-save:disabled { opacity: .5; cursor: default; }
 .stepper { display: inline-flex; align-items: center; border: 1px solid var(--border-strong); border-radius: 10px; overflow: hidden; background: var(--bg); }
 .stepper .icon-btn { width: 30px; height: 32px; border-radius: 0; font-size: 16px; color: var(--text-2); }
 .stepper input { width: 44px; height: 32px; border: 0; background: transparent; color: var(--text); font: 600 14px var(--sans); text-align: center; outline: 0; -moz-appearance: textfield; appearance: textfield; }
@@ -9032,10 +9043,12 @@ function drawGeneral(body) {
   body.appendChild(senseRow);
 
   // The words themselves: any the listening model knows.
-  const wordRow = el("div", "setting-row static wake-word-row", `<span class="what"><b>Wake word</b><span>What starts voice mode, here and with no page open. A greeting in front works too: “Hey”, “Hi” or “Okay”.</span></span><span class="side"><input type="text" maxlength="40" spellcheck="false" autocomplete="off" aria-label="Wake word"><button type="button" class="btn small">Save</button></span>`);
+  const wordRow = el("div", "setting-row static wake-word-row", `<span class="what"><b>Wake word</b><span>What starts voice mode, here and with no page open. A greeting in front works too: “Hey”, “Hi” or “Okay”.</span></span><span class="side"><span class="word-edit"><span class="word-mic">${icon("mic")}</span><input type="text" maxlength="40" spellcheck="false" autocomplete="off" aria-label="Wake word"><button type="button" class="word-save" aria-label="Save the wake word" hidden>${icon("check")}</button></span></span>`);
   const wordInput = wordRow.querySelector("input");
   const wordSave = wordRow.querySelector("button");
   wordInput.value = wakeName();
+  // Save shows only once the words differ from what is set.
+  wordInput.oninput = () => { wordSave.hidden = !wordInput.value.trim() || wordInput.value.trim() === wakeName(); };
   const saveWord = async () => {
     const said = wordInput.value.trim();
     if (!said || said === wakeName()) return;
@@ -9044,6 +9057,7 @@ function drawGeneral(body) {
       const r = await command("wake-word", said, null);
       info.wake_word = r.word;
       wordInput.value = r.word;
+      wordSave.hidden = true;
       toast(`Flash wakes to “${r.word}” now`);
       redrawSettingsTab("voice");
     } catch (error) { showFailure(error); wordInput.value = wakeName(); }
