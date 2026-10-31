@@ -1884,6 +1884,8 @@ body.page-projects #dock, body.page-settings #dock, body.page-tool #dock { displ
 .browser-row .who { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .browser-row .name { display: flex; align-items: center; gap: 8px; font-size: 14.5px; font-weight: 500; color: var(--text); min-width: 0; }
 .browser-row .device { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.browser-row .device-name { font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--border-strong); border-radius: 8px; padding: 3px 8px; width: min(260px, 100%); outline: none; }
+.browser-row .device-name:focus { border-color: var(--accent); }
 .browser-row .you { flex: none; font-size: 11.5px; font-weight: 500; color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); padding: 2px 8px; border-radius: 999px; }
 .browser-row .sub { font-size: 13px; color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .browser-row .btn { flex: none; padding: 6px 12px; font-size: 13px; }
@@ -13382,6 +13384,12 @@ async function renderBrowsers(list = document.querySelector(".browser-list")) {
     const sub = [b.here ? "This computer" : b.address, b.active ? "Active now" : `Seen ${ago(b.seen)}`, `Signed in ${when(b.since)}`];
     row.querySelector(".sub").textContent = sub.join(" · ");
     row.querySelector(".sub").title = row.querySelector(".sub").textContent;
+    const rename = el("button", "icon-btn", icon("edit"));
+    rename.type = "button";
+    rename.dataset.tip = "Rename";
+    rename.setAttribute("aria-label", `Rename ${b.device}`);
+    rename.onclick = () => renameDevice(b, row.querySelector(".device"));
+    row.appendChild(rename);
     const out = el("button", "btn danger", "Sign out");
     out.type = "button";
     // Signing this browser out is the one that cannot be undone from
@@ -13394,6 +13402,38 @@ async function renderBrowsers(list = document.querySelector(".browser-list")) {
     list.appendChild(row);
   }
   return said;
+}
+
+// A signed-in device's name, edited where it is shown: Enter or leaving
+// the box keeps it, Esc puts it back, and an empty one goes back to what
+// Flash calls it.
+function renameDevice(b, span) {
+  if (span.querySelector("input")) return;
+  const box = el("input", "device-name");
+  box.type = "text";
+  box.maxLength = 40;
+  box.value = b.named ? b.device : "";
+  box.placeholder = b.kind || b.device;
+  box.setAttribute("aria-label", "Name");
+  span.textContent = "";
+  span.appendChild(box);
+  box.focus();
+  box.select();
+  let done = false;
+  const finish = async (keep) => {
+    if (done) return;
+    done = true;
+    const to = box.value.trim();
+    if (keep && to !== (b.named ? b.device : "")) {
+      try { await command("device-rename", b.id, current, { to }); } catch (error) { showFailure(error); }
+    }
+    renderBrowsers();
+  };
+  box.onkeydown = (e) => {
+    if (e.key === "Enter") { e.preventDefault(); finish(true); }
+    if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); finish(false); }
+  };
+  box.onblur = () => finish(true);
 }
 
 // The first press arms the button, a second within four seconds acts.
