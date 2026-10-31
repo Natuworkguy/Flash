@@ -4123,11 +4123,11 @@ def _keep_listening() -> None:
     model picked in an open Flash is the one that answers.
     """
 
-    from . import heyflash, keepalive
+    from . import heyflash, keepalive, voice
 
     os.chdir(Path.home())
     console.print(Text(
-        'Listening for "Hey Flash". Ctrl+C stops it.', style=DIM,
+        f'Listening for "{voice.wake_title()}". Ctrl+C stops it.', style=DIM,
     ))
     # Started by its service, it goes when the service does. Run by hand
     # with the service off, it runs until stopped.

@@ -112,6 +112,22 @@ def set_sensitivity(value: Any) -> int:
     return number
 
 
+def set_wake_word(word: Any) -> str:
+    """What wakes Flash, here and in every page (voice.wake_word reads
+    it): checked against the listening model, which hears nothing but
+    the words it knows. Returns it as written."""
+
+    from .envfile import set_env_var
+
+    why = voice.check_wake_word(str(word or ""))
+    if why:
+        raise ValueError(why)
+    cleaned = voice._wake_clean(str(word))
+    os.environ[voice.WAKE_SETTING] = cleaned
+    set_env_var(ENV_PATH, voice.WAKE_SETTING, cleaned)
+    return voice.wake_title()
+
+
 # Shared between Flashes --------------------------------------------
 
 

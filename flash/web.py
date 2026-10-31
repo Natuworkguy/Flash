@@ -3976,6 +3976,7 @@ def status(ai) -> dict:
         "greetings": greetings.POOLS,
         "voice_style": voice.voice_style(),
         "wake_sensitivity": voice.wake_sensitivity(),
+        "wake_word": voice.wake_title(),
         # The scene actually in effect: a name that no longer finds one,
         # because the extension that brought it was removed, is none.
         "background": (
@@ -4900,6 +4901,13 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
             heyflash.set_sensitivity(arg)
             session.hub.publish({"type": "status"})
         return {"sensitivity": voice.wake_sensitivity()}
+
+    if name == "wake-word":
+        # The words that wake Flash; no arg: only what they are.
+        if arg:
+            heyflash.set_wake_word(arg)
+            session.hub.publish({"type": "status"})
+        return {"word": voice.wake_title()}
 
     if name == "wake-service":
         # The "Hey Flash" background service. No arg: only how it stands,

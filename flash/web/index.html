@@ -4128,6 +4128,8 @@ const chats = new Map();   // id -> { id, title, busy, queued, log, partial, thi
 let order = [];
 let current = null;
 let info = {};             // model, auto mode, working directory, lan
+// What wakes Flash, as set in Settings, Voice: "Hey Flash" unless changed.
+const wakeName = () => info.wake_word || "Hey Flash";
 let lastSeq = 0;
 let loading = true;
 let buffered = [];
@@ -8949,7 +8951,7 @@ function drawGeneral(body) {
   body.appendChild(sparkModel);
   fillSparkModelRow(sparkModel);
 
-  const wakeRow = el("button", "setting-row wake-row", `<span class="what"><b>Listen for “Hey Flash”</b><span>While this page is open, saying “Hey Flash” starts voice mode. Only those words are listened for, by the listening model on this computer, and nothing heard is kept. “Hey Flash” at the top right shows when it is on.</span></span><span class="switch" aria-hidden="true"></span>`);
+  const wakeRow = el("button", "setting-row wake-row", `<span class="what"><b>Listen for “${wakeName()}”</b><span>While this page is open, saying “${wakeName()}” starts voice mode. Only those words are listened for, by the listening model on this computer, and nothing heard is kept. “${wakeName()}” at the top right shows when it is on.</span></span><span class="switch" aria-hidden="true"></span>`);
   wakeRow.type = "button";
   wakeRow.setAttribute("role", "switch");
   wakeRow.setAttribute("aria-checked", wakeWanted());
@@ -8970,7 +8972,7 @@ function drawGeneral(body) {
     alwaysRow.setAttribute("aria-checked", !!always.on);
     richText(alwaysRow.querySelector(".what span"), always.on && always.problem
       ? `On, but not listening yet: ${always.problem}`
-      : "Flash listens for “Hey Flash” on the microphone of the computer it runs on, for as long as it runs, with or without this page. It answers out loud there and keeps the conversation as a chat. Until then only those words are listened for, and nothing heard is kept.");
+      : `Flash listens for “${wakeName()}” on the microphone of the computer it runs on, for as long as it runs, with or without this page. It answers out loud there and keeps the conversation as a chat. Until then only those words are listened for, and nothing heard is kept.`);
   };
   showAlways(info.wake_always || {});
   alwaysRow.onclick = async () => {
@@ -8978,20 +8980,20 @@ function drawGeneral(body) {
     showAlways({ on });
     try {
       showAlways(await command("wake-always", on ? "on" : "off", null));
-      toast(on ? "Flash listens for “Hey Flash” even with no page open" : "Flash no longer listens with no page open");
+      toast(on ? `Flash listens for “${wakeName()}” even with no page open` : "Flash no longer listens with no page open");
     } catch (error) { showAlways({ on: !on }); showFailure(error); }
   };
   body.appendChild(alwaysRow);
 
   // A service the system starts at login: "Hey Flash" with Flash quit.
-  const serviceRow = el("button", "setting-row wake-service-row", `<span class="what"><b>“Hey Flash” with Flash closed</b><span></span></span><span class="switch" aria-hidden="true"></span>`);
+  const serviceRow = el("button", "setting-row wake-service-row", `<span class="what"><b>“${wakeName()}” with Flash closed</b><span></span></span><span class="switch" aria-hidden="true"></span>`);
   serviceRow.type = "button";
   serviceRow.setAttribute("role", "switch");
   const showService = (s) => {
     serviceRow.setAttribute("aria-checked", !!s.on);
     serviceRow.querySelector(".what span").textContent = s.on
-      ? `On: a background service listens for “Hey Flash” on this computer from login, even after you quit Flash, and answers out loud. Its conversations are kept as chats.${s.elsewhere ? " It is listening now." : ""}`
-      : "A small background service the system starts at login, listening for “Hey Flash” even after you quit Flash. It answers out loud on this computer, and keeps the conversations as chats.";
+      ? `On: a background service listens for “${wakeName()}” on this computer from login, even after you quit Flash, and answers out loud. Its conversations are kept as chats.${s.elsewhere ? " It is listening now." : ""}`
+      : `A small background service the system starts at login, listening for “${wakeName()}” even after you quit Flash. It answers out loud on this computer, and keeps the conversations as chats.`;
   };
   showService({});
   command("wake-service", "", null).then(showService).catch(() => {});
@@ -9002,20 +9004,20 @@ function drawGeneral(body) {
     try {
       const s = await command("wake-service", on ? "on" : "off", null);
       showService(s);
-      toast(on ? `“Hey Flash” works with Flash closed now, as ${s.how}` : "The “Hey Flash” service is off");
+      toast(on ? `“${wakeName()}” works with Flash closed now, as ${s.how}` : `The “${wakeName()}” service is off`);
     } catch (error) { showService({ on: !on }); showFailure(error); }
     finally { serviceRow.disabled = false; }
   };
   body.appendChild(serviceRow);
 
   // How readily the words wake it, here and with no page open.
-  const senseRow = el("div", "setting-row static wake-sense-row", `<span class="what"><b>“Hey Flash” sensitivity</b><span></span></span><span class="side"><input type="range" min="0" max="100" step="5" aria-label="“Hey Flash” sensitivity"><output></output></span>`);
+  const senseRow = el("div", "setting-row static wake-sense-row", `<span class="what"><b>“${wakeName()}” sensitivity</b><span></span></span><span class="side"><input type="range" min="0" max="100" step="5" aria-label="“${wakeName()}” sensitivity"><output></output></span>`);
   const slider = senseRow.querySelector("input");
   const said = (n) => n >= 80
-    ? "Wakes the moment it hears “Hey Flash”, mid phrase. Quickest, but a video or a song can set it off."
+    ? `Wakes the moment it hears “${wakeName()}”, mid phrase. Quickest, but a video or a song can set it off.`
     : n >= 40
-      ? "Wakes once you have said “Hey Flash” in full and it is fairly sure it heard it."
-      : "Only a clear “Hey Flash”, said in full. Hardly ever set off by anything else, but you may have to say it again.";
+      ? `Wakes once you have said “${wakeName()}” in full and it is fairly sure it heard it.`
+      : `Only a clear “${wakeName()}”, said in full. Hardly ever set off by anything else, but you may have to say it again.`;
   const showSense = (n) => {
     slider.value = n;
     senseRow.querySelector("output").textContent = n;
@@ -9028,6 +9030,28 @@ function drawGeneral(body) {
     catch (error) { showSense(info.wake_sensitivity ?? 50); showFailure(error); }
   };
   body.appendChild(senseRow);
+
+  // The words themselves: any the listening model knows.
+  const wordRow = el("div", "setting-row static wake-word-row", `<span class="what"><b>Wake word</b><span>What starts voice mode, here and with no page open. A greeting in front works too: “Hey”, “Hi” or “Okay”.</span></span><span class="side"><input type="text" maxlength="40" spellcheck="false" autocomplete="off" aria-label="Wake word"><button type="button" class="btn small">Save</button></span>`);
+  const wordInput = wordRow.querySelector("input");
+  const wordSave = wordRow.querySelector("button");
+  wordInput.value = wakeName();
+  const saveWord = async () => {
+    const said = wordInput.value.trim();
+    if (!said || said === wakeName()) return;
+    wordSave.disabled = true;
+    try {
+      const r = await command("wake-word", said, null);
+      info.wake_word = r.word;
+      wordInput.value = r.word;
+      toast(`Flash wakes to “${r.word}” now`);
+      redrawSettingsTab("voice");
+    } catch (error) { showFailure(error); wordInput.value = wakeName(); }
+    finally { wordSave.disabled = false; }
+  };
+  wordSave.onclick = saveWord;
+  wordInput.onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); saveWord(); } };
+  body.appendChild(wordRow);
 
   // Voice mode's look, in this browser.
   const lookRow = el("div", "setting-row static voice-look-row", `<span class="what"><b>Voice mode look</b><span>The orb, or a companion: a face on it that listens, thinks and talks along with Flash.</span></span><span class="side"><select aria-label="Voice mode look"><option value="orb">Orb</option><option value="companion">Companion</option></select></span>`);
@@ -15766,14 +15790,18 @@ function showCamSide(stream) {
   $("#voice .voice-view").classList.toggle("selfie", camFacing.side === "user");
 }
 
-// Flip shows on a phone or tablet with more than one camera, once the
-// camera is on: only then does the browser say how many it has.
+// Flip shows whenever the camera is on, on a phone or tablet (which have
+// a front and a back camera, whatever the browser counts: some count one
+// until both have been opened), and on a computer that says it has two.
+const onPhoneOrTablet = () => navigator.maxTouchPoints > 1 || matchMedia("(pointer: coarse)").matches
+  || /Android|iPhone|iPad|Mobile/i.test(navigator.userAgent);
 async function drawFlip() {
   const flip = $("#voice .voice-flip");
   let cameras = 0;
   try { cameras = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === "videoinput").length; }
   catch (_) { cameras = 0; }
-  flip.hidden = !voice.cam || cameras < 2 || !matchMedia("(pointer: coarse)").matches;
+  flip.hidden = !voice.cam || !(onPhoneOrTablet() || cameras > 1);
+  flip.classList.toggle("turned", camFacing.side === "user");
 }
 
 async function flipCam() {
@@ -15862,7 +15890,7 @@ const wakeWanted = () => pref("wake", "") === "on";
 
 function setWake(on) {
   savePref("wake", on ? "on" : "");
-  if (on) startWake(true); else { stopWake(); toast("Stopped listening for “Hey Flash”"); }
+  if (on) startWake(true); else { stopWake(); toast(`Stopped listening for “${wakeName()}”`); }
 }
 
 async function startWake(told = false) {
@@ -15899,7 +15927,7 @@ async function startWake(told = false) {
     if (wake.parts.length >= 3) sendWake();
   };
   drawWakePill();
-  if (told) toast("Listening for “Hey Flash”");
+  if (told) toast(`Listening for “${wakeName()}”`);
 }
 
 function sendWake() {
@@ -16026,8 +16054,8 @@ function drawWakePill() {
     pill.classList.add("settled");
   }, WAKE_SETTLE_MS);
   pill.dataset.tip = wake.on
-    ? "Listening for “Hey Flash” on this page. Turn it off in Settings, Voice."
-    : "Listening for “Hey Flash” on the computer Flash runs on. Turn it off in Settings, Voice.";
+    ? `Listening for “${wakeName()}” on this page. Turn it off in Settings, Voice.`
+    : `Listening for “${wakeName()}” on the computer Flash runs on. Turn it off in Settings, Voice.`;
 }
 // The browser lets a page listen only after someone has used it: the
 // first click or key after it opens starts the listening.
@@ -19996,7 +20024,7 @@ const ACTIONS = [
   { label: "Extensions", keys: "", slash: "/extensions", run: () => showPage("extensions") },
   { label: "Import memory from another AI", keys: "", slash: "/import", run: () => { showSettings("memory"); importMemory(); } },
   { label: "Voice mode", keys: "", slash: "/voice", run: () => startVoice() },
-  { label: "Listen for “Hey Flash”, or stop", keys: "", slash: "/wake", run: () => setWake(!wakeWanted()) },
+  { label: `Listen for “${wakeName()}”, or stop`, keys: "", slash: "/wake", run: () => setWake(!wakeWanted()) },
   { label: "Signed-in browsers", keys: "", slash: "/security", run: () => showSettings("security") },
   { label: "Let Flash act on this computer", keys: "", slash: "/computer", run: () => showSettings("general") },
   { label: "Record a meeting", keys: "", slash: "/meeting", run: () => startMeeting() },
@@ -20071,7 +20099,7 @@ const SLASH_ARGS = {
     return [["off", "No background"], ...found.map((s) => [s.name, s.title])].filter(([v]) => v.includes(query.toLowerCase())).slice(0, 12);
   },
   "/rename": async () => { const c = chats.get(current); return c && c.title !== "New chat" ? [[c.title, "Its name now"]] : []; },
-  "/wake": async () => [["on", "Listen for Hey Flash"], ["off", "Stop listening"]],
+  "/wake": async () => [["on", `Listen for ${wakeName()}`], ["off", "Stop listening"]],
 };
 
 // Extensions' commands, as the server lists them.
