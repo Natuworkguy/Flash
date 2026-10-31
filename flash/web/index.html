@@ -1277,6 +1277,29 @@ body.voice-on .shell, body.voice-on #suggestions, body.voice-on #pending { displ
 .voice-flip[hidden] { display: none; }
 .voice-flip svg { transition: transform 0.4s var(--ease); }
 .voice-flip.turned svg { transform: rotateY(180deg); }
+/* A guide: a step of a hands-on task, on the photo Flash saw, with what
+   to touch or turn ringed. In the chat, and large above voice mode while
+   it talks you through it. */
+.block.guide { display: flex; flex-direction: column; gap: 10px; max-width: 520px; }
+.guide-head { display: flex; align-items: center; gap: 10px; }
+.guide-head .guide-close { margin-left: auto; }
+.guide-shot { position: relative; border-radius: 14px; overflow: hidden; background: #000; border: 1px solid var(--border); line-height: 0; }
+.guide-shot img { display: block; width: 100%; height: auto; }
+.guide-marks { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+.guide-marks .ring { fill: none; stroke: var(--accent); stroke-width: var(--w); filter: drop-shadow(0 0 3px rgba(0, 0, 0, 0.6)); }
+.guide-marks .pulse { fill: none; stroke: var(--accent); stroke-width: var(--w); transform-box: fill-box; transform-origin: center; animation: guide-pulse 1.6s var(--ease) infinite; }
+.guide-marks .arrow { fill: none; stroke: var(--accent); stroke-width: var(--w); stroke-linecap: round; stroke-linejoin: round; filter: drop-shadow(0 0 3px rgba(0, 0, 0, 0.6)); }
+.guide-marks text { fill: #fff; font: 600 var(--fs) var(--sans); paint-order: stroke; stroke: rgba(0, 0, 0, 0.75); stroke-width: calc(var(--w) * 1.4); stroke-linejoin: round; }
+@keyframes guide-pulse { from { opacity: 0.9; transform: scale(1); } to { opacity: 0; transform: scale(1.45); } }
+@media (prefers-reduced-motion: reduce) { .guide-marks .pulse { display: none; } }
+.guide-say { margin: 0; font-size: 15px; line-height: 1.5; color: var(--text); }
+.block.guide.done .course-chip { color: var(--add); }
+#voice-guide { margin: 0 0 10px; padding: 12px; border: 1px solid var(--border-strong); border-radius: 22px; background: var(--surface); box-shadow: var(--composer-shadow); animation: pop 0.2s var(--ease); }
+#voice-guide[hidden] { display: none; }
+#voice-guide .block.guide { max-width: none; margin: 0; }
+#voice-guide .guide-shot img { max-height: 46vh; width: auto; max-width: 100%; margin: 0 auto; }
+#voice-guide .guide-shot { display: flex; justify-content: center; background: none; border: 0; border-radius: 0; }
+#voice-guide .guide-shot .guide-frame { position: relative; line-height: 0; border-radius: 14px; overflow: hidden; border: 1px solid var(--border); }
 /* The companion: a face on the orb, minding what voice mode is doing. It
    blinks while it listens, looks up while it thinks, perks up while you
    talk, and its mouth moves with what it says. */
@@ -3864,6 +3887,7 @@ select:not([multiple]) { -webkit-appearance: none; appearance: none; background-
           <div class="mt-words" aria-live="polite"></div>
         </div>
         <div id="spark-ask" hidden aria-live="polite"></div>
+        <div id="voice-guide" hidden aria-live="polite"></div>
         <div id="voice" hidden role="group" aria-label="Voice mode">
           <button type="button" class="voice-orb" aria-label="Voice"><span></span><svg class="face" viewBox="0 0 58 58" aria-hidden="true"><g class="cheeks"><circle cx="15" cy="34" r="4.2"/><circle cx="43" cy="34" r="4.2"/></g><g class="brows"><path d="M17 17.5q4-2.6 8 0"/><path d="M33 17.5q4-2.6 8 0"/></g><g class="eyes"><g class="eye"><ellipse cx="21" cy="25.5" rx="3.3" ry="4.4"/><circle class="glint" cx="22.2" cy="23.8" r="1.1"/></g><g class="eye"><ellipse cx="37" cy="25.5" rx="3.3" ry="4.4"/><circle class="glint" cx="38.2" cy="23.8" r="1.1"/></g></g><path class="smile" d="M22.5 36.5q6.5 5.2 13 0"/><ellipse class="mouth" cx="29" cy="38" rx="4.6" ry="3.4"/></svg></button>
           <video class="voice-view" playsinline muted hidden></video>
@@ -8037,6 +8061,7 @@ function drawEntry(entry, ctx) {
     case "browser": drawBrowserFrame(entry); break;
     case "seen": seenImages(ctx.tool, entry.images || []); break;
     case "chess": messagesEl.appendChild(chessCard(entry)); break;
+    case "guide": messagesEl.appendChild(guideCard(entry)); break;
     case "course": messagesEl.querySelector(`.course[data-course="${CSS.escape(entry.subject)}"]`)?.remove(); messagesEl.appendChild(courseCard(entry)); break;
     case "debate": {
       const live = messagesEl.querySelector(`.debate[data-debate="${entry.id}"]`);
@@ -15126,6 +15151,7 @@ function endVoice() {
   if (voice.stream) voice.stream.getTracks().forEach((t) => t.stop());
   if (voice.ctx) voice.ctx.close().catch(() => {});
   stopCam();
+  hideGuide();
   const team = voice.team;
   Object.assign(voice, { ctx: null, stream: null, turn: null, tap: null, source: null, played: null, analyser: null, state: "", team: null });
   $("#voice").hidden = true;
@@ -15799,7 +15825,7 @@ async function toggleCam() {
   view.hidden = false;
   view.play().catch(() => {});
   button.setAttribute("aria-pressed", "true");
-  button.dataset.tip = "Flash sees this with what you say next. Click to turn the camera off.";
+  button.dataset.tip = "Flash sees this with what you say next, and can walk you through it step by step. Click to turn the camera off.";
   showCamSide(stream);
   drawFlip();
 }
@@ -15879,6 +15905,89 @@ async function attachSight() {
     const kept = await api("/api/upload", { name: "camera.jpg", data });
     attached.push({ id: kept.id, name: kept.name, size: 0, kind: kept.kind, image: true, url: "" });
   } catch (error) { toast(`What the camera saw did not upload: ${error.message}`); }
+}
+
+// A step of a guide: the photo Flash saw, with what to touch or turn
+// ringed or pointed at, and what to do. Marks are fractions of the
+// photo, drawn once it has loaded and its shape is known.
+function guideCard(entry, closable = false) {
+  const card = el("div", `block guide${entry.done ? " done" : ""}`, `<div class="guide-head"><span class="course-chip">${icon(entry.done ? "check" : "camera")}<span></span></span></div><div class="guide-shot"><div class="guide-frame"><img alt=""><svg class="guide-marks" aria-hidden="true"></svg></div></div><p class="guide-say"></p>`);
+  card.querySelector(".course-chip span").textContent = entry.done ? "Done" : `Step ${entry.step} of ${entry.of}`;
+  card.querySelector(".guide-say").textContent = entry.text || "";
+  if (closable) {
+    const close = card.querySelector(".guide-head").appendChild(el("button", "icon-btn guide-close", icon("x")));
+    close.type = "button";
+    close.dataset.tip = "Hide the guide";
+    close.setAttribute("aria-label", "Hide the guide");
+    close.onclick = hideGuide;
+  }
+  const img = card.querySelector("img");
+  img.alt = entry.text || "What Flash saw";
+  img.onload = () => guideMarks(card.querySelector(".guide-marks"), img, entry.marks || []);
+  img.src = fileUrl({ id: entry.image });
+  img.onclick = () => openViewer({ id: entry.image, name: "camera.jpg", kind: "image", size: 0 });
+  return card;
+}
+
+function guideMarks(svg, img, marks) {
+  const w = img.naturalWidth, h = img.naturalHeight;
+  if (!w || !h) return;
+  const ns = "http://www.w3.org/2000/svg";
+  const make = (tag, attrs) => {
+    const node = document.createElementNS(ns, tag);
+    for (const [k, v] of Object.entries(attrs)) node.setAttribute(k, v);
+    return svg.appendChild(node);
+  };
+  svg.setAttribute("viewBox", `0 0 ${w} ${h}`);
+  svg.textContent = "";
+  // Lines and words as thick on a big photo as on a small one.
+  const unit = Math.max(w, h) / 100;
+  svg.style.setProperty("--w", `${unit * 0.55}px`);
+  svg.style.setProperty("--fs", `${unit * 3.2}px`);
+  for (const mark of marks) {
+    const x = mark.x * w, y = mark.y * h;
+    const r = Math.max(unit * 1.6, (mark.size || 0.08) * w / 2);
+    let labelY = y + r + unit * 4.2;
+    if (mark.kind === "arrow") {
+      // From up and to the side, towards whichever way has room.
+      const dx = x > w / 2 ? -1 : 1, dy = y > h * 0.35 ? -1 : 1;
+      const len = unit * 14, head = unit * 3;
+      const tipX = x + dx * r * 0.35, tipY = y + dy * r * 0.35;
+      const fromX = tipX + dx * len, fromY = tipY + dy * len;
+      const angle = Math.atan2(tipY - fromY, tipX - fromX);
+      const wing = (a) => `${tipX - head * Math.cos(angle + a)},${tipY - head * Math.sin(angle + a)}`;
+      make("path", { class: "arrow", d: `M${fromX},${fromY} L${tipX},${tipY} M${wing(0.5)} L${tipX},${tipY} L${wing(-0.5)}` });
+      labelY = dy < 0 ? fromY - unit * 1.6 : fromY + unit * 4.2;
+      if (mark.label) make("text", { x: fromX, y: labelY, "text-anchor": "middle" }).textContent = mark.label;
+      continue;
+    }
+    make("circle", { class: "pulse", cx: x, cy: y, r });
+    make("circle", { class: "ring", cx: x, cy: y, r });
+    if (labelY > h - unit) labelY = y - r - unit * 1.6;
+    if (mark.label) {
+      const anchor = x < w * 0.15 ? "start" : x > w * 0.85 ? "end" : "middle";
+      make("text", { x, y: labelY, "text-anchor": anchor }).textContent = mark.label;
+    }
+  }
+}
+
+// While voice mode talks you through something, its latest step stays
+// above the voice bar, large, until it is done or hidden.
+let guideTimer = 0;
+function showGuide(entry) {
+  const box = $("#voice-guide");
+  clearTimeout(guideTimer);
+  box.textContent = "";
+  box.appendChild(guideCard(entry, true));
+  box.hidden = false;
+  if (entry.done) guideTimer = setTimeout(hideGuide, 6000);
+}
+
+function hideGuide() {
+  clearTimeout(guideTimer);
+  const box = $("#voice-guide");
+  box.hidden = true;
+  box.textContent = "";
 }
 
 $("#voice .voice-cam").innerHTML = icon("camera");
@@ -16196,6 +16305,7 @@ function apply(event) {
   const chat = chats.get(event.chat);
   if (!chat) { if (event.chat) refreshLite(); return; }
   const here = event.chat === current && view === "chat";
+  if (event.type === "guide" && voice.on && event.chat === current) showGuide(event);
 
   switch (event.type) {
     case "pending": chat.pending = event.pending; if (event.chat === current) { renderPending(); updateSend(); } return;
