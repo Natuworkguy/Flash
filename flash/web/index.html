@@ -4225,6 +4225,7 @@ function routeTo(path) {
 }
 
 window.addEventListener("popstate", () => {
+  closeExtPanel();
   // Back out of the briefing to where it was opened from, or forward
   // into it again.
   const toBriefing = /^\/briefing\/?$/.test(location.pathname);
@@ -8396,6 +8397,7 @@ function drawProject() {
 }
 
 function showProjects(nav) {
+  closeExtPanel();
   view = "projects";
   viewProject = null;
   morph(drawPage, nav);
@@ -8403,6 +8405,7 @@ function showProjects(nav) {
 }
 
 function openProject(id, nav) {
+  closeExtPanel();
   view = "project";
   viewProject = id;
   current = null;
@@ -8419,6 +8422,7 @@ let memoryPrompt = "";
 let freshMemories = [];
 
 function showSettings(tab) {
+  closeExtPanel();
   if (tab) settingsTab = tab;
   view = "settings";
   viewProject = null;
@@ -9199,6 +9203,7 @@ async function drawSkills(body) {
 
 // Skills and Extensions: pages of their own, opened from the sidebar.
 function showPage(name) {
+  closeExtPanel();
   view = name;
   viewProject = null;
   closeMenu();
@@ -14095,11 +14100,14 @@ async function importMemory() {
 }
 
 function markSide() {
-  $("#projects-btn").classList.toggle("active", view === "projects" || view === "project");
-  $("#skills-btn").classList.toggle("active", view === "skills");
-  $("#sparks-btn").classList.toggle("active", view === "sparks");
-  $("#extensions-btn").classList.toggle("active", view === "extensions");
-  $("#settings-btn").classList.toggle("active", view === "settings");
+  // An extension's panel, while it is open, is where you are.
+  const panel = $("#ext-panel").hidden ? "" : $("#ext-panel").dataset.url || "";
+  $("#projects-btn").classList.toggle("active", !panel && (view === "projects" || view === "project"));
+  $("#skills-btn").classList.toggle("active", !panel && view === "skills");
+  $("#sparks-btn").classList.toggle("active", !panel && view === "sparks");
+  $("#extensions-btn").classList.toggle("active", !panel && view === "extensions");
+  $("#settings-btn").classList.toggle("active", !panel && view === "settings");
+  for (const row of document.querySelectorAll("#ext-side .ext-row[data-url]")) row.classList.toggle("active", row.dataset.url === panel);
 }
 
 // A form in a dialog: new or edited project, a new host.
@@ -17024,6 +17032,7 @@ function checkSent(chatId, before) {
 }
 
 async function createChat(project = "", spark = "") {
+  closeExtPanel();
   const model = newChatModel;
   newChatModel = "";
   const { chat: id } = await command("new", "", null, { project, spark, model });
@@ -18835,6 +18844,7 @@ function pickProject(id) {
 async function newChat() {
   // A new chat starts empty: nothing is made until the first message,
   // so pressing it twice does not leave an empty chat behind.
+  closeExtPanel();
   view = "chat";
   current = null;
   viewProject = null;
@@ -18850,6 +18860,7 @@ async function newChat() {
 // Sparks page, or from + in the box. Like any new chat, it is made when
 // the first message is sent.
 function startSparkChat(id) {
+  closeExtPanel();
   if (isOpen($("#form"))) closeForm();
   closeMenu();
   view = "chat";
@@ -18890,6 +18901,7 @@ document.addEventListener("visibilitychange", markSeen);
 
 function switchTo(id, nav) {
   if (!chats.has(id)) return;
+  closeExtPanel();
   current = id;
   view = "chat";
   viewProject = chats.get(id).project || null;
@@ -19751,6 +19763,7 @@ async function loadBriefing(open = false) {
 }
 
 async function openBriefing(push = true) {
+  closeExtPanel();
   // An address of its own, so it can be linked to, bookmarked, and left
   // with Back.
   if (push && !/^\/briefing\/?$/.test(location.pathname)) history.pushState(null, "", "/briefing");
@@ -19953,9 +19966,20 @@ function openExtPanel(url, label) {
   const frame = box.querySelector("iframe");
   if (frame.getAttribute("src") !== url) frame.src = url;
   box.hidden = false;
+  box.dataset.url = url;
+  markSide();
   if (innerWidth <= 800) closeSide();
 }
-function closeExtPanel() { $("#ext-panel").hidden = true; }
+
+// Shut whenever you go somewhere else: it sits over the page, so a page
+// drawn under it would be hidden, or show through in pieces.
+function closeExtPanel() {
+  const box = $("#ext-panel");
+  if (box.hidden) return;
+  box.hidden = true;
+  delete box.dataset.url;
+  markSide();
+}
 
 function renderExtUI() {
   for (const ext of extUI()) {
@@ -19974,11 +19998,14 @@ function renderExtUI() {
     for (const p of ext.panels) {
       const row = el("button", "side-row ext-row", `${icon(ICON[p.icon] ? p.icon : "puzzle")}<span>${esc(p.label)}</span>`);
       row.type = "button";
-      row.dataset.tip = `${p.label}, from ${ext.name}`;
+      // "Watch, from watch" says nothing the label did not.
+      row.dataset.tip = p.label.toLowerCase() === ext.name ? p.label : `${p.label}, from ${ext.name}`;
+      row.dataset.url = p.url;
       row.onclick = () => openExtPanel(p.url, p.label);
       side.appendChild(row);
     }
   }
+  markSide();
   for (const b of extButtonsAt("sidebar")) side.appendChild(extButton(b, "side-row ext-row"));
   const head = $("#ext-head");
   head.textContent = "";
