@@ -756,6 +756,7 @@ class Access:
                 "id": b["id"],
                 "device": describe_agent(b.get("agent", "")),
                 "phone": _is_phone(b.get("agent", "")),
+                "paired": DEVICE_AGENT in b.get("agent", ""),
                 "address": b.get("address", ""),
                 "here": _is_loopback(b.get("address", "")),
                 "since": b.get("since", 0),
@@ -770,6 +771,58 @@ class Access:
 
 
 # Checked in order: several browsers name the ones they are built on.
+# How long a pairing code lasts, and how many wrong tries end it.
+PAIR_SECONDS = 300
+PAIR_TRIES = 5
+# What a paired device's requests say they are, so the list of
+# signed-in devices can name it.
+DEVICE_AGENT = "FlashDevice/"
+
+
+class Pairing:
+    """A short code a device types in to be signed in, like a browser.
+
+    A device with no camera for the QR code, and no good way to type a
+    long link, gets six digits to type instead. One code at a
+    time: it ends when it is used, after five minutes, or after five
+    wrong tries, which leaves a guesser one chance in two hundred
+    thousand.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self.code = ""
+        self.until = 0.0
+        self.tries = 0
+
+    def start(self) -> dict:
+        with self._lock:
+            self.code = f"{secrets.randbelow(10 ** 6):06d}"
+            self.until = time.time() + PAIR_SECONDS
+            self.tries = 0
+            return {"code": self.code, "expires": self.until}
+
+    def cancel(self) -> None:
+        with self._lock:
+            self.code = ""
+
+    def take(self, given: str) -> bool:
+        """Whether GIVEN is the code, which is then used up."""
+
+        given = "".join(ch for ch in str(given) if ch.isdigit())
+        with self._lock:
+            if not self.code or time.time() > self.until:
+                self.code = ""
+                return False
+            if secrets.compare_digest(given.encode(), self.code.encode()):
+                self.code = ""
+                return True
+            self.tries += 1
+            if self.tries >= PAIR_TRIES:
+                self.code = ""
+            return False
+
+
 _BROWSER_NAMES = (
     ("Edg/", "Edge"), ("OPR/", "Opera"), ("Vivaldi/", "Vivaldi"),
     ("SamsungBrowser/", "Samsung Internet"), ("Firefox/", "Firefox"),
@@ -786,6 +839,9 @@ _SYSTEM_NAMES = (
 def describe_agent(agent: str) -> str:
     """ "Firefox on Windows", from what a browser says it is."""
 
+    if DEVICE_AGENT in agent:
+        named = agent.split(DEVICE_AGENT, 1)[1].partition(" ")[2].strip()
+        return named or "Paired device"
     name = next((n for mark, n in _BROWSER_NAMES if mark in agent), "")
     system = next((n for mark, n in _SYSTEM_NAMES if mark in agent), "")
     if name and system:
@@ -962,6 +1018,8 @@ class Session:
         # The link's token and the browsers signed in with it. A server
         # restarted after an update takes over the old one's (Server).
         self.access = Access()
+        # The code a device types in to sign in (see Pairing).
+        self.pairing = Pairing()
         # Tells whoever started Flash its new link, once the old one is
         # ended. Set by whatever runs the server (see _attach).
         self.relink: Optional[Callable[[], None]] = None
@@ -1178,6 +1236,18 @@ class Session:
         if event["type"] in KEPT:
             chat.log.append({k: v for k, v in event.items() if k != "chat"})
         return self.hub.publish(event)
+
+    def addresses(self) -> list[str]:
+        """Where another device can reach this Flash: the tunnel's
+        public address while it is on, and this machine on the network
+        while that is on."""
+
+        found = []
+        if self.tunnel.host:
+            found.append(f"https://{self.tunnel.host}")
+        if self.lan and self.port:
+            found.append(f"http://{lan_address()}:{self.port}")
+        return found
 
     def state(self, lite: bool = False) -> dict:
         """Everything a page needs to draw, from scratch or to catch up.
@@ -5058,6 +5128,18 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
         session.hub.publish({"type": "status"})
         return {"removed": arg}
 
+    if name == "device-pair":
+        # A code for a device, and where it can reach this computer.
+        if arg == "cancel":
+            session.pairing.cancel()
+            return {}
+        return {**session.pairing.start(), "addresses": session.addresses()}
+
+    if name == "chat-view":
+        # One chat, log and all: what a small screen asks for instead
+        # of every chat at once.
+        return {"chat": session.chat(chat_id).summary()}
+
     if name == "browsers":
         return {"browsers": session.access.listing(
             browser, session.hub.owners()
@@ -6051,9 +6133,11 @@ class Handler(BaseHTTPRequestHandler):
         # browsers were signed in one by one.
         access = self.server.session.access
         cookie = self._cookie()
-        if access.browser(cookie, self._address()) is not None:
-            self.browser = cookie
-            return True
+        # A paired device sends its key in a header: it keeps no cookies.
+        for key in (cookie, self.headers.get("X-Flash-Device", "")):
+            if access.browser(key, self._address()) is not None:
+                self.browser = key
+                return True
         self.browser = ""
         return any(access.token_matches(given) for given in (
             self.headers.get("X-Flash-Token"),
@@ -6250,7 +6334,10 @@ class Handler(BaseHTTPRequestHandler):
         url = urlparse(self.path)
         self._body_read = False
 
-        if not self._authorized({}):
+        # Pairing is how a device gets its key, so it cannot have one
+        # yet: the code it sends is what lets it in.
+        pairing = url.path == "/api/pair" and self._same_site()
+        if not pairing and not self._authorized({}):
             self._refuse()
             return
 
@@ -6290,6 +6377,21 @@ class Handler(BaseHTTPRequestHandler):
 
     def _post(self, path: str, body: dict) -> dict:
         session = self.server.session
+
+        if path == "/api/pair":
+            if not session.pairing.take(str(body.get("code", ""))):
+                raise ValueError(
+                    "That code did not work. Make a new one on the computer."
+                )
+            name = " ".join(str(body.get("name") or "").split())[:40]
+            agent = self.headers.get("User-Agent", "")
+            if DEVICE_AGENT not in agent:
+                agent = f"{DEVICE_AGENT}1"
+            key = session.access.sign_in(
+                self._address(), f"{agent.split()[0]} {name}".strip())
+            session.hub.publish({"type": "browsers"})
+            session.hub.publish({"type": "paired", "name": name})
+            return {"key": key}
 
         if path == "/api/send":
             chat_id = str(body.get("chat") or "")
