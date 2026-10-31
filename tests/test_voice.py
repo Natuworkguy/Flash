@@ -1456,3 +1456,47 @@ def test_a_long_sentence_is_said_in_parts():
     parts = voice._parts(long)
     assert len(parts) > 1 and " ".join(parts) == long
     assert voice._parts("Short.") == ["Short."]
+
+
+class TestWakeWord:
+    def test_the_default_and_its_greetings(self, monkeypatch):
+        monkeypatch.delenv(voice.WAKE_SETTING, raising=False)
+        assert voice.wake_phrases() == voice.WAKE_PHRASES  # nosec B101
+        assert voice.wake_title() == "Hey Flash"  # nosec B101
+
+    def test_a_word_of_your_own(self, monkeypatch):
+        monkeypatch.setenv(voice.WAKE_SETTING, "Hey,  Nova!")
+        assert voice.wake_word() == "hey nova"  # nosec B101
+        assert voice.wake_title() == "Hey Nova"  # nosec B101
+        assert voice.wake_phrases() == (  # nosec B101
+            "hey nova", "hi nova", "okay nova", "ok nova")
+        assert voice._woke('{"text": "um hi nova"}', "text")  # nosec B101
+        assert not voice._woke('{"text": "hey flash"}', "text")  # nosec B101
+        monkeypatch.setenv(voice.WAKE_SETTING, "computer")
+        assert voice.wake_phrases()[:2] == (  # nosec B101
+            "computer", "hey computer")
+
+    def test_checked_against_the_model(self, monkeypatch):
+        class Model:
+            def find_word(self, word):
+                return -1 if word == "zorblax" else 7
+
+        monkeypatch.setattr(voice, "_load_listener", lambda: Model())
+        assert voice.check_wake_word("hey nova") == ""  # nosec B101
+        assert "zorblax" in voice.check_wake_word("hey zorblax")  # nosec B101
+        assert voice.check_wake_word("hi") != ""  # nosec B101
+        assert voice.check_wake_word("a b c d e") != ""  # nosec B101
+
+    def test_a_new_word_makes_a_new_recognizer(self, monkeypatch):
+        _fake_audio(monkeypatch)
+        sys.modules["vosk"].KaldiRecognizer = _Waking
+        monkeypatch.setattr(voice, "_wake", {})
+        _Waking.made = []
+        piece = b"\0" * (voice.BLOCK_FRAMES * 2)
+        monkeypatch.delenv(voice.WAKE_SETTING, raising=False)
+        voice.hear_wake("w", piece)
+        monkeypatch.setenv(voice.WAKE_SETTING, "hey nova")
+        voice.hear_wake("w", piece)
+        grammars = [json.loads(m.grammar) for m in _Waking.made]
+        assert grammars[-1][0] == "hey nova"  # nosec B101
+        assert len(_Waking.made) == 2  # nosec B101

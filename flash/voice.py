@@ -1735,6 +1735,10 @@ def _let_go(gone: list) -> None:
 # the recognizer here is held to the wake phrases, which keeps it light
 # and keeps everything else said out of it. Nothing it hears is kept.
 WAKE_PHRASES = ("hey flash", "hi flash", "okay flash", "ok flash")
+WAKE_SETTING = "VOICE_WAKE_WORD"
+DEFAULT_WAKE_WORD = "hey flash"
+WAKE_GREETINGS = ("hey", "hi", "okay", "ok")
+MAX_WAKE_WORDS = 4
 WAKE_IDLE_SECONDS = 30.0
 WAKE_STREAMS = 4
 _wake: dict[str, tuple[float, object, threading.Lock]] = {}
@@ -1749,9 +1753,72 @@ WAKE_EAGER = 80
 WAKE_WORDS = {"hey", "hi", "okay", "ok", "flash"}
 
 
+def _wake_clean(text: str) -> str:
+    return " ".join(re.findall(r"[a-z']+", str(text or "").lower()))
+
+
+def wake_word() -> str:
+    """What wakes Flash, as set (VOICE_WAKE_WORD): "hey flash" unless
+    changed, in lower case."""
+
+    return _wake_clean(_setting(WAKE_SETTING, DEFAULT_WAKE_WORD)) \
+        or DEFAULT_WAKE_WORD
+
+
+def wake_title() -> str:
+    """The wake word as the page and the terminal write it: Hey Flash."""
+
+    return " ".join(w.capitalize() for w in wake_word().split())
+
+
+def wake_phrases(word: str = "") -> tuple[str, ...]:
+    """Every phrase that wakes Flash: the wake word, and it after any
+    greeting, so "hey nova" also takes "hi nova" and "okay nova", and
+    "computer" also takes "hey computer"."""
+
+    word = _wake_clean(word) or wake_word()
+    first, _, rest = word.partition(" ")
+    if first in WAKE_GREETINGS and rest:
+        found = [f"{g} {rest}" for g in WAKE_GREETINGS]
+    else:
+        found = [word] + [f"{g} {word}" for g in WAKE_GREETINGS]
+    return tuple(dict.fromkeys(found))
+
+
+def wake_words() -> set[str]:
+    return {w for phrase in wake_phrases() for w in phrase.split()}
+
+
+def check_wake_word(word: str) -> str:
+    """Why WORD cannot wake Flash, or "": one to four plain words, each
+    one the listening model knows (it hears nothing else)."""
+
+    cleaned = _wake_clean(word)
+    if not cleaned:
+        return "Say a word or two, in letters."
+    if len(cleaned.split()) > MAX_WAKE_WORDS:
+        return f"At most {MAX_WAKE_WORDS} words."
+    if len(cleaned.replace(" ", "")) < 3:
+        return "Too short: it would wake on almost anything."
+    try:
+        with _models_lock:
+            model = _load_listener()
+    except Exception:  # noqa: BLE001
+        return ""  # no model yet: it is checked again once there is one
+    finder = getattr(model, "find_word", None)
+    if finder is None:
+        return ""
+    unknown = [w for w in cleaned.split() if finder(w) < 0]
+    if unknown:
+        return (f"The listening model does not know "
+                f"{', '.join(repr(w) for w in unknown)}: pick words it "
+                "knows, like a common name or word.")
+    return ""
+
+
 def _woke(result: str, key: str) -> bool:
     said = " ".join(_result_text(result, key).lower().split())
-    return any(phrase in said for phrase in WAKE_PHRASES)
+    return any(phrase in said for phrase in wake_phrases())
 
 
 def wake_confidence(sensitivity: int) -> float:
@@ -1773,14 +1840,14 @@ def _woke_surely(result: str, sensitivity: int) -> bool:
     sure = [
         float(word.get("conf", 1.0)) for word in words
         if isinstance(word, dict)
-        and str(word.get("word", "")).lower() in WAKE_WORDS
+        and str(word.get("word", "")).lower() in wake_words()
     ]
     # A model that gives no confidences has only its words to go by.
     return not sure or min(sure) >= wake_confidence(sensitivity)
 
 
 def hear_wake(stream: str, pcm: bytes, end: bool = False) -> tuple[bool, str]:
-    """Whether "Hey Flash" was just said in STREAM, now PCM (16 kHz mono
+    """Whether the wake word was just said in STREAM, now PCM (16 kHz mono
     16-bit) is heard too. END lets it go. Returns `(woke, "")`, or
     `(False, reason)` when the listening model cannot be used."""
 
@@ -1793,6 +1860,10 @@ def hear_wake(stream: str, pcm: bytes, end: bool = False) -> tuple[bool, str]:
             _wake.pop(stream, None)
             return False, ""
         found = _wake.get(stream)
+    phrases = wake_phrases()
+    if found is not None and found[3] != phrases:
+        # The wake word changed: a recognizer held to the old one goes.
+        found = None
     if found is None:
         try:
             import vosk
@@ -1805,16 +1876,19 @@ def hear_wake(stream: str, pcm: bytes, end: bool = False) -> tuple[bool, str]:
             return False, f"could not load the listening model: {exc}"
         # Only the wake phrases, and "[unk]" for everything else said,
         # with how sure it is of each word.
-        grammar = json.dumps([*WAKE_PHRASES, "[unk]"])
+        grammar = json.dumps([*phrases, "[unk]"])
         recognizer = vosk.KaldiRecognizer(model, SAMPLE_RATE, grammar)
         if hasattr(recognizer, "SetWords"):
             recognizer.SetWords(True)
-        found = (now, recognizer, threading.Lock())
+        found = (now, recognizer, threading.Lock(), phrases)
         with _wake_lock:
-            while len(_wake) >= WAKE_STREAMS:
+            while len(_wake) >= WAKE_STREAMS and stream not in _wake:
                 del _wake[min(_wake, key=lambda k: _wake[k][0])]
-            found = _wake.setdefault(stream, found)
-    _, recognizer, lock = found
+            if stream in _wake and _wake[stream][3] == phrases:
+                found = _wake[stream]
+            else:
+                _wake[stream] = found
+    _, recognizer, lock, _ = found
     woke = False
     sensitivity = wake_sensitivity()
     with lock:
@@ -1831,7 +1905,7 @@ def hear_wake(stream: str, pcm: bytes, end: bool = False) -> tuple[bool, str]:
                 break
     with _wake_lock:
         if stream in _wake:
-            _wake[stream] = (time.monotonic(), recognizer, lock)
+            _wake[stream] = (time.monotonic(), recognizer, lock, phrases)
     return woke, ""
 
 
