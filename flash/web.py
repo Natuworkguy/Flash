@@ -92,6 +92,7 @@ from . import (
     triggers,
     tunnel,
     updater,
+    verify,
     visuals,
     voice,
     voicehooks,
@@ -3623,6 +3624,8 @@ def _respond(
         keep_from = len(convo)
         tool_count = 0
         reply = Streamed()
+        # Code changed this turn is checked before the turn ends.
+        watch = verify.Watch()
 
         for _round in range(ai.Config.max_tool_rounds):
             reply = stream_reply(
@@ -3634,7 +3637,16 @@ def _respond(
             if reply.stopped:
                 break
             if not reply.calls:
-                break
+                # About to end with code changed and not checked: sent
+                # back, once, to run the project's checks.
+                nudge = watch.nudge()
+                if not nudge:
+                    break
+                if reply.content.strip():
+                    _finish_reply(session, chat, reply, spark)
+                convo.append({"role": "assistant", "content": reply.content})
+                convo.append(ai._message("user", nudge))
+                continue
 
             _finish_reply(session, chat, reply, spark)
 
@@ -3706,6 +3718,7 @@ def _respond(
                         after = {e.id for e in subagents.list_all()}
                         session.adopt(chat, after - before)
                     tool_count += 1
+                watch.saw(name, args, output)
                 if spark is not None and name != "reason":
                     sparks.log(spark.id, "tool", tool=name, args=args,
                                result=str(output), during="chat")

@@ -4251,6 +4251,43 @@ def smart_home(action: str = "list", device: str = "", brightness: Any = None,
                    if others else "")
 
 
+def verify(commands: Any = None, folder: str = "") -> str:
+    """Run the project's own checks (tests, linter, type checker) and
+    say what failed, down to the files and lines to look at."""
+
+    from . import verify as checking
+
+    root, found = checking.detect(folder)
+    if isinstance(commands, str):
+        commands = [c.strip() for c in commands.split("\n") if c.strip()]
+    given = [str(c).strip() for c in commands or [] if str(c).strip()]
+    checks = given or found
+    tool_line(f"Verify({', '.join(checks) or root.name})")
+    if not checks:
+        result = (f"No checks found in {root}: no tests or linter set up in "
+                  "pyproject.toml, package.json, Cargo.toml, go.mod or a "
+                  "Makefile. Give the commands to run, or say so plainly "
+                  "in your answer.")
+        tool_result(result, style=WARN)
+        return result
+    # The ones found are the project's own; ones the model wrote are
+    # commands like any other, so asked about like shell's.
+    if not NO_COMMAND_CONFIRMATION:
+        listed = "\n".join(checks)
+        if not _user_allows(f"Run these checks in {root}?\n{listed}",
+                            ask_why=True):
+            why = denial_why()
+            return ("The user said no to running the checks"
+                    + (f': "{why}"' if why else "") + ".")
+    results = []
+    for command in checks:
+        ran = checking.run_one(command, root)
+        results.append(ran)
+        tool_result(f"{'✓' if ran.ok else '✗'} {command} "
+                    f"({ran.seconds:.1f}s)", style=DIM if ran.ok else ERROR)
+    return checking.report(root, results)
+
+
 CHESS_PIECES = dict(zip("KQRBNPkqrbnp", "♔♕♖♗♘♙♚♛♜♝♞♟"))
 
 
@@ -6547,6 +6584,38 @@ tools: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "verify",
+            "description": (
+                "Run the project's own checks after changing code: its "
+                "tests, linter and type checker, found in pyproject.toml, "
+                "package.json, Cargo.toml, go.mod or a Makefile, or the "
+                "commands you give. Says which passed, and for a failure "
+                "the failing tests, the files and lines it points at, and "
+                "the end of its output. Use it after every change to "
+                "code, then fix what fails and verify again until it "
+                "passes. A change is done when its checks pass."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "commands": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": (
+                            "Optional: the checks to run, like a narrower "
+                            "test (python -m pytest -q tests/test_x.py). "
+                            "The project's own are found when left out."),
+                    },
+                    "folder": {"type": "string", "description": (
+                        "Optional: a folder in the project. The current "
+                        "one when left out.")},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "teach_chess",
             "description": (
                 "Teach chess move by move: an opening, a tactic, an "
@@ -8201,6 +8270,7 @@ FUNCTIONS = {
     "review_code": review_code,
     "read_aloud": read_aloud,
     "teach_chess": teach_chess,
+    "verify": verify,
     "smart_home": smart_home,
     "send_audio": send_audio,
     "journal": journal_tool,

@@ -50,6 +50,7 @@ from . import (
     sparks,
     systemone,
     terminal,
+    verify,
     visuals,
 )
 from . import models as model_picker
@@ -7424,6 +7425,8 @@ def _main() -> None:
             followup = ""
             tool_error = None
             sent_tool_images = False
+            # Code changed this turn is checked before the turn ends.
+            watch = verify.Watch()
 
             for _ in range(Config.max_tool_rounds):
                 assistant_tool_calls = []
@@ -7445,6 +7448,7 @@ def _main() -> None:
                     # and a local of that name shadows it for the whole
                     # of main(), including code that runs before this.
                     output = run_tool((name, call_args))
+                    watch.saw(name, call_args, output)
                     trimmed = trim_tool_output(output, name)
                     tool_outputs.append(f"{name}:\n{trimmed}")
                     tool_messages.append({
@@ -7491,7 +7495,25 @@ def _main() -> None:
                 followup = final
 
                 if not tool_calls:
-                    break
+                    # About to end with code changed and not checked:
+                    # sent back, once, to run the project's checks.
+                    nudge = watch.nudge()
+                    if not nudge:
+                        break
+                    tool_messages.append(_message("assistant", final))
+                    tool_messages.append(_message("user", nudge))
+                    final, thinking, tool_calls, err = \
+                        _chat_retry_until_response(
+                            console, client, tool_messages, offered,
+                            turn=turn, bar=bar,
+                        )
+                    if err:
+                        tool_error = err
+                        break
+                    _render_thinking(thinking)
+                    followup = final
+                    if not tool_calls:
+                        break
 
             if tool_error:
                 _print_backend_error(tool_error)
