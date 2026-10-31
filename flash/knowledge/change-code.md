@@ -8,7 +8,7 @@ description: Change code in a project: find the right place, edit it safely, tes
 4. Match the surrounding code. Change only what the task needs; do not reformat or refactor unrelated lines.
 5. Run the project's own checks with verify: it finds its tests, linter and type checker (pyproject.toml, package.json, Cargo.toml, go.mod, Makefile) and runs them. Give commands for a narrower test first when the suite is slow.
 6. When verify fails, start from the failing tests and the files and lines it points at: trace the cause, fix it, and verify again until it passes. Say plainly if something still fails, and why it is not from this change.
-7. End by saying which checks ran and passed. A change is done when its checks pass. If you finish without checking, you are sent back once to verify.
+7. End by saying which checks ran and passed. A change is done when its checks pass. If you finish without checking, you are reminded once.
 8. open_in_editor to show the user a spot in VS Code when they ask where something is.
 
 Pitfalls:

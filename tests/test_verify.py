@@ -104,7 +104,7 @@ class TestTheNudge:
         assert watch.nudge() == ""
         watch.saw("edit", {"path": str(root / "a.py")}, "Edited")
         said = watch.nudge()
-        assert "you changed code (a.py)" in said and "Call verify" in said
+        assert "you changed code (a.py)" in said and "call verify" in said
         assert watch.nudge() == ""  # once a turn
 
     def test_checked_since_or_turned_off_is_let_end(self, tmp_path,
@@ -112,9 +112,6 @@ class TestTheNudge:
         root = project(tmp_path, {"Makefile": "test:\n\ttrue\n"})
         watch = verify.Watch()
         watch.saw("write", {"path": str(root / "a.py")}, "Wrote")
-        watch.saw("shell", {"command": "make test"}, "ok")
-        assert watch.nudge() == ""
-        watch.saw("edit", {"path": str(root / "a.py")}, "Edited")
         monkeypatch.setenv(verify.SETTING, "0")
         assert watch.nudge() == ""
         monkeypatch.setenv(verify.SETTING, "1")
@@ -151,7 +148,7 @@ def test_a_web_turn_that_changed_code_checks_it_before_ending(
     run(session, chat, "fix it")
     assert ran == ["edit", "verify"]
     said = [str(m.get("content")) for m in FakeClient.requests[-1]["messages"]]
-    nudged = next(n for n, m in enumerate(said) if "Call verify now" in m)
+    nudged = next(n for n, m in enumerate(said) if "call verify now" in m)
     assert said[nudged - 1] == "Done." and said[nudged + 2].startswith(
         "Checks: 1 of 1")
     assert chat.messages[-1]["content"] == "Done: make test passed."

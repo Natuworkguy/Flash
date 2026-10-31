@@ -4,9 +4,9 @@ After Flash changes code, it finds the checks the project already has
 (its test runner, linter and type checker, from pyproject.toml,
 package.json, Cargo.toml, go.mod or a Makefile), runs them, and reads
 what failed down to the files and lines to look at. When a reply is
-about to end with code changed and nothing run since, the turn is sent
-back once to run them, fix what fails, and run them again: a change is
-done when its checks pass, not when it has been written.
+about to end with code changed, the model is nudged once to check it,
+unless it already called verify since: a change is done when its checks
+pass, not when it has been written.
 """
 
 import json
@@ -30,16 +30,6 @@ CODE_SUFFIXES = {
     ".cc", ".cpp", ".hpp", ".cs", ".rb", ".php", ".scala", ".dart", ".lua",
     ".ex", ".exs", ".zig",
 }
-
-# A shell command that is itself a check: running one counts as checking.
-CHECK_COMMAND = re.compile(
-    r"\b(pytest|tox|nox|unittest|ruff|flake8|mypy|pyright|pylint|jest|"
-    r"vitest|mocha|eslint|tsc|rspec|phpunit|"
-    r"(npm|pnpm|yarn|bun)( run)? (test|lint|check|typecheck|type-check)|"
-    r"cargo (test|clippy|check)|go (test|vet)|make (test|check|lint)|"
-    r"gradlew? (test|check)|mvn (test|verify)|swift test|dotnet test|"
-    r"mix test)\b"
-)
 
 # Where a failure points: file and line, as each tool prints it.
 PLACE = re.compile(
@@ -239,11 +229,10 @@ def report(root: Path, results: list[Ran]) -> str:
 
 
 NUDGE = (
-    "[Before you finish: you changed code ({files}) and have not run the "
-    "project's checks since. Call verify now. If anything fails, find the "
-    "cause in its output, fix it and verify again, until they pass or "
-    "you are sure a failure has nothing to do with this change. Then "
-    "give your answer again, saying which checks passed.]"
+    "[Before you finish: you changed code ({files}). If you have not "
+    "checked it since, call verify now; if anything fails, find the "
+    "cause in its output, fix it and verify again. Then give your answer "
+    "again, saying which checks passed, or why none were run.]"
 )
 
 
@@ -267,11 +256,8 @@ class Watch:
             if path not in self.changed:
                 self.changed.append(path)
             self.checked = False
-        elif name == "verify" or (
-                name == "shell"
-                and CHECK_COMMAND.search(str((args or {}).get("command")))):
-            if self.changed:
-                self.checked = True
+        elif name == "verify" and self.changed:
+            self.checked = True
 
     def nudge(self) -> str:
         """Once a turn: what to tell the model when it is about to end
@@ -279,9 +265,6 @@ class Watch:
 
         if self.nudged or self.checked or not self.changed or \
                 not enabled():
-            return ""
-        _, checks = detect(str(Path(self.changed[0]).expanduser().parent))
-        if not checks:
             return ""
         self.nudged = True
         names = ", ".join(Path(p).name for p in self.changed[:5]) + (
