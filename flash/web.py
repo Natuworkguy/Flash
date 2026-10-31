@@ -524,7 +524,7 @@ class Ask:
 KEPT = {
     "user", "assistant", "tool", "result", "diff", "ask", "answered",
     "error", "stats", "note", "thought", "file", "plan", "browser", "wait",
-    "seen", "debate", "course", "chess",
+    "seen", "debate", "course", "chess", "guide",
 }
 
 
@@ -2625,6 +2625,72 @@ END_VOICE_TOOL = {
 }
 
 
+# The most marks one step of a guide may put on a photo, and the most
+# words of a label on one.
+GUIDE_MARKS = 6
+GUIDE_LABEL_CHARS = 40
+
+GUIDE_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "guide_step",
+        "description": (
+            "Walk the user through something hands-on with their camera, "
+            "one step at a time: show this step on the photo you just "
+            "got, circling or pointing at what to touch, turn, press or "
+            "look at. For when they want to be shown how to do it (fix, "
+            "set up, assemble, find, use). One step per call, then say "
+            "the step in a sentence or two and stop: their next message "
+            "brings a new photo, so check the step was done before you "
+            "show the next one. Positions are fractions of the photo: x "
+            "from its left edge, y from its top, 0 to 1."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "step": {"type": "integer",
+                         "description": "This step's number, from 1."},
+                "of": {"type": "integer",
+                       "description": "How many steps, as best you know."},
+                "say": {"type": "string",
+                        "description": "The step, short: what to do."},
+                "marks": {
+                    "type": "array",
+                    "description": "Up to 6 things to point out.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "x": {"type": "number"},
+                            "y": {"type": "number"},
+                            "size": {
+                                "type": "number",
+                                "description": "Its width, as a fraction "
+                                "of the photo's: 0.05 for a button, 0.3 "
+                                "for a whole panel.",
+                            },
+                            "label": {"type": "string"},
+                            "kind": {
+                                "type": "string",
+                                "enum": ["circle", "arrow"],
+                                "description": "circle (the default) "
+                                "rings it; arrow points at it.",
+                            },
+                        },
+                        "required": ["x", "y"],
+                    },
+                },
+                "done": {
+                    "type": "boolean",
+                    "description": "True on the last call, once it is all "
+                    "done: the guide closes.",
+                },
+            },
+            "required": ["say"],
+        },
+    },
+}
+
+
 WAIT_TOOL = {
     "type": "function",
     "function": {
@@ -2741,7 +2807,71 @@ def chat_tools(chat: Chat) -> list[dict]:
     and in a spoken conversation, ending that."""
 
     return [TITLE_TOOL, WAIT_TOOL, EDIT_WAIT_TOOL, CANCEL_WAIT_TOOL,
-            *([END_VOICE_TOOL] if chat.heard else [])]
+            *([END_VOICE_TOOL] if chat.heard else []),
+            *([GUIDE_TOOL] if latest_photo(chat) else [])]
+
+
+def latest_photo(chat: Chat) -> str:
+    """The id of the photo with the user's latest message, if it came
+    with one: what the camera saw as they spoke, or a picture they sent.
+    """
+
+    for entry in reversed(chat.log):
+        if entry.get("type") != "user":
+            continue
+        photos = [f for f in entry.get("files") or []
+                  if isinstance(f, dict) and f.get("kind") == "image"]
+        return str(photos[-1].get("id") or "") if photos else ""
+    return ""
+
+
+def _fraction(value, default: float = 0.0) -> float:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return default
+    if number != number:  # NaN
+        return default
+    return min(1.0, max(0.0, number))
+
+
+def guide_step(session: "Session", chat: Chat, args: dict) -> str:
+    """guide_step: one step of a hands-on task, shown on the photo the
+    user just sent, with what to touch or turn marked on it."""
+
+    photo = latest_photo(chat)
+    if not photo:
+        return ("Error: there is no photo with their latest message to "
+                "mark. Ask them to point the camera at it.")
+    say = " ".join(str(args.get("say") or "").split())
+    if not say:
+        return "Error: say what this step is."
+    marks = []
+    for given in (args.get("marks") or [])[:GUIDE_MARKS]:
+        if not isinstance(given, dict):
+            continue
+        marks.append({
+            "x": _fraction(given.get("x")),
+            "y": _fraction(given.get("y")),
+            "size": max(0.02, _fraction(given.get("size"), 0.08)),
+            "label": " ".join(str(given.get("label") or "").split())[
+                :GUIDE_LABEL_CHARS],
+            "kind": "arrow" if given.get("kind") == "arrow" else "circle",
+        })
+    try:
+        step = max(1, int(args.get("step") or 1))
+        of = max(step, int(args.get("of") or step))
+    except (TypeError, ValueError):
+        step, of = 1, 1
+    done = bool(args.get("done"))
+    session.emit(chat, {
+        "type": "guide", "image": photo, "step": step, "of": of,
+        "text": say, "marks": marks, "done": done,
+    })
+    if done:
+        return "Shown. The guide closes: tell them they are done."
+    return (f"Shown as step {step} of {of}. Now say it, briefly, and stop "
+            "for them to do it.")
 
 
 def _command_allowed(wait: "waits.Wait") -> bool:
@@ -3720,6 +3850,8 @@ def _respond(
                     output = retitle(session, chat, args)
                 elif name == "end_conversation":
                     output = end_voice(session, chat)
+                elif name == "guide_step":
+                    output = guide_step(session, chat, args)
                 elif name == "wait_for":
                     output = wait_for(session, chat, args)
                 elif name == "cancel_wait":

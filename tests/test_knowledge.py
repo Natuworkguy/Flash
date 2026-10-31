@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from flash import extensions, skills, tools
+from flash import extensions, skills, tools, web
 
 EXAMPLE = re.compile(r"```\n([a-z_0-9]+) (\{.*?\})\n```", re.S)
 
@@ -15,6 +15,9 @@ def _schemas() -> dict:
     offered = (tools.tools + tools.EMAIL_TOOLS + tools.EDITOR_TOOLS
                + tools.SYSTEM_ONE_TOOLS)
     found = {t["function"]["name"]: t["function"] for t in offered}
+    # The web page's own, for the chat: guide_step and the like.
+    for t in (web.GUIDE_TOOL, web.WAIT_TOOL, web.END_VOICE_TOOL):
+        found[t["function"]["name"]] = t["function"]
     # Tools offered only once allowed: their schemas are built on demand.
     for build in ("computer_tools", "computer_use_tools", "imessage_tools"):
         try:
@@ -48,7 +51,7 @@ def test_every_example_calls_a_real_tool_with_real_arguments():
         for tool, args in EXAMPLE.findall(guide.body):
             seen += 1
             where = f"{guide.name}: {tool}"
-            assert tool in tools.FUNCTIONS, where
+            assert tool in tools.FUNCTIONS or tool in schemas, where
             parsed = json.loads(args)
             if tool not in schemas:
                 continue

@@ -4895,6 +4895,76 @@ class TestChatTools:
         assert web.end_voice(session, chat).startswith("Error")
 
 
+class TestGuide:
+    def chat_with_photo(self, session, photo="ph0to"):
+        chat = session.new_chat()
+        chat.log.append({"type": "user", "text": "how do I reset this",
+                         "files": [{"id": photo, "name": "camera.jpg",
+                                    "kind": "image"}]})
+        return chat
+
+    def names(self, chat):
+        return {t["function"]["name"] for t in web.chat_tools(chat)}
+
+    def test_offered_only_with_a_photo(self):
+        session = web.Session()
+        plain = session.new_chat()
+        plain.log.append({"type": "user", "text": "hi"})
+        assert "guide_step" not in self.names(plain)
+        assert "guide_step" in self.names(self.chat_with_photo(session))
+
+    def test_only_the_latest_message_counts(self):
+        session = web.Session()
+        chat = self.chat_with_photo(session)
+        chat.log.append({"type": "user", "text": "thanks"})
+        assert web.latest_photo(chat) == ""
+        assert "guide_step" not in self.names(chat)
+
+    def test_a_step_is_shown_on_the_photo(self):
+        session = web.Session()
+        chat = self.chat_with_photo(session, "abc123")
+        said = web.guide_step(session, chat, {
+            "step": 2, "of": 4, "say": "  Hold   the reset button. ",
+            "marks": [
+                {"x": 0.4, "y": 1.7, "size": 0.05, "label": "Reset",
+                 "kind": "arrow"},
+                {"x": "nope", "y": -3},
+                "not a mark",
+            ],
+        })
+        assert "step 2 of 4" in said
+        shown = chat.log[-1]
+        assert shown["type"] == "guide"
+        assert shown["image"] == "abc123"
+        assert shown["text"] == "Hold the reset button."
+        assert shown["marks"][0] == {"x": 0.4, "y": 1.0, "size": 0.05,
+                                     "label": "Reset", "kind": "arrow"}
+        assert shown["marks"][1]["x"] == 0.0
+        assert shown["marks"][1]["kind"] == "circle"
+        assert len(shown["marks"]) == 2
+
+    def test_too_many_marks_are_cut(self):
+        session = web.Session()
+        chat = self.chat_with_photo(session)
+        web.guide_step(session, chat, {
+            "say": "These.", "marks": [{"x": 0.1, "y": 0.1}] * 20})
+        assert len(chat.log[-1]["marks"]) == web.GUIDE_MARKS
+
+    def test_no_photo_no_step(self):
+        session = web.Session()
+        chat = session.new_chat()
+        assert web.guide_step(session, chat, {"say": "x"}).startswith("Error")
+
+    def test_the_last_step_says_done(self):
+        session = web.Session()
+        chat = self.chat_with_photo(session)
+        said = web.guide_step(session, chat, {
+            "step": 5, "of": 3, "say": "All set.", "done": True})
+        assert chat.log[-1]["done"] is True
+        assert chat.log[-1]["of"] == 5
+        assert "done" in said
+
+
 def test_one_ctrl_c_stops_the_web_ui(monkeypatch):
     calls = []
     monkeypatch.setattr(web.interrupt, "release", lambda: calls.append(1))
