@@ -454,6 +454,71 @@ class TestLocks:
         assert request(server, "GET", "/nope")[0] == 404
 
 
+class TestPairing:
+    def test_a_code_signs_a_device_in(self, server):
+        code = web.command(server.session, {"name": "device-pair"})["code"]
+        assert len(code) == 6 and code.isdigit()
+
+        status, body = request(
+            server, "POST", "/api/pair", {"code": code, "name": "Wrist"},
+            headers={"User-Agent": "FlashDevice/1.0 test"}, token=False,
+        )
+        assert status == 200
+        key = json.loads(body)["key"]
+
+        status, _ = request(server, "GET", "/api/state?lite=1",
+                            headers={"X-Flash-Device": key}, token=False)
+        assert status == 200
+        listed = server.session.access.listing("", set())
+        assert [b["device"] for b in listed if b["paired"]] == ["Wrist"]
+
+    def test_a_code_works_once(self, server):
+        code = web.command(server.session, {"name": "device-pair"})["code"]
+        assert request(server, "POST", "/api/pair", {"code": code},
+                       token=False)[0] == 200
+        assert request(server, "POST", "/api/pair", {"code": code},
+                       token=False)[0] == 400
+
+    def test_wrong_tries_end_the_code(self, server):
+        code = web.command(server.session, {"name": "device-pair"})["code"]
+        wrong = f"{(int(code) + 1) % 10 ** 6:06d}"
+        for _ in range(web.PAIR_TRIES):
+            assert request(server, "POST", "/api/pair", {"code": wrong},
+                           token=False)[0] == 400
+        assert request(server, "POST", "/api/pair", {"code": code},
+                       token=False)[0] == 400
+
+    def test_no_code_no_pairing(self, server):
+        assert request(server, "POST", "/api/pair", {"code": "000000"},
+                       token=False)[0] == 400
+
+    def test_an_old_code_is_refused(self, server, monkeypatch):
+        code = web.command(server.session, {"name": "device-pair"})["code"]
+        server.session.pairing.until = 0
+        assert request(server, "POST", "/api/pair", {"code": code},
+                       token=False)[0] == 400
+
+    def test_a_made_up_device_key_is_refused(self, server):
+        status, _ = request(server, "GET", "/api/state?lite=1",
+                            headers={"X-Flash-Device": "guess"}, token=False)
+        assert status == 403
+
+    def test_pairing_still_checks_the_host(self, server):
+        code = web.command(server.session, {"name": "device-pair"})["code"]
+        status, _ = request(
+            server, "POST", "/api/pair", {"code": code}, token=False,
+            headers={"Host": "evil.example:7433"},
+        )
+        assert status == 403
+
+    def test_one_chat_with_its_log(self):
+        session = web.Session()
+        chat_id = web.command(session, {"name": "new"})["chat"]
+        shown = web.command(session, {"name": "chat-view", "chat": chat_id})
+        assert shown["chat"]["id"] == chat_id
+        assert shown["chat"]["log"] == []
+
+
 class TestEventStream:
     def test_events_arrive_as_they_happen(self, server):
         port = server.server_address[1]
