@@ -243,7 +243,14 @@ def _press(names: list[str], want: str = "") -> str:
     try:
         return computer._run(["osascript", "-l", "JavaScript", "-e", _PRESS,
                               json.dumps(names), want], timeout=20).strip()
-    except computer.ComputerError:
+    except computer.ComputerError as exc:
+        if "assistive access" in str(exc) or "-25211" in str(exc):
+            raise CallError(
+                "Flash isn't allowed to press Call: give the app that runs "
+                "Flash (Terminal, or whichever you start it from) "
+                "Accessibility access in System Settings, Privacy & "
+                "Security, Accessibility, then restart it and try again."
+            ) from None
         return ""
 
 

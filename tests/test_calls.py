@@ -197,3 +197,14 @@ def test_one_turn_is_never_listened_to_forever(monkeypatch):
     monkeypatch.setattr(calls.voice, "transcribe", lambda pcm: (
         f"{len(pcm)}", ""))
     assert line.hear(longest=5) != ""
+
+
+def test_no_accessibility_access_is_said_at_once(monkeypatch):
+    def refused(argv, given="", timeout=0):
+        raise calls.computer.ComputerError(
+            "osascript failed: osascript is not allowed assistive access. "
+            "(-25211)")
+
+    monkeypatch.setattr(calls.computer, "_run", refused)
+    with pytest.raises(calls.CallError, match="Accessibility"):
+        calls._press(["Call"])
