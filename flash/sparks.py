@@ -4691,6 +4691,22 @@ def _on_project(item: dict) -> str:
 
 def shift(spark_id: str, client=None) -> Optional[Report]:
     """Run one shift of SPARK_ID now, on this thread, and file its report.
+    The commands it runs are the spark's, for Stop to end at once."""
+
+    from . import tools as flash_tools  # deferred: avoids a module cycle
+
+    with flash_tools.running_as(commands_of(spark_id)):
+        return _shift(spark_id, client)
+
+
+def commands_of(spark_id: str) -> str:
+    """Who a spark's commands belong to, for tools.stop_commands."""
+
+    return f"spark:{spark_id}"
+
+
+def _shift(spark_id: str, client=None) -> Optional[Report]:
+    """Run one shift of SPARK_ID now, on this thread, and file its report.
 
     A paused spark still runs when asked to. One that waits on a step
     the user has answered carries on from that step. None if the spark
@@ -5084,6 +5100,10 @@ def stop(key: str) -> Spark:
             raise SparkError(f"{spark.name} is not working on anything.")
 
     spark = _edit(key, change)
+    # The step it is on stops too: a command it is running ends now.
+    from . import tools as flash_tools  # deferred: avoids a module cycle
+
+    flash_tools.stop_commands(commands_of(spark.id))
     log(spark.id, "stopped")
     return spark
 

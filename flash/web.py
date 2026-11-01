@@ -1200,7 +1200,8 @@ class Session:
                          if chat.project else None)
                 with self.turn_lock, \
                         capture_tool_output(_sink(self, chat)), \
-                        inside(found.path if found else None):
+                        inside(found.path if found else None), \
+                        _tools().running_as(chat.id):
                     job()
             except Exception as exc:  # noqa: BLE001
                 self.emit(chat, {
@@ -2571,7 +2572,9 @@ class Session:
                     if chat.stop.is_set():
                         self.emit(chat, {"type": "note", "text": "Stopped."})
                     else:
-                        with inside(found.path if found else None):
+                        # Its commands are this chat's, for Stop to end.
+                        with inside(found.path if found else None), \
+                                _tools().running_as(chat.id):
                             run_turn(self, chat, text, found, files)
                     progress.end(*_outcome(chat, begun))
                 except Exception as exc:  # noqa: BLE001
@@ -2859,6 +2862,12 @@ EDIT_WAIT_TOOL = {
         },
     },
 }
+
+
+def _tools():
+    from . import tools  # deferred: tools imports a lot
+
+    return tools
 
 
 def _reply_since(chat: Chat, begun: int) -> str:
@@ -5015,6 +5024,8 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
     if name == "stop":
         chat = session.chat(chat_id)
         chat.stop.set()
+        # A command it is running ends now, not when it would have.
+        _tools().stop_commands(chat.id)
         # What was waiting goes back to the page, to send again or not.
         items = session.unqueue(chat)
         return {

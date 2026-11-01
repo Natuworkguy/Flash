@@ -499,6 +499,98 @@ def clear_user_runs() -> None:
     _user_runs.clear()
 
 
+# The commands running now, by who runs them: a chat's id, or
+# "spark:<id>". Stop ends them then and there, rather than at the end of
+# a command that could run for minutes.
+_running: dict[str, set] = {}
+_running_lock = threading.Lock()
+_owner = threading.local()
+# Commands ended by Stop, to say so rather than how they failed.
+_stopped: set = set()
+# How long a stopped command has to end before it is killed outright.
+STOP_GRACE = 2.0
+
+
+@contextlib.contextmanager
+def running_as(owner: str):
+    """Commands run on this thread meanwhile are OWNER's, to stop."""
+
+    before = getattr(_owner, "name", "")
+    _owner.name = owner
+    try:
+        yield
+    finally:
+        _owner.name = before
+
+
+def stop_commands(owner: str) -> int:
+    """End every command OWNER is running, and what each started. How
+    many there were."""
+
+    with _running_lock:
+        procs = list(_running.get(owner, ()))
+        _stopped.update(p.pid for p in procs)
+    for proc in procs:
+        _end_tree(proc)
+    return len(procs)
+
+
+def _end_tree(proc: subprocess.Popen) -> None:
+    """End PROC and everything it started: asked first, then made to."""
+
+    if proc.poll() is not None:
+        return
+    if os.name == "nt":
+        with contextlib.suppress(OSError, subprocess.SubprocessError):
+            subprocess.run(  # nosec B603 B607 -- a fixed program
+                ["taskkill", "/T", "/F", "/PID", str(proc.pid)],
+                capture_output=True, timeout=10, check=False,
+            )
+        return
+    import signal
+
+    for sig in (signal.SIGTERM, signal.SIGKILL):
+        with contextlib.suppress(ProcessLookupError, PermissionError):
+            os.killpg(proc.pid, sig)
+        try:
+            proc.wait(timeout=STOP_GRACE)
+            return
+        except subprocess.TimeoutExpired:
+            continue
+
+
+def _run_owned(args, *, shell: bool, seconds: int,
+               env: Optional[dict]) -> tuple[str, str, int, bool]:
+    """Run a command as subprocess.run would, in a process group of its
+    own, so Stop can end it and all it started. (stdout, stderr, exit
+    code, whether Stop ended it). Raises TimeoutExpired, after ending it,
+    when it runs too long."""
+
+    group = ({"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
+             if os.name == "nt" else {"start_new_session": True})
+    proc = subprocess.Popen(  # nosec B602 B603 -- the agent's command
+        args, shell=shell, stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        env=env, **group,
+    )
+    owner = getattr(_owner, "name", "")
+    with _running_lock:
+        _running.setdefault(owner, set()).add(proc)
+    try:
+        out, err = proc.communicate(timeout=seconds)
+    except BaseException:
+        _end_tree(proc)
+        with contextlib.suppress(Exception):
+            proc.communicate(timeout=STOP_GRACE)
+        raise
+    finally:
+        with _running_lock:
+            _running.get(owner, set()).discard(proc)
+            stopped = proc.pid in _stopped
+            _stopped.discard(proc.pid)
+    return out or "", err or "", proc.returncode, stopped
+
+
 def shell_tool(command: str, timeout=None, is_user=False) -> str:
     """Tool to execute a shell command"""
 
@@ -570,27 +662,9 @@ def shell_tool(command: str, timeout=None, is_user=False) -> str:
             if returncode:
                 return f"(exit {returncode})"
             return ""
-        if os.name == "nt":
-            result = subprocess.run(  # nosec B603
-                args,
-                capture_output=True,
-                text=True,
-                timeout=seconds,
-                check=False,
-                stdin=subprocess.DEVNULL,
-                env=env,
-            )
-        else:
-            result = subprocess.run(
-                args,
-                shell=True,  # nosec B602
-                capture_output=True,
-                text=True,
-                timeout=seconds,
-                check=False,
-                stdin=subprocess.DEVNULL,
-                env=env,
-            )
+        out, err, returncode, stopped = _run_owned(
+            args, shell=shell, seconds=seconds, env=env,
+        )
     except subprocess.TimeoutExpired:
         message = (
             f"Error: Command timed out after {seconds} seconds. "
@@ -608,15 +682,21 @@ def shell_tool(command: str, timeout=None, is_user=False) -> str:
             _note_user_run(command, "interrupted with Ctrl+C", "")
         return "Error: Command execution interrupted by user."
 
-    parts = [result.stdout.strip(), result.stderr.strip()]
+    parts = [out.strip(), err.strip()]
     output = "\n".join(part for part in parts if part)
 
-    if result.returncode and output:
-        final = f"(exit {result.returncode})\n{output}"
+    if stopped:
+        final = "Stopped by the user while it ran." + (
+            f" What it printed before:\n{output}" if output else "")
+        tool_result(final, style=WARN)
+        return final
+
+    if returncode and output:
+        final = f"(exit {returncode})\n{output}"
     else:
         final = output or "(no output)"
 
-    tool_result(final, style=ERROR if result.returncode else DIM)
+    tool_result(final, style=ERROR if returncode else DIM)
 
     return final
 

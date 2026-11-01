@@ -1,7 +1,6 @@
 # pylint: disable=C0114,C0115,C0116
 
 import json
-import subprocess  # nosec B404
 
 import httpx
 import pytest
@@ -370,9 +369,9 @@ def _no_shell(monkeypatch):
 
     def fake_run(*args, **kwargs):
         ran.append(args)
-        return subprocess.CompletedProcess(args, 0, "done", "")
+        return "done", "", 0, False
 
-    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr(tools, "_run_owned", fake_run)
     return ran
 
 
