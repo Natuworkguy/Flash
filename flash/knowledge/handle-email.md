@@ -22,5 +22,5 @@ read_email {"uid": "4821"}
 ```
 
 ```
-send_email {"reply_to": "4821", "body": "Hi Sam,\n\nThursday at 2 works. I'll send the agenda tomorrow.\n\nNathan"}
+send_email {"reply_to": "4821", "body": "Hi Sam,\n\nThursday at 2 works. I'll send the agenda tomorrow.\n\nCassius Vale"}
 ```
