@@ -7099,6 +7099,18 @@ def announce(server: "Server") -> None:
 def _listen(
     port: int, lan: bool, session: Optional[Session] = None,
 ) -> "Server":
+    if not lan:
+        # An extension that pairs a device (a watch) needs Flash where
+        # that device can reach it, from the start.
+        from . import extensions
+
+        wanting = extensions.wanting_network()
+        if wanting:
+            lan = True
+            console.print(Text(
+                "On your network for " + ", ".join(wanting)
+                + ": its extension asks for that.",
+                style=DIM))
     try:
         return Server(port, session=session, lan=lan)
     except OSError as exc:

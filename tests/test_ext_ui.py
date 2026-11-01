@@ -217,3 +217,20 @@ def test_the_web_folder_is_behind_the_sign_in(tmp_path):
     finally:
         srv.shutdown()
         srv.server_close()
+
+
+def test_an_extension_can_ask_for_the_network(tmp_path):
+    folder = make(tmp_path / "w", {"web": "web", "css": "x.css"},
+                  {"web/x.css": ""})
+    file = folder / extensions.MANIFEST
+    manifest = json.loads(file.read_text())
+    manifest["network"] = True
+    file.write_text(json.dumps(manifest))
+    ext = extensions.load(folder)
+    assert ext.network is True
+    assert any("--lan" in line for line in ext.contents())
+
+    manifest["network"] = "yes"
+    file.write_text(json.dumps(manifest))
+    with pytest.raises(extensions.ExtensionError, match="true or false"):
+        extensions.load(folder)
