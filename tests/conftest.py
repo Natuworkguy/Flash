@@ -45,6 +45,60 @@ def outside_vscode(monkeypatch):
     monkeypatch.delenv("TERM_PROGRAM", raising=False)
 
 
+_SHELL_SETTINGS = ("MODEL_TITLES", "ULTRA_AUTO", "ULTRA_AUTO_ALLOWED", "SPARK_DEFAULT_MODEL")
+
+
+@pytest.fixture(autouse=True)
+def no_developer_settings(monkeypatch):
+    """Tests never see the developer's own Flash settings.
+
+    flash/ai.py loads the real ~/.flash.env into os.environ at import,
+    before any fixture runs, and the shell may export Flash settings too.
+    Either turns on features (chat titles, ultra auto) tests do not expect.
+    """
+
+    from dotenv import dotenv_values  # pylint: disable=import-outside-toplevel
+
+    names = set(_SHELL_SETTINGS) | set(dotenv_values(ai.ENV_PATH))
+    for name in names:
+        monkeypatch.delenv(name, raising=False)
+    # Config read those settings at import; read them again without them.
+    ai.Config.refresh()
+
+
+_OPENERS = {"open", "xdg-open", "start", "explorer"}
+
+
+@pytest.fixture(autouse=True)
+def nothing_opens_on_screen(monkeypatch):
+    """No test opens a file, app, or browser window on the developer's
+    screen, even one that forgets to mock its viewer. Tests that check
+    an opener patch it themselves, which still wins over this."""
+
+    import subprocess  # pylint: disable=import-outside-toplevel
+    import webbrowser  # pylint: disable=import-outside-toplevel
+
+    for name in ("open", "open_new", "open_new_tab"):
+        monkeypatch.setattr(webbrowser, name, lambda *a, **k: True)
+    monkeypatch.setattr(os, "startfile", lambda *a, **k: None, raising=False)
+    monkeypatch.setattr(tools, "_open_in_viewer", lambda path: "")
+
+    real_popen = subprocess.Popen
+
+    class NoOpeners(real_popen):  # pylint: disable=too-few-public-methods
+        """Popen that refuses `open` and its kin."""
+
+        def __init__(self, args, *rest, **kwargs):
+            first = args if isinstance(args, str) else (list(args) or [""])[0]
+            if os.path.basename(str(first).split()[0] if first else "") \
+                    in _OPENERS:
+                raise AssertionError(
+                    f"a test tried to open something on screen: {args!r}")
+            super().__init__(args, *rest, **kwargs)
+
+    monkeypatch.setattr(subprocess, "Popen", NoOpeners)
+
+
 @pytest.fixture(autouse=True)
 def isolated_home(tmp_path_factory, monkeypatch):
     """The terminal log, hook scripts, and shell rc files live in a temp
