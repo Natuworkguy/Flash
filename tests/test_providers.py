@@ -226,6 +226,36 @@ class TestFallbacksAndAuto:
         assert said == ["alpha:8b (model is gone), beta:8b (model is gone) "
                         "failed, so **gamma:12b** answered."]
 
+    def test_a_turn_keeps_its_fallback_and_says_so_once(self, monkeypatch):
+        from flash import modelchain
+
+        class Gone(Ollama):
+            def chat(self, **kwargs):
+                self.asked.append(kwargs["model"])
+                if kwargs["model"] == "alpha:8b":
+                    raise ollama.ResponseError("model is gone", 404)
+                return SimpleNamespace(
+                    message=SimpleNamespace(content=kwargs["model"]))
+
+        monkeypatch.setattr(ollama, "Client", Gone)
+        modelchain.set_fallbacks("alpha:8b", ["beta:8b"])
+        client = providers.client("x")
+        user = [{"role": "user", "content": "Hi"}]
+        step = user + [{"role": "assistant", "content": ""},
+                       {"role": "tool", "content": "recalled"}]
+
+        client.chat(model="alpha:8b", messages=user)
+        assert len(modelchain.notes(client)) == 1
+        # The tool's answer back, the same turn: straight to beta, and
+        # nothing said again.
+        reply = client.chat(model="alpha:8b", messages=step)
+        assert reply.message.content == "beta:8b"
+        assert modelchain.notes(client) == []
+        assert client._inner.asked == ["alpha:8b", "beta:8b", "beta:8b"]
+        # The next turn tries its own model first again.
+        client.chat(model="alpha:8b", messages=step + user)
+        assert client._inner.asked[-2:] == ["alpha:8b", "beta:8b"]
+
     def test_every_model_failing_says_each(self, monkeypatch):
         from flash import modelchain
 
