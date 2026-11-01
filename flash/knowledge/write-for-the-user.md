@@ -14,5 +14,5 @@ Do not invent facts, quotes or credentials about the user. Leave clearly marked 
 
 When it is an email to send, draft it, then:
 ```
-send_email {"to": "jo@example.com", "subject": "Thursday's review", "body": "Hi Jo,\n\nCould we move Thursday's review to 3pm? The build will be ready by then.\n\nThanks,\nNathan"}
+send_email {"to": "jo@example.com", "subject": "Thursday's review", "body": "Hi Jo,\n\nCould we move Thursday's review to 3pm? The build will be ready by then.\n\nThanks,\nAurelia Thornquist"}
 ```
