@@ -5087,14 +5087,21 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
         return {"token": token}
 
     if name == "skills":
+        own = skills.all_skills()
+        mine = {s.name for s in own}
+        # The knowledge base after: the guides that come with Flash and
+        # its extensions, to read and use but not to change. One the
+        # user saved a skill of the same name over is theirs instead.
+        guides = [g for g in skills.knowledge() if g.name not in mine]
         return {"skills": [
             {
                 "name": s.name,
                 "description": s.description,
                 "by": s.by,
+                "builtin": s.builtin,
                 "size": len(s.body),
             }
-            for s in skills.all_skills()
+            for s in (*own, *guides)
         ]}
 
     if name == "skill":
@@ -5103,8 +5110,17 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
             raise ValueError(f"No skill called {arg!r}.")
         return {
             "name": found.name, "description": found.description,
-            "by": found.by, "content": found.body,
+            "by": found.by, "builtin": found.builtin,
+            "content": found.body,
         }
+
+    if name in ("skill-save", "skill-delete"):
+        found = skills.find(arg)
+        if found is not None and found.builtin:
+            raise ValueError(
+                f"{found.name} is built into "
+                f"{'Flash' if found.builtin == 'flash' else found.builtin}"
+                " and can't be changed. Make a skill of your own instead.")
 
     if name in ("skill-create", "skill-save", "skill-delete"):
         action = {
