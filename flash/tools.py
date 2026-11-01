@@ -523,10 +523,22 @@ def running_as(owner: str):
         _owner.name = before
 
 
+# Owners told to stop, for work that is not a command to end, such as a
+# phone call: it hangs up at its next turn.
+_halted: dict[str, float] = {}
+
+
+def halted(owner: str, since: float) -> bool:
+    """Whether OWNER was told to stop after SINCE."""
+
+    return _halted.get(owner, 0.0) > since
+
+
 def stop_commands(owner: str) -> int:
     """End every command OWNER is running, and what each started. How
     many there were."""
 
+    _halted[owner] = time.time()
     with _running_lock:
         procs = list(_running.get(owner, ()))
         _stopped.update(p.pid for p in procs)
@@ -2201,6 +2213,8 @@ def available_tools() -> list[dict[str, Any]]:
         + (EMAIL_TOOLS if mail.configured() else [])
         + computer_tools()
         + (computer_use_tools() if computeruse.enabled() else [])
+        + ([PHONE_TOOL] if computer.system() == "mac" and ultra_auto()
+           else [])
     )
 
 
@@ -2719,9 +2733,45 @@ def make_spark(
     return result
 
 
+PHONE_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "phone_call",
+        "description": (
+            "Hold a phone call for the user, in your own voice, through "
+            "their iPhone's calling on this Mac: call someone (\"call "
+            "John and tell him I'm running late\"), or answer their next "
+            "call (\"take the next call from John and find out what he "
+            "wants\"). You say first that you are an automated assistant "
+            "calling for the user, talk towards the goal, hang up, and "
+            "get the transcript. Only in UltraAuto."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "action": {"type": "string", "enum": ["call", "answer"],
+                           "description": "call them now, or answer "
+                           "their next call."},
+                "who": {"type": "string",
+                        "description": "A name from Contacts, or a "
+                        "phone number."},
+                "goal": {"type": "string",
+                         "description": "What the call is for, in the "
+                         "user's words: what to say, or find out."},
+                "minutes": {"type": "number",
+                            "description": "answer: how long to wait for "
+                            "their call. 30 by default."},
+            },
+            "required": ["action", "who", "goal"],
+        },
+    },
+}
+
+
 def computer_tools() -> list[dict[str, Any]]:
     """The computer's tools, as far as the user allows them: none while
-    it is off, and only the actions they have not switched off."""
+    it is off, and only the actions they have not switched off. Calls
+    only in UltraAuto, on a Mac."""
 
     if not computer.enabled():
         return []
@@ -4316,6 +4366,91 @@ def _model_step(page, step: Any, names: list) -> str:
                 + (f" {name} {moved}." if moved else ""))
     return (f"click {name}: it {moved}." if moved
             else f"click {name}: nothing moved.")
+
+
+def _call_user() -> str:
+    """The user's name, as the Mac knows it, for Flash to say who it is
+    calling for."""
+
+    with contextlib.suppress(OSError, subprocess.SubprocessError):
+        found = subprocess.run(  # nosec B603 B607 -- a fixed program
+            ["id", "-F"], capture_output=True, text=True, timeout=5,
+            check=False).stdout.strip()
+        if found:
+            return found
+    return "the user"
+
+
+def _call_model(messages: list[dict]) -> str:
+    from . import ai  # deferred: ai imports half of Flash
+
+    answer = ai._client().chat(model=ai.Config.model, messages=messages,
+                               options=ai._chat_options())
+    return str(answer.message.content or "")
+
+
+def phone_call(action: str = "call", who: str = "", goal: str = "",
+               minutes: float = 30) -> str:
+    """Call someone, or take their next call, and talk on it in Flash's
+    own voice towards GOAL: UltraAuto only, on a Mac."""
+
+    from . import calls
+
+    tool_line(f"PhoneCall({action} {who})")
+    if not ultra_auto():
+        result = ("Error: Flash only talks on calls in UltraAuto. Tell the "
+                  "user to switch it on to let Flash make and take calls.")
+        tool_result(result, style=ERROR)
+        return result
+    who = " ".join(str(who or "").split())
+    if not who:
+        return "Error: say who to call, or whose call to take."
+    why = calls.missing()
+    if why:
+        tool_result(why, style=ERROR)
+        return f"Error: {why}"
+    owner = getattr(_owner, "name", "")
+    since = time.time()
+
+    def stopping() -> bool:
+        return halted(owner, since)
+
+    user = _call_user()
+    if action == "answer":
+        def wait() -> None:
+            try:
+                call = calls.take_next(who, goal, user, _call_model,
+                                       minutes=float(minutes or 30),
+                                       stopping=stopping)
+            except Exception as exc:  # noqa: BLE001
+                desktop_notify("Flash's call", f"It failed: {exc}")
+                return
+            if call is None:
+                desktop_notify("Flash's call", f"No call came from "
+                                     f"{who} in {minutes:g} minutes.")
+                return
+            path = calls._keep(call)
+            desktop_notify(
+                f"Call from {call.who}",
+                f"Flash took it: {call.ended}. Transcript in {path}.")
+
+        threading.Thread(target=wait, daemon=True,
+                         name=f"call from {who}").start()
+        result = (f"Waiting for {who}'s next call, for up to {minutes:g} "
+                  "minutes. When it comes, Flash answers, says it is an "
+                  "automated assistant, and talks towards the goal; the "
+                  "user is notified with the transcript after.")
+        tool_result(result, style=DIM)
+        return result
+    try:
+        call = calls.place(who, goal, user, _call_model, stopping=stopping)
+    except (calls.CallError, computer.ComputerError) as exc:
+        result = f"Error: {exc}"
+        tool_result(result, style=ERROR)
+        return result
+    result = calls.summary(call, calls._keep(call))
+    tool_result(result, style=DIM)
+    return result
 
 
 def send_3d_model(path: str, caption: str = "") -> str:
@@ -8587,6 +8722,7 @@ FUNCTIONS = {
     "send_document": send_document,
     "make_3d_model": make_3d_model,
     "test_3d_model": test_3d_model,
+    "phone_call": phone_call,
     "send_3d_model": send_3d_model,
     "make_midi": make_midi,
     "send_midi": send_midi,
