@@ -45,7 +45,8 @@ def outside_vscode(monkeypatch):
     monkeypatch.delenv("TERM_PROGRAM", raising=False)
 
 
-_SHELL_SETTINGS = ("MODEL_TITLES", "ULTRA_AUTO", "ULTRA_AUTO_ALLOWED", "SPARK_DEFAULT_MODEL")
+_SHELL_SETTINGS = ("MODEL_TITLES", "ULTRA_AUTO", "ULTRA_AUTO_ALLOWED",
+                   "SPARK_DEFAULT_MODEL")
 
 
 @pytest.fixture(autouse=True)
