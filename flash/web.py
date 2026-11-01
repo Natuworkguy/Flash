@@ -174,7 +174,8 @@ HTML_SANDBOX = "sandbox allow-scripts allow-forms allow-popups allow-modals"
 # The addresses the page answers to. Each serves the same page, which
 # opens whatever the address names: a chat, a project, a settings tab.
 PAGE_PATHS = re.compile(
-    r"^/(?:c/[0-9a-f]{8}|p/[0-9a-f]{8}|projects|skills|sparks|extensions"
+    r"^/(?:c/[0-9a-f]{8}|p/[0-9a-f]{8}|projects|skills(?:/knowledge)?"
+    r"|sparks|extensions"
     r"|briefing|x/[a-z0-9][a-z0-9_-]{0,63}/[a-z][a-z0-9_-]{0,31}"
     r"|settings(?:/(?:general|usage|memory|email|connectors|security))?)?"
     r"/?$"
