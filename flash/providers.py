@@ -436,6 +436,22 @@ class Client:
         self._inner = inner
         self._host = host
         self._notes: list[dict] = []
+        # The fallback that took over from a model that failed, kept for
+        # the rest of the turn on this thread: its next steps go straight
+        # to it, without asking the failed one again or saying so again.
+        self._held = threading.local()
+
+    def _turn_held(self, messages) -> dict[str, str]:
+        """This thread's fallbacks for the turn: a new turn, one that
+        ends on the user's word, starts with none."""
+
+        held = getattr(self._held, "models", None)
+        last = messages[-1] if messages else None
+        role = last.get("role") if isinstance(last, dict) else getattr(
+            last, "role", None)
+        if held is None or role == "user":
+            held = self._held.models = {}
+        return held
 
     def __getattr__(self, name: str):
         return getattr(self._inner, name)
@@ -466,6 +482,13 @@ class Client:
         for name in (*own, *modelchain.fallbacks(model)):
             if name and name not in chain:
                 chain.append(name)
+        held = self._turn_held(kwargs.get("messages"))
+        took_over = held.get(model)
+        if took_over:
+            # Failed earlier this turn: what took over goes first, and
+            # the one that failed is not asked again.
+            chain = [took_over] + [n for n in chain
+                                   if n not in (model, took_over)]
         stream = bool(kwargs.get("stream"))
         failed: list[tuple[str, str]] = []
         last: Optional[BaseException] = None
@@ -477,7 +500,7 @@ class Client:
             except (KeyboardInterrupt, SystemExit):
                 raise
             except Exception as exc:
-                if len(chain) == 1:
+                if len(chain) == 1 and not took_over:
                     raise
                 failed.append((name, _why(exc)))
                 last = exc
@@ -485,6 +508,8 @@ class Client:
             if failed:
                 self._notes.append({"kind": "fallback", "model": name,
                                     "failed": failed})
+            if name != model:
+                held[model] = name
             return answer
         raise ResponseError(
             "Every model failed: " + "; ".join(
