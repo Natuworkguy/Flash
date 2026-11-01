@@ -77,8 +77,38 @@ def test_every_part_is_read_and_said_at_install(tmp_path):
     page = ext.ui.summary("weather")
     assert page["css"] == "/ext/weather/style.css"
     assert page["panels"][0]["url"] == "/ext/weather/radar.html"
+    # Each at an address of its own, with its X unless it says not.
+    assert page["panels"][0]["route"] == "/x/weather/radar"
+    assert page["panels"][0]["close"] is True
     # A button only for the terminal is not the page's to draw.
     assert [b["id"] for b in page["buttons"]] == ["tldr", "now", "fc"]
+
+
+def test_a_panel_can_go_without_its_x(tmp_path):
+    ext = extensions.load(make(tmp_path / "w", {
+        "web": "web",
+        "panels": [{"id": "home", "label": "Home", "file": "home.html",
+                    "close": False}],
+    }, {"web/home.html": "<h1>Home</h1>"}))
+    assert ext.ui.summary("w")["panels"][0]["close"] is False
+
+
+def test_a_panels_close_is_true_or_false(tmp_path):
+    with pytest.raises(extensions.ExtensionError, match="true or false"):
+        extensions.load(make(tmp_path / "w", {
+            "web": "web",
+            "panels": [{"id": "p", "label": "P", "file": "p.html",
+                        "close": "no"}],
+        }, {"web/p.html": "<p>"}))
+
+
+def test_a_panel_address_opens_the_page():
+    from flash import web
+
+    assert web.PAGE_PATHS.match("/x/watch/watch")
+    assert web.PAGE_PATHS.match("/x/my-ext_2/board/")
+    assert not web.PAGE_PATHS.match("/x/watch")
+    assert not web.PAGE_PATHS.match("/x/Watch/../etc")
 
 
 @pytest.mark.parametrize("ui, why", [
