@@ -315,12 +315,20 @@ class Extension:
     briefing: Optional[Briefing] = None
     # A folder of guides for the knowledge base (skills.knowledge).
     knowledge: Optional[Path] = None
+    # Flash's web UI is opened to the network when Flash starts, as with
+    # --lan: for a device it pairs, a watch say, that reaches it there.
+    network: bool = False
 
     def contents(self) -> list[str]:
         """What installing this adds, one line per kind of thing."""
 
         lines = []
 
+        if self.network:
+            lines.append(
+                "opens Flash's web UI to your network when Flash starts, "
+                "as --lan does"
+            )
         if self.commands:
             lines.append(
                 "commands: "
@@ -935,7 +943,20 @@ def load(root: Path) -> Extension:
         ui=ui,
         speech=speech,
         briefing=briefing,
+        network=_network(manifest.get("network", False)),
     )
+
+
+def _network(value: Any) -> bool:
+    if not isinstance(value, bool):
+        raise ExtensionError('"network" has to be true or false')
+    return value
+
+
+def wanting_network() -> list[str]:
+    """The installed extensions that want Flash on the network."""
+
+    return [e.name for e in installed() if e.network]
 
 
 # What is installed, read once and kept until something changes it:

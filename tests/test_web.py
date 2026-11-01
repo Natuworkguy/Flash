@@ -454,6 +454,24 @@ class TestLocks:
         assert request(server, "GET", "/nope")[0] == 404
 
 
+def test_an_extension_can_put_flash_on_the_network(monkeypatch):
+    from flash import extensions
+
+    made = {}
+
+    class Fake:
+        def __init__(self, port, session=None, lan=False):
+            made["lan"] = lan
+
+    monkeypatch.setattr(web, "Server", Fake)
+    monkeypatch.setattr(extensions, "wanting_network", lambda: [])
+    web._listen(0, False)
+    assert made["lan"] is False
+    monkeypatch.setattr(extensions, "wanting_network", lambda: ["watch"])
+    web._listen(0, False)
+    assert made["lan"] is True
+
+
 class TestPairing:
     def test_a_code_signs_a_device_in(self, server):
         code = web.command(server.session, {"name": "device-pair"})["code"]

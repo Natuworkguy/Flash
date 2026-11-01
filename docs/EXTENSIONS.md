@@ -132,6 +132,7 @@ and cannot point outside it.
 | `voice` | A program in the middle of voice mode: told what is said both ways, and able to change it. See below. |
 | `settings` | Choices the user makes for the extension, in its own settings panel. See below. |
 | `ui` | What it changes of the web page and the terminal: its own stylesheet and script, panels, buttons, a status line, the greeting, the banner. See below. |
+| `network` | `true` opens Flash's web UI to your network whenever Flash starts, as `--lan` does: for an extension that pairs a device, such as a watch, that reaches Flash there. The install preview says so. |
 
 ### Commands
 
