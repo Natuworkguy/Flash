@@ -455,12 +455,17 @@ class Client:
         kwargs = {**dict(zip(("model", "messages", "tools", "stream",
                               "think"), args)), **kwargs}
         model = str(kwargs.pop("model", "") or "")
+        # The caller's own fallbacks, a spark's, first: then the model's.
+        own = [str(m) for m in kwargs.pop("fallbacks", None) or []]
         model, how = modelchain.resolve(
             self._host, model, kwargs.get("messages"),
             default=os.getenv("MODEL", ""))
         if how:
             self._notes.append({"kind": "auto", "model": model, "how": how})
-        chain = [model, *modelchain.fallbacks(model)]
+        chain = [model]
+        for name in (*own, *modelchain.fallbacks(model)):
+            if name and name not in chain:
+                chain.append(name)
         stream = bool(kwargs.get("stream"))
         failed: list[tuple[str, str]] = []
         last: Optional[BaseException] = None

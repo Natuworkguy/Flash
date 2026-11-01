@@ -2301,6 +2301,7 @@ def test_a_failing_model_marks_the_spark_unavailable(model, no_waits):
     assert report.failed  # nosec B101
     assert "glm-4.6:cloud is unavailable" in report.text  # nosec B101
     assert "never switched to another model" in report.text  # nosec B101
+    assert "give it fallbacks" in report.text  # nosec B101
     assert found.unavailable  # nosec B101
     assert found.unavailable_model == "glm-4.6:cloud"  # nosec B101
     # Only its own model was ever asked.
@@ -2790,3 +2791,39 @@ def test_modes_follow_flash_unless_set(monkeypatch, tmp_path):
     assert sparks.set_mode(made.id, "follow").mode == ""
     with pytest.raises(sparks.SparkError, match="A mode is"):
         sparks.set_mode(made.id, "sometimes")
+
+
+def test_fallbacks_are_kept_clean():
+    assert sparks.fallbacks_of("b > c, b\n a", "a") == ["b", "c"]
+    assert sparks.fallbacks_of(["x", "", "x"]) == ["x"]
+    with pytest.raises(sparks.SparkError):
+        sparks.fallbacks_of("a > b > c > d > e")
+
+
+def test_a_spark_carries_on_with_its_fallbacks(model, no_waits, monkeypatch):
+    import ollama
+    from types import SimpleNamespace
+
+    from flash import providers
+
+    asked = []
+
+    class Inner:
+        def chat(self, **kwargs):
+            asked.append(kwargs["model"])
+            if kwargs["model"] != "backup:8b":
+                raise ollama.ResponseError("model is gone", 404)
+            return SimpleNamespace(message=SimpleNamespace(
+                content="All done.", tool_calls=None, thinking=None),
+                prompt_eval_count=1, eval_count=1)
+
+    made = sparks.create("Scout", "Watch.", model="glm-4.6:cloud")
+    sparks.update(made.id, fallbacks="backup:8b")
+    assert sparks.find(made.id).fallbacks == ["backup:8b"]
+    client = providers.Client(Inner())
+
+    report = sparks.shift(made.id, client=client)
+
+    assert not report.failed  # nosec B101
+    assert asked[:2] == ["glm-4.6:cloud", "backup:8b"]  # nosec B101
+    assert not sparks.find(made.id).unavailable  # nosec B101

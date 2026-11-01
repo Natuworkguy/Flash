@@ -460,6 +460,9 @@ class Spark:
     # The model it runs on. "" for a spark from before one was chosen,
     # which runs on whatever Flash is set to.
     model: str = ""
+    # Models it runs on instead, in order, when its own fails: refused,
+    # down, out of quota. Before the model's own fallbacks (/fallbacks).
+    fallbacks: list = field(default_factory=list)
     # A step that asks first, waiting on the user: what it is, and all
     # a shift needs to carry on from it. {} when nothing waits.
     pending: dict = field(default_factory=dict)
@@ -2214,6 +2217,27 @@ def _model_name(model) -> str:
     return " ".join(str(model or "").split())[:200]
 
 
+# The most models a spark falls back on.
+MOST_FALLBACKS = 4
+
+
+def fallbacks_of(given, model: str = "") -> list[str]:
+    """GIVEN as a spark's fallbacks: a list, or "a > b, c" as typed. Its
+    own model, repeats and blanks left out."""
+
+    if isinstance(given, str):
+        given = re.split(r"[>,\n]", given)
+    found: list[str] = []
+    for item in given or []:
+        name = _model_name(item)
+        if name and name != model and name not in found:
+            found.append(name)
+    if len(found) > MOST_FALLBACKS:
+        raise SparkError(f"A spark falls back on {MOST_FALLBACKS} models "
+                         "at most.")
+    return found
+
+
 def project_of(spark: Spark):
     """SPARK's project, or None: none given, or the project is gone."""
 
@@ -2930,6 +2954,8 @@ def update(key: str, **changes) -> Spark:
                 spark.unavailable = spark.unavailable_model = ""
                 spark.unavailable_at = 0.0
             spark.model = model
+        if "fallbacks" in changes:
+            spark.fallbacks = fallbacks_of(changes["fallbacks"], spark.model)
         if "title" in changes:
             spark.title = _title(changes["title"])
         if "colour" in changes:
@@ -2949,7 +2975,8 @@ def update(key: str, **changes) -> Spark:
     changed = {
         name: {"from": before.get(name), "to": after.get(name)}
         for name in ("name", "title", "goal", "boundaries", "every", "at",
-                     "project", "watch", "events", "model", "colour")
+                     "project", "watch", "events", "model", "fallbacks",
+                     "colour")
         if before.get(name) != after.get(name)
     }
     if changed:
@@ -4356,11 +4383,19 @@ def _work(
     host = flash_tools.OLLAMA_HOST or subagents.OLLAMA_HOST_DEFAULT
 
     client = client or providers.client(host)
-    # Always its own model. One that fails, past its retries, marks the
-    # spark unavailable; it is never run on another model instead.
+    # Its own model, then the fallbacks it was given, if any. One that
+    # fails past all of them, and its retries, marks the spark
+    # unavailable.
     answered = [False]
 
+    # Its own fallbacks, when its model fails: a client that knows them
+    # goes on down them, and says which answered.
+    falls = list(spark.fallbacks or [])
+    knows = isinstance(client, providers.Client)
+
     def ask(**request):
+        if falls and knows:
+            request["fallbacks"] = falls
         try:
             response = _ask_model(client, doing, stopping, **request)
         except Stopped:
@@ -4369,6 +4404,13 @@ def _work(
             reason = _reason(error)
             _mark_unavailable(spark.id, model, reason)
             raise ModelFailed(model, reason) from error
+        if knows:
+            for said in client.take_notes():
+                if said.get("kind") == "fallback":
+                    gone = ", ".join(n for n, _ in said.get("failed") or [])
+                    doing(f"On {said.get('model')}: {gone} failed")
+                    log(spark.id, "fallback", model=said.get("model"),
+                        failed=said.get("failed"))
         if not answered[0]:
             answered[0] = True
             if spark.unavailable:
@@ -4903,12 +4945,16 @@ def _shift(spark_id: str, client=None) -> Optional[Report]:
             f"{this_period(find(spark.id) or spark)}.",
         )
     except ModelFailed as e:
+        tried = (f" Its fallbacks failed too: {', '.join(spark.fallbacks)}."
+                 if spark.fallbacks else "")
         report = Report(
             at=time.time(), failed=True, steps=steps,
-            text=f"This shift could not run: {e}. {spark.name} is marked "
-            "unavailable, and no shift starts on its schedule until you "
-            "try again or give it another model. It is never switched to "
-            "another model by itself.",
+            text=f"This shift could not run: {e}.{tried} {spark.name} is "
+            "marked unavailable, and no shift starts on its schedule until "
+            "you try again or give it another model. "
+            + ("It only moves to the fallbacks you gave it." if spark.fallbacks
+               else "It is never switched to another model by itself: give "
+               "it fallbacks to carry on with when its model fails."),
         )
     except Exception as e:  # noqa: BLE001
         report = Report(
