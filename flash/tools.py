@@ -675,7 +675,7 @@ def shell_tool(command: str, timeout=None, is_user=False) -> str:
                 return f"(exit {returncode})"
             return ""
         out, err, returncode, stopped = _run_owned(
-            args, shell=shell, seconds=seconds, env=env,
+            args, shell=shell, seconds=seconds, env=env,  # nosec B604
         )
     except subprocess.TimeoutExpired:
         message = (
@@ -4434,7 +4434,7 @@ def phone_call(action: str = "call", who: str = "", goal: str = "",
                 return
             if call is None:
                 desktop_notify("Flash's call", f"No call came from "
-                                     f"{who} in {minutes:g} minutes.")
+                               f"{who} in {minutes:g} minutes.")
                 return
             path = calls._keep(call)
             desktop_notify(

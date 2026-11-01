@@ -24,6 +24,7 @@ import io
 import json
 import shutil
 import subprocess  # nosec B404
+import threading
 import time
 import wave
 from collections.abc import Callable
@@ -47,6 +48,8 @@ QUIET_SECONDS = 40.0
 PAUSE_SECONDS = 0.9
 # How long Flash waits for the call to be picked up, or to come in.
 PICK_UP_SECONDS = 45.0
+# The longest one turn of theirs is listened to before Flash answers.
+LONGEST_TURN = 30.0
 # The model's word for "this call is over".
 HANG_UP = "[hang up]"
 RATE = voice.SAMPLE_RATE
@@ -56,7 +59,9 @@ CALLS_DIR = FLASH_DIR / "calls"
 # Finds a button by its name in the call's alerts and windows, and
 # presses it: "Call" to confirm one Flash places, "Accept" to take one
 # that comes in (only when its alert names WANT, given as argv[1]), and
-# "End" to hang up. Prints what it pressed, or nothing.
+# "End" to hang up. A notification's buttons are no buttons on macOS 13
+# and later but actions of the notification ("Name:Call ..."), so those
+# are looked through too. Prints what it pressed, or nothing.
 _PRESS = r"""
 function run(argv) {
   const names = JSON.parse(argv[0]);
@@ -64,6 +69,11 @@ function run(argv) {
   const se = Application("System Events");
   const get = (x, what) => {
     try { return x[what](); } catch (e) { return ""; }
+  };
+  const actionName = (a) => {
+    const raw = String(get(a, "description") || get(a, "name") || "");
+    const m = raw.match(/Name:([^\n]*)/);
+    return (m ? m[1] : raw).trim();
   };
   for (const proc of ["NotificationCenter", "FaceTime"]) {
     let all;
@@ -81,8 +91,76 @@ function run(argv) {
         return name;
       }
     }
+    for (const x of all) {
+      let acts;
+      try { acts = x.actions(); } catch (e) { continue; }
+      for (const a of acts) {
+        const name = actionName(a);
+        if (names.includes(name)) {
+          try { a.perform(); return name; } catch (e) {}
+        }
+      }
+    }
   }
   return "";
+}
+"""
+
+# Where the call stands: "live" while there is a call to end, and
+# "connected" once its timer runs (it is picked up). Prints JSON.
+_STATE = r"""
+function run() {
+  const se = Application("System Events");
+  const get = (x, what) => {
+    try { return x[what](); } catch (e) { return ""; }
+  };
+  const ends = ["End", "End Call", "Hang Up"];
+  let live = false, connected = false;
+  for (const proc of ["NotificationCenter", "FaceTime"]) {
+    let all;
+    try { all = se.processes.byName(proc).entireContents(); }
+    catch (e) { continue; }
+    for (const x of all) {
+      const role = get(x, "role");
+      const name = String(get(x, "name") || get(x, "description") || "");
+      if (role === "AXButton" && ends.includes(name)) live = true;
+      const shown = String(get(x, "value") || name).trim();
+      if (role === "AXStaticText" && /^\d{1,2}:\d{2}(:\d{2})?$/.test(shown))
+        connected = true;
+      let acts = [];
+      try { acts = x.actions(); } catch (e) {}
+      for (const a of acts) {
+        const raw = String(get(a, "description") || get(a, "name") || "");
+        if (ends.some((e) => raw.includes("Name:" + e))) live = true;
+      }
+    }
+  }
+  return JSON.stringify({live: live, connected: connected && live});
+}
+"""
+
+# FaceTime keeps its own microphone and speaker, chosen in its Video
+# menu, whatever the Mac's defaults are: the loopback devices are picked
+# there too (the microphone's is the first of its name, the speaker's the
+# last).
+_FACETIME_DEVICES = r"""
+function run(argv) {
+  const se = Application("System Events");
+  let menu;
+  try {
+    const bar = se.processes.byName("FaceTime").menuBars[0];
+    menu = bar.menuBarItems.byName("Video").menus[0];
+  } catch (e) { return ""; }
+  const items = menu.menuItems();
+  const nameOf = (i) => { try { return i.name(); } catch (e) { return ""; } };
+  const named = (n) => items.filter((i) => nameOf(i) === n);
+  const did = [];
+  const mic = named(argv[0]), out = named(argv[1]);
+  try { if (mic.length) { mic[0].click(); did.push("mic"); } } catch (e) {}
+  try {
+    if (out.length) { out[out.length - 1].click(); did.push("out"); }
+  } catch (e) {}
+  return did.join(",");
 }
 """
 
@@ -169,6 +247,80 @@ def _press(names: list[str], want: str = "") -> str:
         return ""
 
 
+def _state() -> dict:
+    """Where the call stands: {"live": bool, "connected": bool}."""
+
+    try:
+        got = json.loads(computer._run(
+            ["osascript", "-l", "JavaScript", "-e", _STATE],
+            timeout=20).strip() or "{}")
+    except (computer.ComputerError, ValueError):
+        return {"live": False, "connected": False}
+    return {"live": bool(got.get("live")),
+            "connected": bool(got.get("connected"))}
+
+
+def _facetime_devices() -> None:
+    with contextlib.suppress(computer.ComputerError):
+        computer._run(["osascript", "-l", "JavaScript", "-e",
+                       _FACETIME_DEVICES, TO_CALL, FROM_CALL], timeout=20)
+
+
+def _picked_up(call: Call, stopping: Callable[[], bool]) -> bool:
+    """Waits for the call Flash placed to be picked up. False, with why in
+    CALL.ended, when it never was."""
+
+    deadline = time.monotonic() + PICK_UP_SECONDS
+    seen_live = False
+    while time.monotonic() < deadline:
+        if stopping():
+            call.ended = "you stopped it"
+            return False
+        now = _state()
+        if now["connected"]:
+            return True
+        if now["live"]:
+            seen_live = True
+        elif seen_live:
+            call.ended = "they didn't pick up"
+            return False
+        time.sleep(0.7)
+    if seen_live:
+        # Still ringing, or a Mac that shows no timer: talk anyway; a
+        # quiet line ends it.
+        return True
+    call.ended = "they didn't pick up"
+    return False
+
+
+class _StillOn:
+    """STOPPING, true too once the call has ended on its own (they hung
+    up). The call is looked at every EVERY seconds on a thread of its own,
+    so listening never waits on it."""
+
+    def __init__(self, stopping: Callable[[], bool], every: float = 4.0,
+                 look: Callable[[], dict] = lambda: _state()) -> None:
+        self.stopping = stopping
+        self.why = ""
+        self._over = threading.Event()
+        self._thread = threading.Thread(
+            target=self._watch, args=(every, look), daemon=True,
+            name="call watch")
+        self._thread.start()
+
+    def _watch(self, every: float, look: Callable[[], dict]) -> None:
+        while not self._over.wait(every):
+            if not look()["live"]:
+                self.why = "they hung up"
+                return
+
+    def __call__(self) -> bool:
+        return bool(self.why) or self.stopping()
+
+    def close(self) -> None:
+        self._over.set()
+
+
 def _number_of(who: str, facetime: bool = False) -> tuple[str, str]:
     """WHO's name and phone number: a number as it is, a name from
     Contacts. With FACETIME, an email address does too: FaceTime Audio
@@ -221,7 +373,12 @@ class Line:
         """What the other side says next, once they pause: "" if they
         say nothing for LONGEST seconds."""
 
-        threshold = voice.silence_threshold()
+        base = voice.silence_threshold()
+        # The line's own hiss sets the bar too, so a noisy line is not
+        # taken for someone who never stops talking: it is learned from
+        # the first moments of the line, and kept up after.
+        floor = getattr(self, "floor", None)
+        learning: list[float] = []
         heard = bytearray()
         quiet = 0.0
         waited = 0.0
@@ -229,11 +386,22 @@ class Line:
         while not stopping():
             block, _ = self.stream.read(frames)
             block = bytes(block)
-            loud = voice._level(block) > threshold
+            level = voice._level(block)
+            if floor is None:
+                learning.append(level)
+                if len(learning) * BLOCK >= 0.5:
+                    # Someone talking from the first moment is no hiss.
+                    floor = self.floor = min(min(learning), base * 3)
+                waited += BLOCK
+                continue
+            loud = level > max(base, floor * 2.5)
+            if not loud:
+                floor = self.floor = floor * .9 + level * .1
             if heard:
                 heard += block
                 quiet = 0.0 if loud else quiet + BLOCK
-                if quiet >= PAUSE_SECONDS:
+                if quiet >= PAUSE_SECONDS or \
+                        len(heard) >= self.device_rate * 2 * LONGEST_TURN:
                     break
             elif loud:
                 heard += block
@@ -336,12 +504,14 @@ def talk(call: Call, line: Line, user: str, ask: Callable[[list[dict]], str],
             call.ended = "the call was done"
             break
         heard = line.hear(stopping=stopping)
+        if not heard and stopping():
+            break
         if not heard:
             call.ended = "the other side went quiet"
             break
         call.lines.append((call.who or "Them", heard))
     if stopping() and not call.ended:
-        call.ended = "you stopped it"
+        call.ended = getattr(stopping, "why", "") or "you stopped it"
 
 
 def _keep(call: Call) -> Path:
@@ -382,15 +552,33 @@ def place(who: str, goal: str, user: str,
     call = Call(who=shown, number=number, goal=goal, incoming=False)
     with _routed():
         _dial(number, via)
-        # The Mac asks before it dials: Flash says yes.
-        deadline = time.monotonic() + 15
-        while time.monotonic() < deadline and not _press(["Call"]):
-            time.sleep(0.5)
-        line = Line()
         try:
-            talk(call, line, user, ask, stopping)
+            # The Mac asks before it dials, in a notification: Flash says
+            # yes.
+            deadline = time.monotonic() + 15
+            pressed = ""
+            while time.monotonic() < deadline and not stopping():
+                pressed = _press(["Call"])
+                if pressed or _state()["live"]:
+                    break
+                time.sleep(0.5)
+            if not pressed and not _state()["live"]:
+                raise CallError(
+                    "The Mac asked to confirm the call and Flash couldn't "
+                    "press Call. Give Flash Accessibility access (System "
+                    "Settings, Privacy & Security, Accessibility) and try "
+                    "again.")
+            _facetime_devices()
+            if not _picked_up(call, stopping):
+                return call
+            line = Line()
+            on = _StillOn(stopping)
+            try:
+                talk(call, line, user, ask, on)
+            finally:
+                on.close()
+                line.close()
         finally:
-            line.close()
             _hang_up()
     return call
 
@@ -420,10 +608,13 @@ def take_next(who: str, goal: str, user: str,
     call = Call(who=shown, number=number, goal=goal, incoming=True)
     with _routed():
         time.sleep(1.0)
+        _facetime_devices()
         line = Line()
+        on = _StillOn(stopping)
         try:
-            talk(call, line, user, ask, stopping)
+            talk(call, line, user, ask, on)
         finally:
+            on.close()
             line.close()
             _hang_up()
     return call
@@ -435,4 +626,3 @@ def summary(call: Call, path: Path) -> str:
     said = call.transcript() or "(nothing was said)"
     return (f"The call {'from' if call.incoming else 'to'} {call.who} "
             f"ended: {call.ended}.\n{said}\nTranscript kept at {path}.")
-

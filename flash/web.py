@@ -2874,8 +2874,8 @@ def _reply_since(chat: Chat, begun: int) -> str:
     """The last reply a turn wrote, from log entry BEGUN on: "" if none."""
 
     for entry in reversed(chat.log[begun:]):
-        if entry.get("type") == "assistant" and str(entry.get("text") or
-                                                       "").strip():
+        text = str(entry.get("text") or "").strip()
+        if entry.get("type") == "assistant" and text:
             return str(entry["text"]).strip()
     return ""
 
