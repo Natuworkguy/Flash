@@ -1275,3 +1275,26 @@ class TestACallMissingAnArgument:
         assert tools._missing_arguments(
             tools.write_tool, {"path": "a", "content": "b"},
         ) == []
+
+
+def test_a_parts_move_in_words():
+    import math
+
+    still = {"centre": [0, 0, 0], "turn": [0, 0, 0, 1]}
+    half = math.radians(-100) / 2
+    turned = {"centre": [0.3, 0, 0.3],
+              "turn": [0, math.sin(half), 0, math.cos(half)]}
+    assert tools._moved(still, still) == ""  # nosec B101
+    assert tools._moved(still, turned) == \
+        "moved 0.42 m, turned -100° about y"  # nosec B101
+    assert tools._moved(turned, still) == \
+        "moved 0.42 m, turned 100° about y"  # nosec B101
+
+
+def test_trying_a_model_needs_a_model_and_steps(tmp_path):
+    assert tools.test_3d_model(str(tmp_path / "gone.glb"),
+                               [{"click": "door"}]).startswith("Error")
+    made = tmp_path / "box.glb"
+    made.write_bytes(tools.model3d.to_glb(tools.model3d.build_parts(
+        [{"name": "box", "shape": "box"}]), "Box"))
+    assert "give steps" in tools.test_3d_model(str(made), [])  # nosec B101

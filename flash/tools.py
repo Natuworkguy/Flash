@@ -4145,6 +4145,179 @@ def make_3d_model(
     )
 
 
+# The most steps one test of a model takes, and pictures it sends back.
+MOST_MODEL_STEPS = 12
+MOST_MODEL_PICTURES = 6
+# How long a click's move is given to play before it is looked at.
+MODEL_CLICK_WAIT_S = 1.4
+
+
+def _moved(before: dict, after: dict) -> str:
+    """How a part moved between two of the viewer's states, in words."""
+
+    import math
+
+    shift = sum((a - b) ** 2 for a, b in zip(after["centre"],
+                                             before["centre"])) ** 0.5
+    said = []
+    if shift >= 0.005:
+        said.append(f"moved {shift:.2f} m")
+    # The turn between them: AFTER times BEFORE undone, as an angle about
+    # an axis, which reads as the part's own move ("100° about y").
+    x1, y1, z1, w1 = before["turn"]
+    x2, y2, z2, w2 = after["turn"]
+    x1, y1, z1 = -x1, -y1, -z1
+    w = w2 * w1 - x2 * x1 - y2 * y1 - z2 * z1
+    x = w2 * x1 + x2 * w1 + y2 * z1 - z2 * y1
+    y = w2 * y1 - x2 * z1 + y2 * w1 + z2 * x1
+    z = w2 * z1 + x2 * y1 - y2 * x1 + z2 * w1
+    if w < 0:
+        w, x, y, z = -w, -x, -y, -z
+    angle = math.degrees(2 * math.acos(max(-1.0, min(1.0, w))))
+    if angle >= 2:
+        norm = math.sqrt(x * x + y * y + z * z) or 1.0
+        axis = (x / norm, y / norm, z / norm)
+        main = max(range(3), key=lambda i: abs(axis[i]))
+        if abs(axis[main]) > 0.95:
+            sign = "-" if axis[main] < 0 else ""
+            said.append(f"turned {sign}{round(angle)}° about {'xyz'[main]}")
+        else:
+            said.append(f"turned {round(angle)}° about ("
+                        + ", ".join(f"{a:.2f}" for a in axis) + ")")
+    return ", ".join(said)
+
+
+def test_3d_model(path: str, steps: Any) -> str:
+    """Try a 3D model as the user would, in the same viewer: click its
+    parts, point at them, turn the view, let it play, and say what each
+    did, with pictures."""
+
+    model_path = Path(path).expanduser()
+    tool_line(f"Test3DModel({model_path})")
+    problem = model3d.check_model_file(model_path) if model_path.exists() \
+        else f"{model_path} does not exist"
+    if not isinstance(steps, list) or not steps:
+        problem = problem or (
+            'give steps: a list such as [{"click": "door"}]')
+    if problem:
+        result = f"Error: {problem}."
+        tool_result(result, style=ERROR)
+        return result
+    try:
+        from playwright.sync_api import Error as PlaywrightError
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        return f"Error: {page_devtools.PACKAGE_HINT}"
+
+    web = Path(__file__).parent / "web" / "three"
+    page_html = model3d.preview_page(
+        model_path.read_bytes(), model_path.suffix.lower(),
+        (web / "viewer.js").read_text(encoding="utf-8"),
+        (web / "three.min.js").read_text(encoding="utf-8"), live=True,
+    )
+    global _model_count
+    _model_count += 1
+    html = Path(SCRATCH_DIR) / f"model-test-{_model_count}.html"
+    html.parent.mkdir(parents=True, exist_ok=True)
+    html.write_text(page_html, encoding="utf-8")
+    sees = model_sees_images(OLLAMA_HOST, MODEL_NAME)
+    lines: list[str] = []
+    pictures = 0
+
+    def picture(page, label: str) -> None:
+        nonlocal pictures
+        if not sees or pictures >= MOST_MODEL_PICTURES:
+            return
+        pictures += 1
+        _pending_images.append(page.screenshot())
+        lines.append(f"  (picture {pictures}: {label})")
+
+    try:
+        with sync_playwright() as driver:
+            chromium = page_devtools.launch_chromium(driver)
+            try:
+                page = chromium.new_page(viewport={
+                    "width": MODEL_PREVIEW_WIDTH,
+                    "height": MODEL_PREVIEW_HEIGHT})
+                page.goto(html.resolve().as_uri(), wait_until="load")
+                page.wait_for_function(
+                    "document.title === 'ready' || document.title === "
+                    "'failed'", timeout=20000)
+                if page.title() != "ready":
+                    raise RuntimeError("the viewer could not draw it")
+                names = page.evaluate("view.probe.names()")
+                for step in steps[:MOST_MODEL_STEPS]:
+                    lines.append(_model_step(page, step, names))
+                    picture(page, lines[-1].split(":")[0])
+            finally:
+                chromium.close()
+    except (PlaywrightError, RuntimeError) as exc:
+        result = f"Error: could not try it: {exc}"
+        tool_result(result, style=ERROR)
+        return result
+
+    if len(steps) > MOST_MODEL_STEPS:
+        lines.append(f"Only the first {MOST_MODEL_STEPS} steps were tried.")
+    result = "\n".join(lines)
+    tool_result(result, style=DIM)
+    return (
+        f"Tried {model_path.name} in the viewer, as the user would:\n"
+        f"{result}\nIf something did not do what it should, fix the parts "
+        "with make_3d_model (same path) and test again."
+    )
+
+
+def _model_step(page, step: Any, names: list) -> str:
+    """One step of test_3d_model, done in PAGE: what happened, in words."""
+
+    if not isinstance(step, dict) or len(step) != 1:
+        return f"Skipped {step!r}: a step is one of click, point, turn, wait."
+    (kind, value), = step.items()
+    if kind == "turn":
+        page.evaluate("d => view.probe.orbit(d)", float(value or 0))
+        page.wait_for_timeout(300)
+        return f"turn {value}°: the view went round"
+    if kind == "wait":
+        seconds = max(0.0, min(float(value or 0), 10.0))
+        page.wait_for_timeout(int(seconds * 1000))
+        return f"wait {seconds:g}s: it played on"
+    if kind not in ("click", "point"):
+        return f"Skipped {kind}: a step is one of click, point, turn, wait."
+    name = str(value or "")
+    where = page.evaluate("n => view.probe.where(n)", name)
+    if where is None:
+        return (f"{kind} {name}: there is no part called that. Parts: "
+                + ", ".join(names[:30]))
+    if not where["inView"]:
+        return (f"{kind} {name}: it is out of view from here; turn the "
+                "view first.")
+    x, y = where["x"], where["y"]
+    over = page.evaluate("([x, y]) => view.probe.at(x, y)", [x, y])
+    hidden = ""
+    if over and over.lower() != name.lower():
+        hidden = (f" Where {name} shows, the pointer lands on {over}: "
+                  f"{name} is behind it from here.")
+    if kind == "point":
+        page.mouse.move(x, y)
+        page.wait_for_timeout(350)
+        card = page.evaluate("view.probe.card()")
+        said = (f"the card says: {' / '.join(card.splitlines())}" if card
+                else "no card showed")
+        return f"point {name}: {said}.{hidden}"
+    before = page.evaluate("n => view.probe.state(n)", name)
+    page.mouse.move(x, y)
+    page.mouse.down()
+    page.mouse.up()
+    page.wait_for_timeout(int(MODEL_CLICK_WAIT_S * 1000))
+    after = page.evaluate("n => view.probe.state(n)", name)
+    moved = _moved(before, after) if before and after else ""
+    if over and over.lower() != name.lower():
+        return (f"click {name}: the click went to {over}.{hidden}"
+                + (f" {name} {moved}." if moved else ""))
+    return (f"click {name}: it {moved}." if moved
+            else f"click {name}: nothing moved.")
+
+
 def send_3d_model(path: str, caption: str = "") -> str:
     """Put a 3D model file someone else made in front of the user."""
 
@@ -6523,6 +6696,40 @@ tools: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "test_3d_model",
+            "description": (
+                "Try a 3D model you made the way the user will, in the "
+                "same viewer: click its parts, point at them, turn the "
+                "view, let it play. Each step says what happened (a door "
+                "turned 100° about y, a drawer moved 0.40 m, the card a "
+                "part shows, a click that landed on another part in "
+                "front of it), with pictures. Use it after make_3d_model "
+                "for anything interactive or animated, before telling "
+                "the user it works."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string",
+                             "description": "The .glb to try."},
+                    "steps": {
+                        "type": "array",
+                        "description": (
+                            "In order, up to 12, each one of: "
+                            "{\"click\": part name}, {\"point\": part "
+                            "name}, {\"turn\": degrees around}, "
+                            "{\"wait\": seconds}."
+                        ),
+                        "items": {"type": "object"},
+                    },
+                },
+                "required": ["path", "steps"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "send_3d_model",
             "description": (
                 "Show a 3D model file that already exists (.glb, .stl, or "
@@ -8379,6 +8586,7 @@ FUNCTIONS = {
     "send_html": send_html,
     "send_document": send_document,
     "make_3d_model": make_3d_model,
+    "test_3d_model": test_3d_model,
     "send_3d_model": send_3d_model,
     "make_midi": make_midi,
     "send_midi": send_midi,

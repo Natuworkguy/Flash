@@ -1492,9 +1492,10 @@ def check_model_file(path: Path) -> Optional[str]:
 
 
 def preview_page(model: bytes, suffix: str, viewer_js: str,
-                 three_js: str) -> str:
+                 three_js: str, live: bool = False) -> str:
     """A page that draws the model with the web UI's own viewer, for the
-    headless browser to take a picture of."""
+    headless browser to take a picture of. LIVE draws it as the user has
+    it, moving and answering the pointer, kept as window.view, to try."""
 
     data = base64.b64encode(model).decode("ascii")
     # Inlined, a script must not close its own tag early.
@@ -1509,8 +1510,10 @@ def preview_page(model: bytes, suffix: str, viewer_js: str,
         "</head><body><div id=\"view\"></div><script>"
         f"const bytes=Uint8Array.from(atob(\"{data}\"),c=>c.charCodeAt(0));"
         "FlashModelView.show(document.getElementById('view'),"
-        f"bytes.buffer,{json.dumps(suffix)},{{light:true,still:true}})"
-        ".then(()=>{document.title='ready'},"
+        f"bytes.buffer,{json.dumps(suffix)},"
+        f"{{light:true,still:{'false' if live else 'true'}}})"
+        ".then((v)=>{window.view=v;if(v.probe)v.probe.hold();"
+        "document.title='ready'},"
         "e=>{document.title='failed';console.error(String(e))});"
         "</script></body></html>"
     )
