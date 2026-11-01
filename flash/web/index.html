@@ -2099,6 +2099,13 @@ body.page-projects #dock, body.page-settings #dock, body.page-tool #dock { displ
 .ext-settings .side input, .ext-settings .side select { font: 13.5px var(--sans); color: var(--text); background: var(--bg); border: 1px solid var(--border-strong); border-radius: 9px; padding: 7px 10px; width: 200px; max-width: 100%; outline: 0; }
 .ext-settings .side input[type="number"] { width: 96px; }
 .ext-settings .side { display: flex; align-items: center; gap: 6px; }
+/* A text setting has a box, a secret menu and Clear: when they and the
+   words do not fit side by side, the controls go under the words, and
+   the box and menu share the row instead of running out of it. */
+.ext-settings .setting-row { flex-wrap: wrap; row-gap: 12px; }
+.ext-settings .setting-row .what { flex: 1 1 220px; min-width: 0; }
+.ext-settings .setting-row .side { flex: 0 1 auto; min-width: 0; max-width: 100%; flex-wrap: wrap; justify-content: flex-end; }
+.ext-settings .side input:not([type="number"]), .ext-settings .side select { flex: 1 1 150px; min-width: 0; }
 .ext-settings .side input[type="password"] { letter-spacing: 0.12em; }
 .ext-settings .ext-clear[hidden] { display: none; }
 /* A text setting set to one of the vault's secrets: its name on a chip,
@@ -2756,6 +2763,8 @@ body.all-stopped .org-node, body.all-stopped .spark-card { animation: all-halt 0
 .field small.bad { color: var(--del); }
 .field input.mono { font-family: var(--mono); font-size: 13.5px; }
 .form-error { color: var(--del); font-size: 13px; min-height: 18px; margin: -4px 0 8px; }
+/* Under the buttons, with nothing to say: no room kept below them. */
+.form-error:empty { min-height: 0; margin: 0; }
 .dialog-buttons { display: flex; justify-content: flex-end; gap: 8px; margin-top: 6px; }
 /* Folder suggestions, hanging under the field that asked for them. */
 .suggest { position: fixed; z-index: 50; max-height: 248px; overflow-y: auto; padding: 5px; background: var(--surface); border: 1px solid var(--border-strong); border-radius: 12px; box-shadow: var(--shadow); animation: pop 0.14s cubic-bezier(0.2, 0, 0, 1); }
@@ -3098,7 +3107,7 @@ body.all-stopped .org-node, body.all-stopped .spark-card { animation: all-halt 0
 @keyframes tc-react-pop { 0% { transform: scale(0.3) rotate(-14deg); } 55% { transform: scale(1.4) rotate(6deg); } 100% { transform: none; } }
 @keyframes tc-react-count { from { opacity: 0; transform: translateY(-6px); } }
 .tc-picker {
-  position: fixed; z-index: 2; display: flex; gap: 1px; padding: 5px; border-radius: 999px;
+  position: fixed; z-index: 80; display: flex; gap: 1px; padding: 5px; border-radius: 999px;
   background: var(--surface); border: 1px solid var(--border); box-shadow: 0 14px 34px rgba(0, 0, 0, 0.2);
   transform-origin: var(--ox, 50%) 100%; animation: tc-picker-in 0.3s var(--spring) both;
 }
@@ -3780,7 +3789,7 @@ select:not([multiple]) { -webkit-appearance: none; appearance: none; background-
 #briefing .bf-rail button.seen { background: rgba(255, 255, 255, 0.5); }
 #briefing .bf-rail button.here { height: 30px; background: #fff; }
 #briefing .bf-rail::before { content: ""; position: absolute; inset: -10px -10px; }
-#briefing .bf-loading { margin: auto; display: flex; flex-direction: column; align-items: center; gap: 12px; color: rgba(245, 244, 239, 0.7); font-size: 14px; }
+#briefing .bf-loading { position: absolute; inset: 0; margin: 0; justify-content: center; pointer-events: none; display: flex; flex-direction: column; align-items: center; gap: 12px; color: rgba(245, 244, 239, 0.7); font-size: 14px; }
 #briefing .bf-hint { position: absolute; left: 50%; bottom: max(12px, env(safe-area-inset-bottom)); transform: translateX(-50%); z-index: 2; font-size: 12px; color: rgba(245, 244, 239, 0.45); pointer-events: none; white-space: nowrap; }
 @media (max-width: 640px) {
   .bf-card { grid-template-columns: minmax(0, 1fr) 58px; gap: 14px; padding: 72px 30px max(40px, calc(env(safe-area-inset-bottom) + 28px)) 20px; }
@@ -3807,13 +3816,20 @@ select:not([multiple]) { -webkit-appearance: none; appearance: none; background-
 @keyframes new-dot-in { from { transform: scale(0); } }
 #ext-head { display: inline-flex; gap: 6px; margin-left: 4px; }
 #ext-head:empty { display: none; }
+/* A new chat, or a page that is not a chat, has nothing for a header
+   button to act on. */
+body.empty #ext-head, body.on-page #ext-head { display: none; }
 .ext-pill svg { width: 14px; height: 14px; }
 .ext-pill span { margin-left: 6px; }
 .actions .ext-act { width: auto; padding: 0 8px; gap: 5px; font-size: 12px; }
 .actions .ext-act span { white-space: nowrap; }
 .fine .ext-status { margin-left: 10px; color: var(--text-3); font-variant-numeric: tabular-nums; }
 .fine .ext-status::before { content: "\00b7"; margin-right: 10px; }
-.ext-said { max-height: 60vh; overflow: auto; }
+/* What an extension's button said: under the title, with its buttons
+   right below it, not a page of its own inside the dialog. */
+.ext-said { max-height: 60vh; overflow: auto; margin: 10px 0 18px; font-size: 15px; line-height: 1.6; }
+.ext-said > :first-child { margin-top: 0; }
+.ext-said > :last-child { margin-bottom: 0; }
 </style>
 </head>
 <body class="empty">
@@ -10417,7 +10433,7 @@ async function tcReact(box, emoji) {
 }
 
 function tcPicker(anchor, id) {
-  const open = $("#team-chat .tc-picker");
+  const open = document.querySelector(".tc-picker:not(.leaving)");
   const again = open && open.dataset.for === String(id);
   tcClosePicker();
   if (again) return;
@@ -10443,22 +10459,43 @@ function tcPicker(anchor, id) {
     const step = { ArrowRight: 1, ArrowLeft: -1 }[e.key];
     if (step) { e.preventDefault(); items[(at + step + items.length) % items.length].focus(); }
   });
-  $("#team-chat").appendChild(pick);
-  // Over the button, or under it near the top; kept inside the window.
+  // On the page itself: inside the chat, which can be a panel with a
+  // transform of its own, "fixed" would be measured from the panel and
+  // cut off at its edge.
+  document.body.appendChild(pick);
+  teamChat.pickerAnchor = anchor;
+  tcPlacePicker(pick, anchor);
+  pick.querySelector(".on, button").focus({ preventScroll: true });
+  setTimeout(() => {
+    document.addEventListener("pointerdown", tcPickerAway, true);
+    $("#team-chat .tc-log").addEventListener("scroll", tcPickerScrolled);
+  });
+}
+
+// Over the button, or under it near the top; kept inside the chat.
+function tcPlacePicker(pick, anchor) {
   const a = anchor.getBoundingClientRect();
+  const room = $("#team-chat .tc").getBoundingClientRect();
   const w = pick.offsetWidth, h = pick.offsetHeight;
-  const left = Math.max(8, Math.min(window.innerWidth - w - 8, a.left + a.width / 2 - w / 2));
-  const below = a.top - h - 8 < 8;
+  const lo = Math.max(8, room.left + 8), hi = Math.min(window.innerWidth, room.right) - w - 8;
+  const left = Math.max(lo, Math.min(hi, a.left + a.width / 2 - w / 2));
+  const below = a.top - h - 8 < Math.max(8, room.top + 8);
   pick.classList.toggle("below", below);
   pick.style.left = `${left}px`;
   pick.style.top = `${below ? a.bottom + 8 : a.top - h - 8}px`;
   pick.style.setProperty("--ox", `${a.left + a.width / 2 - left}px`);
-  teamChat.pickerAnchor = anchor;
-  pick.querySelector(".on, button").focus({ preventScroll: true });
-  setTimeout(() => {
-    document.addEventListener("pointerdown", tcPickerAway, true);
-    $("#team-chat .tc-log").addEventListener("scroll", tcClosePicker, { once: true });
-  });
+}
+
+// The chat moving a little under it, as a spark types or a message
+// comes in, carries it along; it closes only once its message is out
+// of sight.
+function tcPickerScrolled() {
+  const pick = document.querySelector(".tc-picker:not(.leaving)");
+  const anchor = teamChat.pickerAnchor;
+  if (!pick || !anchor?.isConnected) { tcClosePicker(); return; }
+  const a = anchor.getBoundingClientRect(), log = $("#team-chat .tc-log").getBoundingClientRect();
+  if (a.bottom < log.top || a.top > log.bottom) { tcClosePicker(); return; }
+  tcPlacePicker(pick, anchor);
 }
 
 function tcPickerAway(e) {
@@ -10468,7 +10505,8 @@ function tcPickerAway(e) {
 // Whether there was one to close.
 function tcClosePicker() {
   document.removeEventListener("pointerdown", tcPickerAway, true);
-  const pick = $("#team-chat .tc-picker:not(.leaving)");
+  $("#team-chat .tc-log")?.removeEventListener("scroll", tcPickerScrolled);
+  const pick = document.querySelector(".tc-picker:not(.leaving)");
   if (!pick) return false;
   const back = pick.contains(document.activeElement) ? teamChat.pickerAnchor : null;
   pick.classList.add("leaving");
@@ -14272,6 +14310,9 @@ function openForm(html, onSubmit) {
   const form = body.querySelector("form");
   const first = form.querySelector("input, textarea");
   if (first) { first.focus(); first.select && first.select(); }
+  // Nothing to type in: its main button has the focus, so Enter and Esc
+  // work on it straight away.
+  else form.querySelector(".btn.primary, button")?.focus({ preventScroll: true });
   form.onsubmit = async (e) => {
     e.preventDefault();
     const data = Object.fromEntries(new FormData(form));
@@ -20092,7 +20133,7 @@ async function pressExt(b, text = "") {
   if (r.send) await send(r.send);
   if (r.insert) typeIn(r.insert);
   if (r.say) {
-    const form = openForm(`<h2></h2><div class="doc assistant ext-said"></div><div class="actions-row"><button type="button" class="btn" data-copy>Copy</button><button type="button" class="btn primary" data-close>Done</button></div>`, () => false);
+    const form = openForm(`<h2></h2><div class="assistant ext-said"></div><div class="dialog-buttons"><button type="button" class="btn" data-copy>Copy</button><button type="button" class="btn primary" data-close>Done</button></div>`, () => false);
     form.querySelector("h2").textContent = b.label;
     form.querySelector(".ext-said").innerHTML = markdown(r.say);
     form.querySelector("[data-close]").onclick = closeForm;
