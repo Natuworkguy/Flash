@@ -93,6 +93,9 @@ class Panel:
     label: str
     file: str
     icon: str = ""
+    # Whether the page shows its X: a panel that is a place of its own,
+    # left from the sidebar like any page, can go without.
+    close: bool = True
 
 
 @dataclass
@@ -145,8 +148,11 @@ class UI:
             "name": name,
             "css": base + self.css if self.css else "",
             "script": base + self.script if self.script else "",
+            # Each at an address of its own, /x/<extension>/<panel>, to
+            # link to, reload, and come back to.
             "panels": [{"id": p.id, "label": p.label, "icon": p.icon,
-                        "url": base + p.file} for p in self.panels],
+                        "url": base + p.file, "close": p.close,
+                        "route": f"/x/{name}/{p.id}"} for p in self.panels],
             "buttons": [b.summary() for b in self.buttons
                         if set(b.where) - {"terminal"}],
             "greeting": self.greeting,
@@ -161,6 +167,12 @@ def _label(value: Any, where: str, most: int = LABEL_CHARS) -> str:
     if len(text) > most:
         raise ExtensionError(f"{where} is longer than {most} characters")
     return text
+
+
+def _flag(value: Any, where: str) -> bool:
+    if not isinstance(value, bool):
+        raise ExtensionError(f"{where} has to be true or false")
+    return value
 
 
 def _id(value: Any, where: str) -> str:
@@ -255,6 +267,7 @@ def parse(entry: Any, root: Path, commands: set[str]) -> UI:
             file=_web_file(ui.web, panel.get("file"), f"{where} file",
                            (".html",)),
             icon=_text(panel.get("icon"), f"{where} icon")[:24],
+            close=_flag(panel.get("close", True), f"{where} close"),
         ))
     buttons = entry.get("buttons", [])
     if not isinstance(buttons, list) or len(buttons) > MOST_BUTTONS:

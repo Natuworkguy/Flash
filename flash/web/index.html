@@ -3808,7 +3808,8 @@ select:not([multiple]) { -webkit-appearance: none; appearance: none; background-
    status line under the box. */
 #ext-panel { position: absolute; inset: 0; z-index: 30; display: flex; flex-direction: column; background: var(--bg); border-radius: inherit; overflow: hidden; }
 #ext-panel[hidden] { display: none; }
-#ext-panel header { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-bottom: 1px solid var(--border); }
+#ext-panel header { display: flex; align-items: center; gap: 10px; padding: 10px 14px; min-height: 53px; border-bottom: 1px solid var(--border); }
+#ext-panel .ext-panel-close[hidden] { display: none; }
 #ext-panel .ext-panel-name { font-weight: 600; flex: 1; }
 #ext-panel iframe { flex: 1; width: 100%; border: 0; background: var(--bg); }
 #briefing-btn .new-dot { margin-left: auto; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent); animation: new-dot-in 0.4s var(--spring); }
@@ -4221,6 +4222,9 @@ const sparkOf = (id) => (id && sparkList.find((s) => s.id === id)) || null;
 let replaceUrl = false;    // the next change replaces the entry: a new chat getting its id
 
 function routeFor() {
+  // An extension's panel, while it is open, is where you are.
+  const panel = $("#ext-panel");
+  if (panel && !panel.hidden && panel.dataset.route) return panel.dataset.route;
   if (view === "chat") return current ? `/c/${current}` : "/";
   if (view === "project") return viewProject ? `/p/${viewProject}` : "/projects";
   if (view === "settings") return settingsTab && settingsTab !== "general" ? `/settings/${settingsTab}` : "/settings";
@@ -4229,6 +4233,9 @@ function routeFor() {
 
 // Opened at /briefing: the briefing shows once the page has loaded.
 let briefingRouted = false;
+// Opened at an extension panel's address: {ext, id}, opened the same way.
+let panelRouted = null;
+const PANEL_PATH = /^\/x\/([a-z0-9][a-z0-9_-]{0,63})\/([a-z][a-z0-9_-]{0,31})\/?$/;
 
 function syncUrl() {
   // The briefing keeps its address while it is up.
@@ -4261,6 +4268,10 @@ function routeTo(path) {
   } else if (/^\/briefing\/?$/.test(path)) {
     // The briefing, over a new chat: it opens once the page is in.
     briefingRouted = true;
+  } else if ((m = path.match(PANEL_PATH))) {
+    // An extension's panel, over a new chat, once the page knows its
+    // extensions.
+    panelRouted = { ext: m[1], id: m[2] };
   } else if (path !== "/") {
     replaceUrl = true;
   }
@@ -4268,6 +4279,9 @@ function routeTo(path) {
 
 window.addEventListener("popstate", () => {
   closeExtPanel();
+  // Back or forward to an extension's panel: open again.
+  const panel = location.pathname.match(PANEL_PATH);
+  if (panel) { openRoutedPanel({ ext: panel[1], id: panel[2] }, false); return; }
   // Back out of the briefing to where it was opened from, or forward
   // into it again.
   const toBriefing = /^\/briefing\/?$/.test(location.pathname);
@@ -16576,6 +16590,7 @@ async function loadState() {
   renderInfo();
   drawChat();
   if (briefingRouted) { briefingRouted = false; openBriefing(false); }
+  if (panelRouted) { const want = panelRouted; panelRouted = null; openRoutedPanel(want); }
   if (info.update) onUpdate();
   for (const event of buffered) apply(event);
   buffered = [];
@@ -20151,15 +20166,41 @@ function extButton(b, cls, text = () => "") {
 }
 
 // An extension's page, in place of the chat, with a way back.
-function openExtPanel(url, label) {
+// PANEL, from the manifest, when it is one of an extension's own: its
+// address, and whether it has an X. A script's openPanel of another page
+// has neither, and keeps the X.
+function openExtPanel(url, label, panel = extPanels().find((p) => p.url === url), push = true) {
   const box = $("#ext-panel");
-  box.querySelector(".ext-panel-name").textContent = label;
+  box.querySelector(".ext-panel-name").textContent = label || panel?.label || "";
   const frame = box.querySelector("iframe");
   if (frame.getAttribute("src") !== url) frame.src = url;
   box.hidden = false;
   box.dataset.url = url;
+  box.dataset.route = panel?.route || "";
+  box.querySelector(".ext-panel-close").hidden = panel?.close === false;
   markSide();
+  if (push && panel?.route && location.pathname !== panel.route) history.pushState(null, "", panel.route);
   if (innerWidth <= 800) closeSide();
+}
+
+const extPanels = () => extUI().flatMap((e) => (e.panels || []).map((p) => ({ ...p, ext: e.name })));
+
+// Opened by its address: on loading the page, or with Back and Forward.
+function openRoutedPanel(want, push = true) {
+  const panel = extPanels().find((p) => p.ext === want.ext && p.id === want.id);
+  if (!panel) {
+    toast("That extension's page is not here any more.");
+    history.replaceState(null, "", routeFor());
+    return;
+  }
+  openExtPanel(panel.url, panel.label, panel, push);
+  if (!push) history.replaceState(null, "", panel.route);
+}
+
+// The X, and a script's closePanel: back to the address of what is under.
+function shutExtPanel() {
+  closeExtPanel();
+  syncUrl();
 }
 
 // Shut whenever you go somewhere else: it sits over the page, so a page
@@ -20169,6 +20210,7 @@ function closeExtPanel() {
   if (box.hidden) return;
   box.hidden = true;
   delete box.dataset.url;
+  delete box.dataset.route;
   markSide();
 }
 
@@ -20192,7 +20234,7 @@ function renderExtUI() {
       // "Watch, from watch" says nothing the label did not.
       row.dataset.tip = p.label.toLowerCase() === ext.name ? p.label : `${p.label}, from ${ext.name}`;
       row.dataset.url = p.url;
-      row.onclick = () => openExtPanel(p.url, p.label);
+      row.onclick = () => openExtPanel(p.url, p.label, { ...p, ext: ext.name });
       side.appendChild(row);
     }
   }
@@ -20228,7 +20270,7 @@ window.Flash = Object.freeze({
   chat: () => { const c = chats.get(current); return c ? { id: c.id, title: c.title, log: c.log.slice() } : null; },
   icon: (name) => icon(ICON[name] ? name : "puzzle"),
   openPanel: (url, label = "") => openExtPanel(url, label),
-  closePanel: closeExtPanel,
+  closePanel: shutExtPanel,
   addButton(b) {
     const where = Array.isArray(b.where) ? b.where : [b.where || "composer"];
     const made = { id: String(b.id || b.label), label: String(b.label || "Button"), icon: b.icon || "", where, onClick: b.onClick };
@@ -20238,7 +20280,7 @@ window.Flash = Object.freeze({
   },
 });
 $("#ext-panel .ext-panel-close").innerHTML = icon("x");
-$("#ext-panel .ext-panel-close").onclick = closeExtPanel;
+$("#ext-panel .ext-panel-close").onclick = shutExtPanel;
 
 // Slash commands ------------------------------------------------------------
 
