@@ -2463,6 +2463,7 @@ class TestSkillsInThePage:
         listed = {
             s["name"]: s["by"]
             for s in web.command(web.Session(), {"name": "skills"})["skills"]
+            if not s["builtin"]
         }
 
         assert listed == {"by-the-model": "flash", "by-the-user": "you"}
@@ -2502,6 +2503,24 @@ class TestSkillsInThePage:
         web.command(session, {"name": "skill-delete", "arg": "deploy-site"})
         with pytest.raises(ValueError, match="No skill"):
             web.command(session, {"name": "skill", "arg": "deploy-site"})
+
+    def test_the_knowledge_base_is_listed_built_in_and_read_only(self):
+        session = web.Session()
+        listed = web.command(session, {"name": "skills"})["skills"]
+        guide = next(s for s in listed if s["name"] == "change-code")
+        assert guide["builtin"] == "flash"
+        shown = web.command(session, {"name": "skill", "arg": "change-code"})
+        assert shown["builtin"] == "flash" and shown["content"]
+        for name in ("skill-save", "skill-delete"):
+            with pytest.raises(ValueError, match="can't be changed"):
+                web.command(session, {"name": name, "arg": "change-code",
+                                      "description": "d", "content": "x"})
+        # A skill of the user's own of that name takes its place.
+        web.command(session, {"name": "skill-create", "arg": "change-code",
+                              "description": "Mine", "content": "1. Mine"})
+        listed = web.command(session, {"name": "skills"})["skills"]
+        mine = [s for s in listed if s["name"] == "change-code"]
+        assert len(mine) == 1 and mine[0]["builtin"] == ""
 
     def test_a_bad_skill_says_why(self):
         with pytest.raises(ValueError, match="description"):

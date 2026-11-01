@@ -2135,6 +2135,10 @@ button.item-row:hover { background: var(--hover); }
 .chip { font: 11.5px var(--mono); color: var(--text-2); padding: 1px 7px; border-radius: 6px; background: var(--hover); border: 1px solid var(--border); }
 .item-row .src { font: 11.5px var(--mono); color: var(--text-3); overflow-wrap: anywhere; }
 .item-row .chev svg { width: 15px; height: 15px; color: var(--text-3); margin-top: 3px; }
+.made-by.builtin-tag { display: inline-flex; align-items: center; gap: 4px; color: var(--text-2); background: color-mix(in srgb, var(--text-2) 10%, transparent); border-color: color-mix(in srgb, var(--text-2) 25%, transparent); }
+.made-by.builtin-tag svg { width: 11px; height: 11px; }
+.skills-builtin-head { margin-top: 26px; }
+.skills-builtin-sub { margin: -4px 0 10px; font-size: 13px; color: var(--text-3); }
 .made-by { font: 500 11px var(--sans); line-height: 18px; padding: 0 8px; border-radius: 999px; color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent); }
 .item-row .remove { flex: none; }
 .item-row .remove.sure { color: var(--del); border-color: color-mix(in srgb, var(--del) 40%, transparent); }
@@ -9232,6 +9236,8 @@ async function drawSkills(body) {
   let r;
   try { r = await command("skills"); } catch (error) { showFailure(error); return; }
   if (!body.isConnected) return;
+  const builtin = r.skills.filter((s) => s.builtin);
+  r.skills = r.skills.filter((s) => !s.builtin);
   const made = r.skills.filter((s) => s.by === "flash").length;
   body.innerHTML = `<div class="mem-head"><p class="sub">Procedures Flash follows for tasks that come up again. It reads the matching one before it starts, and writes its own as it learns.</p></div><div class="host"></div><div class="mem-path"></div>`;
   const add = el("button", "btn primary with-icon", `${icon("plus")}<span>New skill</span>`);
@@ -9239,23 +9245,40 @@ async function drawSkills(body) {
   add.onclick = () => skillForm();
   body.querySelector(".mem-head").appendChild(add);
   const host = body.querySelector(".host");
+  const rowsOf = (all) => {
+    const list = el("div", "item-list");
+    all.forEach((skill, i) => {
+      const row = el("button", "item-row", `<span class="main"><span class="top"><span class="name"></span></span><span class="desc"></span></span><span class="chev">${icon("chevRight")}</span>`);
+      row.type = "button";
+      row.style.setProperty("--i", i);
+      row.querySelector(".name").textContent = skill.name;
+      row.querySelector(".desc").textContent = skill.description;
+      if (skill.by === "flash") row.querySelector(".top").appendChild(el("span", "made-by", "Made by Flash"));
+      if (skill.builtin) row.querySelector(".top").appendChild(builtinTag(skill.builtin));
+      row.onclick = () => openSkill(skill.name);
+      list.appendChild(row);
+    });
+    return list;
+  };
   if (!r.skills.length) {
     host.innerHTML = `<div class="mem-empty"><b>No skills yet</b>Flash saves one when it works out how to do something that will come up again. You can write your own, too.</div>`;
-    return;
+  } else {
+    host.appendChild(rowsOf(r.skills));
   }
-  const list = el("div", "item-list");
-  r.skills.forEach((skill, i) => {
-    const row = el("button", "item-row", `<span class="main"><span class="top"><span class="name"></span></span><span class="desc"></span></span><span class="chev">${icon("chevRight")}</span>`);
-    row.type = "button";
-    row.style.setProperty("--i", i);
-    row.querySelector(".name").textContent = skill.name;
-    row.querySelector(".desc").textContent = skill.description;
-    if (skill.by === "flash") row.querySelector(".top").appendChild(el("span", "made-by", "Made by Flash"));
-    row.onclick = () => openSkill(skill.name);
-    list.appendChild(row);
-  });
-  host.appendChild(list);
-  body.querySelector(".mem-path").textContent = `${r.skills.length} skill${r.skills.length === 1 ? "" : "s"}${made ? ` · ${made} made by Flash` : ""} · saved in ~/.flash/skills`;
+  if (builtin.length) {
+    const head = el("div", "section-label skills-builtin-head", "Built in");
+    host.appendChild(head);
+    host.appendChild(el("p", "sub skills-builtin-sub", "Flash's knowledge base: guides that come with Flash and your extensions. Flash reads the one a task needs. They can't be changed; a skill of your own with the same name is used instead."));
+    host.appendChild(rowsOf(builtin));
+  }
+  body.querySelector(".mem-path").textContent = `${r.skills.length} skill${r.skills.length === 1 ? "" : "s"}${made ? ` · ${made} made by Flash` : ""} · saved in ~/.flash/skills${builtin.length ? ` · ${builtin.length} built in` : ""}`;
+}
+
+// A built-in guide's tag: locked, and where it comes from.
+function builtinTag(from) {
+  const tag = el("span", "made-by builtin-tag", `${icon("lock")}<span></span>`);
+  tag.querySelector("span").textContent = from === "flash" ? "Built in" : `From ${from}`;
+  return tag;
 }
 
 // Skills and Extensions: pages of their own, opened from the sidebar.
@@ -12331,10 +12354,17 @@ async function openSkill(name) {
       <button type="button" class="btn" data-cancel>Close</button><button type="button" class="btn" data-edit>Edit</button><button type="button" class="btn primary with-icon" data-run>${icon("play")}<span>Do it now</span></button></div>`, async () => {});
   form.querySelector("h2").textContent = skill.name;
   if (skill.by === "flash") form.querySelector("h2").insertAdjacentHTML("beforeend", ` <span class="made-by">Made by Flash</span>`);
+  if (skill.builtin) {
+    // Read only: no Edit, no Delete.
+    form.querySelector("h2").append(" ", builtinTag(skill.builtin));
+    form.querySelector("[data-edit]").remove();
+    form.querySelector("[data-delete]").remove();
+  }
   form.querySelector(".sub").textContent = skill.description;
   form.querySelector(".skill-read").innerHTML = markdown(skill.content);
   form.querySelector("[data-cancel]").onclick = closeForm;
-  form.querySelector("[data-edit]").onclick = () => skillForm(skill);
+  const edit = form.querySelector("[data-edit]");
+  if (edit) edit.onclick = () => skillForm(skill);
   // In a chat of its own, unless one is open and empty to hold it.
   form.querySelector("[data-run]").onclick = async () => {
     closeForm();
@@ -12345,6 +12375,7 @@ async function openSkill(name) {
     } catch (error) { showFailure(error); }
   };
   const del = form.querySelector("[data-delete]");
+  if (!del) return;
   del.onclick = async () => {
     if (!del.classList.contains("sure")) { del.classList.add("sure"); del.textContent = "Delete it?"; return; }
     try { await command("skill-delete", skill.name); } catch (error) { showFailure(error); return; }
@@ -18941,7 +18972,7 @@ async function openChatFiles() {
 }
 
 async function openSkillPicker() {
-  const { skills: list } = await command("skills");
+  const list = (await command("skills")).skills.filter((sk) => !sk.builtin);
   const rows = [{ header: true, html: "Use a skill" }];
   for (const sk of list) {
     rows.push({ html: `<span class="stack"><span class="label">${esc(sk.name)}</span><span class="sub">${esc(sk.description || "")}</span></span>`, skill: sk.name });
