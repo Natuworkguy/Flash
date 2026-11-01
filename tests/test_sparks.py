@@ -2801,8 +2801,9 @@ def test_fallbacks_are_kept_clean():
 
 
 def test_a_spark_carries_on_with_its_fallbacks(model, no_waits, monkeypatch):
-    import ollama
     from types import SimpleNamespace
+
+    import ollama
 
     from flash import providers
 
