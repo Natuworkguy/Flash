@@ -3301,6 +3301,7 @@ class TestAddresses:
     @pytest.mark.parametrize("path", [
         "/", "/c/0123abcd", "/p/89abcdef", "/projects", "/settings",
         "/settings/usage", "/settings/memory", "/skills", "/extensions",
+        "/skills/knowledge",
         "/c/0123abcd/",
     ])
     def test_every_view_has_the_page(self, server, path):
