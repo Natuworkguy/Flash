@@ -6177,6 +6177,8 @@ def _spark_command(name: str, arg: str, body: dict) -> dict:
             }
             if "events" in body:
                 changes["events"] = body["events"] or ()
+            if "fallbacks" in body:
+                changes["fallbacks"] = body["fallbacks"] or []
             spark = sparks.update(arg, **changes)
         elif name == "spark-run":
             spark = sparks.run_now(arg)

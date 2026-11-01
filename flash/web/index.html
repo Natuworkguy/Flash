@@ -12137,6 +12137,7 @@ function sparkForm(spark, inProjectId = "", template = "") {
     <label class="field"><span>Title <em class="count">optional</em></span><input name="title" maxlength="40" placeholder="Repo watcher" autocomplete="off"><small>Its job, as a teammate's: shown under its name, and it knows it.</small></label>
     <div class="field"><span>Colour</span><div class="swatches spark-colours" role="radiogroup" aria-label="Colour">${TEAM_COLOURS.map((c) => `<button type="button" class="swatch" role="radio" data-c="${c}" style="--c:${c}" aria-label="${c}"></button>`).join("")}<label class="swatch custom" data-tip="Any colour"><input type="color" aria-label="Any colour"></label></div><small class="colour-said">${editing ? "Its face, its chips and its messages wear it." : "Left alone, it gets the next in the palette."}</small></div>
     ${modelField()}
+    <label class="field"><span>Fallbacks <em class="count">optional</em></span><input name="fallbacks" class="mono" placeholder="another-model > a-third" autocomplete="off" spellcheck="false"><small>When its model fails (down, refused, out of quota), it carries on with these, in order, up to 4. Then the model's own fallbacks.</small></label>
     <label class="field"><span>Goal</span><textarea name="goal" rows="4" placeholder="Check github.com/me/app for new issues. Tell me which look like bugs, and skip ones you have already told me about."></textarea></label>
     <label class="field"><span>How often</span><select name="every">${choices.map(([m, label]) => `<option value="${m}"${!atTimes && !called && m === every ? " selected" : ""}>${label}</option>`).join("")}<option value="at"${atTimes ? " selected" : ""}>At set times…</option><option value="oncall"${called ? " selected" : ""}>Only when called on</option></select><small class="every-said">${called ? ON_CALL_SAID : "It works while Flash is open, in the terminal or here."}</small></label>
     <label class="field at-field"${atTimes ? "" : " hidden"}><span>When</span><input name="at" placeholder="9am weekdays" autocomplete="off" spellcheck="false"><small class="at-said">Like <b>9am weekdays</b>, <b>mon, thu 8:30</b>, <b>the 1st at 9am</b>, or a cron line such as <b>0 9 * * 1-5</b>. On this computer's clock.</small></label>
@@ -12170,6 +12171,8 @@ function sparkForm(spark, inProjectId = "", template = "") {
           await command("spark-budget", id, null, { on, tokens: on ? tokens : "", period });
         }
         if ((data.mode || "") !== (was.mode || "")) await command("spark-mode", id, null, { mode: data.mode || "" });
+        const falls = (data.fallbacks || "").split(/[>,\n]/).map((m) => m.trim()).filter(Boolean);
+        if (falls.join(" > ") !== (was.fallbacks || []).join(" > ")) await command("spark-update", id, null, { fallbacks: falls });
       };
       if (editing) {
         // Not "name": that is the command's own.
@@ -12230,6 +12233,7 @@ function sparkForm(spark, inProjectId = "", template = "") {
   if (editing) {
     form.sparkname.value = spark.name;
     form.title.value = spark.title || "";
+    form.fallbacks.value = (spark.fallbacks || []).join(" > ");
     form.goal.value = spark.goal;
     form.boundaries.value = spark.boundaries;
     form.watch.value = spark.watch || "";
