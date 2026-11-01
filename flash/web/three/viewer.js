@@ -244,6 +244,10 @@
           for (const m of [].concat(node.material)) m.wireframe = !!on;
         });
       },
+      // For Flash to try the model as the user would (test_3d_model):
+      // where a part shows, what the pointer is over, how a part stands,
+      // what the card says, and turning the view.
+      probe: probe(THREE, model, camera, controls, renderer, holder),
       dispose() {
         alive = false;
         if (touch) touch.dispose();
@@ -263,6 +267,64 @@
         renderer.forceContextLoss();
         renderer.domElement.remove();
       },
+    };
+  }
+
+  function probe(THREE, model, camera, controls, renderer, holder) {
+    const deg = 180 / Math.PI;
+    const named = (n) => (n.userData && n.userData.flash && n.userData.flash.name) || (n.name || "").replace(/_/g, " ");
+    function find(name) {
+      const want = String(name).trim().toLowerCase();
+      let found = null;
+      model.traverse((n) => { if (!found && n !== model && named(n).toLowerCase() === want) found = n; });
+      return found;
+    }
+    function screen(point) {
+      const p = point.clone().project(camera);
+      const r = renderer.domElement.getBoundingClientRect();
+      return { x: r.left + ((p.x + 1) / 2) * r.width, y: r.top + ((1 - p.y) / 2) * r.height, inView: Math.abs(p.x) <= 1 && Math.abs(p.y) <= 1 && p.z < 1 };
+    }
+    return {
+      names() {
+        const all = [];
+        model.traverse((n) => { if (n !== model && n.name && n.parent === model) all.push(named(n)); });
+        return all;
+      },
+      where(name) {
+        const n = find(name);
+        if (!n) return null;
+        return screen(new THREE.Box3().setFromObject(n).getCenter(new THREE.Vector3()));
+      },
+      at(x, y) {
+        const r = renderer.domElement.getBoundingClientRect();
+        const caster = new THREE.Raycaster();
+        caster.setFromCamera(new THREE.Vector2(((x - r.left) / r.width) * 2 - 1, -((y - r.top) / r.height) * 2 + 1), camera);
+        for (const hit of caster.intersectObject(model, true)) {
+          for (let n = hit.object; n && n !== model; n = n.parent) if (n.parent === model || (n.userData && n.userData.flash)) return named(n);
+        }
+        return "";
+      },
+      state(name) {
+        const n = find(name);
+        if (!n) return null;
+        const c = new THREE.Box3().setFromObject(n).getCenter(new THREE.Vector3());
+        const q = n.getWorldQuaternion(new THREE.Quaternion());
+        return { centre: [c.x, c.y, c.z], turn: [q.x, q.y, q.z, q.w] };
+      },
+      card() {
+        const c = holder.querySelector(".model-part-card");
+        if (!c || c.hidden) return "";
+        return [...c.children].map((e) => e.textContent.trim()).filter(Boolean).join(" / ");
+      },
+      orbit(degrees) {
+        controls.autoRotate = false;
+        const offset = camera.position.clone().sub(controls.target);
+        offset.applyAxisAngle(new THREE.Vector3(0, 1, 0), (Number(degrees) || 0) / deg);
+        camera.position.copy(controls.target).add(offset);
+        camera.lookAt(controls.target);
+        controls.update();
+      },
+      hold() { controls.autoRotate = false; },
     };
   }
 
