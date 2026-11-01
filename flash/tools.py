@@ -2739,7 +2739,8 @@ PHONE_TOOL = {
         "name": "phone_call",
         "description": (
             "Hold a phone call for the user, in your own voice, through "
-            "their iPhone's calling on this Mac: call someone (\"call "
+            "their iPhone's calling on this Mac, or FaceTime Audio: call "
+            "someone (\"call "
             "John and tell him I'm running late\"), or answer their next "
             "call (\"take the next call from John and find out what he "
             "wants\"). You say first that you are an automated assistant "
@@ -2761,6 +2762,12 @@ PHONE_TOOL = {
                 "minutes": {"type": "number",
                             "description": "answer: how long to wait for "
                             "their call. 30 by default."},
+                "via": {"type": "string",
+                        "enum": ["phone", "facetime_audio"],
+                        "description": "call: through the iPhone (the "
+                        "default), or FaceTime Audio over the internet, "
+                        "which needs no iPhone and can call an email "
+                        "address. Answering takes either."},
             },
             "required": ["action", "who", "goal"],
         },
@@ -4390,7 +4397,7 @@ def _call_model(messages: list[dict]) -> str:
 
 
 def phone_call(action: str = "call", who: str = "", goal: str = "",
-               minutes: float = 30) -> str:
+               minutes: float = 30, via: str = "phone") -> str:
     """Call someone, or take their next call, and talk on it in Flash's
     own voice towards GOAL: UltraAuto only, on a Mac."""
 
@@ -4443,7 +4450,9 @@ def phone_call(action: str = "call", who: str = "", goal: str = "",
         tool_result(result, style=DIM)
         return result
     try:
-        call = calls.place(who, goal, user, _call_model, stopping=stopping)
+        call = calls.place(who, goal, user, _call_model, stopping=stopping,
+                           via=calls.FACETIME if via == calls.FACETIME
+                           else calls.PHONE)
     except (calls.CallError, computer.ComputerError) as exc:
         result = f"Error: {exc}"
         tool_result(result, style=ERROR)
