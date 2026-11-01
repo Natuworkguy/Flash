@@ -23,11 +23,11 @@ from flash.tools import (
 
 def test_shell_tool_timeout(monkeypatch):
     # This might be tricky to test without actually waiting 15 seconds
-    # but we can mock subprocess.run to raise TimeoutExpired
+    # but we can mock the run to raise TimeoutExpired
     def mock_run(*args, **kwargs):
         raise subprocess.TimeoutExpired(args[0], 15)
 
-    monkeypatch.setattr(subprocess, "run", mock_run)
+    monkeypatch.setattr(tools, "_run_owned", mock_run)
     monkeypatch.setattr(tools, "NO_COMMAND_CONFIRMATION", True)
 
     result = shell_tool("long_command")
@@ -42,13 +42,74 @@ def test_shell_tool_success(monkeypatch):
         returncode = 0
 
     def mock_run(*_, **__):
-        return MockResult()
+        return MockResult.stdout, MockResult.stderr, MockResult.returncode, \
+            False
 
-    monkeypatch.setattr(subprocess, "run", mock_run)
+    monkeypatch.setattr(tools, "_run_owned", mock_run)
     monkeypatch.setattr(tools, "NO_COMMAND_CONFIRMATION", True)
 
     result = shell_tool("echo success")
     assert result == "success"  # nosec B101
+
+
+def test_shell_tool_runs_for_real(monkeypatch):
+    monkeypatch.setattr(tools, "NO_COMMAND_CONFIRMATION", True)
+    assert shell_tool("echo hi; echo oops >&2; exit 3") == \
+        "(exit 3)\nhi\noops"  # nosec B101
+
+
+@pytest.mark.skipif(not hasattr(__import__("os"), "killpg"),
+                    reason="process groups are POSIX")
+def test_stop_ends_a_running_command_and_what_it_started(monkeypatch,
+                                                         tmp_path):
+    import threading
+    import time
+
+    monkeypatch.setattr(tools, "NO_COMMAND_CONFIRMATION", True)
+    pid_file = tmp_path / "child"
+    said = {}
+
+    def work():
+        with tools.running_as("chat1"):
+            said["out"] = shell_tool(
+                f"sleep 30 & echo $! > {pid_file}; echo started; wait",
+                timeout=60)
+
+    runner = threading.Thread(target=work)
+    started = time.monotonic()
+    runner.start()
+    while not pid_file.exists() or not pid_file.read_text().strip():
+        assert time.monotonic() - started < 10  # nosec B101
+        time.sleep(0.05)
+    child = int(pid_file.read_text())
+
+    # Someone else's Stop does nothing to it.
+    assert tools.stop_commands("chat2") == 0  # nosec B101
+    assert tools.stop_commands("chat1") == 1  # nosec B101
+    runner.join(10)
+    assert not runner.is_alive()  # nosec B101
+    assert time.monotonic() - started < 10  # nosec B101
+    assert said["out"].startswith("Stopped by the user")  # nosec B101
+    assert "started" in said["out"]  # nosec B101
+    # The sleep it started went too.
+    time.sleep(0.2)
+    assert _ended(child)  # nosec B101
+
+
+def _ended(pid):
+    """Whether PID is gone, or dead and waiting to be reaped."""
+
+    import os
+    from pathlib import Path
+
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return True
+    status = Path(f"/proc/{pid}/status")
+    if status.exists():
+        return "\nState:\tZ" in status.read_text()
+    return False
 
 
 def test_glob_tool_finds_matching_files(tmp_path):
