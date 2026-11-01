@@ -3,6 +3,7 @@ name: make-phone-calls
 description: Call someone, or take their next call, and talk on it for the user (UltraAuto, Mac)
 ---
 - "Call John and tell him I'm running late", "ring the dentist and move my appointment to Friday", "take the next call from John and find out what he wants": use phone_call. It talks in your own voice through the iPhone's calling on the Mac, and only in UltraAuto.
+- via facetime_audio calls with FaceTime Audio over the internet instead of the iPhone: when the user asks for FaceTime, or the person has only an email address.
 - Put the whole errand in goal, in the user's words: what to say, what to find out, what they will and will not agree to. You cannot ask the user anything mid-call.
 - You always say first that you are an automated assistant calling for the user. Never claim to be them.
 - Agree to nothing they did not ask for: no payments, no personal details, no new plans. Say you will pass it on.

@@ -169,15 +169,27 @@ def _press(names: list[str], want: str = "") -> str:
         return ""
 
 
-def _number_of(who: str) -> tuple[str, str]:
+def _number_of(who: str, facetime: bool = False) -> tuple[str, str]:
     """WHO's name and phone number: a number as it is, a name from
-    Contacts."""
+    Contacts. With FACETIME, an email address does too: FaceTime Audio
+    calls one."""
 
     shown, handle = computer.recipient(who)
-    if "@" in handle:
-        raise CallError(f"{shown} has only an email address in Contacts, "
-                        "and a call needs a phone number.")
+    if "@" in handle and not facetime:
+        raise CallError(f"{shown} has only an email address in Contacts: "
+                        "call them with FaceTime Audio instead.")
     return shown, handle
+
+
+# How a call is made: through the iPhone, or FaceTime Audio, over the
+# internet, which needs no iPhone and reaches an email address too.
+PHONE = "phone"
+FACETIME = "facetime_audio"
+
+
+def _dial(handle: str, via: str) -> None:
+    scheme = "facetime-audio" if via == FACETIME else "tel"
+    computer._run(["open", f"{scheme}:{handle}"])
 
 
 # --- Sound ----------------------------------------------------------------
@@ -355,16 +367,21 @@ def _hang_up() -> None:
 
 def place(who: str, goal: str, user: str,
           ask: Callable[[list[dict]], str],
-          stopping: Callable[[], bool] = lambda: False) -> Call:
-    """Call WHO and talk to them for USER, towards GOAL."""
+          stopping: Callable[[], bool] = lambda: False,
+          via: str = PHONE) -> Call:
+    """Call WHO and talk to them for USER, towards GOAL: on the phone, or
+    with FaceTime Audio (VIA)."""
 
     why = missing()
     if why:
         raise CallError(why)
-    shown, number = _number_of(who)
+    shown, number = _number_of(who, facetime=True)
+    if "@" in number:
+        # Only FaceTime calls an email address.
+        via = FACETIME
     call = Call(who=shown, number=number, goal=goal, incoming=False)
     with _routed():
-        computer._run(["open", f"tel:{number}"])
+        _dial(number, via)
         # The Mac asks before it dials: Flash says yes.
         deadline = time.monotonic() + 15
         while time.monotonic() < deadline and not _press(["Call"]):
@@ -389,8 +406,9 @@ def take_next(who: str, goal: str, user: str,
         raise CallError(why)
     shown = who
     number = ""
-    with contextlib.suppress(computer.ComputerError):
-        shown, number = _number_of(who)
+    # A FaceTime Audio call comes in the same way, Accept and all.
+    with contextlib.suppress(computer.ComputerError, CallError):
+        shown, number = _number_of(who, facetime=True)
     want = shown.split(" (")[0]
     deadline = time.monotonic() + max(1.0, minutes) * 60
     while time.monotonic() < deadline and not stopping():

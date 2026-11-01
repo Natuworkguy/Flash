@@ -83,11 +83,22 @@ def test_the_tool_is_offered_only_in_ultraauto_on_a_mac(monkeypatch):
     assert "phone_call" not in names
 
 
-def test_an_email_only_contact_cannot_be_called(monkeypatch):
+def test_an_email_only_contact_is_called_with_facetime(monkeypatch):
     monkeypatch.setattr(calls.computer, "recipient",
                         lambda who: ("Ann", "ann@example.com"))
-    with pytest.raises(calls.CallError, match="phone number"):
+    with pytest.raises(calls.CallError, match="FaceTime Audio"):
         calls._number_of("Ann")
+    assert calls._number_of("Ann", facetime=True)[1] == "ann@example.com"
+
+
+def test_facetime_audio_dials_its_own_way(monkeypatch):
+    ran = []
+    monkeypatch.setattr(calls.computer, "_run", lambda argv, **k: ran.append(
+        argv) or "")
+    calls._dial("+15550102000", calls.FACETIME)
+    calls._dial("+15550102000", calls.PHONE)
+    assert ran == [["open", "facetime-audio:+15550102000"],
+                   ["open", "tel:+15550102000"]]
 
 
 def test_the_transcript_is_kept(tmp_path, monkeypatch):
