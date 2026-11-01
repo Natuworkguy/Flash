@@ -507,6 +507,7 @@ def test_bad_interactions_are_refused(spec, message):
 
 def test_the_result_says_what_clicks(tmp_path, monkeypatch):
     monkeypatch.setattr(tools, "_model_preview", lambda path: "")
+    monkeypatch.setattr(tools, "_open_with_spinner", lambda path: "")
     said = make_3d_model(str(tmp_path / "box.glb"), [
         {"shape": "box", "name": "lid", "size": 1, "info": "A lid.",
          "on_click": {"move": [0, 0.5, 0]}},
