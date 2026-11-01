@@ -709,13 +709,13 @@ def _read_on_open(ran, messages):
     import sqlite3
 
     def shown(argv):
-        if argv[0] == "open" and argv[1].startswith("imessage://"):
+        if argv[0] == "open" and argv[-1].startswith("imessage://"):
             with sqlite3.connect(messages) as db:
                 db.execute(
                     "UPDATE message SET is_read = 1 WHERE ROWID IN (SELECT "
                     "cm.message_id FROM chat_message_join cm JOIN chat c "
                     "ON c.ROWID = cm.chat_id WHERE c.chat_identifier = ?)",
-                    (argv[1].removeprefix("imessage://"),))
+                    (argv[-1].removeprefix("imessage://"),))
         return ""
 
     ran.answers["open"] = shown
@@ -732,9 +732,10 @@ def test_marking_read_shows_each_chat_then_goes_back(monkeypatch, ran,
 
     said = tools.mark_imessages_read()
 
+    # Shown behind, and cleared from there: nothing came to the front,
+    # so nothing has to be put back.
     opened = [argv for argv, _ in ran if argv[0] == "open"]
-    assert opened == [["open", "imessage://+15550102000"],  # nosec B101
-                      ["open", "-b", "com.apple.Terminal"]]
+    assert opened == [["open", "-g", "imessage://+15550102000"]]  # nosec B101
     assert "Marked read: Sam Lee (1)." in said  # nosec B101
     assert "Climbing (1)" in said and "Group chats" in said  # nosec B101
     assert "Running late" not in computer.read_imessages(  # nosec B101
@@ -760,6 +761,65 @@ def test_a_chat_messages_did_not_clear_is_said(monkeypatch, ran, messages):
 
     said = computer.mark_imessages_read()
     assert "Still unread: Sam Lee." in said  # nosec B101
+
+
+def test_one_not_cleared_behind_is_shown_in_front_then_put_away(
+        monkeypatch, ran, messages):
+    on(monkeypatch, "mac")
+    monkeypatch.setattr(computer, "MARK_PAUSE", 0)
+    _read_on_open(ran, messages)
+    cleared = ran.answers["open"]
+    # Messages only clears it in front, and was open already.
+    ran.answers["open"] = lambda argv: "" if "-g" in argv else cleared(argv)
+    ran.answers["osascript"] = lambda argv: "true" if "is running" in \
+        argv[-1] else ""
+
+    said = computer.mark_imessages_read()
+
+    opened = [argv for argv, _ in ran if argv[0] == "open"]
+    assert opened == [  # nosec B101
+        ["open", "-g", "imessage://+15550102000"],
+        ["open", "imessage://+15550102000"],
+        ["open", "-b", "com.apple.Terminal"]]
+    hid = [argv[-1] for argv, _ in ran
+           if argv[0] == "osascript" and "visible" in argv[-1]]
+    assert hid and "com.apple.MobileSMS" in hid[0]  # nosec B101
+    assert "Marked read: Sam Lee (1)." in said  # nosec B101
+
+
+def test_messages_flash_opened_is_closed_again(monkeypatch, ran, messages):
+    on(monkeypatch, "mac")
+    monkeypatch.setattr(computer, "MARK_PAUSE", 0)
+    _read_on_open(ran, messages)
+    asked = []
+
+    def osa(argv):
+        asked.append(argv[-1])
+        # Not open before; open once Flash showed it a conversation.
+        return "true" if "is running" in argv[-1] and len(asked) > 1 else ""
+
+    ran.answers["osascript"] = osa
+    computer.mark_imessages_read()
+    assert any("to quit" in a and "MobileSMS" in a  # nosec B101
+               for a in asked)
+
+
+def test_contacts_flash_opened_to_look_someone_up_is_closed(monkeypatch,
+                                                            ran):
+    on(monkeypatch, "mac")
+    asked = []
+
+    def osa(argv):
+        asked.append(argv[-1])
+        if "JavaScript" in argv:
+            return json.dumps([SAM])
+        # Not open before the lookup, open after it.
+        return "true" if "is running" in argv[-1] and len(asked) > 2 else ""
+
+    ran.answers["osascript"] = osa
+    assert computer.recipient("sam")[0].startswith("Sam Lee")  # nosec B101
+    assert any("to quit" in a and "AddressBook" in a  # nosec B101
+               for a in asked)
 
 
 def test_marking_read_is_its_own_switch(monkeypatch, ran, messages):

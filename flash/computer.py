@@ -918,7 +918,8 @@ def recipient(to: str) -> tuple[str, str]:
     if len(to) > 80:
         raise ComputerError("That is not a name, number or address.")
     try:
-        found = json.loads(_jxa(_CONTACTS_JS % json.dumps(to)) or "[]")
+        with _as_found(CONTACTS_APP):
+            found = json.loads(_jxa(_CONTACTS_JS % json.dumps(to)) or "[]")
     except ComputerError as exc:
         if _not_allowed(exc, "Contacts"):
             raise ComputerError(
@@ -1192,6 +1193,46 @@ def _unread_chats() -> list[tuple[str, str, int, int]]:
         raise ComputerError(f"Messages could not be read: {exc}") from None
 
 
+MESSAGES_APP = "com.apple.MobileSMS"
+CONTACTS_APP = "com.apple.AddressBook"
+
+
+def _running(bundle: str) -> bool:
+    """Whether the app BUNDLE (its bundle id) is open."""
+
+    try:
+        said = _run(["osascript", "-e",
+                     f'application id "{bundle}" is running'])
+        return said.strip() == "true"
+    except ComputerError:
+        return False
+
+
+def _quit(bundle: str) -> None:
+    _run(["osascript", "-e", f'tell application id "{bundle}" to quit'])
+
+
+def _hide(bundle: str) -> None:
+    _run(["osascript", "-e",
+          'tell application "System Events" to set visible of (first '
+          f'process whose bundle identifier is "{bundle}") to false'])
+
+
+@contextlib.contextmanager
+def _as_found(bundle: str):
+    """Asking app BUNDLE something opens it: closed again afterwards
+    when it was not open before, so nothing is left on screen that the
+    user did not open."""
+
+    was = _running(bundle)
+    try:
+        yield
+    finally:
+        if not was and _running(bundle):
+            with contextlib.suppress(ComputerError):
+                _quit(bundle)
+
+
 def _front_app() -> str:
     """The bundle id of the app in front, to come back to; "" if it
     cannot be told."""
@@ -1236,14 +1277,32 @@ def mark_imessages_read(with_: str = "") -> str:
     def named(ident: str) -> str:
         return names.get(_key(ident), ident)
 
+    def shown(idents: list[str], behind: bool) -> None:
+        for ident in idents:
+            _run(["open", *(["-g"] if behind else []),
+                  f"imessage://{quote(ident, safe='+@.')}"])
+            time.sleep(MARK_PAUSE)
+
     opened = singles[:MOST_MARKED]
     if opened:
         back = _front_app()
-        for ident, _ in opened:
-            _run(["open", f"imessage://{quote(ident, safe='+@.')}"])
-            time.sleep(MARK_PAUSE)
-        if back and back != "com.apple.MobileSMS":
-            with contextlib.suppress(ComputerError):
+        running = _running(MESSAGES_APP)
+        # Behind whatever the user is looking at first, the briefing say:
+        # Messages clears a conversation it shows even from there.
+        shown([ident for ident, _ in opened], behind=True)
+        unread = {i for i, _, people, _ in _unread_chats() if people <= 1}
+        again = [ident for ident, _ in opened if ident in unread]
+        if again:
+            # Some it only clears in front: those, for a moment.
+            shown(again, behind=False)
+        # Messages as it was: closed again when Flash opened it, out of
+        # the way when it was open already; then what was in front.
+        with contextlib.suppress(ComputerError):
+            if not running:
+                _quit(MESSAGES_APP)
+            elif again and back != MESSAGES_APP:
+                _hide(MESSAGES_APP)
+            if again and back and back != MESSAGES_APP:
                 _run(["open", "-b", back])
     left = {ident for ident, _, people, _ in _unread_chats() if people <= 1}
     done = [f"{named(i)} ({n})" for i, n in opened if i not in left]
