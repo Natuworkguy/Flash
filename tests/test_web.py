@@ -472,6 +472,44 @@ def test_an_extension_can_put_flash_on_the_network(monkeypatch):
     assert made["lan"] is True
 
 
+class TestNotes:
+    def test_what_a_device_is_told(self):
+        session = web.Session()
+        chat = session.new_chat()
+        session.hub.publish({"type": "notify", "title": "Done",
+                             "text": "The build passed", "chat": chat.id})
+        session.hub.publish({"type": "ping", "name": "Ada",
+                             "text": "@user can you look?"})
+        session.emit(chat, {"type": "ask", "id": "a1",
+                            "question": "Run rm -rf build?\nrm -rf build"})
+        got = web.command(session, {"name": "notifications"})
+        kinds = [(n["kind"], n["title"]) for n in got["notes"]]
+        assert kinds == [("notify", "Done"), ("mention", "Ada mentioned you"),
+                         ("ask", chat.title)]
+        assert got["notes"][2]["text"] == "Run rm -rf build?"
+        assert got["last"] == 3
+
+        # Only what came after the last one seen.
+        later = web.command(session, {"name": "notifications", "arg": "2"})
+        assert [n["kind"] for n in later["notes"]] == ["ask"]
+
+    def test_only_the_latest_are_kept(self):
+        hub = web.Hub()
+        for n in range(web.NOTES_KEPT + 5):
+            hub.note("notify", f"n{n}", "")
+        kept = hub.notes_after(0)
+        assert len(kept["notes"]) == web.NOTES_KEPT
+        assert kept["last"] == web.NOTES_KEPT + 5
+
+    def test_a_finished_reply(self):
+        chat = web.Chat(id="c")
+        chat.log = [{"type": "user", "text": "hi"},
+                    {"type": "assistant", "text": "  Hello!  "},
+                    {"type": "stats"}]
+        assert web._reply_since(chat, 1) == "Hello!"
+        assert web._reply_since(chat, 2) == ""
+
+
 class TestPairing:
     def test_a_code_signs_a_device_in(self, server):
         code = web.command(server.session, {"name": "device-pair"})["code"]
@@ -2103,6 +2141,9 @@ class TestUsage:
 
         stats = next(e for e in chat.log if e["type"] == "stats")
         assert stats["model"] == "flash-test"
+        # A device that asks is told the reply is in.
+        notes = web.command(session, {"name": "notifications"})["notes"]
+        assert [(n["kind"], n["text"]) for n in notes] == [("reply", "Hi.")]
         assert abs(stats["at"] - time.time()) < 60
         assert web.command(session, {"name": "usage"})["turns"] == 1
 

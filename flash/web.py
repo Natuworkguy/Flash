@@ -38,7 +38,7 @@ import urllib.error
 import urllib.request
 import uuid
 import webbrowser
-from collections import Counter
+from collections import Counter, deque
 from collections.abc import Callable
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
@@ -304,6 +304,11 @@ SIGNED_OUT_PAGE = EXPIRED_PAGE.replace(
 # --- Events --------------------------------------------------------------
 
 
+# How many of those notes are kept, and how much of each.
+NOTES_KEPT = 50
+NOTE_CHARS = 400
+
+
 class Hub:
     """Every open page's event stream, fed from one place.
 
@@ -318,6 +323,25 @@ class Hub:
         # one opened with the link's token itself).
         self._queues: dict[Queue, str] = {}
         self.seq = 0
+        # What was worth telling the user lately, for a device that asks
+        # rather than keeps a page open, a watch say: Flash's notifications,
+        # a spark's mention, a reply finished, a question waiting.
+        self.notes: deque = deque(maxlen=NOTES_KEPT)
+        self.note_seq = 0
+
+    def note(self, kind: str, title: str, text: str, chat: str = "") -> None:
+        with self._lock:
+            self.note_seq += 1
+            self.notes.append({
+                "id": self.note_seq, "at": time.time(), "kind": kind,
+                "title": " ".join(str(title).split())[:120],
+                "text": str(text).strip()[:NOTE_CHARS], "chat": chat,
+            })
+
+    def notes_after(self, since: int) -> dict:
+        with self._lock:
+            return {"notes": [n for n in self.notes if n["id"] > since],
+                    "last": self.note_seq}
 
     def watched(self) -> bool:
         """Whether any page is open on this server to see an event."""
@@ -358,6 +382,14 @@ class Hub:
             return set(self._queues.values())
 
     def publish(self, event: dict) -> dict:
+        if event.get("type") == "notify":
+            self.note("notify", str(event.get("title") or "Flash"),
+                      str(event.get("text") or ""),
+                      str(event.get("chat") or ""))
+        elif event.get("type") == "ping":
+            who = event.get("name") or "A spark"
+            self.note("mention", f"{who} mentioned you",
+                      str(event.get("text") or ""))
         with self._lock:
             self.seq += 1
             event = {**event, "seq": self.seq}
@@ -1254,6 +1286,9 @@ class Session:
 
     def emit(self, chat: Chat, event: dict) -> dict:
         event = {**event, "chat": chat.id}
+        if event["type"] == "ask":
+            self.hub.note("ask", chat.title, str(event.get("question") or "")
+                          .split("\n")[0], chat.id)
         if event["type"] in KEPT:
             chat.log.append({k: v for k, v in event.items() if k != "chat"})
         return self.hub.publish(event)
@@ -2553,6 +2588,9 @@ class Session:
                     progress.end(False)
                     self.asked.pop(chat.id, None)
                     self.started.pop(chat.id, None)
+                    said = _reply_since(chat, begun)
+                    if said:
+                        self.hub.note("reply", chat.title, said, chat.id)
                     with self._lock:
                         following = self._take_next(chat)
                         chat.busy = False
@@ -2821,6 +2859,16 @@ EDIT_WAIT_TOOL = {
         },
     },
 }
+
+
+def _reply_since(chat: Chat, begun: int) -> str:
+    """The last reply a turn wrote, from log entry BEGUN on: "" if none."""
+
+    for entry in reversed(chat.log[begun:]):
+        if entry.get("type") == "assistant" and str(entry.get("text") or
+                                                       "").strip():
+            return str(entry["text"]).strip()
+    return ""
 
 
 def chat_tools(chat: Chat) -> list[dict]:
@@ -3170,7 +3218,11 @@ def _sink(session: Session, chat: Chat):
     def sink(kind: str, text: str, style: str) -> Optional[bool]:
         if kind == "notify":
             if not session.hub.watched():
-                # No page open to pop it up: the desktop, then.
+                # No page open to pop it up: the desktop, then, and the
+                # notes a device asks for.
+                shown = json.loads(text)
+                session.hub.note("notify", str(shown.get("title") or "Flash"),
+                                 str(shown.get("message") or ""), chat.id)
                 return False
             shown = json.loads(text)
             session.emit(chat, {
@@ -5298,6 +5350,15 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
             raise ValueError("That device is not signed in any more.")
         session.hub.publish({"type": "browsers"})
         return {}
+
+    if name == "notifications":
+        # What was worth telling the user since note ARG: for a device
+        # that asks now and then instead of keeping a page open.
+        try:
+            since = int(arg or 0)
+        except ValueError:
+            since = 0
+        return session.hub.notes_after(since)
 
     if name == "chat-view":
         # One chat, log and all: what a small screen asks for instead
