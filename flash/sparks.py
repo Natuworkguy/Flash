@@ -128,6 +128,10 @@ ON_CALL_WORDS = (
 # another Flash changed.
 TICK_SECONDS = 5.0
 
+# How long a shift waits, as it starts, for connected apps still starting
+# up to list their tools.
+SHIFT_REFRESH_SECONDS = 5.0
+
 IDLE = "idle"
 WORKING = "working"
 FAILED = "failed"
@@ -4888,6 +4892,13 @@ def _shift(spark_id: str, client=None) -> Optional[Report]:
                 {"role": "system", "content": prompt},
                 {"role": "user", "content": _opening(why, inbox)},
             ]
+        # Each shift starts with its connected apps' tools as they are
+        # now: servers added or failed since are started, and the running
+        # ones list their tools again. Flash's own tools are read afresh
+        # at every step already; a change to Flash's code needs a restart;
+        # a stale list beats no shift.
+        with contextlib.suppress(Exception):
+            flash_tools.connectors.refresh(wait=SHIFT_REFRESH_SECONDS)
         # In autonomous mode a tool that asks is told yes, the answer
         # the user gave by switching it on, however stale this process's
         # own setting is: nobody is here to answer, and asking would wait
