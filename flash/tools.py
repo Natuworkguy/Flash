@@ -4462,30 +4462,22 @@ def phone_call(action: str = "call", who: str = "", goal: str = "",
                       "action answer once it wakes you.")
             tool_result(result, style=ERROR)
             return result
-        minutes = 1
-
-        def wait() -> None:
-            try:
-                call = calls.take_next(who, goal, user, _call_model,
-                                       minutes=minutes,
-                                       stopping=stopping, owner=owner)
-            except Exception as exc:  # noqa: BLE001
-                desktop_notify("Flash's call", f"It failed: {exc}")
-                return
-            if call is None:
-                desktop_notify("Flash's call", f"No call came from "
-                               f"{who} in {minutes:g} minutes.")
-                return
-            path = calls._keep(call)
-            desktop_notify(
-                f"Call from {call.who}",
-                f"Flash took it: {call.ended}. Transcript in {path}.")
-
-        threading.Thread(target=wait, daemon=True,
-                         name=f"call from {who}").start()
-        result = ("A call is ringing; Flash is picking it up. It says it "
-                  "is an automated assistant and talks towards the goal; "
-                  "the user is notified with the transcript after.")
+        # Taken here, not in the background, like call and join: the
+        # turns are drawn live in the chat that answered, and the
+        # transcript comes back as this tool's result, into that chat.
+        try:
+            call = calls.take_next(who, goal, user, _call_model, minutes=1,
+                                   stopping=stopping, owner=owner)
+        except (calls.CallError, computer.ComputerError) as exc:
+            result = f"Error: {exc}"
+            tool_result(result, style=ERROR)
+            return result
+        if call is None:
+            result = (f"Error: the call from {who} stopped ringing before "
+                      "Flash could pick it up, so nothing was answered.")
+            tool_result(result, style=ERROR)
+            return result
+        result = calls.summary(call, calls._keep(call))
         tool_result(result, style=DIM)
         return result
     try:
