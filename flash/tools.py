@@ -2743,16 +2743,20 @@ PHONE_TOOL = {
             "someone (\"call "
             "John and tell him I'm running late\"), or answer their next "
             "call (\"take the next call from John and find out what he "
-            "wants\"). You say first that you are an automated assistant "
+            "wants\"), or join a call the user is already on, such as "
+            "Google Meet (\"talk to my friend\"). You say first that you "
+            "are an automated assistant "
             "calling for the user, talk towards the goal, hang up, and "
             "get the transcript. Only in UltraAuto."
         ),
         "parameters": {
             "type": "object",
             "properties": {
-                "action": {"type": "string", "enum": ["call", "answer"],
-                           "description": "call them now, or answer "
-                           "their next call."},
+                "action": {"type": "string",
+                           "enum": ["call", "answer", "join"],
+                           "description": "call them now, answer "
+                           "their next call, or join the call the user "
+                           "is on now (who is optional)."},
                 "who": {"type": "string",
                         "description": "A name from Contacts, or a "
                         "phone number."},
@@ -4410,7 +4414,7 @@ def phone_call(action: str = "call", who: str = "", goal: str = "",
         tool_result(result, style=ERROR)
         return result
     who = " ".join(str(who or "").split())
-    if not who:
+    if not who and action != "join":
         return "Error: say who to call, or whose call to take."
     why = calls.missing()
     if why:
@@ -4450,6 +4454,12 @@ def phone_call(action: str = "call", who: str = "", goal: str = "",
         tool_result(result, style=DIM)
         return result
     try:
+        if action == "join":
+            call = calls.join(goal, user, _call_model, who=who,
+                              stopping=stopping)
+            result = calls.summary(call, calls._keep(call))
+            tool_result(result, style=DIM)
+            return result
         call = calls.place(who, goal, user, _call_model, stopping=stopping,
                            via=calls.FACETIME if via == calls.FACETIME
                            else calls.PHONE)

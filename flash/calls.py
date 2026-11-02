@@ -38,6 +38,20 @@ from .paths import FLASH_DIR
 # The devices that carry the call's sound, and what installs them.
 TO_CALL = "BlackHole 2ch"      # Flash speaks into it: the call's microphone
 FROM_CALL = "BlackHole 16ch"   # the call plays into it: what Flash hears
+
+
+def to_call() -> str:
+    """The device Flash speaks into: CALL_MIC_DEVICE, else TO_CALL."""
+
+    return voice._setting("CALL_MIC_DEVICE", TO_CALL)
+
+
+def from_call() -> str:
+    """The device Flash hears the call on: CALL_SPEAKER_DEVICE, else
+    FROM_CALL."""
+
+    return voice._setting("CALL_SPEAKER_DEVICE", FROM_CALL)
+
 SWITCH = "SwitchAudioSource"
 INSTALL = "brew install blackhole-2ch blackhole-16ch switchaudio-osx"
 
@@ -177,6 +191,9 @@ class Call:
     number: str
     goal: str
     incoming: bool
+    # A call the user is already on (Google Meet, Zoom...), joined by
+    # Flash through the loopback devices the user picked in it.
+    joined: bool = False
     lines: list[tuple[str, str]] = field(default_factory=list)
     ended: str = ""
 
@@ -191,7 +208,7 @@ def missing() -> str:
     if computer.system() != "mac":
         return "Flash can only talk on calls on a Mac."
     devices = _devices()
-    lacking = [d for d in (TO_CALL, FROM_CALL) if d not in devices]
+    lacking = [d for d in (to_call(), from_call()) if d not in devices]
     if lacking or not shutil.which(SWITCH):
         return ("For Flash to hear a call and speak on it, install the "
                 f"free audio loopback devices and switcher: {INSTALL}")
@@ -228,8 +245,8 @@ def _routed():
     """The call's sound through the loopback devices, and the Mac's own
     devices back afterwards, whatever happened."""
 
-    was_in = _switch("input", TO_CALL)
-    was_out = _switch("output", FROM_CALL)
+    was_in = _switch("input", to_call())
+    was_out = _switch("output", from_call())
     try:
         yield
     finally:
@@ -270,7 +287,8 @@ def _state() -> dict:
 def _facetime_devices() -> None:
     with contextlib.suppress(computer.ComputerError):
         computer._run(["osascript", "-l", "JavaScript", "-e",
-                       _FACETIME_DEVICES, TO_CALL, FROM_CALL], timeout=20)
+                       _FACETIME_DEVICES, to_call(), from_call()],
+                      timeout=20)
 
 
 def _picked_up(call: Call, stopping: Callable[[], bool]) -> bool:
@@ -363,9 +381,9 @@ class Line:
 
         self.sd = sounddevice
         self.device_rate = int(sounddevice.query_devices(
-            FROM_CALL, "input")["default_samplerate"])
+            from_call(), "input")["default_samplerate"])
         self.stream = sounddevice.RawInputStream(
-            device=FROM_CALL, channels=1, dtype="int16",
+            device=from_call(), channels=1, dtype="int16",
             samplerate=self.device_rate,
             blocksize=int(self.device_rate * BLOCK))
         self.stream.start()
@@ -435,7 +453,7 @@ class Line:
         with wave.open(io.BytesIO(wav)) as read:
             rate = read.getframerate()
             pcm = read.readframes(read.getnframes())
-        out = self.sd.RawOutputStream(device=TO_CALL, channels=1,
+        out = self.sd.RawOutputStream(device=to_call(), channels=1,
                                       dtype="int16", samplerate=rate)
         with out:
             out.write(pcm)
@@ -454,10 +472,13 @@ class Line:
 
 def _instructions(call: Call, user: str) -> str:
     them = call.who or "the other person"
-    opening = (
-        f"You answered a call from {them} for {user}."
-        if call.incoming else f"You called {them} for {user}."
-    )
+    if call.joined:
+        opening = (f"{user} brought you into a call they are on, with "
+                   f"{them}, to talk to them.")
+    elif call.incoming:
+        opening = f"You answered a call from {them} for {user}."
+    else:
+        opening = f"You called {them} for {user}."
     return (
         f"You are Flash, an AI assistant, on a phone call. {opening} "
         f"What {user} wants from it: "
@@ -627,9 +648,37 @@ def take_next(who: str, goal: str, user: str,
     return call
 
 
+def join(goal: str, user: str, ask: Callable[[list[dict]], str],
+         who: str = "",
+         stopping: Callable[[], bool] = lambda: False) -> Call:
+    """Talk on a call USER is already on (Google Meet, Zoom...), towards
+    GOAL, until told to stop, the call goes quiet, or it runs too long.
+
+    The user sets the call app's microphone to to_call() and its speaker
+    to from_call(); Flash opens those devices by name, so the Mac's own
+    devices are never switched and there is nothing to put back. Nothing
+    is hung up either: the call is the user's.
+    """
+
+    why = missing()
+    if why:
+        raise CallError(why)
+    call = Call(who=who or "the people on the call", number="", goal=goal,
+                incoming=True, joined=True)
+    line = Line()
+    try:
+        talk(call, line, user, ask, stopping)
+    finally:
+        line.close()
+    return call
+
+
 def summary(call: Call, path: Path) -> str:
     """What happened on CALL, for the chat."""
 
     said = call.transcript() or "(nothing was said)"
+    if call.joined:
+        return (f"Flash left the call with {call.who}: {call.ended}.\n"
+                f"{said}\nTranscript kept at {path}.")
     return (f"The call {'from' if call.incoming else 'to'} {call.who} "
             f"ended: {call.ended}.\n{said}\nTranscript kept at {path}.")

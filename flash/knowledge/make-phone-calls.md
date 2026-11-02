@@ -9,6 +9,7 @@ description: Call someone, or take their next call, and talk on it for the user 
 - Agree to nothing they did not ask for: no payments, no personal details, no new plans. Say you will pass it on.
 - After a call, tell the user how it went in a line or two, and anything they need to act on. The transcript is kept; give its path.
 - answer waits in the background; the user is notified when the call has come and gone.
+- "Talk to my friend", "say hi to everyone on this Meet": the user is already on a call (Google Meet, Zoom...). Use action join; who is optional. It only works once the user has set the call's microphone to BlackHole 2ch and its speaker to BlackHole 16ch: if they may not have, tell them that first. Flash never hangs up a joined call; it stops when told to, or when the call goes quiet.
 - If the Mac lacks the loopback devices, say the one command that installs them and stop.
 
 ## Examples
@@ -19,4 +20,8 @@ phone_call {"action": "call", "who": "John Doe", "goal": "Tell him Sam is runnin
 
 ```
 phone_call {"action": "answer", "who": "John Doe", "goal": "Find out what he is calling about and when he is free to talk to Sam.", "minutes": 60}
+```
+
+```
+phone_call {"action": "join", "who": "Alex", "goal": "Say hello to Alex for Sam and ask how the move went."}
 ```
