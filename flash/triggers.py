@@ -23,9 +23,12 @@ SETTING = "SPARK_EVENTS"
 EMAIL = "email"
 IMESSAGE = "imessage"
 MCP = "mcp:"
+# A call coming in: from anyone, or call:<name> from one person.
+CALL = "call"
 # How often each is looked at, in seconds: the mail server is asked over
-# the network, the others are on this computer.
-EVERY = {EMAIL: 60.0, IMESSAGE: 15.0, MCP: 30.0}
+# the network, the others are on this computer. A call rings only for
+# half a minute or so.
+EVERY = {EMAIL: 60.0, IMESSAGE: 15.0, MCP: 30.0, CALL: 5.0}
 # How much of what changed a shift is told.
 TOLD_CHARS = 3000
 MOST_EMAILS = 10
@@ -52,8 +55,9 @@ def kinds() -> list[dict]:
 
 
 def parse(events) -> list[str]:
-    """EVENTS as a spark keeps them: email, imessage, or mcp:<server>
-    (mcp:<server>/<tool> to say which tool to watch), each once. Raises
+    """EVENTS as a spark keeps them: email, imessage, call (call:<name>
+    for one person's), or mcp:<server> (mcp:<server>/<tool> to say which
+    tool to watch), each once. Raises
     ValueError for one it does not know."""
 
     if isinstance(events, str):
@@ -67,12 +71,16 @@ def parse(events) -> list[str]:
             event = EMAIL
         if event in ("imessages", "messages", "texts"):
             event = IMESSAGE
-        if event not in (EMAIL, IMESSAGE) and not (
+        if event in ("calls", "phone", "facetime"):
+            event = CALL
+        if event not in (EMAIL, IMESSAGE, CALL) and not (
             event.startswith(MCP) and len(event) > len(MCP)
+        ) and not (
+            event.startswith(CALL + ":") and len(event) > len(CALL) + 1
         ):
             raise ValueError(
                 f"{event!r} is not something to start on. One of: email, "
-                "imessage, or mcp:<server>."
+                "imessage, call (or call:<name>), or mcp:<server>."
             )
         if event not in found:
             found.append(event)
@@ -86,6 +94,10 @@ def words(event: str) -> str:
         return "a new email"
     if event == IMESSAGE:
         return "a new iMessage"
+    if event == CALL:
+        return "a call from anyone"
+    if event.startswith(CALL + ":"):
+        return f"a call from {event[len(CALL) + 1:]}"
     return f"a change in {event[len(MCP):].split('/')[0]}"
 
 
@@ -108,7 +120,8 @@ class Watcher:
             self.looked.pop(gone, None)
         news: dict[str, str] = {}
         for event in sorted(events):
-            kind = event if event in EVERY else MCP
+            kind = event if event in EVERY else (
+                CALL if event.startswith(CALL + ":") else MCP)
             if event in self.looked and \
                     now - self.looked[event] < EVERY[kind]:
                 continue
@@ -130,6 +143,8 @@ class Watcher:
             return self._email()
         if event == IMESSAGE:
             return self._imessage()
+        if event == CALL or event.startswith(CALL + ":"):
+            return self._call(event)
         return self._mcp(event)
 
     def _email(self) -> str:
@@ -175,6 +190,23 @@ class Watcher:
         lines = computer.imessages_after(before)
         return ("New iMessages:\n" + "\n".join(f"- {line}" for line in lines)
                 if lines else "")
+
+    def _call(self, event: str) -> str:
+        """A call that started ringing since the last look, from the one
+        EVENT names if it names one. One ringing call is told once."""
+
+        from . import calls
+
+        alert = " ".join(calls.ringing().split())
+        before = self.seen.get(event)
+        self.seen[event] = alert
+        if not alert or alert == before:
+            return ""
+        who = event[len(CALL) + 1:] if event.startswith(CALL + ":") else ""
+        if who and who not in alert.lower():
+            return ""
+        return (f"A call is ringing: {alert}. Answer it with the phone_call "
+                "tool's answer, if that is what to do.")
 
     def _mcp(self, event: str) -> str:
         from . import connectors

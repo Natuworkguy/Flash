@@ -2805,7 +2805,9 @@ WAIT_TOOL = {
                 "events": {"type": "string", "description": (
                     "Or what coming in ends the wait, space-separated: "
                     "email (a new email), imessage (a new iMessage, on a "
-                    "Mac), mcp:<server> (a change in a connected MCP "
+                    "Mac), call (a call ringing, from anyone, on a Mac), "
+                    "call:<name> (a call from that person), mcp:<server> "
+                    "(a change in a connected MCP "
                     "server). You are told what came in."
                 )},
                 "keep": {"type": "boolean", "description": (
