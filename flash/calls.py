@@ -22,6 +22,7 @@ from __future__ import annotations
 import contextlib
 import io
 import json
+import os
 import shutil
 import subprocess  # nosec B404
 import threading
@@ -33,7 +34,7 @@ from pathlib import Path
 from typing import Optional
 
 from . import computer, voice
-from .paths import FLASH_DIR
+from .paths import ENV_PATH, FLASH_DIR
 from .theme import DIM, tool_result
 
 # The devices that carry the call's sound, and what installs them.
@@ -76,6 +77,54 @@ def monitor() -> str:
     if name in (to_call(), from_call()):
         return ""
     return name
+
+
+def monitor_settings() -> dict:
+    """The call monitor as Settings shows it: on or off, the device
+    chosen ("" for the Mac's speakers from before the call), and the
+    output devices it may play to, never the call's own."""
+
+    devices: list[str] = []
+    with contextlib.suppress(Exception):  # no audio system at all
+        import sounddevice
+
+        for d in sounddevice.query_devices():
+            name = str(d["name"])
+            if (d["max_output_channels"] > 0 and name not in devices
+                    and name not in (TO_CALL, FROM_CALL,
+                                     to_call(), from_call())):
+                devices.append(name)
+    return {
+        "on": voice._setting("CALL_MONITOR", "on").lower() not in (
+            "off", "0", "false", "no"),
+        "device": voice._setting("CALL_MONITOR_DEVICE", ""),
+        "devices": devices,
+    }
+
+
+def set_monitor(on: Optional[bool] = None,
+                device: Optional[str] = None) -> dict:
+    """Turn the call monitor on or off, or choose its device ("" for the
+    Mac's speakers), here and in ~/.flash.env."""
+
+    from .envfile import set_env_var, unset_env_var
+
+    if on is not None:
+        os.environ["CALL_MONITOR"] = "on" if on else "off"
+        set_env_var(ENV_PATH, "CALL_MONITOR", "on" if on else "off")
+    if device is not None:
+        device = device.strip()
+        if device in (TO_CALL, FROM_CALL, to_call(), from_call()):
+            raise ValueError(
+                f"{device} carries the call itself, so it can't be the "
+                "monitor: the call would hear itself.")
+        if device:
+            os.environ["CALL_MONITOR_DEVICE"] = device
+            set_env_var(ENV_PATH, "CALL_MONITOR_DEVICE", device)
+        else:
+            os.environ.pop("CALL_MONITOR_DEVICE", None)
+            unset_env_var(ENV_PATH, "CALL_MONITOR_DEVICE")
+    return monitor_settings()
 
 
 SWITCH = "SwitchAudioSource"

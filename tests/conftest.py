@@ -7,6 +7,7 @@ import pytest
 from flash import (
     ai,
     briefing,
+    calls,
     connectors,
     design,
     extensions,
@@ -184,6 +185,8 @@ def isolated_home(tmp_path_factory, monkeypatch):
     monkeypatch.setattr(systemone, "ENV_PATH", str(home / ".flash.env"))
     # "Hey Flash" with no page open (VOICE_WAKE_ALWAYS, cleared above).
     monkeypatch.setattr(heyflash, "ENV_PATH", str(home / ".flash.env"))
+    # The call monitor, set from Settings.
+    monkeypatch.setattr(calls, "ENV_PATH", str(home / ".flash.env"))
     # Custom instructions, none unless a test writes some.
     monkeypatch.setattr(instructions, "FLASH_DIR", home / ".flash")
     for name in ("SYSTEM_ONE", "SYSTEM_ONE_MODEL"):

@@ -9145,6 +9145,40 @@ function drawGeneral(body) {
   };
   body.appendChild(lookRow);
 
+  // Hearing a call Flash is on, both sides, on this Mac.
+  const monitorRow = el("button", "setting-row call-monitor-row", `<span class="what"><b>Hear calls on this Mac</b><span>While Flash is on a call, you hear the other side and Flash’s own voice here too. Off, the call stays silent on this Mac.</span></span><span class="switch" aria-hidden="true"></span>`);
+  monitorRow.type = "button";
+  monitorRow.setAttribute("role", "switch");
+  const monitorDeviceRow = el("div", "setting-row static call-monitor-device-row", `<span class="what"><b>Hear calls on</b><span>The speakers or headphones calls play on. Your Mac’s speakers means the ones it used before the call.</span></span><span class="side"><select aria-label="Hear calls on"></select></span>`);
+  const monitorPick = monitorDeviceRow.querySelector("select");
+  const showMonitor = (m) => {
+    monitorRow.setAttribute("aria-checked", !!m.on);
+    monitorPick.replaceChildren(new Option("Your Mac’s speakers", ""),
+      ...[...new Set([...(m.devices || []), ...(m.device ? [m.device] : [])])].map((d) => new Option(d, d)));
+    monitorPick.value = m.device || "";
+    monitorPick.disabled = !m.on;
+  };
+  let monitor = { on: true, device: "", devices: [] };
+  showMonitor(monitor);
+  command("call-monitor", "", null).then((m) => showMonitor(monitor = m)).catch(() => {});
+  monitorRow.onclick = async () => {
+    const on = monitorRow.getAttribute("aria-checked") !== "true";
+    showMonitor({ ...monitor, on });
+    try {
+      showMonitor(monitor = await command("call-monitor", on ? "on" : "off", null));
+      toast(on ? "You hear calls on this Mac now" : "Calls are silent on this Mac now");
+    } catch (error) { showMonitor(monitor); showFailure(error); }
+  };
+  monitorPick.onchange = async () => {
+    try {
+      showMonitor(monitor = await command("call-monitor-device", monitorPick.value, null));
+      toast(`You hear calls on ${monitorPick.value || "your Mac’s speakers"} now`);
+    } catch (error) { showMonitor(monitor); showFailure(error); }
+  };
+  body.insertAdjacentHTML("beforeend", `<h2 class="settings-section settings-gap">Calls</h2>`);
+  body.appendChild(monitorRow);
+  body.appendChild(monitorDeviceRow);
+
   body.insertAdjacentHTML("beforeend", `<h2 class="settings-section settings-gap">Voice models</h2><p class="settings-sub">What voice mode listens and speaks with. Both run on this computer, so pick lighter ones for a weaker machine.</p><div class="voice-models"></div>`);
   drawVoiceModels(body.querySelector(".voice-models"));
 

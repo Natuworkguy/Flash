@@ -59,6 +59,7 @@ from . import agent as subagents
 from . import (
     background,
     briefing,
+    calls,
     checkpoint,
     computer,
     computeruse,
@@ -5204,6 +5205,18 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
             heyflash.set_sensitivity(arg)
             session.hub.publish({"type": "status"})
         return {"sensitivity": voice.wake_sensitivity()}
+
+    if name == "call-monitor":
+        # on or off; no arg: only what it is, for Settings.
+        if arg not in ("", "on", "off"):
+            raise ValueError("call-monitor takes on or off")
+        if arg:
+            return calls.set_monitor(on=arg == "on")
+        return calls.monitor_settings()
+
+    if name == "call-monitor-device":
+        # The device the call is heard on; empty: the Mac's speakers.
+        return calls.set_monitor(device=arg)
 
     if name == "wake-word":
         # The words that wake Flash; no arg: only what they are.
