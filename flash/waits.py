@@ -197,6 +197,11 @@ def make(chat_id: str, args: dict, cwd: str = "",
     except ValueError as exc:
         raise WaitError(str(exc)) from None
     keep = args.get("keep") in (True, "true", "yes", 1)
+    if args.get("keep") in (None, "") and any(
+            str(event).split(":")[0] == "call" for event in events or []):
+        # One call answered is no reason to miss the next: a call wait
+        # keeps waiting unless told otherwise.
+        keep = True
     if keep and not events:
         raise WaitError("keep only goes with events: what to keep "
                         "waiting for.")
