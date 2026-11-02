@@ -10087,6 +10087,7 @@ async function drawSparks(body, again = false) {
   if (r.hires.length) host.appendChild(hireCards(r.hires, r.sparks, again));
   if (!r.sparks.length && !r.teams.length) {
     host.insertAdjacentHTML("beforeend", `<div class="mem-empty"><b>No sparks yet</b>Give one a goal like “every morning, check my repo for new issues and tell me which look like bugs”. Or ask Flash in a chat to make one, or start a whole team from New team.</div>`);
+    sparksTrash(body, r.trash || []);
     return;
   }
   const byId = new Map(r.sparks.map((s) => [s.id, s]));
@@ -10129,6 +10130,7 @@ async function drawSparks(body, again = false) {
 }
 
 function sparksFooter(body, r) {
+  sparksTrash(body, r.trash || []);
   const working = r.sparks.filter((s) => s.status === "working").length;
   const where = body.querySelector(".mem-path");
   where.textContent = `${r.sparks.length} spark${r.sparks.length === 1 ? "" : "s"}${working ? ` · ${working} working` : ""} · ${r.always.installed ? "working with Flash closed too" : "working while Flash is open"} · `;
@@ -10138,6 +10140,32 @@ function sparksFooter(body, r) {
   where.appendChild(change);
 }
 const drawSparksPage = () => toolPage("Sparks", drawSparks);
+
+// Removed sparks wait in the trash, under the rest, drawn like the
+// memory list: each can be brought back or deleted for good.
+function sparksTrash(body, trashed) {
+  if (!trashed.length) return;
+  const head = el("div", "section-label", `Trash · ${trashed.length}`);
+  const list = el("ul", "memories");
+  for (const s of trashed) {
+    const item = el("li", "", `<span class="text"></span>`);
+    item.firstChild.textContent = `${s.name} · ${s.handle} · removed ${ago(s.trashed)}`;
+    const acts = el("span", "acts");
+    const forever = button("icon-btn", "trash", "Delete forever", "", async () => {
+      if (!forever.classList.contains("sure")) { forever.classList.add("sure"); forever.dataset.tip = "Click again to delete forever"; forever.setAttribute("aria-label", forever.dataset.tip); return; }
+      try { await command("spark-delete-forever", s.id, null); toast(`${s.name} is deleted forever`); } catch (error) { showFailure(error); }
+    });
+    acts.append(
+      button("icon-btn", "retry", "Restore (paused)", "", async () => {
+        try { await command("spark-restore", s.id, null); toast(`${s.name} is back, paused`); } catch (error) { showFailure(error); }
+      }),
+      forever,
+    );
+    item.appendChild(acts);
+    list.appendChild(item);
+  }
+  body.querySelector(".host").append(head, list);
+}
 
 // Teams ---------------------------------------------------------------------
 // A team is drawn as its org chart: the sparks that report to no one on
@@ -12075,7 +12103,7 @@ function fillSpark(box, spark, again = false) {
     if (!b.classList.contains("sure")) { b.classList.add("sure"); b.textContent = "Delete it?"; return; }
     await command("spark-remove", spark.id, null);
     closeForm();
-    toast(`${spark.name} is gone`);
+    toast(`${spark.name} is in the trash`);
   }, "btn small danger");
 
   if (spark.lessons.length) {

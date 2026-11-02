@@ -5169,6 +5169,7 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
             ],
             "held": sparks.held_count(),
             "always": keepalive.status(),
+            "trash": sparks.trash(),
         }
 
     if name == "sparks-pause-all":
@@ -6358,6 +6359,11 @@ def _spark_command(name: str, arg: str, body: dict) -> dict:
         elif name == "spark-remove":
             spark = sparks.remove(arg)
             return {"removed": spark.id}
+        elif name == "spark-restore":
+            spark = sparks.restore(arg)
+        elif name == "spark-delete-forever":
+            spark = sparks.delete_forever(arg)
+            return {"deleted": spark.id}
         else:
             raise ValueError(f"unknown command {name!r}")
     except (sparks.SparkError, OSError) as exc:
