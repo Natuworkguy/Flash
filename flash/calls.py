@@ -400,6 +400,11 @@ class CallError(Exception):
     pass
 
 
+# False when this process only serves the web UI: its calls show on the
+# page and in CALLS_DIR, not in the terminal it was started from.
+terminal = True
+
+
 def _mark(step: str, since: float) -> None:
     """How long STEP took to come, from SINCE, in calls/timing.log: where
     a call's first seconds go."""
@@ -440,7 +445,8 @@ class Call:
         line = f"[{at}] {who}: {said}"
         # The page draws the turn as it is said; the terminal prints it.
         if not tool_call({"who": who, "said": said, "at": at,
-                          "flash": who == "Flash", "with": self.who}):
+                          "flash": who == "Flash", "with": self.who}) \
+                and terminal:
             tool_result(line, style=DIM)
         try:
             if self.live is None:
