@@ -216,6 +216,37 @@ def test_a_message_sent_meanwhile_is_answered_next(team, monkeypatch):
     ]
 
 
+def test_the_page_sends_attachments_and_sparks_get_their_paths(
+    team, monkeypatch,
+):
+    monkeypatch.setattr(
+        teamchat, "answer", lambda key, message, client=None: None,
+    )
+    shot = web.workspace.keep_upload("shot.png", b"\x89PNG fake")
+    doc = web.workspace.keep_upload("notes.txt", b"hello")
+    session = web.Session()
+
+    posted = web.command(session, {
+        "name": "team-chat-say", "arg": team.id, "text": "",
+        "files": [shot["id"], doc["id"], "no-such-file"],
+    })["entry"]
+
+    # Only the files that are there, as the page shows them: no paths.
+    assert [f["name"] for f in posted["attachments"]] == [  # nosec B101
+        "shot.png", "notes.txt",
+    ]
+    assert all("path" not in f for f in posted["attachments"])  # nosec B101
+    # A spark is told where each one is, for its tools to open.
+    line = teamchat._said_line(posted, {})
+    assert str(web.workspace.upload_path(shot["id"])) in line  # nosec B101
+    assert str(web.workspace.upload_path(doc["id"])) in line  # nosec B101
+
+
+def test_nothing_said_and_nothing_attached_is_refused(team):
+    with pytest.raises(teamchat.TeamChatError):
+        teamchat.say("desk", "  ", files=[])
+
+
 def test_the_page_reads_and_sends(team, monkeypatch):
     sent = []
     monkeypatch.setattr(
