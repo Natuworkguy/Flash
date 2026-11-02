@@ -4,6 +4,7 @@ import io
 import wave
 
 import pytest
+from dotenv import dotenv_values
 
 from flash import calls, tools
 
@@ -310,6 +311,37 @@ def test_the_monitor_never_feeds_the_call_back(monkeypatch):
     monkeypatch.delenv("CALL_MONITOR_DEVICE")
     monkeypatch.setattr(calls, "_speakers", "Headphones")
     assert calls.monitor() == "Headphones"
+
+
+def test_settings_set_the_monitor(monkeypatch):
+    for name in ("CALL_MONITOR", "CALL_MONITOR_DEVICE", "CALL_MIC_DEVICE",
+                 "CALL_SPEAKER_DEVICE"):
+        monkeypatch.setenv(name, "")
+    devices = [
+        {"name": "MacBook Speakers", "max_output_channels": 2},
+        {"name": "MacBook Microphone", "max_output_channels": 0},
+        {"name": "BlackHole 2ch", "max_output_channels": 2},
+        {"name": "BlackHole 16ch", "max_output_channels": 16},
+    ]
+    fake = type("SD", (), {"query_devices": staticmethod(lambda: devices)})
+    monkeypatch.setitem(__import__("sys").modules, "sounddevice", fake)
+
+    shown = calls.monitor_settings()
+    assert shown == {"on": True, "device": "",  # nosec B101
+                     "devices": ["MacBook Speakers"]}
+    assert calls.set_monitor(on=False)["on"] is False  # nosec B101
+    assert calls.set_monitor(device="MacBook Speakers")[  # nosec B101
+        "device"] == "MacBook Speakers"
+    saved = dotenv_values(calls.ENV_PATH)
+    assert saved["CALL_MONITOR"] == "off"  # nosec B101
+    assert saved["CALL_MONITOR_DEVICE"] == "MacBook Speakers"  # nosec B101
+    for loop in ("BlackHole 2ch", "BlackHole 16ch"):
+        with pytest.raises(ValueError):
+            calls.set_monitor(device=loop)
+    calls.set_monitor(on=True, device="")
+    assert "CALL_MONITOR_DEVICE" not in dotenv_values(  # nosec B101
+        calls.ENV_PATH)
+    assert calls.monitor_settings()["on"] is True  # nosec B101
 
 
 def test_the_user_hears_both_sides(monkeypatch):
