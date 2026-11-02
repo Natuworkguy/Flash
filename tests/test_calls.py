@@ -272,3 +272,22 @@ def test_the_tool_joins_without_a_name(monkeypatch, tmp_path):
     result = tools.phone_call(action="join", goal="say hi")
     assert seen == {"goal": "say hi", "who": ""}
     assert "left the call" in result
+
+
+def test_each_turn_goes_to_the_live_transcript_as_it_happens(monkeypatch,
+                                                            tmp_path):
+    monkeypatch.setattr(calls, "CALLS_DIR", tmp_path)
+    shown = []
+    monkeypatch.setattr(calls, "tool_result",
+                        lambda text, style=None: shown.append(text))
+    call = calls.Call(who="Alex", number="", goal="say hi",
+                      incoming=False)
+    call.say("Alex", "Hello?")
+    call.say("Flash", "Hi Alex.")
+    assert call.lines == [("Alex", "Hello?"), ("Flash", "Hi Alex.")]
+    assert shown[0].endswith("Alex: Hello?")
+    assert shown[1].endswith("Flash: Hi Alex.")
+    kept = call.live.read_text(encoding="utf-8").splitlines()
+    assert call.live.parent == tmp_path
+    assert kept[0].endswith("Alex: Hello?")
+    assert kept[1].endswith("Flash: Hi Alex.")

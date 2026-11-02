@@ -34,6 +34,7 @@ from typing import Optional
 
 from . import computer, voice
 from .paths import FLASH_DIR
+from .theme import DIM, tool_result
 
 # The devices that carry the call's sound, and what installs them.
 TO_CALL = "BlackHole 2ch"      # Flash speaks into it: the call's microphone
@@ -196,9 +197,30 @@ class Call:
     joined: bool = False
     lines: list[tuple[str, str]] = field(default_factory=list)
     ended: str = ""
+    # The live transcript, a line at a time as the call goes: set on
+    # the first thing said.
+    live: Optional[Path] = None
 
     def transcript(self) -> str:
         return "\n".join(f"{who}: {said}" for who, said in self.lines)
+
+    def say(self, who: str, said: str) -> None:
+        """Record one turn: kept, shown on the page (or the terminal) as
+        it happens, and added to the call's live transcript file."""
+
+        self.lines.append((who, said))
+        line = f"[{time.strftime('%H:%M:%S')}] {who}: {said}"
+        tool_result(line, style=DIM)
+        try:
+            if self.live is None:
+                CALLS_DIR.mkdir(parents=True, exist_ok=True)
+                stamp = time.strftime("%Y-%m-%d %H.%M.%S")
+                name = f"{stamp} {self.who or 'call'} live.txt"
+                self.live = CALLS_DIR / name
+            with self.live.open("a", encoding="utf-8") as out:
+                out.write(line + "\n")
+        except OSError:
+            pass  # the call goes on; the kept transcript still has it
 
 
 def missing() -> str:
@@ -517,7 +539,7 @@ def talk(call: Call, line: Line, user: str, ask: Callable[[list[dict]], str],
         # Picked up: they say hello, or Flash speaks up after a moment.
         first = line.hear(longest=6.0, stopping=stopping)
     if first:
-        call.lines.append((call.who or "Them", first))
+        call.say(call.who or "Them", first)
     while not stopping():
         if time.monotonic() - started > MOST_SECONDS:
             call.ended = "it ran past ten minutes"
@@ -526,7 +548,7 @@ def talk(call: Call, line: Line, user: str, ask: Callable[[list[dict]], str],
         done = HANG_UP in said.lower()
         said = said.replace(HANG_UP, "").replace(HANG_UP.title(), "").strip()
         if said:
-            call.lines.append(("Flash", said))
+            call.say("Flash", said)
             line.say(said)
         if done:
             call.ended = "the call was done"
@@ -537,7 +559,7 @@ def talk(call: Call, line: Line, user: str, ask: Callable[[list[dict]], str],
         if not heard:
             call.ended = "the other side went quiet"
             break
-        call.lines.append((call.who or "Them", heard))
+        call.say(call.who or "Them", heard)
     if stopping() and not call.ended:
         call.ended = getattr(stopping, "why", "") or "you stopped it"
 
