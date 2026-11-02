@@ -40,7 +40,7 @@ from typing import Optional
 import ollama
 
 from . import agent as subagents
-from . import audit, cron, pings, providers, triggers
+from . import audit, cron, pings, presence, providers, triggers
 from .models import full_name, installed_names
 from .paths import ENV_PATH, FLASH_DIR
 from .sysprompt import get_model_system_prompt
@@ -2988,16 +2988,104 @@ def update(key: str, **changes) -> Spark:
     return spark
 
 
+def trash_dir() -> Path:
+    return sparks_dir() / "trash"
+
+
+def _trash_path(spark_id: str) -> Path:
+    return trash_dir() / f"{spark_id}.json"
+
+
 def remove(key: str) -> Spark:
-    """Take a spark away. Those that reported to it report to its lead."""
+    """Take a spark away, to the trash: it can be restored from there or
+    deleted forever. Those that reported to it report to its lead."""
 
     with _held():
         spark = _must_find(key)
+        folder = trash_dir()
+        folder.mkdir(parents=True, exist_ok=True)
+        temp = folder / f".{spark.id}.tmp"
+        temp.write_text(json.dumps(
+            {"trashed": time.time(), "spark": asdict(spark)}, indent=2,
+        ), encoding="utf-8")
+        os.replace(temp, _trash_path(spark.id))
         _path(spark.id).unlink(missing_ok=True)
         for other in all_sparks():
             if _let_go_of(other, spark.id, spark.reports_to):
                 _save(other)
     log(spark.id, "removed", name=spark.name)
+    _changed()
+    return spark
+
+
+def _trashed(spark_id: str) -> tuple[float, Spark]:
+    path = _trash_path(Path(str(spark_id)).name)
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return float(data.get("trashed") or 0), _from_dict(data["spark"])
+    except (OSError, ValueError, KeyError, TypeError):
+        raise SparkError("No spark by that ID in the trash.") from None
+
+
+def trash() -> list[dict]:
+    """The sparks in the trash, most recently removed first."""
+
+    folder = trash_dir()
+    if not folder.is_dir():
+        return []
+    found = []
+    for path in folder.glob("*.json"):
+        try:
+            when, spark = _trashed(path.stem)
+        except SparkError:
+            continue
+        found.append({
+            "id": spark.id, "name": spark.name, "handle": spark.handle,
+            "title": spark.title, "colour": spark.colour,
+            "goal": spark.goal, "trashed": when,
+        })
+    return sorted(found, key=lambda s: -s["trashed"])
+
+
+def restore(spark_id: str) -> Spark:
+    """Bring a spark back from the trash, paused, so it starts again only
+    when the user resumes it. Its leads and team, if gone, are dropped;
+    sparks that reported to it keep the lead they were given."""
+
+    with _held():
+        _, spark = _trashed(spark_id)
+        for other in all_sparks():
+            if other.id == spark.id or other.handle == spark.handle:
+                raise SparkError(
+                    f"A spark called {other.name} already has that name: "
+                    "rename or remove it first."
+                )
+        live = {s.id for s in all_sparks()}
+        if spark.reports_to not in live:
+            spark.reports_to = ""
+        spark.also_reports_to = [
+            i for i in spark.also_reports_to or [] if i in live
+        ]
+        if not spark.reports_to and spark.also_reports_to:
+            spark.reports_to = spark.also_reports_to.pop(0)
+        if spark.team and find_team(spark.team) is None:
+            spark.team = ""
+        spark.status = IDLE
+        spark.paused = True
+        _save(spark)
+        _trash_path(spark.id).unlink(missing_ok=True)
+    log(spark.id, "restored", name=spark.name)
+    _changed()
+    return spark
+
+
+def delete_forever(spark_id: str) -> Spark:
+    """Delete a spark in the trash for good. Its audit log stays."""
+
+    with _held():
+        _, spark = _trashed(spark_id)
+        _trash_path(spark.id).unlink(missing_ok=True)
+    log(spark.id, "deleted_forever", name=spark.name)
     _changed()
     return spark
 
@@ -3244,9 +3332,20 @@ def _prompt(
     )
     parts = [
         get_model_system_prompt(host, model), body,
-        project_block(spark, jobs), team_block(spark), date_prompt,
+        project_block(spark, jobs), team_block(spark), presence_block(),
+        date_prompt,
     ]
     return "\n\n".join(part for part in parts if part)
+
+
+def presence_block() -> str:
+    """Whether the user is at the computer right now, for a shift."""
+
+    return (
+        "=== The user right now ===\n" + presence.presence_line()
+        + "\n(online: active; idle: no input for 2 minutes; offline: "
+        "the computer is locked. Weigh it before pinging them.)"
+    )
 
 
 STATUS_CHARS = 80
@@ -5283,6 +5382,7 @@ def status_block(spark: Spark) -> str:
             f"  {line}" for line in _reaction_lines(reactions).splitlines()
         ]
     lines.append(f"- You run on the model {model_of(spark) or '(none set)'}.")
+    lines.append(presence.presence_line())
     found = project_of(spark)
     if found:
         lines.append(f"- You work on the project {found.name}.")

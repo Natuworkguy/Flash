@@ -4041,7 +4041,9 @@ def _sparks_command(arg: str) -> None:
             spark = sparks.find(key)
             if spark and confirm(f"Remove {spark.name} and its reports?"):
                 sparks.remove(spark.id)
-                console.print(Text(f"{spark.name} is gone.", style=DIM))
+                console.print(
+                    Text(f"{spark.name} is in the trash.", style=DIM),
+                )
             elif spark is None:
                 warn(f"No spark called {key!r}.")
             return

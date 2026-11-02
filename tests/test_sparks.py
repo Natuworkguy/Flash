@@ -434,6 +434,42 @@ class TestWeb:
 
         web.command(session, {"name": "spark-remove", "arg": made["id"]})
         assert web.command(session, {"name": "sparks"})["sparks"] == []
+        trash = web.command(session, {"name": "sparks"})["trash"]
+        assert [s["id"] for s in trash] == [made["id"]]
+
+        back = web.command(
+            session, {"name": "spark-restore", "arg": made["id"]},
+        )["spark"]
+        assert back["paused"] and back["lessons"] == ["Be brief."]
+        web.command(session, {"name": "spark-remove", "arg": made["id"]})
+        web.command(
+            session, {"name": "spark-delete-forever", "arg": made["id"]},
+        )
+        listed = web.command(session, {"name": "sparks"})
+        assert listed["sparks"] == [] and listed["trash"] == []
+
+    def test_a_restore_refuses_a_name_taken_since(self):
+        first = sparks.create("Scout", "Look around.")
+        sparks.remove(first.id)
+        sparks.create("Scout", "Look again.")
+
+        with pytest.raises(sparks.SparkError, match="already has that name"):
+            sparks.restore(first.id)
+        assert [s["id"] for s in sparks.trash()] == [first.id]
+
+    def test_a_restored_spark_drops_a_lead_that_is_gone(self):
+        lead = sparks.create("Lead", "Lead.")
+        worker = sparks.create("Worker", "Work.")
+        sparks._edit(worker.id, lambda s: setattr(s, "reports_to", lead.id))
+        sparks.remove(worker.id)
+        sparks.remove(lead.id)
+        sparks.delete_forever(lead.id)
+
+        back = sparks.restore(worker.id)
+        assert back.reports_to == "" and back.paused
+        assert sparks.find("worker").id == worker.id
+        with pytest.raises(sparks.SparkError, match="trash"):
+            sparks.delete_forever(lead.id)
 
     def test_a_bad_spark_is_a_plain_error(self):
         session = web.Session()
