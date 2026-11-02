@@ -2791,7 +2791,10 @@ WAIT_TOOL = {
                     "A local date and time, ISO 8601: 2026-10-23T09:00."
                 )},
                 "in_minutes": {"type": "number", "description": (
-                    "Or minutes from now."
+                    "Or minutes from now. With events or a condition, "
+                    "this is when looking starts, not how long: to watch "
+                    "for the next 5 minutes, leave it out and give "
+                    "give_up_after_hours."
                 )},
                 "command": {"type": "string", "description": (
                     "A shell command that succeeds (exit 0) once it is "
@@ -2808,7 +2811,8 @@ WAIT_TOOL = {
                     "Mac), call (a call ringing, from anyone, on a Mac), "
                     "call:<name> (a call from that person), mcp:<server> "
                     "(a change in a connected MCP "
-                    "server). You are told what came in."
+                    "server). You are told what came in. Watching starts "
+                    "now unless at or in_minutes is given."
                 )},
                 "keep": {"type": "boolean", "description": (
                     "With events: wake for each one and go on waiting, "
