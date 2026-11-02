@@ -659,3 +659,39 @@ def test_each_turn_goes_to_the_page_when_one_is_drawing(monkeypatch,
     assert [(e["who"], e["said"], e["flash"]) for e in drawn] == [
         ("Alex", "Hello?", False), ("Flash", "Hi Alex.", True)]
     assert all(e["at"] and e["with"] == "Alex" for e in drawn)
+
+
+def test_flash_sees_the_call_you_confirmed_yourself(monkeypatch):
+    # Flash can't press Call, but you did: the call goes live.
+    states = iter([{"live": False, "connected": False}] * 2
+                  + [{"live": True, "connected": False}])
+    monkeypatch.setattr(calls, "_press", lambda names, want="": "")
+    monkeypatch.setattr(calls, "_state", lambda: next(states))
+    monkeypatch.setattr(calls.time, "sleep", lambda s: None)
+    assert calls._confirmed(lambda: False)
+
+
+def test_confirming_gives_up_in_time(monkeypatch):
+    clock = iter(range(0, 1000, 5))
+    monkeypatch.setattr(calls.time, "monotonic", lambda: next(clock))
+    monkeypatch.setattr(calls.time, "sleep", lambda s: None)
+    monkeypatch.setattr(calls, "_press", lambda names, want="": "")
+    monkeypatch.setattr(calls, "_state",
+                        lambda: {"live": False, "connected": False})
+    assert not calls._confirmed(lambda: False)
+
+
+def test_a_call_never_seen_starting_stops_and_says_why(monkeypatch):
+    clock = iter(range(0, 1000, 5))
+    monkeypatch.setattr(calls.time, "monotonic", lambda: next(clock))
+    monkeypatch.setattr(calls.time, "sleep", lambda s: None)
+    monkeypatch.setattr(calls, "_state",
+                        lambda: {"live": False, "connected": False})
+    call = calls.Call(who="John", number="1", goal="say hi", incoming=False)
+    assert not calls._picked_up(call, lambda: False)
+    assert "couldn't see the call start" in call.ended
+
+
+def test_call_scans_look_in_the_phone_app_too():
+    assert '"Phone"' in calls._STATE
+    assert '"Phone"' in calls._PRESS
