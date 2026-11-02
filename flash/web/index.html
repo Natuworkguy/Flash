@@ -8237,6 +8237,8 @@ const WAIT_HEADS = { waiting: "Waiting", done: "Done waiting", gave_up: "Stopped
 
 // An event a wait or a frozen spark is waiting for, as said.
 function eventWords(e) {
+  if (e === "call") return "a call from anyone";
+  if (e.startsWith("call:")) return `a call from ${e.slice(5)}`;
   return e === "email" ? "a new email" : e === "imessage" ? "a new iMessage" : `a change in ${e.slice(4).split("/")[0]}`;
 }
 
