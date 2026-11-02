@@ -467,23 +467,84 @@ def set_mic(on: bool, owner: str = "") -> dict:
     return live()
 
 
+def _is_call_device(name: str) -> bool:
+    """Whether NAME carries the call's own sound: never the user's mic."""
+
+    return (not name or "blackhole" in name.lower()
+            or name in (TO_CALL, FROM_CALL, to_call(), from_call()))
+
+
+def _system_mic() -> str:
+    """The computer's default input as it is now. PortAudio keeps the one
+    it saw when Flash started, so ask the system first when it can."""
+
+    if shutil.which(SWITCH):
+        with contextlib.suppress(OSError, subprocess.SubprocessError):
+            name = subprocess.run(  # nosec B603 B607 -- a fixed program
+                [SWITCH, "-c", "-t", "input"], capture_output=True,
+                text=True, timeout=10, check=False).stdout.strip()
+            if name:
+                return name
+    with contextlib.suppress(Exception):
+        import sounddevice
+
+        return str(sounddevice.query_devices(kind="input")["name"])
+    return ""
+
+
 def _user_mic() -> str:
-    """The user's own microphone: CALL_USER_MIC, else the Mac's input from
-    before the call, else its input now. Never a device the call's sound
-    goes through, which would feed the call back into itself."""
+    """The user's own microphone: CALL_USER_MIC, else the computer's
+    input from before the call, else its input now. Never a device the
+    call's sound goes through, which would feed the call back into
+    itself."""
 
-    name = voice._setting("CALL_USER_MIC", "") or _was.get("input", "")
-    if not name:
-        with contextlib.suppress(Exception):
-            import sounddevice
-
-            name = str(sounddevice.query_devices(kind="input")["name"])
-    if not name or name in (TO_CALL, FROM_CALL, to_call(), from_call()):
+    chosen = voice._setting("CALL_USER_MIC", "")
+    if chosen and _is_call_device(chosen):
         raise CallError(
-            "Flash can't find your own microphone: the Mac's input is a "
-            "device the call goes through. Set CALL_USER_MIC to your "
-            "microphone's name.")
-    return name
+            f"My mic is set to {chosen}, which carries the call itself. "
+            "Pick your own mic under Settings, Voice, Calls, My mic.")
+    for name in (chosen, _was.get("input", ""), _system_mic()):
+        if not _is_call_device(name):
+            return name
+    raise CallError(
+        "Flash can't find your own microphone: the computer's input is a "
+        "device the call goes through. Pick yours under Settings, Voice, "
+        "Calls, My mic.")
+
+
+def mic_settings() -> dict:
+    """"My mic" as Settings shows it: the mic chosen ("" for the system
+    default) and the inputs it may be, never the call's own."""
+
+    devices: list[str] = []
+    with contextlib.suppress(Exception):  # no audio system at all
+        import sounddevice
+
+        for d in sounddevice.query_devices():
+            name = str(d["name"])
+            if (d["max_input_channels"] > 0 and name not in devices
+                    and not _is_call_device(name)):
+                devices.append(name)
+    return {"mic": voice._setting("CALL_USER_MIC", ""), "mics": devices}
+
+
+def set_user_mic(device: str) -> dict:
+    """Choose the user's mic for calls ("" for the system default), here
+    and in ~/.flash.env."""
+
+    from .envfile import set_env_var, unset_env_var
+
+    device = device.strip()
+    if device and _is_call_device(device):
+        raise ValueError(f"{device} carries the call itself, so it can't "
+                         "be your mic: the call would hear itself.")
+    if device:
+        os.environ["CALL_USER_MIC"] = device
+        set_env_var(ENV_PATH, "CALL_USER_MIC", device)
+    else:
+        os.environ.pop("CALL_USER_MIC", None)
+        unset_env_var(ENV_PATH, "CALL_USER_MIC")
+    return mic_settings()
 
 
 class _MicPass:
@@ -502,9 +563,27 @@ class _MicPass:
         self.done = threading.Event()
         self.inp.start()
         self.out.start()
+        self._heard(mic)
         self.thread = threading.Thread(target=self._pass, daemon=True,
                                        name="call mic")
         self.thread.start()
+
+    def _heard(self, mic: str) -> None:
+        """Pass the first second on, and stop with a reason when it is
+        all silence: the system gives an app without microphone access
+        zeros, not an error, so the call would hear nothing."""
+
+        for _ in range(int(1 / BLOCK)):
+            block, _ = self.inp.read(self.frames)
+            self.out.write(bytes(block))
+            if any(bytes(block)):
+                return
+        self.close()
+        raise CallError(
+            f"{mic} gave Flash only silence, so the call couldn't hear "
+            "you. Let the app Flash runs in use the microphone (on a Mac: "
+            "System Settings, Privacy & Security, Microphone), or pick "
+            "another under Settings, Voice, Calls, My mic.")
 
     def _pass(self) -> None:
         while not self.done.is_set():
@@ -518,7 +597,8 @@ class _MicPass:
 
     def close(self) -> None:
         self.done.set()
-        self.thread.join(timeout=1.0)
+        if getattr(self, "thread", None) is not None:
+            self.thread.join(timeout=1.0)
         for stream in (self.inp, self.out):
             with contextlib.suppress(Exception):
                 stream.stop()
@@ -689,7 +769,14 @@ class Line:
                 mic.close()
             return
         if mic is None and not self._halted():
-            self.mic = _MicPass(self.sd, _user_mic(), to_call())
+            mine = _user_mic()
+            try:
+                self.mic = _MicPass(self.sd, mine, to_call())
+            except CallError:
+                raise
+            except Exception as exc:  # PortAudio's own errors
+                raise CallError(
+                    f"Flash couldn't open your mic, {mine}: {exc}") from exc
 
     def close(self) -> None:
         self.set_mic(False)
@@ -936,9 +1023,10 @@ def place(who: str, goal: str, user: str,
                 time.sleep(0.5)
             if not pressed and not _state()["live"]:
                 raise CallError(
-                    "The Mac asked to confirm the call and Flash couldn't "
-                    "press Call. Give Flash Accessibility access (System "
-                    "Settings, Privacy & Security, Accessibility) and try "
+                    "The computer asked to confirm the call and Flash "
+                    "couldn't press Call. Give Flash Accessibility access "
+                    "(System Settings, Privacy & Security, Accessibility) "
+                    "and try "
                     "again.")
             _facetime_devices()
             if not _picked_up(call, stopping):
