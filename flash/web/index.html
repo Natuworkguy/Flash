@@ -3648,11 +3648,11 @@ body.resizing-viewer iframe { pointer-events: none; }
 #tunnel-pill.settled:not([hidden]):has(+ #wake-pill.settled:not([hidden])) { padding-right: 0; margin-right: -3px; }
 #tunnel-pill.settled:not([hidden]) + #wake-pill.settled { padding-left: 0; }
 @keyframes tunnel-drop { from { opacity: 0; transform: translateY(-160%); } 60% { opacity: 1; } }
-.wake-sense-row .side { gap: 10px; }
+.wake-sense-row .side, .call-silence-row .side { gap: 10px; }
 .voice-look-row select, .call-monitor-device-row select, .call-user-mic-row select { font: 13.5px var(--sans); color: var(--text); background: var(--bg); border: 1px solid var(--border-strong); border-radius: 9px; padding: 7px 10px; outline: 0; }
 .call-monitor-device-row select:disabled { opacity: .5; cursor: default; }
-.wake-sense-row input[type=range] { width: 160px; accent-color: var(--accent); }
-.wake-sense-row output { width: 26px; text-align: right; font-size: 13px; color: var(--text-3); font-variant-numeric: tabular-nums; }
+.wake-sense-row input[type=range], .call-silence-row input[type=range] { width: 160px; accent-color: var(--accent); }
+.wake-sense-row output, .call-silence-row output { width: 26px; text-align: right; font-size: 13px; color: var(--text-3); font-variant-numeric: tabular-nums; }
 /* "• Voice" when it first shows; a few seconds on, the word slides off to
    the right, a letter at a time, into the side, fading out short of the
    window's edge, and the dot slides after it, into the room it left, and
@@ -3891,6 +3891,7 @@ body.empty #ext-head, body.on-page #ext-head { display: none; }
         <div id="call-bar" hidden role="group" aria-label="Phone call">
           <span class="rec-dot" aria-hidden="true"></span>
           <span class="rec-words"><b>On a call</b><span class="rec-meta">Flash is talking. Add your own mic to speak too.</span></span>
+          <button type="button" class="btn small" aria-pressed="false" data-call-pause>Pause Flash</button>
           <button type="button" class="btn small" aria-pressed="false" data-call-mic>Add my mic</button>
         </div>
         <div id="recording" hidden role="group" aria-label="Screen recording">
@@ -8085,6 +8086,7 @@ function assistantBlock(entry) {
 function drawCallEntry(entry) {
   const callBar = document.getElementById("call-bar");
   const mic = callBar.querySelector("[data-call-mic]");
+  const pause = callBar.querySelector("[data-call-pause]");
   if (entry.state === "start") {
     const bar = el("div", "speaker", `<span class="name"></span><span class="from">live</span>`);
     bar.style.setProperty("--c", "var(--accent)");
@@ -8105,6 +8107,19 @@ function drawCallEntry(entry) {
       } catch (e) { toast(e.message); }
       mic.disabled = callBar.hidden;
     };
+    pause.setAttribute("aria-pressed", "false");
+    pause.textContent = "Pause Flash";
+    pause.disabled = false;
+    pause.onclick = async () => {
+      const on = pause.getAttribute("aria-pressed") !== "true";
+      pause.disabled = true;
+      try {
+        const now = await command("call-pause", on ? "on" : "off");
+        pause.setAttribute("aria-pressed", now.paused ? "true" : "false");
+        pause.textContent = now.paused ? "Resume Flash" : "Pause Flash";
+      } catch (e) { toast(e.message); }
+      pause.disabled = callBar.hidden;
+    };
     callBar.hidden = false;
     return;
   }
@@ -8115,6 +8130,7 @@ function drawCallEntry(entry) {
     }
     callBar.hidden = true;
     mic.onclick = null;
+    pause.onclick = null;
     return;
   }
   const when = `${entry.who} · ${entry.at || ""}`;
@@ -9222,7 +9238,7 @@ function drawGeneral(body) {
   };
   let monitor = { on: true, device: "", devices: [] };
   showMonitor(monitor);
-  command("call-monitor", "", null).then((m) => { showMonitor(monitor = m); showUserMic(m); }).catch(() => {});
+  command("call-monitor", "", null).then((m) => { showMonitor(monitor = m); showUserMic(m); showSilence(m.silence); }).catch(() => {});
   monitorRow.onclick = async () => {
     const on = monitorRow.getAttribute("aria-checked") !== "true";
     showMonitor({ ...monitor, on });
@@ -9255,6 +9271,27 @@ function drawGeneral(body) {
     } catch (error) { showUserMic(monitor); showFailure(error); }
   };
   body.appendChild(userMicRow);
+  // How long the other side is quiet before Flash answers.
+  const silenceRow = el("div", "setting-row static call-silence-row", `<span class="what"><b>Wait for silence</b><span></span></span><span class="side"><input type="range" min="0.3" max="3" step="0.1" aria-label="Wait for silence"><output></output></span>`);
+  const silenceSlider = silenceRow.querySelector("input");
+  let silence = 0.9;
+  const showSilence = (n) => {
+    if (n == null) return;
+    silenceSlider.value = n;
+    silenceRow.querySelector("output").textContent = `${Number(n).toFixed(1)}s`;
+    silenceRow.querySelector(".what span").textContent = Number(n) < 0.7
+      ? "How long the other side is quiet before Flash answers. Quick, but Flash may cut in when they only pause for breath."
+      : Number(n) > 1.5
+        ? "How long the other side is quiet before Flash answers. Patient, so they can pause mid thought, but replies come slower."
+        : "How long the other side is quiet before Flash answers. A short pause, like most people leave between turns.";
+  };
+  showSilence(silence);
+  silenceSlider.oninput = () => showSilence(silenceSlider.value);
+  silenceSlider.onchange = async () => {
+    try { showSilence(silence = (await command("call-silence", silenceSlider.value, null)).silence); }
+    catch (error) { showSilence(silence); showFailure(error); }
+  };
+  body.appendChild(silenceRow);
 
   body.insertAdjacentHTML("beforeend", `<h2 class="settings-section settings-gap">Voice models</h2><p class="settings-sub">What voice mode listens and speaks with. Both run on this computer, so pick lighter ones for a weaker machine.</p><div class="voice-models"></div>`);
   drawVoiceModels(body.querySelector(".voice-models"));

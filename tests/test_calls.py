@@ -193,6 +193,41 @@ def test_a_noisy_line_is_not_heard_as_endless_talk(monkeypatch):
     assert int(line.hear(longest=60)) < calls.RATE * 2 * 4
 
 
+def test_the_wait_for_silence_sets_where_a_turn_ends(monkeypatch):
+    # A voice, a one-second pause, the voice again, then quiet.
+    monkeypatch.setattr(calls.voice, "silence_threshold", lambda: 500.0)
+    monkeypatch.setattr(calls.voice, "transcribe", lambda pcm: (
+        f"{len(pcm)}", ""))
+    blocks = int(1.0 / calls.BLOCK)
+    levels = ([0] * 30 + [6000] * 10 + [0] * blocks + [6000] * 10
+              + [0] * 2000)
+
+    def heard(seconds):
+        monkeypatch.setenv("CALL_SILENCE_SECONDS", seconds)
+        line = calls.Line.__new__(calls.Line)
+        line.device_rate = 1000
+        line.stream = FakeStream(levels)
+        return int(line.hear(longest=60))
+
+    # Quick: the pause ends the turn. Patient: both halves are one turn.
+    assert heard("0.5") < heard("2")
+
+
+def test_the_wait_for_silence_is_kept_and_bounded(monkeypatch, tmp_path):
+    monkeypatch.setattr(calls, "ENV_PATH", tmp_path / ".flash.env")
+    monkeypatch.delenv("CALL_SILENCE_SECONDS", raising=False)
+    assert calls.pause_seconds() == calls.PAUSE_SECONDS
+    assert calls.set_pause_seconds("1.5")["silence"] == 1.5
+    assert "CALL_SILENCE_SECONDS=1.5" in (tmp_path / ".flash.env").read_text()
+    for wrong in ("loud", "0", "10"):
+        with pytest.raises(ValueError):
+            calls.set_pause_seconds(wrong)
+    monkeypatch.setenv("CALL_SILENCE_SECONDS", "99")
+    assert calls.pause_seconds() == calls.PAUSE_MOST
+    monkeypatch.setenv("CALL_SILENCE_SECONDS", "nonsense")
+    assert calls.pause_seconds() == calls.PAUSE_SECONDS
+
+
 def test_one_turn_is_never_listened_to_forever(monkeypatch):
     line = calls.Line.__new__(calls.Line)
     line.device_rate = 1000
@@ -451,6 +486,54 @@ def test_halting_stops_flash_mid_word(monkeypatch):
     assert line.hear(longest=5) == ""  # nor listening after
     line.say("More")  # nor speaking again
     assert len(out.wrote) == 1
+
+
+def test_pausing_cuts_flash_off_mid_word_without_ending_the_call(
+        monkeypatch):
+    line = _bare_line()
+    out = Out(on_write=lambda: line.pause(True))  # Pause after one block
+    line.sd = type("SD", (), {"RawOutputStream": lambda self, **k: out})()
+    line.stream = FakeStream([6000] * 100)
+    monkeypatch.setattr(calls.voice, "synthesize", lambda t: (
+        _wav(5000), ""))
+    monkeypatch.setattr(calls.time, "sleep", lambda s: None)
+    line.say("A long sentence")
+    assert len(out.wrote) == 1  # cut within a block, about 0.1s
+    assert not line._halted()  # the call goes on
+    line.say("Anything else")
+    assert len(out.wrote) == 1  # nothing said while paused
+    line.pause(False)
+    line.say("Back again")
+    assert len(out.wrote) > 1
+
+
+def test_a_paused_flash_listens_but_answers_only_once_resumed():
+    line = FakeLine(["Hello?", "Are you there?", "Okay, bye."])
+    line.paused = calls.threading.Event()
+    line._paused = line.paused.is_set
+    line.paused.set()
+    heard = line.hear
+
+    def hear(longest=calls.QUIET_SECONDS, stopping=lambda: False):
+        said = heard()
+        if said == "Are you there?":
+            line.paused.clear()  # Resume pressed while they talk
+        return said
+
+    line.hear = hear
+    call = calls.Call(who="Alex", number="", goal="hi", incoming=True)
+    answers = []
+
+    def model(messages):
+        answers.append(messages[-1]["content"])
+        return "Sorry, I'm here. [hang up]"
+
+    calls.talk(call, line, "Sam", model)
+    # Both things they said while Flash was paused were kept, and
+    # Flash answered once, after the resume.
+    assert [w for w, _ in call.lines] == ["Alex", "Alex", "Flash"]
+    assert answers == ["Are you there?"]
+    assert line.said == ["Sorry, I'm here."]
 
 
 def test_a_halted_line_ends_the_talk():

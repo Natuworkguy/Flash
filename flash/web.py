@@ -5221,8 +5221,9 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
             raise ValueError("call-monitor takes on or off")
         if arg:
             return {**calls.set_monitor(on=arg == "on"),
-                    **calls.mic_settings()}
-        return {**calls.monitor_settings(), **calls.mic_settings()}
+                    **calls.mic_settings(), **calls.silence_settings()}
+        return {**calls.monitor_settings(), **calls.mic_settings(),
+                **calls.silence_settings()}
 
     if name == "call-monitor-device":
         # The device the call is heard on; empty: the computer's speakers.
@@ -5232,6 +5233,20 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
         # The user's own mic for calls; empty: the system default.
         # Settings reads it with call-monitor.
         return {**calls.monitor_settings(), **calls.set_user_mic(arg)}
+
+    if name == "call-silence":
+        # Seconds of quiet on the line before Flash answers.
+        # Settings reads it with call-monitor.
+        return calls.set_pause_seconds(arg)
+
+    if name == "call-pause":
+        # Hold Flash's voice on the call (on), or let it speak (off).
+        if arg not in ("on", "off"):
+            raise ValueError("call-pause takes on or off")
+        try:
+            return calls.set_paused(arg == "on", owner=chat_id)
+        except calls.CallError as exc:
+            raise ValueError(str(exc)) from None
 
     if name == "call-mic":
         # The user's own mic into the call Flash is on, or out of it;
