@@ -41,14 +41,15 @@ def enabled() -> bool:
 
 
 def kinds() -> list[dict]:
-    """What a spark can start on here, for the form: email, iMessages on
-    a Mac, and each MCP server set up."""
+    """What a spark can start on here, for the form: email, iMessages and
+    incoming calls on a Mac, and each MCP server set up."""
 
     from . import computer, connectors
 
     found = [{"event": EMAIL, "title": "A new email"}]
     if computer.system() == "mac":
         found.append({"event": IMESSAGE, "title": "A new iMessage"})
+        found.append({"event": CALL, "title": "An incoming call"})
     for name in connectors.read_config():
         found.append({"event": MCP + name, "title": f"A change in {name}"})
     return found
