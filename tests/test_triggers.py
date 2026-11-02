@@ -19,6 +19,8 @@ def test_events_read_as_a_spark_keeps_them():
     with pytest.raises(ValueError, match="mcp:<server>"):
         triggers.parse("printer")
     assert triggers.words("mcp:notes/search") == "a change in notes"  # nosec
+    assert triggers.words("call") == "a call from anyone"  # nosec
+    assert triggers.words("call:Mom") == "a call from Mom"  # nosec
 
 
 def test_new_email_is_seen_after_the_first_look(monkeypatch):
