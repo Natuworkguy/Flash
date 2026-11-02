@@ -1,7 +1,8 @@
 // The reflex a model writes for a real-time game, run in the page every
 // frame (browser.play). Called with [policy, seconds, until, canvas,
-// start keys]; says how the run went.
-(async ([policySrc, seconds, untilSrc, canvasSel, startKeys]) => {
+// start keys, record]; says how the run went, and with record, hands
+// back a WebM of the canvas as a data URL so the user can watch the run.
+(async ([policySrc, seconds, untilSrc, canvasSel, startKeys, record]) => {
   const canvas = canvasSel ? document.querySelector(canvasSel) : document.querySelector("canvas");
   const c2d = canvas ? canvas.getContext("2d", { willReadFrequently: true }) : null;
   const logged = [];
@@ -71,6 +72,16 @@
     policy = new Function("api", policySrc);
     until = untilSrc ? new Function("api", "return (" + untilSrc + ");") : null;
   } catch (error) { return { error: "The policy does not parse: " + error.message }; }
+  let recorder = null;
+  const chunks = [];
+  if (record && canvas && canvas.captureStream && window.MediaRecorder) {
+    try {
+      const type = ["video/webm;codecs=vp9", "video/webm;codecs=vp8", "video/webm"].find((t) => MediaRecorder.isTypeSupported(t)) || "";
+      recorder = new MediaRecorder(canvas.captureStream(30), type ? { mimeType: type } : {});
+      recorder.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
+      recorder.start(1000);
+    } catch (e) { recorder = null; }
+  }
   const start = performance.now();
   let stopped = "", error = "";
   await new Promise((done) => {
@@ -84,5 +95,13 @@
     };
     requestAnimationFrame(tick);
   });
-  return { frames: api.frame, seconds: +api.t.toFixed(2), actions, stopped, error, title: document.title, log: logged, canvas: !!canvas };
+  let video = "";
+  if (recorder) {
+    try {
+      await new Promise((done) => { recorder.onstop = done; recorder.stop(); });
+      const blob = new Blob(chunks, { type: "video/webm" });
+      video = await new Promise((done) => { const r = new FileReader(); r.onload = () => done(String(r.result)); r.onerror = () => done(""); r.readAsDataURL(blob); });
+    } catch (e) { video = ""; }
+  }
+  return { video, frames: api.frame, seconds: +api.t.toFixed(2), actions, stopped, error, title: document.title, log: logged, canvas: !!canvas };
 })

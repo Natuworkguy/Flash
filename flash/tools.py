@@ -5446,12 +5446,21 @@ def play_realtime(policy: str, seconds: Any = 20, until: str = "",
         k for k in str(start_keys or "").split(",") if k]
     said, why = page_devtools.play(
         policy, seconds=_clamp(seconds, 1, 120, 20), until=str(until or ""),
-        canvas=str(canvas or ""), start_keys=keys)
+        canvas=str(canvas or ""), start_keys=keys,
+        record=str(Path(SCRATCH_DIR) / f"playthrough-{int(time.time())}.webm"))
     if why:
         result = _page_report(f"That did not run: {why}")
         tool_result(why, style=ERROR)
         return result
     tool_result(said.splitlines()[0])
+    # The user gets the playthrough to watch, beside the chat.
+    for line in said.splitlines():
+        if line.startswith("Recording: "):
+            film = line[len("Recording: "):]
+            if tool_file(film):
+                said += "\nThe recording was sent to the user's screen."
+            else:
+                tool_result(f"Playthrough saved to {film}")
     return _page_report(said)
 
 

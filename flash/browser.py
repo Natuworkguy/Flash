@@ -1334,9 +1334,10 @@ def _play_js() -> str:
 
 
 def _play(policy: str, seconds: float = 20, until: str = "",
-          canvas: str = "", start_keys: Optional[list] = None
-          ) -> tuple[str, str]:
+          canvas: str = "", start_keys: Optional[list] = None,
+          record: str = "") -> tuple[str, str]:
     """Run POLICY every frame for SECONDS, or until UNTIL is true.
+    With RECORD, a path, the canvas is filmed and saved there as WebM.
     Returns (what happened, "") or ("", why not)."""
 
     if not is_open():
@@ -1349,7 +1350,7 @@ def _play(policy: str, seconds: float = 20, until: str = "",
         found = page.evaluate(
             _play_js(),
             [policy, seconds, until or "", canvas or "",
-             [str(k) for k in start_keys or []]])
+             [str(k) for k in start_keys or []], bool(record)])
     except Exception as exc:  # noqa: BLE001
         return "", _first_line(exc)
     if found.get("error") and not found.get("frames"):
@@ -1368,6 +1369,16 @@ def _play(policy: str, seconds: float = 20, until: str = "",
         lines.append(f"The policy threw: {found['error']}")
     if found.get("log"):
         lines.append("What it logged:\n" + "\n".join(found["log"]))
+    video = str(found.get("video") or "")
+    if record and "," in video:
+        import base64
+
+        try:
+            Path(record).write_bytes(
+                base64.b64decode(video.split(",", 1)[1]))
+            lines.append(f"Recording: {record}")
+        except (OSError, ValueError):
+            pass
     return "\n".join(lines), ""
 
 
