@@ -10250,6 +10250,12 @@ async function tcFetch(first = false) {
     log.addEventListener("scroll", () => {
       teamChat.atEnd = log.scrollHeight - log.scrollTop - log.clientHeight < 32;
     }, { passive: true });
+    // The log shrinks when "is typing" shows below it (or the composer
+    // grows), with no scroll: a reader at the bottom is kept there, so
+    // the last message is never left cut off.
+    if (window.ResizeObserver) new ResizeObserver(() => {
+      if (teamChat.atEnd !== false) log.scrollTop = log.scrollHeight;
+    }).observe(log);
   }
   if (first) teamChat.atEnd = true;
   const near = teamChat.atEnd !== false;
