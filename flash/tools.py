@@ -2741,9 +2741,11 @@ PHONE_TOOL = {
             "Hold a phone call for the user, in your own voice, through "
             "their iPhone's calling on this computer, or FaceTime Audio: call "
             "someone (\"call "
-            "John and tell him I'm running late\"), or answer their next "
-            "call (\"take the next call from John and find out what he "
-            "wants\"), or join a call the user is already on, such as "
+            "John and tell him I'm running late\"), or answer a call "
+            "that is ringing now (answer does not wait: to wait for a "
+            "call, use wait_for with events \"call:<name>\" or \"call\", "
+            "then answer when it wakes you), or join a call the user is "
+            "already on, such as "
             "Google Meet (\"talk to my friend\"). You say first that you "
             "are an automated assistant "
             "calling for the user, talk towards the goal, hang up, and "
@@ -2763,9 +2765,6 @@ PHONE_TOOL = {
                 "goal": {"type": "string",
                          "description": "What the call is for, in the "
                          "user's words: what to say, or find out."},
-                "minutes": {"type": "number",
-                            "description": "answer: how long to wait for "
-                            "their call. 30 by default."},
                 "via": {"type": "string",
                         "enum": ["phone", "facetime_audio"],
                         "description": "call: through the iPhone (the "
@@ -4451,10 +4450,24 @@ def phone_call(action: str = "call", who: str = "", goal: str = "",
 
     user = _call_user()
     if action == "answer":
+        # answer only picks up a call already ringing: waiting for one is
+        # wait_for's job, so it can wake Flash when the call comes.
+        if not calls.ringing():
+            event = ("call" if who.lower() in calls.ANYONE
+                     else f"call:{who}")
+            result = (f"Error: no call is ringing now, so nothing was "
+                      f"answered. answer does not wait for a call. To wait "
+                      f"for it, use wait_for with events \"{event}\" (or "
+                      "\"call\" for any caller), then use phone_call "
+                      "action answer once it wakes you.")
+            tool_result(result, style=ERROR)
+            return result
+        minutes = 1
+
         def wait() -> None:
             try:
                 call = calls.take_next(who, goal, user, _call_model,
-                                       minutes=float(minutes or 30),
+                                       minutes=minutes,
                                        stopping=stopping, owner=owner)
             except Exception as exc:  # noqa: BLE001
                 desktop_notify("Flash's call", f"It failed: {exc}")
@@ -4470,10 +4483,9 @@ def phone_call(action: str = "call", who: str = "", goal: str = "",
 
         threading.Thread(target=wait, daemon=True,
                          name=f"call from {who}").start()
-        result = (f"Waiting for {who}'s next call, for up to {minutes:g} "
-                  "minutes. When it comes, Flash answers, says it is an "
-                  "automated assistant, and talks towards the goal; the "
-                  "user is notified with the transcript after.")
+        result = ("A call is ringing; Flash is picking it up. It says it "
+                  "is an automated assistant and talks towards the goal; "
+                  "the user is notified with the transcript after.")
         tool_result(result, style=DIM)
         return result
     try:
