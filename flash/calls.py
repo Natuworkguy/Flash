@@ -1419,6 +1419,11 @@ def place(who: str, goal: str, user: str,
     return call
 
 
+# Words for "whoever calls", which no call alert ever says.
+ANYONE = {"", "anyone", "anybody", "any", "someone", "somebody",
+          "whoever", "any caller", "everyone", "all"}
+
+
 def take_next(who: str, goal: str, user: str,
               ask: Callable[[list[dict]], str], minutes: float = 30,
               stopping: Callable[[], bool] = lambda: False,
@@ -1431,10 +1436,14 @@ def take_next(who: str, goal: str, user: str,
         raise CallError(why)
     shown = who
     number = ""
-    # A FaceTime Audio call comes in the same way, Accept and all.
-    with contextlib.suppress(computer.ComputerError, CallError):
-        shown, number = _number_of(who, facetime=True)
-    want = shown.split(" (")[0]
+    if who.strip().lower() in ANYONE:
+        # Whoever calls: no name to look for in the alert.
+        want = ""
+    else:
+        # A FaceTime Audio call comes in the same way, Accept and all.
+        with contextlib.suppress(computer.ComputerError, CallError):
+            shown, number = _number_of(who, facetime=True)
+        want = shown.split(" (")[0]
     deadline = time.monotonic() + max(1.0, minutes) * 60
     while time.monotonic() < deadline and not stopping():
         if _press(["Accept", "Answer"], want=want):

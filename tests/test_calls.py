@@ -855,3 +855,36 @@ def test_the_first_words_are_ready_before_the_call_is_live(monkeypatch):
     assert line.said == ["Thanks, goodbye!"]
     assert len(asked) == 2
     assert call.ended == "the call was done"
+
+
+def test_answer_takes_any_caller_without_reading_a_name(monkeypatch):
+    monkeypatch.setattr(calls, "missing", lambda: "")
+    pressed = []
+    looked = []
+    monkeypatch.setattr(calls, "_number_of",
+                        lambda *a, **k: looked.append(a) or ("", ""))
+
+    def press(names, want=""):
+        pressed.append(want)
+        raise StopIteration
+    monkeypatch.setattr(calls, "_press", press)
+    try:
+        calls.take_next("anyone", "say hi", "Sam", lambda m: "", minutes=1)
+    except StopIteration:
+        pass
+    assert pressed == [""] and not looked
+
+
+def test_answer_with_nothing_ringing_fails_at_once(monkeypatch):
+    from flash import tools
+    monkeypatch.setattr(tools, "ultra_auto", lambda: True)
+    monkeypatch.setattr(calls, "missing", lambda: "")
+    monkeypatch.setattr(calls, "ringing", lambda: "")
+    started = []
+    monkeypatch.setattr(tools.threading, "Thread",
+                        lambda *a, **k: started.append(1))
+    out = tools.phone_call("answer", "anyone", "say hi")
+    assert out.startswith("Error: no call is ringing")
+    assert '"call"' in out and not started
+    out = tools.phone_call("answer", "John", "say hi")
+    assert '"call:John"' in out
