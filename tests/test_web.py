@@ -401,6 +401,22 @@ class TestCommands:
         with pytest.raises(ValueError):
             web.command(web.Session(), {"name": "call-silence", "arg": "9"})
 
+    def test_call_greeting(self, monkeypatch, tmp_path):
+        from flash import calls
+
+        monkeypatch.setattr(calls, "ENV_PATH", tmp_path / ".flash.env")
+        monkeypatch.delenv("CALL_GREETING_MODE", raising=False)
+        monkeypatch.delenv("CALL_GREETING", raising=False)
+        assert web.command(web.Session(), {
+            "name": "call-greeting", "arg": ""})["greeting_mode"] == "default"
+        assert web.command(web.Session(), {
+            "name": "call-greeting", "arg": "custom:Hi: it's {name}'s bot."}
+        ) == {"greeting_mode": "custom", "greeting": "Hi: it's {name}'s bot."}
+        assert web.command(web.Session(), {
+            "name": "call-greeting", "arg": "own"})["greeting_mode"] == "own"
+        with pytest.raises(ValueError):
+            web.command(web.Session(), {"name": "call-greeting", "arg": "x"})
+
     def test_call_mic(self, monkeypatch):
         from flash import calls
 

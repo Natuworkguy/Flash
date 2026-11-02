@@ -15,6 +15,14 @@ def _no_timing_log(monkeypatch):
     monkeypatch.setattr(calls, "_mark", lambda step, since: None)
 
 
+@pytest.fixture(autouse=True)
+def _own_greeting(monkeypatch):
+    # Most tests here are about the talk itself, with the model's own first
+    # words; the greeting tests below set the mode they need.
+    monkeypatch.setenv("CALL_GREETING_MODE", "own")
+    monkeypatch.delenv("CALL_GREETING", raising=False)
+
+
 class FakeLine:
     def __init__(self, heard):
         self.heard = list(heard)
@@ -888,3 +896,53 @@ def test_answer_with_nothing_ringing_fails_at_once(monkeypatch):
     assert '"call"' in out and not started
     out = tools.phone_call("answer", "John", "say hi")
     assert '"call:John"' in out
+
+
+def test_the_standard_greeting_is_said_first_with_the_first_name_only(
+        monkeypatch):
+    monkeypatch.setenv("CALL_GREETING_MODE", "default")
+    call = calls.Call(who="John", number="1", goal="say I'm late",
+                      incoming=False)
+    line = FakeLine([])
+    asked = []
+
+    def model(messages):
+        asked.append(messages)
+        return "Sam is running late."
+
+    calls.talk(call, line, "Sam Smith", model)
+    assert line.said == ["Hi, this is an automated assistant calling on "
+                         "behalf of Sam. Sam is running late."]
+    system = asked[0][0]["content"]
+    assert "Do not greet" in system and "Smith" not in system
+    assert "Flash" not in system
+
+
+def test_answering_and_no_name_greetings(monkeypatch):
+    monkeypatch.setenv("CALL_GREETING_MODE", "default")
+    taken = calls.Call(who="Ann", number="1", goal="", incoming=True)
+    assert calls._greeting(taken, "Sam Smith") == (
+        "Hi, this is an automated assistant answering for Sam.")
+    placed = calls.Call(who="Ann", number="1", goal="", incoming=False)
+    assert calls._greeting(placed, "the user") == (
+        "Hi, this is an automated assistant calling.")
+
+
+def test_a_custom_greeting_is_saved_and_said(monkeypatch, tmp_path):
+    monkeypatch.setattr(calls, "ENV_PATH", tmp_path / ".flash.env")
+    assert calls.set_greeting("custom", "Hey, {name}'s assistant here.") \
+        == {"greeting_mode": "custom",
+            "greeting": "Hey, {name}'s assistant here."}
+    saved = dotenv_values(calls.ENV_PATH)
+    assert saved["CALL_GREETING_MODE"] == "custom"
+    call = calls.Call(who="Ann", number="1", goal="", incoming=False)
+    assert calls._greeting(call, "Sam Smith") == "Hey, Sam's assistant here."
+    with pytest.raises(ValueError):
+        calls.set_greeting("custom", "  ")
+    with pytest.raises(ValueError):
+        calls.set_greeting("loud")
+
+
+def test_own_mode_has_no_fixed_greeting():
+    call = calls.Call(who="Ann", number="1", goal="", incoming=False)
+    assert calls._greeting(call, "Sam") == ""

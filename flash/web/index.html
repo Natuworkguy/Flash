@@ -1951,6 +1951,7 @@ body.page-projects #dock, body.page-settings #dock, body.page-tool #dock { displ
 .word-edit .word-mic { display: flex; color: var(--text-3); }
 .word-edit .word-mic svg { width: 14px; height: 14px; }
 .word-edit input { width: 140px; min-width: 0; border: 0; outline: 0; background: none; color: var(--text); font: 500 14px var(--sans); padding: 0; }
+.call-greeting-text-row .word-edit input { width: 260px; }
 .word-edit .word-save { display: grid; place-items: center; width: 28px; height: 28px; border: 0; border-radius: 7px; background: var(--accent); color: var(--bg); cursor: pointer; animation: course-in .18s ease-out; }
 .word-edit .word-save[hidden] { display: none; }
 .word-edit .word-save svg { width: 15px; height: 15px; }
@@ -3654,7 +3655,7 @@ body.resizing-viewer iframe { pointer-events: none; }
 #tunnel-pill.settled:not([hidden]) + #wake-pill.settled { padding-left: 0; }
 @keyframes tunnel-drop { from { opacity: 0; transform: translateY(-160%); } 60% { opacity: 1; } }
 .wake-sense-row .side, .call-silence-row .side { gap: 10px; }
-.voice-look-row select, .call-monitor-device-row select, .call-user-mic-row select { font: 13.5px var(--sans); color: var(--text); background: var(--bg); border: 1px solid var(--border-strong); border-radius: 9px; padding: 7px 10px; outline: 0; }
+.voice-look-row select, .call-monitor-device-row select, .call-user-mic-row select, .call-greeting-row select { font: 13.5px var(--sans); color: var(--text); background: var(--bg); border: 1px solid var(--border-strong); border-radius: 9px; padding: 7px 10px; outline: 0; }
 .call-monitor-device-row select:disabled { opacity: .5; cursor: default; }
 .wake-sense-row input[type=range], .call-silence-row input[type=range] { width: 160px; accent-color: var(--accent); }
 .wake-sense-row output, .call-silence-row output { width: 26px; text-align: right; font-size: 13px; color: var(--text-3); font-variant-numeric: tabular-nums; }
@@ -9322,6 +9323,55 @@ function drawGeneral(body) {
     catch (error) { showSilence(silence); showFailure(error); }
   };
   body.appendChild(silenceRow);
+  // The first words of every call: a fixed greeting, the user's own, or Flash's.
+  const greetRow = el("div", "setting-row static call-greeting-row", `<span class="what"><b>Call greeting</b><span></span></span><span class="side"><select aria-label="Call greeting"><option value="default">Standard greeting</option><option value="custom">My own greeting</option><option value="own">Let Flash write its own</option></select></span>`);
+  const greetPick = greetRow.querySelector("select");
+  const greetTextRow = el("div", "setting-row static call-greeting-text-row", `<span class="what"><b>My greeting</b><span>Said first, word for word, before Flash carries on. {name} is your first name. Say it is an automated assistant: the greeting is the only place it is said.</span></span><span class="side"><span class="word-edit"><input type="text" maxlength="300" spellcheck="false" autocomplete="off" aria-label="My greeting"><button type="button" class="word-save" aria-label="Save the greeting" hidden>${icon("check")}</button></span></span>`);
+  const greetInput = greetTextRow.querySelector("input");
+  const greetSave = greetTextRow.querySelector("button");
+  let greeting = { greeting_mode: "default", greeting: "" };
+  const greetAbout = {
+    default: "Every call opens with “Hi, this is an automated assistant calling on behalf of” your first name, then Flash carries on.",
+    custom: "Every call opens with your words below, then Flash carries on without greeting again.",
+    own: "Flash writes its own greeting for each call, saying it is an automated assistant calling for you.",
+  };
+  const showGreeting = (g) => {
+    greeting = g;
+    greetPick.value = g.greeting_mode;
+    greetRow.querySelector(".what span").textContent = greetAbout[g.greeting_mode] || "";
+    greetTextRow.hidden = g.greeting_mode !== "custom";
+    greetInput.value = g.greeting || "";
+    greetSave.hidden = true;
+  };
+  showGreeting(greeting);
+  command("call-greeting", "", null).then(showGreeting).catch(() => {});
+  greetPick.onchange = async () => {
+    if (greetPick.value === "custom" && !greeting.greeting) {
+      // Nothing typed yet: show the box, and save once there are words.
+      greetTextRow.hidden = false;
+      greetInput.focus();
+      return;
+    }
+    try {
+      showGreeting(await command("call-greeting", greetPick.value === "custom" ? `custom:${greeting.greeting}` : greetPick.value, null));
+      toast({ default: "Calls open with the standard greeting now", custom: "Calls open with your greeting now", own: "Flash writes its own call greeting now" }[greetPick.value]);
+    } catch (error) { showGreeting(greeting); showFailure(error); }
+  };
+  greetInput.oninput = () => { greetSave.hidden = !greetInput.value.trim() || greetInput.value.trim() === greeting.greeting; };
+  const saveGreeting = async () => {
+    const said = greetInput.value.trim();
+    if (!said || (said === greeting.greeting && greeting.greeting_mode === "custom")) return;
+    greetSave.disabled = true;
+    try {
+      showGreeting(await command("call-greeting", `custom:${said}`, null));
+      toast("Calls open with your greeting now");
+    } catch (error) { showFailure(error); showGreeting(greeting); }
+    finally { greetSave.disabled = false; }
+  };
+  greetSave.onclick = saveGreeting;
+  greetInput.onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); saveGreeting(); } };
+  body.appendChild(greetRow);
+  body.appendChild(greetTextRow);
 
   body.insertAdjacentHTML("beforeend", `<h2 class="settings-section settings-gap">Voice models</h2><p class="settings-sub">What voice mode listens and speaks with. Both run on this computer, so pick lighter ones for a weaker machine.</p><div class="voice-models"></div>`);
   drawVoiceModels(body.querySelector(".voice-models"));

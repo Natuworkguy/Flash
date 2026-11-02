@@ -5250,6 +5250,13 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
         # Settings reads it with call-monitor.
         return {**calls.monitor_settings(), **calls.set_user_mic(arg)}
 
+    if name == "call-greeting":
+        # default, own, or custom:<words>; no arg: only what it is.
+        if not arg:
+            return calls.greeting_settings()
+        mode, _, text = arg.partition(":")
+        return calls.set_greeting(mode, text)
+
     if name == "call-silence":
         # Seconds of quiet on the line before Flash answers.
         # Settings reads it with call-monitor.
