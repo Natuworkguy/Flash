@@ -1504,5 +1504,8 @@ def summary(call: Call, path: Path) -> str:
     if call.joined:
         return (f"Flash left the call with {call.who}: {call.ended}.\n"
                 f"{said}\nTranscript kept at {path}.")
+    ask = ("\nTell the user, first and plainly, every message the caller "
+           "asked to pass along and anything they asked for, in their "
+           "words; then the transcript's path." if call.incoming else "")
     return (f"The call {'from' if call.incoming else 'to'} {call.who} "
-            f"ended: {call.ended}.\n{said}\nTranscript kept at {path}.")
+            f"ended: {call.ended}.\n{said}\nTranscript kept at {path}.{ask}")

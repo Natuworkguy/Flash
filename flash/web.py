@@ -2816,7 +2816,8 @@ WAIT_TOOL = {
                 )},
                 "keep": {"type": "boolean", "description": (
                     "With events: wake for each one and go on waiting, "
-                    "until cancel_wait or the user stops it."
+                    "until cancel_wait or the user stops it. Defaults to "
+                    "true when events has a call event; false otherwise."
                 )},
                 "every_minutes": {"type": "number", "description": (
                     f"How often to look. Default {waits.DEFAULT_EVERY}."
