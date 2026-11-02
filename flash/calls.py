@@ -143,7 +143,9 @@ INSTALL = "brew install blackhole-2ch blackhole-16ch switchaudio-osx"
 # hangs up, and how long a pause ends what someone is saying.
 MOST_SECONDS = 10 * 60
 QUIET_SECONDS = 40.0
-PAUSE_SECONDS = 0.9
+PAUSE_SECONDS = 0.9  # the default; CALL_SILENCE_SECONDS sets it
+PAUSE_LEAST = 0.3
+PAUSE_MOST = 3.0
 # How long Flash waits for the call to be picked up, or to come in.
 PICK_UP_SECONDS = 45.0
 # The longest one turn of theirs is listened to before Flash answers.
@@ -452,7 +454,20 @@ def live() -> dict:
         line = _line
         on = _owner is not None
     return {"live": on, "talking": line is not None,
-            "mic": bool(line is not None and getattr(line, "mic", None))}
+            "mic": bool(line is not None and getattr(line, "mic", None)),
+            "paused": bool(line is not None and line._paused())}
+
+
+def set_paused(on: bool, owner: str = "") -> dict:
+    """Hold Flash on the call: it stops speaking at once and answers
+    nothing until resumed, while the call and its listening go on."""
+
+    with _lock:
+        line = _line if _mine(owner) else None
+    if line is None:
+        raise CallError("Flash isn't talking on a call right now.")
+    line.pause(on)
+    return live()
 
 
 def set_mic(on: bool, owner: str = "") -> dict:
@@ -526,6 +541,47 @@ def mic_settings() -> dict:
                     and not _is_call_device(name)):
                 devices.append(name)
     return {"mic": voice._setting("CALL_USER_MIC", ""), "mics": devices}
+
+
+def pause_seconds() -> float:
+    """How long the other side must be quiet before Flash answers:
+    CALL_SILENCE_SECONDS, kept between the shortest and longest allowed."""
+
+    try:
+        seconds = float(voice._setting("CALL_SILENCE_SECONDS",
+                                       str(PAUSE_SECONDS)))
+    except ValueError:
+        return PAUSE_SECONDS
+    if seconds != seconds:  # NaN
+        return PAUSE_SECONDS
+    return min(max(seconds, PAUSE_LEAST), PAUSE_MOST)
+
+
+def silence_settings() -> dict:
+    """The wait for silence as Settings shows it."""
+
+    return {"silence": pause_seconds(), "silence_least": PAUSE_LEAST,
+            "silence_most": PAUSE_MOST}
+
+
+def set_pause_seconds(seconds: str) -> dict:
+    """Set how long the other side must be quiet before Flash answers,
+    here and in ~/.flash.env."""
+
+    from .envfile import set_env_var
+
+    try:
+        value = float(seconds)
+    except ValueError:
+        raise ValueError("The wait for silence takes a number of "
+                         "seconds.") from None
+    if not PAUSE_LEAST <= value <= PAUSE_MOST:
+        raise ValueError(f"The wait for silence goes from {PAUSE_LEAST} "
+                         f"to {PAUSE_MOST} seconds.")
+    value = round(value, 1)
+    os.environ["CALL_SILENCE_SECONDS"] = str(value)
+    set_env_var(ENV_PATH, "CALL_SILENCE_SECONDS", str(value))
+    return silence_settings()
 
 
 def set_user_mic(device: str) -> dict:
@@ -751,6 +807,21 @@ class Line:
         stopped = getattr(self, "stopped", None)
         return bool(stopped and stopped.is_set())
 
+    def _paused(self) -> bool:
+        paused = getattr(self, "paused", None)
+        return bool(paused and paused.is_set())
+
+    def pause(self, on: bool) -> None:
+        """Hold Flash's voice, cutting off what it is saying, or let it
+        speak again."""
+
+        if getattr(self, "paused", None) is None:
+            self.paused = threading.Event()
+        if on:
+            self.paused.set()
+        else:
+            self.paused.clear()
+
     def halt(self) -> None:
         """Stop now: speaking mid-word, listening, the user's mic."""
 
@@ -798,12 +869,12 @@ class Line:
 
     def _play(self, write: Callable[[bytes], None], pcm: bytes,
               rate: int) -> bool:
-        """PCM through WRITE a block at a time, so a halt cuts it short.
-        Whether it all played."""
+        """PCM through WRITE a block at a time, so a halt or a pause cuts
+        it short. Whether it all played."""
 
         step = max(1, int(rate * BLOCK)) * 2
         for at in range(0, len(pcm), step):
-            if self._halted():
+            if self._halted() or self._paused():
                 return False
             write(pcm[at:at + step])
         return True
@@ -814,6 +885,7 @@ class Line:
         say nothing for LONGEST seconds."""
 
         base = voice.silence_threshold()
+        pause = pause_seconds()
         # The line's own hiss sets the bar too, so a noisy line is not
         # taken for someone who never stops talking: it is learned from
         # the first moments of the line, and kept up after.
@@ -841,7 +913,7 @@ class Line:
             if heard:
                 heard += block
                 quiet = 0.0 if loud else quiet + BLOCK
-                if quiet >= PAUSE_SECONDS or \
+                if quiet >= pause or \
                         len(heard) >= self.device_rate * 2 * LONGEST_TURN:
                     break
             elif loud:
@@ -861,12 +933,12 @@ class Line:
     def say(self, text: str) -> None:
         """TEXT in Flash's voice, into the call."""
 
-        if self._halted():
+        if self._halted() or self._paused():
             return
         wav, why = voice.synthesize(voice.speakable(text))
         if why:
             raise CallError(why)
-        if not wav or self._halted():
+        if not wav or self._halted() or self._paused():
             return
         with wave.open(io.BytesIO(wav)) as read:
             rate = read.getframerate()
@@ -941,6 +1013,10 @@ def talk(call: Call, line: Line, user: str, ask: Callable[[list[dict]], str],
         def stopping() -> bool:
             return told() or halted()
 
+    def held() -> bool:
+        paused = getattr(line, "_paused", None)
+        return bool(paused and paused())
+
     started = time.monotonic()
     if call.incoming:
         first = ""
@@ -953,6 +1029,13 @@ def talk(call: Call, line: Line, user: str, ask: Callable[[list[dict]], str],
         if time.monotonic() - started > MOST_SECONDS:
             call.ended = "it ran past ten minutes"
             break
+        if held():
+            # Paused: still listening, so what they say is kept, but
+            # Flash answers nothing until resumed.
+            heard = line.hear(stopping=lambda: stopping() or not held())
+            if heard:
+                call.say(call.who or "Them", heard)
+            continue
         said = _reply(call, user, ask)
         done = HANG_UP in said.lower()
         said = said.replace(HANG_UP, "").replace(HANG_UP.title(), "").strip()
@@ -965,6 +1048,8 @@ def talk(call: Call, line: Line, user: str, ask: Callable[[list[dict]], str],
         heard = line.hear(stopping=stopping)
         if not heard and stopping():
             break
+        if not heard and held():
+            continue
         if not heard:
             call.ended = "the other side went quiet"
             break

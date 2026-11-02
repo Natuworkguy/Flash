@@ -379,6 +379,28 @@ class TestCommands:
         web.command(session, {"name": "stop", "chat": chat_id})
         assert halted == [chat_id]
 
+    def test_call_pause(self, monkeypatch):
+        from flash import calls
+
+        asked = []
+        monkeypatch.setattr(calls, "set_paused", lambda on, owner="": (
+            asked.append((on, owner)) or {"live": True, "paused": on}))
+        assert web.command(web.Session(), {
+            "name": "call-pause", "arg": "on", "chat": "c1"})["paused"]
+        assert asked == [(True, "c1")]
+        with pytest.raises(ValueError):
+            web.command(web.Session(), {"name": "call-pause", "arg": ""})
+
+    def test_call_silence(self, monkeypatch, tmp_path):
+        from flash import calls
+
+        monkeypatch.setattr(calls, "ENV_PATH", tmp_path / ".flash.env")
+        monkeypatch.delenv("CALL_SILENCE_SECONDS", raising=False)
+        assert web.command(web.Session(), {
+            "name": "call-silence", "arg": "1.2"})["silence"] == 1.2
+        with pytest.raises(ValueError):
+            web.command(web.Session(), {"name": "call-silence", "arg": "9"})
+
     def test_call_mic(self, monkeypatch):
         from flash import calls
 
