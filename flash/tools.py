@@ -70,7 +70,6 @@ from .browser import is_open as page_is_open
 from .browser import open_page as browser_open
 from .browser import snapshot as page_snapshot
 from .browser import where as page_where
-from .dashes import undash
 from .documents import extract_document_text, is_document_path
 from .edit import Edit, apply_edits
 from .images import resolve_image_path
@@ -110,6 +109,7 @@ from .theme import (
     tool_result,
     yes_no,
 )
+from .tidy import tidy, tidy_args
 
 SCRATCH_DIR = mkdtemp(prefix="flash-scratch-", suffix="-temp")
 
@@ -5527,8 +5527,8 @@ def notify_user(message: str, title: str = "") -> str:
     """Tap the user on the shoulder: a notification, wherever they are
     looking, a few at a time at most."""
 
-    message = " ".join(undash(str(message or "")).split())
-    title = " ".join(undash(str(title or "")).split()) or "Flash"
+    message = " ".join(tidy(str(message or "")).split())
+    title = " ".join(tidy(str(title or "")).split()) or "Flash"
     tool_line(f"Notify({title}: {message[:60]})")
 
     if not message:
@@ -8984,6 +8984,9 @@ def run_tool(call):
     """Run a tool with arguments"""
 
     name, args = call
+    # Every argument as the user's settings ask for it: no em dashes,
+    # no emojis, before anyone reviews or runs it.
+    args = tidy_args(args)
 
     # A call missing what it needs is told so first: there is nothing
     # yet for System One to review, or for the user to say yes to.

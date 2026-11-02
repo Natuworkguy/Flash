@@ -27,7 +27,7 @@ from pathlib import Path
 from typing import Optional
 
 from . import pings, sparks
-from .dashes import undash
+from .tidy import tidy
 
 # How many entries a team's chat keeps, oldest dropped first.
 MAX_ENTRIES = 300
@@ -669,7 +669,7 @@ def _sending(team_id: str, spark: sparks.Spark, sent: list[dict]):
 
     def send(args: dict) -> str:
         # Posted as it is sent, so its dashes go here, as an answer's do.
-        text = undash(
+        text = tidy(
             str(args.get("text", ""))
         ).strip()[:sparks.MESSAGE_CHARS]
         if not text or _quiet(text):
@@ -769,7 +769,7 @@ def edit(team_key: str, entry_id: int, text: str, by: str) -> dict:
     anyone to look back at. The message, as it is now."""
 
     team = _team(team_key)
-    text = undash(str(text or "")).strip()[:sparks.MESSAGE_CHARS]
+    text = tidy(str(text or "")).strip()[:sparks.MESSAGE_CHARS]
     if not text or _quiet(text):
         raise TeamChatError("A message cannot be edited to nothing.")
 

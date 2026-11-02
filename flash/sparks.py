@@ -41,7 +41,6 @@ import ollama
 
 from . import agent as subagents
 from . import audit, cron, pings, providers, triggers
-from .dashes import undash
 from .models import full_name, installed_names
 from .paths import ENV_PATH, FLASH_DIR
 from .sysprompt import get_model_system_prompt
@@ -53,6 +52,7 @@ from .theme import (
     tool_line,
     tool_result,
 )
+from .tidy import tidy, tidy_args
 
 # The bubbles a spark is drawn as, one picked for each new spark. Bright
 # enough to read on both a dark and a light page.
@@ -1981,7 +1981,7 @@ def propose_hire(
             "id": uuid.uuid4().hex[:8], "kind": "hire", "by": by.id,
             "by_name": by.name, "at": time.time(), "status": "pending",
             "reason": " ".join(
-                undash(str(reason or "")).split()
+                tidy(str(reason or "")).split()
             )[:REASON_CHARS],
             "spark": wanted,
         }
@@ -2050,7 +2050,7 @@ def propose_removal(by_key: str, target_key: str, reason: str = "") -> dict:
             "by_name": by.name, "at": time.time(), "status": "pending",
             "target": target.id, "target_name": target.name,
             "reason": " ".join(
-                undash(str(reason or "")).split()
+                tidy(str(reason or "")).split()
             )[:REASON_CHARS],
         }
         _write_hires([*found, hire])
@@ -3258,7 +3258,7 @@ def status_note(text: str) -> str:
 
     line = next((part for part in str(text or "").splitlines()
                  if part.strip()), "")
-    line = undash(re.sub(r"[*_`#>]+", "", line)).strip(" -")
+    line = tidy(re.sub(r"[*_`#>]+", "", line)).strip(" -")
     line = " ".join(line.split()).rstrip(".:")
     if len(line) > STATUS_CHARS:
         cut = line[:STATUS_CHARS]
@@ -3799,7 +3799,7 @@ HAND_OFF_TOOL = {
 def _handing_off(spark: Spark) -> Callable[[dict], str]:
     def hand(args: dict) -> str:
         note = " ".join(
-            undash(str(args.get("note", ""))).split()
+            tidy(str(args.get("note", ""))).split()
         )[:LESSON_CHARS * 2]
         target = find(str(args.get("spark", "")))
         if target is None or target.id == spark.id:
@@ -4534,7 +4534,7 @@ def _work(
             getattr(response, "message", None), "content", ""
         ) or ""
 
-    return undash(final).strip()
+    return tidy(final).strip()
 
 
 def _waiting_for_events(spark: Spark):
@@ -5181,6 +5181,8 @@ def _call(
 ) -> str:
     from . import tools as flash_tools  # deferred: avoids a module cycle
 
+    # A spark's own tools too: hand_off, keep_notes and the rest.
+    args = tidy_args(args)
     if name in own:
         return own[name](args)
     if name == "reason":

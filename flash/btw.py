@@ -10,7 +10,7 @@ the real thing never hears of it.
 from collections.abc import Callable
 from typing import Any, Optional
 
-from .dashes import DashGuard
+from .tidy import OutGuard
 
 PROMPT = (
     "The user has asked a quick question on the side, while you work on "
@@ -94,7 +94,7 @@ def ask(
     """The answer, streamed to ON_TEXT a piece at a time as it comes; cut
     off where it got to once STOPPED says so."""
 
-    guard = DashGuard()
+    guard = OutGuard()
     said: list[str] = []
     parts = client.chat(
         model=model, messages=messages, options=options or {}, stream=True,

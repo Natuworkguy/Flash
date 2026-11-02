@@ -9230,6 +9230,29 @@ function drawGeneral(body) {
   };
   body.appendChild(lookRow);
 
+  // Tidying all Flash writes: em dashes (on by default) and emojis (off by default).
+  for (const [which, title, about, onToast, offToast] of [
+    ["dashes", "Remove em dashes", "Flash leaves em dashes out of everything it writes: replies, spark reports, documents, emails, messages and every tool call. Code is kept as written.", "Flash leaves out em dashes now", "Flash can use em dashes again"],
+    ["emojis", "Remove emojis", "Flash leaves emojis out of everything it writes: replies, spark reports, documents, emails, messages and every tool call.", "Flash leaves out emojis now", "Flash can use emojis again"],
+  ]) {
+    const row = el("button", "setting-row", `<span class="what"><b>${title}</b><span>${about}</span></span><span class="switch" aria-hidden="true"></span>`);
+    row.type = "button";
+    row.setAttribute("role", "switch");
+    const show = (s) => row.setAttribute("aria-checked", !!s[which]);
+    let state = { dashes: true, emojis: false };
+    show(state);
+    command(`remove-${which}`, "", null).then((s) => show(state = s)).catch(() => {});
+    row.onclick = async () => {
+      const on = row.getAttribute("aria-checked") !== "true";
+      show({ ...state, [which]: on });
+      try {
+        show(state = await command(`remove-${which}`, on ? "on" : "off", null));
+        toast(on ? onToast : offToast);
+      } catch (error) { show(state); showFailure(error); }
+    };
+    body.appendChild(row);
+  }
+
   // Hearing a call Flash is on, both sides, on this computer.
   const monitorRow = el("button", "setting-row call-monitor-row", `<span class="what"><b>Hear calls on this computer</b><span>While Flash is on a call, you hear the other side and Flash’s own voice here too. Off, the call stays silent on this computer.</span></span><span class="switch" aria-hidden="true"></span>`);
   monitorRow.type = "button";
