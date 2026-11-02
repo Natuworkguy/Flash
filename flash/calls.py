@@ -152,8 +152,9 @@ PICK_UP_SECONDS = 45.0
 # (by Flash, or by you) before it gives up.
 CONFIRM_SECONDS = 30.0
 # The longest one look at the call's windows may take: a slow look is
-# skipped, so a wait never outlasts its deadline by much.
-LOOK_SECONDS = 8
+# skipped, so a wait never outlasts its deadline by much. A look takes
+# about 2 to 6 seconds on macOS 27 with FaceTime and Phone open.
+LOOK_SECONDS = 15
 # The longest one turn of theirs is listened to before Flash answers.
 LONGEST_TURN = 30.0
 # The model's word for "this call is over".
@@ -162,48 +163,106 @@ RATE = voice.SAMPLE_RATE
 BLOCK = 0.1  # seconds of sound read at a time
 CALLS_DIR = FLASH_DIR / "calls"
 
+# Both scripts below read the call's alerts and windows a level at a
+# time, each property of a whole level in one request: asked of every
+# element in turn, as before, they took over a minute on macOS 27 and
+# always ran out of time, so Flash never saw a call. _LEVELS gives, for
+# each process, its levels as [spec, rows], a row {role, subrole, name,
+# value} per element there.
+_LEVELS = r"""
+function levels(se, proc) {
+  const flat = (a) => Array.isArray(a) ? a.flatMap(flat) : [a];
+  const got = (spec, what, n) => {
+    try { return flat(spec[what]()); } catch (e) { return Array(n).fill(""); }
+  };
+  if (!se.uiElementsEnabled()) throw new Error("not allowed assistive access");
+  const out = [];
+  let spec;
+  try { spec = se.processes.byName(proc).windows; spec.name(); }
+  catch (e) { return out; }
+  for (let depth = 0; depth < 20; depth++) {
+    spec = spec.uiElements;
+    let roles;
+    try { roles = flat(spec.role()); } catch (e) { break; }
+    if (!roles.length) break;
+    const n = roles.length, none = Array(n).fill("");
+    // Only what is used is asked: each request costs a few ms a level.
+    const names = got(spec, "name", n);
+    const banners = proc === "NotificationCenter";
+    const subs = banners ? got(spec, "subrole", n) : none;
+    const texts = roles.includes("AXStaticText");
+    const values = texts ? got(spec, "value", n) : none;
+    const descs = names.some((x) => !x) ? got(spec, "description", n) : none;
+    out.push([spec, roles.map((role, i) => ({
+      role: role, subrole: String(subs[i] || ""),
+      name: String(names[i] || descs[i] || ""),
+      value: String(values[i] || ""),
+    }))]);
+  }
+  return out;
+}
+const PROCS = ["NotificationCenter", "FaceTime", "Phone"];
+const BANNER = /Notification/;
+const actionName = (a) => {
+  let raw = "";
+  try { raw = String(a.description() || a.name() || ""); } catch (e) {}
+  const m = raw.match(/Name:([^\n]*)/);
+  return (m ? m[1] : raw).trim();
+};
+"""
+
 # Finds a button by its name in the call's alerts and windows, and
-# presses it: "Call" to confirm one Flash places, "Accept" to take one
-# that comes in (only when its alert names WANT, given as argv[1]), and
-# "End" to hang up. A notification's buttons are no buttons on macOS 13
-# and later but actions of the notification ("Name:Call ..."), so those
-# are looked through too. Prints what it pressed, or nothing.
-_PRESS = r"""
+# presses it: "Call" to confirm one Flash places (macOS 27's "Click to
+# Call" banner, for an iPhone call and a FaceTime Audio one alike, has
+# it), "Accept" to take one that comes in (only when its alert names
+# WANT, given as argv[1]), and "End" to hang up. A notification's
+# buttons are no buttons on macOS 13 to 26 but actions of the
+# notification ("Name:Call ..."), so those are looked through too.
+# Prints what it pressed, or nothing.
+_PRESS = _LEVELS + r"""
 function run(argv) {
   const names = JSON.parse(argv[0]);
   const want = (argv[1] || "").toLowerCase();
   const se = Application("System Events");
-  const get = (x, what) => {
-    try { return x[what](); } catch (e) { return ""; }
-  };
-  const actionName = (a) => {
-    const raw = String(get(a, "description") || get(a, "name") || "");
-    const m = raw.match(/Name:([^\n]*)/);
-    return (m ? m[1] : raw).trim();
-  };
-  for (const proc of ["NotificationCenter", "FaceTime", "Phone"]) {
-    let all;
-    try { all = se.processes.byName(proc).entireContents(); }
-    catch (e) { continue; }
+  const flat = (a) => Array.isArray(a) ? a.flatMap(flat) : [a];
+  for (const proc of PROCS) {
+    const all = levels(se, proc);
     if (want) {
-      const said = all.filter((x) => get(x, "role") === "AXStaticText")
-        .map((x) => String(get(x, "value") || "")).join(" ");
+      const said = all.flatMap(([, rows]) => rows)
+        .filter((x) => x.role === "AXStaticText")
+        .map((x) => x.value || x.name).join(" ");
       if (!said.toLowerCase().includes(want)) continue;
     }
-    for (const x of all) {
-      const name = String(get(x, "name") || get(x, "description") || "");
-      if (get(x, "role") === "AXButton" && names.includes(name)) {
-        x.click();
-        return name;
+    for (const [spec, rows] of all) {
+      for (const x of rows) {
+        if (x.role !== "AXButton" || !names.includes(x.name)) continue;
+        for (const key of ["description", "name"]) {
+          let hit = [];
+          const by = {role: "AXButton"};
+          by[key] = x.name;
+          try { hit = flat(spec.whose(by)()); } catch (e) {}
+          for (const b of hit) {
+            try { b.actions.byName("AXPress").perform(); return x.name; }
+            catch (e) {}
+          }
+        }
       }
     }
-    for (const x of all) {
-      let acts;
-      try { acts = x.actions(); } catch (e) { continue; }
-      for (const a of acts) {
-        const name = actionName(a);
-        if (names.includes(name)) {
-          try { a.perform(); return name; } catch (e) {}
+    for (const [spec, rows] of all) {
+      const subs = [...new Set(rows.map((x) => x.subrole)
+        .filter((sub) => BANNER.test(sub)))];
+      for (const sub of subs) {
+        let hit = [];
+        try { hit = flat(spec.whose({subrole: sub})()); } catch (e) {}
+        for (const x of hit) {
+          let acts = [];
+          try { acts = x.actions(); } catch (e) {}
+          for (const a of acts) {
+            const name = actionName(a);
+            if (names.includes(name)) {
+              try { a.perform(); return name; } catch (e) {}
+            }
+          }
         }
       }
     }
@@ -214,30 +273,31 @@ function run(argv) {
 
 # Where the call stands: "live" while there is a call to end, and
 # "connected" once its timer runs (it is picked up). Prints JSON.
-_STATE = r"""
+_STATE = _LEVELS + r"""
 function run() {
   const se = Application("System Events");
-  const get = (x, what) => {
-    try { return x[what](); } catch (e) { return ""; }
-  };
+  const flat = (a) => Array.isArray(a) ? a.flatMap(flat) : [a];
   const ends = ["End", "End Call", "Hang Up"];
   let live = false, connected = false;
-  for (const proc of ["NotificationCenter", "FaceTime", "Phone"]) {
-    let all;
-    try { all = se.processes.byName(proc).entireContents(); }
-    catch (e) { continue; }
-    for (const x of all) {
-      const role = get(x, "role");
-      const name = String(get(x, "name") || get(x, "description") || "");
-      if (role === "AXButton" && ends.includes(name)) live = true;
-      const shown = String(get(x, "value") || name).trim();
-      if (role === "AXStaticText" && /^\d{1,2}:\d{2}(:\d{2})?$/.test(shown))
-        connected = true;
-      let acts = [];
-      try { acts = x.actions(); } catch (e) {}
-      for (const a of acts) {
-        const raw = String(get(a, "description") || get(a, "name") || "");
-        if (ends.some((e) => raw.includes("Name:" + e))) live = true;
+  for (const proc of PROCS) {
+    for (const [spec, rows] of levels(se, proc)) {
+      for (const x of rows) {
+        if (x.role === "AXButton" && ends.includes(x.name)) live = true;
+        const shown = (x.value || x.name).trim();
+        if (x.role === "AXStaticText" &&
+            /^\d{1,2}:\d{2}(:\d{2})?$/.test(shown)) connected = true;
+      }
+      if (live) continue;
+      const subs = [...new Set(rows.map((x) => x.subrole)
+        .filter((sub) => BANNER.test(sub)))];
+      for (const sub of subs) {
+        let hit = [];
+        try { hit = flat(spec.whose({subrole: sub})()); } catch (e) {}
+        for (const x of hit) {
+          let acts = [];
+          try { acts = x.actions(); } catch (e) {}
+          if (acts.some((a) => ends.includes(actionName(a)))) live = true;
+        }
       }
     }
   }
@@ -667,19 +727,29 @@ class _MicPass:
                 stream.close()
 
 
+def _no_access(exc: Exception) -> bool:
+    """Whether EXC is macOS refusing Flash its Accessibility access."""
+
+    said = str(exc)
+    # A timeout's message quotes the script, which names it too.
+    return ("could not run" not in said
+            and ("assistive access" in said or "-25211" in said))
+
+
+_NO_ACCESS = ("Flash isn't allowed to press Call: give the app that runs "
+              "Flash (Terminal, or whichever you start it from) "
+              "Accessibility access in System Settings, Privacy & "
+              "Security, Accessibility, then restart it and try again.")
+
+
 def _press(names: list[str], want: str = "") -> str:
     try:
         return computer._run(["osascript", "-l", "JavaScript", "-e", _PRESS,
                               json.dumps(names), want],
                               timeout=LOOK_SECONDS).strip()
     except computer.ComputerError as exc:
-        if "assistive access" in str(exc) or "-25211" in str(exc):
-            raise CallError(
-                "Flash isn't allowed to press Call: give the app that runs "
-                "Flash (Terminal, or whichever you start it from) "
-                "Accessibility access in System Settings, Privacy & "
-                "Security, Accessibility, then restart it and try again."
-            ) from None
+        if _no_access(exc):
+            raise CallError(_NO_ACCESS) from None
         return ""
 
 
@@ -690,7 +760,12 @@ def _state() -> dict:
         got = json.loads(computer._run(
             ["osascript", "-l", "JavaScript", "-e", _STATE],
             timeout=LOOK_SECONDS).strip() or "{}")
-    except (computer.ComputerError, ValueError):
+    except computer.ComputerError as exc:
+        if _no_access(exc):
+            # Without it no call can be seen at all: say so, not "no call".
+            raise CallError(_NO_ACCESS) from None
+        return {"live": False, "connected": False}
+    except ValueError:
         return {"live": False, "connected": False}
     return {"live": bool(got.get("live")),
             "connected": bool(got.get("connected"))}
