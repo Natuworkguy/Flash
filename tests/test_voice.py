@@ -1500,3 +1500,36 @@ class TestWakeWord:
         grammars = [json.loads(m.grammar) for m in _Waking.made]
         assert grammars[-1][0] == "hey nova"  # nosec B101
         assert len(_Waking.made) == 2  # nosec B101
+
+
+def test_voice_devices_can_be_chosen_by_name(monkeypatch, tmp_path):
+    """A virtual device such as BlackHole can carry both ears and mouth."""
+
+    stream = _fake_audio(monkeypatch)
+    _fake_piper(monkeypatch, tmp_path, streaming=True)
+    opened = []
+    sounddevice = sys.modules["sounddevice"]
+
+    def opener(kind):
+        return lambda **kw: opened.append((kind, kw)) or stream
+
+    sounddevice.RawInputStream = opener("in")
+    sounddevice.RawOutputStream = opener("out")
+    monkeypatch.setenv("VOICE_INPUT_DEVICE", "BlackHole 2ch")
+    monkeypatch.setenv("VOICE_OUTPUT_DEVICE", "Loopback Audio")
+
+    listen(lambda _: None)
+    speak("all done")
+
+    assert ("in", "BlackHole 2ch") in [  # nosec B101
+        (k, kw.get("device")) for k, kw in opened]
+    assert ("out", "Loopback Audio") in [  # nosec B101
+        (k, kw.get("device")) for k, kw in opened]
+
+
+def test_voice_devices_default_to_the_system_ones(monkeypatch):
+    monkeypatch.delenv("VOICE_INPUT_DEVICE", raising=False)
+    monkeypatch.setenv("VOICE_OUTPUT_DEVICE", "  ")
+
+    assert voice.input_device() is None  # nosec B101
+    assert voice.output_device() is None  # nosec B101

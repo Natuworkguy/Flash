@@ -81,6 +81,28 @@ def _setting(name: str, default: str) -> str:
     return value or default
 
 
+def _device(name: str) -> Optional[str]:
+    """A sound device named in a setting, or None for the system default.
+
+    sounddevice matches the name, or any part of it, so a virtual device
+    such as BlackHole, Loopback or VB-Cable can carry Flash's voice.
+    """
+
+    return _setting(name, "") or None
+
+
+def input_device() -> Optional[str]:
+    """Where Flash listens: VOICE_INPUT_DEVICE, else the system microphone."""
+
+    return _device("VOICE_INPUT_DEVICE")
+
+
+def output_device() -> Optional[str]:
+    """Where Flash speaks: VOICE_OUTPUT_DEVICE, else the system speakers."""
+
+    return _device("VOICE_OUTPUT_DEVICE")
+
+
 def _number(name: str, default: float, *, minimum: float) -> float:
     """A numeric setting that falls back rather than crashing on nonsense.
 
@@ -1140,6 +1162,7 @@ def listen(
 
     try:
         with sounddevice.RawInputStream(
+            device=input_device(),
             samplerate=SAMPLE_RATE,
             blocksize=BLOCK_FRAMES,
             dtype="int16",
@@ -1257,6 +1280,7 @@ class _Barge:
 
         try:
             with sounddevice.RawInputStream(
+                device=input_device(),
                 samplerate=SAMPLE_RATE,
                 blocksize=BLOCK_FRAMES,
                 dtype="int16",
@@ -1556,6 +1580,7 @@ def speak(text: str) -> tuple[str, bool]:
 
     try:
         with _Barge() as barge, sounddevice.RawOutputStream(
+            device=output_device(),
             samplerate=rate,
             dtype="int16",
             channels=1,
