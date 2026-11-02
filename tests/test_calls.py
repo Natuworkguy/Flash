@@ -131,8 +131,8 @@ def test_flash_waits_for_the_call_to_be_picked_up(monkeypatch):
 
 
 def test_a_call_nobody_picks_up_ends_without_talking(monkeypatch):
-    states = iter([{"live": True, "connected": False},
-                   {"live": False, "connected": False}])
+    states = iter([{"live": True, "connected": False}]
+                  + [{"live": False, "connected": False}] * calls.GONE_LOOKS)
     monkeypatch.setattr(calls, "_state", lambda: next(states))
     monkeypatch.setattr(calls.time, "sleep", lambda s: None)
     call = calls.Call(who="John", number="1", goal="ask", incoming=False)

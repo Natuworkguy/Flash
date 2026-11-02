@@ -155,6 +155,9 @@ CONFIRM_SECONDS = 30.0
 # skipped, so a wait never outlasts its deadline by much. A look takes
 # about 2 to 6 seconds on macOS 27 with FaceTime and Phone open.
 LOOK_SECONDS = 15
+# Looks in a row that must find no call before it counts as over: one
+# look can miss the End button (a slow or failed read, a redrawn window).
+GONE_LOOKS = 3
 # The longest one turn of theirs is listened to before Flash answers.
 LONGEST_TURN = 30.0
 # The model's word for "this call is over".
@@ -286,6 +289,7 @@ function run() {
   const flat = (a) => Array.isArray(a) ? a.flatMap(flat) : [a];
   const ends = ["End", "End Call", "Hang Up"];
   let live = false, connected = false;
+  const seen = [];
   for (const proc of PROCS) {
     // Both seen: the levels below can tell nothing more.
     const sure = (rows) => {
@@ -302,6 +306,9 @@ function run() {
         const shown = (x.value || x.name).trim();
         if (x.role === "AXStaticText" &&
             /^\d{1,2}:\d{2}(:\d{2})?$/.test(shown)) connected = true;
+        if (seen.length < 60 && shown &&
+            (x.role === "AXButton" || x.role === "AXStaticText"))
+          seen.push(`${proc}:${x.role.slice(2)}:${shown.slice(0, 30)}`);
       }
       if (live) continue;
       const subs = [...new Set(rows.map((x) => x.subrole)
@@ -317,7 +324,8 @@ function run() {
       }
     }
   }
-  return JSON.stringify({live: live, connected: connected && live});
+  return JSON.stringify({live: live, connected: connected && live,
+                         seen: seen});
 }
 """
 
@@ -795,7 +803,8 @@ def _state() -> dict:
     except ValueError:
         return {"live": False, "connected": False}
     return {"live": bool(got.get("live")),
-            "connected": bool(got.get("connected"))}
+            "connected": bool(got.get("connected")),
+            "seen": list(got.get("seen") or [])}
 
 
 def _facetime_devices() -> None:
@@ -824,18 +833,30 @@ def _picked_up(call: Call, stopping: Callable[[], bool]) -> bool:
 
     deadline = time.monotonic() + PICK_UP_SECONDS
     seen_live = False
+    gone = 0
+    was = None
+    began = deadline - PICK_UP_SECONDS
     while time.monotonic() < deadline:
         if stopping():
             call.ended = "you stopped it"
             return False
         now = _state()
+        if (now["live"], now["connected"]) != was:
+            # What the screen showed each time the state changed: how a
+            # pick-up looks on this Mac, for when it is missed.
+            was = (now["live"], now["connected"])
+            _mark(f"look live={was[0]} connected={was[1]}: "
+                  + " | ".join(now.get("seen", [])), began)
         if now["connected"]:
             return True
         if now["live"]:
             seen_live = True
+            gone = 0
         elif seen_live:
-            call.ended = "they didn't pick up"
-            return False
+            gone += 1
+            if gone >= GONE_LOOKS:
+                call.ended = "they didn't pick up"
+                return False
         # Looking takes seconds already (the Phone app's window is deep):
         # no long wait on top of it, or the pick-up is noticed late.
         time.sleep(0.1)
@@ -864,8 +885,10 @@ class _StillOn:
         self._thread.start()
 
     def _watch(self, every: float, look: Callable[[], dict]) -> None:
+        gone = 0
         while not self._over.wait(every):
-            if not look()["live"]:
+            gone = 0 if look()["live"] else gone + 1
+            if gone >= GONE_LOOKS:
                 self.why = "they hung up"
                 return
 
