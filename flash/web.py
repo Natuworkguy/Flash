@@ -5220,12 +5220,18 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
         if arg not in ("", "on", "off"):
             raise ValueError("call-monitor takes on or off")
         if arg:
-            return calls.set_monitor(on=arg == "on")
-        return calls.monitor_settings()
+            return {**calls.set_monitor(on=arg == "on"),
+                    **calls.mic_settings()}
+        return {**calls.monitor_settings(), **calls.mic_settings()}
 
     if name == "call-monitor-device":
-        # The device the call is heard on; empty: the Mac's speakers.
-        return calls.set_monitor(device=arg)
+        # The device the call is heard on; empty: the computer's speakers.
+        return {**calls.set_monitor(device=arg), **calls.mic_settings()}
+
+    if name == "call-user-mic":
+        # The user's own mic for calls; empty: the system default.
+        # Settings reads it with call-monitor.
+        return {**calls.monitor_settings(), **calls.set_user_mic(arg)}
 
     if name == "call-mic":
         # The user's own mic into the call Flash is on, or out of it;

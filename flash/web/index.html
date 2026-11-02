@@ -1202,12 +1202,12 @@ body.course-open { overflow: hidden; }
 
 /* Voice mode: the box gives way to an orb that listens and speaks. */
 body.voice-on .shell, body.voice-on #suggestions, body.voice-on #pending { display: none !important; }
-#recording { display: flex; align-items: center; gap: 12px; margin: 0 0 10px; padding: 10px 12px 10px 16px; border: 1px solid color-mix(in srgb, #ff4d5e 45%, var(--border-strong)); border-radius: 16px; background: color-mix(in srgb, #ff4d5e 7%, var(--surface)); animation: pop 0.2s var(--ease); }
-#recording[hidden] { display: none; }
-#recording .rec-dot { flex: none; width: 10px; height: 10px; border-radius: 50%; background: #ff4d5e; box-shadow: 0 0 0 0 #ff4d5e80; animation: rec-beat 1.4s ease-out infinite; }
-#recording .rec-words { flex: 1; min-width: 0; display: flex; flex-direction: column; line-height: 1.3; }
-#recording .rec-words b { font-size: 13.5px; font-weight: 600; }
-#recording .rec-meta { font-size: 12px; color: var(--text-3); font-variant-numeric: tabular-nums; }
+#recording, #call-bar { display: flex; align-items: center; gap: 12px; margin: 0 0 10px; padding: 10px 12px 10px 16px; border: 1px solid color-mix(in srgb, #ff4d5e 45%, var(--border-strong)); border-radius: 16px; background: color-mix(in srgb, #ff4d5e 7%, var(--surface)); animation: pop 0.2s var(--ease); }
+#recording[hidden], #call-bar[hidden] { display: none; }
+#recording .rec-dot, #call-bar .rec-dot { flex: none; width: 10px; height: 10px; border-radius: 50%; background: #ff4d5e; box-shadow: 0 0 0 0 #ff4d5e80; animation: rec-beat 1.4s ease-out infinite; }
+#recording .rec-words, #call-bar .rec-words { flex: 1; min-width: 0; display: flex; flex-direction: column; line-height: 1.3; }
+#recording .rec-words b, #call-bar .rec-words b { font-size: 13.5px; font-weight: 600; }
+#recording .rec-meta, #call-bar .rec-meta { font-size: 12px; color: var(--text-3); font-variant-numeric: tabular-nums; }
 #recording .rec-mic { display: inline-flex; align-items: center; gap: 2px; height: 16px; }
 #recording .rec-mic[hidden] { display: none; }
 #meeting { margin: 0 0 10px; padding: 10px 12px 10px 16px; border: 1px solid color-mix(in srgb, #ff4d5e 45%, var(--border-strong)); border-radius: 16px; background: color-mix(in srgb, #ff4d5e 7%, var(--surface)); animation: pop 0.2s var(--ease); }
@@ -3649,7 +3649,7 @@ body.resizing-viewer iframe { pointer-events: none; }
 #tunnel-pill.settled:not([hidden]) + #wake-pill.settled { padding-left: 0; }
 @keyframes tunnel-drop { from { opacity: 0; transform: translateY(-160%); } 60% { opacity: 1; } }
 .wake-sense-row .side { gap: 10px; }
-.voice-look-row select, .call-monitor-device-row select { font: 13.5px var(--sans); color: var(--text); background: var(--bg); border: 1px solid var(--border-strong); border-radius: 9px; padding: 7px 10px; outline: 0; }
+.voice-look-row select, .call-monitor-device-row select, .call-user-mic-row select { font: 13.5px var(--sans); color: var(--text); background: var(--bg); border: 1px solid var(--border-strong); border-radius: 9px; padding: 7px 10px; outline: 0; }
 .call-monitor-device-row select:disabled { opacity: .5; cursor: default; }
 .wake-sense-row input[type=range] { width: 160px; accent-color: var(--accent); }
 .wake-sense-row output { width: 26px; text-align: right; font-size: 13px; color: var(--text-3); font-variant-numeric: tabular-nums; }
@@ -3888,6 +3888,11 @@ body.empty #ext-head, body.on-page #ext-head { display: none; }
         <div id="btw" hidden aria-label="Side questions"></div>
         <div id="waiting-bar" hidden role="group" aria-label="What this chat waits for"></div>
         <div id="pending" hidden aria-label="Waiting messages"></div>
+        <div id="call-bar" hidden role="group" aria-label="Phone call">
+          <span class="rec-dot" aria-hidden="true"></span>
+          <span class="rec-words"><b>On a call</b><span class="rec-meta">Flash is talking. Add your own mic to speak too.</span></span>
+          <button type="button" class="btn small" aria-pressed="false" data-call-mic>Add my mic</button>
+        </div>
         <div id="recording" hidden role="group" aria-label="Screen recording">
           <span class="rec-dot" aria-hidden="true"></span>
           <span class="rec-words"><b>Recording your screen</b><span class="rec-meta"></span></span>
@@ -8078,33 +8083,38 @@ function assistantBlock(entry) {
 // draws its own (the other side as the user's bubble, Flash as a reply),
 // with who said it and when; its end takes the button away.
 function drawCallEntry(entry) {
+  const callBar = document.getElementById("call-bar");
+  const mic = callBar.querySelector("[data-call-mic]");
   if (entry.state === "start") {
     const bar = el("div", "speaker", `<span class="name"></span><span class="from">live</span>`);
     bar.style.setProperty("--c", "var(--accent)");
     bar.querySelector(".name").textContent = `On the call with ${entry.with || "them"}`;
     bar.dataset.callLive = "1";
-    const mic = bar.appendChild(el("button", "pill", `${icon("mic")}<span>Add my mic</span>`));
-    mic.type = "button";
+    messagesEl.appendChild(bar);
+    callBar.querySelector("b").textContent = `On the call with ${entry.with || "them"}`;
     mic.setAttribute("aria-pressed", "false");
+    mic.textContent = "Add my mic";
+    mic.disabled = false;
     mic.onclick = async () => {
       const on = mic.getAttribute("aria-pressed") !== "true";
       mic.disabled = true;
       try {
         const now = await command("call-mic", on ? "on" : "off");
         mic.setAttribute("aria-pressed", now.mic ? "true" : "false");
-        mic.lastChild.textContent = now.mic ? "Take my mic off" : "Add my mic";
+        mic.textContent = now.mic ? "Take my mic off" : "Add my mic";
       } catch (e) { toast(e.message); }
-      mic.disabled = !bar.dataset.callLive;
+      mic.disabled = callBar.hidden;
     };
-    messagesEl.appendChild(bar);
+    callBar.hidden = false;
     return;
   }
   if (entry.state === "end") {
     for (const bar of messagesEl.querySelectorAll("[data-call-live]")) {
       delete bar.dataset.callLive;
       bar.querySelector(".from").textContent = "ended";
-      bar.querySelector("button")?.remove();
     }
+    callBar.hidden = true;
+    mic.onclick = null;
     return;
   }
   const when = `${entry.who} · ${entry.at || ""}`;
@@ -9197,39 +9207,54 @@ function drawGeneral(body) {
   };
   body.appendChild(lookRow);
 
-  // Hearing a call Flash is on, both sides, on this Mac.
-  const monitorRow = el("button", "setting-row call-monitor-row", `<span class="what"><b>Hear calls on this Mac</b><span>While Flash is on a call, you hear the other side and Flash’s own voice here too. Off, the call stays silent on this Mac.</span></span><span class="switch" aria-hidden="true"></span>`);
+  // Hearing a call Flash is on, both sides, on this computer.
+  const monitorRow = el("button", "setting-row call-monitor-row", `<span class="what"><b>Hear calls on this computer</b><span>While Flash is on a call, you hear the other side and Flash’s own voice here too. Off, the call stays silent on this computer.</span></span><span class="switch" aria-hidden="true"></span>`);
   monitorRow.type = "button";
   monitorRow.setAttribute("role", "switch");
-  const monitorDeviceRow = el("div", "setting-row static call-monitor-device-row", `<span class="what"><b>Hear calls on</b><span>The speakers or headphones calls play on. Your Mac’s speakers means the ones it used before the call.</span></span><span class="side"><select aria-label="Hear calls on"></select></span>`);
+  const monitorDeviceRow = el("div", "setting-row static call-monitor-device-row", `<span class="what"><b>Hear calls on</b><span>The speakers or headphones calls play on. Your computer’s speakers means the ones it used before the call.</span></span><span class="side"><select aria-label="Hear calls on"></select></span>`);
   const monitorPick = monitorDeviceRow.querySelector("select");
   const showMonitor = (m) => {
     monitorRow.setAttribute("aria-checked", !!m.on);
-    monitorPick.replaceChildren(new Option("Your Mac’s speakers", ""),
+    monitorPick.replaceChildren(new Option("Your computer’s speakers", ""),
       ...[...new Set([...(m.devices || []), ...(m.device ? [m.device] : [])])].map((d) => new Option(d, d)));
     monitorPick.value = m.device || "";
     monitorPick.disabled = !m.on;
   };
   let monitor = { on: true, device: "", devices: [] };
   showMonitor(monitor);
-  command("call-monitor", "", null).then((m) => showMonitor(monitor = m)).catch(() => {});
+  command("call-monitor", "", null).then((m) => { showMonitor(monitor = m); showUserMic(m); }).catch(() => {});
   monitorRow.onclick = async () => {
     const on = monitorRow.getAttribute("aria-checked") !== "true";
     showMonitor({ ...monitor, on });
     try {
       showMonitor(monitor = await command("call-monitor", on ? "on" : "off", null));
-      toast(on ? "You hear calls on this Mac now" : "Calls are silent on this Mac now");
+      toast(on ? "You hear calls on this computer now" : "Calls are silent on this computer now");
     } catch (error) { showMonitor(monitor); showFailure(error); }
   };
   monitorPick.onchange = async () => {
     try {
       showMonitor(monitor = await command("call-monitor-device", monitorPick.value, null));
-      toast(`You hear calls on ${monitorPick.value || "your Mac’s speakers"} now`);
+      toast(`You hear calls on ${monitorPick.value || "your computer’s speakers"} now`);
     } catch (error) { showMonitor(monitor); showFailure(error); }
   };
   body.insertAdjacentHTML("beforeend", `<h2 class="settings-section settings-gap">Calls</h2>`);
   body.appendChild(monitorRow);
   body.appendChild(monitorDeviceRow);
+  const userMicRow = el("div", "setting-row static call-user-mic-row", `<span class="what"><b>My mic</b><span>The microphone Add my mic puts into a call. The system default means the one this computer uses now.</span></span><span class="side"><select aria-label="My mic"></select></span>`);
+  const userMicPick = userMicRow.querySelector("select");
+  const showUserMic = (m) => {
+    userMicPick.replaceChildren(new Option("System default", ""),
+      ...[...new Set([...(m.mics || []), ...(m.mic ? [m.mic] : [])])].map((d) => new Option(d, d)));
+    userMicPick.value = m.mic || "";
+  };
+  showUserMic(monitor);
+  userMicPick.onchange = async () => {
+    try {
+      showUserMic(monitor = await command("call-user-mic", userMicPick.value, null));
+      toast(`Add my mic uses ${userMicPick.value || "the system default mic"} now`);
+    } catch (error) { showUserMic(monitor); showFailure(error); }
+  };
+  body.appendChild(userMicRow);
 
   body.insertAdjacentHTML("beforeend", `<h2 class="settings-section settings-gap">Voice models</h2><p class="settings-sub">What voice mode listens and speaks with. Both run on this computer, so pick lighter ones for a weaker machine.</p><div class="voice-models"></div>`);
   drawVoiceModels(body.querySelector(".voice-models"));

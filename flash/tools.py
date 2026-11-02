@@ -2739,7 +2739,7 @@ PHONE_TOOL = {
         "name": "phone_call",
         "description": (
             "Hold a phone call for the user, in your own voice, through "
-            "their iPhone's calling on this Mac, or FaceTime Audio: call "
+            "their iPhone's calling on this computer, or FaceTime Audio: call "
             "someone (\"call "
             "John and tell him I'm running late\"), or answer their next "
             "call (\"take the next call from John and find out what he "
