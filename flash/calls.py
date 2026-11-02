@@ -148,6 +148,12 @@ PAUSE_LEAST = 0.3
 PAUSE_MOST = 3.0
 # How long Flash waits for the call to be picked up, or to come in.
 PICK_UP_SECONDS = 45.0
+# The longest Flash waits for the Mac's "Call" prompt to be answered
+# (by Flash, or by you) before it gives up.
+CONFIRM_SECONDS = 30.0
+# The longest one look at the call's windows may take: a slow look is
+# skipped, so a wait never outlasts its deadline by much.
+LOOK_SECONDS = 8
 # The longest one turn of theirs is listened to before Flash answers.
 LONGEST_TURN = 30.0
 # The model's word for "this call is over".
@@ -175,7 +181,7 @@ function run(argv) {
     const m = raw.match(/Name:([^\n]*)/);
     return (m ? m[1] : raw).trim();
   };
-  for (const proc of ["NotificationCenter", "FaceTime"]) {
+  for (const proc of ["NotificationCenter", "FaceTime", "Phone"]) {
     let all;
     try { all = se.processes.byName(proc).entireContents(); }
     catch (e) { continue; }
@@ -216,7 +222,7 @@ function run() {
   };
   const ends = ["End", "End Call", "Hang Up"];
   let live = false, connected = false;
-  for (const proc of ["NotificationCenter", "FaceTime"]) {
+  for (const proc of ["NotificationCenter", "FaceTime", "Phone"]) {
     let all;
     try { all = se.processes.byName(proc).entireContents(); }
     catch (e) { continue; }
@@ -664,7 +670,8 @@ class _MicPass:
 def _press(names: list[str], want: str = "") -> str:
     try:
         return computer._run(["osascript", "-l", "JavaScript", "-e", _PRESS,
-                              json.dumps(names), want], timeout=20).strip()
+                              json.dumps(names), want],
+                              timeout=LOOK_SECONDS).strip()
     except computer.ComputerError as exc:
         if "assistive access" in str(exc) or "-25211" in str(exc):
             raise CallError(
@@ -682,7 +689,7 @@ def _state() -> dict:
     try:
         got = json.loads(computer._run(
             ["osascript", "-l", "JavaScript", "-e", _STATE],
-            timeout=20).strip() or "{}")
+            timeout=LOOK_SECONDS).strip() or "{}")
     except (computer.ComputerError, ValueError):
         return {"live": False, "connected": False}
     return {"live": bool(got.get("live")),
@@ -694,6 +701,19 @@ def _facetime_devices() -> None:
         computer._run(["osascript", "-l", "JavaScript", "-e",
                        _FACETIME_DEVICES, to_call(), from_call()],
                       timeout=20)
+
+
+def _confirmed(stopping: Callable[[], bool]) -> bool:
+    """Waits for the Mac's "Call" prompt to be answered, pressing Call
+    on it. True once Flash pressed it or the call is live (you may have
+    clicked it yourself); False when stopped or out of time."""
+
+    deadline = time.monotonic() + CONFIRM_SECONDS
+    while time.monotonic() < deadline and not stopping():
+        if _press(["Call"]) or _state()["live"]:
+            return True
+        time.sleep(0.5)
+    return False
 
 
 def _picked_up(call: Call, stopping: Callable[[], bool]) -> bool:
@@ -719,7 +739,8 @@ def _picked_up(call: Call, stopping: Callable[[], bool]) -> bool:
         # Still ringing, or a Mac that shows no timer: talk anyway; a
         # quiet line ends it.
         return True
-    call.ended = "they didn't pick up"
+    call.ended = (f"Flash couldn't see the call start on this Mac within "
+                  f"{PICK_UP_SECONDS:.0f} seconds, so it stopped")
     return False
 
 
@@ -1098,21 +1119,18 @@ def place(who: str, goal: str, user: str,
         _dial(number, via)
         try:
             # The Mac asks before it dials, in a notification: Flash says
-            # yes.
-            deadline = time.monotonic() + 15
-            pressed = ""
-            while time.monotonic() < deadline and not stopping():
-                pressed = _press(["Call"])
-                if pressed or _state()["live"]:
-                    break
-                time.sleep(0.5)
-            if not pressed and not _state()["live"]:
+            # yes, unless you click Call first.
+            if not _confirmed(stopping):
+                if stopping():
+                    call.ended = "you stopped it"
+                    return call
                 raise CallError(
-                    "The computer asked to confirm the call and Flash "
-                    "couldn't press Call. Give Flash Accessibility access "
-                    "(System Settings, Privacy & Security, Accessibility) "
-                    "and try "
-                    "again.")
+                    "The computer asked to confirm the call and it wasn't "
+                    f"started within {CONFIRM_SECONDS:.0f} seconds. Click "
+                    "Call on the notification, or give the app that runs "
+                    "Flash Accessibility access (System Settings, Privacy "
+                    "& Security, Accessibility) so Flash can press Call, "
+                    "and try again.")
             _facetime_devices()
             if not _picked_up(call, stopping):
                 return call
