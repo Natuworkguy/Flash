@@ -31,7 +31,7 @@ If the user says only "use this skill, ask me what it needs", ask in two steps, 
   1. Call phone_call join without ready. It joins nothing: it gives you the exact words to say, with this computer's device names in them, such as "Okay. Set the mic to BlackHole 2ch and speakers to BlackHole 16ch in Meet and tell me once it's set." Say only that, and end your turn.
   2. When the user says it is set ("set", "done", "ok it's set"), call phone_call join again, the same goal, with ready true. Only then do you talk on the call.
 - Flash never hangs up a joined call; it stops when told to, or when the call goes quiet.
-- While Flash is on a call, the web page shows the call as it goes, turn by turn, with a button for the user to add their own mic to it. Stop ends the call at once, and the computer's own mic and speakers come back.
+- While Flash is on a call, the web page shows the call as it goes, turn by turn, with a button for the user to add their own mic to it. Stop ends the call at once, and the computer's own mic and speakers come back. When Flash runs only as the web UI, the call's turns are not printed in the terminal it was started from; they show on the page, and the transcript is saved in ~/.flash/calls.
 - If the computer lacks the loopback devices, say the one command that installs them and stop.
 
 ## Examples

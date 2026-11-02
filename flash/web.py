@@ -7373,6 +7373,8 @@ def _attach(server: "Server", standalone: bool) -> None:
         SWITCH_DELAY, _switch_lan, (server, on),
     ).start()
     if standalone:
+        # Calls show on the page and in their saved file, not here.
+        calls.terminal = False
         if os.name != "nt":
             # Windows cannot replace a running Flash at all: its update
             # finishes after this one quits, so there is nothing to
