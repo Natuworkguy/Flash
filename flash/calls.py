@@ -298,7 +298,7 @@ function run() {
     const sure = (rows) => {
       for (const x of rows) {
         if (x.role === "AXButton" && ends.includes(x.name)) live = true;
-        if (x.role === "AXStaticText" && /^\d{1,2}:\d{2}(:\d{2})?$/.test(
+        if (x.role === "AXStaticText" && /(^|\s)\d{1,2}:\d{2}(:\d{2})?$/.test(
           (x.value || x.name).trim())) connected = true;
       }
       return live && connected;
@@ -308,7 +308,7 @@ function run() {
         if (x.role === "AXButton" && ends.includes(x.name)) live = true;
         const shown = (x.value || x.name).trim();
         if (x.role === "AXStaticText" &&
-            /^\d{1,2}:\d{2}(:\d{2})?$/.test(shown)) connected = true;
+            /(^|\s)\d{1,2}:\d{2}(:\d{2})?$/.test(shown)) connected = true;
         if (x.role === "AXStaticText" && proc !== "Phone" &&
             RINGS.test(shown)) ringing = true;
         if (seen.length < 60 && shown && shown !== "button" &&
