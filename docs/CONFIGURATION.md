@@ -81,6 +81,10 @@ Requirements:
 | `VOICE_INTERRUPT_WORD` | No | `interrupt` | - | Word that stops a reply being read aloud when you say it over the top. Matched as a whole word; "stop talking" and "be quiet" always work as well. |
 | `VOICE_NO_SPEECH_SECONDS` | No | `8` | `1` | How long a listening turn waits for you to start speaking before handing the prompt back. This is what ends a hands-free conversation. |
 | `VOICE_SILENCE_THRESHOLD` | No | `500` | `0` | Loudness (0-32768) above which audio counts as speech. Raise it in a noisy room; lower it if a quiet voice is missed. |
+| `VOICE_INPUT_DEVICE` | No | system default | — | Name (or part of it) of the sound device Flash listens on, e.g. `BlackHole 2ch` to hear through a virtual device. |
+| `VOICE_OUTPUT_DEVICE` | No | system default | — | Name (or part of it) of the sound device Flash speaks through, e.g. `Loopback Audio` or `CABLE Input` for a virtual device. |
+| `CALL_MIC_DEVICE` | No | `BlackHole 2ch` | — | Virtual device Flash speaks into on calls: the call's microphone. |
+| `CALL_SPEAKER_DEVICE` | No | `BlackHole 16ch` | — | Virtual device the call plays into, which Flash listens on. |
 | `VOICE_WAKE_ALWAYS` | No | `0` | - | `1` has the web server listen for "Hey Flash" on the microphone of the computer it runs on, for as long as it runs, with or without a page open, and answer out loud there. The conversation is kept as a chat. Settings, Voice, "Listen even with no page open". |
 | (service) | No | off | - | "Hey Flash" with Flash closed: Settings, Voice, "“Hey Flash” with Flash closed" registers `flash --listen` to start at login (a systemd user service or autostart entry on Linux, a launchd agent on macOS, a scheduled task on Windows), listening on this computer's microphone even after Flash is quit. Its conversations are kept as chats. Run `flash --listen` yourself to try it. Only one Flash listens at a time, and a page listening has the microphone first. |
 | `VOICE_WAKE_SENSITIVITY` | No | `50` | `0` | How readily "Hey Flash" wakes Flash, 0 to 100. From 80 up it wakes mid phrase; below, only once the words are said in full and the listening model is sure enough of them, surer the lower it is. Lower it if a video sets it off. Settings, Voice. |
@@ -124,6 +128,21 @@ summarizes it on demand.
   since a dictated slash command cannot reach Flash.
 - The models live in `~/.flash/models`. Deleting that directory frees the
   space; the next `/voice on` downloads them again.
+
+### Letting Flash talk on a call you are on (Google Meet)
+
+In UltraAuto, on a Mac with the loopback devices installed
+(`brew install blackhole-2ch blackhole-16ch switchaudio-osx`):
+
+1. Join the call yourself, then in Meet's settings (Audio) set
+   **Microphone** to `BlackHole 2ch` and **Speakers** to `BlackHole 16ch`
+   (or whatever `CALL_MIC_DEVICE` and `CALL_SPEAKER_DEVICE` name).
+2. Tell Flash "talk to my friend", with what you want said.
+3. Flash says it is an automated assistant, then listens and answers until
+   you tell it to stop, the call goes quiet, or ten minutes pass. It never
+   hangs up your call. Switch Meet back to your own mic and speakers after.
+
+While Meet uses those devices you will not hear the call or be heard on it.
 
 ### Notes on the numeric options
 
