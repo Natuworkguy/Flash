@@ -288,8 +288,11 @@ function run() {
   const se = Application("System Events");
   const flat = (a) => Array.isArray(a) ? a.flatMap(flat) : [a];
   const ends = ["End", "End Call", "Hang Up"];
-  let live = false, connected = false;
+  let live = false, connected = false, ringing = false;
   const seen = [];
+  // While it rings the call's banner reads "FaceTime Audio…" (or
+  // "Calling…"); once answered that text goes, timer or not.
+  const RINGS = /(…|\.\.\.)$|^(calling|ringing)\b/i;
   for (const proc of PROCS) {
     // Both seen: the levels below can tell nothing more.
     const sure = (rows) => {
@@ -306,7 +309,9 @@ function run() {
         const shown = (x.value || x.name).trim();
         if (x.role === "AXStaticText" &&
             /^\d{1,2}:\d{2}(:\d{2})?$/.test(shown)) connected = true;
-        if (seen.length < 60 && shown &&
+        if (x.role === "AXStaticText" && proc !== "Phone" &&
+            RINGS.test(shown)) ringing = true;
+        if (seen.length < 60 && shown && shown !== "button" &&
             (x.role === "AXButton" || x.role === "AXStaticText"))
           seen.push(`${proc}:${x.role.slice(2)}:${shown.slice(0, 30)}`);
       }
@@ -325,7 +330,7 @@ function run() {
     }
   }
   return JSON.stringify({live: live, connected: connected && live,
-                         seen: seen});
+                         ringing: ringing && live, seen: seen});
 }
 """
 
@@ -804,6 +809,7 @@ def _state() -> dict:
         return {"live": False, "connected": False}
     return {"live": bool(got.get("live")),
             "connected": bool(got.get("connected")),
+            "ringing": bool(got.get("ringing")),
             "seen": list(got.get("seen") or [])}
 
 
@@ -833,6 +839,7 @@ def _picked_up(call: Call, stopping: Callable[[], bool]) -> bool:
 
     deadline = time.monotonic() + PICK_UP_SECONDS
     seen_live = False
+    rang = False
     gone = 0
     was = None
     began = deadline - PICK_UP_SECONDS
@@ -841,13 +848,21 @@ def _picked_up(call: Call, stopping: Callable[[], bool]) -> bool:
             call.ended = "you stopped it"
             return False
         now = _state()
-        if (now["live"], now["connected"]) != was:
+        ringing = bool(now.get("ringing"))
+        if (now["live"], now["connected"], ringing) != was:
             # What the screen showed each time the state changed: how a
             # pick-up looks on this Mac, for when it is missed.
-            was = (now["live"], now["connected"])
-            _mark(f"look live={was[0]} connected={was[1]}: "
+            was = (now["live"], now["connected"], ringing)
+            _mark(f"look live={was[0]} connected={was[1]} "
+                  f"ringing={was[2]}: "
                   + " | ".join(now.get("seen", [])), began)
         if now["connected"]:
+            return True
+        # No timer on this Mac's banner: the call was answered when its
+        # "FaceTime Audio…" goes while the call is still there.
+        if ringing:
+            rang = True
+        elif rang and now["live"]:
             return True
         if now["live"]:
             seen_live = True
@@ -920,6 +935,27 @@ FACETIME = "facetime_audio"
 def _dial(handle: str, via: str) -> None:
     scheme = "facetime-audio" if via == FACETIME else "tel"
     computer._run(["open", f"{scheme}:{handle}"])
+    _hide_call_app()
+
+
+# Hidden, not minimized: a hidden app's windows still answer the
+# Accessibility reads that see the call (checked on this Mac), and the
+# call's End button is on its banner anyway.
+_HIDE = """
+tell application "System Events"
+  repeat with n in {"Phone", "FaceTime"}
+    if exists process n then set visible of process n to false
+  end repeat
+end tell
+"""
+
+
+def _hide_call_app() -> None:
+    """Puts the Phone or FaceTime app that came up for the call out of the
+    way, so it does not sit in front of what the user is doing."""
+
+    with contextlib.suppress(computer.ComputerError):
+        computer._run(["osascript", "-e", _HIDE], timeout=5)
 
 
 # --- Sound ----------------------------------------------------------------
@@ -1275,9 +1311,10 @@ def _hang_up() -> None:
 def place(who: str, goal: str, user: str,
           ask: Callable[[list[dict]], str],
           stopping: Callable[[], bool] = lambda: False,
-          via: str = PHONE, owner: str = "") -> Call:
+          via: str = PHONE, owner: str = "",
+          tell: Callable[[str], None] = lambda said: None) -> Call:
     """Call WHO and talk to them for USER, towards GOAL: on the phone, or
-    with FaceTime Audio (VIA)."""
+    with FaceTime Audio (VIA). TELL hears what it is doing, for the chat."""
 
     why = missing()
     if why:
@@ -1289,6 +1326,14 @@ def place(who: str, goal: str, user: str,
     call = Call(who=shown, number=number, goal=goal, incoming=False)
     opening = _Opening(call, user, ask)
     began = opening.since
+    # First words written and spoken before dialling, so they are said the
+    # moment the call is picked up, not seconds into it.
+    tell(f"Getting ready to call {shown}…")
+    opening.get()
+    if stopping():
+        call.ended = "you stopped it"
+        return call
+    tell(f"Calling {shown}…")
     with _holding(owner, shown), _routed():
         _dial(number, via)
         _mark(f"dialled {shown}", began)
@@ -1307,6 +1352,7 @@ def place(who: str, goal: str, user: str,
                     "& Security, Accessibility) so Flash can press Call, "
                     "and try again.")
             _mark("call confirmed", began)
+            _hide_call_app()
             _facetime_devices()
             _mark("devices set", began)
             if not _picked_up(call, stopping):

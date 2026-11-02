@@ -107,8 +107,11 @@ def test_facetime_audio_dials_its_own_way(monkeypatch):
         argv) or "")
     calls._dial("+15550102000", calls.FACETIME)
     calls._dial("+15550102000", calls.PHONE)
-    assert ran == [["open", "facetime-audio:+15550102000"],
-                   ["open", "tel:+15550102000"]]
+    assert [a for a in ran if a[0] == "open"] == [
+        ["open", "facetime-audio:+15550102000"],
+        ["open", "tel:+15550102000"]]
+    # And the app it brings up is hidden again each time.
+    assert [a[0] for a in ran] == ["open", "osascript"] * 2
 
 
 def test_the_transcript_is_kept(tmp_path, monkeypatch):
@@ -124,6 +127,16 @@ def test_the_transcript_is_kept(tmp_path, monkeypatch):
 def test_flash_waits_for_the_call_to_be_picked_up(monkeypatch):
     states = iter([{"live": True, "connected": False}] * 2
                   + [{"live": True, "connected": True}])
+    monkeypatch.setattr(calls, "_state", lambda: next(states))
+    monkeypatch.setattr(calls.time, "sleep", lambda s: None)
+    call = calls.Call(who="John", number="1", goal="ask", incoming=False)
+    assert calls._picked_up(call, lambda: False)
+
+
+def test_a_pick_up_is_seen_when_the_ringing_banner_goes(monkeypatch):
+    # No timer on some Macs: the "FaceTime Audio…" going is the answer.
+    states = iter([{"live": True, "connected": False, "ringing": True}] * 2
+                  + [{"live": True, "connected": False, "ringing": False}])
     monkeypatch.setattr(calls, "_state", lambda: next(states))
     monkeypatch.setattr(calls.time, "sleep", lambda s: None)
     call = calls.Call(who="John", number="1", goal="ask", incoming=False)

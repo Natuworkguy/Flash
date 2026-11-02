@@ -4485,7 +4485,8 @@ def phone_call(action: str = "call", who: str = "", goal: str = "",
             return result
         call = calls.place(who, goal, user, _call_model, stopping=stopping,
                            via=calls.FACETIME if via == calls.FACETIME
-                           else calls.PHONE, owner=owner)
+                           else calls.PHONE, owner=owner,
+                           tell=lambda said: tool_result(said, style=DIM))
     except (calls.CallError, computer.ComputerError) as exc:
         result = f"Error: {exc}"
         tool_result(result, style=ERROR)
