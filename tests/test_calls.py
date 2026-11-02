@@ -695,3 +695,73 @@ def test_a_call_never_seen_starting_stops_and_says_why(monkeypatch):
 def test_call_scans_look_in_the_phone_app_too():
     assert '"Phone"' in calls._STATE
     assert '"Phone"' in calls._PRESS
+
+
+def test_no_accessibility_says_so_instead_of_never_seeing_the_call(
+        monkeypatch):
+    # Without it the scripts saw nothing and Flash waited out the call.
+    def refused(argv, timeout=None):
+        raise calls.computer.ComputerError(
+            "osascript failed: execution error: Error: not allowed "
+            "assistive access (-2700)")
+    monkeypatch.setattr(calls.computer, "_run", refused)
+    with pytest.raises(calls.CallError, match="Accessibility"):
+        calls._state()
+    with pytest.raises(calls.CallError, match="Accessibility"):
+        calls._press(["Call"])
+
+
+def test_a_slow_look_is_not_taken_for_no_accessibility(monkeypatch):
+    # A timeout's message quotes the script, which names assistive access.
+    def slow(argv, timeout=None):
+        raise calls.computer.ComputerError(
+            f"osascript could not run: Command {argv} timed out")
+    monkeypatch.setattr(calls.computer, "_run", slow)
+    assert calls._state() == {"live": False, "connected": False}
+    assert calls._press(["Call"]) == ""
+
+
+def test_scans_read_a_level_at_a_time_and_press_by_description():
+    # Asked an element at a time, a look took over a minute on macOS 27;
+    # its banners' buttons have a description and no name.
+    for script in (calls._STATE, calls._PRESS):
+        assert "uiElements" in script and "entireContents" not in script
+    assert '"description"' in calls._PRESS and "AXPress" in calls._PRESS
+
+
+@pytest.mark.parametrize("via", [calls.PHONE, calls.FACETIME])
+@pytest.mark.parametrize("who_confirms", ["flash", "you"])
+def test_both_kinds_of_call_get_confirmed_and_seen_live(monkeypatch, via,
+                                                        who_confirms):
+    # An iPhone call and a FaceTime Audio one: the prompt is answered,
+    # by Flash pressing Call or by you, and the live call is seen.
+    dialed, pressed = [], []
+    monkeypatch.setattr(calls, "missing", lambda: "")
+    monkeypatch.setattr(calls, "_number_of", lambda who, facetime: (
+        "John", "+15550102000"))
+    monkeypatch.setattr(calls, "_switch", lambda kind, name="": "")
+    monkeypatch.setattr(calls, "_dial",
+                        lambda handle, v: dialed.append((handle, v)))
+
+    def press(names, want=""):
+        pressed.append(names)
+        return "Call" if who_confirms == "flash" and "Call" in names else ""
+    monkeypatch.setattr(calls, "_press", press)
+    # You clicking Call shows only as the call going live.
+    ringing = [{"live": True, "connected": False}]
+    states = iter(ringing * (who_confirms == "you")
+                  + [{"live": True, "connected": True}] * 50)
+    monkeypatch.setattr(calls, "_state", lambda: next(states))
+    monkeypatch.setattr(calls, "_facetime_devices", lambda: None)
+    monkeypatch.setattr(calls.time, "sleep", lambda s: None)
+    seen = []
+
+    def picked_up(call, stopping):
+        seen.append(calls._state()["connected"])
+        call.ended = "test over"
+        return False
+    monkeypatch.setattr(calls, "_picked_up", picked_up)
+    call = calls.place("John", "say hi", "Sam", lambda m: "x", via=via)
+    assert dialed == [("+15550102000", via)]
+    assert ["Call"] in pressed and seen == [True]
+    assert call.ended == "test over"
