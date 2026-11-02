@@ -1,5 +1,8 @@
 # pylint: disable=C0114,C0115,C0116
 
+import io
+import wave
+
 import pytest
 
 from flash import calls, tools
@@ -291,3 +294,59 @@ def test_each_turn_goes_to_the_live_transcript_as_it_happens(monkeypatch,
     assert call.live.parent == tmp_path
     assert kept[0].endswith("Alex: Hello?")
     assert kept[1].endswith("Flash: Hi Alex.")
+
+
+def test_the_monitor_never_feeds_the_call_back(monkeypatch):
+    monkeypatch.delenv("CALL_MIC_DEVICE", raising=False)
+    monkeypatch.delenv("CALL_SPEAKER_DEVICE", raising=False)
+    monkeypatch.setenv("CALL_MONITOR_DEVICE", "MacBook Speakers")
+    assert calls.monitor() == "MacBook Speakers"
+    monkeypatch.setenv("CALL_MONITOR", "off")
+    assert calls.monitor() == ""
+    monkeypatch.delenv("CALL_MONITOR")
+    for loop in ("BlackHole 16ch", "BlackHole 2ch"):
+        monkeypatch.setenv("CALL_MONITOR_DEVICE", loop)
+        assert calls.monitor() == ""
+    monkeypatch.delenv("CALL_MONITOR_DEVICE")
+    monkeypatch.setattr(calls, "_speakers", "Headphones")
+    assert calls.monitor() == "Headphones"
+
+
+def test_the_user_hears_both_sides(monkeypatch):
+    class Out:
+        def __init__(self):
+            self.wrote = []
+
+        def write(self, pcm):
+            self.wrote.append(bytes(pcm))
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    line = calls.Line.__new__(calls.Line)
+    line.device_rate = 1000
+    line.stream = FakeStream([6000] * 20 + [0] * 100)
+    line.monitor = Out()
+    call_out = Out()
+    line.sd = type("SD", (), {"RawOutputStream": lambda self, **k: call_out})()
+    monkeypatch.setattr(calls.voice, "silence_threshold", lambda: 500.0)
+    monkeypatch.setattr(calls.voice, "transcribe", lambda pcm: ("hi", ""))
+    monkeypatch.setattr(calls.time, "sleep", lambda s: None)
+    line.hear(longest=5)
+    heard = len(line.monitor.wrote)
+    assert heard > 0  # the other side
+
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(1000)
+        w.writeframes(b"\x01\x00" * 500)
+    monkeypatch.setattr(calls.voice, "synthesize", lambda t: (
+        buf.getvalue(), ""))
+    line.say("Hello")
+    assert call_out.wrote == [b"\x01\x00" * 500]  # into the call
+    assert line.monitor.wrote[heard:] == [b"\x01\x00" * 500]  # and to you

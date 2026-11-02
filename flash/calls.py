@@ -53,6 +53,31 @@ def from_call() -> str:
 
     return voice._setting("CALL_SPEAKER_DEVICE", FROM_CALL)
 
+
+# The Mac's own speakers from before a call took them over, so the user
+# can still hear it: set while the call's sound is routed.
+_speakers = ""
+
+
+def monitor() -> str:
+    """The device the user hears the call on, both sides: "" when
+    CALL_MONITOR is off, or when it would be a device Flash listens on or
+    speaks into, which would feed the call back into itself."""
+
+    if voice._setting("CALL_MONITOR", "on").lower() in (
+            "off", "0", "false", "no"):
+        return ""
+    name = voice._setting("CALL_MONITOR_DEVICE", _speakers)
+    if not name:
+        with contextlib.suppress(Exception):
+            import sounddevice
+
+            name = str(sounddevice.query_devices(kind="output")["name"])
+    if name in (to_call(), from_call()):
+        return ""
+    return name
+
+
 SWITCH = "SwitchAudioSource"
 INSTALL = "brew install blackhole-2ch blackhole-16ch switchaudio-osx"
 
@@ -267,11 +292,15 @@ def _routed():
     """The call's sound through the loopback devices, and the Mac's own
     devices back afterwards, whatever happened."""
 
+    global _speakers
+
     was_in = _switch("input", to_call())
     was_out = _switch("output", from_call())
+    _speakers = was_out
     try:
         yield
     finally:
+        _speakers = ""
         if was_in:
             _switch("input", was_in)
         if was_out:
@@ -409,11 +438,31 @@ class Line:
             samplerate=self.device_rate,
             blocksize=int(self.device_rate * BLOCK))
         self.stream.start()
+        # The user hears the call too, on their own speakers.
+        self.monitor = None
+        if name := monitor():
+            with contextlib.suppress(Exception):
+                self.monitor = sounddevice.RawOutputStream(
+                    device=name, channels=1, dtype="int16",
+                    samplerate=self.device_rate)
+                self.monitor.start()
 
     def close(self) -> None:
         with contextlib.suppress(Exception):
             self.stream.stop()
             self.stream.close()
+        if getattr(self, "monitor", None):
+            with contextlib.suppress(Exception):
+                self.monitor.stop()
+                self.monitor.close()
+
+    def _monitor(self, pcm: bytes) -> None:
+        """PCM, at the line's rate, on the user's speakers: never a
+        reason for the call to fail."""
+
+        if getattr(self, "monitor", None):
+            with contextlib.suppress(Exception):
+                self.monitor.write(pcm)
 
     def hear(self, longest: float = QUIET_SECONDS,
              stopping: Callable[[], bool] = lambda: False) -> str:
@@ -433,6 +482,7 @@ class Line:
         while not stopping():
             block, _ = self.stream.read(frames)
             block = bytes(block)
+            self._monitor(block)
             level = voice._level(block)
             if floor is None:
                 learning.append(level)
@@ -477,10 +527,15 @@ class Line:
             pcm = read.readframes(read.getnframes())
         out = self.sd.RawOutputStream(device=to_call(), channels=1,
                                       dtype="int16", samplerate=rate)
+        # Flash's voice on the user's speakers as well, alongside.
+        heard = threading.Thread(target=self._monitor, daemon=True, args=(
+            voice._resample(pcm, rate, self.device_rate),))
         with out:
+            heard.start()
             out.write(pcm)
             # Played out before the next word is listened for.
             time.sleep(0.15)
+        heard.join(timeout=5)
         # Its own voice, still on its way back through the call, is not
         # what the other side said.
         with contextlib.suppress(Exception):
