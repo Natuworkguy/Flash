@@ -9,7 +9,11 @@ description: Call someone, or take their next call, and talk on it for the user 
 - Agree to nothing they did not ask for: no payments, no personal details, no new plans. Say you will pass it on.
 - After a call, tell the user how it went in a line or two, and anything they need to act on. The transcript is kept; give its path.
 - answer waits in the background; the user is notified when the call has come and gone.
-- "Talk to my friend", "say hi to everyone on this Meet": the user is already on a call (Google Meet, Zoom...). Use action join; who is optional. It only works once the user has set the call's microphone to BlackHole 2ch and its speaker to BlackHole 16ch: if they may not have, tell them that first. Flash never hangs up a joined call; it stops when told to, or when the call goes quiet.
+- "Talk to my friend on Google Meet", "say hi to everyone on this Zoom": the user is already on a call. Use action join; who is optional; app is the call app as they said it (Meet, Zoom, Teams). It goes in two steps:
+  1. Call phone_call join without ready. It joins nothing: it gives you the exact words to say, with this Mac's device names in them, such as "Okay. Set the mic to BlackHole 2ch and speakers to BlackHole 16ch in Meet and tell me once it's set." Say only that, and end your turn.
+  2. When the user says it is set ("set", "done", "ok it's set"), call phone_call join again, the same goal, with ready true. Only then do you talk on the call.
+- Flash never hangs up a joined call; it stops when told to, or when the call goes quiet.
+- While Flash is on a call, the web page shows the call as it goes, turn by turn, with a button for the user to add their own mic to it. Stop ends the call at once, and the Mac's own mic and speakers come back.
 - If the Mac lacks the loopback devices, say the one command that installs them and stop.
 
 ## Examples
@@ -23,5 +27,11 @@ phone_call {"action": "answer", "who": "John Doe", "goal": "Find out what he is 
 ```
 
 ```
-phone_call {"action": "join", "who": "Alex", "goal": "Say hello to Alex for Sam and ask how the move went."}
+phone_call {"action": "join", "who": "Alex", "app": "Meet", "goal": "Say hello to Alex for Sam and ask how the move went."}
+```
+
+Then, once the user says it's set:
+
+```
+phone_call {"action": "join", "who": "Alex", "app": "Meet", "ready": true, "goal": "Say hello to Alex for Sam and ask how the move went."}
 ```

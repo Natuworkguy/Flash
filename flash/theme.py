@@ -529,6 +529,17 @@ def tool_debate(event: dict) -> bool:
     return True
 
 
+def tool_call(event: dict) -> bool:
+    """Hand one turn of a phone call Flash is on (or its start or end) to
+    whoever is drawing it, as it happens: True when something took it, as
+    the web UI does; the terminal prints the turn instead."""
+
+    sink = _sink()
+    if sink is None:
+        return False
+    return bool(sink("call", json.dumps(event), ""))
+
+
 def tool_music(event: dict) -> Optional[str]:
     """Hand music to the page's player (play_music): what it did, in
     words, or None where there is no page to play it (the terminal)."""

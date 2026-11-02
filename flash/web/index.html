@@ -8073,6 +8073,56 @@ function assistantBlock(entry) {
   return frag;
 }
 
+// A phone call Flash is on, as it goes: its start, with the button that
+// adds the user's own mic to it, then each turn drawn the way the chat
+// draws its own (the other side as the user's bubble, Flash as a reply),
+// with who said it and when; its end takes the button away.
+function drawCallEntry(entry) {
+  if (entry.state === "start") {
+    const bar = el("div", "speaker", `<span class="name"></span><span class="from">live</span>`);
+    bar.style.setProperty("--c", "var(--accent)");
+    bar.querySelector(".name").textContent = `On the call with ${entry.with || "them"}`;
+    bar.dataset.callLive = "1";
+    const mic = bar.appendChild(el("button", "pill", `${icon("mic")}<span>Add my mic</span>`));
+    mic.type = "button";
+    mic.setAttribute("aria-pressed", "false");
+    mic.onclick = async () => {
+      const on = mic.getAttribute("aria-pressed") !== "true";
+      mic.disabled = true;
+      try {
+        const now = await command("call-mic", on ? "on" : "off");
+        mic.setAttribute("aria-pressed", now.mic ? "true" : "false");
+        mic.lastChild.textContent = now.mic ? "Take my mic off" : "Add my mic";
+      } catch (e) { toast(e.message); }
+      mic.disabled = !bar.dataset.callLive;
+    };
+    messagesEl.appendChild(bar);
+    return;
+  }
+  if (entry.state === "end") {
+    for (const bar of messagesEl.querySelectorAll("[data-call-live]")) {
+      delete bar.dataset.callLive;
+      bar.querySelector(".from").textContent = "ended";
+      bar.querySelector("button")?.remove();
+    }
+    return;
+  }
+  const when = `${entry.who} · ${entry.at || ""}`;
+  if (entry.flash) {
+    const head = el("div", "speaker", `<span class="name"></span><span class="from"></span>`);
+    head.style.setProperty("--c", "var(--accent)");
+    head.querySelector(".name").textContent = entry.who;
+    head.querySelector(".from").textContent = entry.at || "";
+    messagesEl.appendChild(head);
+    const wrap = messagesEl.appendChild(el("div", "block turn"));
+    wrap.appendChild(el("div", "assistant")).textContent = entry.said;
+    return;
+  }
+  const wrap = messagesEl.appendChild(el("div", "block user-wrap turn"));
+  wrap.appendChild(el("div", "steer-tag", `${icon("phone")}<span></span>`)).lastChild.textContent = when;
+  wrap.appendChild(el("div", "user")).textContent = entry.said;
+}
+
 function drawEntry(entry, ctx) {
   switch (entry.type) {
     case "user": {
@@ -8112,6 +8162,7 @@ function drawEntry(entry, ctx) {
       break;
     }
     case "result": if (ctx.tool) addResult(ctx.tool, entry.text, entry.error, entry.warn); break;
+    case "call": drawCallEntry(entry); break;
     case "diff": if (ctx.tool) addDiff(ctx.tool, entry.text); break;
     case "plan": if (ctx.tool) addPlan(ctx.tool, entry.steps || []); break;
     case "ask": messagesEl.appendChild(askCard(entry)); break;

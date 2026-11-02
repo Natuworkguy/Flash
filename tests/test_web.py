@@ -369,6 +369,45 @@ class TestCommands:
         with pytest.raises(ValueError):
             web.command(web.Session(), {"name": "explode"})
 
+    def test_stop_halts_a_call(self, monkeypatch):
+        from flash import calls
+
+        halted = []
+        monkeypatch.setattr(calls, "halt", halted.append)
+        session = web.Session()
+        chat_id = web.command(session, {"name": "new"})["chat"]
+        web.command(session, {"name": "stop", "chat": chat_id})
+        assert halted == [chat_id]
+
+    def test_call_mic(self, monkeypatch):
+        from flash import calls
+
+        asked = []
+        monkeypatch.setattr(calls, "set_mic", lambda on, owner="": (
+            asked.append((on, owner)) or {"live": True, "mic": on}))
+        assert web.command(web.Session(), {
+            "name": "call-mic", "arg": "on", "chat": "c1"})["mic"] is True
+        assert asked == [(True, "c1")]
+        with pytest.raises(ValueError):
+            web.command(web.Session(), {"name": "call-mic", "arg": "loud"})
+
+        def no_call(on, owner=""):
+            raise calls.CallError("Flash isn't talking on a call right now.")
+
+        monkeypatch.setattr(calls, "set_mic", no_call)
+        with pytest.raises(ValueError, match="isn't talking"):
+            web.command(web.Session(), {"name": "call-mic", "arg": "on"})
+
+    def test_a_call_turn_is_kept_in_the_chat(self):
+        session = web.Session()
+        chat = session.chat(web.command(session, {"name": "new"})["chat"])
+        sink = web._sink(session, chat)
+        assert sink("call", json.dumps({"who": "Alex", "said": "Hi",
+                                        "at": "12:00:00", "flash": False}),
+                    "")
+        assert chat.log[-1]["type"] == "call"
+        assert chat.log[-1]["said"] == "Hi"
+
 
 # --- HTTP ----------------------------------------------------------------
 
