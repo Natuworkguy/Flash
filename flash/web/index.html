@@ -8134,6 +8134,9 @@ function drawCallEntry(entry) {
       delete bar.dataset.callLive;
       bar.querySelector(".from").textContent = "ended";
     }
+    // A line under the call's last words, so Flash's reply after it reads
+    // apart from them: the same rule a reply's own --- draws.
+    messagesEl.appendChild(el("div", "block turn")).appendChild(el("div", "assistant")).appendChild(el("hr"));
     callBar.hidden = true;
     mic.onclick = null;
     pause.onclick = null;
