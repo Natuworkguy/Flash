@@ -266,14 +266,14 @@ def test_the_tool_joins_without_a_name(monkeypatch, tmp_path):
     monkeypatch.setattr(tools, "_call_user", lambda: "Sam")
     seen = {}
 
-    def join(goal, user, ask, who="", stopping=lambda: False):
+    def join(goal, user, ask, who="", stopping=lambda: False, owner=""):
         seen.update(goal=goal, who=who)
         return calls.Call(who="the people on the call", number="",
                           goal=goal, incoming=True, joined=True,
                           ended="you stopped it")
 
     monkeypatch.setattr(calls, "join", join)
-    result = tools.phone_call(action="join", goal="say hi")
+    result = tools.phone_call(action="join", goal="say hi", ready=True)
     assert seen == {"goal": "say hi", "who": ""}
     assert "left the call" in result
 
@@ -380,5 +380,199 @@ def test_the_user_hears_both_sides(monkeypatch):
     monkeypatch.setattr(calls.voice, "synthesize", lambda t: (
         buf.getvalue(), ""))
     line.say("Hello")
-    assert call_out.wrote == [b"\x01\x00" * 500]  # into the call
-    assert line.monitor.wrote[heard:] == [b"\x01\x00" * 500]  # and to you
+    # A block at a time, so Stop can cut it short.
+    assert b"".join(call_out.wrote) == b"\x01\x00" * 500  # into the call
+    assert b"".join(line.monitor.wrote[heard:]) == b"\x01\x00" * 500
+
+
+def test_joining_asks_for_the_devices_first(monkeypatch):
+    monkeypatch.setattr(tools, "ultra_auto", lambda: True)
+    monkeypatch.setattr(calls, "missing", lambda: "")
+    monkeypatch.setenv("CALL_MIC_DEVICE", "Loop Mic")
+    monkeypatch.setenv("CALL_SPEAKER_DEVICE", "Loop Out")
+
+    def never(*a, **k):
+        raise AssertionError("nothing is joined before the user says set")
+
+    monkeypatch.setattr(calls, "join", never)
+    result = tools.phone_call(action="join", who="Alex", goal="say hi",
+                              app="Meet")
+    assert ("Okay. Set the mic to Loop Mic and speakers to Loop Out in "
+            "Meet and tell me once it's set.") in result
+    assert "ready true" in result
+
+
+def _wav(frames, rate=1000):
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(rate)
+        w.writeframes(b"\x01\x00" * frames)
+    return buf.getvalue()
+
+
+class Out:
+    def __init__(self, on_write=None):
+        self.wrote = []
+        self.on_write = on_write
+
+    def write(self, pcm):
+        self.wrote.append(bytes(pcm))
+        if self.on_write:
+            self.on_write()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+
+def _bare_line():
+    line = calls.Line.__new__(calls.Line)
+    line.device_rate = 1000
+    line.monitor = None
+    line.mic = None
+    line.stopped = calls.threading.Event()
+    return line
+
+
+def test_halting_stops_flash_mid_word(monkeypatch):
+    line = _bare_line()
+    out = Out(on_write=line.halt)  # Stop pressed after the first block
+    line.sd = type("SD", (), {"RawOutputStream": lambda self, **k: out})()
+    line.stream = FakeStream([6000] * 100)
+    monkeypatch.setattr(calls.voice, "synthesize", lambda t: (
+        _wav(5000), ""))
+    monkeypatch.setattr(calls.time, "sleep", lambda s: None)
+    line.say("A long sentence")
+    assert len(out.wrote) == 1  # not the other forty-nine blocks
+    assert line.hear(longest=5) == ""  # nor listening after
+    line.say("More")  # nor speaking again
+    assert len(out.wrote) == 1
+
+
+def test_a_halted_line_ends_the_talk():
+    line = FakeLine(["Hello?", "Still there?"])
+    line.stopped = calls.threading.Event()
+    line._halted = line.stopped.is_set
+    line.stopped.set()
+    call = calls.Call(who="Alex", number="", goal="hi", incoming=True)
+    calls.talk(call, line, "Sam", lambda m: "Hi")
+    assert call.ended == "you stopped it" and line.said == []
+
+
+def test_the_macs_devices_come_back_however_the_call_ends(monkeypatch):
+    now = {"input": "MacBook Microphone", "output": "MacBook Speakers"}
+
+    def switch(kind, name=""):
+        was = now[kind]
+        if name:
+            now[kind] = name
+        return was
+
+    monkeypatch.setattr(calls, "_switch", switch)
+    with pytest.raises(RuntimeError):
+        with calls._routed():
+            assert now == {"input": "BlackHole 2ch",
+                           "output": "BlackHole 16ch"}
+            raise RuntimeError("the call fell over")
+    assert now == {"input": "MacBook Microphone",
+                   "output": "MacBook Speakers"}
+    now.update(input="Headset")
+    calls.restore()  # only once: nothing to put back now
+    assert now["input"] == "Headset"
+
+
+def test_stop_halts_the_call_and_gives_the_devices_back(monkeypatch):
+    now = {"input": "MacBook Microphone", "output": "MacBook Speakers"}
+
+    def switch(kind, name=""):
+        was = now[kind]
+        if name:
+            now[kind] = name
+        return was
+
+    monkeypatch.setattr(calls, "_switch", switch)
+    line = _bare_line()
+    monkeypatch.setattr(calls, "Line", lambda: line)
+    with calls._holding("chat-1", "Alex"), calls._routed(), \
+            calls._opened():
+        assert calls.live()["live"]
+        assert not calls.halt("another chat")  # not its call
+        assert calls.halt("chat-1")
+        assert line.stopped.is_set()
+        assert now == {"input": "MacBook Microphone",
+                       "output": "MacBook Speakers"}
+    assert not calls.live()["live"]
+    assert not calls.halt("chat-1")  # nothing going on now
+
+
+class FakeMicSD:
+    def __init__(self):
+        self.out = Out()
+        self.opened = []
+
+    def query_devices(self, name=None, kind=None):
+        return {"default_samplerate": 1000, "name": "MacBook Microphone"}
+
+    def RawInputStream(self, **k):
+        self.opened.append(("in", k["device"]))
+        return type("In", (), {
+            "start": lambda s: None, "stop": lambda s: None,
+            "close": lambda s: None,
+            "read": lambda s, n: (b"\x05\x00" * n, False)})()
+
+    def RawOutputStream(self, **k):
+        self.opened.append(("out", k["device"]))
+        out = self.out
+        out.start = out.stop = out.close = lambda: None
+        return out
+
+
+def test_the_users_mic_goes_into_the_call_and_out_again(monkeypatch):
+    monkeypatch.delenv("CALL_MIC_DEVICE", raising=False)
+    monkeypatch.delenv("CALL_SPEAKER_DEVICE", raising=False)
+    monkeypatch.setenv("CALL_USER_MIC", "MacBook Microphone")
+    line = _bare_line()
+    line.sd = FakeMicSD()
+    monkeypatch.setattr(calls, "Line", lambda: line)
+    with pytest.raises(calls.CallError):
+        calls.set_mic(True)  # no call going on
+    with calls._holding("", "Alex"), calls._opened():
+        assert calls.set_mic(True)["mic"]
+        deadline = calls.time.monotonic() + 2
+        while not line.sd.out.wrote and calls.time.monotonic() < deadline:
+            calls.time.sleep(0.01)
+        assert calls.set_mic(False)["mic"] is False
+    # From the user's own mic, into what the call hears: never into
+    # what Flash listens on.
+    assert line.sd.opened == [("in", "MacBook Microphone"),
+                              ("out", "BlackHole 2ch")]
+    assert line.sd.out.wrote and line.sd.out.wrote[0].startswith(b"\x05\x00")
+
+
+def test_the_users_mic_is_never_a_loopback(monkeypatch):
+    monkeypatch.delenv("CALL_MIC_DEVICE", raising=False)
+    monkeypatch.delenv("CALL_SPEAKER_DEVICE", raising=False)
+    for loop in ("BlackHole 2ch", "BlackHole 16ch"):
+        monkeypatch.setenv("CALL_USER_MIC", loop)
+        with pytest.raises(calls.CallError):
+            calls._user_mic()
+
+
+def test_each_turn_goes_to_the_page_when_one_is_drawing(monkeypatch,
+                                                       tmp_path):
+    monkeypatch.setattr(calls, "CALLS_DIR", tmp_path)
+    drawn = []
+    monkeypatch.setattr(calls, "tool_call",
+                        lambda event: drawn.append(event) or True)
+    monkeypatch.setattr(calls, "tool_result", lambda *a, **k: (
+        _ for _ in ()).throw(AssertionError("printed as well")))
+    call = calls.Call(who="Alex", number="", goal="hi", incoming=False)
+    call.say("Alex", "Hello?")
+    call.say("Flash", "Hi Alex.")
+    assert [(e["who"], e["said"], e["flash"]) for e in drawn] == [
+        ("Alex", "Hello?", False), ("Flash", "Hi Alex.", True)]
+    assert all(e["at"] and e["with"] == "Alex" for e in drawn)

@@ -558,7 +558,7 @@ class Ask:
 KEPT = {
     "user", "assistant", "tool", "result", "diff", "ask", "answered",
     "error", "stats", "note", "thought", "file", "plan", "browser", "wait",
-    "seen", "debate", "course", "chess", "guide",
+    "seen", "debate", "course", "chess", "guide", "call",
 }
 
 
@@ -3259,6 +3259,12 @@ def _sink(session: Session, chat: Chat):
             session.hub.publish({"type": "debate-live", "chat": chat.id,
                                  **event})
             return True
+        if kind == "call":
+            # A turn of the call Flash is on, drawn as it is said, and
+            # its start and end, which bring the mic button and take it
+            # away.
+            session.emit(chat, {"type": "call", **json.loads(text)})
+            return True
         if kind == "music":
             # The page's player: one for all the pages, as the music is.
             asked = json.loads(text)
@@ -5028,6 +5034,9 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
         chat.stop.set()
         # A command it is running ends now, not when it would have.
         _tools().stop_commands(chat.id)
+        # A call Flash is on stops mid-word, and the Mac gets its own
+        # microphone and speakers back.
+        calls.halt(chat.id)
         # What was waiting goes back to the page, to send again or not.
         items = session.unqueue(chat)
         return {
@@ -5217,6 +5226,18 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
     if name == "call-monitor-device":
         # The device the call is heard on; empty: the Mac's speakers.
         return calls.set_monitor(device=arg)
+
+    if name == "call-mic":
+        # The user's own mic into the call Flash is on, or out of it;
+        # no arg: only where it stands.
+        if arg not in ("", "on", "off"):
+            raise ValueError("call-mic takes on or off")
+        if arg:
+            try:
+                return calls.set_mic(arg == "on", owner=chat_id)
+            except calls.CallError as exc:
+                raise ValueError(str(exc)) from None
+        return calls.live()
 
     if name == "wake-word":
         # The words that wake Flash; no arg: only what they are.

@@ -19,6 +19,7 @@ calling for the user: it never passes itself off as them.
 
 from __future__ import annotations
 
+import atexit
 import contextlib
 import io
 import json
@@ -35,7 +36,7 @@ from typing import Optional
 
 from . import computer, voice
 from .paths import ENV_PATH, FLASH_DIR
-from .theme import DIM, tool_result
+from .theme import DIM, tool_call, tool_result
 
 # The devices that carry the call's sound, and what installs them.
 TO_CALL = "BlackHole 2ch"      # Flash speaks into it: the call's microphone
@@ -58,6 +59,14 @@ def from_call() -> str:
 # The Mac's own speakers from before a call took them over, so the user
 # can still hear it: set while the call's sound is routed.
 _speakers = ""
+
+# The call going now, for Stop and the page's mic button: who started it
+# ("" for no one known), its line once it has one, and the Mac's own
+# devices ("input", "output") from before the call switched them.
+_lock = threading.Lock()
+_owner: Optional[str] = None
+_line: Optional[Line] = None
+_was: dict[str, str] = {}
 
 
 def monitor() -> str:
@@ -283,8 +292,12 @@ class Call:
         it happens, and added to the call's live transcript file."""
 
         self.lines.append((who, said))
-        line = f"[{time.strftime('%H:%M:%S')}] {who}: {said}"
-        tool_result(line, style=DIM)
+        at = time.strftime('%H:%M:%S')
+        line = f"[{at}] {who}: {said}"
+        # The page draws the turn as it is said; the terminal prints it.
+        if not tool_call({"who": who, "said": said, "at": at,
+                          "flash": who == "Flash", "with": self.who}):
+            tool_result(line, style=DIM)
         try:
             if self.live is None:
                 CALLS_DIR.mkdir(parents=True, exist_ok=True)
@@ -336,6 +349,26 @@ def _switch(kind: str, name: str = "") -> str:
     return was
 
 
+def restore() -> None:
+    """The Mac's own input and output back, if a call switched them: once,
+    however many times it is asked (the call's end, Stop, Flash
+    quitting)."""
+
+    global _speakers
+
+    with _lock:
+        was = dict(_was)
+        _was.clear()
+    _speakers = ""
+    for kind in ("input", "output"):
+        if was.get(kind):
+            with contextlib.suppress(OSError, subprocess.SubprocessError):
+                _switch(kind, was[kind])
+
+
+atexit.register(restore)
+
+
 @contextlib.contextmanager
 def _routed():
     """The call's sound through the loopback devices, and the Mac's own
@@ -343,17 +376,153 @@ def _routed():
 
     global _speakers
 
-    was_in = _switch("input", to_call())
-    was_out = _switch("output", from_call())
-    _speakers = was_out
+    try:
+        for kind, name in (("input", to_call()), ("output", from_call())):
+            was = _switch(kind, name)
+            if was and was != name:
+                with _lock:
+                    _was.setdefault(kind, was)
+        _speakers = _was.get("output", "")
+        yield
+    finally:
+        restore()
+
+
+@contextlib.contextmanager
+def _holding(owner: str, who: str):
+    """The call as the one going now, for halt() and set_mic(), with the
+    page told when it starts and ends."""
+
+    global _owner
+
+    with _lock:
+        _owner = owner
+    tool_call({"state": "start", "with": who})
     try:
         yield
     finally:
-        _speakers = ""
-        if was_in:
-            _switch("input", was_in)
-        if was_out:
-            _switch("output", was_out)
+        with _lock:
+            _owner = None
+        tool_call({"state": "end", "with": who})
+
+
+@contextlib.contextmanager
+def _opened():
+    """The call's Line, open while the call talks, and closed (the mic
+    passthrough with it) whatever happened."""
+
+    global _line
+
+    line = Line()
+    with _lock:
+        _line = line
+    try:
+        yield line
+    finally:
+        with _lock:
+            _line = None
+        line.close()
+
+
+def _mine(owner: str) -> bool:
+    return _owner is not None and (not owner or not _owner
+                                   or owner == _owner)
+
+
+def halt(owner: str = "") -> bool:
+    """Stop the call going now, at once: Flash stops speaking mid-word
+    and listening, the user's mic leaves the call, and the Mac's own
+    devices come back. OWNER (a chat): only its own call. Whether there
+    was one."""
+
+    with _lock:
+        if not _mine(owner):
+            return False
+        line = _line
+    if line is not None:
+        line.halt()
+    restore()
+    return True
+
+
+def live() -> dict:
+    """The call going now, as the page shows it."""
+
+    with _lock:
+        line = _line
+        on = _owner is not None
+    return {"live": on, "talking": line is not None,
+            "mic": bool(line is not None and getattr(line, "mic", None))}
+
+
+def set_mic(on: bool, owner: str = "") -> dict:
+    """The user's own microphone into the call alongside Flash's voice,
+    or out of it again."""
+
+    with _lock:
+        line = _line if _mine(owner) else None
+    if line is None:
+        raise CallError("Flash isn't talking on a call right now.")
+    line.set_mic(on)
+    return live()
+
+
+def _user_mic() -> str:
+    """The user's own microphone: CALL_USER_MIC, else the Mac's input from
+    before the call, else its input now. Never a device the call's sound
+    goes through, which would feed the call back into itself."""
+
+    name = voice._setting("CALL_USER_MIC", "") or _was.get("input", "")
+    if not name:
+        with contextlib.suppress(Exception):
+            import sounddevice
+
+            name = str(sounddevice.query_devices(kind="input")["name"])
+    if not name or name in (TO_CALL, FROM_CALL, to_call(), from_call()):
+        raise CallError(
+            "Flash can't find your own microphone: the Mac's input is a "
+            "device the call goes through. Set CALL_USER_MIC to your "
+            "microphone's name.")
+    return name
+
+
+class _MicPass:
+    """The user's microphone, a block at a time, into the device the call
+    hears Flash on. The Mac mixes it with Flash's voice there; nothing of
+    it goes where Flash listens, or to the monitor."""
+
+    def __init__(self, sd, mic: str, into: str) -> None:
+        rate = int(sd.query_devices(mic, "input")["default_samplerate"])
+        self.frames = int(rate * BLOCK)
+        self.inp = sd.RawInputStream(device=mic, channels=1, dtype="int16",
+                                     samplerate=rate, blocksize=self.frames)
+        self.out = sd.RawOutputStream(device=into, channels=1,
+                                      dtype="int16", samplerate=rate,
+                                      blocksize=self.frames)
+        self.done = threading.Event()
+        self.inp.start()
+        self.out.start()
+        self.thread = threading.Thread(target=self._pass, daemon=True,
+                                       name="call mic")
+        self.thread.start()
+
+    def _pass(self) -> None:
+        while not self.done.is_set():
+            try:
+                block, _ = self.inp.read(self.frames)
+                if self.done.is_set():
+                    return
+                self.out.write(bytes(block))
+            except Exception:  # noqa: BLE001  (a device gone: it ends)
+                return
+
+    def close(self) -> None:
+        self.done.set()
+        self.thread.join(timeout=1.0)
+        for stream in (self.inp, self.out):
+            with contextlib.suppress(Exception):
+                stream.stop()
+                stream.close()
 
 
 def _press(names: list[str], want: str = "") -> str:
@@ -480,6 +649,8 @@ class Line:
         import sounddevice
 
         self.sd = sounddevice
+        self.stopped = threading.Event()
+        self.mic: Optional[_MicPass] = None
         self.device_rate = int(sounddevice.query_devices(
             from_call(), "input")["default_samplerate"])
         self.stream = sounddevice.RawInputStream(
@@ -496,7 +667,32 @@ class Line:
                     samplerate=self.device_rate)
                 self.monitor.start()
 
+    def _halted(self) -> bool:
+        stopped = getattr(self, "stopped", None)
+        return bool(stopped and stopped.is_set())
+
+    def halt(self) -> None:
+        """Stop now: speaking mid-word, listening, the user's mic."""
+
+        if getattr(self, "stopped", None) is None:
+            self.stopped = threading.Event()
+        self.stopped.set()
+        self.set_mic(False)
+
+    def set_mic(self, on: bool) -> None:
+        """The user's own microphone into the call, or out of it."""
+
+        mic = getattr(self, "mic", None)
+        if not on:
+            self.mic = None
+            if mic is not None:
+                mic.close()
+            return
+        if mic is None and not self._halted():
+            self.mic = _MicPass(self.sd, _user_mic(), to_call())
+
     def close(self) -> None:
+        self.set_mic(False)
         with contextlib.suppress(Exception):
             self.stream.stop()
             self.stream.close()
@@ -513,6 +709,18 @@ class Line:
             with contextlib.suppress(Exception):
                 self.monitor.write(pcm)
 
+    def _play(self, write: Callable[[bytes], None], pcm: bytes,
+              rate: int) -> bool:
+        """PCM through WRITE a block at a time, so a halt cuts it short.
+        Whether it all played."""
+
+        step = max(1, int(rate * BLOCK)) * 2
+        for at in range(0, len(pcm), step):
+            if self._halted():
+                return False
+            write(pcm[at:at + step])
+        return True
+
     def hear(self, longest: float = QUIET_SECONDS,
              stopping: Callable[[], bool] = lambda: False) -> str:
         """What the other side says next, once they pause: "" if they
@@ -528,7 +736,7 @@ class Line:
         quiet = 0.0
         waited = 0.0
         frames = int(self.device_rate * BLOCK)
-        while not stopping():
+        while not stopping() and not self._halted():
             block, _ = self.stream.read(frames)
             block = bytes(block)
             self._monitor(block)
@@ -566,10 +774,12 @@ class Line:
     def say(self, text: str) -> None:
         """TEXT in Flash's voice, into the call."""
 
+        if self._halted():
+            return
         wav, why = voice.synthesize(voice.speakable(text))
         if why:
             raise CallError(why)
-        if not wav:
+        if not wav or self._halted():
             return
         with wave.open(io.BytesIO(wav)) as read:
             rate = read.getframerate()
@@ -577,13 +787,14 @@ class Line:
         out = self.sd.RawOutputStream(device=to_call(), channels=1,
                                       dtype="int16", samplerate=rate)
         # Flash's voice on the user's speakers as well, alongside.
-        heard = threading.Thread(target=self._monitor, daemon=True, args=(
-            voice._resample(pcm, rate, self.device_rate),))
+        heard = threading.Thread(target=self._play, daemon=True, args=(
+            self._monitor, voice._resample(pcm, rate, self.device_rate),
+            self.device_rate))
         with out:
             heard.start()
-            out.write(pcm)
-            # Played out before the next word is listened for.
-            time.sleep(0.15)
+            if self._play(out.write, pcm, rate):
+                # Played out before the next word is listened for.
+                time.sleep(0.15)
         heard.join(timeout=5)
         # Its own voice, still on its way back through the call, is not
         # what the other side said.
@@ -636,6 +847,13 @@ def talk(call: Call, line: Line, user: str, ask: Callable[[list[dict]], str],
     """The conversation: Flash and the other side in turn, until the goal
     is met, they go quiet, or it runs too long."""
 
+    told = stopping
+    halted = getattr(line, "_halted", None)
+    if halted is not None:
+        # Stop halts the line itself: that ends the talk too.
+        def stopping() -> bool:
+            return told() or halted()
+
     started = time.monotonic()
     if call.incoming:
         first = ""
@@ -665,7 +883,7 @@ def talk(call: Call, line: Line, user: str, ask: Callable[[list[dict]], str],
             break
         call.say(call.who or "Them", heard)
     if stopping() and not call.ended:
-        call.ended = getattr(stopping, "why", "") or "you stopped it"
+        call.ended = getattr(told, "why", "") or "you stopped it"
 
 
 def _keep(call: Call) -> Path:
@@ -692,7 +910,7 @@ def _hang_up() -> None:
 def place(who: str, goal: str, user: str,
           ask: Callable[[list[dict]], str],
           stopping: Callable[[], bool] = lambda: False,
-          via: str = PHONE) -> Call:
+          via: str = PHONE, owner: str = "") -> Call:
     """Call WHO and talk to them for USER, towards GOAL: on the phone, or
     with FaceTime Audio (VIA)."""
 
@@ -704,7 +922,7 @@ def place(who: str, goal: str, user: str,
         # Only FaceTime calls an email address.
         via = FACETIME
     call = Call(who=shown, number=number, goal=goal, incoming=False)
-    with _routed():
+    with _holding(owner, shown), _routed():
         _dial(number, via)
         try:
             # The Mac asks before it dials, in a notification: Flash says
@@ -725,13 +943,12 @@ def place(who: str, goal: str, user: str,
             _facetime_devices()
             if not _picked_up(call, stopping):
                 return call
-            line = Line()
-            on = _StillOn(stopping)
-            try:
-                talk(call, line, user, ask, on)
-            finally:
-                on.close()
-                line.close()
+            with _opened() as line:
+                on = _StillOn(stopping)
+                try:
+                    talk(call, line, user, ask, on)
+                finally:
+                    on.close()
         finally:
             _hang_up()
     return call
@@ -739,7 +956,8 @@ def place(who: str, goal: str, user: str,
 
 def take_next(who: str, goal: str, user: str,
               ask: Callable[[list[dict]], str], minutes: float = 30,
-              stopping: Callable[[], bool] = lambda: False) -> Optional[Call]:
+              stopping: Callable[[], bool] = lambda: False,
+              owner: str = "") -> Optional[Call]:
     """Wait up to MINUTES for a call from WHO, answer it, and talk for
     USER, towards GOAL. None if none came."""
 
@@ -760,23 +978,25 @@ def take_next(who: str, goal: str, user: str,
     else:
         return None
     call = Call(who=shown, number=number, goal=goal, incoming=True)
-    with _routed():
-        time.sleep(1.0)
-        _facetime_devices()
-        line = Line()
-        on = _StillOn(stopping)
+    with _holding(owner, shown), _routed():
         try:
-            talk(call, line, user, ask, on)
+            time.sleep(1.0)
+            _facetime_devices()
+            with _opened() as line:
+                on = _StillOn(stopping)
+                try:
+                    talk(call, line, user, ask, on)
+                finally:
+                    on.close()
         finally:
-            on.close()
-            line.close()
             _hang_up()
     return call
 
 
 def join(goal: str, user: str, ask: Callable[[list[dict]], str],
          who: str = "",
-         stopping: Callable[[], bool] = lambda: False) -> Call:
+         stopping: Callable[[], bool] = lambda: False,
+         owner: str = "") -> Call:
     """Talk on a call USER is already on (Google Meet, Zoom...), towards
     GOAL, until told to stop, the call goes quiet, or it runs too long.
 
@@ -791,11 +1011,13 @@ def join(goal: str, user: str, ask: Callable[[list[dict]], str],
         raise CallError(why)
     call = Call(who=who or "the people on the call", number="", goal=goal,
                 incoming=True, joined=True)
-    line = Line()
-    try:
-        talk(call, line, user, ask, stopping)
-    finally:
-        line.close()
+    with _holding(owner, call.who):
+        try:
+            with _opened() as line:
+                talk(call, line, user, ask, stopping)
+        finally:
+            # Nothing was switched for it, unless something else was.
+            restore()
     return call
 
 

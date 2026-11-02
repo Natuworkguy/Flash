@@ -2772,6 +2772,14 @@ PHONE_TOOL = {
                         "default), or FaceTime Audio over the internet, "
                         "which needs no iPhone and can call an email "
                         "address. Answering takes either."},
+                "ready": {"type": "boolean",
+                          "description": "join: true only once the user "
+                          "has said they set the call app's mic and "
+                          "speakers as you asked. Without it, join only "
+                          "tells you what to ask them."},
+                "app": {"type": "string",
+                        "description": "join: the call app, as the user "
+                        "would say it: Meet, Zoom, Teams..."},
             },
             "required": ["action", "who", "goal"],
         },
@@ -4401,7 +4409,8 @@ def _call_model(messages: list[dict]) -> str:
 
 
 def phone_call(action: str = "call", who: str = "", goal: str = "",
-               minutes: float = 30, via: str = "phone") -> str:
+               minutes: float = 30, via: str = "phone",
+               ready: bool = False, app: str = "") -> str:
     """Call someone, or take their next call, and talk on it in Flash's
     own voice towards GOAL: UltraAuto only, on a Mac."""
 
@@ -4422,6 +4431,20 @@ def phone_call(action: str = "call", who: str = "", goal: str = "",
         return f"Error: {why}"
     owner = getattr(_owner, "name", "")
     since = time.time()
+    if isinstance(ready, str):
+        ready = ready.strip().lower() in ("true", "yes", "1")
+    if action == "join" and not ready:
+        # The call app's mic and speakers have to be the loopback
+        # devices first, and only the user can set them: ask, and wait.
+        ask = (f"Okay. Set the mic to {calls.to_call()} and speakers to "
+               f"{calls.from_call()} in {app.strip() or 'the call app'} "
+               "and tell me once it's set.")
+        result = (f"Not joined yet. Say exactly this to the user, and "
+                  f"nothing else: \"{ask}\" Then wait for them to say it "
+                  "is set, and call phone_call again with action join and "
+                  "ready true.")
+        tool_result(result, style=DIM)
+        return result
 
     def stopping() -> bool:
         return halted(owner, since)
@@ -4432,7 +4455,7 @@ def phone_call(action: str = "call", who: str = "", goal: str = "",
             try:
                 call = calls.take_next(who, goal, user, _call_model,
                                        minutes=float(minutes or 30),
-                                       stopping=stopping)
+                                       stopping=stopping, owner=owner)
             except Exception as exc:  # noqa: BLE001
                 desktop_notify("Flash's call", f"It failed: {exc}")
                 return
@@ -4456,13 +4479,13 @@ def phone_call(action: str = "call", who: str = "", goal: str = "",
     try:
         if action == "join":
             call = calls.join(goal, user, _call_model, who=who,
-                              stopping=stopping)
+                              stopping=stopping, owner=owner)
             result = calls.summary(call, calls._keep(call))
             tool_result(result, style=DIM)
             return result
         call = calls.place(who, goal, user, _call_model, stopping=stopping,
                            via=calls.FACETIME if via == calls.FACETIME
-                           else calls.PHONE)
+                           else calls.PHONE, owner=owner)
     except (calls.CallError, computer.ComputerError) as exc:
         result = f"Error: {exc}"
         tool_result(result, style=ERROR)
