@@ -9,6 +9,12 @@ from dotenv import dotenv_values
 from flash import calls, tools
 
 
+@pytest.fixture(autouse=True)
+def _no_timing_log(monkeypatch):
+    # The real calls/timing.log is for real calls only.
+    monkeypatch.setattr(calls, "_mark", lambda step, since: None)
+
+
 class FakeLine:
     def __init__(self, heard):
         self.heard = list(heard)

@@ -177,6 +177,9 @@ function levels(se, proc, enough) {
   };
   if (!se.uiElementsEnabled()) throw new Error("not allowed assistive access");
   const out = [];
+  // Asking for a process that isn't running waits ~3 s for System
+  // Events to give up; the list of running ones costs under 0.1 s.
+  if (!se.processes.name().includes(proc)) return out;
   let spec;
   try { spec = se.processes.byName(proc).windows; spec.name(); }
   catch (e) { return out; }
@@ -284,7 +287,16 @@ function run() {
   const ends = ["End", "End Call", "Hang Up"];
   let live = false, connected = false;
   for (const proc of PROCS) {
-    for (const [spec, rows] of levels(se, proc)) {
+    // Both seen: the levels below can tell nothing more.
+    const sure = (rows) => {
+      for (const x of rows) {
+        if (x.role === "AXButton" && ends.includes(x.name)) live = true;
+        if (x.role === "AXStaticText" && /^\d{1,2}:\d{2}(:\d{2})?$/.test(
+          (x.value || x.name).trim())) connected = true;
+      }
+      return live && connected;
+    };
+    for (const [spec, rows] of levels(se, proc, sure)) {
       for (const x of rows) {
         if (x.role === "AXButton" && ends.includes(x.name)) live = true;
         const shown = (x.value || x.name).trim();
@@ -337,6 +349,17 @@ function run(argv) {
 
 class CallError(Exception):
     pass
+
+
+def _mark(step: str, since: float) -> None:
+    """How long STEP took to come, from SINCE, in calls/timing.log: where
+    a call's first seconds go."""
+
+    with contextlib.suppress(OSError):
+        CALLS_DIR.mkdir(parents=True, exist_ok=True)
+        with (CALLS_DIR / "timing.log").open("a", encoding="utf-8") as out:
+            out.write(f"{time.strftime('%H:%M:%S')} "
+                      f"+{time.monotonic() - since:5.1f}s {step}\n")
 
 
 @dataclass
@@ -813,7 +836,9 @@ def _picked_up(call: Call, stopping: Callable[[], bool]) -> bool:
         elif seen_live:
             call.ended = "they didn't pick up"
             return False
-        time.sleep(0.7)
+        # Looking takes seconds already (the Phone app's window is deep):
+        # no long wait on top of it, or the pick-up is noticed late.
+        time.sleep(0.1)
     if seen_live:
         # Still ringing, or a Mac that shows no timer: talk anyway; a
         # quiet line ends it.
@@ -1114,6 +1139,7 @@ class _Opening:
     def __init__(self, call: Call, user: str,
                  ask: Callable[[list[dict]], str]) -> None:
         self.got: Optional[tuple[str, bytes]] = None
+        self.since = time.monotonic()
         self._thread = threading.Thread(
             target=self._ready, args=(call, user, ask), daemon=True,
             name="call opening")
@@ -1131,6 +1157,7 @@ class _Opening:
                 if why:
                     wav = b""
             self.got = (said, wav or b"")
+            _mark("first words ready", self.since)
         except Exception:  # noqa: BLE001  (talk() asks again, as before)
             self.got = None
 
@@ -1173,6 +1200,8 @@ def talk(call: Call, line: Line, user: str, ask: Callable[[list[dict]], str],
         # The first words may be ready already (see _Opening).
         ready = opening.get() if opening is not None and not call.lines \
             else None
+        if opening is not None:
+            _mark("talking starts", opening.since)
         opening = None
         said, wav = ready if ready else (_reply(call, user, ask), b"")
         done = HANG_UP in said.lower()
@@ -1236,8 +1265,10 @@ def place(who: str, goal: str, user: str,
         via = FACETIME
     call = Call(who=shown, number=number, goal=goal, incoming=False)
     opening = _Opening(call, user, ask)
+    began = opening.since
     with _holding(owner, shown), _routed():
         _dial(number, via)
+        _mark(f"dialled {shown}", began)
         try:
             # The Mac asks before it dials, in a notification: Flash says
             # yes, unless you click Call first.
@@ -1252,10 +1283,14 @@ def place(who: str, goal: str, user: str,
                     "Flash Accessibility access (System Settings, Privacy "
                     "& Security, Accessibility) so Flash can press Call, "
                     "and try again.")
+            _mark("call confirmed", began)
             _facetime_devices()
+            _mark("devices set", began)
             if not _picked_up(call, stopping):
                 return call
+            _mark("picked up", began)
             with _opened() as line:
+                _mark("line open", began)
                 on = _StillOn(stopping)
                 try:
                     talk(call, line, user, ask, on, opening)
