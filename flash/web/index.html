@@ -3649,7 +3649,8 @@ body.resizing-viewer iframe { pointer-events: none; }
 #tunnel-pill.settled:not([hidden]) + #wake-pill.settled { padding-left: 0; }
 @keyframes tunnel-drop { from { opacity: 0; transform: translateY(-160%); } 60% { opacity: 1; } }
 .wake-sense-row .side { gap: 10px; }
-.voice-look-row select { font: 13.5px var(--sans); color: var(--text); background: var(--bg); border: 1px solid var(--border-strong); border-radius: 9px; padding: 7px 10px; outline: 0; }
+.voice-look-row select, .call-monitor-device-row select { font: 13.5px var(--sans); color: var(--text); background: var(--bg); border: 1px solid var(--border-strong); border-radius: 9px; padding: 7px 10px; outline: 0; }
+.call-monitor-device-row select:disabled { opacity: .5; cursor: default; }
 .wake-sense-row input[type=range] { width: 160px; accent-color: var(--accent); }
 .wake-sense-row output { width: 26px; text-align: right; font-size: 13px; color: var(--text-3); font-variant-numeric: tabular-nums; }
 /* "• Voice" when it first shows; a few seconds on, the word slides off to
