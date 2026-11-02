@@ -316,6 +316,25 @@ def test_an_event_wait_without_keep_is_over_once_one_comes_in(
     assert "From Sam: Re" in session.woke[0]["text"]  # nosec B101
 
 
+def test_a_call_wait_keeps_waiting_after_a_call_unless_told_not_to(
+        session, monkeypatch):
+    monkeypatch.setattr(waits, "check",
+                        lambda wait: (True, "A call is ringing: Mom"))
+    web.wait_for(session, session.chat_, {
+        "what": "calls", "then": "answer them", "events": "call",
+    })
+    assert only(session).keep  # nosec B101
+
+    session.tick_waits()
+    settle(session)
+    session.tick_waits()
+
+    assert only(session).status == waits.WAITING  # nosec B101
+    once = waits.make("c", {"what": "a call", "then": "answer it",
+                            "events": "call", "keep": False}, counted=False)
+    assert not once.keep  # nosec B101
+
+
 def test_a_chat_says_what_it_is_waiting_for_in_the_list(session):
     assert session.chat_.summary()["waiting"] == []  # nosec B101
     web.wait_for(session, session.chat_, {
