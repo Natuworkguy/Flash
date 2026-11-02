@@ -170,7 +170,7 @@ CALLS_DIR = FLASH_DIR / "calls"
 # each process, its levels as [spec, rows], a row {role, subrole, name,
 # value} per element there.
 _LEVELS = r"""
-function levels(se, proc) {
+function levels(se, proc, enough) {
   const flat = (a) => Array.isArray(a) ? a.flatMap(flat) : [a];
   const got = (spec, what, n) => {
     try { return flat(spec[what]()); } catch (e) { return Array(n).fill(""); }
@@ -198,6 +198,8 @@ function levels(se, proc) {
       name: String(names[i] || descs[i] || ""),
       value: String(values[i] || ""),
     }))]);
+    // Found what was wanted: the levels below need no reading.
+    if (enough && enough(out[out.length - 1][1])) break;
   }
   return out;
 }
@@ -226,7 +228,9 @@ function run(argv) {
   const se = Application("System Events");
   const flat = (a) => Array.isArray(a) ? a.flatMap(flat) : [a];
   for (const proc of PROCS) {
-    const all = levels(se, proc);
+    // Pressing only (no WANT to read): stop at the level the button is on.
+    const all = levels(se, proc, want ? null : (rows) => rows.some(
+      (x) => x.role === "AXButton" && names.includes(x.name)));
     if (want) {
       const said = all.flatMap(([, rows]) => rows)
         .filter((x) => x.role === "AXStaticText")
@@ -1034,6 +1038,11 @@ class Line:
         wav, why = voice.synthesize(voice.speakable(text))
         if why:
             raise CallError(why)
+        self.play(wav)
+
+    def play(self, wav: bytes) -> None:
+        """WAV, already spoken, into the call."""
+
         if not wav or self._halted() or self._paused():
             return
         with wave.open(io.BytesIO(wav)) as read:
@@ -1097,8 +1106,42 @@ def _reply(call: Call, user: str, ask: Callable[[list[dict]], str]) -> str:
     return ask(messages).strip()
 
 
+class _Opening:
+    """Flash's first words on CALL, written and spoken on a thread of their
+    own while the call is still dialling or being set up, so they are said
+    the moment it is live, with no silence first."""
+
+    def __init__(self, call: Call, user: str,
+                 ask: Callable[[list[dict]], str]) -> None:
+        self.got: Optional[tuple[str, bytes]] = None
+        self._thread = threading.Thread(
+            target=self._ready, args=(call, user, ask), daemon=True,
+            name="call opening")
+        self._thread.start()
+
+    def _ready(self, call: Call, user: str,
+               ask: Callable[[list[dict]], str]) -> None:
+        try:
+            said = _reply(call, user, ask)
+            plain = said.replace(HANG_UP, "").replace(
+                HANG_UP.title(), "").strip()
+            wav = b""
+            if plain:
+                wav, why = voice.synthesize(voice.speakable(plain))
+                if why:
+                    wav = b""
+            self.got = (said, wav or b"")
+        except Exception:  # noqa: BLE001  (talk() asks again, as before)
+            self.got = None
+
+    def get(self) -> Optional[tuple[str, bytes]]:
+        self._thread.join(timeout=60)
+        return self.got
+
+
 def talk(call: Call, line: Line, user: str, ask: Callable[[list[dict]], str],
-         stopping: Callable[[], bool] = lambda: False) -> None:
+         stopping: Callable[[], bool] = lambda: False,
+         opening: Optional[_Opening] = None) -> None:
     """The conversation: Flash and the other side in turn, until the goal
     is met, they go quiet, or it runs too long."""
 
@@ -1127,12 +1170,19 @@ def talk(call: Call, line: Line, user: str, ask: Callable[[list[dict]], str],
             if heard:
                 call.say(call.who or "Them", heard)
             continue
-        said = _reply(call, user, ask)
+        # The first words may be ready already (see _Opening).
+        ready = opening.get() if opening is not None and not call.lines \
+            else None
+        opening = None
+        said, wav = ready if ready else (_reply(call, user, ask), b"")
         done = HANG_UP in said.lower()
         said = said.replace(HANG_UP, "").replace(HANG_UP.title(), "").strip()
         if said:
             call.say("Flash", said)
-            line.say(said)
+            if wav and hasattr(line, "play"):
+                line.play(wav)
+            else:
+                line.say(said)
         if done:
             call.ended = "the call was done"
             break
@@ -1185,6 +1235,7 @@ def place(who: str, goal: str, user: str,
         # Only FaceTime calls an email address.
         via = FACETIME
     call = Call(who=shown, number=number, goal=goal, incoming=False)
+    opening = _Opening(call, user, ask)
     with _holding(owner, shown), _routed():
         _dial(number, via)
         try:
@@ -1207,7 +1258,7 @@ def place(who: str, goal: str, user: str,
             with _opened() as line:
                 on = _StillOn(stopping)
                 try:
-                    talk(call, line, user, ask, on)
+                    talk(call, line, user, ask, on, opening)
                 finally:
                     on.close()
         finally:
@@ -1239,6 +1290,7 @@ def take_next(who: str, goal: str, user: str,
     else:
         return None
     call = Call(who=shown, number=number, goal=goal, incoming=True)
+    opening = _Opening(call, user, ask)
     with _holding(owner, shown), _routed():
         try:
             time.sleep(1.0)
@@ -1246,7 +1298,7 @@ def take_next(who: str, goal: str, user: str,
             with _opened() as line:
                 on = _StillOn(stopping)
                 try:
-                    talk(call, line, user, ask, on)
+                    talk(call, line, user, ask, on, opening)
                 finally:
                     on.close()
         finally:
@@ -1272,10 +1324,11 @@ def join(goal: str, user: str, ask: Callable[[list[dict]], str],
         raise CallError(why)
     call = Call(who=who or "the people on the call", number="", goal=goal,
                 incoming=True, joined=True)
+    opening = _Opening(call, user, ask)
     with _holding(owner, call.who):
         try:
             with _opened() as line:
-                talk(call, line, user, ask, stopping)
+                talk(call, line, user, ask, stopping, opening)
         finally:
             # Nothing was switched for it, unless something else was.
             restore()

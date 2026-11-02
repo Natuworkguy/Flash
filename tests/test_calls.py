@@ -802,3 +802,37 @@ def test_a_joined_call_greets_first():
                       incoming=True, joined=True)
     _first_turn(call)
     assert call.lines[0][0] == "Flash"
+
+
+def test_the_first_words_are_ready_before_the_call_is_live(monkeypatch):
+    call = calls.Call(who="John Doe", number="+15550102000",
+                      goal="tell him I'm running late", incoming=False)
+    monkeypatch.setattr(calls.voice, "synthesize",
+                        lambda text: (b"WAV:" + text.encode(), ""))
+    replies = iter(["Hi John, this is Flash, calling for Sam.",
+                    "Thanks, goodbye! [hang up]"])
+    asked = []
+
+    def model(messages):
+        asked.append(messages)
+        return next(replies)
+
+    # Written and spoken while dialling, before any line is open.
+    opening = calls._Opening(call, "Sam", model)
+    assert opening.get() == ("Hi John, this is Flash, calling for Sam.",
+                             b"WAV:Hi John, this is Flash, calling for Sam.")
+
+    class PlayLine(FakeLine):
+        played = []
+
+        def play(self, wav):
+            self.played.append(wav)
+
+    line = PlayLine(["No worries."])
+    calls.talk(call, line, "Sam", model, opening=opening)
+
+    # Played as it was made: not asked for, nor spoken, a second time.
+    assert line.played == [b"WAV:Hi John, this is Flash, calling for Sam."]
+    assert line.said == ["Thanks, goodbye!"]
+    assert len(asked) == 2
+    assert call.ended == "the call was done"
