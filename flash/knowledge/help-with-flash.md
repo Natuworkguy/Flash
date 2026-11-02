@@ -13,6 +13,7 @@ Point the user to the right place, briefly:
 - Health: /doctor (and /doctor fix), /version, /update, /stats.
 - Settings are saved in ~/.flash.env with /set NAME VALUE; the web page has Settings for most of them.
 - Dashes and emojis: Settings has "Remove em dashes" (on by default, REMOVE_EM_DASHES) and "Remove emojis" (off by default, REMOVE_EMOJIS). On, Flash strips them from everything it writes, replies and every tool call alike; code is kept as written.
+- Calls: Settings, under Calls, has "Call greeting" (CALL_GREETING_MODE): the standard greeting (default, "Hi, this is an automated assistant calling on behalf of" the user's first name), the user's own (CALL_GREETING, where {name} is their first name), or "Let Flash write its own".
 
 If something is broken, suggest /doctor first.
 

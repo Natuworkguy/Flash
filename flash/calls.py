@@ -13,8 +13,10 @@ microphone for the call) and Flash hears the call through the other
 command that switches them. The Mac's own sound devices are put back
 when the call ends.
 
-On every call Flash says, first thing, that it is an automated assistant
-calling for the user: it never passes itself off as them.
+By default every call opens with a fixed greeting, spoken in code, saying
+it is an automated assistant calling for the user (first name only). The
+user can set their own greeting instead, or let Flash write one; the
+model is always told never to pass itself off as them.
 """
 
 from __future__ import annotations
@@ -146,6 +148,9 @@ QUIET_SECONDS = 40.0
 PAUSE_SECONDS = 0.9  # the default; CALL_SILENCE_SECONDS sets it
 PAUSE_LEAST = 0.3
 PAUSE_MOST = 3.0
+# How a call opens (CALL_GREETING_MODE): a fixed greeting, the user's own
+# (CALL_GREETING), or words Flash writes itself.
+GREETING_MODES = ("default", "custom", "own")
 # How long Flash waits for the call to be picked up, or to come in.
 PICK_UP_SECONDS = 45.0
 # The longest Flash waits for the Mac's "Call" prompt to be answered
@@ -1210,8 +1215,74 @@ class Line:
 # --- Talking ----------------------------------------------------------------
 
 
-def _instructions(call: Call, user: str) -> str:
+def _first_name(user: str) -> str:
+    """USER's first name only, or "" when it is not known."""
+
+    user = (user or "").strip()
+    if not user or user == "the user":
+        return ""
+    return user.split()[0]
+
+
+def greeting_settings() -> dict:
+    """How a call opens, as Settings shows it: CALL_GREETING_MODE is
+    default (a fixed greeting), custom (CALL_GREETING) or own (Flash
+    writes its own)."""
+
+    mode = voice._setting("CALL_GREETING_MODE", "default").lower()
+    if mode not in GREETING_MODES:
+        mode = "default"
+    return {"greeting_mode": mode,
+            "greeting": voice._setting("CALL_GREETING", "")}
+
+
+def set_greeting(mode: str, text: str = "") -> dict:
+    """Choose how calls open, here and in ~/.flash.env: MODE is default,
+    custom (with TEXT, where {name} is the user's first name) or own."""
+
+    from .envfile import set_env_var
+
+    mode = mode.strip().lower()
+    if mode not in GREETING_MODES:
+        raise ValueError("The call greeting is default, custom or own.")
+    text = " ".join(text.split())
+    if mode == "custom":
+        if not text:
+            raise ValueError("Type the greeting to say first.")
+        if len(text) > 300:
+            raise ValueError("Keep the greeting under 300 characters.")
+        os.environ["CALL_GREETING"] = text
+        set_env_var(ENV_PATH, "CALL_GREETING", text)
+    os.environ["CALL_GREETING_MODE"] = mode
+    set_env_var(ENV_PATH, "CALL_GREETING_MODE", mode)
+    return greeting_settings()
+
+
+def _greeting(call: Call, user: str) -> str:
+    """The fixed words said first on CALL, or "" when Flash writes its
+    own. The default says it is automated, with the first name only."""
+
+    settings = greeting_settings()
+    name = _first_name(user)
+    if settings["greeting_mode"] == "own":
+        return ""
+    custom = settings["greeting"]
+    if settings["greeting_mode"] == "custom" and custom:
+        said = custom.replace("{name}", name or "the person I work for")
+        return " ".join(said.split())
+    doing = ("joining" if call.joined else
+             "answering" if call.incoming else "calling")
+    if name:
+        if doing == "calling":
+            return ("Hi, this is an automated assistant calling on behalf "
+                    f"of {name}.")
+        return f"Hi, this is an automated assistant {doing} for {name}."
+    return f"Hi, this is an automated assistant {doing}."
+
+
+def _instructions(call: Call, user: str, greeted: str = "") -> str:
     them = call.who or "the other person"
+    user = _first_name(user) or "the user"
     if call.joined:
         opening = (f"{user} brought you into a call they are on, with "
                    f"{them}, to talk to them.")
@@ -1219,13 +1290,19 @@ def _instructions(call: Call, user: str) -> str:
         opening = f"You answered a call from {them} for {user}."
     else:
         opening = f"You called {them} for {user}."
+    if greeted:
+        first = (f"- You have already said, aloud: \"{greeted}\" Do not "
+                 "greet or introduce yourself again: carry straight on "
+                 "with why, in a sentence or two. ")
+    else:
+        first = ("- First, say plainly that you are an automated assistant "
+                 f"calling (or answering) for {user}, and why, in a short "
+                 "greeting. ")
     return (
-        f"You are Flash, an AI assistant, on a phone call. {opening} "
+        f"You are an AI assistant on a phone call. {opening} "
         f"What {user} wants from it: "
         f"{call.goal or 'find out what they want'}.\n"
-        "- First, say plainly that you are an automated assistant, Flash, "
-        f"calling (or answering) for {user}, and why, in a short greeting. "
-        f"Never claim to be {user} or a person.\n"
+        f"{first}Never claim to be {user} or a person.\n"
         "- Talk as people do on the phone: one or two short sentences, "
         "then let them answer. No lists, no markdown, nothing to read.\n"
         f"- Agree to nothing {user} did not ask for: no payments, no "
@@ -1235,14 +1312,28 @@ def _instructions(call: Call, user: str) -> str:
     )
 
 
-def _reply(call: Call, user: str, ask: Callable[[list[dict]], str]) -> str:
-    messages = [{"role": "system", "content": _instructions(call, user)}]
+def _reply(call: Call, user: str, ask: Callable[[list[dict]], str],
+           greeted: str = "") -> str:
+    messages = [{"role": "system",
+                 "content": _instructions(call, user, greeted)}]
     for who, said in call.lines:
         messages.append({"role": "assistant" if who == "Flash" else "user",
                          "content": said})
     if not call.lines or call.lines[-1][0] == "Flash":
         messages.append({"role": "user", "content": "(silence on the line)"})
     return ask(messages).strip()
+
+
+def _first_words(call: Call, user: str,
+                 ask: Callable[[list[dict]], str]) -> str:
+    """What Flash says first on CALL: the fixed greeting, spoken as set,
+    then the model carrying on from it; or, in own mode, the model's."""
+
+    greeting = _greeting(call, user)
+    if not greeting:
+        return _reply(call, user, ask)
+    rest = _reply(call, user, ask, greeted=greeting)
+    return f"{greeting} {rest}".strip()
 
 
 class _Opening:
@@ -1262,7 +1353,7 @@ class _Opening:
     def _ready(self, call: Call, user: str,
                ask: Callable[[list[dict]], str]) -> None:
         try:
-            said = _reply(call, user, ask)
+            said = _first_words(call, user, ask)
             plain = said.replace(HANG_UP, "").replace(
                 HANG_UP.title(), "").strip()
             wav = b""
@@ -1317,7 +1408,12 @@ def talk(call: Call, line: Line, user: str, ask: Callable[[list[dict]], str],
         if opening is not None:
             _mark("talking starts", opening.since)
         opening = None
-        said, wav = ready if ready else (_reply(call, user, ask), b"")
+        if ready:
+            said, wav = ready
+        elif not call.lines:
+            said, wav = _first_words(call, user, ask), b""
+        else:
+            said, wav = _reply(call, user, ask), b""
         done = HANG_UP in said.lower()
         said = said.replace(HANG_UP, "").replace(HANG_UP.title(), "").strip()
         if said:
