@@ -23,7 +23,6 @@ from rich.console import Group, RenderableType
 from rich.text import Text
 
 from . import providers, systemone
-from .dashes import undash
 from .sysprompt import get_model_system_prompt
 from .theme import (
     ACCENT,
@@ -44,6 +43,7 @@ from .theme import (
     console,
     plural,
 )
+from .tidy import tidy, tidy_args
 
 OLLAMA_HOST_DEFAULT = "http://localhost:11434"
 
@@ -135,7 +135,8 @@ def _tool_call_name_args(call) -> tuple[str, dict]:
     name = getattr(function, "name", "") or ""
     args = getattr(function, "arguments", None) or {}
 
-    return name, dict(args)
+    # What it asked for, as the user's settings ask for it.
+    return name, tidy_args(dict(args))
 
 
 def _update(entry: SubAgent, **changes) -> None:
@@ -271,7 +272,7 @@ def _run(entry: SubAgent) -> None:
         _update(
             entry,
             status=DONE,
-            result=undash(final).strip()
+            result=tidy(final).strip()
             or "(sub-agent finished with no output)",
             finished=time.time(),
         )

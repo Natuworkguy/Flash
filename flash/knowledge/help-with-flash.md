@@ -12,6 +12,7 @@ Point the user to the right place, briefly:
 - Web page: /web (lan for a phone on the same network, tunnel for anywhere, port N).
 - Health: /doctor (and /doctor fix), /version, /update, /stats.
 - Settings are saved in ~/.flash.env with /set NAME VALUE; the web page has Settings for most of them.
+- Dashes and emojis: Settings has "Remove em dashes" (on by default, REMOVE_EM_DASHES) and "Remove emojis" (off by default, REMOVE_EMOJIS). On, Flash strips them from everything it writes, replies and every tool call alike; code is kept as written.
 
 If something is broken, suggest /doctor first.
 

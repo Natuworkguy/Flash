@@ -90,6 +90,7 @@ from . import (
     systemone,
     teamchat,
     themes,
+    tidy,
     titles,
     triggers,
     tunnel,
@@ -101,7 +102,6 @@ from . import (
     waits,
     workspace,
 )
-from .dashes import DashGuard
 from .emojis import EMOJIS
 from .models import full_name
 from .sysprompt import model_sees_images
@@ -114,6 +114,7 @@ from .theme import (
     capture_tool_output,
     console,
 )
+from .tidy import OutGuard
 from .version import __version__
 
 HOST = "127.0.0.1"
@@ -3151,7 +3152,7 @@ def stream_reply(
     out = Streamed()
     # The prompt asks for no dashes; this makes sure of it, a
     # token at a time.
-    content = DashGuard()
+    content = OutGuard()
     thinking: list[str] = []
     # A turn a save woke may answer with only QUIET_WORD: what could
     # still be that word is held back, not shown, until it is not.
@@ -5221,6 +5222,14 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
             heyflash.set_sensitivity(arg)
             session.hub.publish({"type": "status"})
         return {"sensitivity": voice.wake_sensitivity()}
+
+    if name in ("remove-dashes", "remove-emojis"):
+        # on or off; no arg: only what they are, for Settings.
+        if arg not in ("", "on", "off"):
+            raise ValueError(f"{name} takes on or off")
+        if arg:
+            return tidy.set_setting(name.split("-")[1], arg == "on")
+        return tidy.settings()
 
     if name == "call-monitor":
         # on or off; no arg: only what it is, for Settings.

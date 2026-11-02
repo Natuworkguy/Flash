@@ -56,7 +56,6 @@ from . import (
 from . import models as model_picker
 from .btw import question_of as btw_question
 from .cli import parse_args
-from .dashes import undash
 from .envfile import set_env_var, unset_env_var
 from .images import resolve_image_path
 from .latex import render_latex
@@ -129,6 +128,7 @@ from .theme import (
     yes_no,
 )
 from .theme import error as show_error
+from .tidy import tidy, tidy_args
 from .tools import (
     FUNCTIONS,
     MAX_SHELL_TIMEOUT,
@@ -1211,7 +1211,7 @@ def _response_parts(response) -> tuple[str, str, list]:
         return "", "", []
 
     # The prompt asks for no dashes; this makes sure of it.
-    text = undash(getattr(message, "content", "") or "")
+    text = tidy(getattr(message, "content", "") or "")
     thinking = getattr(message, "thinking", "") or ""
     tool_calls = list(getattr(message, "tool_calls", None) or [])
 
@@ -1239,7 +1239,8 @@ def _tool_call_name_args(call) -> tuple[str, dict]:
     name = getattr(function, "name", "") or ""
     args = getattr(function, "arguments", None) or {}
 
-    return name, dict(args)
+    # What Flash asked for, as the user's settings ask for it.
+    return name, tidy_args(dict(args))
 
 
 def _clear_scratch_dir() -> None:
