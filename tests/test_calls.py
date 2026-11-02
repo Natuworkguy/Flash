@@ -24,7 +24,7 @@ class FakeLine:
 def test_a_call_flash_places_goes_to_its_goal_and_hangs_up():
     call = calls.Call(who="John Doe", number="+15550102000",
                       goal="tell him I'm running late", incoming=False)
-    line = FakeLine(["Hello?", "Oh no worries, see you soon."])
+    line = FakeLine(["Oh no worries, see you soon."])
     replies = iter([
         "Hi John, this is Flash, an automated assistant calling for Sam. "
         "Sam is running about fifteen minutes late.",
@@ -39,7 +39,7 @@ def test_a_call_flash_places_goes_to_its_goal_and_hangs_up():
     calls.talk(call, line, "Sam", model)
 
     assert [who for who, _ in call.lines] == [
-        "John Doe", "Flash", "John Doe", "Flash"]
+        "Flash", "John Doe", "Flash"]
     assert line.said[-1] == "Thanks, I'll let Sam know. Goodbye!"
     assert call.ended == "the call was done"
     # It is told who it is, who for, and never to pass as them.
@@ -765,3 +765,40 @@ def test_both_kinds_of_call_get_confirmed_and_seen_live(monkeypatch, via,
     assert dialed == [("+15550102000", via)]
     assert ["Call"] in pressed and seen == [True]
     assert call.ended == "test over"
+
+
+def _first_turn(call):
+    line = FakeLine(["Sure, go ahead.", ""])
+    asked = []
+
+    def model(messages):
+        asked.append(messages)
+        return "Hi, this is Flash, an automated assistant calling for Sam."
+
+    calls.talk(call, line, "Sam", model)
+    return asked[0], line
+
+
+def test_a_placed_call_greets_first_with_the_goal():
+    for number in ("+15550102000", "facetime-audio:+15550102000"):
+        call = calls.Call(who="John", number=number,
+                          goal="tell him I'm running late", incoming=False)
+        first, _ = _first_turn(call)
+        assert first[-1] == {"role": "user",
+                             "content": "(silence on the line)"}
+        assert "running late" in first[0]["content"]
+        assert call.lines[0][0] == "Flash"
+
+
+def test_an_answered_call_greets_first():
+    call = calls.Call(who="Ann", number="+15550103000", goal="",
+                      incoming=True)
+    _first_turn(call)
+    assert call.lines[0][0] == "Flash"
+
+
+def test_a_joined_call_greets_first():
+    call = calls.Call(who="the team", number="", goal="say hi",
+                      incoming=True, joined=True)
+    _first_turn(call)
+    assert call.lines[0][0] == "Flash"

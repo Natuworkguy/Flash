@@ -1076,8 +1076,8 @@ def _instructions(call: Call, user: str) -> str:
         f"What {user} wants from it: "
         f"{call.goal or 'find out what they want'}.\n"
         "- First, say plainly that you are an automated assistant, Flash, "
-        f"calling (or answering) for {user}. Never claim to be {user} or a "
-        "person.\n"
+        f"calling (or answering) for {user}, and why, in a short greeting. "
+        f"Never claim to be {user} or a person.\n"
         "- Talk as people do on the phone: one or two short sentences, "
         "then let them answer. No lists, no markdown, nothing to read.\n"
         f"- Agree to nothing {user} did not ask for: no payments, no "
@@ -1114,13 +1114,8 @@ def talk(call: Call, line: Line, user: str, ask: Callable[[list[dict]], str],
         return bool(paused and paused())
 
     started = time.monotonic()
-    if call.incoming:
-        first = ""
-    else:
-        # Picked up: they say hello, or Flash speaks up after a moment.
-        first = line.hear(longest=6.0, stopping=stopping)
-    if first:
-        call.say(call.who or "Them", first)
+    # Placed, answered or joined: once live, Flash greets first, with the
+    # goal, instead of waiting for a hello that may never come.
     while not stopping():
         if time.monotonic() - started > MOST_SECONDS:
             call.ended = "it ran past ten minutes"
