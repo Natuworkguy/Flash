@@ -208,3 +208,67 @@ def test_no_accessibility_access_is_said_at_once(monkeypatch):
     monkeypatch.setattr(calls.computer, "_run", refused)
     with pytest.raises(calls.CallError, match="Accessibility"):
         calls._press(["Call"])
+
+
+def test_device_names_come_from_settings(monkeypatch):
+    monkeypatch.delenv("CALL_MIC_DEVICE", raising=False)
+    monkeypatch.delenv("CALL_SPEAKER_DEVICE", raising=False)
+    assert (calls.to_call(), calls.from_call()) == (
+        "BlackHole 2ch", "BlackHole 16ch")
+    monkeypatch.setenv("CALL_MIC_DEVICE", "Loopback Mic")
+    monkeypatch.setenv("CALL_SPEAKER_DEVICE", "Loopback Speaker")
+    assert (calls.to_call(), calls.from_call()) == (
+        "Loopback Mic", "Loopback Speaker")
+
+
+def test_joining_a_call_talks_and_never_switches_or_hangs_up(monkeypatch):
+    monkeypatch.setattr(calls, "missing", lambda: "")
+    line = FakeLine(["Hi Flash!"])
+    line.closed = False
+    line.close = lambda: setattr(line, "closed", True)
+    monkeypatch.setattr(calls, "Line", lambda: line)
+
+    def never(*a, **k):
+        raise AssertionError("a joined call must stay the user's")
+
+    monkeypatch.setattr(calls, "_switch", never)
+    monkeypatch.setattr(calls, "_hang_up", never)
+    replies = iter(["Hi, I'm Flash, an automated assistant for Sam.",
+                    "Nice to meet you, bye! [hang up]"])
+    asked = []
+
+    def model(messages):
+        asked.append(messages)
+        return next(replies)
+
+    call = calls.join("say hello", "Sam", model, who="Alex")
+    assert call.joined and call.ended == "the call was done"
+    assert line.said[-1] == "Nice to meet you, bye!"
+    assert line.closed
+    assert "brought you into a call" in asked[0][0]["content"]
+    assert "left the call with Alex" in calls.summary(call, "x.md")
+
+
+def test_joining_without_the_devices_says_how_to_get_them(monkeypatch):
+    monkeypatch.setattr(calls, "missing", lambda: "install them")
+    with pytest.raises(calls.CallError, match="install them"):
+        calls.join("say hi", "Sam", lambda m: "x")
+
+
+def test_the_tool_joins_without_a_name(monkeypatch, tmp_path):
+    monkeypatch.setattr(tools, "ultra_auto", lambda: True)
+    monkeypatch.setattr(calls, "missing", lambda: "")
+    monkeypatch.setattr(calls, "CALLS_DIR", tmp_path)
+    monkeypatch.setattr(tools, "_call_user", lambda: "Sam")
+    seen = {}
+
+    def join(goal, user, ask, who="", stopping=lambda: False):
+        seen.update(goal=goal, who=who)
+        return calls.Call(who="the people on the call", number="",
+                          goal=goal, incoming=True, joined=True,
+                          ended="you stopped it")
+
+    monkeypatch.setattr(calls, "join", join)
+    result = tools.phone_call(action="join", goal="say hi")
+    assert seen == {"goal": "say hi", "who": ""}
+    assert "left the call" in result
