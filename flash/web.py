@@ -6176,6 +6176,7 @@ def _team_command(name: str, arg: str, body: dict) -> dict:
                 reply_to = 0
             return {"entry": teamchat.send(
                 arg, str(body.get("text") or ""), reply_to=reply_to,
+                files=attachments(body.get("files")),
             )}
         if name == "team-chat-retry":
             # A spark's message, answered again in its place.

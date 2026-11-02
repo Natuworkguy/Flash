@@ -520,14 +520,21 @@ def _quote(entry: dict) -> dict:
     return quote
 
 
-def say(team_key: str, text: str, reply_to: int = 0) -> dict:
+def say(
+    team_key: str, text: str, reply_to: int = 0,
+    files: Optional[list] = None,
+) -> dict:
     """Post what the user wrote in TEAM_KEY's chat, as a reply to the
-    message numbered REPLY_TO if one is given. The sparks' answers are
+    message numbered REPLY_TO if one is given, with the uploaded FILES
+    it carries (as the page shows them). The sparks' answers are
     answer()'s to make."""
 
     team = _team(team_key)
     text = str(text or "").strip()[:sparks.MESSAGE_CHARS]
-    if not text:
+    files = [
+        dict(f) for f in files or [] if isinstance(f, dict) and f.get("id")
+    ]
+    if not text and not files:
         raise TeamChatError("Say something first.")
     if not _members(team.id):
         raise TeamChatError(
@@ -536,6 +543,8 @@ def say(team_key: str, text: str, reply_to: int = 0) -> dict:
 
     def change(data: dict) -> dict:
         entry = {"kind": USER, "text": text}
+        if files:
+            entry["attachments"] = files
         if reply_to:
             to = next(
                 (e for e in data["entries"] if e.get("id") == reply_to), None,
@@ -566,12 +575,28 @@ def _line(entry: dict, by_id: dict) -> str:
     ) + "]"
 
 
+def _attached_note(entry: dict) -> str:
+    """The files the user attached to ENTRY, named by path for a spark's
+    tools to open, as the main chat names them to the model; "" for
+    none."""
+
+    from . import workspace
+
+    paths = []
+    for f in entry.get("attachments") or []:
+        path = workspace.upload_path(str(f.get("id", "")))
+        if path is not None:
+            paths.append(str(path))
+    return f" [Attached file: {', '.join(paths)}]" if paths else ""
+
+
 def _said_line(entry: dict, by_id: dict) -> str:
     text = " ".join(str(entry.get("text") or "").split())
     if len(text) > ENTRY_CHARS:
         text = text[:ENTRY_CHARS].rstrip() + " [...]"
     kind = entry.get("kind")
     if kind == USER:
+        text += _attached_note(entry)
         reply = entry.get("reply")
         if not reply:
             return f"The user: {text}"
@@ -1079,12 +1104,13 @@ def retry(team_key: str, entry_id: int, client=None) -> dict:
 
 def send(
     team_key: str, text: str, client=None, reply_to: int = 0,
+    files: Optional[list] = None,
 ) -> dict:
-    """Post what the user wrote, a reply to REPLY_TO if given, and have
-    the sparks answer it in the background: the page's way. The user's
-    message, as posted."""
+    """Post what the user wrote, a reply to REPLY_TO if given, with
+    FILES attached, and have the sparks answer it in the background: the
+    page's way. The user's message, as posted."""
 
-    message = say(team_key, text, reply_to)
+    message = say(team_key, text, reply_to, files)
     threading.Thread(
         target=answer, args=(team_key, message, client), daemon=True,
     ).start()
