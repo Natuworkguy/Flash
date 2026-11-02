@@ -4,7 +4,7 @@ description: Set up ongoing or recurring work: watch something, check every morn
 ---
 Sparks are agents that keep working on a standing goal on a schedule while Flash runs, and report back.
 
-- make_spark when the user asks for something ongoing: name, goal (what to watch and what counts as news), every (how often, like 1h or every morning), boundaries (what it must not do), events (start when an email, an iMessage or a connected app changes, instead of or as well as the schedule). The user is asked first.
+- make_spark when the user asks for something ongoing: name, goal (what to watch and what counts as news), every (how often, like 1h or every morning), boundaries (what it must not do), events (start when an email, an iMessage, an incoming call ("call", or "call:<name>" for one person) or a connected app changes, instead of or as well as the schedule). The user is asked first.
 - ask_spark asks one what it has found, without running it.
 - give_spark gives one a job now, in the background.
 
