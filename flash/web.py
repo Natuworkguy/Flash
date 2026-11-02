@@ -6680,9 +6680,12 @@ class Handler(BaseHTTPRequestHandler):
             if not isinstance(body, dict):
                 raise ValueError("expected an object")
             self._json(self._post(url.path, body))
+        except (BrokenPipeError, ConnectionResetError):
+            # The page went away before its answer: nothing to tell it.
+            self.close_connection = True
         except KeyError:
             self._json({"error": "not found"}, HTTPStatus.NOT_FOUND)
-        except ValueError as exc:
+        except (ValueError, calls.CallError) as exc:
             self._json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
 
     def _post(self, path: str, body: dict) -> dict:
