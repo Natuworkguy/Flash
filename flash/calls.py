@@ -281,6 +281,42 @@ function run(argv) {
 }
 """
 
+# A call coming in, read but not answered: the words of the alert that
+# has an Accept or Answer button (or notification action), so who is
+# calling. Prints nothing when none is ringing.
+_RINGING = _LEVELS + r"""
+function run() {
+  const names = ["Accept", "Answer"];
+  const se = Application("System Events");
+  const flat = (a) => Array.isArray(a) ? a.flatMap(flat) : [a];
+  for (const proc of PROCS) {
+    const all = levels(se, proc, null);
+    const rows = all.flatMap(([, r]) => r);
+    let ringing = rows.some(
+      (x) => x.role === "AXButton" && names.includes(x.name));
+    for (const [spec, r] of all) {
+      if (ringing) break;
+      for (const sub of new Set(r.map((x) => x.subrole)
+          .filter((s) => BANNER.test(s)))) {
+        let hit = [];
+        try { hit = flat(spec.whose({subrole: sub})()); } catch (e) {}
+        for (const x of hit) {
+          let acts = [];
+          try { acts = x.actions(); } catch (e) {}
+          if (acts.some((a) => names.includes(actionName(a)))) ringing = true;
+        }
+      }
+    }
+    if (ringing) {
+      return rows.filter((x) => x.role === "AXStaticText")
+        .map((x) => x.value || x.name).filter(Boolean).join(" ")
+        || "a call";
+    }
+  }
+  return "";
+}
+"""
+
 # Where the call stands: "live" while there is a call to end, and
 # "connected" once its timer runs (it is picked up). Prints JSON.
 _STATE = _LEVELS + r"""
@@ -790,6 +826,19 @@ def _press(names: list[str], want: str = "") -> str:
     except computer.ComputerError as exc:
         if _no_access(exc):
             raise CallError(_NO_ACCESS) from None
+        return ""
+
+
+def ringing() -> str:
+    """The words of a call alert ringing now, saying who is calling, or
+    "" when none is. Nothing is pressed: the call is left to ring."""
+
+    if computer.system() != "mac":
+        return ""
+    try:
+        return computer._run(["osascript", "-l", "JavaScript", "-e",
+                              _RINGING], timeout=LOOK_SECONDS).strip()
+    except computer.ComputerError:
         return ""
 
 
