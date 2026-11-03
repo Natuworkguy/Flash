@@ -16,6 +16,7 @@ Point the user to the right place, briefly:
 - Calls: Settings, under Calls, has "Call greeting" (CALL_GREETING_MODE): the standard greeting (default, "Hi, this is an automated assistant calling on behalf of" the user's first name), the user's own (CALL_GREETING, where {name} is their first name), or "Let Flash write its own".
 - Extension panels that talk: a panel page can reach Flash's model through a "run" button with "where": ["terminal"] (hidden on the web page), called from the page as parent.Flash.request("ext-button", id, {extension, text}); the program can import flash (it is on PYTHONPATH) and print the reply. Stickbuddy (~/Desktop/Projects/flash-stickbuddy, install with /extension install path@that folder) does this: a stickman panel you hover, poke, tickle and drag, with lines from the model and canned ones when it is slow.
 - Printing: on a Mac, Flash can list printers and print a file or a made document (list_printers, print), asking the user yes or no every time (see print-a-file).
+- Apple apps on a Mac: Apple Calendar is a calendar choice beside Google and iCal feeds (Settings, Connectors, Calendar; see manage-the-calendar), the reminders tool lists, adds and ticks off Apple Reminders (see use-reminders), and send_imessage can send a file while read_imessages names attachments (see send-messages). Adding or changing anything asks the user first.
 
 If something is broken, suggest /doctor first.
 

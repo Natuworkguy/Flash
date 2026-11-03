@@ -850,6 +850,16 @@ _SEND = (
     "end tell",
     "end run",
 )
+# A file, by its path: Messages sends it as its own message.
+_SEND_FILE = (
+    "on run argv",
+    'tell application "Messages"',
+    "set chosen to 1st account whose service type = iMessage",
+    "send (POSIX file (item 2 of argv)) to participant (item 1 of argv) "
+    "of chosen",
+    "end tell",
+    "end run",
+)
 
 
 def _is_number(text: str) -> bool:
@@ -955,23 +965,30 @@ def recipient(to: str) -> tuple[str, str]:
         _digits(handle) if _is_number(handle) else handle
 
 
-def send_imessage(handle: str, text: str) -> str:
+def send_imessage(handle: str, text: str, attachment: str = "") -> str:
     """Send TEXT to HANDLE, a number or address, as an iMessage from the
-    user's account in Messages. Raises ComputerError when it could not."""
+    user's account in Messages, then ATTACHMENT, a file's full path, if
+    given. Raises ComputerError when it could not."""
 
     if system() != "mac":
         raise ComputerError("iMessages can only be sent from a Mac.")
     text = str(text or "").strip()
-    if not text:
+    attachment = str(attachment or "").strip()
+    if not text and not attachment:
         raise ComputerError("The message has nothing in it.")
     if len(text) > MESSAGE_CHARS:
         raise ComputerError(f"A message can be at most {MESSAGE_CHARS} "
                             "characters.")
-    argv = ["osascript"]
-    for line in _SEND:
-        argv += ["-e", line]
+    if attachment and not Path(attachment).is_file():
+        raise ComputerError(f"{attachment} is not a file.")
+    sends = ([(_SEND, text)] if text else []) + (
+        [(_SEND_FILE, attachment)] if attachment else [])
     try:
-        _run([*argv, handle, text], timeout=MESSAGE_TIMEOUT)
+        for script, what in sends:
+            argv = ["osascript"]
+            for line in script:
+                argv += ["-e", line]
+            _run([*argv, handle, what], timeout=MESSAGE_TIMEOUT)
     except ComputerError as exc:
         said = str(exc)
         if _not_allowed(exc, "Messages"):
@@ -1095,6 +1112,40 @@ def _address_book() -> dict[str, str]:
     return names
 
 
+_ATTACHMENTS = """
+SELECT j.message_id, a.filename, a.mime_type, a.transfer_name
+FROM message_attachment_join j
+JOIN attachment a ON a.ROWID = j.attachment_id
+WHERE j.message_id IN ({marks})
+"""
+
+
+def _attachments(db, ids: list) -> dict[int, list[str]]:
+    """The files sent with each message in IDS, by its ROWID: each its
+    name, kind and where it is on this Mac. Empty when they cannot be
+    read (an older Messages, say)."""
+
+    out: dict[int, list[str]] = {}
+    if not ids:
+        return out
+    try:
+        rows = db.execute(_ATTACHMENTS.format(  # nosec B608 (marks only)
+            marks=",".join("?" * len(ids))), ids).fetchall()
+    except sqlite3.Error:
+        return out
+    for message, filename, mime, name in rows:
+        path = str(filename or "")
+        if path.startswith("~"):
+            path = str(Path(path).expanduser())
+        shown = name or (Path(path).name if path else "a file")
+        if mime:
+            shown += f" ({mime})"
+        if path:
+            shown += f" at {path}"
+        out.setdefault(message, []).append(shown)
+    return out
+
+
 def read_imessages(with_: str = "", limit=READ_LIMIT,
                    unread_only: bool = False) -> str:
     """The user's newest iMessages and texts, newest first: everyone's,
@@ -1125,19 +1176,23 @@ def read_imessages(with_: str = "", limit=READ_LIMIT,
             # its digits, however it was written.
             rows = db.execute(_RECENT.format(where=where),
                               (limit * 20 if keys else limit,)).fetchall()
+            files = _attachments(db, [r[0] for r in rows if r[6]])
     except sqlite3.Error as exc:
         if "unable to open" in str(exc) or "authoriz" in str(exc):
             raise ComputerError(_FULL_DISK) from None
         raise ComputerError(f"Messages could not be read: {exc}") from None
 
     lines = []
-    for (_, date, mine, read, text, body, attached, handle, group,
+    for (rowid, date, mine, read, text, body, attached, handle, group,
          chat, people) in rows:
         if keys and _key(handle or chat or "") not in keys:
             continue
         words = (text or _body_text(body)).replace("\ufffc", "").strip()
         if attached:
-            words = (words + " [attachment]").strip()
+            sent = files.get(rowid)
+            tag = ("[attachment: " + "; ".join(sent) + "]") if sent \
+                else "[attachment]"
+            words = (words + " " + tag).strip()
         if not words:
             continue
         sender = "You" if mine else names.get(_key(handle), handle or "?")
