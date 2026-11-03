@@ -1135,8 +1135,10 @@ def prompt_block(spark: sparks.Spark) -> str:
         line = _line(entry, by_id)
         if len(line) > PROMPT_CHARS:
             line = line[:PROMPT_CHARS].rstrip() + " [...]"
-        lines.append(f"- {line}")
+        lines.append(f"#{entry.get('id', 0)} {line}")
     return (
         "=== The latest in your team's group chat (what the user says "
-        "there is meant for the whole team) ===\n" + "\n".join(lines)
+        "there is meant for the whole team; to point at a message in a "
+        "report, write its number, like #12, and the user can open it) "
+        "===\n" + "\n".join(lines)
     )
