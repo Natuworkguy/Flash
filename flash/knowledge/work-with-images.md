@@ -2,7 +2,7 @@
 name: work-with-images
 description: Look at, edit, convert or create images, and show them
 ---
-- view_image looks at an image on disk; it is the only way you can see one. Check every image you make before sending it.
+- view_image looks at an image on disk; it is the only way you can see one. It takes an absolute path under home, a temp folder or /Volumes, never a hidden one (see view-an-image). Check every image you make before sending it.
 - send_image shows the user a finished image.
 - screenshot renders a page or URL and shows you the picture.
 
