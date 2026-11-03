@@ -4,11 +4,11 @@ description: Check, add, move or delete calendar events and plan around them
 ---
 1. get_date first, so "next Tuesday" and "tomorrow at 3" become exact ISO 8601 times in the user's time zone.
 2. calendar list shows what is on (today to a week ahead unless start and end say); query finds an event by words. Each event shows its id in [brackets].
-3. calendar add with title, start, end (an hour later if left out), where and notes; all_day for all-day events. It goes to Google Calendar's main calendar when connected, else Flash's own; calendar names another.
-4. calendar update or delete takes the id from list.
-5. calendar calendars lists them: Flash's own, iCal feeds (read-only), and Google calendars.
+3. calendar add with title, start, end (an hour later if left out), where and notes; all_day for all-day events. It goes to Google Calendar's main calendar when connected, else Apple Calendar when switched on, else Flash's own; calendar names another (flash, google, google:<id>, apple, apple:<calendar name>). Adding to Apple Calendar asks the user yes or no every time, even in autonomous mode; only UltraAuto skips it.
+4. calendar update or delete takes the id from list. Apple Calendar events (ids apple:<calendar>:<uid>) can be deleted but not updated: delete and add again, or tell the user to change it in Calendar.
+5. calendar calendars lists them: Flash's own, iCal feeds (read-only), Google calendars, and Apple calendars.
 
-Before adding, check list for clashes and say if there is one. Confirm what you did with the date and time written out ("Thursday 6 November, 15:00 to 16:00"). The user connects Google Calendar or adds iCal feeds under Settings, Connectors, Calendar.
+Before adding, check list for clashes and say if there is one. Confirm what you did with the date and time written out ("Thursday 6 November, 15:00 to 16:00"). The user connects Google Calendar, switches on Apple Calendar (Mac only: every calendar the Calendar app shows, through AppleScript; macOS asks once for Automation) or adds iCal feeds under Settings, Connectors, Calendar. Apple Calendar repeating events show only their first occurrence. For to-dos rather than events, use reminders (see use-reminders).
 
 ## Examples
 
@@ -22,6 +22,11 @@ calendar {"action": "list", "start": "2026-11-03T00:00", "end": "2026-11-08T00:0
 
 ```
 calendar {"action": "add", "title": "Dentist", "start": "2026-11-05T15:00", "end": "2026-11-05T15:45", "where": "12 High Street"}
+```
+
+Add to one Apple calendar by name.
+```
+calendar {"action": "add", "title": "Gym", "start": "2026-11-07T08:00", "calendar": "apple:Home"}
 ```
 
 Move one by the id list showed.

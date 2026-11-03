@@ -4904,6 +4904,8 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
             else []
         return {"feeds": calendars.feeds(),
                 "google": calendars.google_connected(),
+                "apple": calendars.apple_connected(),
+                "apple_available": calendars.apple_available(),
                 "events": [e.summary() for e in found],
                 "problems": problems,
                 "redirect": f"http://127.0.0.1:{session.port}/oauth/google"
@@ -4920,6 +4922,15 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
         except calendars.CalendarError as exc:
             raise ValueError(str(exc)) from None
         return {"feeds": calendars.feeds()}
+
+    if name == "calendar-apple":
+        from . import calendars
+
+        try:
+            calendars.apple_connect(arg != "off")
+        except calendars.CalendarError as exc:
+            raise ValueError(str(exc)) from None
+        return {"apple": calendars.apple_connected()}
 
     if name == "calendar-google":
         from . import calendars
