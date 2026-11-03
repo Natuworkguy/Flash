@@ -10107,7 +10107,19 @@ async function drawSparks(body, again = false) {
   const add = el("button", "btn primary with-icon", `${icon("plus")}<span>New spark</span>`);
   add.type = "button";
   add.onclick = () => sparkForm();
-  buttons.append(shared, team, add);
+  // Every spark's tools read again: Flash's own and extensions, the MCP
+  // servers, and skills, as refresh_tools does for one.
+  const refresh = el("button", "btn with-icon", `${icon("retry")}<span>Refresh tools</span>`);
+  refresh.type = "button";
+  refresh.onclick = async () => {
+    refresh.disabled = true;
+    try {
+      const done = await command("sparks-refresh");
+      toast(`Tools refreshed for every spark${done.servers.length ? ` · ${done.servers.length} MCP server${done.servers.length === 1 ? "" : "s"} ready` : ""}`);
+    } catch (error) { showFailure(error); }
+    refresh.disabled = false;
+  };
+  buttons.append(refresh, shared, team, add);
   body.querySelector(".mem-head").appendChild(buttons);
   sparksAlways = r.always;
   const host = body.querySelector(".host");

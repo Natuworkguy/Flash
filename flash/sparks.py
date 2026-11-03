@@ -5848,6 +5848,42 @@ def wake() -> None:
     _nudge.set()
 
 
+REFRESH = ".refresh.json"
+
+
+def ask_refresh() -> None:
+    """Have every spark's tools brought up to date: Flash's own tools and
+    extensions read again, and the MCP servers refreshed. The caller has
+    done it in its own process; this tells the keeper, which may be
+    another process, to do the same before its next shift."""
+
+    folder = sparks_dir()
+    folder.mkdir(parents=True, exist_ok=True)
+    temp = folder / ".refresh.tmp"
+    temp.write_text(json.dumps({"pid": os.getpid(), "at": time.time()}),
+                    encoding="utf-8")
+    os.replace(temp, folder / REFRESH)
+    wake()
+
+
+def _refresh_asked(seen: float) -> float:
+    """Refresh this process's tools if another one has asked since SEEN;
+    when it was last asked, for the next look."""
+
+    try:
+        asked = json.loads(
+            (sparks_dir() / REFRESH).read_text(encoding="utf-8"))
+        at = float(asked.get("at") or 0)
+    except (OSError, ValueError, AttributeError, TypeError):
+        return seen
+    if at > seen and asked.get("pid") != os.getpid():
+        from . import tools as flash_tools  # deferred: avoids a module cycle
+
+        with contextlib.suppress(Exception):
+            flash_tools.refresh_all()
+    return max(at, seen)
+
+
 def _take_floor() -> bool:
     """Whether this process holds the keeper's lock, taking it if free."""
 
@@ -6089,6 +6125,9 @@ def _keep(
     """
 
     seen = _signature()
+    # Only a refresh asked for after this keeper started: one that
+    # started since has read everything afresh already.
+    refreshed = time.time()
     holding = False
     ticks = 0
     # The code seen at the last look: an update is acted on once it has
@@ -6118,6 +6157,7 @@ def _keep(
                 if spark.status == WORKING:
                     _edit(spark.id, lambda s: setattr(s, "status", IDLE))
         if holding:
+            refreshed = _refresh_asked(refreshed)
             if ticks % WATCH_EVERY_TICKS == 0:
                 with contextlib.suppress(OSError):
                     watch_tick()

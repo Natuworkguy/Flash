@@ -5159,6 +5159,17 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
         learning.refresh()
         return {"message": message}
 
+    if name == "sparks-refresh":
+        # Every spark's tools, as refresh_tools brings one's: here, and
+        # in the keeper running shifts, which may be another process.
+        from . import tools as flash_tools  # deferred: tools imports a lot
+
+        changes, found = flash_tools.refresh_all()
+        sparks.ask_refresh()
+        return {"changed": changes,
+                "servers": [s.name for s in found
+                            if s.state == connectors.READY]}
+
     if name == "sparks":
         return {
             "sparks": [s.to_dict() for s in sparks.all_sparks()],
