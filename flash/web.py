@@ -3313,6 +3313,16 @@ def _sink(session: Session, chat: Chat):
             session.emit(chat, {"type": "chess", "id": uuid.uuid4().hex[:12],
                                 **lesson})
             return True
+        if kind == "chess-move":
+            # Flash's move in a game with the user, checked and shown.
+            from . import chess
+
+            asked = json.loads(text)
+            try:
+                return _chess_play(session, chat, str(asked.get("id") or ""),
+                                   str(asked.get("move") or ""), "flash")
+            except (chess.ChessError, ValueError) as exc:
+                return {"error": str(exc)}
         if kind == "project":
             # "Make this a project": made, and this chat moved into it.
             asked = json.loads(text)
@@ -4611,6 +4621,25 @@ def _install_staged(session: Session, staged_id: str) -> dict:
     return _extension_info(ext)
 
 
+def _chess_play(session: Session, chat: Any, game_id: str, move: str,
+                by: str) -> dict:
+    """A move in chess game GAME_ID in CHAT, by "user" or "flash": kept
+    in the chat's log, and every page showing it brought up to date."""
+
+    from . import chess
+
+    for n, event in enumerate(chat.log):
+        if isinstance(event, dict) and event.get("type") == "chess" \
+                and event.get("mode") == "play" and event.get("id") == game_id:
+            game = chess.play_move(event, move, by)
+            chat.log[n] = game
+            session.save(chat)
+            session.hub.publish({"type": "chess-changed", "chat": chat.id,
+                                 "game": game})
+            return game
+    raise ValueError("That chess game is not in this chat.")
+
+
 def _course_command(session: Session, name: str, subject: str,
                     body: dict) -> dict:
     """A course card's: what to show, and answers given on it, marked
@@ -4677,6 +4706,16 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
                 session.save(chat)
                 return {}
         raise ValueError("That lesson is not in this chat.")
+
+    if name == "chess-play":
+        # The user's move in a game with Flash, checked against the rules.
+        from . import chess
+
+        try:
+            return _chess_play(session, session.chat(chat_id), arg,
+                               str(body.get("move") or ""), "user")
+        except chess.ChessError as exc:
+            raise ValueError(str(exc)) from None
 
     if name == "rename":
         chat = session.chat(chat_id)

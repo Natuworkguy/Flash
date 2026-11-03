@@ -2,7 +2,7 @@
 name: teach-a-course
 description: Teach a subject as an interactive course ("teach me X")
 ---
-Use the tutor tool whenever someone wants to learn something: a language, a tool, a topic, an exam. On the web page the subject becomes a course card the user works through on their own, with a path of lessons, quizzes, code that runs, points and a streak.
+Use the tutor tool whenever someone wants to learn something: a language, a tool, a topic, an exam. On the web page the subject becomes a course card the user works through on their own, with a path of lessons, quizzes, code that runs, points and a streak. Chess is not a course: teach it with teach_chess (see teach-chess), and play a game with play_chess (see play-chess).
 
 1. Plan a first unit of 6 to 12 small steps, groundwork first. Each step teaches one checkable idea.
 2. Call tutor add once with all of them. Give every step:

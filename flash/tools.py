@@ -98,6 +98,7 @@ from .theme import (
     tool_audio,
     tool_browser,
     tool_chess,
+    tool_chess_move,
     tool_course,
     tool_diff,
     tool_document,
@@ -4947,6 +4948,51 @@ def teach_chess(title: str = "", steps: Any = None, start: str = "",
     return _chess_in_terminal(lesson)
 
 
+def play_chess(game: str = "", move: str = "", side: str = "white",
+               start: str = "") -> str:
+    """Play chess against the user, no lesson: start a game on a board
+    in the chat, or play Flash's move in one, checked against the
+    rules."""
+
+    import uuid
+
+    from . import chess
+
+    tool_line(f"ChessGame({game or 'new'}{', ' + move if move else ''})")
+    if game:
+        played = tool_chess_move(game, move)
+        if played is None:
+            result = ("Error: games are played on a board in the browser; "
+                      "there is none here.")
+        elif played.get("error"):
+            result = (f"Error: {played['error']}. Nothing was played: "
+                      "call play_chess again with a legal move.")
+        else:
+            last = played["moves"][-1]["san"]
+            tool_result(last)
+            return f"You played {last}.\n" + chess.game_summary(played)
+        tool_result(result, style=ERROR)
+        return result
+    try:
+        made = chess.new_game(uuid.uuid4().hex[:12], side, start)
+        if move:
+            made = chess.play_move(made, move, "flash")
+    except (chess.ChessError, ValueError) as exc:
+        result = f"Error: {exc}. No game was started."
+        tool_result(result, style=ERROR)
+        return result
+    if not tool_chess(made):
+        result = ("Error: games are played on a board in the browser; "
+                  "there is none here. Play in text instead if they want.")
+        tool_result(result, style=ERROR)
+        return result
+    tool_result(f"the user plays {made['side']}")
+    return ("It is in the chat as a board the user moves pieces on; each "
+            "of their moves comes to you as a message with the game id. "
+            "Say in a line that the game is on.\n"
+            + chess.game_summary(made))
+
+
 def read_aloud(text: str = "", url: str = "", path: str = "",
                out: str = "") -> str:
     """Read an article, a document or some text aloud in Flash's voice:
@@ -7302,6 +7348,43 @@ tools: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "play_chess",
+            "description": (
+                "Play a game of chess against the user, no lesson: for "
+                "\"play chess with me\", \"let's play a game\". Without "
+                "game, starts one: a board in the chat they move pieces "
+                "on, their moves checked there and sent to you. With "
+                "game and move, plays your move in that game. Every move "
+                "is checked against the rules: an illegal one comes back "
+                "as an error with the legal moves. Play to win, at the "
+                "strength they ask for; keep your reply to a line or "
+                "none, the board shows the move. Moves are written as "
+                "usual (e5, Nf6, O-O) or as squares (e7e5)."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "game": {"type": "string", "description": (
+                        "The game's id, from the user's message or the "
+                        "last play_chess result. Leave out to start a "
+                        "new game.")},
+                    "move": {"type": "string", "description": (
+                        "Your move. On a new game, only when the user "
+                        "plays black: your first move as white.")},
+                    "side": {"type": "string", "enum": ["white", "black"],
+                             "description": (
+                                 "On a new game, the side the user plays "
+                                 "(white unless they ask).")},
+                    "start": {"type": "string", "description": (
+                        "On a new game, a FEN to start from instead of "
+                        "the usual first position.")},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "read_aloud",
             "description": (
                 "Read something aloud in Flash's voice: an article from "
@@ -8846,6 +8929,7 @@ FUNCTIONS = {
     "review_code": review_code,
     "read_aloud": read_aloud,
     "teach_chess": teach_chess,
+    "play_chess": play_chess,
     "verify": verify,
     "learn_from_recording": learn_from_recording,
     "check_office_file": check_office_file,

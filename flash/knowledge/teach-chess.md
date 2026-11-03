@@ -11,6 +11,8 @@ description: Teach chess move by move on a board the user plays through: opening
 - For a beginner, start with how the pieces move, one lesson per piece, each ending with a move for them to find. Then checkmate patterns, then openings by their ideas.
 - After a lesson, keep it to a line about what it covered. When they ask about a position, the message gives its FEN: answer from that position.
 - "Next lesson" means the next one in the same line: the same opening further on, or the next tactic, harder.
+- In the browser a lesson can go full screen (the button by "Turn the board"). On the full screen, "Next lesson" greys out once pressed, and while you are working, and the new lesson slides in over the finished one when you send it: call teach_chess with the next lesson, nothing else is needed.
+- To play a game rather than learn ("play chess with me"), use play_chess, not a lesson: see play-chess.
 
 ## Examples
 

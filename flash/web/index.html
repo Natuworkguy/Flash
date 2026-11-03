@@ -846,6 +846,17 @@ pre code { display: block; padding: 2px 16px 14px; overflow-x: auto; font-size: 
 .course.full .course-name { font-size: 20px; }
 .course.full .course-step h3 { font-size: 24px; }
 .course.full .course-lesson { font-size: 16px; }
+/* A chess lesson on the full screen: the board as big as fits, and the
+   next lesson sliding in over the last, like the next slide of a deck. */
+.chess.full { position: fixed; inset: 0; z-index: 2000; margin: 0; border: 0; border-radius: 0; overflow-y: auto; padding: max(24px, env(safe-area-inset-top)) max(16px, calc((100vw - 1100px) / 2)) max(32px, env(safe-area-inset-bottom)); background: var(--bg); }
+.chess.full .chess-title { font-size: 20px; }
+.chess.full .chess-board { width: min(100%, calc(100vh - 160px), 720px); }
+.chess.full .chess-side { flex: 1; min-width: 260px; font-size: 16px; }
+.chess.full.slide-in { z-index: 2001; animation: chess-slide-in 0.42s var(--ease) both; }
+.chess.full.slide-out { animation: chess-slide-out 0.42s var(--ease) both; }
+@keyframes chess-slide-in { from { transform: translateX(100%); } }
+@keyframes chess-slide-out { to { transform: translateX(-30%); opacity: 0.4; } }
+@media (prefers-reduced-motion: reduce) { .chess.full.slide-in, .chess.full.slide-out { animation: none; } }
 body.course-open { overflow: hidden; }
 .course-chip { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; color: var(--accent); text-transform: uppercase; letter-spacing: .04em; }
 .course-chip svg { width: 14px; height: 14px; }
@@ -8214,7 +8225,7 @@ function drawEntry(entry, ctx) {
     case "file": messagesEl.appendChild(entry.kind === "image" ? inlineImage(entry) : entry.kind === "audio" ? audioPlayer(entry) : attachment(entry)); break;
     case "browser": drawBrowserFrame(entry); break;
     case "seen": seenImages(ctx.tool, entry.images || []); break;
-    case "chess": messagesEl.appendChild(chessCard(entry)); break;
+    case "chess": { const card = messagesEl.appendChild(chessCard(entry)); chessTakeOver(card); break; }
     case "guide": messagesEl.appendChild(guideCard(entry)); break;
     case "course": messagesEl.querySelector(`.course[data-course="${CSS.escape(entry.subject)}"]`)?.remove(); messagesEl.appendChild(courseCard(entry)); break;
     case "debate": {
@@ -16830,6 +16841,7 @@ function apply(event) {
   if (event.type === "btw") { btwEvent(event); return; }
   if (event.type === "debate-live") { debateLive(event); return; }
   if (event.type === "course-changed") { courseChanged(event); return; }
+  if (event.type === "chess-changed") { if (event.chat === current) chessGameChanged(event.game); return; }
   if (event.type === "doc-changed") { docChanged(event); return; }
   if (event.type === "doc-proposal") { docProposal(event); return; }
   if (event.type === "answered") docAnswered(event);
@@ -17509,6 +17521,7 @@ function updateSend() {
   send.disabled = (state === "up" && !typed) || (typed && uploading());
   // Next unit asks Flash to teach: not while it is working.
   document.querySelectorAll(".course-next-unit").forEach(b => { b.disabled = !!busy; });
+  document.querySelectorAll(".chess-next-lesson").forEach(b => { b.disabled = !!busy || !!b.dataset.sent; });
   const withSpark = sparkOf(chat ? chat.spark : viewSpark);
   const who = withSpark ? withSpark.name : "Flash";
   const face = $("#spark-btn .spark-av");
@@ -17895,13 +17908,14 @@ function chessLastMove(st) {
 }
 
 function chessCard(entry) {
-  const card = el("div", "block chess", `<div class="chess-head"><span class="course-chip">${icon("chess")}<span>Chess</span></span><span class="chess-title"></span><span class="chess-count"></span><button type="button" class="icon-btn chess-flip" data-tip="Turn the board" aria-label="Turn the board">${icon("flipBoard")}</button></div><div class="chess-bar"><i></i></div><div class="chess-body"><div class="chess-board" role="img"><div class="chess-squares"></div><div class="chess-pieces"></div><svg class="chess-arrows" viewBox="0 0 8 8" aria-hidden="true"></svg><div class="chess-promote" hidden></div></div><div class="chess-side"><div class="chess-turn"></div><div class="chess-say"></div><div class="chess-feedback-box"></div><div class="course-buttons chess-buttons"></div></div></div>`);
+  const card = el("div", "block chess", `<div class="chess-head"><span class="course-chip">${icon("chess")}<span>Chess</span></span><span class="chess-title"></span><span class="chess-count"></span><button type="button" class="icon-btn chess-flip" data-tip="Turn the board" aria-label="Turn the board">${icon("flipBoard")}</button><button type="button" class="icon-btn course-full" data-tip="Full screen" aria-label="Full screen">${icon("expand")}</button></div><div class="chess-bar"><i></i></div><div class="chess-body"><div class="chess-board" role="img"><div class="chess-squares"></div><div class="chess-pieces"></div><svg class="chess-arrows" viewBox="0 0 8 8" aria-hidden="true"></svg><div class="chess-promote" hidden></div></div><div class="chess-side"><div class="chess-turn"></div><div class="chess-say"></div><div class="chess-feedback-box"></div><div class="course-buttons chess-buttons"></div></div></div>`);
   card.dataset.chess = entry.id;
   card.tabIndex = 0;
   card.querySelector(".chess-title").textContent = entry.title;
   const steps = entry.steps || [];
   card._chess = { entry, steps, at: Math.min(entry.at || 0, steps.length), solved: new Set(entry.solved || []), flip: entry.side === "black", sel: null, wrong: 0, open: false, fen: entry.start, last: null, timers: [] };
   card.querySelector(".chess-flip").onclick = () => { card._chess.flip = !card._chess.flip; chessSquares(card); chessPlace(card, card._chess.fen); chessMarks(card, card._chess.shownMarks); };
+  card.querySelector(".course-full").onclick = () => chessFullScreen(card);
   card.addEventListener("keydown", (e) => {
     if (e.target.closest("input, textarea")) return;
     if (e.key === "ArrowRight") { card.querySelector(".chess-next:not([disabled])")?.click(); e.preventDefault(); }
@@ -17909,8 +17923,133 @@ function chessCard(entry) {
   });
   chessPointer(card);
   chessSquares(card);
-  chessShow(card, card._chess.at, false);
+  if (entry.mode === "play") {
+    card.classList.add("chess-game");
+    card._chess.game = entry;
+    chessGameShow(card, null);
+  } else chessShow(card, card._chess.at, false);
   return card;
+}
+
+// A lesson alone on the screen. The page, not the card, is what the browser
+// shows full screen, so the next lesson can slide in over this one and stay.
+function chessFullScreen(card) {
+  if (card.classList.contains("full")) {
+    chessFull(card, false);
+    if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+    return;
+  }
+  const root = document.documentElement;
+  if (root.requestFullscreen && !document.fullscreenElement) root.requestFullscreen().catch(() => {});
+  chessFull(card, true);
+}
+
+function chessFull(card, on) {
+  if (on && !card._home) {
+    card._home = document.createComment("chess");
+    card.replaceWith(card._home);
+    document.body.appendChild(card);
+  } else if (!on && card._home) {
+    card._home.replaceWith(card);
+    card._home = null;
+  }
+  card.classList.toggle("full", on);
+  document.body.classList.toggle("course-open", on || !!document.querySelector(".course.full, .chess.full"));
+  const button = card.querySelector(".course-full");
+  button.innerHTML = icon(on ? "shrink" : "expand");
+  button.dataset.tip = button.ariaLabel = on ? "Exit full screen" : "Full screen";
+  if (on) card.focus({ preventScroll: true });
+}
+
+// A new lesson asked for from a lesson on the full screen: it slides in
+// over the one before, like the next slide of a deck.
+function chessTakeOver(card) {
+  const was = [...document.querySelectorAll(".chess.full")].find((c) => c._chess?.nextAsked);
+  if (!was || card === was) return;
+  was._chess.nextAsked = false;
+  chessFull(card, true);
+  card.classList.add("slide-in");
+  was.classList.add("slide-out");
+  const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
+  setTimeout(() => {
+    was.classList.remove("slide-out");
+    card.classList.remove("slide-in");
+    chessFull(was, false);
+  }, reduce ? 0 : 420);
+}
+
+document.addEventListener("fullscreenchange", () => {
+  if (!document.fullscreenElement) document.querySelectorAll(".chess.full").forEach((card) => chessFull(card, false));
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape" || document.fullscreenElement) return;
+  const card = document.querySelector(".chess.full");
+  if (card) { e.stopPropagation(); chessFull(card, false); }
+}, true);
+
+// A game with Flash, no lesson: the user moves when it is their turn, the
+// move is checked here and sent to Flash, and Flash's answer comes back as
+// chess-changed. PLAYED is the move just made, to slide in, or null.
+function chessGameShow(card, played) {
+  const s = card._chess, g = s.game, mine = g.side === "white" ? "w" : "b";
+  s.timers.forEach(clearTimeout);
+  s.timers = [];
+  s.sel = null;
+  s.open = false;
+  card.querySelector(".chess-promote").hidden = true;
+  card.querySelector(".chess-title").textContent = g.title || "Chess with Flash";
+  card.querySelector(".chess-count").textContent = g.moves.length ? `Move ${Math.ceil(g.moves.length / 2)}` : "";
+  card.querySelector(".chess-bar").style.display = "none";
+  const lastMove = g.moves[g.moves.length - 1];
+  const settle = () => {
+    s.last = lastMove ? [chessSq(lastMove.uci.slice(0, 2)), chessSq(lastMove.uci.slice(2, 4))] : null;
+    s.open = !g.end && g.turn === mine;
+    chessPlace(card, g.fen);
+  };
+  if (played && lastMove && s.fen && s.fen !== g.fen) chessAnimate(card, lastMove.uci, g.fen, settle);
+  else settle();
+  const turn = card.querySelector(".chess-turn"), say = card.querySelector(".chess-say");
+  turn.innerHTML = "<b></b><span></span>";
+  say.textContent = lastMove ? `Last move: ${lastMove.by === "user" ? "you" : "Flash"}, ${lastMove.san}` : `You play ${g.side}.`;
+  card.querySelector(".chess-feedback-box").innerHTML = "";
+  if (g.end === "checkmate") {
+    turn.firstChild.textContent = g.turn === mine ? "Checkmate: Flash wins" : "Checkmate: you win";
+    chessFeedback(card, g.turn === mine ? "wrong" : "right", g.turn === mine ? "Flash wins." : "You win.");
+  } else if (g.end) {
+    turn.firstChild.textContent = "Stalemate: a draw";
+  } else if (g.turn === mine) {
+    turn.firstChild.textContent = "Your move";
+    turn.lastChild.textContent = "Drag a piece, or tap it and then its square.";
+  } else {
+    turn.firstChild.textContent = "Flash is thinking";
+  }
+  const row = card.querySelector(".chess-buttons");
+  row.innerHTML = "";
+  if (g.end) chessButton(row, "New game", "primary chess-new-game", () => send("Play chess with me again."), "retry");
+  chessButton(row, "Ask Flash", "chess-ask", () => send(`In our chess game (game ${g.id}, position ${g.fen}): can you explain the position?`), "chat");
+}
+
+// The user's move in a game: checked by the page's server, then sent to Flash.
+async function chessGameMove(card, uci) {
+  const s = card._chess, g = s.game;
+  s.open = false;
+  s.sel = null;
+  chessLit(card);
+  let game;
+  try { game = await command("chess-play", g.id, current, { move: uci }); }
+  catch (error) { chessPlace(card, g.fen); s.open = true; chessFeedback(card, "wrong", error.message); return; }
+  chessGameChanged(game);
+  send(`In our chess game (game ${game.id}), I played ${game.moves[game.moves.length - 1].san}. Position: ${game.fen}. Your move.`);
+}
+
+function chessGameChanged(game) {
+  document.querySelectorAll(`.chess[data-chess="${CSS.escape(game.id)}"]`).forEach((card) => {
+    const s = card._chess;
+    if (!s?.game || game.moves.length <= s.game.moves.length) return;
+    Object.assign(s.entry, game);
+    s.game = game;
+    chessGameShow(card, true);
+  });
 }
 
 // Where square SQ is drawn, in squares from the top left.
@@ -17957,7 +18096,7 @@ function chessPlace(card, fen) {
 
 // The squares lit: the last move, the piece picked up and where it can go.
 function chessLit(card) {
-  const s = card._chess, st = s.steps[s.at];
+  const s = card._chess, st = s.game || s.steps[s.at];
   const targets = s.sel === null || !st?.legal ? [] : Object.keys(st.legal).filter((u) => u.startsWith(chessName(s.sel))).map((u) => chessSq(u.slice(2, 4)));
   const board = chessBoard(s.fen);
   card.classList.toggle("chess-open", s.open);
@@ -18175,7 +18314,14 @@ function chessDone(card) {
   row.innerHTML = "";
   chessButton(row, "Back", "chess-back", () => chessShow(card, steps.length - 1), "chevLeft");
   chessButton(row, "Again", "", () => { s.solved.clear(); chessShow(card, 0); }, "retry");
-  chessButton(row, "Next lesson", "primary", () => send(`I finished the chess lesson "${s.entry.title}". Teach me the next one.`), "chevRight");
+  const more = chessButton(row, "Next lesson", "primary chess-next-lesson", () => {
+    more.disabled = true;
+    more.dataset.sent = "1";
+    s.nextAsked = true;
+    send(`I finished the chess lesson "${s.entry.title}". Teach me the next one.`);
+  }, "chevRight");
+  // It asks Flash to teach: not while Flash is working, and only once.
+  more.disabled = !!(chats.get(current)?.busy || chats.get(current)?.queued);
   chessButton(row, "Ask Flash", "chess-ask", () => send(`I finished the chess lesson "${s.entry.title}" (it ends at ${last.after}). Can you go over what I should take from it?`), "chat");
   if (s.at !== (s.entry.at || 0)) chessSave(card);
 }
@@ -18190,8 +18336,8 @@ function chessPointer(card) {
     return card._chess.flip ? y * 8 + (7 - x) : (7 - y) * 8 + x;
   };
   const movesFrom = (sq) => {
-    const st = card._chess.steps[card._chess.at];
-    return Object.keys(st?.legal || {}).filter((u) => u.startsWith(chessName(sq)));
+    const legal = card._chess.game ? card._chess.game.legal : card._chess.steps[card._chess.at]?.legal;
+    return Object.keys(legal || {}).filter((u) => u.startsWith(chessName(sq)));
   };
   let drag = null;
   board.addEventListener("pointerdown", (e) => {
@@ -18234,9 +18380,10 @@ function chessPointer(card) {
 }
 
 function chessMoveTo(card, from, to) {
-  const s = card._chess, st = s.steps[s.at];
+  const s = card._chess, st = s.game || s.steps[s.at];
+  const tryMove = (uci) => (s.game ? chessGameMove : chessTry)(card, uci);
   const moves = Object.keys(st.legal).filter((u) => u.startsWith(chessName(from) + chessName(to)));
-  if (moves.length === 1) return chessTry(card, moves[0]);
+  if (moves.length === 1) return tryMove(moves[0]);
   // A pawn reaching the last rank: which piece it becomes.
   const pick = card.querySelector(".chess-promote");
   const white = st.turn === "w";
@@ -18245,7 +18392,7 @@ function chessMoveTo(card, from, to) {
     const b = pick.appendChild(el("button", `chess-piece-pick ${white ? "white" : "black"}`, CHESS_GLYPH[kind] + "︎"));
     b.type = "button";
     b.setAttribute("aria-label", CHESS_NAME[kind]);
-    b.onclick = () => { pick.hidden = true; chessTry(card, chessName(from) + chessName(to) + kind); };
+    b.onclick = () => { pick.hidden = true; tryMove(chessName(from) + chessName(to) + kind); };
   }
   pick.hidden = false;
 }

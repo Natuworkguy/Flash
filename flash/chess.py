@@ -449,3 +449,76 @@ def summary(lesson: dict) -> str:
     return (f"{lesson['title']}: {len(lesson['steps'])} steps, {asks} for "
             f"the user to play. It ends here:\n{board}\nFEN {end.fen()}"
             + over)
+
+
+# ----- a free game: the user against Flash, no lesson -----
+MAX_GAME_MOVES = 600
+
+
+def new_game(game_id: str, side: str = "white", start: str = "") -> dict:
+    """A game for the page: the user plays SIDE, Flash the other, from
+    START (a FEN) or the usual first position."""
+
+    side = "black" if str(side).lower().startswith("b") else "white"
+    pos = Position.from_fen(start or START)
+    game = {"id": game_id, "mode": "play", "title": "Chess with Flash",
+            "side": side, "start": pos.fen(), "moves": []}
+    return {**game, **game_state(pos)}
+
+
+def game_state(pos: Position) -> dict:
+    """What the page needs of a game's position: whose turn, the legal
+    moves (as squares, to what is written), and how it ended."""
+
+    return {"fen": pos.fen(), "turn": pos.turn, "end": pos.outcome(),
+            "legal": {pos.uci(m): pos.san(m) for m in pos.legal()}}
+
+
+def play_move(game: dict, written: str, by: str) -> dict:
+    """GAME after BY ("user" or "flash") plays WRITTEN: a ChessError when
+    the game is over, it is not their turn, or the move is not legal."""
+
+    pos = Position.from_fen(game["fen"])
+    if pos.outcome():
+        raise ChessError(f"the game is over ({pos.outcome()})")
+    user = "w" if game.get("side") == "white" else "b"
+    if (pos.turn == user) != (by == "user"):
+        who = "the user's" if pos.turn == user else "Flash's"
+        raise ChessError(f"it is {who} turn to move")
+    if len(game.get("moves") or []) >= MAX_GAME_MOVES:
+        raise ChessError("the game is too long to go on")
+    move = pos.find(written)
+    played = {"uci": pos.uci(move), "san": pos.san(move), "by": by}
+    pos = pos.play(move)
+    return {**game, "moves": [*(game.get("moves") or []), played],
+            **game_state(pos)}
+
+
+def game_summary(game: dict) -> str:
+    """The game in words, for the model: the moves so far, the board
+    from the user's side, and what comes next."""
+
+    pos = Position.from_fen(game["fen"])
+    sans = [m["san"] for m in game.get("moves") or []]
+    first = Position.from_fen(game.get("start") or START)
+    n, black = first.fullmove, first.turn == "b"
+    words = []
+    for san in sans:
+        if not black:
+            words.append(f"{n}. {san}")
+        else:
+            words.append(f"{n}... {san}" if not words else san)
+            n += 1
+        black = not black
+    user = "w" if game.get("side") == "white" else "b"
+    if pos.outcome():
+        after = f"The game is over: {pos.outcome()}."
+    elif pos.turn == user:
+        after = "It is the user's move: wait for it."
+    else:
+        after = (f"It is your move: call play_chess with game "
+                 f"{game['id']} and your move.")
+    return (f"Game {game['id']}, the user plays {game.get('side')}.\n"
+            f"Moves: {' '.join(words) or 'none yet'}\n"
+            f"{pos.diagram(game.get('side') == 'black')}\nFEN {pos.fen()}\n"
+            + after)
