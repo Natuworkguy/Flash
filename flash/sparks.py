@@ -6187,6 +6187,11 @@ def _keep(
                     watch_tick()
             with contextlib.suppress(OSError, SparkError):
                 event_tick()
+            # Flash's own timed reminders, fired once, by the holder.
+            from . import timers
+
+            with contextlib.suppress(OSError):
+                timers.fire_due()
             for spark in due():
                 _safe_shift(spark.id, prepare, announce)
 
