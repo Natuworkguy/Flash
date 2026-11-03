@@ -465,3 +465,20 @@ def test_editing_keeps_secret_values():
     with pytest.raises(connectors.ConnectorError):
         connectors.edit("nope", "x")
     connectors.remove("ed2")
+
+
+def test_refresh_tools_lists_only_the_flash_tools_that_changed(monkeypatch):
+    shown = [[{"function": {"name": "a", "description": "1"}},
+              {"function": {"name": "b", "description": "1"}}],
+             [{"function": {"name": "a", "description": "2"}},
+              {"function": {"name": "c", "description": "1"}}]]
+    monkeypatch.setattr(tools, "flash_tools", lambda: shown.pop(0))
+
+    said = tools.refresh_tools()
+
+    assert "added: c" in said and "removed: b" in said  # nosec B101
+    assert "updated: a" in said  # nosec B101
+
+
+def test_refresh_tools_says_nothing_of_flash_tools_unchanged():
+    assert "Flash's own tools" not in tools.refresh_tools()  # nosec B101
