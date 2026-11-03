@@ -2222,6 +2222,7 @@ def available_tools() -> list[dict[str, Any]]:
         + (PRINT_TOOLS + REMINDERS_TOOLS if computer.system() == "mac"
            else [])
         + (LOCATION_TOOLS if location.current() else [])
+        + TIMER_TOOLS
     )
 
 
@@ -3409,6 +3410,74 @@ def user_location_tool(**_: Any) -> str:
 
     tool_line("Location()")
     result = location.describe()
+    tool_result(result)
+    return result
+
+
+# Flash's own timed reminders, and what is connected and how charged.
+TIMER_TOOLS: list[dict[str, Any]] = [
+    {
+        "type": "function",
+        "function": {
+            "name": "remind_me",
+            "description": (
+                "Remind the user at a time: Flash itself notifies them "
+                "then, on the desktop and in the briefing, even after a "
+                "restart. add with text and when (an exact local time like "
+                "2026-11-03T18:00, or 'in 20m', 'in 2h', 'in 1d'); list; "
+                "cancel by id. Not Apple Reminders: use reminders for those."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string",
+                               "enum": ["add", "list", "cancel"]},
+                    "text": {"type": "string",
+                             "description": "add: what to remind of."},
+                    "when": {"type": "string",
+                             "description": "add: the time, or 'in 20m'."},
+                    "id": {"type": "string",
+                           "description": "cancel: its id, from list."},
+                },
+                "required": ["action"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "devices",
+            "description": (
+                "What is connected and how charged: the Mac's battery, "
+                "its network, connected Bluetooth devices (AirPods, "
+                "keyboard...) with battery where known, and the paired "
+                "Apple Watch's battery and when it was last heard from. "
+                "Read-only."
+            ),
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+]
+
+
+def remind_me_tool(**args: Any) -> str:
+    """Flash's own reminders: add, list, cancel."""
+
+    from . import timers
+
+    tool_line(f"RemindMe({args.get('action', 'list')})")
+    result = timers.tool(**args)
+    tool_result(result)
+    return result
+
+
+def devices_tool(**_: Any) -> str:
+    """Batteries and connections, read-only."""
+
+    from . import devices
+
+    tool_line("Devices()")
+    result = devices.report()
     tool_result(result)
     return result
 
@@ -9449,6 +9518,8 @@ FUNCTIONS = {
     "list_printers": list_printers,
     "reminders": reminders_tool,
     "user_location": user_location_tool,
+    "remind_me": remind_me_tool,
+    "devices": devices_tool,
     "read_imessages": read_imessages,
     "debate": debate_tool,
     "mark_imessages_read": mark_imessages_read,
@@ -9473,7 +9544,8 @@ SUBAGENT_TOOL_NAMES = (
 SPARK_TOOL_NAMES = SUBAGENT_TOOL_NAMES + ("send_email", "send_imessage",
                                           "debate", "phone_call",
                                           "watch_youtube", "view_image",
-                                          "print", "list_printers")
+                                          "print", "list_printers",
+                                          "remind_me", "devices")
 
 # Tools that ask every time, autonomous mode or not: UltraAuto aside.
 ALWAYS_ASK_TOOL_NAMES = ("send_email", "send_imessage", "print")

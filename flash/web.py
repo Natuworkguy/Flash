@@ -5524,6 +5524,14 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
         return {"location": location.save(
             body.get("lat"), body.get("lon"), body.get("accuracy"))}
 
+    if name == "device":
+        # The watch's battery, sent when Flash is opened on it.
+        from . import devices
+
+        return {"device": devices.save_watch(
+            body.get("battery"), body.get("charging"),
+            str(body.get("watch") or ""))}
+
     if name == "device-rename":
         if not session.access.rename(arg, str(body.get("to") or "")):
             raise ValueError("That device is not signed in any more.")
