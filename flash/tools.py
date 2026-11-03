@@ -2223,14 +2223,35 @@ def turn_tools() -> list[dict[str, Any]]:
     System One's only while it is at work, and whatever the installed
     extensions and the connected MCP servers add."""
 
-    offered = (
+    offered = flash_tools()
+    taken = frozenset(t["function"]["name"] for t in offered)
+    return offered + connectors.tool_schemas(taken)
+
+
+def flash_tools() -> list[dict[str, Any]]:
+    """Flash's own tools on this turn, the extensions' with them: all
+    turn_tools offers but the connected MCP servers'."""
+
+    return (
         available_tools()
         + (EDITOR_TOOLS if editor.available() else [])
         + (SYSTEM_ONE_TOOLS if systemone.active() else [])
         + extensions.tool_schemas(frozenset(FUNCTIONS))
     )
-    taken = frozenset(t["function"]["name"] for t in offered)
-    return offered + connectors.tool_schemas(taken)
+
+
+def _flash_tool_changes(before: list[dict[str, Any]],
+                        after: list[dict[str, Any]]) -> list[str]:
+    """What changed in Flash's own tools, one line each: none if none."""
+
+    old = {t["function"]["name"]: t for t in before}
+    new = {t["function"]["name"]: t for t in after}
+    added = [n for n in new if n not in old]
+    removed = [n for n in old if n not in new]
+    updated = [n for n in new if n in old and new[n] != old[n]]
+    return ([f"added: {', '.join(added)}"] if added else []) + (
+        [f"removed: {', '.join(removed)}"] if removed else []) + (
+        [f"updated: {', '.join(updated)}"] if updated else [])
 
 
 def run_extension_command(
@@ -3217,13 +3238,19 @@ def computer_use_tool(action: str = "", **args: Any) -> str:
 
 
 def refresh_tools() -> str:
-    """Bring the connected MCP servers up to date, and say what each has."""
+    """Bring the connected MCP servers up to date, and say what each has;
+    read Flash's own tools again too, and say which of them changed."""
 
     tool_line("RefreshTools()")
+    before = flash_tools()
+    extensions.reload()
+    changes = _flash_tool_changes(before, flash_tools())
+    flash_part = ("\n\nFlash's own tools that changed, yours from your "
+                  "next step:\n" + "\n".join(changes)) if changes else ""
     found = connectors.refresh()
     if not found:
         result = ("No MCP servers are set up. The user adds them in "
-                  "Settings, Connectors, or with /mcp add.")
+                  "Settings, Connectors, or with /mcp add.") + flash_part
         tool_result(result, style=WARN)
         return result
     lines = []
@@ -3240,7 +3267,7 @@ def refresh_tools() -> str:
             why = server.why or server.state
             lines.append(f"{server.name}: not running ({why})")
     result = ("MCP servers, as they are now. Their tools are yours from "
-              "your next step:\n" + "\n".join(lines))
+              "your next step:\n" + "\n".join(lines)) + flash_part
     tool_result(result)
     return result
 
@@ -8281,8 +8308,11 @@ tools: list[dict[str, Any]] = [
                 "start any that are not running (one just added, one that "
                 "failed), and have each list its tools again. Use it when "
                 "a tool you expect from a connected app is missing, then "
-                "use the new ones on your next step. It says which servers "
-                "are up and what tools each has."
+                "use the new ones on your next step. It reads Flash's own "
+                "tools again too (an extension added or changed, email or "
+                "the computer set up). It says which servers are up and "
+                "what tools each has, then which of Flash's tools were "
+                "added, removed or updated, if any."
             ),
             "parameters": {"type": "object", "properties": {}},
         },
