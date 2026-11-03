@@ -45,6 +45,7 @@ from . import (
     instructions,
     learning,
     livedocs,
+    location,
     mail,
     midi,
     model3d,
@@ -2220,6 +2221,7 @@ def available_tools() -> list[dict[str, Any]]:
            else [])
         + (PRINT_TOOLS + REMINDERS_TOOLS if computer.system() == "mac"
            else [])
+        + (LOCATION_TOOLS if location.current() else [])
     )
 
 
@@ -3381,6 +3383,32 @@ def print_tool(path: str = "", document: str = "", printer: str = "",
     if run.returncode != 0:
         return fail("lp failed: " + (run.stderr or run.stdout).strip())
     result = f"Sent to {shown}. {(run.stdout or '').strip()}".strip()
+    tool_result(result)
+    return result
+
+
+# Offered only while the user's watch shares where they are.
+LOCATION_TOOLS: list[dict[str, Any]] = [
+    {
+        "type": "function",
+        "function": {
+            "name": "user_location",
+            "description": (
+                "Where the user is: the latitude and longitude their Apple "
+                "Watch last gave, how exact and how long ago. Use it for "
+                "'near me', weather here, how far, and the like."
+            ),
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+]
+
+
+def user_location_tool(**_: Any) -> str:
+    """The user's place, from their watch."""
+
+    tool_line("Location()")
+    result = location.describe()
     tool_result(result)
     return result
 
@@ -9420,6 +9448,7 @@ FUNCTIONS = {
     "print": print_tool,
     "list_printers": list_printers,
     "reminders": reminders_tool,
+    "user_location": user_location_tool,
     "read_imessages": read_imessages,
     "debate": debate_tool,
     "mark_imessages_read": mark_imessages_read,
