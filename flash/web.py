@@ -5513,6 +5513,17 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
         # home learns the public address without typing it.
         return {"addresses": session.addresses()}
 
+    if name == "location":
+        # A watch with "Let Flash see my location" on tells where it
+        # is; turned off, it sends "off" and the place is forgotten.
+        from . import location
+
+        if arg == "off":
+            location.forget()
+            return {"location": None}
+        return {"location": location.save(
+            body.get("lat"), body.get("lon"), body.get("accuracy"))}
+
     if name == "device-rename":
         if not session.access.rename(arg, str(body.get("to") or "")):
             raise ValueError("That device is not signed in any more.")
