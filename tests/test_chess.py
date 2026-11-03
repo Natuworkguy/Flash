@@ -140,3 +140,39 @@ class TestTheTool:
         said = tools.teach_chess("Opening", TestLessons.STEPS)
         assert said.startswith("Shown in the terminal")
         assert "FEN " in said
+
+
+class TestAGame:
+    def test_turns_are_kept_and_moves_checked(self):
+        game = chess.new_game("g1", "white")
+        game = chess.play_move(game, "e4", "user")
+        with pytest.raises(chess.ChessError, match="Flash's turn"):
+            chess.play_move(game, "d4", "user")
+        with pytest.raises(chess.ChessError, match="not a legal move"):
+            chess.play_move(game, "e4", "flash")
+        game = chess.play_move(game, "e5", "flash")
+        assert [m["san"] for m in game["moves"]] == ["e4", "e5"]
+        assert game["turn"] == "w" and "g1f3" in game["legal"]
+        assert "Moves: 1. e4 e5" in chess.game_summary(game)
+
+    def test_in_the_browser_both_sides_play_on_one_board(self):
+        session = web.Session()
+        chat = session.new_chat()
+        with theme.capture_tool_output(web._sink(session, chat)):
+            said = tools.play_chess(side="white")
+            game = next(e for e in chat.log if e.get("mode") == "play")
+            web.command(session, {"name": "chess-play", "arg": game["id"],
+                                  "chat": chat.id, "move": "e2e4"})
+            wrong = tools.play_chess(game=game["id"], move="e4")
+            played = tools.play_chess(game=game["id"], move="c5")
+        assert said.startswith("It is in the chat as a board")
+        assert wrong.startswith("Error:") and "legal" in wrong
+        assert played.startswith("You played c5.")
+        game = next(e for e in chat.log if e.get("mode") == "play")
+        assert [m["by"] for m in game["moves"]] == ["user", "flash"]
+        with pytest.raises(ValueError, match="not a legal move"):
+            web.command(session, {"name": "chess-play", "arg": game["id"],
+                                  "chat": chat.id, "move": "e2e4"})
+
+    def test_in_the_terminal_there_is_no_board(self):
+        assert tools.play_chess().startswith("Error:")

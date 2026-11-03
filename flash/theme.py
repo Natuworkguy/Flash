@@ -567,6 +567,17 @@ def tool_chess(lesson: dict) -> bool:
     return bool(sink("chess", json.dumps(lesson), "")) if sink else False
 
 
+def tool_chess_move(game: str, move: str) -> Optional[dict]:
+    """Flash's MOVE in the chess GAME on the page (play_chess): the game
+    after it, {"error": ...} when the page refused it, or None where
+    there is no page (the terminal)."""
+
+    sink = _sink()
+    said = sink("chess-move", json.dumps({"id": game, "move": move}), "") \
+        if sink else None
+    return said if isinstance(said, dict) else None
+
+
 def tool_project(event: dict) -> Optional[dict]:
     """Make the chat this turn is in a project (make_project): what the
     page made of it, or None where there is no chat to move (the
