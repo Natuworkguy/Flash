@@ -3795,8 +3795,9 @@ def write_document(spark_id: str, title: str, content: str) -> Path:
     if not content:
         raise SparkError("The document was empty.")
     # Its title on top, unless it opens with a title of its own; a "##"
-    # section heading is not one.
-    if not content.lstrip().startswith("# "):
+    # section heading is not one. Front matter (a post's --- fields) has to
+    # stay at the very top, and names its own title.
+    if not content.lstrip().startswith(("# ", "---")):
         content = f"# {title}\n\n{content}"
     folder = documents_dir(spark_id)
     folder.mkdir(parents=True, exist_ok=True)
