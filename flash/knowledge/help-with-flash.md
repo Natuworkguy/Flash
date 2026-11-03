@@ -14,6 +14,8 @@ Point the user to the right place, briefly:
 - Settings are saved in ~/.flash.env with /set NAME VALUE; the web page has Settings for most of them.
 - Dashes and emojis: Settings has "Remove em dashes" (on by default, REMOVE_EM_DASHES) and "Remove emojis" (off by default, REMOVE_EMOJIS). On, Flash strips them from everything it writes, replies and every tool call alike; code is kept as written.
 - Calls: Settings, under Calls, has "Call greeting" (CALL_GREETING_MODE): the standard greeting (default, "Hi, this is an automated assistant calling on behalf of" the user's first name), the user's own (CALL_GREETING, where {name} is their first name), or "Let Flash write its own".
+- Extension panels that talk: a panel page can reach Flash's model through a "run" button with "where": ["terminal"] (hidden on the web page), called from the page as parent.Flash.request("ext-button", id, {extension, text}); the program can import flash (it is on PYTHONPATH) and print the reply. Stickbuddy (~/Desktop/Projects/flash-stickbuddy, install with /extension install path@that folder) does this: a stickman panel you hover, poke, tickle and drag, with lines from the model and canned ones when it is slow.
+- Printing: on a Mac, Flash can list printers and print a file or a made document (list_printers, print), asking the user yes or no every time (see print-a-file).
 
 If something is broken, suggest /doctor first.
 

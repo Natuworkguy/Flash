@@ -226,7 +226,7 @@ TASKS: dict[str, tuple[str, str, tuple[str, ...]]] = {
         "screenshot", "open_page", "interact", "computer_use",
         "view_image", "devtools")),
     "sending": ("plane", "Sending", (
-        "send_email", "send_imessage", "notify_user")),
+        "send_email", "send_imessage", "notify_user", "print")),
 }
 TASKS_SETTING = "LOADER_TASKS"
 # What it was called when only writing had one: still turns them off.
