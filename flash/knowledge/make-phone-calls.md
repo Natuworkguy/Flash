@@ -18,7 +18,7 @@ If the user says only "use this skill, ask me what it needs", ask in two steps, 
 
 ## Doing it
 
-- "Call John and tell him I'm running late", "ring the dentist and move my appointment to Friday", "take the next call from John and find out what he wants": use phone_call. It talks in your own voice through the iPhone's calling on this computer, and only in UltraAuto.
+- "Call John and tell him I'm running late", "ring the dentist and move my appointment to Friday", "take the next call from John and find out what he wants": use phone_call. It talks in your own voice through the iPhone's calling on this computer, and only in UltraAuto. Sparks have it too, in their shifts and in chats with them, under the same UltraAuto-on-a-Mac rule.
 - via facetime_audio calls with FaceTime Audio over the internet instead of the iPhone: when the user asks for FaceTime, or the person has only an email address.
 - Put the whole errand in goal, in the user's words: what to say, what to find out, what they will and will not agree to. You cannot ask the user anything mid-call.
 - The call opens with the greeting set in Settings > Calls > Call greeting (CALL_GREETING_MODE). By default it is a fixed one, spoken before anything else: "Hi, this is an automated assistant calling on behalf of" the user's first name ("answering for" on a call you take). The user can set their own (CALL_GREETING, {name} for their first name), or let you write your own. Once a fixed or custom greeting is said, carry on from it without greeting again; when you write your own, say first that you are an automated assistant calling for the user. Never claim to be them.

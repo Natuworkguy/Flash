@@ -8883,7 +8883,7 @@ SUBAGENT_TOOL_NAMES = (
 # A spark's tools: a sub-agent's, and sending email or an iMessage, which
 # it asks the user about in its window, as it does any step that asks.
 SPARK_TOOL_NAMES = SUBAGENT_TOOL_NAMES + ("send_email", "send_imessage",
-                                          "debate")
+                                          "debate", "phone_call")
 
 # Tools that ask every time, autonomous mode or not: UltraAuto aside.
 ALWAYS_ASK_TOOL_NAMES = ("send_email", "send_imessage")
