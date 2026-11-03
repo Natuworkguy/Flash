@@ -1317,3 +1317,100 @@ def test_trying_a_model_needs_a_model_and_steps(tmp_path):
     made.write_bytes(tools.model3d.to_glb(tools.model3d.build_parts(
         [{"name": "box", "shape": "box"}]), "Box"))
     assert "give steps" in tools.test_3d_model(str(made), [])  # nosec B101
+
+
+# Printing: subprocess is always faked, so nothing ever prints.
+
+_LPSTAT = ("printer Office_Laser is idle.  enabled since today\n"
+           "printer Home_Inkjet is idle.  enabled since today\n"
+           "system default destination: Office_Laser\n")
+
+
+def _fake_print(monkeypatch, lpstat=_LPSTAT, answer="y"):
+    calls = []
+
+    def run(command, **_kwargs):
+        calls.append(command)
+        out = lpstat if command[0] == "lpstat" else "request id is X-1"
+        return subprocess.CompletedProcess(command, 0, out, "")
+
+    monkeypatch.setattr(tools.subprocess, "run", run)
+    monkeypatch.setattr(tools, "ultra_auto", lambda: False)
+    monkeypatch.setattr(tools, "notify_needs_input", lambda: None)
+    monkeypatch.setattr(tools, "remote_answer", lambda _q: answer)
+    return calls
+
+
+def test_list_printers_marks_the_default(monkeypatch):
+    _fake_print(monkeypatch)
+    out = tools.list_printers()
+    assert "Office_Laser (default)" in out  # nosec B101
+    assert "Home_Inkjet" in out  # nosec B101
+
+
+def test_list_printers_with_none_set_up(monkeypatch):
+    _fake_print(monkeypatch, lpstat="")
+    assert "No printer is set up" in tools.list_printers()  # nosec B101
+
+
+def test_print_asks_then_runs_lp_with_the_options(tmp_path, monkeypatch):
+    calls = _fake_print(monkeypatch)
+    doc = tmp_path / "ticket.pdf"
+    doc.write_bytes(b"%PDF")
+    out = tools.print_tool(str(doc), printer="Home_Inkjet", copies=2,
+                           pages="1-3, 5", two_sided=True)
+    assert out.startswith("Sent to Home_Inkjet")  # nosec B101
+    assert calls[-1] == [  # nosec B101
+        "lp", "-d", "Home_Inkjet", "-n", "2", "-P", "1-3,5",
+        "-o", "sides=two-sided-long-edge", "--", str(doc.resolve())]
+
+
+def test_print_does_nothing_when_the_user_says_no(tmp_path, monkeypatch):
+    calls = _fake_print(monkeypatch, answer="n")
+    doc = tmp_path / "a.txt"
+    doc.write_text("hi")
+    assert "Not printed" in tools.print_tool(str(doc))  # nosec B101
+    assert all(c[0] != "lp" for c in calls)  # nosec B101
+
+
+def test_print_refuses_bad_paths_and_options(tmp_path, monkeypatch):
+    calls = _fake_print(monkeypatch)
+    doc = tmp_path / "a.txt"
+    doc.write_text("hi")
+    assert "absolute" in tools.print_tool("a.txt")  # nosec B101
+    assert "hidden" in tools.print_tool(str(tmp_path / ".k"))  # nosec B101
+    assert "outside" in tools.print_tool("/etc/hosts")  # nosec B101
+    assert "does not exist" in tools.print_tool(  # nosec B101
+        str(tmp_path / "gone.pdf"))
+    assert "copies" in tools.print_tool(str(doc), copies=0)  # nosec B101
+    assert "pages" in tools.print_tool(str(doc), pages="all")  # nosec B101
+    assert "no printer called" in tools.print_tool(  # nosec B101
+        str(doc), printer="Nope")
+    assert all(c[0] != "lp" for c in calls)  # nosec B101
+
+
+def test_print_with_no_printer_set_up(tmp_path, monkeypatch):
+    _fake_print(monkeypatch, lpstat="")
+    doc = tmp_path / "a.txt"
+    doc.write_text("hi")
+    assert "no printer is set up" in tools.print_tool(str(doc))  # nosec B101
+
+
+def test_print_finds_a_made_document(tmp_path, monkeypatch):
+    from flash import sparks
+
+    calls = _fake_print(monkeypatch)
+    monkeypatch.setattr(sparks, "sparks_dir", lambda: tmp_path)
+    made = tmp_path / "docs" / "s1" / "weekly-brief.md"
+    made.parent.mkdir(parents=True)
+    made.write_text("# Weekly brief")
+    assert tools.print_tool(document="Weekly brief").startswith(  # nosec B101
+        "Sent to Office_Laser")
+    assert calls[-1][-1] == str(made)  # nosec B101
+    assert "no document" in tools.print_tool(document="Other")  # nosec B101
+
+
+def test_print_always_asks_and_sparks_have_it():
+    assert "print" in tools.ALWAYS_ASK_TOOL_NAMES  # nosec B101
+    assert "print" in tools.SPARK_TOOL_NAMES  # nosec B101
+    assert "print" not in tools.SUBAGENT_TOOL_NAMES  # nosec B101

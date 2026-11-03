@@ -2218,6 +2218,7 @@ def available_tools() -> list[dict[str, Any]]:
         + (computer_use_tools() if computeruse.enabled() else [])
         + ([PHONE_TOOL] if computer.system() == "mac" and ultra_auto()
            else [])
+        + (PRINT_TOOLS if computer.system() == "mac" else [])
     )
 
 
@@ -3140,6 +3141,224 @@ def send_imessage(to: str = "", text: str = "") -> str:
         return f"Error: {exc}"
     tool_result(f"Sent to {shown}")
     return f"Sent to {shown}."
+
+
+# On a Mac: printing through CUPS (lpstat, lp), asked about every time,
+# as an email is, since paper and ink cannot be taken back.
+PRINT_TOOLS: list[dict[str, Any]] = [
+    {
+        "type": "function",
+        "function": {
+            "name": "list_printers",
+            "description": (
+                "List the printers set up on the user's Mac, and which one "
+                "is the default."
+            ),
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "print",
+            "description": (
+                "Print a file on the user's Mac, or a document you made "
+                "with make_document, through macOS printing. The user sees "
+                "what will print and says yes or no first, every time. "
+                "Give path or document, not both."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": (
+                            "Absolute path of the file, under home, a temp "
+                            "folder or /Volumes; not a hidden path."
+                        ),
+                    },
+                    "document": {
+                        "type": "string",
+                        "description": (
+                            "Title of a document from make_document."
+                        ),
+                    },
+                    "printer": {
+                        "type": "string",
+                        "description": (
+                            "Printer name as list_printers gives it. Left "
+                            "out, the default printer."
+                        ),
+                    },
+                    "copies": {
+                        "type": "integer",
+                        "description": "How many copies, 1 to 99. Default 1.",
+                    },
+                    "pages": {
+                        "type": "string",
+                        "description": (
+                            "Pages to print, such as 1-3,5. Default all."
+                        ),
+                    },
+                    "two_sided": {
+                        "type": "boolean",
+                        "description": "Print on both sides of the paper.",
+                    },
+                },
+            },
+        },
+    },
+]
+
+_PAGE_RANGE = re.compile(r"\d+(?:-\d+)?(?:,\d+(?:-\d+)?)*")
+
+
+def _printers() -> tuple[list[str], str]:
+    """The printers CUPS knows, and the default's name ("" for none).
+    Raises OSError when lpstat cannot be run."""
+
+    run = subprocess.run(  # nosec B603 B607
+        ["lpstat", "-p", "-d"], capture_output=True, text=True, timeout=15,
+        check=False,
+    )
+    names, default = [], ""
+    for line in (run.stdout or "").splitlines():
+        words = line.split()
+        if len(words) > 1 and words[0] == "printer":
+            names.append(words[1])
+        elif line.startswith("system default destination:"):
+            default = line.split(":", 1)[1].strip()
+    return names, default
+
+
+def list_printers() -> str:
+    """Say which printers are set up, and the default."""
+
+    tool_line("ListPrinters()")
+    try:
+        names, default = _printers()
+    except (OSError, subprocess.SubprocessError) as exc:
+        result = f"Error: could not ask macOS for its printers: {exc}"
+        tool_result(result, style=ERROR)
+        return result
+    if not names:
+        result = ("No printer is set up on this Mac. The user can add one "
+                  "in System Settings > Printers & Scanners.")
+        tool_result(result, style=WARN)
+        return result
+    lines = [n + (" (default)" if n == default else "") for n in names]
+    if not default:
+        lines.append("No default printer: name one when printing.")
+    result = "\n".join(lines)
+    tool_result(result)
+    return result
+
+
+def _made_document(title: str) -> Optional[Path]:
+    """The newest document make_document saved under TITLE, or None."""
+
+    from . import sparks
+
+    slug = sparks._document_slug(title)  # pylint: disable=protected-access
+    found = list((sparks.sparks_dir() / "docs").glob(f"*/{slug}.md"))
+    return max(found, key=lambda p: p.stat().st_mtime) if found else None
+
+
+def print_tool(path: str = "", document: str = "", printer: str = "",
+               copies: Any = 1, pages: str = "",
+               two_sided: bool = False) -> str:
+    """Print a file or a made document with lp. Always asks first."""
+
+    path, document = str(path or "").strip(), str(document or "").strip()
+    printer, pages = str(printer or "").strip(), str(pages or "").strip()
+    tool_line(f"Print({path or document})")
+
+    def fail(message: str) -> str:
+        tool_result(message, style=ERROR)
+        return f"Error: {message}"
+
+    if bool(path) == bool(document):
+        return fail("give either path or document, one of them.")
+    if document:
+        found = _made_document(document)
+        if found is None:
+            return fail(f"no document called {document!r} was made.")
+        target = found
+    else:
+        reason = _image_place_refusal(path).replace(
+            "view_image may open images", "print may read files").replace(
+            "view_image", "print")
+        if reason:
+            return fail(reason)
+        target = Path(path).expanduser().resolve()
+        if not target.is_file():
+            return fail(f"{path} does not exist or is not a file.")
+    try:
+        copies = 1 if copies in (None, "") else int(copies)
+    except (TypeError, ValueError):
+        return fail(f"copies must be a number, not {copies!r}.")
+    if not 1 <= copies <= 99:
+        return fail("copies must be from 1 to 99.")
+    if pages and not _PAGE_RANGE.fullmatch(pages.replace(" ", "")):
+        return fail(f"pages {pages!r} is not a range like 1-3,5.")
+    pages = pages.replace(" ", "")
+
+    try:
+        names, default = _printers()
+    except (OSError, subprocess.SubprocessError) as exc:
+        return fail(f"could not ask macOS for its printers: {exc}")
+    if not names:
+        return fail("no printer is set up on this Mac. The user can add "
+                    "one in System Settings > Printers & Scanners.")
+    if printer and printer not in names:
+        return fail(f"there is no printer called {printer!r}. Set up: "
+                    + ", ".join(names) + ".")
+    if not printer and not default:
+        return fail("there is no default printer. Name one of: "
+                    + ", ".join(names) + ".")
+
+    shown = printer or f"{default} (default)"
+    preview = (f"File: {target}\nPrinter: {shown}\nCopies: {copies}"
+               f"\nPages: {pages or 'all'}"
+               f"\nTwo-sided: {'yes' if two_sided else 'no'}")
+    tool_result(preview)
+
+    # Asked every time, autonomous mode or not, as an email is. Only
+    # UltraAuto does not.
+    ultra = ultra_auto()
+    if not ultra:
+        notify_needs_input()
+    answer = "y" if ultra else remote_answer(f"Print this?\n{preview}")
+    if answer is None:
+        prompt = Text(f"  {BRANCH}  ", style=DIM)
+        prompt.append("Print this? ", style=DIM)
+        prompt.append("y", style=f"bold {ACCENT}")
+        prompt.append("/n ", style=DIM)
+        console.print(prompt, end="")
+        answer = yes_no()
+    if answer != "y":
+        tool_result("Not printed: the user said no", style=WARN)
+        return "Not printed: the user said no. Do not print it again."
+
+    command = ["lp"]
+    if printer:
+        command += ["-d", printer]
+    command += ["-n", str(copies)]
+    if pages:
+        command += ["-P", pages]
+    if two_sided:
+        command += ["-o", "sides=two-sided-long-edge"]
+    command += ["--", str(target)]
+    try:
+        run = subprocess.run(  # nosec B603 B607
+            command, capture_output=True, text=True, timeout=60, check=False)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return fail(f"could not run lp: {exc}")
+    if run.returncode != 0:
+        return fail("lp failed: " + (run.stderr or run.stdout).strip())
+    result = f"Sent to {shown}. {(run.stdout or '').strip()}".strip()
+    tool_result(result)
+    return result
 
 
 def computer_tool(action: str, value: Any = "") -> str:
@@ -9068,6 +9287,8 @@ FUNCTIONS = {
     "computer": computer_tool,
     "computer_use": computer_use_tool,
     "send_imessage": send_imessage,
+    "print": print_tool,
+    "list_printers": list_printers,
     "read_imessages": read_imessages,
     "debate": debate_tool,
     "mark_imessages_read": mark_imessages_read,
@@ -9091,10 +9312,11 @@ SUBAGENT_TOOL_NAMES = (
 # it asks the user about in its window, as it does any step that asks.
 SPARK_TOOL_NAMES = SUBAGENT_TOOL_NAMES + ("send_email", "send_imessage",
                                           "debate", "phone_call",
-                                          "watch_youtube", "view_image")
+                                          "watch_youtube", "view_image",
+                                          "print", "list_printers")
 
 # Tools that ask every time, autonomous mode or not: UltraAuto aside.
-ALWAYS_ASK_TOOL_NAMES = ("send_email", "send_imessage")
+ALWAYS_ASK_TOOL_NAMES = ("send_email", "send_imessage", "print")
 
 # Tools that stop for a y/n unless autonomous mode is on. A sub-agent has
 # no terminal to ask from, so it only gets these in autonomous mode.

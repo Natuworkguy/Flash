@@ -3424,6 +3424,15 @@ def describe(name: str, args: dict) -> tuple[str, str]:
         text = str(args.get("text") or "")
         cut = text[:1200] + ("\n..." if len(text) > 1200 else "")
         return f"Send an iMessage to {to}" if to else "Send an iMessage", cut
+    if name == "print":
+        what = path or str(args.get("document") or "").strip()
+        printer = (str(args.get("printer") or "").strip()
+                   or "the default printer")
+        pages = str(args.get("pages") or "").strip() or "all"
+        detail = (f"Printer: {printer}\nCopies: {args.get('copies') or 1}"
+                  f"\nPages: {pages}\nTwo-sided: "
+                  + ("yes" if args.get("two_sided") else "no"))
+        return f"Print {what}", detail
     if name in ("edit", "multi_edit"):
         return f"Change {path}", json.dumps(
             {k: v for k, v in args.items() if k not in ("file_path", "path")},
