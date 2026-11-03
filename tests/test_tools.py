@@ -221,6 +221,25 @@ def test_view_image_refuses_a_model_without_vision(tmp_path, monkeypatch):
     assert take_pending_images() == []  # nosec B101
 
 
+def test_view_image_refuses_relative_hidden_and_outside_paths(tmp_path):
+    take_pending_images()
+    hidden = tmp_path / ".secret"
+    hidden.mkdir()
+    (hidden / "key.png").write_bytes(b"data")
+
+    assert "not an absolute path" in view_image("shot.png")  # nosec B101
+    assert "hidden path" in view_image(  # nosec B101
+        str(hidden / "key.png"))
+    assert "outside your home" in view_image(  # nosec B101
+        "/etc/shot.png")
+    assert take_pending_images() == []  # nosec B101
+
+
+def test_view_image_is_a_spark_tool_only():
+    assert "view_image" in tools.SPARK_TOOL_NAMES  # nosec B101
+    assert "view_image" not in tools.SUBAGENT_TOOL_NAMES  # nosec B101
+
+
 def _fake_capture(png=b"png bytes", problems=(), error=""):
     """Stand in for a real Chromium run, writing the file it promises."""
 

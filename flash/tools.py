@@ -14,6 +14,7 @@ import re
 import struct
 import subprocess  # nosec B404
 import sys
+import tempfile
 import threading
 import time
 import urllib.error
@@ -3310,10 +3311,40 @@ def take_pending_images() -> list[bytes]:
     return images
 
 
+def _image_place_refusal(path: str) -> str:
+    """Say why view_image may not open `path`, or "" when it may.
+
+    Only absolute paths under home, a temp directory or /Volumes, and
+    nothing hidden: a spark runs unattended, so it must not send a key
+    or a dotfile to the model as an "image".
+    """
+
+    raw = Path(path).expanduser()
+    if not raw.is_absolute():
+        return f"{path} is not an absolute path."
+    if any(part.startswith(".") for part in raw.parts[1:]):
+        return f"{path} is a hidden path, which view_image refuses."
+    real = raw.resolve()
+    roots = {Path.home(), Path("/tmp"), Path(tempfile.gettempdir()),
+             Path("/Volumes")}
+    for root in roots:
+        root = root.resolve()
+        if real == root or root in real.parents:
+            return ""
+    return (f"{path} is outside your home folder, a temp folder and "
+            "/Volumes, where view_image may open images.")
+
+
 def view_image(path: str) -> str:
     """Attach a local image file so the model can see it."""
 
     tool_line(f"ViewImage({path})")
+
+    reason = _image_place_refusal(path)
+    if reason:
+        result = f"Error: {reason}"
+        tool_result(result, style=ERROR)
+        return result
 
     image_path, reason = resolve_image_path(path)
     if image_path is None:
@@ -9060,7 +9091,7 @@ SUBAGENT_TOOL_NAMES = (
 # it asks the user about in its window, as it does any step that asks.
 SPARK_TOOL_NAMES = SUBAGENT_TOOL_NAMES + ("send_email", "send_imessage",
                                           "debate", "phone_call",
-                                          "watch_youtube")
+                                          "watch_youtube", "view_image")
 
 # Tools that ask every time, autonomous mode or not: UltraAuto aside.
 ALWAYS_ASK_TOOL_NAMES = ("send_email", "send_imessage")
