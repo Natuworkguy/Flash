@@ -18,6 +18,8 @@ Point the user to the right place, briefly:
 - Printing: on a Mac, Flash can list printers and print a file or a made document (list_printers, print), asking the user yes or no every time (see print-a-file).
 - Apple apps on a Mac: Apple Calendar is a calendar choice beside Google and iCal feeds (Settings, Connectors, Calendar; see manage-the-calendar), the reminders tool lists, adds and ticks off Apple Reminders (see use-reminders), and send_imessage can send a file while read_imessages names attachments (see send-messages). Adding or changing anything asks the user first.
 - Location: with "Let Flash see my location" on in the Apple Watch app's Settings (off by default), the watch tells Flash where the user is and the user_location tool gives it (see know-where-the-user-is). Off, nothing is collected or sent.
+- Reminders at a time: remind_me has Flash itself notify the user then, kept across restarts (see remind-the-user-later). Apple Reminders are separate.
+- Devices: devices tells the Mac's battery, network, connected Bluetooth devices with their batteries, and the Apple Watch's battery as it last sent it (see check-devices-and-batteries).
 
 If something is broken, suggest /doctor first.
 
