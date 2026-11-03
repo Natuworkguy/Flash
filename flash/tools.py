@@ -54,6 +54,7 @@ from . import (
     textures,
     triggers,
     visuals,
+    youtube,
 )
 from .browser import (
     ACTIONS,
@@ -3297,7 +3298,7 @@ _pending_images: list[bytes] = []
 
 
 def take_pending_images() -> list[bytes]:
-    """Return the image data queued by view_image, clearing the queue.
+    """Return the images view_image or watch_youtube queued; clear them.
 
     view_image can only queue the bytes; the caller attaches them to the
     conversation, because an image reaches the model as message content
@@ -3349,6 +3350,57 @@ def view_image(path: str) -> str:
         "included with this tool result, so answer from what you can "
         "actually see in it."
     )
+
+
+def watch_youtube(url: str, frames: bool = True) -> str:
+    """Read a YouTube video's details and captions, and attach frames."""
+
+    tool_line(f"WatchYouTube({url})")
+
+    vid = youtube.video_id(url)
+    if vid is None:
+        result = f"Error: not a YouTube video link: {url}"
+        tool_result(result, style=ERROR)
+        return result
+
+    sees = frames and model_sees_images(OLLAMA_HOST, MODEL_NAME)
+    try:
+        video = youtube.read_video(vid, want_frames=sees)
+    except (OSError, ValueError) as exc:
+        result = f"Error: could not load video {vid}: {exc}"
+        tool_result(result, style=ERROR)
+        return result
+
+    minutes, seconds = divmod(video.seconds, 60)
+    lines = [
+        f"Video: https://www.youtube.com/watch?v={vid}",
+        f"Title: {video.title}",
+        f"Channel: {video.channel}",
+        f"Length: {minutes}:{seconds:02d}",
+        f"Description: {video.description or '(none)'}",
+        "",
+    ]
+    if video.transcript:
+        lines += [f"Captions ({video.caption_language}):",
+                  video.transcript]
+    else:
+        lines.append("Captions: none available.")
+
+    if video.frames:
+        _pending_images.extend(video.frames)
+        lines.append(
+            f"\nAttached {video.frame_note}. Describe only what you can "
+            "actually see in them."
+        )
+    elif frames and not sees:
+        lines.append(
+            f"\nNo frames: the active model ({MODEL_NAME}) cannot see "
+            "images."
+        )
+
+    tool_result(f"{video.title} ({minutes}:{seconds:02d}), "
+                f"{len(video.frames)} frame sheet(s)")
+    return "\n".join(lines)
 
 
 # Terminals that can draw a picture between two lines of output. Writing
@@ -7496,6 +7548,36 @@ tools: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "watch_youtube",
+            "description": (
+                "Watch a YouTube video or Short from its link: returns "
+                "the title, channel, length, description and timed "
+                "captions, and attaches frames (YouTube's storyboard "
+                "grids, about one frame a second) when the model can "
+                "see images. Use it instead of fetch for any YouTube link."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url": {
+                        "type": "string",
+                        "description": (
+                            "A youtube.com/watch, youtu.be, /shorts/ or "
+                            "/live/ link, or an 11-character video id."
+                        ),
+                    },
+                    "frames": {
+                        "type": "boolean",
+                        "description": "Attach frames. Default true.",
+                    },
+                },
+                "required": ["url"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "screenshot",
             "description": (
                 "Render a web page in a headless browser and look at the "
@@ -8894,6 +8976,7 @@ FUNCTIONS = {
     "edit": edit_tool,
     "multi_edit": multi_edit_tool,
     "view_image": view_image,
+    "watch_youtube": watch_youtube,
     "send_image": send_image,
     "send_pdf": send_pdf,
     "send_html": send_html,
@@ -8976,7 +9059,8 @@ SUBAGENT_TOOL_NAMES = (
 # A spark's tools: a sub-agent's, and sending email or an iMessage, which
 # it asks the user about in its window, as it does any step that asks.
 SPARK_TOOL_NAMES = SUBAGENT_TOOL_NAMES + ("send_email", "send_imessage",
-                                          "debate", "phone_call")
+                                          "debate", "phone_call",
+                                          "watch_youtube")
 
 # Tools that ask every time, autonomous mode or not: UltraAuto aside.
 ALWAYS_ASK_TOOL_NAMES = ("send_email", "send_imessage")
@@ -9152,6 +9236,7 @@ def run_tool(call):
 OUTSIDE = {
     "fetch": "a web page", "web_search": "search results",
     "open_page": "a web page", "interact": "a web page",
+    "watch_youtube": "a YouTube video",
     "read_email": "an email", "check_inbox": "the user's inbox",
     "read_imessages": "messages",
 }
