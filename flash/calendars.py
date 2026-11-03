@@ -13,6 +13,10 @@ Three kinds, all read together:
   them. Signing in uses Google's own sign-in page in the browser, with an
   OAuth client of your own (a Desktop app one, from the Google Cloud
   console), and keeps only a refresh token, in the vault.
+- Apple Calendar, both ways, on a Mac once switched on: every calendar
+  the Calendar app shows (iCloud, Exchange, Google added there...), read
+  and added to through AppleScript. Nothing to sign in to; macOS asks
+  once to let Flash control Calendar.
 
 Times go in and come out as ISO 8601. One with no zone is taken to be in
 this computer's.
@@ -37,6 +41,8 @@ from . import workspace
 
 FILE = "calendar.json"
 FEEDS_FILE = "calendar-feeds.json"
+APPLE_FILE = "calendar-apple.json"
+APPLE_TIMEOUT = 60
 FEED_SECONDS = 10 * 60
 MOST_EVENTS = 200
 GOOGLE_API = "https://www.googleapis.com/calendar/v3"
@@ -67,7 +73,8 @@ class Event:
     all_day: bool = False
     where: str = ""
     notes: str = ""
-    # "flash", "feed:<name>", or "google:<calendar id>".
+    # "flash", "feed:<name>", "google:<calendar id>" or
+    # "apple:<calendar name>".
     calendar: str = "flash"
     repeats: str = ""
     extra: dict = field(default_factory=dict)
@@ -436,6 +443,186 @@ def _google_body(title: str, start: datetime, end: datetime, all_day: bool,
             **({"description": notes} if notes else {})}
 
 
+# Apple Calendar --------------------------------------------------------------
+
+# AppleScript's dates have no zone, so times cross as seconds from
+# 2001-01-01 00:00 on this computer's clock, both ways: no date text to
+# be read in the user's locale.
+# A wall-clock time, with no zone on purpose: AppleScript's have none.
+_WALL_2001 = datetime(2001, 1, 1)  # noqa: DTZ001
+_APPLE_BASE = (
+    "set b to current date",
+    "set day of b to 1",
+    "set year of b to 2001",
+    "set month of b to January",
+    "set time of b to 0",
+)
+_APPLE_TEXT = (
+    "on t(x)",
+    "if x is missing value then return \"\"",
+    "return x as text",
+    "end t",
+)
+_APPLE_READ = (
+    *_APPLE_TEXT,
+    "on run argv",
+    *_APPLE_BASE,
+    "set t0 to b + (item 1 of argv as number)",
+    "set t1 to b + (item 2 of argv as number)",
+    "set fs to character id 31",
+    "set rs to character id 30",
+    "set out to \"\"",
+    'tell application "Calendar"',
+    "repeat with c in calendars",
+    "set cn to name of c",
+    "repeat with e in (every event of c whose start date \u2264 t1 and "
+    "end date \u2265 t0)",
+    "set out to out & cn & fs & (uid of e) & fs & my t(summary of e) & fs "
+    "& ((start date of e) - b) & fs & ((end date of e) - b) & fs & "
+    "(allday event of e) & fs & my t(location of e) & fs & "
+    "my t(description of e) & rs",
+    "end repeat",
+    "end repeat",
+    "end tell",
+    "return out",
+    "end run",
+)
+_APPLE_CALENDARS = (
+    "set out to \"\"",
+    'tell application "Calendar"',
+    "repeat with c in calendars",
+    "set out to out & (name of c) & (character id 31) & (writable of c) "
+    "& (character id 30)",
+    "end repeat",
+    "end tell",
+    "return out",
+)
+_APPLE_ADD = (
+    "on run argv",
+    *_APPLE_BASE,
+    'tell application "Calendar"',
+    "if item 1 of argv is \"\" then",
+    "set c to first calendar whose writable is true",
+    "else",
+    "set c to calendar (item 1 of argv)",
+    "end if",
+    "set e to make new event at end of events of c with properties "
+    "{summary:item 2 of argv, start date:b + (item 3 of argv as number), "
+    "end date:b + (item 4 of argv as number), "
+    "allday event:(item 5 of argv is \"true\"), location:item 6 of argv, "
+    "description:item 7 of argv}",
+    "return (name of c) & (character id 31) & (uid of e)",
+    "end tell",
+    "end run",
+)
+_APPLE_DELETE = (
+    "on run argv",
+    'tell application "Calendar"',
+    "delete (every event of calendar (item 1 of argv) whose uid is "
+    "(item 2 of argv))",
+    "end tell",
+    "end run",
+)
+
+
+def apple_available() -> bool:
+    from . import computer
+
+    return computer.system() == "mac"
+
+
+def apple_connected() -> bool:
+    """Whether Apple Calendar is read and written: on a Mac, once the
+    user has switched it on."""
+
+    found = workspace._read(APPLE_FILE, {})
+    return apple_available() and isinstance(found, dict) \
+        and bool(found.get("on"))
+
+
+def apple_connect(on: bool = True) -> None:
+    if on and not apple_available():
+        raise CalendarError("Apple Calendar is only on a Mac.")
+    if on:
+        # Asked once here, so macOS asks for Automation now, not mid-reply.
+        apple_calendars()
+    workspace._write(APPLE_FILE, {"on": bool(on)})
+
+
+def _apple(script: tuple, *argv: str) -> str:
+    from . import computer
+
+    command = ["osascript"]
+    for line in script:
+        command += ["-e", line]
+    try:
+        return computer._run([*command, *argv], timeout=APPLE_TIMEOUT)
+    except computer.ComputerError as exc:
+        if computer._not_allowed(exc, "Calendar"):
+            raise CalendarError(
+                "macOS has to let the app Flash runs in (Terminal, iTerm "
+                "and the like) control Calendar: System Settings > "
+                "Privacy & Security > Automation, and Calendars.") from None
+        raise CalendarError(f"Apple Calendar said no: {exc}") from None
+
+
+def _records(text: str) -> list[list[str]]:
+    return [r.split("\x1f") for r in text.split("\x1e") if r.strip()]
+
+
+def _apple_seconds(moment: datetime) -> int:
+    """MOMENT as seconds from 2001 on this computer's clock."""
+
+    wall = moment.astimezone(_local()).replace(tzinfo=None)
+    return int((wall - _WALL_2001).total_seconds())
+
+
+def _apple_moment(seconds: str) -> datetime:
+    wall = _WALL_2001 + timedelta(seconds=float(seconds))
+    return wall.astimezone()
+
+
+def apple_calendars() -> list[dict]:
+    return [{"name": r[0], "writable": r[1:2] == ["true"]}
+            for r in _records(_apple(_APPLE_CALENDARS))]
+
+
+def _apple_events(start: datetime, end: datetime) -> list[Event]:
+    out = []
+    for row in _records(_apple(_APPLE_READ, str(_apple_seconds(start)),
+                               str(_apple_seconds(end)))):
+        if len(row) < 8:
+            continue
+        cal, uid, title, begin, finish, all_day, where, notes = row[:8]
+        try:
+            moment, stop = _apple_moment(begin), _apple_moment(finish)
+        except ValueError:
+            continue
+        out.append(Event(
+            id=f"apple:{cal}:{uid}", title=title or "(untitled)",
+            start=_iso(moment), end=_iso(stop), all_day=all_day == "true",
+            where=where, notes=notes[:1000], calendar=f"apple:{cal}"))
+    return out
+
+
+def _apple_add(cal: str, title: str, start: datetime, end: datetime,
+               all_day: bool, where: str, notes: str) -> Event:
+    said = _apple(_APPLE_ADD, cal, title, str(_apple_seconds(start)),
+                  str(_apple_seconds(end)), "true" if all_day else "false",
+                  where, notes)
+    cal, _, uid = said.partition("\x1f")
+    return Event(id=f"apple:{cal}:{uid}", title=title, start=_iso(start),
+                 end=_iso(end), all_day=all_day, where=where, notes=notes,
+                 calendar=f"apple:{cal}")
+
+
+def _apple_parts(event_id: str) -> tuple[str, str]:
+    # The calendar's name may hold a colon; the uid never ends in one.
+    rest = event_id.split(":", 1)[1]
+    cal, _, uid = rest.rpartition(":")
+    return cal, uid
+
+
 # Reading and changing -----------------------------------------------------
 
 
@@ -467,6 +654,12 @@ def events(start: Any = "", end: Any = "", query: str = "",
         except (CalendarError, httpx.HTTPError) as exc:
             if problems is not None:
                 problems.append(str(exc))
+    if apple_connected():
+        try:
+            found += _apple_events(begin, finish)
+        except CalendarError as exc:
+            if problems is not None:
+                problems.append(str(exc))
     if query:
         words = query.lower().split()
         found = [e for e in found if all(
@@ -477,13 +670,20 @@ def events(start: Any = "", end: Any = "", query: str = "",
 
 def _where_to(calendar: str) -> str:
     """Which calendar a new event goes in: the one named, else Google's
-    main one when connected, else Flash's own."""
+    main one when connected, else Apple Calendar's first writable one
+    when switched on, else Flash's own."""
 
     calendar = str(calendar or "").strip()
     if calendar in ("", "default"):
-        return "google:primary" if google_connected() else "flash"
+        return "google:primary" if google_connected() else \
+            "apple:" if apple_connected() else "flash"
     if calendar == "google":
         return "google:primary"
+    if calendar in ("apple", "apple:") or calendar.startswith("apple:"):
+        if not apple_connected():
+            raise CalendarError("Apple Calendar is not switched on: "
+                                "Settings > Calendar.")
+        return "apple:" if calendar == "apple" else calendar
     if calendar.startswith("feed:"):
         raise CalendarError("A feed is read-only: add it to the calendar "
                             "it comes from, or to Google or Flash's own.")
@@ -510,6 +710,9 @@ def add(title: str, start: Any, end: Any = "", all_day: bool = False,
         if found is None:
             raise CalendarError("Google made it, but sent back nothing.")
         return found
+    if target.startswith("apple:"):
+        return _apple_add(target.split(":", 1)[1], title, begin, finish,
+                          bool(all_day), where, notes)
     event = Event(id=uuid.uuid4().hex[:10], title=title, start=_iso(begin),
                   end=_iso(finish), all_day=bool(all_day), where=where,
                   notes=notes)
@@ -553,6 +756,10 @@ def update(event_id: str, **changes: Any) -> Event:
         return found
     if event_id.startswith("feed:"):
         raise CalendarError("That event is in a feed, which is read-only.")
+    if event_id.startswith("apple:"):
+        raise CalendarError("Flash cannot change an Apple Calendar event "
+                            "yet: delete it and add it again, or change "
+                            "it in Calendar.")
     with _lock:
         own = _own()
         found = next((e for e in own if e.id == event_id), None)
@@ -573,6 +780,9 @@ def delete(event_id: str) -> None:
         cal, item = _google_parts(event_id)
         _google("DELETE",
                 f"/calendars/{quote(cal, safe='')}/events/{quote(item)}")
+        return
+    if event_id.startswith("apple:"):
+        _apple(_APPLE_DELETE, *_apple_parts(event_id))
         return
     if event_id.startswith("feed:"):
         raise CalendarError("That event is in a feed, which is read-only.")

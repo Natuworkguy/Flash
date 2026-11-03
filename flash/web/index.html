@@ -14332,11 +14332,13 @@ async function drawCalendarSettings(box) {
   let r;
   try { r = await command("calendar", "", null); } catch (_) { return; }
   if (!box.isConnected) return;
-  box.innerHTML = `<h2 class="settings-section settings-gap">Calendar</h2><p class="settings-sub">What Flash reads when you ask what is on, and what shows as Coming up in the briefing. It can add, move and delete events too, on Google Calendar or its own.</p>
+  box.innerHTML = `<h2 class="settings-section settings-gap">Calendar</h2><p class="settings-sub">What Flash reads when you ask what is on, and what shows as Coming up in the briefing. It can add, move and delete events too, on Google Calendar, Apple Calendar or its own.</p>
     <div class="email-list cal-feeds"></div>
     <form class="cal-feed-form"><input name="fname" placeholder="Name, like Work" aria-label="Feed name" maxlength="40"><input name="furl" class="mono" placeholder="Its iCal address (https:// or webcal://)" aria-label="iCal address"><button type="submit" class="btn">Add feed</button></form>
     <p class="settings-sub cal-hint">Google Calendar: Settings &gt; a calendar &gt; Secret address in iCal format. Read-only.</p>
-    <div class="email-card cal-google"><span class="email-icon">${icon("calendar")}</span><span class="what"><span class="name-row"><b>Google Calendar</b><span class="state"></span></span><span class="said"></span></span><span class="email-actions"></span></div>`;
+    <div class="email-card cal-google"><span class="email-icon">${icon("calendar")}</span><span class="what"><span class="name-row"><b>Google Calendar</b><span class="state"></span></span><span class="said"></span></span><span class="email-actions"></span></div>
+    <div class="email-card cal-apple" hidden><span class="email-icon">${icon("calendar")}</span><span class="what"><span class="name-row"><b>Apple Calendar</b><span class="state"></span></span><span class="said"></span></span><span class="email-actions"></span></div>`;
+  drawAppleCalendar(box, r);
   const list = box.querySelector(".cal-feeds");
   for (const [name, url] of Object.entries(r.feeds)) {
     const row = list.appendChild(el("div", "email-card", `<span class="email-icon">${icon("calendar")}</span><span class="what"><span class="name-row"><b></b></span><span class="said mono one-line"></span></span><span class="email-actions"></span>`));
@@ -14381,6 +14383,20 @@ async function drawCalendarSettings(box) {
     f.querySelector("[data-cancel]").onclick = closeForm;
   };
   actions.append(connect);
+}
+
+// Apple Calendar, on a Mac: switched on or off, nothing to sign in to.
+function drawAppleCalendar(box, r) {
+  const card = box.querySelector(".cal-apple");
+  if (!r.apple_available) return;
+  card.hidden = false;
+  const actions = card.querySelector(".email-actions");
+  card.querySelector(".state").textContent = r.apple ? "Connected" : "";
+  card.querySelector(".said").textContent = r.apple ? "Flash reads every calendar the Calendar app shows, and adds to them, asking you first." : "Every calendar in the Calendar app on this Mac, read and added to. macOS asks once to let Flash control Calendar.";
+  const button = el("button", r.apple ? "btn small danger" : "btn small primary", r.apple ? "Disconnect" : "Connect");
+  button.type = "button";
+  button.onclick = async () => { try { await command("calendar-apple", r.apple ? "off" : "on", null); drawCalendarSettings(box); } catch (error) { showFailure(error); } };
+  actions.append(button);
 }
 
 function connectorCard(body, server) {
