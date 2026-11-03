@@ -3423,6 +3423,9 @@ def describe(name: str, args: dict) -> tuple[str, str]:
         to = str(args.get("to") or "").strip()
         text = str(args.get("text") or "")
         cut = text[:1200] + ("\n..." if len(text) > 1200 else "")
+        attached = str(args.get("attachment") or "").strip()
+        if attached:
+            cut += f"\n\nAttachment: {attached}"
         return f"Send an iMessage to {to}" if to else "Send an iMessage", cut
     if name == "print":
         what = path or str(args.get("document") or "").strip()

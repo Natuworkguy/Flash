@@ -2218,7 +2218,8 @@ def available_tools() -> list[dict[str, Any]]:
         + (computer_use_tools() if computeruse.enabled() else [])
         + ([PHONE_TOOL] if computer.system() == "mac" and ultra_auto()
            else [])
-        + (PRINT_TOOLS if computer.system() == "mac" else [])
+        + (PRINT_TOOLS + REMINDERS_TOOLS if computer.system() == "mac"
+           else [])
     )
 
 
@@ -3079,6 +3080,14 @@ IMESSAGE_TOOLS: list[dict[str, Any]] = [
                         "type": "string",
                         "description": "The message, exactly as it goes.",
                     },
+                    "attachment": {
+                        "type": "string",
+                        "description": (
+                            "Optional: a file to send with it (a photo, a "
+                            "PDF...), by its full path on this Mac. It goes "
+                            "after the text; text may then be left empty."
+                        ),
+                    },
                 },
                 "required": ["to", "text"],
             },
@@ -3087,10 +3096,12 @@ IMESSAGE_TOOLS: list[dict[str, Any]] = [
 ]
 
 
-def send_imessage(to: str = "", text: str = "") -> str:
-    """Send TEXT to TO as an iMessage. Always asks first."""
+def send_imessage(to: str = "", text: str = "", attachment: str = "") -> str:
+    """Send TEXT, and ATTACHMENT if given, to TO as an iMessage. Always
+    asks first."""
 
     to, text = str(to or "").strip(), str(text or "").strip()
+    attachment = str(attachment or "").strip()
     tool_line(f"SendIMessage({to})")
     if not computer.allowed("imessage"):
         result = (
@@ -3102,10 +3113,22 @@ def send_imessage(to: str = "", text: str = "") -> str:
         )
         tool_result(result, style=WARN)
         return result
-    why = unfinished("send_imessage", {"to": to, "text": text})
+    why = unfinished("send_imessage", {"to": to, "text": text}
+                     if text or not attachment else {"to": to})
     if why:
         tool_result(why.removeprefix("Error: "), style=ERROR)
         return why
+    if attachment:
+        refused = _image_place_refusal(attachment).replace(
+            "view_image may open images", "send_imessage may send files"
+        ).replace("view_image", "send_imessage")
+        if refused:
+            tool_result(refused, style=ERROR)
+            return f"Error: {refused}"
+        attachment = str(Path(attachment).expanduser().resolve())
+        if not Path(attachment).is_file():
+            tool_result(f"{attachment} is not a file", style=ERROR)
+            return f"Error: {attachment} does not exist or is not a file."
     try:
         name, handle = computer.recipient(to)
     except computer.ComputerError as exc:
@@ -3113,7 +3136,8 @@ def send_imessage(to: str = "", text: str = "") -> str:
         return f"Error: {exc}"
 
     shown = name if name == handle else f"{name}, {handle}"
-    preview = f"To: {shown}\n\n{text}"
+    preview = f"To: {shown}\n\n{text}" + (
+        f"\n\nAttachment: {attachment}" if attachment else "")
     tool_result(preview)
 
     # Asked every time, autonomous mode or not: it goes out in the user's
@@ -3135,7 +3159,7 @@ def send_imessage(to: str = "", text: str = "") -> str:
         return "Not sent: the user said no. Do not send it again."
 
     try:
-        computer.send_imessage(handle, text)
+        computer.send_imessage(handle, text, attachment)
     except computer.ComputerError as exc:
         tool_result(str(exc), style=ERROR)
         return f"Error: {exc}"
@@ -3358,6 +3382,95 @@ def print_tool(path: str = "", document: str = "", printer: str = "",
         return fail("lp failed: " + (run.stderr or run.stdout).strip())
     result = f"Sent to {shown}. {(run.stdout or '').strip()}".strip()
     tool_result(result)
+    return result
+
+
+# On a Mac: Apple Reminders. Adding and ticking off ask every time.
+REMINDERS_ACTIONS = ("list", "add", "complete", "lists")
+REMINDERS_TOOLS: list[dict[str, Any]] = [
+    {
+        "type": "function",
+        "function": {
+            "name": "reminders",
+            "description": (
+                "The user's Apple Reminders on their Mac. 'list' what is "
+                "not done yet (every list, or the one named; done: true "
+                "for done ones too); 'add' a reminder, with a due time if "
+                "they gave one; 'complete' one by the id list gives in "
+                "[brackets]; 'lists' names the lists. The user says yes "
+                "or no before anything is added or ticked off. Due times "
+                "are ISO 8601, local: work out 'tomorrow at 9' from "
+                "today's date first."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string",
+                               "enum": list(REMINDERS_ACTIONS)},
+                    "title": {"type": "string",
+                              "description": "What to be reminded of."},
+                    "list": {"type": "string", "description": (
+                        "Optional: the list, by name. Left out: every "
+                        "list to read, the default list to add to.")},
+                    "due": {"type": "string",
+                            "description": "Optional: ISO 8601 due time."},
+                    "notes": {"type": "string"},
+                    "id": {"type": "string",
+                           "description": "The reminder's id, to complete."},
+                    "done": {"type": "boolean", "description": (
+                        "list: include done ones too.")},
+                },
+                "required": ["action"],
+            },
+        },
+    },
+]
+
+
+def reminders_tool(action: str = "list", title: str = "", due: str = "",
+                   notes: str = "", id: str = "",
+                   done: Any = False, **given: Any) -> str:
+    """Read the user's Apple Reminders, add one, or tick one off."""
+
+    from . import reminders
+
+    # "list" is a builtin's name, so it comes in as given.
+    in_list = str(given.get("list") or "").strip()
+    action = str(action or "list").strip().lower()
+    tool_line(f"Reminders({action} {title or in_list or id}".strip() + ")")
+    try:
+        if action == "list":
+            found = reminders.reminders(in_list, _truthy(done))
+            result = "\n".join(reminders.describe(r) for r in found) or (
+                "Nothing to do.")
+        elif action == "lists":
+            result = "\n".join(reminders.lists()) or "No lists."
+        elif action == "add":
+            if not title.strip():
+                raise reminders.RemindersError("Give the reminder a title.")
+            question = f"Add the reminder {title!r}" + (
+                f", due {due}" if due else "") + (
+                f", to {in_list}" if in_list else "") + "?"
+            if not ultra_auto() and not _user_allows(question):
+                return "The user said no to adding it. Do not add it again."
+            made = reminders.add(title, in_list, due, notes)
+            result = "Added: " + reminders.describe(made)
+        elif action == "complete":
+            if not id.strip():
+                raise reminders.RemindersError(
+                    "Give the reminder's id, from list.")
+            if not ultra_auto() and not _user_allows(
+                    f"Mark the reminder {id} done?"):
+                return "The user said no to completing it."
+            result = f"Done: {reminders.complete(id)}"
+        else:
+            result = ("Error: action is one of "
+                      + ", ".join(REMINDERS_ACTIONS) + ".")
+    except reminders.RemindersError as exc:
+        result = f"Error: {exc}"
+        tool_result(result, style=ERROR)
+        return result
+    tool_result(result.splitlines()[0][:120])
     return result
 
 
@@ -6049,9 +6162,22 @@ def calendar_tool(action: str = "list", start: str = "", end: str = "",
                           for c in calendars.google_calendars()]
             else:
                 names.append("Google Calendar is not connected.")
+            if calendars.apple_connected():
+                names += [f"apple:{c['name']}"
+                          + ("" if c["writable"] else " (read-only)")
+                          for c in calendars.apple_calendars()]
+            elif calendars.apple_available():
+                names.append("Apple Calendar is not switched on.")
             result = "\n".join(names)
         elif action == "add":
-            if not NO_COMMAND_CONFIRMATION and not _user_allows(
+            # Apple Calendar's is the user's own, synced to every device:
+            # asked every time, as an email is, UltraAuto aside.
+            apple = calendars._where_to(  # pylint: disable=W0212
+                calendar).startswith("apple:")
+            if apple and not ultra_auto() and not _user_allows(
+                    f"Add {title!r} at {start} to Apple Calendar?"):
+                return "The user said no to adding it."
+            if not apple and not NO_COMMAND_CONFIRMATION and not _user_allows(
                     f"Add {title!r} at {start} to your calendar?"):
                 return "The user said no to adding it."
             made = calendars.add(title, start, end, _truthy(all_day), where,
@@ -8114,12 +8240,15 @@ tools: list[dict[str, Any]] = [
             "name": "calendar",
             "description": (
                 "The user's calendars: Flash's own, any iCal feeds they "
-                "added (read-only), and Google Calendar when connected, "
-                "read together. 'list' what is on (today to a week on, "
+                "added (read-only), Google Calendar when connected, and "
+                "Apple Calendar on a Mac when switched on, read together. "
+                "'list' what is on (today to a week on, "
                 "unless start and end say), or find something with query; "
                 "'add' an event (to Google's main calendar when connected, "
-                "else Flash's own, or the calendar named); 'update' or "
-                "'delete' one by the id list gives in [brackets]; "
+                "else Apple Calendar's when on, else Flash's own, or the "
+                "calendar named; the user is asked first); 'update' or "
+                "'delete' one by the id list gives in [brackets] (Apple "
+                "Calendar events can be deleted, not updated); "
                 "'calendars' names them. Times are ISO 8601, local unless "
                 "they say a zone: work out dates like 'next Tuesday' from "
                 "today's date first."
@@ -8143,8 +8272,9 @@ tools: list[dict[str, Any]] = [
                     "id": {"type": "string", "description": (
                         "The event's id, for update and delete.")},
                     "calendar": {"type": "string", "description": (
-                        "Where to add it: flash, google, or "
-                        "google:<calendar id>.")},
+                        "Where to add it: flash, google, "
+                        "google:<calendar id>, apple, or "
+                        "apple:<calendar name>.")},
                 },
                 "required": ["action"],
             },
@@ -9289,6 +9419,7 @@ FUNCTIONS = {
     "send_imessage": send_imessage,
     "print": print_tool,
     "list_printers": list_printers,
+    "reminders": reminders_tool,
     "read_imessages": read_imessages,
     "debate": debate_tool,
     "mark_imessages_read": mark_imessages_read,
