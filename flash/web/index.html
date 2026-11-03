@@ -3000,6 +3000,7 @@ body.all-stopped .org-node, body.all-stopped .spark-card { animation: all-halt 0
 .tc-quote span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tc-quote:hover { background: color-mix(in srgb, var(--c) 10%, var(--hover)); }
 .tc-msg.mine .tc-quote { align-self: flex-end; }
+.tc-quote.inline { display: inline-flex; max-width: 100%; vertical-align: baseline; padding: 1px 8px 1px 6px; }
 .tc-replying { --c: var(--accent); display: flex; align-items: center; gap: 8px; margin: 0 0 8px; padding: 7px 6px 7px 12px; border-radius: 12px; border-left: 3px solid var(--c); background: color-mix(in srgb, var(--c) 9%, var(--bg)); }
 .tc-replying[hidden] { display: none; }
 .tc-replying.in { animation: tc-reply-in 0.32s var(--spring) both; }
@@ -10936,6 +10937,36 @@ function tcJump(id) {
   setTimeout(() => target.classList.remove("lit"), 1600);
 }
 
+// "#12" in a spark's report, outside code and links: the team chat's
+// quote, which opens its team's chat at that message.
+function chipChatRefs(root, spark) {
+  if (!root || !/#\d/.test(root.textContent)) return root;
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+    acceptNode: (node) => (/#\d/.test(node.nodeValue) && !node.parentElement.closest("code, pre, a, .mention, .tc-quote")
+      ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT),
+  });
+  const nodes = [];
+  while (walker.nextNode()) nodes.push(walker.currentNode);
+  for (const node of nodes) {
+    const text = node.nodeValue;
+    const made = document.createDocumentFragment();
+    let last = 0;
+    for (const m of text.matchAll(/(^|[^\w&#])#(\d{1,9})\b/g)) {
+      const start = m.index + m[1].length;
+      made.append(text.slice(last, start));
+      const quote = tcQuote({ id: Number(m[2]), spark: spark.id, name: `#${m[2]}`, text: "in the team chat" });
+      quote.classList.add("inline");
+      quote.onclick = async () => { await openTeamChat(spark.team); tcJump(Number(m[2])); };
+      made.append(quote);
+      last = start + m[2].length + 1;
+    }
+    if (!last) continue;
+    made.append(text.slice(last));
+    node.replaceWith(made);
+  }
+  return root;
+}
+
 function tcReplyTo(entry) {
   teamChat.replyTo = entry;
   const bar = $("#team-chat .tc-replying");
@@ -12189,6 +12220,8 @@ function fillSpark(box, spark, again = false) {
     card.querySelector(".body").innerHTML = markdown(report.text);
     // Those it @mentions were sent it: drawn as chips, as in a chat.
     chipMentions(card.querySelector(".body"));
+    // A team chat message it points at, as #12: the chat's own quote.
+    if (spark.team) chipChatRefs(card.querySelector(".body"), spark);
     if (report.files && report.files.length) card.querySelector(".body").after(docCards(spark.id, report.files));
     const play = readButton(`report:${spark.id}:${report.at}`, () => card.querySelector(".body"));
     play.classList.add("small");
@@ -17474,6 +17507,8 @@ function updateSend() {
   send.dataset.keys = tip[1];
   send.setAttribute("aria-label", { stop: "Stop", steer: "Steer", voice: "Voice mode" }[state] || "Send");
   send.disabled = (state === "up" && !typed) || (typed && uploading());
+  // Next unit asks Flash to teach: not while it is working.
+  document.querySelectorAll(".course-next-unit").forEach(b => { b.disabled = !!busy; });
   const withSpark = sparkOf(chat ? chat.spark : viewSpark);
   const who = withSpark ? withSpark.name : "Flash";
   const face = $("#spark-btn .spark-av");
@@ -18357,8 +18392,10 @@ function drawCourseStep(card, st) {
   box.innerHTML = "";
   if (!st) {
     const done = box.appendChild(el("div", "course-done", `<b>Unit complete</b><span class="settings-sub">Everything here is known, and nothing is due for review yet.</span>`));
-    const more = done.appendChild(el("button", "btn primary", "Next unit with Flash"));
+    const more = done.appendChild(el("button", "btn primary course-next-unit", "Next unit with Flash"));
     more.type = "button";
+    const chat = chats.get(current);
+    more.disabled = !!(chat && (chat.busy || chat.queued));
     more.onclick = () => send(`Teach me the next unit of ${card._data.subject}.`);
     return;
   }
