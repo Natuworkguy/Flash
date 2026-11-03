@@ -3237,17 +3237,26 @@ def computer_use_tool(action: str = "", **args: Any) -> str:
                    "at it before the next step." if image else "")
 
 
+def refresh_all() -> tuple[list[str], list]:
+    """Read Flash's own tools and extensions again and bring the MCP
+    servers up to date, as refresh_tools does, without printing: which
+    of Flash's tools changed, and every configured server as it is now.
+    Skills are read from disk each time, so they need nothing here."""
+
+    before = flash_tools()
+    extensions.reload()
+    changes = _flash_tool_changes(before, flash_tools())
+    return changes, connectors.refresh()
+
+
 def refresh_tools() -> str:
     """Bring the connected MCP servers up to date, and say what each has;
     read Flash's own tools again too, and say which of them changed."""
 
     tool_line("RefreshTools()")
-    before = flash_tools()
-    extensions.reload()
-    changes = _flash_tool_changes(before, flash_tools())
+    changes, found = refresh_all()
     flash_part = ("\n\nFlash's own tools that changed, yours from your "
                   "next step:\n" + "\n".join(changes)) if changes else ""
-    found = connectors.refresh()
     if not found:
         result = ("No MCP servers are set up. The user adds them in "
                   "Settings, Connectors, or with /mcp add.") + flash_part
