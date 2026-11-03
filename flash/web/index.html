@@ -4946,10 +4946,13 @@ const looksLikeMath = (body) => /[\\^_{}]/.test(body) || (body.length <= 3 && /[
 
 function markdown(text) {
   const spans = [];
-  const front = frontMatter(String(text));
+  // A document saved with its title above the front matter: the title,
+  // then the fields as a table.
+  const lead = String(text).match(/^\s*# [^\n]*\n\s*(?=---[ \t]*\n)/);
+  const front = frontMatter(lead ? String(text).slice(lead[0].length) : String(text));
   let html = markdownBody(pullMath(front ? front.rest : String(text), spans));
   if (spans.length) html = html.replace(MATH_RE, (_, i) => renderMath(spans[+i]));
-  return front ? frontTable(front) + html : html;
+  return front ? (lead ? markdownBody(lead[0].trim()) : "") + frontTable(front) + html : html;
 }
 
 // Front matter: the block of fields between --- lines that opens a post
