@@ -4621,6 +4621,13 @@ def _work(
                     "content": flash_tools.trim_tool_output(result, name),
                     "tool_name": name,
                 })
+            # Frames a tool attached (watch_youtube), for the model to see.
+            images = flash_tools.take_pending_images()
+            if images:
+                messages.append({
+                    "role": "user", "content": TOOL_IMAGES_NOTE,
+                    "images": images,
+                })
 
     if tool_calls:
         doing("Writing")
@@ -4674,6 +4681,11 @@ def _keeping_notes(notes: list[str]):
 
     return keep
 
+
+TOOL_IMAGES_NOTE = (
+    "Here are the images your last tool attached. Answer from what you "
+    "can see in them."
+)
 
 NOT_RUN = (
     "Not run: it came after a step that waited for the user's approval. "
