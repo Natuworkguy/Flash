@@ -289,8 +289,9 @@ python run.py
 - `/mcp [add <name> <command or URL> | env <name> KEY=VALUE | remove |
   on | off | tools <name> | reload]`: List and change the
   [connectors](#connectors) whose tools Flash has.
-- `/skills [show|remove <name>]`: List, read, or delete what Flash has
-  learned.
+- `/skills [show|remove|improve|history <name>]`: List, read, delete,
+  improve, or see how a skill has done. `/skills restore <name>
+  <version>` puts an earlier version back.
 - `/plan`: Show the checklist the model is working through.
 - `/hook [install|remove]`: Let Flash see the commands you run in VS
   Code's terminal (zsh and bash).
@@ -1399,6 +1400,18 @@ Flash learns from its own work.
   can only change skills Flash wrote itself, never ones you wrote. It
   stops the moment you send a message, so it never holds up your turn,
   and it runs again after the next turn.
+
+- **Skills improve themselves.** Each time Flash uses a skill, the run
+  is scored: how many tool calls failed after it read the skill, and
+  your rating of the reply if you gave one. When a skill's last 3 runs
+  go badly, Flash rewrites it from them, fixing the steps that failed,
+  then tries the new version on its next 3 uses. If those score better,
+  the new version stays; if not, the old one comes back on its own.
+  Only skills Flash wrote are rewritten unprompted (`SKILL_TRIALS`
+  changes that); improve one of yours with `/skills improve <name>` or
+  the Skills page. Every version is kept, and `/skills history <name>`
+  or the skill's page shows the runs, what was tried, and a Restore
+  button for each earlier version.
 
 What is learned reaches the system prompt in your next session, or
 after `/clear`. The prompt stays the same for the rest of a session,

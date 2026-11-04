@@ -2055,8 +2055,13 @@ def _skills_command(arg: str) -> None:
             warn(f"No skill called {name!r}.")
         return
 
+    if action in ("improve", "history", "restore") and name:
+        _skill_trial_command(action, name)
+        return
+
     if action:
-        warn("Usage: /skills [show <name> | remove <name>]")
+        warn("Usage: /skills [show | remove | improve | history <name> | "
+             "restore <name> <version>]")
         return
 
     saved = skills.all_skills()
@@ -2085,6 +2090,58 @@ def _skills_command(arg: str) -> None:
         "to read one, /skills remove <name> to drop it.\n",
         style=DIM,
     )
+    console.print(body)
+
+
+def _skill_trial_command(action: str, arg: str) -> None:
+    """/skills improve, history and restore: a skill's runs, rewritten
+    from them, or an earlier version put back."""
+
+    from . import skilltrials
+
+    name, _, version = arg.partition(" ")
+    try:
+        if action == "improve":
+            with console.status(f"Rewriting {name} from its runs"):
+                said = skilltrials.improve(name, skilltrials._ask_model(
+                    Config.host, Config.model or ""), asked=True)
+            console.print(Text(said, style=DIM))
+            return
+        if action == "restore":
+            console.print(Text(skilltrials.restore(name, version.strip()),
+                               style=DIM))
+            return
+    except (skilltrials.TrialError, skills.SkillError) as exc:
+        warn(str(exc))
+        return
+    if skills.find(name, guides=False) is None:
+        warn(f"No skill of yours called {name!r}.")
+        return
+    shown = skilltrials.report(name)
+    body = Text()
+    body.append(f"\n{name}", style="bold")
+    score = shown["score"]
+    body.append(f"  version {shown['version']}, "
+                f"{shown['version_runs']} runs"
+                + (f", scoring {score:.0%}" if score is not None else "")
+                + "\n", style=DIM)
+    if shown["trial"]:
+        body.append(f"  On trial: {shown['trial']['done']} of "
+                    f"{shown['trial']['of']} runs in\n", style=ACCENT)
+    for run in reversed(shown["recent"]):
+        body.append(f"  {run['score']:.0%}  ", style=ACCENT)
+        body.append(f"{(run.get('task') or '')[:70]}\n", style=DIM)
+    for item in reversed(shown["history"][-8:]):
+        when = time.strftime("%b %d %H:%M", time.localtime(item["at"]))
+        body.append(f"  {when}  {item['event']}", style="bold")
+        detail = " → ".join(str(item[k]) for k in ("from", "to") if k in item)
+        if "new" in item:
+            detail += f" ({item.get('old', 0):.0%} → {item['new']:.0%})"
+        body.append(f"  {detail}\n", style=DIM)
+    if shown["versions"]:
+        body.append("\n  Earlier versions: " + ", ".join(shown["versions"])
+                    + f". /skills restore {name} <version> to go back.\n",
+                    style=DIM)
     console.print(body)
 
 

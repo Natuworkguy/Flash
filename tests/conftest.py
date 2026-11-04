@@ -25,6 +25,7 @@ from flash import (
     sessions,
     showcase,
     skills,
+    skilltrials,
     sparks,
     systemone,
     terminal,
@@ -150,6 +151,8 @@ def isolated_home(tmp_path_factory, monkeypatch):
     # both have to come from the temp home too.
     monkeypatch.setattr(memory, "MEMORY_PATH", home / ".flash_memory.md")
     monkeypatch.setattr(skills, "FLASH_DIR", home / ".flash")
+    # Each skill's runs, trials and old versions.
+    monkeypatch.setattr(skilltrials, "FLASH_DIR", home / ".flash")
     # Sparks, and what this session has already pointed out about them.
     monkeypatch.setattr(sparks, "FLASH_DIR", home / ".flash")
     # How many notifications the agent has sent lately.

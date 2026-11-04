@@ -19,7 +19,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
-from . import context, providers, skills
+from . import context, providers, skills, skilltrials
 from .memory import list_memory
 from .theme import capture_tool_output
 
@@ -277,6 +277,10 @@ def rated(
     of that, on a thread of its own. Not counted against the reviews
     after turns, and run even while one of those is."""
 
+    try:
+        skilltrials.rated(reply, good)
+    except OSError:
+        pass
     if not model:
         return None
     reply = str(reply or "").strip()
@@ -466,6 +470,13 @@ def after_turn(
 ) -> Optional[Review]:
     """Count a finished turn, and start a review if one is due."""
 
+    try:
+        # The skills it used: scored, judged, rewritten if they keep
+        # going badly. Never at the cost of the turn.
+        skilltrials.after_turn(messages, host=host, model=model, start=start)
+    except Exception:  # noqa: BLE001  # nosec B110
+        pass
+
     skill_every = skill_review_after()
     memory_every = memory_review_every()
 
@@ -513,7 +524,7 @@ def news() -> list[str]:
     with _lock:
         finished, _state.finished = _state.finished, []
 
-    lines = []
+    lines = skilltrials.news()
     for review in finished:
         if review.actions:
             lines.extend(review.actions)
