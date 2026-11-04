@@ -1333,11 +1333,19 @@ def _play_js() -> str:
         encoding="utf-8")
 
 
+MOST_ATTEMPTS = 50
+
+
 def _play(policy: str, seconds: float = 20, until: str = "",
           canvas: str = "", start_keys: Optional[list] = None,
-          record: str = "") -> tuple[str, str]:
+          record: str = "", attempts: int = 1, died: str = "",
+          restart_keys: Optional[list] = None,
+          progress: str = "") -> tuple[str, str]:
     """Run POLICY every frame for SECONDS, or until UNTIL is true.
-    With RECORD, a path, the canvas is filmed and saved there as WebM.
+    With ATTEMPTS, each time DIED is true the RESTART_KEYS are tapped and
+    it plays again, its memory kept, until UNTIL or the attempts or the
+    seconds run out; PROGRESS says how far each got. With RECORD, a path,
+    the best attempt is filmed and saved there as WebM.
     Returns (what happened, "") or ("", why not)."""
 
     if not is_open():
@@ -1345,12 +1353,15 @@ def _play(policy: str, seconds: float = 20, until: str = "",
     if taken():
         return "", TAKEN
     seconds = max(0.5, min(float(seconds or 20), MOST_PLAY_SECONDS))
+    attempts = max(1, min(int(attempts or 1), MOST_ATTEMPTS))
     page = _session.page
     try:
         found = page.evaluate(
             _play_js(),
             [policy, seconds, until or "", canvas or "",
-             [str(k) for k in start_keys or []], bool(record)])
+             [str(k) for k in start_keys or []], bool(record), attempts,
+             died or "", [str(k) for k in restart_keys or []],
+             progress or ""])
     except Exception as exc:  # noqa: BLE001
         return "", _first_line(exc)
     if found.get("error") and not found.get("frames"):
@@ -1362,9 +1373,27 @@ def _play(policy: str, seconds: float = 20, until: str = "",
         + ".",
         f"The page's title now: {found.get('title') or '(none)'}",
     ]
+    tries = found.get("attempts") or []
+    if len(tries) > 1 or (tries and tries[0].get("ended") == "died"):
+        def said(t: dict) -> str:
+            how = {"won": "won", "died": "died", "time": "ran out of time",
+                   "error": "the policy threw"}.get(t.get("ended"), "")
+            far = (f" at {t['progress']:g}%" if t.get("progress") is not None
+                   else "")
+            return f"#{t['attempt']}: {how}{far} after {t['seconds']}s"
+        lines.append("Attempts: " + "; ".join(said(t) for t in tries) + ".")
+        best = found.get("best") or {}
+        if best:
+            lines.append(f"Best: attempt {best.get('attempt')}"
+                         + (f", {best['progress']:g}%"
+                            if best.get("progress") is not None else "")
+                         + (" (filmed)" if record else "") + ".")
     if not found.get("canvas"):
         lines.append("There is no canvas on the page: px and find see "
                      "nothing; act on the page with tap and click.")
+    elif found.get("webgl"):
+        lines.append("The canvas is WebGL: it is copied each frame to read "
+                     "its pixels, so px, find and blobs work on it too.")
     if found.get("error"):
         lines.append(f"The policy threw: {found['error']}")
     if found.get("log"):

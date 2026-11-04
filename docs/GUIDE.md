@@ -1276,23 +1276,39 @@ before its next step.
 A game that moves sixty times a second cannot wait for a model to look
 and think between frames. So with `play_realtime` the AI writes a
 reflex instead: a few lines of JavaScript the page runs every frame,
-reading the canvas's pixels and pressing keys or clicking, for as long
-as it asks. It sees how the run went (frames, actions, what it logged,
-a screenshot), changes the reflex and runs it again, the way a person
-practises.
+reading the canvas's pixels and pressing keys, clicking or holding the
+mouse, for as long as it asks. It sees how the run went (frames,
+actions, what it logged, a screenshot, and a film of the run sent to
+you), changes the reflex and runs it again, the way a person practises.
+
+It has what a hard game needs:
+
+- **Eyes.** `api.blobs` finds every patch of a colour as a box,
+  `api.runs`, `api.find` and `api.findDown` read rows and columns, and
+  `api.speed` measures how fast the picture scrolls. A WebGL canvas,
+  which most game engines draw on, is read the same way.
+- **Hands.** Keys, clicks, and `api.down` and `api.up` to hold the mouse
+  for a ship or a jetpack; `api.later` for timing finer than a frame.
+- **Attempts.** Give it `attempts`, a `died` check and `restart_keys`,
+  and it plays like a person beating a hard level: on a crash it starts
+  over, keeping what it learned in `api.memory` (and where it died in
+  `api.deaths`), until it wins or the attempts run out. It says how far
+  each try got, and films the best one.
 
 ```prompt
 Open flash-dash and beat it.
 ```
 
-`flash-dash` is a demo that comes with Flash: a square that runs on its
-own, spikes to jump, bars hanging low that a jump under hits, and a
-speed-up halfway, with jump windows a few frames wide. Jumping a fixed
-distance before each spike gets about halfway. The reflex in
-`flash/games/dash-policy.js` beats it every time: it measures the speed
-from how far the spikes move between frames, works out every frame a
-jump could start on and still land clear, and jumps in the middle of
-them.
+`flash-dash` is a practice level that comes with Flash, built like a
+Geometry Dash level: spikes, blocks to land on and jump off, a pad that
+launches you over a wall, a spike pit too long to jump that needs a
+tap on a ring in mid-air, a speed-up, and a ship to fly, holding to
+climb, through pillars. The reflex in `flash/games/dash-policy.js`
+beats it from the pixels alone, nearly always on the first try: it
+measures the speed by tracking what it sees, runs the game ahead to
+find every frame a jump could start on and still land safe, and jumps
+in the middle of them; taps a ring only when falling on would die; and
+steers the ship for the middle of each gap.
 
 Both tools need Playwright's Chromium, which `install.sh` and
 `install.ps1` download for you. Installing Flash another way means
