@@ -176,7 +176,8 @@ def test_adding_a_reminder_asks_first(mac, monkeypatch):
     with answer_from(lambda q: asked.append(q) or "y"):
         said = tools.reminders_tool("add", title="Water plants",
                                     due="2026-11-03T18:00")
-    assert "Water plants" in asked[0] and "2026-11-03T18:00" in asked[0]  # nosec
+    assert "Water plants" in asked[0]  # nosec
+    assert "2026-11-03T18:00" in asked[0]  # nosec
     assert said.startswith("Added: Water plants due 2026-11-03T18:00")  # nosec
     due = str(reminders._seconds(calendars.parse_time("2026-11-03T18:00")))
     assert mac[-1][-4:] == ["", "Water plants", "", due]  # nosec B101

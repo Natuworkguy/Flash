@@ -340,8 +340,8 @@ def test_the_tool_joins_without_a_name(monkeypatch, tmp_path):
     assert "left the call" in result
 
 
-def test_each_turn_goes_to_the_live_transcript_as_it_happens(monkeypatch,
-                                                            tmp_path):
+def test_each_turn_goes_to_the_live_transcript_as_it_happens(
+        monkeypatch, tmp_path):
     monkeypatch.setattr(calls, "CALLS_DIR", tmp_path)
     shown = []
     monkeypatch.setattr(calls, "tool_result",
@@ -672,8 +672,8 @@ def test_the_users_mic_is_never_a_loopback(monkeypatch):
             calls._user_mic()
 
 
-def test_each_turn_goes_to_the_page_when_one_is_drawing(monkeypatch,
-                                                       tmp_path):
+def test_each_turn_goes_to_the_page_when_one_is_drawing(
+        monkeypatch, tmp_path):
     monkeypatch.setattr(calls, "CALLS_DIR", tmp_path)
     drawn = []
     monkeypatch.setattr(calls, "tool_call",

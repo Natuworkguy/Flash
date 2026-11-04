@@ -134,6 +134,7 @@ def is_dm(team_id: str) -> bool:
 def _dm_spark(team_id: str) -> Optional[sparks.Spark]:
     return sparks.find(team_id[len(DM_PREFIX):]) if is_dm(team_id) else None
 
+
 # How many messages a spark may post in one turn with send_message, so
 # one turn is a few lines in the chat, not a flood.
 MAX_SENT = 4
@@ -427,7 +428,6 @@ def end_call(team_key: str, call_id: str) -> Optional[dict]:
         return None
 
     return _change(team.id, change)
-
 
 
 def _team(key: str) -> sparks.Team:

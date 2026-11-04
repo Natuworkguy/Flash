@@ -833,7 +833,7 @@ def _press(names: list[str], want: str = "") -> str:
     try:
         return computer._run(["osascript", "-l", "JavaScript", "-e", _PRESS,
                               json.dumps(names), want],
-                              timeout=LOOK_SECONDS).strip()
+                             timeout=LOOK_SECONDS).strip()
     except computer.ComputerError as exc:
         if _no_access(exc):
             raise CallError(_NO_ACCESS) from None
