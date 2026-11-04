@@ -775,7 +775,7 @@ have looked them over.
   see which sparks read it, and when. The terminal says the same.
 - **Calls.** The phone button in a spark's private chat calls it, and in
   a team's chat starts a group call, each spark speaking in a voice of
-  its own. The spark speaks first; mute, hold, share your screen or turn
+  its own. The spark speaks first; mute, share your screen or turn
   on the camera, and it sees what they show with what you say; talk over
   it to cut in. Minimise the call to a bar, or close the chat, and it
   carries on while you use Flash. Afterwards the chat shows one entry
