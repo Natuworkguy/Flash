@@ -120,6 +120,29 @@ def test_a_reflex_runs_every_frame_and_sees_the_canvas():
         browser.close_session()
 
 
+def test_attempts_retry_after_a_death_and_keep_memory():
+    browser = _dash()
+    try:
+        # Doing nothing dies at the first spike, twice; what it saw and
+        # how many tries it has had are kept between them.
+        said, why = browser.play(
+            "const m = api.memory; m.tries = api.attempt; "
+            "if (api.frame % 10 === 1) m.spikes = "
+            "api.blobs('#ff3b5c', 0, 200, api.width, 241).length;"
+            "if (m.logged !== api.attempt && m.spikes !== undefined) { "
+            "m.logged = api.attempt; api.log('spikes', m.spikes, 'try', "
+            "m.tries); }",
+            seconds=12, start_keys=["r"], attempts=2,
+            died="window.dash.over && !window.dash.won",
+            restart_keys=["r"], progress="window.dash.progress()")
+        assert not why
+        assert "#1: died at" in said and "#2: died at" in said
+        assert "Best: attempt" in said
+        assert "spikes 1 try 1" in said and "try 2" in said
+    finally:
+        browser.close_session()
+
+
 @pytest.mark.skipif(
     not __import__("os").environ.get("FLASH_SLOW_TESTS"),
     reason="twenty seconds of real time: FLASH_SLOW_TESTS=1 runs it")

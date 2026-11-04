@@ -6057,7 +6057,9 @@ GAMES = {"flash-dash": Path(__file__).parent / "games" / "dash.html"}
 
 
 def play_realtime(policy: str, seconds: Any = 20, until: str = "",
-                  canvas: str = "", start_keys: Any = None) -> str:
+                  canvas: str = "", start_keys: Any = None,
+                  attempts: Any = 1, died: str = "",
+                  restart_keys: Any = None, progress: str = "") -> str:
     """Run a reflex the model wrote, every frame, in the open page: for a
     game that moves faster than a turn can look and think."""
 
@@ -6068,12 +6070,19 @@ def play_realtime(policy: str, seconds: Any = 20, until: str = "",
         result = "Error: give the policy, JavaScript run every frame."
         tool_result(result, style=ERROR)
         return result
-    keys = start_keys if isinstance(start_keys, list) else [
-        k for k in str(start_keys or "").split(",") if k]
+
+    def keys_of(given: Any) -> list:
+        return given if isinstance(given, list) else [
+            k for k in str(given or "").split(",") if k]
+
+    keys = keys_of(start_keys)
     said, why = page_devtools.play(
         policy, seconds=_clamp(seconds, 1, 120, 20), until=str(until or ""),
         canvas=str(canvas or ""), start_keys=keys,
-        record=str(Path(SCRATCH_DIR) / f"playthrough-{int(time.time())}.webm"))
+        record=str(Path(SCRATCH_DIR) / f"playthrough-{int(time.time())}.webm"),
+        attempts=_clamp(attempts, 1, 50, 1), died=str(died or ""),
+        restart_keys=keys_of(restart_keys) or keys,
+        progress=str(progress or ""))
     if why:
         result = _page_report(f"That did not run: {why}")
         tool_result(why, style=ERROR)
@@ -8800,11 +8809,19 @@ tools: list[dict[str, Any]] = [
                 "api.release(key), api.click(x, y), api.move(x, y) in the "
                 "canvas's pixels; api.memory, kept across frames; api.t "
                 "seconds and api.frame; api.log(...) to see later; "
-                "api.width and api.height. Colours as \"#rrggbb\". Look "
-                "at a screenshot first to learn the colours and where "
-                "things are; measure speeds from how far things move "
-                "between frames. open_page('flash-dash') opens a demo: a "
-                "precise jumping game to practise on."
+                "api.width and api.height. Colours as \"#rrggbb\". "
+                "api.blobs(colour, x0, y0, x1, y1) -> [{x, y, w, h, cx, cy, "
+                "n}] every patch of it; api.speed(y0, y1) -> how fast the "
+                "picture scrolls, pixels a second; api.down(x, y) and "
+                "api.up() hold and let go of the mouse (a ship, a jetpack); "
+                "api.later(ms, fn) for timing finer than a frame; api.dt, "
+                "api.attempt and api.deaths. A WebGL canvas is read too. "
+                "Look at a screenshot first to learn the colours and where "
+                "things are. To beat a hard level, give attempts with died "
+                "(and restart_keys): it retries, keeping api.memory, so the "
+                "policy can learn where it died. open_page('flash-dash') "
+                "opens a practice level like a rhythm runner: spikes, "
+                "blocks, pads, rings and a ship."
             ),
             "parameters": {
                 "type": "object",
@@ -8823,6 +8840,22 @@ tools: list[dict[str, Any]] = [
                     "start_keys": {"type": "string", "description": (
                         "Keys tapped once before it starts, comma "
                         "separated, such as r to restart.")},
+                    "attempts": {"type": "integer", "description": (
+                        "How many tries, at most 50: each time died is "
+                        "true it restarts and plays again, api.memory "
+                        "kept. Default 1. The seconds are for them all.")},
+                    "died": {"type": "string", "description": (
+                        "A JavaScript expression of api true when the try "
+                        "is over and lost, such as "
+                        "document.title.includes('crashed').")},
+                    "restart_keys": {"type": "string", "description": (
+                        "Keys tapped to start a new try. start_keys if "
+                        "not given.")},
+                    "progress": {"type": "string", "description": (
+                        "A JavaScript expression of api giving how far a "
+                        "try got, 0 to 100, to say and to keep the best "
+                        "try's film, such as +document.title.match(/\\d+/)"
+                        "?.[0].")},
                 },
                 "required": ["policy"],
             },
