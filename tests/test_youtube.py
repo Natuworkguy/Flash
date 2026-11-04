@@ -50,7 +50,8 @@ def test_storyboard_urls_spread():
             "101#180#100#3#3#1000#M$M#rs$b")
     urls = youtube.storyboard_urls(spec)
     assert len(urls) == 4  # nosec B101
-    assert urls[0].endswith("storyboard3_L1/M0.jpg?sqp=x&sigh=rs$b")  # nosec B101
+    want = "storyboard3_L1/M0.jpg?sqp=x&sigh=rs$b"
+    assert urls[0].endswith(want)  # nosec B101
     assert "/M11.jpg" in urls[-1]  # nosec B101  (12 sheets of 9)
     assert youtube.storyboard_urls("") == []  # nosec B101
 
