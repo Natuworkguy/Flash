@@ -234,3 +234,85 @@ def test_an_extension_can_ask_for_the_network(tmp_path):
     file.write_text(json.dumps(manifest))
     with pytest.raises(extensions.ExtensionError, match="true or false"):
         extensions.load(folder)
+
+
+def surfaces(folder, extra=None, name="weather"):
+    ui = {
+        "web": "web",
+        "widgets": [{"id": "today", "label": "Today", "file": "today.html",
+                     "height": 140}],
+        "docks": [{"id": "radar", "label": "Radar", "icon": "globe",
+                   "file": "radar.html", "width": 380}],
+        "blocks": [{"lang": "forecast", "file": "card.html",
+                    "about": "a forecast card from JSON {city, days}"}],
+        "buttons": [
+            {"id": "shout", "label": "Shout", "where": ["palette", "input"],
+             "shortcut": "Alt+Shift+Y", "prompt": "Shout: $TEXT"},
+            {"id": "define", "label": "Define", "where": ["selection"],
+             "prompt": "Define: $TEXT"},
+        ],
+    }
+    ui.update(extra or {})
+    folder = make(folder, ui, {"web/today.html": "<p>t</p>",
+                               "web/radar.html": "<p>r</p>",
+                               "web/card.html": "<p>c</p>"})
+    manifest = json.loads((folder / extensions.MANIFEST).read_text())
+    manifest["name"] = name
+    (folder / extensions.MANIFEST).write_text(json.dumps(manifest))
+    return folder
+
+
+def test_widgets_docks_blocks_and_new_places_are_read(tmp_path):
+    ext = extensions.load(surfaces(tmp_path / "w"))
+    drawn = ext.ui.summary("weather")
+    assert drawn["widgets"] == [{"id": "today", "label": "Today",
+                                 "height": 140,
+                                 "url": "/ext/weather/today.html"}]
+    assert drawn["docks"][0]["width"] == 380
+    assert drawn["docks"][0]["url"] == "/ext/weather/radar.html"
+    assert drawn["blocks"] == [{"lang": "forecast", "height": 240,
+                                "url": "/ext/weather/card.html"}]
+    shout = next(b for b in drawn["buttons"] if b["id"] == "shout")
+    assert shout["where"] == ["palette", "input"]
+    assert shout["shortcut"] == "alt+shift+y"
+    said = " ".join(ext.contents())
+    assert "beside the chat: Radar" in said
+    assert "cards on a new chat: Today" in said
+    assert "```forecast" in said
+
+
+@pytest.mark.parametrize("extra, why", [
+    ({"blocks": [{"lang": "python", "file": "card.html"}]}, "block"),
+    ({"blocks": [{"lang": "ui", "file": "card.html"}]}, "block"),
+    ({"blocks": [{"lang": "x", "file": "card.html"}]}, "block"),
+    ({"blocks": [{"lang": "card", "file": "nope.html"}]}, "nope.html"),
+    ({"docks": [{"id": "d", "label": "D", "file": "radar.html",
+                 "width": 2000}]}, "260 to 720"),
+    ({"widgets": [{"id": "w", "label": "W", "file": "today.html",
+                   "height": 5}]}, "60 to 480"),
+    ({"buttons": [{"id": "b", "label": "B", "where": ["input"],
+                   "shortcut": "ctrl+b", "prompt": "x"}]}, "shortcut"),
+    ({"buttons": [{"id": "b", "label": "B", "where": ["input"],
+                   "shortcut": "w", "prompt": "x"}]}, "shortcut"),
+    ({"buttons": [{"id": "b", "label": "B", "where": ["floating"],
+                   "prompt": "x"}]}, "where"),
+])
+def test_bad_surfaces_are_refused_with_why(tmp_path, extra, why):
+    with pytest.raises(ExtensionError, match=why):
+        extensions.load(surfaces(tmp_path / "w", extra))
+
+
+def test_blocks_reach_the_system_prompt(tmp_path):
+    install(surfaces(tmp_path / "w"))
+    extensions.reload()
+    said = extensions.system_prompt()
+    assert "```forecast (from weather): a forecast card" in said
+    assert ext_ui.blocks_taken() == {"forecast": "weather"}
+
+
+def test_a_block_another_extension_draws_refuses_the_install(tmp_path):
+    install(surfaces(tmp_path / "w"))
+    extensions.reload()
+    other = extensions.load(surfaces(tmp_path / "o", name="other"))
+    found = extensions.clashes(other, frozenset(), frozenset())
+    assert any("```forecast blocks are drawn by weather" in c for c in found)

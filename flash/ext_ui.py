@@ -14,8 +14,19 @@ manifest's "ui".
       "greeting": "What's the weather doing?",
       "suggestions": ["Forecast for Paris", "Will it rain today?"],
       "placeholder": "Ask about the weather",
-      "banner": "banner.txt"
+      "banner": "banner.txt",
+      "widgets": [{"id": "today", "label": "Today", "file": "today.html",
+                   "height": 160}],
+      "docks": [{"id": "notes", "label": "Notes", "icon": "book",
+                 "file": "notes.html", "width": 360}],
+      "blocks": [{"lang": "weather", "file": "weather-card.html",
+                  "about": "a forecast card: JSON {city, days: [...]}"}]
     }
+
+Widgets are cards on a new chat's empty page; docks are pages that sit
+beside the chat, opened from a button by its title; blocks draw a
+```lang fence in a reply with the extension's own page, and are offered
+to the model in the system prompt by what "about" says.
 
 "web" is the folder the page is served from (/ext/<name>/...): the
 stylesheet, the script and the panels are files in it. Everything is
@@ -43,8 +54,34 @@ from .extensions import (
 )
 
 ID_RE = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
-# Where a button can go. "terminal" is a key in the terminal's box.
-PLACES = ("sidebar", "composer", "message", "header", "terminal")
+# Where a button can go. "terminal" is a key in the terminal's box;
+# "palette" a row in the command palette; "selection" a chip over text
+# selected in a reply; "input" an icon beside the send button.
+PLACES = ("sidebar", "composer", "message", "header", "terminal",
+          "palette", "selection", "input")
+# A web keyboard shortcut: modifiers, then one key.
+SHORTCUT_RE = re.compile(
+    r"^(?:(?:ctrl|alt|shift|meta|mod)\+){1,3}(?:[a-z0-9]|f[1-9]|f1[0-2])$")
+# Shortcuts the page keeps for itself.
+TAKEN_SHORTCUTS = {
+    "alt+n", "alt+m", "alt+h", "alt+p", "alt+,", "alt+b", "alt+f",
+    "alt+v", "alt+r", "alt+e", "alt+z", "alt+c", "alt+shift+c", "ctrl+o",
+    "alt+l", "alt+shift+d", "ctrl+b", "alt+t", "ctrl+k", "mod+k",
+}
+LANG_RE = re.compile(r"^[a-z][a-z0-9-]{1,31}$")
+# Fences the page draws itself, and the languages people write code in:
+# a block may not take one.
+RESERVED_LANGS = {
+    "ui", "serif", "mermaid", "json", "js", "javascript", "ts",
+    "typescript", "python", "py", "bash", "sh", "shell", "html", "css",
+    "text", "txt", "markdown", "md", "diff", "sql", "yaml", "yml",
+    "toml", "go", "rust", "c", "cpp", "java", "swift", "kotlin", "ruby",
+    "php", "xml", "csv",
+}
+MOST_WIDGETS = 4
+MOST_DOCKS = 3
+MOST_BLOCKS = 8
+ABOUT_CHARS = 200
 # Keys a button may take in the terminal: Ctrl or Alt with a letter.
 KEY_RE = re.compile(r"^(c|m|escape)-[a-z]$")
 TAKEN_KEYS = {"c-c", "c-d", "c-z", "c-j", "c-m", "c-i", "c-h", "c-o",
@@ -78,10 +115,13 @@ class Button:
     command: str = ""
     run: list[str] = field(default_factory=list)
     timeout: int = BUTTON_TIMEOUT
+    # On the web: a keyboard shortcut that presses it, as "alt+shift+w".
+    shortcut: str = ""
 
     def summary(self) -> dict:
         return {"id": self.id, "label": self.label, "icon": self.icon,
                 "where": list(self.where), "key": self.key,
+                "shortcut": self.shortcut,
                 "does": "prompt" if self.prompt else
                 "command" if self.command else "run",
                 "command": self.command}
@@ -96,6 +136,39 @@ class Panel:
     # Whether the page shows its X: a panel that is a place of its own,
     # left from the sidebar like any page, can go without.
     close: bool = True
+
+
+@dataclass
+class Widget:
+    """A card on a new chat's empty page: a page of the extension's."""
+
+    id: str
+    label: str
+    file: str
+    height: int = 160
+
+
+@dataclass
+class Dock:
+    """A page that sits beside the chat, opened and shut from a button
+    by the chat's title, and kept open from chat to chat."""
+
+    id: str
+    label: str
+    file: str
+    icon: str = ""
+    width: int = 360
+
+
+@dataclass
+class Block:
+    """A ```LANG fence in a reply, drawn by the extension's page FILE,
+    which is handed the fence's text."""
+
+    lang: str
+    file: str
+    about: str = ""
+    height: int = 240
 
 
 @dataclass
@@ -117,6 +190,9 @@ class UI:
     suggestions: list[str] = field(default_factory=list)
     placeholder: str = ""
     banner: str = ""
+    widgets: list[Widget] = field(default_factory=list)
+    docks: list[Dock] = field(default_factory=list)
+    blocks: list[Block] = field(default_factory=list)
 
     def contents(self) -> list[str]:
         """What it changes, for the install preview."""
@@ -128,6 +204,15 @@ class UI:
             lines.append(f"restyles the web page: {self.css}")
         if self.panels:
             lines.append("panels: " + ", ".join(p.label for p in self.panels))
+        if self.docks:
+            lines.append("pages beside the chat: "
+                         + ", ".join(d.label for d in self.docks))
+        if self.widgets:
+            lines.append("cards on a new chat: "
+                         + ", ".join(w.label for w in self.widgets))
+        if self.blocks:
+            lines.append("blocks it draws in replies: "
+                         + ", ".join(f"```{b.lang}" for b in self.blocks))
         if self.buttons:
             lines.append("buttons: " + ", ".join(
                 f"{b.label} ({', '.join(b.where)})" for b in self.buttons))
@@ -155,6 +240,13 @@ class UI:
                         "route": f"/x/{name}/{p.id}"} for p in self.panels],
             "buttons": [b.summary() for b in self.buttons
                         if set(b.where) - {"terminal"}],
+            "widgets": [{"id": w.id, "label": w.label, "height": w.height,
+                         "url": base + w.file} for w in self.widgets],
+            "docks": [{"id": d.id, "label": d.label, "icon": d.icon,
+                       "width": d.width, "url": base + d.file}
+                      for d in self.docks],
+            "blocks": [{"lang": b.lang, "height": b.height,
+                        "url": base + b.file} for b in self.blocks],
             "greeting": self.greeting,
             "suggestions": list(self.suggestions),
             "placeholder": self.placeholder,
@@ -182,6 +274,16 @@ def _id(value: Any, where: str) -> str:
             f"{where}: {found!r} is not an id (lowercase letters, digits, "
             "- and _)")
     return found
+
+
+def _size(value: Any, where: str, low: int, high: int,
+          default: int) -> int:
+    if value is None:
+        return default
+    if isinstance(value, bool) or not isinstance(value, int) or \
+            not low <= value <= high:
+        raise ExtensionError(f"{where} has to be {low} to {high} pixels")
+    return value
 
 
 def _web_file(web: Optional[Path], value: Any, where: str,
@@ -216,6 +318,13 @@ def _button(entry: Any, root: Path, index: int,
             "not one Flash uses")
     if "terminal" in places and not key:
         raise ExtensionError(f'{where}: a "terminal" button needs a "key"')
+    shortcut = _text(entry.get("shortcut"), f"{where} shortcut").lower()
+    shortcut = shortcut.replace(" ", "").replace("cmd", "meta")
+    if shortcut and (not SHORTCUT_RE.match(shortcut)
+                     or shortcut in TAKEN_SHORTCUTS):
+        raise ExtensionError(
+            f"{where}: shortcut {shortcut!r} has to be modifiers and a key, "
+            'such as "alt+shift+w", and not one Flash uses')
     does = [k for k in ("prompt", "command", "run") if entry.get(k)]
     if len(does) != 1:
         raise ExtensionError(
@@ -234,7 +343,80 @@ def _button(entry: Any, root: Path, index: int,
         run=_argv(entry["run"], root, where) if entry.get("run") else [],
         timeout=_timeout(entry.get("timeout"), where)
         if entry.get("timeout") is not None else BUTTON_TIMEOUT,
+        shortcut=shortcut,
     )
+
+
+def _widgets(entry: Any, web: Optional[Path]) -> list[Widget]:
+    if not isinstance(entry, list) or len(entry) > MOST_WIDGETS:
+        raise ExtensionError(
+            f'"ui" widgets has to be a list of up to {MOST_WIDGETS}')
+    found = []
+    for index, item in enumerate(entry):
+        where = f'"ui" widgets[{index}]'
+        if not isinstance(item, dict):
+            raise ExtensionError(f"{where} has to be an object")
+        found.append(Widget(
+            id=_id(item.get("id"), f"{where} id"),
+            label=_label(item.get("label"), f"{where} label"),
+            file=_web_file(web, item.get("file"), f"{where} file",
+                           (".html",)),
+            height=_size(item.get("height"), f"{where} height", 60, 480,
+                         160),
+        ))
+    return found
+
+
+def _docks(entry: Any, web: Optional[Path]) -> list[Dock]:
+    if not isinstance(entry, list) or len(entry) > MOST_DOCKS:
+        raise ExtensionError(
+            f'"ui" docks has to be a list of up to {MOST_DOCKS}')
+    found = []
+    for index, item in enumerate(entry):
+        where = f'"ui" docks[{index}]'
+        if not isinstance(item, dict):
+            raise ExtensionError(f"{where} has to be an object")
+        found.append(Dock(
+            id=_id(item.get("id"), f"{where} id"),
+            label=_label(item.get("label"), f"{where} label"),
+            file=_web_file(web, item.get("file"), f"{where} file",
+                           (".html",)),
+            icon=_text(item.get("icon"), f"{where} icon")[:24],
+            width=_size(item.get("width"), f"{where} width", 260, 720,
+                        360),
+        ))
+    return found
+
+
+def _blocks(entry: Any, web: Optional[Path]) -> list[Block]:
+    if not isinstance(entry, list) or len(entry) > MOST_BLOCKS:
+        raise ExtensionError(
+            f'"ui" blocks has to be a list of up to {MOST_BLOCKS}')
+    found = []
+    for index, item in enumerate(entry):
+        where = f'"ui" blocks[{index}]'
+        if not isinstance(item, dict):
+            raise ExtensionError(f"{where} has to be an object")
+        lang = _text(item.get("lang"), f"{where} lang",
+                     required=True).lower()
+        if not LANG_RE.match(lang) or lang in RESERVED_LANGS:
+            raise ExtensionError(
+                f"{where}: {lang!r} can't be a block's language: it has to "
+                "be lowercase letters, digits and -, and not one the page "
+                "draws itself or people write code in")
+        about = " ".join(_text(item.get("about"), f"{where} about").split())
+        if len(about) > ABOUT_CHARS:
+            raise ExtensionError(
+                f"{where} about is longer than {ABOUT_CHARS} characters")
+        found.append(Block(
+            lang=lang,
+            file=_web_file(web, item.get("file"), f"{where} file",
+                           (".html",)),
+            about=about,
+            height=_size(item.get("height"), f"{where} height", 60, 900,
+                         240),
+        ))
+    return found
 
 
 def parse(entry: Any, root: Path, commands: set[str]) -> UI:
@@ -275,9 +457,17 @@ def parse(entry: Any, root: Path, commands: set[str]) -> UI:
             f'"ui" buttons has to be a list of up to {MOST_BUTTONS}')
     ui.buttons = [_button(b, root, i, commands)
                   for i, b in enumerate(buttons)]
+    ui.widgets = _widgets(entry.get("widgets", []), ui.web)
+    ui.docks = _docks(entry.get("docks", []), ui.web)
+    ui.blocks = _blocks(entry.get("blocks", []), ui.web)
     for what, names in (("panel", [p.id for p in ui.panels]),
                         ("button", [b.id for b in ui.buttons]),
-                        ("key", [b.key for b in ui.buttons if b.key])):
+                        ("key", [b.key for b in ui.buttons if b.key]),
+                        ("shortcut", [b.shortcut for b in ui.buttons
+                                      if b.shortcut]),
+                        ("widget", [w.id for w in ui.widgets]),
+                        ("dock", [d.id for d in ui.docks]),
+                        ("block", [b.lang for b in ui.blocks])):
         if len(names) != len(set(names)):
             raise ExtensionError(f'"ui": a {what} is declared twice')
     if entry.get("status") is not None:
@@ -321,7 +511,7 @@ def parse(entry: Any, root: Path, commands: set[str]) -> UI:
         ui.banner = banner
     if not (ui.css or ui.script or ui.panels or ui.buttons or ui.status
             or ui.greeting or ui.suggestions or ui.placeholder
-            or ui.banner):
+            or ui.banner or ui.widgets or ui.docks or ui.blocks):
         raise ExtensionError('"ui" changes nothing')
     return ui
 
@@ -384,6 +574,27 @@ def placeholder() -> str:
 
 def banners() -> list[tuple[str, str]]:
     return [(e.name, e.ui.banner) for e in with_ui() if e.ui.banner]
+
+
+def block_prompt() -> str:
+    """The blocks the installed extensions draw, for the system prompt:
+    a ```lang fence of one shows in the reply as the extension's own
+    card. "" with none."""
+
+    lines = [f"- ```{b.lang} (from {e.name}): {b.about or 'its own card'}"
+             for e in with_ui() for b in e.ui.blocks]
+    if not lines:
+        return ""
+    return ("=== Blocks extensions draw ===\n"
+            "In a reply, a fenced block in one of these languages shows as "
+            "that extension's card instead of code. Use one when it shows "
+            "the answer better than words:\n" + "\n".join(lines))
+
+
+def blocks_taken() -> dict[str, str]:
+    """Each block's language, and the extension that draws it."""
+
+    return {b.lang: e.name for e in with_ui() for b in e.ui.blocks}
 
 
 def terminal_buttons() -> list[tuple[Any, Button]]:

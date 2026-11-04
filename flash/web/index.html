@@ -3898,6 +3898,36 @@ select:not([multiple]) { -webkit-appearance: none; appearance: none; background-
 #ext-panel .ext-panel-close[hidden] { display: none; }
 #ext-panel .ext-panel-name { font-weight: 600; flex: 1; }
 #ext-panel iframe { flex: 1; width: 100%; border: 0; background: var(--bg); }
+/* Extension surfaces: a page docked beside the chat, cards on a new chat,
+   icons by the send button, a chip over selected text, and blocks drawn
+   in replies. */
+#ext-dock { flex: none; width: 0; overflow: hidden; position: relative; border-left: 1px solid transparent; transition: width 0.46s var(--apple), border-color 0.46s var(--apple); }
+#ext-dock.open { width: var(--dock-w, 360px); border-left-color: var(--border); }
+#ext-dock .pane { position: absolute; inset: 0 0 0 auto; width: var(--dock-w, 360px); display: flex; flex-direction: column; background: var(--bg); transform: translateX(36px); opacity: 0; transition: transform 0.46s var(--apple), opacity 0.3s var(--ease); }
+#ext-dock.open .pane { transform: none; opacity: 1; }
+#ext-dock header { display: flex; align-items: center; gap: 10px; height: 56px; flex: none; padding: 0 10px 0 16px; border-bottom: 1px solid var(--border); }
+#ext-dock .ext-dock-name { flex: 1; font-weight: 600; }
+#ext-dock iframe { flex: 1; width: 100%; border: 0; background: var(--bg); }
+@media (max-width: 800px) { #ext-dock.open { position: fixed; inset: 0 0 0 auto; z-index: 60; width: min(100vw, var(--dock-w, 360px)); box-shadow: var(--shadow); } }
+.ext-pill.on { background: var(--hover); color: var(--text); }
+#ext-input { display: contents; }
+#ext-input .icon-btn svg { width: 17px; height: 17px; }
+#ext-widgets { display: none; }
+body.empty #ext-widgets:not(:empty) { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 10px; margin-top: 16px; }
+body.on-page #ext-widgets, body.voice-on #ext-widgets { display: none !important; }
+.ext-widget { border: 1px solid var(--border); border-radius: 14px; overflow: hidden; background: var(--surface); animation: rise 0.4s var(--ease) both; animation-delay: calc(var(--i, 0) * 50ms); }
+.ext-widget .ext-widget-label { display: block; font-size: 11.5px; font-weight: 600; letter-spacing: 0.02em; color: var(--text-3); padding: 9px 12px 0; }
+.ext-widget iframe { display: block; width: 100%; border: 0; background: transparent; }
+#ext-select { position: fixed; z-index: 80; display: flex; gap: 4px; padding: 4px; border-radius: 12px; background: var(--surface); border: 1px solid var(--border); box-shadow: var(--shadow); animation: fade 0.15s var(--ease) both; }
+#ext-select[hidden] { display: none; }
+#ext-select button { display: inline-flex; align-items: center; gap: 6px; padding: 5px 10px; border-radius: 8px; font-size: 13px; font-weight: 500; color: var(--text-2); }
+#ext-select button:hover { background: var(--hover); color: var(--text); }
+#ext-select svg { width: 14px; height: 14px; }
+.ext-block { margin: 10px 0; border: 1px solid var(--border); border-radius: 14px; overflow: hidden; background: var(--surface); }
+.ext-block iframe { display: block; width: 100%; border: 0; background: transparent; transition: height 0.25s var(--ease); }
+.ext-block.ext-js { padding: 12px 14px; }
+.ext-badge { margin-left: auto; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; background: var(--accent); color: #fff; font-size: 11px; font-weight: 700; line-height: 18px; text-align: center; }
+.ext-badge:empty { display: none; }
 #briefing-btn .new-dot { margin-left: auto; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent); animation: new-dot-in 0.4s var(--spring); }
 #briefing-btn .new-dot[hidden] { display: none; }
 @keyframes new-dot-in { from { transform: scale(0); } }
@@ -3906,6 +3936,8 @@ select:not([multiple]) { -webkit-appearance: none; appearance: none; background-
 /* A new chat, or a page that is not a chat, has nothing for a header
    button to act on. */
 body.empty #ext-head, body.on-page #ext-head { display: none; }
+#ext-docks { display: inline-flex; gap: 6px; margin-left: 4px; }
+#ext-docks:empty, body.on-page #ext-docks { display: none; }
 .ext-pill svg { width: 14px; height: 14px; }
 .ext-pill span { margin-left: 6px; }
 .actions .ext-act { width: auto; padding: 0 8px; gap: 5px; font-size: 12px; }
@@ -3956,6 +3988,7 @@ body.empty #ext-head, body.on-page #ext-head { display: none; }
       <button id="title" data-tip="Rename" data-keys="F2">New chat</button>
       <button type="button" class="pill" id="forks-btn" hidden data-tip="This chat's forks" aria-label="This chat's forks"></button>
       <span id="ext-head"></span>
+      <span id="ext-docks"></span>
       <span id="status-pills"><button type="button" id="tunnel-pill" class="status-pill" hidden data-tip="Flash is on the internet through a tunnel" aria-label="Flash is on the internet through a tunnel"><span class="wake-dot"><i></i></span><span class="wake-label"><span>Tunnel</span></span></button><span id="wake-pill" class="status-pill" role="status" hidden data-tip="Listening for “Hey Flash”" aria-label="Listening for “Hey Flash”"><span class="wake-dot"><i></i></span><span class="wake-label"><span>Voice</span></span></span></span>
     </header>
 
@@ -4021,17 +4054,21 @@ body.empty #ext-head, body.on-page #ext-head { display: none; }
             <button type="button" class="pill" id="agents-btn" hidden data-tip="Sub-agents"><span class="pulse-dot"></span><span id="agents-count"></span></button>
             <span id="context" role="meter" aria-label="Context used" aria-valuemin="0" aria-valuemax="100" hidden><span class="ctx-track"><span class="ctx-fill"></span></span><span class="ctx-pct"></span></span>
             <button type="button" class="pill model-pick" id="model-btn" data-tip="Switch model" data-keys="Alt M"></button>
+            <span id="ext-input"></span>
             <button type="submit" id="send" data-tip="Send" data-keys="Enter" aria-label="Send" disabled></button>
           </div>
         </form>
         </div>
         <div id="suggestions"></div>
+        <div id="ext-widgets"></div>
         <div class="fine"><span class="caution">Flash runs commands on this machine. Check what it asks to do.</span><span class="ext-status" hidden></span><span class="tip" hidden></span></div>
       </div>
     </div>
     <div id="drop" aria-hidden="true"><div class="card"></div></div>
   </main>
 
+  <aside id="ext-dock" aria-label="Extension" aria-hidden="true"><div class="pane"><header><span class="ext-dock-name"></span><button type="button" class="icon-btn ext-dock-close" aria-label="Close" data-tip="Close"></button></header><iframe title="Extension"></iframe></div></aside>
+  <div id="ext-select" hidden role="toolbar" aria-label="Do with the selected text"></div>
   <aside id="viewer" aria-label="File" aria-hidden="true">
     <div class="viewer-resize" role="separator" aria-orientation="vertical" aria-label="Resize the panel" tabindex="0" data-tip="Drag to resize, double-click to reset"></div>
     <div class="pane">
@@ -5199,6 +5236,7 @@ function markdownBody(text) {
       if (lang === "serif") html += `<div class="serif-block">${markdownBody(body.join("\n"))}</div>`;
       else if (lang === "ui") html += uiBlock(body.join("\n"), closed);
       else if (lang === "mermaid") html += diagramBlock(body.join("\n"), closed);
+      else if (extBlockOf(lang)) html += extBlockHtml(lang, body.join("\n"), closed);
       else html += codeBlock(fence[2], body.join("\n"));
       continue;
     }
@@ -21310,6 +21348,7 @@ function renderExtUI() {
       // "Watch, from watch" says nothing the label did not.
       row.dataset.tip = p.label.toLowerCase() === ext.name ? p.label : `${p.label}, from ${ext.name}`;
       row.dataset.url = p.url;
+      row.dataset.panel = `${ext.name}/${p.id}`;
       row.onclick = () => openExtPanel(p.url, p.label, { ...p, ext: ext.name });
       side.appendChild(row);
     }
@@ -21319,6 +21358,7 @@ function renderExtUI() {
   const head = $("#ext-head");
   head.textContent = "";
   for (const b of extButtonsAt("header")) head.appendChild(extButton(b, "pill ext-pill"));
+  renderExtExtras();
   renderExtStatus();
 }
 
@@ -21336,6 +21376,299 @@ setInterval(async () => {
   try { info.extension_status = (await command("ext-status", "", null)).status; renderExtStatus(); } catch { /* next time */ }
 }, 15000);
 
+// More of the page an extension can add to: blocks it draws in replies,
+// cards on a new chat, pages docked beside the chat, icons by the send
+// button, a chip over selected text, rows in the command palette, and
+// keyboard shortcuts. A script reaches each through window.Flash too.
+
+var extJsBlocks = new Map();   // lang -> render(el, text, {closed})
+var extWidgetsAdded = [];      // {id, label, height, url | render}
+var extCommandsAdded = [];     // {label, run, shortcut, group}
+var extBadges = new Map();     // panel id -> count
+const IS_MAC = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
+
+function extBlockOf(lang) {
+  if (!lang) return null;
+  if (extJsBlocks.has(lang)) return { lang, js: true };
+  for (const ext of extUI()) for (const b of ext.blocks || []) if (b.lang === lang) return { ...b, extension: ext.name };
+  return null;
+}
+
+// A block still arriving shows what is coming; done, its page draws it,
+// handed the text as its window's name (JSON {lang, text}) and in a
+// message once it loads.
+function extBlockHtml(lang, text, closed) {
+  const block = extBlockOf(lang);
+  if (!closed) return `<div class="ui-card ui-pending"><span class="ui-spin"></span>${esc(`Drawing ${lang}`)}…</div>`;
+  if (block.js) return `<div class="ext-block ext-js" data-lang="${esc(lang)}" data-text="${esc(text)}"></div>`;
+  const name = JSON.stringify({ lang, text });
+  return `<div class="ext-block" data-lang="${esc(lang)}"><iframe src="${esc(block.url)}" name="${esc(name)}" title="${esc(lang)}" loading="lazy" style="height:${block.height}px"></iframe></div>`;
+}
+
+document.addEventListener("load", (e) => {
+  const frame = e.target;
+  if (!(frame instanceof HTMLIFrameElement) || !frame.closest(".ext-block")) return;
+  try {
+    const said = JSON.parse(frame.name || "{}");
+    frame.contentWindow.postMessage({ type: "flash-block", lang: said.lang, text: said.text, theme: extTheme() }, location.origin);
+  } catch { /* its page reads window.name itself */ }
+}, true);
+
+// A block's, widget's or dock's page saying how tall it wants to be.
+window.addEventListener("message", (e) => {
+  if (e.origin !== location.origin || !e.data || e.data.type !== "flash-height") return;
+  for (const frame of document.querySelectorAll(".ext-block iframe, .ext-widget iframe")) {
+    if (frame.contentWindow === e.source) {
+      frame.style.height = `${Math.max(40, Math.min(900, Number(e.data.height) || 0))}px`;
+      return;
+    }
+  }
+});
+
+// Blocks a script draws: drawn as they land in the page.
+new MutationObserver(() => {
+  for (const node of document.querySelectorAll(".ext-block.ext-js:not([data-drawn])")) {
+    node.dataset.drawn = "1";
+    const render = extJsBlocks.get(node.dataset.lang);
+    if (!render) continue;
+    try { render(node, node.dataset.text || "", { closed: true }); }
+    catch (error) { node.textContent = `Couldn't draw this ${node.dataset.lang} block: ${error.message || error}`; }
+  }
+}).observe(document.getElementById("messages"), { childList: true, subtree: true });
+
+function extTheme() {
+  const css = getComputedStyle(document.documentElement);
+  const v = (name) => css.getPropertyValue(name).trim();
+  return {
+    dark: document.documentElement.dataset.theme !== "light",
+    vars: { bg: v("--bg"), surface: v("--surface"), text: v("--text"), text2: v("--text-2"), text3: v("--text-3"), accent: v("--accent"), border: v("--border"), hover: v("--hover") },
+  };
+}
+
+// Cards on a new chat, from the manifests and from scripts. Drawn again
+// only when what they are changes, so a card's page is not reloaded on
+// every redraw.
+function renderExtWidgets() {
+  const box = $("#ext-widgets");
+  const all = [
+    ...extUI().flatMap((e) => (e.widgets || []).map((w) => ({ ...w, key: `${e.name}/${w.id}` }))),
+    ...extWidgetsAdded.map((w) => ({ ...w, key: `js/${w.id}` })),
+  ];
+  const signature = all.map((w) => `${w.key}|${w.url || ""}|${w.height}`).join(";");
+  if (box.dataset.signature === signature) return;
+  box.dataset.signature = signature;
+  box.textContent = "";
+  all.forEach((w, i) => {
+    const card = el("div", "ext-widget");
+    card.style.setProperty("--i", i);
+    card.dataset.widget = w.key;
+    const label = el("span", "ext-widget-label");
+    label.textContent = w.label || "";
+    if (w.label) card.appendChild(label);
+    if (w.url) {
+      const frame = el("iframe");
+      frame.title = w.label || "Widget";
+      frame.src = w.url;
+      frame.style.height = `${w.height || 160}px`;
+      card.appendChild(frame);
+    } else {
+      const body = el("div", "ext-widget-body");
+      body.style.padding = "8px 12px 12px";
+      card.appendChild(body);
+      try { w.render(body); } catch (error) { body.textContent = String(error.message || error); }
+    }
+    box.appendChild(card);
+  });
+}
+
+// A page docked beside the chat. The one open stays open from chat to
+// chat, and through a reload.
+const extDocks = () => extUI().flatMap((e) => (e.docks || []).map((d) => ({ ...d, ext: e.name, key: `${e.name}/${d.id}` })));
+let dockOpen = (() => { try { return localStorage.getItem("flash-dock") || ""; } catch { return ""; } })();
+
+function openDock(key) {
+  const dock = extDocks().find((d) => d.key === key || d.id === key);
+  if (!dock) return false;
+  const box = $("#ext-dock");
+  box.style.setProperty("--dock-w", `${dock.width || 360}px`);
+  box.querySelector(".ext-dock-name").textContent = dock.label;
+  const frame = box.querySelector("iframe");
+  if (frame.getAttribute("src") !== dock.url) frame.src = dock.url;
+  box.classList.add("open");
+  box.setAttribute("aria-hidden", "false");
+  dockOpen = dock.key;
+  try { localStorage.setItem("flash-dock", dockOpen); } catch { /* not kept */ }
+  markDocks();
+  return true;
+}
+
+function closeDock() {
+  const box = $("#ext-dock");
+  box.classList.remove("open");
+  box.setAttribute("aria-hidden", "true");
+  dockOpen = "";
+  try { localStorage.removeItem("flash-dock"); } catch { /* fine */ }
+  markDocks();
+}
+
+function markDocks() {
+  for (const pill of document.querySelectorAll("#ext-docks [data-dock]")) {
+    const on = pill.dataset.dock === dockOpen;
+    pill.classList.toggle("on", on);
+    pill.setAttribute("aria-pressed", on);
+  }
+}
+
+$("#ext-dock .ext-dock-close").innerHTML = icon("x");
+$("#ext-dock .ext-dock-close").onclick = closeDock;
+
+// A chip over text selected in a reply: the "selection" buttons, given
+// what was selected.
+function hideExtSelect() { $("#ext-select").hidden = true; }
+document.addEventListener("mouseup", (e) => {
+  if (e.target.closest && e.target.closest("#ext-select")) return;
+  setTimeout(() => {
+    const buttons = extButtonsAt("selection");
+    const sel = getSelection();
+    const text = sel && !sel.isCollapsed ? sel.toString().trim() : "";
+    const node = sel && sel.anchorNode ? (sel.anchorNode.nodeType === 1 ? sel.anchorNode : sel.anchorNode.parentElement) : null;
+    if (!buttons.length || !text || !node || !node.closest("#messages")) { hideExtSelect(); return; }
+    const rect = sel.getRangeAt(0).getBoundingClientRect();
+    const bar = $("#ext-select");
+    bar.textContent = "";
+    for (const b of buttons) {
+      const btn = el("button", "", `${icon(ICON[b.icon] ? b.icon : "puzzle")}<span>${esc(b.label)}</span>`);
+      btn.type = "button";
+      btn.onmousedown = (ev) => ev.preventDefault();
+      btn.onclick = () => { hideExtSelect(); pressExt(b, text); };
+      bar.appendChild(btn);
+    }
+    bar.hidden = false;
+    const w = bar.offsetWidth, h = bar.offsetHeight;
+    bar.style.left = `${Math.max(8, Math.min(innerWidth - w - 8, rect.left + rect.width / 2 - w / 2))}px`;
+    bar.style.top = `${rect.top - h - 8 < 8 ? rect.bottom + 8 : rect.top - h - 8}px`;
+  }, 0);
+});
+document.addEventListener("scroll", hideExtSelect, true);
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") hideExtSelect(); });
+
+// Keyboard shortcuts of extensions' buttons and scripts' commands, as
+// "alt+shift+w": mod is Cmd on a Mac and Ctrl elsewhere.
+function comboOf(e) {
+  const k = e.key.length === 1 ? e.key.toLowerCase() : e.key.toLowerCase();
+  const parts = [];
+  if (e.ctrlKey) parts.push("ctrl");
+  if (e.altKey) parts.push("alt");
+  if (e.shiftKey) parts.push("shift");
+  if (e.metaKey) parts.push("meta");
+  const key = e.code && /^Key[A-Z]$/.test(e.code) ? e.code.slice(3).toLowerCase() : e.code && /^Digit\d$/.test(e.code) ? e.code.slice(5) : k;
+  return { parts, key };
+}
+
+function shortcutMatches(want, combo) {
+  if (!want) return false;
+  const pieces = want.toLowerCase().split("+");
+  const key = pieces.pop();
+  const mods = new Set(pieces.map((m) => (m === "mod" ? (IS_MAC ? "meta" : "ctrl") : m)));
+  return key === combo.key && mods.size === combo.parts.length && combo.parts.every((m) => mods.has(m));
+}
+
+function shortcutLabel(want) {
+  if (!want) return "";
+  return want.split("+").map((p) => (p === "mod" ? (IS_MAC ? "Cmd" : "Ctrl") : p === "meta" ? "Cmd" : p.length === 1 ? p.toUpperCase() : p[0].toUpperCase() + p.slice(1))).join(" ");
+}
+
+document.addEventListener("keydown", (e) => {
+  if (!e.ctrlKey && !e.altKey && !e.metaKey) return;
+  const combo = comboOf(e);
+  const button = extUI().flatMap((ext) => ext.buttons.map((b) => ({ ...b, extension: ext.name }))).concat(extButtons).find((b) => shortcutMatches(b.shortcut, combo));
+  const added = !button && extCommandsAdded.find((c) => shortcutMatches(c.shortcut, combo));
+  if (!button && !added) return;
+  e.preventDefault();
+  e.stopPropagation();
+  if (button) pressExt(button, input.value.trim());
+  else added.run();
+}, true);
+
+function renderExtExtras() {
+  const boxes = $("#ext-input");
+  boxes.textContent = "";
+  for (const b of extButtonsAt("input")) {
+    const node = el("button", "icon-btn ext-input-btn", icon(ICON[b.icon] ? b.icon : "puzzle"));
+    node.type = "button";
+    node.dataset.tip = b.label + (b.shortcut ? ` (${shortcutLabel(b.shortcut)})` : "");
+    node.setAttribute("aria-label", b.label);
+    node.onclick = () => pressExt(b, input.value.trim());
+    boxes.appendChild(node);
+  }
+  const head = $("#ext-docks");
+  head.textContent = "";
+  for (const d of extDocks()) {
+    const pill = el("button", "pill ext-pill", `${icon(ICON[d.icon] ? d.icon : "puzzle")}<span>${esc(d.label)}</span>`);
+    pill.type = "button";
+    pill.dataset.dock = d.key;
+    pill.dataset.tip = `${d.label}, beside the chat`;
+    pill.onclick = () => (dockOpen === d.key ? closeDock() : openDock(d.key));
+    head.appendChild(pill);
+  }
+  // Before the page knows its extensions, a remembered dock is kept.
+  if (Array.isArray(info.extension_ui)) {
+    if (dockOpen && !$("#ext-dock").classList.contains("open")) { if (!openDock(dockOpen)) closeDock(); }
+    else if (dockOpen && !extDocks().some((d) => d.key === dockOpen)) closeDock();
+  }
+  markDocks();
+  for (const row of document.querySelectorAll("#ext-side .ext-row[data-panel]")) {
+    let badge = row.querySelector(".ext-badge");
+    const n = extBadges.get(row.dataset.panel) ?? extBadges.get(row.dataset.panel.split("/")[1]);
+    if (!badge) { badge = el("span", "ext-badge"); row.appendChild(badge); }
+    badge.textContent = n ? String(n > 99 ? "99+" : n) : "";
+  }
+  renderExtWidgets();
+}
+
+// A dialog a script asks for: what was filled in, or null when it was
+// shut.
+function extDialog({ title = "", text = "", fields = [], ok = "OK", cancel = "Cancel" } = {}) {
+  return new Promise((resolve) => {
+    let done = false;
+    const rows = (fields || []).map((f, i) => {
+      const name = esc(String(f.name || `field${i}`));
+      const label = esc(String(f.label || f.name || ""));
+      const value = esc(String(f.value ?? ""));
+      const control = f.type === "textarea" ? `<textarea name="${name}" rows="4">${value}</textarea>`
+        : f.type === "select" ? `<select name="${name}">${(f.options || []).map((o) => `<option${String(o) === String(f.value) ? " selected" : ""}>${esc(String(o))}</option>`).join("")}</select>`
+        : `<input name="${name}" type="${f.type === "number" ? "number" : f.type === "password" ? "password" : "text"}" value="${value}" placeholder="${esc(String(f.placeholder || ""))}">`;
+      return `<label class="field"><span>${label}</span>${control}</label>`;
+    }).join("");
+    const form = openForm(`<h2></h2><div class="assistant ext-said"></div>${rows}<div class="dialog-buttons"><button type="button" class="btn" data-cancel>${esc(cancel)}</button><button type="submit" class="btn primary">${esc(ok)}</button></div>`, (data) => { done = true; resolve(data); });
+    form.querySelector("h2").textContent = title;
+    if (text) form.querySelector(".ext-said").innerHTML = markdown(String(text)); else form.querySelector(".ext-said").remove();
+    form.querySelector("[data-cancel]").onclick = closeForm;
+    const watch = setInterval(() => {
+      if (!form.isConnected || $("#form").hidden || !$("#form").classList.contains("open") && getComputedStyle($("#form")).display === "none") {
+        clearInterval(watch);
+        if (!done) { done = true; resolve(null); }
+      }
+    }, 200);
+  });
+}
+
+function extStorage(space) {
+  const prefix = `flash-ext:${String(space || "page")}:`;
+  return Object.freeze({
+    get(key, fallback = null) { try { const v = localStorage.getItem(prefix + key); return v === null ? fallback : JSON.parse(v); } catch { return fallback; } },
+    set(key, value) { try { localStorage.setItem(prefix + key, JSON.stringify(value)); return true; } catch { return false; } },
+    remove(key) { try { localStorage.removeItem(prefix + key); } catch { /* fine */ } },
+    keys() { try { return Object.keys(localStorage).filter((k) => k.startsWith(prefix)).map((k) => k.slice(prefix.length)); } catch { return []; } },
+  });
+}
+
+function extNotify(title, body = "") {
+  const show = () => { try { new Notification(String(title), { body: String(body) }); return true; } catch { return false; } };
+  if (document.hidden && "Notification" in window && Notification.permission === "granted" && show()) return;
+  toast(body ? `${title}: ${body}` : String(title));
+}
+
 window.Flash = Object.freeze({
   version: () => info.version,
   on(type, fn) { if (!extListeners.has(type)) extListeners.set(type, new Set()); extListeners.get(type).add(fn); return () => extListeners.get(type).delete(fn); },
@@ -21347,9 +21680,43 @@ window.Flash = Object.freeze({
   icon: (name) => icon(ICON[name] ? name : "puzzle"),
   openPanel: (url, label = "") => openExtPanel(url, label),
   closePanel: shutExtPanel,
+  notify: extNotify,
+  storage: extStorage,
+  dialog: extDialog,
+  theme: extTheme,
+  openDock: (id) => openDock(String(id)),
+  closeDock,
+  setBadge(panel, count) { extBadges.set(String(panel), Number(count) || 0); renderExtExtras(); },
+  registerBlock(lang, render) {
+    const name = String(lang || "").toLowerCase();
+    if (!/^[a-z][a-z0-9-]{1,31}$/.test(name) || typeof render !== "function") throw new Error("registerBlock needs a language and a render(el, text) function");
+    extJsBlocks.set(name, render);
+    // Replies drawn before the script ran show it as code: drawn now.
+    for (const pre of document.querySelectorAll("#messages pre")) {
+      const head = pre.querySelector(".code-head span");
+      if (!head || head.textContent.trim().toLowerCase() !== name) continue;
+      const block = el("div", "ext-block ext-js");
+      block.dataset.lang = name;
+      block.dataset.text = pre.querySelector("code")?.textContent || "";
+      pre.replaceWith(block);
+    }
+    return () => extJsBlocks.delete(name);
+  },
+  addWidget(w) {
+    const made = { id: String(w.id || w.label || extWidgetsAdded.length), label: String(w.label || ""), height: Number(w.height) || 160, url: w.url ? String(w.url) : "", render: w.render };
+    if (!made.url && typeof made.render !== "function") throw new Error("addWidget needs a url or a render(el) function");
+    extWidgetsAdded.push(made);
+    renderExtWidgets();
+    return () => { extWidgetsAdded.splice(extWidgetsAdded.indexOf(made), 1); renderExtWidgets(); };
+  },
+  addCommand(c) {
+    const made = { label: String(c.label || "Command"), run: typeof c.run === "function" ? c.run : () => {}, shortcut: c.shortcut ? String(c.shortcut).toLowerCase().replace(/\s/g, "") : "", group: c.group ? String(c.group) : "" };
+    extCommandsAdded.push(made);
+    return () => extCommandsAdded.splice(extCommandsAdded.indexOf(made), 1);
+  },
   addButton(b) {
     const where = Array.isArray(b.where) ? b.where : [b.where || "composer"];
-    const made = { id: String(b.id || b.label), label: String(b.label || "Button"), icon: b.icon || "", where, onClick: b.onClick };
+    const made = { id: String(b.id || b.label), label: String(b.label || "Button"), icon: b.icon || "", where, onClick: b.onClick, shortcut: b.shortcut ? String(b.shortcut).toLowerCase().replace(/\s/g, "") : "" };
     extButtons.push(made);
     renderExtUI();
     return () => { extButtons.splice(extButtons.indexOf(made), 1); renderExtUI(); };
@@ -21911,6 +22278,8 @@ const highlight = (text, marks) => [...text].map((ch, i) => (marks.includes(i) ?
 function paletteItems(query) {
   const rows = [];
   for (const a of ACTIONS) rows.push({ group: "Action", label: a.label, keys: a.keys, run: a.run });
+  for (const b of extButtonsAt("palette")) rows.push({ group: b.extension || "Extension", label: b.label, keys: shortcutLabel(b.shortcut), run: () => pressExt(b, input.value.trim()) });
+  for (const c of extCommandsAdded) rows.push({ group: c.group || "Extension", label: c.label, keys: shortcutLabel(c.shortcut), run: () => c.run() });
   for (const id of visibleChats()) {
     const c = chats.get(id);
     if (id !== current) rows.push({ group: "Chat", label: c.title, run: () => switchTo(id) });

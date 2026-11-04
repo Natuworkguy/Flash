@@ -588,7 +588,17 @@ script with an API.
   "greeting": "What's the sky doing?",
   "suggestions": ["Forecast for Paris", "Will it rain today?"],
   "placeholder": "Ask about the weather",
-  "banner": "banner.txt"
+  "banner": "banner.txt",
+  "widgets": [
+    {"id": "today", "label": "Today", "file": "today.html", "height": 140}
+  ],
+  "docks": [
+    {"id": "radar", "label": "Radar", "icon": "globe", "file": "radar.html", "width": 380}
+  ],
+  "blocks": [
+    {"lang": "forecast", "file": "forecast.html", "height": 200,
+     "about": "a forecast card: JSON {\"city\": ..., \"days\": [{\"day\", \"high\", \"low\"}]}"}
+  ]
 }
 ```
 
@@ -603,13 +613,36 @@ script with an API.
 | `greeting`, `suggestions` | A new chat's greeting, and up to 8 suggestions offered under the box (and in the terminal's empty box). |
 | `placeholder` | What the empty box says, on the web and in the terminal. |
 | `banner` | A text file (up to 20 lines) shown under Flash's welcome box in the terminal. |
+| `widgets` | Up to 4 cards on a new chat's empty page, each a page (`.html` in `web`) `height` pixels tall (60 to 480, 160 by default). |
+| `docks` | Up to 3 pages that sit beside the chat, `width` pixels wide (260 to 720, 360 by default), each opened and shut from a button at the top. The one open stays open from chat to chat, and through a reload. |
+| `blocks` | Up to 8 kinds of block a reply can hold: a ```` ```lang ```` fence whose text the extension's page draws, `height` pixels tall to start (60 to 900). `about` (up to 200 characters) tells the model what the block is for and what to put in it; it goes in the system prompt. A language the page draws itself (`ui`, `mermaid`, `serif`), one people write code in, or one another extension draws is refused. |
+
+**Blocks.** The page gets the block as its window's name, JSON
+`{"lang", "text"}`, and again in a message once it loads, with the
+page's colours:
+
+```js
+const { text } = JSON.parse(window.name);
+const data = JSON.parse(text);
+// ... draw it, then say how tall it is:
+parent.postMessage({ type: "flash-height", height: document.body.scrollHeight }, location.origin);
+```
+
+A widget's page can say its height the same way.
 
 **Buttons.** Each has an `id`, a `label`, an `icon` (one of the page's
 own icon names, such as `bolt`, `sun`, `globe`, `cube`, `mail`; a
 puzzle piece otherwise), and `where` it goes: `sidebar`, `header` (by
 the chat's title), `composer` (the + menu), `message` (under each
 reply), or `terminal` (a key in the terminal's box, given as `key`: `c-`
-for Ctrl or `m-` for Alt, and a letter Flash doesn't use itself).
+for Ctrl or `m-` for Alt, and a letter Flash doesn't use itself),
+`input` (an icon beside the send button), `selection` (a chip over text
+you select in a reply, given that text), or `palette` (a row in the
+command palette).
+
+On the web any button can have a `shortcut`: modifiers and a key, such
+as `"alt+shift+w"` or `"mod+shift+k"` (`mod` is Cmd on a Mac and Ctrl
+elsewhere). One Flash uses itself is refused.
 
 A button does one of three things:
 
@@ -635,7 +668,23 @@ Flash.addButton({id: "hi", label: "Say hi", icon: "smile",
 Flash.openPanel("/ext/weather/radar.html", "Radar");
 Flash.request("pin", "on");        // any of the page's own commands
 Flash.icon("sun");                 // an icon's SVG
+Flash.notify("Done", "The export finished");  // a notification when the page is hidden, a toast otherwise
+const store = Flash.storage("weather");       // kept in this browser
+store.set("city", "Paris"); store.get("city"); store.remove("city"); store.keys();
+const answer = await Flash.dialog({title: "Which city?", text: "**Markdown** works",
+  fields: [{name: "city", label: "City", value: "Paris"},
+           {name: "units", label: "Units", type: "select", options: ["C", "F"]}]});
+// answer is {city, units}, or null if it was shut
+Flash.theme();                     // {dark, vars: {bg, surface, text, accent, border, ...}}
+Flash.registerBlock("tally", (el, text) => { el.textContent = text.split(",").length + " items"; });
+Flash.addWidget({id: "clock", label: "Clock", render: (el) => { el.textContent = new Date().toLocaleTimeString(); }});
+Flash.addCommand({label: "Open the radar", shortcut: "alt+shift+r", run: () => Flash.openDock("radar")});
+Flash.openDock("radar"); Flash.closeDock();
+Flash.setBadge("board", 3);        // a count on a panel's row in the sidebar
 ```
+
+Blocks a script registers draw the same as a manifest's, in replies
+already shown too.
 
 A script and a panel run as part of the page, with everything it can
 do, so the install preview says plainly when an extension has one.

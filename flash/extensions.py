@@ -1111,11 +1111,14 @@ def find_tool(
 def system_prompt() -> str:
     """Every extension's prompt, each under a header naming it."""
 
-    return "\n\n".join(
-        f"=== Extension: {e.name} ===\n\n{e.prompt}"
-        for e in installed()
-        if e.prompt
-    )
+    from . import ext_ui  # deferred: it imports this module
+
+    parts = [f"=== Extension: {e.name} ===\n\n{e.prompt}"
+             for e in installed() if e.prompt]
+    blocks = ext_ui.block_prompt()
+    if blocks:
+        parts.append(blocks)
+    return "\n\n".join(parts)
 
 
 def background_dirs() -> list[Path]:
@@ -1688,6 +1691,15 @@ def clashes(
             found.append(f"{tool.name} is a built-in tool")
         elif owner:
             found.append(f"tool {tool.name} belongs to {owner}")
+
+    for block in (extension.ui.blocks if extension.ui else []):
+        owner = next(
+            (e.name for e in others if e.ui is not None
+             and any(b.lang == block.lang for b in e.ui.blocks)),
+            None,
+        )
+        if owner:
+            found.append(f"```{block.lang} blocks are drawn by {owner}")
 
     for provider in extension.providers:
         owner = next(
