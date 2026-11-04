@@ -636,6 +636,7 @@ def keep_file(source: str) -> dict:
             else "model" if suffix in MODEL_TYPES
             else "midi" if suffix in MIDI_TYPES
             else "audio" if suffix in AUDIO_TYPES
+            else "video" if SHOWN_TYPES[suffix].startswith("video/")
             else "image"
         ),
     }

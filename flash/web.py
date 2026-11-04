@@ -3313,6 +3313,12 @@ def _sink(session: Session, chat: Chat):
             session.emit(chat, {"type": "chess", "id": uuid.uuid4().hex[:12],
                                 **lesson})
             return True
+        if kind == "canvas":
+            # The canvas as it is now: one card in the chat per canvas,
+            # brought up to date in place, and the panel redrawn live.
+            state = json.loads(text)
+            session.emit(chat, {"type": "canvas", **state})
+            return True
         if kind == "chess-move":
             # Flash's move in a game with the user, checked and shown.
             from . import chess
@@ -6281,7 +6287,20 @@ def _team_command(name: str, arg: str, body: dict) -> dict:
             return {"entry": teamchat.send(
                 arg, str(body.get("text") or ""), reply_to=reply_to,
                 files=attachments(body.get("files")),
+                # The call's id from team-chat-call; true for voice
+                # mode's calls of old, kept with no call entry.
+                call=str(body["call"])[:40]
+                if isinstance(body.get("call"), str)
+                else bool(body.get("call")),
+                hidden=bool(body.get("hidden")),
             )}
+        if name == "team-chat-call":
+            # A 1-to-1 call begun, or ended: its one entry in the DM.
+            if body.get("end"):
+                return {"entry": teamchat.end_call(
+                    arg, str(body.get("end"))[:40],
+                )}
+            return {"entry": teamchat.start_call(arg)}
         if name == "team-chat-retry":
             # A spark's message, answered again in its place.
             try:
