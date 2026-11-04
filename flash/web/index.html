@@ -345,6 +345,12 @@ body.empty #title { visibility: hidden; }
 @keyframes caret-blink { 50% { opacity: 0; } }
 
 #log { flex: 1; overflow-y: auto; overscroll-behavior: contain; }
+/* Phones: scroll the log on its own layer and drop background blurs, which
+   phones repaint on every scrolled frame and make scrolling stutter. */
+@media (hover: none) and (pointer: coarse) {
+  #log { -webkit-overflow-scrolling: touch; will-change: scroll-position; }
+  *, *::before, *::after { -webkit-backdrop-filter: none !important; backdrop-filter: none !important; }
+}
 .col { width: 100%; max-width: var(--chat-width, 768px); margin: 0 auto; padding: 0 24px; }
 #messages { padding-top: 8px; padding-bottom: 40px; }
 body.empty #log { display: none; }
@@ -802,6 +808,20 @@ pre code { display: block; padding: 2px 16px 14px; overflow-x: auto; font-size: 
 .chess-board { container-type: inline-size; }
 .chess-piece.white { color: #fff; -webkit-text-stroke: 1.2px #2a2a2a; text-shadow: 0 1px 2px rgba(0, 0, 0, .35); }
 .chess-piece.black { color: #1d1d1d; -webkit-text-stroke: .6px #1d1d1d; text-shadow: 0 1px 2px rgba(0, 0, 0, .25); }
+/* Carved look: ivory and ebony fills with a soft cast shadow, where the browser can clip a gradient to text. */
+@supports ((-webkit-background-clip: text) or (background-clip: text)) {
+  .chess-piece.white, .chess-piece.black { -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; text-shadow: none; filter: drop-shadow(0 2px 1.5px rgba(0, 0, 0, .4)); }
+  .chess-piece.white { background-image: linear-gradient(160deg, #ffffff 15%, #f3e6cc 55%, #cdb68e 100%); -webkit-text-stroke: 1.1px #3a2c1c; }
+  .chess-piece.black { background-image: linear-gradient(160deg, #6a6a72 0%, #2a2a30 45%, #0b0b0e 100%); -webkit-text-stroke: .7px #000; }
+  .chess-piece.lifted { filter: drop-shadow(0 8px 6px rgba(0, 0, 0, .45)); }
+  /* Gold and silver, picked in Settings. */
+  :root[data-chess-style="metal"] .chess-piece.white { background-image: linear-gradient(160deg, #fffbe6 0%, #f2cf5b 35%, #b8860b 70%, #ffe9a0 100%); -webkit-text-stroke: 1px #5c4205; }
+  :root[data-chess-style="metal"] .chess-piece.black { background-image: linear-gradient(160deg, #ffffff 0%, #c9ced6 35%, #7d848f 70%, #e6e9ee 100%); -webkit-text-stroke: 1px #2f343b; }
+}
+/* Classic, picked in Settings: the plain flat pieces. */
+:root[data-chess-style="classic"] .chess-piece.white, :root[data-chess-style="classic"] .chess-piece.black { background-image: none; -webkit-text-fill-color: currentColor; filter: none; }
+:root[data-chess-style="classic"] .chess-piece.white { color: #fff; -webkit-text-stroke: 1.2px #2a2a2a; text-shadow: 0 1px 2px rgba(0, 0, 0, .35); }
+:root[data-chess-style="classic"] .chess-piece.black { color: #1d1d1d; -webkit-text-stroke: .6px #1d1d1d; text-shadow: 0 1px 2px rgba(0, 0, 0, .25); }
 .chess-piece.taken { opacity: 0; }
 .chess-piece.lifted { transition: none; z-index: 2; font-size: min(44px, 11cqw); cursor: grabbing; }
 .chess-arrows { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
@@ -826,6 +846,14 @@ pre code { display: block; padding: 2px 16px 14px; overflow-x: auto; font-size: 
 .course { border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); padding: 16px; display: flex; flex-direction: column; gap: 14px; }
 /* A setting that only matters while the one above it is on. */
 .setting-row.compact-amount.off { opacity: 0.45; pointer-events: none; }
+.canvas-card { display: flex; flex-direction: column; gap: 10px; }
+.canvas-title { font-weight: 600; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.canvas-body { border: 1px solid var(--border); border-radius: 12px; overflow: hidden; background: #fff; }
+.canvas-body iframe { display: block; width: 100%; height: 420px; border: 0; resize: vertical; }
+.canvas-body.canvas-md { background: var(--surface); padding: 12px 16px; overflow: auto; max-height: 520px; }
+.canvas-card:fullscreen { background: var(--bg); padding: 16px; }
+.canvas-card:fullscreen .canvas-body { flex: 1; max-height: none; }
+.canvas-card:fullscreen .canvas-body iframe { height: 100%; resize: none; }
 .course-head { display: flex; align-items: center; gap: 10px; min-width: 0; flex-wrap: wrap; }
 /* Pinned to the top of the chat: takes no room, floats over the messages, shows once the card is scrolled away. */
 .course-pins { position: sticky; top: 8px; z-index: 6; height: 0; display: flex; flex-direction: column; gap: 6px; pointer-events: none; }
@@ -2633,6 +2661,15 @@ body.all-stopped .org-node, body.all-stopped .spark-card { animation: all-halt 0
 .spark-doc .name { font-size: 13.5px; font-weight: 500; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .spark-doc .meta { font-size: 12px; color: var(--text-3); }
 .spark-doc .chev svg { width: 14px; height: 14px; color: var(--text-3); }
+/* A 1-to-1 call: one entry in the DM; what was said on it, kept in the
+   log for the voice round to read out and the Call Log to show. */
+.tc-msg.in-call[hidden] { display: none; }
+.tc-event-row.tc-call { align-items: center; gap: 8px; }
+.tc-call .tc-event { margin: 10px 0 4px; }
+#call-log .dialog { width: min(520px, 100%); }
+#call-log .call-lines { max-height: min(60vh, 520px); overflow: auto; margin-top: 12px; display: flex; flex-direction: column; gap: 10px; }
+#call-log .call-lines p { margin: 0; }
+#call-log .dialog-buttons { justify-content: flex-end; margin-top: 16px; }
 .tc-event-docs { align-self: center; align-items: center; margin-top: 2px; }
 .spark-unavailable { display: flex; flex-direction: column; gap: 10px; margin: 0 0 14px; padding: 12px 14px; border-radius: 12px; border: 1px solid color-mix(in srgb, var(--del) 40%, var(--border)); background: color-mix(in srgb, var(--del) 8%, var(--surface)); }
 .spark-unavailable .why { display: flex; flex-direction: column; gap: 3px; font-size: 13px; color: var(--text-2); overflow-wrap: anywhere; }
@@ -2863,7 +2900,24 @@ body.all-stopped .org-node, body.all-stopped .spark-card { animation: all-halt 0
 .tc-wrap.full .tc-log > *, .tc-wrap.full .tc-typing, .tc-wrap.full .tc-compose > * { width: 100%; max-width: 820px; margin-left: auto; margin-right: auto; }
 .tc-wrap.full .tc-log > .tc-day, .tc-wrap.full .tc-log > .tc-event { width: auto; }
 .tc-log > *, .tc-typing, .tc-compose > * { transition: max-width 0.5s var(--apple); }
-.tc-full svg { width: 17px; height: 17px; }
+.tc-full svg, .tc-call svg { width: 17px; height: 17px; }
+/* A voice call: in a spark's DM only; a team's chat starts voice from Send. */
+.tc-wrap:not(.dm) .tc-call { display: none; }
+/* A voice call with one spark: its own screen over the DM. */
+.sc-wrap { position: fixed; inset: 0; z-index: 39; display: grid; place-items: center; }
+.sc-wrap[hidden] { display: none; }
+.sc-wrap .tc-scrim { opacity: 1; }
+.sc { position: relative; width: min(320px, calc(100vw - 32px)); display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 32px 24px 24px; border: 1px solid var(--border-strong); border-radius: 22px; background: var(--surface); box-shadow: var(--composer-shadow); animation: pop 0.2s var(--ease); }
+.sc-face { padding: 6px; border-radius: 50%; box-shadow: 0 0 0 3px color-mix(in srgb, var(--c) 45%, transparent); }
+.sc-wrap[data-state="calling"] .sc-face { animation: orb-breathe 1.5s ease-in-out infinite; }
+.sc-name { font-size: 18px; margin-top: 6px; }
+.sc-status { font-size: 13px; color: var(--text-3); font-variant-numeric: tabular-nums; }
+.sc-btns { display: flex; gap: 18px; margin-top: 14px; }
+.sc-btns .icon-btn { width: 48px; height: 48px; border-radius: 50%; border: 1px solid var(--border-strong); }
+.sc-btns .icon-btn svg { width: 20px; height: 20px; }
+.sc-mute[aria-pressed="true"], .sc-btns .voice-cam[aria-pressed="true"] { background: var(--text); color: var(--surface); }
+.sc-hang { background: #d9483b; color: #fff; border-color: transparent !important; }
+.sc-hang:hover { background: #c03a2e; }
 @media (max-width: 600px) { .tc-full { display: none; } }
 .tc-wrap { --t: var(--accent); }
 .tc-wrap.open .tc { transform: none; }
@@ -3050,6 +3104,10 @@ body.all-stopped .org-node, body.all-stopped .spark-card { animation: all-halt 0
 /* Voice mode in a team's chat: the orb takes the composer's place. */
 .tc-wrap.voice .tc-box, .tc-wrap.voice .tc-chips, .tc-wrap.voice .tc-replying, .tc-wrap.voice .tc-mention { display: none; }
 .tc-compose #voice { box-shadow: none; }
+.sc #voice { box-shadow: none; border: 0; background: transparent; width: 100%; }
+/* In a call, voice mode runs unseen: only its camera (and the preview it opens) shows. */
+.sc #voice { justify-content: center; padding: 0; animation: none; }
+.sc #voice .voice-orb, .sc #voice .voice-say, .sc #voice .voice-end { display: none; }
 .tc-msg.fresh { animation: tc-in 0.42s cubic-bezier(0.22, 1, 0.36, 1) both; }
 .tc-msg.mine.fresh { animation-name: tc-in-mine; }
 .tc-event.fresh { animation: tc-pop 0.5s var(--spring) both; }
@@ -3674,7 +3732,7 @@ body.resizing-viewer iframe { pointer-events: none; }
 #tunnel-pill.settled:not([hidden]) + #wake-pill.settled { padding-left: 0; }
 @keyframes tunnel-drop { from { opacity: 0; transform: translateY(-160%); } 60% { opacity: 1; } }
 .wake-sense-row .side, .call-silence-row .side { gap: 10px; }
-.voice-look-row select, .call-monitor-device-row select, .call-user-mic-row select, .call-greeting-row select { font: 13.5px var(--sans); color: var(--text); background: var(--bg); border: 1px solid var(--border-strong); border-radius: 9px; padding: 7px 10px; outline: 0; }
+.voice-look-row select, .chess-style-row select, .call-monitor-device-row select, .call-user-mic-row select, .call-greeting-row select { font: 13.5px var(--sans); color: var(--text); background: var(--bg); border: 1px solid var(--border-strong); border-radius: 9px; padding: 7px 10px; outline: 0; }
 .call-monitor-device-row select:disabled { opacity: .5; cursor: default; }
 .wake-sense-row input[type=range], .call-silence-row input[type=range] { width: 160px; accent-color: var(--accent); }
 .wake-sense-row output, .call-silence-row output { width: 26px; text-align: right; font-size: 13px; color: var(--text-3); font-variant-numeric: tabular-nums; }
@@ -4006,11 +4064,13 @@ body.empty #ext-head, body.on-page #ext-head { display: none; }
 <div id="present" hidden role="dialog" aria-label="Slides"></div>
 <div id="help" class="overlay" hidden><div class="dialog" role="dialog" aria-label="Keyboard shortcuts"><div class="inner" id="help-body"></div></div></div>
 <div id="phone" class="overlay" hidden><div class="dialog" role="dialog" aria-label="Open on your phone"><div class="inner" id="phone-body"></div></div></div>
+<div id="call-log" class="overlay" hidden><div class="dialog" role="dialog" aria-label="Call log"><div class="inner" id="call-log-body"></div></div></div>
 <div id="form" class="overlay" hidden><div class="dialog" role="dialog"><div class="inner" id="form-body"></div></div></div>
 <div id="tip" role="tooltip"></div>
 <div id="toast" role="status"></div>
 <div id="briefing" role="dialog" aria-modal="true" aria-label="Briefing" hidden><div class="bf-top"><span class="bf-name">Briefing</span><span class="bf-count" aria-live="polite"></span><span class="grow"></span><button type="button" class="icon-btn bf-refresh" aria-label="Refresh" data-tip="Refresh"></button><button type="button" class="icon-btn bf-close" aria-label="Close" data-tip="Close" data-keys="Esc"></button></div><div class="bf-feed" tabindex="-1"></div><div class="bf-rail" role="tablist" aria-label="Cards"></div><div class="bf-hint">j / k or ↑ ↓ to move · Esc to close</div></div>
-<div id="team-chat" class="tc-wrap" hidden><div class="tc-scrim" data-close></div><section class="tc" role="dialog" aria-modal="true" aria-labelledby="tc-name"><header class="tc-head"><span class="tc-badge"><span class="letter"></span></span><span class="tc-who"><b id="tc-name"></b><span class="tc-sub"></span></span><span class="tc-faces"></span><button type="button" class="icon-btn tc-full" aria-label="Full screen" data-tip="Full screen"></button><button type="button" class="icon-btn tc-close" data-close aria-label="Close"></button></header><div class="tc-log" aria-live="polite"></div><div class="tc-typing" hidden></div><form class="tc-compose"><div class="tc-chips"></div><div class="tc-replying" hidden><span class="words"><b></b><span></span></span><button type="button" class="icon-btn tc-unreply" aria-label="Cancel the reply" data-tip="Cancel the reply"></button></div><div class="tc-tray" hidden></div><div class="tc-box"><button type="button" class="icon-btn tc-attach" aria-label="Attach files" data-tip="Attach files"></button><textarea rows="1" placeholder="Message the team" aria-label="Message the team"></textarea><button type="submit" class="tc-send" aria-label="Send"></button></div><div class="tc-mention" role="listbox" hidden></div></form></section></div>
+<div id="spark-call" class="sc-wrap" hidden><div class="tc-scrim"></div><section class="sc" role="dialog" aria-modal="true" aria-labelledby="sc-name"><span class="sc-face"></span><b id="sc-name" class="sc-name"></b><span class="sc-status" aria-live="polite"></span><div class="sc-btns"><button type="button" class="icon-btn sc-mute" aria-pressed="false" aria-label="Mute" data-tip="Mute"></button><button type="button" class="icon-btn sc-hang" aria-label="Hang up" data-tip="Hang up"></button></div></section></div>
+<div id="team-chat" class="tc-wrap" hidden><div class="tc-scrim" data-close></div><section class="tc" role="dialog" aria-modal="true" aria-labelledby="tc-name"><header class="tc-head"><span class="tc-badge"><span class="letter"></span></span><span class="tc-who"><b id="tc-name"></b><span class="tc-sub"></span></span><span class="tc-faces"></span><button type="button" class="icon-btn tc-call" aria-label="Voice call" data-tip="Voice call"></button><button type="button" class="icon-btn tc-full" aria-label="Full screen" data-tip="Full screen"></button><button type="button" class="icon-btn tc-close" data-close aria-label="Close"></button></header><div class="tc-log" aria-live="polite"></div><div class="tc-typing" hidden></div><form class="tc-compose"><div class="tc-chips"></div><div class="tc-replying" hidden><span class="words"><b></b><span></span></span><button type="button" class="icon-btn tc-unreply" aria-label="Cancel the reply" data-tip="Cancel the reply"></button></div><div class="tc-tray" hidden></div><div class="tc-box"><button type="button" class="icon-btn tc-attach" aria-label="Attach files" data-tip="Attach files"></button><textarea rows="1" placeholder="Message the team" aria-label="Message the team"></textarea><button type="submit" class="tc-send" aria-label="Send"></button></div><div class="tc-mention" role="listbox" hidden></div></form></section></div>
 
 <script src="/static/katex/katex.min.js" id="katex" async></script>
 <script>
@@ -4333,6 +4393,7 @@ window.addEventListener("popstate", () => {
 
 function pref(key, fallback) { try { return localStorage.getItem("flash-" + key) ?? fallback; } catch (_) { return fallback; } }
 function savePref(key, value) { try { localStorage.setItem("flash-" + key, value); } catch (_) { /* per viewer only */ } }
+document.documentElement.dataset.chessStyle = pref("chess-style", "carved");
 
 // ---------------------------------------------------------------------------
 // Markdown. Everything is escaped first, so a reply cannot put a script
@@ -5786,7 +5847,15 @@ function browserArrived(entry) {
 let viewing = null;
 let lastViewed = null;
 
+// A file's kind, mended by its name: playthroughs kept before videos had
+// a kind of their own were stored as "image", and showed a broken picture.
+function mendKind(entry) {
+  if (entry && /\.(webm|mp4)$/i.test(entry.name || entry.path || "") && (entry.kind === "image" || entry.kind === "file")) entry.kind = "video";
+  return entry;
+}
+
 function openViewer(entry) {
+  mendKind(entry);
   if (entry.kind === "browser") { openBrowser(entry.run, entry.at); return; }
   const viewer = $("#viewer");
   const already = viewer.classList.contains("open");
@@ -8066,6 +8135,7 @@ function sentFiles(files) {
   const images = files.filter((f) => f.kind === "image").length;
   const box = el("div", "user-files" + (images > 1 ? " many" : ""));
   for (const f of files) {
+    mendKind(f);
     if (f.kind === "audio") { box.appendChild(audioPlayer(f)); continue; }
     if (f.kind === "video") {
       const clip = box.appendChild(el("div", "clip", `<video controls preload="metadata" playsinline></video><span class="tag"></span>`));
@@ -8222,10 +8292,17 @@ function drawEntry(entry, ctx) {
       break;
     }
     case "tool": ctx.tool = toolCard(entry.label); messagesEl.appendChild(ctx.tool); break;
-    case "file": messagesEl.appendChild(entry.kind === "image" ? inlineImage(entry) : entry.kind === "audio" ? audioPlayer(entry) : attachment(entry)); break;
+    case "file": mendKind(entry); messagesEl.appendChild(entry.kind === "image" ? inlineImage(entry) : entry.kind === "audio" ? audioPlayer(entry) : attachment(entry)); break;
     case "browser": drawBrowserFrame(entry); break;
     case "seen": seenImages(ctx.tool, entry.images || []); break;
     case "chess": { const card = messagesEl.appendChild(chessCard(entry)); chessTakeOver(card); break; }
+    case "canvas": {
+      // One card per canvas: an update redraws it where it already is.
+      const card = canvasCard(entry);
+      const live = messagesEl.querySelector(`.canvas-card[data-canvas="${CSS.escape(entry.id || "")}"]`);
+      if (live) live.replaceWith(card); else messagesEl.appendChild(card);
+      break;
+    }
     case "guide": messagesEl.appendChild(guideCard(entry)); break;
     case "course": messagesEl.querySelector(`.course[data-course="${CSS.escape(entry.subject)}"]`)?.remove(); messagesEl.appendChild(courseCard(entry)); break;
     case "debate": {
@@ -9275,6 +9352,17 @@ function drawGeneral(body) {
   };
   body.appendChild(lookRow);
 
+  // How chess pieces look, in this browser.
+  const chessRow = el("div", "setting-row static chess-style-row", `<span class="what"><b>Chess pieces</b><span>How the pieces look when you play chess with Flash.</span></span><span class="side"><select aria-label="Chess pieces"><option value="carved">Carved</option><option value="metal">Gold and silver</option><option value="classic">Classic</option></select></span>`);
+  const chessPick = chessRow.querySelector("select");
+  chessPick.value = pref("chess-style", "carved");
+  chessPick.onchange = () => {
+    savePref("chess-style", chessPick.value);
+    document.documentElement.dataset.chessStyle = chessPick.value;
+    toast(`Chess pieces are ${chessPick.selectedOptions[0].textContent.toLowerCase()} now`);
+  };
+  body.appendChild(chessRow);
+
   // Tidying all Flash writes: em dashes (on by default) and emojis (off by default).
   for (const [which, title, about, onToast, offToast] of [
     ["dashes", "Remove em dashes", "Flash leaves em dashes out of everything it writes: replies, spark reports, documents, emails, messages and every tool call. Code is kept as written.", "Flash leaves out em dashes now", "Flash can use em dashes again"],
@@ -9967,9 +10055,7 @@ function renderRoster() {
     if (sp.unread && kind !== "waiting") row.appendChild(el("span", "dot"));
     row.dataset.tip = `${sp.name}${sp.title ? ` · ${sp.title}` : ""} · ${face.dataset.presence}`;
     row.onclick = () => {
-      const latest = [...chats.values()].filter((c) => c.spark === sp.id && (c.log.length || c.busy || c.queued || c.title !== "New chat")).sort(byRecent)[0];
-      if (latest) switchTo(latest.id); else startSparkChat(sp.id);
-      if (innerWidth <= 800) closeSide();
+      startSparkChat(sp.id);
     };
     return row;
   });
@@ -10107,6 +10193,9 @@ async function drawSparks(body, again = false) {
   let r;
   try { r = await command("sparks"); } catch (error) { showFailure(error); return; }
   if (!body.isConnected) return;
+  // A refresh redraws the page: keep the user's place, not a jump.
+  const kept = again ? logEl.scrollTop : null;
+  if (kept !== null) requestAnimationFrame(() => { if (view === "sparks") logEl.scrollTop = kept; });
   body.innerHTML = `<div class="mem-head"><p class="sub">Agents that keep working on one goal, on a schedule, for as long as Flash is running, and report back. Tell one what to do differently and it remembers.</p></div><div class="host"></div><div class="mem-path"></div>`;
   if (again) body.style.animation = "none";
   const buttons = el("div", "buttons");
@@ -10256,7 +10345,14 @@ function tcLeadCount() {
   return members.filter((s) => !members.some((m) => m.id === s.reports_to)).length;
 }
 
+// A DM, the user's private chat with one spark, is a room like a team's,
+// keyed "dm-" and the spark's id: teamchat.py serves both.
+const tcDmId = (sparkId) => `dm-${sparkId}`;
+const tcDmSpark = (id) => (id && id.startsWith("dm-") ? id.slice(3) : "");
+
 function tcMembers() {
+  const dm = tcDmSpark(teamChat.id);
+  if (dm) return [...teamChat.sparks.values()].filter((s) => s.id === dm);
   return [...teamChat.sparks.values()].filter((s) => teamChat.team && s.team === teamChat.team.id);
 }
 
@@ -10281,6 +10377,11 @@ async function openTeamChat(teamId) {
   log.textContent = "";
   log.appendChild(el("div", "tc-loading", "Gathering the team…"));
   wrap.querySelector(".tc-close").innerHTML = icon("x");
+  // A voice call with the spark: voice mode, its words sent to this DM
+  // and the spark's answers read out.
+  const call = wrap.querySelector(".tc-call");
+  call.innerHTML = icon("mic");
+  call.onclick = () => { if (!canRecord) toast("Voice calls need this page opened on this computer, or over HTTPS"); else if (!voice.on) startSparkCall(); };
   tcFullScreen(tcFullScreen.saved());
   wrap.hidden = false;
   requestAnimationFrame(() => wrap.classList.add("open"));
@@ -10338,9 +10439,12 @@ async function tcRefreshTeam() {
   try { r = await command("sparks", "", null); } catch (error) { showFailure(error); return; }
   if (!teamChat.id) return;
   teamChat.sparks = new Map(r.sparks.map((s) => [s.id, s]));
-  teamChat.team = r.teams.find((t) => t.id === teamChat.id) || null;
-  if (!teamChat.team) { toast("That team is gone"); closeTeamChat(); return; }
+  const dm = tcDmSpark(teamChat.id) ? teamChat.sparks.get(tcDmSpark(teamChat.id)) : null;
+  teamChat.team = dm ? { id: teamChat.id, name: dm.name, colour: dm.colour, dm: true } : r.teams.find((t) => t.id === teamChat.id) || null;
+  if (!teamChat.team) { toast(tcDmSpark(teamChat.id) ? "That spark is gone" : "That team is gone"); closeTeamChat(); return; }
   const wrap = $("#team-chat");
+  wrap.classList.toggle("dm", !!dm);
+  if (dm) { tcDrawDm(wrap, dm); return; }
   const team = teamChat.team;
   wrap.style.setProperty("--t", team.colour);
   wrap.querySelector(".tc-badge .letter").textContent = (team.name.match(/\p{L}|\p{N}/u) || ["?"])[0].toUpperCase();
@@ -10383,6 +10487,22 @@ async function tcRefreshTeam() {
     ? `Message ${team.name}${leads.length ? `: ${leadNames} answer${leads.length === 1 ? "s" : ""}, or @mention a spark` : ""}`
     : `Put a spark on ${team.name} to talk to it`;
   area.disabled = !members.length;
+  area.setAttribute("aria-label", "Message the team");
+}
+
+// The sheet as a DM: the spark's face, name and what it does, no chips
+// to @mention anyone, and every message for it.
+function tcDrawDm(wrap, sp) {
+  wrap.style.setProperty("--t", sp.colour);
+  wrap.querySelector(".tc-badge .letter").textContent = (sp.name.match(/\p{L}|\p{N}/u) || ["?"])[0].toUpperCase();
+  wrap.querySelector("#tc-name").textContent = sp.name;
+  wrap.querySelector(".tc-sub").textContent = `${sp.title || sp.handle} · ${sparkState(sp)}`;
+  wrap.querySelector(".tc-faces").textContent = "";
+  wrap.querySelector(".tc-chips").textContent = "";
+  const area = wrap.querySelector("textarea");
+  area.placeholder = `Message ${sp.name}`;
+  area.setAttribute("aria-label", area.placeholder);
+  area.disabled = false;
 }
 
 async function tcFetch(first = false) {
@@ -10418,7 +10538,9 @@ async function tcFetch(first = false) {
   }
   if (first) teamChat.atEnd = true;
   const near = teamChat.atEnd !== false;
-  if (first && !r.entries.length) {
+  if (first && !r.entries.length && teamChat.team.dm) {
+    log.appendChild(el("div", "tc-empty", `<b>This is the start of your chat with ${esc(teamChat.team.name)}.</b><span>Only you and ${esc(teamChat.team.name)} see it, and it reads the latest of it on its shifts.</span>`));
+  } else if (first && !r.entries.length) {
     log.appendChild(el("div", "tc-empty", `<b>This is the start of ${esc(teamChat.team.name)}'s chat.</b><span>Say hello. ${tcLeadCount() > 1 ? "The leads answer" : "The lead answers"}, or @mention a spark to hear from it. Reports and news from the team land here too, and every spark reads the latest of it on its shifts.</span>`));
   } else if (r.entries.length) {
     log.querySelector(".tc-empty")?.remove();
@@ -10428,6 +10550,10 @@ async function tcFetch(first = false) {
   // One a retry replaced leaves the chat.
   (r.changed || []).forEach((entry) => {
     if (entry.retried) { tcRemove(entry.id); return; }
+    if (entry.kind === "call") {
+      log.querySelector(`.tc-call[data-id="${CSS.escape(String(entry.id))}"]`)?.replaceWith(tcCallRow(entry, false));
+      return;
+    }
     const row = log.querySelector(`.tc-msg[data-id="${CSS.escape(String(entry.id))}"]`);
     if (row && entry.edited) tcFillEdited(row, entry);
     const box = log.querySelector(`.tc-reacts[data-for="${CSS.escape(String(entry.id))}"]`);
@@ -10476,6 +10602,19 @@ function teamChatChanged(teamId, sparksToo = false) {
 }
 
 function tcEntry(entry, fresh) {
+  // Said on a call: drawn but never shown, so the call reads it out and
+  // its Call Log can list it; the chat runs on as if it was not there.
+  if (entry.call && entry.kind !== "call") {
+    const day = teamChat.drawnDay, who = teamChat.lastWho;
+    teamChat.drawnDay = tcDay(entry.at);
+    teamChat.lastWho = "";
+    const frag = tcEntry({ ...entry, call: "" }, false);
+    teamChat.drawnDay = day;
+    teamChat.lastWho = who;
+    const row = frag.querySelector(".tc-msg");
+    if (row) { row.hidden = true; row.classList.add("in-call"); row.dataset.call = entry.call; }
+    return frag;
+  }
   const day = tcDay(entry.at);
   const frag = document.createDocumentFragment();
   if (day !== teamChat.drawnDay) {
@@ -10483,6 +10622,7 @@ function tcEntry(entry, fresh) {
     teamChat.lastWho = "";
     frag.appendChild(el("div", "tc-day", `<span>${esc(day)}</span>`));
   }
+  if (entry.kind === "call") { teamChat.lastWho = ""; frag.appendChild(tcCallRow(entry, fresh)); return frag; }
   const spark = entry.spark ? tcSpark(entry.spark) : null;
   if (entry.kind === "event") {
     teamChat.lastWho = "";
@@ -10581,9 +10721,57 @@ function tcEntry(entry, fresh) {
   row.appendChild(col);
   row.dataset.id = entry.id;
   row.dataset.who = who;
+  if (entry.end_call) row.dataset.endCall = "1";
   frag.appendChild(row);
   return frag;
 }
+
+// A call's one entry in the DM, as Discord shows one: started, how long
+// it lasted once over, and its Call Log.
+function tcCallRow(entry, fresh) {
+  const line = el("div", "tc-event-row tc-call");
+  line.dataset.id = entry.id;
+  line.dataset.call = entry.call;
+  const live = !entry.ended && sparkCall.on && sparkCall.id === entry.call;
+  let what = "Started a call";
+  if (entry.ended) {
+    const minutes = Math.max(1, Math.round((entry.ended - entry.at) / 60));
+    what += ` that lasted ${minutes} minute${minutes === 1 ? "" : "s"}`;
+  } else if (live) what += " · ongoing";
+  const row = el("button", `tc-event call${fresh ? " fresh" : ""}`);
+  row.type = "button";
+  const words = el("span", "words");
+  words.innerHTML = `<b>You</b> ${esc(what)}<span class="when"> · ${esc(tcClock(entry.at))}</span>`;
+  row.appendChild(words);
+  row.onclick = () => openCallLog(entry.call);
+  const logBtn = el("button", "btn small", "Call Log");
+  logBtn.type = "button";
+  logBtn.onclick = () => openCallLog(entry.call);
+  line.append(row, logBtn);
+  return line;
+}
+function openCallLog(id) {
+  const body = $("#call-log-body");
+  body.innerHTML = `<h2>Call Log</h2><div class="call-lines"></div><div class="dialog-buttons"></div>`;
+  const lines = body.querySelector(".call-lines");
+  const said = [...document.querySelectorAll(`#team-chat .tc-msg.in-call[data-call="${CSS.escape(String(id))}"]`)];
+  said.forEach((row) => {
+    const p = el("p", "sub");
+    const mine = row.classList.contains("mine");
+    p.innerHTML = `<b></b>: <span></span>`;
+    p.querySelector("b").textContent = mine ? "You" : tcSpark(row.dataset.who)?.name || "A spark";
+    p.querySelector("span").textContent = row.querySelector(".tc-bubble")?.textContent.trim() || "";
+    lines.appendChild(p);
+  });
+  if (!said.length) lines.appendChild(el("p", "sub", "Nothing was said on this call."));
+  const close = el("button", "btn primary", "Close");
+  close.type = "button";
+  close.onclick = closeCallLog;
+  body.querySelector(".dialog-buttons").appendChild(close);
+  showOverlay($("#call-log"));
+}
+function closeCallLog() { hideOverlay($("#call-log")); }
+$("#call-log").addEventListener("mousedown", (e) => { if (e.target.id === "call-log") closeCallLog(); });
 
 // Every version of an edited message, oldest first, the one it says now
 // last: stepped through in its bubble, the latest shown to begin with.
@@ -12171,7 +12359,7 @@ function fillSpark(box, spark, again = false) {
     return b;
   };
   const working = spark.status === "working";
-  act("Chat", async () => startSparkChat(spark.id), "btn small primary");
+  act("Chat", async () => { closeForm(); startSparkChat(spark.id); }, "btn small primary");
   if (working || spark.waiting) {
     act(working ? "Stop" : "Call off", async () => { await command("spark-stop", spark.id, null); toast(working ? `${spark.name} stops at its next step` : `${spark.name} called off that shift`); });
   } else if (!spark.unavailable) {
@@ -15603,7 +15791,7 @@ function setVoice(state, hint) {
   voice.state = state;
   const panel = $("#voice");
   panel.dataset.state = state;
-  const words = voice.team && state === "thinking" ? ["The team is answering", "Each answer is read out, with who said it."] : {
+  const words = voice.team && state === "thinking" ? (teamChat.team && teamChat.team.dm ? [`${teamChat.team.name} is answering`, "Its answer is read out."] : ["The team is answering", "Each answer is read out, with who said it."]) : {
     setup: ["Getting voice ready", "Downloading the voice models, once."],
     listening: ["Listening", "Speak, then pause. Say “stop voice” to finish."],
     hearing: ["Catching that", ""],
@@ -15653,8 +15841,17 @@ async function startVoice(team = null, how = "button") {
   if (team) {
     const panel = $("#voice");
     voice.home = voice.home || { parent: panel.parentElement, next: panel.nextSibling };
-    $("#team-chat .tc-compose").prepend(panel);
-    $("#team-chat").classList.add("voice");
+    // On a call with a spark, the orb lives in the call screen and the
+    // DM's own box stays as it was.
+    // Its camera button joins the call's row, right of hang-up, like mute.
+    if (sparkCall.on) {
+      $("#spark-call .sc-btns").before(panel);
+      $("#spark-call .sc-btns").append(voiceCam);
+    }
+    else {
+      $("#team-chat .tc-compose").prepend(panel);
+      $("#team-chat").classList.add("voice");
+    }
   }
   $("#voice").hidden = false;
   if (!status.ready) {
@@ -15695,6 +15892,7 @@ async function startVoice(team = null, how = "button") {
 
 function endVoice() {
   musicDuck(false);
+  endSparkCall();
   if (!voice.on) return;
   voiceTell("end");
   setTimeout(startWake, 800);
@@ -15721,6 +15919,7 @@ function endVoice() {
     // The orb goes back under the chat, for the next time.
     const panel = $("#voice");
     voice.home.parent.insertBefore(panel, voice.home.next);
+    panel.querySelector(".voice-end").before(voiceCam);
     $("#team-chat").classList.remove("voice");
     if (teamChat.id) $("#team-chat textarea").focus();
     return;
@@ -15858,6 +16057,15 @@ async function pausedUntilResume() {
 }
 
 async function voiceLoop() {
+  // A spark picks up by itself: a call opens with a hello it answers,
+  // before the user says anything.
+  if (sparkCall.on && voice.team && !sparkCall.greeted) {
+    sparkCall.greeted = true;
+    setVoice("thinking");
+    const how = await tcVoiceRound("(Voice call) Hi! You've picked up my call; greet me briefly.", true);
+    if (how === "exit") { endVoice(); return; }
+    if (how === "pause" && !(await pausedUntilResume())) return;
+  }
   while (voice.on) {
     setVoice("listening");
     const pcm = await listenOnce({ live: true });
@@ -15956,10 +16164,166 @@ async function sendAndWait(text) {
 // One round of voice mode in a team's chat: TEXT is sent as the user's
 // message, and the sparks' answers are read out as they finish, each
 // spark named before its first. Resolves to how the reading ended.
-async function tcVoiceRound(text) {
+// A voice call with the spark of a DM: voice mode underneath, with a call
+// screen over it that rings until the spark's first answer comes in.
+const sparkCall = { id: "", team: "", ready: null, on: false, ring: null, timer: 0, since: 0, fillers: null, rounds: 0, fillerUsed: false, fillerLast: -1, fillerSource: null }; // FILLERS: the last five fields
+function startSparkCall() {
+  const spark = teamChat.sparks.get(tcDmSpark(teamChat.id));
+  if (!spark) return;
+  const wrap = $("#spark-call");
+  const face = wrap.querySelector(".sc-face");
+  face.textContent = "";
+  face.style.setProperty("--c", spark.colour);
+  face.appendChild(sparkAvatar(spark, 96));
+  wrap.querySelector(".sc-name").textContent = spark.name;
+  wrap.querySelector(".sc-status").textContent = "Calling…";
+  const mute = wrap.querySelector(".sc-mute");
+  mute.innerHTML = icon("mic");
+  mute.setAttribute("aria-pressed", "false");
+  mute.onclick = () => {
+    const off = mute.getAttribute("aria-pressed") !== "true";
+    mute.setAttribute("aria-pressed", String(off));
+    mute.setAttribute("aria-label", off ? "Unmute" : "Mute");
+    mute.dataset.tip = off ? "Unmute" : "Mute";
+    if (voice.stream) voice.stream.getTracks().forEach((t) => { t.enabled = !off; });
+    if (off) sparkFillerStop(); // FILLERS hook
+  };
+  wrap.querySelector(".sc-hang").innerHTML = icon("x");
+  wrap.querySelector(".sc-hang").onclick = () => { endSparkCall(); endVoice(); };
+  wrap.dataset.state = "calling";
+  wrap.hidden = false;
+  sparkCall.on = true;
+  sparkCall.greeted = false;
+  // The call's one entry in the DM; what is said on it carries its id.
+  sparkCall.id = "";
+  sparkCall.team = teamChat.id;
+  sparkCall.ready = command("team-chat-call", teamChat.id, null, {})
+    .then((r) => { sparkCall.id = r.entry.call; tcFetch(); return sparkCall.id; })
+    .catch((error) => { showFailure(error); return ""; });
+  sparkCall.rounds = 0; // FILLERS hook
+  sparkCallRing(true);
+  startVoice(teamChat.id).then(() => { if (!voice.on) endSparkCall(); else sparkFillersPrepare(); /* FILLERS hook */ });
+}
+// The ring, made here: two tones together, two seconds on and four off.
+function sparkCallRing(on) {
+  if (sparkCall.ring) { sparkCall.ring.close().catch(() => {}); sparkCall.ring = null; }
+  if (!on) return;
+  const ctx = new (window.AudioContext || window.webkitAudioContext)();
+  const gain = ctx.createGain();
+  gain.gain.value = 0;
+  gain.connect(ctx.destination);
+  for (const hz of [440, 480]) {
+    const osc = ctx.createOscillator();
+    osc.frequency.value = hz;
+    osc.connect(gain);
+    osc.start();
+  }
+  const t0 = ctx.currentTime + 0.1;
+  for (let i = 0; i < 30; i++) {
+    const at = t0 + i * 6;
+    gain.gain.setValueAtTime(0, at);
+    gain.gain.linearRampToValueAtTime(0.08, at + 0.05);
+    gain.gain.setValueAtTime(0.08, at + 1.95);
+    gain.gain.linearRampToValueAtTime(0, at + 2);
+  }
+  sparkCall.ring = ctx;
+}
+function sparkCallConnected() {
+  if (!sparkCall.on || sparkCall.since) return;
+  sparkCallRing(false);
+  sparkCall.since = Date.now();
+  const wrap = $("#spark-call");
+  wrap.dataset.state = "connected";
+  const status = wrap.querySelector(".sc-status");
+  const tick = () => {
+    const s = Math.floor((Date.now() - sparkCall.since) / 1000);
+    status.textContent = `Connected · ${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+  };
+  tick();
+  sparkCall.timer = setInterval(tick, 1000);
+}
+function endSparkCall() {
+  if (!sparkCall.on) return;
+  sparkCall.on = false;
+  sparkCallRing(false);
+  clearInterval(sparkCall.timer);
+  sparkCall.since = 0;
+  const ending = sparkCall.ready, team = sparkCall.team;
+  sparkCall.ready = null;
+  if (ending) ending.then((id) => { if (id) command("team-chat-call", team, null, { end: id }).then(() => { if (teamChat.id === team) tcFetch(); }).catch(() => {}); });
+  sparkFillerStop(); sparkCall.fillers = null; sparkCall.rounds = 0; // FILLERS hook
+  $("#spark-call").hidden = true;
+  sparkCallChime();
+}
+// The hang-up, made here like the ring: three short falling tones.
+function sparkCallChime() {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const t0 = ctx.currentTime + 0.05;
+    [660, 520, 400].forEach((hz, i) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.frequency.value = hz;
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      const at = t0 + i * 0.16;
+      gain.gain.setValueAtTime(0, at);
+      gain.gain.linearRampToValueAtTime(0.09, at + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.001, at + 0.15);
+      osc.start(at);
+      osc.stop(at + 0.16);
+    });
+    setTimeout(() => ctx.close().catch(() => {}), 1000);
+  } catch (_) { /* no sound to make */ }
+}
+
+// FILLERS start: short "thinking" sounds in a 1-to-1 spark call, made
+// once when the call starts and played while a reply or its speech loads.
+// Kept apart to be easy to take out: this block plus the lines marked
+// "FILLERS hook" (and the extra sparkCall fields).
+const SPARK_FILLERS = ["Hmm…", "Let me think…", "One sec…", "Okay…"];
+async function sparkFillersPrepare() {
+  const made = [];
+  sparkCall.fillers = made;
+  for (const text of SPARK_FILLERS) {
+    try { const audio = await makeSpeech(text); if (sparkCall.fillers === made) made.push(audio); } catch { /* skip this one */ }
+  }
+}
+// A new wait: one filler at most, and none in the greeting (first) round.
+function sparkFillerReset() {
+  sparkCall.rounds = (sparkCall.rounds || 0) + 1;
+  sparkCall.fillerUsed = false;
+}
+function sparkFillerPlay() {
+  const list = sparkCall.fillers;
+  if (!sparkCall.on || sparkCall.rounds < 2 || sparkCall.fillerUsed || !list || !list.length || !voice.ctx) return;
+  const mute = $("#spark-call .sc-mute");
+  if (mute && mute.getAttribute("aria-pressed") === "true") return;
+  sparkCall.fillerUsed = true;
+  let pick = Math.floor(Math.random() * list.length);
+  if (list.length > 1 && pick === sparkCall.fillerLast) pick = (pick + 1 + Math.floor(Math.random() * (list.length - 1))) % list.length;
+  sparkCall.fillerLast = pick;
+  try {
+    const source = voice.ctx.createBufferSource();
+    source.buffer = list[pick];
+    source.connect(voice.analyser || voice.ctx.destination);
+    source.onended = () => { if (sparkCall.fillerSource === source) sparkCall.fillerSource = null; };
+    sparkCall.fillerSource = source;
+    source.start();
+  } catch { sparkCall.fillerSource = null; }
+}
+function sparkFillerStop() {
+  const source = sparkCall.fillerSource;
+  sparkCall.fillerSource = null;
+  if (source) try { source.stop(); } catch { /* already over */ }
+}
+// FILLERS end
+async function tcVoiceRound(text, hidden = false) {
   const team = voice.team;
+  sparkFillerReset(); // FILLERS hook
   let mine;
-  try { mine = (await command("team-chat-say", team, null, { text, reply_to: teamChat.replyTo ? teamChat.replyTo.id : 0 })).entry; }
+  const call = sparkCall.on ? (await sparkCall.ready) || true : false;
+  try { mine = (await command("team-chat-say", team, null, { text, reply_to: teamChat.replyTo ? teamChat.replyTo.id : 0, call, hidden })).entry; }
   catch (error) { showFailure(error); return "done"; }
   tcCancelReply();
   tcFetch();
@@ -15973,14 +16337,19 @@ async function tcVoiceRound(text) {
     await new Promise((r) => setTimeout(r, 300));
     if (!voice.on || voice.team !== team || teamChat.id !== team) return "exit";
     const waiting = [...log.querySelectorAll(".tc-msg.theirs")].filter((row) => Number(row.dataset.id) > mine.id && !read.has(row.dataset.id));
+    if (!waiting.length) sparkFillerPlay(); // FILLERS hook
     if (waiting.length) {
+      sparkCallConnected();
       for (const row of waiting) {
         read.add(row.dataset.id);
         const who = row.dataset.who || "";
         const name = tcSpark(who)?.name || "A spark";
-        const how = await readAloud(row.querySelector(".tc-bubble"), who !== last ? `${name} says:` : "");
+        const how = await readAloud(row.querySelector(".tc-bubble"), who !== last && !sparkCall.on ? `${name} says:` : "");
         last = who;
         if (how !== "done") return how;
+        // The spark ended the call with its end_call tool: hung up once
+        // its goodbye has been read.
+        if (sparkCall.on && row.dataset.endCall) { endVoice(); return "hangup"; }
       }
       setVoice("thinking");
       quiet = Date.now();
@@ -15996,7 +16365,7 @@ async function tcVoiceRound(text) {
     // The round is over once no one has typed for a moment; one in which
     // every spark stayed quiet is told so, rather than waited out.
     if (read.size && Date.now() - quiet > 2500) return "done";
-    if (!read.size && ((typed && Date.now() - quiet > 3000) || Date.now() - started > 30000)) {
+    if (!read.size && ((typed && Date.now() - quiet > 3000) || Date.now() - started > (sparkCall.on ? 120000 : 30000))) {
       await sayLine("No one answered.");
       return voice.on ? "done" : "exit";
     }
@@ -16077,6 +16446,8 @@ function markSpoken(range) {
   CSS.highlights.set("speaking", new Highlight(range));
   // In the chat's log, or a team chat's, whichever it is in.
   const holder = range.startContainer.parentElement?.closest(".tc-log") || logEl;
+  // A call's lines are read out but never shown: nothing to scroll to.
+  if (!range.getClientRects().length) return;
   const r = range.getBoundingClientRect();
   const box = holder.getBoundingClientRect();
   if (r.top < box.top + 64 || r.bottom > box.bottom - 24) {
@@ -16303,7 +16674,9 @@ async function readAloud(node, lead = "") {
   try {
     for (let i = 0; i < parts.length; i++) {
       let audio;
+      if (i === 0) sparkFillerPlay(); // FILLERS hook
       try { audio = await next; } catch (error) { if (voice.on) toast(error.message); return "done"; }
+      if (i === 0) sparkFillerStop(); // FILLERS hook
       if (i + 1 < parts.length) next = makeSpeech(parts[i + 1].text);
       if (!voice.on) return "exit";
       if (voice.cut) return voice.cut;
@@ -16371,7 +16744,7 @@ function camWanted(side) {
 
 async function toggleCam() {
   const view = $("#voice .voice-view");
-  const button = $("#voice .voice-cam");
+  const button = voiceCam;
   if (voice.cam) {
     stopCam();
     return;
@@ -16445,7 +16818,7 @@ function stopCam() {
   const view = $("#voice .voice-view");
   view.srcObject = null;
   view.hidden = true;
-  const button = $("#voice .voice-cam");
+  const button = voiceCam;
   button.setAttribute("aria-pressed", "false");
   button.dataset.tip = "Show Flash something";
   $("#voice .voice-flip").hidden = true;
@@ -16550,8 +16923,10 @@ function hideGuide() {
   box.textContent = "";
 }
 
-$("#voice .voice-cam").innerHTML = icon("camera");
-$("#voice .voice-cam").onclick = toggleCam;
+// The camera button: under voice mode, or in a call's row right of hang-up.
+const voiceCam = $("#voice .voice-cam");
+voiceCam.innerHTML = icon("camera");
+voiceCam.onclick = toggleCam;
 $("#voice .voice-flip").innerHTML = icon("cameraFlip");
 $("#voice .voice-flip").onclick = flipCam;
 
@@ -16756,6 +17131,9 @@ window.addEventListener("keydown", armWake, { once: true, capture: true });
 
 function toBottom(force, smooth) {
   if (!force && !follow) return;
+  // Background news only pulls the chat down; another page (Sparks,
+  // Settings...) shares this scroller and keeps where the user is.
+  if (!force && view !== "chat") return;
   follow = true;
   logEl.scrollTo({ top: logEl.scrollHeight, behavior: smooth && !calm.matches ? "smooth" : "auto" });
   $("#jump").hidden = true;
@@ -18429,6 +18807,32 @@ const COURSE_STARTER = {
 };
 const COURSE_LANG = { c: "C", cpp: "C++", python: "Python", javascript: "JavaScript", rust: "Rust", go: "Go", java: "Java", shell: "Shell" };
 
+function canvasCard(entry) {
+  // The agent's canvas: HTML or SVG in a sandboxed frame (its scripts run,
+  // but it cannot reach Flash), Markdown drawn like a reply.
+  const card = el("div", "block canvas-card", `<div class="course-head"><span class="course-chip">${icon("image")}<span>Canvas</span></span><span class="canvas-title"></span><button type="button" class="icon-btn canvas-full" data-tip="Full screen" aria-label="Full screen">${icon("expand")}</button></div><div class="canvas-body"></div>`);
+  card.dataset.canvas = entry.id || "";
+  card.querySelector(".canvas-title").textContent = entry.title || "Canvas";
+  const body = card.querySelector(".canvas-body");
+  if (entry.format === "markdown") {
+    body.classList.add("canvas-md");
+    body.innerHTML = markdown(entry.content || "");
+  } else {
+    const frame = document.createElement("iframe");
+    frame.setAttribute("sandbox", "allow-scripts");
+    frame.title = entry.title || "Canvas";
+    frame.srcdoc = entry.format === "svg"
+      ? `<!doctype html><meta charset="utf-8"><style>html,body{margin:0;height:100%;display:grid;place-items:center}svg{max-width:100%;max-height:100%}</style>${entry.content || ""}`
+      : entry.content || "";
+    body.appendChild(frame);
+  }
+  card.querySelector(".canvas-full").onclick = () => {
+    if (document.fullscreenElement === card) document.exitFullscreen().catch(() => {});
+    else card.requestFullscreen?.().catch(() => {});
+  };
+  return card;
+}
+
 function courseCard(entry) {
   const card = el("div", "block course", `<div class="course-head"><span class="course-chip">${icon("book")}<span>Course</span></span><span class="course-name"></span><span class="course-stats"><span class="streak" data-tip="Days in a row">${icon("flame")}<b>0</b></span><span class="xp" data-tip="Points">${icon("bolt")}<b>0</b> XP</span><span class="count"></span></span><button type="button" class="icon-btn course-full" data-tip="Full screen" aria-label="Full screen">${icon("expand")}</button></div><div class="course-bar"><i></i></div><div class="course-path"></div><div class="course-step"></div>`);
   card.dataset.course = entry.subject;
@@ -19743,22 +20147,13 @@ async function newChat() {
   if (innerWidth <= 800) closeSide();
 }
 
-// A new chat with a spark, on the main screen: from its window on the
-// Sparks page, or from + in the box. Like any new chat, it is made when
-// the first message is sent.
+// A chat with a spark: its private DM, a sheet that slides out at the
+// side as a team's chat does, over whatever is open. From its window on
+// the Sparks page, the roster, or + in the box.
 function startSparkChat(id) {
-  closeExtPanel();
-  if (isOpen($("#form"))) closeForm();
   closeMenu();
-  view = "chat";
-  current = null;
-  const sp = sparkOf(id);
-  viewProject = sp && projectOf(sp.project) ? sp.project : null;
-  viewSpark = id;
-  renderChats();
-  morph(drawChat);
-  input.focus();
   if (innerWidth <= 800) closeSide();
+  openTeamChat(tcDmId(id));
 }
 
 async function openSparkPicker() {
@@ -21819,6 +22214,7 @@ window.addEventListener("keydown", (e) => {
   if (voice.on && e.key === "Escape") { e.preventDefault(); endVoice(); return; }
   if (up($("#help"))) { if (e.key === "Escape" || e.key === "?" || (mod && e.key === "/")) { e.preventDefault(); closeHelp(); } return; }
   if (up($("#phone"))) { if (e.key === "Escape") { e.preventDefault(); closePhone(); } return; }
+  if (up($("#call-log"))) { if (e.key === "Escape") { e.preventDefault(); closeCallLog(); } return; }
   if (up($("#form"))) return;
   if (up(palette) || up(searchBox)) return;
   // The team chat is over the page: Esc closes it, and the page's own

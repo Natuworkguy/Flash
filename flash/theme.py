@@ -567,6 +567,15 @@ def tool_chess(lesson: dict) -> bool:
     return bool(sink("chess", json.dumps(lesson), "")) if sink else False
 
 
+def tool_canvas(state: dict) -> bool:
+    """Show the agent's canvas, as it is now (STATE: id, title, format,
+    content), in the panel beside the chat, live: False where there is
+    no page (the terminal)."""
+
+    sink = _sink()
+    return bool(sink("canvas", json.dumps(state), "")) if sink else False
+
+
 def tool_chess_move(game: str, move: str) -> Optional[dict]:
     """Flash's MOVE in the chess GAME on the page (play_chess): the game
     after it, {"error": ...} when the page refused it, or None where

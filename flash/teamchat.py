@@ -22,6 +22,7 @@ import os
 import threading
 import time
 import unicodedata
+import uuid
 from collections.abc import Callable
 from pathlib import Path
 from typing import Optional
@@ -53,6 +54,8 @@ TYPING_STALE = 10 * 60
 USER = "user"
 SPARK = "spark"
 EVENT = "event"
+# A 1-to-1 voice call: one entry in the DM, its messages kept apart.
+CALL = "call"
 
 TEAM_CHAT_PROMPT = """
 === You are in your team's group chat ===
@@ -90,6 +93,46 @@ You are shown the latest of the chat, then asked to post your message.
   say now, rather than posting it again. Everyone can still see what it
   said before. When the edit says it all, answer with only {quiet}.
 """.strip()
+
+# A private chat with one spark, a DM: a room like a team's, keyed
+# DM_PREFIX and the spark's id (team ids are bare hex, so never collide),
+# with only that spark in it, which answers every message.
+DM_PREFIX = "dm-"
+
+DM_PROMPT = """
+=== You are in a private chat with the user ===
+This is a one-on-one chat between the user and you, {name} ({handle}):
+no other spark sees it.
+
+You are shown the latest of the chat, then asked to post your message.
+- Write as yourself, like a direct message: short, plain, friendly. A
+  few sentences at most, unless you were asked for more.
+- Answer what the user said, from what you know and have found.
+- Real work goes in a shift: call take_on, then say you are on it.
+- While a shift of yours runs, the user can change it here: call
+  steer_shift with what to do differently, or stop_shift when it is no
+  longer wanted or needed.
+- You can call send_message to post a quick "on it, checking" before
+  you look into something; your answer is posted after it. When it
+  already said it all, answer with only {quiet}.
+- Each message starts with its number, as #12. To react to one with an
+  emoji, call react with its number; to fix a message of yours, call
+  edit_message. When that says it all, answer with only {quiet}.
+""".strip()
+
+
+def dm_id(spark_id: str) -> str:
+    """The key of the private chat with the spark SPARK_ID."""
+
+    return DM_PREFIX + spark_id
+
+
+def is_dm(team_id: str) -> bool:
+    return str(team_id or "").startswith(DM_PREFIX)
+
+
+def _dm_spark(team_id: str) -> Optional[sparks.Spark]:
+    return sparks.find(team_id[len(DM_PREFIX):]) if is_dm(team_id) else None
 
 # How many messages a spark may post in one turn with send_message, so
 # one turn is a few lines in the chat, not a flood.
@@ -345,7 +388,56 @@ def _live(entries: list) -> list:
     return [e for e in entries if not e.get("retried")]
 
 
+def _shown(entries: list) -> list:
+    """ENTRIES as the chat shows them: live, without hidden prompts."""
+
+    return [e for e in _live(entries) if not e.get("hidden")]
+
+
+def start_call(team_key: str) -> dict:
+    """A voice call with the spark of TEAM_KEY's DM, begun now: its one
+    entry in the chat, whose "call" id the call's messages carry."""
+
+    team = _team(team_key)
+    if not is_dm(team.id):
+        raise TeamChatError("Calls are only in a spark's private chat.")
+
+    def change(data: dict) -> dict:
+        return _add(data, {
+            "kind": CALL, "call": uuid.uuid4().hex[:12], "ended": 0,
+        })
+
+    return _change(team.id, change)
+
+
+def end_call(team_key: str, call_id: str) -> Optional[dict]:
+    """Mark the call CALL_ID in TEAM_KEY's chat over, now: its entry, or
+    None if there is no such call. Ending it twice keeps the first end."""
+
+    team = _team(team_key)
+
+    def change(data: dict) -> Optional[dict]:
+        for entry in data["entries"]:
+            if entry.get("kind") == CALL and entry.get("call") == call_id:
+                if not entry.get("ended"):
+                    entry["ended"] = time.time()
+                    data["seq"] += 1
+                    entry["changed"] = data["seq"]
+                return entry
+        return None
+
+    return _change(team.id, change)
+
+
+
 def _team(key: str) -> sparks.Team:
+    if is_dm(key):
+        spark = _dm_spark(key)
+        if spark is None:
+            raise TeamChatError("That spark is gone.")
+        # A room of its own, as a team of one.
+        return sparks.Team(id=dm_id(spark.id), name=spark.name,
+                           colour=spark.colour)
     team = sparks.find_team(key)
     if team is None:
         raise TeamChatError(f"There is no team called {key}.")
@@ -367,7 +459,7 @@ def history(team_key: str, since: int = 0) -> dict:
     ]
     return {
         "team": team.id, "seq": data["seq"],
-        "entries": _live(
+        "entries": _shown(
             [e for e in data["entries"] if e.get("id", 0) > since]
         ),
         # Those it has, but changed since: their reactions, as now.
@@ -387,8 +479,10 @@ def _unread(data: dict) -> int:
 
     return sum(
         1 for e in _live(data["entries"])
-        if e.get("kind") != USER and e.get("at", 0) > data["read"]
+        if e.get("kind") not in (USER, CALL) and e.get("at", 0) > data["read"]
         and not (e.get("kind") == EVENT and not e.get("spark"))
+        # Heard on a call, not waiting in the chat.
+        and not e.get("call")
     )
 
 
@@ -474,6 +568,9 @@ def event(team_id: str, spark: Optional[sparks.Spark], what: str,
 
 
 def _members(team_id: str) -> list[sparks.Spark]:
+    if is_dm(team_id):
+        spark = _dm_spark(team_id)
+        return [spark] if spark else []
     return sparks.members(team_id)
 
 
@@ -522,12 +619,14 @@ def _quote(entry: dict) -> dict:
 
 def say(
     team_key: str, text: str, reply_to: int = 0,
-    files: Optional[list] = None,
+    files: Optional[list] = None, hidden: bool = False, call: str = "",
 ) -> dict:
     """Post what the user wrote in TEAM_KEY's chat, as a reply to the
     message numbered REPLY_TO if one is given, with the uploaded FILES
-    it carries (as the page shows them). The sparks' answers are
-    answer()'s to make."""
+    it carries (as the page shows them). HIDDEN: the sparks answer it,
+    but it is left out of the chat's history (a call's opening hello).
+    CALL: the id of the call it was said on, from start_call().
+    The sparks' answers are answer()'s to make."""
 
     team = _team(team_key)
     text = str(text or "").strip()[:sparks.MESSAGE_CHARS]
@@ -543,6 +642,10 @@ def say(
 
     def change(data: dict) -> dict:
         entry = {"kind": USER, "text": text}
+        if hidden:
+            entry["hidden"] = True
+        if call:
+            entry["call"] = call
         if files:
             entry["attachments"] = files
         if reply_to:
@@ -595,6 +698,14 @@ def _said_line(entry: dict, by_id: dict) -> str:
     if len(text) > ENTRY_CHARS:
         text = text[:ENTRY_CHARS].rstrip() + " [...]"
     kind = entry.get("kind")
+    if kind == CALL:
+        ended = float(entry.get("ended") or 0)
+        if not ended:
+            return "(The user is on a voice call with you)"
+        minutes = max(1, round((ended - float(entry.get("at") or ended)) / 60))
+        return f"(A voice call with the user, {minutes} min)"
+    if entry.get("call"):
+        text = "[on the call] " + text
     if kind == USER:
         text += _attached_note(entry)
         reply = entry.get("reply")
@@ -629,8 +740,10 @@ def _said_line(entry: dict, by_id: dict) -> str:
 def _view(team: sparks.Team, spark: sparks.Spark, entries: list) -> str:
     by_id = {s.id: s for s in sparks.all_sparks()}
     lines = [f"#{e.get('id', 0)} {_line(e, by_id)}" for e in entries]
+    room = "Your private chat with the user" if is_dm(team.id) \
+        else f"{team.name}'s chat"
     return (
-        f"=== {team.name}'s chat: its latest {len(lines)} messages ===\n"
+        f"=== {room}: its latest {len(lines)} messages ===\n"
         + "\n\n".join(lines)
         + "\n=== End of the chat ===\n\n"
         f"Post your message in the chat now, as {spark.name}."
@@ -664,7 +777,8 @@ def _post(team_id: str, spark: sparks.Spark, entry: dict,
     return posted
 
 
-def _sending(team_id: str, spark: sparks.Spark, sent: list[dict]):
+def _sending(team_id: str, spark: sparks.Spark, sent: list[dict],
+             call: str = ""):
     """send_message, for SPARK: posted now, and kept in SENT."""
 
     def send(args: dict) -> str:
@@ -679,7 +793,9 @@ def _sending(team_id: str, spark: sparks.Spark, sent: list[dict]):
                 f"Error: that is {MAX_SENT} messages this turn already. "
                 "Put the rest in your answer."
             )
-        sent.append(_post(team_id, spark, {"text": text}))
+        sent.append(_post(
+            team_id, spark, {"text": text, **({"call": call} if call else {})},
+        ))
         sparks.tool_line(f"SendMessage({text[:60]})")
         return "(posted in the chat)"
 
@@ -851,6 +967,38 @@ def _tell_author(
     )
 
 
+END_CALL_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "end_call",
+        "description": (
+            "Hang up the voice call you are on with the user, once the "
+            "conversation is over: they said bye, or that was all. Say "
+            "your goodbye in your answer as well."
+        ),
+        "parameters": {"type": "object", "properties": {}},
+    },
+}
+
+# Told to a spark answering the user on a one-to-one voice call.
+CALL_PROMPT = """
+You are on a voice call with the user: what you answer is read out to
+them. Keep it short and spoken, with no lists or formatting. When the
+conversation is over (they say bye, or that is all), say goodbye and
+call end_call to hang up."""
+
+
+def _ending(ended: list[bool]):
+    """end_call: the call hangs up once this turn's answer is read."""
+
+    def end(args: dict) -> str:
+        ended.append(True)
+        sparks.tool_line("EndCall()")
+        return "(the call hangs up after your answer)"
+
+    return end
+
+
 def _reacting(team_id: str, spark: sparks.Spark, reacted: list[str]):
     """react, for SPARK: its reaction put on, never taken off."""
 
@@ -883,26 +1031,34 @@ def _ultra_tools() -> tuple[str, ...]:
 
 
 def _reply(
-    team: sparks.Team, spark: sparks.Spark, client=None,
+    team: sparks.Team, spark: sparks.Spark, client=None, call=False,
 ) -> list[dict]:
     """SPARK's messages in TEAM's chat, made now and posted: those it
-    sent as it worked, then its answer. [] if it chose to stay quiet."""
+    sent as it worked, then its answer. [] if it chose to stay quiet.
+    CALL: the user is on a voice call with it, which it can end; the
+    call's id, its messages are kept as the call's."""
 
     from . import agent as subagents
     from . import tools as flash_tools  # deferred: avoids a module cycle
 
+    call_id = call if isinstance(call, str) and is_dm(team.id) else ""
     steps: list[str] = []
     kit = sparks.ChatKit(spark)
     sent: list[dict] = []
     reacted: list[str] = []
     edited: list[int] = []
     tools = {
-        **kit.tools, "send_message": _sending(team.id, spark, sent),
+        **kit.tools, "send_message": _sending(team.id, spark, sent, call_id),
         "react": _reacting(team.id, spark, reacted),
         "edit_message": _editing(team.id, spark, edited),
     }
     schemas = [*kit.schemas, SEND_MESSAGE_TOOL, REACT_TOOL,
                EDIT_MESSAGE_TOOL]
+    ended: list[bool] = []
+    call = call and is_dm(team.id)
+    if call:
+        tools["end_call"] = _ending(ended)
+        schemas.append(END_CALL_TOOL)
     others = [s for s in _members(team.id) if s.id != spark.id]
     # A team can have several leads, equals at the top of it.
     leads = _leads(team.id)
@@ -922,12 +1078,13 @@ def _reply(
         if sparks.over_budget(spark):
             raise RuntimeError(sparks.out_of_budget(spark))
         host = flash_tools.OLLAMA_HOST or subagents.OLLAMA_HOST_DEFAULT
+        room = DM_PROMPT if is_dm(team.id) else TEAM_CHAT_PROMPT
         system = sparks.chat_prompt(
             spark, host, model, flash_tools.CURRENT_DATE_PROMPT,
-        ) + "\n\n" + TEAM_CHAT_PROMPT.format(
+        ) + "\n\n" + room.format(
             team=team.name, name=spark.name, handle=spark.handle,
             roster=roster, quiet=QUIET,
-        )
+        ) + (CALL_PROMPT if call else "")
         entries = _live(_read(team.id)["entries"])[-CONTEXT_ENTRIES:]
         _seen(team.id, spark, entries)
         messages = [
@@ -962,7 +1119,13 @@ def _reply(
         }
     kit.apply()
 
+    if ended:
+        # The page hangs up once it has read this one out.
+        entry = {**(entry or {"text": "Bye!", "steps": steps}),
+                 "end_call": True}
     if entry is not None:
+        if call_id:
+            entry = {**entry, "call": call_id}
         return [*sent, _post(team.id, spark, entry, done=True)]
     _set_typing(team.id, spark.id, "")
     if not sent and not reacted and not edited:
@@ -987,6 +1150,7 @@ def _round(team: sparks.Team, message: dict, client=None) -> list[dict]:
     limit = REPLY_LIMIT
     if sparks.mentions_everyone(message.get("text", "")):
         limit = max(REPLY_LIMIT, len(queue))
+    call = message.get("call") or False
     replied = _replied_to(team.id, message)
     if replied is not None and all(q.id != replied.id for q in queue):
         # The one replied to answers first, then any it named besides.
@@ -1004,7 +1168,7 @@ def _round(team: sparks.Team, message: dict, client=None) -> list[dict]:
         answered.add(spark.id)
         turns += 1
         # One turn, and any messages in it: one quiet brings no one in.
-        said = _reply(team, spark, client)
+        said = _reply(team, spark, client, call=call)
         posted += said
         for entry in said:
             if not entry.get("failed"):
@@ -1104,15 +1268,21 @@ def retry(team_key: str, entry_id: int, client=None) -> dict:
 
 def send(
     team_key: str, text: str, client=None, reply_to: int = 0,
-    files: Optional[list] = None,
+    files: Optional[list] = None, call=False, hidden: bool = False,
 ) -> dict:
     """Post what the user wrote, a reply to REPLY_TO if given, with
     FILES attached, and have the sparks answer it in the background: the
-    page's way. The user's message, as posted."""
+    page's way. CALL: said on a voice call, which the spark can end: the
+    call's id from start_call(), its messages kept as the call's.
+    The user's message, as posted."""
 
-    message = say(team_key, text, reply_to, files)
+    message = say(
+        team_key, text, reply_to, files, hidden=hidden,
+        call=call if isinstance(call, str) else "",
+    )
+    heard = {**message, "call": call or True} if call else message
     threading.Thread(
-        target=answer, args=(team_key, message, client), daemon=True,
+        target=answer, args=(team_key, heard, client), daemon=True,
     ).start()
     return message
 
@@ -1121,9 +1291,36 @@ def prompt_block(spark: sparks.Spark) -> str:
     """The latest of SPARK's team chat, for its prompt: "" with no team,
     or nothing said yet."""
 
+    blocks = [b for b in (_team_block(spark), _dm_block(spark)) if b]
+    return "\n\n".join(blocks)
+
+
+def _dm_block(spark: sparks.Spark) -> str:
+    """The latest of SPARK's private chat with the user: "" if none."""
+
+    room = dm_id(spark.id)
+    entries = _shown(_read(room)["entries"])[-PROMPT_ENTRIES:]
+    if not entries:
+        return ""
+    with contextlib.suppress(OSError):
+        _seen(room, spark, entries)
+    by_id = {s.id: s for s in sparks.all_sparks()}
+    lines = []
+    for entry in entries:
+        line = _line(entry, by_id)
+        if len(line) > PROMPT_CHARS:
+            line = line[:PROMPT_CHARS].rstrip() + " [...]"
+        lines.append(f"#{entry.get('id', 0)} {line}")
+    return (
+        "=== The latest in your private chat with the user ===\n"
+        + "\n".join(lines)
+    )
+
+
+def _team_block(spark: sparks.Spark) -> str:
     if not spark.team:
         return ""
-    entries = _live(_read(spark.team)["entries"])[-PROMPT_ENTRIES:]
+    entries = _shown(_read(spark.team)["entries"])[-PROMPT_ENTRIES:]
     if not entries:
         return ""
     # What is in its prompt it reads, on a shift as in a chat.

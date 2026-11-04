@@ -9,6 +9,7 @@ description: Play a game of chess against the user on a board in the chat, no le
 - Play to win, at the strength they ask for (go easier for a beginner if they say so). Keep your reply to a line or nothing: the board shows the move. Do not comment on every move unless they ask.
 - When the game ends (checkmate or stalemate) the board says so and offers "New game", which asks you for another.
 - "Ask Flash" on the board sends the game id and FEN: answer from that position.
+- "Change the chess pieces", "a different piece style": the user picks it in Settings, Chess pieces (Carved, Gold and silver, Classic). It is per browser; you cannot change it for them.
 - In the terminal there is no board: offer to play in text instead, moves written as usual.
 
 ## Examples

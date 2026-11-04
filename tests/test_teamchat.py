@@ -1110,3 +1110,44 @@ def test_versions_pile_up_in_order(team):
         "Friday.", "Thursday.",
     ]
     assert entry["text"] == "Today, done." and entry["edited"]  # nosec
+
+
+def test_a_dm_is_answered_by_its_spark_alone(team):
+    lead = sparks.find("lead")
+    room = teamchat.dm_id(lead.id)
+    message = teamchat.say(room, "Just between us: how is it going?")
+    client = FakeClient([_reply("Going well.")])
+
+    posted = teamchat.answer(room, message, client)
+
+    assert [e["text"] for e in posted] == ["Going well."]  # nosec B101
+    system = client.calls[0]["messages"][0]["content"]
+    assert "private chat with the user" in system  # nosec B101
+    assert "group chat" not in system.split("=== You are in")[-1]  # nosec B101
+    # The team's chat never sees it; the spark reads it on its shifts.
+    assert not _said(team.id, teamchat.USER)  # nosec B101
+    assert "Just between us" in teamchat.prompt_block(lead)  # nosec B101
+
+
+def test_a_call_is_one_entry_its_messages_kept_apart(team):
+    lead = sparks.find("lead")
+    room = teamchat.dm_id(lead.id)
+    call = teamchat.start_call(room)
+    message = teamchat.say(room, "Can you hear me?", call=call["call"])
+    client = FakeClient([_reply("Loud and clear.")])
+
+    posted = teamchat.answer(room, {**message, "call": call["call"]}, client)
+
+    assert [e["call"] for e in posted] == [call["call"]]  # nosec B101
+    # Kept for the spark and the log, but nothing waits unread.
+    assert teamchat.unread(room) == 0  # nosec B101
+    ended = teamchat.end_call(room, call["call"])
+    assert ended["ended"] >= call["at"]  # nosec B101
+    assert "Loud and clear" in teamchat.prompt_block(lead)  # nosec B101
+    with pytest.raises(teamchat.TeamChatError):
+        teamchat.start_call("desk")
+
+
+def test_a_dm_with_a_spark_that_is_gone_is_refused(model):
+    with pytest.raises(teamchat.TeamChatError):
+        teamchat.say("dm-nobody", "Hello?")

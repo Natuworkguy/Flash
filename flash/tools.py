@@ -100,6 +100,7 @@ from .theme import (
     set_denial_why,
     tool_audio,
     tool_browser,
+    tool_canvas,
     tool_chess,
     tool_chess_move,
     tool_course,
@@ -5505,6 +5506,37 @@ def play_chess(game: str = "", move: str = "", side: str = "white",
             + chess.game_summary(made))
 
 
+def canvas(content: str = "", title: str = "", format: str = "html",
+           id: str = "") -> str:
+    """Show or update a canvas: a live card in the web chat that holds
+    HTML, Markdown or SVG, redrawn in place each time it is called with
+    the same id."""
+
+    import uuid
+
+    kind = (format or "html").strip().lower()
+    if kind not in ("html", "markdown", "svg"):
+        return "Error: format is html, markdown or svg."
+    if not str(content or "").strip():
+        return "Error: give the canvas's whole content."
+    if len(content) > 500_000:
+        return "Error: over 500,000 characters: make it smaller."
+    made = not id
+    cid = str(id or uuid.uuid4().hex[:12])
+    tool_line(f"Canvas({title or cid})")
+    state = {"id": cid, "title": str(title or "Canvas"), "format": kind,
+             "content": str(content)}
+    if tool_canvas(state):
+        tool_result("Shown" if made else "Updated")
+        return (f"The canvas is {'in' if made else 'updated in'} the chat "
+                f"(id {cid}). To change it, call canvas again with id "
+                f"{cid} and the whole new content. Do not repeat it in "
+                "your reply.")
+    tool_result("No page to show it on")
+    return ("Error: the canvas needs Flash's web app; nothing was shown. "
+            "Give the content in your reply instead.")
+
+
 def read_aloud(text: str = "", url: str = "", path: str = "",
                out: str = "") -> str:
     """Read an article, a document or some text aloud in Flash's voice:
@@ -7873,6 +7905,35 @@ tools: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "canvas",
+            "description": (
+                "Show visual content live in the web chat as a canvas card: "
+                "a page, chart, diagram, table or mock-up you build and "
+                "keep updating as you work. The first call makes a canvas "
+                "and returns its id; call again with that id and the whole "
+                "new content to redraw it in place. HTML runs in a sandbox "
+                "(scripts allowed, no access to Flash). Web app only."),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "content": {"type": "string", "description": (
+                        "The canvas's whole content, in the format given.")},
+                    "title": {"type": "string", "description": (
+                        "A few words shown above it.")},
+                    "format": {"type": "string",
+                               "enum": ["html", "markdown", "svg"],
+                               "description": "html unless set."},
+                    "id": {"type": "string", "description": (
+                        "To update a canvas: its id from the first call. "
+                        "Left out, a new canvas.")},
+                },
+                "required": ["content"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "play_chess",
             "description": (
                 "Play a game of chess against the user, no lesson: for "
@@ -9490,6 +9551,7 @@ FUNCTIONS = {
     "read_aloud": read_aloud,
     "teach_chess": teach_chess,
     "play_chess": play_chess,
+    "canvas": canvas,
     "verify": verify,
     "learn_from_recording": learn_from_recording,
     "check_office_file": check_office_file,
