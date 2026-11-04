@@ -32,6 +32,16 @@ from .tidy import tidy
 
 # How many entries a team's chat keeps, oldest dropped first.
 MAX_ENTRIES = 300
+# What is said on calls is kept apart from that, so a long call does not
+# push the chat itself out: this many of its lines, oldest first.
+MAX_CALL_ENTRIES = 1500
+# A call nobody has been heard on, or beaten for, in this long is over:
+# its page was closed, or its device lost.
+CALL_STALE = 5 * 60
+# How long a spark's call to the user rings before it is missed.
+RING_SECONDS = 45
+# How long a spark waits after calling the user before it may call again.
+CALL_USER_GAP = 30 * 60
 # How many replies from sparks one message of the user's can set off,
 # counting those a spark's @mention brings in.
 REPLY_LIMIT = 4
@@ -54,8 +64,13 @@ TYPING_STALE = 10 * 60
 USER = "user"
 SPARK = "spark"
 EVENT = "event"
-# A 1-to-1 voice call: one entry in the DM, its messages kept apart.
+# A voice call: one entry in the chat, its messages kept apart.
 CALL = "call"
+# Where a call is: ringing (a spark calling the user), calling (the user
+# calling, not picked up yet), live, or over, as ended (it was talked
+# on), unanswered (the user's, never picked up), cancelled (it never got
+# going), missed or declined (a spark's, not picked up).
+OPEN_STATES = ("ringing", "calling", "live")
 
 TEAM_CHAT_PROMPT = """
 === You are in your team's group chat ===
@@ -374,11 +389,23 @@ def _change(team_id: str, change: Callable[[dict], object]):
     return out
 
 
+def _on_call(entry: dict) -> bool:
+    """Whether ENTRY was said on a call (not the call's own entry)."""
+
+    return bool(entry.get("call")) and entry.get("kind") != CALL
+
+
 def _add(data: dict, entry: dict) -> dict:
     data["seq"] += 1
     entry = {"id": data["seq"], "at": time.time(), **entry}
     data["entries"].append(entry)
-    del data["entries"][:-MAX_ENTRIES]
+    # The chat and its calls' lines each keep their own latest.
+    said = [e for e in data["entries"] if _on_call(e)]
+    rest = [e for e in data["entries"] if not _on_call(e)]
+    drop = {id(e) for e in said[:-MAX_CALL_ENTRIES]} | \
+        {id(e) for e in rest[:-MAX_ENTRIES]}
+    if drop:
+        data["entries"] = [e for e in data["entries"] if id(e) not in drop]
     return entry
 
 
@@ -395,39 +422,243 @@ def _shown(entries: list) -> list:
     return [e for e in _live(entries) if not e.get("hidden")]
 
 
-def start_call(team_key: str) -> dict:
-    """A voice call with the spark of TEAM_KEY's DM, begun now: its one
-    entry in the chat, whose "call" id the call's messages carry."""
+def _state(entry: dict) -> str:
+    """Where the call ENTRY is, for entries from before calls had one."""
+
+    state = entry.get("state")
+    if state:
+        return state
+    return "ended" if entry.get("ended") else "live"
+
+
+def _settle(data: dict, now: Optional[float] = None) -> bool:
+    """End the calls in DATA that are over without anyone saying so: a
+    spark's that rang out, and those nobody has been heard on for
+    CALL_STALE. Whether any was."""
+
+    now = time.time() if now is None else now
+    changed = False
+    for entry in data["entries"]:
+        if entry.get("kind") != CALL or _state(entry) not in OPEN_STATES:
+            continue
+        state = _state(entry)
+        if state == "ringing":
+            if now - float(entry.get("at") or now) < RING_SECONDS:
+                continue
+            entry.update(state="missed",
+                         ended=float(entry.get("at") or now) + RING_SECONDS)
+        else:
+            last = float(entry.get("beat") or entry.get("at") or now)
+            if now - last < CALL_STALE:
+                continue
+            entry.update(state="ended" if entry.get("connected")
+                         else "unanswered", ended=last)
+        data["seq"] += 1
+        entry["changed"] = data["seq"]
+        changed = True
+    return changed
+
+
+def _settled(team_id: str) -> dict:
+    """TEAM_ID's chat, with any call that is over marked so."""
+
+    data = _read(team_id)
+    if _settle(dict(data, entries=[dict(e) for e in data["entries"]])):
+        _change(team_id, _settle)
+        data = _read(team_id)
+    return data
+
+
+def _call_entry(data: dict, call_id: str) -> Optional[dict]:
+    return next((e for e in data["entries"] if e.get("kind") == CALL
+                 and e.get("call") == call_id), None)
+
+
+def open_call(team_key: str) -> Optional[dict]:
+    """The call going on in TEAM_KEY's chat now, ringing or live."""
 
     team = _team(team_key)
-    if not is_dm(team.id):
-        raise TeamChatError("Calls are only in a spark's private chat.")
+    data = _settled(team.id)
+    return next((e for e in reversed(data["entries"])
+                 if e.get("kind") == CALL and _state(e) in OPEN_STATES),
+                None)
+
+
+def start_call(team_key: str) -> dict:
+    """A voice call begun now by the user, with the spark of a private
+    chat or with a team: its one entry in the chat, whose "call" id the
+    call's messages carry. A call still open there is over first: only
+    one goes on at a time."""
+
+    team = _team(team_key)
 
     def change(data: dict) -> dict:
+        now = time.time()
+        _settle(data, now)
+        for entry in data["entries"]:
+            if entry.get("kind") == CALL and _state(entry) in OPEN_STATES:
+                last = float(entry.get("beat") or entry.get("at") or now)
+                entry.update(
+                    ended=last, state="ended" if entry.get("connected")
+                    else "missed" if _state(entry) == "ringing"
+                    else "unanswered")
+                data["seq"] += 1
+                entry["changed"] = data["seq"]
         return _add(data, {
             "kind": CALL, "call": uuid.uuid4().hex[:12], "ended": 0,
+            "state": "calling", "from": USER, "beat": now,
+            **({} if is_dm(team.id) else {"group": True}),
         })
 
     return _change(team.id, change)
+
+
+# What each step of a call does to it, from the state it must be in.
+_STEPS = {
+    "beat": OPEN_STATES,
+    "connected": ("calling", "live"),
+    "answer": ("ringing",),
+    "decline": ("ringing",),
+    "end": OPEN_STATES,
+    "cancel": OPEN_STATES,
+}
+
+
+def call_step(team_key: str, call_id: str, step: str) -> Optional[dict]:
+    """Move the call CALL_ID in TEAM_KEY's chat on: beat (still there),
+    connected (first answer heard), answer or decline (a spark's call to
+    the user), end (hung up) or cancel (it never got going). Its entry,
+    or None if there is no such call. A step it is past is ignored:
+    ending a call twice keeps the first end."""
+
+    if step not in _STEPS:
+        raise TeamChatError(f"Unknown call step {step!r}.")
+    team = _team(team_key)
+    talked: list[bool] = []
+
+    def change(data: dict) -> Optional[dict]:
+        now = time.time()
+        _settle(data, now)
+        entry = _call_entry(data, call_id)
+        if entry is None:
+            return None
+        state = _state(entry)
+        if state not in _STEPS[step]:
+            if step == "answer":
+                raise TeamChatError("That call is over: it rang out, or "
+                                    "was declined.")
+            return entry
+        entry["beat"] = now
+        if step == "connected" and not entry.get("connected"):
+            entry.update(connected=now, state="live")
+        elif step == "answer":
+            entry.update(connected=now, state="live")
+        elif step == "decline":
+            entry.update(state="declined", ended=now)
+        elif step in ("end", "cancel"):
+            entry["ended"] = now
+            entry["state"] = (
+                "cancelled" if step == "cancel" and not entry.get("connected")
+                else "ended" if entry.get("connected")
+                else "missed" if state == "ringing" else "unanswered")
+            said = [e for e in data["entries"] if e.get("call") == call_id
+                    and e.get("kind") == USER and not e.get("hidden")]
+            talked.append(entry["state"] == "ended" and len(said) >= 2)
+        if step != "beat":
+            data["seq"] += 1
+            entry["changed"] = data["seq"]
+        return dict(entry)
+
+    entry = _change(team.id, change)
+    if talked and talked[0]:
+        # Once a real conversation is over, it is summed up in the chat.
+        threading.Thread(target=_recap, args=(team.id, call_id),
+                         daemon=True).start()
+    return entry
 
 
 def end_call(team_key: str, call_id: str) -> Optional[dict]:
     """Mark the call CALL_ID in TEAM_KEY's chat over, now: its entry, or
     None if there is no such call. Ending it twice keeps the first end."""
 
+    return call_step(team_key, call_id, "end")
+
+
+RECAP_PROMPT = (
+    "(The voice call just ended. Post one short message in the chat "
+    "summing up what you talked about: what was decided, and anything "
+    "you said you would do. A few lines, written, not spoken. If nothing "
+    "worth keeping was said, answer with only {quiet}.)"
+)
+
+
+def _recap(team_id: str, call_id: str) -> None:
+    """After a call: the spark (a team's leads) sums it up in the chat."""
+
+    with contextlib.suppress(Exception):
+        message = say(team_id, RECAP_PROMPT.format(quiet=QUIET), hidden=True)
+        answer(team_id, {**message, "recap": call_id})
+
+
+def call_log(team_key: str, call_id: str) -> list[dict]:
+    """What was said on the call CALL_ID, in order: who, and what."""
+
     team = _team(team_key)
+    by_id = {s.id: s for s in sparks.all_sparks()}
+    out = []
+    for entry in _live(_read(team.id)["entries"]):
+        if entry.get("call") != call_id or entry.get("kind") == CALL \
+                or entry.get("hidden"):
+            continue
+        spark = by_id.get(entry.get("spark", ""))
+        out.append({
+            "at": entry.get("at", 0), "id": entry.get("id", 0),
+            "who": USER if entry.get("kind") == USER else "spark",
+            "spark": entry.get("spark", ""),
+            "name": "You" if entry.get("kind") == USER
+            else getattr(spark, "name", "") or entry.get("name") or "A spark",
+            "text": str(entry.get("text") or ""),
+            "failed": bool(entry.get("failed")),
+        })
+    return out
 
-    def change(data: dict) -> Optional[dict]:
-        for entry in data["entries"]:
-            if entry.get("kind") == CALL and entry.get("call") == call_id:
-                if not entry.get("ended"):
-                    entry["ended"] = time.time()
-                    data["seq"] += 1
-                    entry["changed"] = data["seq"]
-                return entry
-        return None
 
-    return _change(team.id, change)
+def ring(spark: sparks.Spark, reason: str) -> dict:
+    """SPARK calls the user, for REASON: a call that rings wherever Flash
+    is open (or on the desktop when only the keeper is), RING_SECONDS
+    long. Its entry in their private chat."""
+
+    reason = " ".join(str(reason or "").split())[:300]
+    if not reason:
+        raise TeamChatError("Say why you are calling.")
+    room = dm_id(spark.id)
+
+    def change(data: dict) -> dict:
+        now = time.time()
+        _settle(data, now)
+        busy = next((e for e in data["entries"] if e.get("kind") == CALL
+                     and _state(e) in OPEN_STATES), None)
+        if busy is not None:
+            raise TeamChatError("You are on a call with the user already.")
+        last = max((float(e.get("at") or 0) for e in data["entries"]
+                    if e.get("kind") == CALL and e.get("from") == SPARK),
+                   default=0)
+        if now - last < CALL_USER_GAP:
+            wait = int((CALL_USER_GAP - (now - last)) // 60) + 1
+            raise TeamChatError(
+                f"You called the user {int((now - last) // 60)} minutes "
+                f"ago. Wait {wait} more minutes, or message them instead.")
+        return _add(data, {
+            "kind": CALL, "call": uuid.uuid4().hex[:12], "ended": 0,
+            "state": "ringing", "from": SPARK, "spark": spark.id,
+            "name": spark.name, "reason": reason, "beat": now,
+        })
+
+    entry = _change(room, change)
+    from . import sparkcalls  # deferred: it imports this module
+
+    sparkcalls.rang(room, entry)
+    return entry
 
 
 def _team(key: str) -> sparks.Team:
@@ -450,7 +681,7 @@ def history(team_key: str, since: int = 0) -> dict:
     the user last looked."""
 
     team = _team(team_key)
-    data = _read(team.id)
+    data = _settled(team.id)
     now = time.time()
     typing = [
         {"spark": sid, "doing": str(t.get("doing") or "")}
@@ -470,6 +701,8 @@ def history(team_key: str, since: int = 0) -> dict:
         ],
         "typing": typing,
         "unread": _unread(data),
+        # Its sparks are still at the last message: a call waits on.
+        "answering": team.id in _busy,
     }
 
 
@@ -479,10 +712,14 @@ def _unread(data: dict) -> int:
 
     return sum(
         1 for e in _live(data["entries"])
-        if e.get("kind") not in (USER, CALL) and e.get("at", 0) > data["read"]
-        and not (e.get("kind") == EVENT and not e.get("spark"))
-        # Heard on a call, not waiting in the chat.
-        and not e.get("call")
+        if e.get("at", 0) > data["read"] and (
+            (e.get("kind") not in (USER, CALL)
+             and not (e.get("kind") == EVENT and not e.get("spark"))
+             # Heard on a call, not waiting in the chat.
+             and not e.get("call"))
+            # A spark's call the user missed is waiting for them.
+            or (e.get("kind") == CALL and e.get("from") == SPARK
+                and _state(e) == "missed"))
     )
 
 
@@ -646,6 +883,10 @@ def say(
             entry["hidden"] = True
         if call:
             entry["call"] = call
+            # Heard on the call: it is still going.
+            on = _call_entry(data, call)
+            if on is not None and _state(on) in OPEN_STATES:
+                on["beat"] = time.time()
         if files:
             entry["attachments"] = files
         if reply_to:
@@ -699,11 +940,7 @@ def _said_line(entry: dict, by_id: dict) -> str:
         text = text[:ENTRY_CHARS].rstrip() + " [...]"
     kind = entry.get("kind")
     if kind == CALL:
-        ended = float(entry.get("ended") or 0)
-        if not ended:
-            return "(The user is on a voice call with you)"
-        minutes = max(1, round((ended - float(entry.get("at") or ended)) / 60))
-        return f"(A voice call with the user, {minutes} min)"
+        return _call_line(entry)
     if entry.get("call"):
         text = "[on the call] " + text
     if kind == USER:
@@ -735,6 +972,32 @@ def _said_line(entry: dict, by_id: dict) -> str:
     if entry.get("for"):
         what += f" for {entry['for']}"
     return f"({who} {what}{': ' + text if text else ''})"
+
+
+def _call_line(entry: dict) -> str:
+    """A call's entry, as a spark reads it in the chat."""
+
+    state = _state(entry)
+    with_ = "the user and the team" if entry.get("group") else "the user"
+    if entry.get("from") == SPARK:
+        reason = f" about: {entry['reason']}" if entry.get("reason") else ""
+        if state == "ringing":
+            return f"(You are calling the user{reason}; it is ringing)"
+        if state == "missed":
+            return f"(You called the user{reason}; they did not pick up)"
+        if state == "declined":
+            return f"(You called the user{reason}; they declined)"
+    if state in ("calling", "live"):
+        return f"(A voice call with {with_}, going on now)"
+    if state == "unanswered":
+        return "(The user called; the call was not picked up)"
+    if state == "cancelled":
+        return "(A call that never got going)"
+    start = float(entry.get("connected") or entry.get("at") or 0)
+    seconds = max(0, float(entry.get("ended") or start) - start)
+    length = f"{round(seconds / 60)} min" if seconds >= 90 \
+        else f"{int(seconds)} s"
+    return f"(A voice call with {with_}, {length})"
 
 
 def _view(team: sparks.Team, spark: sparks.Spark, entries: list) -> str:
@@ -985,7 +1248,22 @@ CALL_PROMPT = """
 You are on a voice call with the user: what you answer is read out to
 them. Keep it short and spoken, with no lists or formatting. When the
 conversation is over (they say bye, or that is all), say goodbye and
-call end_call to hang up."""
+call end_call to hang up. A picture with what they say is what their
+camera or screen shows now."""
+
+GROUP_CALL_PROMPT = """
+You are on a group voice call with the user and your team: what you
+answer is read out to them in your own voice, after the others'. Keep it
+short and spoken, with no lists or formatting, and only say something
+when you have something to add. When the user says bye, or that is all,
+say goodbye and call end_call to hang up for everyone."""
+
+# Said on a call in place of an answer that failed: the error itself is
+# kept in the chat, for the Call Log.
+CALL_FAILED = ("Sorry, something went wrong on my side, so I couldn't "
+               "answer that.")
+# The most pictures a spark is shown with one message.
+MAX_PICTURES = 2
 
 
 def _ending(ended: list[bool]):
@@ -1041,7 +1319,7 @@ def _reply(
     from . import agent as subagents
     from . import tools as flash_tools  # deferred: avoids a module cycle
 
-    call_id = call if isinstance(call, str) and is_dm(team.id) else ""
+    call_id = call if isinstance(call, str) else ""
     steps: list[str] = []
     kit = sparks.ChatKit(spark)
     sent: list[dict] = []
@@ -1055,7 +1333,7 @@ def _reply(
     schemas = [*kit.schemas, SEND_MESSAGE_TOOL, REACT_TOOL,
                EDIT_MESSAGE_TOOL]
     ended: list[bool] = []
-    call = call and is_dm(team.id)
+    call = bool(call)
     if call:
         tools["end_call"] = _ending(ended)
         schemas.append(END_CALL_TOOL)
@@ -1084,13 +1362,19 @@ def _reply(
         ) + "\n\n" + room.format(
             team=team.name, name=spark.name, handle=spark.handle,
             roster=roster, quiet=QUIET,
-        ) + (CALL_PROMPT if call else "")
-        entries = _live(_read(team.id)["entries"])[-CONTEXT_ENTRIES:]
+        ) + ((CALL_PROMPT if is_dm(team.id) else GROUP_CALL_PROMPT)
+             if call else "")
+        entries = _live(_settled(team.id)["entries"])[-CONTEXT_ENTRIES:]
         _seen(team.id, spark, entries)
         messages = [
             {"role": "system", "content": system},
             {"role": "user", "content": _view(team, spark, entries)},
         ]
+        # What the user's camera or screen showed with their latest
+        # message, for a model that can see it.
+        pictures = _pictures(entries, host, model)
+        if pictures:
+            messages[-1]["images"] = pictures
         # In UltraAuto an answer here gets every tool a shift has, and
         # what would ask is told yes: nobody is here to answer it.
         ultra = sparks.mode_of(spark) == "ultra"
@@ -1116,6 +1400,7 @@ def _reply(
         entry = {
             "steps": steps, "failed": True,
             "text": f"I could not answer: {exc.__class__.__name__}: {exc}",
+            **({"spoken": CALL_FAILED} if call else {}),
         }
     kit.apply()
 
@@ -1131,6 +1416,36 @@ def _reply(
     if not sent and not reacted and not edited:
         sparks.log(spark.id, "team_chat_quiet", team=team.name)
     return sent
+
+
+IMAGE_TYPES = (".jpg", ".jpeg", ".png", ".webp", ".gif")
+
+
+def _pictures(entries: list, host: str, model: str) -> list[str]:
+    """The pictures attached to the user's latest message among ENTRIES,
+    base64, when MODEL can see: what a call's camera or screen showed."""
+
+    import base64
+
+    from . import workspace
+    from .sysprompt import model_sees_images
+
+    latest = next((e for e in reversed(entries) if e.get("kind") == USER
+                   and not e.get("hidden")), None)
+    if latest is None:
+        return []
+    paths = []
+    for f in latest.get("attachments") or []:
+        path = workspace.upload_path(str(f.get("id", "")))
+        if path is not None and path.suffix.lower() in IMAGE_TYPES:
+            paths.append(path)
+    if not paths or not model_sees_images(host, model):
+        return []
+    out = []
+    for path in paths[:MAX_PICTURES]:
+        with contextlib.suppress(OSError):
+            out.append(base64.b64encode(path.read_bytes()).decode("ascii"))
+    return out
 
 
 def _replied_to(team_id: str, message: dict) -> Optional[sparks.Spark]:
@@ -1299,7 +1614,7 @@ def _dm_block(spark: sparks.Spark) -> str:
     """The latest of SPARK's private chat with the user: "" if none."""
 
     room = dm_id(spark.id)
-    entries = _shown(_read(room)["entries"])[-PROMPT_ENTRIES:]
+    entries = _shown(_settled(room)["entries"])[-PROMPT_ENTRIES:]
     if not entries:
         return ""
     with contextlib.suppress(OSError):

@@ -367,6 +367,39 @@ CHAT_TOOLS = [
 ]
 
 
+CALL_USER_TOOL = _tool(
+    "call_user",
+    "Phone the user: a voice call that rings wherever Flash is open, and "
+    "on the computer. Only for what cannot wait for them to read your "
+    "report, or is far easier talked through: something urgent, a "
+    "decision you are stuck on. Never for routine news. Once in 30 "
+    "minutes at most; if they miss it, it shows as a missed call they can "
+    "return. When they pick up, you speak first and say why you called.",
+    "reason", "Why you are calling, in a sentence: shown while it rings.",
+)
+
+
+def _calling(spark: "Spark") -> Callable[[dict], str]:
+    """call_user, for SPARK on a shift: its call to the user rings."""
+
+    def call(args: dict) -> str:
+        from . import teamchat  # deferred: it imports this module
+
+        reason = " ".join(str(args.get("reason", "")).split())
+        try:
+            teamchat.ring(spark, reason)
+        except ValueError as exc:
+            return f"Error: {exc}"
+        tool_line(f"CallUser({reason[:120]})")
+        tool_result("Ringing")
+        return ("(ringing: if they pick up, the call happens in your "
+                "private chat with them, and you speak first. If not, "
+                "it shows there as a missed call. Carry on with your "
+                "shift.)")
+
+    return call
+
+
 TAKE_ON_TOOL = {
     "type": "function",
     "function": {
@@ -4950,6 +4983,7 @@ def _shift(spark_id: str, client=None) -> Optional[Report]:
         "hand_off": _handing_off(spark),
         "ask_spark": _asking(spark),
         "make_document": _documenting(spark, made),
+        "call_user": _calling(spark),
         **_proposing(spark),
     }
     if tidies_memory(spark):
@@ -5032,7 +5066,7 @@ def _shift(spark_id: str, client=None) -> Optional[Report]:
             text = _work(
                 spark, messages, own,
                 [KEEP_NOTES_TOOL, WAIT_FOR_EVENTS_TOOL, HAND_OFF_TOOL,
-                 ASK_SPARK_TOOL,
+                 ASK_SPARK_TOOL, CALL_USER_TOOL,
                  MAKE_DOCUMENT_TOOL, *PROPOSAL_TOOLS,
                  *([TIDY_MEMORY_TOOL] if "tidy_memory" in own else [])],
                 steps, lambda doing: _set_activity(spark.id, doing),

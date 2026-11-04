@@ -1550,8 +1550,9 @@ def _said(voice, text: str, settings: dict):
         yield audio if audio is not None else bytes(chunk)
 
 
-def speak(text: str) -> tuple[str, bool]:
-    """Read `text` aloud, stopping if it is interrupted.
+def speak(text: str, speaker: str = "") -> tuple[str, bool]:
+    """Read `text` aloud, stopping if it is interrupted: in Flash's voice,
+    or in SPEAKER, another Kokoro voice (a spark's, on a call).
 
     Returns `(reason, interrupted)`: `reason` is "" unless the reply
     could not be played at all, and `interrupted` says whether saying
@@ -1569,7 +1570,10 @@ def speak(text: str) -> tuple[str, bool]:
         return INSTALL_HINT, False
 
     try:
-        voice, rate = _load_speaker()
+        if speaker and is_kokoro(speaker) and is_kokoro(piper_voice()):
+            voice, rate = _KokoroVoice(speaker), KOKORO_RATE
+        else:
+            voice, rate = _load_speaker()
     except Exception as exc:  # noqa: BLE001
         return f"could not load the voice: {exc}", False
 
@@ -1934,9 +1938,37 @@ def hear_wake(stream: str, pcm: bytes, end: bool = False) -> tuple[bool, str]:
     return woke, ""
 
 
-def synthesize(text: str) -> tuple[bytes, str]:
-    """TEXT spoken, as a WAV file the web page can play. Returns
-    `(wav, "")`, or `(b"", reason)` when the voice cannot be used."""
+# Kokoro voices a spark on a call can be given, one each: clear, and
+# unlike one another.
+SPARK_KOKORO = ("af_heart", "am_michael", "bf_emma", "am_adam", "af_nicole",
+                "bm_george", "af_sarah", "am_fenrir", "bf_isabella",
+                "bm_lewis")
+# With a voice that has no others, a spark's is Flash's set higher or
+# lower, by this many cents.
+SPARK_DETUNE = (-260, 220, -140, 320, -380, 120)
+
+
+def spark_voice(spark_id: str) -> dict:
+    """The voice SPARK_ID speaks in on a call: {"voice": a Kokoro voice}
+    when Flash speaks with Kokoro, one of its others, else {"detune":
+    cents} for the page to shift Flash's own voice by. {} for Flash."""
+
+    if not spark_id:
+        return {}
+    import zlib
+
+    pick = zlib.crc32(spark_id.encode("utf-8"))
+    own = piper_voice()
+    if is_kokoro(own):
+        others = [v for v in SPARK_KOKORO if KOKORO + v != own]
+        return {"voice": KOKORO + others[pick % len(others)]}
+    return {"detune": SPARK_DETUNE[pick % len(SPARK_DETUNE)]}
+
+
+def synthesize(text: str, speaker: str = "") -> tuple[bytes, str]:
+    """TEXT spoken, as a WAV file the web page can play: in Flash's voice,
+    or in SPEAKER, another Kokoro voice. Returns `(wav, "")`, or
+    `(b"", reason)` when the voice cannot be used."""
 
     text = (text or "").strip()
     if not text:
@@ -1944,7 +1976,10 @@ def synthesize(text: str) -> tuple[bytes, str]:
 
     try:
         with _models_lock:
-            voice, rate = _load_speaker()
+            if speaker and is_kokoro(speaker) and is_kokoro(piper_voice()):
+                voice, rate = _KokoroVoice(speaker), KOKORO_RATE
+            else:
+                voice, rate = _load_speaker()
             pcm = b"".join(
                 chunk or b"" for chunk in _pcm_chunks(voice, text, rate)
             )

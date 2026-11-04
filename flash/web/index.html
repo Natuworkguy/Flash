@@ -2678,6 +2678,9 @@ body.all-stopped .org-node, body.all-stopped .spark-card { animation: all-halt 0
 .tc-msg.in-call[hidden] { display: none; }
 .tc-event-row.tc-call { align-items: center; gap: 8px; }
 .tc-call .tc-event { margin: 10px 0 4px; }
+.tc-call .tc-event.missed b { color: #d9483b; }
+.tc-call .tc-event.live b::after, .tc-call .tc-event.ringing b::after { content: ""; display: inline-block; width: 7px; height: 7px; margin-left: 6px; border-radius: 50%; background: #2f9e5b; vertical-align: middle; animation: orb-breathe 1.2s ease-in-out infinite; }
+.tc-call .tc-event .why { color: var(--text-3); }
 #call-log .dialog { width: min(520px, 100%); }
 #call-log .call-lines { max-height: min(60vh, 520px); overflow: auto; margin-top: 12px; display: flex; flex-direction: column; gap: 10px; }
 #call-log .call-lines p { margin: 0; }
@@ -2914,7 +2917,8 @@ body.all-stopped .org-node, body.all-stopped .spark-card { animation: all-halt 0
 .tc-log > *, .tc-typing, .tc-compose > * { transition: max-width 0.5s var(--apple); }
 .tc-full svg, .tc-call svg { width: 17px; height: 17px; }
 /* A voice call: in a spark's DM only; a team's chat starts voice from Send. */
-.tc-wrap:not(.dm) .tc-call { display: none; }
+.tc-call-row-btns { display: flex; gap: 6px; flex: none; }
+.tc-call-row-btns .btn { white-space: nowrap; }
 /* A voice call with one spark: its own screen over the DM. */
 .sc-wrap { position: fixed; inset: 0; z-index: 39; display: grid; place-items: center; }
 .sc-wrap[hidden] { display: none; }
@@ -2928,8 +2932,32 @@ body.all-stopped .org-node, body.all-stopped .spark-card { animation: all-halt 0
 .sc-btns .icon-btn { width: 48px; height: 48px; border-radius: 50%; border: 1px solid var(--border-strong); }
 .sc-btns .icon-btn svg { width: 20px; height: 20px; }
 .sc-mute[aria-pressed="true"], .sc-btns .voice-cam[aria-pressed="true"] { background: var(--text); color: var(--surface); }
-.sc-hang { background: #d9483b; color: #fff; border-color: transparent !important; }
-.sc-hang:hover { background: #c03a2e; }
+.sc-hang, .sc-decline { background: #d9483b; color: #fff; border-color: transparent !important; }
+.sc-hang:hover, .sc-decline:hover { background: #c03a2e; }
+.sc-hang svg, .sc-decline svg { transform: rotate(135deg); }
+.sc-pick { background: #2f9e5b; color: #fff; border-color: transparent !important; }
+.sc-pick:hover { background: #268a4e; }
+.sc-hold[aria-pressed="true"], .sc-screen[aria-pressed="true"] { background: var(--text); color: var(--surface); }
+.sc-answer { display: flex; gap: 48px; margin-top: 14px; }
+.sc-answer[hidden], .sc-wrap[data-state="incoming"] .sc-btns, .sc-wrap[data-state="incoming"] .sc-mini { display: none; }
+.sc-answer .icon-btn { width: 56px; height: 56px; border-radius: 50%; }
+.sc-answer .icon-btn svg { width: 22px; height: 22px; }
+.sc-wrap[data-state="incoming"] .sc-face { animation: orb-breathe 1.1s ease-in-out infinite; }
+.sc-mini { position: absolute; top: 10px; right: 10px; width: 32px; height: 32px; }
+.sc-caption { margin: 2px 0 0; max-width: 100%; min-height: 1.4em; font-size: 13px; line-height: 1.4; color: var(--text-2); text-align: center; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.sc-caption b { color: var(--text); font-weight: 600; }
+.sc-caption:empty { display: none; }
+.sc-wrap[data-state="held"] .sc-status { color: var(--warn, #c98a00); }
+/* Minimised: a bar at the top of the window, the rest of Flash usable. */
+.sc-wrap.mini { inset: 12px auto auto 50%; transform: translateX(-50%); display: block; z-index: 60; }
+.sc-wrap.mini .tc-scrim, .sc-wrap.mini .sc-caption, .sc-wrap.mini .sc-mini, .sc-wrap.mini #voice, .sc-wrap.mini .sc-hold, .sc-wrap.mini .sc-screen, .sc-wrap.mini .voice-cam { display: none; }
+.sc-wrap.mini .sc { flex-direction: row; width: auto; max-width: calc(100vw - 32px); gap: 10px; padding: 6px 8px 6px 6px; border-radius: 999px; cursor: pointer; animation: none; }
+.sc-wrap.mini .sc-face { width: 12px; height: 12px; padding: 0; margin-left: 8px; flex: none; border-radius: 50%; background: var(--c); box-shadow: 0 0 0 3px color-mix(in srgb, var(--c) 30%, transparent); animation: orb-breathe 1.6s ease-in-out infinite; }
+.sc-wrap.mini .sc-face > * { display: none; }
+.sc-wrap.mini .sc-name { font-size: 14px; margin: 0; }
+.sc-wrap.mini .sc-btns { margin: 0; gap: 6px; }
+.sc-wrap.mini .sc-btns .icon-btn { width: 32px; height: 32px; }
+.sc-wrap.mini .sc-btns .icon-btn svg { width: 15px; height: 15px; }
 @media (max-width: 600px) { .tc-full { display: none; } }
 .tc-wrap { --t: var(--accent); }
 .tc-wrap.open .tc { transform: none; }
@@ -4118,7 +4146,7 @@ body.empty #ext-head, body.on-page #ext-head { display: none; }
 <div id="tip" role="tooltip"></div>
 <div id="toast" role="status"></div>
 <div id="briefing" role="dialog" aria-modal="true" aria-label="Briefing" hidden><div class="bf-top"><span class="bf-name">Briefing</span><span class="bf-count" aria-live="polite"></span><span class="grow"></span><button type="button" class="icon-btn bf-refresh" aria-label="Refresh" data-tip="Refresh"></button><button type="button" class="icon-btn bf-close" aria-label="Close" data-tip="Close" data-keys="Esc"></button></div><div class="bf-feed" tabindex="-1"></div><div class="bf-rail" role="tablist" aria-label="Cards"></div><div class="bf-hint">j / k or ↑ ↓ to move · Esc to close</div></div>
-<div id="spark-call" class="sc-wrap" hidden><div class="tc-scrim"></div><section class="sc" role="dialog" aria-modal="true" aria-labelledby="sc-name"><span class="sc-face"></span><b id="sc-name" class="sc-name"></b><span class="sc-status" aria-live="polite"></span><div class="sc-btns"><button type="button" class="icon-btn sc-mute" aria-pressed="false" aria-label="Mute" data-tip="Mute"></button><button type="button" class="icon-btn sc-hang" aria-label="Hang up" data-tip="Hang up"></button></div></section></div>
+<div id="spark-call" class="sc-wrap" hidden><div class="tc-scrim"></div><section class="sc" role="dialog" aria-modal="true" aria-labelledby="sc-name"><button type="button" class="icon-btn sc-mini" aria-label="Minimise" data-tip="Keep the call going in a small bar"></button><span class="sc-face"></span><b id="sc-name" class="sc-name"></b><span class="sc-status" aria-live="polite"></span><p class="sc-caption" aria-live="polite"></p><div class="sc-btns"><button type="button" class="icon-btn sc-mute" aria-pressed="false" aria-label="Mute" data-tip="Mute"></button><button type="button" class="icon-btn sc-hold" aria-pressed="false" aria-label="Hold" data-tip="Put the call on hold"></button><button type="button" class="icon-btn sc-hang" aria-label="Hang up" data-tip="Hang up"></button><button type="button" class="icon-btn sc-screen" aria-pressed="false" aria-label="Share your screen" data-tip="Share your screen"></button></div><div class="sc-answer" hidden><button type="button" class="icon-btn sc-decline" aria-label="Decline" data-tip="Decline"></button><button type="button" class="icon-btn sc-pick" aria-label="Answer" data-tip="Answer"></button></div><video class="sc-screen-view" muted playsinline hidden></video></section></div>
 <div id="team-chat" class="tc-wrap" hidden><div class="tc-scrim" data-close></div><section class="tc" role="dialog" aria-modal="true" aria-labelledby="tc-name"><header class="tc-head"><span class="tc-badge"><span class="letter"></span></span><span class="tc-who"><b id="tc-name"></b><span class="tc-sub"></span></span><span class="tc-faces"></span><button type="button" class="icon-btn tc-call" aria-label="Voice call" data-tip="Voice call"></button><button type="button" class="icon-btn tc-full" aria-label="Full screen" data-tip="Full screen"></button><button type="button" class="icon-btn tc-close" data-close aria-label="Close"></button></header><div class="tc-log" aria-live="polite"></div><div class="tc-typing" hidden></div><form class="tc-compose"><div class="tc-chips"></div><div class="tc-replying" hidden><span class="words"><b></b><span></span></span><button type="button" class="icon-btn tc-unreply" aria-label="Cancel the reply" data-tip="Cancel the reply"></button></div><div class="tc-tray" hidden></div><div class="tc-box"><button type="button" class="icon-btn tc-attach" aria-label="Attach files" data-tip="Attach files"></button><textarea rows="1" placeholder="Message the team" aria-label="Message the team"></textarea><button type="submit" class="tc-send" aria-label="Send"></button></div><div class="tc-mention" role="listbox" hidden></div></form></section></div>
 
 <script src="/static/katex/katex.min.js" id="katex" async></script>
@@ -4180,6 +4208,7 @@ const ICON = {
   think: '<path d="M9.5 18h5M10.5 21h3"/><path d="M12 3a6 6 0 0 0-3.7 10.7c.7.6 1.2 1.4 1.2 2.3h5c0-.9.5-1.7 1.2-2.3A6 6 0 0 0 12 3Z"/>',
   spark: '<circle cx="10" cy="13" r="7"/><path d="M8 11.5v2M12 11.5v2"/><path d="M19 2.5v4M17 4.5h4"/>',
   phone: '<rect x="6" y="2" width="12" height="20" rx="3"/><path d="M11 18h2"/>',
+  handset: '<path d="M22 16.9v3a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3.1 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.1 4.2 2 2 0 0 1 4.1 2h3a2 2 0 0 1 2 1.7c.1 1 .4 1.9.7 2.8a2 2 0 0 1-.5 2.1L8.1 9.9a16 16 0 0 0 6 6l1.3-1.3a2 2 0 0 1 2.1-.4c.9.3 1.9.6 2.8.7a2 2 0 0 1 1.7 2z"/>',
   keyboard: '<rect x="2" y="5" width="20" height="14" rx="3"/><path d="M6 9h.01M10 9h.01M14 9h.01M18 9h.01M7 15h10"/>',
   sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>',
   moon: '<path d="M20 14.5A8 8 0 0 1 9.5 4 8 8 0 1 0 20 14.5Z"/>',
@@ -10435,15 +10464,27 @@ async function openTeamChat(teamId) {
   // A voice call with the spark: voice mode, its words sent to this DM
   // and the spark's answers read out.
   const call = wrap.querySelector(".tc-call");
-  call.innerHTML = icon("mic");
-  call.onclick = () => { if (!canRecord) toast("Voice calls need this page opened on this computer, or over HTTPS"); else if (!voice.on) startSparkCall(); };
+  call.innerHTML = icon("handset");
+  const group = !teamId.startsWith("dm-");
+  call.dataset.tip = call.ariaLabel = group ? "Group call with the team" : "Voice call";
+  call.onclick = () => {
+    if (!canRecord) toast("Voice calls need this page opened on this computer, or over HTTPS");
+    else if (sparkCall.on) { $("#spark-call").classList.remove("mini"); toast("You are on a call already"); }
+    else if (!voice.on) startSparkCall();
+  };
   tcFullScreen(tcFullScreen.saved());
   wrap.hidden = false;
   requestAnimationFrame(() => wrap.classList.add("open"));
   wrap.querySelectorAll("[data-close]").forEach((b) => { b.onclick = closeTeamChat; });
+  // Until its first look is drawn, nothing else fetches it: a fetch in
+  // between (a ring ending, a call hung up) would draw what this one is
+  // about to, then have it wiped and fetched from where it left off.
+  teamChat.opening = teamId;
   await tcRefreshTeam();
   if (teamChat.id !== teamId) return;
+  Object.assign(teamChat, { seq: 0, drawnDay: "", lastWho: "" });
   log.textContent = "";
+  teamChat.opening = null;
   await tcFetch(true);
   tcWireComposer();
   wrap.querySelector("textarea").focus({ preventScroll: true });
@@ -10480,7 +10521,8 @@ function closeTeamChat() {
   clearTimeout(teamChat.timer);
   tcWhoAway();
   tcClosePicker();
-  if (voice.on && voice.team) endVoice();
+  // A call goes on with its chat closed; other voice mode in it ends.
+  if (voice.on && voice.team && !sparkCall.on) endVoice();
   if (reading.key && reading.key.startsWith("tc:")) stopReading();
   teamChat.id = null;
   tcClearTray();
@@ -10561,7 +10603,7 @@ function tcDrawDm(wrap, sp) {
 }
 
 async function tcFetch(first = false) {
-  if (!teamChat.id || teamChat.loading) return;
+  if (!teamChat.id || teamChat.loading || (!first && teamChat.opening === teamChat.id)) return;
   teamChat.loading = true;
   let r;
   try { r = await command("team-chat", teamChat.id, null, { since: teamChat.seq, read: !document.hidden }); }
@@ -10781,49 +10823,82 @@ function tcEntry(entry, fresh) {
   return frag;
 }
 
-// A call's one entry in the DM, as Discord shows one: started, how long
-// it lasted once over, and its Call Log.
+// A call's one entry in the chat, as Discord shows one: who called, how
+// it went (how long, or missed, declined, not answered), its Call Log,
+// and Call back for a spark's call that was missed or declined.
+const callLength = (seconds) => seconds < 60 ? `${Math.max(1, Math.round(seconds))} second${Math.round(seconds) === 1 ? "" : "s"}`
+  : `${Math.round(seconds / 60)} minute${Math.round(seconds / 60) === 1 ? "" : "s"}`;
+function callWords(entry) {
+  const state = entry.state || (entry.ended ? "ended" : "live");
+  const fromSpark = entry.from === "spark";
+  const name = entry.name || tcSpark(entry.spark)?.name || "The spark";
+  const over = entry.ended && entry.connected ? callLength(entry.ended - entry.connected) : "";
+  if (fromSpark) {
+    if (state === "ringing") return [`<b>${esc(name)}</b> is calling you`, "ringing"];
+    if (state === "missed") return [`Missed call from <b>${esc(name)}</b>`, "missed"];
+    if (state === "declined") return [`You declined a call from <b>${esc(name)}</b>`, "missed"];
+    if (state === "live") return [`<b>${esc(name)}</b> called you · ongoing`, "live"];
+    return [`<b>${esc(name)}</b> called you${over ? ` · ${esc(over)}` : ""}`, ""];
+  }
+  const what = entry.group ? "a group call" : "a call";
+  if (state === "calling" || state === "live") return [`<b>You</b> started ${what} · ongoing`, "live"];
+  if (state === "unanswered") return [`<b>You</b> started ${what} · no answer`, "missed"];
+  if (state === "cancelled") return [`<b>You</b> started ${what} that didn't connect`, "missed"];
+  return [`<b>You</b> started ${what}${over ? ` that lasted ${esc(over)}` : ""}`, ""];
+}
 function tcCallRow(entry, fresh) {
   const line = el("div", "tc-event-row tc-call");
   line.dataset.id = entry.id;
   line.dataset.call = entry.call;
-  const live = !entry.ended && sparkCall.on && sparkCall.id === entry.call;
-  let what = "Started a call";
-  if (entry.ended) {
-    const minutes = Math.max(1, Math.round((entry.ended - entry.at) / 60));
-    what += ` that lasted ${minutes} minute${minutes === 1 ? "" : "s"}`;
-  } else if (live) what += " · ongoing";
-  const row = el("button", `tc-event call${fresh ? " fresh" : ""}`);
+  const [words, kind] = callWords(entry);
+  const row = el("button", `tc-event call${fresh ? " fresh" : ""}${kind ? ` ${kind}` : ""}`);
   row.type = "button";
-  const words = el("span", "words");
-  words.innerHTML = `<b>You</b> ${esc(what)}<span class="when"> · ${esc(tcClock(entry.at))}</span>`;
-  row.appendChild(words);
-  row.onclick = () => openCallLog(entry.call);
-  const logBtn = el("button", "btn small", "Call Log");
-  logBtn.type = "button";
-  logBtn.onclick = () => openCallLog(entry.call);
-  line.append(row, logBtn);
+  const shown = el("span", "words");
+  shown.innerHTML = `${words}<span class="when"> · ${esc(tcClock(entry.at))}</span>`;
+  if (entry.reason) shown.appendChild(el("span", "why")).textContent = ` · “${entry.reason}”`;
+  row.appendChild(shown);
+  row.onclick = () => openCallLog(entry.call, entry.team || teamChat.id);
+  const btns = el("span", "tc-call-row-btns");
+  if (entry.from === "spark" && ["missed", "declined"].includes(entry.state)) {
+    const back = el("button", "btn small primary", "Call back");
+    back.type = "button";
+    back.onclick = () => {
+      if (!canRecord) toast("Voice calls need this page opened on this computer, or over HTTPS");
+      else if (!sparkCall.on && !voice.on) startSparkCall();
+    };
+    btns.appendChild(back);
+  }
+  if (entry.connected) {
+    const logBtn = el("button", "btn small", "Call Log");
+    logBtn.type = "button";
+    logBtn.onclick = () => openCallLog(entry.call, entry.team || teamChat.id);
+    btns.appendChild(logBtn);
+  }
+  line.append(row, btns);
   return line;
 }
-function openCallLog(id) {
+// Who said what on a call, from the chat on the server: all of it, the
+// lines from before this page opened the chat too.
+async function openCallLog(id, team = teamChat.id) {
   const body = $("#call-log-body");
   body.innerHTML = `<h2>Call Log</h2><div class="call-lines"></div><div class="dialog-buttons"></div>`;
   const lines = body.querySelector(".call-lines");
-  const said = [...document.querySelectorAll(`#team-chat .tc-msg.in-call[data-call="${CSS.escape(String(id))}"]`)];
-  said.forEach((row) => {
-    const p = el("p", "sub");
-    const mine = row.classList.contains("mine");
-    p.innerHTML = `<b></b>: <span></span>`;
-    p.querySelector("b").textContent = mine ? "You" : tcSpark(row.dataset.who)?.name || "A spark";
-    p.querySelector("span").textContent = row.querySelector(".tc-bubble")?.textContent.trim() || "";
-    lines.appendChild(p);
-  });
-  if (!said.length) lines.appendChild(el("p", "sub", "Nothing was said on this call."));
   const close = el("button", "btn primary", "Close");
   close.type = "button";
   close.onclick = closeCallLog;
   body.querySelector(".dialog-buttons").appendChild(close);
   showOverlay($("#call-log"));
+  let said = [];
+  try { said = (await command("team-chat-call-log", team, null, { call: id })).lines || []; }
+  catch (error) { lines.appendChild(el("p", "sub", error.message)); return; }
+  said.forEach((line) => {
+    const p = el("p", "sub");
+    p.innerHTML = `<b></b>: <span></span>`;
+    p.querySelector("b").textContent = line.name;
+    p.querySelector("span").textContent = line.text;
+    lines.appendChild(p);
+  });
+  if (!said.length) lines.appendChild(el("p", "sub", "Nothing was said on this call."));
 }
 function closeCallLog() { hideOverlay($("#call-log")); }
 $("#call-log").addEventListener("mousedown", (e) => { if (e.target.id === "call-log") closeCallLog(); });
@@ -16159,15 +16234,9 @@ async function pausedUntilResume() {
 }
 
 async function voiceLoop() {
-  // A spark picks up by itself: a call opens with a hello it answers,
-  // before the user says anything.
-  if (sparkCall.on && voice.team && !sparkCall.greeted) {
-    sparkCall.greeted = true;
-    setVoice("thinking");
-    const how = await tcVoiceRound("(Voice call) Hi! You've picked up my call; greet me briefly.", true);
-    if (how === "exit") { endVoice(); return; }
-    if (how === "pause" && !(await pausedUntilResume())) return;
-  }
+  // A call has a loop of its own: the spark speaks first, "hold on" is
+  // said to it, and it goes on with the chat closed.
+  if (sparkCall.on) return callLoop();
   while (voice.on) {
     setVoice("listening");
     const pcm = await listenOnce({ live: true });
@@ -16266,55 +16335,135 @@ async function sendAndWait(text) {
 // One round of voice mode in a team's chat: TEXT is sent as the user's
 // message, and the sparks' answers are read out as they finish, each
 // spark named before its first. Resolves to how the reading ended.
-// A voice call with the spark of a DM: voice mode underneath, with a call
-// screen over it that rings until the spark's first answer comes in.
-const sparkCall = { id: "", team: "", ready: null, on: false, ring: null, timer: 0, since: 0, fillers: null, rounds: 0, fillerUsed: false, fillerLast: -1, fillerSource: null }; // FILLERS: the last five fields
-function startSparkCall() {
-  const spark = teamChat.sparks.get(tcDmSpark(teamChat.id));
-  if (!spark) return;
+// A voice call with the spark of a DM, or a team: voice mode underneath,
+// with a call screen over it. It runs on its own, from the chat on the
+// server, so the chat can be closed (or the screen made a small bar) and
+// the call goes on. A spark can call too: its call rings here first.
+const sparkCall = { id: "", team: "", ready: null, on: false, ring: null, timer: 0, since: 0, beat: 0, fillers: null, rounds: 0, fillerUsed: false, fillerLast: -1, fillerSource: null,
+  incoming: null, ringing: null, group: false, held: false, screen: null, names: new Map(), greeted: false }; // FILLERS: fillers to fillerSource
+const CALL_BEAT = 20000;
+
+// Who a call is with: the spark of a DM, or a team, from what this page knows.
+function callParty(team) {
+  const sparkId = tcDmSpark(team);
+  if (sparkId) {
+    const spark = (teamChat.sparks && teamChat.sparks.get(sparkId)) || sparkList.find((s) => s.id === sparkId);
+    return spark ? { name: spark.name, colour: spark.colour, face: () => sparkAvatar(spark, 96), group: false } : null;
+  }
+  const t = teamChat.id === team && teamChat.team ? teamChat.team : null;
+  if (!t) return null;
+  return { name: t.name, colour: t.colour, group: true, face: () => { const b = el("span", "tc-badge sc-team"); b.style.setProperty("--c", t.colour); b.textContent = (t.name || "?")[0].toUpperCase(); return b; } };
+}
+
+function callScreen(party, state, status) {
   const wrap = $("#spark-call");
   const face = wrap.querySelector(".sc-face");
   face.textContent = "";
-  face.style.setProperty("--c", spark.colour);
-  face.appendChild(sparkAvatar(spark, 96));
-  wrap.querySelector(".sc-name").textContent = spark.name;
-  wrap.querySelector(".sc-status").textContent = "Calling…";
+  face.style.setProperty("--c", party.colour);
+  face.appendChild(party.face());
+  wrap.querySelector(".sc-name").textContent = party.name;
+  wrap.querySelector(".sc-status").textContent = status;
+  wrap.querySelector(".sc-caption").textContent = "";
+  wrap.dataset.state = state;
+  wrap.classList.remove("mini");
+  wrap.hidden = false;
+  return wrap;
+}
+
+// The call's buttons: mute, hold, hang up, share the screen, minimise.
+function callButtons(wrap) {
   const mute = wrap.querySelector(".sc-mute");
   mute.innerHTML = icon("mic");
-  mute.setAttribute("aria-pressed", "false");
-  mute.onclick = () => {
+  const press = (b, on, yes, no) => { b.setAttribute("aria-pressed", String(on)); b.setAttribute("aria-label", on ? yes : no); b.dataset.tip = on ? yes : no; };
+  press(mute, false, "Unmute", "Mute");
+  mute.onclick = (e) => {
+    e.stopPropagation();
     const off = mute.getAttribute("aria-pressed") !== "true";
-    mute.setAttribute("aria-pressed", String(off));
-    mute.setAttribute("aria-label", off ? "Unmute" : "Mute");
-    mute.dataset.tip = off ? "Unmute" : "Mute";
-    if (voice.stream) voice.stream.getTracks().forEach((t) => { t.enabled = !off; });
+    press(mute, off, "Unmute", "Mute");
+    callMic();
     if (off) sparkFillerStop(); // FILLERS hook
   };
-  wrap.querySelector(".sc-hang").innerHTML = icon("x");
-  wrap.querySelector(".sc-hang").onclick = () => { endSparkCall(); endVoice(); };
-  wrap.dataset.state = "calling";
-  wrap.hidden = false;
-  sparkCall.on = true;
-  sparkCall.greeted = false;
-  // The call's one entry in the DM; what is said on it carries its id.
-  sparkCall.id = "";
-  sparkCall.team = teamChat.id;
-  sparkCall.ready = command("team-chat-call", teamChat.id, null, {})
-    .then((r) => { sparkCall.id = r.entry.call; tcFetch(); return sparkCall.id; })
-    .catch((error) => { showFailure(error); return ""; });
-  sparkCall.rounds = 0; // FILLERS hook
-  sparkCallRing(true);
-  startVoice(teamChat.id).then(() => { if (!voice.on) endSparkCall(); else sparkFillersPrepare(); /* FILLERS hook */ });
+  const hold = wrap.querySelector(".sc-hold");
+  hold.innerHTML = icon("pause");
+  press(hold, false, "Take off hold", "Put the call on hold");
+  hold.onclick = (e) => { e.stopPropagation(); setCallHold(!sparkCall.held); };
+  const hang = wrap.querySelector(".sc-hang");
+  hang.innerHTML = icon("handset");
+  hang.onclick = (e) => { e.stopPropagation(); endSparkCall(); endVoice(); };
+  const screen = wrap.querySelector(".sc-screen");
+  screen.innerHTML = icon("monitor");
+  press(screen, false, "Stop sharing your screen", "Share your screen");
+  screen.hidden = !navigator.mediaDevices?.getDisplayMedia;
+  screen.onclick = (e) => { e.stopPropagation(); toggleCallScreen(); };
+  const mini = wrap.querySelector(".sc-mini");
+  mini.innerHTML = icon("shrink");
+  mini.onclick = (e) => { e.stopPropagation(); wrap.classList.add("mini"); };
+  // The small bar opens back up when clicked anywhere but its buttons.
+  wrap.querySelector(".sc").onclick = () => { if (wrap.classList.contains("mini")) wrap.classList.remove("mini"); };
 }
-// The ring, made here: two tones together, two seconds on and four off.
-function sparkCallRing(on) {
-  if (sparkCall.ring) { sparkCall.ring.close().catch(() => {}); sparkCall.ring = null; }
+
+// The microphone is open only when not muted or on hold.
+function callMic() {
+  const muted = $("#spark-call .sc-mute").getAttribute("aria-pressed") === "true";
+  if (voice.stream) voice.stream.getTracks().forEach((t) => { t.enabled = !muted && !sparkCall.held; });
+}
+
+function setCallHold(on) {
+  sparkCall.held = on;
+  const wrap = $("#spark-call"), hold = wrap.querySelector(".sc-hold");
+  hold.setAttribute("aria-pressed", String(on));
+  hold.dataset.tip = hold.ariaLabel = on ? "Take off hold" : "Put the call on hold";
+  callMic();
+  if (on) { sparkFillerStop(); if (voice.turn) voice.turn.finish(null); }
+  wrap.dataset.state = on ? "held" : sparkCall.since ? "connected" : "calling";
+  if (on) wrap.querySelector(".sc-status").textContent = "On hold";
+  else if (sparkCall.since) sparkCallTick();
+}
+
+function callCaption(who, text) {
+  const cap = $("#spark-call .sc-caption");
+  if (!sparkCall.on || !cap) return;
+  cap.innerHTML = `<b></b> <span></span>`;
+  cap.querySelector("b").textContent = `${who}:`;
+  cap.querySelector("span").textContent = text;
+}
+
+// Start a call: with the spark of TEAM's DM, or the team itself. INCOMING
+// is a spark's call to the user being answered (its ring event).
+function startSparkCall(opts = {}) {
+  const team = opts.team || teamChat.id;
+  const party = team && callParty(team);
+  if (!party || sparkCall.on) return;
+  const incoming = opts.incoming || null;
+  stopIncoming();
+  const wrap = callScreen(party, "calling", incoming ? "Connecting…" : party.group ? "Starting the call…" : "Calling…");
+  callButtons(wrap);
+  Object.assign(sparkCall, { on: true, greeted: false, id: "", team, group: party.group, incoming, held: false, since: 0, rounds: 0 }); // FILLERS hook (rounds)
+  sparkCall.ready = (incoming
+    ? command("team-chat-call", team, null, { step: "answer", call: incoming.call }).then(() => incoming.call)
+    : command("team-chat-call", team, null, {}).then((r) => r.entry.call))
+    .then((id) => { sparkCall.id = id; if (teamChat.id === team) tcFetch(); return id; })
+    .catch((error) => { showFailure(error); return ""; });
+  // Without its entry the call cannot be kept apart from the chat: over.
+  sparkCall.ready.then((id) => { if (!id && sparkCall.on && sparkCall.team === team) { endSparkCall("cancel"); endVoice(); } });
+  clearInterval(sparkCall.beat);
+  sparkCall.beat = setInterval(() => { if (sparkCall.on && sparkCall.id) command("team-chat-call", sparkCall.team, null, { step: "beat", call: sparkCall.id }).catch(() => {}); }, CALL_BEAT);
+  if (!incoming) sparkCallRing(true);
+  startVoice(team).then(() => { if (!voice.on) { endSparkCall("cancel"); } else sparkFillersPrepare(); /* FILLERS hook */ });
+}
+
+// The ring, made here: two tones together, two seconds on and four off;
+// a spark calling in rings quicker, twice a second and a half.
+function sparkCallRing(on, incoming = false) {
+  const was = incoming ? sparkCall.ringing : sparkCall.ring;
+  if (was) { was.close().catch(() => {}); if (incoming) sparkCall.ringing = null; else sparkCall.ring = null; }
   if (!on) return;
-  const ctx = new (window.AudioContext || window.webkitAudioContext)();
+  let ctx;
+  try { ctx = new (window.AudioContext || window.webkitAudioContext)(); } catch (_) { return; }
   const gain = ctx.createGain();
   gain.gain.value = 0;
   gain.connect(ctx.destination);
-  for (const hz of [440, 480]) {
+  for (const hz of incoming ? [660, 880] : [440, 480]) {
     const osc = ctx.createOscillator();
     osc.frequency.value = hz;
     osc.connect(gain);
@@ -16322,41 +16471,261 @@ function sparkCallRing(on) {
   }
   const t0 = ctx.currentTime + 0.1;
   for (let i = 0; i < 30; i++) {
-    const at = t0 + i * 6;
-    gain.gain.setValueAtTime(0, at);
-    gain.gain.linearRampToValueAtTime(0.08, at + 0.05);
-    gain.gain.setValueAtTime(0.08, at + 1.95);
-    gain.gain.linearRampToValueAtTime(0, at + 2);
+    const beeps = incoming ? [[0, 0.4], [0.6, 1.0]] : [[0, 2]];
+    for (const [a, b] of beeps) {
+      const at = t0 + i * (incoming ? 3 : 6) + a;
+      gain.gain.setValueAtTime(0, at);
+      gain.gain.linearRampToValueAtTime(0.08, at + 0.04);
+      gain.gain.setValueAtTime(0.08, t0 + i * (incoming ? 3 : 6) + b - 0.05);
+      gain.gain.linearRampToValueAtTime(0, t0 + i * (incoming ? 3 : 6) + b);
+    }
   }
-  sparkCall.ring = ctx;
+  if (incoming) sparkCall.ringing = ctx; else sparkCall.ring = ctx;
+}
+
+function sparkCallTick() {
+  const status = $("#spark-call .sc-status");
+  if (!sparkCall.since || sparkCall.held) return;
+  const s = Math.floor((Date.now() - sparkCall.since) / 1000);
+  status.textContent = `${sparkCall.group ? "On the call" : "Connected"} · ${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
 }
 function sparkCallConnected() {
   if (!sparkCall.on || sparkCall.since) return;
   sparkCallRing(false);
   sparkCall.since = Date.now();
-  const wrap = $("#spark-call");
-  wrap.dataset.state = "connected";
-  const status = wrap.querySelector(".sc-status");
-  const tick = () => {
-    const s = Math.floor((Date.now() - sparkCall.since) / 1000);
-    status.textContent = `Connected · ${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
-  };
-  tick();
-  sparkCall.timer = setInterval(tick, 1000);
+  if (!sparkCall.held) $("#spark-call").dataset.state = "connected";
+  sparkCallTick();
+  sparkCall.timer = setInterval(sparkCallTick, 1000);
+  if (sparkCall.ready) sparkCall.ready.then((id) => { if (id) command("team-chat-call", sparkCall.team, null, { step: "connected", call: id }).catch(() => {}); });
 }
-function endSparkCall() {
+// HOW: "end" (hung up), or "cancel" when it never got going.
+function endSparkCall(how = "end") {
   if (!sparkCall.on) return;
+  // The microphone never opened (refused, or voice mode not ready): it
+  // never got going, rather than going unanswered.
+  if (how === "end" && !voice.stream && !sparkCall.since) how = "cancel";
   sparkCall.on = false;
   sparkCallRing(false);
   clearInterval(sparkCall.timer);
+  clearInterval(sparkCall.beat);
   sparkCall.since = 0;
+  sparkCall.held = false;
+  stopCallScreen();
   const ending = sparkCall.ready, team = sparkCall.team;
   sparkCall.ready = null;
-  if (ending) ending.then((id) => { if (id) command("team-chat-call", team, null, { end: id }).then(() => { if (teamChat.id === team) tcFetch(); }).catch(() => {}); });
+  if (ending) ending.then((id) => { if (id) command("team-chat-call", team, null, { step: how === "cancel" ? "cancel" : "end", call: id }).then(() => { if (teamChat.id === team) tcFetch(); }).catch(() => {}); });
   sparkFillerStop(); sparkCall.fillers = null; sparkCall.rounds = 0; // FILLERS hook
-  $("#spark-call").hidden = true;
+  const wrap = $("#spark-call");
+  wrap.hidden = true;
+  wrap.classList.remove("mini");
   sparkCallChime();
 }
+// A page closed mid-call hangs up on its way out, as a phone would.
+addEventListener("pagehide", () => {
+  if (!sparkCall.on || !sparkCall.id) return;
+  fetch("/api/command", { method: "POST", keepalive: true, credentials: "same-origin", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name: "team-chat-call", arg: sparkCall.team, step: "end", call: sparkCall.id }) }).catch(() => {});
+});
+
+// Sharing the screen: what it shows goes with each thing said, as the
+// camera's view does.
+async function toggleCallScreen() {
+  if (sparkCall.screen) { stopCallScreen(); return; }
+  let stream;
+  try { stream = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: 5 }, audio: false }); }
+  catch (_) { return; }
+  if (!sparkCall.on) { stream.getTracks().forEach((t) => t.stop()); return; }
+  sparkCall.screen = stream;
+  const view = $("#spark-call .sc-screen-view");
+  view.srcObject = stream;
+  view.play().catch(() => {});
+  stream.getVideoTracks()[0]?.addEventListener("ended", stopCallScreen);
+  const b = $("#spark-call .sc-screen");
+  b.setAttribute("aria-pressed", "true");
+  b.dataset.tip = b.ariaLabel = "Stop sharing your screen";
+}
+function stopCallScreen() {
+  const stream = sparkCall.screen;
+  sparkCall.screen = null;
+  if (stream) stream.getTracks().forEach((t) => t.stop());
+  const view = $("#spark-call .sc-screen-view");
+  if (view) view.srcObject = null;
+  const b = $("#spark-call .sc-screen");
+  if (b) { b.setAttribute("aria-pressed", "false"); b.dataset.tip = b.ariaLabel = "Share your screen"; }
+}
+// What the camera and the shared screen show now, uploaded: their ids.
+async function callSights() {
+  const views = [];
+  const cam = $("#voice .voice-view");
+  if (voice.cam && cam && cam.videoWidth) views.push(["camera.jpg", cam]);
+  const screen = $("#spark-call .sc-screen-view");
+  if (sparkCall.screen && screen && screen.videoWidth) views.push(["screen.jpg", screen]);
+  const ids = [];
+  for (const [name, view] of views) {
+    const scale = Math.min(1, 1280 / view.videoWidth);
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.round(view.videoWidth * scale);
+    canvas.height = Math.round(view.videoHeight * scale);
+    canvas.getContext("2d").drawImage(view, 0, 0, canvas.width, canvas.height);
+    try { ids.push((await api("/api/upload", { name, data: canvas.toDataURL("image/jpeg", 0.82).split(",")[1] })).id); }
+    catch (error) { toast(`What the ${name === "screen.jpg" ? "screen" : "camera"} showed did not upload: ${error.message}`); }
+  }
+  return ids;
+}
+
+// The words that open a call, sent to the spark (not shown): it speaks first.
+function callHello() {
+  if (sparkCall.incoming) {
+    const why = sparkCall.incoming.reason ? ` about: ${sparkCall.incoming.reason}` : "";
+    return `(Voice call) You called me${why}. I've picked up; say hi and tell me why you called.`;
+  }
+  return sparkCall.group ? "(Voice call) Hi team! I've started a group call; greet me briefly." : "(Voice call) Hi! You've picked up my call; greet me briefly.";
+}
+
+// One thing said on the call, and the answers to it read out as they
+// come in, each in its spark's voice. Resolves to how it ended: "done",
+// "exit", "hangup", "noanswer", or {barge: words} when the user talked over it.
+async function callRound(text, hidden = false) {
+  const team = sparkCall.team;
+  sparkFillerReset(); // FILLERS hook
+  const id = await sparkCall.ready;
+  if (!id || !sparkCall.on) return "exit";
+  const files = hidden ? [] : await callSights();
+  let mine;
+  try { mine = (await command("team-chat-say", team, null, { text, call: id, hidden, files })).entry; }
+  catch (error) { showFailure(error); return "done"; }
+  let since = mine.id, read = 0;
+  const started = Date.now();
+  let quiet = Date.now();
+  for (;;) {
+    await new Promise((r) => setTimeout(r, 350));
+    if (!voice.on || !sparkCall.on) return "exit";
+    let r;
+    try { r = await command("team-chat", team, null, { since, read: false }); } catch (_) { continue; }
+    for (const e of r.entries) since = Math.max(since, e.id);
+    const answers = r.entries.filter((e) => e.kind === "spark" && e.call === id && e.id > mine.id);
+    if (!answers.length) {
+      // Still at it (working, or typing): waited for, however long.
+      if (r.answering || (r.typing || []).length) { quiet = Date.now(); if (!read) sparkFillerPlay(); continue; } // FILLERS hook
+      if (read && Date.now() - quiet > 1500) return "done";
+      // Before anyone has picked up, a call rings for two minutes at most.
+      if (!read && !sparkCall.since && Date.now() - started > 120000) { await sayLine("No one answered."); return "noanswer"; }
+      // Picked up, and it chose to stay quiet: the user's turn again.
+      if (!read && sparkCall.since && Date.now() - quiet > 6000) return "done";
+      continue;
+    }
+    for (const e of answers) {
+      sparkCallConnected();
+      read++;
+      const node = el("div");
+      node.innerHTML = markdown(e.failed ? (e.spoken || "Sorry, something went wrong on my side.") : (e.spoken || e.text || ""));
+      const how = await readAloud(node, "", { spark: e.spark, name: e.name || callParty(team)?.name || "" });
+      if (how && how.barge) return how;
+      if (how !== "done") return how;
+      // The spark ended the call with its end_call tool, once its goodbye was said.
+      if (e.end_call) return "hangup";
+    }
+    quiet = Date.now();
+  }
+}
+
+// The call's own loop, in place of voice mode's: the spark speaks first,
+// then each thing the user says goes to it, the user's own "hold on" too.
+async function callLoop() {
+  setVoice("thinking");
+  let how = await callRound(callHello(), true);
+  sparkCall.greeted = true;
+  let carried = how && how.barge ? how.barge : "";
+  if (how === "exit" || how === "hangup" || how === "noanswer") { if (how === "noanswer") endSparkCall(); endVoice(); return; }
+  while (voice.on && sparkCall.on) {
+    let text = carried;
+    carried = "";
+    if (!text) {
+      if (sparkCall.held) { setVoice("paused"); await new Promise((r) => setTimeout(r, 300)); continue; }
+      setVoice("listening");
+      const pcm = await listenOnce({ live: true, patience: Infinity });
+      if (!voice.on || !sparkCall.on) return;
+      if (!pcm || sparkCall.held) continue;
+      setVoice("hearing");
+      const heard = await hear(pcm);
+      if (!voice.on || !sparkCall.on) return;
+      if (!heard || !heard.text || heard.alone) continue;
+      if (heard.exit) { endVoice(); return; }
+      text = heard.text;
+    }
+    callCaption("You", text);
+    setVoice("thinking");
+    how = await callRound(text);
+    if (how === "exit" || how === "hangup") { endVoice(); return; }
+    if (how && how.barge) carried = how.barge;
+  }
+}
+
+// ---- A spark calling the user ----
+// Rings here (every open page), with Answer and Decline; answered, the
+// call starts with the spark speaking first.
+function showIncoming(ring) {
+  if (!ring || !ring.call) return;
+  if (sparkCall.on) { toast(`${ring.name || "A spark"} is calling. Hang up to answer.`); return; }
+  if (sparkCall.incomingShown && sparkCall.incomingShown.call === ring.call) return;
+  const spark = sparkList.find((s) => s.id === ring.spark) || { id: ring.spark, name: ring.name || "A spark", colour: "var(--accent)" };
+  const wrap = callScreen({ name: spark.name, colour: spark.colour, face: () => sparkAvatar(spark, 96) }, "incoming", "is calling you…");
+  if (ring.reason) callCaptionRaw(ring.reason);
+  sparkCall.incomingShown = ring;
+  const box = wrap.querySelector(".sc-answer");
+  box.hidden = false;
+  const pick = box.querySelector(".sc-pick"), decline = box.querySelector(".sc-decline");
+  pick.innerHTML = icon("handset");
+  decline.innerHTML = icon("handset");
+  pick.onclick = () => answerIncoming(ring);
+  decline.onclick = () => {
+    stopIncoming();
+    command("team-chat-call", ring.team, null, { step: "decline", call: ring.call }).catch(() => {});
+  };
+  sparkCallRing(true, true);
+  pick.focus();
+}
+function callCaptionRaw(text) { const cap = $("#spark-call .sc-caption"); if (cap) cap.textContent = text; }
+function stopIncoming(ringEnded) {
+  const shown = sparkCall.incomingShown;
+  if (ringEnded && (!shown || shown.call !== ringEnded)) return;
+  sparkCall.incomingShown = null;
+  sparkCallRing(false, true);
+  const wrap = $("#spark-call");
+  wrap.querySelector(".sc-answer").hidden = true;
+  if (!sparkCall.on) wrap.hidden = true;
+}
+async function answerIncoming(ring) {
+  stopIncoming();
+  if (!canRecord) { toast("Voice calls need this page opened on this computer, or over HTTPS"); return; }
+  // Its private chat opens with the call, for what is said after.
+  if (teamChat.id !== ring.team) { try { await openTeamChat(ring.team); } catch (_) { /* the call goes on without it */ } }
+  startSparkCall({ team: ring.team, incoming: ring });
+}
+function sparkRingEnded(event) {
+  const shown = sparkCall.incomingShown;
+  if (!shown || shown.call !== event.call) { if (teamChat.id === event.team) tcFetch(); return; }
+  stopIncoming(event.call);
+  if (event.state === "missed") toast(`Missed call from ${shown.name || "a spark"}`);
+  if (teamChat.id === event.team) tcFetch();
+}
+// Calls ringing when the page opened, and one it was opened to answer.
+async function checkRings() {
+  let rings = [];
+  try { rings = (await command("team-chat-ringing", "", null)).rings || []; } catch (_) { return; }
+  const asked = new URLSearchParams(location.search).get("answer") || "";
+  if (asked) {
+    const url = new URL(location.href);
+    url.searchParams.delete("answer");
+    history.replaceState(history.state, "", url);
+  }
+  const [team, call] = asked.split(":");
+  const wanted = rings.find((r) => r.call === call);
+  if (asked && !wanted && team) { toast("That call is over. Call back from the chat."); try { await openTeamChat(team); } catch (_) { /* gone */ } }
+  const ring = wanted || rings[0];
+  if (ring) showIncoming(ring);
+}
+
 // The hang-up, made here like the ring: three short falling tones.
 function sparkCallChime() {
   try {
@@ -16400,7 +16769,7 @@ function sparkFillerPlay() {
   const list = sparkCall.fillers;
   if (!sparkCall.on || sparkCall.rounds < 2 || sparkCall.fillerUsed || !list || !list.length || !voice.ctx) return;
   const mute = $("#spark-call .sc-mute");
-  if (mute && mute.getAttribute("aria-pressed") === "true") return;
+  if ((mute && mute.getAttribute("aria-pressed") === "true") || sparkCall.held) return;
   sparkCall.fillerUsed = true;
   let pick = Math.floor(Math.random() * list.length);
   if (list.length > 1 && pick === sparkCall.fillerLast) pick = (pick + 1 + Math.floor(Math.random() * (list.length - 1))) % list.length;
@@ -16560,12 +16929,13 @@ function markSpoken(range) {
 const unmarkSpoken = () => { if (window.CSS && CSS.highlights) CSS.highlights.delete("speaking"); };
 
 // A line of speech, made on this computer, ready to play.
-function makeSpeech(line, ctx = voice.ctx) {
-  return api("/api/voice/say", { text: line }).then((r) => {
+// SPARK: a spark on a call, said in a voice of its own.
+function makeSpeech(line, ctx = voice.ctx, spark = "") {
+  return api("/api/voice/say", { text: line, ...(spark ? { spark } : {}) }).then((r) => {
     const raw = atob(r.audio);
     const bytes = new Uint8Array(raw.length);
     for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
-    return ctx.decodeAudioData(bytes.buffer);
+    return ctx.decodeAudioData(bytes.buffer).then((audio) => { audio.detune = Number(r.detune) || 0; return audio; });
   });
 }
 
@@ -16716,6 +17086,8 @@ function playSpeech(audio) {
   return new Promise((resolve) => {
     const source = voice.ctx.createBufferSource();
     source.buffer = audio;
+    // A spark's voice, where Flash has only the one: set higher or lower.
+    if (audio.detune) source.detune.value = audio.detune;
     source.connect(voice.analyser);
     const ended = () => {
       if (voice.source === source) voice.source = null;
@@ -16753,40 +17125,60 @@ function listenForInterruptions(line) {
       const heard = await hear(pcm, line());
       if (stopped || !heard) continue;
       if (heard.exit) { cutReading("exit"); return; }
-      if (heard.pause) { cutReading("pause"); return; }
+      // On a call, anything the user says over the spark cuts it off and
+      // is what it hears next, as on a phone; its own words coming back
+      // through the microphone do not.
+      if (sparkCall.on && !sparkCall.held && heard.text && !heard.alone && !echoOf(heard.text, line())) {
+        voice.barge = heard.text;
+        cutReading("barge");
+        return;
+      }
+      if (heard.pause && !sparkCall.on) { cutReading("pause"); return; }
       if (heard.interrupt) { cutReading("interrupt"); return; }
     }
   })();
   return () => { stopped = true; if (voice.turn) voice.turn.finish(null); };
 }
 
+// Whether HEARD is only LINE, being said, heard back through the speakers.
+function echoOf(heard, line) {
+  const words = (t) => (t || "").toLowerCase().replace(/[^a-z0-9' ]/g, " ").split(/\s+/).filter(Boolean);
+  const said = new Set(words(line)), got = words(heard);
+  if (!got.length) return true;
+  return got.filter((w) => said.has(w)).length / got.length > 0.6;
+}
+
 // Reads a whole reply aloud, a sentence at a time: the next one is made
 // while this one plays, so the gaps stay short. Resolves to how it ended:
 // "done", or what cut it short.
-async function readAloud(node, lead = "") {
+// WHO: a spark on a call, {spark, name}: said in its voice, and captioned.
+async function readAloud(node, lead = "", who = null) {
   const parts = sentencesOf(node.querySelector(".assistant") || node);
   if (!parts.length) parts.push({ text: "That reply is code. It is on screen.", range: null });
   // Who is speaking, in a team's chat, said before what they said.
   if (lead) parts.unshift({ text: lead, range: null });
   setVoice("speaking");
   voice.cut = false;
+  voice.barge = "";
   let now = "";
   const stopListening = listenForInterruptions(() => now);
-  let next = makeSpeech(parts[0].text);
+  const speak = (text) => makeSpeech(text, voice.ctx, who ? who.spark : "");
+  let next = speak(parts[0].text);
   try {
     for (let i = 0; i < parts.length; i++) {
       let audio;
       if (i === 0) sparkFillerPlay(); // FILLERS hook
       try { audio = await next; } catch (error) { if (voice.on) toast(error.message); return "done"; }
       if (i === 0) sparkFillerStop(); // FILLERS hook
-      if (i + 1 < parts.length) next = makeSpeech(parts[i + 1].text);
+      if (i + 1 < parts.length) next = speak(parts[i + 1].text);
       if (!voice.on) return "exit";
-      if (voice.cut) return voice.cut;
+      if (voice.cut) return voice.cut === "barge" ? { barge: voice.barge } : voice.cut;
       now = parts[i].text;
       markSpoken(parts[i].range);
+      if (who) callCaption(who.name, parts[i].text);
       await playSpeech(audio);
       if (!voice.on) return "exit";
-      if (voice.cut) return voice.cut;
+      if (voice.cut) return voice.cut === "barge" ? { barge: voice.barge } : voice.cut;
     }
     return "done";
   } finally {
@@ -17337,6 +17729,8 @@ function apply(event) {
   if (event.type === "btw") { btwEvent(event); return; }
   if (event.type === "debate-live") { debateLive(event); return; }
   if (event.type === "course-changed") { courseChanged(event); return; }
+  if (event.type === "spark-ring") { showIncoming(event); return; }
+  if (event.type === "spark-ring-end") { sparkRingEnded(event); return; }
   if (event.type === "canvas-op") { canvasOp(event); return; }
   if (event.type === "chess-changed") { if (event.chat === current) chessGameChanged(event.game); return; }
   if (event.type === "doc-changed") { docChanged(event); return; }
@@ -17555,7 +17949,10 @@ async function loadState() {
   for (const event of buffered) apply(event);
   buffered = [];
   refreshContext();
+  // A spark calling as the page opens, or the call it was opened to answer.
+  if (!checkedRings) { checkedRings = true; checkRings(); }
 }
+let checkedRings = false;
 
 let liteTimer = null;
 function refreshLite() {

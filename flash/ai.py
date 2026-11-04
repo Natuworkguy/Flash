@@ -4244,6 +4244,182 @@ def _terminal_ping(said: dict) -> None:
     desktop(f"{said['name']} mentioned you", said["text"])
 
 
+# What said on a call in the terminal hangs it up.
+HANG_UP = ("hang up", "end the call", "end call")
+# A spark's call ringing in this terminal: (its chat, its entry), and
+# whether it was answered from the desktop's prompt.
+_ring: dict = {}
+
+
+def _terminal_ring(team: str, entry: dict) -> None:
+    """A spark is calling: the terminal's bell, the computer ringing with
+    a prompt to answer, and the call shown at the prompt's next look."""
+
+    from . import sparkcalls
+
+    _ring.clear()
+    _ring.update(team=team, entry=entry, answer=False, shown=False)
+    with contextlib.suppress(OSError, ValueError):
+        sys.__stdout__.write("\a")
+        sys.__stdout__.flush()
+    if sparkcalls.claim(str(entry.get("call") or "")):
+        sparkcalls.ring_desktop(team, entry,
+                                on_answer=lambda: _ring.update(answer=True))
+
+
+def _terminal_ring_end(team: str, entry: dict) -> None:
+    if _ring.get("entry", {}).get("call") == entry.get("call") and \
+            not _ring.get("taking"):
+        state = entry.get("state")
+        _ring.clear()
+        if state == "missed":
+            console.print(Text(
+                f"  Missed call from {entry.get('name') or 'a spark'}. "
+                f"/call {entry.get('name') or ''} to call back.",
+                style=DIM))
+
+
+def _ring_waiting() -> bool:
+    """Whether a ring is waiting for the prompt: new, or just answered on
+    the desktop."""
+
+    return bool(_ring) and (not _ring.get("shown") or _ring.get("answer"))
+
+
+def _show_ring() -> None:
+    entry = _ring.get("entry") or {}
+    _ring["shown"] = True
+    note = Text("\n  ")
+    note.append(f"{entry.get('name') or 'A spark'} is calling you",
+                style=f"bold {ACCENT}")
+    if entry.get("reason"):
+        note.append(f": {entry['reason']}")
+    note.append("\n  Press Enter or type /answer to pick up, /decline to "
+                "decline.\n", style=DIM)
+    console.print(note)
+
+
+def _spark_call(team: str, call: str, incoming: Optional[dict] = None) -> None:
+    """A voice call with a spark (or a team) here in the terminal: it
+    speaks first, then each thing said goes to it and its answers are
+    read out, in its own voice, until either hangs up. With no voice set
+    up it is typed, the same way."""
+
+    from . import teamchat
+    from . import voice as voice_mod
+
+    spoken = models_present()
+    who = (incoming or {}).get("name") or ""
+    console.print(Text(
+        f"  On a call{' with ' + who if who else ''}. "
+        + ("Speak when it is your turn; say \"hang up\" or press Ctrl+C "
+           "to end it." if spoken else
+           "Voice is not set up, so type; an empty line or /hangup ends "
+           "it."), style=DIM))
+    hello = (
+        f"(Voice call) You called me about: {incoming.get('reason')}. "
+        "I've picked up; say hi and tell me why you called."
+        if incoming else
+        "(Voice call) Hi! You've picked up my call; greet me briefly.")
+    connected = False
+
+    def round_(text: str, hidden: bool = False) -> bool:
+        """Say TEXT on the call and hear the answers: False once hung up."""
+
+        nonlocal connected
+        message = teamchat.say(team, text, hidden=hidden, call=call)
+        posted = teamchat.answer(team, {**message, "call": call}, _client())
+        for entry in posted:
+            if entry.get("kind") != teamchat.SPARK:
+                continue
+            if not connected:
+                connected = True
+                teamchat.call_step(team, call, "connected")
+            said = str(entry.get("spoken") or entry.get("text") or "")
+            name = str(entry.get("name") or "Spark")
+            console.print(Text(f"  {name}: ", style=f"bold {ACCENT}")
+                          + Text(said))
+            if spoken:
+                own = voice_mod.spark_voice(str(entry.get("spark") or ""))
+                voice_mod.speak(said, speaker=own.get("voice", ""))
+            if entry.get("end_call"):
+                return False
+        return True
+
+    try:
+        if not round_(hello, hidden=True):
+            return
+        while True:
+            if spoken:
+                said = _voice_input()
+                if said is None:
+                    continue
+            else:
+                said = console.input("  You: ").strip()
+                if not said or said == "/hangup":
+                    return
+            words = " ".join(said.lower().strip(" .!").split())
+            if is_exit_phrase(said) or words in HANG_UP:
+                return
+            if spoken:
+                console.print(Text("  You: ", style="bold") + Text(said))
+            if not round_(said):
+                return
+    except (KeyboardInterrupt, EOFError):
+        console.print()
+    finally:
+        with contextlib.suppress(Exception):
+            teamchat.call_step(team, call, "end")
+        console.print(Text("  Call ended.", style=DIM))
+
+
+def _answer_ring() -> None:
+    from . import teamchat
+
+    if not _ring:
+        warn("No spark is calling.")
+        return
+    team, entry = _ring["team"], dict(_ring["entry"])
+    _ring["taking"] = True
+    try:
+        teamchat.call_step(team, str(entry.get("call")), "answer")
+    except ValueError as exc:
+        _ring.clear()
+        warn(str(exc))
+        return
+    _ring.clear()
+    _spark_call(team, str(entry.get("call")), incoming=entry)
+
+
+def _decline_ring() -> None:
+    from . import teamchat
+
+    if not _ring:
+        warn("No spark is calling.")
+        return
+    team, call = _ring["team"], str(_ring["entry"].get("call"))
+    name = _ring["entry"].get("name") or "the spark"
+    _ring.clear()
+    with contextlib.suppress(ValueError):
+        teamchat.call_step(team, call, "decline")
+    console.print(Text(f"  Declined the call from {name}.", style=DIM))
+
+
+def _call_command(arg: str) -> None:
+    """/call <spark>: a voice call with that spark, here."""
+
+    from . import teamchat
+
+    spark = sparks.find(arg.strip().lstrip("@")) if arg.strip() else None
+    if spark is None:
+        names = ", ".join(s.name for s in sparks.all_sparks()) or "none yet"
+        warn(f"Usage: /call <spark>. Sparks: {names}.")
+        return
+    room = teamchat.dm_id(spark.id)
+    entry = teamchat.start_call(room)
+    _spark_call(room, entry["call"], incoming=None)
+
+
 def _keep_sparks() -> None:
     """`flash --sparks`: the keeper alone, until stopped.
 
@@ -6642,6 +6818,10 @@ def _main() -> None:
     connectors.start()
     # A spark's @user rings the terminal's bell and shows on the desktop.
     pings.on_ping(_terminal_ping)
+    # A spark's call rings here, and on the computer.
+    from . import sparkcalls
+
+    sparkcalls.listen(_terminal_ring, _terminal_ring_end)
 
     _clear_screen()
 
@@ -6661,6 +6841,8 @@ def _main() -> None:
         terminal.write_hook(hook_shell)
 
     def wake_ready() -> bool:
+        if _ring_waiting():
+            return True
         return (
             wakes_in_a_row < MAX_WAKES_IN_A_ROW
             and bool(subagents.unseen())
@@ -6771,6 +6953,12 @@ def _main() -> None:
                 # An empty line is what the voice branch below listens on.
                 listening_on = False
                 uin = ""
+            elif _ring_waiting():
+                if _ring.get("answer"):
+                    _answer_ring()
+                else:
+                    _show_ring()
+                continue
             elif wake_ready():
                 # Finished while the last turn was still running.
                 woken = True
@@ -6842,6 +7030,13 @@ def _main() -> None:
                     expand_collapsed()
                     continue
 
+                if uin == WAKE and _ring_waiting():
+                    # A spark calling, or a call answered on the desktop.
+                    if _ring.get("answer"):
+                        _answer_ring()
+                    else:
+                        _show_ring()
+                    continue
                 if uin == WAKE:
                     woken = True
                 elif uin.strip():
@@ -6864,6 +7059,11 @@ def _main() -> None:
                 wakes_in_a_row += 1
             else:
                 wakes_in_a_row = 0
+
+            if uin.strip() == "" and _ring and _ring.get("shown"):
+                # Enter while a spark is calling picks it up.
+                _answer_ring()
+                continue
 
             if uin.strip() == "":
                 if not Config.voice:
@@ -7056,6 +7256,18 @@ def _main() -> None:
 
             if uin == "/email" or uin.startswith("/email "):
                 _email_command(uin[len("/email"):].strip())
+                continue
+
+            if uin == "/answer":
+                _answer_ring()
+                continue
+
+            if uin == "/decline":
+                _decline_ring()
+                continue
+
+            if uin == "/call" or uin.startswith("/call "):
+                _call_command(uin[len("/call"):].strip())
                 continue
 
             if uin == "/sparks" or uin.startswith("/sparks "):

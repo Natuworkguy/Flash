@@ -289,6 +289,8 @@ python run.py
 - `/mcp [add <name> <command or URL> | env <name> KEY=VALUE | remove |
   on | off | tools <name> | reload]`: List and change the
   [connectors](#connectors) whose tools Flash has.
+- `/call <spark>`, `/answer`, `/decline`: Call a spark, or pick up or
+  turn down one calling you.
 - `/skills [show|remove|improve|history <name>]`: List, read, delete,
   improve, or see how a skill has done. `/skills restore <name>
   <version>` puts an earlier version back.
@@ -771,6 +773,22 @@ have looked them over.
   Under each of your messages, one tick means it is in the chat and two
   mean a spark has read it, answering or on a shift; hover the ticks to
   see which sparks read it, and when. The terminal says the same.
+- **Calls.** The phone button in a spark's private chat calls it, and in
+  a team's chat starts a group call, each spark speaking in a voice of
+  its own. The spark speaks first; mute, hold, share your screen or turn
+  on the camera, and it sees what they show with what you say; talk over
+  it to cut in. Minimise the call to a bar, or close the chat, and it
+  carries on while you use Flash. Afterwards the chat shows one entry
+  (how long it lasted, or that it went unanswered), its Call Log, and a
+  short recap from the spark. A call left open by a closed tab or a lost
+  device ends by itself. **Sparks can call you too**, with `call_user`
+  on a shift, for what cannot wait: every open page rings with the
+  reason and Answer and Decline; with no page open the computer rings,
+  with a prompt whose Answer opens Flash on the call; the terminal rings
+  its bell (Enter or `/answer` picks up, `/decline` turns it down); and
+  with only the keeper running, the computer rings the same way. A call
+  not picked up is a missed call in the chat, with Call back. In the
+  terminal, `/call <spark>` calls one, by voice or typed.
 - **Team rules.** Lines every spark on a team keeps to, on top of its own
   boundaries, on shifts and in chats alike (the team's edit form, or
   `/sparks teams rules <team> <rules|none>`).
