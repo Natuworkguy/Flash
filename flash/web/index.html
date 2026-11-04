@@ -2191,6 +2191,18 @@ button.item-row:hover { background: var(--hover); }
 .dialog h2.mono-title { font: 600 17px var(--mono); display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .skill-read { max-height: 48vh; overflow: auto; margin: 12px 0 4px; padding: 12px 16px; border: 1px solid var(--border); border-radius: 12px; background: var(--code-bg); font-size: 14px; }
 .skill-read > :first-child { margin-top: 0; }
+/* How a skill is going: its runs' score, a new version on trial, and
+   the versions it has had, to go back to. */
+.made-by.score-tag { color: var(--text-2); background: color-mix(in srgb, var(--text-2) 10%, transparent); border-color: color-mix(in srgb, var(--text-2) 25%, transparent); font-variant-numeric: tabular-nums; }
+.made-by.score-tag.poor { color: var(--del); background: color-mix(in srgb, var(--del) 10%, transparent); border-color: color-mix(in srgb, var(--del) 30%, transparent); }
+.skill-trials { margin: 10px 0 4px; display: flex; flex-direction: column; gap: 8px; font-size: 13px; }
+.skill-trials .head { display: flex; align-items: center; gap: 8px; }
+.skill-trials .head b { flex: 1; font-weight: 600; }
+.skill-trials ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.skill-trials li { display: flex; gap: 8px; align-items: baseline; color: var(--text-2); min-width: 0; }
+.skill-trials li .pct { font-variant-numeric: tabular-nums; color: var(--text); min-width: 46px; }
+.skill-trials li .what { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.skill-trials li .btn { padding: 0 8px; line-height: 22px; font-size: 12px; }
 .field .count { float: right; font-size: 11.5px; color: var(--text-3); font-weight: 400; }
 .field textarea.mono { font: 12.5px/1.55 var(--mono); }
 .instructions-box { max-width: 620px; display: grid; gap: 8px; }
@@ -9677,6 +9689,11 @@ function skillRows(all) {
     row.querySelector(".desc").textContent = skill.description;
     if (skill.by === "flash") row.querySelector(".top").appendChild(el("span", "made-by", "Made by Flash"));
     if (skill.builtin && skill.builtin !== "flash") row.querySelector(".top").appendChild(builtinTag(skill.builtin));
+    if (skill.trial) row.querySelector(".top").appendChild(el("span", "made-by", `Trying a new version · ${skill.trial.done}/${skill.trial.of}`));
+    else if (typeof skill.score === "number") {
+      const tag = row.querySelector(".top").appendChild(el("span", "made-by score-tag" + (skill.score < 0.75 ? " poor" : ""), `${Math.round(skill.score * 100)}%`));
+      tag.dataset.tip = "How its last runs went";
+    }
     row.onclick = () => openSkill(skill.name);
     list.appendChild(row);
   });
@@ -13002,6 +13019,7 @@ async function openSkill(name) {
   }
   form.querySelector(".sub").textContent = skill.description;
   form.querySelector(".skill-read").innerHTML = markdown(skill.content);
+  if (skill.trials) form.querySelector(".skill-read").after(skillTrials(skill));
   form.querySelector("[data-cancel]").onclick = closeForm;
   const edit = form.querySelector("[data-edit]");
   if (edit) edit.onclick = () => skillForm(skill);
@@ -13023,6 +13041,52 @@ async function openSkill(name) {
     toast(`Deleted ${skill.name}`);
     redrawSettingsTab("skills");
   };
+}
+
+// A skill's runs, and the versions Flash has tried: each use scored,
+// a new version kept only if it does better, any earlier one put back.
+function skillTrials(skill) {
+  const t = skill.trials;
+  const box = el("div", "skill-trials", `<div class="head"><b>How it's going</b></div><ul class="runs"></ul><ul class="history"></ul>`);
+  const head = box.querySelector(".head");
+  const pct = (n) => `${Math.round((n || 0) * 100)}%`;
+  head.querySelector("b").textContent = t.trial ? `Trying a new version: ${t.trial.done} of ${t.trial.of} runs in`
+    : t.version_runs ? `Scoring ${pct(t.score)} over its last ${Math.min(t.version_runs, 5)} run${t.version_runs === 1 ? "" : "s"}` : "Not used since it last changed";
+  if (!t.trial && t.runs) {
+    const go = head.appendChild(el("button", "btn small", "Improve from its runs"));
+    go.type = "button";
+    go.dataset.tip = "Rewrite it from how its runs went, then keep it only if the next runs do better";
+    go.onclick = async () => {
+      go.disabled = true; go.textContent = "Rewriting…";
+      try { toast((await command("skill-improve", skill.name)).said); closeForm(); redrawSettingsTab("skills"); }
+      catch (error) { showFailure(error); go.disabled = false; go.textContent = "Improve from its runs"; }
+    };
+  }
+  const runs = box.querySelector(".runs");
+  for (const r of [...t.recent].reverse()) {
+    const li = runs.appendChild(el("li", "", `<span class="pct"></span><span class="what"></span>`));
+    li.querySelector(".pct").textContent = pct(r.score);
+    li.querySelector(".what").textContent = r.task || "(no message)";
+    li.dataset.tip = [r.rating ? `Rated ${r.rating}` : "", `${r.errors} of ${r.tools} tool calls failed`, ...(r.failures || [])].filter(Boolean).join("\n");
+  }
+  const said = { trying: "Tried a new version", kept: "Kept the new version", "rolled back": "Went back: no better", restored: "Put back by hand", unchanged: "Looked, nothing to change", ended: "Trial ended: changed by hand" };
+  const hist = box.querySelector(".history");
+  for (const h of [...t.history].reverse().slice(0, 8)) {
+    const li = hist.appendChild(el("li", "", `<span class="pct"></span><span class="what"></span>`));
+    li.querySelector(".pct").textContent = new Date(h.at * 1000).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+    li.querySelector(".what").textContent = (said[h.event] || h.event) + ("new" in h ? ` (${pct(h.old)} → ${pct(h.new)})` : "");
+    const back = h.event === "kept" || h.event === "trying" ? h.from : h.event === "restored" ? h.from : "";
+    if (back && t.versions.includes(back)) {
+      const b = li.appendChild(el("button", "btn", "Restore"));
+      b.type = "button";
+      b.dataset.tip = `Put back the version before (${back})`;
+      b.onclick = async () => {
+        try { toast((await command("skill-restore", skill.name, null, { version: back })).said); closeForm(); redrawSettingsTab("skills"); }
+        catch (error) { showFailure(error); }
+      };
+    }
+  }
+  return box;
 }
 
 function skillForm(skill) {

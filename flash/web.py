@@ -86,6 +86,7 @@ from . import (
     providers,
     showcase,
     skills,
+    skilltrials,
     sparks,
     systemone,
     teamchat,
@@ -5251,6 +5252,9 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
         # its extensions, to read and use but not to change. One the
         # user saved a skill of the same name over is theirs instead.
         guides = [g for g in skills.knowledge() if g.name not in mine]
+        # How each of the user's own is going: its recent runs' score,
+        # and a new version being tried.
+        going = {s.name: skilltrials.report(s.name) for s in own}
         return {"skills": [
             {
                 "name": s.name,
@@ -5258,6 +5262,8 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
                 "by": s.by,
                 "builtin": s.builtin,
                 "size": len(s.body),
+                "score": going.get(s.name, {}).get("score"),
+                "trial": going.get(s.name, {}).get("trial"),
             }
             for s in (*own, *guides)
         ]}
@@ -5270,7 +5276,22 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
             "name": found.name, "description": found.description,
             "by": found.by, "builtin": found.builtin,
             "content": found.body,
+            "trials": None if found.builtin else skilltrials.report(
+                found.name),
         }
+
+    if name in ("skill-improve", "skill-restore"):
+        # Rewritten from its runs and tried, or an earlier version back.
+        try:
+            if name == "skill-restore":
+                said = skilltrials.restore(arg, str(body.get("version")
+                                                    or ""))
+            else:
+                said = skilltrials.improve(arg, skilltrials._ask_model(
+                    ai.Config.host, ai.Config.model or ""), asked=True)
+        except (skilltrials.TrialError, skills.SkillError) as exc:
+            raise ValueError(str(exc)) from None
+        return {"said": said}
 
     if name in ("skill-save", "skill-delete"):
         found = skills.find(arg)
