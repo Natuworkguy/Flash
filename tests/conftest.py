@@ -26,6 +26,7 @@ from flash import (
     showcase,
     skills,
     skilltrials,
+    sparkcalls,
     sparks,
     systemone,
     terminal,
@@ -153,6 +154,14 @@ def isolated_home(tmp_path_factory, monkeypatch):
     monkeypatch.setattr(skills, "FLASH_DIR", home / ".flash")
     # Each skill's runs, trials and old versions.
     monkeypatch.setattr(skilltrials, "FLASH_DIR", home / ".flash")
+    # A spark's call rings in no real Flash: the listeners are kept per
+    # test, and no thread is left beating once the temp home is gone.
+    monkeypatch.setattr(sparkcalls, "_handlers", [])
+    monkeypatch.setattr(sparkcalls, "_rung", {})
+    monkeypatch.setattr(sparkcalls, "_started", False)
+    monkeypatch.setattr(sparkcalls, "_start_threads", lambda: None)
+    monkeypatch.setattr(sparkcalls, "ring_desktop",
+                        lambda *a, **k: None)
     # Sparks, and what this session has already pointed out about them.
     monkeypatch.setattr(sparks, "FLASH_DIR", home / ".flash")
     # How many notifications the agent has sent lately.

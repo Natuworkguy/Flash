@@ -1144,10 +1144,288 @@ def test_a_call_is_one_entry_its_messages_kept_apart(team):
     ended = teamchat.end_call(room, call["call"])
     assert ended["ended"] >= call["at"]  # nosec B101
     assert "Loud and clear" in teamchat.prompt_block(lead)  # nosec B101
-    with pytest.raises(teamchat.TeamChatError):
-        teamchat.start_call("desk")
+    # A team can be called too: a group call.
+    assert teamchat.start_call("desk")["group"] is True  # nosec B101
 
 
 def test_a_dm_with_a_spark_that_is_gone_is_refused(model):
     with pytest.raises(teamchat.TeamChatError):
         teamchat.say("dm-nobody", "Hello?")
+
+
+def _call(room, call_id):
+    return teamchat._call_entry(teamchat._read(room), call_id)
+
+
+def test_a_call_goes_from_calling_to_live_to_ended(team):
+    room = teamchat.dm_id(sparks.find("lead").id)
+    call = teamchat.start_call(room)["call"]
+    assert _call(room, call)["state"] == "calling"  # nosec B101
+    teamchat.call_step(room, call, "connected")
+    live = _call(room, call)
+    assert live["state"] == "live" and live["connected"]  # nosec B101
+    assert "going on now" in teamchat._call_line(live)  # nosec B101
+    ended = teamchat.end_call(room, call)
+    assert ended["state"] == "ended"  # nosec B101
+    # A second end keeps the first.
+    again = teamchat.end_call(room, call)
+    assert again["ended"] == ended["ended"]  # nosec B101
+    assert teamchat._call_line(ended).startswith(  # nosec B101
+        "(A voice call with the user,")
+
+
+def test_a_call_never_picked_up_or_never_started_says_so(team):
+    room = teamchat.dm_id(sparks.find("lead").id)
+    call = teamchat.start_call(room)["call"]
+    assert teamchat.end_call(room, call)["state"] == "unanswered"  # nosec B101
+    call = teamchat.start_call(room)["call"]
+    gone = teamchat.call_step(room, call, "cancel")
+    assert gone["state"] == "cancelled"  # nosec B101
+
+
+def test_a_call_nobody_is_on_any_more_ends_itself(team, monkeypatch):
+    room = teamchat.dm_id(sparks.find("lead").id)
+    call = teamchat.start_call(room)["call"]
+    teamchat.call_step(room, call, "connected")
+    beat = _call(room, call)["beat"]
+    # The page was closed: no beat, nothing said, for longer than allowed.
+    later = beat + teamchat.CALL_STALE + 5
+    monkeypatch.setattr(teamchat.time, "time", lambda: later)
+    assert teamchat.open_call(room) is None  # nosec B101
+    over = _call(room, call)
+    assert over["state"] == "ended" and over["ended"] == beat  # nosec B101
+    # So the spark is not told it is on a call for ever after.
+    assert "going on now" not in teamchat.prompt_block(  # nosec B101
+        sparks.find("lead"))
+
+
+def test_a_new_call_ends_the_one_left_open(team):
+    room = teamchat.dm_id(sparks.find("lead").id)
+    first = teamchat.start_call(room)["call"]
+    teamchat.call_step(room, first, "connected")
+    second = teamchat.start_call(room)["call"]
+    assert _call(room, first)["state"] == "ended"  # nosec B101
+    assert teamchat.open_call(room)["call"] == second  # nosec B101
+
+
+def test_a_beat_or_a_word_keeps_a_call_going(team, monkeypatch):
+    room = teamchat.dm_id(sparks.find("lead").id)
+    call = teamchat.start_call(room)["call"]
+    start = _call(room, call)["beat"]
+    monkeypatch.setattr(teamchat.time, "time", lambda: start + 200)
+    teamchat.call_step(room, call, "beat")
+    monkeypatch.setattr(teamchat.time, "time", lambda: start + 400)
+    teamchat.say(room, "Still here", call=call)
+    monkeypatch.setattr(teamchat.time, "time",
+                        lambda: start + 400 + teamchat.CALL_STALE - 10)
+    assert teamchat.open_call(room)["call"] == call  # nosec B101
+
+
+def test_what_is_said_on_calls_never_pushes_the_chat_out(team, monkeypatch):
+    monkeypatch.setattr(teamchat, "MAX_ENTRIES", 5)
+    monkeypatch.setattr(teamchat, "MAX_CALL_ENTRIES", 8)
+    room = teamchat.dm_id(sparks.find("lead").id)
+    for n in range(3):
+        teamchat.say(room, f"Before {n}")
+    call = teamchat.start_call(room)["call"]
+    for n in range(20):
+        teamchat.say(room, f"On the call {n}", call=call)
+    entries = teamchat._read(room)["entries"]
+    kept = [e["text"] for e in entries if not teamchat._on_call(e)
+            and e.get("kind") == "user"]
+    assert kept == ["Before 0", "Before 1", "Before 2"]  # nosec B101
+    assert _call(room, call) is not None  # nosec B101
+    said = [e for e in entries if teamchat._on_call(e)]
+    assert len(said) == 8 and said[-1]["text"] == "On the call 19"  # nosec
+
+
+def test_the_call_log_has_everything_said_on_it(team):
+    room = teamchat.dm_id(sparks.find("lead").id)
+    call = teamchat.start_call(room)["call"]
+    teamchat.say(room, "(Voice call) hello", hidden=True, call=call)
+    message = teamchat.say(room, "What is on today?", call=call)
+    teamchat.answer(room, {**message, "call": call},
+                    FakeClient([_reply("Two meetings.")]))
+    lines = teamchat.call_log(room, call)
+    assert [(x["name"], x["text"]) for x in lines] == [  # nosec B101
+        ("You", "What is on today?"), ("Lead", "Two meetings.")]
+
+
+def test_a_failed_answer_on_a_call_is_said_kindly(team, monkeypatch):
+    room = teamchat.dm_id(sparks.find("lead").id)
+    call = teamchat.start_call(room)["call"]
+    message = teamchat.say(room, "Hi", call=call)
+
+    def broken(*args, **kwargs):
+        raise ConnectionError("no model")
+
+    monkeypatch.setattr(sparks, "_work", broken)
+    posted = teamchat.answer(room, {**message, "call": call})
+    assert posted[0]["failed"]  # nosec B101
+    assert "ConnectionError" in posted[0]["text"]  # nosec B101
+    assert posted[0]["spoken"] == teamchat.CALL_FAILED  # nosec B101
+
+
+def test_a_long_call_is_summed_up_after(team, monkeypatch):
+    summed = []
+    monkeypatch.setattr(teamchat, "_recap",
+                        lambda room, call: summed.append((room, call)))
+    monkeypatch.setattr(teamchat.threading, "Thread",
+                        lambda target, args, daemon: type(
+                            "T", (), {"start": lambda self: target(*args)})())
+    room = teamchat.dm_id(sparks.find("lead").id)
+    call = teamchat.start_call(room)["call"]
+    teamchat.call_step(room, call, "connected")
+    teamchat.say(room, "One", call=call)
+    teamchat.say(room, "Two", call=call)
+    teamchat.end_call(room, call)
+    assert summed == [(room, call)]  # nosec B101
+    # A call that never got talking on is not.
+    short = teamchat.start_call(room)["call"]
+    teamchat.end_call(room, short)
+    assert len(summed) == 1  # nosec B101
+
+
+def test_a_spark_calls_and_the_user_answers_declines_or_misses(
+        team, monkeypatch):
+    lead = sparks.find("lead")
+    room = teamchat.dm_id(sparks.find("lead").id)
+    ring = teamchat.ring(lead, "The build broke and I need a decision")
+    assert ring["state"] == "ringing" and ring["from"] == "spark"  # nosec
+    assert "it is ringing" in teamchat._call_line(ring)  # nosec B101
+    # One call at a time.
+    with pytest.raises(teamchat.TeamChatError):
+        teamchat.ring(lead, "Again")
+    answered = teamchat.call_step(room, ring["call"], "answer")
+    assert answered["state"] == "live" and answered["connected"]  # nosec
+    teamchat.end_call(room, ring["call"])
+    # Not again for a while, then it may.
+    with pytest.raises(teamchat.TeamChatError, match="Wait"):
+        teamchat.ring(lead, "Something else")
+    now = time.time() + teamchat.CALL_USER_GAP + 1
+    monkeypatch.setattr(teamchat.time, "time", lambda: now)
+    second = teamchat.ring(lead, "Quick question")
+    teamchat.call_step(room, second["call"], "decline")
+    assert _call(room, second["call"])["state"] == "declined"  # nosec B101
+    # Rung out: missed, waiting unread, and too late to answer.
+    third_at = now + teamchat.CALL_USER_GAP + 1
+    monkeypatch.setattr(teamchat.time, "time", lambda: third_at)
+    third = teamchat.ring(lead, "Are you there?")
+    monkeypatch.setattr(teamchat.time,
+                        "time", lambda: third_at + teamchat.RING_SECONDS + 1)
+    assert teamchat.open_call(room) is None  # nosec B101
+    assert _call(room, third["call"])["state"] == "missed"  # nosec B101
+    assert teamchat.unread(room) == 1  # nosec B101
+    with pytest.raises(teamchat.TeamChatError):
+        teamchat.call_step(room, third["call"], "answer")
+
+
+def test_a_ring_reaches_the_flashes_listening(team):
+    from flash import sparkcalls
+
+    heard, ended = [], []
+    sparkcalls.listen(lambda room, e: heard.append(e["call"]),
+                      lambda room, e: ended.append(e["state"]))
+    lead = sparks.find("lead")
+    ring = teamchat.ring(lead, "Need you")
+    assert heard == [ring["call"]]  # nosec B101
+    room = teamchat.dm_id(sparks.find("lead").id)
+    teamchat.call_step(room, ring["call"], "decline")
+    assert ended == ["declined"]  # nosec B101
+
+
+def test_with_no_flash_open_the_computer_rings(team, monkeypatch):
+    from flash import sparkcalls
+
+    rung = []
+    monkeypatch.setattr(sparkcalls, "ring_desktop",
+                        lambda room, entry: rung.append(entry["call"]))
+    monkeypatch.setattr(sparkcalls, "ringers_alive", lambda: False)
+    ring = teamchat.ring(sparks.find("lead"), "Urgent")
+    assert rung == [ring["call"]]  # nosec B101
+    # Claimed once: a second Flash does not ring it too.
+    assert not sparkcalls.claim(ring["call"])  # nosec B101
+
+
+def test_a_shift_can_call_the_user(team):
+    said = sparks._calling(sparks.find("lead"))({"reason": "Need a yes"})
+    assert "ringing" in said  # nosec B101
+    empty = sparks._calling(sparks.find("lead"))({"reason": ""})
+    assert "Error" in empty  # nosec B101
+
+
+def test_a_spark_sees_what_the_camera_showed(team, monkeypatch, tmp_path):
+    from flash import workspace
+
+    picture = tmp_path / "camera.jpg"
+    picture.write_bytes(b"\xff\xd8jpeg")
+    monkeypatch.setattr(workspace, "upload_path", lambda fid: picture)
+    monkeypatch.setattr("flash.sysprompt.model_sees_images",
+                        lambda host, model: True)
+    room = teamchat.dm_id(sparks.find("lead").id)
+    call = teamchat.start_call(room)["call"]
+    message = teamchat.say(room, "What is this?", call=call,
+                           files=[{"id": "x", "name": "camera.jpg"}])
+    client = FakeClient([_reply("A jar.")])
+    teamchat.answer(room, {**message, "call": call}, client)
+    sent = client.calls[0]["messages"][-1]
+    assert sent.get("images")  # nosec B101
+
+
+def test_the_page_can_run_a_call(team):
+    session = web.Session()
+    room = teamchat.dm_id(sparks.find("lead").id)
+    started = web.command(session, {"name": "team-chat-call", "arg": room})
+    call = started["entry"]["call"]
+    web.command(session, {"name": "team-chat-call", "arg": room,
+                          "step": "beat", "call": call})
+    web.command(session, {"name": "team-chat-call", "arg": room,
+                          "step": "connected", "call": call})
+    assert web.command(session, {"name": "team-chat", "arg": room})[  # nosec
+        "answering"] is False
+    ended = web.command(session, {"name": "team-chat-call", "arg": room,
+                                  "end": call})
+    assert ended["entry"]["state"] == "ended"  # nosec B101
+    assert web.command(session, {"name": "team-chat-call-log", "arg": room,
+                                 "call": call})["lines"] == []  # nosec B101
+    teamchat.ring(sparks.find("lead"), "Hello")
+    rings = web.command(session, {"name": "team-chat-ringing", "arg": ""})
+    assert rings["rings"][0]["reason"] == "Hello"  # nosec B101
+
+
+def test_the_terminal_rings_and_takes_a_call(team, monkeypatch):
+    from flash import ai
+
+    monkeypatch.setattr(ai, "_ring", {})
+    lead = sparks.find("lead")
+    room = teamchat.dm_id(lead.id)
+    ring = teamchat.ring(lead, "The build broke")
+    ai._terminal_ring(room, ring)
+    assert ai._ring_waiting()  # nosec B101
+    ai._show_ring()
+    assert not ai._ring_waiting()  # nosec B101
+    # No voice set up here: the call is typed.
+    monkeypatch.setattr(ai, "models_present", lambda: False)
+    typed = iter(["Which test?", "/hangup"])
+    monkeypatch.setattr(ai.console, "input", lambda prompt="": next(typed))
+    client = FakeClient([_reply("Hi, the build broke."),
+                         _reply("The payments test.")])
+    monkeypatch.setattr(ai, "_client", lambda: client)
+    ai._answer_ring()
+    log = teamchat.call_log(room, ring["call"])
+    assert [x["text"] for x in log] == [  # nosec B101
+        "Hi, the build broke.", "Which test?", "The payments test."]
+    assert _call(room, ring["call"])["state"] == "ended"  # nosec B101
+    assert not ai._ring  # nosec B101
+
+
+def test_the_terminal_can_decline_a_call(team, monkeypatch):
+    from flash import ai
+
+    monkeypatch.setattr(ai, "_ring", {})
+    lead = sparks.find("lead")
+    room = teamchat.dm_id(lead.id)
+    ring = teamchat.ring(lead, "Hello?")
+    ai._terminal_ring(room, ring)
+    ai._decline_ring()
+    assert _call(room, ring["call"])["state"] == "declined"  # nosec B101

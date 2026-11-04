@@ -87,6 +87,7 @@ from . import (
     showcase,
     skills,
     skilltrials,
+    sparkcalls,
     sparks,
     systemone,
     teamchat,
@@ -6339,6 +6340,24 @@ def team_info(team: "sparks.Team") -> dict:
     }
 
 
+def _ringing_now() -> list[dict]:
+    """Sparks' calls to the user ringing now, in every private chat."""
+
+    out = []
+    with contextlib.suppress(OSError):
+        for path in teamchat._folder().glob(teamchat.DM_PREFIX + "*.json"):
+            for entry in teamchat._read(path.stem)["entries"]:
+                if sparkcalls._ringing(entry):
+                    out.append({"team": path.stem, **_ring_event(entry)})
+    return out
+
+
+def _ring_event(entry: dict) -> dict:
+    return {"call": entry.get("call"), "spark": entry.get("spark"),
+            "name": entry.get("name"), "reason": entry.get("reason"),
+            "at": entry.get("at")}
+
+
 def _team_command(name: str, arg: str, body: dict) -> dict:
     """The Sparks page's teams, their templates, and hires to decide."""
 
@@ -6399,12 +6418,26 @@ def _team_command(name: str, arg: str, body: dict) -> dict:
                 hidden=bool(body.get("hidden")),
             )}
         if name == "team-chat-call":
-            # A 1-to-1 call begun, or ended: its one entry in the DM.
+            # A call begun (with a spark, or a team), or a step of one:
+            # still there, connected, answered, declined, hung up.
             if body.get("end"):
                 return {"entry": teamchat.end_call(
                     arg, str(body.get("end"))[:40],
                 )}
+            step = str(body.get("step") or "")
+            if step:
+                return {"entry": teamchat.call_step(
+                    arg, str(body.get("call") or "")[:40], step,
+                )}
             return {"entry": teamchat.start_call(arg)}
+        if name == "team-chat-call-log":
+            # Who said what on a call, from the chat itself.
+            return {"lines": teamchat.call_log(
+                arg, str(body.get("call") or "")[:40],
+            )}
+        if name == "team-chat-ringing":
+            # A spark's call ringing now, for a page that just opened.
+            return {"rings": _ringing_now()}
         if name == "team-chat-retry":
             # A spark's message, answered again in its place.
             try:
@@ -7112,12 +7145,15 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/api/voice/say":
             session.always.page_listening()
-            wav, why = voice.synthesize(
-                voice.speakable(str(body.get("text") or ""))
-            )
+            # A spark on a call speaks in a voice of its own.
+            own = voice.spark_voice(str(body.get("spark") or ""))
+            said = voice.speakable(str(body.get("text") or ""))
+            wav, why = voice.synthesize(said, speaker=own["voice"]) \
+                if own.get("voice") else voice.synthesize(said)
             if why:
                 raise ValueError(why)
-            return {"audio": base64.b64encode(wav).decode("ascii")}
+            return {"audio": base64.b64encode(wav).decode("ascii"),
+                    "detune": own.get("detune", 0)}
 
         if path == "/api/answer":
             return {
@@ -7577,6 +7613,22 @@ def _attach(server: "Server", standalone: bool) -> None:
     teamchat.on_change(
         lambda team: session.hub.publish({"type": "team-chat", "team": team})
     )
+
+    # A spark calling the user: every open page rings, and with none
+    # open the computer does, its Answer opening this page on the call.
+    def ringing(team: str, entry: dict) -> None:
+        session.hub.publish({"type": "spark-ring", "team": team,
+                             **_ring_event(entry)})
+        session.hub.note("call", f"{entry.get('name') or 'A spark'} is "
+                         "calling", str(entry.get("reason") or ""), team)
+        if not session.hub.watched() and \
+                sparkcalls.claim(str(entry.get("call") or "")):
+            sparkcalls.ring_desktop(team, entry, answer_url=(
+                f"{server.url}&answer={team}:{entry.get('call')}"))
+
+    sparkcalls.listen(ringing, lambda team, entry: session.hub.publish({
+        "type": "spark-ring-end", "team": team, "call": entry.get("call"),
+        "state": teamchat._state(entry)}))
     # A spark's @user: the page plays a ping and says who it was.
     pings.on_ping(lambda said: session.hub.publish({"type": "ping", **said}))
     # A terminal's Flash, or the keeper, talking in a team's chat is news
