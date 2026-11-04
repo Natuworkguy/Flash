@@ -559,7 +559,7 @@ class Ask:
 KEPT = {
     "user", "assistant", "tool", "result", "diff", "ask", "answered",
     "error", "stats", "note", "thought", "file", "plan", "browser", "wait",
-    "seen", "debate", "course", "chess", "guide", "call",
+    "seen", "debate", "course", "chess", "guide", "call", "canvas",
 }
 
 
@@ -1111,6 +1111,9 @@ class Session:
         # Debates being argued now, by id: their chat, how to stop it,
         # and what the user has said to steer it, not yet taken in.
         self.debating: dict[str, dict] = {}
+        # A canvas op waiting for the page's answer, by its nonce: set
+        # when the answer is in ("done"), and the answer ("out").
+        self.canvas_waits: dict[str, dict] = {}
         # Each running turn's message: where it is in the chat's log, and
         # what the model was given, so a turn that fails can be taken
         # back out and tried again.
@@ -3231,6 +3234,64 @@ def stream_reply(
     return out
 
 
+# How long a canvas op waits for the page showing the canvas to answer.
+CANVAS_WAIT = 10.0
+# Patches kept with a canvas, made again when it is drawn after a reload.
+CANVAS_KEPT_PATCHES = 200
+
+
+def _kept_canvas(chat: Chat, cid: str) -> Optional[dict]:
+    """The canvas CID's entry in CHAT's log, if it was shown there."""
+
+    for event in chat.log:
+        if isinstance(event, dict) and event.get("type") == "canvas" \
+                and event.get("id") == cid:
+            return event
+    return None
+
+
+def _canvas_op(session: Session, chat: Chat, asked: dict) -> dict:
+    """A patch, run, read or look on a live canvas: sent to the pages,
+    and the first answer from one showing it returned. Patches are kept
+    with the canvas too, so it is drawn changed when the chat is opened
+    again."""
+
+    cid = str(asked.get("id") or "")
+    kept = _kept_canvas(chat, cid)
+    if kept is None:
+        return {"error": f"There is no canvas {cid} in this chat."}
+    op = str(asked.get("op") or "")
+    if op != "show" and kept.get("format") != "html":
+        return {"error": "Only an HTML canvas is live; show it again with "
+                         "the whole new content."}
+    if op == "patch":
+        kept["patches"] = (list(kept.get("patches") or [])
+                           + list(asked.get("patches") or []))[
+                               -CANVAS_KEPT_PATCHES:]
+        session.save(chat)
+    if not session.hub.watched():
+        if op == "patch":
+            return {"later": True}
+        return {"error": "No page has Flash open: the user needs the chat "
+                         "open in the web app."}
+    nonce = uuid.uuid4().hex
+    waiting = {"done": threading.Event(), "out": None}
+    session.canvas_waits[nonce] = waiting
+    try:
+        session.hub.publish({"type": "canvas-op", "chat": chat.id,
+                             "nonce": nonce, **asked})
+        if not waiting["done"].wait(CANVAS_WAIT):
+            if op == "patch":
+                return {"later": True}
+            return {"error": "No open page is showing this chat's canvas "
+                             "now: the user needs the chat open."}
+    finally:
+        session.canvas_waits.pop(nonce, None)
+    out = waiting["out"]
+    return out if isinstance(out, dict) else {"error": "The page's answer "
+                                              "made no sense."}
+
+
 def _sink(session: Session, chat: Chat):
     """Where a tool's output goes: to the page, as it happens."""
 
@@ -3316,9 +3377,21 @@ def _sink(session: Session, chat: Chat):
         if kind == "canvas":
             # The canvas as it is now: one card in the chat per canvas,
             # brought up to date in place, and the panel redrawn live.
+            # Kept once in the chat's log, where it was first shown,
+            # with the patches made since it was last drawn whole.
             state = json.loads(text)
-            session.emit(chat, {"type": "canvas", **state})
+            kept = _kept_canvas(chat, str(state.get("id") or ""))
+            if kept is None:
+                session.emit(chat, {"type": "canvas", **state})
+            else:
+                kept.clear()
+                kept.update({"type": "canvas", **state})
+                session.save(chat)
+                session.hub.publish({"type": "canvas", "chat": chat.id,
+                                     **state})
             return True
+        if kind == "canvas-op":
+            return _canvas_op(session, chat, json.loads(text))
         if kind == "chess-move":
             # Flash's move in a game with the user, checked and shown.
             from . import chess
@@ -4712,6 +4785,16 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
                 session.save(chat)
                 return {}
         raise ValueError("That lesson is not in this chat.")
+
+    if name == "canvas-result":
+        # A page's answer to a canvas op: the first one in is the one.
+        waiting = session.canvas_waits.get(arg)
+        result = body.get("result")
+        if waiting and not waiting["done"].is_set() \
+                and isinstance(result, dict):
+            waiting["out"] = result
+            waiting["done"].set()
+        return {}
 
     if name == "chess-play":
         # The user's move in a game with Flash, checked against the rules.

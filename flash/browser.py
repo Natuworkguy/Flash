@@ -191,8 +191,11 @@ def capture(
     full_page: bool,
     wait_ms: int,
     mouse: Optional[tuple[float, float]] = None,
+    cursor: bool = True,
 ) -> tuple[list[str], str]:
     """Render `url` to `out` as a PNG.
+
+    `cursor` False leaves out the Flash cursor drawn on the page.
 
     With `mouse`, the pointer is moved there first, so the picture shows
     what hovering does, with the Flash cursor where it rests.
@@ -221,7 +224,8 @@ def capture(
                     viewport={"width": width, "height": height},
                 )
                 _watch(page, problems)
-                page.add_init_script(_CURSOR_JS)
+                if cursor:
+                    page.add_init_script(_CURSOR_JS)
                 page.goto(
                     url,
                     wait_until="load",

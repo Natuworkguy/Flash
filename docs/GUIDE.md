@@ -1318,6 +1318,29 @@ running it yourself:
 playwright install chromium
 ```
 
+### Live canvas
+
+In the web app, the `canvas` tool shows a card in the chat with HTML,
+Markdown or SVG that Flash builds and keeps updating as it works. An
+HTML canvas is live, and Flash can work on it the way you do:
+
+- **patch** changes parts of it in place by CSS selector (replace an
+  element or its content, add to it, set its text, an attribute or an
+  input's value, remove it), so what you typed and where you scrolled
+  stay as they are. Patches are kept with the canvas, so it looks the
+  same when you open the chat again.
+- **run** runs JavaScript inside it and gets back what it returns.
+- **read** gets what is in it now: every input's value, what its code
+  keeps in `flash.state`, and its text.
+- **look** gets a picture of it as you see it, for a model that sees
+  images.
+
+The canvas's own buttons can talk to Flash with `flash.send("...")`:
+the text arrives in the chat marked as coming from that canvas. It only
+works from something you did, such as a click, so a canvas cannot send
+messages on its own. Everything runs in the canvas's sandbox, which
+cannot reach Flash, your files or your cookies.
+
 ### Updates
 
 Flash checks `main` on GitHub for a newer version on startup and shows it

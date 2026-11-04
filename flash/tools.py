@@ -101,6 +101,7 @@ from .theme import (
     tool_audio,
     tool_browser,
     tool_canvas,
+    tool_canvas_op,
     tool_chess,
     tool_chess_move,
     tool_course,
@@ -5506,14 +5507,30 @@ def play_chess(game: str = "", move: str = "", side: str = "white",
             + chess.game_summary(made))
 
 
+CANVAS_ACTIONS = ("show", "patch", "run", "read", "look")
+CANVAS_HOWS = ("inner", "outer", "append", "prepend", "text", "remove",
+               "attr", "value")
+# The most a canvas sends back to the model from a read or a run.
+CANVAS_ANSWER_CHARS = 20_000
+
+
 def canvas(content: str = "", title: str = "", format: str = "html",
-           id: str = "") -> str:
+           id: str = "", action: str = "show", patches: Any = None,
+           script: str = "") -> str:
     """Show or update a canvas: a live card in the web chat that holds
     HTML, Markdown or SVG, redrawn in place each time it is called with
-    the same id."""
+    the same id. On a live HTML canvas, ACTION also changes parts of it
+    in place (patch), runs code in it (run), reads what is in it now
+    (read) or looks at it (look)."""
 
     import uuid
 
+    doing = (action or "show").strip().lower()
+    if doing not in CANVAS_ACTIONS:
+        return "Error: action is show, patch, run, read or look."
+    if doing != "show":
+        return _canvas_act(doing, str(id or "").strip(), patches,
+                           str(script or ""))
     kind = (format or "html").strip().lower()
     if kind not in ("html", "markdown", "svg"):
         return "Error: format is html, markdown or svg."
@@ -5528,13 +5545,148 @@ def canvas(content: str = "", title: str = "", format: str = "html",
              "content": str(content)}
     if tool_canvas(state):
         tool_result("Shown" if made else "Updated")
+        live = (" To change part of it, call canvas with action patch; to "
+                "see what the user did in it, action read; to see it, "
+                "action look." if kind == "html" else "")
         return (f"The canvas is {'in' if made else 'updated in'} the chat "
-                f"(id {cid}). To change it, call canvas again with id "
-                f"{cid} and the whole new content. Do not repeat it in "
-                "your reply.")
+                f"(id {cid}). To redraw it, call canvas again with id "
+                f"{cid} and the whole new content.{live} Do not repeat it "
+                "in your reply.")
     tool_result("No page to show it on")
     return ("Error: the canvas needs Flash's web app; nothing was shown. "
             "Give the content in your reply instead.")
+
+
+def _canvas_patches(patches: Any) -> tuple[list[dict], str]:
+    """The changes asked for, checked: (patches, "") or ([], why not)."""
+
+    if isinstance(patches, str):
+        try:
+            patches = json.loads(patches) if patches.strip() else []
+        except ValueError:
+            return [], "patches is a JSON list of changes."
+    if isinstance(patches, dict):
+        patches = [patches]
+    if not isinstance(patches, list) or not patches:
+        return [], ("give patches: a list of {selector, how, html}, how "
+                    "being " + ", ".join(CANVAS_HOWS) + ".")
+    if len(patches) > 50:
+        return [], "at most 50 patches at a time."
+    out = []
+    for n, one in enumerate(patches, 1):
+        if not isinstance(one, dict) or not str(one.get("selector") or
+                                                "").strip():
+            return [], f"patch {n} has no selector."
+        how = str(one.get("how") or "inner").strip().lower()
+        if how not in CANVAS_HOWS:
+            return [], (f"patch {n}: how is one of "
+                        + ", ".join(CANVAS_HOWS) + ".")
+        if how == "attr" and not str(one.get("name") or "").strip():
+            return [], f"patch {n}: an attr patch needs the attribute's name."
+        out.append({"selector": str(one["selector"]), "how": how,
+                    "html": str(one.get("html") or ""),
+                    "name": str(one.get("name") or ""),
+                    "all": bool(one.get("all"))})
+    if sum(len(p["html"]) for p in out) > 200_000:
+        return [], "over 200,000 characters of patches: make them smaller."
+    return out, ""
+
+
+def _canvas_act(doing: str, cid: str, patches: Any, script: str) -> str:
+    """A patch, run, read or look on the live canvas CID, through the
+    page that shows it."""
+
+    if not cid:
+        return "Error: give the id of the canvas, from when it was shown."
+    tool_line(f"Canvas({doing} {cid})")
+    asked: dict[str, Any] = {"id": cid, "op": doing}
+    if doing == "patch":
+        asked["patches"], why = _canvas_patches(patches)
+        if why:
+            tool_result(why, style=ERROR)
+            return f"Error: {why}"
+    if doing == "run":
+        if not script.strip():
+            return "Error: give script, JavaScript run in the canvas."
+        if len(script) > 100_000:
+            return "Error: the script is over 100,000 characters."
+        asked["script"] = script
+    if doing == "look" and not model_sees_images(OLLAMA_HOST, MODEL_NAME):
+        result = (f"Error: the active model ({MODEL_NAME}) cannot see "
+                  "images; use action read to get the canvas's text and "
+                  "values instead.")
+        tool_result(result, style=ERROR)
+        return result
+    got = tool_canvas_op(asked)
+    if got is None:
+        tool_result("No page to show it on")
+        return ("Error: the canvas needs Flash's web app; there is no "
+                "canvas here.")
+    if not isinstance(got, dict):
+        got = {"error": str(got)}
+    if got.get("error"):
+        tool_result(str(got["error"]), style=ERROR)
+        return f"Error: {got['error']}"
+    if doing == "patch":
+        missed = [str(m) for m in got.get("missed") or []]
+        if got.get("later"):
+            tool_result("Saved, shown when the chat is opened")
+            return ("No page has the chat open right now: the changes are "
+                    "kept and made when the canvas is next shown.")
+        tool_result(f"Changed {got.get('changed', 0)}")
+        said = f"Changed {got.get('changed', 0)} element(s) in place."
+        if missed:
+            said += (" Nothing matched: " + ", ".join(missed[:10])
+                     + ". Read the canvas to see what is there.")
+        return said
+    if doing == "look":
+        return _canvas_look(cid, str(got.get("html") or ""),
+                            int(got.get("width") or 0),
+                            int(got.get("height") or 0))
+    answer = got.get("result") if doing == "run" else {
+        k: got.get(k) for k in ("values", "state", "text")}
+    shown = answer if isinstance(answer, str) else json.dumps(
+        answer, ensure_ascii=False, indent=1)
+    if len(shown) > CANVAS_ANSWER_CHARS:
+        shown = shown[:CANVAS_ANSWER_CHARS] + "\n[cut short]"
+    tool_result("Ran" if doing == "run" else "Read")
+    if doing == "run":
+        return f"The script ran in canvas {cid}. It returned:\n{shown}"
+    return (f"Canvas {cid} as it is now in the user's page (values are "
+            "its inputs, state is what its code put in flash.state, text "
+            f"is what it shows):\n{shown}")
+
+
+def _canvas_look(cid: str, html: str, width: int, height: int) -> str:
+    """A picture of the canvas, drawn from what the page showed, attached
+    for the model to see."""
+
+    global _screenshot_count
+
+    if not html.strip():
+        return "Error: the page sent nothing to draw."
+    view_width = _clamp(width, MIN_SCREENSHOT_SIDE, MAX_SCREENSHOT_SIDE,
+                        DEFAULT_SCREENSHOT_WIDTH)
+    view_height = _clamp(height, MIN_SCREENSHOT_SIDE, MAX_SCREENSHOT_SIDE,
+                         DEFAULT_SCREENSHOT_HEIGHT)
+    _screenshot_count += 1
+    page = Path(SCRATCH_DIR) / f"canvas-{cid}.html"
+    out = Path(SCRATCH_DIR) / f"canvas-{_screenshot_count}.png"
+    page.parent.mkdir(parents=True, exist_ok=True)
+    page.write_text(html, encoding="utf-8")
+    _problems, why = capture(page.resolve().as_uri(), out, width=view_width,
+                             height=view_height, full_page=False, wait_ms=200,
+                             cursor=False)
+    if why:
+        tool_result(why, style=ERROR)
+        return f"Error: {why}"
+    data = out.read_bytes()
+    _pending_images.append(data)
+    tool_result(f"{view_width}x{view_height} ({max(1, len(data) // 1024)} "
+                f"KB) {out.name}")
+    return (f"A picture of canvas {cid} as the user sees it now, at "
+            f"{view_width}x{view_height}, is attached. Judge it from what "
+            "you can see.")
 
 
 def read_aloud(text: str = "", url: str = "", path: str = "",
@@ -7917,11 +8069,17 @@ tools: list[dict[str, Any]] = [
             "name": "canvas",
             "description": (
                 "Show visual content live in the web chat as a canvas card: "
-                "a page, chart, diagram, table or mock-up you build and "
-                "keep updating as you work. The first call makes a canvas "
-                "and returns its id; call again with that id and the whole "
-                "new content to redraw it in place. HTML runs in a sandbox "
-                "(scripts allowed, no access to Flash). Web app only."),
+                "a page, chart, diagram, table, form or mock-up you build "
+                "and keep updating as you work. The first call makes a "
+                "canvas and returns its id; call again with that id and "
+                "the whole new content to redraw it. An HTML canvas is "
+                "live: action patch changes parts of it in place by CSS "
+                "selector (keeping what the user typed), run runs "
+                "JavaScript in it and returns the result, read returns "
+                "its inputs' values, flash.state and text, look attaches "
+                "a picture of it. Its buttons can message you with "
+                "flash.send(text). HTML runs in a sandbox (no access to "
+                "Flash). Web app only."),
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -7935,8 +8093,34 @@ tools: list[dict[str, Any]] = [
                     "id": {"type": "string", "description": (
                         "To update a canvas: its id from the first call. "
                         "Left out, a new canvas.")},
+                    "action": {"type": "string", "enum": list(
+                        CANVAS_ACTIONS), "description": (
+                        "show (default) draws content; patch, run, read "
+                        "and look act on the live canvas with this id.")},
+                    "patches": {"type": "array", "description": (
+                        "For patch: the changes, in order."), "items": {
+                        "type": "object", "properties": {
+                            "selector": {"type": "string"},
+                            "how": {"type": "string",
+                                    "enum": list(CANVAS_HOWS),
+                                    "description": (
+                                        "inner (default) replaces its "
+                                        "content, outer the element, "
+                                        "append/prepend add html, text "
+                                        "sets plain text, remove, attr "
+                                        "sets attribute name to html, "
+                                        "value sets an input's value.")},
+                            "html": {"type": "string"},
+                            "name": {"type": "string", "description": (
+                                "For attr: the attribute.")},
+                            "all": {"type": "boolean", "description": (
+                                "Every match, not just the first.")},
+                        }, "required": ["selector"]}},
+                    "script": {"type": "string", "description": (
+                        "For run: the body of an async function run in "
+                        "the canvas; what it returns comes back.")},
                 },
-                "required": ["content"],
+                "required": [],
             },
         },
     },

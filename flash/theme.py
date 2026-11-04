@@ -576,6 +576,15 @@ def tool_canvas(state: dict) -> bool:
     return bool(sink("canvas", json.dumps(state), "")) if sink else False
 
 
+def tool_canvas_op(asked: dict) -> Any:
+    """Patch, run code in, read or look at a live canvas (ASKED: id, op,
+    and what the op needs), through the page showing it: the page's
+    answer as a dict, or None where there is no page (the terminal)."""
+
+    sink = _sink()
+    return sink("canvas-op", json.dumps(asked), "") if sink else None
+
+
 def tool_chess_move(game: str, move: str) -> Optional[dict]:
     """Flash's MOVE in the chess GAME on the page (play_chess): the game
     after it, {"error": ...} when the page refused it, or None where
