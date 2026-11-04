@@ -17273,6 +17273,7 @@ function apply(event) {
   if (event.type === "btw") { btwEvent(event); return; }
   if (event.type === "debate-live") { debateLive(event); return; }
   if (event.type === "course-changed") { courseChanged(event); return; }
+  if (event.type === "canvas-op") { canvasOp(event); return; }
   if (event.type === "chess-changed") { if (event.chat === current) chessGameChanged(event.game); return; }
   if (event.type === "doc-changed") { docChanged(event); return; }
   if (event.type === "doc-proposal") { docProposal(event); return; }
@@ -17327,6 +17328,19 @@ function apply(event) {
       renderChats();
       if (here) drawChat();
       return;
+    case "canvas": {
+      // Kept once, where it was first shown, and redrawn there.
+      const entry = { ...event };
+      delete entry.chat;
+      const at = chat.log.findIndex((x) => x.type === "canvas" && x.id === entry.id);
+      if (at >= 0) {
+        chat.log[at] = entry;
+        if (here) drawEntry(entry, drawCtx);
+        return;
+      }
+      // a new one: on into the log like anything else
+    }
+    // falls through
     default: {
       const entry = { ...event };
       delete entry.chat;
@@ -18845,6 +18859,133 @@ const COURSE_STARTER = {
 };
 const COURSE_LANG = { c: "C", cpp: "C++", python: "Python", javascript: "JavaScript", rust: "Rust", go: "Go", java: "Java", shell: "Shell" };
 
+// The canvas made live: a script put first in an HTML canvas, there to
+// change it in place, run code in it, read it and draw it for Flash when
+// the page asks, and to give its own code flash.send and flash.state.
+// It runs in the canvas's sandbox and only ever talks to this page.
+const CANVAS_HELPER = `<script>(() => {
+  const up = (m) => parent.postMessage(m, "*");
+  const flash = window.flash = { state: {}, send(text) {
+    // Only from something the user did, so a canvas cannot talk on its own.
+    if (navigator.userActivation && !navigator.userActivation.isActive) return false;
+    up({ type: "flash-canvas-send", text: String(text ?? "").slice(0, 4000) });
+    return true;
+  } };
+  const plain = (v) => { try { return JSON.parse(JSON.stringify(v === undefined ? null : v)); } catch { return String(v); } };
+  function values() {
+    const out = {};
+    document.querySelectorAll("input,select,textarea").forEach((e, i) => {
+      const k = e.name || e.id || e.tagName.toLowerCase() + i;
+      if (e.type === "radio") { if (e.checked) out[k] = e.value; else if (!(k in out)) out[k] = null; }
+      else if (e.type === "checkbox") out[k] = e.checked;
+      else if (e.type === "password") out[k] = e.value ? "(hidden)" : "";
+      else if (e.multiple) out[k] = [...e.selectedOptions].map((o) => o.value);
+      else out[k] = e.value;
+    });
+    return out;
+  }
+  function picture() {
+    // The page as it looks now: what was typed written in, drawn
+    // canvases as pictures, and no scripts to run again.
+    const copy = document.documentElement.cloneNode(true);
+    const from = document.querySelectorAll("input,select,textarea,canvas"), to = copy.querySelectorAll("input,select,textarea,canvas");
+    from.forEach((e, i) => {
+      const c = to[i];
+      if (!c) return;
+      if (e.tagName === "CANVAS") {
+        const img = document.createElement("img");
+        try { img.src = e.toDataURL(); } catch {}
+        for (const a of ["id", "class", "style"]) if (e.getAttribute(a)) img.setAttribute(a, e.getAttribute(a));
+        img.width = e.clientWidth; img.height = e.clientHeight;
+        c.replaceWith(img);
+      } else if (e.type === "checkbox" || e.type === "radio") c.toggleAttribute("checked", e.checked);
+      else if (e.tagName === "TEXTAREA") c.textContent = e.value;
+      else if (e.tagName === "SELECT") [...c.options].forEach((o, n) => o.toggleAttribute("selected", e.options[n] && e.options[n].selected));
+      else if (e.type !== "password") c.setAttribute("value", e.value);
+    });
+    copy.querySelectorAll("script").forEach((x) => x.remove());
+    return "<!doctype html>" + copy.outerHTML;
+  }
+  function patch(list) {
+    let changed = 0;
+    const missed = [];
+    for (const p of list || []) {
+      let found;
+      try { found = p.all ? [...document.querySelectorAll(p.selector)] : [document.querySelector(p.selector)].filter(Boolean); }
+      catch { missed.push(p.selector); continue; }
+      if (!found.length) { missed.push(p.selector); continue; }
+      for (const e of found) {
+        if (p.how === "outer") e.outerHTML = p.html;
+        else if (p.how === "append") e.insertAdjacentHTML("beforeend", p.html);
+        else if (p.how === "prepend") e.insertAdjacentHTML("afterbegin", p.html);
+        else if (p.how === "text") e.textContent = p.html;
+        else if (p.how === "remove") e.remove();
+        else if (p.how === "attr") e.setAttribute(p.name, p.html);
+        else if (p.how === "value") { e.value = p.html; e.dispatchEvent(new Event("input", { bubbles: true })); }
+        else e.innerHTML = p.html;
+        changed++;
+      }
+    }
+    return { changed, missed };
+  }
+  const Run = (async () => {}).constructor;
+  addEventListener("message", async (e) => {
+    const d = e.data;
+    if (e.source !== parent || !d || d.type !== "flash-canvas-op") return;
+    let result;
+    try {
+      if (d.op === "patch") result = patch(d.patches);
+      else if (d.op === "run") result = { result: plain(await new Run("flash", d.script)(flash)) };
+      else if (d.op === "read") result = { values: values(), state: plain(flash.state), text: (document.body ? document.body.innerText : "").slice(0, 20000) };
+      else if (d.op === "look") result = { html: picture(), width: innerWidth, height: innerHeight };
+      else result = { error: "Unknown op " + d.op };
+    } catch (err) { result = { error: (d.op === "run" ? "The script threw: " : "It failed: ") + (err && err.message || err) }; }
+    if (d.nonce) up({ type: "flash-canvas-answer", nonce: d.nonce, result });
+  });
+})();<\/script>`;
+
+function canvasLive(html) {
+  // First thing in the document, after its doctype so it stays standard.
+  const head = /^\s*<!doctype[^>]*>/i.exec(html);
+  return head ? head[0] + CANVAS_HELPER + html.slice(head[0].length) : CANVAS_HELPER + html;
+}
+
+// The canvas frame a message came from, if it came from one.
+const canvasFrameOf = (source) => [...document.querySelectorAll(".canvas-card iframe")].find((f) => f.contentWindow === source);
+const canvasSent = new WeakMap();
+
+window.addEventListener("message", (e) => {
+  const d = e.data;
+  if (!d || typeof d !== "object" || !String(d.type || "").startsWith("flash-canvas-")) return;
+  const frame = canvasFrameOf(e.source);
+  if (!frame) return;
+  const card = frame.closest(".canvas-card");
+  if (d.type === "flash-canvas-answer") {
+    command("canvas-result", String(d.nonce || ""), current, { result: d.result && typeof d.result === "object" ? d.result : { error: "No answer" } }).catch(() => {});
+  } else if (d.type === "flash-canvas-send" && current) {
+    // A button in the canvas talking to Flash: said in the chat, marked
+    // as the canvas's, and at most one a second.
+    const text = String(d.text || "").trim();
+    const last = canvasSent.get(frame) || 0;
+    if (!text || Date.now() - last < 1000) return;
+    canvasSent.set(frame, Date.now());
+    const title = card.querySelector(".canvas-title").textContent;
+    api("/api/send", { chat: current, mode: "steer", text: `[From the canvas "${title}" (id ${card.dataset.canvas})] ${text}` }).catch(showFailure);
+  }
+});
+
+// Flash acting on a live canvas: done in the frame, which answers.
+function canvasOp(event) {
+  const chat = chats.get(event.chat);
+  const kept = chat && chat.log.find((x) => x.type === "canvas" && x.id === event.id);
+  if (kept && event.op === "patch") kept.patches = (kept.patches || []).concat(event.patches || []).slice(-200);
+  if (event.chat !== current) return;
+  const frame = messagesEl.querySelector(`.canvas-card[data-canvas="${CSS.escape(event.id || "")}"] iframe`);
+  if (!frame) return;
+  const op = { type: "flash-canvas-op", op: event.op, nonce: event.nonce, patches: event.patches, script: event.script };
+  if (frame._ready) frame.contentWindow.postMessage(op, "*"); else frame._ops.push(op);
+}
+
 function canvasCard(entry) {
   // The agent's canvas: HTML or SVG in a sandboxed frame (its scripts run,
   // but it cannot reach Flash), Markdown drawn like a reply.
@@ -18861,7 +19002,15 @@ function canvasCard(entry) {
     frame.title = entry.title || "Canvas";
     frame.srcdoc = entry.format === "svg"
       ? `<!doctype html><meta charset="utf-8"><style>html,body{margin:0;height:100%;display:grid;place-items:center}svg{max-width:100%;max-height:100%}</style>${entry.content || ""}`
-      : entry.content || "";
+      : canvasLive(entry.content || "");
+    // Ops wait for the frame to load; the patches made since the canvas
+    // was drawn whole are made again first, so it looks as it did.
+    frame._ops = [];
+    frame.onload = () => {
+      frame._ready = true;
+      if ((entry.patches || []).length) frame.contentWindow.postMessage({ type: "flash-canvas-op", op: "patch", patches: entry.patches }, "*");
+      frame._ops.splice(0).forEach((op) => frame.contentWindow.postMessage(op, "*"));
+    };
     body.appendChild(frame);
   }
   card.querySelector(".canvas-full").onclick = () => {

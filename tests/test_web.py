@@ -5275,3 +5275,98 @@ def test_course_commands_and_card(monkeypatch):
     with pytest.raises(ValueError):
         web.command(session, {"name": "course-answer", "arg": "c",
                               "id": "hi", "choice": 0})
+
+
+def test_a_canvas_is_kept_once_with_the_patches_since_it_was_drawn():
+    session = web.Session()
+    chat = session.new_chat()
+    sink = web._sink(session, chat)
+    shown = {"id": "c1", "title": "Board", "format": "html",
+             "content": "<p id=a>one</p>"}
+    assert sink("canvas", json.dumps(shown), "")
+    # No page open: a patch is kept for when the canvas is drawn again,
+    # and a read has nothing to read.
+    patch = [{"selector": "#a", "how": "text", "html": "two"}]
+    assert sink("canvas-op", json.dumps(
+        {"id": "c1", "op": "patch", "patches": patch}), "") == {
+            "later": True}
+    assert "error" in sink("canvas-op", json.dumps(
+        {"id": "c1", "op": "read"}), "")
+    kept = [e for e in chat.log if e.get("type") == "canvas"]
+    assert len(kept) == 1 and kept[0]["patches"] == patch
+    # Drawn whole again: still one, where it was, the patches gone.
+    assert sink("canvas", json.dumps({**shown, "content": "<p>new</p>"}), "")
+    kept = [e for e in chat.log if e.get("type") == "canvas"]
+    assert len(kept) == 1 and kept[0]["content"] == "<p>new</p>"
+    assert "patches" not in kept[0]
+    assert "no canvas" in sink("canvas-op", json.dumps(
+        {"id": "zz", "op": "read"}), "")["error"]
+    sink("canvas", json.dumps({**shown, "id": "m", "format": "markdown"}),
+         "")
+    assert "Only an HTML canvas" in sink("canvas-op", json.dumps(
+        {"id": "m", "op": "read"}), "")["error"]
+
+
+def test_a_canvas_op_is_answered_by_the_page_showing_it():
+    from flash.theme import capture_tool_output
+
+    session = web.Session()
+    chat = session.new_chat()
+    sink = web._sink(session, chat)
+    sink("canvas", json.dumps({"id": "c1", "title": "Form", "format": "html",
+                               "content": "<input name=n>"}), "")
+    page = session.hub.subscribe()
+
+    def answer(result):
+        # The page: the op arrives, the canvas answers through it.
+        while True:
+            event = page.get(timeout=5)
+            if event.get("type") == "canvas-op":
+                break
+        assert event["chat"] == chat.id and event["id"] == "c1"
+        web.command(session, {"name": "canvas-result",
+                              "arg": event["nonce"], "result": result})
+        # A second answer, from another page, changes nothing.
+        web.command(session, {"name": "canvas-result",
+                              "arg": event["nonce"], "result": {"x": 1}})
+        return event
+
+    got = {}
+    threading.Thread(target=lambda: got.update(answer(
+        {"values": {"n": "Ada"}, "state": {"step": 2}, "text": "Hi"})),
+        daemon=True).start()
+    with capture_tool_output(sink):
+        said = tools.canvas(id="c1", action="read")
+    assert '"n": "Ada"' in said and '"step": 2' in said
+    assert got["op"] == "read"
+
+    threading.Thread(target=lambda: got.update(answer(
+        {"result": [1, 2, 3]})), daemon=True).start()
+    with capture_tool_output(sink):
+        said = tools.canvas(id="c1", action="run", script="return [1,2,3]")
+    assert got["script"] == "return [1,2,3]" and "[\n 1," in said
+
+    threading.Thread(target=lambda: got.update(answer(
+        {"changed": 1, "missed": ["#gone"]})), daemon=True).start()
+    with capture_tool_output(sink):
+        said = tools.canvas(id="c1", action="patch", patches=[
+            {"selector": "input", "how": "value", "html": "Bo"},
+            {"selector": "#gone", "how": "remove"}])
+    assert "Changed 1" in said and "#gone" in said
+    assert got["patches"][0] == {"selector": "input", "how": "value",
+                                 "html": "Bo", "name": "", "all": False}
+    assert not session.canvas_waits
+
+
+def test_canvas_actions_are_checked_before_they_reach_the_page():
+    assert tools.canvas(id="c1", action="dance").startswith("Error")
+    assert "id of the canvas" in tools.canvas(action="read")
+    assert "script" in tools.canvas(id="c1", action="run")
+    for bad in ([], [{"how": "inner"}], [{"selector": "a", "how": "melt"}],
+                [{"selector": "a", "how": "attr"}], "not json"):
+        assert tools.canvas(id="c1", action="patch",
+                            patches=bad).startswith("Error"), bad
+    ok, why = tools._canvas_patches('{"selector": "#a", "html": "x"}')
+    assert not why and ok[0]["how"] == "inner"
+    # No page at all (the terminal): said plainly.
+    assert "web app" in tools.canvas(id="c1", action="read")
