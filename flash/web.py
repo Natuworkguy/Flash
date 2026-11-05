@@ -6453,16 +6453,27 @@ def _team_command(name: str, arg: str, body: dict) -> dict:
         if name == "team-chat-call":
             # A call begun (with a spark, or a team), or a step of one:
             # still there, connected, answered, declined, hung up.
+            # Which page or terminal it is on, so another can take it.
+            holder = str(body.get("holder") or "")[:80]
             if body.get("end"):
-                return {"entry": teamchat.end_call(
-                    arg, str(body.get("end"))[:40],
+                return {"entry": teamchat.call_step(
+                    arg, str(body.get("end"))[:40], "end", holder,
                 )}
             step = str(body.get("step") or "")
             if step:
                 return {"entry": teamchat.call_step(
-                    arg, str(body.get("call") or "")[:40], step,
+                    arg, str(body.get("call") or "")[:40], step, holder,
                 )}
-            return {"entry": teamchat.start_call(arg)}
+            return {"entry": teamchat.start_call(arg, holder)}
+        if name == "team-chat-call-state":
+            # A call as it stands: still here, moved, or over.
+            found = teamchat._call_entry(
+                teamchat._settled(teamchat._team(arg).id),
+                str(body.get("call") or "")[:40])
+            return {"entry": found}
+        if name == "team-chat-live":
+            # Calls going on now, anywhere: to take one over here.
+            return {"calls": teamchat.live_calls()}
         if name == "team-chat-call-log":
             # Who said what on a call, from the chat itself.
             return {"lines": teamchat.call_log(
