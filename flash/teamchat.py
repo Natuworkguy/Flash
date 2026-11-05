@@ -40,7 +40,8 @@ MAX_CALL_ENTRIES = 1500
 CALL_STALE = 5 * 60
 # How long a spark's call to the user rings before it is missed.
 RING_SECONDS = 45
-# How long a spark waits after calling the user before it may call again.
+# How long a spark waits after calling the user before it may call again,
+# unless it works in UltraAuto.
 CALL_USER_GAP = 30 * 60
 # How many replies from sparks one message of the user's can set off,
 # counting those a spark's @mention brings in.
@@ -643,7 +644,8 @@ def ring(spark: sparks.Spark, reason: str) -> dict:
         last = max((float(e.get("at") or 0) for e in data["entries"]
                     if e.get("kind") == CALL and e.get("from") == SPARK),
                    default=0)
-        if now - last < CALL_USER_GAP:
+        # In UltraAuto a spark is trusted to call as often as it needs.
+        if sparks.mode_of(spark) != "ultra" and now - last < CALL_USER_GAP:
             wait = int((CALL_USER_GAP - (now - last)) // 60) + 1
             raise TeamChatError(
                 f"You called the user {int((now - last) // 60)} minutes "

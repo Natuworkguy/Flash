@@ -1429,3 +1429,18 @@ def test_the_terminal_can_decline_a_call(team, monkeypatch):
     ai._terminal_ring(room, ring)
     ai._decline_ring()
     assert _call(room, ring["call"])["state"] == "declined"  # nosec B101
+
+
+def test_a_spark_in_ultra_auto_can_call_as_often_as_needed(team, monkeypatch):
+    lead = sparks.find("lead")
+    room = teamchat.dm_id(lead.id)
+    monkeypatch.setattr(sparks, "mode_of", lambda spark: "ultra")
+    first = teamchat.ring(lead, "One")
+    teamchat.call_step(room, first["call"], "decline")
+    second = teamchat.ring(lead, "Two, right away")
+    assert second["state"] == "ringing"  # nosec B101
+    # Out of UltraAuto, the wait is back.
+    teamchat.call_step(room, second["call"], "decline")
+    monkeypatch.setattr(sparks, "mode_of", lambda spark: "auto")
+    with pytest.raises(teamchat.TeamChatError, match="Wait"):
+        teamchat.ring(lead, "Three")
