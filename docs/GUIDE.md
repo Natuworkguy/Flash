@@ -787,8 +787,9 @@ have looked them over.
   with a prompt whose Answer opens Flash on the call; the terminal rings
   its bell (Enter or `/answer` picks up, `/decline` turns it down); and
   with only the keeper running, the computer rings the same way. A call
-  not picked up is a missed call in the chat, with Call back. In the
-  terminal, `/call <spark>` calls one, by voice or typed.
+  not picked up is a missed call in the chat, with Call back, and when
+  it still needs you, the spark can @mention you with what it called
+  about. In the terminal, `/call <spark>` calls one, by voice or typed.
 - **Team rules.** Lines every spark on a team keeps to, on top of its own
   boundaries, on shifts and in chats alike (the team's edit form, or
   `/sparks teams rules <team> <rules|none>`).
