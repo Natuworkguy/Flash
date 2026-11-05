@@ -1505,3 +1505,57 @@ def test_the_terminal_switches_incoming_calls(monkeypatch):
     assert not teamchat.calls_allowed()  # nosec B101
     ai._call_command("incoming on")
     assert teamchat.calls_allowed()  # nosec B101
+
+
+def test_a_call_moves_between_flashes(team):
+    room = teamchat.dm_id(sparks.find("lead").id)
+    call = teamchat.start_call(room, "web:aaa")["call"]
+    assert call_holder(room, call) == "web:aaa"  # nosec B101
+    assert [c["call"] for c in teamchat.live_calls()] == [call]  # nosec
+    assert teamchat.live_calls()[0]["team"] == room  # nosec B101
+
+    taken = teamchat.call_step(room, call, "take", "terminal:42")
+    assert taken["holder"] == "terminal:42" and taken["taken"]  # nosec
+    # The page it left lets go: its beat and its hang-up change nothing.
+    before = taken["beat"]
+    assert teamchat.call_step(room, call, "beat", "web:aaa")[  # nosec B101
+        "beat"] == before
+    teamchat.call_step(room, call, "end", "web:aaa")
+    assert _call(room, call)["state"] in ("calling", "live")  # nosec B101
+    # Where it went, it is hung up for real.
+    teamchat.call_step(room, call, "end", "terminal:42")
+    assert _call(room, call)["state"] not in ("calling", "live")  # nosec
+    assert teamchat.live_calls() == []  # nosec B101
+    # An ended call cannot be taken.
+    teamchat.call_step(room, call, "take", "web:bbb")
+    assert call_holder(room, call) == "terminal:42"  # nosec B101
+
+
+def test_a_spark_call_answered_is_held_where_it_was_answered(team):
+    lead = sparks.find("lead")
+    room = teamchat.dm_id(lead.id)
+    ring = teamchat.ring(lead, "Quick question")
+    teamchat.call_step(room, ring["call"], "answer", "web:ccc")
+    assert call_holder(room, ring["call"]) == "web:ccc"  # nosec B101
+
+
+def test_the_terminal_takes_a_call_over(team, monkeypatch):
+    from flash import ai
+
+    room = teamchat.dm_id(sparks.find("lead").id)
+    call = teamchat.start_call(room, "web:aaa")["call"]
+    ran = []
+    monkeypatch.setattr(ai, "_spark_call",
+                        lambda t, c, incoming=None, taken=False:
+                        ran.append((t, c, taken)))
+    ai._call_command("take")
+    assert ran == [(room, call, True)]  # nosec B101
+    assert call_holder(room, call) == ai.CALL_HOLDER  # nosec B101
+    # Its own call is not one to take.
+    ran.clear()
+    ai._call_command("take")
+    assert ran == []  # nosec B101
+
+
+def call_holder(room, call):
+    return _call(room, call).get("holder")

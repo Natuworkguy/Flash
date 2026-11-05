@@ -796,7 +796,12 @@ have looked them over.
   it still needs you, the spark can @mention you with what it called
   about. Don't want calls? Switch off Let sparks call me in Settings,
   General (or `/call incoming off`): sparks are no longer offered the
-  call, and @mention you instead. In the terminal, `/call <spark>` calls one, by voice or typed.
+  call, and @mention you instead. **Move a call** between Flashes as
+  you would between phones: a call going on in one Flash (a page, a
+  terminal) shows in every other page as a pill at the top, On a call
+  with Maya, with Transfer here; in a terminal, `/call take` (or `/call
+  take maya`) takes it over. It carries on where it was, with no hello,
+  and the Flash it left lets go without hanging up. In the terminal, `/call <spark>` calls one, by voice or typed.
 - **Team rules.** Lines every spark on a team keeps to, on top of its own
   boundaries, on shifts and in chats alike (the team's edit form, or
   `/sparks teams rules <team> <rules|none>`).

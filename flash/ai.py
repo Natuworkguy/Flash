@@ -4266,6 +4266,8 @@ def _terminal_ping(said: dict) -> None:
 
 # What said on a call in the terminal hangs it up.
 HANG_UP = ("hang up", "end the call", "end call")
+# This terminal, as the Flash a call is on: another can take it over.
+CALL_HOLDER = f"terminal:{os.getpid()}"
 # A spark's call ringing in this terminal: (its chat, its entry), and
 # whether it was answered from the desktop's prompt.
 _ring: dict = {}
@@ -4319,17 +4321,29 @@ def _show_ring() -> None:
     console.print(note)
 
 
-def _spark_call(team: str, call: str, incoming: Optional[dict] = None) -> None:
+def _spark_call(team: str, call: str, incoming: Optional[dict] = None,
+                taken: bool = False) -> None:
     """A voice call with a spark (or a team) here in the terminal: it
     speaks first, then each thing said goes to it and its answers are
     read out, in its own voice, until either hangs up. With no voice set
-    up it is typed, the same way."""
+    up it is typed, the same way. TAKEN: a call taken over from another
+    Flash, which carries on where it was, with no hello."""
 
     from . import teamchat
     from . import voice as voice_mod
 
     spoken = models_present()
-    who = (incoming or {}).get("name") or ""
+    who = (incoming or {}).get("name") or _call_party(team)
+
+    def moved() -> bool:
+        """Whether the call went on elsewhere: taken over by another
+        Flash, or hung up there."""
+
+        entry = teamchat._call_entry(teamchat._read(team), call)
+        if entry is None or teamchat._state(entry) not in (
+                "calling", "live"):
+            return True
+        return str(entry.get("holder") or CALL_HOLDER) != CALL_HOLDER
     console.print(Text(
         f"  On a call{' with ' + who if who else ''}. "
         + ("Speak when it is your turn; say \"hang up\" or press Ctrl+C "
@@ -4354,7 +4368,7 @@ def _spark_call(team: str, call: str, incoming: Optional[dict] = None) -> None:
                 continue
             if not connected:
                 connected = True
-                teamchat.call_step(team, call, "connected")
+                teamchat.call_step(team, call, "connected", CALL_HOLDER)
             said = str(entry.get("spoken") or entry.get("text") or "")
             name = str(entry.get("name") or "Spark")
             console.print(Text(f"  {name}: ", style=f"bold {ACCENT}")
@@ -4368,9 +4382,13 @@ def _spark_call(team: str, call: str, incoming: Optional[dict] = None) -> None:
         return True
 
     try:
-        if not round_(hello, hidden=True):
+        if taken:
+            connected = True
+        elif not round_(hello, hidden=True):
             return
         while True:
+            if moved():
+                return
             if spoken:
                 said = _voice_input()
                 if said is None:
@@ -4382,6 +4400,8 @@ def _spark_call(team: str, call: str, incoming: Optional[dict] = None) -> None:
             words = " ".join(said.lower().strip(" .!").split())
             if is_exit_phrase(said) or words in HANG_UP:
                 return
+            if moved():
+                return
             if spoken:
                 console.print(Text("  You: ", style="bold") + Text(said))
             if not round_(said):
@@ -4389,9 +4409,13 @@ def _spark_call(team: str, call: str, incoming: Optional[dict] = None) -> None:
     except (KeyboardInterrupt, EOFError):
         console.print()
     finally:
+        gone = moved()
+        # Taken over elsewhere, it goes on there: not hung up from here.
         with contextlib.suppress(Exception):
-            teamchat.call_step(team, call, "end")
-        console.print(Text("  Call ended.", style=DIM))
+            teamchat.call_step(team, call, "end", CALL_HOLDER)
+        console.print(Text(
+            "  The call moved to another Flash." if gone and _call_open(
+                team, call) else "  Call ended.", style=DIM))
 
 
 def _answer_ring() -> None:
@@ -4403,7 +4427,8 @@ def _answer_ring() -> None:
     team, entry = _ring["team"], dict(_ring["entry"])
     _ring["taking"] = True
     try:
-        teamchat.call_step(team, str(entry.get("call")), "answer")
+        teamchat.call_step(team, str(entry.get("call")), "answer",
+                           CALL_HOLDER)
     except ValueError as exc:
         _ring.clear()
         warn(str(exc))
@@ -4432,6 +4457,9 @@ def _call_command(arg: str) -> None:
     from . import teamchat
 
     words = arg.split()
+    if words[:1] == ["take"]:
+        _take_call(" ".join(words[1:]))
+        return
     if words[:1] == ["incoming"]:
         # /call incoming on|off: whether sparks may call you.
         if words[1:] in (["on"], ["off"]):
@@ -4448,8 +4476,52 @@ def _call_command(arg: str) -> None:
         warn(f"Usage: /call <spark>. Sparks: {names}.")
         return
     room = teamchat.dm_id(spark.id)
-    entry = teamchat.start_call(room)
+    entry = teamchat.start_call(room, CALL_HOLDER)
     _spark_call(room, entry["call"], incoming=None)
+
+
+def _call_party(team: str) -> str:
+    """Who a call in TEAM's chat is with: the spark's name, or the team's."""
+
+    from . import teamchat
+
+    with contextlib.suppress(Exception):
+        return teamchat._team(team).name
+    return ""
+
+
+def _call_open(team: str, call: str) -> bool:
+    from . import teamchat
+
+    entry = teamchat._call_entry(teamchat._read(team), call)
+    return entry is not None and teamchat._state(entry) in ("calling", "live")
+
+
+def _take_call(arg: str) -> None:
+    """/call take [name]: a call going on in another Flash (a page, or
+    another terminal), taken over here, to carry on where it was."""
+
+    from . import teamchat
+
+    found = [c for c in teamchat.live_calls()
+             if c.get("holder") != CALL_HOLDER]
+    wanted = arg.strip().lstrip("@").casefold()
+    if wanted:
+        found = [c for c in found
+                 if wanted in _call_party(c["team"]).casefold()]
+    if not found:
+        warn("No call is going on in another Flash to take over.")
+        return
+    if len(found) > 1 and not wanted:
+        names = ", ".join(_call_party(c["team"]) for c in found)
+        warn(f"Calls are going on with {names}: /call take <name> picks "
+             "one.")
+        return
+    call = found[0]
+    teamchat.call_step(call["team"], call["call"], "take", CALL_HOLDER)
+    console.print(Text(f"  Took the call with {_call_party(call['team'])} "
+                       "over from the other Flash.", style=DIM))
+    _spark_call(call["team"], call["call"], taken=True)
 
 
 def _keep_sparks() -> None:

@@ -1254,6 +1254,15 @@ body.voice-on .shell, body.voice-on #suggestions, body.voice-on #pending { displ
    mode takes away, under the greeting on a new chat. */
 #on-call { display: none; align-items: center; gap: 12px; margin: 0 auto 10px; max-width: 520px; padding: 10px 10px 10px 16px; border: 1px solid color-mix(in srgb, var(--c, #2f9e5b) 45%, var(--border-strong)); border-radius: 16px; background: color-mix(in srgb, var(--c, #2f9e5b) 8%, var(--surface)); }
 body.spark-calling #on-call:not([hidden]) { display: flex; animation: rise-far 0.45s var(--ease) both; }
+/* A call going on in another Flash: a pill floating at the top, like a
+   minimised call's, with a button to take it over here. */
+#call-elsewhere { position: fixed; top: 12px; left: 0; right: 0; margin: 0 auto; width: fit-content; z-index: 59; display: flex; align-items: center; gap: 10px; max-width: calc(100vw - 32px); padding: 6px 6px 6px 14px; border-radius: 999px; border: 1px solid color-mix(in srgb, var(--c, #2f9e5b) 45%, var(--border-strong)); background: color-mix(in srgb, var(--c, #2f9e5b) 10%, var(--surface)); box-shadow: var(--shadow-lg, 0 8px 30px rgba(0,0,0,.18)); animation: rise-far 0.45s var(--ease) both; }
+#call-elsewhere[hidden] { display: none; }
+#call-elsewhere .oc-dot { flex: none; width: 10px; height: 10px; border-radius: 50%; background: var(--c, #2f9e5b); animation: orb-breathe 1.6s ease-in-out infinite; }
+#call-elsewhere .ce-words { display: flex; flex-direction: column; min-width: 0; line-height: 1.25; }
+#call-elsewhere .ce-words b { font-size: 13.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#call-elsewhere .ce-meta { font-size: 12px; color: var(--text-2); white-space: nowrap; }
+#call-elsewhere .ce-take { flex: none; border-radius: 999px; }
 #on-call .oc-dot { flex: none; width: 10px; height: 10px; border-radius: 50%; background: var(--c, #2f9e5b); animation: orb-breathe 1.6s ease-in-out infinite; }
 #on-call .rec-words { flex: 1; min-width: 0; display: flex; flex-direction: column; line-height: 1.3; }
 #on-call .rec-words b { font-size: 13.5px; font-weight: 600; }
@@ -4053,6 +4062,11 @@ body.empty #ext-head, body.on-page #ext-head { display: none; }
     <div id="dock">
       <div class="col">
         <div id="hero"><h1 id="greeting">Good evening</h1></div>
+        <div id="call-elsewhere" hidden role="group" aria-label="A call in another Flash">
+          <span class="oc-dot" aria-hidden="true"></span>
+          <span class="ce-words"><b>On a call</b><span class="ce-meta"></span></span>
+          <button type="button" class="btn small primary ce-take">Transfer here</button>
+        </div>
         <div id="on-call" hidden role="group" aria-label="Call with a spark">
           <span class="oc-dot" aria-hidden="true"></span>
           <span class="rec-words"><b>On a call</b><span class="rec-meta"></span></span>
@@ -16467,6 +16481,8 @@ async function sendAndWait(text) {
 const sparkCall = { id: "", team: "", ready: null, on: false, ring: null, timer: 0, since: 0, beat: 0, fillers: null, rounds: 0, fillerUsed: false, fillerLast: -1, fillerSource: null,
   incoming: null, ringing: null, group: false, screen: null, names: new Map(), greeted: false }; // FILLERS: fillers to fillerSource
 const CALL_BEAT = 20000;
+// This page, as the Flash a call is on: another can take it over.
+const CALL_HOLDER = "web:" + Math.random().toString(36).slice(2, 10);
 
 // Who a call is with: the spark of a DM, or a team, from what this page knows.
 function callParty(team) {
@@ -16547,6 +16563,7 @@ function setCallMini(on) {
 
 // The bar under the greeting while a call goes on: who with, and for how long.
 function drawOnCall() {
+  drawCallElsewhere();
   const bar = $("#on-call");
   document.body.classList.toggle("spark-calling", sparkCall.on);
   bar.hidden = !sparkCall.on;
@@ -16585,19 +16602,29 @@ function startSparkCall(opts = {}) {
   stopIncoming();
   const wrap = callScreen(party, "calling", incoming ? "Connecting…" : party.group ? "Starting the call…" : "Calling…");
   callButtons(wrap);
-  Object.assign(sparkCall, { on: true, greeted: false, id: "", team, group: party.group, incoming, since: 0, rounds: 0 }); // FILLERS hook (rounds)
+  Object.assign(sparkCall, { on: true, greeted: false, id: "", team, group: party.group, incoming, since: 0, rounds: 0, taken: !!opts.take, moved: false }); // FILLERS hook (rounds)
   sparkCall.ready = (incoming
-    ? command("team-chat-call", team, null, { step: "answer", call: incoming.call }).then(() => incoming.call)
-    : command("team-chat-call", team, null, {}).then((r) => r.entry.call))
+    ? command("team-chat-call", team, null, { step: "answer", call: incoming.call, holder: CALL_HOLDER }).then(() => incoming.call)
+    : opts.take
+    // Taken over from another Flash: it carries on where it was.
+    ? command("team-chat-call", team, null, { step: "take", call: opts.take.call, holder: CALL_HOLDER }).then(() => opts.take.call)
+    : command("team-chat-call", team, null, { holder: CALL_HOLDER }).then((r) => r.entry.call))
     .then((id) => { sparkCall.id = id; if (teamChat.id === team) tcFetch(); return id; })
     .catch((error) => { showFailure(error); return ""; });
   // Without its entry the call cannot be kept apart from the chat: over.
   sparkCall.ready.then((id) => { if (!id && sparkCall.on && sparkCall.team === team) { endSparkCall("cancel"); endVoice(); } });
   clearInterval(sparkCall.beat);
-  sparkCall.beat = setInterval(() => { if (sparkCall.on && sparkCall.id) command("team-chat-call", sparkCall.team, null, { step: "beat", call: sparkCall.id }).catch(() => {}); }, CALL_BEAT);
-  if (!incoming) sparkCallRing(true);
+  sparkCall.beat = setInterval(() => { if (sparkCall.on && sparkCall.id) command("team-chat-call", sparkCall.team, null, { step: "beat", call: sparkCall.id, holder: CALL_HOLDER }).catch(() => {}); }, CALL_BEAT);
+  // Taken over by another Flash, or hung up there: noticed within moments.
+  clearInterval(sparkCall.watch);
+  sparkCall.watch = setInterval(checkCallHere, 3000);
+  if (opts.take) {
+    sparkCall.ready.then((id) => { if (!id || !sparkCall.on) return; sparkCallConnected(); if (opts.take.connected) sparkCall.since = opts.take.connected * 1000; sparkCallTick(); toast(`Call moved here`); });
+  } else if (!incoming) sparkCallRing(true);
   drawOnCall();
-  startVoice(team).then(() => { if (!voice.on) { endSparkCall("cancel"); } else sparkFillersPrepare(); /* FILLERS hook */ });
+  // A call taken over that cannot go on here is let go, not hung up, to
+  // take back where it can.
+  startVoice(team).then(() => { if (!voice.on) { endSparkCall(sparkCall.taken ? "moved" : "cancel"); } else sparkFillersPrepare(); /* FILLERS hook */ });
 }
 
 // The ring, made here: two tones together, two seconds on and four off;
@@ -16645,7 +16672,7 @@ function sparkCallConnected() {
   $("#spark-call").dataset.state = "connected";
   sparkCallTick();
   sparkCall.timer = setInterval(sparkCallTick, 1000);
-  if (sparkCall.ready) sparkCall.ready.then((id) => { if (id) command("team-chat-call", sparkCall.team, null, { step: "connected", call: id }).catch(() => {}); });
+  if (sparkCall.ready) sparkCall.ready.then((id) => { if (id) command("team-chat-call", sparkCall.team, null, { step: "connected", call: id, holder: CALL_HOLDER }).catch(() => {}); });
 }
 // HOW: "end" (hung up), or "cancel" when it never got going.
 function endSparkCall(how = "end") {
@@ -16657,11 +16684,14 @@ function endSparkCall(how = "end") {
   sparkCallRing(false);
   clearInterval(sparkCall.timer);
   clearInterval(sparkCall.beat);
+  clearInterval(sparkCall.watch);
   sparkCall.since = 0;
   stopCallScreen();
   const ending = sparkCall.ready, team = sparkCall.team;
   sparkCall.ready = null;
-  if (ending) ending.then((id) => { if (id) command("team-chat-call", team, null, { step: how === "cancel" ? "cancel" : "end", call: id }).then(() => { if (teamChat.id === team) tcFetch(); }).catch(() => {}); });
+  callsElsewhereChanged();
+  // Moved to another Flash, or ended there: nothing to hang up from here.
+  if (ending && how !== "moved") ending.then((id) => { if (id) command("team-chat-call", team, null, { step: how === "cancel" ? "cancel" : "end", call: id, holder: CALL_HOLDER }).then(() => { if (teamChat.id === team) tcFetch(); }).catch(() => {}); });
   sparkFillerStop(); sparkCall.fillers = null; sparkCall.rounds = 0; // FILLERS hook
   const wrap = $("#spark-call");
   wrap.hidden = true;
@@ -16669,11 +16699,67 @@ function endSparkCall(how = "end") {
   drawOnCall();
   sparkCallChime();
 }
+// The call still here? Taken over by another Flash it goes on there, and
+// this page lets go without hanging up; hung up there, it ends here too.
+async function checkCallHere() {
+  if (!sparkCall.on || !sparkCall.id) return;
+  const team = sparkCall.team, id = sparkCall.id;
+  let entry;
+  try { entry = (await command("team-chat-call-state", team, null, { call: id })).entry; } catch (_) { return; }
+  if (!sparkCall.on || sparkCall.id !== id) return;
+  const open = entry && ["calling", "live"].includes(entry.state);
+  if (open && (!entry.holder || entry.holder === CALL_HOLDER)) return;
+  const party = callParty(team);
+  sparkCall.moved = true;
+  endSparkCall("moved");
+  endVoice();
+  toast(open ? `Your call${party ? ` with ${party.name}` : ""} moved to another Flash` : "The call ended on another Flash");
+  checkCallsElsewhere();
+}
+
+// A call going on in another Flash (another page, a terminal): a pill
+// floating at the top says so, with a button to take it over here.
+var callsElsewhere = [];
+async function checkCallsElsewhere() {
+  if (typeof command !== "function") return;
+  let calls = [];
+  try { calls = (await command("team-chat-live", "", null)).calls || []; } catch (_) { return; }
+  // Any call not going on in this page right now: in another Flash, or
+  // let go here.
+  callsElsewhere = calls.filter((c) => !(sparkCall.on && c.call === sparkCall.id) && callParty(c.team));
+  drawCallElsewhere();
+}
+function drawCallElsewhere() {
+  const pill = $("#call-elsewhere");
+  if (!pill) return;
+  const call = !sparkCall.on && callsElsewhere[0];
+  pill.hidden = !call;
+  if (!call) return;
+  const party = callParty(call.team);
+  pill.style.setProperty("--c", party.colour);
+  pill.querySelector("b").textContent = `On a call with ${party.name}`;
+  const s = call.connected ? Math.max(0, Math.floor(Date.now() / 1000 - call.connected)) : -1;
+  const here = call.holder === CALL_HOLDER;
+  pill.querySelector(".ce-meta").textContent = `${here ? "on hold" : "in another Flash"}${s < 0 ? "" : ` · ${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`}`;
+  pill.querySelector(".ce-take").textContent = here ? "Rejoin" : "Transfer here";
+  pill.querySelector(".ce-take").onclick = () => {
+    pill.hidden = true;
+    startSparkCall({ team: call.team, take: call });
+  };
+}
+var callsElsewhereSoon = 0;
+function callsElsewhereChanged() {
+  clearTimeout(callsElsewhereSoon);
+  callsElsewhereSoon = setTimeout(checkCallsElsewhere, 400);
+}
+setInterval(() => { if (!document.hidden) checkCallsElsewhere(); }, 8000);
+setInterval(() => { if (callsElsewhere.length && !sparkCall.on) drawCallElsewhere(); }, 1000);
+
 // A page closed mid-call hangs up on its way out, as a phone would.
 addEventListener("pagehide", () => {
   if (!sparkCall.on || !sparkCall.id) return;
   fetch("/api/command", { method: "POST", keepalive: true, credentials: "same-origin", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name: "team-chat-call", arg: sparkCall.team, step: "end", call: sparkCall.id }) }).catch(() => {});
+    body: JSON.stringify({ name: "team-chat-call", arg: sparkCall.team, step: "end", call: sparkCall.id, holder: CALL_HOLDER }) }).catch(() => {});
 });
 
 // Sharing the screen: what it shows goes with each thing said, as the
@@ -16783,7 +16869,8 @@ async function callRound(text, hidden = false) {
 // then each thing the user says goes to it, the user's own "hold on" too.
 async function callLoop() {
   setVoice("thinking");
-  let how = await callRound(callHello(), true);
+  // Taken over from another Flash: no hello, the user's turn.
+  let how = sparkCall.taken ? "done" : await callRound(callHello(), true);
   sparkCall.greeted = true;
   let carried = how && how.barge ? how.barge : "";
   if (how === "exit" || how === "hangup" || how === "noanswer") { if (how === "noanswer") endSparkCall(); endVoice(); return; }
@@ -17892,7 +17979,7 @@ function apply(event) {
   if (event.type === "browsers") { if (view === "settings" && settingsTab === "security") renderBrowsers(); return; }
   if (event.type === "notify") { notified(event); return; }
   if (event.type === "ping") { pinged(event); return; }
-  if (event.type === "team-chat") { teamChatChanged(event.team); return; }
+  if (event.type === "team-chat") { teamChatChanged(event.team); callsElsewhereChanged(); return; }
   if (event.type === "btw") { btwEvent(event); return; }
   if (event.type === "debate-live") { debateLive(event); return; }
   if (event.type === "course-changed") { courseChanged(event); return; }
@@ -18117,7 +18204,7 @@ async function loadState() {
   buffered = [];
   refreshContext();
   // A spark calling as the page opens, or the call it was opened to answer.
-  if (!checkedRings) { checkedRings = true; checkRings(); }
+  if (!checkedRings) { checkedRings = true; checkRings(); checkCallsElsewhere(); }
 }
 let checkedRings = false;
 

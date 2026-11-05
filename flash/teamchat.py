@@ -476,6 +476,21 @@ def _call_entry(data: dict, call_id: str) -> Optional[dict]:
                  and e.get("call") == call_id), None)
 
 
+def live_calls() -> list[dict]:
+    """Every call going on now, in every chat, ringing calls aside: what
+    another Flash can take over. Each with its chat's id as "team"."""
+
+    found = []
+    with contextlib.suppress(OSError):
+        for path in _folder().glob("*.json"):
+            with contextlib.suppress(Exception):
+                for entry in _settled(path.stem)["entries"]:
+                    if entry.get("kind") == CALL and \
+                            _state(entry) in ("calling", "live"):
+                        found.append({"team": path.stem, **entry})
+    return found
+
+
 def open_call(team_key: str) -> Optional[dict]:
     """The call going on in TEAM_KEY's chat now, ringing or live."""
 
@@ -486,11 +501,12 @@ def open_call(team_key: str) -> Optional[dict]:
                 None)
 
 
-def start_call(team_key: str) -> dict:
+def start_call(team_key: str, holder: str = "") -> dict:
     """A voice call begun now by the user, with the spark of a private
     chat or with a team: its one entry in the chat, whose "call" id the
     call's messages carry. A call still open there is over first: only
-    one goes on at a time."""
+    one goes on at a time. HOLDER: the Flash it is on (a page, a
+    terminal), so another can take it over."""
 
     team = _team(team_key)
 
@@ -510,6 +526,7 @@ def start_call(team_key: str) -> dict:
             "kind": CALL, "call": uuid.uuid4().hex[:12], "ended": 0,
             "state": "calling", "from": USER, "beat": now,
             **({} if is_dm(team.id) else {"group": True}),
+            **({"holder": holder[:80]} if holder else {}),
         })
 
     return _change(team.id, change)
@@ -523,15 +540,23 @@ _STEPS = {
     "decline": ("ringing",),
     "end": OPEN_STATES,
     "cancel": OPEN_STATES,
+    # Another Flash takes the call over: it goes on there, not here.
+    "take": ("calling", "live"),
 }
 
 
-def call_step(team_key: str, call_id: str, step: str) -> Optional[dict]:
+def call_step(team_key: str, call_id: str, step: str,
+              holder: str = "") -> Optional[dict]:
     """Move the call CALL_ID in TEAM_KEY's chat on: beat (still there),
     connected (first answer heard), answer or decline (a spark's call to
-    the user), end (hung up) or cancel (it never got going). Its entry,
-    or None if there is no such call. A step it is past is ignored:
-    ending a call twice keeps the first end."""
+    the user), end (hung up), cancel (it never got going) or take
+    (HOLDER, another Flash, takes it over). Its entry, or None if there
+    is no such call. A step it is past is ignored: ending a call twice
+    keeps the first end.
+
+    HOLDER says which Flash the step comes from. One the call has moved
+    away from changes nothing: its hang-up, as it lets go, does not end
+    the call where it went."""
 
     if step not in _STEPS:
         raise TeamChatError(f"Unknown call step {step!r}.")
@@ -545,12 +570,21 @@ def call_step(team_key: str, call_id: str, step: str) -> Optional[dict]:
         if entry is None:
             return None
         state = _state(entry)
+        holder_now = str(entry.get("holder") or "")
+        if holder and holder_now and holder != holder_now and \
+                step in ("beat", "connected", "end", "cancel"):
+            return dict(entry)
         if state not in _STEPS[step]:
             if step == "answer":
                 raise TeamChatError("That call is over: it rang out, or "
                                     "was declined.")
             return entry
         entry["beat"] = now
+        if holder and step in ("answer", "connected", "take") and (
+                step == "take" or not holder_now):
+            entry["holder"] = holder[:80]
+        if step == "take":
+            entry["taken"] = now
         if step == "connected" and not entry.get("connected"):
             entry.update(connected=now, state="live")
         elif step == "answer":
