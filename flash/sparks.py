@@ -374,8 +374,10 @@ CALL_USER_TOOL = _tool(
     "report, or is far easier talked through: something urgent, a "
     "decision you are stuck on. Never for routine news. Once in 30 "
     "minutes at most, outside UltraAuto; if they miss it, it shows as a "
-    "missed call they can return. When they pick up, you speak first and "
-    "say why you called.",
+    "missed call they can return. If they don't pick up and it still "
+    "needs them, @user them in your report or a chat with what you "
+    "called about, so it reaches them as a mention too. When they pick "
+    "up, you speak first and say why you called.",
     "reason", "Why you are calling, in a sentence: shown while it rings.",
 )
 
@@ -395,8 +397,9 @@ def _calling(spark: "Spark") -> Callable[[dict], str]:
         tool_result("Ringing")
         return ("(ringing: if they pick up, the call happens in your "
                 "private chat with them, and you speak first. If not, "
-                "it shows there as a missed call. Carry on with your "
-                "shift.)")
+                "it shows there as a missed call, and you can @user "
+                "them in your report with what you called about, so it "
+                "still reaches them. Carry on with your shift.)")
 
     return call
 
