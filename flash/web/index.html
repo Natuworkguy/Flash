@@ -1250,6 +1250,19 @@ body.course-open { overflow: hidden; }
 body.voice-on .shell, body.voice-on #suggestions, body.voice-on #pending { display: none !important; }
 #recording, #call-bar { display: flex; align-items: center; gap: 12px; margin: 0 0 10px; padding: 10px 12px 10px 16px; border: 1px solid color-mix(in srgb, #ff4d5e 45%, var(--border-strong)); border-radius: 16px; background: color-mix(in srgb, #ff4d5e 7%, var(--surface)); animation: pop 0.2s var(--ease); }
 #recording[hidden], #call-bar[hidden] { display: none; }
+/* A call with a spark going on: in place of the message box, which voice
+   mode takes away, under the greeting on a new chat. */
+#on-call { display: none; align-items: center; gap: 12px; margin: 0 auto 10px; max-width: 520px; padding: 10px 10px 10px 16px; border: 1px solid color-mix(in srgb, var(--c, #2f9e5b) 45%, var(--border-strong)); border-radius: 16px; background: color-mix(in srgb, var(--c, #2f9e5b) 8%, var(--surface)); }
+body.spark-calling #on-call:not([hidden]) { display: flex; animation: rise-far 0.45s var(--ease) both; }
+#on-call .oc-dot { flex: none; width: 10px; height: 10px; border-radius: 50%; background: var(--c, #2f9e5b); animation: orb-breathe 1.6s ease-in-out infinite; }
+#on-call .rec-words { flex: 1; min-width: 0; display: flex; flex-direction: column; line-height: 1.3; }
+#on-call .rec-words b { font-size: 13.5px; font-weight: 600; }
+#on-call .rec-meta { font-size: 12px; color: var(--text-3); font-variant-numeric: tabular-nums; }
+#on-call .oc-hang { width: 34px; height: 34px; border-radius: 50%; background: #d9483b; color: #fff; }
+#on-call .oc-hang:hover { background: #c03a2e; }
+#on-call .oc-hang svg { width: 16px; height: 16px; transform: rotate(135deg); }
+/* While the call screen grows out of the bar or shrinks into it. */
+.sc-wrap.flip .sc { animation: none; }
 #recording .rec-dot, #call-bar .rec-dot { flex: none; width: 10px; height: 10px; border-radius: 50%; background: #ff4d5e; box-shadow: 0 0 0 0 #ff4d5e80; animation: rec-beat 1.4s ease-out infinite; }
 #recording .rec-words, #call-bar .rec-words { flex: 1; min-width: 0; display: flex; flex-direction: column; line-height: 1.3; }
 #recording .rec-words b, #call-bar .rec-words b { font-size: 13.5px; font-weight: 600; }
@@ -4040,6 +4053,12 @@ body.empty #ext-head, body.on-page #ext-head { display: none; }
     <div id="dock">
       <div class="col">
         <div id="hero"><h1 id="greeting">Good evening</h1></div>
+        <div id="on-call" hidden role="group" aria-label="Call with a spark">
+          <span class="oc-dot" aria-hidden="true"></span>
+          <span class="rec-words"><b>On a call</b><span class="rec-meta"></span></span>
+          <button type="button" class="btn small" data-oncall-open>Open</button>
+          <button type="button" class="icon-btn oc-hang" aria-label="Hang up" data-tip="Hang up"></button>
+        </div>
         <div id="btw" hidden aria-label="Side questions"></div>
         <div id="waiting-bar" hidden role="group" aria-label="What this chat waits for"></div>
         <div id="pending" hidden aria-label="Waiting messages"></div>
@@ -10468,7 +10487,7 @@ async function openTeamChat(teamId) {
   call.dataset.tip = call.ariaLabel = group ? "Group call with the team" : "Voice call";
   call.onclick = () => {
     if (!canRecord) toast("Voice calls need this page opened on this computer, or over HTTPS");
-    else if (sparkCall.on) { $("#spark-call").classList.remove("mini"); toast("You are on a call already"); }
+    else if (sparkCall.on) { setCallMini(false); toast("You are on a call already"); }
     else if (!voice.on) startSparkCall();
   };
   tcFullScreen(tcFullScreen.saved());
@@ -16392,10 +16411,48 @@ function callButtons(wrap) {
   screen.onclick = (e) => { e.stopPropagation(); toggleCallScreen(); };
   const mini = wrap.querySelector(".sc-mini");
   mini.innerHTML = icon("shrink");
-  mini.onclick = (e) => { e.stopPropagation(); wrap.classList.add("mini"); };
+  mini.onclick = (e) => { e.stopPropagation(); setCallMini(true); };
   // The small bar opens back up when clicked anywhere but its buttons.
-  wrap.querySelector(".sc").onclick = () => { if (wrap.classList.contains("mini")) wrap.classList.remove("mini"); };
+  wrap.querySelector(".sc").onclick = () => { if (wrap.classList.contains("mini")) setCallMini(false); };
 }
+
+// The call screen made the bar at the top, or the bar made the screen
+// again: the card glides and shrinks into the bar (or grows out of it), its
+// contents fading across, the dimmed page behind fading with it.
+function setCallMini(on) {
+  const wrap = $("#spark-call"), card = wrap.querySelector(".sc"), scrim = wrap.querySelector(".tc-scrim");
+  if (wrap.hidden || wrap.classList.contains("mini") === on) return;
+  const from = card.getBoundingClientRect();
+  wrap.classList.add("flip");
+  wrap.classList.toggle("mini", on);
+  const to = card.getBoundingClientRect();
+  if (calm.matches || !card.animate || !to.width || !to.height) { wrap.classList.remove("flip"); return; }
+  const dx = from.left + from.width / 2 - (to.left + to.width / 2), dy = from.top + from.height / 2 - (to.top + to.height / 2);
+  const ease = "cubic-bezier(.22, .9, .25, 1)", time = 420;
+  const glide = card.animate([
+    { transform: `translate(${dx}px, ${dy}px) scale(${from.width / to.width}, ${from.height / to.height})`, borderRadius: on ? "22px" : "999px" },
+    { transform: "none", borderRadius: on ? "999px" : "22px" },
+  ], { duration: time, easing: ease });
+  for (const child of card.children) child.animate([{ opacity: 0 }, { opacity: 0, offset: 0.35 }, { opacity: 1 }], { duration: time, easing: "ease-out" });
+  if (!on) scrim.animate([{ opacity: 0 }, { opacity: 1 }], { duration: time, easing: "ease-out" });
+  glide.finished.catch(() => {}).then(() => wrap.classList.remove("flip"));
+}
+
+// The bar under the greeting while a call goes on: who with, and for how long.
+function drawOnCall() {
+  const bar = $("#on-call");
+  document.body.classList.toggle("spark-calling", sparkCall.on);
+  bar.hidden = !sparkCall.on;
+  if (!sparkCall.on) return;
+  const party = callParty(sparkCall.team);
+  if (party) bar.style.setProperty("--c", party.colour);
+  const s = sparkCall.since ? Math.floor((Date.now() - sparkCall.since) / 1000) : -1;
+  bar.querySelector("b").textContent = party ? `On a call with ${party.name}` : "On a call";
+  bar.querySelector(".rec-meta").textContent = s < 0 ? (sparkCall.incoming ? "Connecting…" : "Calling…") : `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+}
+$("#on-call [data-oncall-open]").onclick = () => setCallMini(false);
+$("#on-call .oc-hang").innerHTML = icon("handset");
+$("#on-call .oc-hang").onclick = () => { endSparkCall(); endVoice(); };
 
 // The microphone is open only when not muted.
 function callMic() {
@@ -16432,6 +16489,7 @@ function startSparkCall(opts = {}) {
   clearInterval(sparkCall.beat);
   sparkCall.beat = setInterval(() => { if (sparkCall.on && sparkCall.id) command("team-chat-call", sparkCall.team, null, { step: "beat", call: sparkCall.id }).catch(() => {}); }, CALL_BEAT);
   if (!incoming) sparkCallRing(true);
+  drawOnCall();
   startVoice(team).then(() => { if (!voice.on) { endSparkCall("cancel"); } else sparkFillersPrepare(); /* FILLERS hook */ });
 }
 
@@ -16471,6 +16529,7 @@ function sparkCallTick() {
   if (!sparkCall.since) return;
   const s = Math.floor((Date.now() - sparkCall.since) / 1000);
   status.textContent = `${sparkCall.group ? "On the call" : "Connected"} · ${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+  drawOnCall();
 }
 function sparkCallConnected() {
   if (!sparkCall.on || sparkCall.since) return;
@@ -16500,6 +16559,7 @@ function endSparkCall(how = "end") {
   const wrap = $("#spark-call");
   wrap.hidden = true;
   wrap.classList.remove("mini");
+  drawOnCall();
   sparkCallChime();
 }
 // A page closed mid-call hangs up on its way out, as a phone would.
