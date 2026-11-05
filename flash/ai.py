@@ -4431,6 +4431,17 @@ def _call_command(arg: str) -> None:
 
     from . import teamchat
 
+    words = arg.split()
+    if words[:1] == ["incoming"]:
+        # /call incoming on|off: whether sparks may call you.
+        if words[1:] in (["on"], ["off"]):
+            set_config_var(teamchat.CALLS_SETTING,
+                           "1" if words[1] == "on" else "0")
+        console.print(Text(
+            "Sparks can call you." if teamchat.calls_allowed() else
+            "Sparks can't call you; they @mention you instead. "
+            "/call incoming on lets them.", style=DIM))
+        return
     spark = sparks.find(arg.strip().lstrip("@")) if arg.strip() else None
     if spark is None:
         names = ", ".join(s.name for s in sparks.all_sparks()) or "none yet"

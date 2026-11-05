@@ -382,6 +382,12 @@ CALL_USER_TOOL = _tool(
 )
 
 
+def _calls_allowed() -> bool:
+    from . import teamchat  # deferred: it imports this module
+
+    return teamchat.calls_allowed()
+
+
 def _calling(spark: "Spark") -> Callable[[dict], str]:
     """call_user, for SPARK on a shift: its call to the user rings."""
 
@@ -5142,7 +5148,9 @@ def _shift(spark_id: str, client=None) -> Optional[Report]:
             text = _work(
                 spark, messages, own,
                 [KEEP_NOTES_TOOL, WAIT_FOR_EVENTS_TOOL, HAND_OFF_TOOL,
-                 ASK_SPARK_TOOL, CALL_USER_TOOL,
+                 ASK_SPARK_TOOL,
+                 # Not offered at all with calls switched off.
+                 *([CALL_USER_TOOL] if _calls_allowed() else []),
                  MAKE_DOCUMENT_TOOL, *PROPOSAL_TOOLS,
                  *([TIDY_MEMORY_TOOL] if "tidy_memory" in own else [])],
                 steps, lambda doing: _set_activity(spark.id, doing),

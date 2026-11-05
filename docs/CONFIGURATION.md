@@ -83,6 +83,7 @@ Requirements:
 | `VOICE_INTERRUPT_WORD` | No | `interrupt` | - | Word that stops a reply being read aloud when you say it over the top. Matched as a whole word; "stop talking" and "be quiet" always work as well. |
 | `VOICE_INTERRUPT` | No | `word` | `anything` | How a reply in voice mode is cut off: `word` waits for the interrupt word, `anything` stops it as soon as you talk over it and takes what you said as your next turn. Settings, General, Interrupting Flash. |
 | `CALL_INTERRUPT` | No | `anything` | `word` | The same for calls with sparks: talk over the spark (`anything`), or say the interrupt word (`word`). Settings, General, Interrupting on spark calls. |
+| `SPARK_CALLS` | No | `1` | - | `0` stops sparks from calling you: they are not offered the call and @mention you instead. Usually set with Let sparks call me in Settings, or `/call incoming off`. |
 | `VOICE_NO_SPEECH_SECONDS` | No | `8` | `1` | How long a listening turn waits for you to start speaking before handing the prompt back. This is what ends a hands-free conversation. |
 | `VOICE_SILENCE_THRESHOLD` | No | `500` | `0` | Loudness (0-32768) above which audio counts as speech. Raise it in a noisy room; lower it if a quiet voice is missed. |
 | `VOICE_INPUT_DEVICE` | No | system default | — | Name (or part of it) of the sound device Flash listens on, e.g. `BlackHole 2ch` to hear through a virtual device. |

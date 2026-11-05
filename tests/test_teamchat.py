@@ -1444,3 +1444,64 @@ def test_a_spark_in_ultra_auto_can_call_as_often_as_needed(team, monkeypatch):
     monkeypatch.setattr(sparks, "mode_of", lambda spark: "auto")
     with pytest.raises(teamchat.TeamChatError, match="Wait"):
         teamchat.ring(lead, "Three")
+
+
+def test_calls_from_sparks_can_be_switched_off(team, monkeypatch, tmp_path):
+    from flash import web
+
+    monkeypatch.setattr("flash.notify.ENV_PATH", tmp_path / ".env")
+    monkeypatch.setattr("flash.ai.ENV_PATH", tmp_path / ".env",
+                        raising=False)
+    lead = sparks.find("lead")
+    assert teamchat.calls_allowed()  # on unless switched off  # nosec B101
+
+    monkeypatch.setenv(teamchat.CALLS_SETTING, "0")
+    assert not teamchat.calls_allowed()  # nosec B101
+    with pytest.raises(teamchat.TeamChatError, match="turned off calls"):
+        teamchat.ring(lead, "The build broke")
+    said = sparks._calling(lead)({"reason": "The build broke"})
+    assert said.startswith("Error: The user turned off calls")  # nosec
+    assert "@user" in said  # nosec B101
+
+    class Hub:
+        def publish(self, event):
+            pass
+
+    class Session:
+        hub = Hub()
+
+    monkeypatch.setattr("flash.ai.set_config_var",
+                        lambda name, value: monkeypatch.setenv(name, value))
+    assert web.command(Session(), {"name": "incoming-calls-setting",  # nosec
+                                   "arg": "on"}) == {"spark_calls": True}
+    assert teamchat.calls_allowed()  # nosec B101
+    assert teamchat.ring(lead, "Now it rings")["state"] == "ringing"  # nosec
+
+
+def test_a_shift_is_not_offered_the_call_with_calls_off(team, monkeypatch):
+    offered = []
+
+    def work(spark, messages, own, schemas, *a, **k):
+        offered.append({s["function"]["name"] for s in schemas})
+        return sparks.NOTHING_NEW
+
+    monkeypatch.setattr(sparks, "_work", work)
+    monkeypatch.setattr(sparks, "get_model_system_prompt", lambda h, m: "")
+    monkeypatch.setattr("flash.tools.MODEL_NAME", "test-model")
+    lead = sparks.find("lead")
+    sparks.shift(lead.id, client=object())
+    monkeypatch.setenv(teamchat.CALLS_SETTING, "off")
+    sparks.shift(lead.id, client=object())
+    assert "call_user" in offered[0]  # nosec B101
+    assert "call_user" not in offered[1]  # nosec B101
+
+
+def test_the_terminal_switches_incoming_calls(monkeypatch):
+    from flash import ai
+
+    monkeypatch.setattr(ai, "set_config_var",
+                        lambda name, value: monkeypatch.setenv(name, value))
+    ai._call_command("incoming off")
+    assert not teamchat.calls_allowed()  # nosec B101
+    ai._call_command("incoming on")
+    assert teamchat.calls_allowed()  # nosec B101
