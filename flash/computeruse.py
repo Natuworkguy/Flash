@@ -375,9 +375,10 @@ def do(action: str, args: dict, owner: str) -> tuple[str, Optional[bytes]]:
     UseError when it could not, TakenBack when the user took it back."""
 
     action = str(action or "").strip().lower()
-    if action not in ACTIONS:
+    known = {**ACTIONS, **FAST_ACTIONS} if fast() else ACTIONS
+    if action not in known:
         raise UseError(f"{action!r} is not an action. One of: "
-                       f"{', '.join(ACTIONS)}.")
+                       f"{', '.join(known)}.")
     why = missing()
     if why:
         raise UseError(why)
@@ -389,6 +390,9 @@ def do(action: str, args: dict, owner: str) -> tuple[str, Optional[bytes]]:
         said = f"Waited {seconds:g} seconds."
     elif action in ("screenshot", "wake"):
         said = ""
+    elif action == "elements":
+        # Read, not looked at: no screenshot after it.
+        return list_elements(), None
     else:
         _check_pointer(owner)
         said = _act(action, args)
@@ -437,8 +441,12 @@ def _number(value, default: float = 0.0) -> float:
 
 
 def _point(args: dict, x: str = "x", y: str = "y") -> tuple[float, float]:
-    """The model's point, from the screenshot, as the screen's own."""
+    """The model's point, from the screenshot, as the screen's own: or,
+    in fast mode, the middle of the element it named."""
 
+    named = args.get("element" if x == "x" else "to_element")
+    if named not in (None, "") and fast():
+        return element_point(str(named))
     if not _shot:
         raise UseError("Take a screenshot first, to see where things are.")
     if args.get(x) is None or args.get(y) is None:
@@ -461,6 +469,13 @@ def _act(action: str, args: dict) -> str:
             raise UseError("Nothing to type: give text.")
         if len(text) > MOST_TYPED:
             raise UseError(f"At most {MOST_TYPED} characters at a time.")
+        if args.get("element") not in (None, "") and fast():
+            # Into the field it named: clicked first, so it has the cursor.
+            x, y = _point(args)
+            _send(kind, {"do": "click", "x": x, "y": y, "button": "left",
+                         "count": 1})
+            _left_at(x, y)
+            time.sleep(FAST_SETTLE)
         _send(kind, {"do": "type", "text": text})
         return f"Typed {len(text)} characters."
     if action == "key":
@@ -1078,3 +1093,295 @@ def _linux_stop_down() -> Optional[Callable[[], bool]]:
             any(map(held, alts))
 
     return down
+
+
+# --- Fast mode --------------------------------------------------------------
+#
+# Off unless the user turns it on: the plain way stays the default. On, a
+# step can be several actions, done one after the other with a single
+# screenshot at the end, and the front window's buttons, fields and menus
+# can be listed by name from the system's accessibility tree (elements),
+# so the model clicks "Save" by name instead of finding it in a picture.
+# Far fewer slow look-and-click rounds for the same work.
+
+FAST_SETTING = "COMPUTER_USE_FAST"
+# The most actions one step may do, and the pause between them.
+MOST_STEPS = 12
+FAST_SETTLE = 0.15
+# The most elements listed, and the kinds worth clicking or typing in.
+MOST_ELEMENTS = 250
+FAST_ACTIONS = {
+    "elements": "list the front window's buttons, fields, menus and links "
+                "by name (no screenshot); then click, type into or drag "
+                "them by element instead of x, y",
+}
+
+_elements: list[dict] = []
+
+
+def fast() -> bool:
+    """Whether fast mode is on: off unless the user turned it on."""
+
+    from .notify import _saved
+
+    return _saved(FAST_SETTING).strip().lower() in ("1", "on", "true", "yes")
+
+
+def set_fast(on: bool) -> None:
+    from .envfile import set_env_var
+    from .paths import ENV_PATH
+
+    os.environ[FAST_SETTING] = "1" if on else "0"
+    set_env_var(ENV_PATH, FAST_SETTING, os.environ[FAST_SETTING])
+
+
+def element_point(name: str) -> tuple[float, float]:
+    """The middle of the element called NAME, from the last elements
+    list, in the screen's own points."""
+
+    if not _elements:
+        raise UseError("List the elements first (action elements).")
+    wanted = " ".join(str(name or "").split()).casefold()
+    if not wanted:
+        raise UseError("Give the element's name, as elements listed it.")
+    # By its number in the list, its exact name, or a name it is in.
+    if wanted.lstrip("#").isdigit():
+        index = int(wanted.lstrip("#")) - 1
+        found = _elements[index] if 0 <= index < len(_elements) else None
+    else:
+        found = next((e for e in _elements
+                      if e["name"].casefold() == wanted), None) or next(
+            (e for e in _elements if wanted in e["name"].casefold()), None)
+    if found is None:
+        names = ", ".join(repr(e["name"]) for e in _elements[:12])
+        raise UseError(f"No element called {name!r}. Some there are: "
+                       f"{names}. List them again if the window changed.")
+    return found["x"] + found["w"] / 2, found["y"] + found["h"] / 2
+
+
+def list_elements() -> str:
+    """The front window's elements, numbered, as the model reads them."""
+
+    found = _read_elements()
+    _elements[:] = found[:MOST_ELEMENTS]
+    if not _elements:
+        return ("No buttons or fields could be read in the front window: "
+                "use a screenshot and x, y instead.")
+    scale = _shot.get("scale") or 0
+    lines = []
+    for number, item in enumerate(_elements, 1):
+        where = ""
+        if scale:
+            # Where it is in the latest screenshot, for the odd x, y step.
+            where = (f" at {round((item['x'] + item['w'] / 2) / scale)}, "
+                     f"{round((item['y'] + item['h'] / 2) / scale)}")
+        lines.append(f"{number}. {item['role']} {item['name']!r}{where}")
+    return (f"{len(_elements)} elements in the front window. Click, "
+            "double_click, right_click, move or type into one with element "
+            "(its name or number):\n" + "\n".join(lines))
+
+
+def _read_elements() -> list[dict]:
+    kind = system()
+    if kind == "mac":
+        said = _run(["osascript", "-l", "JavaScript", "-e", _MAC_ELEMENTS])
+    elif kind == "windows":
+        said = _run(["powershell", "-NoProfile", "-NonInteractive",
+                     "-Command", _WIN_ELEMENTS])
+    else:
+        python = shutil.which("python3") or sys.executable
+        said = _run([python, "-c", _LINUX_ELEMENTS])
+    try:
+        raw = json.loads(said or "[]")
+    except ValueError:
+        raise UseError("The window's elements could not be read: "
+                       f"{said[:200]}") from None
+    if isinstance(raw, dict):
+        raw = [raw]
+    out = []
+    for item in raw if isinstance(raw, list) else []:
+        if not isinstance(item, dict):
+            continue
+        name = " ".join(str(item.get("name") or "").split())[:80]
+        try:
+            box = [float(item.get(k) or 0) for k in ("x", "y", "w", "h")]
+        except (TypeError, ValueError):
+            continue
+        if not name or box[2] <= 0 or box[3] <= 0:
+            continue
+        out.append({"name": name, "role": str(item.get("role") or "")[:24],
+                    "x": box[0], "y": box[1], "w": box[2], "h": box[3]})
+    return out
+
+
+def do_steps(steps: list, owner: str) -> tuple[str, Optional[bytes]]:
+    """Several actions for OWNER, one after the other, and one screenshot
+    after the last: fast mode's step. Stops at the first that fails."""
+
+    if not isinstance(steps, list) or not steps:
+        raise UseError("steps is a list of actions, each like "
+                       '{"action": "click", "element": "Save"}.')
+    if len(steps) > MOST_STEPS:
+        raise UseError(f"At most {MOST_STEPS} steps at a time.")
+    why = missing()
+    if why:
+        raise UseError(why)
+    woke = wake()
+    done: list[str] = []
+    failed = ""
+    for number, step in enumerate(steps, 1):
+        step = dict(step) if isinstance(step, dict) else {}
+        action = str(step.pop("action", "") or "").strip().lower()
+        if action in ("screenshot", "wake", "elements"):
+            failed = (f"Step {number}: {action} goes on its own, not in "
+                      "steps.")
+            break
+        try:
+            if action == "wait":
+                seconds = min(MOST_WAIT, max(0.0, _number(
+                    step.get("seconds"), 1)))
+                time.sleep(seconds)
+                done.append(f"waited {seconds:g}s")
+                continue
+            if action not in ACTIONS:
+                raise UseError(f"{action!r} is not an action.")
+            _check_pointer(owner)
+            done.append(_act(action, step).rstrip("."))
+        except TakenBack:
+            raise
+        except UseError as exc:
+            failed = f"Step {number} ({action}) failed: {exc}"
+            break
+        time.sleep(FAST_SETTLE)
+    with _lock:
+        if _holder.get("owner") == owner:
+            _holder["at"] = time.monotonic()
+    time.sleep(max(0.0, SETTLE - FAST_SETTLE))
+    image, size = screenshot()
+    said = (f"Did {len(done)} of {len(steps)} steps"
+            + (f": {'; '.join(done)}." if done else "."))
+    if failed:
+        said += f" {failed} Nothing after it was done."
+    said += f" The screen now, {size[0]}x{size[1]}."
+    if woke:
+        said = "Woke the screen first. " + said
+    return said, image
+
+
+# The front app's windows, read through System Events: each element worth
+# clicking or typing in, with its name and where it is, in points.
+_MAC_ELEMENTS = r"""
+const KEEP = new Set(['AXButton', 'AXTextField', 'AXTextArea', 'AXCheckBox',
+  'AXRadioButton', 'AXPopUpButton', 'AXMenuButton', 'AXComboBox', 'AXLink',
+  'AXTab', 'AXMenuItem', 'AXSearchField', 'AXSlider', 'AXDisclosureTriangle',
+  'AXSegment', 'AXIncrementor', 'AXCell', 'AXRow', 'AXStaticText']);
+const se = Application('System Events');
+const proc = se.applicationProcesses.whose({frontmost: true})[0];
+const out = [];
+function label(p) {
+  for (const k of ['name', 'title', 'description', 'help']) {
+    const v = p[k]; if (v && typeof v === 'string' && v.trim()) return v;
+  }
+  const v = p.value; return typeof v === 'string' ? v.slice(0, 60) : '';
+}
+function walk(el, depth) {
+  if (out.length >= 250 || depth > 14) return;
+  let kids = [];
+  try { kids = el.uiElements(); } catch (e) { return; }
+  for (const kid of kids) {
+    if (out.length >= 250) return;
+    let p = {};
+    try { p = kid.properties(); } catch (e) { continue; }
+    const role = p.role || '';
+    if (KEEP.has(role) && p.position && p.size) {
+      const name = label(p);
+      if (name && role !== 'AXStaticText')
+        out.push({name, role: role.replace(/^AX/, ''), x: p.position[0],
+          y: p.position[1], w: p.size[0], h: p.size[1]});
+    }
+    if (role !== 'AXMenuItem') walk(kid, depth + 1);
+  }
+}
+try { for (const w of proc.windows()) walk(w, 0); } catch (e) {}
+JSON.stringify(out);
+"""
+
+# The front window, through UI Automation, in the screen's own pixels.
+_WIN_ELEMENTS = r"""
+Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
+Add-Type -Namespace Flash -Name Win -MemberDefinition @'
+[DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
+[DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+'@
+[Flash.Win]::SetProcessDPIAware() | Out-Null
+$keep = @('Button','Edit','CheckBox','RadioButton','ComboBox','Hyperlink',
+  'MenuItem','TabItem','ListItem','TreeItem','SplitButton','Slider',
+  'Document','Spinner')
+$root = [System.Windows.Automation.AutomationElement]::FromHandle(
+  [Flash.Win]::GetForegroundWindow())
+$all = $root.FindAll([System.Windows.Automation.TreeScope]::Descendants,
+  [System.Windows.Automation.Condition]::TrueCondition)
+$out = New-Object System.Collections.ArrayList
+foreach ($e in $all) {
+  if ($out.Count -ge 250) { break }
+  $c = $e.Current
+  if ($c.IsOffscreen -or -not $c.Name) { continue }
+  $t = $c.ControlType.ProgrammaticName -replace '^ControlType\.', ''
+  if ($keep -notcontains $t) { continue }
+  $r = $c.BoundingRectangle
+  if ($r.IsEmpty -or $r.Width -le 0) { continue }
+  [void]$out.Add(@{ name = $c.Name; role = $t; x = $r.X; y = $r.Y;
+    w = $r.Width; h = $r.Height })
+}
+ConvertTo-Json -InputObject @($out) -Compress
+"""
+
+# The active window, through AT-SPI, in the screen's own pixels.
+_LINUX_ELEMENTS = r"""
+import json
+try:
+    import gi
+    gi.require_version('Atspi', '2.0')
+    from gi.repository import Atspi
+except Exception:
+    print('[]'); raise SystemExit
+KEEP = {'push button', 'toggle button', 'text', 'entry', 'password text',
+        'check box', 'radio button', 'combo box', 'link', 'menu item',
+        'page tab', 'list item', 'slider', 'spin button', 'menu',
+        'table cell', 'tree item'}
+out = []
+def walk(node, depth):
+    if len(out) >= 250 or depth > 30:
+        return
+    for i in range(node.get_child_count()):
+        kid = node.get_child_at_index(i)
+        if kid is None:
+            continue
+        try:
+            role = kid.get_role_name()
+            states = kid.get_state_set()
+            shown = states.contains(Atspi.StateType.SHOWING)
+        except Exception:
+            continue
+        if not shown:
+            continue
+        name = kid.get_name() or ''
+        if role in KEEP and name:
+            box = kid.get_extents(Atspi.CoordType.SCREEN)
+            out.append({'name': name, 'role': role.title(), 'x': box.x,
+                        'y': box.y, 'w': box.width, 'h': box.height})
+        walk(kid, depth + 1)
+desktop = Atspi.get_desktop(0)
+for a in range(desktop.get_child_count()):
+    app = desktop.get_child_at_index(a)
+    if app is None:
+        continue
+    for w in range(app.get_child_count()):
+        win = app.get_child_at_index(w)
+        try:
+            if win.get_state_set().contains(Atspi.StateType.ACTIVE):
+                walk(win, 0)
+        except Exception:
+            pass
+print(json.dumps(out))
+"""

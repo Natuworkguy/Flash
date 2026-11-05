@@ -138,6 +138,7 @@ def _computer_use() -> dict:
         "computer_use": computeruse.enabled(),
         "computer_use_keys": computeruse.stop_keys(),
         "computer_use_mouse": computeruse.mouse_stops(),
+        "computer_use_fast": computeruse.fast(),
         "computer_use_missing": computeruse.missing(),
     }
 
@@ -5856,6 +5857,12 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
 
     if name == "computer-use-setting":
         computeruse.set_enabled(arg in ("on", "1", "true"))
+        session.hub.publish({"type": "status"})
+        return _computer_use()
+
+    if name == "computer-use-fast":
+        # Fast mode: several actions a step, buttons clicked by name.
+        computeruse.set_fast(arg in ("on", "1", "true"))
         session.hub.publish({"type": "status"})
         return _computer_use()
 

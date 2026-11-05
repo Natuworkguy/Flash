@@ -299,3 +299,129 @@ def test_a_no_can_say_why(monkeypatch):
     assert seen["answer"] == "n"
     assert theme.denial_why() == "I'm presenting"
     assert theme.denial_why() == ""
+
+
+# --- Fast mode ---------------------------------------------------------------
+
+ELEMENTS = [
+    {"name": "Save", "role": "Button", "x": 100, "y": 40, "w": 60, "h": 20},
+    {"name": "File name", "role": "TextField", "x": 300, "y": 200,
+     "w": 200, "h": 30},
+    {"name": "Cancel", "role": "Button", "x": 20, "y": 40, "w": 60, "h": 20},
+]
+
+
+@pytest.fixture
+def fast(monkeypatch, screen):
+    monkeypatch.setenv(computeruse.FAST_SETTING, "1")
+    monkeypatch.setattr(computeruse, "FAST_SETTLE", 0)
+    # The fake pointer never moves: Flash's own clicks are not the user's.
+    monkeypatch.setattr(computeruse, "_check_pointer", lambda owner: None)
+    monkeypatch.setattr(computeruse, "_read_elements",
+                        lambda: [dict(e) for e in ELEMENTS])
+    monkeypatch.setattr(tools, "ULTRA_AUTO", True)
+    computeruse._elements.clear()
+    yield screen
+    computeruse._elements.clear()
+
+
+def test_fast_mode_is_off_until_turned_on(monkeypatch, screen):
+    monkeypatch.delenv(computeruse.FAST_SETTING, raising=False)
+    assert not computeruse.fast()  # nosec B101
+    schema = tools.computer_use_tools()[0]["function"]
+    assert "steps" not in schema["parameters"]["properties"]  # nosec B101
+    assert "elements" not in schema["parameters"]["properties"][  # nosec
+        "action"]["enum"]
+    monkeypatch.setattr(tools, "ULTRA_AUTO", True)
+    said = tools.computer_use_tool("elements")
+    assert "not an action" in said  # nosec B101
+
+
+def test_fast_mode_offers_elements_and_steps(fast):
+    schema = tools.computer_use_tools()[0]["function"]
+    props = schema["parameters"]["properties"]
+    assert {"element", "to_element", "steps"} <= set(props)  # nosec B101
+    assert "elements" in props["action"]["enum"]  # nosec B101
+    assert "Fast mode is on" in schema["description"]  # nosec B101
+
+
+def test_elements_are_listed_without_a_screenshot(fast):
+    said = tools.computer_use_tool("elements")
+    assert "3 elements" in said and "1. Button 'Save'" in said  # nosec
+    assert tools._pending_images == []  # nosec B101
+
+
+def test_an_element_is_clicked_by_name_or_number(fast):
+    tools.computer_use_tool("elements")
+    tools.computer_use_tool("click", element="save")
+    tools.computer_use_tool("double_click", element="#3")
+    # The middle of each, in the screen's own points.
+    assert fast[0] == {"do": "click", "x": 130.0, "y": 50.0,  # nosec B101
+                       "button": "left", "count": 1}
+    assert fast[1]["x"] == 50.0 and fast[1]["count"] == 2  # nosec B101
+    said = tools.computer_use_tool("click", element="Delete everything")
+    assert "No element called" in said and "'Save'" in said  # nosec B101
+
+
+def test_steps_run_in_order_with_one_screenshot(fast, monkeypatch):
+    shots = []
+    real = computeruse.screenshot
+    monkeypatch.setattr(computeruse, "screenshot",
+                        lambda: shots.append(1) or real())
+    tools.computer_use_tool("elements")
+    said = tools.computer_use_tool("steps", steps=[
+        {"action": "type", "element": "File name", "text": "report"},
+        {"action": "key", "keys": "enter"},
+        {"action": "click", "element": "Save"},
+    ])
+    assert "Did 3 of 3 steps" in said and len(shots) == 1  # nosec B101
+    # Typed into the field: clicked first so it has the cursor.
+    assert [c["do"] for c in fast] == ["click", "type", "key",  # nosec
+                                       "click"]
+    assert fast[0]["x"] == 400.0 and fast[1]["text"] == "report"  # nosec
+
+
+def test_steps_stop_at_the_first_that_fails(fast):
+    tools.computer_use_tool("elements")
+    said = tools.computer_use_tool("steps", steps=json_steps())
+    assert "Did 1 of 3 steps" in said  # nosec B101
+    assert "Step 2 (click) failed" in said  # nosec B101
+    assert len(fast) == 1  # nosec B101
+
+
+def json_steps():
+    import json
+
+    return json.dumps([{"action": "click", "element": "Save"},
+                       {"action": "click", "element": "Nowhere"},
+                       {"action": "click", "element": "Cancel"}])
+
+
+def test_too_many_steps_are_refused(fast):
+    said = tools.computer_use_tool(
+        "steps", steps=[{"action": "key", "keys": "tab"}] * 13)
+    assert "At most 12 steps" in said and fast == []  # nosec B101
+
+
+def test_elements_read_from_the_system_are_cleaned(monkeypatch):
+    monkeypatch.setattr(computeruse, "_run", lambda argv, env=None: (
+        '{"name": "Only one", "role": "Button", "x": 1, "y": 2, "w": 3, '
+        '"h": 4}'))
+    assert computeruse._read_elements() == [{  # nosec B101
+        "name": "Only one", "role": "Button", "x": 1.0, "y": 2.0,
+        "w": 3.0, "h": 4.0}]
+    monkeypatch.setattr(computeruse, "_run", lambda argv, env=None: (
+        '[{"name": "", "x": 1, "y": 1, "w": 5, "h": 5}, '
+        '{"name": "Zero", "x": 1, "y": 1, "w": 0, "h": 5}]'))
+    assert computeruse._read_elements() == []  # nosec B101
+
+
+def test_the_web_and_terminal_switch_fast_mode(monkeypatch):
+    from flash import ai
+
+    monkeypatch.setattr("flash.envfile.set_env_var", lambda *a: None)
+    monkeypatch.setenv(computeruse.FAST_SETTING, "0")
+    ai._computer_use_command(["fast", "on"])
+    assert computeruse.fast()  # nosec B101
+    ai._computer_use_command(["fast", "off"])
+    assert not computeruse.fast()  # nosec B101
