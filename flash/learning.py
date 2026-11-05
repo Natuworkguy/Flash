@@ -40,7 +40,8 @@ MAX_REVIEW_ROUNDS = 6
 
 # The tools the review may call. No shell, no files, no forget: it
 # works unattended, so it gets nothing it could do damage with.
-REVIEW_TOOL_NAMES = ("skill_view", "skill_manage", "remember", "recall")
+REVIEW_TOOL_NAMES = ("skill_view", "skill_manage", "remember", "recall",
+                     "update_user_model")
 
 NOTHING = "Nothing to save."
 
@@ -109,6 +110,10 @@ line each, nothing the project's memory below already says."""
 
 PROJECT_TASK = " And save what it taught you about this project in the " \
     "project's memory."
+
+PROFILE_TASK = " Then, only if the conversation showed something lasting " \
+    "about the user that the profile misses or gets wrong, update that " \
+    "section of the profile."
 
 
 def _setting(name: str, default: int) -> int:
@@ -186,8 +191,15 @@ def prompt_block() -> str:
             secrets = vault.prompt_block()
         except Exception:  # noqa: BLE001
             secrets = ""
+        from . import usermodel  # deferred: kept beside memory
+
+        try:
+            profile = usermodel.prompt_block()
+        except Exception:  # noqa: BLE001
+            profile = ""
         _snapshot = "\n\n".join(
-            part for part in (memory_block(), skills.listing(), secrets)
+            part for part in (profile, memory_block(), skills.listing(),
+                              secrets)
             if part
         )
 
@@ -215,6 +227,9 @@ class Review:
     # The project the conversation was worked in ("" for none): what it
     # learned about the project goes in the project's own memory.
     project: str = ""
+    # Whether it may rewrite the user profile (flash/usermodel.py), which
+    # it does alongside memory while the setting is on.
+    profile: bool = False
     actions: list[str] = field(default_factory=list)
     reply: str = ""
     error: str = ""
@@ -327,6 +342,11 @@ def review_messages(review: Review, messages: list[dict]) -> list[dict]:
     if review.memory:
         guides.append(MEMORY_GUIDE)
         guides.append(memory_block() or "=== Memory ===\nNothing saved yet.")
+    if review.profile:
+        from . import usermodel  # deferred: kept beside memory
+
+        guides.append(usermodel.GUIDE)
+        guides.append(usermodel.review_block())
     if review.memory and review.project:
         from . import memory  # deferred: memory imports nothing of ours
 
@@ -357,6 +377,7 @@ def review_messages(review: Review, messages: list[dict]) -> list[dict]:
                 f"{_task(review)}"
                 + (PROJECT_TASK if review.memory and review.project
                    else "")
+                + (PROFILE_TASK if review.profile else "")
             ),
         },
     ]
@@ -374,6 +395,8 @@ def _allowed(review: Review) -> tuple[str, ...]:
         names += ["skill_view", "skill_manage"]
     if review.memory:
         names += ["remember", "recall"]
+    if review.profile:
+        names += ["update_user_model"]
     return tuple(names)
 
 
@@ -394,6 +417,8 @@ def _call(review: Review, name: str, args: dict) -> str:
     succeeded = (
         (name == "skill_manage" and not result.startswith("Error"))
         or (name == "remember" and result.startswith("Remembered"))
+        or (name == "update_user_model"
+            and result.startswith(("Updated", "Cleared")))
     )
     if succeeded:
         review.actions.append(result)
@@ -543,9 +568,12 @@ def after_turn(
 
         # Work in a project is worth learning from for the project, too,
         # whenever enough of it was done for a review.
+        from . import usermodel  # deferred: kept beside memory
+
         review = Review(skills=due_skills,
                         memory=due_memory or bool(project),
-                        project=project or "")
+                        project=project or "",
+                        profile=due_memory and usermodel.enabled())
         _state.running = review
         _state.cancel.clear()
 

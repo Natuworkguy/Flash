@@ -2126,6 +2126,19 @@ body.page-projects #dock, body.page-settings #dock, body.page-tool #dock { displ
 .usage-note { font-size: 12.5px; color: var(--text-3); margin: 4px 2px 0; }
 .keep-usage-row { margin-top: 18px; }
 .mem-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; margin-bottom: 16px; }
+.profile .settings-section { margin-top: 0; }
+.profile-secs { border: 1px solid var(--border); border-radius: 14px; background: var(--surface); overflow: hidden; }
+.psec { padding: 12px 16px; border-top: 1px solid var(--border); }
+.psec:first-child { border-top: 0; }
+.psec b { display: block; font-size: 12px; font-weight: 500; color: var(--text-3); margin-bottom: 4px; }
+.psec .ptext { font-size: 14.5px; line-height: 1.55; color: var(--text-2); white-space: pre-wrap; overflow-wrap: anywhere; }
+.psec.mine b::after { content: " · yours"; color: var(--text-3); font-weight: 400; }
+.profile-edit { width: 100%; min-height: 320px; resize: vertical; font: 13.5px/1.6 var(--mono, ui-monospace, monospace); color: var(--text); background: var(--bg); border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; outline: none; box-sizing: border-box; }
+.profile-edit:focus { border-color: color-mix(in srgb, var(--text) 30%, transparent); }
+.profile-acts { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-top: 10px; }
+.profile-acts small { color: var(--text-3); font-size: 12.5px; }
+.profile-acts .buttons { display: flex; gap: 8px; flex: none; }
+.profile .profile-auto { margin-top: 12px; max-width: none; }
 .mem-head .sub { color: var(--text-3); font-size: 14px; margin: 0; max-width: 440px; }
 .btn.with-icon { display: inline-flex; align-items: center; gap: 7px; white-space: nowrap; }
 .btn.with-icon svg { width: 15px; height: 15px; }
@@ -15019,11 +15032,12 @@ function drawConnectorForm(body, server = null) {
 }
 
 async function drawMemory(body) {
-  let m;
-  try { m = await command("memory"); } catch (error) { showFailure(error); return; }
+  let m, profile;
+  try { [m, profile] = await Promise.all([command("memory"), command("profile")]); } catch (error) { showFailure(error); return; }
   if (!body.isConnected) return;
   memoryPrompt = m.prompt;
-  body.innerHTML = `<div class="mem-head"><p class="sub">Facts Flash keeps about you and your work. Every new chat starts with them, and Flash adds to them as it learns.</p></div><div class="mem-list"></div><div class="mem-path"></div>`;
+  body.innerHTML = `<div class="profile"></div><h2 class="settings-section settings-gap">Facts</h2><div class="mem-head facts-head"><p class="sub">Facts Flash keeps about you and your work. Every new chat starts with them, and Flash adds to them as it learns.</p></div><div class="mem-list"></div><div class="mem-path"></div>`;
+  drawProfile(body.querySelector(".profile"), profile);
   const host = body.querySelector(".mem-list");
   const addBtn = el("button", "btn with-icon", `${icon("plus")}<span>Add</span>`);
   addBtn.type = "button";
@@ -15033,9 +15047,64 @@ async function drawMemory(body) {
   importBtn.onclick = importMemory;
   const buttons = el("div", "buttons");
   buttons.append(addBtn, importBtn);
-  body.querySelector(".mem-head").appendChild(buttons);
+  body.querySelector(".facts-head").appendChild(buttons);
   body.querySelector(".mem-path").textContent = `Saved in ${shortPath(m.path)}`;
   renderMemories(host, m.entries);
+}
+
+// The profile: who Flash understands the user to be, in sections it keeps
+// up to date from their chats, and Your notes, which only they write.
+function drawProfile(host, p) {
+  const age = p.age ? `Updated ${p.age}.` : "Nothing yet: it fills in as you chat.";
+  host.innerHTML = `<div class="mem-head"><div><h2 class="settings-section">Your profile</h2><p class="sub">Who Flash understands you to be: how you work, how you like replies, what you are working on. Every chat starts with it. ${age}</p></div><div class="buttons"></div></div><div class="profile-body"></div>`;
+  const edit = el("button", "btn with-icon", `${icon("edit")}<span>Edit</span>`);
+  edit.type = "button";
+  edit.onclick = () => editProfile(host, p);
+  host.querySelector(".buttons").appendChild(edit);
+  const view = host.querySelector(".profile-body");
+  const shown = p.sections.filter(([k]) => (p.parsed[k] || "").trim());
+  if (!shown.length) view.innerHTML = `<div class="mem-empty"><b>Nothing here yet</b>As you chat, Flash writes down what it learns about how you work and what you like. Or start it yourself with Edit.</div>`;
+  else {
+    const list = el("div", "profile-secs");
+    for (const [k, heading] of shown) {
+      const sec = el("div", "psec" + (k === "notes" ? " mine" : ""), `<b></b><div class="ptext"></div>`);
+      sec.querySelector("b").textContent = heading;
+      sec.querySelector(".ptext").textContent = p.parsed[k];
+      list.appendChild(sec);
+    }
+    view.appendChild(list);
+  }
+  const auto = el("button", "setting-row profile-auto", `<span class="what"><b>Keep it up to date</b><span>After a few messages, Flash looks back over the chat and rewrites a section when it learned something lasting about you. Your notes are never changed. Off, the profile stays as it is.</span></span><span class="switch" aria-hidden="true"></span>`);
+  auto.type = "button";
+  auto.setAttribute("role", "switch");
+  auto.setAttribute("aria-checked", !!p.on);
+  auto.onclick = async () => {
+    const on = auto.getAttribute("aria-checked") !== "true";
+    auto.setAttribute("aria-checked", on);
+    try { p.on = (await command("profile-auto", null, null, { on })).on; }
+    catch (error) { auto.setAttribute("aria-checked", !on); showFailure(error); }
+  };
+  host.appendChild(auto);
+}
+
+function editProfile(host, p) {
+  const view = host.querySelector(".profile-body");
+  // Empty, it starts from every heading, so there is somewhere to write.
+  const start = p.text.trim() || ["# About you", ...p.sections.map(([, h]) => `## ${h}\n\n`)].join("\n\n");
+  view.innerHTML = `<textarea class="profile-edit" spellcheck="true" aria-label="Your profile"></textarea><div class="profile-acts"><small>Write under each heading. Your notes are yours alone: Flash reads them and never changes them.</small><span class="buttons"></span></div>`;
+  const ta = view.querySelector("textarea");
+  ta.value = start;
+  const cancel = el("button", "btn", "Cancel"), save = el("button", "btn primary", "Save");
+  cancel.type = save.type = "button";
+  cancel.onclick = () => drawProfile(host, p);
+  save.onclick = async () => {
+    save.disabled = true;
+    try { Object.assign(p, await command("profile-save", null, null, { text: ta.value })); toast("Profile saved"); drawProfile(host, p); }
+    catch (error) { save.disabled = false; showFailure(error); }
+  };
+  view.querySelector(".profile-acts .buttons").append(cancel, save);
+  // from the top, where the first heading is
+  ta.setSelectionRange(0, 0); ta.focus({ preventScroll: true }); ta.scrollTop = 0;
 }
 
 function renderMemories(host, entries) {

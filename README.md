@@ -86,8 +86,12 @@ it goes:
   them, and reads their network log and console like DevTools.
 - **Splits the work.** Sub-agents take independent pieces in the
   background and report back when they are done.
-- **Learns.** It saves what worked as skills for next time, and remembers
-  what you tell it.
+- **Learns.** It saves what worked as skills for next time, remembers
+  what you tell it, and keeps a profile of how you work and like replies
+  that you can read and edit in Settings, Memory.
+- **Remembers past chats.** Ask about something from an earlier
+  conversation and it searches your chats, on the web page and in the
+  terminal, reads the one that fits and sums it up.
 - **Makes things.** 3D models that open in Blender, MIDI tunes with a
   piano roll to play them, PDFs, images and documents, all shown in the
   web UI's side panel.

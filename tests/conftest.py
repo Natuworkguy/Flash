@@ -19,6 +19,7 @@ from flash import (
     meeting,
     memory,
     notify,
+    paths,
     progress_mail,
     repl_input,
     screenglow,
@@ -31,6 +32,7 @@ from flash import (
     systemone,
     terminal,
     tools,
+    usermodel,
     voice,
     waits,
     workspace,
@@ -180,6 +182,9 @@ def isolated_home(tmp_path_factory, monkeypatch):
     # How many notifications the agent has sent lately.
     monkeypatch.setattr(notify, "FLASH_DIR", home / ".flash")
     monkeypatch.setattr(notify, "ENV_PATH", str(home / ".flash.env"))
+    # Settings saved through paths at the moment they are saved
+    # (usermodel, sandbox) go to the temp home's file too.
+    monkeypatch.setattr(paths, "ENV_PATH", str(home / ".flash.env"))
     monkeypatch.setenv(notify.LIMIT_SETTING, "")
     monkeypatch.setenv(notify.WINDOW_SETTING, "")
     # The tally of replies, and what tips have been shown.
@@ -190,6 +195,7 @@ def isolated_home(tmp_path_factory, monkeypatch):
     monkeypatch.setattr(sparks, "_told", set())
     # The web UI's saved hosts, projects, and chats.
     monkeypatch.setattr(workspace, "FLASH_DIR", home / ".flash")
+    monkeypatch.setattr(usermodel, "FLASH_DIR", home / ".flash")
     # Search indexes of folders.
     monkeypatch.setattr(filesearch, "FLASH_DIR", home / ".flash")
     # Progress emails: off, and their log in the temp home.
