@@ -1750,6 +1750,33 @@ def check_step(index: Any) -> str:
     return plan.as_text()
 
 
+def notes_tool(add: Any = "", rewrite: Any = None, drop: Any = "") -> str:
+    """Keep working notes on a long task: kept word for word through
+    every compaction of the chat."""
+
+    from . import worknotes
+
+    if isinstance(add, (list, tuple)):
+        add = "\n".join(str(item) for item in add)
+    if isinstance(rewrite, (list, tuple)):
+        rewrite = "\n".join(str(item) for item in rewrite)
+    if not str(add or "").strip() and rewrite is None and \
+            not str(drop or "").strip():
+        notes = worknotes.lines()
+        tool_line("Notes()")
+        tool_result(f"{len(notes)} lines" if notes else "None yet", style=DIM)
+        return "\n".join(f"- {line}" for line in notes) or "No notes yet."
+    notes = worknotes.change(str(add or ""), None if rewrite is None
+                             else str(rewrite), str(drop or ""))
+    what = "rewritten" if rewrite is not None else "dropped" if \
+        str(drop or "").strip() and not str(add or "").strip() else "added"
+    tool_line(f"Notes({what})")
+    tool_result(f"{len(notes)} line{'' if len(notes) == 1 else 's'} kept",
+                style=DIM)
+    return ("Your notes now:\n" + "\n".join(f"- {line}" for line in notes)
+            if notes else "Your notes are empty.")
+
+
 # How the project's memory is told apart in recall's results.
 PROJECT_MARK = "project "
 
@@ -9319,6 +9346,44 @@ tools: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "notes",
+            "description": (
+                "Your own working notes for this chat, for a long task: "
+                "what you found (paths, names, numbers, causes), what you "
+                "decided and why, what is done and what is left. When the "
+                "chat grows too long its older turns are squeezed into a "
+                "short summary, but your notes are kept word for word, "
+                "every time. Write a line the moment you learn something "
+                "you would hate to rediscover; keep them short. Call it "
+                "with nothing to read them."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "add": {
+                        "type": "string",
+                        "description": (
+                            "Lines to add at the end, one per line."),
+                    },
+                    "rewrite": {
+                        "type": "string",
+                        "description": (
+                            "All the notes, in place of the old ones: to "
+                            "tidy them up or mark things done. An empty "
+                            "string clears them."
+                        ),
+                    },
+                    "drop": {
+                        "type": "string",
+                        "description": "Take out the lines with this in them.",
+                    },
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "check_step",
             "description": (
                 "Tick one step of the current plan, by its 1-based number, "
@@ -9776,6 +9841,7 @@ FUNCTIONS = {
     "send_audio": send_audio,
     "plan": plan_tool,
     "check_step": check_step,
+    "notes": notes_tool,
     "remember": remember,
     "recall": recall,
     "forget": forget,

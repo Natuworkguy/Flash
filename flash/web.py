@@ -102,6 +102,7 @@ from . import (
     voice,
     voicehooks,
     waits,
+    worknotes,
     workspace,
 )
 from .emojis import EMOJIS
@@ -1167,6 +1168,7 @@ class Session:
             if wait.status == waits.WAITING:
                 waits.end(wait.id, waits.CANCELLED, "Its chat was deleted.")
         workspace.delete_chat(chat_id)
+        worknotes.clear(chat_id)
         self.hub.publish({"type": "chats", "chat": chat_id})
 
     def save(self, chat: Chat) -> None:
@@ -1257,7 +1259,8 @@ class Session:
                     "The model returned no summary; the chat is kept as "
                     "it was.", style=WARN)
                 return
-            chat.messages[:] = [context.summary_message(summary)]
+            chat.messages[:] = [context.summary_message(
+                worknotes.with_notes(summary, chat.id))]
             flash_tools.tool_result(
                 f"{was} tokens of history down to "
                 f"{context.total_tokens(chat.messages)}")
@@ -3846,7 +3849,8 @@ def run_turn(
     tools_ran = 0
     try:
         # In a project, its memory is the tools' to reach.
-        with memory.in_project(found.id if found is not None else ""):
+        with memory.in_project(found.id if found is not None else ""), \
+                worknotes.in_chat(chat.id):
             for number, spark in enumerate(speakers):
                 if chat.stop.is_set():
                     break

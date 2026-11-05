@@ -52,6 +52,7 @@ from . import (
     terminal,
     verify,
     visuals,
+    worknotes,
 )
 from . import models as model_picker
 from .btw import question_of as btw_question
@@ -1151,7 +1152,9 @@ def _compact(
         )
         return False
 
-    messages[:] = context.merge_summary(messages, summary)
+    # Flash's working notes go over word for word, beside the summary.
+    messages[:] = context.merge_summary(
+        messages, worknotes.with_notes(summary))
     tool_result(
         f"Summarized into {context.estimate_tokens(summary)} tokens"
     )
@@ -5597,6 +5600,7 @@ def _resume_command(arg: str, messages: list) -> None:
     messages[:] = _session.messages
     clear_collapsed()
     plan.clear()
+    worknotes.clear()
     console.print(Text(f"Picked up: {_session.title or 'a conversation'}"
                        + (f" (fork {_session.fork})"
                           if _session.fork and _session.fork != sessions.MAIN
@@ -7374,6 +7378,7 @@ def _main() -> None:
                 # was learned this session.
                 learning.refresh()
                 plan.clear()
+                worknotes.clear()
                 checkpoint.clear()
                 console.print(Text("Context cleared.", style=DIM))
                 continue
@@ -7413,7 +7418,8 @@ def _main() -> None:
                     )
                 else:
                     was = context.total_tokens(messages)
-                    messages[:] = [context.summary_message(summary)]
+                    messages[:] = [context.summary_message(
+                        worknotes.with_notes(summary))]
                     now = context.total_tokens(messages)
                     tool_result(
                         f"{was} tokens of history down to {now}"
