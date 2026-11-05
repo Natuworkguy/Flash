@@ -32,6 +32,7 @@ what anyone thinks of it.
 
 from __future__ import annotations
 
+import contextlib
 import datetime as dt
 import os
 import random
@@ -87,6 +88,18 @@ _ALIASES = {"c++": "cpp", "js": "javascript", "node": "javascript",
             "py": "python", "bash": "shell", "sh": "shell",
             "linux": "shell", "terminal": "shell", "rs": "rust",
             "golang": "go"}
+
+
+def _homes() -> list[Path]:
+    """Where toolchains may have installed themselves: the home folder,
+    and the account's own, which a changed HOME (sudo, a test) hides."""
+
+    homes = [Path.home()]
+    with contextlib.suppress(ImportError, KeyError, OSError):
+        import pwd
+
+        homes.append(Path(pwd.getpwuid(os.getuid()).pw_dir))
+    return list(dict.fromkeys(homes))
 
 
 class TutorError(ValueError):
@@ -456,13 +469,14 @@ def run(lang: str, answer: str, files: Optional[dict] = None,
                "TERM": "dumb"}
         # Toolchains that find themselves through the home folder still
         # find themselves: the answer's home is its own folder.
-        real_home = Path.home()
-        for name, default in (("RUSTUP_HOME", real_home / ".rustup"),
-                              ("CARGO_HOME", real_home / ".cargo"),
-                              ("GOROOT", None), ("GOPATH", None),
-                              ("JAVA_HOME", None), ("SYSTEMROOT", None)):
-            value = os.environ.get(name) or (
-                str(default) if default and default.exists() else "")
+        homes = _homes()
+        for name, folder_name in (("RUSTUP_HOME", ".rustup"),
+                                  ("CARGO_HOME", ".cargo"),
+                                  ("GOROOT", None), ("GOPATH", None),
+                                  ("JAVA_HOME", None), ("SYSTEMROOT", None)):
+            found = [str(h / folder_name) for h in homes
+                     if folder_name and (h / folder_name).exists()]
+            value = os.environ.get(name) or (found[0] if found else "")
             if value:
                 env[name] = value
         if verify:
