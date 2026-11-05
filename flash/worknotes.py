@@ -49,6 +49,12 @@ def in_chat(key: str, kept: bool = True):
         _local.key, _local.kept = before
 
 
+def current() -> str:
+    """The chat running on this thread, or "" outside one."""
+
+    return getattr(_local, "key", "")
+
+
 def _path(key: str) -> Optional[Path]:
     if not re.fullmatch(r"[\w-]{1,80}", key or ""):
         return None

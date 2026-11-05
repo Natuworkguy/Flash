@@ -245,6 +245,10 @@ To save a durable fact or preference for future sessions, use the remember
   tool. What is already saved is under === Memory === below, when there is
   any; recall searches older entries by a specific phrase. To delete one
   saved memory by its 1-based index, use the forget tool.
+When the user refers to an earlier conversation ("like we discussed",
+  "the plan from last week") or asks what was said or decided before,
+  search_chats finds it among their past chats; read the one that fits
+  with its chat_id and sum up what it says, rather than guessing.
 When a task matches a skill under === Skills === below, call skill_view on
   it first and follow it. When the user asks you to remember how to do
   something, or corrects how you did a task that will come up again, save
@@ -1868,6 +1872,45 @@ def recall(phrase: str) -> str:
                   for i, entry in search_memory(phrase, path)]
     result = "\n".join(lines) if lines else "No matching memories."
     tool_result(result)
+    return result
+
+
+def update_user_model(section: str, content: str) -> str:
+    """Rewrite one section of the user profile."""
+
+    from . import usermodel
+
+    tool_line(f"UpdateProfile({section})")
+    if not usermodel.enabled():
+        result = ("Not updated: the user turned off keeping their profile "
+                  "up to date.")
+    else:
+        result = usermodel.update(section, content)
+    if result.startswith(("Error", "Not")):
+        tool_result(result, style=ERROR)
+    else:
+        tool_result(result)
+    return result
+
+
+def search_chats(query: str = "", chat_id: str = "", limit: int = 5) -> str:
+    """Search the user's past conversations, or read one back."""
+
+    from . import pastchats, worknotes
+
+    if chat_id:
+        tool_line(f"ReadChat({chat_id}{', ' + query if query else ''})")
+        result = pastchats.read(chat_id.strip(), query)
+        tool_result(result.split("\n", 1)[0])
+        return result
+    if not query.strip():
+        result = "Error: give a query to search for, or a chat_id to read."
+        tool_result(result, style=ERROR)
+        return result
+    tool_line(f"SearchChats({query})")
+    found = pastchats.search(query, limit, exclude=worknotes.current())
+    result = pastchats.describe(found, query)
+    tool_result(f"{len(found)} found" if found else "Nothing found")
     return result
 
 
@@ -9550,6 +9593,87 @@ tools: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "update_user_model",
+            "description": (
+                "Rewrite one section of the user's profile: your picture "
+                "of who they are, how they work and how they like replies, "
+                "which every chat starts with. Use it when you learn "
+                "something lasting about the user that the profile under "
+                "=== About the user === misses or gets wrong, sending the "
+                "whole section, merged with what it already says, in short "
+                "lines. Single facts go to remember instead. The user's "
+                "own notes are theirs and cannot be changed."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "section": {
+                        "type": "string",
+                        "enum": ["who", "work", "replies", "knows", "now",
+                                 "goals"],
+                        "description": (
+                            "who: who they are; work: how they work; "
+                            "replies: how they like replies; knows: what "
+                            "they know; now: what they are working on; "
+                            "goals: where they are headed."
+                        ),
+                    },
+                    "content": {
+                        "type": "string",
+                        "description": (
+                            "The whole section as it should read, a few "
+                            "short lines. Empty clears it."
+                        ),
+                    },
+                },
+                "required": ["section", "content"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_chats",
+            "description": (
+                "Search the user's past conversations with you, on the "
+                "web page and in the terminal, for what was said in them: "
+                "decisions, plans, things the user told you. Returns the "
+                "best matching chats, each with its id, title, date and "
+                "what was said where the words came up. Call it again "
+                "with a chat_id to read that conversation (with query, "
+                "the part about it), then sum up what you found. Use it "
+                "when the user refers to an earlier conversation or asks "
+                "what was decided before. Only what the user and you "
+                "said is searched, not tool output."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": (
+                            "Words the conversation would contain, e.g. "
+                            "'logo colours' or 'Lisbon trip budget'."
+                        ),
+                    },
+                    "chat_id": {
+                        "type": "string",
+                        "description": (
+                            "A chat's id from a search, to read that "
+                            "conversation back."
+                        ),
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "How many chats, 1 to 10 (5).",
+                    },
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "agent",
             "description": (
                 "Start a sub-agent on a background thread to do one "
@@ -9932,6 +10056,8 @@ FUNCTIONS = {
     "check_step": check_step,
     "notes": notes_tool,
     "remember": remember,
+    "search_chats": search_chats,
+    "update_user_model": update_user_model,
     "recall": recall,
     "forget": forget,
     "skill_view": skill_view,

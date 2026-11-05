@@ -217,7 +217,7 @@ TASKS: dict[str, tuple[str, str, tuple[str, ...]]] = {
     "writing": ("quill", "Writing", (
         "write", "edit", "multi_edit", "send_document", "make_document")),
     "searching": ("magnifier", "Searching", (
-        "web_search", "fetch", "grep", "glob", "recall")),
+        "web_search", "fetch", "grep", "glob", "recall", "search_chats")),
     "running": ("terminal", "Running", ("shell",)),
     "reading": ("book", "Reading", (
         "read", "read_email", "check_inbox", "read_imessages",

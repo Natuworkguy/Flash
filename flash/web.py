@@ -6175,6 +6175,29 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
             "path": str(kept_in or memory.MEMORY_PATH),
         }
 
+    if name == "profile":
+        from . import usermodel
+
+        return {"text": usermodel.text(), "on": usermodel.enabled(),
+                "age": usermodel.age(), "path": str(usermodel.path()),
+                "sections": [[k, h] for k, h, _ in usermodel.SECTIONS]
+                + [list(usermodel.NOTES)],
+                "parsed": usermodel.load()}
+
+    if name == "profile-save":
+        from . import usermodel
+
+        sections = usermodel.save_text(str(body.get("text") or ""))
+        learning.refresh()
+        return {"text": usermodel.text(), "parsed": sections,
+                "age": usermodel.age()}
+
+    if name == "profile-auto":
+        from . import usermodel
+
+        usermodel.set_enabled(bool(body.get("on")))
+        return {"on": usermodel.enabled()}
+
     if name == "memory-preview":
         known = {e.lower() for e in memory.list_memory()}
         facts = memory.parse_import(str(body.get("text") or ""))
