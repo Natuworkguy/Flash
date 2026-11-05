@@ -2928,6 +2928,37 @@ def _computer_command(arg: str) -> None:
         console.print(line)
 
 
+def _sandbox_command(arg: str) -> None:
+    """/sandbox [on|off], /sandbox auto [on|off]: whether every command
+    Flash runs goes in the OS sandbox, and whether in Ask first a
+    sandboxed one runs without asking."""
+
+    from . import sandbox
+
+    words = arg.lower().split()
+    if words[:1] == ["auto"] and words[1:] in (["on"], ["off"]):
+        sandbox.set_setting(sandbox.AUTO_ALLOW_SETTING, words[1] == "on")
+    elif words in (["on"], ["off"]):
+        sandbox.set_setting(sandbox.SETTING, words[0] == "on")
+    elif words:
+        warn("Usage: /sandbox [on|off], or /sandbox auto [on|off]")
+        return
+    console.print(Text(
+        ("Every command Flash runs is in the sandbox: it writes only in "
+         "the folder it works in and temp folders, and can't see keys."
+         if sandbox.enabled() else
+         "The sandbox is off: commands run with your full access, unless "
+         "Flash puts one in the sandbox itself. /sandbox on puts every "
+         "one in it.")
+        + (" In Ask first, sandboxed commands run without asking."
+           if sandbox.auto_allow() else
+           " Sandboxed commands still ask first in Ask first; /sandbox "
+           "auto on lets them run."), style=DIM))
+    why = sandbox.missing()
+    if why:
+        warn(why)
+
+
 def _computer_use_command(words: list[str]) -> None:
     """/computer use: whether Flash may see the screen and work the mouse
     and keyboard (beta), shown, or switched with on or off."""
@@ -7340,6 +7371,10 @@ def _main() -> None:
 
             if uin == "/mcp" or uin.startswith("/mcp "):
                 _mcp_command(uin[len("/mcp"):].strip())
+                continue
+
+            if uin == "/sandbox" or uin.startswith("/sandbox "):
+                _sandbox_command(uin[len("/sandbox"):].strip())
                 continue
 
             if uin == "/computer" or uin.startswith("/computer "):

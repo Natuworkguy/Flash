@@ -130,6 +130,16 @@ PAGE = WEB_DIR / "index.html"
 DESIGN_KIT = WEB_DIR / "designkit.js"
 
 
+def _sandbox() -> dict:
+    """The sandbox's state, for Settings."""
+
+    from . import sandbox
+
+    return {"sandbox": sandbox.enabled(),
+            "sandbox_auto_allow": sandbox.auto_allow(),
+            "sandbox_missing": sandbox.missing()}
+
+
 def _computer_use() -> dict:
     """Computer Use's state, for Settings: on or off, the stop keys, and
     what this computer lacks for it."""
@@ -4366,6 +4376,7 @@ def status(ai) -> dict:
         "model_titles": titles.enabled(),
         "computer": computer.enabled(),
         **_computer_use(),
+        **_sandbox(),
         "spark_events": triggers.enabled(),
         **_computer_kinds(),
         "visuals": visuals.level(),
@@ -5862,6 +5873,17 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
         computeruse.set_enabled(arg in ("on", "1", "true"))
         session.hub.publish({"type": "status"})
         return _computer_use()
+
+    if name in ("sandbox-setting", "sandbox-auto-setting"):
+        # Every command in the sandbox; and, in Ask first, sandboxed ones
+        # without asking.
+        from . import sandbox
+
+        sandbox.set_setting(
+            sandbox.SETTING if name == "sandbox-setting"
+            else sandbox.AUTO_ALLOW_SETTING, arg in ("on", "1", "true"))
+        session.hub.publish({"type": "status"})
+        return _sandbox()
 
     if name == "computer-use-fast":
         # Fast mode: several actions a step, buttons clicked by name.

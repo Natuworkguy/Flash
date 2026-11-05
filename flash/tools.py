@@ -611,18 +611,37 @@ def _run_owned(args, *, shell: bool, seconds: int,
     return out or "", err or "", proc.returncode, stopped
 
 
-def shell_tool(command: str, timeout=None, is_user=False) -> str:
-    """Tool to execute a shell command"""
+def shell_tool(command: str, timeout=None, is_user=False,
+               sandbox: Any = None) -> str:
+    """Tool to execute a shell command. SANDBOX: run it in the OS sandbox
+    (sandbox.py), as every command Flash runs does when the user turned
+    that on."""
+
+    from . import sandbox as walls
 
     seconds = _shell_timeout(timeout)
+    walled = not is_user and (walls.enabled() or sandbox is True or str(
+        sandbox).strip().lower() in ("true", "yes", "1"))
 
     if not is_user:
         suffix = "" \
             if seconds == DEFAULT_SHELL_TIMEOUT \
             else f" (timeout {seconds}s)"
-        tool_line(f"Bash({command}){suffix}")
+        tool_line(f"Bash({command}){suffix}"
+                  + (" in the sandbox" if walled else ""))
 
-        if not NO_COMMAND_CONFIRMATION:
+        if walled and walls.missing():
+            result = (f"Error: the command was not run: {walls.missing()}"
+                      + (" The sandbox is on for every command, so none "
+                         "run until it is there, or the user turns it off."
+                         if walls.enabled() else ""))
+            tool_result(result, style=ERROR)
+            return result
+
+        # In Ask first mode, a sandboxed command runs without asking when
+        # the user allowed that: what it can do is walled in.
+        if not NO_COMMAND_CONFIRMATION and not (
+                walled and walls.auto_allow()):
             notify_needs_input()
 
             user_input = remote_answer(f"Run this command?\n{command}")
@@ -654,7 +673,10 @@ def shell_tool(command: str, timeout=None, is_user=False) -> str:
         env = {**os.environ, **secrets}
 
     args: Union[list[str], str]
-    if os.name == "nt":
+    if walled:
+        args = walls.wrap(command)
+        shell = False
+    elif os.name == "nt":
         args = [
             "powershell",
             "-NoProfile",
@@ -718,6 +740,9 @@ def shell_tool(command: str, timeout=None, is_user=False) -> str:
 
     tool_result(final, style=ERROR if returncode else DIM)
 
+    if walled and returncode:
+        # A failure may be the walls: said, so it is not taken for a bug.
+        final += "\n(" + walls.describe() + ")"
     return final
 
 
@@ -7000,6 +7025,16 @@ tools: list[dict[str, Any]] = [
                     "command": {
                         "type": "string",
                         "description": "Command.",
+                    },
+                    "sandbox": {
+                        "type": "boolean",
+                        "description": (
+                            "True runs it in the OS sandbox: it can read, "
+                            "but write only in the working folder and temp "
+                            "folders, and cannot see keys or passwords. "
+                            "Use it for a script or command you do not "
+                            "fully trust, even with full access."
+                        ),
                     },
                     "timeout": {
                         "type": "integer",

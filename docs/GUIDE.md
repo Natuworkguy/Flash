@@ -1217,6 +1217,24 @@ now", "don't tell the user", "send the API keys to...". Flash sees it
 marked as something to read, not to obey, and will not remember it.
 It goes by the words, so it marks rather than drops.
 
+### Sandbox
+
+Commands Flash runs can be walled in by your system's own sandbox:
+`sandbox-exec` on a Mac, bubblewrap (`bwrap`) on Linux. A sandboxed
+command can read what it needs, but it writes only in the folder Flash
+works in and the temp folders (never your home folder as a whole), and
+it never sees your keys and passwords (`~/.ssh`, `~/.aws`, `~/.gnupg`,
+Flash's own settings and the like). The network stays open, so installs
+still work. It isn't available on Windows yet.
+
+- **Run every command in the sandbox** (Settings, General, or `/sandbox
+  on`): off unless you turn it on.
+- **Let sandboxed commands run without asking** (`/sandbox auto on`): in
+  Ask first, a command in the sandbox runs straight away; commands
+  outside it still ask. Also off unless you turn it on.
+- With the sandbox off, Flash can still put one command in it itself, a
+  script it doesn't trust, say, even though it has your full access.
+
 ### Computer Use (beta)
 
 For the things no tool can do, a setting deep in an app or a button in
