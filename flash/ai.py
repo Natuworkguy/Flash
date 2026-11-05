@@ -2939,9 +2939,18 @@ def _computer_use_command(words: list[str]) -> None:
             "Moving the mouse no longer stops it; "
             f"{computeruse.stop_keys()} still does.", style=DIM))
         return
+    if words[:1] == ["fast"] and words[1:] in (["on"], ["off"]):
+        computeruse.set_fast(words[1] == "on")
+        console.print(Text(
+            "Fast mode: several actions per step, one screenshot after "
+            "them, and buttons and fields clicked by name."
+            if words[1] == "on" else
+            "Fast mode is off: one action and one screenshot per step.",
+            style=DIM))
+        return
     if words and words not in (["on"], ["off"]):
-        warn("Usage: /computer use [on|off], or /computer use mouse "
-             "[on|off]")
+        warn("Usage: /computer use [on|off], /computer use mouse "
+             "[on|off], or /computer use fast [on|off]")
         return
     if words:
         try:
@@ -2965,7 +2974,10 @@ def _computer_use_command(words: list[str]) -> None:
         "Computer Use (beta) is on: when no tool can do it, Flash asks to "
         "see your screen and use your mouse and keyboard, every reply, "
         f"even in autonomous mode. {computeruse.how_to_stop()} to take it "
-        "back. /computer use mouse on|off: whether moving the mouse does.",
+        "back. /computer use mouse on|off: whether moving the mouse does. "
+        "/computer use fast on|off: fast mode (now "
+        f"{'on' if computeruse.fast() else 'off'}), several actions per "
+        "step and buttons clicked by name.",
         style=DIM,
     ))
     why = computeruse.missing()

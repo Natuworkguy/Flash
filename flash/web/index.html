@@ -9276,12 +9276,18 @@ function drawGeneral(body) {
   const mouseRow = el("button", "setting-row computer-use-mouse-row", `<span class="what"><b>Moving the mouse stops it</b><span>On, touching the mouse takes your computer back and stops the reply. Off, you can use the mouse while it works, and only the stop keys stop it.</span></span><span class="switch" aria-hidden="true"></span>`);
   mouseRow.type = "button";
   mouseRow.setAttribute("role", "switch");
+  // Fast mode: off unless turned on, the plain way staying the default.
+  const fastRow = el("button", "setting-row computer-use-fast-row", `<span class="what"><b>Fast mode</b><span>Several clicks and keys per step with one screenshot after them, and buttons and fields clicked by name, read from the app itself. Far fewer slow steps. Off, one action and one screenshot at a time.</span></span><span class="switch" aria-hidden="true"></span>`);
+  fastRow.type = "button";
+  fastRow.setAttribute("role", "switch");
   const showUse = () => {
     useRow.setAttribute("aria-checked", !!info.computer_use);
     useRow.disabled = !info.computer;
     useNeeds.hidden = !!info.computer;
     useWarn.hidden = !info.computer_use;
     mouseRow.hidden = !info.computer_use;
+    fastRow.hidden = !info.computer_use;
+    fastRow.setAttribute("aria-checked", !!info.computer_use_fast);
     const mouse = info.computer_use_mouse !== false;
     mouseRow.setAttribute("aria-checked", mouse);
     const stop = useWarn.querySelector(".use-stop");
@@ -9310,7 +9316,14 @@ function drawGeneral(body) {
   };
   body.appendChild(useRow);
   body.appendChild(useNeeds);
+  fastRow.onclick = async () => {
+    const on = fastRow.getAttribute("aria-checked") !== "true";
+    fastRow.setAttribute("aria-checked", on);
+    try { Object.assign(info, await command("computer-use-fast", on ? "on" : "off")); showUse(); }
+    catch (error) { fastRow.setAttribute("aria-checked", !on); showFailure(error); }
+  };
   body.appendChild(mouseRow);
+  body.appendChild(fastRow);
   body.appendChild(useWarn);
   showUse();
 

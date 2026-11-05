@@ -2903,7 +2903,10 @@ def computer_use_tools() -> list[dict[str, Any]]:
     """Computer Use's one tool, said for this computer."""
 
     mac = computer.system() == "mac"
-    return [{
+    quick = computeruse.fast()
+    actions = {**computeruse.ACTIONS, **computeruse.FAST_ACTIONS} if quick \
+        else computeruse.ACTIONS
+    schema: dict[str, Any] = {
         "type": "function",
         "function": {
             "name": "computer_use",
@@ -2924,14 +2927,20 @@ def computer_use_tools() -> list[dict[str, Any]]:
                    if mac else "Shortcuts use ctrl (ctrl+c, alt+tab). ")
                 + "Actions: "
                 + "; ".join(f"{name}: {what}"
-                            for name, what in computeruse.ACTIONS.items())
+                            for name, what in actions.items())
                 + "."
+                + (" Fast mode is on: to be quick, list the elements "
+                   "and click or type into them by name (element), and "
+                   "do several actions in one call with steps, looking "
+                   "only once at the end. Fall back to a screenshot and "
+                   "x, y for what elements does not list."
+                   if quick else "")
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "action": {"type": "string",
-                               "enum": list(computeruse.ACTIONS)},
+                               "enum": list(actions)},
                     "x": {"type": "number"},
                     "y": {"type": "number"},
                     "to_x": {"type": "number",
@@ -2955,7 +2964,30 @@ def computer_use_tools() -> list[dict[str, Any]]:
                 "required": ["action"],
             },
         },
-    }]
+    }
+    if quick:
+        props = schema["function"]["parameters"]["properties"]
+        props["element"] = {
+            "type": "string",
+            "description": "In place of x, y: an element's name or number "
+                           "from the last elements list.",
+        }
+        props["to_element"] = {"type": "string",
+                               "description": "Where a drag ends, by "
+                               "element."}
+        props["steps"] = {
+            "type": "array",
+            "description": (
+                f"Up to {computeruse.MOST_STEPS} actions done one after "
+                "the other, with one screenshot after the last: each an "
+                "object like the call itself, e.g. {\"action\": \"click\", "
+                "\"element\": \"Name\"}, {\"action\": \"type\", "
+                "\"text\": \"Ada\"}, {\"action\": \"key\", \"keys\": "
+                "\"enter\"}. Set action to steps with it."),
+            "items": {"type": "object"},
+        }
+        props["action"]["enum"] = [*actions, "steps"]
+    return [schema]
 
 
 # On a Mac, with the computer allowed: the user's recent iMessages.
@@ -3641,6 +3673,15 @@ def computer_user(owner: str, stop: Callable[[], None]):
         _computer_user.who = before
 
 
+def _plan_json(steps: Any) -> list:
+    """STEPS as a list, from a model that sent it as JSON text."""
+
+    if isinstance(steps, str):
+        with contextlib.suppress(ValueError):
+            steps = json.loads(steps)
+    return steps if isinstance(steps, list) else []
+
+
 def computer_use_tool(action: str = "", **args: Any) -> str:
     """One step of Computer Use, for the reply working the computer.
     The first step of a reply asks the user, autonomous mode or not; only
@@ -3650,7 +3691,10 @@ def computer_use_tool(action: str = "", **args: Any) -> str:
         "terminal", computeruse.interrupt_terminal)
     action = str(action or "").strip().lower()
     tool_line(f"ComputerUse({action}"
-              + "".join(f", {args[k]}" for k in ("x", "y") if k in args)
+              + "".join(f", {args[k]}" for k in ("x", "y", "element")
+                        if k in args)
+              + (f", {len(_plan_json(args.get('steps')))} steps"
+                 if args.get("steps") else "")
               + ")")
     if not computeruse.enabled():
         result = ("Error: Computer Use is off. The user can turn it on in "
@@ -3687,7 +3731,12 @@ def computer_use_tool(action: str = "", **args: Any) -> str:
                     "not ask again.")
         computeruse.take(owner, stop)
     try:
-        said, image = computeruse.do(action, args, owner)
+        if computeruse.fast() and (action == "steps" or (
+                isinstance(args.get("steps"), list) and args["steps"])):
+            said, image = computeruse.do_steps(
+                _plan_json(args.get("steps")), owner)
+        else:
+            said, image = computeruse.do(action, args, owner)
     except computeruse.UseError as exc:
         tool_result(str(exc), style=ERROR)
         return f"Error: {exc}"

@@ -1243,6 +1243,17 @@ through it. Then:
   mouse off`; then only the stop keys take it back.
 - the Stop button and Esc still stop the reply as usual.
 
+**Fast mode** is a second, quicker way to work, off unless you turn it
+on (Fast mode in Settings, or `/computer use fast on`); the plain way
+stays the default. With it on, Flash can do several clicks and keys in
+one step and look only once at the end, and it can list the front
+window's buttons, fields, menus and links by name, read from the app
+itself through the system's accessibility support (System Events on a
+Mac, UI Automation on Windows, AT-SPI on Linux), then click or type into
+one by its name instead of finding it in a screenshot. Far fewer slow
+look-and-click rounds for the same work. Where an app lists nothing, it
+falls back to screenshots and points.
+
 Only one chat has the computer at a time. It needs a model that can see
 images. On a Mac, the app Flash runs in needs Accessibility (for the
 mouse and keyboard) and Screen Recording (for the screenshots), under
