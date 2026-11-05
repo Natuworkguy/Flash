@@ -517,7 +517,7 @@ def after_turn(
         # The skills it used: scored, judged, rewritten if they keep
         # going badly. Never at the cost of the turn.
         skilltrials.after_turn(messages, host=host, model=model, start=start)
-    except Exception:  # noqa: BLE001  # nosec B110
+    except Exception:  # noqa: BLE001, S110  # nosec B110
         pass
 
     skill_every = skill_review_after()

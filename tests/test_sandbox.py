@@ -88,7 +88,8 @@ def test_a_real_sandbox_walls_the_command_in(tmp_path, monkeypatch):
     work.mkdir()
     monkeypatch.chdir(work)
     # Not the folder it works in, nor a temp folder it may write in.
-    outside = Path("/var/tmp") / f"flash-sandbox-{tmp_path.name}.txt"
+    var_tmp = Path("/var/tmp")  # nosec B108
+    outside = var_tmp / f"flash-sandbox-{tmp_path.name}.txt"
     outside.unlink(missing_ok=True)
 
     said = tools.shell_tool(
