@@ -397,7 +397,7 @@ def test_heard_interruption_ignores_ordinary_speech(said):
 class _Interrupting:
     """Stands in for the barge-in listener, having already heard it."""
 
-    def __init__(self):
+    def __init__(self, how="word", line=""):
         self.heard = threading.Event()
         self.heard.set()
 
@@ -1533,3 +1533,26 @@ def test_voice_devices_default_to_the_system_ones(monkeypatch):
 
     assert voice.input_device() is None  # nosec B101
     assert voice.output_device() is None  # nosec B101
+
+
+def test_how_talking_over_a_reply_cuts_it_off(monkeypatch):
+    monkeypatch.delenv("VOICE_INTERRUPT", raising=False)
+    monkeypatch.delenv("CALL_INTERRUPT", raising=False)
+    # Voice mode waits for the word; a call is cut by anything said.
+    assert voice.interrupt_how("voice") == "word"
+    assert voice.interrupt_how("calls") == "anything"
+    monkeypatch.setenv("VOICE_INTERRUPT", "anything")
+    monkeypatch.setenv("CALL_INTERRUPT", "word")
+    assert voice.interrupt_how("voice") == "anything"
+    assert voice.interrupt_how("calls") == "word"
+    monkeypatch.setenv("CALL_INTERRUPT", "nonsense")
+    assert voice.interrupt_how("calls") == "anything"
+
+
+def test_only_the_users_own_words_count_as_talking_over():
+    line = "The build broke on the payments test after the last merge"
+    assert voice._talked_over("wait roll it back", line)
+    # Its own words, back through the microphone, do not.
+    assert not voice._talked_over("the payments test after", line)
+    # Nor a single sound.
+    assert not voice._talked_over("uh", line)

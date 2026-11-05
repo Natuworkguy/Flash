@@ -4366,6 +4366,8 @@ def status(ai) -> dict:
         # the browser's clock.
         "greetings": greetings.POOLS,
         "voice_style": voice.voice_style(),
+        "voice_interrupt": voice.interrupt_how("voice"),
+        "call_interrupt": voice.interrupt_how("calls"),
         "wake_sensitivity": voice.wake_sensitivity(),
         "wake_word": voice.wake_title(),
         # The scene actually in effect: a name that no longer finds one,
@@ -5716,6 +5718,16 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
 
     if name == "voice-models":
         return voice_models(session)
+
+    if name == "interrupt-setting":
+        # How talking over a reply cuts it off: in voice mode, or on calls.
+        how = str(body.get("how") or "")
+        if arg not in voice.INTERRUPT_SETTINGS or how not in \
+                voice.INTERRUPT_HOWS:
+            raise ValueError("pick voice or calls, and word or anything")
+        ai.set_config_var(voice.INTERRUPT_SETTINGS[arg][0], how)
+        return {"voice_interrupt": voice.interrupt_how("voice"),
+                "call_interrupt": voice.interrupt_how("calls")}
 
     if name == "voice-style":
         if arg not in voice.STYLES:

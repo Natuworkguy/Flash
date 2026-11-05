@@ -144,6 +144,34 @@ def piper_voice() -> str:
     return _setting("VOICE_PIPER_VOICE", DEFAULT_PIPER_VOICE)
 
 
+# How a reply read aloud is cut off: by the interrupt word only, or by
+# anything the user says over it. One for Flash's own voice mode, one for
+# calls with sparks.
+INTERRUPT_HOWS = ("word", "anything")
+INTERRUPT_SETTINGS = {"voice": ("VOICE_INTERRUPT", "word"),
+                      "calls": ("CALL_INTERRUPT", "anything")}
+
+
+def interrupt_how(kind: str) -> str:
+    """How talking over a reply cuts it off for KIND, "voice" (Flash's
+    voice mode) or "calls" (a call with a spark): "word" or "anything"."""
+
+    name, default = INTERRUPT_SETTINGS[kind]
+    how = _setting(name, default).lower()
+    return how if how in INTERRUPT_HOWS else default
+
+
+def _talked_over(said: str, line: str) -> bool:
+    """Whether SAID, heard while LINE is read out, is the user talking
+    over it: a few words, most of them not LINE's own coming back."""
+
+    words = re.sub(r"[^a-z0-9' ]", " ", (said or "").lower()).split()
+    if len(words) < 2:
+        return False
+    spoken = set(re.sub(r"[^a-z0-9' ]", " ", (line or "").lower()).split())
+    return sum(w in spoken for w in words) / len(words) <= 0.6
+
+
 def voice_style() -> str:
     """How Flash's voice delivers what it says: one of STYLES."""
 
@@ -1244,10 +1272,13 @@ class _Barge:
     be talked over.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, how: str = "word", line: str = "") -> None:
         self.heard = threading.Event()
         self._done = threading.Event()
         self._thread = None
+        # "anything": any words said over LINE, not LINE's own, cut it.
+        self.how = how
+        self.line = line
 
     def __enter__(self):
         try:
@@ -1298,7 +1329,9 @@ class _Barge:
                             recognizer.PartialResult()
                         ).get("partial")
 
-                    if _heard_interruption(said):
+                    if _heard_interruption(said) or (
+                            self.how == "anything"
+                            and _talked_over(said, self.line)):
                         self.heard.set()
                         return
         except Exception:  # noqa: BLE001, S110  # nosec B110
@@ -1550,9 +1583,11 @@ def _said(voice, text: str, settings: dict):
         yield audio if audio is not None else bytes(chunk)
 
 
-def speak(text: str, speaker: str = "") -> tuple[str, bool]:
+def speak(text: str, speaker: str = "",
+          kind: str = "voice") -> tuple[str, bool]:
     """Read `text` aloud, stopping if it is interrupted: in Flash's voice,
-    or in SPEAKER, another Kokoro voice (a spark's, on a call).
+    or in SPEAKER, another Kokoro voice (a spark's, on a call). KIND
+    "voice" or "calls" says which interrupting setting applies.
 
     Returns `(reason, interrupted)`: `reason` is "" unless the reply
     could not be played at all, and `interrupted` says whether saying
@@ -1583,7 +1618,8 @@ def speak(text: str, speaker: str = "") -> tuple[str, bool]:
     interrupted = False
 
     try:
-        with _Barge() as barge, sounddevice.RawOutputStream(
+        with _Barge(interrupt_how(kind), text) as barge, \
+                sounddevice.RawOutputStream(
             device=output_device(),
             samplerate=rate,
             dtype="int16",

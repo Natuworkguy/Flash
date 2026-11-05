@@ -5370,3 +5370,24 @@ def test_canvas_actions_are_checked_before_they_reach_the_page():
     assert not why and ok[0]["how"] == "inner"
     # No page at all (the terminal): said plainly.
     assert "web app" in tools.canvas(id="c1", action="read")
+
+
+def test_the_page_sets_how_replies_are_interrupted(monkeypatch):
+    from flash import ai, voice
+
+    saved = {}
+    monkeypatch.setattr(ai, "set_config_var",
+                        lambda name, value: saved.update({name: value}) or
+                        monkeypatch.setenv(name, value))
+    session = web.Session()
+    out = web.command(session, {"name": "interrupt-setting", "arg": "voice",
+                                "how": "anything"})
+    assert out["voice_interrupt"] == "anything"
+    assert saved == {"VOICE_INTERRUPT": "anything"}
+    out = web.command(session, {"name": "interrupt-setting", "arg": "calls",
+                                "how": "word"})
+    assert out["call_interrupt"] == "word"
+    assert voice.interrupt_how("calls") == "word"
+    with pytest.raises(ValueError):
+        web.command(session, {"name": "interrupt-setting", "arg": "calls",
+                              "how": "loudly"})
