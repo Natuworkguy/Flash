@@ -102,7 +102,8 @@ COMMANDS = [
     ("/plan", "show the checklist the model is working through"),
     ("/agents", "watch sub-agents work live (/agents <id> for one)"),
     ("/sparks", "agents that keep working on a goal (new, chat <name>)"),
-    ("/call", "a voice call with a spark: /call <name>"),
+    ("/call", "a voice call with a spark: /call <name>, or /call "
+              "incoming on|off for whether sparks may call you"),
     ("/answer", "pick up a spark's call that is ringing"),
     ("/decline", "decline a spark's call that is ringing"),
     ("/email", "your email (connect, test, inbox, progress, disconnect)"),

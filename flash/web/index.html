@@ -9481,7 +9481,19 @@ function drawGeneral(body) {
   // Cutting in while a reply is read out: with the word, or by talking.
   // One for Flash's own voice mode, one for calls with sparks.
   body.appendChild(interruptRow("voice", "Interrupting Flash", "How to cut Flash off while it talks in voice mode. Say “interrupt”, or just start talking and what you say is your next turn, as on a phone."));
+  // Whether sparks may call at all: on unless switched off.
+  const callsRow = el("button", "setting-row spark-calls-row", `<span class="what"><b>Let sparks call me</b><span>A spark with something urgent can ring you, here, on your computer, in the terminal and on paired devices. Off, it never rings: it @mentions you in a message instead.</span></span><span class="switch" aria-hidden="true"></span>`);
+  callsRow.type = "button";
+  callsRow.setAttribute("role", "switch");
+  callsRow.setAttribute("aria-checked", info.spark_calls !== false);
+  callsRow.onclick = async () => {
+    const on = callsRow.getAttribute("aria-checked") !== "true";
+    callsRow.setAttribute("aria-checked", on);
+    try { info.spark_calls = (await command("incoming-calls-setting", on ? "on" : "off")).spark_calls; }
+    catch (error) { callsRow.setAttribute("aria-checked", !on); showFailure(error); }
+  };
   body.appendChild(interruptRow("calls", "Interrupting on spark calls", "The same, on a call with a spark: talk over it, or say “interrupt”."));
+  body.appendChild(callsRow);
 
   // Voice mode's look, in this browser.
   const lookRow = el("div", "setting-row static voice-look-row", `<span class="what"><b>Voice mode look</b><span>The orb, or a companion: a face on it that listens, thinks and talks along with Flash.</span></span><span class="side"><select aria-label="Voice mode look"><option value="orb">Orb</option><option value="companion">Companion</option></select></span>`);

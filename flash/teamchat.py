@@ -625,11 +625,29 @@ def call_log(team_key: str, call_id: str) -> list[dict]:
     return out
 
 
+# Whether sparks may call the user: on unless switched off.
+CALLS_SETTING = "SPARK_CALLS"
+CALLS_OFF = ("The user turned off calls from sparks. If it can't wait, "
+             "@user them in your report or in a message instead.")
+
+
+def calls_allowed() -> bool:
+    """Whether sparks may call the user. Read from the env file, so the
+    keeper's sparks go by what was set in another Flash."""
+
+    from .notify import _saved
+
+    return _saved(CALLS_SETTING).strip().lower() not in (
+        "0", "off", "false", "no")
+
+
 def ring(spark: sparks.Spark, reason: str) -> dict:
     """SPARK calls the user, for REASON: a call that rings wherever Flash
     is open (or on the desktop when only the keeper is), RING_SECONDS
     long. Its entry in their private chat."""
 
+    if not calls_allowed():
+        raise TeamChatError(CALLS_OFF)
     reason = " ".join(str(reason or "").split())[:300]
     if not reason:
         raise TeamChatError("Say why you are calling.")

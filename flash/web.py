@@ -4374,6 +4374,7 @@ def status(ai) -> dict:
         "greetings": greetings.POOLS,
         "voice_style": voice.voice_style(),
         "voice_interrupt": voice.interrupt_how("voice"),
+        "spark_calls": teamchat.calls_allowed(),
         "call_interrupt": voice.interrupt_how("calls"),
         "wake_sensitivity": voice.wake_sensitivity(),
         "wake_word": voice.wake_title(),
@@ -5873,6 +5874,13 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
         computeruse.set_mouse_stops(arg in ("on", "1", "true"))
         session.hub.publish({"type": "status"})
         return _computer_use()
+
+    if name == "incoming-calls-setting":
+        # Whether sparks may call the user at all.
+        on = arg in ("on", "1", "true")
+        ai.set_config_var(teamchat.CALLS_SETTING, "1" if on else "0")
+        session.hub.publish({"type": "status"})
+        return {"spark_calls": on}
 
     if name == "titles-setting":
         on = arg in ("on", "1", "true")

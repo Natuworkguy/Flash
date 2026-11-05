@@ -794,7 +794,9 @@ have looked them over.
   with only the keeper running, the computer rings the same way. A call
   not picked up is a missed call in the chat, with Call back, and when
   it still needs you, the spark can @mention you with what it called
-  about. In the terminal, `/call <spark>` calls one, by voice or typed.
+  about. Don't want calls? Switch off Let sparks call me in Settings,
+  General (or `/call incoming off`): sparks are no longer offered the
+  call, and @mention you instead. In the terminal, `/call <spark>` calls one, by voice or typed.
 - **Team rules.** Lines every spark on a team keeps to, on top of its own
   boundaries, on shifts and in chats alike (the team's edit form, or
   `/sparks teams rules <team> <rules|none>`).
