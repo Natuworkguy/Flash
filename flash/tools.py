@@ -314,13 +314,15 @@ SYSTEM_PROMPT = _flash_system_prompt()
 def build_system_prompt(model_prompt: str = "") -> str:
     """Prepend the model's own system prompt to Flash's, when it has one."""
 
+    from . import memory
+
     model_prompt = model_prompt.strip()
     added = "\n\n".join(
         part
         for part in (
             extensions.system_prompt(), instructions.prompt_block(),
-            instructions.agents_block(), learning.prompt_block(),
-            sparks.roster_block(),
+            instructions.agents_block(), memory.folder_block(),
+            learning.prompt_block(), sparks.roster_block(),
         )
         if part
     )

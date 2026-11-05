@@ -1623,6 +1623,19 @@ project starts with it, and `recall` searches it too. The project's
 page lists it under Memory, where you add, edit and forget entries.
 Deleting a project deletes its memory.
 
+It keeps itself up to date: after enough work in a project, the
+background learning review also saves what the work taught Flash about
+the project (commands that worked, conventions, where things live, a
+mistake that cost time and its fix) to the project's memory, apart from
+what it learned about you.
+
+The terminal has project memory too, by folder. Started in a repository,
+or a folder with a project file such as `package.json` or
+`pyproject.toml`, Flash keeps a memory for that project, adds to it as
+it learns, and brings it back whenever you work anywhere in that folder
+again. A web project that takes the folder in shares the same memory.
+Plain folders and your home folder have none.
+
 **Making it yours.** Settings › General changes how the page looks, in
 this browser:
 

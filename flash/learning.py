@@ -98,6 +98,18 @@ BOTH_TASK = "Review the conversation above: update the skill library, " \
     "and save anything worth remembering about the user or their " \
     "environment."
 
+PROJECT_GUIDE = """\
+This conversation was worked in a project. What it taught you about the \
+project itself goes in the project's own memory: remember with project \
+true. Worth keeping: the commands that build, test and run it and that \
+worked; its conventions and layout; where things live; a mistake that \
+cost time and what fixed it; a decision made and why. Keep facts about \
+the user out of it (plain remember), and keep it current: one short \
+line each, nothing the project's memory below already says."""
+
+PROJECT_TASK = " And save what it taught you about this project in the " \
+    "project's memory."
+
 
 def _setting(name: str, default: int) -> int:
     try:
@@ -200,6 +212,9 @@ class Review:
     # A review the user asked for by rating a reply: what they thought
     # of which reply, and why, if they said.
     rating: str = ""
+    # The project the conversation was worked in ("" for none): what it
+    # learned about the project goes in the project's own memory.
+    project: str = ""
     actions: list[str] = field(default_factory=list)
     reply: str = ""
     error: str = ""
@@ -312,6 +327,17 @@ def review_messages(review: Review, messages: list[dict]) -> list[dict]:
     if review.memory:
         guides.append(MEMORY_GUIDE)
         guides.append(memory_block() or "=== Memory ===\nNothing saved yet.")
+    if review.memory and review.project:
+        from . import memory  # deferred: memory imports nothing of ours
+
+        guides.append(PROJECT_GUIDE)
+        try:
+            kept = memory.list_memory(memory.project_path(review.project))
+        except ValueError:
+            kept = []
+        guides.append("=== The project's memory ===\n" + (
+            "\n".join(f"- {entry}" for entry in kept[-60:])
+            or "Nothing saved yet."))
 
     conversation = context.transcript(messages)
     if len(conversation) > REVIEW_INPUT_CHARS:
@@ -329,6 +355,8 @@ def review_messages(review: Review, messages: list[dict]) -> list[dict]:
                 f"{conversation}\n"
                 "=== End of conversation ===\n\n"
                 f"{_task(review)}"
+                + (PROJECT_TASK if review.memory and review.project
+                   else "")
             ),
         },
     ]
@@ -401,6 +429,14 @@ def _stream(client, model: str, messages: list, tools: list) -> Any:
 
 
 def _run(review: Review, messages: list[dict], host: str, model: str):
+    from . import memory  # deferred: memory imports nothing of ours
+
+    # remember with project true reaches the project's memory.
+    with memory.in_project(review.project):
+        _review(review, messages, host, model)
+
+
+def _review(review: Review, messages: list[dict], host: str, model: str):
     try:
         client = providers.client(host)
         tools = _schemas(_allowed(review))
@@ -467,8 +503,15 @@ def after_turn(
     host: str,
     model: str,
     start: Callable[..., Any] = threading.Thread,
+    project: Optional[str] = None,
 ) -> Optional[Review]:
-    """Count a finished turn, and start a review if one is due."""
+    """Count a finished turn, and start a review if one is due. PROJECT:
+    the project it was worked in, the current one by default."""
+
+    if project is None:
+        from . import memory  # deferred: memory imports nothing of ours
+
+        project = memory.current_project()
 
     try:
         # The skills it used: scored, judged, rewritten if they keep
@@ -498,7 +541,11 @@ def after_turn(
         if due_memory:
             _state.turns = 0
 
-        review = Review(skills=due_skills, memory=due_memory)
+        # Work in a project is worth learning from for the project, too,
+        # whenever enough of it was done for a review.
+        review = Review(skills=due_skills,
+                        memory=due_memory or bool(project),
+                        project=project or "")
         _state.running = review
         _state.cancel.clear()
 

@@ -40,6 +40,7 @@ from . import (
     interrupt,
     learning,
     loaders,
+    memory,
     pings,
     plan,
     progress,
@@ -6948,6 +6949,9 @@ def _main() -> None:
     # From here a single Ctrl+C stops a running turn; at the prompt the
     # input box asks for a second press itself.
     arm_exit(interrupt.release())
+    # The terminal works in a folder: a project folder's memory goes with
+    # every turn in it.
+    memory.FOLDER_MEMORY = True
 
     while True:
         dock: Optional[Dock] = None
@@ -7597,6 +7601,8 @@ def _main() -> None:
             )
 
             messages.append(_message("user", content, pending_images))
+            # Remember, recall and forget reach this folder's project.
+            memory.enter_folder()
             _fit_and_compact(console, client, messages)
 
             system_message = _message(
