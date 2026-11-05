@@ -9632,7 +9632,9 @@ tools: list[dict[str, Any]] = [
                         "type": "string",
                         "description": (
                             "Optional: the name of the user's project it "
-                            "works on, when the chat is about one."
+                            "works on, when the chat is about one. Several, "
+                            "separated by commas, when it works on more "
+                            "than one; the first is its main one."
                         ),
                     },
                     "model": {

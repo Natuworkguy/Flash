@@ -3043,16 +3043,16 @@ body.all-stopped .org-node, body.all-stopped .spark-card { animation: all-halt 0
 .tc-event:hover { border-color: color-mix(in srgb, var(--c, var(--accent)) 40%, var(--border)); background: color-mix(in srgb, var(--c, var(--accent)) 8%, var(--hover)); }
 .tc-event .words b { color: var(--text); font-weight: 600; }
 .tc-event .when { color: var(--text-3); }
-.lead-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+:is(.lead-chips, .project-chips) { display: flex; flex-wrap: wrap; gap: 6px; }
 .event-checks { display: grid; gap: 6px; margin: 2px 0 4px; }
 .event-check { display: flex; align-items: center; gap: 9px; font-size: 13.5px; font-weight: 400; color: var(--text-2); cursor: pointer; }
 .event-check input { flex: none; width: auto; margin: 0; padding: 0; accent-color: var(--accent); }
 .event-check span { display: inline; margin: 0; font-size: 13.5px; font-weight: 400; color: var(--text-2); }
-.lead-chips .chip-btn { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; padding: 4px 11px 4px 5px; border-radius: 999px; border: 1px solid var(--border-strong); color: var(--text-2); transition: background 0.15s, border-color 0.15s, transform 0.2s var(--spring); }
-.lead-chips .chip-btn:hover { background: var(--hover); color: var(--text); }
-.lead-chips .chip-btn .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--c); flex: none; margin-left: 3px; }
-.lead-chips .chip-btn:active { transform: scale(0.95); }
-.lead-chips .chip-btn.on { border-color: color-mix(in srgb, var(--c) 60%, var(--border)); background: color-mix(in srgb, var(--c) 16%, var(--surface)); color: var(--text); }
+:is(.lead-chips, .project-chips) .chip-btn { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; padding: 4px 11px 4px 5px; border-radius: 999px; border: 1px solid var(--border-strong); color: var(--text-2); transition: background 0.15s, border-color 0.15s, transform 0.2s var(--spring); }
+:is(.lead-chips, .project-chips) .chip-btn:hover { background: var(--hover); color: var(--text); }
+:is(.lead-chips, .project-chips) .chip-btn .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--c); flex: none; margin-left: 3px; }
+:is(.lead-chips, .project-chips) .chip-btn:active { transform: scale(0.95); }
+:is(.lead-chips, .project-chips) .chip-btn.on { border-color: color-mix(in srgb, var(--c) 60%, var(--border)); background: color-mix(in srgb, var(--c) 16%, var(--surface)); color: var(--text); }
 .org .shared-lines { position: absolute; left: 0; top: 0; pointer-events: none; overflow: visible; z-index: 0; }
 .org-tree { z-index: 1; }
 /* The same line as the tree's own: a second lead is no lesser one. */
@@ -8723,7 +8723,7 @@ function drawProject() {
 
   // The sparks working on it: each opens its window, and a new one can
   // be made here, already given the project.
-  const itsSparks = sparkList.filter((sp) => sp.project === p.id);
+  const itsSparks = sparkList.filter((sp) => sp.project === p.id || (sp.project_ids || []).includes(p.id));
   const sparkHead = el("div", "section-label", "Sparks");
   const addSpark = el("button", "link-btn", "New spark");
   addSpark.type = "button";
@@ -10404,7 +10404,7 @@ async function drawSparks(body, again = false) {
     card.querySelector(".name").textContent = spark.name;
     const title = card.querySelector(".title");
     if (spark.title) title.textContent = spark.title; else title.remove();
-    card.querySelector(".meta").textContent = `${spark.handle} · ${spark.schedule}${spark.project_name ? ` · in ${spark.project_name}` : ""}${spark.model_used ? ` · ${spark.model_used}` : ""}`;
+    card.querySelector(".meta").textContent = `${spark.handle} · ${spark.schedule}${sparkProjectsWords(spark)}${spark.model_used ? ` · ${spark.model_used}` : ""}`;
     const state = card.querySelector(".state");
     state.textContent = spark.unread ? `${spark.unread} new report${spark.unread === 1 ? "" : "s"} · ${sparkState(spark)}` : sparkState(spark);
     state.classList.toggle("working", spark.status === "working");
@@ -12485,7 +12485,7 @@ function fillSpark(box, spark, again = false) {
   pill.classList.add(kind);
   pill.textContent = kind === "idle" ? "Ready" : doing;
   box.querySelector(".handle").textContent = spark.handle;
-  box.querySelector(".spark-head .meta").textContent = `On ${spark.model_used || "no model"}${spark.model ? "" : " (Flash's)"} · ${spark.schedule}${spark.project_name ? ` · in ${spark.project_name}` : ""} · ${sparkState(spark)} · ${spark.runs} shift${spark.runs === 1 ? "" : "s"}`;
+  box.querySelector(".spark-head .meta").textContent = `On ${spark.model_used || "no model"}${spark.model ? "" : " (Flash's)"} · ${spark.schedule}${sparkProjectsWords(spark)} · ${sparkState(spark)} · ${spark.runs} shift${spark.runs === 1 ? "" : "s"}`;
   if (spark.team_name) {
     const line = el("div", "team-line", `<span class="dot"></span><span></span>`);
     line.style.setProperty("--t", spark.team_colour || spark.colour);
@@ -12941,6 +12941,13 @@ function setTimesField(form) {
   });
 }
 
+// Where a spark works, for a line about it: " · in Shop", or with more.
+function sparkProjectsWords(spark) {
+  const names = (spark.projects || []).map((p) => p.name);
+  if (!names.length) return spark.project_name ? ` · in ${spark.project_name}` : "";
+  return ` · in ${names.length > 2 ? `${names[0]} + ${names.length - 1} more` : names.join(" and ")}`;
+}
+
 function sparkForm(spark, inProjectId = "", template = "") {
   const editing = !!spark;
   const every = editing ? spark.every : 60;
@@ -12960,6 +12967,7 @@ function sparkForm(spark, inProjectId = "", template = "") {
     <label class="field"><span>How often</span><select name="every">${choices.map(([m, label]) => `<option value="${m}"${!atTimes && !called && m === every ? " selected" : ""}>${label}</option>`).join("")}<option value="at"${atTimes ? " selected" : ""}>At set times…</option><option value="oncall"${called ? " selected" : ""}>Only when called on</option></select><small class="every-said">${called ? ON_CALL_SAID : "It works while Flash is open, in the terminal or here."}</small></label>
     <label class="field at-field"${atTimes ? "" : " hidden"}><span>When</span><input name="at" placeholder="9am weekdays" autocomplete="off" spellcheck="false"><small class="at-said">Like <b>9am weekdays</b>, <b>mon, thu 8:30</b>, <b>the 1st at 9am</b>, or a cron line such as <b>0 9 * * 1-5</b>. On this computer's clock.</small></label>
     <label class="field"><span>Project</span><select name="project"><option value="">No project</option>${[...projects].reverse().map((p) => `<option value="${esc(p.id)}"${editing && spark.project === p.id ? " selected" : ""}>${esc(p.name)}</option>`).join("")}</select><small>${projects.length ? "Its shifts work on the project's folder and follow its instructions, and a chat with it starts there." : "Make a project on the Projects page to give it one: a folder, and how to work in it."}</small></label>
+    <div class="field more-projects-field" hidden><span>Also works on <em class="count">optional</em></span><div class="project-chips" role="group" aria-label="Also works on"></div><small>More projects it works on besides its main one. Its shifts are told each one's folder and instructions, and do each piece of work in the project it belongs to.</small></div>
     <label class="field"><span>Watch a folder <em class="count">optional</em></span><input name="watch" class="mono" placeholder="~/Downloads" autocomplete="off" spellcheck="false" role="combobox" aria-autocomplete="list" aria-expanded="false"><small>A change to its files starts a shift too, besides the schedule, and it is told which files changed. Tab takes a suggestion and shows what is inside it.</small></label>
     <div class="field events-field"><span>Start when <em class="count">optional</em></span><div class="event-checks" role="group" aria-label="Start when"></div><small class="events-said"></small></div>
     <label class="field"><span>Boundaries</span><textarea name="boundaries" rows="2" placeholder="Only read. Never push, delete, or message anyone."></textarea><small>Lines it must not cross.</small></label>
@@ -12972,7 +12980,8 @@ function sparkForm(spark, inProjectId = "", template = "") {
     ${editing || sparksAlways.installed ? "" : `<label class="field check"><input type="checkbox" name="always" checked><span>Keep sparks working when Flash is closed. Flash starts a keeper at login and notifies you of news.</span></label>`}
     <div class="dialog-buttons"><button type="button" class="btn" data-cancel>Cancel</button><button type="submit" class="btn primary">${editing ? "Save" : "Make spark"}</button></div>`,
     async (data) => {
-      const fields = { goal: data.goal, every: data.every === "at" ? data.at.trim() : data.every, boundaries: data.boundaries, project: data.project || "", watch: data.watch || "", events: [...form.querySelectorAll(".event-checks input:checked")].map((box) => box.value), model: data.model || "", title: data.title || "" };
+      const more = data.project ? [...form.querySelectorAll(".project-chips .chip-btn.on")].map((b) => b.dataset.id).filter((id) => id !== data.project) : [];
+      const fields = { goal: data.goal, every: data.every === "at" ? data.at.trim() : data.every, boundaries: data.boundaries, project: data.project || "", projects: data.project ? [data.project, ...more] : [], watch: data.watch || "", events: [...form.querySelectorAll(".event-checks input:checked")].map((box) => box.value), model: data.model || "", title: data.title || "" };
       if (form.dataset.colour) fields.colour = form.dataset.colour;
       const name = data.sparkname.trim();
       // Its team, who it reports to and its budget, each only if changed.
@@ -13048,6 +13057,38 @@ function sparkForm(spark, inProjectId = "", template = "") {
     handleNote.querySelector("[data-handle]").textContent = mine;
   };
   form.sparkname.addEventListener("input", named);
+  // More projects it works on: a chip for each but its main one.
+  {
+    const field = form.querySelector(".more-projects-field");
+    const box = form.querySelector(".project-chips");
+    const picked = new Set(editing ? (spark.project_ids || []).slice(1) : []);
+    const draw = () => {
+      const main = form.project.value;
+      box.textContent = "";
+      for (const p of [...projects].reverse()) {
+        if (p.id === main) continue;
+        const chosen = picked.has(p.id);
+        const chip = el("button", `chip-btn${chosen ? " on" : ""}`);
+        chip.type = "button";
+        chip.dataset.id = p.id;
+        chip.style.setProperty("--c", "var(--accent)");
+        chip.appendChild(el("i", "dot"));
+        chip.append(p.name);
+        chip.setAttribute("aria-pressed", String(chosen));
+        chip.onclick = () => {
+          const now = chip.classList.toggle("on");
+          chip.setAttribute("aria-pressed", String(now));
+          if (now) picked.add(p.id); else picked.delete(p.id);
+        };
+        box.appendChild(chip);
+      }
+      // Only with a main project, and another to add.
+      field.hidden = !main || !box.childElementCount;
+    };
+    form.project.addEventListener("change", draw);
+    // After the form is filled in, for the project picked in it.
+    queueMicrotask(draw);
+  }
   if (editing) {
     form.sparkname.value = spark.name;
     form.title.value = spark.title || "";

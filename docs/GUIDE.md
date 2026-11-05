@@ -567,7 +567,12 @@ Each spark has:
 - optionally, a **project** from the web UI's Projects: its shifts work
   on that folder and follow the project's instructions, a chat with it
   starts in the project, and the project's page lists it. Pick one in
-  the spark's form, or with `/sparks project scout <project|none>`.
+  the spark's form, or with `/sparks project scout <project|none>`. A
+  spark can work on **several projects**: pick more under Also works on
+  in its form, or list them, `/sparks project scout App, Site`. The
+  first is its main one, where a chat with it starts; its shifts are
+  told every project's folder and instructions and do each piece of
+  work in the project it belongs to, and each project's page lists it.
 
 And always:
 

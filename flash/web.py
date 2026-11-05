@@ -1358,7 +1358,8 @@ class Session:
                  "next_run": s.next_run, "waiting_on": s.waiting_on,
                  "pending": {k: s.pending[k] for k in ("label", "detail")
                              if k in s.pending},
-                 "project": s.project if sparks.project_of(s) else ""}
+                 "project": s.project if sparks.project_of(s) else "",
+                 "project_ids": [p.id for p in sparks.projects_of(s)]}
                 for s in sparks.all_sparks()
             ],
             "status": {
@@ -6522,6 +6523,11 @@ def _spark_command(name: str, arg: str, body: dict) -> dict:
                 str(body.get("colour") or ""),
                 body.get("events") or (),
             )
+            # Several projects: the first its main one.
+            if isinstance(body.get("projects"), list) and \
+                    len(body["projects"]) > 1:
+                spark = sparks.update(spark.id, projects=[
+                    str(p) for p in body["projects"]])
         elif name == "spark-update":
             # The new name comes as "rename": "name" names the command.
             fields = {"rename": "name", "goal": "goal", "every": "every",
@@ -6536,6 +6542,10 @@ def _spark_command(name: str, arg: str, body: dict) -> dict:
                 changes["events"] = body["events"] or ()
             if "fallbacks" in body:
                 changes["fallbacks"] = body["fallbacks"] or []
+            if isinstance(body.get("projects"), list):
+                # Every project it works on, its main one first.
+                changes.pop("project", None)
+                changes["projects"] = [str(p) for p in body["projects"]]
             spark = sparks.update(arg, **changes)
         elif name == "spark-run":
             spark = sparks.run_now(arg)
