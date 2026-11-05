@@ -373,8 +373,9 @@ CALL_USER_TOOL = _tool(
     "on the computer. Only for what cannot wait for them to read your "
     "report, or is far easier talked through: something urgent, a "
     "decision you are stuck on. Never for routine news. Once in 30 "
-    "minutes at most; if they miss it, it shows as a missed call they can "
-    "return. When they pick up, you speak first and say why you called.",
+    "minutes at most, outside UltraAuto; if they miss it, it shows as a "
+    "missed call they can return. When they pick up, you speak first and "
+    "say why you called.",
     "reason", "Why you are calling, in a sentence: shown while it rings.",
 )
 
