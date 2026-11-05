@@ -3874,7 +3874,7 @@ class TestSparkChats:
 
         assert listed == [{
             "id": spark.id, "name": "Scout", "handle": "@scout-spark",
-            "title": "", "colour": spark.colour, "project": "",
+            "title": "", "colour": spark.colour, "project": "", "project_ids": [],
             "status": "idle", "paused": False, "waiting": False,
             "answering": False, "unread": 0, "activity": "",
             "next_run": spark.next_run, "waiting_on": [], "pending": {},

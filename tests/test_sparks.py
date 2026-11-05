@@ -2864,3 +2864,92 @@ def test_a_spark_carries_on_with_its_fallbacks(model, no_waits, monkeypatch):
     assert not report.failed  # nosec B101
     assert asked[:2] == ["glm-4.6:cloud", "backup:8b"]  # nosec B101
     assert not sparks.find(made.id).unavailable  # nosec B101
+
+
+# --- More than one project ---------------------------------------------------
+
+
+@pytest.fixture
+def two_projects(project, tmp_path):
+    from flash import workspace
+
+    folder = tmp_path / "site"
+    folder.mkdir()
+    return project, workspace.create_project("Site", str(folder),
+                                             "Deploy with make ship.")
+
+
+def test_a_spark_can_work_on_several_projects(model, two_projects):
+    app, site = two_projects
+    made = sparks.create("Scout", "Watch both.", project="App, Site")
+
+    assert made.project == app.id  # nosec B101
+    assert made.more_projects == [site.id]  # nosec B101
+    said = sparks.find(made.id).to_dict()
+    assert said["project_name"] == "App"  # nosec B101
+    assert [p["name"] for p in said["projects"]] == ["App", "Site"]  # nosec
+    assert said["project_ids"] == [app.id, site.id]  # nosec B101
+
+    client = FakeClient([_reply(sparks.NOTHING_NEW)])
+    sparks.shift(made.id, client=client)
+    system = client.calls[0]["messages"][0]["content"]
+    assert "=== Your projects ===" in system  # nosec B101
+    assert "--- App (your main project) ---" in system  # nosec B101
+    assert "--- Site ---" in system  # nosec B101
+    assert app.path in system and site.path in system  # nosec B101
+    assert "Run make test." in system and "make ship" in system  # nosec
+    chat = sparks.chat_prompt(sparks.find(made.id), "h", "m", "")
+    assert "projects App and Site; App is your main" in chat  # nosec
+
+
+def test_projects_are_set_whole_main_first(two_projects):
+    app, site = two_projects
+    made = sparks.create("Scout", "Watch.")
+
+    made = sparks.update(made.id, projects=[site.id, app.id, site.id])
+    assert (made.project, made.more_projects) == (site.id,  # nosec B101
+                                                  [app.id])
+    # Setting just the main one keeps the others, but not twice.
+    made = sparks.update(made.id, project=app.id)
+    assert (made.project, made.more_projects) == (app.id, [])  # nosec
+    made = sparks.update(made.id, projects=[])
+    assert (made.project, made.more_projects) == ("", [])  # nosec B101
+    with pytest.raises(sparks.SparkError, match="No project"):
+        sparks.update(made.id, projects=["App", "Nope"])
+
+
+def test_a_project_that_went_is_left_out(two_projects):
+    from flash import workspace
+
+    app, site = two_projects
+    made = sparks.create("Scout", "Watch.", project="App, Site")
+    workspace.delete_project(site.id)
+    kept = sparks.find(made.id)
+    assert [p.name for p in sparks.projects_of(kept)] == ["App"]  # nosec
+    assert "=== Your project: App ===" in sparks.project_block(kept)  # nosec
+
+
+def test_a_team_project_keeps_a_sparks_own_beside_it(two_projects):
+    app, site = two_projects
+    own = sparks.create("Own", "Look after the site.", project="Site")
+    team = sparks.create_team("Crew")
+    sparks.set_team(own.id, team.id)
+
+    sparks.set_team_project("Crew", "App")
+
+    kept = sparks.find(own.id)
+    assert kept.project == app.id  # nosec B101
+    assert kept.more_projects == [site.id]  # nosec B101
+
+
+def test_the_page_sets_several_projects(two_projects):
+    from flash import web
+
+    app, site = two_projects
+    made = web._spark_command("spark-create", "Scout", {
+        "goal": "Watch.", "project": app.id, "projects": [app.id, site.id]})
+    spark = made["spark"]
+    assert spark["project_ids"] == [app.id, site.id]  # nosec B101
+    changed = web._spark_command("spark-update", spark["id"], {
+        "project": site.id, "projects": [site.id]})
+    assert changed["spark"]["project_ids"] == [site.id]  # nosec B101

@@ -496,8 +496,11 @@ class Spark:
     # A shift asked for now, ahead of the schedule, even while paused.
     asked: bool = False
     chat: list[Message] = field(default_factory=list)
-    # The project it works on, by its ID in the web UI's projects, or "".
+    # The project it works on, by its ID in the web UI's projects, or "":
+    # its main one, where a chat with it starts.
     project: str = ""
+    # More projects it works on besides, by their IDs.
+    more_projects: list[str] = field(default_factory=list)
     # The model it runs on. "" for a spark from before one was chosen,
     # which runs on whatever Flash is set to.
     model: str = ""
@@ -596,6 +599,10 @@ class Spark:
         found = project_of(self)
         data["project"] = found.id if found else ""
         data["project_name"] = found.name if found else ""
+        # Every project it works on, its main one first.
+        data["projects"] = [{"id": p.id, "name": p.name}
+                            for p in projects_of(self)]
+        data["project_ids"] = [p["id"] for p in data["projects"]]
         data["unread"] = self.unread
         data["schedule"] = schedule_words(self)
         found_team = find_team(self.team) if self.team else None
@@ -1246,7 +1253,14 @@ def set_team_project(key: str, project: str) -> tuple[Team, list[Spark]]:
                 "" if spark.project == before else spark.project
             )
             if spark.project != now:
+                # A project of its own, not the team's, it keeps working
+                # on beside the team's.
+                own = spark.project if spark.project not in ("", before) \
+                    else ""
                 spark.project = now
+                spark.more_projects = [
+                    p for p in [*spark.more_projects, own]
+                    if p and p != now]
                 _save(spark)
                 moved.append(spark)
     from . import workspace  # deferred: only a team with one needs it
@@ -2289,6 +2303,39 @@ def project_of(spark: Spark):
     return workspace.project(spark.project)
 
 
+def projects_of(spark: Spark) -> list:
+    """Every project SPARK works on that is still there, its main one
+    first."""
+
+    from . import workspace  # deferred: only a spark with one needs it
+
+    found = []
+    for project_id in [spark.project, *spark.more_projects]:
+        if project_id and all(p.id != project_id for p in found):
+            project = workspace.project(project_id)
+            if project is not None:
+                found.append(project)
+    return found
+
+
+def resolve_projects(keys) -> list[str]:
+    """The IDs of the projects KEYS names: a list, or names separated by
+    commas or new lines, by ID or by name. Repeats and "none" left out."""
+
+    if isinstance(keys, str):
+        whole = " ".join(keys.split())
+        # A project with a comma in its name is still found whole.
+        with contextlib.suppress(SparkError):
+            return [found] if (found := resolve_project(whole)) else []
+        keys = re.split(r"[,\n]", keys)
+    ids: list[str] = []
+    for key in keys or []:
+        found = resolve_project(str(key))
+        if found and found not in ids:
+            ids.append(found)
+    return ids
+
+
 def resolve_project(key: str) -> str:
     """The ID of the project KEY names, by ID or by name; "" for none."""
 
@@ -2326,16 +2373,32 @@ def project_block(spark: Spark, jobs: Optional[dict] = None) -> str:
 
     from . import workspace  # deferred: only a spark with one needs it
 
-    own = project_of(spark)
+    mine = projects_of(spark)
+    own = mine[0] if mine else None
     blocks = []
-    if own is not None:
+    if len(mine) == 1:
         blocks.append(_project_lines(
             own, f"=== Your project: {own.name} ===",
             f"You work on the project in {own.path}.",
         ))
+    elif mine:
+        blocks.append([
+            "=== Your projects ===",
+            f"You work on {len(mine)} projects: "
+            + ", ".join(p.name for p in mine)
+            + f". {own.name} is your main one. Each piece of work belongs "
+            "to one of them: do it in that project's folder, and follow "
+            "that project's instructions for it.",
+        ])
+        for number, found in enumerate(mine):
+            blocks.append(_project_lines(
+                found, f"--- {found.name}"
+                + (" (your main project)" if number == 0 else "") + " ---",
+                f"It is in {found.path}.",
+            ))
     for project_id, names in (jobs or {}).items():
         found = workspace.project(project_id)
-        if found is None or (own is not None and found.id == own.id):
+        if found is None or any(found.id == p.id for p in mine):
             continue
         blocks.append(_project_lines(
             found,
@@ -2919,7 +2982,9 @@ def create(
     if not goal:
         raise SparkError("A spark needs a goal.")
     minutes, at = parse_schedule(every)
-    project = resolve_project(project)
+    # One project, or several: the first is its main one.
+    more = resolve_projects(project)
+    project = more.pop(0) if more else ""
     watch = _watch_folder(watch)
     chosen = parse_colour(colour) if str(colour or "").strip() else ""
     try:
@@ -2942,6 +3007,7 @@ def create(
             at=at,
             colour=chosen or COLOURS[len(taken) % len(COLOURS)],
             project=project,
+            more_projects=more,
             watch=watch,
             events=events,
             model=_model_name(model),
@@ -2978,8 +3044,14 @@ def update(key: str, **changes) -> Spark:
             )
         if "every" in changes:
             _schedule(spark, *parse_schedule(changes["every"]))
-        if "project" in changes:
+        if "projects" in changes:
+            ids = resolve_projects(changes["projects"])
+            spark.project = ids[0] if ids else ""
+            spark.more_projects = ids[1:]
+        elif "project" in changes:
             spark.project = resolve_project(changes["project"])
+            spark.more_projects = [p for p in spark.more_projects
+                                   if p != spark.project]
         if "watch" in changes:
             spark.watch = _watch_folder(changes["watch"])
         if "events" in changes:
@@ -3016,8 +3088,8 @@ def update(key: str, **changes) -> Spark:
     changed = {
         name: {"from": before.get(name), "to": after.get(name)}
         for name in ("name", "title", "goal", "boundaries", "every", "at",
-                     "project", "watch", "events", "model", "fallbacks",
-                     "colour")
+                     "project", "more_projects", "watch", "events", "model",
+                     "fallbacks", "colour")
         if before.get(name) != after.get(name)
     }
     if changed:
@@ -5446,9 +5518,14 @@ def status_block(spark: Spark) -> str:
         ]
     lines.append(f"- You run on the model {model_of(spark) or '(none set)'}.")
     lines.append(presence.presence_line())
-    found = project_of(spark)
-    if found:
-        lines.append(f"- You work on the project {found.name}.")
+    mine = projects_of(spark)
+    if len(mine) == 1:
+        lines.append(f"- You work on the project {mine[0].name}.")
+    elif mine:
+        lines.append("- You work on the projects "
+                     + ", ".join(p.name for p in mine[:-1])
+                     + f" and {mine[-1].name}; {mine[0].name} is your "
+                     "main one.")
     if spark.watch:
         lines.append(
             f"- A change in {spark.watch} starts a shift too."

@@ -4028,10 +4028,14 @@ def _sparks_command(arg: str) -> None:
             ))
             return
         if action == "project" and key and extra:
-            spark = sparks.update(key, project=extra)
-            found = sparks.project_of(spark)
+            # One project, or several separated by commas: the first is
+            # its main one.
+            spark = sparks.update(key, projects=extra)
+            found = [p.name for p in sparks.projects_of(spark)]
             console.print(Text(
-                f"{spark.name} works on {found.name} now." if found else
+                f"{spark.name} works on {' and '.join(found)} now"
+                + (f", {found[0]} its main project." if len(found) > 1
+                   else ".") if found else
                 f"{spark.name} has no project now.", style=DIM,
             ))
             return
