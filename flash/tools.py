@@ -3859,7 +3859,8 @@ def _image_place_refusal(path: str) -> str:
     if any(part.startswith(".") for part in raw.parts[1:]):
         return f"{path} is a hidden path, which view_image refuses."
     real = raw.resolve()
-    roots = {Path.home(), Path("/tmp"), Path(tempfile.gettempdir()),
+    tmp = Path("/tmp")  # nosec B108
+    roots = {Path.home(), tmp, Path(tempfile.gettempdir()),
              Path("/Volumes")}
     for root in roots:
         root = root.resolve()

@@ -93,7 +93,10 @@ def writable(folder: Optional[str] = None) -> list[Path]:
     if here is not None and here != home and here.parent != here and \
             here not in home.parents:
         places.append(here)
-    for temp in {Path("/tmp"), Path(os.environ.get("TMPDIR") or "/tmp")}:
+    # Named, not created: the system's temp folders, which sandboxed
+    # commands may write in like any other program.
+    tmp = Path("/tmp")  # nosec B108
+    for temp in {tmp, Path(os.environ.get("TMPDIR") or tmp)}:
         try:
             places.append(temp.resolve())
         except OSError:
