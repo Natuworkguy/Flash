@@ -373,3 +373,104 @@ def current_project() -> str:
     """The project the chat running on this thread is in, or ""."""
 
     return getattr(_in_project, "id", "")
+
+
+# --- A folder's memory, for the terminal ------------------------------------
+#
+# The terminal works in a folder, not in one of the web page's projects. A
+# folder that is a project (a repository, or one with a project file such
+# as package.json) has a memory of its own all the same: the commands that
+# build and test it, its conventions, what broke before and why. It goes
+# with every turn worked in that folder, from any terminal, and a web
+# project that takes the folder in shares the same memory.
+
+# On for the terminal: its turns run in the folder it was started in.
+FOLDER_MEMORY = False
+PROJECT_MARKERS = (
+    ".git", "pyproject.toml", "setup.py", "package.json", "Cargo.toml",
+    "go.mod", "Gemfile", "pom.xml", "build.gradle", "build.gradle.kts",
+    "composer.json", "CMakeLists.txt", "Package.swift", "deno.json",
+    "pubspec.yaml", "mix.exs", "AGENTS.md", "FLASH.md",
+)
+FOLDER_PROMPT_ENTRIES = 40
+
+
+def folder_root(folder: Optional[Path] = None) -> Optional[Path]:
+    """The project FOLDER (the current one by default) is in: the top of
+    its repository, or else the nearest folder with a project file. None
+    outside one, and never the home folder or above it."""
+
+    import os
+
+    try:
+        here = Path(folder or os.getcwd()).resolve()
+        home = Path.home().resolve()
+    except OSError:
+        return None
+    nearest = None
+    for place in (here, *here.parents):
+        if place == home or place in home.parents:
+            break
+        with contextlib.suppress(OSError):
+            if (place / ".git").exists():
+                return place
+            if nearest is None and any(
+                    (place / name).exists() for name in PROJECT_MARKERS):
+                nearest = place
+    return nearest
+
+
+def folder_project(folder: Optional[Path] = None) -> str:
+    """The project id for FOLDER's memory: the web project that takes it
+    in, if one does, or one of its own; "" outside a project."""
+
+    root = folder_root(folder)
+    if root is None:
+        return ""
+    with contextlib.suppress(Exception):
+        from . import workspace  # deferred: workspace is the web's
+
+        for project in workspace.projects():
+            for kept in [project.path, *project.folders]:
+                with contextlib.suppress(OSError, ValueError):
+                    place = Path(kept).expanduser().resolve()
+                    if root == place or place in root.parents:
+                        return project.id
+    return "dir-" + hashlib.sha1(  # nosec B324 -- a name, not security
+        str(root).encode("utf-8")).hexdigest()[:16]
+
+
+def enter_folder() -> str:
+    """The terminal's turn about to run: its folder's project is the one
+    remember, recall and forget reach. Its id, or ""."""
+
+    project = folder_project() if FOLDER_MEMORY else ""
+    _in_project.id = project
+    return project
+
+
+def folder_block() -> str:
+    """The terminal's folder's memory, for the system prompt: "" outside
+    a project, or off the terminal."""
+
+    if not FOLDER_MEMORY:
+        return ""
+    project = folder_project()
+    root = folder_root()
+    if not project or root is None:
+        return ""
+    try:
+        kept = list_memory(project_path(project))
+    except ValueError:
+        return ""
+    shown = kept[-FOLDER_PROMPT_ENTRIES:]
+    lines = [f"=== This project's memory ({root}) ===",
+             "What you learned working in this project before. remember "
+             "with project true adds to it: how to build, test and run "
+             "it, its conventions, where things are, what broke and the "
+             "fix. It comes back whenever you work in this folder."]
+    if len(kept) > len(shown):
+        lines.append(f"({len(kept) - len(shown)} older entries: recall "
+                     "with project true finds them.)")
+    lines += [f"- {entry}" for entry in shown] or ["(nothing yet)"]
+    return "\n".join(lines)

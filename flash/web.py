@@ -3874,6 +3874,7 @@ def run_turn(
         learning.after_turn(
             chat.messages, tools_ran,
             host=ai.Config.host, model=ai.Config.model or "",
+            project=found.id if found is not None else "",
         )
 
 

@@ -104,6 +104,19 @@ def nothing_opens_on_screen(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def no_folder_memory(monkeypatch):
+    """The terminal's loop turns a folder's project memory on, and sets
+    the project its thread is in: neither outlasts the test that ran it."""
+
+    from flash import memory
+
+    monkeypatch.setattr(memory, "FOLDER_MEMORY", False)
+    memory._in_project.id = ""
+    yield
+    memory._in_project.id = ""
+
+
+@pytest.fixture(autouse=True)
 def isolated_home(tmp_path_factory, monkeypatch):
     """The terminal log, hook scripts, and shell rc files live in a temp
     home, so no test reads or edits the developer's real ones. It sits
