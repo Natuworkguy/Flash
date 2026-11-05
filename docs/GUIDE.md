@@ -929,6 +929,11 @@ listens for what you say next, so you never have to sit through an answer
 that started off wrong. "stop talking" and "be quiet" work too, as does
 Ctrl+C, and the word can be changed with `VOICE_INTERRUPT_WORD`. It is
 matched as a whole word, so "the interrupted process" is just a message.
+Or let anything you say cut in: set **Interrupting Flash** to "Anything
+you say" in Settings, General (or `VOICE_INTERRUPT=anything`), and talking
+over Flash stops it and what you said is your next turn, as on a phone.
+Calls with sparks work that way by default; **Interrupting on spark
+calls** (or `CALL_INTERRUPT=word`) makes them wait for the word instead.
 
 Say **"voice off"** (or "stop listening", "exit voice mode") to end the
 conversation. That hands the prompt back but leaves voice mode armed, so

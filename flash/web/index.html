@@ -8858,6 +8858,33 @@ function paletteMini(palette) {
   return box.outerHTML;
 }
 
+// KIND "voice" or "calls": how talking over a reply cuts it off.
+function interruptRow(kind, label, about) {
+  const key = kind === "voice" ? "voice_interrupt" : "call_interrupt";
+  const row = el("div", "setting-row static interrupt-row", `<span class="what"><b></b><span></span></span><span class="side"><span class="seg" role="radiogroup"></span></span>`);
+  row.querySelector("b").textContent = label;
+  row.querySelector(".what span").textContent = about;
+  const seg = row.querySelector(".seg");
+  seg.setAttribute("aria-label", label);
+  const mark = (how) => { for (const b of seg.children) { b.classList.toggle("on", b.dataset.how === how); b.setAttribute("aria-checked", b.dataset.how === how); } };
+  for (const [how, name] of [["word", "Say “interrupt”"], ["anything", "Anything you say"]]) {
+    const b = el("button", "");
+    b.type = "button";
+    b.textContent = name;
+    b.dataset.how = how;
+    b.setAttribute("role", "radio");
+    b.onclick = async () => {
+      const was = info[key];
+      mark(how);
+      try { info[key] = (await command("interrupt-setting", kind, null, { how }))[key]; }
+      catch (error) { mark(was); showFailure(error); }
+    };
+    seg.appendChild(b);
+  }
+  mark(info[key] || (kind === "voice" ? "word" : "anything"));
+  return row;
+}
+
 function segRow(label, about, kind, choices) {
   const row = el("div", "setting-row static", `<span class="what"><b></b><span></span></span><span class="side"><span class="seg" role="radiogroup"></span></span>`);
   row.querySelector("b").textContent = label;
@@ -9437,6 +9464,11 @@ function drawGeneral(body) {
   wordSave.onclick = saveWord;
   wordInput.onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); saveWord(); } };
   body.appendChild(wordRow);
+
+  // Cutting in while a reply is read out: with the word, or by talking.
+  // One for Flash's own voice mode, one for calls with sparks.
+  body.appendChild(interruptRow("voice", "Interrupting Flash", "How to cut Flash off while it talks in voice mode. Say “interrupt”, or just start talking and what you say is your next turn, as on a phone."));
+  body.appendChild(interruptRow("calls", "Interrupting on spark calls", "The same, on a call with a spark: talk over it, or say “interrupt”."));
 
   // Voice mode's look, in this browser.
   const lookRow = el("div", "setting-row static voice-look-row", `<span class="what"><b>Voice mode look</b><span>The orb, or a companion: a face on it that listens, thinks and talks along with Flash.</span></span><span class="side"><select aria-label="Voice mode look"><option value="orb">Orb</option><option value="companion">Companion</option></select></span>`);
@@ -16255,14 +16287,21 @@ async function voiceLoop() {
   // A call has a loop of its own: the spark speaks first, "hold on" is
   // said to it, and it goes on with the chat closed.
   if (sparkCall.on) return callLoop();
+  // What the user said over the last reply, when talking over Flash cuts
+  // it off (Settings, Voice): taken as what they said next.
+  let carried = null;
   while (voice.on) {
-    setVoice("listening");
-    const pcm = await listenOnce({ live: true });
-    if (!voice.on) return;
-    if (!pcm) { if (!(await pausedUntilResume())) return; continue; }
-    setVoice("hearing");
-    const heard = await hear(pcm);
-    if (!voice.on) return;
+    let heard = carried;
+    carried = null;
+    if (!heard) {
+      setVoice("listening");
+      const pcm = await listenOnce({ live: true });
+      if (!voice.on) return;
+      if (!pcm) { if (!(await pausedUntilResume())) return; continue; }
+      setVoice("hearing");
+      heard = await hear(pcm);
+      if (!voice.on) return;
+    }
     if (!heard || !heard.text || heard.alone) continue;
     showHeard(heard.text);
     // "Pause the music", "next song", "turn it down": done here, and a
@@ -16283,6 +16322,7 @@ async function voiceLoop() {
       const how = await tcVoiceRound(heard.text);
       if (how === "exit") { endVoice(); toast("Voice mode off"); return; }
       if (how === "pause" && !(await pausedUntilResume())) return;
+      if (how && how.barge) carried = { text: how.barge };
       continue;
     }
     // An extension in the middle may change what Flash is asked, answer
@@ -16315,6 +16355,7 @@ async function voiceLoop() {
     const how = await readAloud(reply);
     if (how === "exit" || voice.endAfter) { endVoice(); toast("Voice mode off"); return; }
     if (how === "pause" && !(await pausedUntilResume())) return;
+    if (how && how.barge) carried = { text: how.barge };
   }
 }
 
@@ -17183,10 +17224,12 @@ function listenForInterruptions(line) {
       const heard = await hear(pcm, line());
       if (stopped || !heard) continue;
       if (heard.exit) { cutReading("exit"); return; }
-      // On a call, anything the user says over the spark cuts it off and
-      // is what it hears next, as on a phone; its own words coming back
-      // through the microphone do not.
-      if (sparkCall.on && heard.text && !heard.alone && !echoOf(heard.text, line())) {
+      // Talked over (on a call, and in voice mode when set to, in
+      // Settings, Voice): anything said cuts the reading off and is what
+      // is heard next, as on a phone; its own words coming back through
+      // the microphone do not. Set to the word, only "interrupt" does.
+      const anything = sparkCall.on ? info.call_interrupt !== "word" : info.voice_interrupt === "anything";
+      if (anything && heard.text && !heard.alone && !echoOf(heard.text, line())) {
         voice.barge = heard.text;
         cutReading("barge");
         return;

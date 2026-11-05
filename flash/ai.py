@@ -4341,7 +4341,8 @@ def _spark_call(team: str, call: str, incoming: Optional[dict] = None) -> None:
                           + Text(said))
             if spoken:
                 own = voice_mod.spark_voice(str(entry.get("spark") or ""))
-                voice_mod.speak(said, speaker=own.get("voice", ""))
+                voice_mod.speak(said, speaker=own.get("voice", ""),
+                                kind="calls")
             if entry.get("end_call"):
                 return False
         return True
