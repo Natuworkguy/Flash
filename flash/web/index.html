@@ -9278,6 +9278,32 @@ function drawGeneral(body) {
 
   // Seeing the screen and working the mouse and keyboard: off until
   // turned on, and asked every reply even then.
+  // The OS sandbox: off unless turned on, and asking in Ask first unless
+  // that is turned on too.
+  body.insertAdjacentHTML("beforeend", `<h2 class="settings-section settings-gap">Sandbox</h2><p class="settings-sub">Commands Flash runs can be walled in by your system's own sandbox: they read what they need, but write only in the folder Flash works in and temp folders, and never see your keys and passwords. With it off, Flash can still put a command it doesn't trust in the sandbox itself.</p>`);
+  const boxRow = el("button", "setting-row sandbox-row", `<span class="what"><b>Run every command in the sandbox</b><span>Off, commands run with your full access.</span></span><span class="switch" aria-hidden="true"></span>`);
+  const boxAuto = el("button", "setting-row sandbox-auto-row", `<span class="what"><b>Let sandboxed commands run without asking</b><span>In Ask first, a command in the sandbox runs straight away instead of waiting for your yes. Commands outside it still ask.</span></span><span class="switch" aria-hidden="true"></span>`);
+  const boxMissing = el("p", "settings-sub sandbox-missing");
+  for (const [row, key, cmd] of [[boxRow, "sandbox", "sandbox-setting"], [boxAuto, "sandbox_auto_allow", "sandbox-auto-setting"]]) {
+    row.type = "button";
+    row.setAttribute("role", "switch");
+    row.setAttribute("aria-checked", !!info[key]);
+    row.onclick = async () => {
+      const on = row.getAttribute("aria-checked") !== "true";
+      row.setAttribute("aria-checked", on);
+      try { Object.assign(info, await command(cmd, on ? "on" : "off")); showBox(); }
+      catch (error) { row.setAttribute("aria-checked", !on); showFailure(error); }
+    };
+  }
+  const showBox = () => {
+    boxRow.setAttribute("aria-checked", !!info.sandbox);
+    boxAuto.setAttribute("aria-checked", !!info.sandbox_auto_allow);
+    boxMissing.textContent = info.sandbox_missing || "";
+    boxMissing.hidden = !info.sandbox_missing;
+  };
+  body.append(boxRow, boxAuto, boxMissing);
+  showBox();
+
   body.insertAdjacentHTML("beforeend", `<h2 class="settings-section settings-gap">Computer Use<span class="beta-chip">Beta</span></h2><p class="settings-sub">Flash looks at your screen and clicks, types and scrolls itself, only for things its tools can’t do: a setting deep in an app, a button with no other way in. It is slow, and it can click the wrong thing.</p>`);
   const useRow = el("button", "setting-row computer-use-row", `<span class="what"><b>Let Flash control this computer</b><span>Off, Flash is never offered it. On, it asks you first, every reply that wants it, even in autonomous mode.</span></span><span class="switch" aria-hidden="true"></span>`);
   useRow.type = "button";

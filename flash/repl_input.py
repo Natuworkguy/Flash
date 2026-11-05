@@ -88,6 +88,8 @@ COMMANDS = [
     ("/instructions", "how every reply should be (<text> or clear)"),
     ("/auto", "ask first or autonomous (/auto on|off), or UltraAuto (ultra)"),
     ("/systemone", "a small model that reviews autonomous commands (on|off)"),
+    ("/sandbox", "run Flash's commands in the OS sandbox: /sandbox "
+                 "on|off, /sandbox auto on|off"),
     ("/computer", "let Flash pause music, open apps, send iMessages "
                   "(on|off [what]); use on|off: Computer Use, beta"),
     ("/mcp", "connect MCP servers' tools (add, remove, on, off, tools)"),
