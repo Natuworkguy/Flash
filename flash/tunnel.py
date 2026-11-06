@@ -2,8 +2,9 @@
 that forwards it to this computer, to open from anywhere.
 
 Each service is a program Flash starts and stops (cloudflared, ssh,
-tailscale, ngrok), told to forward to the web server on this machine,
-and the public address is read from what it prints. Flash then answers
+tailscale, ngrok, or one an extension adds), told to forward to the web
+server on this machine, and the public address is read from what it
+prints. Flash then answers
 requests to that address too, as well as to this machine's own names.
 
 This puts Flash on the internet. Anyone with the link, token and all,
@@ -13,6 +14,7 @@ turned on, and never turned on by itself: it stops when Flash stops.
 """
 
 import atexit
+import os
 import re
 import shutil
 import subprocess  # nosec B404
@@ -38,9 +40,11 @@ class Service:
     address: str
     install: str
     ready: str = ""
+    # The extension that adds it, "" for a built-in one.
+    extension: str = ""
 
 
-SERVICES = {
+BUILT_IN = {
     service.name: service for service in (
         Service(
             "cloudflare", "Cloudflare quick tunnel",
@@ -87,6 +91,59 @@ SERVICES = {
         ),
     )
 }
+# The name the built-ins have always been read by.
+SERVICES = BUILT_IN
+
+
+def all_services() -> dict[str, Service]:
+    """The built-in services, then each one an extension adds, the
+    built-ins keeping their names."""
+
+    from . import extensions  # deferred: extensions reads this module
+
+    found = dict(BUILT_IN)
+    for extension, added in extensions.tunnel_services():
+        if added.name in found:
+            continue
+        found[added.name] = Service(
+            added.name, added.title, added.about, added.run[0],
+            tuple(added.run), added.address, added.install, added.ready,
+            extension=extension.name,
+        )
+    return found
+
+
+def find(name: str) -> Optional[Service]:
+    return all_services().get(str(name or "").strip().lower())
+
+
+def _program(service: Service) -> Optional[str]:
+    """Where SERVICE's program is, or None when it is not there."""
+
+    if not service.extension:
+        return shutil.which(service.program)
+    from . import extensions
+
+    added = extensions.find(service.extension)
+    if added is None:
+        return None
+    program = extensions.argv(added, [service.program])[0]
+    if os.path.isabs(program):
+        return program if os.path.isfile(program) else None
+    return shutil.which(program)
+
+
+def _environment(service: Service) -> Optional[dict]:
+    """What SERVICE's program runs with: an extension's settings too."""
+
+    if not service.extension:
+        return None
+    from . import extensions
+
+    added = extensions.find(service.extension)
+    return extensions.environment(added) if added else None
+
+
 # How long a service has to say its address before it is given up on.
 START_SECONDS = 45.0
 # How long Flash keeps trying to reach itself through a new address, and
@@ -108,13 +165,14 @@ class TunnelError(Exception):
 
 
 def services() -> list[dict]:
-    """Every service, for the picker: whether its program is here."""
+    """Every service, for the picker: whether its program is here, and
+    the extension that adds it."""
 
     return [
         {"name": s.name, "title": s.title, "about": s.about,
-         "installed": shutil.which(s.program) is not None,
-         "install": s.install}
-        for s in SERVICES.values()
+         "installed": _program(s) is not None,
+         "install": s.install, "extension": s.extension}
+        for s in all_services().values()
     ]
 
 
@@ -156,21 +214,32 @@ class Tunnel:
         be reached through it, or "" once it can: it is on only then.
         Raises TunnelError when it cannot be had."""
 
-        service = SERVICES.get(str(name or "").strip().lower())
+        service = find(name)
         if service is None:
             raise TunnelError(
                 f"No tunnel service called {name!r}. One of: "
-                + ", ".join(SERVICES) + "."
+                + ", ".join(all_services()) + "."
             )
-        program = shutil.which(service.program)
+        program = _program(service)
         if program is None:
             raise TunnelError(
                 f"{service.title} needs {service.program}, which is not "
-                f"installed: {service.install}."
+                "installed" + (f": {service.install}." if service.install
+                               else ".")
             )
         self.stop()
-        argv = [program, *(str(a).format(port=int(port))
-                           for a in service.argv[1:])]
+        # Only {port} is filled in: an extension's arguments may have
+        # braces of their own.
+        rest = list(service.argv[1:])
+        if service.extension:
+            from . import extensions
+
+            added = extensions.find(service.extension)
+            # Its own files, ./ in the manifest, are inside it.
+            rest = extensions.argv(added, ["", *rest])[1:] if added \
+                else rest
+        argv = [program, *(str(a).replace("{port}", str(int(port)))
+                           for a in rest)]
         with self._lock:
             self.state, self.service, self.url, self.why = (
                 STARTING, service.name, "", "")
@@ -183,6 +252,7 @@ class Tunnel:
                     argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT, text=True, encoding="utf-8",
                     errors="replace", bufsize=1,
+                    env=_environment(service),
                 )
             except OSError as exc:
                 self.state, self.why = FAILED, str(exc)
@@ -242,7 +312,10 @@ class Tunnel:
                 continue
             self._said = (self._said + [line])[-SAID_LINES:]
             found = pattern.search(line)
-            if found and not address:
+            # Only ever an https address: what Flash answers to, and
+            # what the link with its token is sent over.
+            if found and not address and \
+                    found.group(0).lower().startswith("https://"):
                 address = found.group(0).rstrip("/").lower()
             if address and self.state == STARTING and \
                     process is self._process and (

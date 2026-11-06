@@ -14,6 +14,12 @@ models on the server that list `decision` among their capabilities, or
 none at all. Older Ollama servers have no such endpoint, so switching
 it on checks the server's version first and says what to do about one
 that is too old.
+
+An extension can serve System One models too, picked as
+@<extension>/<model> like any other and answered by its own program
+(systemone_api has the typed protocol). Those need no Ollama at all,
+and what they answer is checked against each question's type before
+Flash acts on it.
 """
 
 from __future__ import annotations
@@ -30,6 +36,7 @@ from urllib.parse import urlparse
 
 import httpx
 
+from . import systemone_api as api
 from .paths import ENV_PATH
 
 MIN_VERSION = (0, 35)
@@ -179,6 +186,62 @@ def same_model(one: str, other: str) -> bool:
     return bool(one and other) and tagged(one) == tagged(other)
 
 
+# --- Extensions' models ------------------------------------------------------
+
+
+def is_extension(name: str) -> bool:
+    """Whether NAME is a model an extension serves: @extension/model."""
+
+    return (name or "").strip().startswith("@")
+
+
+def extension_models() -> list[str]:
+    """Every System One model the installed extensions serve, by the
+    name it is picked by."""
+
+    from . import extensions  # deferred: extensions is only needed here
+
+    return sorted(extensions.system_one_name(e, m)
+                  for e, m in extensions.system_one_models())
+
+
+def _served(name: str):
+    """The extension and model NAME is, or SystemOneError saying it is
+    not installed."""
+
+    from . import extensions
+
+    found = extensions.find_system_one(name)
+    if found is None:
+        raise SystemOneError(
+            f"{name} is not a System One model of any installed "
+            "extension. Install the extension, or pick another model."
+        )
+    return found
+
+
+def _ask_extension(name: str, state: Any,
+                   questions: dict[str, api.Question]) -> dict[str, Any]:
+    from . import extensions
+
+    extension, served = _served(name)
+    try:
+        reply = extensions.ask_system_one(
+            extension, served,
+            {"model": served.name, "state": state, "questions": questions},
+        )
+    except extensions.ExtensionError as exc:
+        raise SystemOneError(str(exc)[:1].upper() + str(exc)[1:]) from None
+    if not isinstance(reply, dict) or "answers" not in reply:
+        raise SystemOneError(f"{name} answered without answers.")
+    try:
+        return dict(api.check_answers(questions, reply["answers"]))
+    except api.ProtocolError as exc:
+        raise SystemOneError(
+            f"{name} answered wrongly, so its answer was not used: {exc}."
+        ) from None
+
+
 # --- The server --------------------------------------------------------------
 
 
@@ -304,16 +367,20 @@ def _capabilities(host: str, name: str) -> Optional[list[str]]:
 
 def capable(host: str, name: str) -> Optional[bool]:
     """Whether NAME is a System One model on HOST: None when HOST does
-    not have it at all."""
+    not have it at all. An extension's model is one wherever it is."""
 
+    if is_extension(name):
+        return True if name.strip().lower() in extension_models() \
+            else None
     found = _capabilities(host, name)
     return None if found is None else CAPABILITY in found
 
 
 def scan(host: str) -> list[str]:
     """Every System One model on HOST, by name: the ones /api/show says
-    have the decision capability. Asked of the server each time, so a
-    model pulled a moment ago is in the list."""
+    have the decision capability, then the extensions' own. Asked of
+    the server each time, so a model pulled a moment ago is in the
+    list."""
 
     return sorted(
         name for name, can in catalog(host).items() if CAPABILITY in can
@@ -321,8 +388,35 @@ def scan(host: str) -> list[str]:
 
 
 def catalog(host: str) -> dict[str, list[str]]:
-    """Every model on HOST, with what /api/show says each can do."""
+    """Every model on HOST, with what /api/show says each can do, and
+    each extension's System One model. With no Ollama to ask, only the
+    extensions' models, if there are any."""
 
+    served = {name: [CAPABILITY] for name in extension_models()}
+    try:
+        return {**_ollama_catalog(host), **served}
+    except SystemOneError:
+        if served:
+            return served
+        raise
+
+
+def available(host: str) -> list[str]:
+    """The System One models there are to pick: Ollama's, once its
+    version is known to have System One, and the extensions'. Raises
+    SystemOneError about Ollama only when no extension has one."""
+
+    served = extension_models()
+    try:
+        check(host)
+        return scan(host)
+    except SystemOneError:
+        if served:
+            return served
+        raise
+
+
+def _ollama_catalog(host: str) -> dict[str, list[str]]:
     try:
         response = _get(f"{_base(host)}/api/tags", VERSION_SECONDS)
         response.raise_for_status()
@@ -371,6 +465,12 @@ def choose(host: str, name: str) -> str:
         return ""
 
     name = name.strip()
+    if is_extension(name):
+        name = name.lower()
+        _served(name)
+        set_model(name)
+        set_enabled(True)
+        return name
     check(host)
     found = capable(host, name)
     if found is None:
@@ -392,10 +492,9 @@ def turn_on(host: str) -> str:
     """Switch System One on, with the model picked before, or else the
     first System One model the server has. Answers with that model."""
 
-    check(host)
     name = model()
     if not name:
-        found = scan(host)
+        found = available(host)
         if not found:
             raise SystemOneError(no_models(host))
         name = found[0]
@@ -409,14 +508,25 @@ def ask(
     name: str = "",
 ) -> dict[str, dict[str, Any]]:
     """Put QUESTIONS about STATE to the System One model, and answer
-    with what it said to each, by the questions' keys."""
+    with what it said to each, by the questions' keys.
 
-    check(host)
+    Each question is checked against its type before it is sent. An
+    extension's model has its answers checked too, against their
+    questions' types, and is refused when one is wrong."""
+
+    try:
+        asked = api.check_questions(questions)
+    except api.ProtocolError as exc:
+        raise SystemOneError(f"Not a question System One takes: {exc}.") \
+            from None
     use = name or model()
+    if is_extension(use):
+        return _ask_extension(use.strip().lower(), state, asked)
+    check(host)
     try:
         response = _post(
             f"{_base(host)}/v1/systemone",
-            {"model": use, "state": state, "questions": questions},
+            {"model": use, "state": state, "questions": asked},
             ANSWER_SECONDS,
         )
     except httpx.HTTPError as exc:

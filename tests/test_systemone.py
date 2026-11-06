@@ -163,12 +163,15 @@ def test_ask_posts_to_the_endpoint(server, monkeypatch):
     assert answers["q"]["noul"] == 0.9  # nosec B101
 
 
+QUESTION = {"q": {"type": "noul", "instructions": "?"}}
+
+
 def test_ask_missing_model(server):
     server.status = 404
     server.error = "model 'nimble' not found"
 
     with pytest.raises(systemone.SystemOneError) as raised:
-        systemone.ask("localhost", {}, {}, "nimble")
+        systemone.ask("localhost", {}, QUESTION, "nimble")
 
     assert "ollama pull nimble" in str(raised.value)  # nosec B101
 
@@ -178,7 +181,7 @@ def test_ask_missing_endpoint(server):
     server.error = "404 page not found"
 
     with pytest.raises(systemone.SystemOneError) as raised:
-        systemone.ask("localhost", {}, {})
+        systemone.ask("localhost", {}, QUESTION)
 
     assert "v0.35" in str(raised.value)  # nosec B101
 

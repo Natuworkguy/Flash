@@ -14019,7 +14019,7 @@ async function renderTunnel(box = document.querySelector(".tunnel-box")) {
     const pick = el("select");
     pick.setAttribute("aria-label", "Tunnel service");
     for (const s of r.services) {
-      const option = new Option(`${s.title}${s.installed ? "" : " (not installed)"}`, s.name);
+      const option = new Option(`${s.title}${s.extension ? ` (from ${s.extension})` : ""}${s.installed ? "" : " (not installed)"}`, s.name);
       option.title = s.about;
       pick.add(option);
     }
@@ -14030,7 +14030,7 @@ async function renderTunnel(box = document.querySelector(".tunnel-box")) {
     const about = () => {
       const s = r.services.find((x) => x.name === pick.value);
       start.disabled = !s.installed;
-      said.textContent = s.installed ? s.about : `${s.title} needs its program: ${s.install}.`;
+      said.textContent = s.installed ? (s.about || `Added by the ${s.extension} extension.`) : `${s.title} needs its program${s.install ? `: ${s.install}` : ""}.`;
     };
     pick.onchange = about;
     start.onclick = async () => {
