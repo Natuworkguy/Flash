@@ -1637,10 +1637,6 @@ def _pcm_chunks(voice, text: str, rate: int = 22050):
         settings, breath = delivery(said, style) if style.feeling \
             else ({}, 0.0)
         how = humanvoice.delivery(mood, said, vary=bool(style.feeling))
-        # A breath in before some of the longer sentences, as a speaker
-        # takes one: the same sentences each time it is said.
-        if style.breath and humanvoice.breathes(said):
-            yield humanvoice.breath(rate, seed=len(said))
         if how.pace != 1.0:
             settings = {**settings, "length_scale": round(
                 settings.get("length_scale", 1.0) * how.pace, 3)}
@@ -1658,19 +1654,21 @@ def _pcm_chunks(voice, text: str, rate: int = 22050):
 
 
 def _sound(voice, name: str, rate: int, settings: dict):
-    """The sound NAME a person makes ([laugh], [sigh], ...): a breath of
+    """The sound NAME a person makes ([laugh], [sigh], ...): a rush of
     air, or a word said as the sound, a little quicker and softer than
-    the words around it."""
+    the words around it. Breathing is not voiced."""
 
     from . import humanvoice
 
+    if name in humanvoice.SILENT_SOUNDS:
+        return
     if name in humanvoice.SAID_SOUNDS:
         quicker = {**settings, "length_scale": round(
             settings.get("length_scale", 1.0) * 0.9, 3)}
         yield humanvoice.louder(b"".join(_said(
             voice, humanvoice.SAID_SOUNDS[name], quicker)), 0.8)
         return
-    yield humanvoice.breath(rate, name)
+    yield humanvoice.air(rate, name)
     yield b"\x00\x00" * int(rate * 0.08)
 
 
