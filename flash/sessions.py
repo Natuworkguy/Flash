@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import threading
 import time
 import uuid
 from dataclasses import asdict, dataclass, field, fields
@@ -86,6 +87,22 @@ def is_turn(message: dict, notes: tuple[str, ...] = ()) -> bool:
         text.startswith(note) for note in notes if note)
 
 
+_last_stamp = 0.0
+_stamp_lock = threading.Lock()
+
+
+def _now() -> float:
+    """The time, always after the last one given here: Windows' clock
+    can give two saves made one after the other the same time, and the
+    latest would then not be sure to list first."""
+
+    global _last_stamp
+
+    with _stamp_lock:
+        _last_stamp = max(time.time(), _last_stamp + 1e-6)
+        return _last_stamp
+
+
 def save(session: Session, messages: list) -> Session:
     """Keep SESSION as MESSAGES has it now."""
 
@@ -97,7 +114,7 @@ def save(session: Session, messages: list) -> Session:
             title = _said(first)
             session.title = title if len(title) <= TITLE_CHARS \
                 else title[:TITLE_CHARS - 1].rstrip() + "…"
-    session.updated = time.time()
+    session.updated = _now()
     if not session.messages and not session.forks:
         return session
     path = _path(session.id)
