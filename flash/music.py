@@ -110,6 +110,7 @@ def _osascript(script: str) -> str:
     try:
         done = subprocess.run(  # nosec B603 B607 -- a fixed program
             ["osascript", "-e", script], capture_output=True, text=True,
+            encoding="utf-8", errors="replace",
             timeout=TIMEOUT, check=False)
     except (OSError, subprocess.SubprocessError) as exc:
         raise MusicError(f"macOS would not run it: {exc}") from None

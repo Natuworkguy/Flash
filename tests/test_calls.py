@@ -128,7 +128,7 @@ def test_the_transcript_is_kept(tmp_path, monkeypatch):
                       lines=[("Flash", "Hi"), ("John", "Hey")],
                       ended="the call was done")
     path = calls._keep(call)
-    assert "Flash: Hi\nJohn: Hey" in path.read_text()
+    assert "Flash: Hi\nJohn: Hey" in path.read_text(encoding="utf-8")
     assert "ended: the call was done" in calls.summary(call, path)
 
 
@@ -245,7 +245,8 @@ def test_the_wait_for_silence_is_kept_and_bounded(monkeypatch, tmp_path):
     monkeypatch.delenv("CALL_SILENCE_SECONDS", raising=False)
     assert calls.pause_seconds() == calls.PAUSE_SECONDS
     assert calls.set_pause_seconds("1.5")["silence"] == 1.5
-    assert "CALL_SILENCE_SECONDS=1.5" in (tmp_path / ".flash.env").read_text()
+    assert "CALL_SILENCE_SECONDS=1.5" in (tmp_path / ".flash.env").read_text(
+            encoding="utf-8")
     for wrong in ("loud", "0", "10"):
         with pytest.raises(ValueError):
             calls.set_pause_seconds(wrong)
@@ -889,6 +890,9 @@ def test_answer_with_nothing_ringing_fails_at_once(monkeypatch):
     monkeypatch.setattr(calls, "missing", lambda: "")
     monkeypatch.setattr(calls, "ringing", lambda: "")
     started = []
+    # Who the user is comes from a command, which on Windows reads its
+    # output on threads of its own: those stay real.
+    monkeypatch.setattr(tools, "_call_user", lambda: "Nathan")
     monkeypatch.setattr(tools.threading, "Thread",
                         lambda *a, **k: started.append(1))
     out = tools.phone_call("answer", "anyone", "say hi")

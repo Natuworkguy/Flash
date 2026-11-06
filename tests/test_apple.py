@@ -2,6 +2,7 @@
 """Apple Calendar, Apple Reminders and iMessage attachments, with the Mac
 side (osascript, Messages' database) faked."""
 
+import os
 import sqlite3
 
 import pytest
@@ -275,5 +276,8 @@ def test_read_imessages_names_the_attachments(mac, monkeypatch, tmp_path):
     said = tools.read_imessages()
     assert "Sam Lee (unread): Here it is [attachment: IMG_1.heic " \
         "(image/heic) at " in said  # nosec B101
-    assert "/Library/Messages/Attachments/ab/IMG_1.heic]" in said  # nosec
+    # where the Mac keeps it, said in this system's own path form
+    kept = os.path.join("Library", "Messages", "Attachments", "ab",
+                        "IMG_1.heic")
+    assert f"{os.sep}{kept}]" in said  # nosec
     assert "~" not in said  # nosec B101

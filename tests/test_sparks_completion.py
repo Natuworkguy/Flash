@@ -119,8 +119,8 @@ def test_templates_and_hires(crew):
 class TestMentions:
     @pytest.fixture
     def here(self, tmp_path, monkeypatch):
-        (tmp_path / "notes.txt").write_text("")
-        (tmp_path / "owl.py").write_text("")
+        (tmp_path / "notes.txt").write_text("", encoding="utf-8")
+        (tmp_path / "owl.py").write_text("", encoding="utf-8")
         monkeypatch.chdir(tmp_path)
 
     def offered(self, text):

@@ -297,7 +297,8 @@ def _mac_watch() -> bool:
     process = subprocess.Popen(  # nosec B603
         [sys.executable, "-c", _MAC_WATCH, str(os.getpid())],
         stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL, text=True,
+        stderr=subprocess.DEVNULL, text=True, encoding="utf-8",
+        errors="replace",
     )
     _watching["process"] = process
     said = (process.stdout.readline() if process.stdout else "").strip()
@@ -570,7 +571,8 @@ def _run(argv: list[str], env: Optional[dict] = None) -> str:
         # Fixed programs, never through a shell; what the model gave only
         # ever goes in as an argument.
         done = subprocess.run(  # nosec B603
-            argv, capture_output=True, text=True, timeout=TIMEOUT,
+            argv, capture_output=True, text=True, encoding="utf-8",
+            errors="replace", timeout=TIMEOUT,
             check=False, env=env,
         )
     except FileNotFoundError:

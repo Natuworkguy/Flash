@@ -358,7 +358,8 @@ def test_a_spark_left_working_by_a_quit_flash_is_let_go(monkeypatch):
 
 def test_a_broken_file_is_skipped():
     sparks.sparks_dir().mkdir(parents=True)
-    (sparks.sparks_dir() / "junk.json").write_text("{not json")
+    (sparks.sparks_dir() / "junk.json").write_text("{not json",
+                                                   encoding="utf-8")
     sparks.create("Scout", "Watch the issues.")
 
     assert [s.name for s in sparks.all_sparks()] == ["Scout"]
@@ -530,7 +531,8 @@ def test_only_one_process_holds_the_keeper_lock():
     other = subprocess.run(
         [sys.executable, "-c",
          "from flash import sparks; print(sparks._take_floor())"],
-        capture_output=True, text=True, check=True,
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+        check=True,
         env=_other_flash_env(), cwd=_REPO,
     )
     assert other.stdout.strip() == "False"
@@ -539,7 +541,8 @@ def test_only_one_process_holds_the_keeper_lock():
     freed = subprocess.run(
         [sys.executable, "-c",
          "from flash import sparks; print(sparks._take_floor())"],
-        capture_output=True, text=True, check=True,
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+        check=True,
         env=_other_flash_env(), cwd=_REPO,
     )
     assert freed.stdout.strip() == "True"
@@ -609,7 +612,7 @@ def test_a_stale_heartbeat_is_no_keeper():
     sparks.sparks_dir().mkdir(parents=True)
     (sparks.sparks_dir() / sparks.HEARTBEAT).write_text(json.dumps({
         "pid": 1, "always": True, "since": 0, "beat": time.time() - 3600,
-    }))
+    }), encoding="utf-8")
 
     assert sparks.keeper() is None
 
@@ -816,7 +819,7 @@ def test_chat_is_kept_to_its_length(model):
 def test_the_keepers_heartbeat_is_not_a_spark_nor_a_change():
     sparks.create("Scout", "Watch the issues.")
     before = sparks._signature()
-    (sparks.sparks_dir() / sparks.HEARTBEAT).write_text("{}")
+    (sparks.sparks_dir() / sparks.HEARTBEAT).write_text("{}", encoding="utf-8")
 
     assert sparks._signature() == before
     assert [s.name for s in sparks.all_sparks()] == ["Scout"]
@@ -1224,13 +1227,13 @@ def test_a_spark_cannot_hand_work_to_itself(model):
 def test_a_watched_folder_that_changes_starts_a_shift(tmp_path):
     folder = tmp_path / "inbox"
     folder.mkdir()
-    (folder / "a.txt").write_text("one")
+    (folder / "a.txt").write_text("one", encoding="utf-8")
     made = sparks.create("Scout", "Sort the inbox.", watch=str(folder))
     sparks._watched.clear()
 
     assert sparks.watch_tick() == []  # the first look only learns it
-    (folder / "b.txt").write_text("two")
-    (folder / "a.txt").write_text("changed")
+    (folder / "b.txt").write_text("two", encoding="utf-8")
+    (folder / "a.txt").write_text("changed", encoding="utf-8")
     os.utime(folder / "a.txt", (1, 1))
     started = sparks.watch_tick(now=time.time() + 3600)
 
@@ -1248,7 +1251,7 @@ def test_a_watch_waits_for_a_shift_just_run(tmp_path):
     sparks._edit(made.id, lambda s: setattr(s, "last_run", time.time()))
     sparks._watched.clear()
     sparks.watch_tick()
-    (folder / "new.txt").write_text("x")
+    (folder / "new.txt").write_text("x", encoding="utf-8")
 
     assert sparks.watch_tick() == []
     assert sparks.watch_tick(now=time.time() + 3600) != []
@@ -1641,7 +1644,7 @@ def test_autonomous_mode_turned_on_in_another_flash_is_heeded(
     it on in wrote it to the env file. A shift goes by the file."""
 
     env = tmp_path / ".flash.env"
-    env.write_text("NO_COMMAND_CONFIRMATION=1\n")
+    env.write_text("NO_COMMAND_CONFIRMATION=1\n", encoding="utf-8")
     monkeypatch.setattr(sparks, "ENV_PATH", str(env))
     monkeypatch.setattr(tools, "NO_COMMAND_CONFIRMATION", False)
     made = sparks.create("Scout", "Keep the repo current.")
@@ -1658,7 +1661,7 @@ def test_autonomous_mode_turned_on_in_another_flash_is_heeded(
 @pytest.fixture
 def autonomous(monkeypatch, tmp_path):
     env = tmp_path / ".flash.env"
-    env.write_text("NO_COMMAND_CONFIRMATION=1\n")
+    env.write_text("NO_COMMAND_CONFIRMATION=1\n", encoding="utf-8")
     monkeypatch.setattr(sparks, "ENV_PATH", str(env))
 
 
@@ -1760,7 +1763,7 @@ def test_a_tool_that_asks_is_told_yes_in_autonomous_mode(
     would wait forever."""
 
     env = tmp_path / ".flash.env"
-    env.write_text("NO_COMMAND_CONFIRMATION=1\n")
+    env.write_text("NO_COMMAND_CONFIRMATION=1\n", encoding="utf-8")
     monkeypatch.setattr(sparks, "ENV_PATH", str(env))
     monkeypatch.setattr(tools, "NO_COMMAND_CONFIRMATION", False)
 
@@ -1804,7 +1807,7 @@ def test_autonomous_mode_off_in_the_file_waits_even_if_on_here(
     model, fake_shell, monkeypatch, tmp_path,
 ):
     env = tmp_path / ".flash.env"
-    env.write_text("NO_COMMAND_CONFIRMATION=0\n")
+    env.write_text("NO_COMMAND_CONFIRMATION=0\n", encoding="utf-8")
     monkeypatch.setattr(sparks, "ENV_PATH", str(env))
     monkeypatch.setattr(tools, "NO_COMMAND_CONFIRMATION", True)
     made = sparks.create("Scout", "Keep the repo current.")
@@ -2245,7 +2248,7 @@ def test_new_sparks_are_on_flashs_model_until_a_default_is_set():
 def test_the_default_is_kept_and_flash_takes_it_back():
     assert sparks.set_default_model("beta3:8b") == "beta3:8b"  # nosec B101
     assert sparks.default_model() == "beta3:8b"  # nosec B101
-    saved = Path(sparks.ENV_PATH).read_text()
+    saved = Path(sparks.ENV_PATH).read_text(encoding="utf-8")
     assert "SPARK_DEFAULT_MODEL=" in saved  # nosec B101
 
     assert sparks.set_default_model("flash") == ""  # nosec B101
@@ -2544,7 +2547,8 @@ def test_a_spark_writes_a_document_and_a_new_version(model):
     )
 
     assert first == again  # nosec B101
-    assert first.read_text().startswith("# Brief")  # nosec B101
+    assert first.read_text(
+            encoding="utf-8").startswith("# Brief")  # nosec B101
     found = sparks.documents(made.id)
     assert [d["title"] for d in found] == ["Brief"]  # nosec B101
 
@@ -2554,7 +2558,8 @@ def test_a_document_gets_its_title_as_a_heading(model):
 
     path = sparks.write_document(made.id, "Release notes", "Two fixes.")
 
-    assert path.read_text() == "# Release notes\n\nTwo fixes.\n"  # nosec B101
+    said = path.read_text(encoding="utf-8")
+    assert said == "# Release notes\n\nTwo fixes.\n"  # nosec B101
     with pytest.raises(sparks.SparkError):
         sparks.write_document(made.id, "", "x")
     with pytest.raises(sparks.SparkError):
@@ -2566,7 +2571,7 @@ def test_only_a_sparks_own_documents_can_be_reached(model, tmp_path):
     other = sparks.create("Other", "Write.")
     mine = sparks.write_document(scout.id, "Mine", "Text.")
     secret = tmp_path / "secret.md"
-    secret.write_text("no")
+    secret.write_text("no", encoding="utf-8")
 
     found = sparks.document_of(scout.id, str(mine))
     assert found == mine.resolve()  # nosec B101
@@ -2615,7 +2620,8 @@ def test_a_document_opening_with_a_section_still_gets_its_title(model):
 
     path = sparks.write_document(made.id, "Review", "## Summary\n\nFine.")
 
-    assert path.read_text().startswith("# Review\n\n## Summary")  # nosec B101
+    said = path.read_text(encoding="utf-8")
+    assert said.startswith("# Review\n\n## Summary")  # nosec B101
     titles = [d["title"] for d in sparks.documents(made.id)]
     assert titles == ["Review"]  # nosec B101
 
@@ -2808,20 +2814,20 @@ def test_a_spark_that_asks_first_waits_in_autonomous_mode(
 
 def test_modes_follow_flash_unless_set(monkeypatch, tmp_path):
     env = tmp_path / ".flash.env"
-    env.write_text("")
+    env.write_text("", encoding="utf-8")
     monkeypatch.setattr(sparks, "ENV_PATH", str(env))
     made = sparks.create("Scout", "Watch the issues.")
     assert sparks.mode_of(made) == "ask"
-    env.write_text("NO_COMMAND_CONFIRMATION=1\n")
+    env.write_text("NO_COMMAND_CONFIRMATION=1\n", encoding="utf-8")
     assert sparks.mode_of(made) == "auto"
 
     # UltraAuto only where it is offered; set where it no longer is, Auto.
     with pytest.raises(sparks.SparkError, match="isn't offered"):
         sparks.set_mode(made.id, "ultra")
-    env.write_text("ULTRA_AUTO_ALLOWED=1\n")
+    env.write_text("ULTRA_AUTO_ALLOWED=1\n", encoding="utf-8")
     assert sparks.set_mode(made.id, "ultra").mode == "ultra"
     assert sparks.mode_of(sparks.find(made.id)) == "ultra"
-    env.write_text("ULTRA_AUTO_ALLOWED=0\n")
+    env.write_text("ULTRA_AUTO_ALLOWED=0\n", encoding="utf-8")
     assert sparks.mode_of(sparks.find(made.id)) == "auto"
 
     assert sparks.set_mode(made.id, "follow").mode == ""

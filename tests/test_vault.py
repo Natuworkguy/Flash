@@ -10,7 +10,8 @@ TOKEN = "ghp_" + "a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8"
 def test_a_secret_is_kept_encrypted_and_found_by_name():
     vault.set_secret("api", "s3cret-value-123")
     assert vault.names() == ["api"]  # nosec B101
-    assert "s3cret-value-123" not in vault._file().read_text()  # nosec
+    assert "s3cret-value-123" not in vault._file().read_text(
+            encoding="utf-8")  # nosec
     vault._cache.clear()
     assert vault.get("api") == "s3cret-value-123"  # nosec B101
     with pytest.raises(vault.VaultError):

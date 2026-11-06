@@ -60,7 +60,8 @@ def said(tmp_path, count=0, timeout=10):
     out = tmp_path / "said.jsonl"
     deadline = time.monotonic() + timeout
     while True:
-        lines = out.read_text().splitlines() if out.exists() else []
+        lines = out.read_text(
+                encoding="utf-8").splitlines() if out.exists() else []
         if len(lines) >= count or time.monotonic() > deadline:
             return [json.loads(line) for line in lines]
         time.sleep(0.05)

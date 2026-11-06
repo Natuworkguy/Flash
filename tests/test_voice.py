@@ -616,7 +616,7 @@ def test_one_model_downloads_by_name(tmp_path, monkeypatch):
             with zipfile.ZipFile(out, "w") as bundle:
                 bundle.writestr("vosk-model-en-us-0.22-lgraph/am/x", "x")
         else:
-            out.write_text("{}")
+            out.write_text("{}", encoding="utf-8")
         on_progress(label, 100)
         return ""
 
@@ -1128,6 +1128,8 @@ def test_kokoro_voices_are_offered_and_share_one_download(kokoro):
 
 
 def test_kokoro_speaks_through_the_same_path(kokoro, monkeypatch):
+    # Speaking goes through numpy, which comes with the voice extras.
+    pytest.importorskip("numpy")
     monkeypatch.setenv("VOICE_STYLE", "calm")
 
     wav, why = voice.synthesize("Hello there. How are you?")

@@ -171,6 +171,6 @@ class TestSoundInTheChat:
         assert "audio" in sent and "in the chat in a player" in said
 
     def test_on_the_page(self):
-        page = web.PAGE.read_text()
+        page = web.PAGE.read_text(encoding="utf-8")
         assert "function audioPlayer(entry)" in page
         assert 'entry.kind === "audio" ? audioPlayer(entry)' in page

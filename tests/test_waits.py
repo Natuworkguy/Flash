@@ -118,7 +118,7 @@ def test_a_command_is_run_until_it_succeeds(session, monkeypatch, tmp_path):
     assert looked.next > time.time() + 30  # nosec B101  (a minute on)
     assert session.woke == []  # nosec B101
 
-    ready.write_text("go")
+    ready.write_text("go", encoding="utf-8")
     come(wait.id)
     session.tick_waits()
     settle(session)

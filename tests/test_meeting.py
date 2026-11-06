@@ -109,7 +109,8 @@ def test_ending_it_starts_the_write_up(ready, monkeypatch):
     assert "[2:00]" not in said and "Sam writes the notes" in said  # nosec
     # And kept for good, besides.
     kept = list(meeting.folder().glob("*.md"))
-    assert len(kept) == 1 and "let's ship friday" in kept[0].read_text()
+    assert len(kept) == 1 and "let's ship friday" in kept[0].read_text(
+            encoding="utf-8")
     with pytest.raises(ValueError, match="not being recorded"):
         post(session, "hear", id=started["id"], data="", count=0)
 
@@ -117,7 +118,7 @@ def test_ending_it_starts_the_write_up(ready, monkeypatch):
 def test_a_long_meeting_is_read_from_its_file(ready, monkeypatch, tmp_path):
     monkeypatch.setattr(meeting, "INLINE_CHARS", 50)
     path = tmp_path / "Meeting.md"
-    path.write_text("[0:00] " + "words " * 40 + "\n")
+    path.write_text("[0:00] " + "words " * 40 + "\n", encoding="utf-8")
 
     said = meeting.note({"path": str(path)})
 

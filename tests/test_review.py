@@ -21,7 +21,8 @@ def repo(tmp_path):
     git(tmp_path, "config", "user.email", "t@example.com")
     git(tmp_path, "config", "user.name", "T")
     (tmp_path / "calc.py").write_text(
-        "def average(values):\n    return sum(values) / len(values)\n")
+        "def average(values):\n    return sum(values) / len(values)\n",
+        encoding="utf-8")
     git(tmp_path, "add", ".")
     git(tmp_path, "commit", "-q", "-m", "start")
     return tmp_path
@@ -51,8 +52,8 @@ class TestTheChange:
     def test_uncommitted_with_new_files_and_line_numbers(self, repo):
         (repo / "calc.py").write_text(
             "def average(values):\n    total = sum(values)\n"
-            "    return total / len(values)\n")
-        (repo / "new.py").write_text("print('hi')\n")
+            "    return total / len(values)\n", encoding="utf-8")
+        (repo / "new.py").write_text("print('hi')\n", encoding="utf-8")
 
         diff, what, skipped = review.diff_of("", repo)
 
@@ -67,7 +68,8 @@ class TestTheChange:
 
     def test_a_branch_and_a_range(self, repo):
         git(repo, "checkout", "-q", "-b", "work")
-        (repo / "calc.py").write_text("def average(values):\n    return 0\n")
+        (repo / "calc.py").write_text("def average(values):\n    return 0\n",
+                                      encoding="utf-8")
         git(repo, "commit", "-qam", "zero")
 
         diff, what, _ = review.diff_of("main", repo)
@@ -89,7 +91,7 @@ class TestTwoPasses:
     def change(self, repo):
         (repo / "calc.py").write_text(
             "def average(values):\n    return sum(values) / len(values)\n\n"
-            "def ratio(a, b):\n    return a / b\n")
+            "def ratio(a, b):\n    return a / b\n", encoding="utf-8")
 
     def test_only_what_holds_up_is_reported(self, repo):
         self.change(repo)
@@ -149,7 +151,8 @@ class TestTwoPasses:
 
 class TestWhereItRuns:
     def test_the_tool_reports_it(self, repo, monkeypatch):
-        (repo / "calc.py").write_text("def average(values):\n    return 1\n")
+        (repo / "calc.py").write_text("def average(values):\n    return 1\n",
+                                      encoding="utf-8")
         monkeypatch.chdir(repo)
         model = Reviewer(
             [{"file": "calc.py", "line": 2, "title": "Always 1",
@@ -167,7 +170,8 @@ class TestWhereItRuns:
     def test_the_terminal_keeps_it_in_the_conversation(
         self, repo, monkeypatch
     ):
-        (repo / "calc.py").write_text("def average(values):\n    return 1\n")
+        (repo / "calc.py").write_text("def average(values):\n    return 1\n",
+                                      encoding="utf-8")
         monkeypatch.chdir(repo)
         monkeypatch.setattr(ai, "_client", lambda: Reviewer([], []))
         monkeypatch.setattr(tools, "MODEL_NAME", "m")
@@ -196,7 +200,8 @@ class TestWhereItRuns:
 
         from flash import web, workspace
 
-        (repo / "calc.py").write_text("def average(values):\n    return 1\n")
+        (repo / "calc.py").write_text("def average(values):\n    return 1\n",
+                                      encoding="utf-8")
         model = Reviewer(
             [{"file": "calc.py", "line": 2, "title": "Always 1",
               "why": "The average is not computed."}],

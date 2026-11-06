@@ -496,6 +496,7 @@ def _switch(kind: str, name: str = "") -> str:
 
     was = subprocess.run(  # nosec B603 B607 -- a fixed program
         [SWITCH, "-c", "-t", kind], capture_output=True, text=True,
+        encoding="utf-8", errors="replace",
         timeout=10, check=False).stdout.strip()
     if name:
         subprocess.run(  # nosec B603 B607
@@ -650,7 +651,8 @@ def _system_mic() -> str:
         with contextlib.suppress(OSError, subprocess.SubprocessError):
             name = subprocess.run(  # nosec B603 B607 -- a fixed program
                 [SWITCH, "-c", "-t", "input"], capture_output=True,
-                text=True, timeout=10, check=False).stdout.strip()
+                text=True, encoding="utf-8", errors="replace", timeout=10,
+                check=False).stdout.strip()
             if name:
                 return name
     with contextlib.suppress(Exception):

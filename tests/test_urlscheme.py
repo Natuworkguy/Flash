@@ -69,7 +69,7 @@ def test_the_handler_passes_links_with_uri(monkeypatch, tmp_path):
     monkeypatch.setattr(urlscheme.subprocess, "run",
                         lambda *a, **kw: None, raising=False)
     urlscheme._register_linux(["/usr/bin/flash"])
-    entry = (tmp_path / "flash.desktop").read_text()
+    entry = (tmp_path / "flash.desktop").read_text(encoding="utf-8")
     assert "Exec=/usr/bin/flash --uri %u" in entry  # nosec B101
 
     args = parse_args(["--uri", "flash://?prompt=hi"])
@@ -137,7 +137,7 @@ def test_the_installers_take_dev():
     from pathlib import Path
 
     root = Path(__file__).resolve().parent.parent
-    sh = (root / "install.sh").read_text()
-    ps = (root / "install.ps1").read_text()
+    sh = (root / "install.sh").read_text(encoding="utf-8")
+    ps = (root / "install.ps1").read_text(encoding="utf-8")
     assert "--dev) BRANCH=\"dev\"" in sh and "--branch \"$BRANCH\"" in sh
     assert "[switch]$Dev" in ps and "--branch $Branch" in ps

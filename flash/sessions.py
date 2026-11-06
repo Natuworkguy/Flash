@@ -19,6 +19,7 @@ from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 from typing import Any, Optional
 
+from . import paths
 from .paths import FLASH_DIR
 
 TITLE_CHARS = 60
@@ -103,7 +104,7 @@ def save(session: Session, messages: list) -> Session:
     path.parent.mkdir(parents=True, exist_ok=True)
     partial = path.with_suffix(".partial")
     partial.write_text(json.dumps(asdict(session)), encoding="utf-8")
-    os.replace(partial, path)
+    paths.replace(partial, path)
     _trim()
     return session
 

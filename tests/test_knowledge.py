@@ -87,10 +87,10 @@ def test_guides_cannot_be_changed():
 def _extension(root: Path, guides: dict) -> Path:
     root.mkdir()
     (root / "flash-extension.json").write_text(json.dumps(
-        {"name": "acme", "knowledge": "knowledge"}))
+        {"name": "acme", "knowledge": "knowledge"}), encoding="utf-8")
     (root / "knowledge").mkdir()
     for name, text in guides.items():
-        (root / "knowledge" / name).write_text(text)
+        (root / "knowledge" / name).write_text(text, encoding="utf-8")
     return root
 
 

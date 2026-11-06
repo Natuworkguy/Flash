@@ -51,7 +51,7 @@ def test_a_server_s_tools_join_flash_s(fake):
 
 def test_the_config_is_the_usual_shape_and_private(fake):
     path = connectors.config_path()
-    saved = json.loads(path.read_text())
+    saved = json.loads(path.read_text(encoding="utf-8"))
 
     assert saved["mcpServers"]["fake"]["command"] == sys.executable  # nosec
     assert saved["mcpServers"]["fake"]["args"] == [str(SERVER)]  # nosec
@@ -422,17 +422,19 @@ def test_a_start_command_then_its_url(tmp_path, monkeypatch):
     for name in ("HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy"):
         monkeypatch.delenv(name, raising=False)
     script = tmp_path / "server.py"
-    script.write_text(STARTED_SERVER)
+    script.write_text(STARTED_SERVER, encoding="utf-8")
     with socket.socket() as probe:
         probe.bind(("127.0.0.1", 0))
         port = probe.getsockname()[1]
     # As it would be said: run it, then connect.
     connectors.add("mine", f'run "{script}" {port} then connect to '
-                           f"localhost:{port}/mcp")
+                           f"127.0.0.1:{port}/mcp")
     spec = connectors.read_config()["mine"]
-    assert spec["url"] == f"http://localhost:{port}/mcp"
+    assert spec["url"] == f"http://127.0.0.1:{port}/mcp"
     assert spec["start"]["command"] == sys.executable
-    found = ready("mine", 20)
+    # As long as Flash itself gives a start command (a slow machine
+    # takes a while to start Python).
+    found = ready("mine", connectors.START_SECONDS)
     assert found["state"] == connectors.READY, found
     assert connectors.find("mine__hello") is not None
     assert found["target"] == spec["url"]
@@ -445,7 +447,8 @@ def test_a_start_command_then_its_url(tmp_path, monkeypatch):
 
 def test_a_start_command_that_dies_says_so(tmp_path):
     script = tmp_path / "broken.py"
-    script.write_text("import sys\nprint('no port given')\nsys.exit(3)\n")
+    script.write_text("import sys\nprint('no port given')\nsys.exit(3)\n",
+                      encoding="utf-8")
     connectors.add("broken", "http://127.0.0.1:9/mcp", None,
                    f'"{script}"')
     found = ready("broken", 20)
@@ -482,3 +485,12 @@ def test_refresh_tools_lists_only_the_flash_tools_that_changed(monkeypatch):
 
 def test_refresh_tools_says_nothing_of_flash_tools_unchanged():
     assert "Flash's own tools" not in tools.refresh_tools()  # nosec B101
+
+
+def test_windows_quoted_paths_lose_their_quotes_and_keep_backslashes():
+    said = r'"C:\Program Files\Python\python.exe" "D:\a\server.py" -y'
+
+    assert connectors.split_command(said, windows=True) == [
+        r"C:\Program Files\Python\python.exe", r"D:\a\server.py", "-y"]
+    assert connectors.split_command('npx "~/My Notes"', windows=True) == [
+        "npx", "~/My Notes"]

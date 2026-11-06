@@ -336,9 +336,11 @@ class TestWiring:
 
     def test_a_confirmed_tool_asks_first(self, tmp_path, monkeypatch):
         folder = full(tmp_path / "src")
-        manifest = json.loads((folder / extensions.MANIFEST).read_text())
+        manifest = json.loads((folder / extensions.MANIFEST).read_text(
+                encoding="utf-8"))
         manifest["tools"][0]["confirm"] = True
-        (folder / extensions.MANIFEST).write_text(json.dumps(manifest))
+        (folder / extensions.MANIFEST).write_text(json.dumps(manifest),
+                                                  encoding="utf-8")
         install(tmp_path, folder)
         monkeypatch.setattr(tools, "yes_no", lambda: "n")
 
@@ -551,7 +553,7 @@ class TestBundles:
         with pytest.raises(ExtensionError, match="no bundle at"):
             extensions.fetch(f"path@{tmp_path / 'gone.bundle'}")
         broken = tmp_path / "broken.bundle"
-        broken.write_text("not a bundle")
+        broken.write_text("not a bundle", encoding="utf-8")
         with pytest.raises(ExtensionError, match="not a git bundle"):
             extensions.fetch(f"path@{broken}")
 
@@ -752,14 +754,14 @@ def test_removing_empties_it_from_the_deepest_up(tmp_path, monkeypatch):
     # A link out is removed, not followed.
     outside = tmp_path / "keep"
     outside.mkdir()
-    (outside / "mine.txt").write_text("mine")
+    (outside / "mine.txt").write_text("mine", encoding="utf-8")
     if os.name != "nt":
         (dest / "link").symlink_to(outside, target_is_directory=True)
     extensions.reload()
 
     assert extensions.remove("deep") is True
     assert not dest.exists()
-    assert (outside / "mine.txt").read_text() == "mine"
+    assert (outside / "mine.txt").read_text(encoding="utf-8") == "mine"
     assert extensions.find("deep") is None
 
 
@@ -835,7 +837,8 @@ class TestBranchesAndGit:
         for branch, said in (("", "main"), ("#dev", "dev")):
             checkout = extensions.fetch(f"git@file://{repo}{branch}")
             try:
-                assert (checkout / "prompt.md").read_text().strip() == said
+                assert (checkout / "prompt.md").read_text(
+                        encoding="utf-8").strip() == said
             finally:
                 extensions.discard(checkout)
 

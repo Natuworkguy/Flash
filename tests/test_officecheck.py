@@ -85,7 +85,7 @@ def test_pages_to_show_keep_the_ends():
 def test_what_is_not_an_office_file_is_refused(tmp_path):
     with pytest.raises(officecheck.CheckError, match="no file"):
         officecheck.check(tmp_path / "x.docx")
-    (tmp_path / "x.txt").write_text("hi")
+    (tmp_path / "x.txt").write_text("hi", encoding="utf-8")
     with pytest.raises(officecheck.CheckError, match="not an office file"):
         officecheck.check(tmp_path / "x.txt")
 
@@ -105,7 +105,8 @@ def test_a_document_and_a_sheet_as_they_open(tmp_path, monkeypatch):
                                'placeholder text "TODO" on page 1']
     assert len(report.images) == 3 and report.images[0][:4] == b"\x89PNG"
 
-    (tmp_path / "costs.csv").write_text("A,10,=B1/B2\nB,0,=B1*2\n")
+    (tmp_path / "costs.csv").write_text("A,10,=B1/B2\nB,0,=B1*2\n",
+                                        encoding="utf-8")
     subprocess.run(  # nosec B603
         [shutil.which("soffice"),
          f"-env:UserInstallation={(tmp_path / 'p').as_uri()}",

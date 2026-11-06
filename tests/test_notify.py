@@ -52,7 +52,7 @@ def test_the_limit_is_kept_on_disk():
 def test_a_spoiled_count_does_not_stop_notifications():
     path = notify.FLASH_DIR / "notified.json"
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("not json")
+    path.write_text("not json", encoding="utf-8")
 
     assert notify.take_notify_turn() == 0  # nosec B101
 
@@ -134,7 +134,8 @@ def test_the_user_sets_the_limit():
     assert notify.set_limits(10, "60m") == (10, 3600)  # nosec B101
     assert notify.limits() == (10, 3600)  # nosec B101
     assert "every 1 hour" in notify.limit_words()  # nosec B101
-    saved = (notify.FLASH_DIR.parent / ".flash.env").read_text()
+    saved = (notify.FLASH_DIR.parent / ".flash.env").read_text(
+            encoding="utf-8")
     assert "NOTIFY_LIMIT=" in saved  # nosec B101
 
 

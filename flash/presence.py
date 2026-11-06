@@ -28,7 +28,8 @@ def _run(*args: str) -> str:
         return ""
     try:
         done = subprocess.run(
-            list(args), capture_output=True, text=True, timeout=_TIMEOUT,
+            list(args), capture_output=True, text=True, encoding="utf-8",
+            errors="replace", timeout=_TIMEOUT,
             check=False,
         )
     except (OSError, subprocess.SubprocessError):

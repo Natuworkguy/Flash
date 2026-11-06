@@ -87,5 +87,6 @@ def test_the_scripts_parse():
     if shutil.which("node"):
         node = subprocess.run(  # nosec B603 B607
             ["node", "--check", "-"], input=screenglow._MAC_GLOW,
-            text=True, capture_output=True, check=False)
+            text=True, encoding="utf-8", errors="replace", capture_output=True,
+            check=False)
         assert node.returncode == 0, node.stderr  # nosec B101

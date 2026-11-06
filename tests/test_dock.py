@@ -1,5 +1,6 @@
 # pylint: disable=C0114,C0116
 
+import os
 import types
 
 import pytest
@@ -70,7 +71,7 @@ def test_a_question_steps_the_dock_aside_until_answered(dock, monkeypatch):
 
 def test_a_live_and_a_status_step_it_aside(dock):
     with theme.Live(theme.Text("x"), console=theme.Console(
-            file=open("/dev/null", "w")), transient=True):
+            file=open(os.devnull, "w", encoding="utf-8")), transient=True):
         assert dock.held == 1
     assert dock.held == 0
 

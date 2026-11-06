@@ -90,6 +90,54 @@ _ALIASES = {"c++": "cpp", "js": "javascript", "node": "javascript",
             "golang": "go"}
 
 
+# What a compiler on Windows finds itself and its tools through.
+_WINDOWS_KEPT = ("SYSTEMROOT", "SYSTEMDRIVE", "WINDIR", "COMSPEC", "PATHEXT",
+                 "PROGRAMFILES", "PROGRAMFILES(X86)", "PROGRAMW6432",
+                 "PROGRAMDATA", "COMMONPROGRAMFILES",
+                 "COMMONPROGRAMFILES(X86)", "NUMBER_OF_PROCESSORS",
+                 "PROCESSOR_ARCHITECTURE", "OS")
+
+
+def _windows_env(folder: str) -> dict:
+    """On Windows, the system's own settings kept, and the answer's
+    temporary and app-data folders its own."""
+
+    kept = {name: os.environ[name] for name in _WINDOWS_KEPT
+            if os.environ.get(name)}
+    return {**kept, **{name: folder for name in (
+        "TEMP", "TMP", "USERPROFILE", "LOCALAPPDATA", "APPDATA")}}
+
+
+def _program(name: str) -> str:
+    """Where NAME is, or "". Bash on Windows is Git's: the one in System32
+    only starts WSL, which may have no Linux in it."""
+
+    if name == "bash" and os.name == "nt":
+        for place in (os.environ.get("PROGRAMFILES", r"C:\Program Files"),
+                      os.environ.get("PROGRAMFILES(X86)", "")):
+            found = Path(place) / "Git" / "bin" / "bash.exe"
+            if place and found.is_file():
+                return str(found)
+        found = shutil.which("bash") or ""
+        return "" if "system32" in found.lower() else found
+    return shutil.which(name) or ""
+
+
+def _here(argv: list, root: Path) -> list:
+    """A step as this system runs it: on Windows a built program is
+    main.exe, run by its whole path, and bash is Git's."""
+
+    argv = list(argv)
+    if os.name != "nt":
+        return argv
+    if argv[0] == "./main":
+        argv[0] = str(root / "main.exe")
+    elif argv[0] == "bash":
+        argv[0] = _program("bash") or "bash"
+    return ["main.exe" if a == "main" and i and argv[i - 1] == "-o" else a
+            for i, a in enumerate(argv)]
+
+
 def _homes() -> list[Path]:
     """Where toolchains may have installed themselves: the home folder,
     and the account's own, which a changed HOME (sudo, a test) hides."""
@@ -453,7 +501,7 @@ def run(lang: str, answer: str, files: Optional[dict] = None,
     prints, for an answer that changes files rather than printing."""
 
     spec = LANGUAGES[lang]
-    missing = [n for n in spec["needs"] if not shutil.which(n)]
+    missing = [n for n in spec["needs"] if not _program(n)]
     if missing:
         raise TutorError(f"{', '.join(missing)} is not installed here, so "
                          f"{lang} answers cannot be run. Install it first.")
@@ -467,6 +515,8 @@ def run(lang: str, answer: str, files: Optional[dict] = None,
         env = {"PATH": os.environ.get("PATH", ""), "HOME": folder,
                "TMPDIR": folder, "LANG": "C.UTF-8", "LC_ALL": "C.UTF-8",
                "TERM": "dumb"}
+        if os.name == "nt":
+            env.update(_windows_env(folder))
         # Toolchains that find themselves through the home folder still
         # find themselves: the answer's home is its own folder.
         homes = _homes()
@@ -483,13 +533,16 @@ def run(lang: str, answer: str, files: Optional[dict] = None,
             (root / ".verify.sh").write_text(verify, encoding="utf-8")
         steps = ([spec["build"]] if spec["build"] else []) + [spec["run"]] \
             + ([["bash", ".verify.sh"]] if verify else [])
+        steps = [_here(argv, root) for argv in steps]
+        run_step = _here(spec["run"], root)
         answered = None
         for n, argv in enumerate(steps):
             building = spec["build"] is not None and n == 0
             try:
                 done = subprocess.run(  # nosec B603 -- the learner's own
                     argv, cwd=folder, env=env, capture_output=True,
-                    text=True, timeout=RUN_SECONDS * (3 if building else 1),
+                    text=True, encoding="utf-8", errors="replace",
+                    timeout=RUN_SECONDS * (3 if building else 1),
                     input=None if building else stdin, check=False)
             except subprocess.TimeoutExpired as exc:
                 return {"built": not building, "exit": None,
@@ -500,7 +553,7 @@ def run(lang: str, answer: str, files: Optional[dict] = None,
                 return {"built": False, "exit": done.returncode,
                         "timed_out": False, "stdout": _clip(done.stdout),
                         "stderr": _clip(done.stderr)}
-            if argv == spec["run"]:
+            if argv == run_step:
                 answered = done
         # The answer's own exit and errors; the check's output.
         assert answered is not None  # nosec B101 -- the run step ran

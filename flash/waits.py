@@ -428,7 +428,8 @@ def _run_command(wait: Wait) -> tuple[bool, str]:
             # The user's yes, given when the wait was set, is for this
             # very command, in the shell the shell tool uses.
             wait.command, shell=True, cwd=wait.cwd or None,
-            capture_output=True, text=True, timeout=COMMAND_SECONDS,
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=COMMAND_SECONDS,
             stdin=subprocess.DEVNULL, env=os.environ.copy(),
         )
     except subprocess.TimeoutExpired:

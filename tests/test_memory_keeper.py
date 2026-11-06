@@ -44,7 +44,8 @@ def test_the_memory_keeper_tidies_and_backs_up_first(tmp_path):
     backups = list((memory.MEMORY_PATH.parent / ".flash"
                     / "memory-backups").glob("*.md"))
     assert len(backups) == 1  # nosec B101
-    assert "likes tea a lot" in backups[0].read_text()  # nosec B101
+    assert "likes tea a lot" in backups[0].read_text(
+            encoding="utf-8")  # nosec B101
 
     assert tidy({"action": "forget", "index": 1}).startswith(  # nosec B101
         "Error: say why")

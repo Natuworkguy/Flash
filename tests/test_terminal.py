@@ -37,7 +37,8 @@ def test_read_trims_a_long_log(monkeypatch):
     assert [c.command for c in terminal.read()] == [  # nosec B101
         "cmd 7", "cmd 8", "cmd 9"
     ]
-    assert len(terminal.LOG_PATH.read_text().splitlines()) == 3  # nosec
+    assert len(terminal.LOG_PATH.read_text(
+            encoding="utf-8").splitlines()) == 3  # nosec
 
 
 def test_no_log_means_nothing_to_say():
@@ -114,18 +115,21 @@ def test_current_shell(monkeypatch):
 def test_install_is_idempotent_and_remove_restores(isolated_home):
     rc = isolated_home / ".zshrc"
     original = "export PATH=$HOME/bin:$PATH\nalias ll='ls -la'\n"
-    rc.write_text(original)
+    rc.write_text(original, encoding="utf-8")
 
     assert "Added to" in terminal.install("zsh")  # nosec B101
     assert terminal.installed("zsh")  # nosec B101
-    assert terminal.hook_path("zsh").read_text() == terminal.ZSH_HOOK
-    assert rc.read_text() == original + "\n" + terminal.rc_block("zsh")
+    assert terminal.hook_path("zsh").read_text(
+            encoding="utf-8") == terminal.ZSH_HOOK
+    assert rc.read_text(
+            encoding="utf-8") == original + "\n" + terminal.rc_block("zsh")
 
     assert terminal.install("zsh").startswith("Already set up")  # nosec
-    assert rc.read_text().count(terminal.BEGIN) == 1  # nosec B101
+    assert rc.read_text(
+            encoding="utf-8").count(terminal.BEGIN) == 1  # nosec B101
 
     assert terminal.remove("zsh").startswith("Removed from")  # nosec B101
-    assert rc.read_text() == original  # nosec B101
+    assert rc.read_text(encoding="utf-8") == original  # nosec B101
     assert not terminal.hook_path("zsh").exists()  # nosec B101
     assert terminal.remove("zsh").startswith("Nothing to remove")  # nosec
 
@@ -135,13 +139,15 @@ def test_install_into_a_missing_rc_and_remove_keeps_what_follows(
 ):
     rc = isolated_home / ".bashrc"
     terminal.install("bash")
-    assert rc.read_text() == terminal.rc_block("bash")  # nosec B101
+    assert rc.read_text(
+            encoding="utf-8") == terminal.rc_block("bash")  # nosec B101
 
     with rc.open("a") as handle:
         handle.write("alias gs='git status'\n")
     terminal.remove("bash")
 
-    assert rc.read_text() == "alias gs='git status'\n"  # nosec B101
+    assert rc.read_text(
+            encoding="utf-8") == "alias gs='git status'\n"  # nosec B101
 
 
 # --- the hooks in real shells ----------------------------------------------
@@ -216,7 +222,8 @@ def test_hook_records_commands_in_vscode(shell, isolated_home):
     # second as the user's message before it, and since() would skip it.
     realtime = shell == "zsh" or subprocess.run(  # nosec B603 B607
         ["bash", "-c", 'echo "${EPOCHREALTIME:+yes}"'],
-        capture_output=True, text=True, check=False,
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+        check=False,
     ).stdout.strip() == "yes"
     if realtime:
         assert any(c.time % 1 for c in got)  # nosec B101

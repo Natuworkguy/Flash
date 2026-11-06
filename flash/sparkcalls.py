@@ -62,7 +62,8 @@ def _beat() -> None:
     with contextlib.suppress(OSError):
         _folder().mkdir(parents=True, exist_ok=True)
         _beat_file().write_text(json.dumps({"pid": os.getpid(),
-                                            "at": time.time()}))
+                                            "at": time.time()}),
+                                encoding="utf-8")
 
 
 def ringers_alive() -> bool:
@@ -72,7 +73,7 @@ def ringers_alive() -> bool:
     with contextlib.suppress(OSError):
         for path in _folder().glob("*.json"):
             with contextlib.suppress(OSError, ValueError):
-                beat = json.loads(path.read_text())
+                beat = json.loads(path.read_text(encoding="utf-8"))
                 if now - float(beat.get("at") or 0) < BEAT_STALE and \
                         sparks.alive(beat.get("pid")):
                     return True
@@ -289,7 +290,7 @@ def _run_while(args: list[str], going: Callable[[], bool]) -> str:
     try:
         proc = subprocess.Popen(  # nosec B603 -- fixed program, text args
             args, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-            text=True)
+            text=True, encoding="utf-8", errors="replace")
     except OSError:
         return ""
     while proc.poll() is None:

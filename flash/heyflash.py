@@ -32,7 +32,7 @@ import uuid
 from collections.abc import Callable
 from typing import Any, Optional
 
-from . import voice, voicehooks
+from . import paths, voice, voicehooks
 from .paths import ENV_PATH
 
 SETTING = "VOICE_WAKE_ALWAYS"
@@ -156,7 +156,7 @@ def _write_shared(change: Callable[[dict], None]) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         partial = path.with_name(f".{path.name}.{os.getpid()}.partial")
         partial.write_text(json.dumps(shared), encoding="utf-8")
-        os.replace(partial, path)
+        paths.replace(partial, path)
     except OSError:
         pass
 

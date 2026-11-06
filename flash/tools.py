@@ -415,7 +415,7 @@ def _run_shell_streaming(
         shell=shell,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
-        text=True,
+        text=True, encoding="utf-8", errors="replace",
         bufsize=1,
         env=env,
     )
@@ -3376,7 +3376,8 @@ def _printers() -> tuple[list[str], str]:
     Raises OSError when lpstat cannot be run."""
 
     run = subprocess.run(  # nosec B603 B607
-        ["lpstat", "-p", "-d"], capture_output=True, text=True, timeout=15,
+        ["lpstat", "-p", "-d"], capture_output=True, text=True,
+        encoding="utf-8", errors="replace", timeout=15,
         check=False,
     )
     names, default = [], ""
@@ -3509,7 +3510,8 @@ def print_tool(path: str = "", document: str = "", printer: str = "",
     command += ["--", str(target)]
     try:
         run = subprocess.run(  # nosec B603 B607
-            command, capture_output=True, text=True, timeout=60, check=False)
+            command, capture_output=True, text=True, encoding="utf-8",
+            errors="replace", timeout=60, check=False)
     except (OSError, subprocess.SubprocessError) as exc:
         return fail(f"could not run lp: {exc}")
     if run.returncode != 0:
@@ -5090,7 +5092,8 @@ def _call_user() -> str:
 
     with contextlib.suppress(OSError, subprocess.SubprocessError):
         found = subprocess.run(  # nosec B603 B607 -- a fixed program
-            ["id", "-F"], capture_output=True, text=True, timeout=5,
+            ["id", "-F"], capture_output=True, text=True, encoding="utf-8",
+            errors="replace", timeout=5,
             check=False).stdout.strip()
         if found:
             return found

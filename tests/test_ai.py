@@ -450,7 +450,8 @@ def test_hook_command_installs_after_asking(monkeypatch, isolated_home,
     assert "Added to" in out  # nosec B101
     assert "Set up in" in out  # nosec B101
     assert "Removed from" in out  # nosec B101
-    assert terminal.BEGIN not in (isolated_home / ".zshrc").read_text()
+    assert terminal.BEGIN not in (isolated_home / ".zshrc").read_text(
+            encoding="utf-8")
 
 
 def test_hook_command_declined_changes_nothing(monkeypatch, isolated_home):

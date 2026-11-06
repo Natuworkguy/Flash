@@ -13,7 +13,7 @@ def test_another_chromium_is_used_when_playwrights_own_is_missing(
     shell = (tmp_path / "chromium_headless_shell-1234"
              / "chrome-headless-shell-mac-arm64" / "chrome-headless-shell")
     shell.parent.mkdir(parents=True)
-    shell.write_text("#!/bin/sh\n")
+    shell.write_text("#!/bin/sh\n", encoding="utf-8")
     shell.chmod(0o755)
     monkeypatch.setenv("PLAYWRIGHT_BROWSERS_PATH", str(tmp_path))
     monkeypatch.setattr(browser.Path, "home", lambda: tmp_path / "nobody")
@@ -63,7 +63,7 @@ def test_the_user_can_take_the_browser_from_another_thread(tmp_path):
     page = tmp_path / "p.html"
     page.write_text("<button id=b onclick=\"document.title='clicked'\" "
                     "style='position:absolute;left:0;top:0;width:200px;"
-                    "height:80px'>Hi</button><input id=i>")
+                    "height:80px'>Hi</button><input id=i>", encoding="utf-8")
     why = browser.open_page(page.as_uri(), width=400, height=300, wait_ms=0)
     if why:
         pytest.skip(why)
@@ -150,7 +150,7 @@ def test_the_agents_reflex_beats_flash_dash():
     from pathlib import Path
 
     policy = (Path(__file__).parent.parent / "flash" / "games"
-              / "dash-policy.js").read_text()
+              / "dash-policy.js").read_text(encoding="utf-8")
     browser = _dash()
     try:
         said, why = browser.play(policy, seconds=40, start_keys=["r"],

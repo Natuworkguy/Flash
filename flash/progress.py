@@ -75,7 +75,8 @@ def _deliver() -> None:
             try:
                 subprocess.run(  # nosec B603 -- the user installed it
                     extensions.argv(extension, extension.events.run),
-                    input=json.dumps(payload), text=True,
+                    input=json.dumps(payload), text=True, encoding="utf-8",
+                    errors="replace",
                     capture_output=True, timeout=extension.events.timeout,
                     env=extensions.environment(extension),
                     cwd=str(extension.path),
