@@ -13,10 +13,23 @@ from tests.test_web import request, server  # noqa: F401  (a fixture)
 # Writes down what it is sent, then answers with what ANSWERS (a JSON
 # object of event to answer) holds for that event.
 MIDDLE = """\
-import json, os, sys
+import json, os, sys, time
 said = json.load(sys.stdin)
-with open(os.environ["FLASH_TEST_VOICE"], "a", encoding="utf-8") as out:
-    out.write(json.dumps({"by": NAME, **said}) + "\\n")
+path = os.environ["FLASH_TEST_VOICE"]
+# Hooks run side by side, and an append is not one write on Windows: a
+# lock keeps each line whole.
+while True:
+    try:
+        lock = os.open(path + ".lock", os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        break
+    except (FileExistsError, PermissionError):  # Windows, as it goes
+        time.sleep(0.005)
+try:
+    with open(path, "a", encoding="utf-8") as out:
+        out.write(json.dumps({"by": NAME, **said}) + "\\n")
+finally:
+    os.close(lock)
+    os.remove(path + ".lock")
 answers = ANSWERS
 if said["event"] in answers:
     print(json.dumps(answers[said["event"]]))

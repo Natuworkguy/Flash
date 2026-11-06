@@ -6079,15 +6079,22 @@ def _take_floor() -> bool:
     return True
 
 
+# Held while a beat is written, and while the floor is given up.
+_beating = threading.Lock()
+
+
 def _give_floor() -> None:
     global _floor
 
-    if _floor is None:
-        return
-    handle, _floor = _floor, None  # the beat stops with it
-    with contextlib.suppress(OSError):
-        (sparks_dir() / HEARTBEAT).unlink(missing_ok=True)
-        handle.close()  # closing it lets the lock go
+    # Under the beat's lock: a beat being written as the floor goes would
+    # put the heartbeat back, and a keeper that stopped look as if it ran.
+    with _beating:
+        if _floor is None:
+            return
+        handle, _floor = _floor, None  # the beat stops with it
+        with contextlib.suppress(OSError):
+            (sparks_dir() / HEARTBEAT).unlink(missing_ok=True)
+            handle.close()  # closing it lets the lock go
 
 
 def _beat(always: bool) -> None:
@@ -6101,12 +6108,15 @@ def _beat(always: bool) -> None:
     held = _floor
 
     def keep_beating() -> None:
-        while _floor is held and held is not None:
-            beat["beat"] = time.time()
-            with contextlib.suppress(OSError):
-                temp = sparks_dir() / ".keeper.tmp"
-                temp.write_text(json.dumps(beat), encoding="utf-8")
-                paths.replace(temp, sparks_dir() / HEARTBEAT)
+        while held is not None:
+            with _beating:
+                if _floor is not held:
+                    return
+                beat["beat"] = time.time()
+                with contextlib.suppress(OSError):
+                    temp = sparks_dir() / ".keeper.tmp"
+                    temp.write_text(json.dumps(beat), encoding="utf-8")
+                    paths.replace(temp, sparks_dir() / HEARTBEAT)
             time.sleep(TICK_SECONDS)
 
     threading.Thread(target=keep_beating, daemon=True).start()
