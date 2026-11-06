@@ -59,6 +59,9 @@ _lock = threading.Lock()
 XP_RIGHT = 10
 MOST_LESSON = 6000
 RUN_SECONDS = 10
+# Building, longer: a first compile on a slow machine (Windows scanning
+# each file the compiler writes, a linker loading) takes a while.
+BUILD_SECONDS = 120
 MOST_OUTPUT = 8000
 MATCHES = ("exact", "contains", "regex")
 # Each language: the file the answer goes in, how it is built (or
@@ -535,7 +538,10 @@ def run(lang: str, answer: str, files: Optional[dict] = None,
     if missing:
         raise TutorError(f"{', '.join(missing)} is not installed here, so "
                          f"{lang} answers cannot be run. Install it first.")
-    with tempfile.TemporaryDirectory(prefix="flash-tutor-") as folder:
+    # A file a toolchain's helper still has open (Windows will not delete
+    # one) is left behind rather than failing the answer.
+    with tempfile.TemporaryDirectory(prefix="flash-tutor-",
+                                     ignore_cleanup_errors=True) as folder:
         root = Path(folder)
         for name, content in (files or {}).items():
             target = root / name
@@ -547,6 +553,10 @@ def run(lang: str, answer: str, files: Optional[dict] = None,
                "TERM": "dumb"}
         if os.name == "nt":
             env.update(_windows_env(folder))
+        # Go's telemetry: a helper it leaves running holds its files open,
+        # and an answer has no use for it.
+        env["GOTELEMETRY"] = "off"
+        env["GOTOOLCHAIN"] = "local"
         # Toolchains that find themselves through the home folder still
         # find themselves: the answer's home is its own folder.
         homes = _homes()
@@ -572,7 +582,7 @@ def run(lang: str, answer: str, files: Optional[dict] = None,
                 done = subprocess.run(  # nosec B603 -- the learner's own
                     argv, cwd=folder, env=env, capture_output=True,
                     text=True, encoding="utf-8", errors="replace",
-                    timeout=RUN_SECONDS * (3 if building else 1),
+                    timeout=BUILD_SECONDS if building else RUN_SECONDS,
                     input=None if building else stdin, check=False)
             except subprocess.TimeoutExpired as exc:
                 return {"built": not building, "exit": None,
