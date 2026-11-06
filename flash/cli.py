@@ -105,6 +105,18 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     )
 
     parser.add_argument(
+        "--shortcut",
+        nargs="?",
+        const="add",
+        choices=("add", "remove"),
+        help=(
+            "add a Flash shortcut that opens the web UI in your browser "
+            "(the Start menu, ~/Applications, or the applications menu), "
+            "or remove it"
+        ),
+    )
+
+    parser.add_argument(
         "--sparks",
         action="store_true",
         help=(

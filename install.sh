@@ -7,6 +7,8 @@ uninstall() {
     if command -v flash >/dev/null 2>&1; then
         echo "Removing the flash:// URL handler..."
         flash --unregister-url-scheme || true
+        echo "Removing the Flash shortcut..."
+        flash --shortcut remove || true
     fi
     if command -v pipx >/dev/null 2>&1; then
         echo "Uninstalling flash via pipx..."
@@ -202,6 +204,14 @@ echo ""
 echo "Registering the flash:// URL handler..."
 "$FLASH_BIN" --register-url-scheme || \
     echo "Unable to install flash:// URL handler. Continuing."
+
+# A Flash shortcut (an app in ~/Applications on a Mac, an applications
+# menu entry on Linux): the web UI in the browser, started if it is not
+# running. Never fail the install over it.
+echo ""
+echo "Adding a Flash shortcut..."
+"$FLASH_BIN" --shortcut || \
+    echo "Could not add the Flash shortcut. Continuing."
 FLASH_VERSION="$(flash --version)"
 
 echo ""

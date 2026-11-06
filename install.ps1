@@ -64,6 +64,10 @@ function Uninstall-Flash {
         Write-Host "Removing the flash:// URL handler..."
         Invoke-FlashScheme -FlashExe "flash" -Flag "--unregister-url-scheme" `
             -SkipMessage "Could not remove the flash:// URL handler."
+        Write-Host "Removing the Start menu shortcut..."
+        try { & flash --shortcut remove } catch {
+            Write-Host "Could not remove the Start menu shortcut."
+        }
     }
     if (Get-Command pipx -ErrorAction SilentlyContinue) {
         Write-Host "Uninstalling flash via pipx..."
@@ -208,6 +212,13 @@ try {
     Write-Host "Registering the flash:// URL handler..."
     Invoke-FlashScheme -FlashExe $FlashExe -Flag "--register-url-scheme" `
         -SkipMessage "Unable to install flash:// URL handler. Continuing."
+
+    # A Start menu shortcut, "Flash": the web UI in the browser, started
+    # out of sight if it is not running. Never fail the install over it.
+    Write-Host ""
+    Write-Host "Adding Flash to the Start menu..."
+    Invoke-FlashScheme -FlashExe $FlashExe -Flag "--shortcut" `
+        -SkipMessage "Could not add the Start menu shortcut. Continuing."
 
     Write-Host ""
     Write-Host "=== flash installed via pipx. ==="

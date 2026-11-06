@@ -6909,6 +6909,18 @@ def _main() -> None:
         _keep_listening()
         return
 
+    if args.shortcut:
+        from . import launcher
+
+        try:
+            said = launcher.install() if args.shortcut == "add" \
+                else launcher.remove()
+        except Exception as exc:  # noqa: BLE001 -- said, not raised
+            show_error(f"Could not make the shortcut: {exc}")
+            sys.exit(1)
+        console.print(Text(said, style=DIM))
+        return
+
     # flash://open: the web UI, wherever it is running, or here.
     if args.url and is_open_url(args.url):
         from . import web
@@ -6917,7 +6929,9 @@ def _main() -> None:
             web.open_ui(port=args.port or web.DEFAULT_PORT, lan=args.lan)
         except OSError as exc:
             show_error(str(exc))
-            input("\n\nPress any key to continue ")
+            # From a shortcut there is no terminal to wait in.
+            if sys.stdin is not None and sys.stdin.isatty():
+                input("\n\nPress any key to continue ")
             sys.exit(1)
         return
 
