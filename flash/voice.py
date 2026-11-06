@@ -1477,22 +1477,59 @@ def _pcm_chunks(voice, text: str, rate: int = 22050):
     sentence at a time, each said as the voice style has it, with a
     breath after it."""
 
-    text = fit_for_voice(text)
-    if not text:
+    from . import humanvoice
+
+    text = humanvoice.for_ear(text or "")
+    if not fit_for_voice(humanvoice.strip(text)) and \
+            not humanvoice.pieces(text)[1]:
         return
 
     whole = isinstance(voice, (_KokoroVoice, _ExtensionVoice))
     style = STYLES[voice_style()]
-    if not style.feeling and not whole:
-        yield from _said(voice, text, {})
+    if not style.feeling and not whole and text == humanvoice.strip(text):
+        yield from _said(voice, fit_for_voice(text), {})
         return
     for sentence in sentences(text):
-        settings, breath = delivery(sentence, style) if style.feeling \
+        mood, pieces = humanvoice.pieces(sentence)
+        said = humanvoice.strip(sentence)
+        settings, breath = delivery(said, style) if style.feeling \
             else ({}, 0.0)
-        for part in _parts(sentence) if whole else [sentence]:
-            yield from _said(voice, part, settings)
+        how = humanvoice.delivery(mood, said, vary=bool(style.feeling))
+        # A breath in before some of the longer sentences, as a speaker
+        # takes one: the same sentences each time it is said.
+        if style.breath and humanvoice.breathes(said):
+            yield humanvoice.breath(rate, seed=len(said))
+        if how.pace != 1.0:
+            settings = {**settings, "length_scale": round(
+                settings.get("length_scale", 1.0) * how.pace, 3)}
+        for kind, piece in pieces:
+            if kind == "sound":
+                yield from _sound(voice, piece, rate, settings)
+                continue
+            piece = fit_for_voice(piece)
+            for part in (_parts(piece) if whole else [piece]):
+                if part:
+                    yield humanvoice.louder(
+                        b"".join(_said(voice, part, settings)), how.gain)
         if breath:
             yield b"\x00\x00" * int(rate * breath)
+
+
+def _sound(voice, name: str, rate: int, settings: dict):
+    """The sound NAME a person makes ([laugh], [sigh], ...): a breath of
+    air, or a word said as the sound, a little quicker and softer than
+    the words around it."""
+
+    from . import humanvoice
+
+    if name in humanvoice.SAID_SOUNDS:
+        quicker = {**settings, "length_scale": round(
+            settings.get("length_scale", 1.0) * 0.9, 3)}
+        yield humanvoice.louder(b"".join(_said(
+            voice, humanvoice.SAID_SOUNDS[name], quicker)), 0.8)
+        return
+    yield humanvoice.breath(rate, name)
+    yield b"\x00\x00" * int(rate * 0.08)
 
 
 # Kokoro's network, once loaded: every Kokoro voice speaks with it.
@@ -2071,9 +2108,29 @@ def synthesize(text: str, speaker: str = "") -> tuple[bytes, str]:
     call). Returns `(wav, "")`, or `(b"", reason)` when the voice cannot
     be used."""
 
+    return synthesize_line(text, speaker)[:2]
+
+
+def pitch_of(text: str) -> int:
+    """How many cents higher or lower TEXT is said, for the page to shift
+    its audio by: its feeling's, and its own small variation."""
+
+    from . import humanvoice
+
+    if not STYLES[voice_style()].feeling:
+        return 0
+    first = next(iter(sentences(humanvoice.for_ear(text or ""))), "")
+    mood, _pieces = humanvoice.pieces(first)
+    return humanvoice.delivery(mood, humanvoice.strip(first)).detune
+
+
+def synthesize_line(text: str, speaker: str = "") -> tuple[bytes, str, int]:
+    """synthesize, and the cents the page shifts the line by (pitch_of):
+    a voice here has no pitch of its own to set."""
+
     text = (text or "").strip()
     if not text:
-        return b"", ""
+        return b"", "", 0
 
     try:
         with _models_lock:
@@ -2086,9 +2143,9 @@ def synthesize(text: str, speaker: str = "") -> tuple[bytes, str]:
                 chunk or b"" for chunk in _pcm_chunks(voice, text, rate)
             )
     except ImportError:
-        return b"", INSTALL_HINT
+        return b"", INSTALL_HINT, 0
     except Exception as exc:  # noqa: BLE001
-        return b"", f"could not speak the reply: {exc}"
+        return b"", f"could not speak the reply: {exc}", 0
 
     out = io.BytesIO()
     with wave.open(out, "wb") as wav:
@@ -2096,7 +2153,7 @@ def synthesize(text: str, speaker: str = "") -> tuple[bytes, str]:
         wav.setsampwidth(2)
         wav.setframerate(rate)
         wav.writeframes(pcm)
-    return out.getvalue(), ""
+    return out.getvalue(), "", pitch_of(text)
 
 
 def speakable(line: str) -> str:

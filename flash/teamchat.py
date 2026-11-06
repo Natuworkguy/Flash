@@ -26,7 +26,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Optional
 
-from . import paths, pings, sparks
+from . import humanvoice, paths, pings, sparks
 from .tidy import tidy
 
 # How many entries a team's chat keeps, oldest dropped first.
@@ -1312,7 +1312,14 @@ You are on a group voice call with the user and your team: what you
 answer is read out to them in your own voice, after the others'. Keep it
 short and spoken, with no lists or formatting, and only say something
 when you have something to add. When the user says bye, or that is all,
-say goodbye and call end_call to hang up for everyone."""
+say goodbye and call end_call to hang up for everyone.
+
+Talk with your teammates as well as the user, the way people on a call
+do: answer what the one before you said when it is to the point ("Yeah,
+and on top of that..."), say so when you disagree, and pass a question
+to whoever knows it best by name ("Scout, that's yours, right?"). One
+of you answering is often enough: when someone already said it, keep
+quiet, or a word of agreement will do."""
 
 # Said on a call in place of an answer that failed: the error itself is
 # kept in the chat, for the Call Log.
@@ -1419,7 +1426,11 @@ def _reply(
             team=team.name, name=spark.name, handle=spark.handle,
             roster=roster, quiet=QUIET,
         ) + ((CALL_PROMPT if is_dm(team.id) else GROUP_CALL_PROMPT)
-             if call else "")
+             + "\n" + humanvoice.spoken() if call else "")
+        # How the user sounded saying their latest, on a call.
+        heard = _call_notes.get(team.id, "") if call else ""
+        if heard:
+            system += "\n\nHeard on the call just now: " + heard
         entries = _live(_settled(team.id)["entries"])[-CONTEXT_ENTRIES:]
         _seen(team.id, spark, entries)
         messages = [
@@ -1637,16 +1648,25 @@ def retry(team_key: str, entry_id: int, client=None) -> dict:
     return old
 
 
+# Per team, how the user sounded saying their latest on a call (from
+# humanvoice.note_for): told to the sparks answering it, never posted.
+_call_notes: dict[str, str] = {}
+
+
 def send(
     team_key: str, text: str, client=None, reply_to: int = 0,
     files: Optional[list] = None, call=False, hidden: bool = False,
+    note: str = "",
 ) -> dict:
     """Post what the user wrote, a reply to REPLY_TO if given, with
     FILES attached, and have the sparks answer it in the background: the
     page's way. CALL: said on a voice call, which the spark can end: the
-    call's id from start_call(), its messages kept as the call's.
+    call's id from start_call(), its messages kept as the call's. NOTE:
+    how they sounded saying it, for the sparks alone.
     The user's message, as posted."""
 
+    if call:
+        _call_notes[_team(team_key).id] = note
     message = say(
         team_key, text, reply_to, files, hidden=hidden,
         call=call if isinstance(call, str) else "",
