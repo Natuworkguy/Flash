@@ -30,6 +30,7 @@ PACKAGES: dict[str, list[list[str]]] = {
     "piper-tts": [],
     "sounddevice": [],
     "kokoro-onnx": [],
+    "ptts": [],
     "moonshine-voice": [],
     "playwright": [[sys.executable, "-m", "playwright", "install",
                     "chromium"]],

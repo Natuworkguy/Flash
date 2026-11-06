@@ -995,11 +995,21 @@ listening model can be swapped with `VOICE_PIPER_VOICE` and
 `VOICE_VOSK_MODEL`, and the microphone's sensitivity tuned with
 `VOICE_SILENCE_THRESHOLD`; see [docs/CONFIGURATION.md](CONFIGURATION.md).
 
-For a voice that sounds far more natural, pick a Kokoro voice in
-Settings, Voice models, or `/voice pull heart`: Heart, Bella, Michael,
-Emma or George. They share one download of about 120 MB and run on the
-CPU, a little slower than Piper but well ahead of the reading. They need
-one more package, which an update keeps once you have it:
+The best voice is Phonon: pick one in Settings, Voice models, or
+`/voice pull harper`: Harper, Juniper, Hadley, Miles or Easton, or Maeve,
+Spencer or Edwin for British English. They share one download of about
+67 MB, run on the CPU without a graphics card, and start speaking before
+a sentence is finished. They need one more package, which an update keeps
+once you have it:
+
+```bash
+pipx inject flash ptts             # or: pip install "flash[phonon]"
+```
+
+The second best is Kokoro, in the same place, or `/voice pull heart`:
+Heart, Bella, Michael, Emma or George. They share one download of about
+120 MB and run on the CPU, a little slower than Piper but well ahead of
+the reading. They need a package of their own too:
 
 ```bash
 pipx inject flash kokoro-onnx      # or: pip install "flash[kokoro]"
@@ -1017,9 +1027,9 @@ pipx inject flash moonshine-voice  # or: pip install "flash[moonshine]"
 ```
 
 In the web UI none of these commands need typing: wherever Flash finds a
-package missing (starting voice mode, a Kokoro voice, a Moonshine model,
-a tool that failed for want of one), it shows an Install button that
-runs the right command for your install. Logs shows what it prints as it
+package missing (starting voice mode, a Phonon or Kokoro voice, a
+Moonshine model, a tool that failed for want of one), it shows an Install
+button that runs the right command for your install. Logs shows what it prints as it
 goes, and opens by itself if the install fails.
 
 ### Waiting for something

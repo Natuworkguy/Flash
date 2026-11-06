@@ -594,7 +594,12 @@ def test_a_line_is_made_fit_to_hear():
     ) == "See a link for more."
 
 
-@pytest.mark.parametrize("catalogue", [voice.LISTENING, voice.SPEAKING])
+@pytest.mark.parametrize("catalogue", [
+    voice.LISTENING,
+    # To speak with, the best and the second best come first.
+    [c for c in voice.SPEAKING
+     if not (voice.is_phonon(c.name) or voice.is_kokoro(c.name))],
+])
 def test_settings_offers_the_defaults_lightest_first(catalogue):
     names = [c.name for c in catalogue]
     sizes = [c.size for c in catalogue]
@@ -604,6 +609,22 @@ def test_settings_offers_the_defaults_lightest_first(catalogue):
         voice.DEFAULT_PIPER_VOICE in names
     )
     assert all(c.label for c in catalogue)  # nosec B101
+
+
+def test_phonon_is_offered_as_the_best_and_kokoro_second():
+    engines = []
+    for choice in voice.SPEAKING:
+        if voice.engine_of(choice.name) not in engines:
+            engines.append(voice.engine_of(choice.name))
+
+    assert engines == ["Phonon", "Kokoro", "Piper"]  # nosec B101
+    assert "the best" in voice.SPEAKING[0].label  # nosec B101
+    assert voice.engine_label("phonon-harper") == (  # nosec B101
+        "Phonon, the best")
+    assert voice.engine_label("kokoro-af_heart") == (  # nosec B101
+        "Kokoro, second best")
+    kokoro = next(c for c in voice.SPEAKING if voice.is_kokoro(c.name))
+    assert "second best" in kokoro.label  # nosec B101
 
 
 def test_one_model_downloads_by_name(tmp_path, monkeypatch):
@@ -1425,7 +1446,8 @@ def test_models_are_grouped_by_their_engine():
     assert listening == sorted(listening, key=["Vosk", "Moonshine"].index)
     speaking = [voice.engine_of(c.name)
                 for c in voice.by_engine(voice.SPEAKING)]
-    assert speaking == sorted(speaking, key=["Piper", "Kokoro"].index)
+    assert speaking == sorted(
+        speaking, key=["Phonon", "Kokoro", "Piper"].index)
 
 
 def test_the_next_piece_is_made_while_one_plays():
@@ -1558,3 +1580,118 @@ def test_only_the_users_own_words_count_as_talking_over():
     assert not voice._talked_over("the payments test after", line)
     # Nor a single sound.
     assert not voice._talked_over("uh", line)
+
+
+class _FakePhonon:
+    """A stand-in for ptts: it keeps how it was loaded and what it said."""
+
+    made: list = []
+    fail_local = False
+
+    def __init__(self, model=None, *, lang=None, quant=None,
+                 voice_catalog=None):
+        if self.fail_local and not str(model).startswith("hf://"):
+            raise OSError("not a model folder")
+        _FakePhonon.made.append({"model": model, "lang": lang,
+                                 "quant": quant, "catalog": voice_catalog})
+        self.said = []
+
+    def synth(self, text, voice=None):
+        import numpy
+
+        self.said.append((text, voice))
+        return numpy.array([0.0, 0.5, -2.0], dtype="float32")
+
+
+class TestPhonon:
+    @pytest.fixture(autouse=True)
+    def phonon(self, tmp_path, monkeypatch):
+        fake = types.ModuleType("ptts")
+        fake.TTS = _FakePhonon
+        _FakePhonon.made = []
+        _FakePhonon.fail_local = False
+        monkeypatch.setitem(sys.modules, "ptts", fake)
+        monkeypatch.setattr(voice, "MODELS_DIR", tmp_path)
+        monkeypatch.setattr(voice, "_phonon", None)
+        monkeypatch.setattr(voice, "_speaker", None)
+        return tmp_path
+
+    def test_one_download_brings_the_model_and_every_voice(
+            self, monkeypatch):
+        fetched = []
+
+        def fetch(url, out, label, on_progress, stop=None):
+            fetched.append(url)
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_bytes(b"x")
+            return ""
+
+        monkeypatch.setattr(voice, "_download", fetch)
+        assert not voice.voice_installed("phonon-harper")  # nosec B101
+
+        why = voice.download_voice("phonon-harper", lambda *a: None)
+
+        assert why == ""  # nosec B101
+
+        assert len(fetched) == len(voice.PHONON_FILES) + len(  # nosec B101
+            voice.PHONON_VOICES)
+        assert all(voice.voice_installed(f"phonon-{v}")  # nosec B101
+                   for v in voice.PHONON_VOICES)
+        catalog = (voice.phonon_dir() / "voices.jsonl").read_text(
+            encoding="utf-8").splitlines()
+        assert len(catalog) == len(voice.PHONON_VOICES)  # nosec B101
+        assert json.loads(catalog[0])["name"] == "Harper"  # nosec B101
+        assert not voice.voice_installed("phonon-nobody")  # nosec B101
+
+    def test_it_speaks_from_its_own_folder_in_the_voice_picked(self):
+        pytest.importorskip("numpy")
+        speaker = voice._PhononVoice("phonon-maeve")
+
+        pcm = speaker.pcm("Hello there.")
+
+        [made] = _FakePhonon.made
+        assert made["model"] == str(voice.phonon_dir())  # nosec B101
+        assert made["lang"] == "en" and made["quant"] == "q8"  # nosec B101
+        assert made["catalog"].endswith("voices.jsonl")  # nosec B101
+        assert speaker.model.said == [("Hello there.", "Maeve")]  # nosec B101
+        said = array.array("h", pcm).tolist()
+        assert said == [0, 16383, -32767]  # nosec B101
+
+    def test_it_falls_back_to_its_own_download(self):
+        _FakePhonon.fail_local = True
+
+        voice._PhononVoice("phonon-harper")
+
+        made = _FakePhonon.made[0]["model"]
+        assert made == voice.PHONON_REMOTE  # nosec B101
+
+    def test_one_model_serves_every_voice(self):
+        voice._PhononVoice("phonon-harper")
+        voice._PhononVoice("phonon-miles")
+
+        assert len(_FakePhonon.made) == 1  # nosec B101
+
+    def test_without_the_package_it_says_what_to_install(self, monkeypatch):
+        monkeypatch.setitem(sys.modules, "ptts", None)
+        monkeypatch.setenv("VOICE_PIPER_VOICE", "phonon-harper")
+
+        with pytest.raises(RuntimeError, match="ptts"):
+            voice._PhononVoice("phonon-harper")
+        assert voice.PHONON_PACKAGE in voice.missing_packages()  # nosec B101
+        assert voice.install_hint() == voice.PHONON_HINT  # nosec B101
+        assert not voice.phonon_ready()  # nosec B101
+
+    def test_a_spark_gets_another_phonon_voice(self, monkeypatch):
+        monkeypatch.setenv("VOICE_PIPER_VOICE", "phonon-harper")
+
+        own = voice.spark_voice("spark-1")
+
+        assert voice.is_phonon(own["voice"])  # nosec B101
+        assert own["voice"] != "phonon-harper"  # nosec B101
+
+    def test_its_download_stays_while_one_of_its_voices_speaks(
+            self, monkeypatch):
+        monkeypatch.setenv("VOICE_PIPER_VOICE", "phonon-harper")
+
+        with pytest.raises(ValueError, match="in use"):
+            voice.remove_voice("phonon-miles")
