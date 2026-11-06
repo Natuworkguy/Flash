@@ -5335,10 +5335,12 @@ def _debate_command(line: str, history: list) -> None:
         question, models = before["question"], before.get("models", [])
         steer = rest[len("more"):].strip()
         rounds = 0
+        until = bool(before.get("until"))
     else:
         asked = debate.parse_full(line)
         question, models, rounds = (asked["question"], asked["models"],
                                     asked["rounds"])
+        until = asked["until"]
     if not question:
         warn(debate.USAGE)
         return
@@ -5359,6 +5361,8 @@ def _debate_command(line: str, history: list) -> None:
                         live.update(f"{debate.SIDES[event['side']]} is "
                                     "speaking (Ctrl+C stops it)")
                 heard[n]["text"] += event.get("text", "")
+            elif "settled" in event:
+                live.update(f"Settled: {event['settled']}")
             elif "summary" in event:
                 if not pieces["summary"]:
                     live.update("Summing up")
@@ -5369,7 +5373,7 @@ def _debate_command(line: str, history: list) -> None:
                               history=history, options=_chat_options(),
                               say=say, turns=before.get("turns"),
                               steers=lambda: [steer] if steer else [],
-                              rounds=rounds or debate.ROUNDS)
+                              rounds=rounds or debate.ROUNDS, until=until)
         except KeyboardInterrupt:
             turns = list(before.get("turns", [])) + [
                 heard[n] for n in sorted(heard) if heard[n]["text"].strip()]
@@ -5401,6 +5405,11 @@ def _debate_command(line: str, history: list) -> None:
             title_align="left" if turn["side"] == 0 else "right",
             padding=(0, 1),
         ))
+    if done.get("until"):
+        how = debate.settled_text(done.get("settled", ""), done["sides"])
+        console.print(Text(f"  Ended because {how}." if how else
+                           "  It never settled before the rounds ran out.",
+                           style=DIM))
     if done["summary"]:
         console.print(Panel(
             Markdown(done["summary"]), border_style=DIM,

@@ -1018,6 +1018,9 @@ body.course-open { overflow: hidden; }
 .debate-turn.speaking .who::after { content: " · speaking"; font-weight: 500; text-transform: none; letter-spacing: 0; }
 .debate-summary { padding: 12px 14px; border-radius: 12px; background: var(--hover); font-size: 14.5px; line-height: 1.6; }
 .debate-wait { font-size: 13px; color: var(--text-3); }
+.debate-settled { align-self: center; font-size: 13px; font-weight: 600; color: var(--text); padding: 5px 12px; border-radius: 999px; background: color-mix(in srgb, var(--accent) 16%, transparent); }
+.debate-rounds.off { opacity: 0.45; pointer-events: none; }
+.debate-until { max-width: none; margin: 4px 0 14px; }
 .debate[hidden] { display: none; }
 .debate-steer { align-self: center; display: flex; align-items: center; gap: 7px; max-width: 80%; padding: 5px 12px; border-radius: 999px; background: color-mix(in srgb, var(--accent) 12%, transparent); font-size: 13px; color: var(--text-2); }
 .debate-steer svg { flex: none; width: 13px; height: 13px; color: var(--accent); }
@@ -18985,9 +18988,9 @@ function stopReply() {
 // whole debate is kept in the chat and drawn from there.
 const debates = new Map();
 
-async function startDebate(text, models = [], rounds = 0) {
+async function startDebate(text, models = [], rounds = 0, until = false) {
   if (!current) await createChat(viewProject || "", viewSpark || "");
-  try { await api("/api/debate", { chat: current, text, models, rounds }); }
+  try { await api("/api/debate", { chat: current, text, models, rounds, until }); }
   catch (error) { showFailure(error); }
 }
 
@@ -19063,6 +19066,7 @@ function debateForm(question = "") {
       <div class="debate-side side-1"><span class="debate-side-name">Against</span>${pick("b")}</div>
     </div>
     <label class="field debate-rounds"><span>Rounds <b class="debate-rounds-n">2</b><small class="debate-rounds-say">each side speaks twice</small></span><input type="range" name="rounds" min="1" max="10" value="2"></label>
+    <button type="button" class="setting-row debate-until" role="switch" aria-checked="false"><span class="what"><b>Until it is settled</b><span>Go on until they agree or one side wins, however many rounds that takes (up to 12).</span></span><span class="switch" aria-hidden="true"></span></button>
     <div class="dialog-buttons"><button type="button" class="btn" data-cancel>Cancel</button><button type="submit" class="btn primary with-icon">${icon("users")}<span>Start debating</span></button></div>`,
     async (data) => {
       const asked = String(data.question || "").trim();
@@ -19070,9 +19074,15 @@ function debateForm(question = "") {
       const sides = [data.a, data.b].filter(Boolean);
       // One picked: the other side is the chat's own.
       const both = sides.length === 1 ? (data.a ? [data.a, chatModel()] : [chatModel(), data.b]) : sides;
-      startDebate(asked, both, Number(data.rounds) || 2);
+      startDebate(asked, both, Number(data.rounds) || 2, form.querySelector(".debate-until").getAttribute("aria-checked") === "true");
     });
   form.querySelector("[name=question]").value = question;
+  const until = form.querySelector(".debate-until");
+  until.onclick = () => {
+    const on = until.getAttribute("aria-checked") !== "true";
+    until.setAttribute("aria-checked", on);
+    form.querySelector(".debate-rounds").classList.toggle("off", on);
+  };
   form.querySelector("[data-cancel]").onclick = closeForm;
   const range = form.querySelector("[name=rounds]");
   const said = () => {
@@ -19107,6 +19117,7 @@ function debateLive(event) {
     d.turns[event.turn].text += event.text || "";
   }
   if (event.summary) d.summary += event.summary;
+  if (event.settled) d.settledText = event.settled;
   if (event.error) d.error = event.error;
   if (event.done) {
     d.done = true;
@@ -20188,6 +20199,10 @@ function debateCard(d, live = false) {
     if (live && !d.summary && n === d.turns.length - 1) turn.classList.add("speaking");
   });
   if (live && !d.turns.length && !d.error) turns.appendChild(el("div", "debate-wait", "The sides are getting ready…"));
+  // Argued until settled: how it ended.
+  const ended = d.settledText || ({ agreed: "the sides came to agree", 0: `${(d.sides || [])[0] || "For"} won`, 1: `${(d.sides || [])[1] || "Against"} won` })[d.settled];
+  if (ended) card.appendChild(el("div", "debate-settled")).textContent = `Settled: ${ended}`;
+  else if (d.until && d.summary) card.appendChild(el("div", "debate-wait", "It never settled before the rounds ran out."));
   if (d.summary) {
     const sum = card.appendChild(el("div", "debate-summary", `<div class="who">Summary</div><div class="said"></div>`));
     sum.querySelector(".said").innerHTML = markdown(d.summary);

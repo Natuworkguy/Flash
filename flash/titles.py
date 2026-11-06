@@ -1,7 +1,7 @@
 """Chat titles the model writes: a few words for what a chat is about,
 in place of its first message cut short.
 
-Off until turned on, in the web UI's Settings or with MODEL_TITLES=1 in
+On unless turned off, in the web UI's Settings or with MODEL_TITLES=0 in
 ~/.flash.env. Written once, after a chat's first reply, and never over
 a name the user gave the chat themselves.
 """
@@ -24,8 +24,10 @@ SHOWN_CHARS = 2000
 
 
 def enabled() -> bool:
-    return (os.environ.get(SETTING) or "").strip().lower() in (
-        "1", "on", "true", "yes",
+    """On unless turned off."""
+
+    return (os.environ.get(SETTING) or "").strip().lower() not in (
+        "0", "off", "false", "no",
     )
 
 
