@@ -158,7 +158,8 @@ def run_one(command: str, root: Path, timeout: int = TIMEOUT) -> Ran:
     try:
         done = subprocess.run(  # nosec B602 -- the project's check, asked
             command, shell=True, cwd=root, capture_output=True, text=True,
-            timeout=timeout, errors="replace",
+            encoding="utf-8", errors="replace",
+            timeout=timeout,
             env={**os.environ, "CI": os.environ.get("CI", "1"),
                  "FORCE_COLOR": "0", "NO_COLOR": "1"},
         )

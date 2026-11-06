@@ -37,7 +37,7 @@ def test_writes_only_where_it_works_and_never_at_home(tmp_path, monkeypatch):
 def test_secrets_are_hidden(tmp_path, monkeypatch):
     monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
     (tmp_path / ".ssh").mkdir()
-    (tmp_path / ".flash.env").write_text("KEY=1")
+    (tmp_path / ".flash.env").write_text("KEY=1", encoding="utf-8")
     args = sandbox.bwrap_args(str(tmp_path))
     assert ["--tmpfs", str((tmp_path / ".ssh").resolve())] == args[  # nosec
         args.index("--tmpfs"):args.index("--tmpfs") + 2]
@@ -62,9 +62,10 @@ def test_ask_first_asks_unless_sandboxed_commands_may_run(monkeypatch):
     monkeypatch.setattr(tools, "remote_answer",
                         lambda q: asked.append(q) or "n")
     monkeypatch.setattr(sandbox, "missing", lambda: "")
+    # A stand-in sandbox that says what the command would: on any system.
     monkeypatch.setattr(sandbox, "wrap",
                         lambda command, folder=None: [
-                            "/bin/sh", "-c", command])
+                            sys.executable, "-c", "print('hi')"])
     assert tools.shell_tool("echo hi", sandbox=True) == \
         "Command blocked by user"  # nosec B101
     monkeypatch.setenv(sandbox.AUTO_ALLOW_SETTING, "1")
@@ -83,7 +84,8 @@ def test_a_real_sandbox_walls_the_command_in(tmp_path, monkeypatch):
     monkeypatch.setattr(tools, "NO_COMMAND_CONFIRMATION", True)
     monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path / "home")
     (tmp_path / "home" / ".ssh").mkdir(parents=True)
-    (tmp_path / "home" / ".ssh" / "id_key").write_text("SECRET")
+    (tmp_path / "home" / ".ssh" / "id_key").write_text("SECRET",
+                                                       encoding="utf-8")
     work = tmp_path / "work"
     work.mkdir()
     monkeypatch.chdir(work)
@@ -95,7 +97,8 @@ def test_a_real_sandbox_walls_the_command_in(tmp_path, monkeypatch):
     said = tools.shell_tool(
         f"echo ok > inside.txt; echo no > {outside}; "
         f"cat {tmp_path}/home/.ssh/id_key; echo done", sandbox=True)
-    assert (work / "inside.txt").read_text() == "ok\n"  # nosec B101
+    assert (work / "inside.txt").read_text(
+            encoding="utf-8") == "ok\n"  # nosec B101
     try:
         assert not outside.exists()  # nosec B101
     finally:

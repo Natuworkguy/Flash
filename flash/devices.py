@@ -54,7 +54,8 @@ def watch() -> Optional[dict]:
 def _run(*cmd: str) -> str:
     try:
         return subprocess.run(  # nosec B603
-            list(cmd), capture_output=True, text=True, timeout=15, check=False
+            list(cmd), capture_output=True, text=True, encoding="utf-8",
+            errors="replace", timeout=15, check=False
         ).stdout
     except (OSError, subprocess.SubprocessError):
         return ""

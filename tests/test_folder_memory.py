@@ -13,7 +13,7 @@ def home(tmp_path, monkeypatch):
     repo = tmp_path / "code" / "shop"
     (repo / ".git").mkdir(parents=True)
     (repo / "web" / "src").mkdir(parents=True)
-    (repo / "web" / "package.json").write_text("{}")
+    (repo / "web" / "package.json").write_text("{}", encoding="utf-8")
     (tmp_path / "notes").mkdir()
     return tmp_path
 
@@ -29,7 +29,7 @@ def test_a_repository_is_one_project_from_any_folder_in_it(home):
 def test_a_folder_with_a_project_file_is_one_too(home):
     app = home / "app"
     app.mkdir()
-    (app / "pyproject.toml").write_text("")
+    (app / "pyproject.toml").write_text("", encoding="utf-8")
     (app / "pkg").mkdir()
     assert memory.folder_root(app / "pkg") == app  # nosec B101
 

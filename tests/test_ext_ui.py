@@ -20,11 +20,12 @@ def make(folder, ui, files=None, commands=None):
     folder.mkdir(parents=True, exist_ok=True)
     manifest = {"name": "weather", "ui": ui,
                 "commands": commands or []}
-    (folder / extensions.MANIFEST).write_text(json.dumps(manifest))
+    (folder / extensions.MANIFEST).write_text(json.dumps(manifest),
+                                              encoding="utf-8")
     for name, text in (files or {}).items():
         path = folder / name
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(text)
+        path.write_text(text, encoding="utf-8")
     return folder
 
 
@@ -223,15 +224,15 @@ def test_an_extension_can_ask_for_the_network(tmp_path):
     folder = make(tmp_path / "w", {"web": "web", "css": "x.css"},
                   {"web/x.css": ""})
     file = folder / extensions.MANIFEST
-    manifest = json.loads(file.read_text())
+    manifest = json.loads(file.read_text(encoding="utf-8"))
     manifest["network"] = True
-    file.write_text(json.dumps(manifest))
+    file.write_text(json.dumps(manifest), encoding="utf-8")
     ext = extensions.load(folder)
     assert ext.network is True
     assert any("--lan" in line for line in ext.contents())
 
     manifest["network"] = "yes"
-    file.write_text(json.dumps(manifest))
+    file.write_text(json.dumps(manifest), encoding="utf-8")
     with pytest.raises(extensions.ExtensionError, match="true or false"):
         extensions.load(folder)
 
@@ -256,9 +257,11 @@ def surfaces(folder, extra=None, name="weather"):
     folder = make(folder, ui, {"web/today.html": "<p>t</p>",
                                "web/radar.html": "<p>r</p>",
                                "web/card.html": "<p>c</p>"})
-    manifest = json.loads((folder / extensions.MANIFEST).read_text())
+    manifest = json.loads((folder / extensions.MANIFEST).read_text(
+            encoding="utf-8"))
     manifest["name"] = name
-    (folder / extensions.MANIFEST).write_text(json.dumps(manifest))
+    (folder / extensions.MANIFEST).write_text(json.dumps(manifest),
+                                              encoding="utf-8")
     return folder
 
 

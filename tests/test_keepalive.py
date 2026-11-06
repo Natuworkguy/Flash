@@ -55,7 +55,7 @@ def _beat(always: bool) -> None:
     (sparks.sparks_dir() / sparks.HEARTBEAT).write_text(json.dumps({
         "pid": 1, "always": always, "since": time.time(),
         "beat": time.time(),
-    }))
+    }), encoding="utf-8")
 
 
 def test_the_keeper_is_this_python_running_flash_sparks(monkeypatch):
@@ -66,8 +66,8 @@ def test_the_keeper_is_this_python_running_flash_sparks(monkeypatch):
 
 def test_windows_starts_it_without_a_console(monkeypatch, tmp_path):
     python = tmp_path / "python.exe"
-    python.write_text("")
-    (tmp_path / "pythonw.exe").write_text("")
+    python.write_text("", encoding="utf-8")
+    (tmp_path / "pythonw.exe").write_text("", encoding="utf-8")
     monkeypatch.setattr(keepalive, "_host", lambda: "windows")
     monkeypatch.setattr(keepalive.sys, "executable", str(python))
 
@@ -85,7 +85,7 @@ class TestLinux:
         how = keepalive.turn_on()
 
         assert "systemd" in how
-        unit = keepalive._unit_path().read_text()
+        unit = keepalive._unit_path().read_text(encoding="utf-8")
         assert "--sparks" in unit and "WorkingDirectory=%h" in unit
         # systemd's specifiers are escaped out of what it is given.
         assert "/odd%%dir" in unit
@@ -107,7 +107,7 @@ class TestLinux:
         how = keepalive.turn_on()
 
         assert "autostart" in how
-        entry = keepalive._autostart_path().read_text()
+        entry = keepalive._autostart_path().read_text(encoding="utf-8")
         assert "Exec=" in entry and "--sparks" in entry
         assert spawned == [True]
         assert keepalive.turn_off()
@@ -144,9 +144,9 @@ def test_a_python_with_a_space_in_its_path_is_quoted(monkeypatch):
         keepalive.sys, "executable", "/home/me/My Tools/python"
     )
 
-    assert keepalive._exec_line() == (
-        '"/home/me/My Tools/python" -m flash --sparks'
-    )
+    # In the running system's own path form (backslashes on Windows).
+    python = str(Path("/home/me/My Tools/python"))
+    assert keepalive._exec_line() == f'"{python}" -m flash --sparks'
 
 
 class TestMacOS:
@@ -229,7 +229,7 @@ class TestAnotherFlash:
         (sparks.sparks_dir() / sparks.HEARTBEAT).write_text(json.dumps({
             "pid": 1, "always": True, "since": time.time(),
             "beat": time.time(), **fields,
-        }))
+        }), encoding="utf-8")
 
     def test_this_flash_is_not_another(self):
         self._beat(**sparks.code_identity())
@@ -644,10 +644,10 @@ class TestTheListener:
 
         unit = keepalive._unit_path(keepalive.LISTENER)
         assert unit.name == "flash-listen.service"
-        assert "--listen" in unit.read_text()
+        assert "--listen" in unit.read_text(encoding="utf-8")
         assert keepalive.installed(keepalive.LISTENER)
         # The sparks' keeper is left as it was.
-        assert "--sparks" in keepalive._unit_path().read_text()
+        assert "--sparks" in keepalive._unit_path().read_text(encoding="utf-8")
 
         keepalive.turn_off(keepalive.LISTENER)
         assert not keepalive.installed(keepalive.LISTENER)

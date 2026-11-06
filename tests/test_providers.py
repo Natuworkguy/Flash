@@ -58,8 +58,8 @@ def test_a_provider_name_belongs_to_one_extension(echo, tmp_path):
     other = tmp_path / "other"
     shutil.copytree(EXAMPLE, other)
     manifest = other / "flash-extension.json"
-    manifest.write_text(manifest.read_text().replace(
-        '"echo-provider"', '"other"'))
+    manifest.write_text(manifest.read_text(encoding="utf-8").replace(
+        '"echo-provider"', '"other"'), encoding="utf-8")
 
     assert extensions.clashes(
         extensions.load(other), frozenset(), frozenset(),

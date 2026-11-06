@@ -93,7 +93,8 @@ def convert(path: Path, out: Path, to: str) -> Path:
         [_soffice(), f"-env:UserInstallation={profile.as_uri()}",
          "--headless", "--norestore", "--convert-to", to, "--outdir",
          str(out), str(path)],
-        capture_output=True, text=True, timeout=TIMEOUT, check=False,
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+        timeout=TIMEOUT, check=False,
     )
     made = out / f"{path.stem}.{to.split(':')[0]}"
     if not made.is_file():
@@ -109,7 +110,8 @@ def page_texts(pdf: Path) -> list[str]:
         return []
     done = subprocess.run(  # nosec B603
         [tool, "-layout", str(pdf), "-"], capture_output=True, text=True,
-        timeout=TIMEOUT, check=False, errors="replace",
+        encoding="utf-8", errors="replace",
+        timeout=TIMEOUT, check=False,
     )
     texts = done.stdout.split("\f")
     return texts[:-1] if texts and not texts[-1].strip() else texts

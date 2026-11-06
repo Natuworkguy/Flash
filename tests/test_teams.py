@@ -287,11 +287,11 @@ def test_the_log_shows_when_it_was_edited_by_hand(model):
     assert sparks.audit_log("scout")["intact"]
 
     path = sparks.audit_dir() / f"{spark.id}.jsonl"
-    lines = path.read_text().splitlines()
+    lines = path.read_text(encoding="utf-8").splitlines()
     first = json.loads(lines[0])
     first["goal"] = "Something else."
     lines[0] = json.dumps(first)
-    path.write_text("\n".join(lines) + "\n")
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
     log = sparks.audit_log("scout")
     assert not log["intact"] and log["checked"] == 1

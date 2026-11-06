@@ -495,12 +495,13 @@ def two(server):
 def test_a_file_from_when_there_was_one_account_still_reads(monkeypatch):
     path = mail._path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps({"address": "me@gmail.com", "password": "p"}))
+    path.write_text(json.dumps({"address": "me@gmail.com", "password": "p"}),
+                    encoding="utf-8")
 
     assert mail.addresses() == ["me@gmail.com"]
     mail.save("me@work.example", "q")
     assert mail.addresses() == ["me@gmail.com", "me@work.example"]
-    assert "accounts" in json.loads(path.read_text())
+    assert "accounts" in json.loads(path.read_text(encoding="utf-8"))
 
 
 def test_accounts_are_added_changed_and_removed_one_at_a_time(two):

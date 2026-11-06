@@ -33,7 +33,8 @@ def page_code(*calls: str) -> str:
 
 def run(script: str):
     done = subprocess.run(  # nosec B603
-        [node, "-e", script], capture_output=True, text=True, check=True,
+        [node, "-e", script], capture_output=True, text=True, encoding="utf-8",
+        errors="replace", check=True,
     )
     return json.loads(done.stdout)
 

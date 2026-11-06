@@ -166,6 +166,7 @@ def _run(argv: list[str], given: str = "",
         # Fixed commands, never through a shell.
         done = subprocess.run(  # nosec B603
             argv, input=given, capture_output=True, text=True,
+            encoding="utf-8", errors="replace",
             timeout=timeout, check=False,
         )
     except FileNotFoundError:

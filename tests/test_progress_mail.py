@@ -59,7 +59,8 @@ def outbox(tmp_path, count=0, timeout=10):
     path = tmp_path / "outbox.jsonl"
     deadline = time.monotonic() + timeout
     while True:
-        lines = path.read_text().splitlines() if path.exists() else []
+        lines = path.read_text(
+                encoding="utf-8").splitlines() if path.exists() else []
         if len(lines) >= count or time.monotonic() > deadline:
             return [json.loads(line) for line in lines]
         time.sleep(0.05)

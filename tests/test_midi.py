@@ -196,15 +196,15 @@ def test_make_midi_writes_nothing_for_a_bad_track(tmp_path, quiet):
 
 def test_make_midi_leaves_a_file_that_is_not_midi(tmp_path, quiet):
     other = tmp_path / "notes.mid"
-    other.write_text("my notes")
+    other.write_text("my notes", encoding="utf-8")
 
     assert "left alone" in make_midi(str(other), SONG)
-    assert other.read_text() == "my notes"
+    assert other.read_text(encoding="utf-8") == "my notes"
 
 
 def test_send_midi_checks_what_it_is_given(tmp_path, quiet):
     fake = tmp_path / "fake.mid"
-    fake.write_text("not music")
+    fake.write_text("not music", encoding="utf-8")
     wrong = tmp_path / "song.mp3"
     wrong.write_bytes(b"ID3")
     real = tmp_path / "real.midi"

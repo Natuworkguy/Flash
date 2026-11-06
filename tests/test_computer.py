@@ -276,11 +276,11 @@ def test_open_shows_links_and_documents_never_runs_things(
 ):
     on(monkeypatch, "mac")
     note = tmp_path / "notes.txt"
-    note.write_text("hi")
+    note.write_text("hi", encoding="utf-8")
     script = tmp_path / "go.command"
-    script.write_text("echo hi")
+    script.write_text("echo hi", encoding="utf-8")
     runnable = tmp_path / "tool"
-    runnable.write_text("#!/bin/sh\n")
+    runnable.write_text("#!/bin/sh\n", encoding="utf-8")
     os.chmod(runnable, 0o755)  # nosec B103
 
     assert tools.computer_tool("open", "https://example.com") == (  # nosec
@@ -293,13 +293,16 @@ def test_open_shows_links_and_documents_never_runs_things(
         "Opened"
     )
     opened = [argv for argv, _ in ran]
-    for refused, why in (
+    refusals = [
         (str(script), "would run"),
-        (str(runnable), "would run"),
         ("javascript:alert(1)", "Only web and mail links"),
         ("file:///etc/passwd", "Only web and mail links"),
         (str(tmp_path / "missing.txt"), "Nothing is at"),
-    ):
+    ]
+    # Windows has no run bit: a file with no extension is not a program.
+    if os.name != "nt":
+        refusals.append((str(runnable), "would run"))
+    for refused, why in refusals:
         assert why in tools.computer_tool("open", refused)  # nosec B101
     assert [argv for argv, _ in ran] == opened  # nosec B101
 

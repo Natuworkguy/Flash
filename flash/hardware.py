@@ -89,7 +89,8 @@ def _memory() -> int:
 def _run(argv: list[str]) -> str:
     try:
         done = subprocess.run(argv, capture_output=True,  # nosec B603
-                              text=True, timeout=5, check=False)
+                              text=True, encoding="utf-8", errors="replace",
+                              timeout=5, check=False)
     except (OSError, subprocess.SubprocessError):
         return ""
     return done.stdout.strip() if done.returncode == 0 else ""

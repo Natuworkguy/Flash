@@ -97,6 +97,22 @@ from typing import Any, Optional
 
 from .paths import FLASH_DIR
 
+
+def _remove_tree(path) -> None:
+    """A folder gone, whatever is in it: on Windows git keeps its objects
+    read-only, which would otherwise stay behind."""
+
+    def writable(func, target, _exc):
+        with contextlib.suppress(OSError):
+            os.chmod(target, stat.S_IWRITE)
+            func(target)
+
+    if sys.version_info >= (3, 12):
+        shutil.rmtree(path, onexc=writable)
+    else:
+        shutil.rmtree(path, onerror=writable)
+
+
 MANIFEST = "flash-extension.json"
 
 # Where an installed extension remembers what it was installed from, so
@@ -1501,7 +1517,8 @@ def _git(args: list[str]) -> subprocess.CompletedProcess:
     env = dict(os.environ, GIT_TERMINAL_PROMPT="0")
     try:
         return subprocess.run(  # nosec B603 B607
-            ["git", *args], capture_output=True, text=True,
+            ["git", *args], capture_output=True, text=True, encoding="utf-8",
+            errors="replace",
             timeout=CLONE_TIMEOUT_SECONDS, check=False, env=env,
             stdin=subprocess.DEVNULL,
         )
@@ -1602,7 +1619,7 @@ def fetch(spec: str) -> Path:
                     f"Could not open {Path(target).name}"
                     + (f": {why}" if why else ".")
                 )
-            shutil.rmtree(checkout / ".git", ignore_errors=True)
+            _remove_tree(checkout / ".git")
             return checkout
 
         if kind == "path":
@@ -1630,10 +1647,10 @@ def fetch(spec: str) -> Path:
                 + (f": {why}" if why else ".")
             )
 
-        shutil.rmtree(checkout / ".git", ignore_errors=True)
+        _remove_tree(checkout / ".git")
         return checkout
     except BaseException:
-        shutil.rmtree(staging, ignore_errors=True)
+        _remove_tree(staging)
         raise
 
 
@@ -1653,7 +1670,7 @@ def update_source(name: str) -> str:
 def discard(checkout: Path) -> None:
     """Remove what fetch() made."""
 
-    shutil.rmtree(checkout.parent, ignore_errors=True)
+    _remove_tree(checkout.parent)
 
 
 def clashes(
@@ -1731,7 +1748,7 @@ def install(checkout: Path, spec: str) -> Extension:
     # update never leaves less than there was.
     incoming = root / f".{extension.name}.incoming"
     previous = root / f".{extension.name}.previous"
-    shutil.rmtree(incoming, ignore_errors=True)
+    _remove_tree(incoming)
     shutil.copytree(checkout, incoming)
 
     if previous.exists():
@@ -1747,14 +1764,14 @@ def install(checkout: Path, spec: str) -> Extension:
             # Held open (Windows), so it stays where it is: the new
             # copy goes into it instead, file by file.
             shutil.copytree(incoming, target, dirs_exist_ok=True)
-            shutil.rmtree(incoming, ignore_errors=True)
+            _remove_tree(incoming)
     if not target.exists():
         try:
             incoming.rename(target)
         except OSError as exc:
             if moved:
                 previous.rename(target)
-            shutil.rmtree(incoming, ignore_errors=True)
+            _remove_tree(incoming)
             raise ExtensionError(
                 f"Could not put the new copy in place: {exc}. The one "
                 "you had is kept.") from None

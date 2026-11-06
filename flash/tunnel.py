@@ -181,7 +181,8 @@ class Tunnel:
                 # number.
                 self._process = subprocess.Popen(  # nosec B603
                     argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT, text=True, bufsize=1,
+                    stderr=subprocess.STDOUT, text=True, encoding="utf-8",
+                    errors="replace", bufsize=1,
                 )
             except OSError as exc:
                 self.state, self.why = FAILED, str(exc)

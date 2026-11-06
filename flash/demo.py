@@ -107,7 +107,8 @@ def _duration(path: Path) -> float:
     done = subprocess.run(  # nosec B603
         [probe, "-v", "error", "-show_entries", "format=duration",
          "-of", "default=nw=1:nk=1", str(path)],
-        capture_output=True, text=True, timeout=60, check=False,
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+        timeout=60, check=False,
     )
     try:
         return float(done.stdout.strip())
@@ -129,7 +130,8 @@ def stills_of(path: Path, most: int = MAX_STILLS) -> list[dict]:
              f"select='eq(n\\,0)+gt(scene\\,{SCENE_CHANGE})',showinfo,"
              f"scale='min({STILL_WIDTH}\\,iw)':-2",
              "-vsync", "vfr", "-q:v", "4", str(out / "%04d.jpg")],
-            capture_output=True, text=True, timeout=600, check=False,
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=600, check=False,
         )
         times = [float(t) for t in re.findall(
             r"pts_time:\s*([\d.]+)", done.stderr)]

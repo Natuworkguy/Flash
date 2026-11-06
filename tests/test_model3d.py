@@ -275,12 +275,12 @@ def test_make_3d_model_leaves_a_file_that_is_not_a_model(
 ):
     _no_vision(monkeypatch)
     precious = tmp_path / "notes.glb"
-    precious.write_text("my notes")
+    precious.write_text("my notes", encoding="utf-8")
 
     result = make_3d_model(str(precious), [{"shape": "box"}])
 
     assert "left alone" in result
-    assert precious.read_text() == "my notes"
+    assert precious.read_text(encoding="utf-8") == "my notes"
 
 
 def test_make_3d_model_attaches_a_picture_for_a_model_that_sees(
@@ -304,7 +304,7 @@ def test_make_3d_model_attaches_a_picture_for_a_model_that_sees(
     assert "picture of it" in result
     assert take_pending_images() == [b"png bytes"]
     # The page draws the model with the web UI's own viewer.
-    page = (tmp_path / "model-1.html").read_text()
+    page = (tmp_path / "model-1.html").read_text(encoding="utf-8")
     assert "FlashModelView.show" in page and "window.FlashThree" in page
     assert pages == [(tmp_path / "model-1.html").resolve().as_uri()]
 
@@ -312,7 +312,7 @@ def test_make_3d_model_attaches_a_picture_for_a_model_that_sees(
 def test_send_3d_model_checks_what_it_is_given(tmp_path, monkeypatch):
     _no_vision(monkeypatch)
     fake = tmp_path / "fake.glb"
-    fake.write_text("not a model")
+    fake.write_text("not a model", encoding="utf-8")
     wrong = tmp_path / "model.fbx"
     wrong.write_bytes(b"x")
     stl = tmp_path / "part.stl"

@@ -322,7 +322,8 @@ def run_fix(check: Check) -> tuple[bool, str]:
                 start_new_session=True)
             return True, f"Started {' '.join(check.command)}."
         done = subprocess.run(  # nosec B603 -- a fixed command
-            check.command, capture_output=True, text=True,
+            check.command, capture_output=True, text=True, encoding="utf-8",
+            errors="replace",
             timeout=FIX_TIMEOUT, check=False)
     except FileNotFoundError:
         return False, f"{check.command[0]} is not on this computer."

@@ -634,7 +634,8 @@ def press(ext: Any, button: Button, text: str = "", chat: str = "") -> dict:
             extensions.argv(ext, button.run),
             input=json.dumps({"button": button.id, "text": text,
                               "chat": chat}),
-            capture_output=True, text=True, timeout=button.timeout,
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=button.timeout,
             cwd=ext.path, env=extensions.environment(ext), check=False,
         )
     except subprocess.TimeoutExpired:
@@ -686,7 +687,8 @@ def pressed(name: str, button_id: str, text: str = "",
     try:
         done = subprocess.run(  # nosec B603  (its own program, no shell)
             extensions.argv(ext, command.run or []) + words,
-            capture_output=True, text=True, timeout=command.timeout,
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=command.timeout,
             cwd=ext.path, env=extensions.environment(ext), check=False,
         )
     except subprocess.TimeoutExpired:
@@ -711,7 +713,8 @@ def _refresh(ext: Any) -> None:
     try:
         done = subprocess.run(  # nosec B603  (its own program, no shell)
             extensions.argv(ext, ext.ui.status.run), capture_output=True,
-            text=True, timeout=ext.ui.status.timeout, cwd=ext.path,
+            text=True, encoding="utf-8", errors="replace",
+            timeout=ext.ui.status.timeout, cwd=ext.path,
             env=extensions.environment(ext), check=False,
         )
         line = next((ln.strip() for ln in done.stdout.splitlines()

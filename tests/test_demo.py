@@ -67,7 +67,7 @@ def test_what_is_not_a_recording_is_refused(tmp_path):
     with pytest.raises(demo.DemoError, match="no file"):
         demo.read(tmp_path / "missing.mp4")
     text = tmp_path / "notes.txt"
-    text.write_text("x")
+    text.write_text("x", encoding="utf-8")
     with pytest.raises(demo.DemoError, match="not a video"):
         demo.read(text)
 

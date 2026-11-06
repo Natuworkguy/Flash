@@ -256,7 +256,7 @@ def test_history_survives_and_keeps_secrets_out(tmp_path):
     reread = list(repl_input.SessionHistory(str(path)).load_history_strings())
 
     assert reread == ["explain this repo"]  # nosec B101
-    assert "sk-secret" not in path.read_text()  # nosec B101
+    assert "sk-secret" not in path.read_text(encoding="utf-8")  # nosec B101
 
 
 def test_a_broken_history_file_costs_only_the_history(tmp_path):

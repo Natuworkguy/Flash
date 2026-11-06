@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Optional
 from urllib.parse import urlparse
 
+from . import paths
 from .paths import FLASH_DIR
 
 # What the estimate of what the same tokens would cost elsewhere assumes:
@@ -87,7 +88,7 @@ def _write(tally: dict) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         partial = path.with_suffix(".json.partial")
         partial.write_text(json.dumps(tally), encoding="utf-8")
-        os.replace(partial, path)
+        paths.replace(partial, path)
     except OSError:
         pass
 

@@ -110,7 +110,8 @@ def _log(service: Service = SPARKS) -> Path:
 
 def _run(args: list[str]) -> subprocess.CompletedProcess:
     return subprocess.run(  # nosec B603 -- fixed argument lists
-        args, check=False, capture_output=True, text=True, timeout=30,
+        args, check=False, capture_output=True, text=True, encoding="utf-8",
+        errors="replace", timeout=30,
     )
 
 

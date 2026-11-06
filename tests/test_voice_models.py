@@ -65,7 +65,7 @@ def test_pull_downloads_and_switches(monkeypatch, printed):
         fetched.append((kind, name))
         (voice.MODELS_DIR).mkdir(parents=True, exist_ok=True)
         for path in voice.piper_paths(name):
-            path.write_text("model")
+            path.write_text("model", encoding="utf-8")
         return ""
 
     monkeypatch.setattr(voice, "download_model", download)
@@ -106,7 +106,7 @@ def test_remove_keeps_the_one_in_use(printed):
 
     for path in voice.piper_paths("en_US-ryan-high"):
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text("model")
+        path.write_text("model", encoding="utf-8")
     ai._voice_remove("ryan")
     assert printed[-1].strip() == "Removed en_US-ryan-high."
     assert not voice.voice_installed("en_US-ryan-high")

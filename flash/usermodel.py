@@ -21,6 +21,7 @@ import re
 import time
 from pathlib import Path
 
+from . import paths
 from .paths import FLASH_DIR
 
 SETTING = "USER_MODEL"
@@ -124,7 +125,7 @@ def _write(sections: dict[str, str]) -> None:
     target.parent.mkdir(parents=True, exist_ok=True)
     partial = target.with_suffix(".partial")
     partial.write_text(render(sections), encoding="utf-8")
-    os.replace(partial, target)
+    paths.replace(partial, target)
 
 
 def save_text(raw: str) -> dict[str, str]:

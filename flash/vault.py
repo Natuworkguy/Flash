@@ -31,6 +31,7 @@ import time
 from pathlib import Path
 from typing import Optional
 
+from . import paths
 from .paths import FLASH_DIR
 
 PLACEHOLDER = re.compile(r"\{\{secret:([A-Za-z0-9_.-]{1,40})\}\}")
@@ -64,7 +65,8 @@ def _file() -> Path:
 def _run(argv: list[str], given: str = "") -> Optional[str]:
     try:
         done = subprocess.run(  # nosec B603 -- fixed programs
-            argv, input=given, capture_output=True, text=True, timeout=10,
+            argv, input=given, capture_output=True, text=True,
+            encoding="utf-8", errors="replace", timeout=10,
             check=False)
     except (OSError, subprocess.SubprocessError):
         return None
@@ -147,7 +149,7 @@ def _write_private(path: Path, data: bytes) -> None:
     partial.write_bytes(data)
     with contextlib.suppress(OSError):
         os.chmod(partial, 0o600)
-    os.replace(partial, path)
+    paths.replace(partial, path)
 
 
 def _cipher():

@@ -717,7 +717,7 @@ class TestFlags:
         pyproject = web.PAGE.parents[2] / "pyproject.toml"
 
         assert web.PAGE.is_file()
-        assert '"web/*.html"' in pyproject.read_text()
+        assert '"web/*.html"' in pyproject.read_text(encoding="utf-8")
 
 
 def test_tools_confirm_in_the_terminal_without_a_page(monkeypatch):
@@ -1599,9 +1599,9 @@ PDF = b"%PDF-1.4\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF\n"
 class TestShownFiles:
     def test_send_pdf_checks_what_it_is_given(self, tmp_path):
         fake = tmp_path / "notes.pdf"
-        fake.write_text("just text")
+        fake.write_text("just text", encoding="utf-8")
         wrong = tmp_path / "notes.txt"
-        wrong.write_text("x")
+        wrong.write_text("x", encoding="utf-8")
 
         assert "does not start like a PDF" in tools.send_pdf(str(fake))
         assert "not a .pdf file" in tools.send_pdf(str(wrong))
@@ -1653,7 +1653,7 @@ class TestShownFiles:
 
     def test_send_html_checks_what_it_is_given(self, tmp_path):
         wrong = tmp_path / "notes.txt"
-        wrong.write_text("x")
+        wrong.write_text("x", encoding="utf-8")
 
         assert "not an .html file" in tools.send_html(str(wrong))
         assert "no file" in tools.send_html(str(tmp_path / "gone.html"))
@@ -1662,7 +1662,7 @@ class TestShownFiles:
         self, tmp_path, monkeypatch
     ):
         page = tmp_path / "site.html"
-        page.write_text("<h1>hi</h1>")
+        page.write_text("<h1>hi</h1>", encoding="utf-8")
         opened = []
         monkeypatch.setattr(tools, "_open_with_spinner",
                             lambda path: opened.append(path) or "")
@@ -1674,7 +1674,7 @@ class TestShownFiles:
 
     def test_in_the_web_ui_a_page_goes_to_the_page(self, tmp_path):
         page = tmp_path / "site.html"
-        page.write_text("<h1>hi</h1>")
+        page.write_text("<h1>hi</h1>", encoding="utf-8")
         FakeClient.scripts = [
             [part(calls=[call("send_html", path=str(page))]),
              part(done=True)],
@@ -1692,7 +1692,8 @@ class TestShownFiles:
 
     def test_a_page_is_served_sandboxed(self, server, tmp_path):
         page = tmp_path / "site.html"
-        page.write_text("<script>fetch('/api/state')</script>")
+        page.write_text("<script>fetch('/api/state')</script>",
+                        encoding="utf-8")
         kept = web.workspace.keep_file(str(page))
 
         status, _ = request(server, "GET", f"/api/files/{kept['id']}")
@@ -1736,7 +1737,7 @@ class TestShownFiles:
 
     def test_send_document_checks_what_it_is_given(self, tmp_path):
         wrong = tmp_path / "page.html"
-        wrong.write_text("<p>x</p>")
+        wrong.write_text("<p>x</p>", encoding="utf-8")
         binary = tmp_path / "notes.txt"
         binary.write_bytes(b"\xff\xfe\x00junk")
 
@@ -1748,7 +1749,7 @@ class TestShownFiles:
         self, tmp_path, monkeypatch
     ):
         doc = tmp_path / "plan.md"
-        doc.write_text("# Plan")
+        doc.write_text("# Plan", encoding="utf-8")
         opened = []
         monkeypatch.setattr(tools, "_open_with_spinner",
                             lambda path: opened.append(path) or "")
@@ -1760,7 +1761,7 @@ class TestShownFiles:
 
     def test_in_the_web_ui_a_document_goes_to_the_page(self, tmp_path):
         doc = tmp_path / "plan.md"
-        doc.write_text("# Plan\n\nShip it.")
+        doc.write_text("# Plan\n\nShip it.", encoding="utf-8")
         FakeClient.scripts = [
             [part(calls=[call("send_document", path=str(doc))]),
              part(done=True)],
@@ -1779,7 +1780,8 @@ class TestShownFiles:
 
     def test_flash_can_comment_on_a_document_it_sends(self, tmp_path):
         doc = tmp_path / "plan.md"
-        doc.write_text("# Plan\n\n**Budget**: TBD\n\n- Record the demo\n")
+        doc.write_text("# Plan\n\n**Budget**: TBD\n\n- Record the demo\n",
+                       encoding="utf-8")
         comments = [
             # Quoted with its Markdown marks, or as it reads: both are in.
             {"quote": "**Budget**: TBD", "note": "Needs a number."},
@@ -1812,7 +1814,7 @@ class TestShownFiles:
 
     def test_comments_as_a_json_string_still_arrive(self, tmp_path):
         doc = tmp_path / "plan.md"
-        doc.write_text("Ship it.")
+        doc.write_text("Ship it.", encoding="utf-8")
         from flash.theme import capture_tool_output
         sent = []
         with capture_tool_output(
@@ -1829,7 +1831,7 @@ class TestShownFiles:
         self, tmp_path, monkeypatch, capsys
     ):
         doc = tmp_path / "plan.md"
-        doc.write_text("Ship it.")
+        doc.write_text("Ship it.", encoding="utf-8")
         monkeypatch.setattr(tools, "_open_with_spinner", lambda path: "")
 
         reply = tools.send_document(
@@ -1841,7 +1843,7 @@ class TestShownFiles:
 
     def test_a_document_is_served_as_text(self, server, tmp_path):
         doc = tmp_path / "plan.md"
-        doc.write_text("# Plan <script>x</script>")
+        doc.write_text("# Plan <script>x</script>", encoding="utf-8")
         kept = web.workspace.keep_file(str(doc))
 
         status, body = request(server, "GET", f"/api/files/{kept['id']}")
@@ -1857,7 +1859,7 @@ class TestShownFiles:
     ):
         # Saved with comments: those are the message, so it wakes nothing.
         doc = tmp_path / "plan.md"
-        doc.write_text("# Plan")
+        doc.write_text("# Plan", encoding="utf-8")
         kept = web.workspace.keep_file(str(doc))
         FakeClient.scripts = [[part("Noted."), part(done=True)]]
         session = web.Session()
@@ -1870,8 +1872,9 @@ class TestShownFiles:
         run(session, chat, "what changed?")
 
         assert saved == {"size": 17, "path": str(doc.resolve())}
-        assert doc.read_text() == "# Plan\n\nMine now."
-        assert web.workspace.kept_file(kept["id"])[0].read_text() == (
+        assert doc.read_text(encoding="utf-8") == "# Plan\n\nMine now."
+        assert web.workspace.kept_file(kept["id"])[0].read_text(
+                encoding="utf-8") == (
             "# Plan\n\nMine now."
         )
         told = FakeClient.requests[-1]["messages"][-1]["content"]
@@ -1882,20 +1885,21 @@ class TestShownFiles:
 
     def test_a_copy_outlives_its_file(self, tmp_path):
         doc = tmp_path / "scratch.md"
-        doc.write_text("draft")
+        doc.write_text("draft", encoding="utf-8")
         kept = web.workspace.keep_file(str(doc))
         doc.unlink()
 
         saved = web.workspace.save_document(kept["id"], "kept anyway")
 
         assert saved == {"size": 11, "path": ""}
-        assert web.workspace.kept_file(kept["id"])[0].read_text() == (
+        assert web.workspace.kept_file(kept["id"])[0].read_text(
+                encoding="utf-8") == (
             "kept anyway"
         )
 
     def test_only_documents_are_saved(self, tmp_path):
         page = tmp_path / "site.html"
-        page.write_text("<p>x</p>")
+        page.write_text("<p>x</p>", encoding="utf-8")
         kept = web.workspace.keep_file(str(page))
 
         with pytest.raises(web.workspace.WorkspaceError):
@@ -1905,7 +1909,7 @@ class TestShownFiles:
 
     def test_an_svg_is_never_kept(self, tmp_path):
         page = tmp_path / "page.svg"
-        page.write_text("<svg onload='alert(1)'/>")
+        page.write_text("<svg onload='alert(1)'/>", encoding="utf-8")
 
         with pytest.raises(web.workspace.WorkspaceError):
             web.workspace.keep_file(str(page))
@@ -2557,11 +2561,12 @@ class TestSkillsInThePage:
         folder = skills.skills_dir() / "older"
         folder.mkdir(parents=True)
         (folder / skills.SKILL_FILE).write_text(
-            "---\nname: older\ndescription: d\nmanaged: true\n---\n\nx\n"
+            "---\nname: older\ndescription: d\nmanaged: true\n---\n\nx\n",
+            encoding="utf-8"
         )
         (skills.skills_dir() / "hand").mkdir()
         (skills.skills_dir() / "hand" / skills.SKILL_FILE).write_text(
-            "---\nname: hand\ndescription: d\n---\n\nx\n"
+            "---\nname: hand\ndescription: d\n---\n\nx\n", encoding="utf-8"
         )
 
         assert skills.find("older").by == "flash"
@@ -2615,8 +2620,9 @@ class TestExtensionsInThePage:
             "description": "Weather lookups",
             "version": "0.1.0",
             "commands": [{"name": "forecast", "prompt": "forecast.md"}],
-        }))
-        (folder / "forecast.md").write_text("Forecast for $ARGUMENTS")
+        }), encoding="utf-8")
+        (folder / "forecast.md").write_text("Forecast for $ARGUMENTS",
+                                            encoding="utf-8")
         return folder
 
     def test_shown_first_and_installed_on_yes(self, tmp_path):
@@ -2659,9 +2665,11 @@ class TestExtensionsInThePage:
 
     def test_a_clash_is_refused_before_anything_installs(self, tmp_path):
         folder = self.make(tmp_path / "clash")
-        manifest = json.loads((folder / "flash-extension.json").read_text())
+        manifest = json.loads((folder / "flash-extension.json").read_text(
+                encoding="utf-8"))
         manifest["commands"][0]["name"] = "help"
-        (folder / "flash-extension.json").write_text(json.dumps(manifest))
+        (folder / "flash-extension.json").write_text(json.dumps(manifest),
+                                                     encoding="utf-8")
 
         with pytest.raises(ValueError, match="built-in command"):
             web.command(web.Session(), {
@@ -3345,10 +3353,10 @@ class TestAnExtensionsBackground:
         (source / "scenes").mkdir(parents=True)
         (source / "flash-extension.json").write_text(json.dumps({
             "name": "scenery", "backgrounds": "scenes",
-        }))
+        }), encoding="utf-8")
         (source / "scenes" / "dunes.scene").write_text(
             "name: Dunes\npalette:\n  . #c2a060\n  o #402010\npixels:\n"
-            + "\n".join(["..oo" * 6] * 6) + "\n"
+            + "\n".join(["..oo" * 6] * 6) + "\n", encoding="utf-8"
         )
         session = web.Session()
         preview = web.command(session, {
@@ -4843,7 +4851,7 @@ class TestCustomInstructions:
         instructions.save("Use metric. No bullet points.")
 
         assert "Use metric. No bullet points." in tools.build_system_prompt()
-        assert instructions.path().read_text().strip() == (
+        assert instructions.path().read_text(encoding="utf-8").strip() == (
             "Use metric. No bullet points.")
 
         instructions.save("   ")
@@ -4931,7 +4939,7 @@ class TestCompactInTheBrowser:
         assert len(chat.messages) == 2
 
     def test_on_the_page(self):
-        page = web.PAGE.read_text()
+        page = web.PAGE.read_text(encoding="utf-8")
         assert 'slash: "/compact", run: compactChat' in page
 
 
@@ -4940,7 +4948,8 @@ class TestAgentsFile:
         from flash import instructions
 
         (tmp_path / ".git").mkdir()
-        (tmp_path / "AGENTS.md").write_text("Run make test before you finish.")
+        (tmp_path / "AGENTS.md").write_text("Run make test before you finish.",
+                                            encoding="utf-8")
 
         block = instructions.agents_block(tmp_path)
         assert "Run make test before you finish." in block
@@ -4951,10 +4960,11 @@ class TestAgentsFile:
     ):
         from flash import instructions
 
-        (tmp_path / "AGENTS.md").write_text("Outside the repository.")
+        (tmp_path / "AGENTS.md").write_text("Outside the repository.",
+                                            encoding="utf-8")
         repo = tmp_path / "repo"
         (repo / ".git").mkdir(parents=True)
-        (repo / "AGENTS.md").write_text("Use tabs.")
+        (repo / "AGENTS.md").write_text("Use tabs.", encoding="utf-8")
         deep = repo / "src" / "lib"
         deep.mkdir(parents=True)
         assert instructions.agents_file(deep) == repo / "AGENTS.md"
@@ -4968,10 +4978,10 @@ class TestAgentsFile:
 
         (tmp_path / ".git").mkdir()
         assert instructions.agents_block(tmp_path) == ""
-        (tmp_path / "FLASH.md").write_text("  \n")
+        (tmp_path / "FLASH.md").write_text("  \n", encoding="utf-8")
         assert instructions.agents_block(tmp_path) == ""
         long = "x" * (instructions.MAX_AGENTS_CHARS + 50)
-        (tmp_path / "FLASH.md").write_text(long)
+        (tmp_path / "FLASH.md").write_text(long, encoding="utf-8")
         block = instructions.agents_block(tmp_path)
         assert "[the rest of the file is cut]" in block
         assert "x" * (instructions.MAX_AGENTS_CHARS + 1) not in block
@@ -4979,7 +4989,8 @@ class TestAgentsFile:
     def test_a_project_chat_follows_its_folders(self, tmp_path, monkeypatch):
         folder = tmp_path / "proj"
         (folder / ".git").mkdir(parents=True)
-        (folder / "AGENTS.md").write_text("Never touch the vendor folder.")
+        (folder / "AGENTS.md").write_text("Never touch the vendor folder.",
+                                          encoding="utf-8")
         made = workspace.create_project("Proj", str(folder))
         seen = {}
 

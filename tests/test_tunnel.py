@@ -1,6 +1,7 @@
 # pylint: disable=C0114,C0115,C0116
 
 import http.client
+import os
 import sys
 import threading
 
@@ -22,16 +23,23 @@ def program(monkeypatch, tmp_path):
         "INF |  Your quick Tunnel has been created! Visit it at (it may "
         "take some time to be reachable):  |\n"
         f"INF |  {ADDRESS}  |\n"
-        "INF Registered tunnel connection connIndex=0 protocol=quic\n"
+        "INF Registered tunnel connection connIndex=0 protocol=quic\n",
+        encoding="utf-8"
     )
     script = tmp_path / "cloudflared"
     script.write_text(
         f"#!{sys.executable}\n"
         "import time\n"
-        f"print(open({str(said)!r}).read(), flush=True)\n"
-        "time.sleep(60)\n"
+        f"print(open({str(said)!r}, encoding='utf-8').read(), flush=True)\n"
+        "time.sleep(60)\n", encoding="utf-8"
     )
     script.chmod(0o755)
+    if os.name == "nt":
+        # Windows runs no #! script: a .cmd that hands it to Python does.
+        runner = tmp_path / "cloudflared.cmd"
+        runner.write_text(f'@"{sys.executable}" "{script}" %*\r\n',
+                          encoding="utf-8")
+        script = runner
     monkeypatch.setattr(
         tunnel.shutil, "which",
         lambda name: str(script) if name == "cloudflared" else None,
@@ -65,7 +73,7 @@ def test_a_tunnel_that_gives_no_address_fails_and_says_why(program):
         "INF Requesting new quick Tunnel on trycloudflare.com...\n"
         'failed to request quick Tunnel: Post "https://api.trycloudflare'
         '.com/tunnel": dial tcp: lookup api.trycloudflare.com: no such '
-        "host\n")
+        "host\n", encoding="utf-8")
     found = tunnel.Tunnel()
 
     with pytest.raises(tunnel.TunnelError, match="no such host"):
@@ -74,7 +82,7 @@ def test_a_tunnel_that_gives_no_address_fails_and_says_why(program):
 
 
 def test_the_address_counts_only_once_the_tunnel_is_connected(program):
-    program.write_text(f"INF |  {ADDRESS}  |\n")
+    program.write_text(f"INF |  {ADDRESS}  |\n", encoding="utf-8")
 
     with pytest.raises(tunnel.TunnelError, match="no address"):
         tunnel.Tunnel().start("cloudflare", 7433, wait=1)

@@ -81,6 +81,7 @@ from . import (
     meeting,
     memory,
     modelchain,
+    paths,
     pings,
     progress,
     providers,
@@ -699,7 +700,7 @@ class Access:
             partial.write_text(data, encoding="utf-8")
             with contextlib.suppress(OSError):
                 os.chmod(partial, 0o600)
-            os.replace(partial, path)
+            paths.replace(partial, path)
         except OSError:
             pass
 
@@ -5093,7 +5094,8 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
         try:
             done = subprocess.run(  # nosec B603  (its own program, no shell)
                 extensions.argv(ext, command.run or []) + words,
-                capture_output=True, text=True, timeout=command.timeout,
+                capture_output=True, text=True, encoding="utf-8",
+                errors="replace", timeout=command.timeout,
                 cwd=ext.path, env=extensions.environment(ext), check=False,
             )
         except subprocess.TimeoutExpired:

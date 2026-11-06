@@ -52,8 +52,8 @@ def test_request_extension_installs_once_allowed(tmp_path, monkeypatch):
     folder = tmp_path / "ext"
     folder.mkdir()
     (folder / extensions.MANIFEST).write_text(json.dumps(
-        {"name": "helper", "prompt": "p.md"}))
-    (folder / "p.md").write_text("Be kind.")
+        {"name": "helper", "prompt": "p.md"}), encoding="utf-8")
+    (folder / "p.md").write_text("Be kind.", encoding="utf-8")
     monkeypatch.setattr(tools, "ultra_auto", lambda: False)
     monkeypatch.setattr(tools, "_user_allows", lambda q, **_: True)
     said = tools.request_extension(f"path@{folder}", "for tone")

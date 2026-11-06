@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import contextlib
 import json
-import os
 import threading
 import time
 import unicodedata
@@ -27,7 +26,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Optional
 
-from . import pings, sparks
+from . import paths, pings, sparks
 from .tidy import tidy
 
 # How many entries a team's chat keeps, oldest dropped first.
@@ -374,7 +373,7 @@ def _write(team_id: str, data: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temp = path.with_suffix(".tmp")
     temp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
-    os.replace(temp, path)
+    paths.replace(temp, path)
     with contextlib.suppress(OSError):
         _written[team_id] = _stamp(path)
 

@@ -16,7 +16,7 @@ def project(tmp_path, files):
     for name, text in files.items():
         path = tmp_path / name
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(text)
+        path.write_text(text, encoding="utf-8")
     return tmp_path
 
 
@@ -37,7 +37,8 @@ class TestFinding:
             "pnpm-lock.yaml": ""})
         assert verify.detect(str(root))[1] == ["pnpm run lint", "pnpm test"]
         (root / "package.json").write_text(json.dumps({"scripts": {
-            "test": 'echo "Error: no test specified" && exit 1'}}))
+            "test": 'echo "Error: no test specified" && exit 1'}}),
+            encoding="utf-8")
         assert verify.detect(str(root))[1] == []
 
     def test_a_makefile_comes_first(self, tmp_path):
@@ -62,7 +63,9 @@ class TestReading:
         assert places == ["tests/test_dates.py:12", "src/dates.py:40"]
         said = verify.report(verify.Path("/p"), [
             verify.Ran("ruff check .", True, 0.2, ""), ran])
-        assert said.startswith("Checks in /p: 1 of 2 passed.")
+        # the folder in this system's own form (\\p on Windows)
+        folder = verify.Path("/p")
+        assert said.startswith(f"Checks in {folder}: 1 of 2 passed.")
         assert "Look at: tests/test_dates.py:12, src/dates.py:40" in said
         assert "never by skipping" in said
 

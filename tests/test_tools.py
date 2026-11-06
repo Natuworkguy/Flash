@@ -1,6 +1,7 @@
 # pylint: disable=C0114,C0115,C0116
 
 import json
+import os
 import subprocess  # nosec B404
 
 import pytest
@@ -54,8 +55,10 @@ def test_shell_tool_success(monkeypatch):
 
 def test_shell_tool_runs_for_real(monkeypatch):
     monkeypatch.setattr(tools, "NO_COMMAND_CONFIRMATION", True)
-    assert shell_tool("echo hi; echo oops >&2; exit 3") == \
-        "(exit 3)\nhi\noops"  # nosec B101
+    # Windows runs commands in PowerShell, everything else in sh.
+    command = ("Write-Output hi; [Console]::Error.WriteLine('oops'); exit 3"
+               if os.name == "nt" else "echo hi; echo oops >&2; exit 3")
+    assert shell_tool(command) == "(exit 3)\nhi\noops"  # nosec B101
 
 
 @pytest.mark.skipif(not hasattr(__import__("os"), "killpg"),
@@ -78,10 +81,11 @@ def test_stop_ends_a_running_command_and_what_it_started(monkeypatch,
     runner = threading.Thread(target=work)
     started = time.monotonic()
     runner.start()
-    while not pid_file.exists() or not pid_file.read_text().strip():
+    while not pid_file.exists() or not pid_file.read_text(
+            encoding="utf-8").strip():
         assert time.monotonic() - started < 10  # nosec B101
         time.sleep(0.05)
-    child = int(pid_file.read_text())
+    child = int(pid_file.read_text(encoding="utf-8"))
 
     # Someone else's Stop does nothing to it.
     assert tools.stop_commands("chat2") == 0  # nosec B101
@@ -108,16 +112,16 @@ def _ended(pid):
         return True
     status = Path(f"/proc/{pid}/status")
     if status.exists():
-        return "\nState:\tZ" in status.read_text()
+        return "\nState:\tZ" in status.read_text(encoding="utf-8")
     return False
 
 
 def test_glob_tool_finds_matching_files(tmp_path):
-    (tmp_path / "a.py").write_text("print(1)")
-    (tmp_path / "b.txt").write_text("not python")
+    (tmp_path / "a.py").write_text("print(1)", encoding="utf-8")
+    (tmp_path / "b.txt").write_text("not python", encoding="utf-8")
     sub = tmp_path / "sub"
     sub.mkdir()
-    (sub / "c.py").write_text("print(2)")
+    (sub / "c.py").write_text("print(2)", encoding="utf-8")
 
     result = glob_tool("*.py", str(tmp_path))
     assert "a.py" in result  # nosec B101
@@ -131,8 +135,10 @@ def test_glob_tool_missing_path():
 
 
 def test_grep_tool_finds_matches(tmp_path):
-    (tmp_path / "a.py").write_text("def foo():\n    return 1\n")
-    (tmp_path / "b.py").write_text("def bar():\n    return 2\n")
+    (tmp_path / "a.py").write_text("def foo():\n    return 1\n",
+                                   encoding="utf-8")
+    (tmp_path / "b.py").write_text("def bar():\n    return 2\n",
+                                   encoding="utf-8")
 
     result = grep_tool("def foo", str(tmp_path))
     assert "a.py:1:" in result  # nosec B101
@@ -140,8 +146,8 @@ def test_grep_tool_finds_matches(tmp_path):
 
 
 def test_grep_tool_glob_filter(tmp_path):
-    (tmp_path / "a.py").write_text("target\n")
-    (tmp_path / "a.txt").write_text("target\n")
+    (tmp_path / "a.py").write_text("target\n", encoding="utf-8")
+    (tmp_path / "a.txt").write_text("target\n", encoding="utf-8")
 
     result = grep_tool("target", str(tmp_path), glob_filter="*.py")
     assert "a.py:1:" in result  # nosec B101
@@ -149,7 +155,7 @@ def test_grep_tool_glob_filter(tmp_path):
 
 
 def test_grep_tool_case_insensitive(tmp_path):
-    (tmp_path / "a.py").write_text("HELLO world\n")
+    (tmp_path / "a.py").write_text("HELLO world\n", encoding="utf-8")
 
     assert "No matches" in grep_tool("hello", str(tmp_path))  # nosec B101
     result = grep_tool("hello", str(tmp_path), case_insensitive=True)
@@ -191,7 +197,7 @@ def test_view_image_missing_file(tmp_path):
 def test_view_image_unsupported_type(tmp_path):
     take_pending_images()
     text_file = tmp_path / "notes.txt"
-    text_file.write_text("hello")
+    text_file.write_text("hello", encoding="utf-8")
 
     result = view_image(str(text_file))
     assert "Unsupported image type" in result  # nosec B101
@@ -231,7 +237,7 @@ def test_view_image_refuses_relative_hidden_and_outside_paths(tmp_path):
     assert "hidden path" in view_image(  # nosec B101
         str(hidden / "key.png"))
     assert "outside your home" in view_image(  # nosec B101
-        "/etc/shot.png")
+        os.path.abspath("/etc/shot.png"))
     assert take_pending_images() == []  # nosec B101
 
 
@@ -258,7 +264,7 @@ def test_screenshot_queues_the_rendered_page(tmp_path, monkeypatch):
     monkeypatch.setattr(tools, "SCRATCH_DIR", str(tmp_path))
     monkeypatch.setattr(tools, "capture", _fake_capture())
     page = tmp_path / "index.html"
-    page.write_text("<h1>hi</h1>")
+    page.write_text("<h1>hi</h1>", encoding="utf-8")
 
     result = screenshot(str(page))
     assert "Rendered file://" in result  # nosec B101
@@ -275,7 +281,7 @@ def test_screenshot_reports_page_errors(tmp_path, monkeypatch):
         _fake_capture(problems=["page error: boom is not defined"]),
     )
     page = tmp_path / "broken.html"
-    page.write_text("<script>boom()</script>")
+    page.write_text("<script>boom()</script>", encoding="utf-8")
 
     result = screenshot(str(page))
     assert "boom is not defined" in result  # nosec B101
@@ -295,7 +301,7 @@ def test_screenshot_clamps_an_absurd_viewport(tmp_path, monkeypatch):
 
     monkeypatch.setattr(tools, "capture", capture)
     page = tmp_path / "index.html"
-    page.write_text("<h1>hi</h1>")
+    page.write_text("<h1>hi</h1>", encoding="utf-8")
 
     screenshot(str(page), width=999999, height=0, wait_ms="soon")
     assert seen["width"] == tools.MAX_SCREENSHOT_SIDE  # nosec B101
@@ -313,7 +319,7 @@ def test_screenshot_surfaces_a_capture_failure(tmp_path, monkeypatch):
         _fake_capture(error=browser.BROWSER_HINT),
     )
     page = tmp_path / "index.html"
-    page.write_text("<h1>hi</h1>")
+    page.write_text("<h1>hi</h1>", encoding="utf-8")
 
     result = screenshot(str(page))
     assert "playwright install chromium" in result  # nosec B101
@@ -325,7 +331,7 @@ def test_screenshot_refuses_a_model_without_vision(tmp_path, monkeypatch):
     monkeypatch.setattr(tools, "MODEL_NAME", "text-only")
     monkeypatch.setattr(tools, "model_sees_images", lambda *_: False)
     page = tmp_path / "index.html"
-    page.write_text("<h1>hi</h1>")
+    page.write_text("<h1>hi</h1>", encoding="utf-8")
 
     result = screenshot(str(page))
     assert "no vision support" in result  # nosec B101
@@ -339,7 +345,7 @@ def test_resolve_target_accepts_urls_and_local_pages(tmp_path):
     )
 
     page = tmp_path / "index.html"
-    page.write_text("<h1>hi</h1>")
+    page.write_text("<h1>hi</h1>", encoding="utf-8")
     url, why = browser.resolve_target(str(page))
     assert why == ""  # nosec B101
     assert url is not None  # nosec B101
@@ -354,7 +360,7 @@ def test_resolve_target_rejects_what_it_cannot_render(tmp_path):
     assert "is a directory" in why  # nosec B101
 
     script = tmp_path / "app.py"
-    script.write_text("print('hi')")
+    script.write_text("print('hi')", encoding="utf-8")
     _, why = browser.resolve_target(str(script))
     assert "not a page Flash can render" in why  # nosec B101
 
@@ -364,7 +370,8 @@ def test_resolve_target_rejects_what_it_cannot_render(tmp_path):
 
 def test_read_tool_numbers_lines(tmp_path):
     target = tmp_path / "renderer.py"
-    target.write_text("\n".join(f"line {i}" for i in range(1, 21)))
+    target.write_text("\n".join(f"line {i}" for i in range(1, 21)),
+                      encoding="utf-8")
 
     result = read_tool(str(target), offset=2, limit=19)
 
@@ -375,7 +382,8 @@ def test_read_tool_numbers_lines(tmp_path):
 
 def test_read_tool_reports_remaining_lines(tmp_path):
     target = tmp_path / "long.txt"
-    target.write_text("\n".join(str(i) for i in range(1, 11)))
+    target.write_text("\n".join(str(i) for i in range(1, 11)),
+                      encoding="utf-8")
 
     result = read_tool(str(target), limit=4)
 
@@ -385,7 +393,7 @@ def test_read_tool_reports_remaining_lines(tmp_path):
 
 def test_read_tool_offset_past_end(tmp_path):
     target = tmp_path / "short.txt"
-    target.write_text("only one line")
+    target.write_text("only one line", encoding="utf-8")
 
     result = read_tool(str(target), offset=99)
 
@@ -425,7 +433,8 @@ def test_write_tool_creates_file(tmp_path, monkeypatch):
 
     result = write_tool(str(target), "print(1)\nprint(2)\n")
 
-    assert target.read_text() == "print(1)\nprint(2)\n"  # nosec B101
+    assert target.read_text(
+            encoding="utf-8") == "print(1)\nprint(2)\n"  # nosec B101
     assert "Created 2 lines" in result  # nosec B101
 
 
@@ -442,11 +451,11 @@ def test_write_tool_blocked_leaves_file_untouched(tmp_path, monkeypatch):
     monkeypatch.setattr(tools, "NO_COMMAND_CONFIRMATION", False)
     monkeypatch.setattr("builtins.input", lambda: "n")
     target = tmp_path / "keep.txt"
-    target.write_text("original")
+    target.write_text("original", encoding="utf-8")
 
     result = write_tool(str(target), "replaced")
 
-    assert target.read_text() == "original"  # nosec B101
+    assert target.read_text(encoding="utf-8") == "original"  # nosec B101
     assert "blocked by user" in result  # nosec B101
 
 
@@ -493,7 +502,7 @@ def test_open_page_shows_the_page_and_what_it_can_click(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(tools, "browser_open", lambda *_a, **_k: "")
     page = tmp_path / "index.html"
-    page.write_text("<button>Add one</button>")
+    page.write_text("<button>Add one</button>", encoding="utf-8")
 
     result = open_page(str(page))
 
@@ -512,7 +521,7 @@ def test_open_page_surfaces_a_browser_that_will_not_start(
         tools, "browser_open", lambda *_a, **_k: browser.BROWSER_HINT
     )
     page = tmp_path / "index.html"
-    page.write_text("<h1>hi</h1>")
+    page.write_text("<h1>hi</h1>", encoding="utf-8")
 
     result = open_page(str(page))
 
@@ -697,7 +706,7 @@ def test_screenshot_can_rest_the_mouse_first(tmp_path, monkeypatch):
 
     monkeypatch.setattr(tools, "capture", capture)
     page = tmp_path / "index.html"
-    page.write_text("<button>hi</button>")
+    page.write_text("<button>hi</button>", encoding="utf-8")
 
     screenshot(str(page))
     assert seen["mouse"] is None  # nosec B101
@@ -716,7 +725,7 @@ def test_each_step_is_a_frame_of_one_run_for_the_user(tmp_path, monkeypatch):
         tools, "browser_interact", lambda *_a, **_k: ("Clicked at 5,5.", "")
     )
     page = tmp_path / "index.html"
-    page.write_text("<h1>hi</h1>")
+    page.write_text("<h1>hi</h1>", encoding="utf-8")
     sent = []
 
     with capture_tool_output(lambda kind, text, _style: sent.append(
@@ -747,7 +756,7 @@ def test_a_blind_model_still_shows_the_user_its_browser(
     monkeypatch.setattr(tools, "model_sees_images", lambda *_: False)
     monkeypatch.setattr(tools, "browser_open", lambda *_a, **_k: "")
     page = tmp_path / "index.html"
-    page.write_text("<h1>hi</h1>")
+    page.write_text("<h1>hi</h1>", encoding="utf-8")
     sent = []
 
     with capture_tool_output(lambda kind, text, _style: sent.append(kind)):
@@ -949,7 +958,7 @@ def test_send_image_missing_file(tmp_path):
 
 def test_send_image_unsupported_type(tmp_path):
     notes = tmp_path / "notes.txt"
-    notes.write_text("hello")
+    notes.write_text("hello", encoding="utf-8")
 
     result = send_image(str(notes))
 
@@ -1368,7 +1377,7 @@ def test_print_asks_then_runs_lp_with_the_options(tmp_path, monkeypatch):
 def test_print_does_nothing_when_the_user_says_no(tmp_path, monkeypatch):
     calls = _fake_print(monkeypatch, answer="n")
     doc = tmp_path / "a.txt"
-    doc.write_text("hi")
+    doc.write_text("hi", encoding="utf-8")
     assert "Not printed" in tools.print_tool(str(doc))  # nosec B101
     assert all(c[0] != "lp" for c in calls)  # nosec B101
 
@@ -1376,10 +1385,11 @@ def test_print_does_nothing_when_the_user_says_no(tmp_path, monkeypatch):
 def test_print_refuses_bad_paths_and_options(tmp_path, monkeypatch):
     calls = _fake_print(monkeypatch)
     doc = tmp_path / "a.txt"
-    doc.write_text("hi")
+    doc.write_text("hi", encoding="utf-8")
     assert "absolute" in tools.print_tool("a.txt")  # nosec B101
     assert "hidden" in tools.print_tool(str(tmp_path / ".k"))  # nosec B101
-    assert "outside" in tools.print_tool("/etc/hosts")  # nosec B101
+    outside = os.path.abspath("/etc/hosts")
+    assert "outside" in tools.print_tool(outside)  # nosec B101
     assert "does not exist" in tools.print_tool(  # nosec B101
         str(tmp_path / "gone.pdf"))
     assert "copies" in tools.print_tool(str(doc), copies=0)  # nosec B101
@@ -1392,7 +1402,7 @@ def test_print_refuses_bad_paths_and_options(tmp_path, monkeypatch):
 def test_print_with_no_printer_set_up(tmp_path, monkeypatch):
     _fake_print(monkeypatch, lpstat="")
     doc = tmp_path / "a.txt"
-    doc.write_text("hi")
+    doc.write_text("hi", encoding="utf-8")
     assert "no printer is set up" in tools.print_tool(str(doc))  # nosec B101
 
 
@@ -1403,7 +1413,7 @@ def test_print_finds_a_made_document(tmp_path, monkeypatch):
     monkeypatch.setattr(sparks, "sparks_dir", lambda: tmp_path)
     made = tmp_path / "docs" / "s1" / "weekly-brief.md"
     made.parent.mkdir(parents=True)
-    made.write_text("# Weekly brief")
+    made.write_text("# Weekly brief", encoding="utf-8")
     assert tools.print_tool(document="Weekly brief").startswith(  # nosec B101
         "Sent to Office_Laser")
     assert calls[-1][-1] == str(made)  # nosec B101

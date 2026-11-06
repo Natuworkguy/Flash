@@ -54,5 +54,6 @@ def test_renders_the_frames(tmp_path):
     frames = subprocess.run(
         ["ffprobe", "-v", "error", "-count_frames", "-select_streams", "v:0",
          "-show_entries", "stream=nb_read_frames", "-of", "csv=p=0",
-         str(clip)], capture_output=True, text=True, check=True)
+         str(clip)], capture_output=True, text=True, encoding="utf-8",
+        errors="replace", check=True)
     assert frames.stdout.strip() == "5"

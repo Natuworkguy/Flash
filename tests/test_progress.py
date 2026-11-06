@@ -87,7 +87,8 @@ def recorded(tmp_path, monkeypatch):
     def seen(count, timeout=10):
         deadline = time.monotonic() + timeout
         while True:
-            lines = out.read_text().splitlines() if out.exists() else []
+            lines = out.read_text(
+                    encoding="utf-8").splitlines() if out.exists() else []
             if len(lines) >= count or time.monotonic() > deadline:
                 return [json.loads(line) for line in lines]
             time.sleep(0.05)

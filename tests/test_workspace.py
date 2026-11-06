@@ -273,7 +273,7 @@ class TestProjects:
     def test_folder_suggestions(self, tmp_path):
         for name in ("alpha", "alps", "beta", ".hidden"):
             (tmp_path / name).mkdir()
-        (tmp_path / "also-a-file").write_text("x")
+        (tmp_path / "also-a-file").write_text("x", encoding="utf-8")
 
         assert workspace.folder_suggestions(f"{tmp_path}/al") == [
             str(tmp_path / "alpha"), str(tmp_path / "alps"),
@@ -305,7 +305,7 @@ class TestChats:
     def test_a_broken_file_is_skipped(self):
         folder = workspace.store() / "chats"
         folder.mkdir(parents=True)
-        (folder / "0123abcd.json").write_text("{broken")
+        (folder / "0123abcd.json").write_text("{broken", encoding="utf-8")
 
         assert workspace.load_chats() == []
 

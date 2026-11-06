@@ -75,7 +75,7 @@ def test_images_must_be_png_or_jpeg(tmp_path):
     assert textures.load_image(picture)[1] == "image/png"
 
     fake = tmp_path / "logo.jpg"
-    fake.write_text("not a picture")
+    fake.write_text("not a picture", encoding="utf-8")
     with pytest.raises(textures.TextureError, match="not a PNG"):
         textures.load_image(fake)
     with pytest.raises(textures.TextureError, match="not a file"):

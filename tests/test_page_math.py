@@ -26,7 +26,8 @@ def pulled(text: str) -> tuple[str, list]:
         "console.log(JSON.stringify([out, spans]));\n"
     )
     done = subprocess.run(  # nosec B603
-        [node, "-e", script], capture_output=True, text=True, check=True,
+        [node, "-e", script], capture_output=True, text=True, encoding="utf-8",
+        errors="replace", check=True,
     )
     out, spans = json.loads(done.stdout)
     return out, spans

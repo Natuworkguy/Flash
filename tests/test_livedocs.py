@@ -70,7 +70,8 @@ class TestLive:
         assert [e["id"] for e in changed] == [info["id"]]
         assert "$4.2M, up 12%" in changed[0]["text"]
         kept = workspace.kept_file(info["id"])[0]
-        assert kept.read_text(encoding="utf-8") == changed[0]["text"]
+        # byte for byte, line endings and all
+        assert kept.read_bytes().decode("utf-8") == changed[0]["text"]
 
     def test_every_copy_shown_is_kept_up(self, shown, monkeypatch):
         path, first = shown

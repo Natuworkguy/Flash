@@ -53,7 +53,8 @@ def test_show_diff_writes_both_sides(vscode, tmp_path):
 
     before = tmp_path / "app (before).py"
     after = tmp_path / "app (Flash's edit).py"
-    assert (before.read_text(), after.read_text()) == ("old\n", "new\n")
+    assert (before.read_text(encoding="utf-8"),
+            after.read_text(encoding="utf-8")) == ("old\n", "new\n")
     assert vscode == [[  # nosec B101
         "/bin/code", "--reuse-window", "--diff", str(before), str(after),
     ]]
@@ -76,7 +77,7 @@ def test_a_failed_launch_is_just_false(monkeypatch):
 def test_a_confirmed_write_opens_the_diff_first(vscode, tmp_path, monkeypatch):
     monkeypatch.setattr(tools, "SCRATCH_DIR", str(tmp_path))
     target = tmp_path / "keep.txt"
-    target.write_text("original\n")
+    target.write_text("original\n", encoding="utf-8")
     monkeypatch.setattr(tools, "NO_COMMAND_CONFIRMATION", False)
     monkeypatch.setattr(tools, "notify_needs_input", lambda: None)
     monkeypatch.setattr("builtins.input", lambda: "n")
@@ -84,7 +85,7 @@ def test_a_confirmed_write_opens_the_diff_first(vscode, tmp_path, monkeypatch):
     result = tools.write_tool(str(target), "replaced\n")
 
     assert "blocked by user" in result  # nosec B101
-    assert target.read_text() == "original\n"  # nosec B101
+    assert target.read_text(encoding="utf-8") == "original\n"  # nosec B101
     (argv,) = vscode
     assert argv[2] == "--diff"  # nosec B101
     assert argv[3].endswith("keep (before).txt")  # nosec B101
@@ -93,7 +94,7 @@ def test_a_confirmed_write_opens_the_diff_first(vscode, tmp_path, monkeypatch):
 def test_no_diff_without_a_question_or_a_change(vscode, tmp_path, monkeypatch):
     monkeypatch.setattr(tools, "SCRATCH_DIR", str(tmp_path))
     target = tmp_path / "same.txt"
-    target.write_text("same\n")
+    target.write_text("same\n", encoding="utf-8")
     monkeypatch.setattr(tools, "notify_needs_input", lambda: None)
     monkeypatch.setattr("builtins.input", lambda: "y")
 
@@ -110,7 +111,7 @@ def test_no_diff_without_a_question_or_a_change(vscode, tmp_path, monkeypatch):
 
 def test_open_in_editor_tool(vscode, tmp_path):
     target = tmp_path / "app.py"
-    target.write_text("x = 1\n")
+    target.write_text("x = 1\n", encoding="utf-8")
 
     assert tools.open_in_editor(str(target), 1) == (  # nosec B101
         f"Opened {target} at line 1."
@@ -123,7 +124,7 @@ def test_open_in_editor_tool(vscode, tmp_path):
 
 def test_open_in_editor_outside_vscode(tmp_path):
     target = tmp_path / "app.py"
-    target.write_text("x = 1\n")
+    target.write_text("x = 1\n", encoding="utf-8")
     assert "not available" in tools.open_in_editor(str(target), "7")
 
 
@@ -275,7 +276,7 @@ def _answer(monkeypatch, reply):
 def test_approving_a_write_closes_the_diff(vscode, tmp_path, monkeypatch):
     monkeypatch.setattr(tools, "SCRATCH_DIR", str(tmp_path))
     target = tmp_path / "keep.txt"
-    target.write_text("original\n")
+    target.write_text("original\n", encoding="utf-8")
     _answer(monkeypatch, "y")
 
     tools.write_tool(str(target), "replaced\n")
@@ -287,7 +288,7 @@ def test_approving_a_write_closes_the_diff(vscode, tmp_path, monkeypatch):
 def test_rejecting_a_write_closes_the_diff_too(vscode, tmp_path, monkeypatch):
     monkeypatch.setattr(tools, "SCRATCH_DIR", str(tmp_path))
     target = tmp_path / "keep.txt"
-    target.write_text("original\n")
+    target.write_text("original\n", encoding="utf-8")
     _answer(monkeypatch, "n")
 
     tools.write_tool(str(target), "replaced\n")
@@ -301,7 +302,7 @@ def test_an_interrupted_answer_still_closes_the_diff(
 ):
     monkeypatch.setattr(tools, "SCRATCH_DIR", str(tmp_path))
     target = tmp_path / "keep.txt"
-    target.write_text("original\n")
+    target.write_text("original\n", encoding="utf-8")
     monkeypatch.setattr(tools, "NO_COMMAND_CONFIRMATION", False)
     monkeypatch.setattr(tools, "notify_needs_input", lambda: None)
 
@@ -319,25 +320,26 @@ def test_an_interrupted_answer_still_closes_the_diff(
 def test_approving_an_edit_closes_the_diff(vscode, tmp_path, monkeypatch):
     monkeypatch.setattr(tools, "SCRATCH_DIR", str(tmp_path))
     target = tmp_path / "greet.py"
-    target.write_text('print("hello")\n')
+    target.write_text('print("hello")\n', encoding="utf-8")
     _answer(monkeypatch, "y")
 
     tools.edit_tool(str(target), '"hello"', '"hi"')
 
     assert editor._showing is None  # nosec B101
-    assert target.read_text() == 'print("hi")\n'  # nosec B101
+    assert target.read_text(encoding="utf-8") == 'print("hi")\n'  # nosec B101
 
 
 def test_rejecting_an_edit_closes_the_diff(vscode, tmp_path, monkeypatch):
     monkeypatch.setattr(tools, "SCRATCH_DIR", str(tmp_path))
     target = tmp_path / "greet.py"
-    target.write_text('print("hello")\n')
+    target.write_text('print("hello")\n', encoding="utf-8")
     _answer(monkeypatch, "n")
 
     tools.edit_tool(str(target), '"hello"', '"hi"')
 
     assert editor._showing is None  # nosec B101
-    assert target.read_text() == 'print("hello")\n'  # nosec B101
+    assert target.read_text(
+            encoding="utf-8") == 'print("hello")\n'  # nosec B101
 
 
 def test_the_setting_hint_is_said_once_and_only_when_it_is_off(

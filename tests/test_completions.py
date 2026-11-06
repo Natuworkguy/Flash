@@ -37,7 +37,7 @@ class TestImagePaths:
                                                    monkeypatch):
         monkeypatch.chdir(tmp_path)
         (tmp_path / "cat.png").write_bytes(b"")
-        (tmp_path / "notes.txt").write_text("x")
+        (tmp_path / "notes.txt").write_text("x", encoding="utf-8")
 
         offered = {c.text for c in complete("/image ")}
 

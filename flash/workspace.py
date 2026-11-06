@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any, Optional
 from urllib.parse import urlparse
 
+from . import paths
 from .paths import FLASH_DIR
 
 LOCAL_HOST = "http://localhost:11434"
@@ -41,6 +42,9 @@ MAX_DIR_SUGGESTIONS = 12
 CHAT_ID_RE = re.compile(r"^[0-9a-f]{8}$")
 
 _lock = threading.Lock()
+# One chat saved at a time: two threads replacing one file at once is what
+# Windows refuses.
+_chat_lock = threading.Lock()
 
 
 class WorkspaceError(ValueError):
@@ -64,7 +68,7 @@ def _write(name: str, value: Any) -> None:
     path = folder / name
     partial = path.with_suffix(path.suffix + ".partial")
     partial.write_text(json.dumps(value, indent=1), encoding="utf-8")
-    os.replace(partial, path)
+    paths.replace(partial, path)
 
 
 # --- Hosts ---------------------------------------------------------------
@@ -913,6 +917,11 @@ def chat_saved(chat_id: str) -> bool:
 
 
 def save_chat(saved: dict) -> None:
+    with _chat_lock:
+        _save_chat(saved)
+
+
+def _save_chat(saved: dict) -> None:
     path = _chat_file(saved.get("id", ""))
     if path is None:
         return
@@ -922,7 +931,7 @@ def save_chat(saved: dict) -> None:
     partial = path.with_name(f".{path.stem}.{uuid.uuid4().hex[:8]}.partial")
     try:
         partial.write_text(json.dumps(saved), encoding="utf-8")
-        os.replace(partial, path)
+        paths.replace(partial, path)
     finally:
         partial.unlink(missing_ok=True)
 

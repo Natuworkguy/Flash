@@ -40,7 +40,7 @@ from typing import Optional
 import ollama
 
 from . import agent as subagents
-from . import audit, cron, pings, presence, providers, triggers
+from . import audit, cron, paths, pings, presence, providers, triggers
 from .models import full_name, installed_names
 from .paths import ENV_PATH, FLASH_DIR
 from .sysprompt import get_model_system_prompt
@@ -836,7 +836,7 @@ def _save(spark: Spark) -> None:
     data = asdict(spark)
     temp = folder / f".{spark.id}.tmp"
     temp.write_text(json.dumps(data, indent=2), encoding="utf-8")
-    os.replace(temp, _path(spark.id))
+    paths.replace(temp, _path(spark.id))
 
 
 _depth = threading.local()
@@ -1060,7 +1060,7 @@ def _write_teams(found: list[Team]) -> None:
     temp.write_text(
         json.dumps([asdict(t) for t in found], indent=2), encoding="utf-8",
     )
-    os.replace(temp, _teams_path())
+    paths.replace(temp, _teams_path())
 
 
 def teams() -> list[Team]:
@@ -1935,7 +1935,7 @@ def _write_hires(found: list[dict]) -> None:
     temp = folder / ".hires.tmp"
     # The decided ones are kept a while, for the record, not for ever.
     temp.write_text(json.dumps(found[-100:], indent=2), encoding="utf-8")
-    os.replace(temp, _hires_path())
+    paths.replace(temp, _hires_path())
 
 
 def hires(pending: bool = True) -> list[dict]:
@@ -3123,7 +3123,7 @@ def remove(key: str) -> Spark:
         temp.write_text(json.dumps(
             {"trashed": time.time(), "spark": asdict(spark)}, indent=2,
         ), encoding="utf-8")
-        os.replace(temp, _trash_path(spark.id))
+        paths.replace(temp, _trash_path(spark.id))
         _path(spark.id).unlink(missing_ok=True)
         for other in all_sparks():
             if _let_go_of(other, spark.id, spark.reports_to):
@@ -3931,7 +3931,7 @@ def write_document(spark_id: str, title: str, content: str) -> Path:
     path = folder / f"{_document_slug(title)}.md"
     temp = path.with_suffix(".tmp")
     temp.write_text(content + "\n", encoding="utf-8")
-    os.replace(temp, path)
+    paths.replace(temp, path)
     return path
 
 
@@ -6009,7 +6009,7 @@ def ask_refresh() -> None:
     temp = folder / ".refresh.tmp"
     temp.write_text(json.dumps({"pid": os.getpid(), "at": time.time()}),
                     encoding="utf-8")
-    os.replace(temp, folder / REFRESH)
+    paths.replace(temp, folder / REFRESH)
     wake()
 
 
@@ -6088,7 +6088,7 @@ def _beat(always: bool) -> None:
             with contextlib.suppress(OSError):
                 temp = sparks_dir() / ".keeper.tmp"
                 temp.write_text(json.dumps(beat), encoding="utf-8")
-                os.replace(temp, sparks_dir() / HEARTBEAT)
+                paths.replace(temp, sparks_dir() / HEARTBEAT)
             time.sleep(TICK_SECONDS)
 
     threading.Thread(target=keep_beating, daemon=True).start()
@@ -6114,9 +6114,33 @@ def keeper() -> Optional[dict]:
     return beat
 
 
+def _alive_on_windows(pid: int) -> bool:
+    """Windows' own answer: the process opened for a look, and whether it
+    has an exit code yet. One that is there but not ours to open is
+    running all the same."""
+
+    import ctypes
+    from ctypes import wintypes
+
+    still_active, access_denied = 259, 5
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.OpenProcess.restype = wintypes.HANDLE
+    kernel32.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL,
+                                     wintypes.DWORD)
+    handle = kernel32.OpenProcess(0x1000, False, pid)  # limited query
+    if not handle:
+        return ctypes.get_last_error() == access_denied
+    try:
+        code = wintypes.DWORD()
+        if not kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
+            return True
+        return code.value == still_active
+    finally:
+        kernel32.CloseHandle(handle)
+
+
 def alive(pid) -> bool:
-    """Whether process PID is running. Unknowable on Windows from here
-    without risk, so there it is taken to be."""
+    """Whether process PID is running."""
 
     try:
         pid = int(pid)
@@ -6125,7 +6149,10 @@ def alive(pid) -> bool:
     if pid <= 0:
         return False
     if os.name == "nt":
-        return True
+        try:
+            return _alive_on_windows(pid)
+        except (OSError, AttributeError, ValueError):
+            return True  # it cannot tell: taken to be, as before
     try:
         os.kill(pid, 0)  # signal 0: asks, and sends nothing
     except ProcessLookupError:

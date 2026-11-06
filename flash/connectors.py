@@ -130,15 +130,27 @@ _BARE_URL = re.compile(r"^(localhost|127\.0\.0\.1|\[::1\]|[\w.-]+\.\w+)"
                        r"(:\d+)?(/\S*)?$", re.IGNORECASE)
 
 
+def split_command(text: str, windows: bool = os.name == "nt") -> list[str]:
+    """TEXT split into words as its shell would. Windows keeps a quoted
+    word's backslashes (C:\\Tools), and the quotes come off it after."""
+
+    import shlex
+
+    words = shlex.split(text, posix=not windows)
+    if windows:
+        words = [w[1:-1] if len(w) >= 2 and w[0] == w[-1] and w[0] in "\"'"
+                 else w for w in words]
+    return words
+
+
 def _command(text: str) -> dict:
     """A command line as {"command", "args"}; a .py file alone runs on
     Flash's own Python."""
 
-    import shlex
     import sys
 
     try:
-        words = shlex.split(str(text), posix=os.name != "nt")
+        words = split_command(str(text))
     except ValueError as exc:
         raise ConnectorError(f"That command does not parse: {exc}") from None
     if not words:
