@@ -147,7 +147,37 @@ def _homes() -> list[Path]:
         import pwd
 
         homes.append(Path(pwd.getpwuid(os.getuid()).pw_dir))
+    if os.name == "nt":
+        with contextlib.suppress(AttributeError, OSError, ValueError):
+            homes.append(Path(_windows_profile()))
     return list(dict.fromkeys(homes))
+
+
+def _windows_profile() -> str:
+    """The account's own profile folder, as Windows keeps it: not read
+    from USERPROFILE, which a test or a launcher may have changed."""
+
+    import ctypes
+    import uuid
+    from ctypes import wintypes
+
+    class Guid(ctypes.Structure):  # pylint: disable=too-few-public-methods
+        _fields_ = [("data1", wintypes.DWORD), ("data2", wintypes.WORD),
+                    ("data3", wintypes.WORD), ("data4", ctypes.c_ubyte * 8)]
+
+    profile = Guid.from_buffer_copy(
+        uuid.UUID("5E6C858F-0E22-4760-9AFE-EA3317B67173").bytes_le)
+    found = ctypes.c_wchar_p()
+    shell = ctypes.WinDLL("shell32")
+    if shell.SHGetKnownFolderPath(ctypes.byref(profile), 0, None,
+                                  ctypes.byref(found)):
+        raise OSError("no profile folder")
+    try:
+        if not found.value:
+            raise OSError("no profile folder")
+        return found.value
+    finally:
+        ctypes.WinDLL("ole32").CoTaskMemFree(found)
 
 
 class TutorError(ValueError):

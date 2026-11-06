@@ -57,6 +57,29 @@ def offline(monkeypatch):
     monkeypatch.setattr(ai, "_session_system_prompt", lambda heard=False: "")
     monkeypatch.setattr(ai, "_history_budget", lambda: 100_000)
     monkeypatch.setattr(web.checkpoint, "start_turn", lambda label: None)
+    # Every session the test makes, so none of its turns outlives it: one
+    # still going would take the next test's scripted replies for its own.
+    made = []
+    init = web.Session.__init__
+
+    def kept(self, *args, **kwargs):
+        init(self, *args, **kwargs)
+        made.append(self)
+
+    monkeypatch.setattr(web.Session, "__init__", kept)
+    yield
+    chats = []
+    for session in made:
+        with session._lock:
+            for chat in session.chats.values():
+                chat.pending.clear()
+                chat.stop.set()
+                chats.append(chat)
+    deadline = time.monotonic() + 10
+    while any(chat.busy or chat.queued for chat in chats) and (
+        time.monotonic() < deadline
+    ):
+        time.sleep(0.02)
 
 
 def events_of(session):

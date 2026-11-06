@@ -334,3 +334,30 @@ def no_developer_config(monkeypatch):
     from flash.ai import Config
 
     monkeypatch.setattr(Config, "background", "")
+
+
+@pytest.fixture(autouse=True)
+def no_leftover_listeners(monkeypatch):
+    """Every "Hey Flash" listener a test starts is stopped with it.
+
+    One left running, by a test that failed before it stopped its own or
+    that stopped it without waiting, would go on hearing the next test's
+    wake word, and answer it in a conversation of its own.
+    """
+
+    started = []
+    start = heyflash.Listener.start
+
+    def kept(self):
+        started.append(self)
+        start(self)
+
+    monkeypatch.setattr(heyflash.Listener, "start", kept)
+    yield
+    for found in started:
+        found._stop.set()
+        found._changed.set()
+    for found in started:
+        for thread in (found._thread, found._beats):
+            if thread is not None:
+                thread.join(timeout=5)
