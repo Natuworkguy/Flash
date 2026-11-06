@@ -56,6 +56,11 @@ KOKORO_HINT = (
     f"`{_ADD} {KOKORO_PACKAGE}`."
 )
 
+PHONON_PACKAGE = "ptts"
+PHONON_HINT = (
+    f"Phonon voices need the {PHONON_PACKAGE} package. Install it with "
+    f"`{_ADD} {PHONON_PACKAGE}`."
+)
 MOONSHINE_PACKAGE = "moonshine-voice"
 MOONSHINE_HINT = (
     f"Moonshine listening needs the {MOONSHINE_PACKAGE} package. Install "
@@ -244,6 +249,39 @@ KOKORO_SIZE = 92_361_271 + 28_214_398
 KOKORO_RATE = 24000
 KOKORO_ACCENTS = {"a": "en-us", "b": "en-gb"}
 
+# Phonon speaks the most naturally of them, and the quickest: a small
+# network that starts talking before a sentence is done, on any CPU. One
+# model shared by every Phonon voice, and a small file for each voice,
+# all fetched together, so a spark's own voice is there when it calls. A
+# voice is named phonon-<its own name>.
+PHONON = "phonon-"
+PHONON_BASE = "https://huggingface.co/gradium/phonon-31m-en/resolve/main"
+PHONON_VOICES_BASE = (
+    "https://huggingface.co/gradium/phonon-voices/resolve/main/voices"
+)
+PHONON_REMOTE = "hf://gradium/phonon-31m-en"
+# The model's files, and their sizes.
+PHONON_FILES = {
+    "config.json": 4_634, "model.q8.gguf": 64_512_352,
+    "tokenizer.model": 65_045, "tokenizer.json": 277_967,
+}
+# Flash's name for each voice: the catalog's name for it, its file, and
+# its accent.
+PHONON_VOICES = {
+    "harper": ("Harper", "4SZHfMpw-p46Ywgs", "en-us"),
+    "juniper": ("Juniper", "NIWIOv5vTi5eRMj8", "en-us"),
+    "hadley": ("Hadley", "bXwrkHhURL1VFJdG", "en-us"),
+    "miles": ("Miles", "d9XCyhjo4JhkHF1d", "en-us"),
+    "easton": ("Easton", "LMDIYE0Oa377Qh6Z", "en-us"),
+    "maeve": ("Maeve", "6PWnV0Nq4wu7RVBT", "en-gb"),
+    "spencer": ("Spencer", "JOW0vchyswkQUMDS", "en-gb"),
+    "edwin": ("Edwin", "zUCxzrOrugTSis03", "en-gb"),
+}
+PHONON_VOICE_SIZE = 256_136
+PHONON_SIZE = sum(PHONON_FILES.values()) + \
+    PHONON_VOICE_SIZE * len(PHONON_VOICES)
+PHONON_RATE = 24000
+
 # Moonshine hears more accurately than Vosk, and streams: the words while
 # someone talks come from the same model that hears them in the end. A
 # model is a folder of files from Moonshine's own server, pinned here as
@@ -312,8 +350,27 @@ LISTENING = (
            "Vosk's largest, for strong machines"),
 )
 
-# And to speak with.
+# And to speak with: the best first, Phonon, then the second best, Kokoro,
+# then Piper's, lightest first.
 SPEAKING = (
+    # One download for all of them.
+    Choice(f"{PHONON}harper", PHONON_SIZE,
+           "Phonon Harper, the best: confident and friendly"),
+    Choice(f"{PHONON}juniper", PHONON_SIZE, "Phonon Juniper, cheerful"),
+    Choice(f"{PHONON}hadley", PHONON_SIZE, "Phonon Hadley, calm and kind"),
+    Choice(f"{PHONON}miles", PHONON_SIZE, "Phonon Miles, warm and decisive"),
+    Choice(f"{PHONON}easton", PHONON_SIZE, "Phonon Easton, crisp and close"),
+    Choice(f"{PHONON}maeve", PHONON_SIZE, "Phonon Maeve, British, sparky"),
+    Choice(f"{PHONON}spencer", PHONON_SIZE,
+           "Phonon Spencer, British, patient"),
+    Choice(f"{PHONON}edwin", PHONON_SIZE, "Phonon Edwin, British, firm"),
+    # One download for all of them.
+    Choice(f"{KOKORO}af_heart", KOKORO_SIZE,
+           "Kokoro Heart, second best: natural and warm"),
+    Choice(f"{KOKORO}af_bella", KOKORO_SIZE, "Kokoro Bella, bright"),
+    Choice(f"{KOKORO}am_michael", KOKORO_SIZE, "Kokoro Michael, calm"),
+    Choice(f"{KOKORO}bf_emma", KOKORO_SIZE, "Kokoro Emma, British"),
+    Choice(f"{KOKORO}bm_george", KOKORO_SIZE, "Kokoro George, British"),
     Choice("en_US-amy-low", 63_104_526, "Amy, fastest, for weaker machines"),
     Choice(DEFAULT_PIPER_VOICE, 63_201_294, "Amy, balanced"),
     # Every medium voice is the same size of model.
@@ -321,13 +378,6 @@ SPEAKING = (
     Choice("en_US-hfc_female-medium", 63_201_294,
            "HFC, bright and friendly"),
     Choice("en_US-lessac-high", 113_895_201, "Lessac, clearest"),
-    # One download for all of them.
-    Choice(f"{KOKORO}af_heart", KOKORO_SIZE,
-           "Kokoro Heart, the most natural, warm"),
-    Choice(f"{KOKORO}af_bella", KOKORO_SIZE, "Kokoro Bella, bright"),
-    Choice(f"{KOKORO}am_michael", KOKORO_SIZE, "Kokoro Michael, calm"),
-    Choice(f"{KOKORO}bf_emma", KOKORO_SIZE, "Kokoro Emma, British"),
-    Choice(f"{KOKORO}bm_george", KOKORO_SIZE, "Kokoro George, British"),
     Choice("en_US-ryan-high", 120_786_792,
            "Ryan, clearest, for strong machines"),
 )
@@ -424,6 +474,8 @@ def engine_of(name: str) -> str:
 
     if is_extension(name):
         return str(name)[1:].split("/", 1)[0]
+    if is_phonon(name):
+        return "Phonon"
     if is_kokoro(name):
         return "Kokoro"
     if is_moonshine(name):
@@ -437,7 +489,9 @@ def engine_label(name: str) -> str:
 
     if is_extension(name):
         return f"From the {engine_of(name)} extension"
-    return engine_of(name)
+    # The voices to speak with, ranked: the best, and the second best.
+    ranked = {"Phonon": "Phonon, the best", "Kokoro": "Kokoro, second best"}
+    return ranked.get(engine_of(name), engine_of(name))
 
 
 def by_engine(choices) -> list:
@@ -453,6 +507,36 @@ def by_engine(choices) -> list:
 
 def is_kokoro(name: str) -> bool:
     return str(name or "").startswith(KOKORO)
+
+
+def is_phonon(name: str) -> bool:
+    return str(name or "").startswith(PHONON)
+
+
+def phonon_dir() -> Path:
+    """Where Phonon's model and voices are kept, laid out as the model's
+    own folder, with its voices and their catalog beside it."""
+
+    return MODELS_DIR / "phonon"
+
+
+def phonon_paths() -> list[Path]:
+    """Every file Phonon voices run on: the model's and each voice's."""
+
+    folder = phonon_dir()
+    return [*(folder / name for name in PHONON_FILES),
+            *(folder / "voices" / f"{file}.safetensors"
+              for _name, file, _accent in PHONON_VOICES.values())]
+
+
+def phonon_ready() -> bool:
+    """Whether the package Phonon voices run on is installed."""
+
+    try:
+        import ptts  # noqa: F401
+    except Exception:  # noqa: BLE001
+        return False
+    return True
 
 
 def kokoro_paths() -> tuple[Path, Path]:
@@ -499,6 +583,9 @@ def listening_installed(name: str) -> bool:
 def voice_installed(name: str) -> bool:
     if is_extension(name):
         return _extension_speech(name, "speaking") is not None
+    if is_phonon(name):
+        return name[len(PHONON):] in PHONON_VOICES and all(
+            path.is_file() for path in phonon_paths())
     paths = kokoro_paths() if is_kokoro(name) else piper_paths(name)
     return all(path.is_file() for path in paths)
 
@@ -534,9 +621,10 @@ def missing_packages() -> list[str]:
 
     missing = []
 
-    # The voice in use decides which speaks: Piper, or Kokoro.
+    # The voice in use decides which speaks: Piper, Kokoro or Phonon.
     speaking = (
         ("kokoro_onnx", KOKORO_PACKAGE) if is_kokoro(piper_voice())
+        else ("ptts", PHONON_PACKAGE) if is_phonon(piper_voice())
         else ("piper", "piper-tts")
     )
     # Vosk listens for "Hey Flash" even while Moonshine does the rest.
@@ -566,6 +654,8 @@ def install_hint() -> str:
     missing = missing_packages()
     if MOONSHINE_PACKAGE in missing:
         return MOONSHINE_HINT
+    if PHONON_PACKAGE in missing:
+        return PHONON_HINT
     return KOKORO_HINT if KOKORO_PACKAGE in missing else INSTALL_HINT
 
 
@@ -721,6 +811,8 @@ def download_voice(
 
     if is_kokoro(name):
         return _download_kokoro(on_progress, stop)
+    if is_phonon(name):
+        return _download_phonon(on_progress, stop)
 
     try:
         onnx_url, config_url = _piper_urls(name)
@@ -754,6 +846,42 @@ def _download_kokoro(
         if why:
             return why
     return ""
+
+
+def _download_phonon(
+    on_progress: Progress, stop: Optional[threading.Event] = None,
+) -> str:
+    """Fetch Phonon's model and every voice Flash offers in it, what of
+    them is not here, and write the catalog that names the voices."""
+
+    folder = phonon_dir()
+    (folder / "voices").mkdir(parents=True, exist_ok=True)
+    wanted = [(f"{PHONON_BASE}/{name}", folder / name, "Phonon")
+              for name in PHONON_FILES]
+    wanted += [(f"{PHONON_VOICES_BASE}/{file}.safetensors",
+                folder / "voices" / f"{file}.safetensors",
+                f"Phonon voice {shown}")
+               for shown, file, _accent in PHONON_VOICES.values()]
+    for url, path, label in wanted:
+        if path.is_file():
+            continue
+        why = _download(url, path, label, on_progress, stop)
+        if why:
+            return why
+    _write_phonon_catalog()
+    return ""
+
+
+def _write_phonon_catalog() -> None:
+    """The voices Phonon is given, one a line, as its catalogs are."""
+
+    lines = [json.dumps({
+        "name": shown, "voice_id": file, "language": "en",
+        "locale": accent, "filename": f"voices/{file}.safetensors",
+    }) for shown, file, accent in PHONON_VOICES.values()]
+    phonon_dir().mkdir(parents=True, exist_ok=True)
+    (phonon_dir() / "voices.jsonl").write_text(
+        "\n".join(lines) + "\n", encoding="utf-8")
 
 
 def _download_moonshine(
@@ -869,6 +997,16 @@ def remove_voice(name: str) -> None:
 
     if name not in {c.name for c in SPEAKING}:
         raise ValueError(f"{name!r} is not a voice Flash offers")
+    if is_phonon(name):
+        # Shared by them all, as Kokoro's is.
+        if is_phonon(piper_voice()):
+            raise ValueError(
+                "Every Phonon voice shares one download, and one of them "
+                "is in use. Pick another voice first."
+            )
+        for path in [*phonon_paths(), phonon_dir() / "voices.jsonl"]:
+            path.unlink(missing_ok=True)
+        return
     if is_kokoro(name):
         # Shared by them all: not from under the one speaking now.
         if is_kokoro(piper_voice()):
@@ -1369,6 +1507,10 @@ def _load_speaker():
         if _speaker is None or _speaker[0] != name:
             _speaker = (name, _KokoroVoice(name), KOKORO_RATE)
         return _speaker[1], _speaker[2]
+    if is_phonon(name):
+        if _speaker is None or _speaker[0] != name:
+            _speaker = (name, _PhononVoice(name), PHONON_RATE)
+        return _speaker[1], _speaker[2]
 
     onnx, config = piper_paths()
 
@@ -1484,7 +1626,7 @@ def _pcm_chunks(voice, text: str, rate: int = 22050):
             not humanvoice.pieces(text)[1]:
         return
 
-    whole = isinstance(voice, (_KokoroVoice, _ExtensionVoice))
+    whole = isinstance(voice, (_KokoroVoice, _PhononVoice, _ExtensionVoice))
     style = STYLES[voice_style()]
     if not style.feeling and not whole and text == humanvoice.strip(text):
         yield from _said(voice, fit_for_voice(text), {})
@@ -1565,6 +1707,55 @@ class _KokoroVoice:
         return (clipped * 32767).astype("<i2").tobytes()
 
 
+# Phonon's model, once loaded: every Phonon voice speaks with it.
+_phonon = None
+
+
+def _phonon_model():
+    """Phonon's model, from its folder here; from its own download if that
+    will not load, which it keeps in a cache of its own."""
+
+    global _phonon
+
+    try:
+        import ptts
+    except Exception:  # noqa: BLE001
+        raise RuntimeError(PHONON_HINT) from None
+    if _phonon is None:
+        folder = phonon_dir()
+        catalog = folder / "voices.jsonl"
+        if not catalog.is_file():
+            _write_phonon_catalog()
+        try:
+            _phonon = ptts.TTS(str(folder), lang="en", quant="q8",
+                               voice_catalog=str(catalog))
+        except Exception:  # noqa: BLE001
+            _phonon = ptts.TTS(PHONON_REMOTE, lang="en", quant="q8",
+                               voice_catalog=str(catalog))
+    return _phonon
+
+
+class _PhononVoice:
+    """A Phonon voice, speaking as Flash asks a Piper voice to: 16-bit
+    audio for each piece of text. It keeps its own pace: Phonon has no
+    setting for one."""
+
+    def __init__(self, name: str) -> None:
+        key = name[len(PHONON):]
+        if key not in PHONON_VOICES:
+            raise RuntimeError(f"{name} is not a Phonon voice Flash has.")
+        self.voice = PHONON_VOICES[key][0]
+        self.model = _phonon_model()
+
+    def pcm(self, text: str, pace: float = 1.0) -> bytes:
+        import numpy
+
+        samples = self.model.synth(text, voice=self.voice)
+        clipped = numpy.clip(numpy.asarray(samples, dtype="float32"),
+                             -1.0, 1.0)
+        return (clipped * 32767).astype("<i2").tobytes()
+
+
 class _ExtensionVoice:
     """An extension's voice, speaking as a Piper voice is asked to."""
 
@@ -1604,7 +1795,7 @@ def _said(voice, text: str, settings: dict):
     in Kokoro or an extension's voice, which take the pace and leave the
     rest."""
 
-    if isinstance(voice, (_KokoroVoice, _ExtensionVoice)):
+    if isinstance(voice, (_KokoroVoice, _PhononVoice, _ExtensionVoice)):
         yield voice.pcm(text, settings.get("length_scale", 1.0))
         return
 
@@ -1653,6 +1844,8 @@ def speak(text: str, speaker: str = "",
     try:
         if speaker and is_kokoro(speaker) and is_kokoro(piper_voice()):
             voice, rate = _KokoroVoice(speaker), KOKORO_RATE
+        elif speaker and is_phonon(speaker) and is_phonon(piper_voice()):
+            voice, rate = _PhononVoice(speaker), PHONON_RATE
         else:
             voice, rate = _load_speaker()
     except Exception as exc:  # noqa: BLE001
@@ -2036,6 +2229,8 @@ def can_speak_with(name: str) -> bool:
 
     if not name or not voice_installed(name):
         return False
+    if is_phonon(name):
+        return phonon_ready()
     return kokoro_ready() if is_kokoro(name) else True
 
 
@@ -2065,7 +2260,10 @@ def spark_voice(spark_id: str, chosen: Optional[str] = None,
     else:
         pick = zlib.crc32(spark_id.encode("utf-8"))
         own = piper_voice()
-        if is_kokoro(own):
+        if is_phonon(own):
+            others = [v for v in PHONON_VOICES if PHONON + v != own]
+            found = {"voice": PHONON + others[pick % len(others)]}
+        elif is_kokoro(own):
             others = [v for v in SPARK_KOKORO if KOKORO + v != own]
             found = {"voice": KOKORO + others[pick % len(others)]}
         else:
@@ -2085,6 +2283,8 @@ def _other_speaker(name: str):
 
     if is_kokoro(name):
         return _KokoroVoice(name), KOKORO_RATE
+    if is_phonon(name):
+        return _PhononVoice(name), PHONON_RATE
     if is_extension(name):
         found = _extension_speech(name, "speaking")
         if found is None:

@@ -41,9 +41,10 @@ _WAIT_SECONDS = 300
 # whether the update succeeded. Kept in step with install.sh,
 # install.ps1, and requirements-voice.txt.
 VOICE_PACKAGES = ("sounddevice", "vosk", "piper-tts")
-# Kokoro voices' package and Moonshine listening's, each put back too by
-# an update, when it was in.
+# Kokoro's and Phonon's voices' packages and Moonshine listening's, each
+# put back too by an update, when it was in.
 KOKORO_PACKAGE = "kokoro-onnx"
+PHONON_PACKAGE = "ptts"
 MOONSHINE_PACKAGE = "moonshine-voice"
 
 
@@ -55,6 +56,7 @@ def voice_packages() -> list[str]:
 
     packages = list(VOICE_PACKAGES)
     for module, package in (("kokoro_onnx", KOKORO_PACKAGE),
+                            ("ptts", PHONON_PACKAGE),
                             ("moonshine_voice", MOONSHINE_PACKAGE)):
         try:
             if importlib.util.find_spec(module) is not None:

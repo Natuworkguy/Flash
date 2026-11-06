@@ -24,6 +24,8 @@ dev = { file = ["requirements-dev.txt"] }
 voice = { file = ["requirements-voice.txt"] }
 # Kokoro voices, which speak more naturally: pip install "flash[kokoro]".
 kokoro = { file = ["requirements-kokoro.txt"] }
+# Phonon voices, the most natural and quickest: pip install "flash[phonon]".
+phonon = { file = ["requirements-phonon.txt"] }
 # Moonshine listening, which hears more accurately than Vosk:
 # pip install "flash[moonshine]".
 moonshine = { file = ["requirements-moonshine.txt"] }
