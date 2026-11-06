@@ -51,6 +51,9 @@ MOODS = {
 # Sounds, and how each is made when the voice has no way of its own to
 # make it: a breath of air, or a word said as the sound.
 SOUNDS = ("laugh", "chuckle", "sigh", "breath", "hm", "gasp")
+# Read as cues, so never shown or read out, but not voiced: breathing is
+# left out of Flash's voice.
+SILENT_SOUNDS = ("breath",)
 SAID_SOUNDS = {"laugh": "Ha ha!", "chuckle": "Heh.", "hm": "Hmm."}
 
 _CUE = re.compile(
@@ -151,30 +154,13 @@ def _noise(rate: int, seconds: float, rise: float, fall: float,
     return out.tobytes()
 
 
-def breath(rate: int, kind: str = "breath", seed: int = 0) -> bytes:
-    """A breath in (before speaking), a sigh (out, longer) or a gasp
-    (in, sharp), as 16-bit audio at RATE."""
+def air(rate: int, kind: str = "sigh", seed: int = 0) -> bytes:
+    """A sigh (out, long and soft) or a gasp (in, sharp), as 16-bit audio
+    at RATE."""
 
-    if kind == "sigh":
-        return _noise(rate, 0.85, 0.12, 0.7, 0.16, seed, low=0.1)
     if kind == "gasp":
         return _noise(rate, 0.3, 0.05, 0.22, 0.2, seed, high=0.8)
-    return _noise(rate, 0.42, 0.16, 0.24, 0.07, seed)
-
-
-# How long a sentence is before a breath may come ahead of it, and how
-# many such sentences in ten have one.
-BREATH_CHARS = 80
-BREATHS_IN_TEN = 6
-
-
-def breathes(sentence: str) -> bool:
-    """Whether SENTENCE is said after a breath in: a long one, some of the
-    time, decided by the sentence so it does not change between takes."""
-
-    if len(sentence or "") < BREATH_CHARS:
-        return False
-    return zlib.crc32(sentence.encode("utf-8")) % 10 < BREATHS_IN_TEN
+    return _noise(rate, 0.85, 0.12, 0.7, 0.16, seed, low=0.1)
 
 
 def louder(pcm: bytes, gain: float) -> bytes:
@@ -444,7 +430,7 @@ How to sound like a person on the phone, not text read aloud:
   [calm] [serious] [sorry] [sad]. Your voice takes it on; most sentences
   need none.
 - Make the sounds people make, where they would, and sparingly (one a
-  reply at most): [laugh] [chuckle] [sigh] [breath] [hm] [gasp].
+  reply at most): [laugh] [chuckle] [sigh] [hm] [gasp].
 - Use their name now and then, not every time. Bring back what they said
   earlier in this conversation, or before, when it matters.
 - Before using a tool that takes a moment, say a few words of what you

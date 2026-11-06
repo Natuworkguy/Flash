@@ -85,13 +85,19 @@ class TestTiming:
         said = humanvoice.ack_for("the build failed again")
         assert said in humanvoice._ACKS["bad"]
 
-    def test_breaths_come_before_some_long_sentences_only(self):
-        long = [f"Sentence number {n}, which goes on long enough that a "
-                "speaker would take a breath before it." for n in range(20)]
+    def test_breathing_is_never_voiced(self, monkeypatch):
+        monkeypatch.setattr(voice, "_KokoroVoice", _Voice)
+        monkeypatch.setenv("VOICE_STYLE", "calm")
+        speaker = _Voice()
+        long = ("This sentence goes on more than long enough that a speaker "
+                "would have taken a breath before saying it out loud.")
 
-        assert not humanvoice.breathes("Short one.")
-        assert 0 < sum(map(humanvoice.breathes, long)) < 20
-        assert humanvoice.breathes(long[0]) == humanvoice.breathes(long[0])
+        pcm = b"".join(voice._pcm_chunks(speaker, f"[breath] {long}", 100))
+
+        assert [text for text, _ in speaker.said] == [long]
+        # The speech and the calm style's pause after it: no rush of air.
+        assert pcm.rstrip(b"\x00") == b"\x10\x00" * 49 + b"\x10"
+        assert "[breath]" not in humanvoice.spoken()
 
 
 def _speech(seconds, loud, pitch, rate=16000):
