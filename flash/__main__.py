@@ -23,7 +23,27 @@ def _repair(error: ModuleNotFoundError) -> None:
         [sys.executable, "-m", "flash", *sys.argv[1:]], env=again))
 
 
+def _no_console() -> None:
+    """Started with no console (pythonw, from a shortcut or a login task),
+    Python has nowhere to print, and printing would fail: what Flash says
+    goes to ~/.flash/background.log instead."""
+
+    if sys.stdout is not None and sys.stderr is not None:
+        return
+    from pathlib import Path
+
+    log = Path.home() / ".flash" / "background.log"
+    try:
+        log.parent.mkdir(parents=True, exist_ok=True)
+        out = open(log, "a", encoding="utf-8", buffering=1)
+    except OSError:
+        out = open(os.devnull, "w", encoding="utf-8")
+    sys.stdout = sys.stdout or out
+    sys.stderr = sys.stderr or out
+
+
 def main() -> None:
+    _no_console()
     try:
         from .ai import main as flash
     except ModuleNotFoundError as error:
