@@ -4601,7 +4601,9 @@ def voice_models(session: "Session") -> dict:
         return [
             {
                 "name": c.name, "size": c.size, "label": c.label,
-                "engine": voice.engine_of(c.name),
+                "engine": voice.engine_label(c.name),
+                # An extension's: nothing to download or delete.
+                "extension": voice.is_extension(c.name),
                 "installed": getattr(voice, installed)(c.name),
                 "current": c.name == in_use,
                 # A Kokoro voice or a Moonshine model, with what it
@@ -6601,7 +6603,8 @@ def _spark_command(name: str, arg: str, body: dict) -> dict:
             fields = {"rename": "name", "goal": "goal", "every": "every",
                       "boundaries": "boundaries", "project": "project",
                       "watch": "watch", "model": "model",
-                      "title": "title", "colour": "colour"}
+                      "title": "title", "colour": "colour",
+                      "voice": "voice", "pitch": "pitch"}
             changes = {
                 field: str(body[key])
                 for key, field in fields.items() if key in body
@@ -7248,8 +7251,15 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/api/voice/say":
             session.always.page_listening()
-            # A spark on a call speaks in a voice of its own.
-            own = voice.spark_voice(str(body.get("spark") or ""))
+            # A spark on a call speaks in a voice of its own; a voice and
+            # pitch given are one being tried, before they are saved.
+            if "voice" in body:
+                own = voice.spark_voice(
+                    str(body.get("spark") or "new spark"),
+                    chosen=str(body.get("voice") or ""),
+                    pitch=_int(body.get("pitch")))
+            else:
+                own = voice.spark_voice(str(body.get("spark") or ""))
             said = voice.speakable(str(body.get("text") or ""))
             wav, why = voice.synthesize(said, speaker=own["voice"]) \
                 if own.get("voice") else voice.synthesize(said)

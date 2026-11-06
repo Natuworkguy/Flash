@@ -431,6 +431,15 @@ def engine_of(name: str) -> str:
     return "Vosk" if str(name or "").startswith("vosk") else "Piper"
 
 
+def engine_label(name: str) -> str:
+    """What runs model NAME, said for a person: the engine, or "From the
+    NAME extension" for one an extension adds."""
+
+    if is_extension(name):
+        return f"From the {engine_of(name)} extension"
+    return engine_of(name)
+
+
 def by_engine(choices) -> list:
     """CHOICES with each engine's together, in the order they first come,
     and their own order kept within each."""
@@ -1984,27 +1993,83 @@ SPARK_KOKORO = ("af_heart", "am_michael", "bf_emma", "am_adam", "af_nicole",
 SPARK_DETUNE = (-260, 220, -140, 320, -380, 120)
 
 
-def spark_voice(spark_id: str) -> dict:
-    """The voice SPARK_ID speaks in on a call: {"voice": a Kokoro voice}
-    when Flash speaks with Kokoro, one of its others, else {"detune":
-    cents} for the page to shift Flash's own voice by. {} for Flash."""
+def can_speak_with(name: str) -> bool:
+    """Whether voice NAME is ready to speak with now: downloaded, and
+    what it runs on installed."""
+
+    if not name or not voice_installed(name):
+        return False
+    return kokoro_ready() if is_kokoro(name) else True
+
+
+def spark_voice(spark_id: str, chosen: Optional[str] = None,
+                pitch: Optional[int] = None) -> dict:
+    """The voice SPARK_ID speaks in on a call: {"voice": NAME} for a voice
+    of its own, and {"detune": cents} for the page to shift it by. The
+    one the user chose for it, when it can speak with that; else one
+    picked for it: another Kokoro voice when Flash speaks with Kokoro, or
+    Flash's own voice shifted. {} for Flash."""
 
     if not spark_id:
         return {}
     import zlib
 
-    pick = zlib.crc32(spark_id.encode("utf-8"))
-    own = piper_voice()
-    if is_kokoro(own):
-        others = [v for v in SPARK_KOKORO if KOKORO + v != own]
-        return {"voice": KOKORO + others[pick % len(others)]}
-    return {"detune": SPARK_DETUNE[pick % len(SPARK_DETUNE)]}
+    from . import sparks  # deferred: sparks imports half of Flash
+
+    # CHOSEN and PITCH: ones being tried, in place of what it has saved.
+    spark = sparks.find(spark_id)
+    if chosen is None:
+        chosen = (getattr(spark, "voice", "") or "") if spark else ""
+    if pitch is None:
+        pitch = int(getattr(spark, "pitch", 0) or 0) if spark else 0
+    found: dict
+    if chosen and can_speak_with(chosen):
+        found = {"voice": chosen}
+    else:
+        pick = zlib.crc32(spark_id.encode("utf-8"))
+        own = piper_voice()
+        if is_kokoro(own):
+            others = [v for v in SPARK_KOKORO if KOKORO + v != own]
+            found = {"voice": KOKORO + others[pick % len(others)]}
+        else:
+            found = {"detune": SPARK_DETUNE[pick % len(SPARK_DETUNE)]}
+    if pitch:
+        # Chosen by the user: in place of any picked shift.
+        found["detune"] = pitch * 100
+    return found
+
+
+_others: dict = {}  # name -> (voice, rate): voices besides Flash's own
+
+
+def _other_speaker(name: str):
+    """Voice NAME, loaded beside Flash's own, for a spark that speaks in
+    it: a Kokoro voice, an extension's, or another Piper voice."""
+
+    if is_kokoro(name):
+        return _KokoroVoice(name), KOKORO_RATE
+    if is_extension(name):
+        found = _extension_speech(name, "speaking")
+        if found is None:
+            raise RuntimeError(f"{name} is not installed: its extension is "
+                               "gone.")
+        speaker = _ExtensionVoice(*found)
+        return speaker, speaker.rate
+    if name not in _others:
+        from piper import PiperVoice
+
+        onnx, config = piper_paths(name)
+        settings = json.loads(config.read_text(encoding="utf-8"))
+        rate = int(settings.get("audio", {}).get("sample_rate", 22050))
+        _others[name] = (PiperVoice.load(str(onnx)), rate)
+    return _others[name]
 
 
 def synthesize(text: str, speaker: str = "") -> tuple[bytes, str]:
     """TEXT spoken, as a WAV file the web page can play: in Flash's voice,
-    or in SPEAKER, another Kokoro voice. Returns `(wav, "")`, or
-    `(b"", reason)` when the voice cannot be used."""
+    or in SPEAKER, another voice ready to speak with (a spark's on a
+    call). Returns `(wav, "")`, or `(b"", reason)` when the voice cannot
+    be used."""
 
     text = (text or "").strip()
     if not text:
@@ -2012,8 +2077,9 @@ def synthesize(text: str, speaker: str = "") -> tuple[bytes, str]:
 
     try:
         with _models_lock:
-            if speaker and is_kokoro(speaker) and is_kokoro(piper_voice()):
-                voice, rate = _KokoroVoice(speaker), KOKORO_RATE
+            if speaker and speaker != piper_voice() and \
+                    can_speak_with(speaker):
+                voice, rate = _other_speaker(speaker)
             else:
                 voice, rate = _load_speaker()
             pcm = b"".join(

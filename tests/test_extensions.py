@@ -990,6 +990,16 @@ class TestSpeechAndBriefing:
         assert voice.voice_installed("@talky/aura")
         assert not voice.voice_installed("@talky/gone")
         assert voice.engine_of("@talky/aura") == "talky"
+        # Said as where it comes from, in Settings and the terminal.
+        assert voice.engine_label("@talky/aura") == \
+            "From the talky extension"
+        assert voice.engine_label("en_US-amy-low") == "Piper"
+        from flash import web
+        shown = {m["name"]: m for m in
+                 web.voice_models(web.Session())["speaking"]}
+        assert shown["@talky/aura"]["engine"] == "From the talky extension"
+        assert shown["@talky/aura"]["extension"] is True
+        assert shown["en_US-amy-low"]["extension"] is False
         monkeypatch.setenv("VOICE_PIPER_VOICE", "@talky/aura")
         wav, why = voice.synthesize("hello")
         assert not why and wav[:4] == b"RIFF"

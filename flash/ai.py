@@ -6567,16 +6567,18 @@ def _voice_models() -> None:
         engine = ""
         for choice in voice.by_engine(voice.offered(kind)):
             # Each engine's together, a line between them.
-            if voice.engine_of(choice.name) != engine:
-                engine = voice.engine_of(choice.name)
+            if voice.engine_label(choice.name) != engine:
+                engine = voice.engine_label(choice.name)
                 grid.add_row(Text(""), Text(f"── {engine} ", style=DIM),
                              Text(""), Text(""))
             current = choice.name == in_use
             have = voice.model_installed(kind, choice.name)
+            ready = "ready" if voice.is_extension(choice.name) else \
+                "downloaded"
             grid.add_row(
                 Text("  ●" if current else "   ", style=ACCENT),
                 Text(choice.name, style=ACCENT if current else ""),
-                Text("downloaded" if have else _megabytes(choice.size),
+                Text(ready if have else _megabytes(choice.size),
                      style=DIM),
                 Text(choice.label, style=DIM),
             )
@@ -6605,7 +6607,7 @@ def _voice_pick(kind: str) -> None:
     rows = [
         model_picker.Model(
             name=choice.name,
-            summary=f"{voice.engine_of(choice.name)}: {choice.label}",
+            summary=f"{voice.engine_label(choice.name)}: {choice.label}",
             size=_megabytes(choice.size),
             note="in use" if choice.name == in_use else (
                 "downloaded" if voice.model_installed(kind, choice.name)
