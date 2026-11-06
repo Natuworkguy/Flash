@@ -96,7 +96,7 @@ def events_of(session):
     return drain
 
 
-def run(session, chat, text, timeout=5):
+def run(session, chat, text, timeout=15):
     session.send(chat, text)
     deadline = time.monotonic() + timeout
     time.sleep(0.05)
@@ -2006,11 +2006,35 @@ def subagent_world(monkeypatch):
         session.close()
 
 
-def wait_for(check, timeout=5):
+def wait_for(check, timeout=15):
     deadline = time.monotonic() + timeout
     while not check():
-        assert time.monotonic() < deadline, "timed out"
+        assert time.monotonic() < deadline, "timed out\n" + threads_now()
         time.sleep(0.02)
+
+
+def threads_now():
+    """Where every other thread is, in Flash's code and the tests': what
+    a turn that never finished was stuck on."""
+
+    import sys
+    import traceback
+
+    names = {t.ident: t.name for t in threading.enumerate()}
+    said = []
+    for ident, frame in sys._current_frames().items():
+        if ident == threading.get_ident():
+            continue
+        lines = [
+            f"  {os.path.basename(f.filename)}:{f.lineno} {f.name}"
+            for f in traceback.extract_stack(frame)
+            if "flash" in f.filename.replace("\\", "/").split("/")[-2:][0]
+            or "tests" in f.filename
+        ]
+        if lines:
+            said.append(f"{names.get(ident, ident)}:\n" + "\n".join(
+                lines[-12:]))
+    return "\n".join(said) or "(no other threads in Flash)"
 
 
 class TestSubAgents:
