@@ -1,6 +1,7 @@
 # pylint: disable=C0114,C0115,C0116
 
 import json
+import os
 import plistlib
 import sys
 import time
@@ -53,7 +54,7 @@ def spawned(monkeypatch):
 def _beat(always: bool) -> None:
     sparks.sparks_dir().mkdir(parents=True, exist_ok=True)
     (sparks.sparks_dir() / sparks.HEARTBEAT).write_text(json.dumps({
-        "pid": 1, "always": always, "since": time.time(),
+        "pid": os.getppid(), "always": always, "since": time.time(),
         "beat": time.time(),
     }), encoding="utf-8")
 
@@ -227,7 +228,7 @@ class TestAnotherFlash:
     def _beat(self, **fields):
         sparks.sparks_dir().mkdir(parents=True, exist_ok=True)
         (sparks.sparks_dir() / sparks.HEARTBEAT).write_text(json.dumps({
-            "pid": 1, "always": True, "since": time.time(),
+            "pid": os.getppid(), "always": True, "since": time.time(),
             "beat": time.time(), **fields,
         }), encoding="utf-8")
 
