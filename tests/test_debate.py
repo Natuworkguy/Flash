@@ -231,13 +231,16 @@ class TestRoundsAndSuggestions:
         found = debate.parse_full(
             "/debate a:8b vs b:8b; rounds 4; Should I rewrite this in C?")
         assert found == {"question": "Should I rewrite this in C?",
-                         "models": ["a:8b", "b:8b"], "rounds": 4}
+                         "models": ["a:8b", "b:8b"], "rounds": 4,
+                         "until": False}
 
     def test_any_order_and_the_old_way(self):
         assert debate.parse_full("/debate Why; rounds 3; a vs b") == {
-            "question": "Why", "models": ["a", "b"], "rounds": 3}
+            "question": "Why", "models": ["a", "b"], "rounds": 3,
+            "until": False}
         assert debate.parse_full("/debate a vs b: why; not?") == {
-            "question": "why; not?", "models": ["a", "b"], "rounds": 0}
+            "question": "why; not?", "models": ["a", "b"], "rounds": 0,
+            "until": False}
         assert debate.parse("/debate just; asking") == ("just; asking", [])
 
     def test_rounds_are_held_in_bounds(self):
@@ -257,3 +260,58 @@ class TestRoundsAndSuggestions:
         assert said("alpha:8b vs beta:8b; rounds 1")[:2] == ["1; ", "10; "]
         assert said("alpha:8b vs beta:8b; rounds 4; Should I") == []
         assert said("mo") == ["more"]
+
+
+class Referee(Client):
+    """A client whose referee says the debate is settled at last."""
+
+    def __init__(self, verdicts):
+        super().__init__()
+        self.verdicts = list(verdicts)
+
+    def chat(self, model, messages, options=None, stream=True):
+        if "You referee a debate" in messages[0]["content"]:
+            self.asked.append(("referee", messages))
+            said = self.verdicts.pop(0) if self.verdicts else "GOING"
+            return [SimpleNamespace(message=SimpleNamespace(content=said))]
+        return super().chat(model, messages, options, stream)
+
+
+def test_until_settled_is_read_in_its_many_wordings():
+    for said in ("until settled", "till they agree", "until someone wins",
+                 "until one side wins", "to the end", "rounds until agreed"):
+        asked = debate.parse_full(f"/debate a vs b; {said}; Tabs?")
+        assert asked["until"] and asked["question"] == "Tabs?", said
+    assert not debate.parse_full("/debate Tabs?")["until"]
+    assert debate.suggest("unt", [])[0][0] == "until settled; "
+
+
+def test_until_settled_goes_on_until_the_referee_says_so():
+    client = Referee(["GOING", "GOING", "AGAINST."])
+    heard = []
+    done = debate.run("tabs?", client, [], "m", until=True, say=heard.append)
+
+    assert len(done["turns"]) == 6  # three rounds, then it was settled
+    assert done["until"] and done["settled"] == "1"
+    assert {"settled": "Against won"} in heard
+    sides = [m for m, msgs in client.asked if m != "referee"]
+    # Each side is told it may concede, and the judge hears how it ended.
+    first = client.asked[0][1][0]["content"]
+    assert "until you two agree or one of you wins" in first
+    summed = client.asked[-1][1][-1]["content"]
+    assert "It ended because Against won." in summed and sides
+    assert "ended when Against won" in debate.note(done)[1]["content"]
+
+
+def test_until_settled_stops_at_the_most_rounds_when_it_never_settles():
+    client = Referee([])
+    done = debate.run("q", client, [], "m", until=True)
+
+    assert len(done["turns"]) == debate.MOST_UNTIL * 2
+    assert done["settled"] == ""
+    assert "never settled" in client.asked[-1][1][-1]["content"]
+
+
+def test_agreement_is_a_settlement_too():
+    done = debate.run("q", Referee(["AGREED"]), [], "m", until=True)
+    assert done["settled"] == "agreed" and len(done["turns"]) == 2

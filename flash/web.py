@@ -2057,7 +2057,7 @@ class Session:
 
     def debate(self, chat: Chat, text: str = "", continues: str = "",
                steer: str = "", models: Optional[list] = None,
-               rounds: int = 0) -> str:
+               rounds: int = 0, until: bool = False) -> str:
         """Argue a question out (debate.py), in CHAT, on a thread of its
         own: each side's words stream to the page as "debate-live"
         events, and the whole debate is kept in the chat at the end, its
@@ -2076,6 +2076,7 @@ class Session:
             if before is None:
                 raise ValueError("That debate is gone.")
             question, models = before["question"], before.get("models", [])
+            until = until or bool(before.get("until"))
         else:
             asked = argue.parse_full(text)
             question = asked["question"]
@@ -2083,6 +2084,7 @@ class Session:
             models = [str(m) for m in models or [] if str(m).strip()][:2] \
                 or asked["models"]
             rounds = rounds or asked["rounds"]
+            until = until or asked["until"]
         if not question:
             raise ValueError(argue.USAGE)
         if chat.busy or chat.queued:
@@ -2113,7 +2115,7 @@ class Session:
                     options=ai._chat_options(), say=say,
                     stopped=going["stop"].is_set,
                     turns=(before or {}).get("turns"), steers=steers,
-                    rounds=int(rounds or argue.ROUNDS),
+                    rounds=int(rounds or argue.ROUNDS), until=until,
                 )
             except Exception as exc:  # noqa: BLE001
                 say({"done": True, "error": f"{exc.__class__.__name__}: "
@@ -7108,7 +7110,8 @@ class Handler(BaseHTTPRequestHandler):
                     continues=str(body.get("continues") or ""),
                     steer=str(body.get("steer") or ""),
                     models=list(body.get("models") or []),
-                    rounds=_int(body.get("rounds"))),
+                    rounds=_int(body.get("rounds")),
+                    until=bool(body.get("until"))),
             }
 
         if path == "/api/browser/control":

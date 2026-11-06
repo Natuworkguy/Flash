@@ -144,3 +144,10 @@ def test_the_switch(monkeypatch):
     assert saved == {titles.SETTING: "0"}
     web.command(session, {"name": "titles-setting", "arg": "on"})
     assert saved == {titles.SETTING: "1"}
+
+
+def test_titles_are_on_unless_turned_off(monkeypatch):
+    monkeypatch.delenv(titles.SETTING, raising=False)
+    assert titles.enabled()
+    monkeypatch.setenv(titles.SETTING, "0")
+    assert not titles.enabled()

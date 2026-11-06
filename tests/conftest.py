@@ -68,6 +68,9 @@ def no_developer_settings(monkeypatch):
     names = set(_SHELL_SETTINGS) | set(dotenv_values(ai.ENV_PATH))
     for name in names:
         monkeypatch.delenv(name, raising=False)
+    # Model titles are on for everyone else, but here each one would take
+    # a scripted reply meant for the chat; their own tests turn them on.
+    monkeypatch.setenv("MODEL_TITLES", "0")
     # Config read those settings at import; read them again without them.
     ai.Config.refresh()
 

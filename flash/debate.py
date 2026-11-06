@@ -22,12 +22,16 @@ from . import btw
 
 ROUNDS = 2
 MOST_ROUNDS = 10
+# Until settled: the sides go on until they agree or one wins, checked
+# after every round, up to this many rounds in case they never do.
+MOST_UNTIL = 12
 # How much of the chat comes along, as for a side question.
 HISTORY_CHARS = 12_000
 
 USAGE = ("Give a question after /debate, like /debate should I rewrite "
          "this in Rust? Two models and how long: /debate alpha:8b vs "
-         "beta:8b; rounds 4; question")
+         "beta:8b; rounds 4; question, or until settled to go on until "
+         "they agree or one side wins")
 
 SIDES = ("For", "Against")
 
@@ -43,6 +47,24 @@ question argued out before they decide. You are {me}; the other side is
 - Keep each turn short: a few tight paragraphs or bullets at most.
 - Do not address the user, sum up, or call it a tie; that is not yours.
 """.strip()
+
+UNTIL_STANCE = (" This debate goes on until you two agree or one of you "
+                "wins. When the other side has convinced you, say so "
+                "plainly (concede, or say you now agree) rather than "
+                "arguing on for the sake of it.")
+
+REFEREE_PROMPT = """
+You referee a debate between {a} and {b}. Read where it has got to and
+say whether it is settled, with exactly one word:
+AGREED if the two sides now agree on the answer,
+FOR if {a} has won: {b} conceded, or has no answer left to {a}'s case,
+AGAINST if {b} has won the same way,
+GOING if neither: they still disagree and both still have a case.
+Reply with the one word and nothing else.
+""".strip()
+
+SETTLED = {"agreed": "the sides came to agree", "0": "{a} won",
+           "1": "{b} won"}
 
 FIRST = ("Open the debate: take the answer to the question you find most "
          "defensible, say it in one line, and argue for it.")
@@ -65,18 +87,24 @@ Do not take a side in the other sections. Be brief.
 
 VS_RE = re.compile(r"^(\S+)\s+vs\.?\s+(\S+)$", re.I)
 ROUNDS_RE = re.compile(r"^rounds?\s*[:=]?\s*(\d{1,2})$", re.I)
+UNTIL_RE = re.compile(
+    r"^(?:(?:rounds?\s+)?(?:until|till)\s+(?:it\s+is\s+|it's\s+)?"
+    r"(?:settled|agreed|(?:they|the\s+sides)\s+agree|(?:someone\s+|one\s+"
+    r"(?:side\s+)?)wins?|the\s+end)|to\s+the\s+end|no\s+limit)$", re.I)
 
 
 def parse_full(text: str) -> dict:
-    """What "/debate ..." asks for: {"question", "models", "rounds"}.
-    Parts go between semicolons, in any order: "a vs b" names a model
-    for each side, "rounds N" how many times each speaks, and the rest
-    is the question: "/debate a vs b; rounds 4; Should I rewrite this in
-    C?". "a vs b: question" still names the models, as it used to."""
+    """What "/debate ..." asks for: {"question", "models", "rounds",
+    "until"}. Parts go between semicolons, in any order: "a vs b" names a
+    model for each side, "rounds N" how many times each speaks, "until
+    settled" goes on until they agree or one wins, and the rest is the
+    question: "/debate a vs b; rounds 4; Should I rewrite this in C?".
+    "a vs b: question" still names the models, as it used to."""
 
     text = re.sub(r"^/debate\b", "", str(text or "").strip()).strip()
     models: list[str] = []
     rounds = 0
+    until = False
     asked: list[str] = []
     for part in text.split(";") if ";" in text else [text]:
         part = part.strip()
@@ -86,6 +114,8 @@ def parse_full(text: str) -> dict:
             models = [vs.group(1), vs.group(2)]
         elif many and not rounds:
             rounds = int(many.group(1))
+        elif UNTIL_RE.match(part) and not until:
+            until = True
         elif part:
             asked.append(part)
     question = "; ".join(asked)
@@ -97,7 +127,8 @@ def parse_full(text: str) -> dict:
             question = found.group(3).strip()
             models = [found.group(1), found.group(2)]
     return {"question": question, "models": models,
-            "rounds": max(1, min(rounds, MOST_ROUNDS)) if rounds else 0}
+            "rounds": max(1, min(rounds, MOST_ROUNDS)) if rounds else 0,
+            "until": until}
 
 
 def suggest(typed: str, models: list[str]) -> list[tuple[str, int, str]]:
@@ -132,6 +163,10 @@ def suggest(typed: str, models: list[str]) -> list[tuple[str, int, str]]:
             "rounds".startswith(word):
         out.append(("rounds ", len(lead), "how many times each side speaks "
                     f"({ROUNDS} if not said)"))
+    if word and not re.search(r"(^|;)\s*until\b", done, re.I) and \
+            "until".startswith(word):
+        out.append(("until settled; ", len(lead),
+                    "go on until they agree or one side wins"))
     if not any(VS_RE.match(p.strip()) for p in done.split(";")):
         out += [(f"{m} ", len(lead), "the first side's model")
                 for m in models if word in m.lower()][:12]
@@ -186,6 +221,7 @@ def run(
     stopped: Callable[[], bool] = lambda: False,
     turns: Optional[list[dict]] = None,
     steers: Callable[[], list[str]] = lambda: [],
+    until: bool = False,
 ) -> dict:
     """Argue QUESTION out. MODELS are the two sides' (one for both, or
     two); JUDGE sums it up. TURNS goes on from a debate already had, for
@@ -195,7 +231,12 @@ def run(
     SAY hears each piece as it comes: {"turn": n, "side": 0 or 1, "text":
     piece}, {"turn": n, "side": -1, "text": steer}, then {"summary":
     piece}. The whole debate, at the end: question, sides, turns,
-    summary, and whether it was stopped."""
+    summary, and whether it was stopped.
+
+    UNTIL goes on past ROUNDS until the sides agree or one wins, as the
+    judge sees it after each round (up to MOST_UNTIL rounds): SAY hears
+    {"settled": how} then, and the debate has "settled": "agreed", "0"
+    or "1" (the side that won), or "" when it never was."""
 
     question = " ".join(str(question or "").split())
     if not question:
@@ -205,7 +246,9 @@ def run(
     names = list(SIDES) if same else \
         [f"{SIDES[0]} ({models[0]})", f"{SIDES[1]} ({models[1]})"]
     say = say or (lambda event: None)
-    rounds = max(1, min(int(rounds or ROUNDS), MOST_ROUNDS))
+    rounds = MOST_UNTIL if until else \
+        max(1, min(int(rounds or ROUNDS), MOST_ROUNDS))
+    settled = ""
     context = _history(history or [])
     turns = [dict(t) for t in turns or []]
 
@@ -217,6 +260,8 @@ def run(
                 turns.append({"side": USER, "text": steer})
 
     for _ in range(rounds):
+        if settled or stopped():
+            break
         for side in (0, 1):
             if stopped():
                 break
@@ -227,6 +272,8 @@ def run(
             if turns and turns[-1]["side"] == USER:
                 stance += (" The user has just steered the debate: take "
                            "what they said into account first.")
+            if until:
+                stance += UNTIL_STANCE
             system = SIDE_PROMPT.format(me=names[side], them=names[1 - side],
                                         stance=stance)
             asked = [{"role": "system", "content": system}, *context,
@@ -241,20 +288,57 @@ def run(
                            stopped=stopped)
             if text:
                 turns.append({"side": side, "text": text})
+        if until and not stopped():
+            settled = _referee(client, judge, question, turns, names,
+                               options, stopped)
+            if settled:
+                say({"settled": settled_text(settled, names)})
     summary = ""
     if not stopped():
         take_steers()
     if any(t["side"] != USER for t in turns) and not stopped():
+        ending = ""
+        if until:
+            ending = (f"\n\nIt ended because {settled_text(settled, names)}."
+                      if settled else f"\n\nIt went {rounds} rounds and "
+                      "never settled: say so.")
         asked = [{"role": "system",
                   "content": JUDGE_PROMPT.format(a=names[0], b=names[1])},
                  {"role": "user", "content": f"The question: {question}"
-                  f"\n\nThe debate:\n\n{_transcript(turns, names)}"}]
+                  f"\n\nThe debate:\n\n{_transcript(turns, names)}"
+                  + ending}]
         summary = btw.ask(client, judge, asked, options,
                           on_text=lambda piece: say({"summary": piece}),
                           stopped=stopped)
     return {"question": question, "sides": names, "models": models,
             "turns": turns, "summary": summary,
-            "stopped": bool(stopped())}
+            "stopped": bool(stopped()),
+            **({"until": True, "settled": settled} if until else {})}
+
+
+def settled_text(settled: str, names: list[str]) -> str:
+    """How a debate settled, said: "the sides came to agree", "For won"."""
+
+    return SETTLED.get(settled, "").format(a=names[0], b=names[1])
+
+
+def _referee(client: Any, judge: str, question: str, turns: list[dict],
+             names: list[str], options: Optional[dict],
+             stopped: Callable[[], bool]) -> str:
+    """Whether the debate has settled: "agreed", "0" or "1" for the side
+    that won, or "" while it goes on (or when the judge cannot say)."""
+
+    asked = [{"role": "system",
+              "content": REFEREE_PROMPT.format(a=names[0], b=names[1])},
+             {"role": "user", "content": f"The question: {question}"
+              f"\n\nThe debate:\n\n{_transcript(turns, names)}"}]
+    try:
+        said = btw.ask(client, judge, asked, options, stopped=stopped)
+    except Exception:  # noqa: BLE001 -- unsure is going on
+        return ""
+    word = re.sub(r"[^A-Z]", "", (said or "").strip().split("\n")[0]
+                  .split(" ")[0].upper())
+    return {"AGREED": "agreed", "FOR": "0", "AGAINST": "1"}.get(word, "")
 
 
 def note(debate: dict) -> list[dict]:
@@ -264,6 +348,9 @@ def note(debate: dict) -> list[dict]:
 
     head = (f"(A debate between {debate['sides'][0]} and "
             f"{debate['sides'][1]}, {len(debate['turns'])} turns")
+    if debate.get("settled"):
+        how = settled_text(debate["settled"], debate["sides"])
+        head += f", ended when {how}"
     if debate.get("summary"):
         said = f"{head}. The summary:)\n\n{debate['summary']}"
     else:

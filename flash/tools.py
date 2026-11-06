@@ -6976,7 +6976,7 @@ def request_extension(source: str, why: str = "") -> str:
 
 
 def debate_tool(question: str = "", context: str = "", rounds: Any = 2,
-                sides: Any = None) -> str:
+                sides: Any = None, until_settled: Any = False) -> str:
     """Have two sides argue QUESTION out (debate.py), and say what came
     of it: the summary, for the model to go on from. The user watches it
     in the web UI as it is argued, and can stop it there."""
@@ -7028,7 +7028,8 @@ def debate_tool(question: str = "", context: str = "", rounds: Any = 2,
         done = argue.run(question, providers.client(OLLAMA_HOST), models,
                          MODEL_NAME, history=history, rounds=rounds,
                          options=learning.chat_options(), say=say,
-                         stopped=stopping, steers=steers)
+                         stopped=stopping, steers=steers,
+                         until=str(until_settled).lower() in ("true", "1"))
     except KeyboardInterrupt:
         done = {"question": question, "sides": list(argue.SIDES),
                 "models": models, "summary": "", "stopped": True,
@@ -9355,6 +9356,14 @@ tools: list[dict[str, Any]] = [
                         "type": "integer",
                         "description": "Turns each side gets, 1 to 4. "
                         "Default 2.",
+                    },
+                    "until_settled": {
+                        "type": "boolean",
+                        "description": (
+                            "Go on past rounds until the sides agree or "
+                            "one wins (checked after each round, up to a "
+                            "dozen rounds). For when the user wants it "
+                            "argued to a conclusion."),
                     },
                     "sides": {
                         "type": "array", "items": {"type": "string"},
