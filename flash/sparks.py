@@ -474,6 +474,10 @@ class Message:
     failed: bool = False
 
 
+# How far a spark's voice can be pitched, in semitones, up or down.
+PITCH_MOST = 8
+
+
 @dataclass
 class Spark:
     """One spark, as kept on disk."""
@@ -513,6 +517,11 @@ class Spark:
     # Models it runs on instead, in order, when its own fails: refused,
     # down, out of quota. Before the model's own fallbacks (/fallbacks).
     fallbacks: list = field(default_factory=list)
+    # The voice it speaks in on a call: one of the voices Settings offers
+    # (Kokoro, Piper, an extension's), or "" for one picked for it. And
+    # its pitch, in semitones up or down from that voice's own.
+    voice: str = ""
+    pitch: int = 0
     # A step that asks first, waiting on the user: what it is, and all
     # a shift needs to carry on from it. {} when nothing waits.
     pending: dict = field(default_factory=dict)
@@ -3075,6 +3084,15 @@ def update(key: str, **changes) -> Spark:
             spark.model = model
         if "fallbacks" in changes:
             spark.fallbacks = fallbacks_of(changes["fallbacks"], spark.model)
+        if "voice" in changes:
+            spark.voice = str(changes["voice"] or "").strip()[:120]
+        if "pitch" in changes:
+            try:
+                spark.pitch = max(-PITCH_MOST, min(PITCH_MOST,
+                                                   int(changes["pitch"])))
+            except (TypeError, ValueError):
+                raise SparkError("A pitch is a number of semitones, "
+                                 f"-{PITCH_MOST} to {PITCH_MOST}.") from None
         if "title" in changes:
             spark.title = _title(changes["title"])
         if "colour" in changes:

@@ -1021,6 +1021,12 @@ body.course-open { overflow: hidden; }
 .debate-settled { align-self: center; font-size: 13px; font-weight: 600; color: var(--text); padding: 5px 12px; border-radius: 999px; background: color-mix(in srgb, var(--accent) 16%, transparent); }
 .debate-rounds.off { opacity: 0.45; pointer-events: none; }
 .debate-until { max-width: none; margin: 4px 0 14px; }
+.spark-voice-row { display: flex; gap: 8px; align-items: center; }
+.spark-voice-row select { flex: 1; min-width: 0; }
+.spark-pitch { display: flex; align-items: center; gap: 12px; margin-top: 8px; font-size: 13px; color: var(--text-2); }
+.spark-pitch > span { white-space: nowrap; }
+.spark-pitch b { font-variant-numeric: tabular-nums; display: inline-block; min-width: 2.2ch; }
+.spark-pitch input[type=range] { flex: 1; accent-color: var(--accent); }
 .debate[hidden] { display: none; }
 .debate-steer { align-self: center; display: flex; align-items: center; gap: 7px; max-width: 80%; padding: 5px 12px; border-radius: 999px; background: color-mix(in srgb, var(--accent) 12%, transparent); font-size: 13px; color: var(--text-2); }
 .debate-steer svg { flex: none; width: 13px; height: 13px; color: var(--accent); }
@@ -13031,6 +13037,7 @@ function sparkForm(spark, inProjectId = "", template = "") {
     <div class="field"><span>Colour</span><div class="swatches spark-colours" role="radiogroup" aria-label="Colour">${TEAM_COLOURS.map((c) => `<button type="button" class="swatch" role="radio" data-c="${c}" style="--c:${c}" aria-label="${c}"></button>`).join("")}<label class="swatch custom" data-tip="Any colour"><input type="color" aria-label="Any colour"></label></div><small class="colour-said">${editing ? "Its face, its chips and its messages wear it." : "Left alone, it gets the next in the palette."}</small></div>
     ${modelField()}
     <label class="field"><span>Fallbacks <em class="count">optional</em></span><input name="fallbacks" class="mono" placeholder="another-model > a-third" autocomplete="off" spellcheck="false"><small>When its model fails (down, refused, out of quota), it carries on with these, in order, up to 4. Then the model's own fallbacks.</small></label>
+    <div class="field spark-voice-field"><span>Voice on calls <em class="count">optional</em></span><div class="spark-voice-row"><select name="callvoice" aria-label="Voice on calls"><option value="">Picked for it</option></select><button type="button" class="btn small with-icon" data-hear>${icon("play")}<span>Hear it</span></button></div><label class="spark-pitch"><span>Pitch <b class="pitch-n">0</b></span><input type="range" name="pitch" min="-8" max="8" step="1" value="0" aria-label="Pitch, in semitones"></label><small>How it sounds when you call it: any voice downloaded in Settings, Voice, including extensions' voices, and higher or lower.</small></div>
     <label class="field"><span>Goal</span><textarea name="goal" rows="4" placeholder="Check github.com/me/app for new issues. Tell me which look like bugs, and skip ones you have already told me about."></textarea></label>
     <label class="field"><span>How often</span><select name="every">${choices.map(([m, label]) => `<option value="${m}"${!atTimes && !called && m === every ? " selected" : ""}>${label}</option>`).join("")}<option value="at"${atTimes ? " selected" : ""}>At set times…</option><option value="oncall"${called ? " selected" : ""}>Only when called on</option></select><small class="every-said">${called ? ON_CALL_SAID : "It works while Flash is open, in the terminal or here."}</small></label>
     <label class="field at-field"${atTimes ? "" : " hidden"}><span>When</span><input name="at" placeholder="9am weekdays" autocomplete="off" spellcheck="false"><small class="at-said">Like <b>9am weekdays</b>, <b>mon, thu 8:30</b>, <b>the 1st at 9am</b>, or a cron line such as <b>0 9 * * 1-5</b>. On this computer's clock.</small></label>
@@ -13068,6 +13075,8 @@ function sparkForm(spark, inProjectId = "", template = "") {
         if ((data.mode || "") !== (was.mode || "")) await command("spark-mode", id, null, { mode: data.mode || "" });
         const falls = (data.fallbacks || "").split(/[>,\n]/).map((m) => m.trim()).filter(Boolean);
         if (falls.join(" > ") !== (was.fallbacks || []).join(" > ")) await command("spark-update", id, null, { fallbacks: falls });
+        const callVoice = data.callvoice || "", pitch = Number(data.pitch) || 0;
+        if (callVoice !== (was.voice || "") || pitch !== (was.pitch || 0)) await command("spark-update", id, null, { voice: callVoice, pitch });
       };
       if (editing) {
         // Not "name": that is the command's own.
@@ -13157,6 +13166,44 @@ function sparkForm(spark, inProjectId = "", template = "") {
     // After the form is filled in, for the project picked in it.
     queueMicrotask(draw);
   }
+  // Its voice on calls: any voice ready to speak with, and its pitch.
+  const pitchN = form.querySelector(".pitch-n");
+  const showPitch = () => { const n = Number(form.pitch.value); pitchN.textContent = n > 0 ? `+${n}` : String(n); };
+  form.pitch.value = editing ? spark.pitch || 0 : 0;
+  form.pitch.addEventListener("input", showPitch);
+  showPitch();
+  command("voice-models").then((r) => {
+    const pick = form.callvoice, want = editing ? spark.voice || "" : "";
+    for (const m of r.speaking.filter((m) => m.installed && !m.needs)) {
+      const o = pick.appendChild(el("option"));
+      o.value = m.name;
+      o.textContent = `${m.label} (${m.engine})`;
+    }
+    if (want && ![...pick.options].some((o) => o.value === want)) {
+      const o = pick.appendChild(el("option"));
+      o.value = want;
+      o.textContent = `${want} (not ready: download it in Settings)`;
+    }
+    pick.value = want;
+  }, () => {});
+  form.querySelector("[data-hear]").onclick = async (e) => {
+    const b = e.currentTarget;
+    b.disabled = true;
+    try {
+      const who = form.sparkname.value.trim() || "your spark";
+      const r = await api("/api/voice/say", { text: `Hi, it's ${who}. What can I do for you?`, spark: editing ? spark.id : "", voice: form.callvoice.value, pitch: Number(form.pitch.value) || 0 });
+      const bytes = Uint8Array.from(atob(r.audio), (c) => c.charCodeAt(0));
+      const ctx = new AudioContext();
+      const audio = await ctx.decodeAudioData(bytes.buffer);
+      const src = ctx.createBufferSource();
+      src.buffer = audio;
+      src.detune.value = Number(r.detune) || 0;
+      src.connect(ctx.destination);
+      await new Promise((done) => { src.onended = done; src.start(); });
+      ctx.close();
+    } catch (error) { showFailure(error); }
+    finally { b.disabled = false; }
+  };
   if (editing) {
     form.sparkname.value = spark.name;
     form.title.value = spark.title || "";
@@ -13767,7 +13814,8 @@ async function drawVoiceModels(box = document.querySelector(".voice-models")) {
       const fetching = r.downloading && r.downloading.kind === kind && r.downloading.name === m.name;
       const row = list.appendChild(el("div", "vm-row" + (m.current ? " current" : ""), `<span class="vm-mark">${m.current ? icon("check") : ""}</span><span class="vm-what"><b></b><small></small></span><span class="vm-act"></span>`));
       row.dataset.key = `${kind}:${m.name}`;
-      row.querySelector("b").innerHTML = `${fmtBytes(m.size)} <span class="vm-dot">&bull;</span> ${esc(m.label)}`;
+      // An extension's has no download to size.
+      row.querySelector("b").innerHTML = m.extension ? esc(m.label) : `${fmtBytes(m.size)} <span class="vm-dot">&bull;</span> ${esc(m.label)}`;
       row.querySelector("small").textContent = m.name;
       const act = row.querySelector(".vm-act");
       if (fetching) { downloadingSlot(act, "Downloading"); continue; }
@@ -13784,7 +13832,8 @@ async function drawVoiceModels(box = document.querySelector(".voice-models")) {
         catch (error) { pick.disabled = false; showFailure(error); }
       };
       act.appendChild(pick);
-      if (m.installed) {
+      // An extension's goes with the extension, not from here.
+      if (m.installed && !m.extension) {
         const drop = button("icon-btn", "x", `Remove, freeing ${fmtBytes(m.size)}`, "", async () => {
           if (!(await confirmPop(drop, { title: kind === "listening" ? "Remove this listening model?" : "Remove this voice?", text: `Deletes ${m.name} and frees ${fmtBytes(m.size)}. You can download it again later.`, yes: "Remove" }))) return;
           try { await command("voice-model-remove", m.name, null, { kind }); drawVoiceModels(box); } catch (error) { showFailure(error); }
