@@ -71,6 +71,7 @@ from . import (
     extensions,
     greetings,
     heyflash,
+    humanvoice,
     installer,
     instructions,
     interrupt,
@@ -1079,6 +1080,11 @@ class Session:
         # "Hey Flash" heard on this computer's own microphone, with no
         # page open, when switched on. Started with the server.
         self.always = heyflash.Listener(self)
+        # How the user sounds in voice mode, against how they usually do.
+        self.ear = humanvoice.Ear()
+        # What a spoken turn's model hears with it and the user never
+        # sees: how they sounded, what was said to them already.
+        self.voice_notes: dict[str, str] = {}
         # A package Flash needs, installed from a button in the page, its
         # lines sent to every page as they come.
         # Meetings being recorded, a piece at a time from the page.
@@ -1231,10 +1237,10 @@ class Session:
                     "text": f"{exc.__class__.__name__}: {exc}",
                 })
             finally:
+                self.save(chat)
                 with self._lock:
                     following = self._take_next(chat)
                     chat.busy = False
-                self.save(chat)
                 self.emit(chat, {"type": "busy", "busy": False})
                 self.hub.publish({"type": "status"})
             if following is not None:
@@ -2505,11 +2511,11 @@ class Session:
         asked = next(
             (e.get("text", "") for e in chat.log if e["type"] == "user"), "",
         )
-        answered = next(
+        answered = humanvoice.strip(next(
             (e.get("text", "") for e in chat.log
              if e["type"] == "assistant" and (e.get("text") or "").strip()),
             "",
-        )
+        ))
         spark = sparks.find(chat.spark) if chat.spark else None
         model = (
             sparks.model_of(spark, chat_model(chat)) if spark
@@ -2617,14 +2623,16 @@ class Session:
                     progress.end(False)
                     self.asked.pop(chat.id, None)
                     self.started.pop(chat.id, None)
-                    said = _reply_since(chat, begun)
+                    said = humanvoice.strip(_reply_since(chat, begun))
                     if said:
                         self.hub.note("reply", chat.title, said, chat.id)
+                    # Saved before it is done: whatever looks once it is
+                    # done finds the reply on disk too.
+                    chat.partial = chat.thinking = ""
+                    self.save(chat)
                     with self._lock:
                         following = self._take_next(chat)
                         chat.busy = False
-                    chat.partial = chat.thinking = ""
-                    self.save(chat)
                     self.emit(chat, {"type": "busy", "busy": False})
                     self.hub.publish({"type": "status"})
             if chat.auto_title:
@@ -3850,7 +3858,10 @@ def run_turn(
             f"{chat_model(chat)} reports no vision support; the image is "
             "sent anyway, but expect an error."
         )})
-    content = "\n\n".join(part for part in (news, said) if part)
+    # Heard, not typed: how they sounded, and what was said to them at
+    # once, for the model alone.
+    spoken = session.voice_notes.pop(chat.id, "") if chat.heard else ""
+    content = "\n\n".join(part for part in (news, said, spoken) if part)
     asked = ai._message("user", content, images or None)
     # Which turn it began, so editing the message finds where to cut.
     at = session.started.get(chat.id)
@@ -4388,6 +4399,13 @@ def status(ai) -> dict:
         "greetings": greetings.POOLS,
         "voice_style": voice.voice_style(),
         "voice_interrupt": voice.interrupt_how("voice"),
+        # Said at once, before an answer, and while the user talks on:
+        # made ahead by the page, so they cost no wait when said.
+        "voice_acks": sorted({a for kind in humanvoice._ACKS.values()
+                              for a in kind}),
+        "voice_backchannels": list(humanvoice.BACKCHANNELS),
+        "voice_fillers": list(humanvoice.FILLERS),
+        "voice_quiet": dict(humanvoice.QUIET),
         "spark_calls": teamchat.calls_allowed(),
         "call_interrupt": voice.interrupt_how("calls"),
         "wake_sensitivity": voice.wake_sensitivity(),
@@ -4632,6 +4650,12 @@ def voice_models(session: "Session") -> dict:
             {"name": name, "label": style.label,
              "current": name == voice.voice_style()}
             for name, style in voice.STYLES.items()
+        ],
+        # How often it thinks aloud: an um, a second thought.
+        "disfluency": [
+            {"name": name, "label": label,
+             "current": name == humanvoice.disfluency()}
+            for name, label in humanvoice.DISFLUENCIES.items()
         ],
     }
 
@@ -5754,6 +5778,12 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
         return {"voice_interrupt": voice.interrupt_how("voice"),
                 "call_interrupt": voice.interrupt_how("calls")}
 
+    if name == "voice-disfluency":
+        if arg not in humanvoice.DISFLUENCIES:
+            raise ValueError("pick off, light or more")
+        ai.set_config_var(humanvoice.DISFLUENCY_SETTING, arg)
+        return voice_models(session)
+
     if name == "voice-style":
         if arg not in voice.STYLES:
             raise ValueError(f"{arg!r} is not a voice style")
@@ -6500,6 +6530,7 @@ def _team_command(name: str, arg: str, body: dict) -> dict:
                 if isinstance(body.get("call"), str)
                 else bool(body.get("call")),
                 hidden=bool(body.get("hidden")),
+                note=humanvoice.note_for(body.get("voice_note")),
             )}
         if name == "team-chat-call":
             # A call begun (with a spark, or a team), or a step of one:
@@ -7082,6 +7113,12 @@ class Handler(BaseHTTPRequestHandler):
             chat = (
                 session.chat(chat_id) if chat_id else session.new_chat()
             )
+            # Only for a turn about to start: a message steered into one
+            # running has it to no turn.
+            if body.get("voice") and body.get("voice_note") and \
+                    not (chat.busy or chat.queued):
+                session.voice_notes[chat.id] = humanvoice.note_for(
+                    body["voice_note"])
             sent = session.send(
                 chat, str(body.get("text", "")),
                 mode=str(body.get("mode") or ""),
@@ -7186,9 +7223,15 @@ class Handler(BaseHTTPRequestHandler):
             text, why = voice.transcribe(pcm)
             if why:
                 raise ValueError(why)
+            speaking = str(body.get("speaking") or "")
             return {
                 "text": text,
-                **voice.voice_command(text, str(body.get("speaking") or "")),
+                **voice.voice_command(text, speaking),
+                # Said over a reply, it is not a turn of its own to read.
+                **({} if speaking else {
+                    "mood": session.ear.mood(pcm, text),
+                    "ack": humanvoice.ack_for(text),
+                }),
             }
 
         if path.startswith("/api/meeting/"):
@@ -7265,8 +7308,10 @@ class Handler(BaseHTTPRequestHandler):
                 if own.get("voice") else voice.synthesize(said)
             if why:
                 raise ValueError(why)
+            # Its own pitch on top: the feeling it is said with, and the
+            # line's small variation.
             return {"audio": base64.b64encode(wav).decode("ascii"),
-                    "detune": own.get("detune", 0)}
+                    "detune": own.get("detune", 0) + voice.pitch_of(said)}
 
         if path == "/api/answer":
             return {

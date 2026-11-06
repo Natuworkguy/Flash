@@ -1701,6 +1701,8 @@ html[data-nav="back"]::view-transition-new(content) { animation: nav-in-left 0.4
 
 /* Words arriving in a reply resolve out of a soft blur. */
 .ink { animation: ink 0.42s var(--ease) both; }
+/* A spoken reply's cues ([happy], [laugh]): said, never shown. */
+.cue { display: none; }
 @keyframes ink { from { opacity: 0; filter: blur(4px); } }
 
 /* While Flash works, a glow turns slowly round the composer, in the
@@ -5147,6 +5149,10 @@ document.addEventListener("submit", (e) => {
 // before the Markdown pass so neither mangles the other, and left alone
 // inside code, or where a $ reads like a price rather than algebra.
 const MATH_RE = /\uE000(\d+)\uE001/g;
+// A spoken reply's cues: a feeling ("[happy]") or a sound ("[laugh]"),
+// said in its voice and never shown (humanvoice.py has the list).
+const CUE_RE = /\[(happy|excited|playful|warm|curious|surprised|thoughtful|calm|serious|sorry|sad|laugh|chuckle|sigh|breath|hm|gasp)\][ \t]*/gi;
+const uncue = (text) => String(text || "").replace(CUE_RE, "");
 const CODE_RE = /```[\s\S]*?(?:```|$)|~~~[\s\S]*?(?:~~~|$)|(`+)(?!`)[^\n]+?\1(?!`)/g;
 // A backslash before the \[ or \( means a backslash typed as text.
 const DISPLAY_MATH_RE = /\$\$([\s\S]+?)\$\$|(?<!\\)\\\[([\s\S]+?)\\\]/g;
@@ -5162,8 +5168,12 @@ function markdown(text) {
   // then the fields as a table.
   const lead = String(text).match(/^\s*# [^\n]*\n\s*(?=---[ \t]*\n)/);
   const front = frontMatter(lead ? String(text).slice(lead[0].length) : String(text));
-  let html = markdownBody(pullMath(front ? front.rest : String(text), spans));
+  // Cues go through as marks of their own, and come out as hidden spans:
+  // never seen, but there for the reading aloud to find.
+  const body = (front ? front.rest : String(text)).replace(CUE_RE, (_, name) => `\uE002${name.toLowerCase()}\uE003`);
+  let html = markdownBody(pullMath(body, spans));
   if (spans.length) html = html.replace(MATH_RE, (_, i) => renderMath(spans[+i]));
+  html = html.replace(/\uE002(\w+)\uE003/g, '<span class="cue">[$1]</span>');
   return front ? frontTable(front, lead ? lead[0].trim().slice(2).trim() : "") + html : html;
 }
 
@@ -13866,6 +13876,28 @@ function drawVoiceStyles(box, r) {
       catch (error) { showFailure(error); }
     };
   }
+  // Thinking aloud: how often an "um", or a second thought halfway
+  // through a sentence, the way people speak.
+  if ((r.disfluency || []).length) {
+    box.insertAdjacentHTML("beforeend", `<div class="vm-head"><b>Thinking aloud</b><span>The small ums and second thoughts people have when they speak.</span></div>`);
+    const aloud = box.appendChild(el("div", "vm-styles"));
+    aloud.setAttribute("role", "radiogroup");
+    aloud.setAttribute("aria-label", "Thinking aloud");
+    for (const d of r.disfluency) {
+      const [name, what] = d.label.split(": ");
+      const chip = aloud.appendChild(el("button", "vm-style" + (d.current ? " on" : ""), `<b></b><span></span>`));
+      chip.type = "button";
+      chip.setAttribute("role", "radio");
+      chip.setAttribute("aria-checked", d.current);
+      chip.querySelector("b").textContent = name;
+      chip.querySelector("span").textContent = what || "";
+      chip.onclick = async () => {
+        if (d.current) return;
+        try { await command("voice-disfluency", d.name); drawVoiceModels(box); toast(d.name === "off" ? "Flash speaks in whole sentences now" : "Flash thinks aloud now"); }
+        catch (error) { showFailure(error); }
+      };
+    }
+  }
   const hear = el("button", "btn small with-icon vm-hear", `${icon("play")}<span>Hear it</span>`);
   hear.type = "button";
   hear.disabled = !(r.speaking || []).some((m) => m.current && m.installed);
@@ -16319,7 +16351,9 @@ async function startVoice(team = null, how = "button") {
     if (!voice.on) return;
   }
   try {
-    voice.stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true } });
+    // Its own voice cancelled out, the room's noise and levels evened,
+    // and, where the browser can, other voices than the nearest set apart.
+    voice.stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true, voiceIsolation: true } });
   } catch (_) {
     toast("Flash could not use the microphone. Allow it for this page, then try again.");
     endVoice();
@@ -16340,8 +16374,73 @@ async function startVoice(team = null, how = "button") {
   voice.analyser = voice.ctx.createAnalyser();
   voice.analyser.fftSize = 512;
   voice.analyser.connect(voice.ctx.destination);
+  // How loud the room is, and the user, learned as they talk (focus).
+  voice.floor = 0;
+  voice.userLevel = 0;
+  voice.bcAt = 0;
+  voice.bcUntil = 0;
+  voice.note = null;
+  voice.pans = new Map();
+  // The few words said at once: made now, which warms the voice up too,
+  // so the first reply starts without the wait of loading it.
+  quickPrepare(sparkCall.on ? tcDmSpark(team) || "" : "");
   drawOrb();
   voiceLoop();
+}
+
+// Said at once, so they cost no wait: an acknowledgment as the user
+// finishes ("Okay.", "Oh no."), and a quiet "mm-hm" while they go on.
+// In a spark's voice on a call with one, made once a voice per page.
+const quickMade = new Map();
+function quickPrepare(spark = "") {
+  const lines = [...((info && info.voice_acks) || []), ...((info && info.voice_backchannels) || []),
+    ...((info && info.voice_fillers) || []), ...Object.values((info && info.voice_quiet) || {})];
+  (async () => {
+    for (const line of lines) {
+      const key = `${spark}|${line}`;
+      if (quickMade.has(key)) continue;
+      if (!voice.on || !voice.ctx) return;
+      try { quickMade.set(key, await makeSpeech(line, voice.ctx, spark)); } catch { return; }
+    }
+  })();
+}
+// LINE said now, quietly by GAIN, if it is made: nothing waits on it.
+function quickSay(line, spark = "", gain = 1) {
+  const audio = line && quickMade.get(`${spark}|${line}`);
+  if (!audio || !voice.on || !voice.ctx) return 0;
+  try {
+    const source = voice.ctx.createBufferSource();
+    source.buffer = audio;
+    if (audio.detune) source.detune.value = audio.detune;
+    const level = voice.ctx.createGain();
+    level.gain.value = gain;
+    source.connect(level);
+    level.connect(voice.analyser || voice.ctx.destination);
+    source.start();
+    // Its own words coming back through the microphone are not theirs.
+    voice.bcUntil = Math.max(voice.bcUntil || 0, performance.now() + audio.duration * 1000 + 150);
+    return audio.duration;
+  } catch { return 0; }
+}
+
+// The user's time of day, for the model with what they said.
+function clockNote() {
+  const now = new Date();
+  return { time: now.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }), hour: now.getHours() };
+}
+
+// Whether the user sounds done, from what they said so far: a pause after
+// "and then I..." is a breath, after a whole question it is the end. How
+// much longer (or shorter) than usual to wait. As humanvoice.end_pause.
+const TRAILING = new Set("and but so or because cause cuz the a an to of with for um uh er erm like if then my your our their his her its is are was were i i'm we you it's that's in on at from about when where which who whether just also maybe than into onto by as this these those what how why can could would should will do does did not very really some any more most let let's gonna wanna".split(" "));
+const ASKING = new Set("what how why when where who which can could would will is are do does did should shall may have has".split(" "));
+function endPause(heard) {
+  const words = String(heard || "").toLowerCase().replace(/[^a-z' ]/g, " ").split(/\s+/).filter(Boolean);
+  if (!words.length) return 1;
+  if (TRAILING.has(words[words.length - 1]) || /,\s*$/.test(heard)) return 1.8;
+  if (words.length >= 3 && ASKING.has(words[0])) return 0.7;
+  if (words.length >= 4) return 0.85;
+  return 1;
 }
 
 function endVoice() {
@@ -16435,17 +16534,39 @@ function hearChunk(samples) {
   const out = toVoiceRate(samples, voice.ctx.sampleRate);
   const step = samples.length / voice.ctx.sampleRate;
   turn.elapsed += step;
-  const loud = rms >= turn.o.loud;
+  // Focus: speech is what stands well above the room (a TV, a fan) and
+  // near how loud the user has been, so voices further off do not count.
+  // The room is the quietest it has been lately: it follows a drop at
+  // once and a rise only slowly, so talking never teaches it their voice.
+  const room = voice.floor || VOICE_LOUD / 3;
+  voice.floor = rms < room ? Math.max(rms, VOICE_LOUD / 20) : room * 1.002;
+  const loud = rms >= Math.max(turn.o.loud, room * 3, (voice.userLevel || 0) * 0.25);
+  if (loud) voice.userLevel = voice.userLevel ? voice.userLevel * 0.95 + rms * 0.05 : rms;
+  // A "mm-hm" of Flash's own playing: neither their speech nor a pause.
+  const backchanneling = performance.now() < (voice.bcUntil || 0);
   // Waiting for speech, only the last second or so is kept, so a long
   // wait does not become a long recording.
   if (!turn.heard && !loud) {
     turn.parts.push(out);
     if (turn.parts.length > 6) turn.parts.shift();
   } else turn.parts.push(out);
-  if (loud) { turn.heard = true; turn.quiet = 0; } else turn.quiet += step;
+  if (loud && !backchanneling) { turn.heard = true; turn.quiet = 0; turn.nodded = false; }
+  else if (!backchanneling) turn.quiet += step;
   const spoken = turn.heard ? turn.parts.length * out.length / VOICE_RATE : 0;
   if (turn.o.live && turn.heard) hearLive(turn);
-  if (turn.heard && (turn.quiet >= turn.o.pause || spoken >= turn.o.longest)) {
+  // How long a pause ends their turn: longer when what they said so far
+  // trails off, shorter after a whole question.
+  const pause = turn.o.pause * (turn.o.live ? endPause(turn.partial) : 1);
+  // A quiet "mm-hm" in a pause, now and then, when they have been
+  // talking a while: they are being listened to.
+  if (turn.o.backchannel && turn.heard && !turn.nodded && spoken >= 4 && turn.quiet >= 0.4 && turn.quiet < pause
+      && Date.now() - (voice.bcAt || 0) > 8000 && endPause(turn.partial) >= 1) {
+    turn.nodded = true;
+    const lines = (info && info.voice_backchannels) || [];
+    const took = quickSay(lines[Math.floor(Math.random() * lines.length)], turn.o.spark || "", 0.45);
+    if (took) voice.bcAt = Date.now();
+  }
+  if (turn.heard && (turn.quiet >= pause || spoken >= turn.o.longest)) {
     const pcm = new Int16Array(turn.parts.reduce((n, part) => n + part.length, 0));
     let at = 0;
     for (const part of turn.parts) { pcm.set(part, at); at += part.length; }
@@ -16467,7 +16588,7 @@ function hearLive(turn) {
   let at = 0;
   for (const part of parts) { pcm.set(part, at); at += part.length; }
   api("/api/voice/live", { id: turn.id, data: base64Of(new Uint8Array(pcm.buffer)) })
-    .then((heard) => { if (!turn.done && voice.on) showHeard(heard.text); })
+    .then((heard) => { if (!turn.done && voice.on) { turn.partial = heard.text || turn.partial; showHeard(heard.text); } })
     .catch(() => {})
     .finally(() => { turn.sending = false; if (turn.done) endLive(turn); });
 }
@@ -16522,8 +16643,13 @@ async function voiceLoop() {
     carried = null;
     if (!heard) {
       setVoice("listening");
-      const pcm = await listenOnce({ live: true });
+      // After a question that needs thought, they get longer, and a
+      // "Take your time." if they need it, before voice mode pauses.
+      const asked = voice.askedLast;
+      voice.askedLast = false;
+      const pcm = await listenOnce({ live: true, backchannel: true, patience: asked ? 16 : VOICE_PATIENCE });
       if (!voice.on) return;
+      if (!pcm && asked && quickSay(info && info.voice_quiet && info.voice_quiet.think)) continue;
       if (!pcm) { if (!(await pausedUntilResume())) return; continue; }
       setVoice("hearing");
       heard = await hear(pcm);
@@ -16544,12 +16670,16 @@ async function voiceLoop() {
     // Started with "Hey Flash": a ping says the request is in, words and
     // all, before the wait for its answer.
     if (voice.how === "wake") ping();
+    // A word at once, as a person would ("Okay.", "Oh no."), and how they
+    // sounded and what was cut off, for the model with what they said.
+    const acked = !voice.team && heard.ack && quickSay(heard.ack) ? heard.ack : "";
+    voice.note = { mood: heard.mood || "", ack: acked, cut: heard.cut || "", ...clockNote() };
     setVoice("thinking");
     if (voice.team) {
       const how = await tcVoiceRound(heard.text);
       if (how === "exit") { endVoice(); toast("Voice mode off"); return; }
       if (how === "pause" && !(await pausedUntilResume())) return;
-      if (how && how.barge) carried = { text: how.barge };
+      if (how && how.barge) carried = { text: how.barge, cut: how.cut || "" };
       continue;
     }
     // An extension in the middle may change what Flash is asked, answer
@@ -16561,6 +16691,15 @@ async function voiceLoop() {
     if (middle && middle.reply) {
       reply = el("div");
       reply.textContent = middle.reply;
+    } else if (!voiceHooked()) {
+      // Said as it is written: the first words while the rest is on its
+      // way, and what it says before using a tool while the tool runs.
+      await attachSight();
+      const how = await speakAsItComes(heard.text, !!acked);
+      if (how === "exit" || voice.endAfter) { endVoice(); toast("Voice mode off"); return; }
+      if (how === "pause" && !(await pausedUntilResume())) return;
+      if (how && how.barge) carried = { text: how.barge, cut: how.cut || "" };
+      continue;
     } else {
       // With the camera on, what it sees goes with what was said.
       await attachSight();
@@ -16582,7 +16721,138 @@ async function voiceLoop() {
     const how = await readAloud(reply);
     if (how === "exit" || voice.endAfter) { endVoice(); toast("Voice mode off"); return; }
     if (how === "pause" && !(await pausedUntilResume())) return;
-    if (how && how.barge) carried = { text: how.barge };
+    if (how && how.barge) carried = { text: how.barge, cut: how.cut || "" };
+  }
+}
+
+// Markdown as it is heard: code, tables and pictures stay on screen,
+// links are their words, marks of emphasis and list bullets go, and cues
+// stay for the voice. A code block still open hides all after it.
+function spokenOf(raw) {
+  const text = String(raw || "").split(/^[ \t]*(?:```|~~~).*$/m).filter((_, i) => i % 2 === 0).join("\n");
+  return text
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, " ")
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
+    .replace(/^[ \t]*\|.*\|[ \t]*$/gm, " ")
+    .replace(/^[ \t]{0,3}#{1,6}[ \t]+/gm, "")
+    .replace(/^[ \t]*(?:[-*+]|\d+[.)])[ \t]+/gm, "")
+    .replace(/^[ \t]*>[ \t]?/gm, "")
+    .replace(/`([^`\n]*)`/g, "$1")
+    .replace(/(\*\*|__|\*)(?=\S)([^*\n]+?)\1/g, "$2")
+    .replace(/https?:\/\/\S+/g, "a link");
+}
+
+// The whole sentences at the start of TEXT, and how much of it they take:
+// a sentence is whole at its end mark and a space, or at a line's end.
+// DONE: the reply is over, and what is left is said too. FIRST: nothing
+// is said yet, and a long first sentence starts at its first comma.
+function wholeSentences(text, done, first) {
+  const lines = [];
+  const ends = /[^\n]*?(?:[.!?\u2026]+["')\]]*(?=\s)|\n)/g;
+  let used = 0;
+  for (let m = ends.exec(text); m; m = ends.exec(text)) {
+    if (!m[0]) { ends.lastIndex++; continue; }
+    lines.push(m[0]);
+    used = ends.lastIndex;
+  }
+  if (done && used < text.length) { lines.push(text.slice(used)); used = text.length; }
+  else if (first && !lines.length && text.length > 70) {
+    const comma = text.lastIndexOf(", ", 90);
+    if (comma > 25) { lines.push(text.slice(0, comma + 1)); used = comma + 1; }
+  }
+  const said = lines.map((l) => l.replace(/\s+/g, " ").trim())
+    .filter((l) => /[\p{L}\p{N}]/u.test(uncue(l)) || uncue(l) !== l);
+  return { lines: said, used };
+}
+
+// Sends TEXT and says the reply as it is written, a sentence at a time,
+// the next made while one plays; a permission asked on the way is asked
+// out loud. Resolves as readAloud does: "done", "exit", "pause", "tap",
+// "interrupt", or {barge, cut} when talked over (the turn stops there).
+async function speakAsItComes(text, acked = false) {
+  const before = current;
+  const startedAt = current && chats.get(current) ? chats.get(current).log.length : 0;
+  await send(text);
+  const chatId = current;
+  const from = current === before ? startedAt : 0;
+  const asked = new Set();
+  const queue = [];
+  let used = 0, said = 0, now = "", stopListening = null;
+  // Thinking sounds while the answer takes a while (Flash's own voice):
+  // one soon after they finish, and "Still on it." if it goes on long.
+  const fillers = ((info && info.voice_fillers) || []);
+  let filled = 0, lastSound = Date.now();
+  const firstWait = acked ? 2600 : 1800;
+  voice.cut = false;
+  voice.barge = "";
+  const stopHearing = () => { if (stopListening) { stopListening(); stopListening = null; } };
+  const cutShort = async () => {
+    if (voice.cut !== "barge") return voice.cut;
+    // Talked over: it stops, as a person would, and listens. What they
+    // said goes in once the turn is over, as a turn of its own.
+    const barge = { barge: voice.barge, cut: now };
+    const chat = chats.get(chatId);
+    if (chat && (chat.busy || chat.queued) && chatId === current) {
+      await command("stop").catch(() => {});
+      const until = Date.now() + 3000;
+      while ((chat.busy || chat.queued) && Date.now() < until) await new Promise((r) => setTimeout(r, 60));
+    }
+    return barge;
+  };
+  try {
+    for (;;) {
+      if (!voice.on) return "exit";
+      if (voice.cut) return await cutShort();
+      const chat = chats.get(chatId);
+      const done = !!chat && !(chat.busy || chat.queued) && chat.log.length > from;
+      const raw = chat ? [...chat.log.slice(from).filter((e) => e.type === "assistant" && e.text).map((e) => e.text), chat.partial || ""].filter(Boolean).join("\n\n") : "";
+      const plain = spokenOf(raw);
+      if (plain.length < used) used = plain.length;
+      const got = wholeSentences(plain.slice(used), done, !said && !queue.length);
+      used += got.used;
+      for (const line of got.lines) queue.push({ line, audio: makeSpeech(line) });
+      if (queue.length) {
+        const item = queue.shift();
+        let audio;
+        try { audio = await item.audio; } catch (error) { if (voice.on) toast(error.message); continue; }
+        if (!voice.on) return "exit";
+        if (voice.cut) return await cutShort();
+        if (voice.state !== "speaking") setVoice("speaking");
+        if (!stopListening) stopListening = listenForInterruptions(() => now);
+        now = item.line;
+        said++;
+        await playSpeech(audio);
+        lastSound = Date.now();
+        continue;
+      }
+      const card = pendingAsk();
+      if (card && !asked.has(card)) {
+        stopHearing();
+        asked.add(card);
+        await askAloud(card);
+        if (!voice.on) return "exit";
+        setVoice("thinking");
+        continue;
+      }
+      if (done) {
+        // A reply of code alone says where it is.
+        if (!said && raw.trim()) { said++; queue.push({ line: "That reply is code. It is on screen.", audio: makeSpeech("That reply is code. It is on screen.") }); continue; }
+        // Ended on a question: they get time to think about it.
+        voice.askedLast = /\?["')\]]*$/.test(uncue(now).trim());
+        return said ? "done" : null;
+      }
+      const waited = Date.now() - lastSound;
+      if (fillers.length > 1 && ((!said && !filled && waited > firstWait) || (filled < 2 && waited > 9000 && (said || filled)))) {
+        const line = said || filled ? fillers[fillers.length - 1] : fillers[Math.floor(Math.random() * (fillers.length - 1))];
+        if (quickSay(line)) { filled = said || filled ? 2 : 1; lastSound = Date.now(); }
+      }
+      stopHearing();
+      if (voice.state !== "thinking") setVoice("thinking");
+      await new Promise((r) => setTimeout(r, 120));
+    }
+  } finally {
+    stopHearing();
+    for (const item of queue) item.audio.catch(() => {});
   }
 }
 
@@ -16736,7 +17006,7 @@ function callCaption(who, text) {
   if (!sparkCall.on || !cap) return;
   cap.innerHTML = `<b></b> <span></span>`;
   cap.querySelector("b").textContent = `${who}:`;
-  cap.querySelector("span").textContent = text;
+  cap.querySelector("span").textContent = uncue(text);
 }
 
 // Start a call: with the spark of TEAM's DM, or the team itself. INCOMING
@@ -16957,24 +17227,31 @@ async function callSights() {
 
 // The words that open a call, sent to the spark (not shown): it speaks first.
 function callHello() {
+  // How a person picks up: never one stock line, but what fits now (the
+  // time of day, what they were just doing), and short.
+  const { time, hour } = clockNote();
+  const when = hour < 5 ? "the middle of the night" : hour < 12 ? "morning" : hour < 17 ? "afternoon" : hour < 21 ? "evening" : "late at night";
+  const way = `It's ${time} here, ${when}. Pick up the way a person does, in your own words and never a stock greeting: short, and with whatever fits right now, like what you were just working on or the time of day.`;
   if (sparkCall.incoming) {
     const why = sparkCall.incoming.reason ? ` about: ${sparkCall.incoming.reason}` : "";
-    return `(Voice call) You called me${why}. I've picked up; say hi and tell me why you called.`;
+    return `(Voice call) You called me${why}. I've picked up. ${way} Then say why you called, first thing.`;
   }
-  return sparkCall.group ? "(Voice call) Hi team! I've started a group call; greet me briefly." : "(Voice call) Hi! You've picked up my call; greet me briefly.";
+  return sparkCall.group ? `(Voice call) I've started a group call with the team. ${way} One or two of you greet me; the rest can wait to speak.` : `(Voice call) You've picked up my call. ${way}`;
 }
 
 // One thing said on the call, and the answers to it read out as they
 // come in, each in its spark's voice. Resolves to how it ended: "done",
 // "exit", "hangup", "noanswer", or {barge: words} when the user talked over it.
-async function callRound(text, hidden = false) {
+async function callRound(text, hidden = false, note = null) {
   const team = sparkCall.team;
   sparkFillerReset(); // FILLERS hook
+  // Said a word already, at once: no "Hmm..." on top of it.
+  if (note && note.ack) sparkCall.fillerUsed = true;
   const id = await sparkCall.ready;
   if (!id || !sparkCall.on) return "exit";
   const files = hidden ? [] : await callSights();
   let mine;
-  try { mine = (await command("team-chat-say", team, null, { text, call: id, hidden, files })).entry; }
+  try { mine = (await command("team-chat-say", team, null, { text, call: id, hidden, files, ...(note ? { voice_note: note } : {}) })).entry; }
   catch (error) { showFailure(error); return "done"; }
   let since = mine.id, read = 0;
   const started = Date.now();
@@ -17021,26 +17298,38 @@ async function callLoop() {
   sparkCall.greeted = true;
   let carried = how && how.barge ? how.barge : "";
   if (how === "exit" || how === "hangup" || how === "noanswer") { if (how === "noanswer") endSparkCall(); endVoice(); return; }
+  // One to one, the spark nods along ("mm-hm") and answers at once in
+  // its own voice; a group call leaves that to whoever answers.
+  const spark = sparkCall.group ? "" : tcDmSpark(sparkCall.team) || "";
+  let cut = how && how.cut ? how.cut : "";
+  let checked = false;
   while (voice.on && sparkCall.on) {
     let text = carried;
     carried = "";
+    let note = { mood: "", ack: "", cut };
+    cut = "";
     if (!text) {
       setVoice("listening");
-      const pcm = await listenOnce({ live: true, patience: Infinity });
+      // A long silence on the line: "You still there?", once, from the
+      // spark of a call with one.
+      const pcm = await listenOnce({ live: true, patience: spark && !checked ? 25 : Infinity, backchannel: !!spark, spark });
       if (!voice.on || !sparkCall.on) return;
-      if (!pcm) continue;
+      if (!pcm) { if (spark && !checked) { checked = true; quickSay(info && info.voice_quiet && info.voice_quiet.there, spark); } continue; }
+      checked = false;
       setVoice("hearing");
       const heard = await hear(pcm);
       if (!voice.on || !sparkCall.on) return;
       if (!heard || !heard.text || heard.alone) continue;
       if (heard.exit) { endVoice(); return; }
       text = heard.text;
+      const acked = spark && heard.ack && quickSay(heard.ack, spark) ? heard.ack : "";
+      note = { ...note, mood: heard.mood || "", ack: acked, ...clockNote() };
     }
     callCaption("You", text);
     setVoice("thinking");
-    how = await callRound(text);
+    how = await callRound(text, false, note);
     if (how === "exit" || how === "hangup") { endVoice(); return; }
-    if (how && how.barge) carried = how.barge;
+    if (how && how.barge) { carried = how.barge; cut = how.cut || ""; }
   }
 }
 
@@ -17193,7 +17482,9 @@ async function tcVoiceRound(text, hidden = false) {
   sparkFillerReset(); // FILLERS hook
   let mine;
   const call = sparkCall.on ? (await sparkCall.ready) || true : false;
-  try { mine = (await command("team-chat-say", team, null, { text, reply_to: teamChat.replyTo ? teamChat.replyTo.id : 0, call, hidden })).entry; }
+  const note = voice.note;
+  voice.note = null;
+  try { mine = (await command("team-chat-say", team, null, { text, reply_to: teamChat.replyTo ? teamChat.replyTo.id : 0, call, hidden, ...(note ? { voice_note: note } : {}) })).entry; }
   catch (error) { showFailure(error); return "done"; }
   tcCancelReply();
   tcFetch();
@@ -17481,13 +17772,36 @@ function browserVoice(said, text) {
 }
 if ("speechSynthesis" in window) speechSynthesis.addEventListener?.("voiceschanged", () => { pickedVoice = undefined; });
 
-function playSpeech(audio) {
+// Where SPARK sits in a group call, left to right: each in a place of
+// its own, in the order they first speak, so voices are told apart as in
+// a room. The middle for Flash, and for a call with one spark.
+const PLACES = [-0.35, 0.35, -0.15, 0.15, -0.5, 0.5];
+function placeOf(spark) {
+  if (!spark || !voice.pans || !(sparkCall.on ? sparkCall.group : voice.team && !tcDmSpark(voice.team))) return 0;
+  if (!voice.pans.has(spark)) voice.pans.set(spark, PLACES[voice.pans.size % PLACES.length]);
+  return voice.pans.get(spark);
+}
+
+function playSpeech(audio, spark = "") {
   return new Promise((resolve) => {
     const source = voice.ctx.createBufferSource();
     source.buffer = audio;
     // A spark's voice, where Flash has only the one: set higher or lower.
     if (audio.detune) source.detune.value = audio.detune;
-    source.connect(voice.analyser);
+    // Through a level of its own, so being talked over fades it out
+    // rather than cutting it off mid-sound.
+    const level = voice.ctx.createGain();
+    source.connect(level);
+    let out = level;
+    const place = placeOf(spark);
+    if (place && voice.ctx.createStereoPanner) {
+      const pan = voice.ctx.createStereoPanner();
+      pan.pan.value = place;
+      level.connect(pan);
+      out = pan;
+    }
+    out.connect(voice.analyser);
+    voice.fade = level;
     const ended = () => {
       if (voice.source === source) voice.source = null;
       if (voice.played === ended) voice.played = null;
@@ -17509,7 +17823,21 @@ async function sayLine(line) {
 // Stops the reading for REASON: "tap", "interrupt", "pause" or "exit".
 function cutReading(reason) {
   voice.cut = reason;
-  if (voice.source) { try { voice.source.stop(); } catch (_) { /* already over */ } }
+  const source = voice.source;
+  if (!source) return;
+  // Trailing off over a moment, as a person stops when talked over;
+  // at once for anything else.
+  const level = voice.fade;
+  if (reason === "barge" && level && voice.ctx) {
+    const now = voice.ctx.currentTime;
+    try {
+      level.gain.setValueAtTime(level.gain.value, now);
+      level.gain.linearRampToValueAtTime(0, now + 0.18);
+      source.stop(now + 0.2);
+      return;
+    } catch (_) { /* stopped below */ }
+  }
+  try { source.stop(); } catch (_) { /* already over */ }
 }
 
 // While a reply is read out, keeps an ear open for the interrupt word,
@@ -17573,13 +17901,13 @@ async function readAloud(node, lead = "", who = null) {
       if (i === 0) sparkFillerStop(); // FILLERS hook
       if (i + 1 < parts.length) next = speak(parts[i + 1].text);
       if (!voice.on) return "exit";
-      if (voice.cut) return voice.cut === "barge" ? { barge: voice.barge } : voice.cut;
+      if (voice.cut) return voice.cut === "barge" ? { barge: voice.barge, cut: now } : voice.cut;
       now = parts[i].text;
       markSpoken(parts[i].range);
       if (who) callCaption(who.name, parts[i].text);
-      await playSpeech(audio);
+      await playSpeech(audio, who ? who.spark : "");
       if (!voice.on) return "exit";
-      if (voice.cut) return voice.cut === "barge" ? { barge: voice.barge } : voice.cut;
+      if (voice.cut) return voice.cut === "barge" ? { barge: voice.barge, cut: now } : voice.cut;
     }
     return "done";
   } finally {
@@ -18946,7 +19274,9 @@ async function send(text, mode = "steer") {
     clearTray();
     autosize();
     updateSend();
-    await api("/api/send", { chat: current, text, mode, files, deep: takeThink() }).catch(showFailure);
+    const note = voice.on ? voice.note : null;
+    voice.note = null;
+    await api("/api/send", { chat: current, text, mode, files, deep: takeThink(), ...(note ? { voice: true, voice_note: note } : {}) }).catch(showFailure);
     return;
   }
   if (text) sent.push(text);
@@ -18966,7 +19296,10 @@ async function send(text, mode = "steer") {
   const chatId = current;
   const before = (chats.get(chatId) || { log: [] }).log.length;
   // From voice mode, the reply will be heard: the model is told so.
-  const sentOk = await api("/api/send", { chat: chatId, text, files, voice: voice.on, deep: takeThink() }).then(() => true).catch((error) => { showFailure(error); return false; });
+  // With what they said, how they sounded, for the model alone.
+  const note = voice.on ? voice.note : null;
+  voice.note = null;
+  const sentOk = await api("/api/send", { chat: chatId, text, files, voice: voice.on, deep: takeThink(), ...(note ? { voice_note: note } : {}) }).then(() => true).catch((error) => { showFailure(error); return false; });
   if (sentOk) checkSent(chatId, before);
 }
 
@@ -21534,6 +21867,7 @@ function editLast(block) {
 }
 
 async function copy(text, what, from) {
+  text = uncue(text);
   if (!text) { toast(`No ${what} to copy`); return; }
   try { await navigator.clipboard.writeText(text); }
   catch (_) { toast("The browser blocked the clipboard"); return; }

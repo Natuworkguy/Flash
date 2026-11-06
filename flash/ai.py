@@ -37,6 +37,7 @@ from . import (
     extensions,
     frontmatter,
     greetings,
+    humanvoice,
     interrupt,
     learning,
     loaders,
@@ -1335,7 +1336,9 @@ def _session_system_prompt(heard: bool = False) -> str:
 
     prompt = build_system_prompt(_model_system_prompts[model])
 
-    return prompt + VOICE_PROMPT if heard else prompt
+    # How to sound like a person: built now, with thinking aloud as set.
+    return prompt + VOICE_PROMPT + "\n" + humanvoice.spoken() if heard \
+        else prompt
 
 
 def _state_pair(entry: Any) -> dict:
@@ -6240,8 +6243,9 @@ def _render_markdown(console: Console, text: str, *, end: str = "\n") -> None:
     trailing cursor dot -- the full reply already arrived in one shot, so
     this is a paced typewriter effect rather than real token streaming."""
 
+    # A spoken reply's cues ([happy], [laugh]) are said, never shown.
     text = render_latex(serif.for_terminal(visuals.for_terminal(
-        frontmatter.for_terminal(text)
+        frontmatter.for_terminal(humanvoice.strip(text))
     )))
 
     def render(body: str) -> Markdown:
