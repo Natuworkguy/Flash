@@ -297,6 +297,33 @@ class Speech:
 
 
 @dataclass
+class SystemOne:
+    """A System One model, answered by a program: given {"model",
+    "state", "questions"} as JSON on stdin, it writes {"answers"}
+    (systemone_api has the types, and checks them)."""
+
+    name: str
+    description: str
+    run: list[str]
+    timeout: int = DEFAULT_TIMEOUT
+
+
+@dataclass
+class TunnelService:
+    """A tunnel service, started like the built-in ones: RUN, with
+    {port} where the port goes, prints a public https address that
+    ADDRESS matches, and maybe READY once it can be reached."""
+
+    name: str
+    title: str
+    about: str
+    run: list[str]
+    address: str
+    install: str = ""
+    ready: str = ""
+
+
+@dataclass
 class Briefing:
     """A program that adds cards to the briefing: run when it is read,
     it writes a JSON list of {"title", "body"}, and maybe "id", "at" (a
@@ -328,6 +355,8 @@ class Extension:
     # What it changes of the web page and the terminal (ext_ui.UI).
     ui: Any = None
     speech: list[Speech] = field(default_factory=list)
+    system_one: list[SystemOne] = field(default_factory=list)
+    tunnels: list[TunnelService] = field(default_factory=list)
     briefing: Optional[Briefing] = None
     # A folder of guides for the knowledge base (skills.knowledge).
     knowledge: Optional[Path] = None
@@ -394,6 +423,12 @@ class Extension:
             if names:
                 lines.append(f"{said}: " + ", ".join(
                     f"@{self.name}/{n}" for n in names))
+        if self.system_one:
+            lines.append("System One models: " + ", ".join(
+                f"@{self.name}/{m.name}" for m in self.system_one))
+        if self.tunnels:
+            lines.append("tunnel services: " + ", ".join(
+                t.name for t in self.tunnels))
         if self.briefing is not None:
             lines.append("cards in the briefing")
         if self.ui is not None:
@@ -664,6 +699,69 @@ def _speech(entry: Any, root: Path, index: int) -> Speech:
     )
 
 
+def _system_one(entry: Any, root: Path, index: int) -> SystemOne:
+    where = f"system_one[{index}]"
+    if not isinstance(entry, dict):
+        raise ExtensionError(f"{where} has to be an object")
+    name = _text(entry.get("name"), f"{where}.name", required=True).lower()
+    if not NAME_RE.match(name):
+        raise ExtensionError(
+            f"{where}: {name!r} is not a model name (lowercase letters, "
+            "digits, - and _)")
+    where = f"System One model {name}"
+    return SystemOne(
+        name=name,
+        description=_text(entry.get("description"), f"{where}.description"),
+        run=_argv(entry.get("run"), root, where),
+        timeout=_timeout(entry.get("timeout"), where),
+    )
+
+
+PORT = "{port}"
+
+
+def _pattern(value: Any, where: str, *, required: bool = False) -> str:
+    text = _text(value, where, required=required)
+    if text:
+        try:
+            re.compile(text)
+        except re.error as exc:
+            raise ExtensionError(f"{where} is not a regular expression: "
+                                 f"{exc}") from None
+    return text
+
+
+def _tunnel(entry: Any, root: Path, index: int) -> TunnelService:
+    where = f"tunnels[{index}]"
+    if not isinstance(entry, dict):
+        raise ExtensionError(f"{where} has to be an object")
+    name = _text(entry.get("name"), f"{where}.name", required=True).lower()
+    if not NAME_RE.match(name):
+        raise ExtensionError(
+            f"{where}: {name!r} is not a service name (lowercase letters, "
+            "digits, - and _)")
+    where = f"tunnel {name}"
+    run = _argv(entry.get("run"), root, where)
+    if not any(PORT in part for part in run[1:]):
+        raise ExtensionError(
+            f'{where}: "run" has to say where the port goes, as {PORT}')
+    address = _pattern(entry.get("address"), f"{where}.address",
+                       required=True)
+    if not address.startswith("https"):
+        raise ExtensionError(
+            f'{where}: "address" has to match an https:// address, '
+            r'like "https://[-a-z0-9]+\\.example\\.com"')
+    return TunnelService(
+        name=name,
+        title=_text(entry.get("title"), f"{where}.title") or name,
+        about=_text(entry.get("about"), f"{where}.about"),
+        run=run,
+        address=address,
+        install=_text(entry.get("install"), f"{where}.install"),
+        ready=_pattern(entry.get("ready"), f"{where}.ready"),
+    )
+
+
 def _briefing(entry: Any, root: Path) -> Briefing:
     where = '"briefing"'
     if not isinstance(entry, dict):
@@ -914,6 +1012,16 @@ def load(root: Path) -> Extension:
         for index, entry in enumerate(_entries(manifest, "speech"))
     ]
     _unique([s.name for s in speech], "speech model")
+    system_one = [
+        _system_one(entry, root, index)
+        for index, entry in enumerate(_entries(manifest, "system_one"))
+    ]
+    _unique([m.name for m in system_one], "System One model")
+    tunnels = [
+        _tunnel(entry, root, index)
+        for index, entry in enumerate(_entries(manifest, "tunnels"))
+    ]
+    _unique([t.name for t in tunnels], "tunnel service")
     briefing = (
         _briefing(manifest["briefing"], root)
         if manifest.get("briefing") is not None else None
@@ -927,11 +1035,11 @@ def load(root: Path) -> Extension:
 
     if not (commands or tools or prompt or backgrounds or providers
             or themes or loaders or events or voice or ui or speech
-            or briefing or knowledge):
+            or system_one or tunnels or briefing or knowledge):
         raise ExtensionError(
             f"{MANIFEST} declares nothing: no commands, tools, prompt, "
             "backgrounds, providers, themes, loaders, events, voice, "
-            "speech, briefing, ui, or knowledge"
+            "speech, system_one, tunnels, briefing, ui, or knowledge"
         )
 
     try:
@@ -958,6 +1066,8 @@ def load(root: Path) -> Extension:
         settings=settings,
         ui=ui,
         speech=speech,
+        system_one=system_one,
+        tunnels=tunnels,
         briefing=briefing,
         network=_network(manifest.get("network", False)),
     )
@@ -1346,6 +1456,76 @@ def find_speech(name: str, kind: str = ""
     return None
 
 
+# System One and tunnels -------------------------------------------------
+
+
+def system_one_name(extension: Extension, model: SystemOne) -> str:
+    """How the user picks MODEL: @<extension>/<model>."""
+
+    return f"@{extension.name}/{model.name}"
+
+
+def system_one_models() -> list[tuple[Extension, SystemOne]]:
+    """Every installed extension's System One models."""
+
+    return [(e, m) for e in installed() for m in e.system_one]
+
+
+def find_system_one(name: str) -> Optional[tuple[Extension, SystemOne]]:
+    wanted = (name or "").strip().lower()
+    return next(((e, m) for e, m in system_one_models()
+                 if system_one_name(e, m) == wanted), None)
+
+
+def ask_system_one(extension: Extension, model: SystemOne,
+                   request: dict) -> Any:
+    """REQUEST put to MODEL's program, and what it wrote back, read as
+    JSON. Raises ExtensionError when it could not be had."""
+
+    what = system_one_name(extension, model)
+    try:
+        result = subprocess.run(  # nosec B603
+            argv(extension, model.run), input=json.dumps(request),
+            capture_output=True, text=True, encoding="utf-8",
+            errors="replace", timeout=model.timeout, check=False,
+            env=environment(extension),
+        )
+    except subprocess.TimeoutExpired:
+        raise ExtensionError(
+            f"{what} took longer than {model.timeout} seconds") from None
+    except OSError as exc:
+        raise ExtensionError(f"could not start {what}: {exc}") from None
+    said = result.stdout.strip()
+    try:
+        reply = json.loads(said) if said else None
+    except ValueError:
+        reply = None
+    if isinstance(reply, dict) and isinstance(reply.get("error"), str):
+        raise ExtensionError(f"{what} could not answer: {reply['error']}")
+    if result.returncode:
+        why = result.stderr.strip()
+        raise ExtensionError(
+            f"{what} stopped with exit {result.returncode}"
+            + (f": {why.splitlines()[-1]}" if why else ""))
+    if reply is None:
+        raise ExtensionError(f"{what} did not write a JSON reply")
+    return reply
+
+
+def tunnel_services() -> list[tuple[Extension, TunnelService]]:
+    """Every extension's tunnel services, the first to claim a name
+    winning, which install already keeps from mattering."""
+
+    taken: set[str] = set()
+    found = []
+    for extension in installed():
+        for service in extension.tunnels:
+            if service.name not in taken:
+                taken.add(service.name)
+                found.append((extension, service))
+    return found
+
+
 def _run_bytes(extension: Extension, run: list[str], given: bytes,
                timeout: int, what: str) -> bytes:
     try:
@@ -1726,6 +1906,19 @@ def clashes(
         )
         if owner:
             found.append(f"provider @{provider.name} belongs to {owner}")
+
+    from .tunnel import BUILT_IN  # deferred: tunnel reads this module
+
+    for service in extension.tunnels:
+        owner = next(
+            (e.name for e in others
+             if any(t.name == service.name for t in e.tunnels)),
+            None,
+        )
+        if service.name in BUILT_IN:
+            found.append(f"tunnel {service.name} is a built-in service")
+        elif owner:
+            found.append(f"tunnel {service.name} belongs to {owner}")
 
     return found
 

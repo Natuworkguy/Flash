@@ -2465,11 +2465,13 @@ def _system_one_pick(name: str) -> None:
     when the server does not have it."""
 
     try:
-        systemone.check(Config.host)
-        if systemone.capable(Config.host, name) is None and not \
-                fetch_if_missing(_client(), name):
-            warn("  System One is as it was.")
-            return
+        # An extension's model is its own program: no Ollama to ask.
+        if not systemone.is_extension(name):
+            systemone.check(Config.host)
+            if systemone.capable(Config.host, name) is None and not \
+                    fetch_if_missing(_client(), name):
+                warn("  System One is as it was.")
+                return
         name = systemone.choose(Config.host, name)
     except systemone.SystemOneError as exc:
         warn(f"  {exc}")
@@ -2503,7 +2505,8 @@ def _system_one_status() -> None:
             "  In autonomous mode, a small model that checks each command "
             "and edit before it runs, and answers the model's quick "
             "questions. Needs Ollama v"
-            f"{systemone.MIN_VERSION_TEXT}+.\n", style=DIM,
+            f"{systemone.MIN_VERSION_TEXT}+, or an extension's System One "
+            "model.\n", style=DIM,
         )
     body.append(
         "  /systemone on|off, /systemone model to see the System One "
@@ -2514,11 +2517,11 @@ def _system_one_status() -> None:
 
 
 def _system_one_models() -> None:
-    """The System One models on this Ollama, the one in use marked."""
+    """The System One models on this Ollama and from extensions, the
+    one in use marked."""
 
     try:
-        systemone.check(Config.host)
-        found = systemone.scan(Config.host)
+        found = systemone.available(Config.host)
     except systemone.SystemOneError as exc:
         warn(f"  {exc}")
         return

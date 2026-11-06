@@ -377,6 +377,128 @@ above 1 is slower) and writes the speech to stdout: a WAV file, or raw
 16-bit audio on stdin once the speaker stops, and writes what was said.
 "Hey Flash" still listens with a Vosk model.
 
+### Tunnel services
+
+An extension can add a tunnel service. It shows in the tunnel picker
+beside the built-in ones (Settings, General, Network), marked with the
+extension's name, and `/web tunnel <name>` opens it:
+
+```json
+"tunnels": [
+  {"name": "relay", "title": "Acme Relay",
+   "about": "Your Acme account's own address, the same each time.",
+   "run": ["acme-relay", "http", "127.0.0.1:{port}"],
+   "address": "https://[-a-z0-9]+\\.relay\\.example\\.com",
+   "ready": "connection established",
+   "install": "acme.example.com/relay"}
+]
+```
+
+Flash runs `run` with `{port}` swapped for the web UI's port, and reads
+what the program prints, its output and its errors alike. The first
+match of `address`, a regular expression, is the public address, and
+it has to be an `https://` one. With `ready`, the tunnel counts as open
+only once a later line matches that too, for a service that says its
+address before it can be reached. Flash then checks that it can reach
+itself through the address before it says the tunnel is open, and
+stops the program when the tunnel is turned off or Flash stops.
+
+`run` can be a program on the PATH, one in the extension (`./...`), or
+`python` and a script; `install` says where to get it when it is not
+there. The program gets the extension's settings as every other one
+does. A name a built-in service has (`cloudflare`, `localhost.run`,
+`tailscale`, `ngrok`) or another extension's tunnel has is refused at
+install.
+
+### System One models
+
+An extension can serve [System One](GUIDE.md#system-one) models. Each
+is picked like one of Ollama's, as `@<extension>/<name>`, in the web
+UI's model menu or with `/systemone model @<extension>/<name>`, and
+needs no Ollama:
+
+```json
+"system_one": [
+  {"name": "guard", "description": "House rules, then a small model",
+   "run": ["python", "./guard.py"], "timeout": 30}
+]
+```
+
+The program is given one request as JSON on stdin and writes one reply
+on stdout:
+
+```json
+{"model": "guard",
+ "state": {"request": "tidy the build folder", "tool": "shell",
+           "arguments": "{\"command\": \"rm -rf build\"}"},
+ "questions": {
+   "safe": {"type": "noul", "instructions": "Is this safe to run?",
+            "criteria": {"true": "Safe", "false": "Unsafe"}},
+   "on_task": {"type": "noul", "instructions": "Does it serve the request?"}
+ }}
+```
+
+```json
+{"answers": {"safe": {"noul": 0.82}, "on_task": {"noul": 0.97}}}
+```
+
+or `{"error": "why"}` when it cannot answer. The `model` is the name
+from the manifest, so one program can serve several models. Every
+question is one of three types, and each has its answer's type:
+
+| Question | `criteria` | Answer |
+| --- | --- | --- |
+| `noul`, yes or no | maybe `{"true": ..., "false": ...}` | `{"noul": p}`, p the probability of yes, 0 to 1 |
+| `choice` | `{option: what it means}`, two or more | `{"choice": option}`, maybe `probabilities` by option and `confidence` |
+| `score` | the levels, lowest first, two or more | `{"score": s}`, s from 0 to the number of levels less one, maybe `probabilities`, `legend` and `confidence` |
+
+Flash checks both ways. Every question is checked against its type
+before it is sent, and every answer against its question's type when it
+comes back: a probability outside 0 to 1, a choice that was not offered,
+a score off the scale, a key the type does not have, a question left
+unanswered or one answered that was not asked. A reply that is wrong
+anywhere is not used at all, and says exactly what was wrong. A review
+System One cannot answer does not let the call through, so a broken
+model stops calls rather than waving them on.
+
+A Python program can let `flash.systemone_api` do the reading, checking
+and writing, with every question and answer typed (`python` in `run`
+is the Python Flash runs on, so it imports Flash):
+
+```python
+from flash.systemone_api import (
+    ChoiceQuestion, Model, ScoreQuestion, YesNoQuestion, choice, score,
+    serve, yes_no)
+
+RISKY = ("rm -rf", "sudo ", "curl ", "| sh")
+
+
+class Guard(Model):
+    name = "guard"
+
+    def yes_no(self, state, question: YesNoQuestion):
+        risky = any(word in str(state) for word in RISKY)
+        return yes_no(0.05 if risky else 0.9)
+
+    def choice(self, state, question: ChoiceQuestion):
+        return choice(next(iter(question["criteria"])))
+
+    def score(self, state, question: ScoreQuestion):
+        return score(len(question["criteria"]) // 2)
+
+
+serve(Guard())
+```
+
+`yes_no`, `choice` and `score` build answers and refuse a bad one
+before it is sent; a model that would rather see all the questions at
+once overrides `answer(state, questions)` instead. A type checker such
+as mypy or pyright checks a model against the types, and the module
+uses only Python's standard library, so it can be copied beside a
+program that runs on another Python. `check_questions` and
+`check_answers` are there for a program that does its own reading and
+writing.
+
 ### Briefing
 
 An extension can add cards to the briefing. Its program runs when the

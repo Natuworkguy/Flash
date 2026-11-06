@@ -533,6 +533,11 @@ can only judge are left out of the chat models above them. `/systemone`
 shows how many calls it has reviewed and stopped this session, and the
 status bar reads `auto + S1` while it is at work.
 
+An extension can serve System One models too, picked as
+`@<extension>/<name>` with the rest and needing no Ollama. What they
+answer is checked against each question's type before Flash acts on it.
+See [System One models](EXTENSIONS.md#system-one-models).
+
 ### Smart home
 
 Flash controls your smart home through [Home Assistant](https://www.home-assistant.io),
@@ -1744,6 +1749,10 @@ home. Pick the service, then Open tunnel:
 | localhost.run | `ssh`, nothing else | random, new each time |
 | Tailscale Funnel | Tailscale signed in, Funnel allowed | your tailnet's, the same each time |
 | ngrok | `ngrok` with its authtoken added | ngrok's |
+
+Extensions can add more services; they show in the same picker with
+the extension's name beside them. See
+[Tunnel services](EXTENSIONS.md#tunnel-services).
 
 Settings then shows the link, token and all, with a QR code, and every
 page shows a red bar with Turn off while it lasts. In the terminal,

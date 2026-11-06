@@ -195,3 +195,107 @@ def test_a_refused_post_does_not_spill_into_the_next_request(server):
 
     assert said.startswith(b"HTTP/1.1 403")  # nosec B101
     assert b"501" not in said and b"Unsupported method" not in said
+
+
+# --- Services from extensions --------------------------------------------
+
+RELAY = """\
+import os, sys, time
+port = sys.argv[sys.argv.index("--port") + 1]
+print("starting relay for", port, "{not a port}", flush=True)
+print(os.environ["FLASH_SETTING_SCHEME"] + "://bright-fox."
+      + os.environ["FLASH_SETTING_REGION"]
+      + ".relay.example.com", flush=True)
+print("connection established", flush=True)
+time.sleep(60)
+"""
+
+
+def relay_extension(tmp_path, scheme="https", **changes):
+    from flash import extensions
+    from tests.test_extensions import install, make
+
+    service = {
+        "name": "relay", "title": "Acme Relay",
+        "about": "Your own address.",
+        "run": ["python", "./relay.py", "--port", "{port}", "{not a port}"],
+        "address": r"https://[-a-z0-9.]+\.relay\.example\.com",
+        "ready": "connection established",
+        "install": "acme.example.com/relay",
+        **changes,
+    }
+    found = install(tmp_path, make(tmp_path / "relay-src", {
+        "name": "acme",
+        "settings": [{"id": "region", "label": "Region", "type": "text",
+                      "default": "eu"},
+                     {"id": "scheme", "label": "Scheme", "type": "text",
+                      "default": scheme}],
+        "tunnels": [service],
+    }, {"relay.py": RELAY}))
+    assert extensions.find("acme") is not None  # nosec B101
+    return found
+
+
+def test_an_extension_s_service_is_picked_and_opened_like_the_others(
+        tmp_path):
+    relay_extension(tmp_path)
+    listed = {s["name"]: s for s in tunnel.services()}
+    assert listed["relay"]["extension"] == "acme"  # nosec B101
+    assert listed["relay"]["installed"]  # nosec B101
+    assert listed["cloudflare"]["extension"] == ""  # nosec B101
+
+    found = tunnel.Tunnel()
+    status = found.start("relay", 7433, wait=20)
+
+    # Its own settings reached it, and only {port} was filled in.
+    assert status["url"] == \
+        "https://bright-fox.eu.relay.example.com"  # nosec B101
+    assert any("7433 {not a port}" in line
+               for line in found._said)  # nosec B101
+    found.stop()
+
+
+def test_an_extension_s_service_whose_program_is_missing_says_where(
+        tmp_path, monkeypatch):
+    relay_extension(tmp_path, run=["acme-relay", "{port}"])
+    monkeypatch.setattr(tunnel.shutil, "which", lambda name: None)
+
+    assert not {s["name"]: s for s in tunnel.services()}["relay"][
+        "installed"]  # nosec B101
+    with pytest.raises(tunnel.TunnelError,
+                       match="needs acme-relay.*acme.example.com/relay"):
+        tunnel.Tunnel().start("relay", 7433)
+
+
+@pytest.mark.parametrize("changes, why", [
+    ({"run": ["acme-relay", "http"]}, "where the port goes"),
+    ({"address": "http://[a-z]+"}, "https://"),
+    ({"address": "https://(["}, "not a regular expression"),
+    ({"ready": "(("}, "not a regular expression"),
+    ({"name": "Has Space"}, "not a service name"),
+])
+def test_a_bad_service_is_refused_at_install(tmp_path, changes, why):
+    from flash.extensions import ExtensionError
+
+    with pytest.raises(ExtensionError, match=why):
+        relay_extension(tmp_path, **changes)
+
+
+def test_a_built_in_name_is_kept_by_the_built_in(tmp_path):
+    from flash import extensions
+
+    found = relay_extension(tmp_path, name="cloudflare", title="Fake")
+
+    assert extensions.clashes(found, frozenset(), frozenset()) == [
+        "tunnel cloudflare is a built-in service"]  # nosec B101
+    assert tunnel.find("cloudflare").title == \
+        "Cloudflare quick tunnel"  # nosec B101
+
+
+def test_only_an_https_address_counts(tmp_path):
+    # A pattern loose enough to match plain http too.
+    relay_extension(tmp_path, address=r"https?://[-a-z0-9.]+\.example\.com",
+                    scheme="http")
+
+    with pytest.raises(tunnel.TunnelError, match="no address"):
+        tunnel.Tunnel().start("relay", 7433, wait=2)

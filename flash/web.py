@@ -4548,6 +4548,7 @@ def system_one_state(ai, models: bool = False) -> dict:
         # leave out of the chat models.
         "judge_only": [],
     }
+    served = systemone.extension_models()
     try:
         state["version"] = systemone.check(ai.Config.host)
         if models:
@@ -4564,6 +4565,14 @@ def system_one_state(ai, models: bool = False) -> dict:
         state.update(version=exc.version, problem=str(exc), too_old=True)
     except systemone.SystemOneError as exc:
         state["problem"] = str(exc)
+    # An extension's models answer with no Ollama at all: there to pick
+    # whatever Ollama said, and nothing wrong while one is in use.
+    if models and served:
+        state["models"] = sorted({*state["models"], *served})
+        state["judge_only"] = sorted({*state["judge_only"], *served})
+    if systemone.is_extension(state["model"]) or (
+            models and served and not state["too_old"]):
+        state["problem"] = ""
     return state
 
 
@@ -7602,6 +7611,11 @@ def tunnel_info(session: "Session") -> dict:
     }
 
 
+def _service_title(name: str) -> str:
+    service = tunnel.find(name)
+    return service.title if service else name
+
+
 def _warn_public(session: "Session") -> None:
     """Say in the terminal, loudly, that Flash is on the internet."""
 
@@ -7610,7 +7624,7 @@ def _warn_public(session: "Session") -> None:
         return
     console.print(Text(
         f"Flash is on the internet at {found.url}, through "
-        f"{tunnel.SERVICES[found.service].title}. Anyone with the link "
+        f"{_service_title(found.service)}. Anyone with the link "
         "can use Flash as you: read your chats, run commands, change "
         "files, send messages. Turn it off in Settings, Network, when "
         "you're done.",
