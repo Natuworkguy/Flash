@@ -487,6 +487,14 @@ def _call_entry(data: dict, call_id: str) -> Optional[dict]:
                  and e.get("call") == call_id), None)
 
 
+def holder_place(holder: str) -> str:
+    """Where the Flash holding a call is, for the user: Web, CLI or
+    Watch, from its holder ("web:...", "terminal:...", "watch:...")."""
+
+    kind = str(holder or "").split(":", 1)[0]
+    return {"web": "Web", "terminal": "CLI", "watch": "Watch"}.get(kind, "")
+
+
 def live_calls() -> list[dict]:
     """Every call going on now, in every chat, ringing calls aside: what
     another Flash can take over. Each with its chat's id as "team"."""
@@ -596,6 +604,16 @@ def call_step(team_key: str, call_id: str, step: str,
             entry["holder"] = holder[:80]
         if step == "take":
             entry["taken"] = now
+            # The spark on the call is told where the user went: a note
+            # in its chat only it reads, hidden from the page.
+            went, was = holder_place(holder), holder_place(holder_now)
+            if went and holder != holder_now:
+                _add(data, {
+                    "kind": EVENT, "hidden": True, "note":
+                    f"The call just moved to the {went}"
+                    + (f" from the {was}" if was and was != went else "")
+                    + "; the user is there now",
+                })
         if step == "connected" and not entry.get("connected"):
             entry.update(connected=now, state="live")
         elif step == "answer":
@@ -1025,6 +1043,8 @@ def _said_line(entry: dict, by_id: dict) -> str:
     kind = entry.get("kind")
     if kind == CALL:
         return _call_line(entry)
+    if entry.get("note"):
+        return f"({entry['note']})"
     if entry.get("call"):
         text = "[on the call] " + text
     if kind == USER:

@@ -142,6 +142,14 @@ def _sandbox() -> dict:
             "sandbox_missing": sandbox.missing()}
 
 
+def _awake_state() -> dict:
+    """Keeping the Mac awake, for Settings."""
+
+    from . import awake
+
+    return awake.state()
+
+
 def _computer_use() -> dict:
     """Computer Use's state, for Settings: on or off, the stop keys, and
     what this computer lacks for it."""
@@ -4391,6 +4399,7 @@ def status(ai) -> dict:
         "computer": computer.enabled(),
         **_computer_use(),
         **_sandbox(),
+        **_awake_state(),
         "spark_events": triggers.enabled(),
         "spark_retry": sparks.retry_shifts(),
         **_computer_kinds(),
@@ -5384,6 +5393,19 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
         learning.refresh()
         return {"message": message}
 
+    if name == "sparks-read-all":
+        # Every spark's new reports and every team chat, read at once.
+        marked = 0
+        for spark in sparks.all_sparks():
+            if spark.unread:
+                sparks.mark_read(spark.id)
+                marked += 1
+        for team in sparks.teams():
+            if teamchat.mark_read(team.id):
+                marked += 1
+        if marked:
+            briefing.stale()
+        return {"marked": marked}
     if name == "sparks-refresh":
         # Every spark's tools, as refresh_tools brings one's: here, and
         # in the keeper running shifts, which may be another process.
@@ -5931,6 +5953,14 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
         computeruse.set_enabled(arg in ("on", "1", "true"))
         session.hub.publish({"type": "status"})
         return _computer_use()
+
+    if name == "keep-awake-setting":
+        # Keep the Mac awake while Flash serves, for the watch and calls.
+        from . import awake
+
+        awake.set_setting(arg in ("on", "1", "true"))
+        session.hub.publish({"type": "status"})
+        return awake.state()
 
     if name in ("sandbox-setting", "sandbox-auto-setting"):
         # Every command in the sandbox; and, in Ask first, sandboxed ones
@@ -7839,6 +7869,11 @@ def _attach(server: "Server", standalone: bool) -> None:
 
     session = server.session
     session.relink = lambda: announce(server)
+    # Asleep, the watch cannot reach Flash and no spark can call: hold
+    # the Mac awake for as long as this process serves (on by default).
+    from . import awake
+
+    awake.start()
     # Sparks work for as long as the server runs, and the page hears of
     # every shift they start and finish.
     sparks.on_change(session.sparks_changed)

@@ -1303,12 +1303,15 @@ def _hearing(live: bool = True):
 def listen(
     on_state: State, on_words: Optional[Callable[[str], None]] = None,
     settle: bool = False, limit: float = MAX_TURN_SECONDS,
+    stop: Optional[Callable[[], bool]] = None,
 ) -> tuple[str, str]:
     """Record until the speaker stops, and return what was said. ON_WORDS
     is told the words so far, as they change, while they talk. SETTLE
     also ends the turn once the words have stopped changing for a
     pause, for a room that is never quiet (a video playing). LIMIT is
-    the longest a turn can run, in seconds.
+    the longest a turn can run, in seconds. STOP, asked about once a
+    second, ends the turn at once with nothing heard when it says so
+    (a call that went on elsewhere).
 
     Returns `(text, "")`, where `text` is empty when nothing was heard,
     or `("", reason)` when the microphone or the model was not usable.
@@ -1328,6 +1331,7 @@ def listen(
     elapsed = 0.0
     # When the words last changed.
     changed = 0.0
+    asked = 0.0
     step = BLOCK_FRAMES / SAMPLE_RATE
 
     # Read once per turn so a /set during the session takes effect.
@@ -1355,6 +1359,12 @@ def listen(
                     if on_words is not None:
                         on_words(words)
                 elapsed += step
+
+                if stop is not None and elapsed - asked >= 1.0:
+                    asked = elapsed
+                    if stop():
+                        hearing.close()
+                        return "", ""
 
                 if settle and shown and elapsed - changed >= pause:
                     break
