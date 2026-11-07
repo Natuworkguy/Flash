@@ -1,3 +1,4 @@
+# PYTHON_ARGCOMPLETE_OK
 # pylint: disable=C0114
 
 import os
@@ -44,6 +45,15 @@ def _no_console() -> None:
 
 def main() -> None:
     _no_console()
+    # Tab completion, and the shell hook for it, before the rest of
+    # Flash loads: a Tab has to answer at once.
+    from . import cli
+
+    cli.complete()
+    if sys.argv[1:2] == ["completion"]:
+        args = cli.parse_args()
+        print(cli.completion_script(args.target or ""))
+        return
     try:
         from .ai import main as flash
     except ModuleNotFoundError as error:

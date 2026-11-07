@@ -125,6 +125,24 @@ Then set `MODEL` to whichever you built (`flash-onyx-<version>:31b`, or
 python3 run.py
 ```
 
+### Tab completion
+
+`flash` completes its commands and flags with Tab, along with the
+shells for `flash completion`, the installed extensions for `flash
+update` and `flash remove`, and where `flash install` can install from
+(`github@`, `git@`, and folders after `path@`). Turn it on once by
+adding a line to your shell's startup file, then open a new terminal:
+
+```bash
+echo 'eval "$(flash completion bash)"' >> ~/.bashrc           # bash
+echo 'eval "$(flash completion zsh)"' >> ~/.zshrc             # zsh
+flash completion fish > ~/.config/fish/completions/flash.fish # fish
+```
+
+To try it in the open terminal only, run the `eval` part on its own.
+`flash completion powershell` and `flash completion tcsh` print the
+same for those shells.
+
 ## Configuration
 
 FLASH CLI is configured through environment variables. You can create a `.flash.env` file in your home directory:
