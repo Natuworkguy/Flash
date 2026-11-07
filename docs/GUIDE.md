@@ -765,7 +765,12 @@ have looked them over.
   one room (the chat button on the team, or `/sparks teamchat <team>
   [message]`). The leads answer what is said to no one; `@scout` calls
   on one, `@everyone` on all of them, and replying to a message calls on
-  whoever wrote it. Sparks can bring a teammate in, send a few messages
+  whoever wrote it. Any spark can be @mentioned, on the team or not: one
+  off it joins as a guest, answers what it was asked, and leaves the rest
+  to the team without joining it (the @ list shows the team first, then
+  the rest, marked). `@everyone` still means the team. A private chat
+  with one spark never calls anyone else in. Sparks can bring a teammate
+  (or a guest) in, send a few messages
   in a row, react with an emoji, or stay quiet when they have nothing to
   add. A spark that needs you writes `@user`, there or in a report: the
   web UI plays a ping and says who it was (click it to go there), the

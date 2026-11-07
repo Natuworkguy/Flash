@@ -2,7 +2,8 @@
 
 Every team has one. The user writes in it; the sparks it @mentions
 answer, or its leads when it names no one, and a spark can @mention a
-teammate to bring it in too, a few replies at most for each message of
+teammate to bring it in too, or any other spark, which joins as a
+guest for what it was asked, a few replies at most for each message of
 the user's, so two sparks never talk on forever. Around the talk, the
 team's news lands in it as it happens: a report filed, a shift that
 failed, a spark that joined. And the latest of it is in every member's
@@ -84,7 +85,8 @@ You are shown the latest of the chat, then asked to post your message.
 - Answer what was said to you, or to the team, from what you know and
   have found. Do not repeat what a teammate already said.
 - To bring a teammate in, @mention them by handle in your message, and
-  they answer after you. Only do that when they are really needed.
+  they answer after you. A spark off the team can be @mentioned too,
+  and joins as a guest. Only do that when they are really needed.
 - @user pings the user, with a sound, wherever they are. Use it only
   when you need them now: a sign-off, a question only they can answer,
   or what you called them about when they didn't pick up.
@@ -108,6 +110,16 @@ You are shown the latest of the chat, then asked to post your message.
   you posted it), call edit_message with its number and what it should
   say now, rather than posting it again. Everyone can still see what it
   said before. When the edit says it all, answer with only {quiet}.
+""".strip()
+
+# A spark @mentioned into a team's chat that is not on the team: told
+# so, after the room's own rules.
+GUEST_PROMPT = """
+=== You are a guest here ===
+You are not on {team}: you were @mentioned into its chat for what was
+asked of you. Answer that, then leave the rest to the team; what is not
+for you is theirs to answer. Work you take on is your own, in a shift
+of yours, not the team's.
 """.strip()
 
 # A private chat with one spark, a DM: a room like a team's, keyed
@@ -876,19 +888,37 @@ def _leads(team_id: str) -> list[sparks.Spark]:
 def _named(
     team_id: str, text: str, skip: set[str], everyone: bool = False,
 ) -> list[sparks.Spark]:
-    """The team's sparks TEXT @mentions, but those in SKIP. With
-    EVERYONE, an @everyone in it names the whole team, its leads first:
-    the user's way to ask them all; a spark's own @everyone names no
-    one."""
+    """The sparks TEXT @mentions, but those in SKIP: on the team, or
+    not, as guests (in a DM, only the spark it is with). With EVERYONE,
+    an @everyone in it names the whole team, its leads first: the
+    user's way to ask them all; a spark's own @everyone names no one."""
 
     team = _members(team_id)
     ids = {s.id for s in team}
     leads = _leads(team_id)
     order = leads + [s for s in team if all(s.id != lead.id for lead in leads)]
+    private = is_dm(team_id)
     return [
         s for s in sparks.mentioned(text, everyone, order)
-        if s.id in ids and s.id not in skip
+        if (s.id in ids or not private) and s.id not in skip
     ]
+
+
+def is_guest(team_id: str, spark: sparks.Spark) -> bool:
+    """Whether SPARK is in TEAM_ID's chat as a guest: not on the team."""
+
+    return not is_dm(team_id) and \
+        all(s.id != spark.id for s in _members(team_id))
+
+
+def _speaker(team_id: str, spark_id: str) -> Optional[sparks.Spark]:
+    """The spark SPARK_ID, if it can still speak in TEAM_ID's chat: one
+    on the team, or in a team's chat, any spark there is."""
+
+    if is_dm(team_id):
+        return next((s for s in _members(team_id) if s.id == spark_id),
+                    None)
+    return sparks.find(spark_id) if spark_id else None
 
 
 def _quote(entry: dict) -> dict:
@@ -1420,13 +1450,21 @@ def _reply(
             raise RuntimeError(sparks.out_of_budget(spark))
         host = flash_tools.OLLAMA_HOST or subagents.OLLAMA_HOST_DEFAULT
         room = DM_PROMPT if is_dm(team.id) else TEAM_CHAT_PROMPT
-        system = sparks.chat_prompt(
-            spark, host, model, flash_tools.CURRENT_DATE_PROMPT,
-        ) + "\n\n" + room.format(
+        said = room.format(
             team=team.name, name=spark.name, handle=spark.handle,
             roster=roster, quiet=QUIET,
-        ) + ((CALL_PROMPT if is_dm(team.id) else GROUP_CALL_PROMPT)
-             + "\n" + humanvoice.spoken() if call else "")
+        )
+        if is_guest(team.id, spark):
+            said = said.replace(
+                "The others on the team:", "The sparks on the team:",
+            ) + "\n\n" + GUEST_PROMPT.format(team=team.name)
+        on_call = ""
+        if call:
+            on_call = (CALL_PROMPT if is_dm(team.id) else GROUP_CALL_PROMPT) \
+                + "\n" + humanvoice.spoken()
+        system = sparks.chat_prompt(
+            spark, host, model, flash_tools.CURRENT_DATE_PROMPT,
+        ) + "\n\n" + said + on_call
         # How the user sounded saying their latest, on a call.
         heard = _call_notes.get(team.id, "") if call else ""
         if heard:
@@ -1516,13 +1554,11 @@ def _pictures(entries: list, host: str, model: str) -> list[str]:
 
 
 def _replied_to(team_id: str, message: dict) -> Optional[sparks.Spark]:
-    """The spark whose message, or news, MESSAGE replies to, if it is
-    still on the team: a reply calls on it as an @mention would."""
+    """The spark whose message, or news, MESSAGE replies to, if it can
+    still speak there (a guest too): a reply calls on it as an @mention
+    would."""
 
-    spark_id = (message.get("reply") or {}).get("spark", "")
-    if not spark_id:
-        return None
-    return next((s for s in _members(team_id) if s.id == spark_id), None)
+    return _speaker(team_id, (message.get("reply") or {}).get("spark", ""))
 
 
 def _round(team: sparks.Team, message: dict, client=None) -> list[dict]:
@@ -1605,12 +1641,11 @@ def retry(team_key: str, entry_id: int, client=None) -> dict:
             raise TeamChatError("That message is no longer in the chat.")
         if entry.get("kind") != SPARK:
             raise TeamChatError("Only a spark's message can be retried.")
-        spark = next((s for s in _members(team.id)
-                      if s.id == entry.get("spark")), None)
+        spark = _speaker(team.id, entry.get("spark", ""))
         if spark is None:
             raise TeamChatError(
-                f"{entry.get('name') or 'That spark'} is not on the team "
-                "now, so it cannot answer again."
+                f"{entry.get('name') or 'That spark'} is not here now, so "
+                "it cannot answer again."
             )
         entry["retried"] = True
         # As a reaction does: a page that has it sees it changed.
