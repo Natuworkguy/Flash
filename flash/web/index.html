@@ -3493,6 +3493,9 @@ body.resizing-viewer iframe { pointer-events: none; }
 .model-view .model-tools button { padding: 5px 10px; border-radius: 8px; font-size: 12.5px; color: var(--text-2); white-space: nowrap; }
 .model-view .model-tools button:hover { background: var(--hover); color: var(--text); }
 .model-view .model-tools button[aria-pressed="true"] { background: var(--hover); color: var(--text); }
+.model-view .model-tools button.model-ext { padding: 5px 7px; display: grid; place-items: center; }
+.model-view .model-tools button.model-ext svg { width: 15px; height: 15px; }
+.model-view .model-tools button.model-ext:disabled { opacity: 0.5; }
 .model-view .model-tools .hint { padding: 0 8px; font-size: 12px; color: var(--text-3); white-space: nowrap; }
 .model-view .model-motion { display: flex; align-items: center; gap: 4px; padding-right: 4px; margin-right: 2px; border-right: 1px solid var(--border); }
 .model-view .model-motion[hidden] { display: none; }
@@ -3506,6 +3509,9 @@ body.resizing-viewer iframe { pointer-events: none; }
 .model-part-card em { font-style: normal; font-size: 12px; color: var(--accent); }
 .model-part-card[hidden] { display: none; }
 @media (max-width: 560px) { .model-view .model-tools .hint { display: none; } }
+/* A narrow viewer, beside the chat: the bar keeps its buttons, not the hint. */
+.model-view { container-type: inline-size; }
+@container (max-width: 720px) { .model-tools .hint { display: none; } }
 
 /* A MIDI file: a piano roll, its tracks, and a transport to play it by.
    The roll fits the whole piece across; the line is where it is. */
@@ -6973,6 +6979,19 @@ async function openModel(entry, body) {
   const wire = tools.querySelector("[data-wire]");
   wire.onclick = () => { const on = wire.getAttribute("aria-pressed") !== "true"; press(wire, on); mine.handle.wireframe(on); };
   if (mine.handle.animated) showMotion(mine, view, tools);
+  // Extensions' buttons for a model, as icons, named on hover: the
+  // model's file goes to them.
+  for (const b of extButtonsAt("model")) {
+    const node = el("button", "model-ext", icon(ICON[b.icon] ? b.icon : "puzzle"));
+    node.type = "button";
+    node.dataset.tip = b.label;
+    node.setAttribute("aria-label", b.label);
+    node.onclick = async () => {
+      node.disabled = true;
+      try { await pressExt(b, "", entry.id); } finally { node.disabled = false; }
+    };
+    tools.insertBefore(node, tools.querySelector(".hint"));
+  }
   // Parts that say what they are, or move when clicked: say how.
   if (mine.handle.told || mine.handle.clickable) {
     tools.querySelector(".hint").textContent = mine.handle.clickable
@@ -22622,10 +22641,11 @@ function extButtonsAt(where) {
   return found;
 }
 
-async function pressExt(b, text = "") {
-  if (b.onClick) { try { await b.onClick({ text, chat: current }); } catch (error) { showFailure(error); } return; }
+// FILE: the id of the model whose bar it was pressed in.
+async function pressExt(b, text = "", file = "") {
+  if (b.onClick) { try { await b.onClick({ text, chat: current, file }); } catch (error) { showFailure(error); } return; }
   let r;
-  try { r = await command("ext-button", b.id, current, { extension: b.extension, text }); } catch (error) { showFailure(error); return; }
+  try { r = await command("ext-button", b.id, current, { extension: b.extension, text, ...(file ? { file } : {}) }); } catch (error) { showFailure(error); return; }
   if (r.send) await send(r.send);
   if (r.insert) typeIn(r.insert);
   if (r.say) {

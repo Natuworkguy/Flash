@@ -56,9 +56,11 @@ from .extensions import (
 ID_RE = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
 # Where a button can go. "terminal" is a key in the terminal's box;
 # "palette" a row in the command palette; "selection" a chip over text
-# selected in a reply; "input" an icon beside the send button.
+# selected in a reply; "input" an icon beside the send button; "model"
+# an icon in the bar of a 3D model being looked at, its program given
+# the model's file.
 PLACES = ("sidebar", "composer", "message", "header", "terminal",
-          "palette", "selection", "input")
+          "palette", "selection", "input", "model")
 # A web keyboard shortcut: modifiers, then one key.
 SHORTCUT_RE = re.compile(
     r"^(?:(?:ctrl|alt|shift|meta|mod)\+){1,3}(?:[a-z0-9]|f[1-9]|f1[0-2])$")
@@ -621,19 +623,24 @@ def expand(button: Button, text: str) -> str:
     return f"{button.prompt}\n\n{text}".strip() if text else button.prompt
 
 
-def press(ext: Any, button: Button, text: str = "", chat: str = "") -> dict:
+def press(ext: Any, button: Button, text: str = "", chat: str = "",
+          file: str = "") -> dict:
     """Run a "run" button's program, with {button, text, chat} as JSON on
-    stdin. What it prints is what it says: plain text to show, or JSON
-    with "say" (to show), "insert" (into the box) or "send" (as a
-    message)."""
+    stdin, and "file", the path of the model it was pressed on, from a
+    3D model's bar. What it prints is what it says: plain text to show,
+    or JSON with "say" (to show), "insert" (into the box) or "send" (as
+    a message)."""
+
+    given = {"button": button.id, "text": text, "chat": chat}
+    if file:
+        given["file"] = file
 
     from . import extensions
 
     try:
         done = subprocess.run(  # nosec B603  (its own program, no shell)
             extensions.argv(ext, button.run),
-            input=json.dumps({"button": button.id, "text": text,
-                              "chat": chat}),
+            input=json.dumps(given),
             capture_output=True, text=True, encoding="utf-8", errors="replace",
             timeout=button.timeout,
             cwd=ext.path, env=extensions.environment(ext), check=False,
@@ -658,9 +665,11 @@ def press(ext: Any, button: Button, text: str = "", chat: str = "") -> dict:
 
 
 def pressed(name: str, button_id: str, text: str = "",
-            chat: str = "") -> dict:
+            chat: str = "", file: str = "") -> dict:
     """What a button does, for whoever pressed it: {"send": message} to
-    send, {"insert": text} for the box, {"say": text} to show."""
+    send, {"insert": text} for the box, {"say": text} to show. FILE: the
+    model's path, pressed in a 3D model's bar; a prompt or a command
+    gets it as its text."""
 
     import shlex
 
@@ -670,10 +679,11 @@ def pressed(name: str, button_id: str, text: str = "",
     if found is None:
         return {"say": "That button is gone."}
     ext, button = found
+    if button.run:
+        return press(ext, button, text, chat, file)
+    text = text or file
     if button.prompt:
         return {"send": expand(button, text)}
-    if button.run:
-        return press(ext, button, text, chat)
     command = next((c for c in ext.commands if c.name == button.command),
                    None)
     if command is None:

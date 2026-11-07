@@ -6083,9 +6083,17 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
     if name == "ext-button":
         # An extension's button: what it does with TEXT, the reply or
         # the box it was pressed on.
+        # From a 3D model's bar: the model's file, by the id the page
+        # has for it.
+        file = ""
+        if body.get("file"):
+            kept = workspace.kept_file(str(body["file"]))
+            if kept is None:
+                raise ValueError("That model is not here any more.")
+            file = str(kept[0])
         return ext_ui.pressed(
             str(body.get("extension") or ""), arg,
-            str(body.get("text") or ""), chat_id,
+            str(body.get("text") or ""), chat_id, file,
         )
 
     if name == "think-auto":
