@@ -2348,9 +2348,35 @@ def test_a_failing_model_marks_the_spark_unavailable(model, no_waits):
     assert found.model == "glm-4.6:cloud"  # nosec B101
 
 
-def test_an_unavailable_spark_waits_for_you(model, no_waits):
+def test_an_unavailable_spark_tries_again_next_shift(model, no_waits):
+    made = sparks.create("Scout", "Watch.", every="1h")
+    report = sparks.shift(made.id, client=FailingClient(ConnectionError("x")))
+
+    assert sparks.retry_shifts()  # nosec B101 -- on by default
+    assert "tries again on its next shift" in report.text  # nosec B101
+    assert "until you try again" not in report.text  # nosec B101
+    # Not now, but on its schedule, with nobody pressing Try again.
+    assert sparks.due(time.time() + 60) == []  # nosec B101
+    assert [s.id for s in sparks.due(time.time() + 7200)] == [  # nosec B101
+        made.id]
+
+
+def test_the_retry_setting_is_kept_in_the_env_file(model, no_waits):
+    from flash.envfile import set_env_var
+
+    set_env_var(sparks.ENV_PATH, sparks.RETRY_SETTING, "0")
+    assert not sparks.retry_shifts()  # nosec B101
+    set_env_var(sparks.ENV_PATH, sparks.RETRY_SETTING, "1")
+    assert sparks.retry_shifts()  # nosec B101
+
+
+def test_an_unavailable_spark_waits_for_you(model, no_waits, monkeypatch):
+    # With Try again every shift switched off.
+    monkeypatch.setattr(sparks, "retry_shifts", lambda: False)
     made = sparks.create("Scout", "Watch.")
-    sparks.shift(made.id, client=FailingClient(ConnectionError("down")))
+    report = sparks.shift(made.id,
+                          client=FailingClient(ConnectionError("down")))
+    assert "until you try again" in report.text  # nosec B101
 
     assert sparks.due(time.time() + 10 ** 8) == []  # nosec B101
 

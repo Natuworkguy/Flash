@@ -9450,6 +9450,19 @@ function drawGeneral(body) {
   };
   body.appendChild(eventsRow);
 
+  // A spark whose model failed: try again each shift, or wait for you.
+  const retryRow = el("button", "setting-row spark-retry-row", `<span class="what"><b>Try again every shift</b><span>When a spark's model fails, it tries again on its next shift, on its schedule. Off, it stops and waits for you to press Try again.</span></span><span class="switch" aria-hidden="true"></span>`);
+  retryRow.type = "button";
+  retryRow.setAttribute("role", "switch");
+  retryRow.setAttribute("aria-checked", info.spark_retry !== false);
+  retryRow.onclick = async () => {
+    const on = retryRow.getAttribute("aria-checked") !== "true";
+    retryRow.setAttribute("aria-checked", on);
+    try { info.spark_retry = (await command("retry-shifts-setting", on ? "on" : "off", null)).on; }
+    catch (error) { retryRow.setAttribute("aria-checked", !on); showFailure(error); }
+  };
+  body.appendChild(retryRow);
+
   // How far a shift may go before it writes its report, if at all.
   const limit = el("button", "setting-row spark-limit-row", `<span class="what"><b>Limit tool rounds per shift</b><span></span></span><span class="switch" aria-hidden="true"></span>`);
   limit.type = "button";
@@ -12647,7 +12660,7 @@ function fillSpark(box, spark, again = false) {
     const card = el("div", "spark-unavailable", `<div class="why"><b></b><span></span></div><div class="row"><button type="button" class="btn small primary" data-retry>Try again</button><button type="button" class="btn small" data-model>Change model</button></div>`);
     card.querySelector("b").textContent = `Unavailable: ${spark.unavailable_model || "no model is set"}${spark.unavailable_model ? " failed" : ""}`;
     const why = spark.unavailable.replace(/\s*$/, "");
-    card.querySelector("span").textContent = `${why}${/[.!?]$/.test(why) ? "" : "."} No shift starts on its schedule until you try again or give it another model.`;
+    card.querySelector("span").textContent = `${why}${/[.!?]$/.test(why) ? "" : "."} ${info.spark_retry !== false ? "It tries again on its next shift, or now with Try again." : "No shift starts on its schedule until you try again or give it another model."}`;
     card.querySelector("[data-retry]").onclick = async () => {
       try { await command("spark-run", spark.id, null); toast(`${spark.name} is trying again`); }
       catch (error) { showFailure(error); }
@@ -12710,7 +12723,7 @@ function fillSpark(box, spark, again = false) {
   if (!said.length) {
     // A paused one, or one on set times, is not about to start: it says
     // when it will, as its card does.
-    const first = spark.unavailable && !spark.asked ? "Unavailable: its first shift waits until you try again or give it another model."
+    const first = spark.unavailable && !spark.asked ? (info.spark_retry !== false ? "Unavailable: it tries again on its next shift." : "Unavailable: its first shift waits until you try again or give it another model.")
       : spark.paused ? "Paused: its first shift waits until you resume it."
       : onCall(spark) && !spark.asked ? "On call: its first shift is the first time you or another spark call on it."
       : Date.now() / 1000 >= spark.next_run - 60 ? "Its first shift starts soon."

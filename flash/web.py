@@ -4392,6 +4392,7 @@ def status(ai) -> dict:
         **_computer_use(),
         **_sandbox(),
         "spark_events": triggers.enabled(),
+        "spark_retry": sparks.retry_shifts(),
         **_computer_kinds(),
         "visuals": visuals.level(),
         # What a new chat says hello with, for the page to pick from by
@@ -5889,6 +5890,13 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
             raise ValueError(str(exc)) from None
         session.wait_changed(wait)
         return {"wait": wait.card()}
+
+    if name == "retry-shifts-setting":
+        # Whether a spark whose model failed tries again each shift.
+        on = arg in ("on", "1", "true")
+        ai.set_config_var(sparks.RETRY_SETTING, "1" if on else "0")
+        session.hub.publish({"type": "status"})
+        return {"on": on}
 
     if name == "events-setting":
         if arg in ("on", "off"):
