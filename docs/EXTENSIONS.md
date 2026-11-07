@@ -759,8 +759,9 @@ the chat's title), `composer` (the + menu), `message` (under each
 reply), or `terminal` (a key in the terminal's box, given as `key`: `c-`
 for Ctrl or `m-` for Alt, and a letter Flash doesn't use itself),
 `input` (an icon beside the send button), `selection` (a chip over text
-you select in a reply, given that text), or `palette` (a row in the
-command palette).
+you select in a reply, given that text), `palette` (a row in the
+command palette), or `model` (an icon in the bar of a 3D model being
+looked at, named when pointed at, and given the model's file).
 
 On the web any button can have a `shortcut`: modifiers and a key, such
 as `"alt+shift+w"` or `"mod+shift+k"` (`mod` is Cmd on a Mac and Ctrl
@@ -772,7 +773,9 @@ A button does one of three things:
   was pressed on, or what is typed in the box. In the terminal, it fills
   the box for you to send.
 - `command`: one of the extension's commands, given what is typed.
-- `run`: a program, given `{"button", "text", "chat"}` as JSON on stdin.
+- `run`: a program, given `{"button", "text", "chat"}` as JSON on stdin,
+  and `"file"`, the model's path, when pressed in a 3D model's bar (a
+  `prompt` or `command` gets the path as its text).
   What it prints is shown. Printing JSON with `say` (shown), `insert`
   (put in the box) or `send` (sent as a message) does that instead.
 

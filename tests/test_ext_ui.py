@@ -319,3 +319,48 @@ def test_a_block_another_extension_draws_refuses_the_install(tmp_path):
     other = extensions.load(surfaces(tmp_path / "o", name="other"))
     found = extensions.clashes(other, frozenset(), frozenset())
     assert any("```forecast blocks are drawn by weather" in c for c in found)
+
+
+GIVEN = """\
+import json, sys
+print(json.dumps({"say": json.dumps(json.load(sys.stdin), sort_keys=True)}))
+"""
+
+
+def test_a_model_s_bar_gives_its_buttons_the_model(tmp_path):
+    install(make(tmp_path / "w", {"buttons": [
+        {"id": "send", "label": "Send it", "icon": "cube",
+         "where": ["model"], "run": ["python", "./given.py"]},
+        {"id": "ask", "label": "Ask", "where": ["model"],
+         "prompt": "What is in $TEXT?"},
+    ]}, {"given.py": GIVEN}))
+    model = tmp_path / "chair.glb"
+
+    said = json.loads(ext_ui.pressed("weather", "send", "", "c1",
+                                     str(model))["say"])
+
+    assert said == {"button": "send", "chat": "c1", "file": str(model),
+                    "text": ""}
+    assert ext_ui.pressed("weather", "ask", file=str(model)) == {
+        "send": f"What is in {model}?"}
+    # Pressed anywhere else, there is no file in what it is given.
+    assert "file" not in json.loads(
+        ext_ui.pressed("weather", "send", "hi")["say"])
+
+
+def test_the_page_finds_the_model_by_its_id(tmp_path, monkeypatch):
+    install(make(tmp_path / "w", {"buttons": [
+        {"id": "send", "label": "Send it", "where": ["model"],
+         "run": ["python", "./given.py"]}]}, {"given.py": GIVEN}))
+    model = tmp_path / "chair.glb"
+    monkeypatch.setattr(web.workspace, "kept_file", lambda i: (
+        model, "model/gltf-binary") if i == "f1" else None)
+    session = web.Session()
+
+    found = web.command(session, {"name": "ext-button", "arg": "send",
+                                  "extension": "weather", "file": "f1"})
+
+    assert json.loads(found["say"])["file"] == str(model)
+    with pytest.raises(ValueError, match="not here any more"):
+        web.command(session, {"name": "ext-button", "arg": "send",
+                              "extension": "weather", "file": "gone"})
