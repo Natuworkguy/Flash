@@ -3526,7 +3526,8 @@ body.resizing-viewer iframe { pointer-events: none; }
 .pcb-view .bar button[aria-pressed="true"] { background: rgba(255, 255, 255, 0.11); color: #fff; }
 .pcb-view .bar svg { width: 14px; height: 14px; }
 .pcb-view .bar .sep { width: 1px; height: 18px; background: rgba(255, 255, 255, 0.1); margin: 0 3px; }
-.pcb-view .card { position: absolute; top: 12px; right: 12px; width: 236px; max-height: calc(100% - 90px); overflow-y: auto; padding: 14px; border-radius: 16px; background: rgba(20, 23, 28, 0.84); border: 1px solid rgba(255, 255, 255, 0.08); box-shadow: 0 14px 40px rgba(0, 0, 0, 0.4); backdrop-filter: blur(12px); display: flex; flex-direction: column; gap: 12px; animation: rise-far 0.5s var(--apple) both; scrollbar-width: thin; }
+.pcb-view .card { position: absolute; top: 12px; right: 12px; width: 248px; max-height: calc(100% - 90px); overflow: hidden; border-radius: 16px; background: rgba(20, 23, 28, 0.84); border: 1px solid rgba(255, 255, 255, 0.08); box-shadow: 0 14px 40px rgba(0, 0, 0, 0.4); backdrop-filter: blur(12px); display: flex; flex-direction: column; animation: rise-far 0.5s var(--apple) both; }
+.pcb-view .card .scroll { padding: 14px; overflow-y: auto; min-height: 0; display: flex; flex-direction: column; gap: 12px; scrollbar-width: thin; overscroll-behavior: contain; }
 .pcb-view .card h3 { margin: 0; font-size: 14px; font-weight: 650; letter-spacing: -0.01em; }
 .pcb-view .card .sub { color: #8d97a4; font-size: 12px; margin-top: 2px; }
 .pcb-view .stats { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
@@ -3544,6 +3545,12 @@ body.resizing-viewer iframe { pointer-events: none; }
 .pcb-view .drc.clean { background: rgba(51, 209, 122, 0.1); border: 1px solid rgba(51, 209, 122, 0.25); color: #8ee8b4; }
 .pcb-view .drc.issues { background: rgba(255, 176, 32, 0.08); border: 1px solid rgba(255, 176, 32, 0.25); color: #f3c47e; }
 .pcb-view .drc b { font-weight: 650; }
+.pcb-view .drc .head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 2px; }
+.pcb-view .drc .fix { padding: 4px 11px; border-radius: 8px; background: #ffb020; color: #1a1205; font-weight: 650; font-size: 12px; opacity: 1; text-decoration: none; }
+.pcb-view .drc .fix:hover { background: #ffc24d; text-decoration: none; }
+.pcb-view .drc .fix:disabled { opacity: 0.6; }
+.pcb-view .drc .more { opacity: 0.7; font-weight: 600; }
+.pcb-view .notes { font-size: 11.5px; color: #9aa4b1; line-height: 1.4; display: flex; flex-direction: column; gap: 3px; }
 .pcb-view .drc button { text-align: left; color: inherit; opacity: 0.85; padding: 3px 0; font-size: 11.5px; line-height: 1.35; }
 .pcb-view .drc button:hover { opacity: 1; text-decoration: underline; }
 .pcb-view .tip { position: absolute; pointer-events: none; padding: 7px 10px; border-radius: 10px; background: rgba(12, 14, 18, 0.92); border: 1px solid rgba(255, 255, 255, 0.1); font-size: 12px; line-height: 1.35; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4); transform: translate(12px, 12px); max-width: 240px; }
@@ -7275,7 +7282,7 @@ async function openPcb(entry, body) {
 
   // The card: what it is, its layers, and what the checks found.
   const card = view.appendChild(el("aside", "card"));
-  card.innerHTML = `<div><h3></h3><div class="sub"></div></div><div class="stats"></div><div class="layers"></div><div class="drc"></div>`;
+  card.innerHTML = `<div class="scroll"><div><h3></h3><div class="sub"></div></div><div class="stats"></div><div class="layers"></div><div class="drc"></div><div class="notes"></div></div>`;
   card.querySelector("h3").textContent = board.name;
   card.querySelector(".sub").textContent = `${s.width} × ${s.height} mm · ${board.layers} layer${board.layers === 1 ? "" : "s"} · ${board.thickness} mm`;
   const stat = (v, label) => `<div class="stat"><b>${v}</b><span>${label}</span></div>`;
@@ -7299,8 +7306,22 @@ async function openPcb(entry, body) {
   const drc = card.querySelector(".drc");
   const errors = board.problems.filter((p) => !p.warning);
   drc.className = `drc ${errors.length ? "issues" : "clean"}`;
-  drc.innerHTML = errors.length ? `<b>${errors.length} to fix</b>` : "<b>Design rules: clean</b><span>Every net routed, every gap within the rules.</span>";
-  for (const p of errors.slice(0, 12)) {
+  drc.innerHTML = errors.length ? `<div class="head"><b>${errors.length} to fix</b><button type="button" class="fix">Fix</button></div>` : "<b>Design rules: clean</b><span>Every net routed, every gap within the rules.</span>";
+  // Fix: Flash takes the problems on, in the chat, and makes the board
+  // again with what it changes.
+  const fixBtn = drc.querySelector(".fix");
+  if (fixBtn) {
+    fixBtn.dataset.tip = "Ask Flash to fix these and make the board again";
+    fixBtn.onclick = async () => {
+      fixBtn.disabled = true;
+      const where = entry.path ? ` (${entry.path})` : "";
+      const list = errors.slice(0, 20).map((p) => `- ${p.text}`).join("\n");
+      await send(`Fix the problems on the circuit board ${entry.name}${where}, and make it again with design_pcb at the same path. Its design is in the file's "spec". Move or turn parts, give the board more room or more layers, as each one needs:\n${list}`);
+      fixBtn.disabled = false;
+    };
+  }
+  const SHOWN = 4;
+  errors.forEach((p, n) => {
     const b = el("button", "");
     b.type = "button";
     b.textContent = p.text;
@@ -7310,10 +7331,20 @@ async function openPcb(entry, body) {
       const h = w / ((r.width || 1) / (r.height || 1));
       vb = { x: p.x - w / 2, y: Y(p.y) - h / 2, w, h };
       applyView();
-      if (p.net) { state.focus = p.net; markFocus(); }
+      const net = p.net || (p.nets || [])[0];
+      if (net) { state.focus = net; markFocus(); }
     };
+    b.hidden = n >= SHOWN;
     drc.appendChild(b);
+  });
+  if (errors.length > SHOWN) {
+    const more = el("button", "more", `Show ${errors.length - SHOWN} more`);
+    more.type = "button";
+    more.onclick = () => { drc.querySelectorAll("button[hidden]").forEach((b) => { b.hidden = false; }); more.remove(); };
+    drc.appendChild(more);
   }
+  const notes = card.querySelector(".notes");
+  for (const note of board.notes || []) notes.appendChild(el("span", "", esc(note[0].toUpperCase() + note.slice(1)) + "."));
 
   const resized = new ResizeObserver(() => { if (!mine.dropped && state.mode !== "3d") fit(); });
   resized.observe(stage);

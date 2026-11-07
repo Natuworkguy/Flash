@@ -563,6 +563,9 @@ class Part:
     note: str = ""
     edge: bool = False
     side_given: bool = False
+    # The room kept round it for its traces, when placement had to take
+    # less than the usual (None: the usual).
+    fanout: Optional[float] = None
 
     def box(self, margin: float = 0.0) -> tuple[float, float, float, float]:
         """Its courtyard: body and pads, turned and placed, plus MARGIN."""
@@ -912,6 +915,8 @@ def _box_of(part: Part) -> tuple[float, float, float, float]:
     # which need more room than a small one's single row.
     fanout = 0.0 if not many else FANOUT_MM if count <= 20 else min(
         1.4, 0.55 + count * 0.013)
+    if part.fanout is not None:
+        fanout = min(fanout, part.fanout)
     return part.box(0.1 + part.print_.keepout + fanout)
 
 
@@ -1023,9 +1028,10 @@ def place(design: Design) -> None:
     leave room for the rest; the way that finds room for the most parts,
     then has the least wire, is kept."""
 
-    loose = [p for p in design.parts if not p.fixed]
     for part in design.parts:
         _place_pads(part, design.layers)
+    _release_overlaps(design)
+    loose = [p for p in design.parts if not p.fixed]
     if not loose:
         return
     best = None
@@ -1043,6 +1049,27 @@ def place(design: Design) -> None:
         part.x, part.y, part.rotation, part.side = x, y, rotation, side
         _place_pads(part, design.layers)
     design.notes = best[2]
+
+
+def _release_overlaps(design: Design) -> None:
+    """Parts given places over each other: the smaller of each pair is
+    let go, for placement to find it room, and the notes say so."""
+
+    fixed = sorted((p for p in design.parts if p.fixed and not p.edge),
+                   key=lambda p: -_area_of(p))
+    for n, big in enumerate(fixed):
+        for small in fixed[n + 1:]:
+            if not small.fixed or (small.side != big.side and not (
+                    _through(small) or _through(big))):
+                continue
+            a0, b0, a1, b1 = big.box(0.1)
+            c0, d0, c1, d1 = small.box(0.1)
+            if min(a1, c1) - max(a0, c0) > 0.05 and \
+                    min(b1, d1) - max(b0, d0) > 0.05:
+                small.fixed = False
+                design.notes.append(
+                    f"moved {small.ref}: where it was given, it was over "
+                    f"{big.ref}")
 
 
 def _wiring(design: Design) -> float:
@@ -1110,51 +1137,18 @@ def _place_once(design: Design, loose: list[Part], way: int) -> None:
         if not part.side_given and design.layers >= 2 and \
                 not _through(part):
             sides.append("bottom" if part.side == "top" else "top")
-        best = None
-        through = _through(part) or part.print_.keepout > 0
-        for n, side in enumerate(sides):
-            for rotation in (0, 90, 180, 270):
-                part.side, part.rotation, part.x, part.y = side, rotation, 0, 0
-                bx0, by0, bx1, by1 = _box_of(part)
-                stride = 2 if room.w * room.h > 40_000 else 1
-                for j in range(0, room.h, stride):
-                    cy = room.y0 + (j + 0.5) * room.res
-                    rj0 = int((cy + by0 - room.y0) / room.res)
-                    rj1 = int((cy + by1 - room.y0) / room.res)
-                    if rj0 < 0 or rj1 >= room.h:
-                        continue
-                    for i in range(0, room.w, stride):
-                        cx = room.x0 + (i + 0.5) * room.res
-                        ri0 = int((cx + bx0 - room.x0) / room.res)
-                        ri1 = int((cx + bx1 - room.x0) / room.res)
-                        lost = room.taken_in(side, ri0, rj0, ri1, rj1)
-                        if through:
-                            lost += room.taken_in(
-                                "bottom" if side == "top" else "top",
-                                ri0, rj0, ri1, rj1)
-                        if lost and best is not None and best[0] == 0:
-                            continue
-                        cost = n * 0.5   # its own side, when it can
-                        for x0, y0, x1, y1, weight in boxes:
-                            dx = x0 - cx if cx < x0 else cx - x1 \
-                                if cx > x1 else 0
-                            dy = y0 - cy if cy < y0 else cy - y1 \
-                                if cy > y1 else 0
-                            cost += (dx + dy) * weight
-                        if not boxes:
-                            # Nothing to be near yet: toward this way's
-                            # side, to leave the rest of the board open.
-                            cost += math.hypot(cx - lean[0],
-                                               cy - lean[1]) * 0.05
-                        if part.print_.keepout:
-                            cost += _edge_distance(cx, cy,
-                                                   design.outline) * 3
-                        # A free spot always beats one that overlaps.
-                        key = (1 if lost else 0, lost if lost else cost)
-                        if best is None or key < best[0:2]:
-                            best = (key[0], key[1], cx, cy, rotation, side)
-            if best is not None and best[0] == 0 and n == 0:
-                break   # it fits on its own side: it stays there
+        best = _best_spot(design, room, part, sides, boxes, lean)
+        for less in (FANOUT_MM, 0.0):
+            if best is None or not best[0]:
+                break
+            # No room with the usual space round it for its traces: with
+            # less, rather than over another part.
+            part.fanout = less
+            tighter = _best_spot(design, room, part, sides, boxes, lean)
+            if tighter is not None and tighter[0:2] < best[0:2]:
+                best = tighter
+            else:
+                part.fanout = None
         if best[0]:
             # No room anywhere: where it overlaps least, and the check
             # says what it is over.
@@ -1165,6 +1159,59 @@ def _place_once(design: Design, loose: list[Part], way: int) -> None:
         room.take(part)
         remember(part)
         placed.append(part)
+
+
+def _best_spot(design: Design, room: _Room, part: Part, sides: list,
+               boxes: list, lean: tuple) -> Optional[tuple]:
+    """Where PART goes best, as (overlaps, cost or cells taken, x, y,
+    rotation, side): free spots near what it connects to first."""
+
+    best = None
+    through = _through(part) or part.print_.keepout > 0
+    for n, side in enumerate(sides):
+        for rotation in (0, 90, 180, 270):
+            part.side, part.rotation, part.x, part.y = side, rotation, 0, 0
+            bx0, by0, bx1, by1 = _box_of(part)
+            stride = 2 if room.w * room.h > 40_000 else 1
+            for j in range(0, room.h, stride):
+                cy = room.y0 + (j + 0.5) * room.res
+                rj0 = int((cy + by0 - room.y0) / room.res)
+                rj1 = int((cy + by1 - room.y0) / room.res)
+                if rj0 < 0 or rj1 >= room.h:
+                    continue
+                for i in range(0, room.w, stride):
+                    cx = room.x0 + (i + 0.5) * room.res
+                    ri0 = int((cx + bx0 - room.x0) / room.res)
+                    ri1 = int((cx + bx1 - room.x0) / room.res)
+                    lost = room.taken_in(side, ri0, rj0, ri1, rj1)
+                    if through:
+                        lost += room.taken_in(
+                            "bottom" if side == "top" else "top",
+                            ri0, rj0, ri1, rj1)
+                    if lost and best is not None and best[0] == 0:
+                        continue
+                    cost = n * 0.5   # its own side, when it can
+                    for x0, y0, x1, y1, weight in boxes:
+                        dx = x0 - cx if cx < x0 else cx - x1 \
+                            if cx > x1 else 0
+                        dy = y0 - cy if cy < y0 else cy - y1 \
+                            if cy > y1 else 0
+                        cost += (dx + dy) * weight
+                    if not boxes:
+                        # Nothing to be near yet: toward this way's
+                        # side, to leave the rest of the board open.
+                        cost += math.hypot(cx - lean[0],
+                                           cy - lean[1]) * 0.05
+                    if part.print_.keepout:
+                        cost += _edge_distance(cx, cy,
+                                               design.outline) * 3
+                    # A free spot always beats one that overlaps.
+                    key = (1 if lost else 0, lost if lost else cost)
+                    if best is None or key < best[0:2]:
+                        best = (key[0], key[1], cx, cy, rotation, side)
+        if best is not None and best[0] == 0 and n == 0:
+            break   # it fits on its own side: it stays there
+    return best
 
 
 # --- Routing ---------------------------------------------------------------
@@ -1223,6 +1270,9 @@ class Router:
         self.margin = self.pitch * 0.75
         self.default_w = rules["trace"]
         self.terminals: dict[str, list[set[int]]] = {}
+        # Nets the check found too close to another: routed again with a
+        # cell more room all along them.
+        self.careful: set[str] = set()
         self._build_base()
 
     @staticmethod
@@ -1422,8 +1472,9 @@ class Router:
             return [], [], set()
         net_id = self.net_ids[net]
         width = self.design.widths.get(net, self.default_w)
+        extra = self.pitch if net in self.careful else 0.0
         wide = [d for d in self._stencil(max(0.0, (
-            width - self.default_w) / 2)) if d != (0, 0)]
+            width - self.default_w) / 2) + extra) if d != (0, 0)]
         # A wide trace narrows to the usual width near its own pads, as
         # it must to leave a fine-pitch part.
         neck: set[int] = set()
@@ -1452,7 +1503,7 @@ class Router:
         def passable(layer, i, j):
             k = j * self.w + i
             cost = open_(layer, k, strict=False)
-            if cost is None or k in neck:
+            if cost is None or (k in neck and net not in self.careful):
                 return cost
             for di, dj in wide:
                 ii, jj = i + di, j + dj
@@ -1704,6 +1755,30 @@ class Router:
         for net in queue:
             if net not in self.failed:
                 self.failed.append(net)
+
+    def reroute(self, nets: set[str]) -> None:
+        """NETS again, each with a cell more room: taken up, and routed
+        anew with the rest of the board as it is."""
+
+        nets = {n for n in nets if n in self.tracks and
+                not self.design.on_plane(n)}
+        if not nets:
+            return
+        kept = {n: (self.tracks.pop(n), self.vias.pop(n)) for n in nets}
+        self.careful |= nets
+        self._rebuild()
+        for net in sorted(nets):
+            done = self._route_net(net)
+            if done is not None:
+                self._keep(net, done)
+            else:
+                # No careful way through: back as it was, and the check
+                # says so.
+                self.tracks[net], self.vias[net] = kept[net]
+                for t in kept[net][0]:
+                    self._mark_track(t)
+                for v in kept[net][1]:
+                    self._mark_via(v)
 
     def _keep(self, net, done) -> None:
         tracks, vias, _ = done
@@ -1967,6 +2042,7 @@ def check(board: dict) -> list[dict]:
                         n or "no net" for n in (ia[3], ib[3]))
                     problems.append({
                         "kind": "clearance",
+                        "nets": [n for n in (ia[3], ib[3]) if n],
                         "text": f"{what} are {max(gap, 0):.3f} mm apart on "
                                 f"{board['layer_names'][ia[0]]}, under "
                                 f"{rules['clearance']} mm",
@@ -2039,8 +2115,26 @@ def design(spec: Any) -> dict:
     placed_at = time.monotonic()
     router = Router(made)
     router.route()
-    pours = router.pours()
+    board = _assemble(made, router)
+    # Nets the check finds too close to another are routed again with
+    # more room, once, and the board checked again.
+    close = {n for p in board["problems"] if p["kind"] == "clearance"
+             for n in p.get("nets", [])}
+    if close:
+        router.reroute(close)
+        board = _assemble(made, router)
     routed_at = time.monotonic()
+    board["stats"] = stats(board, placed_at - started, routed_at - placed_at)
+    # What it was asked for, so it can be made again with changes.
+    board["spec"] = spec if isinstance(spec, dict) else json.loads(spec)
+    board["notes"] = list(made.notes)
+    return board
+
+
+def _assemble(made: Design, router: Router) -> dict:
+    """The board as it stands: everything drawn and written, checked."""
+
+    pours = router.pours()
     names = layer_names(made.layers)
     single = {}
     pins_on: dict[str, list[str]] = {}
@@ -2090,7 +2184,6 @@ def design(spec: Any) -> dict:
         "single": single,
     }
     board["problems"] = check(board)
-    board["stats"] = stats(board, placed_at - started, routed_at - placed_at)
     return board
 
 
@@ -2137,6 +2230,8 @@ def summary(board: dict) -> str:
     ]
     errors = [p for p in board["problems"] if not p.get("warning")]
     warnings = [p for p in board["problems"] if p.get("warning")]
+    for note in board.get("notes", []):
+        lines.append(f"Note: {note}.")
     if not errors:
         lines.append("Design rule check: clean.")
     else:
