@@ -20,6 +20,15 @@ if ! (( $+functions[compdef] )); then
   autoload -Uz compinit && compinit -i
 fi
 """
+# Each command as zsh and fish list it beside the word.
+COMMANDS_SAID = {
+    "install": "install an extension",
+    "update": "update an extension, or all of them",
+    "remove": "remove an extension",
+    "list": "list the installed extensions",
+    "doctor": "check that everything Flash needs works",
+    "completion": "print what turns on Tab completion",
+}
 # Where an extension to install can come from, offered as it is typed.
 SOURCES = ("github@", "git@", "path@")
 
@@ -62,6 +71,13 @@ def _targets(prefix: str, parsed_args: Any, **_kwargs: Any) -> list[str]:
     return []
 
 
+def _commands(prefix: str, **_kwargs: Any) -> dict[str, str]:
+    """The commands, each with a few words on what it does."""
+
+    return {name: said for name, said in COMMANDS_SAID.items()
+            if name.startswith(prefix)}
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="flash",
@@ -72,7 +88,7 @@ def build_parser() -> argparse.ArgumentParser:
         action="version",
         version=f"Flash CLI v{__version__}",
     )
-    parser.add_argument(
+    command = parser.add_argument(
         "command",
         nargs="?",
         choices=EXTENSION_COMMANDS + OTHER_COMMANDS,
@@ -87,6 +103,7 @@ def build_parser() -> argparse.ArgumentParser:
             "flash in your shell (bash by default)"
         ),
     )
+    command.completer = _commands  # type: ignore[attr-defined]
     target = parser.add_argument(
         "target",
         nargs="?",
@@ -208,8 +225,11 @@ def complete() -> None:
     try:
         argcomplete.autocomplete(build_parser(),
                                  always_complete_options=False)
-    except Exception:  # noqa: BLE001  (one too old for this Python)
-        # No offers, and no traceback in the middle of what is typed.
+    except Exception:  # an argcomplete too old for this Python
+        # No offers, and no traceback in the middle of what is typed,
+        # unless argcomplete's own debugging is on.
+        if os.environ.get("_ARC_DEBUG"):
+            raise
         sys.exit(0)
     sys.exit(0)
 
