@@ -9,6 +9,8 @@ import zipfile
 import pytest
 
 from flash import pcb
+from tests.test_web import request
+from tests.test_web import server as web_server
 
 SMALL = {
     "name": "Blinky",
@@ -75,3 +77,73 @@ def test_the_files_a_board_house_takes(board):
 
 def test_the_board_in_3d(board):
     assert pcb.glb(board)[:4] == b"glTF"
+
+
+# --- The tool, the file, and the page's downloads --------------------------
+
+
+def test_the_tool_writes_the_board_and_its_files(tmp_path, monkeypatch):
+    from flash import tools
+
+    shown = []
+    monkeypatch.setattr(tools, "tool_file", lambda path: shown.append(path)
+                        or True)
+
+    said = tools.design_pcb(str(tmp_path / "blinky"), SMALL, "a blinky")
+
+    assert shown == [str(tmp_path / "blinky.fpcb")]
+    assert (tmp_path / "blinky-fab.zip").exists()
+    assert (tmp_path / "blinky.kicad_pcb").read_text().startswith(
+        "(kicad_pcb")
+    assert pcb.load((tmp_path / "blinky.fpcb").read_text())["name"] == \
+        "Blinky"
+    assert "Design rule check: clean" in said
+    assert "call design_pcb again" in said
+
+
+def test_the_tool_says_what_is_wrong_and_writes_nothing(tmp_path):
+    from flash import tools
+
+    bad = {**SMALL, "parts": [{"ref": "U1", "package": "QFP-9000",
+                               "pins": []}]}
+
+    said = tools.design_pcb(str(tmp_path / "x.fpcb"), bad)
+
+    assert said.startswith("Error:") and "no package" in said
+    assert not (tmp_path / "x.fpcb").exists()
+
+
+def test_a_board_is_kept_as_a_board(tmp_path, board):
+    from flash import workspace
+
+    path = tmp_path / "blinky.fpcb"
+    path.write_text(json.dumps(board), encoding="utf-8")
+
+    kept = workspace.keep_file(str(path))
+
+    assert kept["kind"] == "pcb" and kept["mime"] == "application/json"
+
+
+# The web tests' running server, for the page's downloads.
+FIXTURES = (web_server,)
+
+
+def test_the_page_downloads_its_fab_files_kicad_and_3d(
+        tmp_path, board, web_server):
+    from flash import workspace
+
+    path = tmp_path / "blinky.fpcb"
+    path.write_text(json.dumps(board), encoding="utf-8")
+    kept = workspace.keep_file(str(path))
+    base = f"/api/files/{kept['id']}/board"
+
+    server = web_server
+    status, body = request(server, "GET", base + "?format=fab")
+    assert status == 200 and body[:2] == b"PK"
+    status, body = request(server, "GET", base + "?format=kicad")
+    assert status == 200 and body.startswith(b"(kicad_pcb")
+    status, body = request(server, "GET", base + "?format=glb")
+    assert status == 200 and body[:4] == b"glTF"
+    assert request(server, "GET", base + "?format=exe")[0] == 400
+    assert request(server, "GET", base + "?format=fab",
+                   token=False)[0] in (401, 403)

@@ -7036,6 +7036,12 @@ class Handler(BaseHTTPRequestHandler):
         elif url.path == "/api/events":
             self._events()
         elif url.path.startswith("/api/files/") and url.path.endswith(
+                "/board"):
+            self._board(
+                url.path.removeprefix("/api/files/").removesuffix("/board"),
+                query.get("format", [""])[0],
+            )
+        elif url.path.startswith("/api/files/") and url.path.endswith(
                 "/export"):
             self._export(
                 url.path.removeprefix("/api/files/").removesuffix("/export"),
@@ -7386,6 +7392,39 @@ class Handler(BaseHTTPRequestHandler):
             if design and not download:
                 data = with_design_kit(data)
         self._send(HTTPStatus.OK, data, mime, headers)
+
+    def _board(self, file_id: str, fmt: str) -> None:
+        """A board Flash designed, as a board house's zip, a KiCad
+        board, or a 3D model, made from its file."""
+
+        from . import pcb
+
+        kept = workspace.kept_file(file_id)
+        if kept is None or kept[0].suffix != pcb.SUFFIX:
+            self._json({"error": "not found"}, HTTPStatus.NOT_FOUND)
+            return
+        try:
+            board = pcb.load(kept[0].read_text(encoding="utf-8"))
+            stem = re.sub(r"[^A-Za-z0-9_-]+", "-", board["name"]).strip(
+                "-") or "board"
+            if fmt == "fab":
+                data, kind, name = (pcb.fab_zip(board), "application/zip",
+                                    f"{stem}-fab.zip")
+            elif fmt == "kicad":
+                data, kind, name = (pcb.kicad(board).encode(),
+                                    "application/octet-stream",
+                                    f"{stem}.kicad_pcb")
+            elif fmt == "glb":
+                data, kind, name = (pcb.glb(board), "model/gltf-binary",
+                                    f"{stem}.glb")
+            else:
+                raise pcb.PcbError("format is fab, kicad or glb")
+        except (pcb.PcbError, OSError, ValueError, KeyError) as exc:
+            self._json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+            return
+        self._send(HTTPStatus.OK, data, kind, {
+            "Content-Disposition": f'attachment; filename="{name}"',
+        })
 
     def _export(self, file_id: str, fmt: str) -> None:
         """A design drawn as a PNG, a PDF or slides, as a download."""

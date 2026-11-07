@@ -3509,6 +3509,55 @@ body.resizing-viewer iframe { pointer-events: none; }
 .model-part-card em { font-style: normal; font-size: 12px; color: var(--accent); }
 .model-part-card[hidden] { display: none; }
 @media (max-width: 560px) { .model-view .model-tools .hint { display: none; } }
+/* A printed circuit board Flash designed: its copper drawn as it is,
+   layer by layer, both sides as made, and in 3D. */
+.pcb-view { position: absolute; inset: 0; background: radial-gradient(ellipse at 50% 38%, #181c22, #0a0c0f 72%); color: #e9edf2; overflow: hidden; container-type: inline-size; }
+.pcb-view .stage { position: absolute; inset: 0; touch-action: none; cursor: grab; }
+.pcb-view .stage.panning { cursor: grabbing; }
+.pcb-view svg.pcb { width: 100%; height: 100%; display: block; }
+.pcb-view .three { position: absolute; inset: 0; }
+.pcb-view .three[hidden] { display: none; }
+.pcb-view [data-net], .pcb-view [data-ref] { transition: opacity 0.25s; }
+.pcb-view svg.focusing [data-net]:not(.on) { opacity: 0.1; }
+.pcb-view svg.focusing [data-net].on { filter: drop-shadow(0 0 0.12px #fff); }
+.pcb-view .bar { position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%); display: flex; align-items: center; gap: 4px; padding: 4px; border-radius: 13px; background: rgba(20, 23, 28, 0.86); border: 1px solid rgba(255, 255, 255, 0.09); box-shadow: 0 12px 34px rgba(0, 0, 0, 0.45); backdrop-filter: blur(10px); animation: rise-far 0.45s var(--apple) both; white-space: nowrap; max-width: calc(100% - 24px); overflow-x: auto; scrollbar-width: none; }
+.pcb-view .bar button, .pcb-view .bar a { padding: 6px 11px; border-radius: 9px; font-size: 12.5px; color: #aab3bf; text-decoration: none; display: inline-flex; align-items: center; gap: 6px; }
+.pcb-view .bar button:hover, .pcb-view .bar a:hover { background: rgba(255, 255, 255, 0.07); color: #fff; }
+.pcb-view .bar button[aria-pressed="true"] { background: rgba(255, 255, 255, 0.11); color: #fff; }
+.pcb-view .bar svg { width: 14px; height: 14px; }
+.pcb-view .bar .sep { width: 1px; height: 18px; background: rgba(255, 255, 255, 0.1); margin: 0 3px; }
+.pcb-view .card { position: absolute; top: 12px; right: 12px; width: 236px; max-height: calc(100% - 90px); overflow-y: auto; padding: 14px; border-radius: 16px; background: rgba(20, 23, 28, 0.84); border: 1px solid rgba(255, 255, 255, 0.08); box-shadow: 0 14px 40px rgba(0, 0, 0, 0.4); backdrop-filter: blur(12px); display: flex; flex-direction: column; gap: 12px; animation: rise-far 0.5s var(--apple) both; scrollbar-width: thin; }
+.pcb-view .card h3 { margin: 0; font-size: 14px; font-weight: 650; letter-spacing: -0.01em; }
+.pcb-view .card .sub { color: #8d97a4; font-size: 12px; margin-top: 2px; }
+.pcb-view .stats { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.pcb-view .stat { padding: 8px 9px; border-radius: 10px; background: rgba(255, 255, 255, 0.04); border: 1px solid rgba(255, 255, 255, 0.06); }
+.pcb-view .stat b { display: block; font-size: 15px; font-weight: 650; font-variant-numeric: tabular-nums; }
+.pcb-view .stat span { color: #8d97a4; font-size: 11px; }
+.pcb-view .layers { display: flex; flex-direction: column; gap: 2px; }
+.pcb-view .layers button { display: flex; align-items: center; gap: 8px; padding: 5px 7px; border-radius: 8px; font-size: 12.5px; color: #d6dce3; text-align: left; }
+.pcb-view .layers button:hover { background: rgba(255, 255, 255, 0.06); }
+.pcb-view .layers button i { width: 10px; height: 10px; border-radius: 3px; flex: none; box-shadow: 0 0 10px var(--c); background: var(--c); }
+.pcb-view .layers button small { margin-left: auto; color: #7d8794; }
+.pcb-view .layers button[aria-pressed="false"] { opacity: 0.4; }
+.pcb-view .layers button[aria-pressed="false"] i { box-shadow: none; }
+.pcb-view .drc { border-radius: 11px; padding: 9px 10px; font-size: 12px; display: flex; flex-direction: column; gap: 4px; }
+.pcb-view .drc.clean { background: rgba(51, 209, 122, 0.1); border: 1px solid rgba(51, 209, 122, 0.25); color: #8ee8b4; }
+.pcb-view .drc.issues { background: rgba(255, 176, 32, 0.08); border: 1px solid rgba(255, 176, 32, 0.25); color: #f3c47e; }
+.pcb-view .drc b { font-weight: 650; }
+.pcb-view .drc button { text-align: left; color: inherit; opacity: 0.85; padding: 3px 0; font-size: 11.5px; line-height: 1.35; }
+.pcb-view .drc button:hover { opacity: 1; text-decoration: underline; }
+.pcb-view .tip { position: absolute; pointer-events: none; padding: 7px 10px; border-radius: 10px; background: rgba(12, 14, 18, 0.92); border: 1px solid rgba(255, 255, 255, 0.1); font-size: 12px; line-height: 1.35; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4); transform: translate(12px, 12px); max-width: 240px; }
+.pcb-view .tip b { display: block; font-size: 12.5px; }
+.pcb-view .tip span { color: #9aa4b1; }
+.pcb-view .tip[hidden] { display: none; }
+.pcb-view .note { position: absolute; inset: 0; display: grid; place-items: center; color: #8d97a4; font-size: 13px; }
+.pcb-view .ring { fill: none; stroke: #ffb020; animation: pcb-ping 1.6s ease-out 2; }
+@keyframes pcb-ping { 0% { stroke-opacity: 1; } 100% { stroke-opacity: 0.25; } }
+.pcb-view .via-pop { animation: pcb-pop 0.35s var(--apple) both; transform-box: fill-box; transform-origin: center; }
+@keyframes pcb-pop { from { transform: scale(0); } to { transform: scale(1); } }
+@container (max-width: 620px) { .pcb-view .card { left: 12px; right: 12px; width: auto; max-height: 38%; top: auto; bottom: 66px; } .pcb-view .card .layers, .pcb-view .card .stats { display: none; } }
+@media (prefers-reduced-motion: reduce) { .pcb-view .via-pop, .pcb-view .ring { animation: none; } }
+
 /* A narrow viewer, beside the chat: the bar keeps its buttons, not the hint. */
 .model-view { container-type: inline-size; }
 @container (max-width: 720px) { .model-tools .hint { display: none; } }
@@ -5665,6 +5714,7 @@ function fileSize(bytes) {
 const fileUrl = (entry, download) => `/api/files/${encodeURIComponent(entry.id)}${download ? "?download=1" : ""}`;
 const fileKind = (entry) => (entry.kind === "pdf" ? "PDF" : entry.kind === "html" ? "HTML"
   : entry.kind === "model" ? "3D model"
+  : entry.kind === "pcb" ? "Circuit board"
   : entry.kind === "midi" ? "MIDI"
   : entry.kind === "doc" ? (/\.txt$/i.test(entry.name) ? "Text" : "Markdown")
   : (entry.mime || "image/").split("/")[1].toUpperCase());
@@ -5812,6 +5862,7 @@ function attachment(entry) {
     ? `<img alt="" loading="lazy" src="${fileUrl(entry)}">`
     : entry.kind === "doc" ? `<span class="doc-thumb">${icon("file")}</span>`
     : entry.kind === "model" ? `<span class="doc-thumb">${icon("cube")}</span>`
+    : entry.kind === "pcb" ? `<span class="doc-thumb">${icon("chip")}</span>`
     : entry.kind === "midi" || entry.kind === "audio" ? `<span class="doc-thumb">${icon("music")}</span>`
     : `<span class="badge">${fileKind(entry)}</span>`;
   card.innerHTML = `<span class="thumb">${thumb}</span><span class="info"><div class="name"></div>` +
@@ -6011,7 +6062,7 @@ function openViewer(entry) {
   viewing = lastViewed = entry;
   $("#viewer-title").textContent = entry.name;
   $("#viewer-size").textContent = `${fileKind(entry)} · ${fileSize(entry.size)}`;
-  $("#viewer-kind").innerHTML = icon({ pdf: "file", html: "globe", doc: "file", model: "cube", midi: "music" }[entry.kind] || "image");
+  $("#viewer-kind").innerHTML = icon({ pdf: "file", html: "globe", doc: "file", model: "cube", pcb: "chip", midi: "music" }[entry.kind] || "image");
   $("#viewer-edit").hidden = entry.kind !== "doc";
   $("#viewer-editing").hidden = true;
   if (openDoc && openDoc.onSelect) document.removeEventListener("selectionchange", openDoc.onSelect);
@@ -6022,6 +6073,7 @@ function openViewer(entry) {
   $("#viewer-open").href = fileUrl(entry);
   const body = $("#viewer-body");
   dropModel();
+  dropPcb();
   dropMidi();
   dropDesign();
   body.textContent = "";
@@ -6038,6 +6090,8 @@ function openViewer(entry) {
     openDocument(entry, body);
   } else if (entry.kind === "model") {
     openModel(entry, body);
+  } else if (entry.kind === "pcb") {
+    openPcb(entry, body);
   } else if (entry.kind === "midi") {
     openMidi(entry, body);
   } else if (entry.kind === "audio") {
@@ -6932,6 +6986,342 @@ async function openMidi(entry, body) {
     if (ctx) ctx.close();
   };
   layout();
+}
+
+// ---------------------------------------------------------------------------
+// Boards: a printed circuit board Flash designed, read from its .fpcb file.
+// Layers (each copper layer in its colour, glowing), Top and Bottom (as
+// the board will look, mask and gold), and 3D. Point at a part for what
+// it is; click copper to light up its whole net; Replay draws the traces
+// in the order they were routed.
+
+let pcbView = null;
+const PCB_COLOURS = ["#ff6b4a", "#33d17a", "#4aa8ff", "#f5c542", "#4fd1c5", "#c38cff"];
+const PCB_LOOKS = { ic: "#15161a", passive: "#b48a57", led: "#f3efe4", usb: "#c9cbce", crystal: "#cfd2d6", can: "#d3d5d8", antenna: "#ece8dc", connector: "#262626", header: "#1d1d1d", switch: "#3a3a3a", diode: "#202022" };
+
+function pcbColour(board, layer) {
+  if (layer === board.layers - 1 && board.layers > 1) return PCB_COLOURS[5];
+  return PCB_COLOURS[Math.min(layer, 4)];
+}
+
+function dropPcb() {
+  if (!pcbView) return;
+  const gone = pcbView;
+  pcbView = null;
+  gone.dropped = true;
+  if (gone.model) gone.model.dispose();
+  if (gone.cleanup) gone.cleanup();
+}
+
+async function openPcb(entry, body) {
+  const view = body.appendChild(el("div", "pcb-view", `<div class="stage"><svg class="pcb" xmlns="http://www.w3.org/2000/svg"></svg></div><div class="three" hidden></div><div class="note">Loading the board…</div><div class="tip" hidden></div>`));
+  const mine = { entry, dropped: false, model: null, cleanup: null };
+  pcbView = mine;
+  let board;
+  try {
+    const response = await fetch(fileUrl(entry), { credentials: "same-origin" });
+    board = await response.json();
+    if (board.format !== "flash-pcb") throw new Error("not a board file");
+  } catch (e) {
+    if (!mine.dropped) view.querySelector(".note").textContent = `Could not show this board: ${e && e.message ? e.message : e}`;
+    return;
+  }
+  if (mine.dropped) return;
+  view.querySelector(".note").remove();
+  const s = board.stats;
+  $("#viewer-size").textContent = `Circuit board · ${s.width} × ${s.height} mm · ${board.layers} layer${board.layers === 1 ? "" : "s"}`;
+  const state = { mode: "layers", hidden: new Set(), focus: "" };
+  const svg = view.querySelector("svg.pcb");
+  const stage = view.querySelector(".stage");
+  const three = view.querySelector(".three");
+  const tip = view.querySelector(".tip");
+  const ns = "http://www.w3.org/2000/svg";
+  const add = (tag, at, parent) => { const e = document.createElementNS(ns, tag); for (const k in at) e.setAttribute(k, at[k]); parent.appendChild(e); return e; };
+  const Y = (y) => -y;
+  const xs = board.outline.map((p) => p[0]), ys = board.outline.map((p) => p[1]);
+  const box = { x0: Math.min(...xs), x1: Math.max(...xs), y0: Math.min(...ys), y1: Math.max(...ys) };
+  const outline = board.outline.map((p) => `${p[0]},${Y(p[1])}`).join(" ");
+  const parts = new Map(board.parts.map((p) => [p.ref, p]));
+
+  // The view: fitted to the board, then zoomed and panned.
+  let vb;
+  // Fitted into what the card and the bar leave free, not under them.
+  const fit = () => {
+    const pad = Math.max(box.x1 - box.x0, box.y1 - box.y0) * 0.08;
+    const r = stage.getBoundingClientRect();
+    const sideCard = view.querySelector(".card");
+    const c = sideCard ? sideCard.getBoundingClientRect() : null;
+    const right = c && c.top < r.top + r.height / 2 && c.width < r.width * 0.6 ? c.width + 24 : 0;
+    const below = 70 + (c && !right ? c.height + 12 : 0);
+    const free = { w: Math.max(80, r.width - right), h: Math.max(80, r.height - below) };
+    const bw = box.x1 - box.x0 + 2 * pad, bh = box.y1 - box.y0 + 2 * pad;
+    const scale = Math.max(bw / free.w, bh / free.h);   // mm a pixel
+    const w = (r.width || 1) * scale, h = (r.height || 1) * scale;
+    const cx = (box.x0 + box.x1) / 2, cy = -(box.y0 + box.y1) / 2;
+    vb = { x: cx - free.w / 2 * scale, y: cy - (free.h / 2 + 8) * scale, w, h };
+    applyView();
+  };
+  const applyView = () => svg.setAttribute("viewBox", `${vb.x} ${vb.y} ${vb.w} ${vb.h}`);
+  const toBoard = (ev) => {
+    const r = svg.getBoundingClientRect();
+    return { x: vb.x + (ev.clientX - r.left) / r.width * vb.w, y: vb.y + (ev.clientY - r.top) / r.height * vb.h };
+  };
+  stage.addEventListener("wheel", (ev) => {
+    ev.preventDefault();
+    const at = toBoard(ev);
+    const k = Math.exp(ev.deltaY * 0.0015);
+    const w = Math.min(Math.max(vb.w * k, 0.6), (box.x1 - box.x0 + 40) * 3);
+    const scale = w / vb.w;
+    vb = { x: at.x - (at.x - vb.x) * scale, y: at.y - (at.y - vb.y) * scale, w, h: vb.h * scale };
+    applyView();
+  }, { passive: false });
+  let drag = null;
+  stage.addEventListener("pointerdown", (ev) => { drag = { x: ev.clientX, y: ev.clientY, vb: { ...vb }, moved: false }; stage.setPointerCapture(ev.pointerId); });
+  stage.addEventListener("pointermove", (ev) => {
+    if (drag) {
+      const r = svg.getBoundingClientRect();
+      const dx = (ev.clientX - drag.x) / r.width * vb.w, dy = (ev.clientY - drag.y) / r.height * vb.h;
+      if (Math.abs(ev.clientX - drag.x) + Math.abs(ev.clientY - drag.y) > 3) { drag.moved = true; stage.classList.add("panning"); }
+      if (drag.moved) { vb = { ...drag.vb, x: drag.vb.x - dx, y: drag.vb.y - dy }; applyView(); tip.hidden = true; return; }
+    }
+    hover(ev);
+  });
+  stage.addEventListener("pointerup", (ev) => {
+    stage.classList.remove("panning");
+    const wasDrag = drag && drag.moved;
+    drag = null;
+    if (!wasDrag) pick(ev);
+  });
+  stage.addEventListener("pointerleave", () => { tip.hidden = true; });
+
+  // What is under the pointer: a part says what it is, copper its net.
+  function hover(ev) {
+    const hit = document.elementFromPoint(ev.clientX, ev.clientY);
+    const partEl = hit && hit.closest && hit.closest("[data-ref]");
+    const netEl = hit && hit.closest && hit.closest("[data-net]");
+    const r = view.getBoundingClientRect();
+    let html = "";
+    if (partEl) {
+      const p = parts.get(partEl.dataset.ref);
+      if (p) html = `<b>${esc(p.ref)}${p.value ? ` · ${esc(p.value)}` : ""}</b><span>${esc(p.package)} · ${p.side}${p.note ? ` · ${esc(p.note)}` : ""}</span>`;
+    }
+    if (netEl && netEl.dataset.net) {
+      const n = board.nets.find((x) => x.name === netEl.dataset.net);
+      html += `${html ? "<br>" : ""}<b>${esc(netEl.dataset.net)}</b><span>${n ? `${n.pins} pins${n.ground ? " · ground" : n.power ? " · power" : ""}` : ""}${netEl.dataset.pin ? ` · ${esc(netEl.dataset.pin)}` : ""}</span>`;
+    }
+    if (!html) { tip.hidden = true; return; }
+    tip.innerHTML = html;
+    tip.hidden = false;
+    tip.style.left = `${Math.min(ev.clientX - r.left, r.width - 250)}px`;
+    tip.style.top = `${ev.clientY - r.top}px`;
+  }
+  function pick(ev) {
+    const hit = document.elementFromPoint(ev.clientX, ev.clientY);
+    const netEl = hit && hit.closest && hit.closest("[data-net]");
+    const net = netEl ? netEl.dataset.net : "";
+    state.focus = net && net !== state.focus ? net : "";
+    markFocus();
+  }
+  function markFocus() {
+    svg.classList.toggle("focusing", !!state.focus);
+    svg.querySelectorAll("[data-net].on").forEach((e) => e.classList.remove("on"));
+    if (state.focus) svg.querySelectorAll(`[data-net="${CSS.escape(state.focus)}"]`).forEach((e) => e.classList.add("on"));
+  }
+
+  const padEl = (p, g, fill, extra = {}) => {
+    const r = p.shape === "rect" ? Math.min(p.w, p.h) * 0.18 : Math.min(p.w, p.h) / 2;
+    return add("rect", { x: p.x - p.w / 2, y: Y(p.y) - p.h / 2, width: p.w, height: p.h, rx: r, fill, ...extra }, g);
+  };
+  const trackEl = (t, g, stroke) => add("polyline", { points: t.points.map((q) => `${q[0]},${Y(q[1])}`).join(" "), fill: "none", stroke, "stroke-width": t.width, "stroke-linecap": "round", "stroke-linejoin": "round", "data-net": t.net, "data-order": t.order }, g);
+
+  function draw() {
+    svg.textContent = "";
+    const defs = add("defs", {}, svg);
+    defs.innerHTML = `<filter id="pcb-glow" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="0.05" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>` +
+      `<linearGradient id="pcb-gold" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#f4d27a"/><stop offset="1" stop-color="#b8892e"/></linearGradient>` +
+      `<clipPath id="pcb-clip"><polygon points="${outline}"/></clipPath>`;
+    if (state.mode === "layers") drawLayers(); else drawSide(state.mode);
+    markFocus();
+  }
+
+  function drawLayers() {
+    add("polygon", { points: outline, fill: "#0f1216", stroke: "#3b424d", "stroke-width": 0.06 }, svg);
+    const g = add("g", { "clip-path": "url(#pcb-clip)" }, svg);
+    for (const L of [...Array(board.layers).keys()].reverse()) {
+      if (state.hidden.has(L)) continue;
+      const colour = pcbColour(board, L);
+      const lg = add("g", { opacity: L === 0 ? 1 : 0.8, filter: "url(#pcb-glow)" }, g);
+      const plane = (board.planes || {})[L];
+      if (plane) add("polygon", { points: outline, fill: colour, opacity: 0.08, "data-net": plane }, lg);
+      for (const r of board.pours[L] || []) add("rect", { x: r[0], y: Y(r[3]), width: r[2] - r[0], height: r[3] - r[1], fill: colour, opacity: 0.16, "data-net": board.ground }, lg);
+      for (const t of board.tracks) if (t.layer === L) trackEl(t, lg, colour);
+      for (const p of board.pads) if (p.layers.includes(L)) padEl(p, lg, colour, { "data-net": p.net, "data-pin": `${p.part}.${p.name}` });
+    }
+    for (const v of board.vias) {
+      const vg = add("g", { "data-net": v.net, "data-order": v.order, class: "via" }, svg);
+      add("circle", { cx: v.x, cy: Y(v.y), r: board.rules.via / 2, fill: "#e9edf2" }, vg);
+      add("circle", { cx: v.x, cy: Y(v.y), r: board.rules.drill / 2, fill: "#0a0c0f" }, vg);
+    }
+    for (const part of board.parts) {
+      if (part.kind === "pad" || part.kind === "hole") continue;
+      const [x0, y0, x1, y1] = part.box;
+      const pg = add("g", { "data-ref": part.ref }, svg);
+      add("rect", { x: x0, y: Y(y1), width: x1 - x0, height: y1 - y0, rx: 0.08, fill: "rgba(255,255,255,0.001)", stroke: part.side === "top" ? "rgba(255,255,255,.3)" : "rgba(195,140,255,.4)", "stroke-width": 0.03, "stroke-dasharray": part.side === "top" ? "" : "0.12 0.08" }, pg);
+      const label = add("text", { x: (x0 + x1) / 2, y: Y((y0 + y1) / 2) + 0.12, "font-size": Math.max(0.18, Math.min(0.55, (x1 - x0) / 4)), fill: "rgba(255,255,255,.55)", "text-anchor": "middle", "font-weight": 600, "pointer-events": "none", "font-family": "system-ui, sans-serif" }, pg);
+      label.textContent = part.ref;
+    }
+    for (const p of board.problems) if (!p.warning) add("circle", { cx: p.x, cy: Y(p.y), r: 0.35, class: "ring", "stroke-width": 0.07 }, svg);
+  }
+
+  function drawSide(side) {
+    const L = side === "top" ? 0 : board.layers - 1;
+    const g = add("g", side === "bottom" ? { transform: `translate(${box.x0 + box.x1},0) scale(-1,1)` } : {}, svg);
+    add("polygon", { points: outline, fill: board.color, stroke: "#000", "stroke-width": 0.08 }, g);
+    const cg = add("g", { "clip-path": "url(#pcb-clip)" }, g);
+    for (const r of board.pours[L] || []) add("rect", { x: r[0], y: Y(r[3]), width: r[2] - r[0], height: r[3] - r[1], fill: "#ffffff", opacity: 0.045 }, cg);
+    for (const t of board.tracks) if (t.layer === L) trackEl(t, cg, "rgba(255,255,255,.13)");
+    for (const v of board.vias) add("circle", { cx: v.x, cy: Y(v.y), r: board.rules.via / 2, fill: "rgba(255,255,255,.15)", "data-net": v.net }, cg);
+    for (const p of board.pads) if (p.layers.includes(L)) padEl(p, cg, "url(#pcb-gold)", { "data-net": p.net, "data-pin": `${p.part}.${p.name}` });
+    for (const part of board.parts) {
+      if (part.side !== side || part.kind === "pad" || part.kind === "hole") continue;
+      let [bw, bl] = part.body;
+      if (part.rotation % 180) [bw, bl] = [bl, bw];
+      const pg = add("g", { "data-ref": part.ref }, g);
+      const look = part.kind === "passive" && !/F$/i.test(part.value) ? "#1e1f22" : (PCB_LOOKS[part.kind] || "#18191c");
+      add("rect", { x: part.x - bw / 2, y: Y(part.y) - bl / 2, width: bw, height: bl, rx: Math.min(bw, bl) * 0.12, fill: look, stroke: "rgba(255,255,255,.08)", "stroke-width": 0.03 }, pg);
+      if (part.kind === "ic" && Object.keys(part.pins).length > 6) add("circle", { cx: part.x - bw / 2 + 0.4, cy: Y(part.y) - bl / 2 + 0.4, r: 0.15, fill: "rgba(255,255,255,.2)" }, pg);
+      if (part.kind === "ic" && bw > 2.4 && part.value) {
+        const t = add("text", { x: part.x, y: Y(part.y) + 0.12, "font-size": Math.min(0.42, bw / 9), fill: "rgba(255,255,255,.45)", "text-anchor": "middle", "font-weight": 600, "pointer-events": "none", "font-family": "system-ui, sans-serif", ...(side === "bottom" ? { transform: `translate(${2 * part.x},0) scale(-1,1)` } : {}) }, pg);
+        t.textContent = part.value.length < 18 ? part.value : part.ref;
+      }
+    }
+  }
+
+  // Replay: every trace drawn in the order it was routed, vias popping
+  // in as they come.
+  function replay() {
+    if (state.mode !== "layers") { setMode("layers"); }
+    const lines = [...svg.querySelectorAll("polyline[data-order]")];
+    const vias = [...svg.querySelectorAll("g.via")];
+    const last = Math.max(1, ...lines.map((l) => +l.dataset.order), ...vias.map((v) => +v.dataset.order));
+    const span = Math.min(4200, 900 + last * 18);
+    for (const line of lines) {
+      const length = line.getTotalLength();
+      line.style.transition = "none";
+      line.style.strokeDasharray = `${length}`;
+      line.style.strokeDashoffset = `${length}`;
+    }
+    for (const via of vias) via.style.opacity = "0";
+    svg.getBoundingClientRect();
+    for (const line of lines) {
+      const at = (+line.dataset.order / last) * span;
+      line.style.transition = `stroke-dashoffset ${Math.min(600, 160 + line.getTotalLength() * 40)}ms cubic-bezier(.3,.7,.2,1) ${at}ms`;
+      line.style.strokeDashoffset = "0";
+    }
+    for (const via of vias) {
+      const at = (+via.dataset.order / last) * span;
+      setTimeout(() => { if (!mine.dropped) { via.style.opacity = ""; via.classList.add("via-pop"); } }, at);
+    }
+  }
+
+  async function setMode(mode) {
+    state.mode = mode;
+    bar.querySelectorAll("[data-mode]").forEach((b) => b.setAttribute("aria-pressed", b.dataset.mode === mode));
+    const is3d = mode === "3d";
+    stage.hidden = is3d;
+    three.hidden = !is3d;
+    tip.hidden = true;
+    if (!is3d) { draw(); return; }
+    if (mine.model) return;
+    three.textContent = "";
+    three.appendChild(el("div", "note", "Building the board in 3D…"));
+    try {
+      await loadThree();
+      if (mine.dropped) return;
+      const handle = await FlashModelView.show(three, `/api/files/${encodeURIComponent(entry.id)}/board?format=glb`, ".glb");
+      if (mine.dropped) { handle.dispose(); return; }
+      mine.model = handle;
+      three.querySelector(".note")?.remove();
+    } catch (e) {
+      three.querySelector(".note").textContent = `Could not show it in 3D: ${e && e.message ? e.message : e}`;
+    }
+  }
+
+  // The bar: views, replay, fit, and the files.
+  const bar = view.appendChild(el("div", "bar"));
+  for (const [mode, label] of [["layers", "Layers"], ["top", "Top"], ["bottom", "Bottom"], ["3d", "3D"]]) {
+    if (mode === "bottom" && board.layers < 2) continue;
+    const b = el("button", "", label);
+    b.type = "button";
+    b.dataset.mode = mode;
+    b.onclick = () => setMode(mode);
+    bar.appendChild(b);
+  }
+  bar.appendChild(el("span", "sep"));
+  const replayBtn = el("button", "", `${icon("play")}<span>Replay</span>`);
+  replayBtn.type = "button";
+  replayBtn.dataset.tip = "Draw the traces again, in the order they were routed";
+  replayBtn.onclick = replay;
+  const fitBtn = el("button", "", `${icon("expand")}<span>Fit</span>`);
+  fitBtn.type = "button";
+  fitBtn.onclick = fit;
+  const fab = el("a", "", `${icon("download")}<span>Fab files</span>`);
+  fab.href = `/api/files/${encodeURIComponent(entry.id)}/board?format=fab`;
+  fab.dataset.tip = "Gerbers, drills, BOM and pick-and-place, zipped for a board house";
+  const kicad = el("a", "", `${icon("chip")}<span>KiCad</span>`);
+  kicad.href = `/api/files/${encodeURIComponent(entry.id)}/board?format=kicad`;
+  kicad.dataset.tip = "Open it in KiCad to go on with";
+  bar.append(replayBtn, fitBtn, el("span", "sep"), fab, kicad);
+
+  // The card: what it is, its layers, and what the checks found.
+  const card = view.appendChild(el("aside", "card"));
+  card.innerHTML = `<div><h3></h3><div class="sub"></div></div><div class="stats"></div><div class="layers"></div><div class="drc"></div>`;
+  card.querySelector("h3").textContent = board.name;
+  card.querySelector(".sub").textContent = `${s.width} × ${s.height} mm · ${board.layers} layer${board.layers === 1 ? "" : "s"} · ${board.thickness} mm`;
+  const stat = (v, label) => `<div class="stat"><b>${v}</b><span>${label}</span></div>`;
+  card.querySelector(".stats").innerHTML = stat(s.parts, "parts") + stat(s.pads, "pads") + stat(`${s.routed}/${s.nets}`, "nets routed") + stat(s.vias, "vias") + stat(`${s.length} mm`, "of track") + stat(`${Math.round(s.place_s + s.route_s)} s`, "to lay out");
+  const layerBox = card.querySelector(".layers");
+  board.layer_names.forEach((name, L) => {
+    const b = el("button", "", `<i style="--c:${pcbColour(board, L)}"></i><span></span><small></small>`);
+    b.type = "button";
+    b.setAttribute("aria-pressed", "true");
+    b.querySelector("span").textContent = name[0].toUpperCase() + name.slice(1);
+    const plane = (board.planes || {})[L];
+    b.querySelector("small").textContent = plane ? `${plane} plane` : board.pours[L] ? `${board.ground} pour` : "";
+    b.onclick = () => {
+      const on = !state.hidden.has(L);
+      if (on) state.hidden.add(L); else state.hidden.delete(L);
+      b.setAttribute("aria-pressed", String(!on));
+      if (state.mode !== "layers") setMode("layers"); else draw();
+    };
+    layerBox.appendChild(b);
+  });
+  const drc = card.querySelector(".drc");
+  const errors = board.problems.filter((p) => !p.warning);
+  drc.className = `drc ${errors.length ? "issues" : "clean"}`;
+  drc.innerHTML = errors.length ? `<b>${errors.length} to fix</b>` : "<b>Design rules: clean</b><span>Every net routed, every gap within the rules.</span>";
+  for (const p of errors.slice(0, 12)) {
+    const b = el("button", "");
+    b.type = "button";
+    b.textContent = p.text;
+    b.onclick = () => {
+      if (state.mode !== "layers") setMode("layers");
+      const w = Math.max(3, (box.x1 - box.x0) / 4), r = stage.getBoundingClientRect();
+      const h = w / ((r.width || 1) / (r.height || 1));
+      vb = { x: p.x - w / 2, y: Y(p.y) - h / 2, w, h };
+      applyView();
+      if (p.net) { state.focus = p.net; markFocus(); }
+    };
+    drc.appendChild(b);
+  }
+
+  const resized = new ResizeObserver(() => { if (!mine.dropped && state.mode !== "3d") fit(); });
+  resized.observe(stage);
+  mine.cleanup = () => resized.disconnect();
+  setMode("layers");
+  fit();
+  // The first look draws it as it was routed.
+  if (!matchMedia("(prefers-reduced-motion: reduce)").matches) requestAnimationFrame(replay);
 }
 
 function dropModel() {
@@ -7949,7 +8339,7 @@ function closeViewer() {
   // Emptied once it has slid away, so a PDF or a model is not left loaded.
   // A piece stops at once; the panel empties once it has slid away.
   dropMidi();
-  setTimeout(() => { if (!viewing) { dropModel(); $("#viewer-body").textContent = ""; } }, 480);
+  setTimeout(() => { if (!viewing) { dropModel(); dropPcb(); $("#viewer-body").textContent = ""; } }, 480);
   return true;
 }
 
@@ -8316,8 +8706,8 @@ function sentFiles(files) {
       shot.onclick = () => openViewer(f);
       continue;
     }
-    const viewable = f.kind === "pdf" || f.kind === "model" || f.kind === "midi";
-    const chip = box.appendChild(el(viewable ? "button" : "div", "doc", `<span class="badge">${icon(f.kind === "model" ? "cube" : f.kind === "midi" ? "music" : "file")}</span><span class="words"><span class="name"></span><span class="meta"></span></span>`));
+    const viewable = f.kind === "pdf" || f.kind === "model" || f.kind === "midi" || f.kind === "pcb";
+    const chip = box.appendChild(el(viewable ? "button" : "div", "doc", `<span class="badge">${icon(f.kind === "model" ? "cube" : f.kind === "pcb" ? "chip" : f.kind === "midi" ? "music" : "file")}</span><span class="words"><span class="name"></span><span class="meta"></span></span>`));
     chip.querySelector(".name").textContent = f.name;
     chip.querySelector(".meta").textContent = `${extOf(f.name)} · ${fileSize(f.size)}`;
     if (viewable) { chip.type = "button"; chip.onclick = () => openViewer(f); }
@@ -21433,7 +21823,7 @@ async function pasteImage() {
 // skill when the message reaches it.
 // A file from any chat, attached again: one you sent, or one Flash
 // made and showed there, like a post. Grouped by the chat it is in.
-const FILE_ICONS = { image: "image", video: "record", pdf: "file", model: "cube", midi: "music" };
+const FILE_ICONS = { image: "image", video: "record", pdf: "file", model: "cube", pcb: "chip", midi: "music" };
 async function openChatFiles() {
   const { files } = await command("chat-files");
   const rows = [];

@@ -566,6 +566,9 @@ SHOWN_TYPES = {
     ".glb": "model/gltf-binary",
     ".stl": "model/stl",
     ".obj": "model/obj",
+    # Printed circuit boards Flash designed, drawn by the page from what
+    # the file says. Nothing in one runs.
+    ".fpcb": "application/json",
     # Music as notes, played by the page's own synth and drawn as a
     # piano roll. Nothing in one runs.
     ".mid": "audio/midi",
@@ -638,6 +641,7 @@ def keep_file(source: str) -> dict:
             else "html" if SHOWN_TYPES[suffix] == "text/html"
             else "doc" if document
             else "model" if suffix in MODEL_TYPES
+            else "pcb" if suffix == ".fpcb"
             else "midi" if suffix in MIDI_TYPES
             else "audio" if suffix in AUDIO_TYPES
             else "video" if SHOWN_TYPES[suffix].startswith("video/")
@@ -786,6 +790,7 @@ def upload_info(file_id: str) -> Optional[dict]:
             else "video" if mime.startswith("video/")
             else "pdf" if suffix == ".pdf"
             else "model" if suffix in MODEL_TYPES
+            else "pcb" if suffix == ".fpcb"
             else "midi" if suffix in MIDI_TYPES
             else "audio" if mime.startswith("audio/")
             else "file"
