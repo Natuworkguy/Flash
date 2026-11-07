@@ -49,6 +49,7 @@ from . import (
     mail,
     midi,
     model3d,
+    pcb,
     plan,
     skills,
     sparks,
@@ -185,6 +186,14 @@ To make a 3D model (an object, a prop, a room, a layout), use the
   door swinging, a flag waving, a planet circling), saves a .glb, and
   shows it in a 3D viewer that plays the motion. Use send_3d_model to
   show a .glb, .stl, or .obj file that already exists.
+To design a printed circuit board (any electronics: a controller, a
+  sensor, earbuds, a dev board), use the design_pcb tool. Give it the
+  board's shape and every part with its package and what each pin
+  connects to; it places the parts, routes every net on as many layers
+  as you give it, checks the rules, and writes the files a board house
+  takes, a KiCad board, and a 3D model, shown beside the chat. Never
+  stop at a netlist, a parts list, or a script the user has to run:
+  make the board.
 To make music (a tune, a chord progression, a drum beat), use the
   make_midi tool: it writes the tracks of notes you give it as a .mid
   and plays it to the user in a player with a piano roll. Use send_midi
@@ -4839,6 +4848,61 @@ def _show_model(model_path: Path, label: str) -> str:
     )
 
 
+def design_pcb(path: str, design: Any, caption: str = "") -> str:
+    """Design a printed circuit board from its parts and their nets:
+    placed, routed, checked, with its fab files, shown to the user."""
+
+    board_path = Path(path).expanduser()
+    if board_path.suffix.lower() != pcb.SUFFIX:
+        board_path = board_path.with_name(board_path.name + pcb.SUFFIX)
+    tool_line(f"DesignPCB({board_path})")
+    try:
+        board = pcb.design(design)
+    except pcb.PcbError as exc:
+        result = f"Error: {exc}. Nothing was written."
+        tool_result(result, style=ERROR)
+        return result
+    stem = board_path.name[:-len(pcb.SUFFIX)]
+    fab = board_path.with_name(f"{stem}-fab.zip")
+    kicad = board_path.with_name(f"{stem}.kicad_pcb")
+    try:
+        board_path.parent.mkdir(parents=True, exist_ok=True)
+        for target in (board_path, fab, kicad):
+            checkpoint.record(target)
+        board_path.write_text(json.dumps(board), encoding="utf-8")
+        fab.write_bytes(pcb.fab_zip(board))
+        kicad.write_text(pcb.kicad(board), encoding="utf-8")
+    except OSError as exc:
+        result = f"Error: could not write {board_path}: {exc}"
+        tool_result(result, style=ERROR)
+        return result
+    s = board["stats"]
+    label = (f"{board_path.name} ({s['width']} x {s['height']} mm, "
+             f"{board['layers']} layers, {s['parts']} parts, {s['routed']}"
+             f"/{s['nets']} nets routed"
+             + (", rules clean" if not s["errors"] else
+                f", {s['errors']} to fix") + ")"
+             + (f": {caption.strip()}" if caption.strip() else ""))
+    if tool_file(str(board_path)):
+        tool_result(label)
+        shown = ("It is on the user's screen beside the chat: its copper "
+                 "layers, both sides as made, and in 3D, with the fab "
+                 "files to download.")
+    else:
+        tool_result(label)
+        console.print(Text(f"{' ' * RESULT_INDENT}{_display_path(fab)}",
+                           style=DIM))
+        shown = "Its files' paths are on screen."
+    return (
+        f"Saved {board_path}, the board house's files in {fab} "
+        f"(Gerbers, drills, BOM, pick-and-place) and a KiCad board, "
+        f"{kicad}.\n{shown}\n{pcb.summary(board)}\n"
+        "To change it (move or turn parts with x, y and rotation, a bigger "
+        "board, more layers), call design_pcb again with the whole changed "
+        "design and the same path."
+    )
+
+
 def make_3d_model(
     path: str, parts: Any, title: str = "", caption: str = "",
 ) -> str:
@@ -7882,6 +7946,78 @@ tools: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "design_pcb",
+            "description": (
+                "Design a printed circuit board and show it to the user: "
+                "give the board's outline and layers and every part, each "
+                "with its package and the net each pin is on, and it "
+                "places the parts (any you leave without x, y), routes "
+                "every net on all its layers with vias, puts ground on a "
+                "plane (4+ layers) or a pour, checks the design rules on "
+                "the real copper, and writes Gerbers, drill files, a BOM, "
+                "a pick-and-place list (zipped, ready for a board house), "
+                "a KiCad board, and a 3D model. Use it for any "
+                "electronics the user wants built, from a breakout to a "
+                "product (earbuds, a MIDI controller, a wearable): first "
+                "work out the circuit (each chip's real pinout from its "
+                "datasheet, decoupling caps on every supply pin, pull-ups, "
+                "crystals and their load caps, ESD on connectors), then "
+                "lay it out here. Name nets plainly (GND, 3V3, VBUS, SDA). "
+                "The result says what was routed and every rule broken: "
+                "fix what it says (more room, more layers, parts moved "
+                "nearer what they connect to) and call again. Packages: "
+                + pcb.PACKAGE_HELP + ". For any other part, give its own "
+                "pads instead of a package."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": (
+                            "Full path to save it at, ending in .fpcb: in "
+                            "the user's Downloads folder unless they named "
+                            "another place. The fab zip and the KiCad "
+                            "board are written beside it."
+                        ),
+                    },
+                    "design": {
+                        "type": "object",
+                        "description": (
+                            "The board: {\"name\", \"board\": {\"shape\": "
+                            "rect|rounded|stadium|circle|polygon, \"width\", "
+                            "\"height\" (or \"diameter\", or \"points\": [[x, "
+                            "y], ...] in mm), \"layers\": 1|2|4|6, "
+                            "\"thickness\", \"color\": black|green|blue|red|"
+                            "white|purple|yellow}, \"parts\": [{\"ref\": "
+                            "\"U1\", \"package\": \"QFN-56-7x7\", \"value\": "
+                            "\"RP2040\", \"pins\": {\"1\": \"3V3\", \"EP\": "
+                            "\"GND\"} or a list of nets in pin order, and "
+                            "maybe \"x\", \"y\" (mm from the bottom left), "
+                            "\"rotation\" (0, 90, 180, 270), \"side\": "
+                            "top|bottom, \"edge\": true for a connector "
+                            "that overhangs the edge, or \"pads\": "
+                            "[{\"name\", \"x\", \"y\", \"w\", \"h\", "
+                            "\"shape\", \"drill\"}] "
+                            "and \"body\": [w, l, height] for a part with "
+                            "no package}], and maybe \"nets\": {\"VBUS\": "
+                            "{\"width\": 0.4}}, \"rules\": {\"trace\", "
+                            "\"clearance\", \"via\", \"drill\", \"edge\"} in "
+                            "mm, \"ground\": the ground net's name."
+                        ),
+                    },
+                    "caption": {
+                        "type": "string",
+                        "description": "A few words on what it is.",
+                    },
+                },
+                "required": ["path", "design"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "send_3d_model",
             "description": (
                 "Show a 3D model file that already exists (.glb, .stl, or "
@@ -10027,6 +10163,7 @@ FUNCTIONS = {
     "send_html": send_html,
     "send_document": send_document,
     "make_3d_model": make_3d_model,
+    "design_pcb": design_pcb,
     "test_3d_model": test_3d_model,
     "phone_call": phone_call,
     "send_3d_model": send_3d_model,

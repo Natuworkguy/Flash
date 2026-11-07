@@ -55,7 +55,9 @@ MAX_PARTS = 400
 MAX_PADS = 4000
 MAX_CELLS = 450_000          # routing grid cells on each layer
 NECK_MM = 0.6                # how near its pads a wide trace narrows
-ROUTE_SECONDS = 75.0         # the most routing may take, all nets
+ROUTE_SECONDS = 110.0        # the most routing may take, all nets
+NET_SECONDS = 24.0           # ... one net, however many pins
+CONNECTION_SECONDS = 3.0     # ... one pin joining its net
 MASK_COLORS = {
     "green": "#1f6b3a", "black": "#141414", "matte-black": "#1b1c1e",
     "blue": "#1b3f8f", "red": "#8f1d1d", "white": "#e8e8e4",
@@ -212,10 +214,12 @@ PACKAGE_HELP = (
     "chip passives 01005, 0201, 0402, 0603, 0805, 1206, 1210, 2010, 2512 "
     "(or LED-0603 and the like); SOT-23, SOT-23-5, SOT-23-6, SC-70-6, "
     "SOT-563, SOD-123, SOD-323, SOD-523; SOIC-n, TSSOP-n, MSOP-n, SSOP-n; "
-    "QFN-n-WxH[-pitch] and DFN-n-WxH[-pitch] (with an exposed pad EP), "
+    "QFN-n-WxH[-pitch][-EPsize] and DFN-n-WxH[-pitch] (with an exposed "
+    "pad EP, -EP3.2 for its datasheet's size, -NOEP for none), "
     "LGA-n-WxH[-pitch]; BGA-RxC-pitch and WLCSP-n-pitch (balls A1, A2, "
     "...); USB-C; XTAL-3225, XTAL-2016, XTAL-2012 (32 kHz, two pads); "
-    "MIC-PDM (pads VDD, GND, SEL, CLK, DATA); ANT-3216 (chip antenna, "
+    "MIC-PDM (pads VDD, GND, SEL, CLK, DATA); WS2812B-2020 and "
+    "WS2812B-5050 (1 VDD, 2 DOUT, 3 GND, 4 DIN); ANT-3216 (chip antenna, "
     "keeps copper clear); FPC-n[-pitch]; HDR-1xn[-pitch]; TACT-WxH; "
     "PAD-WxH and PAD-ROUND-D (one pad: battery, speaker, pogo contact); "
     "TESTPAD-D; TH-D-DRILL; HOLE-D (mounting hole)")
@@ -297,7 +301,8 @@ def _footprint(package: str) -> Footprint:
 
     nolead = re.match(
         r"^(QFN|DFN|SON|LGA)-(\d+)-(\d+(?:\.\d+)?)X(\d+(?:\.\d+)?)"
-        r"(?:-(\d?\.\d+))?(-NOEP)?$", name)
+        r"(?:-(\d?\.\d+))?(-NOEP|-EP(\d+(?:\.\d+)?)(?:X(\d+(?:\.\d+)?))?)?"
+        r"$", name)
     if nolead:
         family = nolead.group(1)
         count = int(nolead.group(2))
@@ -318,12 +323,15 @@ def _footprint(package: str) -> Footprint:
         else:
             pads = _quad(count, width, height, pitch, pad_l, pad_w,
                          0.375 if family != "LGA" else 0.0)
-        if family != "LGA" and not nolead.group(6):
+        if family != "LGA" and nolead.group(6) != "-NOEP":
             inset = pad_l - 0.375 + 0.3
-            ep_w = width - 2 * inset if not two_sides else \
-                width - 2 * inset
+            ep_w = width - 2 * inset
             ep_h = height - 2 * inset if not two_sides else \
                 max(pitch, (count // 2 - 1) * pitch)
+            if nolead.group(7):
+                # Its datasheet's size: -EP3.2 or -EP3.2x2.6.
+                ep_w = float(nolead.group(7))
+                ep_h = float(nolead.group(8) or nolead.group(7))
             if ep_w > 0.4 and ep_h > 0.4:
                 pads.append(PadSpec("EP", 0, 0, round(ep_w, 3),
                                     round(ep_h, 3)))
@@ -370,6 +378,17 @@ def _footprint(package: str) -> Footprint:
                 pads.append(PadSpec("SH", x, y, 1.0, 1.6, "oval", 0.6))
         return Footprint(raw, pads, (8.94, 7.3, 3.2), "usb")
 
+    if name in ("WS2812B-2020", "SK6805-2020", "LED-RGB-2020"):
+        # Smart RGB LEDs: 1 VDD, 2 DOUT, 3 GND, 4 DIN.
+        spots = (("1", -0.65, 0.55), ("2", 0.65, 0.55), ("3", 0.65, -0.55),
+                 ("4", -0.65, -0.55))
+        return Footprint(raw, [PadSpec(n, x, y, 0.6, 0.6)
+                               for n, x, y in spots], (2.0, 2.0, 0.84), "led")
+    if name in ("WS2812B", "WS2812B-5050", "SK6812-5050"):
+        spots = (("1", -2.45, 1.65), ("2", -2.45, -1.65), ("3", 2.45, -1.65),
+                 ("4", 2.45, 1.65))
+        return Footprint(raw, [PadSpec(n, x, y, 1.5, 0.9)
+                               for n, x, y in spots], (5.0, 5.0, 1.6), "led")
     crystals = {
         "XTAL-3225": ([("1", -1.1, -0.8), ("2", 1.1, -0.8), ("3", 1.1, 0.8),
                        ("4", -1.1, 0.8)], 1.4, 1.15, (3.2, 2.5, 0.8)),
@@ -691,10 +710,19 @@ class Design:
     rules: dict[str, float]
     parts: list[Part]
     widths: dict[str, float]       # net -> trace width
-    plane: str                     # the net on the inner plane, or ""
-    pours: list[int]               # outer layers poured with the plane net
+    planes: dict[int, str]         # inner layer -> the net filling it
+    pours: list[int]               # outer layers poured with ground
     ground: str
     notes: list[str] = field(default_factory=list)
+
+    @property
+    def plane(self) -> str:
+        """The ground plane's net, on inner 1, or ""."""
+
+        return self.planes.get(1, "")
+
+    def on_plane(self, net: str) -> bool:
+        return net in self.planes.values()
 
     @property
     def nets(self) -> list[str]:
@@ -783,7 +811,20 @@ def read(spec: Any) -> Design:
         ground = next((n for n in sorted(all_nets) if GROUND_RE.match(n)), "")
     elif ground not in all_nets:
         raise PcbError(f"ground: no pin is on {ground!r}")
-    plane = ground if layers >= 4 and ground else ""
+    planes: dict[int, str] = {}
+    if layers >= 4 and ground:
+        planes[1] = ground
+    # A power net can have a plane of its own on the last inner layer
+    # ("power_plane": "3V3"): signal, ground, power, signal. Not by
+    # default: on a dense board that layer routes more as signals.
+    power = spec.get("power_plane") or ""
+    if power:
+        if layers < 4:
+            raise PcbError("power_plane: a power plane needs 4 layers")
+        if not isinstance(power, str) or power not in all_nets:
+            raise PcbError(f"power_plane: no pin is on {power!r}")
+        if power != ground:
+            planes[layers - 2] = power
     pour_given = spec.get("pour", None)
     if pour_given is None:
         pours = [layers - 1] if layers == 2 and ground else []
@@ -795,7 +836,8 @@ def read(spec: Any) -> Design:
     return Design(
         name=str(spec.get("name") or "board").strip()[:80] or "board",
         outline=outline, layers=layers, thickness=thickness, color=color,
-        rules=rules, parts=parts, widths=widths, plane=plane, pours=pours,
+        rules=rules, parts=parts, widths=widths, planes=planes,
+        pours=pours,
         ground=ground)
 
 
@@ -864,9 +906,12 @@ def _box_of(part: Part) -> tuple[float, float, float, float]:
     """Where nothing else may sit: its courtyard, an antenna's keepout,
     and round a part with many pins, room for its traces to get out."""
 
-    many = len(part.print_.pads) > 8 and part.print_.kind not in (
-        "connector", "header")
-    fanout = FANOUT_MM if many else 0.0
+    count = len(part.print_.pads)
+    many = count > 8 and part.print_.kind not in ("connector", "header")
+    # A big fine-pitch part fans out through two staggered rows of vias,
+    # which need more room than a small one's single row.
+    fanout = 0.0 if not many else FANOUT_MM if count <= 20 else min(
+        1.4, 0.55 + count * 0.013)
     return part.box(0.1 + part.print_.keepout + fanout)
 
 
@@ -1006,7 +1051,8 @@ def _wiring(design: Design) -> float:
     boxes: dict[str, list[float]] = {}
     for part in design.parts:
         for pad in part.pads:
-            if pad.net and pad.net not in (design.plane, design.ground):
+            if pad.net and pad.net != design.ground and \
+                    not design.on_plane(pad.net):
                 b = boxes.setdefault(pad.net, [1e9, 1e9, -1e9, -1e9])
                 b[0], b[1] = min(b[0], pad.x), min(b[1], pad.y)
                 b[2], b[3] = max(b[2], pad.x), max(b[3], pad.y)
@@ -1037,7 +1083,7 @@ def _place_once(design: Design, loose: list[Part], way: int) -> None:
 
     def remember(part: Part) -> None:
         for pad in part.pads:
-            if pad.net and pad.net != design.plane:
+            if pad.net and not design.on_plane(pad.net):
                 pads_on.setdefault(pad.net, []).append(pad)
 
     for part in placed:
@@ -1045,7 +1091,7 @@ def _place_once(design: Design, loose: list[Part], way: int) -> None:
 
     def links(part: Part) -> int:
         nets = {n for n in part.pins.values()
-                if n not in (design.plane, design.ground)}
+                if n != design.ground and not design.on_plane(n)}
         return sum(1 for n in nets if n in pads_on)
 
     remaining = sorted(loose, key=lambda p: -_area_of(p))
@@ -1295,12 +1341,13 @@ class Router:
         for layer, net_id, inner in cores:
             for k in inner:
                 self.base[layer][k] = net_id
-        # The plane layer belongs to its net, but for the edge.
-        if design.plane:
-            plane_id = self.net_ids[design.plane]
+        # Each plane layer belongs to its net, but for the edge.
+        for layer, net in design.planes.items():
+            plane_id = self.net_ids[net]
+            grid = self.base[layer]
             for k in range(size):
-                if self.base[1][k] != OUTSIDE:
-                    self.base[1][k] = plane_id
+                if grid[k] != OUTSIDE:
+                    grid[k] = plane_id
         # Around an antenna, no copper but its own feed's: the area is
         # kept for its nets on every layer, and the plane is cut away.
         for part in design.parts:
@@ -1310,7 +1357,7 @@ class Router:
                         if n in self.net_ids]
                 own = mine[0] if mine else BLOCKED
                 for layer in range(self.layers):
-                    plane_layer = design.plane and layer == 1
+                    plane_layer = layer in design.planes
                     for k in self._cells_near_rect(x0, y0, x1, y1,
                                                    part.print_.keepout):
                         here = self.base[layer][k]
@@ -1349,8 +1396,7 @@ class Router:
         grow = self.design.rules["clearance"] + self.design.rules["via"] / 2 \
             + self.default_w / 2 + self.margin
         for layer in range(self.layers):
-            if self.design.plane and layer == 1 and \
-                    via.net != self.design.plane:
+            if self.design.planes.get(layer, via.net) != via.net:
                 continue
             grid = self.grid[layer]
             for k in self._cells_near_disc(via.x, via.y, grow):
@@ -1370,7 +1416,9 @@ class Router:
         whom to move. Answers the tracks, vias, and the nets crossed."""
 
         groups = [set(g) for g in self.terminals.get(net, [])]
-        if len(groups) < 2 and not (self.design.plane == net and groups):
+        planes = self.design.planes
+        mine = next((L for L, n in planes.items() if n == net), -1)
+        if len(groups) < 2 and not (mine >= 0 and groups):
             return [], [], set()
         net_id = self.net_ids[net]
         width = self.design.widths.get(net, self.default_w)
@@ -1388,8 +1436,7 @@ class Router:
         via_grow = self._stencil(max(0.0, (self.design.rules["via"] -
                                            self.default_w) / 2))
         layer_size = self.w * self.h
-        plane = 1 if self.design.plane else -1
-        signal_layers = [L for L in range(self.layers) if L != plane]
+        signal_layers = [L for L in range(self.layers) if L not in planes]
         crossed: set[str] = set()
 
         def open_(layer, k, strict=True):
@@ -1428,7 +1475,7 @@ class Router:
         def via_fits(i, j):
             cost = 0.0
             for layer in range(self.layers):
-                if layer == plane and net != self.design.plane:
+                if layer in planes and layer != mine:
                     continue
                 for di, dj in via_grow or [(0, 0)]:
                     ii, jj = i + di, j + dj
@@ -1442,8 +1489,8 @@ class Router:
 
         tree: set[int] = set(groups[0])
         rest = groups[1:]
-        if self.design.plane == net:
-            # Every pad goes down to the plane: the plane is the tree.
+        if mine >= 0:
+            # Every pad goes down to its plane: the plane is the tree.
             tree = set()
             rest = groups
         tracks: list[Track] = []
@@ -1452,8 +1499,10 @@ class Router:
         steps8 = [(1, 0, 1.0), (-1, 0, 1.0), (0, 1, 1.0), (0, -1, 1.0),
                   (1, 1, 1.4142), (1, -1, 1.4142), (-1, 1, 1.4142),
                   (-1, -1, 1.4142)]
-        deadline = time.monotonic() + 4.0
+        net_deadline = time.monotonic() + NET_SECONDS
         while rest:
+            deadline = min(net_deadline,
+                           time.monotonic() + CONNECTION_SECONDS)
             # The pad nearest the tree goes next.
             if tree:
                 tx = [(s // layer_size, (s % layer_size) % self.w,
@@ -1495,7 +1544,7 @@ class Router:
             best: dict[int, float] = {}
             for s in start:
                 layer = s // layer_size
-                if layer == plane and net != self.design.plane:
+                if layer in planes and layer != mine:
                     continue
                 k = s % layer_size
                 i, j = k % self.w, k // self.w
@@ -1510,7 +1559,7 @@ class Router:
                     continue
                 layer = s // layer_size
                 k = s % layer_size
-                if s in goal or (self.design.plane == net and layer == plane):
+                if s in goal or layer == mine:
                     found = s
                     break
                 expanded += 1
@@ -1522,7 +1571,7 @@ class Router:
                     ii, jj = i + di, j + dj
                     if not (0 <= ii < self.w and 0 <= jj < self.h):
                         continue
-                    if layer == plane:
+                    if layer in planes:
                         continue
                     extra = passable(layer, ii, jj)
                     if extra is None:
@@ -1543,7 +1592,7 @@ class Router:
                     for other in range(self.layers):
                         if other == layer:
                             continue
-                        if other == plane and net != self.design.plane:
+                        if other in planes and other != mine:
                             continue
                         ns = other * layer_size + k
                         ng = g + via_cost + cost
@@ -1612,7 +1661,7 @@ class Router:
         design = self.design
         started = time.monotonic()
         nets = [n for n in design.nets if len(self.terminals.get(n, [])) > 1
-                or n == design.plane]
+                or design.on_plane(n)]
 
         def span(net):
             xs, ys = [], []
@@ -1621,8 +1670,10 @@ class Router:
                 xs.append(s % self.w)
                 ys.append(s // self.w)
             return (max(xs) - min(xs) + max(ys) - min(ys)) if xs else 0
-        # Short nets first, power and the plane's net last.
-        nets.sort(key=lambda n: (n == design.plane, n == design.ground,
+        # Short signals first, then long ones and power traces, and the
+        # planes' nets last: their pins drop into the plane wherever the
+        # signals have left room.
+        nets.sort(key=lambda n: (design.on_plane(n), n == design.ground,
                                  POWER_RE.match(n) is not None, span(n)))
         queue = list(nets)
         tries: dict[str, int] = {}
@@ -1633,7 +1684,7 @@ class Router:
                 self._keep(net, done)
                 continue
             tries[net] = tries.get(net, 0) + 1
-            if tries[net] > 3:
+            if tries[net] > 5:
                 self.failed.append(net)
                 continue
             # Find whom it would cross, and move them out of the way.
@@ -1781,9 +1832,10 @@ def _copper(board: dict) -> list[tuple]:
             items.append((track["layer"], "seg",
                           (a[0], a[1], b[0], b[1], track["width"]),
                           track["net"], ""))
+    planes = {int(k): v for k, v in board.get("planes", {}).items()}
     for via in board["vias"]:
         for layer in range(board["layers"]):
-            if board["plane"] and layer == 1:
+            if layer in planes:
                 continue
             items.append((layer, "disc", (via["x"], via["y"],
                                           board["rules"]["via"]),
@@ -1996,7 +2048,7 @@ def design(spec: Any) -> dict:
         if pad.net:
             pins_on.setdefault(pad.net, []).append(f"{pad.part}.{pad.name}")
     for net, pins in pins_on.items():
-        if len(set(pins)) == 1 and net != made.plane:
+        if len(set(pins)) == 1 and not made.on_plane(net):
             single[net] = pins[0]
     tracks = [t for ts in router.tracks.values() for t in ts]
     vias = [v for vs in router.vias.values() for v in vs]
@@ -2007,6 +2059,7 @@ def design(spec: Any) -> dict:
         "thickness": made.thickness,
         "color": MASK_COLORS.get(made.color, made.color),
         "rules": made.rules, "plane": made.plane, "ground": made.ground,
+        "planes": {str(k): v for k, v in made.planes.items()},
         "pours": {str(k): v for k, v in pours.items()},
         "grid": router.pitch,
         "parts": [{
@@ -2074,8 +2127,9 @@ def summary(board: dict) -> str:
         f"{s['parts']} parts, {s['pads']} pads.",
         f"Routed {s['routed']} of {s['nets']} nets with {s['vias']} vias, "
         f"{s['length']} mm of track"
-        + (f"; {board['plane']} is the plane on inner 1"
-           if board["plane"] else "")
+        + "".join(f"; {net} is the plane on "
+                  f"{board['layer_names'][int(layer)]}"
+                  for layer, net in sorted(board.get("planes", {}).items()))
         + (f"; {board['ground']} poured on "
            + " and ".join(board["layer_names"][int(k)]
                           for k in board["pours"])
@@ -2199,24 +2253,31 @@ def gerbers(board: dict) -> dict[str, str]:
             "Inr"
         g = _Gerber(f"{board['name']} copper {layer + 1}",
                     f"Copper,L{layer + 1},{side}")
-        if board["plane"] and layer == 1:
+        plane = board.get("planes", {}).get(str(layer), "")
+        if plane:
             g.region([tuple(p) for p in board["outline"]])
             g.clear()
             clearance = rules["clearance"]
             for via in board["vias"]:
-                if via["net"] != board["plane"]:
+                if via["net"] != plane:
                     g.aperture("C", rules["via"] + 2 * clearance)
                     g.flash(via["x"], via["y"])
             for pad in board["pads"]:
-                if pad["drill"] and pad["net"] != board["plane"]:
+                if pad["drill"] and pad["net"] != plane:
                     g.aperture("C", max(pad["w"], pad["h"]) + 2 * clearance)
                     g.flash(pad["x"], pad["y"])
+            for part in board["parts"]:
+                if part.get("keepout"):
+                    x0, y0, x1, y1 = part["box"]
+                    k = part["keepout"]
+                    g.region([(x0 - k, y0 - k), (x1 + k, y0 - k),
+                              (x1 + k, y1 + k), (x0 - k, y1 + k)])
             # Keep the plane off the edge.
             outline = [tuple(p) for p in board["outline"]]
             g.line(outline + outline[:1], 2 * rules["edge"])
             g.dark()
             for via in board["vias"]:
-                if via["net"] == board["plane"]:
+                if via["net"] == plane:
                     g.aperture("C", rules["via"])
                     g.flash(via["x"], via["y"])
         for rect in board["pours"].get(str(layer), []):
@@ -2228,7 +2289,7 @@ def gerbers(board: dict) -> dict[str, str]:
         for track in board["tracks"]:
             if track["layer"] == layer:
                 g.line(track["points"], track["width"])
-        if not (board["plane"] and layer == 1):
+        if not plane:
             for via in board["vias"]:
                 g.aperture("C", rules["via"])
                 g.flash(via["x"], via["y"])
@@ -2462,8 +2523,8 @@ def kicad(board: dict) -> str:
                    f"{rules['via']}) (drill {rules['drill']}) "
                    f'(layers "F.Cu" "B.Cu") (net {number[via["net"]]}))')
     zone_layers = []
-    if board["plane"]:
-        zone_layers.append((copper[1], board["plane"]))
+    for layer, net in sorted(board.get("planes", {}).items()):
+        zone_layers.append((copper[int(layer)], net))
     for key in board["pours"]:
         zone_layers.append((copper[int(key)], board["ground"]))
     for layer, net in zone_layers:
