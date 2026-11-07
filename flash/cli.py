@@ -13,6 +13,13 @@ EXTENSION_COMMANDS = ("install", "update", "remove", "list")
 OTHER_COMMANDS = ("doctor", "completion")
 # The shells `flash completion` writes the hook for.
 SHELLS = ("bash", "zsh", "fish", "tcsh", "powershell")
+# zsh's completion system, which the hook's compdef needs, started when
+# nothing has started it (a .zshrc without oh-my-zsh or the like).
+ZSH_COMPLETION_SYSTEM = """\
+if ! (( $+functions[compdef] )); then
+  autoload -Uz compinit && compinit -i
+fi
+"""
 # Where an extension to install can come from, offered as it is typed.
 SOURCES = ("github@", "git@", "path@")
 
@@ -223,7 +230,12 @@ def completion_script(shell: str = "") -> str:
             "flash completion needs the argcomplete package: "
             f"{sys.executable} -m pip install argcomplete") from None
     # Text for the user's shell to read; nothing is run here.
-    return argcomplete.shellcode(["flash"], shell=shell)  # nosec B604
+    script = argcomplete.shellcode(["flash"], shell=shell)  # nosec B604
+    if shell == "zsh":
+        # Its hook needs zsh's completion system, which a .zshrc with no
+        # framework never starts: started here when it is not running.
+        script = ZSH_COMPLETION_SYSTEM + script
+    return script
 
 
 def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:

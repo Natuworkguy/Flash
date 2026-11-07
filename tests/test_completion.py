@@ -3,6 +3,7 @@
 # pylint: disable=C0116
 
 import os
+import shutil
 import subprocess  # nosec B404
 import sys
 from pathlib import Path
@@ -101,3 +102,21 @@ def test_a_tab_in_the_shell_is_answered(tmp_path):
         "install", "update", "remove", "list"]
     assert _tab("flash --w", tmp_path) == ["--web"]
     assert _tab("flash completion f", tmp_path) == ["fish"]
+
+
+@pytest.mark.skipif(not shutil.which("zsh"), reason="zsh is not here")
+def test_the_zsh_hook_works_without_a_completion_system(tmp_path):
+    """A .zshrc with no compinit (no oh-my-zsh or the like): the hook
+    starts zsh's completion system itself, so compdef is there."""
+
+    pytest.importorskip("argcomplete")
+    hook = tmp_path / "hook.zsh"
+    hook.write_text(cli.completion_script("zsh"), encoding="utf-8")
+
+    done = subprocess.run(  # nosec B603 B607
+        ["zsh", "-f", "-c", f"source {hook} && print -r -- $_comps[flash]"],
+        capture_output=True, text=True, timeout=60, check=False,
+        env={**os.environ, "HOME": str(tmp_path)})
+
+    assert "compdef" not in done.stderr
+    assert done.stdout.strip() == "_python_argcomplete"
