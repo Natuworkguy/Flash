@@ -1,3 +1,4 @@
+argcomplete>=3.5
 colorama
 types-colorama
 ollama

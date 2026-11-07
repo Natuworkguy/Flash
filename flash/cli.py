@@ -1,17 +1,61 @@
-"""Command-line argument parsing for Flash CLI."""
+"""Command-line argument parsing for Flash CLI, and Tab completion of
+it in the shell (argcomplete)."""
 
 import argparse
+import os
 import sys
-from typing import Optional
+from typing import Any, Optional
 
 from .version import __version__
 
 EXTENSION_COMMANDS = ("install", "update", "remove", "list")
 # Commands of their own, not about extensions.
-OTHER_COMMANDS = ("doctor",)
+OTHER_COMMANDS = ("doctor", "completion")
+# The shells `flash completion` writes the hook for.
+SHELLS = ("bash", "zsh", "fish", "tcsh", "powershell")
+# Where an extension to install can come from, offered as it is typed.
+SOURCES = ("github@", "git@", "path@")
 
 
-def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
+def _targets(prefix: str, parsed_args: Any, **_kwargs: Any) -> list[str]:
+    """What can follow the command, as Tab offers it: the shells for
+    completion, installed extensions to update or remove, and where one
+    can be installed from."""
+
+    command = getattr(parsed_args, "command", None)
+    if command == "completion":
+        return [s for s in SHELLS if s.startswith(prefix)]
+    if command in ("update", "remove"):
+        from . import extensions  # only read when it is asked for
+
+        try:
+            names = [e.name for e in extensions.installed()]
+        except (OSError, ValueError):
+            names = []
+        return [n for n in names if n.startswith(prefix)]
+    if command == "install":
+        if prefix.startswith("path@"):
+            # The folder typed so far ("", "/", "~/code/"), and the start
+            # of the name in it.
+            head, slash, start = prefix[5:].rpartition("/")
+            folder = head + slash
+            base = os.path.expanduser(folder) if folder else "."
+            try:
+                found = sorted(os.listdir(base))
+            except OSError:
+                return []
+            return [
+                f"path@{folder}{name}"
+                + ("/" if os.path.isdir(os.path.join(base, name)) else "")
+                for name in found
+                if name.startswith(start)
+                and (start.startswith(".") or not name.startswith("."))
+            ]
+        return [s for s in SOURCES if s.startswith(prefix)]
+    return []
+
+
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="flash",
         description="FLASH (Fast Local Agent SHell) CLI",
@@ -31,14 +75,18 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
             "path@/some/folder for one on disk), update [NAME] (pull it "
             "again from where it came from; all of them with no NAME), "
             "remove NAME, or list; "
-            "doctor checks that everything Flash needs works"
+            "doctor checks that everything Flash needs works; "
+            "completion [SHELL] prints what turns on Tab completion for "
+            "flash in your shell (bash by default)"
         ),
     )
-    parser.add_argument(
+    target = parser.add_argument(
         "target",
         nargs="?",
-        help="what to install, update or remove",
+        help="what to install, update or remove; with completion, the "
+             "shell",
     )
+    target.completer = _targets  # type: ignore[attr-defined]
     parser.add_argument(
         "-y", "--yes",
         action="store_true",
@@ -135,6 +183,51 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
         ),
     )
 
+    return parser
+
+
+def complete() -> None:
+    """Answer the shell's Tab, when it is asking (argcomplete sets
+    _ARGCOMPLETE), and exit; else return. Kept apart from the rest of
+    Flash, so a Tab never waits on it loading."""
+
+    if "_ARGCOMPLETE" not in os.environ:
+        return
+    try:
+        import argcomplete
+    except ImportError:
+        # Never installed: nothing to offer, and a Tab never installs.
+        sys.exit(0)
+    try:
+        argcomplete.autocomplete(build_parser(),
+                                 always_complete_options=False)
+    except Exception:  # noqa: BLE001  (one too old for this Python)
+        # No offers, and no traceback in the middle of what is typed.
+        sys.exit(0)
+    sys.exit(0)
+
+
+def completion_script(shell: str = "") -> str:
+    """What turns Tab completion on for flash in SHELL, to eval or
+    source."""
+
+    shell = (shell or "bash").strip().lower()
+    if shell not in SHELLS:
+        raise SystemExit(
+            f"flash completion: no completion for {shell!r}. One of: "
+            + ", ".join(SHELLS) + ".")
+    try:
+        import argcomplete
+    except ImportError:
+        raise SystemExit(
+            "flash completion needs the argcomplete package: "
+            f"{sys.executable} -m pip install argcomplete") from None
+    # Text for the user's shell to read; nothing is run here.
+    return argcomplete.shellcode(["flash"], shell=shell)  # nosec B604
+
+
+def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
+    parser = build_parser()
     argv = list(sys.argv[1:] if argv is None else argv)
     # A link from a handler registered before --uri: still a link.
     if argv and argv[0].lower().startswith("flash:"):
@@ -144,7 +237,8 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
         parser.error(f"flash {args.command} needs "
                      + ("a source, like github@owner/repo"
                         if args.command == "install" else "a name"))
-    if args.target and args.command not in ("install", "update", "remove"):
+    if args.target and args.command not in ("install", "update", "remove",
+                                            "completion"):
         parser.error(f"unexpected {args.target!r}")
     # What the rest of Flash reads.
     args.extension_install = args.target if args.command == "install" \

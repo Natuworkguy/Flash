@@ -6899,6 +6899,12 @@ def _main() -> None:
     if args.update:
         sys.exit(0 if _run_update(force=args.force) else 1)
 
+    if args.command == "completion":
+        from .cli import completion_script
+
+        print(completion_script(args.target or ""))
+        return
+
     if args.command == "doctor":
         sys.exit(1 if _doctor_command(fix=args.fix, cli=True) else 0)
 
