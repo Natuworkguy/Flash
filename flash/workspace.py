@@ -648,7 +648,8 @@ def keep_file(source: str) -> dict:
             else "image"
         ),
     }
-    if document or page:
+    if document or page or suffix == ".fpcb":
+        # A board's own path: what Fix asks Flash to make again.
         info["path"] = str(path.resolve())
     return info
 

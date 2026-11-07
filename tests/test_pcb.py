@@ -122,6 +122,21 @@ def test_a_board_is_kept_as_a_board(tmp_path, board):
     kept = workspace.keep_file(str(path))
 
     assert kept["kind"] == "pcb" and kept["mime"] == "application/json"
+    assert kept["path"] == str(path)
+
+
+def test_parts_given_over_each_other_are_moved_apart():
+    spec = json.loads(json.dumps(SMALL))
+    for part in spec["parts"]:
+        if part["ref"] in ("C1", "C2"):
+            part["x"], part["y"] = 10, 7
+
+    made = pcb.design(spec)
+
+    assert any("moved C" in note for note in made["notes"])
+    assert made["spec"] == spec
+    assert not [p for p in made["problems"]
+                if p["kind"] == "placement"]
 
 
 # The web tests' running server, for the page's downloads.
