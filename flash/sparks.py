@@ -3771,6 +3771,19 @@ def _mark_unavailable(spark_id: str, model: str, reason: str) -> None:
     _changed()
 
 
+# Whether a spark whose model failed tries again on its next shift, on
+# its schedule, rather than waiting for the user's Try again.
+RETRY_SETTING = "SPARK_RETRY"
+
+
+def retry_shifts() -> bool:
+    """Whether sparks try again each shift after their model failed. On
+    unless switched off; read from the env file, so a keeper elsewhere
+    goes by what was set in another Flash."""
+
+    return _saved_on(RETRY_SETTING, True)
+
+
 def _mark_available(spark_id: str) -> None:
     """Its model answered again: it is back on its schedule."""
 
@@ -5218,11 +5231,13 @@ def _shift(spark_id: str, client=None) -> Optional[Report]:
     except ModelFailed as e:
         tried = (f" Its fallbacks failed too: {', '.join(spark.fallbacks)}."
                  if spark.fallbacks else "")
+        waits = (" It tries again on its next shift." if retry_shifts()
+                 else f" {spark.name} is marked unavailable, and no shift "
+                 "starts on its schedule until you try again or give it "
+                 "another model.")
         report = Report(
             at=time.time(), failed=True, steps=steps,
-            text=f"This shift could not run: {e}.{tried} {spark.name} is "
-            "marked unavailable, and no shift starts on its schedule until "
-            "you try again or give it another model. "
+            text=f"This shift could not run: {e}.{tried}{waits} "
             + ("It only moves to the fallbacks you gave it." if spark.fallbacks
                else "It is never switched to another model by itself: give "
                "it fallbacks to carry on with when its model fails."),
@@ -5976,12 +5991,15 @@ CHECK_EVERY_TICKS = 12
 
 def due(now: Optional[float] = None) -> list[Spark]:
     now = time.time() if now is None else now
+    # One whose model failed tries again on its schedule, unless the
+    # user would rather say when.
+    retrying = retry_shifts()
     return [
         s for s in all_sparks()
         if s.status != WORKING and not s.waiting
         and (s.asked or (
             s.status != WAITING and not s.paused and not on_call(s)
-            and not s.unavailable and not s.waiting_on
+            and (retrying or not s.unavailable) and not s.waiting_on
             and s.next_run <= now
         ))
     ]
