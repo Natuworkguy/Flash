@@ -10581,6 +10581,15 @@ function tcLeadCount() {
 const tcDmId = (sparkId) => `dm-${sparkId}`;
 const tcDmSpark = (id) => (id && id.startsWith("dm-") ? id.slice(3) : "");
 
+// Who can be @mentioned in the chat: the team, then every other spark,
+// which joins as a guest. In a DM, only the spark it is with.
+function tcMentionable() {
+  const members = tcMembers();
+  if (tcDmSpark(teamChat.id)) return members;
+  const guests = [...teamChat.sparks.values()].filter((s) => !members.some((m) => m.id === s.id));
+  return [...members, ...guests.map((s) => ({ ...s, guest: true }))];
+}
+
 function tcMembers() {
   const dm = tcDmSpark(teamChat.id);
   if (dm) return [...teamChat.sparks.values()].filter((s) => s.id === dm);
@@ -10929,7 +10938,7 @@ function tcEntry(entry, fresh) {
   const bubble = el("div", "tc-bubble");
   bubble.innerHTML = markdown(entry.text || "");
   bubble.hidden = !entry.text;
-  chipMentions(bubble, tcMembers());
+  chipMentions(bubble, tcMentionable());
   bubble.title = tcClock(entry.at);
   // The reply sits just beside the bubble, however short it is.
   const line = el("div", "tc-line");
@@ -11062,7 +11071,7 @@ function tcVersions(entry, bubble) {
     const v = all[at];
     const latest = at === all.length - 1;
     bubble.innerHTML = markdown(v.text || "");
-    chipMentions(bubble, tcMembers());
+    chipMentions(bubble, tcMentionable());
     bubble.classList.toggle("old", !latest);
     const label = box.querySelector(".tc-ver-label");
     label.innerHTML = latest ? `<b>Edited</b> · ${all.length} versions` : `Version ${at + 1} of ${all.length} · ${esc(tcClock(v.at))}`;
@@ -11583,7 +11592,7 @@ function tcWireComposer() {
       else item.appendChild(sparkAvatar(spark, 20));
       const words = el("span", "words", `<b></b><span></span>`);
       words.querySelector("b").textContent = spark.name;
-      words.querySelector("span").textContent = spark.title || spark.handle;
+      words.querySelector("span").textContent = spark.guest ? "Not on the team: joins as a guest" : (spark.title || spark.handle);
       item.appendChild(words);
       item.onmousedown = (e) => { e.preventDefault(); choose(spark); };
       menu.appendChild(item);
@@ -11607,9 +11616,10 @@ function tcWireComposer() {
     if (!word) { closeMenu(); return; }
     const q = word[1].toLowerCase();
     const team = tcMembers();
+    // The team first; sparks off it after, as guests.
     picks = [
       ...(team.length > 1 && "everyone".startsWith(q) ? [{ ...EVERYONE_PICK, title: `All ${team.length} on the team answer` }] : []),
-      ...team.filter((s) => s.name.toLowerCase().startsWith(q) || s.handle.slice(1).startsWith(q)),
+      ...tcMentionable().filter((s) => s.name.toLowerCase().startsWith(q) || s.handle.slice(1).startsWith(q)),
     ].slice(0, 6);
     at = 0;
     drawMenu();

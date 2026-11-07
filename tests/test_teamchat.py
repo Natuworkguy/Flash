@@ -1559,3 +1559,89 @@ def test_the_terminal_takes_a_call_over(team, monkeypatch):
 
 def call_holder(room, call):
     return _call(room, call).get("holder")
+
+
+# --- Sparks from outside the team ----------------------------------------
+
+
+@pytest.fixture
+def outsider(team):
+    """Critic: a spark on no team at all."""
+
+    return sparks.create("Critic", "Critic's job.")
+
+
+def test_a_spark_off_the_team_is_called_in_as_a_guest(team, outsider):
+    message = teamchat.say("desk", "@critic is this plan any good?")
+    client = FakeClient([_reply("Mostly. Cut step three.")])
+
+    posted = teamchat.answer("desk", message, client)
+
+    assert [e["name"] for e in posted] == ["Critic"]  # nosec B101
+    told = client.calls[0]["messages"][0]["content"]
+    assert "You are not on Desk" in told  # nosec B101
+    assert "The sparks on the team:" in told  # nosec B101
+    assert "- Lead (@lead-spark)" in told  # nosec B101
+    # A guest, not a member: the team is as it was.
+    assert teamchat.is_guest(team.id, outsider)  # nosec B101
+    assert outsider.id not in [
+        s.id for s in sparks.members(team.id)]  # nosec B101
+
+
+def test_a_member_is_not_told_it_is_a_guest(team, outsider):
+    message = teamchat.say("desk", "@scout what did you find?")
+    client = FakeClient([_reply("Two bugs.")])
+
+    teamchat.answer("desk", message, client)
+
+    told = client.calls[0]["messages"][0]["content"]
+    assert "You are not on Desk" not in told  # nosec B101
+    assert "The others on the team:" in told  # nosec B101
+
+
+def test_a_teammate_can_bring_a_guest_in(team, outsider):
+    message = teamchat.say("desk", "Is the plan sound?")
+    client = FakeClient([
+        _reply("@critic can you check it?"),
+        _reply("Looks fine."),
+    ])
+
+    posted = teamchat.answer("desk", message, client)
+
+    assert [e["name"] for e in posted] == ["Lead", "Critic"]  # nosec B101
+
+
+def test_everyone_still_means_the_team(team, outsider):
+    message = teamchat.say("desk", "@everyone check in")
+    client = FakeClient([_reply("Here.") for _ in range(4)])
+
+    posted = teamchat.answer("desk", message, client)
+
+    assert sorted(e["name"] for e in posted) == [  # nosec B101
+        "Lead", "Scout", "Writer"]
+
+
+def test_a_reply_to_a_guest_and_a_retry_go_to_the_guest(team, outsider):
+    first = teamchat.answer(
+        "desk", teamchat.say("desk", "@critic thoughts?"),
+        FakeClient([_reply("Cut step three.")]))[0]
+    message = teamchat.say("desk", "Why that one?", first["id"])
+
+    posted = teamchat.answer(
+        "desk", message, FakeClient([_reply("It repeats step two.")]))
+
+    assert [e["name"] for e in posted] == ["Critic"]  # nosec B101
+    # A retry of its message is its to make, too.
+    assert teamchat.retry("desk", posted[0]["id"], FakeClient(
+        [_reply("It repeats two.")]))["name"] == "Critic"  # nosec B101
+
+
+def test_a_dm_never_calls_anyone_else_in(model):
+    scout = sparks.create("Scout", "Scout's job.")
+    sparks.create("Critic", "Critic's job.")
+    room = teamchat.dm_id(scout.id)
+    message = teamchat.say(room, "@critic what do you think?")
+
+    posted = teamchat.answer(room, message, FakeClient([_reply("Hm.")]))
+
+    assert [e["name"] for e in posted] == ["Scout"]  # nosec B101
