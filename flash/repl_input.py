@@ -5,13 +5,18 @@ import contextlib
 import json
 import os
 import shutil
+import threading
 import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import Optional
 
 from prompt_toolkit import PromptSession
-from prompt_toolkit.application.current import get_app, get_app_or_none
+from prompt_toolkit.application.current import (
+    get_app,
+    get_app_or_none,
+    set_app,
+)
 from prompt_toolkit.completion import Completer, Completion, PathCompleter
 from prompt_toolkit.data_structures import Point
 from prompt_toolkit.document import Document
@@ -1499,19 +1504,92 @@ def read_line(
     def pre_run() -> None:
         watch_for_wake()
         watch_for_resize()
+        _flush_held(get_app())
 
     message = _frame_message(prompt_ansi, status, health, backdrop)
 
     # Nothing reserved under the input. Those rows are drawn whether or
     # not a menu is open, so they show up as dead space below the
     # prompt and lift the frame off the foot of the screen.
-    return _session.prompt(
-        message,
-        default=_take_carried(),
-        pre_run=pre_run,
-        reserve_space_for_menu=0,
-        bottom_toolbar=closing_rule,
-    )
+    global _starting
+    _starting = True
+    try:
+        return _session.prompt(
+            message,
+            default=_take_carried(),
+            pre_run=pre_run,
+            reserve_space_for_menu=0,
+            bottom_toolbar=closing_rule,
+        )
+    finally:
+        _starting = False
+        # Anything still held prints now, under the finished prompt.
+        _flush_held(None)
+
+
+# A prompt on its way up but not running yet: what print_above is given
+# then waits for it, rather than landing on top of the half-drawn frame.
+_starting = False
+_held: list[Callable[[], None]] = []
+_held_lock = threading.Lock()
+
+
+def _flush_held(app) -> None:
+    """Print what was held, above APP's prompt if given, else at once."""
+
+    with _held_lock:
+        held = list(_held)
+        _held.clear()
+    if not held:
+        return
+
+    def show_all() -> None:
+        for show in held:
+            show()
+
+    if app is None:
+        show_all()
+        return
+
+    def run() -> None:
+        from prompt_toolkit.application import run_in_terminal
+
+        if not app.is_running:
+            show_all()
+            return
+        with set_app(app):
+            run_in_terminal(show_all)
+
+    app.loop.call_soon(run)
+
+
+def print_above(show: Callable[[], None]) -> None:
+    """Run SHOW, which prints, from any thread: above the prompt if one
+    is up, which then draws itself again underneath, else at once."""
+
+    app = _session.app if _session is not None else None
+    loop = getattr(app, "loop", None) if app is not None else None
+    if app is None or loop is None or not app.is_running:
+        with _held_lock:
+            if _starting:
+                _held.append(show)
+                return
+        show()
+        return
+
+    def run() -> None:
+        from prompt_toolkit.application import run_in_terminal
+
+        if not app.is_running:
+            show()
+            return
+        with set_app(app):
+            run_in_terminal(show)
+
+    try:
+        loop.call_soon_threadsafe(run)
+    except RuntimeError:  # the loop closed as the prompt ended
+        show()
 
 
 # The dock ---------------------------------------------------------------

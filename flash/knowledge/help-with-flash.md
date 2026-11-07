@@ -19,6 +19,8 @@ Point the user to the right place, briefly:
 - Apple apps on a Mac: Apple Calendar is a calendar choice beside Google and iCal feeds (Settings, Connectors, Calendar; see manage-the-calendar), the reminders tool lists, adds and ticks off Apple Reminders (see use-reminders), and send_imessage can send a file while read_imessages names attachments (see send-messages). Adding or changing anything asks the user first.
 - Location: with "Let Flash see my location" on in the Apple Watch app's Settings (off by default), the watch tells Flash where the user is and the user_location tool gives it (see know-where-the-user-is). Off, nothing is collected or sent.
 - Reminders at a time: remind_me has Flash itself notify the user then, kept across restarts (see remind-the-user-later). Apple Reminders are separate.
+- Permission mode on the watch: the Apple Watch app's Settings has a Permissions section to pick Ask first, Auto, or UltraAuto (listed only once UltraAuto is allowed in Flash's Settings). It sets the same mode as the mode button by the message box.
+- Keep awake: Settings has "Keep this Mac awake while Flash runs" (on by default). While Flash's server runs it holds macOS idle sleep off (caffeinate), so the watch can still reach Flash and sparks can still call when the user is away. The display still sleeps, and closing the lid on battery still sleeps the Mac; macOS lets no app stop that. If the computer cannot be reached, the watch says "Can't reach your computer right now." instead of an error.
 - Devices: devices tells the Mac's battery, network, connected Bluetooth devices with their batteries, and the Apple Watch's battery as it last sent it (see check-devices-and-batteries).
 
 If something is broken, suggest /doctor first.

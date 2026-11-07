@@ -3184,6 +3184,7 @@ body.all-stopped .org-node, body.all-stopped .spark-card { animation: all-halt 0
 .tc-box { display: flex; align-items: flex-end; gap: 8px; padding: 6px 6px 6px 14px; border: 1px solid var(--border-strong); border-radius: 18px; background: var(--bg); transition: border-color 0.15s, box-shadow 0.15s; }
 .tc-box:focus-within { border-color: color-mix(in srgb, var(--t) 60%, var(--border-strong)); box-shadow: 0 0 0 3px color-mix(in srgb, var(--t) 16%, transparent); }
 .tc-box textarea { flex: 1; min-width: 0; resize: none; border: 0; outline: 0; background: transparent; color: var(--text); font: 14.5px/1.45 var(--sans); padding: 6px 0; max-height: 160px; }
+.tc-box textarea::placeholder { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .tc-send { flex: none; width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center; background: var(--t); color: #fff; transition: transform 0.2s var(--spring), opacity 0.15s; }
 .tc-send svg { width: 17px; height: 17px; }
 .tc-send:disabled { opacity: 0.35; }
@@ -9811,6 +9812,22 @@ function drawGeneral(body) {
   };
   body.append(boxRow, boxAuto, boxMissing);
   showBox();
+  // Keeping the Mac awake while Flash runs, for the watch and spark calls:
+  // on unless switched off.
+  if (info.keep_awake_supported) {
+    body.insertAdjacentHTML("beforeend", `<h2 class="settings-section settings-gap">Stay awake</h2><p class="settings-sub">Asleep, Flash stops: your Apple Watch can’t reach it and sparks can’t call you. The screen still turns off, and closing the lid on battery still puts the Mac to sleep.</p>`);
+    const awakeRow = el("button", "setting-row keep-awake-row", `<span class="what"><b>Keep this Mac awake while Flash runs</b><span>Off, the Mac sleeps as usual and Flash stops with it.</span></span><span class="switch" aria-hidden="true"></span>`);
+    awakeRow.type = "button";
+    awakeRow.setAttribute("role", "switch");
+    awakeRow.setAttribute("aria-checked", !!info.keep_awake);
+    awakeRow.onclick = async () => {
+      const on = awakeRow.getAttribute("aria-checked") !== "true";
+      awakeRow.setAttribute("aria-checked", on);
+      try { Object.assign(info, await command("keep-awake-setting", on ? "on" : "off")); awakeRow.setAttribute("aria-checked", !!info.keep_awake); }
+      catch (error) { awakeRow.setAttribute("aria-checked", !on); showFailure(error); }
+    };
+    body.appendChild(awakeRow);
+  }
 
   body.insertAdjacentHTML("beforeend", `<h2 class="settings-section settings-gap">Computer Use<span class="beta-chip">Beta</span></h2><p class="settings-sub">Flash looks at your screen and clicks, types and scrolls itself, only for things its tools can’t do: a setting deep in an app, a button with no other way in. It is slow, and it can click the wrong thing.</p>`);
   const useRow = el("button", "setting-row computer-use-row", `<span class="what"><b>Let Flash control this computer</b><span>Off, Flash is never offered it. On, it asks you first, every reply that wants it, even in autonomous mode.</span></span><span class="switch" aria-hidden="true"></span>`);
@@ -10941,6 +10958,20 @@ async function drawSparks(body, again = false) {
     refresh.disabled = false;
   };
   buttons.append(refresh, shared, team, add);
+  // Every spark's reports and every team chat, marked read in one go.
+  if (r.sparks.some(sp => sp.unread) || (r.teams || []).some(t => t.chat_unread)) {
+    const readAll = el("button", "btn with-icon", `${icon("check")}<span>Mark all read</span>`);
+    readAll.type = "button";
+    readAll.onclick = async () => {
+      readAll.disabled = true;
+      try {
+        const done = await command("sparks-read-all");
+        toast(done.marked ? "Marked every spark and team chat read" : "Nothing unread");
+        drawSparks(body, true);
+      } catch (error) { showFailure(error); readAll.disabled = false; }
+    };
+    buttons.prepend(readAll);
+  }
   body.querySelector(".mem-head").appendChild(buttons);
   sparksAlways = r.always;
   const host = body.querySelector(".host");
@@ -12038,7 +12069,8 @@ function tcWireComposer() {
   // mode, for talking to the team, as the chat's own does.
   const grow = () => {
     area.style.height = "auto";
-    area.style.height = Math.min(area.scrollHeight, 160) + "px";
+    // Empty, the box stays one line: a long placeholder does not grow it.
+    area.style.height = area.value ? Math.min(area.scrollHeight, 160) + "px" : "";
     const has = area.value.trim() || teamChat.files.length;
     const state = has || !canRecord || area.disabled ? "up" : "voice";
     send.disabled = (state === "up" && !has) || teamChat.files.some((f) => f.uploading);
@@ -17625,17 +17657,20 @@ async function checkCallHere() {
   if (!sparkCall.on || sparkCall.id !== id) return;
   const open = entry && ["calling", "live"].includes(entry.state);
   if (open && (!entry.holder || entry.holder === CALL_HOLDER)) return;
-  const party = callParty(team);
   sparkCall.moved = true;
   endSparkCall("moved");
   endVoice();
-  toast(open ? `Your call${party ? ` with ${party.name}` : ""} moved to another Flash` : "The call ended on another Flash");
+  toast(open ? `Transferred to ${callPlace(entry.holder) || "another Flash"}` : "The call ended on another Flash");
   checkCallsElsewhere();
 }
 
 // A call going on in another Flash (another page, a terminal): a pill
 // floating at the top says so, with a button to take it over here.
 var callsElsewhere = [];
+// Where the Flash holding a call is: Web, CLI or Watch, from its holder.
+function callPlace(holder) {
+  return { web: "Web", terminal: "CLI", watch: "Watch" }[String(holder || "").split(":")[0]] || "";
+}
 async function checkCallsElsewhere() {
   if (typeof command !== "function") return;
   let calls = [];
@@ -17656,10 +17691,15 @@ function drawCallElsewhere() {
   pill.querySelector("b").textContent = `On a call with ${party.name}`;
   const s = call.connected ? Math.max(0, Math.floor(Date.now() / 1000 - call.connected)) : -1;
   const here = call.holder === CALL_HOLDER;
-  pill.querySelector(".ce-meta").textContent = `${here ? "on hold" : "in another Flash"}${s < 0 ? "" : ` · ${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`}`;
+  const place = callPlace(call.holder);
+  const where = place === "Watch" ? "on your watch" : place === "CLI" ? "in the CLI" : "in another Flash";
+  pill.querySelector(".ce-meta").textContent = `${here ? "on hold" : where}${s < 0 ? "" : ` · ${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`}`;
   pill.querySelector(".ce-take").textContent = here ? "Rejoin" : "Transfer here";
-  pill.querySelector(".ce-take").onclick = () => {
+  pill.querySelector(".ce-take").onclick = async () => {
     pill.hidden = true;
+    // Voice mode starts only in the call's own chat, as answering does:
+    // without it the call let go at once and showed "on hold" here.
+    if (teamChat.id !== call.team) { try { await openTeamChat(call.team); } catch (_) { /* the call goes on without it */ } }
     startSparkCall({ team: call.team, take: call });
   };
 }

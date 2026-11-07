@@ -22,8 +22,9 @@ the program, and reads what it prints as JSON:
 - heard: what the user said ("text"). {"text": ...} changes what Flash
   is asked; {"reply": ...} answers it instead, read aloud, and Flash is
   never asked; {"end": true} ends voice mode.
-- reply: what Flash is about to say ("text"), as it will be read out.
-  {"text": ...} is read out instead.
+- reply: what Flash is about to say ("text"), as it is shown: tone and
+  sound cues such as [warm] or [laugh] are kept for the voice and left
+  out. {"text": ...} is read out instead.
 
 Several extensions are asked in turn, in the order they are installed,
 each seeing the text as the one before left it; once one answers a
@@ -144,10 +145,19 @@ def ask(event: str, conversation: str = "", **data: Any) -> dict:
     decided: dict = {"ignore": False} if event == "wake" else {"text": text}
     if event == "heard":
         decided.update(reply=None, end=False)
+    from .humanvoice import strip  # deferred: read on demand
+
     for extension in _listeners(event):
+        # A reply's tone and sound cues are for the voice alone: the
+        # extension sees the words as shown, and handing those back
+        # unchanged keeps the cues.
+        shown = (" ".join(strip(text).split()) if event == "reply"
+                 else text)
         answer = _answer(_run(
-            extension, _payload(event, conversation, {**data, "text": text}),
+            extension, _payload(event, conversation, {**data, "text": shown}),
         ))
+        if event == "reply" and answer.get("text") == shown:
+            continue
         if event == "wake":
             if answer.get("ignore") is True:
                 decided["ignore"] = True

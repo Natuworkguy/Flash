@@ -84,6 +84,7 @@ from .repl_input import (
     arm_exit,
     carry,
     is_shell_line,
+    print_above,
     read_line,
     screen_redrawn,
     screen_size,
@@ -2150,6 +2151,33 @@ def _skill_trial_command(action: str, arg: str) -> None:
                     + f". /skills restore {name} <version> to go back.\n",
                     style=DIM)
     console.print(body)
+
+
+_calls_noted: set[str] = set()
+
+
+def _note_calls() -> None:
+    """Point once at a call going on in another Flash (the watch, a
+    page, another terminal), with how to transfer it here."""
+
+    from . import teamchat
+
+    with contextlib.suppress(Exception):
+        for call in teamchat.live_calls():
+            if call.get("holder") == CALL_HOLDER or \
+                    call.get("call") in _calls_noted:
+                continue
+            _calls_noted.add(str(call.get("call")))
+            who = _call_party(call["team"])
+            place = teamchat.holder_place(str(call.get("holder") or ""))
+            where = {"Watch": "on your watch", "Web": "on the web",
+                     "CLI": "in another terminal"}.get(
+                         place, "in another Flash")
+            note = Text(f"  {_bubble()} ", style=ACCENT)
+            note.append(f"On a call with {who}", style=f"bold {ACCENT}")
+            note.append(f" {where} · /call take to transfer it here",
+                        style=DIM)
+            console.print(note)
 
 
 def _note_sparks() -> None:
@@ -4393,6 +4421,15 @@ def _spark_call(team: str, call: str, incoming: Optional[dict] = None,
         if incoming else
         "(Voice call) Hi! You've picked up my call; greet me briefly.")
     connected = False
+    # Still here, every few seconds, as the page's call beats: a call
+    # that goes quiet while the user thinks is not taken for over.
+    beating = threading.Event()
+
+    def beat() -> None:
+        while not beating.wait(5):
+            with contextlib.suppress(Exception):
+                teamchat.call_step(team, call, "beat", CALL_HOLDER)
+    threading.Thread(target=beat, daemon=True).start()
 
     def round_(text: str, hidden: bool = False) -> bool:
         """Say TEXT on the call and hear the answers: False once hung up."""
@@ -4408,8 +4445,9 @@ def _spark_call(team: str, call: str, incoming: Optional[dict] = None,
                 teamchat.call_step(team, call, "connected", CALL_HOLDER)
             said = str(entry.get("spoken") or entry.get("text") or "")
             name = str(entry.get("name") or "Spark")
+            # Cues ([happy], [laugh]) are said, never shown.
             console.print(Text(f"  {name}: ", style=f"bold {ACCENT}")
-                          + Text(said))
+                          + Text(" ".join(humanvoice.strip(said).split())))
             if spoken:
                 own = voice_mod.spark_voice(str(entry.get("spark") or ""))
                 voice_mod.speak(said, speaker=own.get("voice", ""),
@@ -4427,7 +4465,8 @@ def _spark_call(team: str, call: str, incoming: Optional[dict] = None,
             if moved():
                 return
             if spoken:
-                said = _voice_input()
+                # Stops listening as soon as the call goes on elsewhere.
+                said = _voice_input(stop=moved)
                 if said is None:
                     continue
             else:
@@ -4446,13 +4485,18 @@ def _spark_call(team: str, call: str, incoming: Optional[dict] = None,
     except (KeyboardInterrupt, EOFError):
         console.print()
     finally:
+        beating.set()
         gone = moved()
         # Taken over elsewhere, it goes on there: not hung up from here.
         with contextlib.suppress(Exception):
             teamchat.call_step(team, call, "end", CALL_HOLDER)
-        console.print(Text(
-            "  The call moved to another Flash." if gone and _call_open(
-                team, call) else "  Call ended.", style=DIM))
+        where = ""
+        if gone and _call_open(team, call):
+            entry = teamchat._call_entry(teamchat._read(team), call) or {}
+            where = teamchat.holder_place(str(entry.get("holder") or ""))
+            where = f"  Transferred to {where}." if where else \
+                "  The call moved to another Flash."
+        console.print(Text(where or "  Call ended.", style=DIM))
 
 
 def _answer_ring() -> None:
@@ -6475,8 +6519,9 @@ def _set_voice(on: bool) -> None:
     console.print(told)
 
 
-def _voice_input() -> Optional[str]:
-    """Record one spoken turn and return it, or None if nothing was said."""
+def _voice_input(stop: Optional[Callable[[], bool]] = None) -> Optional[str]:
+    """Record one spoken turn and return it, or None if nothing was said
+    (or STOP said to give up listening)."""
 
     # VOICE can be set by hand, and a model directory can be deleted, so
     # the models are checked here rather than only when /voice turns on.
@@ -6507,7 +6552,7 @@ def _voice_input() -> Optional[str]:
                 now["words"] = words
                 draw()
 
-            heard, why = listen(on_state, on_words)
+            heard, why = listen(on_state, on_words, stop=stop)
     except KeyboardInterrupt:
         # Ctrl+C ends the spoken turn and hands the prompt back, rather
         # than tearing down whatever else the main loop was doing.
@@ -6519,7 +6564,8 @@ def _voice_input() -> Optional[str]:
         return None
 
     if not heard:
-        console.print(Text("Nothing heard.", style=DIM))
+        if stop is None or not stop():
+            console.print(Text("Nothing heard.", style=DIM))
         return None
 
     return heard
@@ -6987,7 +7033,9 @@ def _main() -> None:
     from . import keepalive
 
     threading.Thread(target=keepalive.take_over_if_wanted, kwargs={
-        "say": lambda said: console.print(Text(f"  {said}", style=DIM))},
+        # Said above the prompt, which may already be drawn.
+        "say": lambda said: print_above(
+            lambda: console.print(Text(f"  {said}", style=DIM)))},
         daemon=True).start()
     connectors.start()
     # A spark's @user rings the terminal's bell and shows on the desktop.
@@ -7143,6 +7191,7 @@ def _main() -> None:
                 if not banner_showing:
                     _note_learning()
                     _note_sparks()
+                    _note_calls()
                 try:
                     uin = read_line(
                         Config.prompt,
