@@ -1464,6 +1464,15 @@ body.spark-calling #on-call:not([hidden]) { display: flex; animation: rise-far 0
 .input-shade[hidden] { display: none; }
 .input-shade .code { background: var(--hover); box-shadow: 0 0 0 1px var(--border); border-radius: 4px; color: var(--accent); -webkit-box-decoration-break: clone; box-decoration-break: clone; }
 .input-shade .tick { color: var(--text-3); }
+/* [text](link) while it is typed: the words as a link, the rest faint */
+.input-shade .md-link { color: var(--accent); text-decoration: underline; text-decoration-color: color-mix(in srgb, var(--accent) 45%, transparent); text-underline-offset: 2px; }
+.input-shade .md-url { color: var(--text-3); opacity: 0.55; }
+.user a.user-link { color: inherit; text-decoration: underline; text-decoration-color: color-mix(in srgb, currentColor 45%, transparent); text-underline-offset: 2px; }
+.user a.user-link:hover { text-decoration-color: currentColor; }
+.tc-box { position: relative; }
+.tc-box .input-shade { font: 14.5px/1.45 var(--sans); padding: 6px 0; }
+.tc-box.shaded textarea { color: transparent; caret-color: var(--text); }
+.tc-box.shaded textarea::selection { color: transparent; background: color-mix(in srgb, var(--accent) 28%, transparent); }
 #composer.shaded #input { color: transparent; caret-color: var(--text); }
 /* A draft with a code block in it is written in monospace, the box and
    the layer under it alike, so the caret still lands where it shows. */
@@ -8582,12 +8591,39 @@ function commentsBlock(sent, text, steered) {
 // backticks; typed (TICKS), the backticks stay, dimmed, so what is drawn
 // lines up letter for letter with the box.
 const CODE_BITS_RE = /```[^\n`]*\n?[\s\S]*?```|``[^\n]+?``|`[^`\n]+`/g;
+// [text](link), as a message or the box has it: shown as a link
+const MD_LINK_RE = /\[([^\]\n]+)\]\(((?:https?:\/\/|mailto:)[^\s)]+)\)/g;
+const hasMdLink = (text) => { MD_LINK_RE.lastIndex = 0; const found = MD_LINK_RE.test(text); MD_LINK_RE.lastIndex = 0; return found; };
+// Plain text with its links: in the box (TICKS), the words as a link and
+// the brackets and address faint, every character kept so the caret stays
+// true; in a sent message, a link to open.
+function linkBits(text, ticks = false) {
+  const out = document.createDocumentFragment();
+  let last = 0;
+  for (const found of text.matchAll(MD_LINK_RE)) {
+    out.append(text.slice(last, found.index));
+    last = found.index + found[0].length;
+    const [, words, href] = found;
+    if (ticks) {
+      const open = el("span", "md-url"), shown = el("span", "md-link"), close = el("span", "md-url");
+      open.textContent = "["; shown.textContent = words; close.textContent = `](${href})`;
+      out.append(open, shown, close);
+    } else {
+      const a = el("a", "user-link");
+      a.href = href; a.textContent = words; a.title = href;
+      if (!href.startsWith("mailto:")) { a.target = "_blank"; a.rel = "noopener noreferrer"; }
+      out.append(a);
+    }
+  }
+  out.append(text.slice(last));
+  return out;
+}
 function codeBits(text, ticks = false) {
   const out = document.createDocumentFragment();
   let last = 0;
   for (const found of text.matchAll(CODE_BITS_RE)) {
     const bit = found[0];
-    out.append(text.slice(last, found.index));
+    out.append(linkBits(text.slice(last, found.index), ticks));
     last = found.index + bit.length;
     const fence = bit.startsWith("```");
     const wide = fence ? 3 : bit.startsWith("``") ? 2 : 1;
@@ -8611,7 +8647,7 @@ function codeBits(text, ticks = false) {
       out.appendChild(el("code")).textContent = bit.slice(wide, -wide).replace(/^ (.*) $/, "$1");
     }
   }
-  out.append(text.slice(last));
+  out.append(linkBits(text.slice(last), ticks));
   return out;
 }
 
@@ -21302,6 +21338,8 @@ document.body.appendChild(tcFilePicker);
 tcFilePicker.onchange = () => { tcAddFiles(tcFilePicker.files); tcFilePicker.value = ""; };
 
 const tcArea = () => $("#team-chat textarea");
+// Code and [text](link)s show as they are typed, as in the main box.
+shadeArea(tcArea(), $("#team-chat .tc-box"));
 const tcChanged = () => tcArea().dispatchEvent(new Event("input"));
 
 function tcAddFiles(list) {
@@ -24255,7 +24293,8 @@ function autosize() {
   shadeInput();
 }
 
-// Code between backticks shows as code while it is typed: drawn by a
+// Code between backticks shows as code while it is typed, and a
+// [text](link) as a link: drawn by a
 // layer under the box (see .input-shade), kept to the box's place,
 // size and scroll, and redrawn whenever its text changes, by the user
 // or by Flash (a draft, a sent message cleared).
@@ -24263,24 +24302,47 @@ const inputShade = el("div", "input-shade");
 inputShade.setAttribute("aria-hidden", "true");
 inputShade.hidden = true;
 input.before(inputShade);
+// Draw AREA's text into SHADE, the layer under it, when it has code or a
+// link to show; HOLDER takes "shaded", which makes the box's own text clear.
+function paintShade(area, shade, holder) {
+  const text = area.value;
+  const shaded = (/`/.test(text) && CODE_BITS_RE.test(text)) || hasMdLink(text);
+  CODE_BITS_RE.lastIndex = 0;
+  holder.classList.toggle("shaded", shaded);
+  shade.hidden = !shaded;
+  if (!shaded) { shade.textContent = ""; return; }
+  shade.textContent = "";
+  // A last empty line, as the box keeps one.
+  shade.append(codeBits(text, true), "\u200b");
+  Object.assign(shade.style, {
+    top: `${area.offsetTop}px`, left: `${area.offsetLeft}px`,
+    width: `${area.clientWidth}px`, height: `${area.clientHeight}px`,
+  });
+  shade.scrollTop = area.scrollTop;
+}
+// A box of its own (a team chat's) with the same layer under it.
+function shadeArea(area, holder) {
+  const shade = el("div", "input-shade");
+  shade.setAttribute("aria-hidden", "true");
+  shade.hidden = true;
+  area.before(shade);
+  const paint = () => paintShade(area, shade, holder);
+  const value = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value");
+  Object.defineProperty(area, "value", {
+    configurable: true,
+    get() { return value.get.call(this); },
+    set(text) { value.set.call(this, text); queueMicrotask(paint); },
+  });
+  area.addEventListener("input", paint);
+  area.addEventListener("scroll", () => { shade.scrollTop = area.scrollTop; });
+  new ResizeObserver(() => { if (!shade.hidden) paint(); }).observe(area);
+  return paint;
+}
 function shadeInput() {
-  const text = input.value;
   // A code block, from its opening fence: the whole box goes monospace,
   // the only way a textarea's caret stays true to what it shows.
-  input.closest("#composer").classList.toggle("code-draft", text.includes("```"));
-  const shaded = /`/.test(text) && CODE_BITS_RE.test(text);
-  CODE_BITS_RE.lastIndex = 0;
-  input.closest("#composer").classList.toggle("shaded", shaded);
-  inputShade.hidden = !shaded;
-  if (!shaded) { inputShade.textContent = ""; return; }
-  inputShade.textContent = "";
-  // A last empty line, as the box keeps one.
-  inputShade.append(codeBits(text, true), "\u200b");
-  Object.assign(inputShade.style, {
-    top: `${input.offsetTop}px`, left: `${input.offsetLeft}px`,
-    width: `${input.clientWidth}px`, height: `${input.clientHeight}px`,
-  });
-  inputShade.scrollTop = input.scrollTop;
+  input.closest("#composer").classList.toggle("code-draft", input.value.includes("```"));
+  paintShade(input, inputShade, input.closest("#composer"));
 }
 {
   const value = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value");
