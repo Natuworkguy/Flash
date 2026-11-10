@@ -201,7 +201,7 @@ HTML_SANDBOX = "sandbox allow-scripts allow-forms allow-popups allow-modals"
 # opens whatever the address names: a chat, a project, a settings tab.
 PAGE_PATHS = re.compile(
     r"^/(?:c/[0-9a-f]{8}|p/[0-9a-f]{8}|projects|skills(?:/knowledge)?"
-    r"|sparks|extensions"
+    r"|sparks|extensions|made"
     r"|briefing|x/[a-z0-9][a-z0-9_-]{0,63}/[a-z][a-z0-9_-]{0,31}"
     r"|settings(?:/(?:general|usage|memory|email|connectors|security))?)?"
     r"/?$"
@@ -3840,6 +3840,41 @@ def chat_files(session: "Session") -> list[dict]:
     return list(found.values())[:MOST_CHAT_FILES]
 
 
+# How many things the Made page shows at most.
+MOST_MADE = 500
+
+
+def made_files(session: "Session") -> list[dict]:
+    """Everything Flash made, in every chat, newest first: each file it
+    showed, once, with the chat it is in and its place in that chat's
+    log, so the page can open the chat at it."""
+
+    found: dict[str, dict] = {}
+    for chat in list(session.chats.values()):
+        for index, entry in enumerate(chat.log):
+            if entry.get("type") != "file":
+                continue
+            file_id = str(entry.get("id") or "")
+            if not file_id or file_id in found:
+                continue
+            kept = workspace.kept_file(file_id)
+            if kept is None:
+                continue
+            try:
+                made = os.path.getmtime(kept[0])
+            except OSError:
+                continue
+            found[file_id] = {
+                "id": file_id, "name": str(entry.get("name") or kept[0].name),
+                "kind": str(entry.get("kind") or "file"),
+                "mime": kept[1], "size": entry.get("size") or 0,
+                "made": made, "chat": chat.id, "chat_title": chat.title,
+                "index": index,
+                **({"path": entry["path"]} if entry.get("path") else {}),
+            }
+    return sorted(found.values(), key=lambda f: -f["made"])[:MOST_MADE]
+
+
 def attachments(files: Optional[list]) -> list[dict]:
     """The files a message carries, as the page shows them: those that
     are really there, and no more than MAX_ATTACHMENTS."""
@@ -4985,6 +5020,9 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
 
     if name == "chat-files":
         return {"files": chat_files(session)}
+
+    if name == "made":
+        return {"files": made_files(session)}
 
     if name == "reuse-file":
         try:

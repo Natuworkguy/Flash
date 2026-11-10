@@ -1852,6 +1852,22 @@ body.page-projects #dock, body.page-settings #dock, body.page-tool #dock { displ
 .back { display: inline-flex; align-items: center; gap: 4px; color: var(--text-3); font-size: 13.5px; margin-bottom: 14px; padding: 4px 8px 4px 2px; border-radius: 7px; }
 .back:hover { color: var(--text); background: var(--hover); }
 .back svg { width: 15px; height: 15px; transform: rotate(180deg); }
+.page-sub { color: var(--text-3); font-size: 14px; margin: -12px 0 14px; max-width: 560px; }
+.made-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 16px; }
+.made-chips .chip { padding: 5px 11px; border-radius: 999px; border: 1px solid var(--border); font-size: 13px; color: var(--text-2); }
+.made-chips .chip span { color: var(--text-3); margin-left: 3px; font-variant-numeric: tabular-nums; }
+.made-chips .chip[aria-pressed="true"] { background: var(--text); color: var(--bg); border-color: var(--text); }
+.made-chips .chip[aria-pressed="true"] span { color: inherit; opacity: 0.6; }
+.made-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 14px; }
+.made-card { display: flex; flex-direction: column; gap: 8px; text-align: left; animation: rise-far 0.35s var(--ease) both; animation-delay: calc(var(--i, 0) * 0.025s); }
+.made-card .look { position: relative; aspect-ratio: 4 / 3; border-radius: 10px; border: 1px solid var(--border); background: var(--surface); overflow: hidden; display: grid; place-items: center; align-content: center; gap: 6px; color: var(--text-3); transition: border-color 0.15s; }
+.made-card:hover .look { border-color: var(--border-strong); }
+.made-card .look img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; display: block; }
+.made-card .look svg { width: 26px; height: 26px; }
+.made-card .look i { font-style: normal; font-size: 12px; }
+.made-card .words { min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.made-card .words b { font-weight: 550; font-size: 13.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.made-card .words span { font-size: 12px; color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; }
 .card {
   display: flex; flex-direction: column; gap: 6px; text-align: left;
@@ -4187,6 +4203,7 @@ body.empty #ext-head, body.on-page #ext-head { display: none; }
     <button class="side-row" id="search-btn" data-tip="Search chats" data-keys="Alt F"></button>
     <button class="side-row" id="briefing-btn" data-tip="Briefing" data-keys="Alt B"></button>
     <button class="side-row" id="projects-btn" data-tip="Projects" data-keys="Alt P"></button>
+    <button class="side-row" id="made-btn" data-tip="Everything Flash made, newest first"></button>
     <button class="side-row" id="skills-btn" data-tip="Skills"></button>
     <button class="side-row" id="sparks-btn" data-tip="Sparks"></button>
     <div id="spark-roster" aria-label="Your sparks"></div>
@@ -4639,7 +4656,7 @@ function routeTo(path) {
   } else if ((m = path.match(/^\/skills(?:\/(knowledge))?\/?$/))) {
     view = "skills";
     skillsTab = m[1] ? "knowledge" : "mine";
-  } else if ((m = path.match(/^\/(projects|sparks|extensions)\/?$/))) {
+  } else if ((m = path.match(/^\/(projects|sparks|extensions|made)\/?$/))) {
     view = m[1];
   } else if (/^\/briefing\/?$/.test(path)) {
     // The briefing, over a new chat: it opens once the page is in.
@@ -9199,11 +9216,11 @@ function drawPage() {
   document.body.classList.toggle("page-projects", view === "projects");
   document.body.classList.toggle("page-project", view === "project");
   document.body.classList.toggle("page-settings", view === "settings");
-  document.body.classList.toggle("page-tool", view === "skills" || view === "sparks" || view === "extensions");
+  document.body.classList.toggle("page-tool", view === "skills" || view === "sparks" || view === "extensions" || view === "made");
   messagesEl.textContent = "";
   streamNode = null;
   $("#crumb").hidden = true;
-  const pages = { projects: drawProjects, settings: drawSettings, skills: drawSkillsPage, sparks: drawSparksPage, extensions: drawExtensionsPage };
+  const pages = { projects: drawProjects, settings: drawSettings, skills: drawSkillsPage, sparks: drawSparksPage, extensions: drawExtensionsPage, made: drawMadePage };
   (pages[view] || drawProject)();
   renderPending();
   renderBtw();
@@ -10515,6 +10532,63 @@ function toolPage(title, draw) {
   draw(body);
 }
 const drawExtensionsPage = () => toolPage("Extensions", drawExtensions);
+
+// Made: everything Flash made, in every chat, newest first. Each opens in
+// the chat that made it, scrolled to where it was shown.
+const MADE_KINDS = [["all", "All"], ["image", "Images"], ["doc", "Documents"], ["html", "Pages"], ["model", "3D"], ["pcb", "Boards"], ["video", "Video"], ["audio", "Audio"], ["other", "Other"]];
+let madeFilter = "all";
+const madeGroup = (f) => (["image", "doc", "html", "model", "pcb", "video"].includes(f.kind) ? f.kind
+  : f.kind === "pdf" ? "doc" : f.kind === "audio" || f.kind === "midi" ? "audio" : "other");
+const drawMadePage = () => toolPage("Made", async (body) => {
+  body.appendChild(el("p", "page-sub", "Everything Flash made, in every chat. Each one opens in the chat that made it, and stays editable there."));
+  const chips = body.appendChild(el("div", "made-chips"));
+  const grid = body.appendChild(el("div", "made-grid"));
+  let files = [];
+  try { files = (await command("made")).files || []; } catch (error) { grid.appendChild(el("p", "page-empty", error.message)); return; }
+  const draw = () => {
+    chips.textContent = "";
+    for (const [key, label] of MADE_KINDS) {
+      const n = key === "all" ? files.length : files.filter((f) => madeGroup(f) === key).length;
+      if (!n && key !== "all") continue;
+      const chip = el("button", "chip", `${esc(label)} <span>${n}</span>`);
+      chip.type = "button";
+      chip.setAttribute("aria-pressed", String(madeFilter === key));
+      chip.onclick = () => { madeFilter = key; draw(); };
+      chips.appendChild(chip);
+    }
+    grid.textContent = "";
+    const shown = files.filter((f) => madeFilter === "all" || madeGroup(f) === madeFilter);
+    if (!shown.length) grid.appendChild(el("p", "page-empty", files.length ? "Nothing of that kind yet." : "Nothing yet. Images, documents, pages, 3D models, boards and videos Flash makes land here."));
+    shown.forEach((f, i) => {
+      const card = el("button", "made-card");
+      card.type = "button";
+      card.style.setProperty("--i", Math.min(i, 20));
+      const look = el("span", "look");
+      if (f.kind === "image") {
+        const img = el("img");
+        img.loading = "lazy";
+        img.alt = "";
+        img.src = fileUrl(f);
+        look.appendChild(img);
+      } else look.innerHTML = icon(FILE_ICONS[f.kind] || "file") + `<i>${esc(fileKind(f))}</i>`;
+      card.appendChild(look);
+      const words = el("span", "words", `<b></b><span></span>`);
+      words.querySelector("b").textContent = f.name;
+      words.querySelector("span").textContent = `${f.chat_title || "Chat"} · ${ago(f.made)}`;
+      card.appendChild(words);
+      card.dataset.tip = `Open in ${f.chat_title || "its chat"}`;
+      card.onclick = () => openMade(f);
+      grid.appendChild(card);
+    });
+  };
+  draw();
+});
+function openMade(f) {
+  if (!chats.has(f.chat)) { refreshLite(); toast("That chat is still loading. Try again in a moment."); return; }
+  jumpTo = { chat: f.chat, index: f.index, terms: [] };
+  switchTo(f.chat);
+  setTimeout(() => openViewer(f), 250);
+}
 
 // Sparks ---------------------------------------------------------------------
 // Agents that keep working on one goal, on a schedule, for as long as Flash
@@ -16094,6 +16168,7 @@ function markSide() {
   const panel = $("#ext-panel").hidden ? "" : $("#ext-panel").dataset.url || "";
   $("#projects-btn").classList.toggle("active", !panel && (view === "projects" || view === "project"));
   $("#skills-btn").classList.toggle("active", !panel && view === "skills");
+  $("#made-btn").classList.toggle("active", !panel && view === "made");
   $("#sparks-btn").classList.toggle("active", !panel && view === "sparks");
   $("#extensions-btn").classList.toggle("active", !panel && view === "extensions");
   $("#settings-btn").classList.toggle("active", !panel && view === "settings");
@@ -19487,7 +19562,7 @@ function refreshLite() {
     // Not while something on the page is being edited: redrawing it
     // would throw away what is half typed.
     const editing = messagesEl.contains(document.activeElement) && /TEXTAREA|INPUT/.test(document.activeElement.tagName);
-    if (!["chat", "settings", "skills", "sparks", "extensions"].includes(view) && !editing && $("#form").hidden) drawPage();
+    if (!["chat", "settings", "skills", "sparks", "extensions", "made"].includes(view) && !editing && $("#form").hidden) drawPage();
     renderChats();
     renderInfo();
     renderSparkBtn();
@@ -23926,6 +24001,7 @@ const ACTIONS = [
   { label: "Briefing", keys: "Alt B", slash: "/briefing", run: openBriefing },
   { label: "Brief me: Flash reads the briefing to you", keys: "", slash: "/brief", run: () => briefMe() },
   { label: "Skills", keys: "", slash: "/skills", run: () => showPage("skills") },
+  { label: "Made: everything Flash made", keys: "", slash: "/made", run: () => showPage("made") },
   { label: "Sparks", keys: "", slash: "/sparks", run: () => showPage("sparks") },
   { label: "Background", keys: "", slash: "/background", run: () => showSettings("general") },
   { label: "Extensions", keys: "", slash: "/extensions", run: () => showPage("extensions") },
@@ -24911,6 +24987,8 @@ $("#open-side").innerHTML = icon("panel");
 $("#top-new").innerHTML = icon("compose");
 $("#new-chat .plus").innerHTML = icon("plus");
 $("#projects-btn").innerHTML = icon("folder") + "<span>Projects</span>";
+$("#made-btn").innerHTML = icon("image") + "<span>Made</span>";
+$("#made-btn").onclick = () => showPage("made");
 $("#skills-btn").innerHTML = icon("book") + "<span>Skills</span>";
 $("#sparks-btn").innerHTML = icon("spark") + "<span>Sparks</span><span class=\"count\"></span><span class=\"fold\" role=\"button\" tabindex=\"0\" hidden>" + icon("chevDown") + "</span>";
 // The chevron folds the roster; the rest of the row opens the page.
@@ -24936,7 +25014,7 @@ $("#extensions-btn").innerHTML = icon("puzzle") + "<span>Extensions</span>";
 // Right-click a row to move it, or More > Customize sidebar for them all.
 // Kept for this browser. A spark list and the extensions' rows go with
 // the row they belong to.
-const SIDE_ROWS = [["search-btn", "Search"], ["briefing-btn", "Briefing"], ["projects-btn", "Projects"],
+const SIDE_ROWS = [["search-btn", "Search"], ["briefing-btn", "Briefing"], ["projects-btn", "Projects"], ["made-btn", "Made"],
   ["skills-btn", "Skills"], ["sparks-btn", "Sparks"], ["extensions-btn", "Extensions"]];
 const SIDE_WITH = { "sparks-btn": "spark-roster", "extensions-btn": "ext-side" };
 // An extension's panel or sidebar button, as a row of the sidebar's own: an id that stays the same from one load to the next.
