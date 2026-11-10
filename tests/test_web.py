@@ -2941,6 +2941,54 @@ class TestQueueAndSteer:
         gate.set()
         self.settle(session, chat)
 
+    def test_send_now_stops_the_turn_and_runs_first(self):
+        gate = threading.Event()
+        FakeClient.scripts = [
+            self.held(gate, part("Working on the long thing."),
+                      part(done=True)),
+            [part("Doing the urgent one."), part(done=True)],
+            [part("Then the later one."), part(done=True)],
+        ]
+        session = web.Session()
+        chat = session.new_chat()
+
+        session.send(chat, "long thing")
+        wait_for(lambda: chat.busy and FakeClient.requests)
+        session.send(chat, "later one")
+        session.send(chat, "urgent one", mode="now")
+
+        assert chat.stop.is_set()
+        assert [p["text"] for p in chat.pending] == ["urgent one", "later one"]
+        gate.set()
+        self.settle(session, chat)
+
+        asked = [e["text"] for e in chat.log if e["type"] == "user"]
+        assert asked == ["long thing", "urgent one", "later one"]
+
+    def test_a_waiting_message_can_be_sent_now(self):
+        gate = threading.Event()
+        FakeClient.scripts = [
+            self.held(gate, part("Working."), part(done=True)),
+            [part("B first."), part(done=True)],
+            [part("Then A."), part(done=True)],
+        ]
+        session = web.Session()
+        chat = session.new_chat()
+        session.send(chat, "go")
+        wait_for(lambda: chat.busy and FakeClient.requests)
+        session.send(chat, "a")
+        second = session.send(chat, "b")["pending"]
+
+        left = web.command(session, {"name": "pending-mode", "chat": chat.id,
+                                     "arg": second, "mode": "now"})
+
+        assert [p["text"] for p in left["pending"]] == ["b", "a"]
+        assert chat.stop.is_set()
+        gate.set()
+        self.settle(session, chat)
+        asked = [e["text"] for e in chat.log if e["type"] == "user"]
+        assert asked == ["go", "b", "a"]
+
 
 def down():
     raise ConnectionError("the model went away")

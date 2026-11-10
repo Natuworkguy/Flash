@@ -1911,8 +1911,9 @@ class Session:
 
         While one is already running, the message waits in the chat's
         pending list instead: MODE "steer" hands it to the model at the
-        running turn's next step, and anything else makes it the next
-        turn. WAKE is a turn nobody typed: a sub-agent finished, and the
+        running turn's next step, "now" stops the running turn and makes
+        it the next one, and anything else makes it the next turn after
+        those already waiting. WAKE is a turn nobody typed: a sub-agent finished, and the
         model is woken to report back. It never waits in line.
         """
 
@@ -1943,7 +1944,10 @@ class Session:
                     # Only when asked, so a plain one stays as it was.
                     **({"deep": True} if deep else {}),
                 }
-                chat.pending.append(item)
+                if mode == "now":
+                    chat.pending.insert(0, item)
+                else:
+                    chat.pending.append(item)
                 waiting = True
             else:
                 chat.stop.clear()
@@ -1954,6 +1958,8 @@ class Session:
 
         if waiting:
             self._publish_pending(chat)
+            if mode == "now":
+                self.halt(chat)
             return {"pending": item["id"]}
 
         self._begin(chat, text, wake, attached, note=note)
@@ -2572,6 +2578,31 @@ class Session:
         chat.queued = True
         chat.stop.clear()
         return item
+
+    def halt(self, chat: Chat) -> None:
+        """Stop the turn CHAT is running, leaving what waits to run."""
+
+        chat.stop.set()
+        # A command it is running ends now, not when it would have.
+        _tools().stop_commands(chat.id)
+        # A call Flash is on stops mid-word, and the Mac gets its own
+        # microphone and speakers back.
+        calls.halt(chat.id)
+
+    def send_now(self, chat: Chat, item_id: str) -> None:
+        """Stop the running turn and run the waiting message ITEM_ID next,
+        ahead of the rest."""
+
+        with self._lock:
+            found = next((p for p in chat.pending if p["id"] == item_id), None)
+            if found is None:
+                raise ValueError("That message has already been sent.")
+            chat.pending.remove(found)
+            found["mode"] = "queue"
+            chat.pending.insert(0, found)
+        self._publish_pending(chat)
+        if chat.busy:
+            self.halt(chat)
 
     def unqueue(self, chat: Chat) -> list[dict]:
         """Drop every waiting message, handing back the messages."""
@@ -5237,18 +5268,18 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
 
     if name == "stop":
         chat = session.chat(chat_id)
-        chat.stop.set()
-        # A command it is running ends now, not when it would have.
-        _tools().stop_commands(chat.id)
-        # A call Flash is on stops mid-word, and the Mac gets its own
-        # microphone and speakers back.
-        calls.halt(chat.id)
+        session.halt(chat)
         # What was waiting goes back to the page, to send again or not.
         items = session.unqueue(chat)
         return {
             "restored": [item["text"] for item in items],
             "files": [f for item in items for f in item.get("files") or []],
         }
+
+    if name == "pending-mode" and body.get("mode") == "now":
+        chat = session.chat(chat_id)
+        session.send_now(chat, arg)
+        return {"pending": [dict(p) for p in chat.pending]}
 
     if name in ("pending-remove", "pending-mode"):
         chat = session.chat(chat_id)
