@@ -16,7 +16,7 @@
 <body>
 <div class="wrap">
   <canvas id="game" width="800" height="300" aria-label="Flash Dash"></canvas>
-  <div class="say" id="say">Space, Up or a click jumps; hold it to fly the ship. Tap on a ring in the air to jump again. One try per run: R starts over.</div>
+  <div class="say" id="say">Space, Up or a click jumps; hold it to fly the ship. Tap on a ring in the air to jump again. One try per run: R starts over. This level has secrets: find them and it gets easier.</div>
 </div>
 <script>
 // Flash Dash: a square runs right on its own, as in a rhythm runner.
@@ -29,8 +29,10 @@
 // The level is the same every time, and the simulation steps at a fixed
 // rate whatever the screen's, so timing is all that matters.
 //
-// This copy of the level is not quite right. Things here do not always
-// behave as they look. Finding out which, and how, is the game.
+// This copy has secrets: glitches that help. None shows until it is found,
+// and each needs something done on purpose that a careful run never does.
+// The counter at the top right says how many a run has found, and the
+// clock how fast it went.
 const W = 800, H = 300, GROUND = 240, CEIL = 40, SIZE = 30, PX = 150, BLOCK = 30;
 const SPEED = 360, FAST = 430, GRAVITY = 2400, JUMP = 640, PAD = 900, ORB = 680, STEP = 1 / 240;
 const SHIP_UP = 1900, SHIP_G = 1500, SHIP_MAX = 420;
@@ -57,20 +59,17 @@ const LEVEL = [
   ["p", 7400], ["s", 7470, 5],
   ["s", 7950, 3],
 ];
-const DECOYS = [2550, 2580, 2610];
-const UNSEEN = [7750];
-const RED_BLOCK = 0;
 const END = 8500;
 const canvas = document.getElementById("game");
 const ctx = canvas.getContext("2d", { willReadFrequently: true });
-const state = { x: 0, y: 0, vy: 0, ground: true, over: false, won: false, jumps: 0, held: false, pressed: false, ship: false, fast: false, attempts: 1, back: 0, backed: false, floaty: 0, small: false };
+const FRESH = { x: 0, y: 0, vy: 0, ground: true, over: false, won: false, jumps: 0, held: false, pressed: false, ship: false, fast: false, t: 0, boost: 0, boostWait: 0, padT: -1, ringT: -1, slow: false, ceil: 0, phase: false, found: [], said: "", saidT: 0 };
+const state = { ...FRESH, attempts: 1 };
 window.dash = state;
 
-const SPIKES = LEVEL.filter(([k]) => k === "s").flatMap(([, at, n]) => Array.from({ length: n }, (_, k) => at + k * SPIKE)).concat(UNSEEN);
+const SPIKES = LEVEL.filter(([k]) => k === "s").flatMap(([, at, n]) => Array.from({ length: n }, (_, k) => at + k * SPIKE));
 const BLOCKS = LEVEL.filter(([k]) => k === "b").map(([, at, h, n]) => ({ a: at, b: at + n * BLOCK, top: GROUND - h * BLOCK }));
 const PADS = LEVEL.filter(([k]) => k === "p").map(([, at]) => at);
 const ORBS = LEVEL.filter(([k]) => k === "o").map(([, at, up]) => ({ x: at, y: GROUND - up }));
-const ORB_SHOWN = -40;
 const SPEEDS = LEVEL.filter(([k]) => k === "v").map(([, at]) => at);
 const GATES = LEVEL.filter(([k]) => k === "ship" || k === "cube").map(([k, at]) => ({ at, ship: k === "ship" }));
 const PILLARS = LEVEL.filter(([k]) => k === "w").map(([, at, top, bottom]) => ({ a: at, b: at + PILLAR, top, bottom }));
@@ -78,7 +77,7 @@ const PILLARS = LEVEL.filter(([k]) => k === "w").map(([, at, top, bottom]) => ({
 function press() { if (state.over) return; state.held = true; state.pressed = true; }
 function release() { state.held = false; }
 function reset() {
-  Object.assign(state, { x: 0, y: 0, vy: 0, ground: true, over: false, won: false, jumps: 0, held: false, pressed: false, ship: false, fast: false, back: 0, backed: false, floaty: 0, small: false });
+  Object.assign(state, { ...FRESH, found: [] });
   state.attempts++;
   document.title = "Flash Dash";
 }
@@ -92,6 +91,9 @@ addEventListener("mouseup", release);
 canvas.addEventListener("pointerdown", (e) => { if (e.pointerType !== "mouse") press(); });
 addEventListener("pointerup", (e) => { if (e.pointerType !== "mouse") release(); });
 
+// A secret found: counted once a run, and named for a moment on screen.
+function found(name) { if (!state.found.includes(name)) state.found.push(name); state.said = name; state.saidT = 1.2; }
+
 function crash() { state.over = true; document.title = `Flash Dash: crashed at ${progress()}%`; }
 
 // The top of what is under the square: the ground, or a block it is over.
@@ -103,14 +105,22 @@ function support(left, right, bottom) {
 
 function step(dt) {
   if (state.over) return;
-  let speed = state.fast ? FAST : SPEED;
-  if (!state.backed && state.x >= 3560) { state.backed = true; state.back = 0.3; }
-  if (state.back > 0) { state.back -= dt; speed = -speed * 0.9; }
+  state.t += dt;
+  if (state.saidT > 0) state.saidT -= dt;
+  let speed = state.slow ? SPEED * 0.75 : state.fast ? FAST : SPEED;
+  if (state.boostWait > 0) state.boostWait -= dt;
+  else if (state.boost > 0) { state.boost -= dt; speed *= 2.4; }
   const before = state.x;
   state.x += speed * dt;
   const left = state.x + PX, right = left + SIZE;
-  for (const at of SPEEDS) if (before + PX + SIZE < at && right >= at) state.fast = true;
-  for (const g of GATES) if (before + PX + SIZE / 2 < g.at && left + SIZE / 2 >= g.at) { state.ship = g.ship; state.ground = false; if (!g.ship) state.vy = Math.min(state.vy, 0); }
+  for (const at of SPEEDS) if (before + PX + SIZE < at && right >= at) {
+    // Secret: jump as you pass through the speed arch and it slows the
+    // level down instead, until the ship.
+    if (state.held && !state.ground) { state.slow = true; found("arch backflip"); } else state.fast = true;
+  }
+  if (state.padT >= 0) state.padT += dt;
+  if (state.ringT >= 0) state.ringT += dt;
+  for (const g of GATES) if (before + PX + SIZE / 2 < g.at && left + SIZE / 2 >= g.at) { state.ship = g.ship; state.ground = false; state.slow = false; state.phase = false; state.ceil = 0; if (!g.ship) state.vy = Math.min(state.vy, 0); }
 
   if (state.ship) {
     state.vy += (state.held ? -SHIP_UP : SHIP_G) * dt;
@@ -118,27 +128,44 @@ function step(dt) {
     state.y += state.vy * dt;
     // the ship slides along the floor and the ceiling
     if (GROUND + state.y > GROUND) { state.y = 0; state.vy = Math.min(0, state.vy); }
-    if (GROUND + state.y - SIZE < CEIL) { state.y = -1; state.vy = 0; }
+    if (GROUND + state.y - SIZE < CEIL) { state.y = CEIL + SIZE - GROUND; state.vy = Math.max(0, state.vy); }
+    // Secret: grind the ceiling for 0.3 s and the ship goes ghost: pillars
+    // pass through it until you let go.
+    const onCeiling = GROUND + state.y - SIZE <= CEIL + 0.5 && state.held;
+    state.ceil = onCeiling ? state.ceil + dt : 0;
+    if (state.ceil >= 0.3 && !state.phase) { state.phase = true; found("ceiling ghost"); }
+    if (!state.held) state.phase = false;
     state.pressed = false;
   } else {
     const bottomWas = GROUND + state.y;
     // a ring: pressing while touching it jumps again, in the air
+    // Secret: tap again a moment after a pad throws you, and it flings you
+    // far up and forward.
+    if (state.pressed && !state.ground && state.padT >= 0 && state.padT < 0.06) {
+      state.vy = -1250; state.boostWait = 0.12; state.boost = 1.0; state.padT = -1; state.pressed = false; found("pad fling");
+    }
     if (state.pressed && !state.ground) {
       for (const o of ORBS) {
         const cx = Math.max(left, Math.min(o.x, right)), cy = Math.max(bottomWas - SIZE, Math.min(o.y, bottomWas));
-        if (Math.hypot(cx - o.x, cy - o.y) < 18) { state.vy = -ORB; state.jumps++; break; }
+        if (Math.hypot(cx - o.x, cy - o.y) < 18) { state.vy = -ORB; state.jumps++; state.ringT = 0; break; }
       }
     }
-    if (state.pressed && state.ground) { state.vy = -JUMP; state.ground = false; state.jumps++; if (state.jumps === 3) state.floaty = 0.5; }
-    if (state.held && state.ground) { state.vy = -JUMP; state.ground = false; state.jumps++; if (state.jumps === 3) state.floaty = 0.5; }
+    // Secret: hold the jump through the ring instead of tapping it and it
+    // slingshots you on.
+    if (state.ringT >= 0.12) {
+      if (state.held) { state.vy = -520; state.boost = 0.45; found("ring slingshot"); }
+      state.ringT = -1;
+    }
+    if (state.ringT >= 0 && !state.held) state.ringT = -1;
+    if (state.pressed && state.ground) { state.vy = -JUMP; state.ground = false; state.jumps++; }
+    if (state.held && state.ground) { state.vy = -JUMP; state.ground = false; state.jumps++; }
     state.pressed = false;
     // a pad under the square launches it
-    if (state.ground && bottomWas >= GROUND - 1) for (const p of PADS) if (right > p && left < p + 30) { state.vy = -PAD; state.ground = false; state.small = true; }
+    if (state.ground && bottomWas >= GROUND - 1) for (const p of PADS) if (right > p && left < p + 30) { state.vy = -PAD; state.ground = false; state.padT = 0; }
     const floor = support(left, right, bottomWas);
     if (state.ground && floor > bottomWas + 0.5) state.ground = false;     // ran off an edge
     if (!state.ground) {
-      if (state.floaty > 0) state.floaty -= dt;
-      state.vy += (state.floaty > 0 ? GRAVITY * 0.55 : GRAVITY) * dt;
+      state.vy += GRAVITY * dt;
       state.y += state.vy * dt;
       const bottom = GROUND + state.y;
       const land = support(left, right, bottomWas);
@@ -150,11 +177,21 @@ function step(dt) {
   // eye expects and no more; a block's side or underside; a pillar.
   for (const s of SPIKES) {
     if (s + SPIKE < left - SIZE || s > right) continue;
+    // Secret: come down square on a spike's very tip and it bounces you
+    // like a pad.
+    const tip = s + SPIKE / 2, mid = left + SIZE / 2;
+    if (!state.ship && state.vy > 0 && Math.abs(mid - tip) < 12 && bottom > GROUND - SPIKE && bottom <= GROUND - SPIKE + 10) {
+      state.y = -SPIKE; state.vy = -JUMP * 1.15; state.ground = false; found("spike surf"); break;
+    }
     if (right > s + 8 && left < s + SPIKE - 8 && bottom > GROUND - SPIKE + 10) return crash();
   }
-  for (const k of BLOCKS) if (right > k.a + 2 && left < k.b - 2 && bottom > k.top + 2 && top < GROUND) return crash();
-  for (const p of PILLARS) if (right > p.a && left < p.b && (top < p.top || bottom > p.bottom)) return crash();
-  if (state.x >= END) { state.over = true; state.won = true; document.title = "Flash Dash: won"; }
+  for (const k of BLOCKS) if (right > k.a + 2 && left < k.b - 2 && bottom > k.top + 2 && top < GROUND) {
+    // Secret: run into a block's side with the jump held and you climb it.
+    if (state.held && !state.ship && left < k.a + 12) { state.y = k.top - GROUND; state.vy = 0; state.ground = true; found("wall climb"); continue; }
+    return crash();
+  }
+  for (const p of PILLARS) if (!state.phase && right > p.a && left < p.b && (top < p.top || bottom > p.bottom)) return crash();
+  if (state.x >= END) { state.over = true; state.won = true; document.title = `Flash Dash: won in ${state.t.toFixed(2)}s, ${state.found.length} secrets`; }
 }
 const progress = () => Math.min(100, Math.floor((state.x / END) * 100));
 state.progress = progress;
@@ -171,34 +208,36 @@ function draw() {
     if (on(a, b - a)) { ctx.fillStyle = COLORS.ground; ctx.fillRect(Math.max(0, a), 0, Math.min(W, b) - Math.max(0, a), CEIL); }
   }
   ctx.fillStyle = COLORS.spike;
-  for (const s of SPIKES.filter((s) => !UNSEEN.includes(s)).concat(DECOYS)) {
+  for (const s of SPIKES) {
     const x = s - state.x;
     if (!on(x, SPIKE)) continue;
     ctx.beginPath(); ctx.moveTo(x, GROUND); ctx.lineTo(x + SPIKE / 2, GROUND - SPIKE); ctx.lineTo(x + SPIKE, GROUND); ctx.fill();
   }
   ctx.fillStyle = COLORS.block;
-  BLOCKS.forEach((k, i) => { const x = k.a - state.x; if (on(x, k.b - k.a)) { ctx.fillStyle = i === RED_BLOCK ? COLORS.spike : COLORS.block; ctx.fillRect(x, k.top, k.b - k.a, GROUND - k.top); } });
-  ctx.fillStyle = COLORS.block;
+  for (const k of BLOCKS) { const x = k.a - state.x; if (on(x, k.b - k.a)) ctx.fillRect(x, k.top, k.b - k.a, GROUND - k.top); }
   for (const p of PILLARS) { const x = p.a - state.x; if (on(x, PILLAR)) { ctx.fillRect(x, CEIL, PILLAR, p.top - CEIL); ctx.fillRect(x, p.bottom, PILLAR, GROUND - p.bottom); } }
   ctx.fillStyle = COLORS.pad;
   for (const p of PADS) { const x = p - state.x; if (on(x, 30)) ctx.fillRect(x, GROUND - 6, 30, 6); }
   ctx.strokeStyle = COLORS.orb; ctx.lineWidth = 5;
-  for (const o of ORBS) { const x = o.x + ORB_SHOWN - state.x; if (on(x - 14, 28)) { ctx.beginPath(); ctx.arc(x, o.y, 12, 0, Math.PI * 2); ctx.stroke(); } }
+  for (const o of ORBS) { const x = o.x - state.x; if (on(x - 14, 28)) { ctx.beginPath(); ctx.arc(x, o.y, 12, 0, Math.PI * 2); ctx.stroke(); } }
   for (const at of SPEEDS) { const x = at - state.x; if (on(x, 8)) { ctx.fillStyle = COLORS.speed; ctx.fillRect(x, 120, 8, GROUND - 120); } }
   for (const g of GATES) { const x = g.at - state.x; if (on(x, 10)) { ctx.fillStyle = g.ship ? COLORS.ship : COLORS.cube; ctx.fillRect(x, CEIL, 10, GROUND - CEIL); } }
   const finish = END - state.x + PX + SIZE;
   if (finish < W) { ctx.fillStyle = COLORS.finish; ctx.fillRect(finish, 0, 6, GROUND); }
   const py = GROUND - SIZE + state.y;
   ctx.fillStyle = COLORS.player;
+  ctx.globalAlpha = state.phase ? 0.45 : 1;
   if (state.ship) {
     ctx.beginPath(); ctx.moveTo(PX, py + 6); ctx.lineTo(PX + SIZE, py + SIZE / 2); ctx.lineTo(PX, py + SIZE); ctx.closePath(); ctx.fill();
     ctx.fillStyle = COLORS.ship; ctx.fillRect(PX, py + SIZE - 4, 14, 4);
   } else {
-    const z = state.small ? 18 : SIZE;
-    ctx.fillRect(PX, py + SIZE - z, z, z);
-    ctx.fillStyle = COLORS.eye; ctx.fillRect(PX + z - 12, py + SIZE - z + 5, 6, 6);
+    ctx.fillRect(PX, py, SIZE, SIZE);
+    ctx.fillStyle = COLORS.eye; ctx.fillRect(PX + 18, py + 8, 6, 6);
   }
-  ctx.fillStyle = "#e8e6f0"; ctx.font = "600 14px system-ui"; ctx.fillText(`${Math.floor((state.x / END) * 107)}%`, 14, 24);
+  ctx.globalAlpha = 1;
+  ctx.fillStyle = "#e8e6f0"; ctx.font = "600 14px system-ui"; ctx.fillText(`${progress()}%`, 14, 24);
+  ctx.textAlign = "right"; ctx.fillText(`${state.t.toFixed(1)}s   secrets ${state.found.length}/6`, W - 14, 24); ctx.textAlign = "left";
+  if (state.saidT > 0) { ctx.fillStyle = COLORS.speed; ctx.font = "700 18px system-ui"; ctx.textAlign = "center"; ctx.fillText(`secret: ${state.said}`, W / 2, 70); ctx.textAlign = "left"; }
   ctx.fillStyle = "#9a98ad"; ctx.fillText(`Attempt ${state.attempts}`, 60, 24);
   if (state.over) { ctx.fillStyle = state.won ? COLORS.speed : COLORS.spike; ctx.font = "700 28px system-ui"; ctx.fillText(state.won ? "Level complete" : "Crashed. R to retry", 270, 120); }
 }
@@ -208,7 +247,7 @@ function frame(now) {
   carry += Math.min(0.1, (now - last) / 1000);
   last = now;
   while (carry >= STEP) { step(STEP); carry -= STEP; }
-  if (!(state.x > 5000 && state.x < 5070)) draw();
+  draw();
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);

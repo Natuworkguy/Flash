@@ -1,19 +1,20 @@
-"""flash-dash-glitched: the practice level with ten glitches planted in it,
-for an agent to find by playing. This is the answer key; each test pins one
-glitch, so a change to the level cannot quietly remove it.
+"""flash-dash-glitched: the practice level with six secrets in it, glitches
+that help, for an agent to find by playing. This is the answer key; each
+test pins one, so a change to the level cannot quietly remove it.
 
-1. Moonwalk: just past the speed arch, the level runs backwards for 0.3 s.
-2. An invisible spike: lethal, never drawn.
-3. Decoy spikes: drawn, harmless.
-4. A red block: the first block is drawn spike red, and is still a block.
-5. A floaty third jump: the third jump falls at about half gravity.
-6. A ring drawn 40 px away from where it works.
-7. A ceiling that wraps: the ship touching the ceiling comes out at the floor.
-8. A shrinking square: after the first pad it is drawn small, and hits as big.
-9. The progress counter runs past 100%.
-10. A frozen stretch: the screen stops redrawing for a moment in the ship
-    section, while the game goes on.
-And it can still be won: a search over the game's own steps finds a run.
+1. Pad fling: tap again just after a pad throws you, and it flings you far
+   up and forward, clean over the spike pit (or, from the last pad, over
+   the finish).
+2. Ring slingshot: hold the jump through the ring instead of tapping, and
+   it slings you on.
+3. Spike surf: come down square on a spike's tip and it bounces you.
+4. Wall climb: hit a block's side with the jump held and you climb it.
+5. Arch backflip: jump through the speed arch and the level slows down
+   instead, until the ship.
+6. Ceiling ghost: grind the ship along the ceiling and it goes through
+   pillars until you let go.
+
+A careful run finds none of them: the reference reflex wins with 0.
 """
 
 from pathlib import Path
@@ -31,11 +32,11 @@ def test_it_is_a_game_flash_opens_by_name():
     assert GAME.exists()
 
 
-def test_the_page_gives_nothing_away():
-    shown = GAME.read_text(encoding="utf-8")
-    say = shown[shown.index('<div class="say"'):shown.index("</div>", shown.index('<div class="say"'))]
-    assert say == PLAIN.read_text(encoding="utf-8")[
-        PLAIN.read_text(encoding="utf-8").index('<div class="say"'):][:len(say)]
+def test_same_level_as_the_plain_one():
+    def level(path):
+        text = path.read_text(encoding="utf-8")
+        return text[text.index("const LEVEL = ["):text.index("const END")]
+    assert level(GAME) == level(PLAIN)
 
 
 @pytest.fixture(scope="module")
@@ -54,61 +55,75 @@ def page():
         browser.close()
 
 
+LAND = "let k = 0; while (!S.ground && !S.over && k++ < 2000) go(1); "
+
+
 def run(page, script):
-    return page.evaluate("() => { reset(); const S = window.dash; "
-                         "const go = (n, held) => { for (let i = 0; i < n; i++) "
-                         "{ if (held && !S.held) S.pressed = true; S.held = !!held; "
-                         "step(1 / 240); } }; " + script + " }")
+    return page.evaluate(
+        "() => { reset(); const S = window.dash; "
+        "const go = (n, held) => { for (let i = 0; i < n; i++) { "
+        "if (held && !S.held) S.pressed = true; S.held = !!held; "
+        "step(1 / 240); if (S.over) break; } }; " + script + " }")
 
 
-def test_moonwalk(page):
-    assert run(page, "S.x = 3550; S.fast = true; go(20); const a = S.x; go(20); "
-                     "return S.x < a;")
+def test_pad_fling_clears_the_spike_pit(page):
+    to_pad = "S.x = 2120; let i = 0; while (S.padT < 0 && i++ < 400) go(1); "
+    plain = run(page, to_pad + "go(5); " + LAND + "return S.x + PX;")
+    flung = run(page, to_pad + "go(4, true); go(1); " + LAND
+                + "return [S.x + PX, S.over, S.found];")
+    assert flung[0] > 3000 > plain  # past the last spike of the pit
+    assert flung[1] is False and flung[2] == ["pad fling"]
 
 
-def test_invisible_spike_kills_but_is_not_drawn(page):
-    assert run(page, "return SPIKES.includes(7750) && UNSEEN.includes(7750);")
-    assert run(page, "S.x = 7750 - 150 - 20; go(40); return S.over && !S.won;")
+def test_pad_fling_from_the_last_pad_carries_you_past_the_last_spikes(page):
+    # the pad at 7400 sits just before five spikes and three more after
+    landed = run(page, "S.x = 7240; S.fast = true; let i = 0; "
+                       "while (S.padT < 0 && i++ < 400) go(1); go(4, true); "
+                       "go(1); " + LAND + "return [S.x + PX, S.over];")
+    assert landed[0] > 8040 and landed[1] is False
 
 
-def test_decoy_spikes_are_harmless(page):
-    assert run(page, "S.x = 2550 - 150 - 40; go(80); return !S.over && "
-                     "!SPIKES.includes(2550);")
+def test_ring_slingshot_goes_further_than_a_tap(page):
+    at_ring = "S.x = 2870 - 150 - 15; S.y = -63; S.vy = 0; S.ground = false; "
+    tapped = run(page, at_ring + "go(1, true); go(1); " + LAND
+                 + "return [S.x + PX, S.found];")
+    held = run(page, at_ring + "go(40, true); " + LAND
+               + "return [S.x + PX, S.over, S.found];")
+    assert tapped[1] == [] and held[2] == ["ring slingshot"]
+    assert held[0] > tapped[0] + 200 and held[1] is False
 
 
-def test_red_block_is_solid(page):
-    assert run(page, "return RED_BLOCK === 0 && BLOCKS[0].a === 1350;")
+def test_spike_surf_bounces_off_a_tip(page):
+    assert run(page, "S.x = 548; S.y = -31; S.vy = 120; S.ground = false; "
+                     "go(30); return !S.over && S.vy < 0 && "
+                     "S.found.includes('spike surf');")
 
 
-def test_third_jump_is_floaty(page):
-    assert run(page, "S.jumps = 2; go(1, true); go(1); go(60); const y3 = S.y; "
-                     "reset(); S.jumps = 0; go(1, true); go(1); go(60); "
-                     "return y3 < S.y;")
+def test_wall_climb_only_with_the_jump_held(page):
+    assert run(page, "S.x = 1164; go(2); go(30, true); "
+                     "return !S.over && S.found.includes('wall climb');")
+    assert run(page, "S.x = 1164; go(60); return S.over;")
 
 
-def test_ring_is_drawn_away_from_its_hitbox(page):
-    assert run(page, "return ORB_SHOWN === -40;")
+def test_arch_backflip_slows_the_level(page):
+    assert run(page, "S.x = 2910; go(1, true); go(60, true); "
+                     "return S.slow && !S.fast;")
+    assert run(page, "S.x = 2910; go(80); return S.fast && !S.slow;")
 
 
-def test_ship_ceiling_wraps_to_the_floor(page):
-    # held, the ship climbs to the ceiling, and comes out at the floor
-    assert run(page, "S.x = 4400; S.ship = true; S.ground = false; "
-                     "let wrapped = false, was = S.y; for (let i = 0; i < 400; i++) "
-                     "{ go(1, true); if (was < -150 && S.y > -10) wrapped = true; "
-                     "was = S.y; } return wrapped;")
+def test_ceiling_ghost_passes_through_pillars(page):
+    assert run(page, "S.x = 4140; S.ship = true; S.ground = false; "
+                     "go(1500, true); return !S.over && S.x > 6000 && "
+                     "S.found.includes('ceiling ghost');")
 
 
-def test_square_shrinks_after_a_pad(page):
-    assert run(page, "S.x = 2280 - 150; go(30); return S.small;")
-
-
-def test_frozen_stretch_and_counter_past_100():
+def test_the_screen_counts_secrets_and_time():
     shown = GAME.read_text(encoding="utf-8")
-    assert "state.x > 5000 && state.x < 5070" in shown
-    assert "* 107)}%" in shown
+    assert "secrets ${state.found.length}/6" in shown
+    assert "won in ${state.t.toFixed(2)}s" in shown
 
 
 def test_the_plain_level_has_none_of_it():
     plain = PLAIN.read_text(encoding="utf-8")
-    for planted in ("DECOYS", "UNSEEN", "RED_BLOCK", "ORB_SHOWN", "floaty", "* 107"):
-        assert planted not in plain
+    for secret in ("found(", "boost", "phase", "slow"):
+        assert secret not in plain
