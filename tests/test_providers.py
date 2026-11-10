@@ -163,6 +163,19 @@ def test_an_unknown_provider_says_so(client):
         client.chat(model="@x/y", messages=[])
 
 
+def test_a_keeper_discovers_a_provider_installed_by_another_process(client):
+    # The keeper has already cached its installed extensions.
+    assert extensions.providers() == []
+    target = extensions.extensions_dir() / "echo-provider"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(EXAMPLE, target)
+
+    reply = client.chat(model="@echo/echo-1",
+                        messages=[{"role": "user", "content": "hi"}])
+
+    assert reply.message.content == "echo-1 heard: hi"
+
+
 def test_what_a_provider_model_can_do_comes_from_its_listing(echo):
     host = "http://localhost:11434"
 

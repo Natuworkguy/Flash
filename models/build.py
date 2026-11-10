@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Build the sizes a Flash Onyx Modelfile declares in its header."""
+"""Build the sizes a Flash Onyx Modelfile declares in its header.
+
+A model is a single Modelfile, or a folder holding its Modelfile (named
+`Modelfile`, or the one `*.Modelfile` in it) beside the files it uses,
+such as weights or an adapter that FROM or ADAPTER name by relative path.
+"""
 
 from __future__ import annotations
 
@@ -41,6 +46,28 @@ BASE_TERMS = (
     "model and are not replaced by the license above. Run "
     "`ollama show --license {base}` to read them."
 )
+
+
+def modelfile(path: Path) -> Path:
+    """Return the Modelfile PATH names: itself, or the one in its folder."""
+
+    if not path.is_dir():
+        return path
+
+    plain = path / "Modelfile"
+
+    if plain.is_file():
+        return plain
+
+    found = sorted(path.glob("*.Modelfile"))
+
+    if len(found) != 1:
+        raise SystemExit(
+            f"{path}: needs a Modelfile, or exactly one *.Modelfile; "
+            f"found {len(found)}."
+        )
+
+    return found[0]
 
 
 def header(source: str, path: Path) -> tuple[str, list[str], bool]:
@@ -172,6 +199,7 @@ def run(argv: list[str], dry_run: bool) -> None:
 
 def build(
     source: str,
+    folder: Path,
     name: str,
     size: str,
     label: str,
@@ -180,19 +208,28 @@ def build(
     dry_run: bool,
     push: bool,
 ) -> None:
-    """Create NAME:LABEL from SIZE, under NAMESPACE if one is given."""
+    """Create NAME:LABEL from SIZE, under NAMESPACE if one is given.
+
+    The generated Modelfile is written in FOLDER, beside the source, so
+    the relative paths in it (FROM ./weights.gguf, ADAPTER) still resolve.
+    """
 
     prefix = f"{namespace.rstrip('/')}/" if namespace else ""
     tag = f"{prefix}{name}:{label}" if label else f"{prefix}{name}"
+    handle, temp = tempfile.mkstemp(
+        prefix=f".{name}-{label or 'base'}-",
+        suffix=".Modelfile",
+        dir=folder,
+    )
+    generated = Path(temp)
 
-    with tempfile.TemporaryDirectory() as workdir:
-        generated = Path(workdir) / f"{name}-{label or 'base'}.Modelfile"
-        generated.write_text(
-            render(source, name, size, terms),
-            encoding="utf-8",
-            newline="\n"
-        )
+    try:
+        with open(handle, "w", encoding="utf-8", newline="\n") as out:
+            out.write(render(source, name, size, terms))
+
         run(["ollama", "create", tag, "-f", str(generated)], dry_run)
+    finally:
+        generated.unlink(missing_ok=True)
 
     if push:
         run(["ollama", "push", tag], dry_run)
@@ -270,7 +307,7 @@ def main() -> int:
         "modelfile",
         nargs="+",
         type=Path,
-        help="Modelfile to build",
+        help="Modelfile, or model folder holding one, to build",
     )
     parser.add_argument(
         "--size",
@@ -320,7 +357,8 @@ def main() -> int:
 
     terms = licensing()
 
-    for path in args.modelfile:
+    for given in args.modelfile:
+        path = modelfile(given)
         source = path.read_text(encoding="utf-8")
         name, declared, cloud = header(source, path)
         sizes = wanted(declared, args.size, path, cloud)
@@ -343,6 +381,7 @@ def main() -> int:
         for size, label in targets(sizes, base, cloud, path):
             build(
                 source,
+                path.parent,
                 name,
                 size,
                 label,

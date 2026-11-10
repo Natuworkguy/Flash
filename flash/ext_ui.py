@@ -624,16 +624,20 @@ def expand(button: Button, text: str) -> str:
 
 
 def press(ext: Any, button: Button, text: str = "", chat: str = "",
-          file: str = "") -> dict:
+          file: str = "", choice: str = "") -> dict:
     """Run a "run" button's program, with {button, text, chat} as JSON on
     stdin, and "file", the path of the model it was pressed on, from a
     3D model's bar. What it prints is what it says: plain text to show,
     or JSON with "say" (to show), "insert" (into the box) or "send" (as
-    a message)."""
+    a message), or "choose" to ask the user to pick one first:
+    {"title", "text", "label", "button", "options": [{"value", "label"}]}.
+    The program then runs again with the value picked as "choice"."""
 
     given = {"button": button.id, "text": text, "chat": chat}
     if file:
         given["file"] = file
+    if choice:
+        given["choice"] = choice
 
     from . import extensions
 
@@ -657,6 +661,19 @@ def press(ext: Any, button: Button, text: str = "", chat: str = "",
         said = json.loads(out)
     except ValueError:
         said = None
+    if isinstance(said, dict) and isinstance(said.get("choose"), dict):
+        ask = said["choose"]
+        options = [
+            {"value": str(o.get("value", "")),
+             "label": str(o.get("label") or o.get("value", ""))}
+            for o in ask.get("options") or [] if isinstance(o, dict)
+        ]
+        if options:
+            return {"choose": {
+                **{k: str(ask[k]) for k in ("title", "text", "label",
+                                            "button") if ask.get(k)},
+                "options": options,
+            }}
     if isinstance(said, dict) and any(
             k in said for k in ("say", "insert", "send")):
         return {k: str(said[k]) for k in ("say", "insert", "send")
@@ -665,11 +682,12 @@ def press(ext: Any, button: Button, text: str = "", chat: str = "",
 
 
 def pressed(name: str, button_id: str, text: str = "",
-            chat: str = "", file: str = "") -> dict:
+            chat: str = "", file: str = "", choice: str = "") -> dict:
     """What a button does, for whoever pressed it: {"send": message} to
-    send, {"insert": text} for the box, {"say": text} to show. FILE: the
-    model's path, pressed in a 3D model's bar; a prompt or a command
-    gets it as its text."""
+    send, {"insert": text} for the box, {"say": text} to show, or
+    {"choose": ...} for a pick first. FILE: the model's path, pressed in
+    a 3D model's bar; a prompt or a command gets it as its text. CHOICE:
+    what the user picked, for a "run" button that asked."""
 
     import shlex
 
@@ -680,7 +698,7 @@ def pressed(name: str, button_id: str, text: str = "",
         return {"say": "That button is gone."}
     ext, button = found
     if button.run:
-        return press(ext, button, text, chat, file)
+        return press(ext, button, text, chat, file, choice)
     text = text or file
     if button.prompt:
         return {"send": expand(button, text)}

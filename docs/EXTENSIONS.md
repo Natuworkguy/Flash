@@ -778,6 +778,10 @@ A button does one of three things:
   `prompt` or `command` gets the path as its text).
   What it prints is shown. Printing JSON with `say` (shown), `insert`
   (put in the box) or `send` (sent as a message) does that instead.
+  Printing `{"choose": {"title", "text", "label", "button", "options":
+  [{"value", "label"}]}}` asks the user to pick one in a dialog first;
+  the program then runs again with `"choice"`, the value picked, in its
+  JSON. Riptide's Send to Riptide uses it to ask which window to send to.
 
 **The page's API.** A `script`, and a panel as `parent.Flash`, gets:
 

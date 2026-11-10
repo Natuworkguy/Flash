@@ -5238,9 +5238,10 @@ def _shift(spark_id: str, client=None) -> Optional[Report]:
         report = Report(
             at=time.time(), failed=True, steps=steps,
             text=f"This shift could not run: {e}.{tried}{waits} "
-            + ("It only moves to the fallbacks you gave it." if spark.fallbacks
-               else "It is never switched to another model by itself: give "
-               "it fallbacks to carry on with when its model fails."),
+            + ("It tries its own fallbacks before the model's global "
+               "fallbacks." if spark.fallbacks else
+               "It uses the model's global fallbacks when configured; "
+               "set fallbacks to carry on when its model fails."),
         )
     except Exception as e:  # noqa: BLE001
         report = Report(
