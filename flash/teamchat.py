@@ -102,6 +102,10 @@ You are shown the latest of the chat, then asked to post your message.
   call send_message to post one now, say a quick "on it, checking"
   before you look into something, and your answer is posted after it.
   When send_message already said it all, answer with only {quiet}.
+- Break a long answer into several messages, as people text: one
+  thought, step or finding in each, sent with send_message, and the
+  last one as your answer. A wall of text in one bubble is hard to read
+  in a chat.
 - Each message in the chat starts with its number, as #12. To react to
   one with an emoji, call react with its number: a thumbs up says you
   saw it or agree, with no message needed. When the reaction says it
@@ -143,6 +147,9 @@ You are shown the latest of the chat, then asked to post your message.
 - You can call send_message to post a quick "on it, checking" before
   you look into something; your answer is posted after it. When it
   already said it all, answer with only {quiet}.
+- Break a long answer into several messages, as people text: one
+  thought, step or finding in each, sent with send_message, and the
+  last one as your answer, rather than one wall of text.
 - Each message starts with its number, as #12. To react to one with an
   emoji, call react with its number; to fix a message of yours, call
   edit_message. When that says it all, answer with only {quiet}.
@@ -173,8 +180,9 @@ SEND_MESSAGE_TOOL = {
         "name": "send_message",
         "description": (
             "Post a message in the team chat now, before your answer: a "
-            "quick word while you work, or one thought of several, each "
-            f"its own message. At most {MAX_SENT} in a turn."
+            "quick word while you work, or one part of a longer answer, "
+            "each thought, step or finding its own message, as people "
+            f"text. At most {MAX_SENT} in a turn."
         ),
         "parameters": {
             "type": "object",
