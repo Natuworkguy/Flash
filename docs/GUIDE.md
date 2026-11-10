@@ -1420,6 +1420,18 @@ find every frame a jump could start on and still land safe, and jumps
 in the middle of them; taps a ring only when falling on would die; and
 steers the ship for the middle of each gap.
 
+`flash-dash-glitched` is the same level with glitches hidden in it, for a
+bug hunt by play: the page says only that it is not quite right. Ask
+Flash to find them:
+
+```prompt
+Open flash-dash-glitched. Don't read its source: play it, and list every
+glitch you find, with where it happens and how you know.
+```
+
+There are ten. What they are is in the test that keeps them in
+(`tests/test_dash_glitched.py`), so read that after, not before.
+
 Both tools need Playwright's Chromium, which `install.sh` and
 `install.ps1` download for you. Installing Flash another way means
 running it yourself:
