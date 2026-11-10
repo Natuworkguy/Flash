@@ -249,6 +249,12 @@ def wait_to_notify(now: Optional[float] = None) -> int:
     count, window = limits()
     if not count:
         return window
+    # Quiet hours: nothing until they end.
+    from . import checkins
+
+    quiet = checkins.quiet_left(now)
+    if quiet:
+        return quiet
     recent = sorted(t for t in _sent_times() if now - t < window)
     waits = [0.0]
     if recent:

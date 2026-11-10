@@ -5736,6 +5736,20 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
         except keepalive.KeepAliveError as exc:
             raise ValueError(str(exc)) from None
 
+    if name == "checkins":
+        # What to tell the user about, and quiet hours: read, or changed.
+        from . import checkins
+
+        try:
+            if "interests" in body:
+                checkins.set_interests(str(body.get("interests") or ""))
+            if "quiet" in body:
+                checkins.set_quiet_hours(str(body.get("quiet") or ""))
+        except checkins.CheckinError as exc:
+            raise ValueError(str(exc)) from None
+        return {"interests": checkins.interests(),
+                "quiet": checkins.quiet_words(), "now": checkins.is_quiet()}
+
     if name == "notify-limit":
         # No arg: only what it is, for the row in Settings. "off" stops
         # them; "4/15" lets the agent send 4 every 15 minutes.

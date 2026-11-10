@@ -2089,6 +2089,13 @@ body.page-projects #dock, body.page-settings #dock, body.page-tool #dock { displ
 .stepper input { width: 44px; height: 32px; border: 0; background: transparent; color: var(--text); font: 600 14px var(--sans); text-align: center; outline: 0; -moz-appearance: textfield; appearance: textfield; }
 .stepper input::-webkit-inner-spin-button, .stepper input::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
 .stepper:focus-within { border-color: var(--accent); }
+.tell-row { align-items: stretch; }
+.tell-row .what { flex: 1; display: flex; flex-direction: column; }
+.tell-row textarea { margin-top: 10px; width: 100%; resize: vertical; min-height: 64px; padding: 9px 11px; border-radius: 10px; border: 1px solid var(--border); background: var(--bg); color: var(--text); font: inherit; font-size: 14px; line-height: 1.45; }
+.tell-row .tell-foot { display: flex; justify-content: flex-end; margin-top: 4px; min-height: 16px; }
+.tell-row .saved { font-size: 12px; color: var(--text-3); }
+.quiet-side input { width: 150px; padding: 7px 10px; border-radius: 9px; border: 1px solid var(--border); background: var(--bg); color: var(--text); font: inherit; font-size: 13.5px; text-align: center; }
+.quiet-side input.bad { border-color: var(--del); }
 .notify-limit { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
 .notify-limit .per { font-size: 13px; color: var(--text-3); }
 @media (max-width: 560px) { .notify-limit-row { flex-wrap: wrap; } .notify-limit-row .what { flex: 1 1 100%; } .notify-limit { justify-content: flex-start; } }
@@ -9987,6 +9994,14 @@ function drawGeneral(body) {
   body.appendChild(browserAsk);
   fillNotifyRows(notifyOn, notifyLimit, browserAsk);
 
+  // What to tell you about, in your words, and when not to: every
+  // spark's shift reads it, and quiet hours hold every notification,
+  // ping and call until they end.
+  const tellRow = el("div", "setting-row static tell-row", `<span class="what"><b>What to tell you about</b><span>In your own words: what matters, how often, and what to leave out. Every spark reads it before it decides something is worth a word. You can also just tell Flash in a chat.</span><textarea rows="3" maxlength="2000" placeholder="New issues on my repos as they come in. A weather line each morning. Nothing about newsletters or promotions."></textarea><span class="tell-foot"><span class="saved" aria-live="polite"></span></span></span>`);
+  const quietRow = el("div", "setting-row static quiet-row", `<span class="what"><b>Quiet hours</b><span>Nothing notifies, pings or calls you in this span, in this computer's time. What comes in waits in the reports.</span></span><span class="side quiet-side"><input type="text" placeholder="off" aria-label="Quiet hours, like 10pm-7am" spellcheck="false"></span>`);
+  body.append(tellRow, quietRow);
+  fillCheckinRows(tellRow, quietRow);
+
   body.insertAdjacentHTML("beforeend", `<h2 class="settings-section settings-gap">Sparks</h2><p class="settings-sub">Agents that keep working on a goal, on a schedule. Make and read them on the Sparks page.</p>`);
   const always = el("button", "setting-row sparks-always-row", `<span class="what"><b>Keep working when Flash is closed</b><span></span></span><span class="switch" aria-hidden="true"></span>`);
   always.type = "button";
@@ -13314,6 +13329,36 @@ function showAlways(row, a) {
 async function fillAlwaysRow(row) {
   try { sparksAlways = (await command("sparks-always", "", null)).always; } catch (error) { showFailure(error); return; }
   if (row.isConnected && !row.disabled) showAlways(row, sparksAlways);
+}
+
+async function fillCheckinRows(tellRow, quietRow) {
+  const box = tellRow.querySelector("textarea");
+  const said = tellRow.querySelector(".saved");
+  const quiet = quietRow.querySelector("input");
+  let r;
+  try { r = await command("checkins", "", null); } catch (error) { showFailure(error); return; }
+  box.value = r.interests || "";
+  quiet.value = r.quiet || "";
+  quiet.placeholder = "off · e.g. 10pm-7am";
+  let timer = 0;
+  box.addEventListener("input", () => {
+    said.textContent = "";
+    clearTimeout(timer);
+    timer = setTimeout(async () => {
+      try { await command("checkins", "", null, { interests: box.value }); said.textContent = "Saved"; }
+      catch (error) { showFailure(error); }
+    }, 700);
+  });
+  const saveQuiet = async () => {
+    try {
+      const back = await command("checkins", "", null, { quiet: quiet.value });
+      quiet.value = back.quiet || "";
+      quiet.classList.remove("bad");
+      toast(back.quiet ? `Quiet from ${back.quiet}` : "No quiet hours");
+    } catch (error) { quiet.classList.add("bad"); showFailure(error); }
+  };
+  quiet.addEventListener("change", saveQuiet);
+  quiet.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); quiet.blur(); } });
 }
 
 async function setSparksAlways(on, row) {
