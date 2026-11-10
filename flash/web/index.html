@@ -15963,7 +15963,7 @@ function markSide() {
   $("#sparks-btn").classList.toggle("active", !panel && view === "sparks");
   $("#extensions-btn").classList.toggle("active", !panel && view === "extensions");
   $("#settings-btn").classList.toggle("active", !panel && view === "settings");
-  for (const row of document.querySelectorAll("#ext-side .ext-row[data-url]")) row.classList.toggle("active", row.dataset.url === panel);
+  for (const row of document.querySelectorAll("#sidebar .ext-row[data-url]")) row.classList.toggle("active", row.dataset.url === panel);
 }
 
 // A form in a dialog: new or edited project, a new host.
@@ -23368,10 +23368,14 @@ function renderExtUI() {
   }
   const side = $("#ext-side");
   side.textContent = "";
+  // rows the sidebar layout moved out of here go too: they are made again below
+  for (const old of document.querySelectorAll("#sidebar .ext-row")) old.remove();
   for (const ext of extUI()) {
     for (const p of ext.panels) {
       const row = el("button", "side-row ext-row", `${icon(ICON[p.icon] ? p.icon : "puzzle")}<span>${esc(p.label)}</span>`);
       row.type = "button";
+      // an id of its own, for the sidebar layout to order it or put it in More
+      row.id = sideExtId(`${ext.name}/${p.id}`);
       // "Watch, from watch" says nothing the label did not.
       row.dataset.tip = p.label.toLowerCase() === ext.name ? p.label : `${p.label}, from ${ext.name}`;
       row.dataset.url = p.url;
@@ -23381,7 +23385,12 @@ function renderExtUI() {
     }
   }
   markSide();
-  for (const b of extButtonsAt("sidebar")) side.appendChild(extButton(b, "side-row ext-row"));
+  for (const b of extButtonsAt("sidebar")) {
+    const btn = extButton(b, "side-row ext-row");
+    btn.id = sideExtId(`button/${b.ext || ""}/${b.id || b.label || ""}`);
+    side.appendChild(btn);
+  }
+  try { applySideLayout(); } catch (_) { /* the layout code is not loaded yet: it lays the rows out when it is */ }
   const head = $("#ext-head");
   head.textContent = "";
   for (const b of extButtonsAt("header")) head.appendChild(extButton(b, "pill ext-pill"));
@@ -23644,7 +23653,7 @@ function renderExtExtras() {
     else if (dockOpen && !extDocks().some((d) => d.key === dockOpen)) closeDock();
   }
   markDocks();
-  for (const row of document.querySelectorAll("#ext-side .ext-row[data-panel]")) {
+  for (const row of document.querySelectorAll("#sidebar .ext-row[data-panel]")) {
     let badge = row.querySelector(".ext-badge");
     const n = extBadges.get(row.dataset.panel) ?? extBadges.get(row.dataset.panel.split("/")[1]);
     if (!badge) { badge = el("span", "ext-badge"); row.appendChild(badge); }
@@ -24771,10 +24780,21 @@ $("#extensions-btn").innerHTML = icon("puzzle") + "<span>Extensions</span>";
 const SIDE_ROWS = [["search-btn", "Search"], ["briefing-btn", "Briefing"], ["projects-btn", "Projects"],
   ["skills-btn", "Skills"], ["sparks-btn", "Sparks"], ["extensions-btn", "Extensions"]];
 const SIDE_WITH = { "sparks-btn": "spark-roster", "extensions-btn": "ext-side" };
-function sideLayout() {
+// An extension's panel or sidebar button, as a row of the sidebar's own: an id that stays the same from one load to the next.
+function sideExtId(key) { return "sx-" + String(key).replace(/[^\w-]+/g, "_"); }
+// Every row the layout covers: the built-in ones, then the extensions' rows that are on the page now.
+function sideItems() {
+  const ext = [...document.querySelectorAll("#sidebar .ext-row[id^='sx-']")].map((r) => [r.id, r.querySelector("span")?.textContent || r.textContent.trim() || "Extension"]);
+  return [...SIDE_ROWS, ...ext];
+}
+function savedSideLayout() {
   let saved = [];
   try { saved = JSON.parse(pref("side-layout", "[]")); } catch (_) { saved = []; }
-  const known = SIDE_ROWS.map(([id]) => id);
+  return Array.isArray(saved) ? saved : [];
+}
+function sideLayout() {
+  const saved = savedSideLayout();
+  const known = sideItems().map(([id]) => id);
   const out = [];
   for (const r of Array.isArray(saved) ? saved : []) {
     if (r && known.includes(r.id) && !out.some((o) => o.id === r.id)) out.push({ id: r.id, more: !!r.more });
@@ -24783,7 +24803,10 @@ function sideLayout() {
   return out;
 }
 function setSideLayout(layout) {
-  savePref("side-layout", JSON.stringify(layout));
+  // rows of an extension not loaded right now keep their place for when it is
+  const ids = new Set(layout.map((r) => r.id));
+  const kept = savedSideLayout().filter((r) => r && !ids.has(r.id) && String(r.id).startsWith("sx-"));
+  savePref("side-layout", JSON.stringify([...layout, ...kept]));
   applySideLayout();
 }
 function applySideLayout() {
@@ -24802,7 +24825,7 @@ function applySideLayout() {
   moreBtn.classList.toggle("in-more", !layout.some((r) => r.more));
   at.after(moreBtn);
 }
-const sideName = (id) => (SIDE_ROWS.find(([k]) => k === id) || [id, id])[1];
+const sideName = (id) => (sideItems().find(([k]) => k === id) || [id, id])[1];
 const sideIcon = (id) => document.getElementById(id)?.querySelector("svg")?.outerHTML || "";
 function moveSide(id, step) {
   const layout = sideLayout(), i = layout.findIndex((r) => r.id === id), j = i + step;
@@ -24823,11 +24846,15 @@ $("#side-more").onclick = (e) => {
   // the arrow turns toward the menu, above or below
   btn.dataset.up = menuEl && menuEl.getBoundingClientRect().top < btn.getBoundingClientRect().top ? "1" : "";
 };
-for (const [id] of SIDE_ROWS) {
-  document.getElementById(id)?.addEventListener("contextmenu", (e) => {
+// right-click any row of the layout, an extension's too (theirs are made later, so this listens on the sidebar)
+$("#sidebar").addEventListener("contextmenu", (e) => {
+  const row = e.target.closest(".side-row");
+  const id = row?.id;
+  if (!id || !sideItems().some(([k]) => k === id)) return;
+  {
     e.preventDefault();
     const layout = sideLayout(), i = layout.findIndex((r) => r.id === id);
-    openMenu(e.currentTarget, [
+    openMenu(row, [
       { act: "up", html: icon("up") + "<span>Move up</span>" },
       { act: "down", html: icon("down") + "<span>Move down</span>" },
       { act: "more", html: icon("more") + "<span>Put in More</span>" },
@@ -24838,8 +24865,8 @@ for (const [id] of SIDE_ROWS) {
       else if (row.act === "more") tuckSide(id, true);
       else openSideCustomizer();
     }, "", true);
-  });
-}
+  }
+});
 let sideCustomEl = null;
 function closeSideCustomizer() {
   if (!sideCustomEl) return;
