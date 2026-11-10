@@ -189,6 +189,26 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     parser.add_argument(
+        "--import-memories",
+        metavar="FILE",
+        help=(
+            "save the facts in FILE to your memory, and exit: another "
+            "assistant's export, one fact a line, or JSON (a list, or "
+            '{"memories": [...]}). - reads standard input. Facts already '
+            "saved are skipped"
+        ),
+    )
+
+    parser.add_argument(
+        "--memory-prompt",
+        action="store_true",
+        help=(
+            "print the prompt that has another assistant export what it "
+            "knows about you, for --import-memories, and exit"
+        ),
+    )
+
+    parser.add_argument(
         "--sparks",
         action="store_true",
         help=(

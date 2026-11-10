@@ -1502,6 +1502,25 @@ shows what the extension adds and asks before installing it.
 `flash list` and `flash remove <name>` do the
 rest. See [docs/EXTENSIONS.md](EXTENSIONS.md) to write your own.
 
+### Importing memories
+
+Bring what another assistant knows about you, or facts you keep
+yourself, into Flash's memory with one command:
+
+```bash
+flash --memory-prompt                    # the prompt to give the other assistant
+flash --import-memories its-answer.txt   # save what it answered
+flash --import-memories facts.json       # or a JSON list: ["...", "..."]
+some-script | flash --import-memories -  # or from standard input
+```
+
+It takes the other assistant's answer as it is (only what is in its
+code blocks, if it used any), plain lines with or without bullets, or
+JSON: a list of strings, or `{"memories": [...]}`. Facts already saved
+are skipped, so running it twice adds nothing. It exits 0 when it saved
+or found something, so a script installing Flash can run it last. In a
+chat, `/import-memories <file>` does the same.
+
 ### Learning
 
 Flash learns from its own work.

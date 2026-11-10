@@ -105,6 +105,8 @@ COMMANDS = [
     ("/refresh", "reload config from the env file"),
     ("/memory", f"show saved memory, numbered ({MEMORY_PATH})"),
     ("/forget", "delete one memory by its 1-based index (/forget N)"),
+    ("/import-memories", "save the facts in a file to memory "
+     "(/import-memories <file>)"),
     ("/skills", "procedures Flash has learned (/skills show|remove <name>)"),
     ("/plan", "show the checklist the model is working through"),
     ("/agents", "watch sub-agents work live (/agents <id> for one)"),
