@@ -4315,7 +4315,7 @@ body.empty #ext-head, body.on-page #ext-head { display: none; }
 <div id="form" class="overlay" hidden><div class="dialog" role="dialog"><div class="inner" id="form-body"></div></div></div>
 <div id="tip" role="tooltip"></div>
 <div id="toast" role="status"></div>
-<div id="briefing" role="dialog" aria-modal="true" aria-label="Briefing" hidden><div class="bf-top"><span class="bf-name">Briefing</span><span class="bf-count" aria-live="polite"></span><span class="grow"></span><button type="button" class="icon-btn bf-refresh" aria-label="Refresh" data-tip="Refresh"></button><button type="button" class="icon-btn bf-close" aria-label="Close" data-tip="Close" data-keys="Esc"></button></div><div class="bf-feed" tabindex="-1"></div><div class="bf-rail" role="tablist" aria-label="Cards"></div><div class="bf-hint">j / k or ↑ ↓ to move · Esc to close</div></div>
+<div id="briefing" role="dialog" aria-modal="true" aria-label="Briefing" hidden><div class="bf-top"><span class="bf-name">Briefing</span><span class="bf-count" aria-live="polite"></span><span class="grow"></span><button type="button" class="pill bf-brief" data-tip="Flash reads it to you in a chat, and marks it read">Brief me</button><button type="button" class="icon-btn bf-refresh" aria-label="Refresh" data-tip="Refresh"></button><button type="button" class="icon-btn bf-close" aria-label="Close" data-tip="Close" data-keys="Esc"></button></div><div class="bf-feed" tabindex="-1"></div><div class="bf-rail" role="tablist" aria-label="Cards"></div><div class="bf-hint">j / k or ↑ ↓ to move · Esc to close</div></div>
 <div id="spark-call" class="sc-wrap" hidden><div class="tc-scrim"></div><section class="sc" role="dialog" aria-modal="true" aria-labelledby="sc-name"><button type="button" class="icon-btn sc-mini" aria-label="Minimise" data-tip="Keep the call going in a small bar"></button><span class="sc-face"></span><b id="sc-name" class="sc-name"></b><span class="sc-status" aria-live="polite"></span><p class="sc-caption" aria-live="polite"></p><div class="sc-btns"><button type="button" class="icon-btn sc-mute" aria-pressed="false" aria-label="Mute" data-tip="Mute"></button><button type="button" class="icon-btn sc-hang" aria-label="Hang up" data-tip="Hang up"></button><button type="button" class="icon-btn sc-screen" aria-pressed="false" aria-label="Share your screen" data-tip="Share your screen"></button></div><div class="sc-answer" hidden><button type="button" class="icon-btn sc-decline" aria-label="Decline" data-tip="Decline"></button><button type="button" class="icon-btn sc-pick" aria-label="Answer" data-tip="Answer"></button></div><video class="sc-screen-view" muted playsinline hidden></video></section></div>
 <div id="team-chat" class="tc-wrap" hidden><div class="tc-scrim" data-close></div><section class="tc" role="dialog" aria-modal="true" aria-labelledby="tc-name"><header class="tc-head"><span class="tc-badge"><span class="letter"></span></span><span class="tc-who"><b id="tc-name"></b><span class="tc-sub"></span></span><span class="tc-faces"></span><button type="button" class="icon-btn tc-call" aria-label="Voice call" data-tip="Voice call"></button><button type="button" class="icon-btn tc-full" aria-label="Full screen" data-tip="Full screen"></button><button type="button" class="icon-btn tc-close" data-close aria-label="Close"></button></header><div class="tc-log" aria-live="polite"></div><div class="tc-typing" hidden></div><form class="tc-compose"><div class="tc-chips"></div><div class="tc-replying" hidden><span class="words"><b></b><span></span></span><button type="button" class="icon-btn tc-unreply" aria-label="Cancel the reply" data-tip="Cancel the reply"></button></div><div class="tc-tray" hidden></div><div class="tc-box"><button type="button" class="icon-btn tc-attach" aria-label="Attach files" data-tip="Attach files"></button><textarea rows="1" placeholder="Message the team" aria-label="Message the team"></textarea><button type="submit" class="tc-send" aria-label="Send"></button></div><div class="tc-mention" role="listbox" hidden></div></form></section></div>
 
@@ -23134,6 +23134,13 @@ function closeBriefing() {
   briefing.closing = setTimeout(() => { briefEl.hidden = true; briefEl.classList.remove("closing"); }, 300);
 }
 
+// Flash gives the briefing itself, in a new chat, and marks it read.
+async function briefMe() {
+  closeBriefing();
+  await newChat();
+  send("Brief me: what came in while I was away?");
+}
+
 // A new chat, with what to say about the card already in the box.
 function briefCompose(text) {
   closeBriefing();
@@ -23787,6 +23794,7 @@ const ACTIONS = [
   { label: "Settings and usage", keys: "Alt ,", slash: "/settings", run: () => showSettings() },
   { label: "Update Flash", keys: "", slash: "/update", run: () => { showSettings("general"); checkUpdates(); } },
   { label: "Briefing", keys: "Alt B", slash: "/briefing", run: openBriefing },
+  { label: "Brief me: Flash reads the briefing to you", keys: "", slash: "/brief", run: () => briefMe() },
   { label: "Skills", keys: "", slash: "/skills", run: () => showPage("skills") },
   { label: "Sparks", keys: "", slash: "/sparks", run: () => showPage("sparks") },
   { label: "Background", keys: "", slash: "/background", run: () => showSettings("general") },
@@ -24929,6 +24937,7 @@ applySideLayout();
 $("#search-btn").innerHTML = icon("search") + "<span>Search</span>";
 $("#briefing-btn").innerHTML = icon("feed") + "<span>Briefing</span><span class=\"new-dot\" hidden aria-label=\"New\"></span>";
 $("#briefing-btn").onclick = openBriefing;
+$("#briefing .bf-brief").onclick = () => briefMe();
 $("#recents-btn i").innerHTML = icon("chevDown");
 $("#recents-btn").onclick = () => foldRecents($("#recents-btn").getAttribute("aria-expanded") === "true");
 foldRecents(pref("recents", "open") === "folded", true);
