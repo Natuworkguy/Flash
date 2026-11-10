@@ -6470,7 +6470,12 @@ def interact(
     return _page_report(note, full_page=_truthy(full_page))
 
 
-GAMES = {"flash-dash": Path(__file__).parent / "games" / "dash.html"}
+GAMES = {
+    "flash-dash": Path(__file__).parent / "games" / "dash.html",
+    # The same level with things wrong in it, for finding what (a bug hunt
+    # by play: its page says only that it is not quite right).
+    "flash-dash-glitched": Path(__file__).parent / "games" / "dash-glitched.html",
+}
 
 
 def play_realtime(policy: str, seconds: Any = 20, until: str = "",
@@ -9353,7 +9358,8 @@ tools: list[dict[str, Any]] = [
                 "(and restart_keys): it retries, keeping api.memory, so the "
                 "policy can learn where it died. open_page('flash-dash') "
                 "opens a practice level like a rhythm runner: spikes, "
-                "blocks, pads, rings and a ship."
+                "blocks, pads, rings and a ship. open_page('flash-dash-glitched') "
+                "opens the same level with glitches hidden in it to find."
             ),
             "parameters": {
                 "type": "object",
