@@ -229,6 +229,41 @@ KEEP_NOTES_TOOL = {
     },
 }
 
+REMIND_SELF_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "remind_self",
+        "description": (
+            "Set yourself a reminder: at that time you are woken in your "
+            "chat with the user, told what you set it for, and say it to "
+            "them there, as a message from you. For a birthday, an "
+            "anniversary, a deadline or a check-in: the user's birthday "
+            "is 'add' with when the next one at 9:00 (2027-03-14T09:00), "
+            "every 'year', and text like 'wish them a happy birthday'. "
+            "'list' shows yours; 'cancel' one by its id."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "action": {"type": "string",
+                           "enum": ["add", "list", "cancel"]},
+                "text": {"type": "string",
+                         "description": "add: what to do or say then."},
+                "when": {"type": "string",
+                         "description": (
+                             "add: a local time like 2027-03-14T09:00, or "
+                             "'in 2h', 'in 3d'.")},
+                "every": {"type": "string",
+                          "enum": ["", "day", "week", "month", "year"],
+                          "description": "add: repeat, or '' for once."},
+                "id": {"type": "string",
+                       "description": "cancel: its id, from list."},
+            },
+            "required": ["action"],
+        },
+    },
+}
+
 WAIT_FOR_EVENTS_TOOL = {
     "type": "function",
     "function": {
@@ -541,6 +576,9 @@ class Spark:
     why: str = ""
     # What other sparks handed it, for its next shift: {from, text, at}.
     inbox: list = field(default_factory=list)
+    # What it set itself to do at a time: {id, at, text, every}, EVERY
+    # being "", "day", "week", "month" or "year" (a birthday).
+    reminders: list = field(default_factory=list)
     # When the answer being made now was started, or 0; and what it is
     # doing meanwhile.
     replying: float = 0.0
@@ -4826,6 +4864,161 @@ def _waiting_for_events(spark: Spark):
     return wait
 
 
+# --- Reminders a spark sets itself --------------------------------------
+
+REPEATS = ("", "day", "week", "month", "year")
+MAX_REMINDERS = 50
+
+
+def next_time(at: float, every: str) -> float:
+    """The time after AT that a reminder repeating EVERY comes round:
+    the same day of the month next month, or next year, kept on the
+    last day of a month that is shorter (a 29 February birthday falls
+    on the 28th)."""
+
+    import calendar
+    from datetime import datetime, timedelta
+
+    when = datetime.fromtimestamp(at)
+    if every == "day":
+        return (when + timedelta(days=1)).timestamp()
+    if every == "week":
+        return (when + timedelta(weeks=1)).timestamp()
+    if every in ("month", "year"):
+        year, month = (when.year + 1, when.month) if every == "year" else (
+            when.year + (when.month == 12), when.month % 12 + 1)
+        day = min(when.day, calendar.monthrange(year, month)[1])
+        return when.replace(year=year, month=month, day=day).timestamp()
+    return 0.0
+
+
+def _when_words(at: float) -> str:
+    from datetime import datetime
+
+    return datetime.fromtimestamp(at).strftime("%a %d %b %Y, %H:%M")
+
+
+def remind_self(key: str, action: str = "list", text: str = "",
+                when: str = "", every: str = "", reminder_id: str = "",
+                now: Optional[float] = None) -> str:
+    """A spark's own reminders: add, list or cancel. The answer is what
+    the spark is told."""
+
+    from . import timers
+
+    now = time.time() if now is None else now
+    action = str(action or "list").strip().lower()
+    spark = _must_find(key)
+    if action == "add":
+        text = str(text or "").strip()[:GOAL_CHARS]
+        every = str(every or "").strip().lower()
+        if not text:
+            return "Error: say what the reminder is for."
+        if every not in REPEATS:
+            return "Error: every is one of day, week, month, year, or ''."
+        try:
+            at = timers.parse_when(when, now)
+        except ValueError as exc:
+            return f"Error: {exc}"
+        if at <= now:
+            return "Error: that time has passed: give the next one."
+        if len(spark.reminders) >= MAX_REMINDERS:
+            return f"Error: {MAX_REMINDERS} reminders is the most: cancel one."
+        made = {"id": uuid.uuid4().hex[:6], "at": at, "text": text,
+                "every": every}
+        _edit(spark.id, lambda s: s.reminders.append(made))
+        wake()
+        tool_line(f"RemindSelf({_when_words(at)})")
+        again = f", then every {every}" if every else ""
+        return f"Set ({made['id']}): {_when_words(at)}{again}: {text}"
+    if action == "cancel":
+        gone = str(reminder_id or "").strip()
+        if not any(r.get("id") == gone for r in spark.reminders):
+            return f"Error: no reminder {gone!r}: list shows their ids."
+        _edit(spark.id, lambda s: setattr(s, "reminders", [
+            r for r in s.reminders if r.get("id") != gone]))
+        tool_line(f"RemindSelf(cancel {gone})")
+        return f"Cancelled {gone}."
+    tool_line("RemindSelf(list)")
+    if not spark.reminders:
+        return "No reminders set."
+    return "\n".join(
+        f"{r['id']}: {_when_words(r['at'])}"
+        + (f", every {r['every']}" if r.get("every") else "") + f": {r['text']}"
+        for r in sorted(spark.reminders, key=lambda r: r.get("at", 0)))
+
+
+def _reminding(spark: Spark):
+    def remind(args: dict) -> str:
+        return remind_self(
+            spark.id, args.get("action", "list"), args.get("text", ""),
+            args.get("when", ""), args.get("every", ""), args.get("id", ""))
+    return remind
+
+
+def reminders_due(now: Optional[float] = None) -> list[tuple[Spark, dict]]:
+    """Each reminder whose time has come, taken off its spark (or moved
+    on to its next time, for one that repeats): fired once."""
+
+    now = time.time() if now is None else now
+    fired: list[tuple[Spark, dict]] = []
+    for spark in all_sparks():
+        if not any(r.get("at", 0) <= now for r in spark.reminders):
+            continue
+        came: list[dict] = []
+
+        def take(s: Spark) -> None:
+            kept = []
+            for r in s.reminders:
+                if r.get("at", 0) > now:
+                    kept.append(r)
+                    continue
+                came.append(dict(r))
+                if r.get("every"):
+                    after = r["at"]
+                    # missed while Flash was off: on to the next one ahead
+                    while after <= now:
+                        after = next_time(after, r["every"])
+                    kept.append({**r, "at": after})
+            s.reminders = kept
+
+        changed = _edit(spark.id, take)
+        fired += [(changed, r) for r in came]
+    return fired
+
+
+REMINDER_NOTE = (
+    "(A reminder you set yourself has come round: {text}. It is now "
+    "{when}. Do it now, here: say it to the user in this chat, in your "
+    "own words, as yourself.)"
+)
+
+
+def fire_reminders(now: Optional[float] = None, client=None,
+                   start=threading.Thread) -> list[tuple[Spark, dict]]:
+    """Each reminder due now said to its spark in its chat with the user,
+    where it answers: the birthday wish, posted as the spark's own
+    message. Each answers on a thread of its own, so the keeper never
+    waits on a model."""
+
+    from . import teamchat
+
+    fired = reminders_due(now)
+    for spark, reminder in fired:
+        log(spark.id, "reminder", text=reminder.get("text", ""))
+
+        def run(spark=spark, reminder=reminder) -> None:
+            with contextlib.suppress(Exception):
+                room = teamchat.dm_id(spark.id)
+                note = teamchat.say(room, REMINDER_NOTE.format(
+                    text=reminder.get("text", ""),
+                    when=_when_words(time.time())), hidden=True)
+                teamchat.answer(room, note, client)
+
+        start(target=run, daemon=True).start()
+    return fired
+
+
 def _keeping_notes(notes: list[str]):
     def keep(args: dict) -> str:
         notes[0] = str(args.get("notes", "")).strip()
@@ -5088,6 +5281,7 @@ def _shift(spark_id: str, client=None) -> Optional[Report]:
     own = {
         "keep_notes": _keeping_notes(notes),
         "wait_for_events": _waiting_for_events(spark),
+        "remind_self": _reminding(spark),
         "hand_off": _handing_off(spark),
         "ask_spark": _asking(spark),
         "make_document": _documenting(spark, made),
@@ -5173,7 +5367,8 @@ def _shift(spark_id: str, client=None) -> Optional[Report]:
                 else contextlib.nullcontext():
             text = _work(
                 spark, messages, own,
-                [KEEP_NOTES_TOOL, WAIT_FOR_EVENTS_TOOL, HAND_OFF_TOOL,
+                [KEEP_NOTES_TOOL, WAIT_FOR_EVENTS_TOOL, REMIND_SELF_TOOL,
+                 HAND_OFF_TOOL,
                  ASK_SPARK_TOOL,
                  # Not offered at all with calls switched off.
                  *([CALL_USER_TOOL] if _calls_allowed() else []),
@@ -5610,7 +5805,7 @@ class ChatKit:
 
     schemas = [
         KEEP_NOTES_TOOL, HAND_OFF_TOOL, ASK_SPARK_TOOL, TAKE_ON_TOOL,
-        MAKE_DOCUMENT_TOOL, *PROPOSAL_TOOLS, *CHAT_TOOLS,
+        MAKE_DOCUMENT_TOOL, REMIND_SELF_TOOL, *PROPOSAL_TOOLS, *CHAT_TOOLS,
     ]
 
     def __init__(self, spark: Spark, chat: str = "") -> None:
@@ -5624,6 +5819,7 @@ class ChatKit:
         self.changes: dict = {}
         self.tools: dict[str, Callable[[dict], str]] = {
             "keep_notes": _keeping_notes(self.notes),
+            "remind_self": _reminding(spark),
             "learn": self._learn,
             "set_goal": self._set_goal,
             "set_schedule": self._set_schedule,
@@ -6384,6 +6580,9 @@ def _keep(
 
             with contextlib.suppress(OSError):
                 timers.fire_due()
+            # The sparks' own reminders: each said in its chat.
+            with contextlib.suppress(OSError, SparkError):
+                fire_reminders()
             for spark in due():
                 _safe_shift(spark.id, prepare, announce)
 
