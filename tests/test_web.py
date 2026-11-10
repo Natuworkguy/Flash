@@ -2990,6 +2990,32 @@ class TestQueueAndSteer:
         assert asked == ["go", "b", "a"]
 
 
+class TestMade:
+    def test_lists_what_flash_made_newest_first_with_its_chat(self, tmp_path):
+        session = web.Session()
+        first, second = session.new_chat(), session.new_chat()
+        older = tmp_path / "older.png"
+        older.write_bytes(b"\x89PNG\r\n\x1a\n" + b"0" * 32)
+        newer = tmp_path / "page.html"
+        newer.write_text("<p>hi</p>")
+        kept_old = web.workspace.keep_file(str(older))
+        kept_new = web.workspace.keep_file(str(newer))
+        old_path = web.workspace.kept_file(kept_old["id"])[0]
+        os.utime(old_path, (1000, 1000))
+        first.log += [{"type": "user", "text": "draw"},
+                      {"type": "file", **kept_old}]
+        second.log += [{"type": "file", **kept_new},
+                       # what you sent is not something Flash made
+                       {"type": "user", "text": "here",
+                        "files": [dict(kept_old)]}]
+
+        made = web.command(session, {"name": "made"})["files"]
+
+        assert [f["name"] for f in made] == ["page.html", "older.png"]
+        assert made[1]["chat"] == first.id and made[1]["index"] == 1
+        assert made[1]["chat_title"] == first.title
+
+
 class TestBackground:
     def test_lists_and_stops_a_running_command(self):
         import sys as _sys
