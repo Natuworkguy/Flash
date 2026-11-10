@@ -421,6 +421,25 @@ body.empty #suggestions { display: flex; flex-wrap: wrap; justify-content: cente
 .btw-card .x { position: absolute; top: 6px; right: 6px; width: 28px; height: 28px; }
 .btw-card .x svg { width: 15px; height: 15px; }
 #pending { display: flex; flex-direction: column; gap: 6px; margin: 0 8px 8px; }
+#bg-bar { display: flex; align-items: center; gap: 8px; margin: 0 8px 8px; padding: 0 4px 0 12px; height: 34px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); font-size: 13px; color: var(--text-2); animation: rise 0.25s var(--ease) both; }
+#bg-bar[hidden] { display: none; }
+#bg-bar .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); animation: pulse 1.2s ease-in-out infinite; flex: none; }
+#bg-bar .words { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#bg-bar button { flex: none; padding: 4px 9px; border-radius: 8px; font-size: 12.5px; color: var(--text-2); }
+#bg-bar button:hover { background: var(--hover); color: var(--text); }
+#bg-bar .bg-stop-all:hover { color: var(--del); }
+#bg-panel .dialog { width: min(560px, 100%); }
+#bg-panel .bg-list { max-height: min(62vh, 560px); overflow: auto; margin-top: 10px; display: flex; flex-direction: column; }
+#bg-panel h3 { margin: 14px 0 4px; font-size: 11.5px; font-weight: 600; color: var(--text-3); text-transform: uppercase; letter-spacing: 0.05em; }
+#bg-panel h3:first-child { margin-top: 0; }
+#bg-panel .bg-row { display: flex; align-items: center; gap: 10px; padding: 7px 0; border-bottom: 1px solid var(--border); font-size: 13.5px; }
+#bg-panel .bg-row .what { flex: 1; min-width: 0; }
+#bg-panel .bg-row .what b { display: block; font-weight: 550; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#bg-panel .bg-row .what span { display: block; color: var(--text-3); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#bg-panel .bg-row code { font-size: 12px; }
+#bg-panel .bg-row .btn { flex: none; }
+#bg-panel .bg-none { color: var(--text-3); font-size: 13px; padding: 18px 0; text-align: center; }
+#bg-panel .dialog-buttons { display: flex; justify-content: space-between; margin-top: 16px; }
 #waiting-bar { display: flex; flex-direction: column; gap: 6px; margin: 0 8px 8px; }
 #waiting-bar[hidden] { display: none; }
 .waiting-row { display: flex; align-items: center; gap: 10px; padding: 6px 6px 6px 12px; border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--border)); border-radius: 12px; background: color-mix(in srgb, var(--accent) 6%, var(--surface)); font-size: 13.5px; animation: rise 0.25s var(--ease) both; }
@@ -4220,6 +4239,7 @@ body.empty #ext-head, body.on-page #ext-head { display: none; }
           <button type="button" class="icon-btn oc-hang" aria-label="Hang up" data-tip="Hang up"></button>
         </div>
         <div id="btw" hidden aria-label="Side questions"></div>
+        <div id="bg-bar" hidden role="status"><span class="dot"></span><span class="words"></span><button type="button" class="bg-view">View</button><button type="button" class="bg-stop-all">Stop all</button></div>
         <div id="waiting-bar" hidden role="group" aria-label="What this chat waits for"></div>
         <div id="pending" hidden aria-label="Waiting messages"></div>
         <div id="call-bar" hidden role="group" aria-label="Phone call">
@@ -4320,6 +4340,7 @@ body.empty #ext-head, body.on-page #ext-head { display: none; }
 <div id="present" hidden role="dialog" aria-label="Slides"></div>
 <div id="help" class="overlay" hidden><div class="dialog" role="dialog" aria-label="Keyboard shortcuts"><div class="inner" id="help-body"></div></div></div>
 <div id="phone" class="overlay" hidden><div class="dialog" role="dialog" aria-label="Open on your phone"><div class="inner" id="phone-body"></div></div></div>
+<div id="bg-panel" class="overlay" hidden><div class="dialog" role="dialog" aria-label="Background"><div class="inner" id="bg-body"></div></div></div>
 <div id="call-log" class="overlay" hidden><div class="dialog" role="dialog" aria-label="Call log"><div class="inner" id="call-log-body"></div></div></div>
 <div id="form" class="overlay" hidden><div class="dialog" role="dialog"><div class="inner" id="form-body"></div></div></div>
 <div id="tip" role="tooltip"></div>
@@ -11654,6 +11675,99 @@ async function openCallLog(id, team = teamChat.id) {
   if (!said.length) lines.appendChild(el("p", "sub", "Nothing was said on this call."));
 }
 function closeCallLog() { hideOverlay($("#call-log")); }
+
+// ---------------------------------------------------------------------------
+// Background: sub-agents, chats mid-turn, spark shifts and commands, in
+// any chat, over the message box as "2 agents working · View · Stop all",
+// and listed in a panel with a Stop on each.
+
+let bgNow = { agents: [], chats: [], sparks: [], shells: [], waits: [] };
+const plural = (n, one, many = one + "s") => `${n} ${n === 1 ? one : many}`;
+function bgWords(b) {
+  const others = b.chats.filter((c) => c.id !== current);
+  const parts = [];
+  if (b.agents.length) parts.push(`${plural(b.agents.length, "agent")} working`);
+  if (others.length) parts.push(`${plural(others.length, "other chat")} working`);
+  if (b.sparks.length) parts.push(`${plural(b.sparks.length, "spark")} on shift`);
+  if (b.shells.length) parts.push(plural(b.shells.length, "command") + " running");
+  return parts.join(" · ");
+}
+function renderBgBar() {
+  const words = bgWords(bgNow);
+  const bar = $("#bg-bar");
+  bar.hidden = !words || view !== "chat";
+  bar.querySelector(".words").textContent = words;
+  if (isOpen($("#bg-panel"))) drawBgPanel();
+}
+async function pollBackground() {
+  if (document.hidden) return;
+  try { bgNow = await api("/api/background"); } catch (_) { return; }
+  renderBgBar();
+}
+setInterval(pollBackground, 3000);
+setTimeout(pollBackground, 800);
+async function bgStop(what, btn) {
+  if (btn) btn.disabled = true;
+  try { await command("bg-stop", what); } catch (error) { showFailure(error); }
+  setTimeout(pollBackground, 400);
+}
+function bgRow(title, sub, stopKey, open) {
+  const row = el("div", "bg-row", `<span class="what"><b></b><span></span></span>`);
+  row.querySelector("b").textContent = title;
+  row.querySelector(".what span").textContent = sub;
+  if (open) {
+    const go = el("button", "btn small", "Open");
+    go.type = "button";
+    go.onclick = () => { closeBgPanel(); open(); };
+    row.appendChild(go);
+  }
+  if (stopKey) {
+    const stop = el("button", "btn small", stopKey.startsWith("wait:") ? "Cancel" : "Stop");
+    stop.type = "button";
+    stop.onclick = () => stopKey.startsWith("wait:")
+      ? command("wait-cancel", stopKey.slice(5)).then(() => setTimeout(pollBackground, 300)).catch(showFailure)
+      : bgStop(stopKey, stop);
+    row.appendChild(stop);
+  }
+  return row;
+}
+const secs = (n) => (n < 60 ? `${n}s` : n < 3600 ? `${Math.floor(n / 60)}m ${n % 60}s` : `${Math.floor(n / 3600)}h ${Math.floor((n % 3600) / 60)}m`);
+function drawBgPanel() {
+  const list = $("#bg-body .bg-list");
+  if (!list) return;
+  list.textContent = "";
+  const b = bgNow;
+  const section = (name, rows) => { if (!rows.length) return; list.appendChild(el("h3", "", name)); rows.forEach((r) => list.appendChild(r)); };
+  section("Agents", b.agents.map((a) => bgRow(a.task, `${a.activity} · ${secs(a.seconds)}${a.chat_title ? ` · from ${a.chat_title}` : ""}`, `agent:${a.id}`, a.chat ? () => switchTo(a.chat) : null)));
+  section("Jobs", [
+    ...b.chats.map((c) => bgRow(c.title || "Chat", c.id === current ? "This chat, working" : "Working", `chat:${c.id}`, c.id === current ? null : () => switchTo(c.id))),
+    ...b.sparks.map((sp) => bgRow(sp.name, "On shift", `spark:${sp.id}`, null)),
+    ...b.waits.map((w) => bgRow(w.what, `${w.when[0].toUpperCase()}${w.when.slice(1)}${w.chat_title ? ` · ${w.chat_title}` : ""}`, `wait:${w.id}`, w.chat ? () => switchTo(w.chat) : null)),
+  ]);
+  section("Shells", b.shells.map((sh) => {
+    const row = bgRow("", `${sh.by} · ${secs(sh.seconds)} · pid ${sh.pid}`, `shell:${sh.pid}`, null);
+    const code = el("code", "");
+    code.textContent = sh.command;
+    row.querySelector("b").appendChild(code);
+    return row;
+  }));
+  if (!list.childElementCount) list.appendChild(el("div", "bg-none", "Nothing is running in the background."));
+  const all = $("#bg-body .bg-all");
+  all.disabled = !bgWords(b) && !b.chats.length;
+}
+function openBgPanel() {
+  const body = $("#bg-body");
+  body.innerHTML = `<h2>Background</h2><div class="bg-list"></div><div class="dialog-buttons"><button type="button" class="btn bg-all">Stop all</button><button type="button" class="btn primary bg-close">Close</button></div>`;
+  body.querySelector(".bg-close").onclick = closeBgPanel;
+  body.querySelector(".bg-all").onclick = (e) => bgStop("all", e.currentTarget);
+  showOverlay($("#bg-panel"));
+  drawBgPanel();
+  pollBackground();
+}
+function closeBgPanel() { hideOverlay($("#bg-panel")); }
+$("#bg-panel").addEventListener("mousedown", (e) => { if (e.target.id === "bg-panel") closeBgPanel(); });
+$("#bg-bar .bg-view").onclick = openBgPanel;
+$("#bg-bar .bg-stop-all").onclick = (e) => { const b = e.currentTarget; bgStop("all", b).then(() => { b.disabled = false; }); };
 $("#call-log").addEventListener("mousedown", (e) => { if (e.target.id === "call-log") closeCallLog(); });
 
 // Every version of an edited message, oldest first, the one it says now
@@ -19606,7 +19720,10 @@ function renderChats() {
 function renderAgents() {
   const count = info.agents || 0;
   const btn = $("#agents-btn");
-  btn.hidden = !count;
+  // The Background bar over the message box says it now, with Stop.
+  btn.hidden = true;
+  if (count && !bgNow.agents.length) pollBackground();
+  renderBgBar();
   $("#agents-count").textContent = `${count} agent${count === 1 ? "" : "s"} working`;
   const unread = $("#sparks-btn .count");
   if (unread) unread.textContent = info.sparks_unread || "";
@@ -24708,6 +24825,7 @@ window.addEventListener("keydown", (e) => {
   if (up($("#help"))) { if (e.key === "Escape" || e.key === "?" || (mod && e.key === "/")) { e.preventDefault(); closeHelp(); } return; }
   if (up($("#phone"))) { if (e.key === "Escape") { e.preventDefault(); closePhone(); } return; }
   if (up($("#call-log"))) { if (e.key === "Escape") { e.preventDefault(); closeCallLog(); } return; }
+  if (up($("#bg-panel"))) { if (e.key === "Escape") { e.preventDefault(); closeBgPanel(); } return; }
   if (up($("#form"))) return;
   if (up(palette) || up(searchBox)) return;
   // The team chat is over the page: Esc closes it, and the page's own

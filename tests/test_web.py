@@ -2990,6 +2990,51 @@ class TestQueueAndSteer:
         assert asked == ["go", "b", "a"]
 
 
+class TestBackground:
+    def test_lists_and_stops_a_running_command(self):
+        import sys as _sys
+
+        session = web.Session()
+        chat = session.new_chat()
+        tools = web._tools()
+        done = {}
+
+        def run():
+            with tools.running_as(chat.id):
+                done["out"] = tools._run_owned(
+                    [_sys.executable, "-c", "import time; time.sleep(30)"],
+                    shell=False, seconds=60, env=None)
+
+        thread = threading.Thread(target=run, daemon=True)
+        thread.start()
+        wait_for(lambda: session.background()["shells"])
+        shell = session.background()["shells"][0]
+        assert shell["owner"] == chat.id
+        assert "time.sleep(30)" in shell["command"]
+        assert shell["by"] == chat.title
+
+        assert web.command(session, {"name": "bg-stop",
+                                     "arg": f"shell:{shell['pid']}"}) == {
+            "stopped": 1}
+        thread.join(10)
+        assert done["out"][3] is True        # ended by Stop
+        assert session.background()["shells"] == []
+
+    def test_stop_all_stops_a_sub_agent(self):
+        session = web.Session()
+        entry = web.subagents.SubAgent(id="ab12cd", task="dig")
+        with web.subagents._lock:
+            web.subagents._agents[entry.id] = entry
+        try:
+            listed = session.background()["agents"]
+            assert [a["id"] for a in listed] == ["ab12cd"]
+            assert session.stop_background("all") == 1
+            assert entry.stop_asked
+        finally:
+            with web.subagents._lock:
+                web.subagents._agents.pop(entry.id, None)
+
+
 def down():
     raise ConnectionError("the model went away")
 

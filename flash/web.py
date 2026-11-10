@@ -1745,6 +1745,86 @@ class Session:
             if entry.id in owned
         ]
 
+    # Background ----------------------------------------------------
+
+    def background(self) -> dict:
+        """Everything working on its own, in any chat: sub-agents, chats
+        mid-turn, spark shifts, commands running, and waits. For the
+        Background panel and its bar."""
+
+        titles = {c.id: c.title for c in list(self.chats.values())}
+        agents = [
+            {
+                "id": entry.id, "task": entry.task,
+                "activity": entry.activity,
+                "seconds": round(entry.elapsed),
+                "chat": self.agents.get(entry.id, ""),
+                "chat_title": titles.get(self.agents.get(entry.id, ""), ""),
+            }
+            for entry in subagents.list_all()
+            if entry.status == subagents.RUNNING
+        ]
+        chats = [
+            {"id": c.id, "title": c.title}
+            for c in list(self.chats.values()) if c.busy or c.queued
+        ]
+        working = [
+            {"id": sp.id, "name": sp.name}
+            for sp in sparks.all_sparks() if sp.status == sparks.WORKING
+        ]
+        shells = []
+        for row in _tools().running_shells():
+            owner = row["owner"]
+            kind, _, key = owner.partition(":")
+            if kind == "agent":
+                found = next((a for a in agents if a["id"] == key), None)
+                by = f"Sub-agent: {found['task']}" if found else "A sub-agent"
+            elif kind == "spark":
+                found = sparks.find(key)
+                by = found.name if found else "A spark"
+            else:
+                by = titles.get(owner, "Flash")
+            shells.append({**row, "by": by[:80]})
+        waiting = [
+            {"id": w.id, "what": w.what, "chat": w.chat,
+             "chat_title": titles.get(w.chat, ""), "when": waits.when(w)}
+            for w in waits.waiting()
+        ]
+        return {"agents": agents, "chats": chats, "sparks": working,
+                "shells": shells, "waits": waiting}
+
+    def stop_background(self, what: str) -> int:
+        """Stop one thing the Background panel lists, named
+        "kind:key" (agent, chat, spark, shell), or everything working
+        for "all". Waits are left: they are cancelled one by one. How
+        many were stopped."""
+
+        kind, _, key = what.partition(":")
+        stopped = 0
+        now = self.background()
+        if kind in ("agent", "all"):
+            for a in now["agents"]:
+                if kind == "all" or a["id"] == key:
+                    stopped += subagents.stop(a["id"])
+        if kind in ("chat", "all"):
+            for c in now["chats"]:
+                if kind == "all" or c["id"] == key:
+                    self.halt(self.chat(c["id"]))
+                    stopped += 1
+        if kind in ("spark", "all"):
+            for sp in now["sparks"]:
+                if kind == "all" or sp["id"] == key:
+                    with contextlib.suppress(sparks.SparkError):
+                        sparks.stop(sp["id"])
+                        stopped += 1
+        if kind in ("shell", "all"):
+            for row in now["shells"]:
+                if kind == "all" or str(row["pid"]) == key:
+                    stopped += _tools().stop_shell(row["pid"])
+        if stopped:
+            self.hub.publish({"type": "status"})
+        return stopped
+
     # Search --------------------------------------------------------
 
     def search(self, query: str, limit: int = SEARCH_LIMIT) -> list[dict]:
@@ -5920,6 +6000,9 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
                 "connector-switch", "connector-reload"):
         return _connector_command(name, arg, body)
 
+    if name == "bg-stop":
+        return {"stopped": session.stop_background(arg or "all")}
+
     if name == "wait-cancel":
         try:
             wait = waits.cancel(arg)
@@ -7101,6 +7184,8 @@ class Handler(BaseHTTPRequestHandler):
             self._file(url.path.removeprefix("/api/files/"),
                        download=query.get("download", [""])[0] == "1",
                        design=query.get("design", [""])[0] == "1")
+        elif url.path == "/api/background":
+            self._json(self.server.session.background())
         elif url.path == "/api/agents":
             self._json({"agents": self.server.session.agent_list(
                 query.get("chat", [""])[0]

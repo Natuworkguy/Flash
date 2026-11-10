@@ -106,6 +106,7 @@ class SubAgent:
     activity: str = "Starting"
     steps: list[Step] = field(default_factory=list)
     delivered: bool = False
+    stop_asked: bool = False
 
     @property
     def elapsed(self) -> float:
@@ -246,13 +247,20 @@ def _run(entry: SubAgent) -> None:
         # The same loop as the main one's: an empty reply is asked for
         # again, changed code is checked, and at the round limit the
         # steps asked for still run before the answer.
-        with capture_tool_output(_recorder(entry)):
+        # Its commands are its own, for Stop to end.
+        with capture_tool_output(_recorder(entry)), \
+                flash_tools.running_as(f"agent:{entry.id}"):
             done = loop.run(
                 messages, ask=ask,
                 call=lambda name, args: _call_tool(entry, name, args, allowed),
                 rounds=MAX_SUBAGENT_ROUNDS or -1,
                 last_word=lambda _ran: ROUND_LIMIT_MESSAGE,
+                stopping=lambda: entry.stop_asked,
             )
+        if done.reply.stopped:
+            _update(entry, status=FAILED, result="Stopped by the user.",
+                    finished=time.time())
+            return
         final = done.reply.content
 
         _update(
@@ -281,6 +289,21 @@ def start(task: str) -> str:
     threading.Thread(target=_run, args=(entry,), daemon=True).start()
 
     return entry.id
+
+
+def stop(agent_id: str) -> bool:
+    """Stop a running sub-agent: the command it runs ends now, and it
+    stops at its next step. Whether it was running."""
+
+    from . import tools as flash_tools  # deferred: avoids a module cycle
+
+    with _lock:
+        entry = _agents.get(agent_id)
+        if entry is None or entry.status != RUNNING:
+            return False
+        entry.stop_asked = True
+    flash_tools.stop_commands(f"agent:{agent_id}")
+    return True
 
 
 def run_now(task: str) -> tuple[bool, str]:

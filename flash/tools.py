@@ -586,6 +586,9 @@ _running_lock = threading.Lock()
 _owner = threading.local()
 # Commands ended by Stop, to say so rather than how they failed.
 _stopped: set = set()
+# What each running command is, by its process id, for the Background
+# panel: (owner, the command, when it started).
+_running_info: dict[int, tuple[str, str, float]] = {}
 # How long a stopped command has to end before it is killed outright.
 STOP_GRACE = 2.0
 
@@ -624,6 +627,36 @@ def stop_commands(owner: str) -> int:
     for proc in procs:
         _end_tree(proc)
     return len(procs)
+
+
+def running_shells() -> list[dict]:
+    """Every command Flash is running now: its process id, who runs it
+    (a chat's id, "spark:<id>" or "agent:<id>"), what it is, and for how
+    many seconds it has run. Oldest first."""
+
+    now = time.time()
+    with _running_lock:
+        rows = [
+            {"pid": pid, "owner": owner, "command": command,
+             "seconds": round(now - started)}
+            for pid, (owner, command, started) in _running_info.items()
+        ]
+    return sorted(rows, key=lambda r: -r["seconds"])
+
+
+def stop_shell(pid: int) -> bool:
+    """End the running command PID and what it started. Whether there
+    was one."""
+
+    with _running_lock:
+        proc = next((p for procs in _running.values() for p in procs
+                     if p.pid == pid), None)
+        if proc is not None:
+            _stopped.add(proc.pid)
+    if proc is None:
+        return False
+    threading.Thread(target=_end_tree, args=(proc,), daemon=True).start()
+    return True
 
 
 def _end_tree(proc: subprocess.Popen) -> None:
@@ -665,8 +698,10 @@ def _run_owned(args, *, shell: bool, seconds: int,
         env=env, **group,
     )
     owner = getattr(_owner, "name", "")
+    shown = args if isinstance(args, str) else " ".join(map(str, args))
     with _running_lock:
         _running.setdefault(owner, set()).add(proc)
+        _running_info[proc.pid] = (owner, shown, time.time())
     try:
         out, err = proc.communicate(timeout=seconds)
     except BaseException:
@@ -677,6 +712,7 @@ def _run_owned(args, *, shell: bool, seconds: int,
     finally:
         with _running_lock:
             _running.get(owner, set()).discard(proc)
+            _running_info.pop(proc.pid, None)
             stopped = proc.pid in _stopped
             _stopped.discard(proc.pid)
     return out or "", err or "", proc.returncode, stopped
