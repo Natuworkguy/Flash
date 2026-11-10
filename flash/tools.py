@@ -6472,8 +6472,7 @@ def interact(
 
 GAMES = {
     "flash-dash": Path(__file__).parent / "games" / "dash.html",
-    # The same level with things wrong in it, for finding what (a bug hunt
-    # by play: its page says only that it is not quite right).
+    # The same level with secrets in it: glitches that help, found by play.
     "flash-dash-glitched": Path(__file__).parent / "games" / "dash-glitched.html",
 }
 
@@ -9359,7 +9358,7 @@ tools: list[dict[str, Any]] = [
                 "policy can learn where it died. open_page('flash-dash') "
                 "opens a practice level like a rhythm runner: spikes, "
                 "blocks, pads, rings and a ship. open_page('flash-dash-glitched') "
-                "opens the same level with glitches hidden in it to find."
+                "opens the same level with secrets hidden in it that make it easier."
             ),
             "parameters": {
                 "type": "object",
