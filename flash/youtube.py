@@ -11,6 +11,7 @@ from __future__ import annotations
 import html
 import json
 import math
+import platform
 import re
 import urllib.parse
 import urllib.request
@@ -20,9 +21,32 @@ TIMEOUT_SECONDS = 20
 MAX_TRANSCRIPT_CHARS = 30_000
 MAX_SHEETS = 4
 
+_CHROME_VERSION = "142.0.0.0"
+
+
+def _platform_token() -> str:
+    """The OS part of a Chrome User-Agent, for the machine this runs on.
+
+    Chrome's own format: macOS always says "Intel" (Apple silicon Macs
+    send it too) and Windows 11 still says NT 10.0.
+    """
+    system = platform.system()
+    machine = platform.machine().lower()
+    if system == "Darwin":
+        version = platform.mac_ver()[0] or "10.15.7"
+        return f"Macintosh; Intel Mac OS X {version.replace('.', '_')}"
+    if system == "Windows":
+        parts = platform.version().split(".")
+        nt = ".".join(parts[:2]) if len(parts) >= 2 else "10.0"
+        arch = "ARM64" if machine in ("arm64", "aarch64") else "x64"
+        return f"Windows NT {nt}; Win64; {arch}"
+    arch = {"amd64": "x86_64", "arm64": "aarch64"}.get(machine, machine)
+    return f"X11; Linux {arch or 'x86_64'}"
+
+
 _WEB_AGENT = (
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/130.0 Safari/537.36"
+    f"Mozilla/5.0 ({_platform_token()}) AppleWebKit/537.36 "
+    f"(KHTML, like Gecko) Chrome/{_CHROME_VERSION} Safari/537.36"
 )
 _ANDROID_VERSION = "20.10.38"
 _ANDROID_AGENT = (

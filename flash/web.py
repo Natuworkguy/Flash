@@ -1340,7 +1340,11 @@ class Session:
         if self.tunnel.host:
             found.append(f"https://{self.tunnel.host}")
         if self.lan and self.port:
-            found.append(f"http://{lan_address()}:{self.port}")
+            found += [f"http://{ip}:{self.port}"
+                      for ip in lan_addresses(every=True)]
+            host = socket.gethostname().split(".")[0]
+            if host and host != "localhost":
+                found.append(f"http://{host}.local:{self.port}")
         return found
 
     def state(self, lite: bool = False) -> dict:
@@ -6132,6 +6136,7 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
         return ext_ui.pressed(
             str(body.get("extension") or ""), arg,
             str(body.get("text") or ""), chat_id, file,
+            str(body.get("choice") or ""),
         )
 
     if name == "think-auto":
@@ -7612,22 +7617,72 @@ class Server(ThreadingHTTPServer):
         super().server_close()
 
 
-def lan_address() -> str:
-    """This machine's address on the local network.
+_VIRTUAL = ("lo", "utun", "tun", "tap", "ipsec", "ppp", "bridge", "vmnet",
+            "vboxnet", "docker", "veth", "awdl", "llw", "gif", "stf", "anpi")
 
-    Connecting a UDP socket sends nothing; it only asks the system
-    which interface it would route through, which is the one a phone
-    on the same Wi-Fi can reach.
+
+def _interfaces() -> tuple[str, dict[str, list[str]]]:
+    """The default route's interface and each interface's IPv4 addresses,
+    from route and ifconfig (macOS and the BSDs); empty where they are
+    missing."""
+
+    default, found = "", {}
+    try:
+        said = subprocess.run(["route", "-n", "get", "default"],
+                              capture_output=True, text=True, timeout=3).stdout
+        default = next((line.split(":", 1)[1].strip()
+                        for line in said.splitlines()
+                        if line.strip().startswith("interface:")), "")
+        said = subprocess.run(["ifconfig"], capture_output=True, text=True,
+                              timeout=3).stdout
+    except (OSError, subprocess.SubprocessError):
+        return default, found
+    name = ""
+    for line in said.splitlines():
+        if line and not line[0].isspace():
+            name = line.split(":", 1)[0]
+        elif line.strip().startswith("inet ") and name:
+            found.setdefault(name, []).append(line.split()[1])
+    return default, found
+
+
+def lan_addresses(every: bool = False) -> list[str]:
+    """This machine's addresses on the local network, best first.
+
+    The interface with the default route comes first: that is the Wi-Fi
+    or Ethernet a phone or watch shares. VPNs (utun), VM bridges and
+    Internet Sharing are left out: a VPN can take over routing, so asking
+    the system which way it would send a packet names the tunnel, not
+    the Wi-Fi. Without ifconfig, that probe is the fallback. EVERY keeps
+    those too, after the rest, for a device that tries each in turn.
     """
 
-    probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    try:
-        probe.connect(("10.255.255.255", 1))
-        return probe.getsockname()[0]
-    except OSError:
-        return "127.0.0.1"
-    finally:
-        probe.close()
+    default, interfaces = _interfaces()
+    found: list[str] = []
+    names = sorted(interfaces, key=lambda n: (
+        n != default, n != default and n.startswith(_VIRTUAL)))
+    for name in names:
+        if not every and name != default and name.startswith(_VIRTUAL):
+            continue
+        for ip in interfaces[name]:
+            if not ip.startswith(("127.", "169.254.")) and ip not in found:
+                found.append(ip)
+    if not found:
+        probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            probe.connect(("10.255.255.255", 1))
+            found.append(probe.getsockname()[0])
+        except OSError:
+            pass
+        finally:
+            probe.close()
+    return found or ["127.0.0.1"]
+
+
+def lan_address() -> str:
+    """The best of lan_addresses: the one to show and put in the QR."""
+
+    return lan_addresses()[0]
 
 
 def qr_svg(url: str) -> str:

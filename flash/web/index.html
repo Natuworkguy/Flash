@@ -2750,6 +2750,8 @@ body.all-stopped .org-node, body.all-stopped .spark-card { animation: all-halt 0
 .spark-unavailable .row { display: flex; gap: 8px; flex-wrap: wrap; }
 .spark-head { display: flex; align-items: center; gap: 18px; margin: -6px -6px 16px; padding: 18px 18px 16px; border-radius: 16px;
   background: radial-gradient(120% 140% at 0% 0%, color-mix(in srgb, var(--c) 26%, transparent), transparent 60%), color-mix(in srgb, var(--c) 6%, var(--surface)); }
+.spark-head > div:first-child { flex: 1 1 240px; min-width: 0; overflow-wrap: anywhere; }
+.spark-head { flex-wrap: wrap; }
 .spark-head h2 { margin: 0; font-size: 19px; }
 .spark-head .meta { font-size: 12.5px; color: var(--text-3); margin-top: 3px; }
 .spark-sec { margin: 16px 0 6px; font-size: 12.5px; font-weight: 600; color: var(--text-2); }
@@ -13376,9 +13378,21 @@ async function fillModelField(form, current = "", fresh = false) {
     select.replaceWith(box);
     return;
   }
+  const fallbackNote = el("small", "global-fallbacks");
+  select.closest(".field").appendChild(fallbackNote);
+  const showFallbacks = async () => {
+    const model = select.value;
+    try {
+      const result = await command("fallbacks", model, null);
+      if (select.value !== model || !select.isConnected) return;
+      fallbackNote.textContent = (model || result.model) + " using its global fallbacks: " + ((result.chain || []).join(" > ") || "none");
+    } catch (_) { fallbackNote.textContent = ""; }
+  };
+  select.addEventListener("change", showFallbacks);
   const names = current && !listed.includes(current) ? [current, ...listed] : listed;
   select.innerHTML = `<option value="">Choose a model…</option>` + names.map((m) => `<option value="${esc(m)}">${esc(m)}${!listed.includes(m) ? " (not on this computer)" : m === said.spark_default ? " (default)" : m === info.model ? " (Flash's)" : ""}</option>`).join("");
   select.value = current;
+  showFallbacks();
 }
 
 // A spark as a code to hand on: whoever adds it gets a copy of their own.
@@ -23176,10 +23190,28 @@ function extButtonsAt(where) {
 }
 
 // FILE: the id of the model whose bar it was pressed in.
-async function pressExt(b, text = "", file = "") {
+// CHOICE: what the user picked in the dialog a button asked for with
+// {"choose": {title, label, options: [{value, label}], button}}; the
+// button runs again with it.
+async function pressExt(b, text = "", file = "", choice = "") {
   if (b.onClick) { try { await b.onClick({ text, chat: current, file }); } catch (error) { showFailure(error); } return; }
   let r;
-  try { r = await command("ext-button", b.id, current, { extension: b.extension, text, ...(file ? { file } : {}) }); } catch (error) { showFailure(error); return; }
+  try { r = await command("ext-button", b.id, current, { extension: b.extension, text, ...(file ? { file } : {}), ...(choice ? { choice } : {}) }); } catch (error) { showFailure(error); return; }
+  if (r.choose) {
+    const c = r.choose;
+    const options = (c.options || []).map((o) => `<option value="${esc(String(o.value))}">${esc(String(o.label ?? o.value))}</option>`).join("");
+    const form = openForm(`<h2></h2><p class="sub"></p><label class="field"><span></span><select name="choice" required>${options}</select></label><div class="dialog-buttons"><button type="button" class="btn" data-cancel>Cancel</button><button type="submit" class="btn primary"></button></div>`, (data) => {
+      closeForm();
+      pressExt(b, text, file, data.choice);
+      return false;
+    });
+    form.querySelector("h2").textContent = c.title || b.label;
+    form.querySelector(".sub").textContent = c.text || "";
+    form.querySelector(".field span").textContent = c.label || "Choose";
+    form.querySelector("[type=submit]").textContent = c.button || b.label;
+    form.querySelector("[data-cancel]").onclick = closeForm;
+    return;
+  }
   if (r.send) await send(r.send);
   if (r.insert) typeIn(r.insert);
   if (r.say) {

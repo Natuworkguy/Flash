@@ -81,9 +81,14 @@ def name_of(provider: str, model: str) -> str:
 
 
 def _find(provider: str):
-    for extension, found in extensions.providers():
-        if found.name == provider:
-            return extension, found
+    # A long-running spark keeper may predate an extension installed by
+    # another Flash process. Recheck disk before reporting it missing.
+    for refresh in (False, True):
+        if refresh:
+            extensions.reload()
+        for extension, found in extensions.providers():
+            if found.name == provider:
+                return extension, found
     raise ResponseError(
         f"No provider called @{provider}. /extension lists what is "
         "installed.", 404,

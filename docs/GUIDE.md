@@ -103,9 +103,13 @@ Or, if you already have the repo cloned locally:
 ### Flash Onyx (recommended model)
 
 **Flash Onyx** is a series of custom Ollama models built for Flash: a base
-model with Flash's persona and tuned parameters baked in. Each one lives in a
-single Modelfile under `models/` that declares its name and sizes at the top,
-and `models/build.py` builds whatever a Modelfile declares.
+model with Flash's persona and tuned parameters baked in. Each one lives
+under `models/`, either as a single Modelfile or as a folder (such as
+`models/onyx3/`) holding its `Modelfile` (or one `*.Modelfile`) beside the
+files it uses, like fine-tuned weights that `FROM ./onyx3.gguf` names by a
+relative path. The Modelfile declares its name and sizes at the top, and
+`models/build.py` builds whatever it declares; give it the file or the
+folder. Relative paths resolve from the Modelfile's own folder.
 
 Recent releases come in two sizes (the README's license notes say what
 they are built on): `12b` runs on consumer
@@ -115,6 +119,7 @@ version under `models/` is the newest; older ones stay there to build too.
 ```bash
 python3 models/build.py models/flash-onyx-<version>.Modelfile             # every size
 python3 models/build.py models/flash-onyx-<version>.Modelfile --size 31b  # just one
+python3 models/build.py models/onyx3/                                     # a model folder
 ```
 
 Then set `MODEL` to whichever you built (`flash-onyx-<version>:31b`, or
