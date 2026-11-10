@@ -19008,12 +19008,58 @@ logEl.addEventListener("scroll", () => {
 }, { passive: true });
 
 // ---------------------------------------------------------------------------
+// What came in while you were away, on the tab: "(2) Flash" in its title
+// and a blue dot on its icon, until you come back to it. A reply that
+// finished and a notification (a spark's @user among them) each count.
+const tabMark = (() => {
+  const titleEl = document.querySelector("title") || document.head.appendChild(document.createElement("title"));
+  const iconEl = document.querySelector('link[rel="icon"]');
+  const plainIcon = iconEl ? iconEl.href : "";
+  let base = titleEl.textContent || "Flash", count = 0, dotted = "";
+  const away = () => document.hidden || !document.hasFocus();
+  const show = () => {
+    titleEl.textContent = count ? `(${count > 99 ? "99+" : count}) ${base}` : base;
+    if (!iconEl) return;
+    if (!count) { iconEl.type = "image/svg+xml"; iconEl.href = plainIcon; return; }
+    if (dotted) { iconEl.type = "image/png"; iconEl.href = dotted; return; }
+    // The icon with a blue dot at its top right, drawn once.
+    const img = new Image();
+    img.onload = () => {
+      const c = document.createElement("canvas"); c.width = c.height = 64;
+      const g = c.getContext("2d"); g.drawImage(img, 0, 0, 64, 64);
+      g.globalCompositeOperation = "destination-out";
+      g.beginPath(); g.arc(50, 14, 16, 0, Math.PI * 2); g.fill();
+      g.globalCompositeOperation = "source-over";
+      g.fillStyle = "#2f7cf6"; g.beginPath(); g.arc(50, 14, 12, 0, Math.PI * 2); g.fill();
+      try { dotted = c.toDataURL("image/png"); } catch (_) { return; }
+      if (count) show();
+    };
+    img.src = plainIcon;
+  };
+  // Every title set anywhere on the page keeps the count in front of it.
+  Object.defineProperty(document, "title", {
+    configurable: true,
+    get: () => titleEl.textContent,
+    set: v => { base = String(v).replace(/^\(\d+\+?\) /, ""); show(); },
+  });
+  const seen = () => { if (count && !away()) { count = 0; show(); } };
+  document.addEventListener("visibilitychange", seen);
+  addEventListener("focus", seen);
+  return {
+    missed() { if (away()) { count++; show(); } },
+    get count() { return count; },
+  };
+})();
+
+// ---------------------------------------------------------------------------
 // Events from Flash
 
 function apply(event) {
   if (event.seq && event.seq <= lastSeq) return;
   if (event.seq) lastSeq = event.seq;
   extEmit(event);
+  // A reply finished while you were away.
+  if (event.type === "stats") tabMark.missed();
   if (event.type === "chats" || event.type === "status" || event.type === "projects") { refreshLite(); return; }
   if (event.type === "music") { onMusic(event); return; }
   if (event.type === "calendar") { const box = document.querySelector(".cal-box"); if (box) drawCalendarSettings(box); toast("Google Calendar is connected"); return; }
@@ -19159,14 +19205,8 @@ function notified(event) {
       try { Notification.requestPermission(); } catch (_) { /* nothing to do */ }
     }, { once: true });
   }
-  if (document.hidden) {
-    // A mark on the tab, too, for a browser that shows no notification.
-    if (!notified.title) notified.title = document.title;
-    document.title = `🔔 ${title}`;
-    document.addEventListener("visibilitychange", () => {
-      if (notified.title) { document.title = notified.title; notified.title = ""; }
-    }, { once: true });
-  }
+  // A mark on the tab, too, for a browser that shows no notification.
+  tabMark.missed();
 }
 
 // A spark wrote @user: a ping, and who it was and what it said, as any
