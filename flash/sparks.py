@@ -39,7 +39,10 @@ from typing import Optional
 import ollama
 
 from . import agent as subagents
-from . import audit, cron, loop, paths, pings, presence, providers, triggers
+from . import (
+    audit, checkins, cron, loop, paths, pings, presence, providers, sources,
+    triggers,
+)
 from .models import full_name, installed_names
 from .paths import ENV_PATH, FLASH_DIR
 from .sysprompt import get_model_system_prompt
@@ -203,6 +206,10 @@ How to work:
   replaced, not added to, so keep what still matters.
 - End with your report to the user: short, what you found or did, and
   anything that needs them. Do not repeat news from your last report.
+- Every number in it says where it came from, beside it: a link, or the
+  email, file, sheet, page or command you read it in. "14 unread
+  (Gmail)", "$12,400 (Q3 sheet, row 14)". One you cannot source, leave
+  out or call a guess.
 - If nothing is worth telling them, reply with exactly {nothing_new}
   and nothing else.
 """.strip()
@@ -3503,7 +3510,7 @@ def _prompt(
     parts = [
         get_model_system_prompt(host, model), body,
         project_block(spark, jobs), team_block(spark), presence_block(),
-        date_prompt,
+        checkins.prompt_block(), date_prompt,
     ]
     return "\n\n".join(part for part in parts if part)
 
@@ -4829,10 +4836,21 @@ def _work(
             # Where saying nothing is an answer (a team chat it need not
             # join), an empty reply is not asked for again.
             retries=0 if quiet_ok else loop.EMPTY_RETRIES,
+            # A shift's report: its figures say where they came from.
+            review=_cited if audit_as == "shift" else None,
         )
     final = done.reply.content
 
     return tidy(final).strip()
+
+
+def _cited(text: str) -> str:
+    """What a report is sent back with when a figure in it says nowhere
+    where it came from, or "". Nothing new is left be."""
+
+    if not text or text.strip(" .").upper() == NOTHING_NEW:
+        return ""
+    return sources.nudge(text)
 
 
 def _waiting_for_events(spark: Spark):

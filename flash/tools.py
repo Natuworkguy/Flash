@@ -34,6 +34,7 @@ from rich.text import Text
 
 from . import agent as subagents
 from . import browser as page_devtools
+from . import sources as _sources
 from . import (
     checkpoint,
     computer,
@@ -120,9 +121,11 @@ from .tidy import tidy, tidy_args
 
 SCRATCH_DIR = mkdtemp(prefix="flash-scratch-", suffix="-temp")
 
+
 TOOL_SYSTEM_PROMPT = f"""
 === Tool System Prompt ===
 Answer concisely. Use shell only when command output is needed.
+In a brief, a summary or a report: {_sources.RULE}
 When using shell, call the tool without extra text first.
 When searching a codebase or directory for files by name or pattern, use
   the glob tool instead of shell find/ls. When searching file contents for
@@ -430,6 +433,27 @@ def trim_tool_output(text: str, name: str = "") -> str:
         "see them) ...\n\n"
         + text[-tail_len:]
     )
+
+
+def checkin_preferences_tool(interests=None, quiet_hours=None) -> str:
+    """Read the user's check-in preferences, or change them."""
+
+    from . import checkins
+
+    try:
+        if interests is not None:
+            checkins.set_interests(str(interests))
+        if quiet_hours is not None:
+            checkins.set_quiet_hours(str(quiet_hours))
+    except checkins.CheckinError as exc:
+        return f"Error: {exc}"
+    said = checkins.interests() or "(nothing set)"
+    quiet = checkins.quiet_words() or "off"
+    changed = interests is not None or quiet_hours is not None
+    return (("Saved. " if changed else "")
+            + f"What to tell the user about, in their words: {said}\n"
+            f"Quiet hours: {quiet}"
+            + (" (it is quiet hours now)" if checkins.is_quiet() else ""))
 
 
 def read_briefing_tool() -> str:
@@ -9653,9 +9677,47 @@ tools: list[dict[str, Any]] = [
                 "briefing, what they missed, or to be caught up. Then brief "
                 "them: what needs them first, the rest grouped and short, "
                 "with the next step for each that has one, and say where "
-                "each came from."
+                "each came from. Every number cites its source beside it: "
+                "the email, report, file, sheet or link it was read in."
             ),
             "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "checkin_preferences",
+            "description": (
+                "What the user wants to hear about from Flash's check-ins "
+                "and sparks, how often, and their quiet hours. Every "
+                "spark's shift reads it; during quiet hours nothing "
+                "notifies, pings or calls them. Call it with no arguments "
+                "to read it. When the user says something like \"tell me "
+                "about X every morning\", \"stop telling me about Y\" or "
+                "\"don't ping me after 10pm\", read it, then write it back "
+                "whole with their change folded in, in their own plain "
+                "words."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "interests": {
+                        "type": "string",
+                        "description": (
+                            "The whole setting, replacing what was there: "
+                            "what to tell them about and how often, and "
+                            "what to leave out. Empty clears it."
+                        ),
+                    },
+                    "quiet_hours": {
+                        "type": "string",
+                        "description": (
+                            "A span like \"10pm-7am\" or \"22:00 to "
+                            "07:00\", in this computer's time, or \"off\"."
+                        ),
+                    },
+                },
+            },
         },
     },
     {
@@ -10337,6 +10399,8 @@ FUNCTIONS = {
     "refresh_tools": refresh_tools,
     "more_output": more_output,
     "read_briefing": lambda **_: read_briefing_tool(),
+    "checkin_preferences": lambda interests=None, quiet_hours=None, **_:
+        checkin_preferences_tool(interests, quiet_hours),
     "review_code": review_code,
     "read_aloud": read_aloud,
     "teach_chess": teach_chess,
