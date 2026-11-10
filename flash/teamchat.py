@@ -1518,7 +1518,7 @@ def _reply(
                 lambda doing: _set_typing(team.id, spark.id, doing),
                 sparks.MAX_CHAT_ROUNDS, sparks.CHAT_LAST_WORD, client,
                 names=_ultra_tools() if ultra else None,
-                audit_as="team chat",
+                audit_as="team chat", quiet_ok=True,
             )
         said = "" if not text or _quiet(text) else text
         # Its answer only repeating the message it just sent is not

@@ -25,7 +25,6 @@ own that the operating system starts at login.
 import base64
 import contextlib
 import hashlib
-import itertools
 import json
 import os
 import re
@@ -40,7 +39,7 @@ from typing import Optional
 import ollama
 
 from . import agent as subagents
-from . import audit, cron, paths, pings, presence, providers, triggers
+from . import audit, cron, loop, paths, pings, presence, providers, triggers
 from .models import full_name, installed_names
 from .paths import ENV_PATH, FLASH_DIR
 from .sysprompt import get_model_system_prompt
@@ -4625,6 +4624,7 @@ def _work(
     spent: Optional[Callable[[int], object]] = None,
     audit_as: str = "shift",
     steering: Optional[Callable[[], list[str]]] = None,
+    quiet_ok: bool = False,
 ) -> str:
     """One agent run for SPARK: the model and its tools, back and forth,
     until it answers. OWN are the tools only a spark has, each answered
@@ -4722,82 +4722,77 @@ def _work(
         def spent(tokens: int) -> bool:
             return spend(spark.id, tokens)
 
-    final = ""
-    tool_calls: list = []
-    with capture_tool_output(record):
-        # No limit: it goes until the model has no more tools to call,
-        # or the user stops it.
-        for _ in range(rounds) if rounds is not None else itertools.count():
-            if stopping is not None and stopping():
-                raise Stopped()
-            for change in steering() if steering is not None else []:
-                messages.append({
-                    "role": "user", "content": f"{STEER_NOTE}\n{change}",
-                })
-            doing(note[0] or "Thinking")
-            response = ask(
-                model=model, messages=messages, tools=tools_now(),
-                options=subagents.chat_options(),
-            )
-            spent(_tokens_of(response))
-            message = getattr(response, "message", None)
-            final = getattr(message, "content", "") or ""
-            tool_calls = list(getattr(message, "tool_calls", None) or [])
-            if not tool_calls:
-                break
-            said = status_note(final)
-            if said:
-                note[0] = said
-                doing(said)
-
-            calls = [subagents._tool_call_name_args(c) for c in tool_calls]
-            messages.append({
-                "role": "assistant",
-                "content": final,
-                "tool_calls": [
-                    {"function": {"name": n, "arguments": a}}
-                    for n, a in calls
-                ],
-            })
-            for at, (name, args) in enumerate(calls):
-                why = ""
-                if gate is not None and (name in allowed or connected(
-                        name)) and gate(name):
-                    # Half written ("x", "placeholder"): back to the
-                    # model to finish, never put to the user like that.
-                    why = flash_tools.unfinished(name, args)
-                    if not why:
-                        raise NeedsApproval(name, args, calls[at + 1:])
-                result = why or _call(
-                    name, args, allowed + ((name,) if connected(name) else ()),
-                    steps, own,
-                )
-                log(spark.id, "tool", tool=name, args=args,
-                    result=str(result), during=audit_as)
-                messages.append({
-                    "role": "tool",
-                    "content": flash_tools.trim_tool_output(result, name),
-                    "tool_name": name,
-                })
-            # Frames a tool attached (watch_youtube), for the model to see.
-            images = flash_tools.take_pending_images()
-            if images:
-                messages.append({
-                    "role": "user", "content": TOOL_IMAGES_NOTE,
-                    "images": images,
-                })
-
-    if tool_calls:
-        doing("Writing")
-        messages.append({"role": "system", "content": last_word})
-        response = ask(
-            model=model, messages=messages,
-            options=subagents.chat_options(),
-        )
+    def ask_once(convo: list, with_tools: bool) -> loop.Reply:
+        if stopping is not None and stopping():
+            raise Stopped()
+        doing((note[0] or "Thinking") if with_tools else "Writing")
+        request = {"model": model, "messages": convo,
+                   "options": subagents.chat_options()}
+        if with_tools:
+            request["tools"] = tools_now()
+        response = ask(**request)
         spent(_tokens_of(response))
-        final = getattr(
-            getattr(response, "message", None), "content", ""
-        ) or ""
+        message = getattr(response, "message", None)
+        return loop.Reply(
+            content=getattr(message, "content", "") or "",
+            calls=[subagents._tool_call_name_args(c) for c in
+                   getattr(message, "tool_calls", None) or []],
+        )
+
+    # The calls of the step being run, for an approval to hold the rest.
+    step: dict = {"calls": [], "at": 0}
+
+    def shown(reply: loop.Reply) -> None:
+        said = status_note(reply.content)
+        if said:
+            note[0] = said
+            doing(said)
+        step["calls"], step["at"] = list(reply.calls), 0
+
+    def run_one(name: str, args: dict) -> str:
+        at = step["at"]
+        step["at"] += 1
+        why = ""
+        if gate is not None and (name in allowed or connected(
+                name)) and gate(name):
+            # Half written ("x", "placeholder"): back to the model to
+            # finish, never put to the user like that.
+            why = flash_tools.unfinished(name, args)
+            if not why:
+                raise NeedsApproval(name, args, step["calls"][at + 1:])
+        result = why or _call(
+            name, args, allowed + ((name,) if connected(name) else ()),
+            steps, own,
+        )
+        log(spark.id, "tool", tool=name, args=args,
+            result=str(result), during=audit_as)
+        return result
+
+    def steer(convo: list) -> None:
+        for change in steering() if steering is not None else []:
+            convo.append({"role": "user", "content": f"{STEER_NOTE}\n{change}"})
+
+    def after(convo: list, _calls: list) -> None:
+        # Frames a tool attached (watch_youtube), for the model to see.
+        images = flash_tools.take_pending_images()
+        if images:
+            convo.append({"role": "user", "content": TOOL_IMAGES_NOTE,
+                          "images": images})
+        steer(convo)
+
+    with capture_tool_output(record):
+        steer(messages)
+        # The main loop's rules (loop.py); with no round limit it goes
+        # until the model has no more tools to call, or the user stops it.
+        done = loop.run(
+            messages, ask=ask_once, call=run_one, rounds=rounds,
+            on_reply=shown, after_round=after,
+            last_word=lambda _ran: last_word,
+            # Where saying nothing is an answer (a team chat it need not
+            # join), an empty reply is not asked for again.
+            retries=0 if quiet_ok else loop.EMPTY_RETRIES,
+        )
+    final = done.reply.content
 
     return tidy(final).strip()
 

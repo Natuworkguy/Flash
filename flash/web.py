@@ -78,6 +78,7 @@ from . import (
     keepalive,
     learning,
     livedocs,
+    loop,
     loaders,
     meeting,
     memory,
@@ -99,7 +100,6 @@ from . import (
     triggers,
     tunnel,
     updater,
-    verify,
     visuals,
     voice,
     voicehooks,
@@ -4019,114 +4019,94 @@ def _respond(
             convo = [system, *chat.messages]
         keep_from = len(convo)
         tool_count = 0
-        reply = Streamed()
-        # Code changed this turn is checked before the turn ends.
-        watch = verify.Watch()
 
-        for _round in range(ai.Config.max_tool_rounds):
-            reply = stream_reply(
-                session, chat, client, convo, offered, model,
+        def ask(messages: list, with_tools: bool) -> loop.Reply:
+            nonlocal tokens, generating
+            streamed = stream_reply(
+                session, chat, client, messages,
+                offered if with_tools else None, model,
             )
-            tokens += reply.tokens
-            generating += reply.seconds
+            tokens += streamed.tokens
+            generating += streamed.seconds
+            said = loop.Reply(
+                content=streamed.content, stopped=streamed.stopped,
+                calls=[ai._tool_call_name_args(c) for c in streamed.calls],
+            )
+            said.streamed = streamed
+            return said
 
-            if reply.stopped:
-                break
-            if not reply.calls:
-                # About to end with code changed and not checked: sent
-                # back, once, to run the project's checks.
-                nudge = watch.nudge()
-                if not nudge:
-                    break
-                if reply.content.strip():
-                    _finish_reply(session, chat, reply, spark)
-                convo.append({"role": "assistant", "content": reply.content})
-                convo.append(ai._message("user", nudge))
-                continue
+        def shown(said: loop.Reply) -> None:
+            _finish_reply(session, chat, said.streamed, spark)
 
-            _finish_reply(session, chat, reply, spark)
-
-            named = [ai._tool_call_name_args(call) for call in reply.calls]
-            convo.append({
-                "role": "assistant",
-                "content": reply.content,
-                "tool_calls": [
-                    {"function": {"name": name, "arguments": args}}
-                    for name, args in named
-                ],
-            })
-
-            for name, args in named:
-                if name != "reason":
-                    used.append(name)
-                if chat.stop.is_set():
-                    output = "Stopped by the user before this ran."
-                elif name == "reason":
-                    # It prints straight to the terminal, which is not
-                    # where anyone is looking.
-                    session.emit(chat, {
-                        "type": "thought",
-                        "text": str(args.get("thought", "")).strip(),
-                    })
-                    output = "(noted)"
-                elif name == "think_harder" and can_think:
-                    # Every step after this one thinks first.
-                    chat.thought_harder = True
-                    session.emit(chat, {
-                        "type": "thought",
-                        "text": "Thinking harder: "
-                        + str(args.get("why", "")).strip(),
-                    })
-                    output = flash_tools.THOUGHT_HARDER
-                elif name == "title_chat":
-                    output = retitle(session, chat, args)
-                elif name == "end_conversation":
-                    output = end_voice(session, chat)
-                elif name == "guide_step":
-                    output = guide_step(session, chat, args)
-                elif name == "wait_for":
-                    output = wait_for(session, chat, args)
-                elif name == "cancel_wait":
-                    output = cancel_wait(session, chat, args)
-                elif name == "edit_wait":
-                    output = edit_wait(session, chat, args)
-                elif name == "computer_use":
-                    # This chat's: the stop keys stop this reply.
-                    with flash_tools.computer_user(chat.id, chat.stop.set):
-                        output = flash_tools.run_tool((name, args))
-                    tool_count += 1
-                elif kit is not None and name in kit.tools:
-                    output = kit.tools[name](args)
-                    tool_count += 1
-                elif kit is not None and name not in sparks.chat_tool_names() \
-                        and flash_tools.connectors.find(name) is None:
-                    output = f"Unknown tool: {name}."
-                elif name == "give_spark":
-                    # Its report comes back to this chat, not only to
-                    # the spark's reports.
-                    output = flash_tools.give_spark(
-                        str(args.get("spark", "")), str(args.get("job", "")),
-                        chat.id,
-                    )
-                    tool_count += 1
-                else:
-                    before = {e.id for e in subagents.list_all()}
-                    output = flash_tools.run_tool((name, args))
-                    if name == "agent":
-                        after = {e.id for e in subagents.list_all()}
-                        session.adopt(chat, after - before)
-                    tool_count += 1
-                watch.saw(name, args, output)
-                if spark is not None and name != "reason":
-                    sparks.log(spark.id, "tool", tool=name, args=args,
-                               result=str(output), during="chat")
-                convo.append({
-                    "role": "tool",
-                    "content": flash_tools.trim_tool_output(output, name),
-                    "tool_name": name,
+        def call(name: str, args: dict) -> str:
+            nonlocal tool_count
+            if name != "reason":
+                used.append(name)
+            if chat.stop.is_set():
+                output = "Stopped by the user before this ran."
+            elif name == "reason":
+                # It prints straight to the terminal, which is not
+                # where anyone is looking.
+                session.emit(chat, {
+                    "type": "thought",
+                    "text": str(args.get("thought", "")).strip(),
                 })
+                output = "(noted)"
+            elif name == "think_harder" and can_think:
+                # Every step after this one thinks first.
+                chat.thought_harder = True
+                session.emit(chat, {
+                    "type": "thought",
+                    "text": "Thinking harder: "
+                    + str(args.get("why", "")).strip(),
+                })
+                output = flash_tools.THOUGHT_HARDER
+            elif name == "title_chat":
+                output = retitle(session, chat, args)
+            elif name == "end_conversation":
+                output = end_voice(session, chat)
+            elif name == "guide_step":
+                output = guide_step(session, chat, args)
+            elif name == "wait_for":
+                output = wait_for(session, chat, args)
+            elif name == "cancel_wait":
+                output = cancel_wait(session, chat, args)
+            elif name == "edit_wait":
+                output = edit_wait(session, chat, args)
+            elif name == "computer_use":
+                # This chat's: the stop keys stop this reply.
+                with flash_tools.computer_user(chat.id, chat.stop.set):
+                    output = flash_tools.run_tool((name, args))
+                tool_count += 1
+            elif kit is not None and name in kit.tools:
+                output = kit.tools[name](args)
+                tool_count += 1
+            elif kit is not None and name not in sparks.chat_tool_names() \
+                    and flash_tools.connectors.find(name) is None:
+                output = f"Unknown tool: {name}."
+            elif name == "give_spark":
+                # Its report comes back to this chat, not only to
+                # the spark's reports.
+                output = flash_tools.give_spark(
+                    str(args.get("spark", "")), str(args.get("job", "")),
+                    chat.id,
+                )
+                tool_count += 1
+            else:
+                before = {e.id for e in subagents.list_all()}
+                output = flash_tools.run_tool((name, args))
+                if name == "agent":
+                    after = {e.id for e in subagents.list_all()}
+                    session.adopt(chat, after - before)
+                tool_count += 1
+            if spark is not None and name != "reason":
+                sparks.log(spark.id, "tool", tool=name, args=args,
+                           result=str(output), during="chat")
+            return output
 
-            if any(name == "refresh_tools" for name, _ in named):
+        def after(messages: list, calls: list) -> None:
+            nonlocal offered
+            if any(name == "refresh_tools" for name, _ in calls):
                 # New tools from the connected apps, from the next step.
                 offered = flash_tools.turn_tools()
                 if kit is not None:
@@ -4141,28 +4121,28 @@ def _respond(
             images = flash_tools.take_pending_images()
             if images:
                 _show_seen(session, chat, images)
-                convo.append(
+                messages.append(
                     ai._message("user", ai.TOOL_IMAGE_NOTE, images)
                 )
 
             # Whatever the user sent to steer this turn, read before the
             # model decides its next step.
             for steer in session.take_steers(chat):
-                said, shown = outgoing(ai, steer["text"], steer.get("files"))
-                convo.append(ai._message(
-                    "user", f"{STEER_NOTE}\n{said}", shown or None,
+                said, shown_files = outgoing(ai, steer["text"],
+                                             steer.get("files"))
+                messages.append(ai._message(
+                    "user", f"{STEER_NOTE}\n{said}", shown_files or None,
                 ))
 
-            if chat.stop.is_set():
-                reply = Streamed(stopped=True)
-                break
-        else:
-            # Out of tool rounds: one more call, with no tools, for the
-            # answer from what the tools found.
-            convo.append(ai._tool_limit_message())
-            reply = stream_reply(session, chat, client, convo, None, model)
-            tokens += reply.tokens
-            generating += reply.seconds
+        # The one agent loop (loop.py): an empty reply is asked for
+        # again, changed code is checked, and at the round limit the
+        # steps asked for still run before the answer.
+        done = loop.run(
+            convo, ask=ask, call=call, on_reply=shown, after_round=after,
+            stopping=chat.stop.is_set,
+            trim=flash_tools.trim_tool_output,
+        )
+        reply = getattr(done.reply, "streamed", None) or Streamed(stopped=True)
 
     # Woken by a save that asked nothing of it: nothing to show, and
     # nothing kept but that the file changed, for the next message.

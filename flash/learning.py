@@ -19,7 +19,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
-from . import context, providers, skills, skilltrials
+from . import context, loop, providers, skills, skilltrials
 from .memory import list_memory
 from .theme import capture_tool_output
 
@@ -466,39 +466,28 @@ def _review(review: Review, messages: list[dict], host: str, model: str):
         client = providers.client(host)
         tools = _schemas(_allowed(review))
         chat = review_messages(review, messages)
-        reply = ""
+        def ask(convo: list, with_tools: bool) -> loop.Reply:
+            reply, calls = _stream(client, model, convo,
+                                   tools if with_tools else None)
+            return loop.Reply(content=reply, calls=[
+                (call.function.name, dict(call.function.arguments or {}))
+                for call in calls
+            ])
+
+        def call(name: str, args: dict) -> str:
+            try:
+                return _call(review, name, args)
+            except TypeError as exc:
+                return f"Error: {exc}"
 
         # Tool output goes to a sink, never the terminal: this thread
         # would otherwise print into the middle of the user's prompt.
+        # The main loop's rules (loop.py), less the code checks: a
+        # review only writes skills and memories.
         with capture_tool_output(lambda *_event: None):
-            for _round in range(MAX_REVIEW_ROUNDS):
-                reply, calls = _stream(client, model, chat, tools)
-                if not calls:
-                    break
-
-                named = [
-                    (
-                        call.function.name,
-                        dict(call.function.arguments or {}),
-                    )
-                    for call in calls
-                ]
-                chat.append({
-                    "role": "assistant",
-                    "content": reply,
-                    "tool_calls": [
-                        {"function": {"name": n, "arguments": a}}
-                        for n, a in named
-                    ],
-                })
-                for name, args in named:
-                    try:
-                        result = _call(review, name, args)
-                    except TypeError as exc:
-                        result = f"Error: {exc}"
-                    chat.append(
-                        {"role": "tool", "content": result, "tool_name": name}
-                    )
+            done = loop.run(chat, ask=ask, call=call,
+                            rounds=MAX_REVIEW_ROUNDS, check_code=False)
+        reply = done.reply.content
 
         review.reply = reply.strip()
     except InterruptedError:
