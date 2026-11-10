@@ -6168,6 +6168,7 @@ function mendKind(entry) {
 }
 
 function openViewer(entry) {
+  document.querySelectorAll("#viewer .viewer-ext").forEach((n) => n.remove());
   mendKind(entry);
   if (entry.kind === "browser") { openBrowser(entry.run, entry.at); return; }
   const viewer = $("#viewer");
@@ -6222,7 +6223,19 @@ function openViewer(entry) {
     img.src = fileUrl(entry);
     holder.appendChild(img);
     holder.onclick = () => holder.classList.toggle("actual");
-    body.appendChild(holder);
+    body.appendChild(holder);    // Extensions' buttons for a picture, in the bar: the picture's file
+    // goes to them (Send to Riptide makes it a layer there).
+    for (const b of extButtonsAt("image")) {
+      const node = el("button", "icon-btn viewer-ext", icon(ICON[b.icon] ? b.icon : "puzzle"));
+      node.type = "button";
+      node.dataset.tip = b.label;
+      node.setAttribute("aria-label", b.label);
+      node.onclick = async () => {
+        node.disabled = true;
+        try { await pressExt(b, "", entry.id); } finally { node.disabled = false; }
+      };
+      $("#viewer-download").before(node);
+    }
   }
   viewer.setAttribute("aria-hidden", "false");
   if (!already) {

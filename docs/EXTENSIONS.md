@@ -760,8 +760,10 @@ reply), or `terminal` (a key in the terminal's box, given as `key`: `c-`
 for Ctrl or `m-` for Alt, and a letter Flash doesn't use itself),
 `input` (an icon beside the send button), `selection` (a chip over text
 you select in a reply, given that text), `palette` (a row in the
-command palette), or `model` (an icon in the bar of a 3D model being
-looked at, named when pointed at, and given the model's file).
+command palette), `model` (an icon in the bar of a 3D model being
+looked at, named when pointed at, and given the model's file), or
+`image` (the same in the bar of a picture being looked at, given the
+picture's file: Riptide's Send to Riptide makes it a layer there).
 
 On the web any button can have a `shortcut`: modifiers and a key, such
 as `"alt+shift+w"` or `"mod+shift+k"` (`mod` is Cmd on a Mac and Ctrl
