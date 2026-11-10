@@ -113,6 +113,7 @@ def run(
     check_code: bool = True,
     last_word: Optional[Callable[[int], str]] = None,
     retries: int = EMPTY_RETRIES,
+    review: Optional[Callable[[str], str]] = None,
 ) -> Result:
     """Run a turn to its answer.
 
@@ -121,7 +122,9 @@ def run(
     None for no limit. FIRST is a reply already in hand (the terminal
     asks once before it knows whether tools are coming). ON_REPLY sees
     each reply that calls tools, before they run, so a page can show the
-    words that came with them."""
+    words that came with them. REVIEW reads the answer it is about to end
+    with and says what to fix, or "": the answer is sent back once with
+    that, as an unchecked code change is."""
 
     from . import tools as flash_tools
     from . import verify
@@ -142,6 +145,9 @@ def run(
             # About to end with code changed and not checked: sent back,
             # once, to run the project's checks.
             nudge = watch.nudge() if watch is not None else ""
+            if not nudge and review is not None:
+                nudge = review(reply.content)
+                review = None       # once: a second answer stands
             if not nudge:
                 return result
             if on_reply is not None and reply.content.strip():
