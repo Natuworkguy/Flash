@@ -3742,6 +3742,10 @@ body.resizing-viewer iframe { pointer-events: none; }
 
 /* The sidebar's rows under New chat, as the user laid them out */
 .in-more { display: none !important; }
+#side-more .more-arr { margin-left: auto; display: grid; place-items: center; color: var(--text-3); transition: transform 0.16s cubic-bezier(0.2, 0, 0, 1); }
+#side-more .more-arr svg { width: 14px; height: 14px; }
+#side-more[aria-expanded="true"] .more-arr { transform: rotate(90deg); color: var(--text-2); }
+#side-more[aria-expanded="true"][data-up="1"] .more-arr { transform: rotate(-90deg); }
 .side-custom { position: fixed; z-index: 40; width: 280px; background: var(--surface); border: 1px solid var(--border-strong); border-radius: 14px; box-shadow: var(--shadow); padding: 10px; animation: pop 0.14s cubic-bezier(0.2, 0, 0, 1); }
 .side-custom h3 { margin: 2px 6px 8px; font-size: 13px; font-weight: 600; color: var(--text); }
 .side-custom p { margin: 0 6px 10px; font-size: 12px; color: var(--text-3); }
@@ -22702,6 +22706,7 @@ let emojis = {};           // :name -> emoji, the terminal's list
 
 function closeMenu() {
   emojiField = null;
+  $("#side-more")?.setAttribute("aria-expanded", "false");
   $("#plus-btn").classList.remove("open");
   if (!menuEl) return;
   const leaving = menuEl;
@@ -24776,11 +24781,15 @@ function moveSide(id, step) {
 function tuckSide(id, more) {
   setSideLayout(sideLayout().map((r) => r.id === id ? { ...r, more } : r));
 }
-$("#side-more").innerHTML = icon("more") + "<span>More</span>";
+$("#side-more").innerHTML = icon("more") + "<span>More</span>" + `<span class="more-arr" aria-hidden="true">${icon("chevRight")}</span>`;
 $("#side-more").onclick = (e) => {
   const rows = sideLayout().filter((r) => r.more).map((r) => ({ id: r.id, html: sideIcon(r.id) + `<span>${esc(sideName(r.id))}</span>` }));
   rows.push({ custom: true, rule: true, html: icon("edit") + "<span>Customize sidebar</span>" });
   openMenu(e.currentTarget, rows, (row) => row.custom ? openSideCustomizer() : document.getElementById(row.id)?.click(), "", true);
+  const btn = e.currentTarget;
+  btn.setAttribute("aria-expanded", "true");
+  // the arrow turns toward the menu, above or below
+  btn.dataset.up = menuEl && menuEl.getBoundingClientRect().top < btn.getBoundingClientRect().top ? "1" : "";
 };
 for (const [id] of SIDE_ROWS) {
   document.getElementById(id)?.addEventListener("contextmenu", (e) => {
