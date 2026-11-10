@@ -815,6 +815,12 @@ def _unread(data: dict) -> int:
     )
 
 
+def read_at(team_key: str) -> float:
+    """When the user last read TEAM_KEY's chat, as a time."""
+
+    return float(_read(_team(team_key).id).get("read") or 0)
+
+
 def unread(team_id: str) -> int:
     return _unread(_read(team_id))
 

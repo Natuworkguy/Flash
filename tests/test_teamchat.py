@@ -1645,3 +1645,20 @@ def test_a_dm_never_calls_anyone_else_in(model):
     posted = teamchat.answer(room, message, FakeClient([_reply("Hm.")]))
 
     assert [e["name"] for e in posted] == ["Scout"]  # nosec B101
+
+
+def test_opening_the_chat_says_when_it_was_last_read(team):
+    # The page glows what came after it, though this same look marks it read.
+    session = web.Session()
+    web.command(session, {"name": "team-chat", "arg": team.id, "read": True})
+    before = teamchat.read_at(team.id)
+    time.sleep(0.01)
+    teamchat.event(team.id, sparks.find("lead"), "report", "Found two new bugs.")
+
+    opened = web.command(session, {"name": "team-chat", "arg": team.id, "read": True})
+
+    assert opened["seen_up_to"] == before  # nosec B101
+    news = [e for e in opened["entries"] if e.get("at", 0) > opened["seen_up_to"]]
+    assert news and news[-1]["text"].startswith("Found two new bugs")  # nosec B101
+    assert opened["unread"] == 0  # nosec B101
+    assert teamchat.read_at(team.id) > before  # nosec B101

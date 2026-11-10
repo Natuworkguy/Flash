@@ -6558,9 +6558,13 @@ def _team_command(name: str, arg: str, body: dict) -> dict:
         if name == "team-chat":
             # The page with the chat open reads what it has not drawn,
             # and, while it is in front of the user, marks it read.
+            # When it was last read, from before this look marks it:
+            # what came after is what the page shows as new.
+            seen = teamchat.read_at(arg)
             if body.get("read"):
                 teamchat.mark_read(arg)
-            return teamchat.history(arg, int(body.get("since") or 0))
+            return {**teamchat.history(arg, int(body.get("since") or 0)),
+                    "seen_up_to": seen}
         if name == "team-chat-say":
             try:
                 reply_to = int(body.get("reply_to") or 0)

@@ -3209,6 +3209,10 @@ body.all-stopped .org-node, body.all-stopped .spark-card { animation: all-halt 0
 .sc #voice { justify-content: center; padding: 0; animation: none; }
 .sc #voice .voice-orb, .sc #voice .voice-say, .sc #voice .voice-end { display: none; }
 .tc-msg.fresh { animation: tc-in 0.42s cubic-bezier(0.22, 1, 0.36, 1) both; }
+/* What came in since the chat was last read: a soft glow round each, fading a few seconds after it opens */
+.tc-log .unread .tc-bubble, .tc-log .unread.tc-event-row .tc-event, .tc-log .tc-event.unread { box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 55%, transparent), 0 0 18px 2px color-mix(in srgb, var(--accent) 32%, transparent); transition: box-shadow 1.6s ease; }
+.tc-log .unread.seen .tc-bubble, .tc-log .unread.seen.tc-event-row .tc-event, .tc-log .tc-event.unread.seen { box-shadow: 0 0 0 1px transparent, 0 0 0 0 transparent; }
+@media (prefers-reduced-motion: reduce) { .tc-log .unread .tc-bubble, .tc-log .unread.tc-event-row .tc-event { transition: none; } }
 .tc-msg.mine.fresh { animation-name: tc-in-mine; }
 .tc-event.fresh { animation: tc-pop 0.5s var(--spring) both; }
 @keyframes tc-in { from { opacity: 0; transform: translate(-10px, 10px) scale(0.97); } }
@@ -11375,7 +11379,19 @@ async function tcFetch(first = false) {
   } else if (r.entries.length) {
     log.querySelector(".tc-empty")?.remove();
   }
-  r.entries.forEach((entry) => log.appendChild(tcEntry(entry, !first)));
+  r.entries.forEach((entry) => {
+    const made = tcEntry(entry, !first);
+    // a day's divider can come with it: the message is the last of what was made
+    const node = made.nodeType === Node.DOCUMENT_FRAGMENT_NODE ? (made.querySelector(".tc-msg, .tc-event-row, .tc-event") || made.lastElementChild) : made;
+    log.appendChild(made);
+    // What the sparks said since the user last looked glows when the chat opens, then fades.
+    if (node?.classList && first && r.seen_up_to && (entry.at || 0) > r.seen_up_to && entry.kind !== "user" && entry.kind !== "call") node.classList.add("unread");
+  });
+  if (first) {
+    const firstNew = log.querySelector(".unread");
+    if (firstNew && log.querySelectorAll(".unread").length > 1) firstNew.scrollIntoView({ block: "center" });
+    setTimeout(() => log.querySelectorAll(".unread").forEach((n) => n.classList.add("seen")), 4500);
+  }
   // Messages already drawn that were reacted to: only their pills change.
   // One a retry replaced leaves the chat.
   (r.changed || []).forEach((entry) => {
