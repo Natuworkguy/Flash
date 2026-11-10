@@ -22,7 +22,7 @@ from typing import Optional
 from rich.console import Group, RenderableType
 from rich.text import Text
 
-from . import providers, systemone
+from . import loop, providers, systemone
 from .sysprompt import get_model_system_prompt
 from .theme import (
     ACCENT,
@@ -47,7 +47,8 @@ from .tidy import tidy, tidy_args
 
 OLLAMA_HOST_DEFAULT = "http://localhost:11434"
 
-MAX_SUBAGENT_ROUNDS = 10
+# 0: the main loop's limit (loop.max_rounds, MAX_TOOL_ROUNDS)
+MAX_SUBAGENT_ROUNDS = 0
 DEFAULT_WAIT_SECONDS = 300.0
 MAX_WAIT_SECONDS = 600.0
 
@@ -75,8 +76,10 @@ contained answer, not a promise to look further.
 """.strip()
 
 ROUND_LIMIT_MESSAGE = (
-    "You have used every tool round you get. Answer the task now from the "
-    "tool results above. Do not call any more tools."
+    "You have used every tool round you get, and the steps you last asked "
+    "for have run: their results are above. Answer the task now from all "
+    "the tool results, with no more tool calls: what is done, what is "
+    "not, and what would finish it."
 )
 
 
@@ -223,51 +226,34 @@ def _run(entry: SubAgent) -> None:
         # What System One holds this sub-agent's calls up against.
         systemone.set_request(entry.task)
 
-        final = ""
-        tool_calls: list = []
-
-        with capture_tool_output(_recorder(entry)):
-            for round_number in range(1, MAX_SUBAGENT_ROUNDS + 1):
-                _update(entry, rounds=round_number, activity="Thinking")
-                response = client.chat(
-                    model=model,
-                    messages=messages,
-                    tools=schemas,
-                    options=chat_options(),
-                )
-                message = getattr(response, "message", None)
-                final = getattr(message, "content", "") or ""
-                tool_calls = list(getattr(message, "tool_calls", None) or [])
-
-                if not tool_calls:
-                    break
-
-                calls = [_tool_call_name_args(call) for call in tool_calls]
-                messages.append({
-                    "role": "assistant",
-                    "content": final,
-                    "tool_calls": [
-                        {"function": {"name": name, "arguments": args}}
-                        for name, args in calls
-                    ],
-                })
-
-                for name, args in calls:
-                    result = _call_tool(entry, name, args, allowed)
-                    messages.append({
-                        "role": "tool",
-                        "content": flash_tools.trim_tool_output(result, name),
-                        "tool_name": name,
-                    })
-
-        if tool_calls:
-            _update(entry, activity="Writing its answer")
-            messages.append({"role": "system", "content": ROUND_LIMIT_MESSAGE})
+        def ask(convo: list, with_tools: bool) -> loop.Reply:
+            if with_tools:
+                _update(entry, rounds=entry.rounds + 1, activity="Thinking")
+            else:
+                _update(entry, activity="Writing its answer")
             response = client.chat(
-                model=model, messages=messages, options=chat_options()
+                model=model, messages=convo,
+                tools=schemas if with_tools else None,
+                options=chat_options(),
             )
             message = getattr(response, "message", None)
-            final = getattr(message, "content", "") or ""
+            return loop.Reply(
+                content=getattr(message, "content", "") or "",
+                calls=[_tool_call_name_args(c) for c in
+                       getattr(message, "tool_calls", None) or []],
+            )
+
+        # The same loop as the main one's: an empty reply is asked for
+        # again, changed code is checked, and at the round limit the
+        # steps asked for still run before the answer.
+        with capture_tool_output(_recorder(entry)):
+            done = loop.run(
+                messages, ask=ask,
+                call=lambda name, args: _call_tool(entry, name, args, allowed),
+                rounds=MAX_SUBAGENT_ROUNDS or -1,
+                last_word=lambda _ran: ROUND_LIMIT_MESSAGE,
+            )
+        final = done.reply.content
 
         _update(
             entry,

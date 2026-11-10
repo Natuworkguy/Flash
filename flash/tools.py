@@ -358,7 +358,7 @@ NO_COMMAND_CONFIRMATION = False
 ULTRA_AUTO = False
 OLLAMA_HOST = ""
 MODEL_NAME = ""
-MAX_TOOL_OUTPUT_CHARS = 1200
+MAX_TOOL_OUTPUT_CHARS = 4000
 
 
 def init(config, ):
@@ -391,24 +391,67 @@ _SELF_LIMITING_TOOLS = {
 }
 
 
+# The output limit for the task in hand, raised by more_output; and the
+# last result that was cut, whole, so more_output can show what was cut
+# without the command being run again. Per thread: a sub-agent's or a
+# spark's limit is its own.
+_output = threading.local()
+MOST_OUTPUT_CHARS = 200_000
+
+
+def reset_output_limit() -> None:
+    """A new task starts at the configured limit (loop.run calls this)."""
+
+    _output.limit = None
+    _output.cut = None
+
+
+def output_limit() -> int:
+    return getattr(_output, "limit", None) or MAX_TOOL_OUTPUT_CHARS
+
+
 def trim_tool_output(text: str, name: str = "") -> str:
-    """Cut a tool result down to MAX_TOOL_OUTPUT_CHARS, keeping both ends."""
+    """Cut a tool result down to the output limit, keeping both ends."""
 
     text = text.strip() or "(no output)"
-    limit = MAX_TOOL_OUTPUT_CHARS
+    limit = output_limit()
 
     if name in _SELF_LIMITING_TOOLS or len(text) <= limit:
         return text
 
+    _output.cut = (name, text)
     head_len = limit // 2
     tail_len = limit - head_len
     omitted = len(text) - limit
 
     return (
         text[:head_len]
-        + f"\n\n... truncated {omitted} characters ...\n\n"
+        + f"\n\n... truncated {omitted} characters (call more_output to "
+        "see them) ...\n\n"
         + text[-tail_len:]
     )
+
+
+def more_output(chars: Any = 0) -> str:
+    """Raise the output limit for the rest of this task, and show the
+    last result that was cut, whole up to the new limit."""
+
+    try:
+        want = int(chars or 0)
+    except (TypeError, ValueError):
+        want = 0
+    want = max(output_limit() * 4 if want <= 0 else want, MAX_TOOL_OUTPUT_CHARS)
+    _output.limit = min(MOST_OUTPUT_CHARS, want)
+    tool_line(f"MoreOutput({_output.limit:,} characters)")
+    cut = getattr(_output, "cut", None)
+    head = (f"Each tool result is now cut at {_output.limit:,} characters "
+            "for the rest of this task.")
+    if not cut:
+        return head + " No result has been cut yet."
+    name, text = cut
+    _output.cut = None
+    return f"{head} The last cut result ({name}), again:\n\n" + \
+        trim_tool_output(text, "more_output")
 
 
 def _run_shell_streaming(
@@ -852,7 +895,7 @@ def grep_tool(
         return result
 
     try:
-        regex = re.compile(pattern, re.IGNORECASE if case_insensitive else 0)
+        regex = re.compile(pattern, re.IGNORECASE if _truthy(case_insensitive) else 0)
     except re.error as exc:
         result = f"Error: invalid regex: {exc}"
         tool_result(result, style=ERROR)
@@ -1040,7 +1083,7 @@ def _read_exact(file_path: Path) -> Optional[str]:
 def write_tool(path: str, content: str, append: Any = False) -> str:
     """Tool to write a text file, showing a diff and asking to confirm."""
 
-    adding = bool(append)
+    adding = _truthy(append)
 
     tool_line(f"Write({path}, append)" if adding else f"Write({path})")
 
@@ -1341,7 +1384,7 @@ def edit_tool(
 
     return _edit_file(
         path,
-        [Edit(str(old_string), str(new_string), bool(replace_all))],
+        [Edit(str(old_string), str(new_string), _truthy(replace_all))],
         "Apply this edit?",
     )
 
@@ -1380,7 +1423,7 @@ def _parse_edits(edits: Any) -> Union[list[Edit], str]:
         parsed.append(Edit(
             str(entry["old_string"]),
             str(entry["new_string"]),
-            bool(entry.get("replace_all", False)),
+            _truthy(entry.get("replace_all", False)),
         ))
 
     return parsed
@@ -1974,7 +2017,7 @@ def skill_manage_tool(
             content=content,
             old_string=old_string,
             new_string=new_string,
-            managed_only=managed_only,
+            managed_only=_truthy(managed_only),
             # The model is the only caller of this tool: the review, or
             # a chat that asked for one. Either way, Flash wrote it.
             by="flash",
@@ -2570,7 +2613,15 @@ def agent_result(agent_id: str, wait_seconds: Any = None) -> str:
 
 
 def _truthy(value: Any) -> bool:
-    return value is True or str(value).strip().lower() in ("true", "yes", "1")
+    """A yes/no argument as the model sent it. Models write booleans as
+    strings often enough ("false", "False", "0"), and bool("false") is
+    True, so a string is read for what it says."""
+
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    return str(value).strip().lower() in ("true", "yes", "y", "1", "on")
 
 
 def check_inbox(
@@ -3488,7 +3539,7 @@ def print_tool(path: str = "", document: str = "", printer: str = "",
     shown = printer or f"{default} (default)"
     preview = (f"File: {target}\nPrinter: {shown}\nCopies: {copies}"
                f"\nPages: {pages or 'all'}"
-               f"\nTwo-sided: {'yes' if two_sided else 'no'}")
+               f"\nTwo-sided: {'yes' if _truthy(two_sided) else 'no'}")
     tool_result(preview)
 
     # Asked every time, autonomous mode or not, as an email is. Only
@@ -3514,7 +3565,7 @@ def print_tool(path: str = "", document: str = "", printer: str = "",
     command += ["-n", str(copies)]
     if pages:
         command += ["-P", pages]
-    if two_sided:
+    if _truthy(two_sided):
         command += ["-o", "sides=two-sided-long-edge"]
     command += ["--", str(target)]
     try:
@@ -5197,7 +5248,7 @@ def phone_call(action: str = "call", who: str = "", goal: str = "",
     since = time.time()
     if isinstance(ready, str):
         ready = ready.strip().lower() in ("true", "yes", "1")
-    if action == "join" and not ready:
+    if action == "join" and not _truthy(ready):
         # The call app's mic and speakers have to be the loopback
         # devices first, and only the user can set them: ask, and wait.
         ask = (f"Okay. Set the mic to {calls.to_call()} and speakers to "
@@ -5800,7 +5851,7 @@ def _canvas_patches(patches: Any) -> tuple[list[dict], str]:
         out.append({"selector": str(one["selector"]), "how": how,
                     "html": str(one.get("html") or ""),
                     "name": str(one.get("name") or ""),
-                    "all": bool(one.get("all"))})
+                    "all": _truthy(one.get("all"))})
     if sum(len(p["html"]) for p in out) > 200_000:
         return [], "over 200,000 characters of patches: make them smaller."
     return out, ""
@@ -6164,7 +6215,7 @@ def screenshot(
                          MAX_SCREENSHOT_SIDE, DEFAULT_SCREENSHOT_HEIGHT)
     settle_ms = _clamp(wait_ms, 0, MAX_SCREENSHOT_WAIT_MS,
                        DEFAULT_SCREENSHOT_WAIT_MS)
-    whole_page = bool(full_page)
+    whole_page = _truthy(full_page)
 
     shape = f"{view_width}x{view_height}"
     if whole_page:
@@ -6266,7 +6317,7 @@ def _page_report(
     if sees or capturing():
         _screenshot_count += 1
         out = Path(SCRATCH_DIR) / f"page-{_screenshot_count}.png"
-        why = page_snapshot(out, full_page=bool(full_page))
+        why = page_snapshot(out, full_page=_truthy(full_page))
         if not why:
             _show_browser(out, url, title, step or headline.split("\n")[0])
 
@@ -6416,7 +6467,7 @@ def interact(
         tool_result(why, style=ERROR)
         return result
 
-    return _page_report(note, full_page=bool(full_page))
+    return _page_report(note, full_page=_truthy(full_page))
 
 
 GAMES = {"flash-dash": Path(__file__).parent / "games" / "dash.html"}
@@ -9536,6 +9587,25 @@ tools: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "more_output",
+            "description": (
+                "Tool results are cut to a few thousand characters, the "
+                "middle taken out. When what was cut matters (a long test "
+                "or build log, a big file listing), call this: it raises "
+                "the limit for the rest of this task and shows the last "
+                "cut result again, whole up to the new limit, without "
+                "running anything again. chars is the new limit (default: "
+                "four times the current one; at most 200,000)."
+            ),
+            "parameters": {"type": "object", "properties": {
+                "chars": {"type": "integer",
+                          "description": "The new limit, in characters."},
+            }},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "refresh_tools",
             "description": (
                 "Refresh the tools from the user's connected MCP servers: "
@@ -10191,6 +10261,7 @@ FUNCTIONS = {
     "think_harder": think_harder_tool,
     "get_date": get_date,
     "refresh_tools": refresh_tools,
+    "more_output": more_output,
     "review_code": review_code,
     "read_aloud": read_aloud,
     "teach_chess": teach_chess,
@@ -10245,7 +10316,7 @@ SUBAGENT_TOOL_NAMES = (
     "shell", "glob", "grep", "read", "write", "edit", "multi_edit",
     "web_search", "fetch", "get_os", "get_date", "reason",
     "check_inbox", "read_email", "notify_user", "read_imessages",
-    "refresh_tools",
+    "refresh_tools", "more_output",
 )
 
 # A spark's tools: a sub-agent's, and sending email or an iMessage, which

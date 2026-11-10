@@ -228,3 +228,63 @@ def test_a_crlf_file_takes_an_edit_written_with_lf(tmp_path):
 
     assert "1 replacement" in result
     assert path.read_bytes() == b'def greet(name):\r\n    return "hi"\r\n'
+
+
+# --- yes/no arguments sent as strings ---------------------------------------
+# Models write booleans as strings often enough, and bool("false") is True.
+
+
+@pytest.mark.parametrize("flag", ["false", "False", "0", "no", 0, False])
+def test_edit_replace_all_false_as_written_by_a_model(tmp_path, flag):
+    path = tmp_path / "n.py"
+    path.write_text("a = 1\nb = 1\n", encoding="utf-8")
+
+    result = edit_tool(str(path), "= 1", "= 2", replace_all=flag)
+
+    # one match of two is ambiguous: refused, nothing changed
+    assert path.read_text(encoding="utf-8") == "a = 1\nb = 1\n"
+    assert "2 replacements" not in result
+
+
+@pytest.mark.parametrize("flag", ["true", "True", "1", "yes", 1, True])
+def test_edit_replace_all_true_as_written_by_a_model(tmp_path, flag):
+    path = tmp_path / "n.py"
+    path.write_text("a = 1\nb = 1\n", encoding="utf-8")
+
+    edit_tool(str(path), "= 1", "= 2", replace_all=flag)
+
+    assert path.read_text(encoding="utf-8") == "a = 2\nb = 2\n"
+
+
+def test_multi_edit_replace_all_false_string(tmp_path):
+    path = tmp_path / "n.py"
+    path.write_text("a = 1\nb = 1\n", encoding="utf-8")
+
+    multi_edit_tool(str(path), [{"old_string": "= 1", "new_string": "= 2",
+                                 "replace_all": "false"}])
+
+    assert path.read_text(encoding="utf-8") == "a = 1\nb = 1\n"
+
+
+@pytest.mark.parametrize("flag", ["false", "False", "0", "no", 0, False])
+def test_write_append_false_overwrites(tmp_path, flag):
+    from flash.tools import write_tool
+
+    path = tmp_path / "out.txt"
+    path.write_text("old\n", encoding="utf-8")
+
+    write_tool(str(path), "new\n", append=flag)
+
+    assert path.read_text(encoding="utf-8") == "new\n"
+
+
+@pytest.mark.parametrize("flag", ["true", "True", "1", "yes", True])
+def test_write_append_true_appends(tmp_path, flag):
+    from flash.tools import write_tool
+
+    path = tmp_path / "out.txt"
+    path.write_text("old\n", encoding="utf-8")
+
+    write_tool(str(path), "new\n", append=flag)
+
+    assert path.read_text(encoding="utf-8") == "old\nnew\n"

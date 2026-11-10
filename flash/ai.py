@@ -40,6 +40,7 @@ from . import (
     humanvoice,
     interrupt,
     learning,
+    loop,
     loaders,
     memory,
     pings,
@@ -52,7 +53,6 @@ from . import (
     sparks,
     systemone,
     terminal,
-    verify,
     visuals,
     worknotes,
 )
@@ -300,9 +300,9 @@ class Config:
         # 0 for just what no longer fits.
         cls.compact_amount = min(
             COMPACT_MOST, _int_env("COMPACT_AMOUNT", 0, minimum=0))
-        cls.max_tool_rounds = _int_env("MAX_TOOL_ROUNDS", 10, minimum=1)
+        cls.max_tool_rounds = _int_env("MAX_TOOL_ROUNDS", 50, minimum=1)
         cls.max_tool_output_chars = _int_env(
-            "MAX_TOOL_OUTPUT_CHARS", 1200, minimum=500
+            "MAX_TOOL_OUTPUT_CHARS", 4000, minimum=500
         )
         # Room for a whole file in one write call. A tool call is part of
         # the reply, so one cut off here arrives missing what it had not
@@ -7888,43 +7888,32 @@ def _main() -> None:
             # remembers what was read, run, and changed.
             keep_from = len(tool_messages)
             tool_outputs = []
-            followup = ""
-            tool_error = None
             sent_tool_images = False
-            # Code changed this turn is checked before the turn ends.
-            watch = verify.Watch()
+            saw_images = [False]
 
-            for _ in range(Config.max_tool_rounds):
-                assistant_tool_calls = []
-                for call in tool_calls:
-                    name, call_args = _tool_call_name_args(call)
-                    assistant_tool_calls.append(
-                        {"function": {"name": name, "arguments": call_args}}
-                    )
+            def ask(convo: list, with_tools: bool) -> loop.Reply:
+                said, thought, calls, err = _chat_retry_until_response(
+                    console, client, convo, offered if with_tools else None,
+                    turn=turn, is_image=saw_images[0], bar=bar,
+                )
+                saw_images[0] = False
+                if err:
+                    return loop.Reply(error=err)
+                _render_thinking(thought)
+                return loop.Reply(content=said, thinking=thought, calls=[
+                    _tool_call_name_args(c) for c in calls])
 
-                tool_messages.append({
-                    "role": "assistant",
-                    "content": final,
-                    "tool_calls": assistant_tool_calls,
-                })
+            def call(name: str, call_args: dict) -> str:
+                # Not `tool_result`: that is the imported renderer, and a
+                # local of that name shadows it for the whole of main(),
+                # including code that runs before this.
+                output = run_tool((name, call_args))
+                tool_outputs.append(f"{name}:\n{trim_tool_output(output, name)}")
+                return output
 
-                for call in tool_calls:
-                    name, call_args = _tool_call_name_args(call)
-                    # Not `tool_result`: that is the imported renderer,
-                    # and a local of that name shadows it for the whole
-                    # of main(), including code that runs before this.
-                    output = run_tool((name, call_args))
-                    watch.saw(name, call_args, output)
-                    trimmed = trim_tool_output(output, name)
-                    tool_outputs.append(f"{name}:\n{trimmed}")
-                    tool_messages.append({
-                        "role": "tool",
-                        "content": trimmed,
-                        "tool_name": name,
-                    })
-
-                if any(_tool_call_name_args(c)[0] == "refresh_tools"
-                       for c in tool_calls):
+            def after(convo: list, calls: list) -> None:
+                nonlocal offered, sent_tool_images
+                if any(n == "refresh_tools" for n, _ in calls):
                     # New tools from the connected apps, from the next
                     # step on.
                     offered = turn_tools() + think_tools(
@@ -7933,53 +7922,26 @@ def _main() -> None:
                     # On already: not offered again.
                     offered = [t for t in offered
                                if t["function"]["name"] != "think_harder"]
-
                 tool_images = take_pending_images()
                 if tool_images:
-                    sent_tool_images = True
-                    tool_messages.append(
-                        _message("user", TOOL_IMAGE_NOTE, tool_images)
-                    )
-
+                    sent_tool_images = saw_images[0] = True
+                    convo.append(_message("user", TOOL_IMAGE_NOTE, tool_images))
                 # Whatever the user sent to steer this turn, read before
                 # the model decides its next step.
                 for said in steers(dock):
-                    tool_messages.append(
-                        _message("user", f"{STEER_NOTE}\n{said}")
-                    )
+                    convo.append(_message("user", f"{STEER_NOTE}\n{said}"))
 
-                final, thinking, tool_calls, err = _chat_retry_until_response(
-                    console, client, tool_messages, offered,
-                    turn=turn, is_image=bool(tool_images), bar=bar,
-                )
-                if err:
-                    tool_error = err
-                    break
-
-                _render_thinking(thinking)
-
-                followup = final
-
-                if not tool_calls:
-                    # About to end with code changed and not checked:
-                    # sent back, once, to run the project's checks.
-                    nudge = watch.nudge()
-                    if not nudge:
-                        break
-                    tool_messages.append(_message("assistant", final))
-                    tool_messages.append(_message("user", nudge))
-                    final, thinking, tool_calls, err = \
-                        _chat_retry_until_response(
-                            console, client, tool_messages, offered,
-                            turn=turn, bar=bar,
-                        )
-                    if err:
-                        tool_error = err
-                        break
-                    _render_thinking(thinking)
-                    followup = final
-                    if not tool_calls:
-                        break
+            # The one agent loop (loop.py): changed code is checked before
+            # the turn ends, and at the round limit the steps the model
+            # asked for still run, then it answers from what they found.
+            done = loop.run(
+                tool_messages, ask=ask, call=call, rounds=Config.max_tool_rounds,
+                first=loop.Reply(content=final, thinking=thinking, calls=[
+                    _tool_call_name_args(c) for c in tool_calls]),
+                after_round=after, retries=0,
+            )
+            followup = done.reply.content
+            tool_error = done.reply.error
 
             if tool_error:
                 _print_backend_error(tool_error)

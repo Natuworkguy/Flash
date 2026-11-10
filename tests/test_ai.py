@@ -147,10 +147,10 @@ def test_direct_shell_command():
 
 
 def test_trim_tool_output():
-    text = "a" * 2000
+    text = "a" * 10000
     trimmed = trim_tool_output(text)
     assert "truncated" in trimmed  # nosec B101
-    assert len(trimmed) < 2000  # nosec B101
+    assert len(trimmed) < 10000  # nosec B101
 
     short_text = "hello"
     assert trim_tool_output(short_text) == "hello"  # nosec B101
