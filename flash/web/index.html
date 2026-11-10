@@ -3763,6 +3763,15 @@ body.resizing-viewer iframe { pointer-events: none; }
 .side-custom .foot button { font-size: 12.5px; padding: 6px 10px; border-radius: 8px; color: var(--text-2); }
 .side-custom .foot button:hover { background: var(--hover); color: var(--text); }
 
+/* An extension command's output, in the chat */
+.cmd-out { border: 1px solid var(--border); border-radius: 12px; background: var(--surface); margin: 10px 0; overflow: hidden; }
+.cmd-out .cmd-head { display: flex; align-items: center; gap: 8px; padding: 6px 6px 6px 12px; border-bottom: 1px solid var(--border); font-size: 12.5px; color: var(--text-3); }
+.cmd-out .cmd-name { font-family: var(--mono); color: var(--text-2); }
+.cmd-out .cmd-state { color: var(--del); }
+.cmd-out .cmd-close { margin-left: auto; width: 26px; height: 26px; }
+.cmd-out pre { margin: 0; padding: 10px 12px; max-height: 360px; overflow: auto; font: 12.5px/1.5 var(--mono); color: var(--text); white-space: pre-wrap; word-break: break-word; }
+.cmd-out.failed { border-color: color-mix(in srgb, var(--del) 40%, var(--border)); }
+
 /* Popovers, menus, dialogs ------------------------------------------- */
 .menu {
   position: absolute; z-index: 30;
@@ -23845,7 +23854,18 @@ async function runExtCommand(text) {
   let said;
   try { said = await command("ext-command", text); } catch (error) { showFailure(error); return; }
   if (said.send) { await send(said.send); return; }
-  if (said.say) toast(said.say.length > 400 ? said.say.slice(0, 400) + "…" : said.say, said.failed ? 6000 : 4000);
+  if (said.say) showCommandOutput(text, said.say, said.failed);
+}
+
+// What a command printed, in the chat as a card of its own: all of it, kept
+// to this page (it is not sent to the model, and not saved with the chat).
+function showCommandOutput(text, output, failed) {
+  const card = el("div", "block cmd-out" + (failed ? " failed" : ""));
+  card.innerHTML = `<div class="cmd-head"><span class="cmd-name">${esc(text.split(/\s+/)[0])}</span>${failed ? '<span class="cmd-state">failed</span>' : ""}<button type="button" class="icon-btn cmd-close" aria-label="Dismiss" data-tip="Dismiss">${icon("x")}</button></div><pre></pre>`;
+  card.querySelector("pre").textContent = output;
+  card.querySelector(".cmd-close").onclick = () => card.remove();
+  $("#messages").appendChild(card);
+  card.scrollIntoView({ block: "nearest", behavior: "smooth" });
 }
 
 function runSlash(text) {
@@ -24521,9 +24541,21 @@ input.addEventListener("keydown", (e) => {
   if (menuEl && slashOpen) {
     if (e.key === "ArrowDown") { e.preventDefault(); menuSel = (menuSel + 1) % menuRows.length; menuEl.redraw(); return; }
     if (e.key === "ArrowUp") { e.preventDefault(); menuSel = (menuSel - 1 + menuRows.length) % menuRows.length; menuEl.redraw(); return; }
-    if (e.key === "Tab" && !e.shiftKey) { e.preventDefault(); input.value = menuRows[menuSel].action.slash + " "; closeMenu(); slashOpen = false; autosize(); return; }
+    if (e.key === "Tab" && !e.shiftKey) {
+      e.preventDefault();
+      const row = menuRows[menuSel], slash = row?.action?.slash || row?.ext?.slash;
+      if (slash) { input.value = slash + " "; closeMenu(); slashOpen = false; autosize(); } else if (row) menuPick(row);
+      return;
+    }
     if (e.key === "Escape") { e.preventDefault(); closeMenu(); slashOpen = false; return; }
-    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); const row = menuRows[menuSel]; clearInput(); row.action.run(); return; }
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      const row = menuRows[menuSel];
+      // An extension's command typed out in full runs; anything else does what clicking it does.
+      if (row?.ext && input.value.trim() === row.ext.slash) { runExtCommand(input.value.trim()); return; }
+      if (row) menuPick(row);
+      return;
+    }
   }
   if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(input.value, e.ctrlKey || e.metaKey ? "queue" : "steer"); return; }
   if (e.key === "Tab" && e.shiftKey) { e.preventDefault(); toggleAuto(); return; }
