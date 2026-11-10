@@ -6930,6 +6930,26 @@ def main() -> None:
         sys.exit(130)
 
 
+def _import_memories(source: str) -> bool:
+    """flash --import-memories and /import-memories: SOURCE's facts into
+    the user's memory, said how many."""
+
+    try:
+        added, known = memory.import_from(source)
+    except OSError as exc:
+        show_error(f"Could not read {source}: {exc}")
+        return False
+    if not added and not known:
+        warn("No facts found in it: one a line, or a JSON list.")
+        return False
+    said = f"Saved {len(added)} new " + ("memory" if len(added) == 1
+                                          else "memories")
+    if known:
+        said += f"; {known} already saved"
+    console.print(Text(said + ".", style=DIM))
+    return True
+
+
 def _main() -> None:
     args = parse_args()
 
@@ -6961,6 +6981,13 @@ def _main() -> None:
         or args.extension_update is not None
     ):
         sys.exit(0 if _handle_extension_flags(args) else 1)
+
+    if getattr(args, "memory_prompt", False):
+        print(memory.IMPORT_PROMPT)
+        return
+
+    if getattr(args, "import_memories", None):
+        sys.exit(0 if _import_memories(args.import_memories) else 1)
 
     if args.sparks:
         _keep_sparks()
@@ -7580,6 +7607,19 @@ def _main() -> None:
                     console.print(Text(listing, style=DIM))
                 else:
                     console.print(Text("No memories saved yet.", style=DIM))
+                continue
+
+            if uin == "/import-memories" or \
+                    uin.startswith("/import-memories "):
+                source = uin[len("/import-memories"):].strip()
+                if not source:
+                    console.print(Text(
+                        "Usage: /import-memories <file> (one fact a line, "
+                        "another assistant's export, or JSON). To get an "
+                        "export, give another assistant this:\n\n"
+                        + memory.IMPORT_PROMPT, style=DIM))
+                    continue
+                _import_memories(source)
                 continue
 
             if uin == "/forget" or uin.startswith("/forget "):

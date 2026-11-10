@@ -323,20 +323,62 @@ def parse_import(text: str) -> list[str]:
     return facts
 
 
+def _json_facts(text: str) -> Optional[list[str]]:
+    """Facts given as JSON, the shape a script or an installing agent
+    writes: a list of strings, or {"memories": [...]}; None for text that
+    is not that."""
+
+    import json
+
+    try:
+        data = json.loads(text)
+    except (TypeError, ValueError):
+        return None
+    if isinstance(data, dict):
+        data = data.get("memories", data.get("facts"))
+    if not isinstance(data, list):
+        return None
+    facts: list[str] = []
+    for item in data[:MAX_IMPORTED]:
+        fact = " ".join(str(item.get("text", "") if isinstance(item, dict)
+                            else item).split())[:MAX_ENTRY_CHARS]
+        if fact and fact.lower() not in {f.lower() for f in facts}:
+            facts.append(fact)
+    return facts
+
+
 def import_memory(text: str,
                   path: Optional[Path] = None) -> tuple[list[str], int]:
-    """Save every new fact in TEXT. Returns (the ones added, how many
-    were already saved)."""
+    """Save every new fact in TEXT: another assistant's answer to
+    IMPORT_PROMPT, a plain list, or JSON (a list of strings, or
+    {"memories": [...]}). Returns (the ones added, how many were already
+    saved)."""
 
     entries = list_memory(path)
     known = {entry.lower() for entry in entries}
-    facts = parse_import(text)
+    facts = _json_facts(text)
+    if facts is None:
+        facts = parse_import(text)
     added = [fact for fact in facts if fact.lower() not in known]
 
     if added:
         _write(path, entries + added)
 
     return added, len(facts) - len(added)
+
+
+def import_from(source: str, path: Optional[Path] = None,
+                stdin=None) -> tuple[list[str], int]:
+    """import_memory, from SOURCE: a file's path, or "-" for standard
+    input. Raises OSError for a file that cannot be read."""
+
+    if str(source).strip() == "-":
+        import sys
+
+        text = (stdin or sys.stdin).read()
+    else:
+        text = Path(source).expanduser().read_text(encoding="utf-8")
+    return import_memory(text, path)
 
 
 # --- A project's memory ---------------------------------------------------
