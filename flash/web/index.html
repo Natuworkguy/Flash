@@ -3530,59 +3530,62 @@ body.resizing-viewer iframe { pointer-events: none; }
 @media (max-width: 560px) { .model-view .model-tools .hint { display: none; } }
 /* A printed circuit board Flash designed: its copper drawn as it is,
    layer by layer, both sides as made, and in 3D. */
-.pcb-view { position: absolute; inset: 0; background: radial-gradient(ellipse at 50% 38%, #181c22, #0a0c0f 72%); color: #e9edf2; overflow: hidden; container-type: inline-size; }
-.pcb-view .stage { position: absolute; inset: 0; touch-action: none; cursor: grab; }
+.pcb-view { position: absolute; inset: 0; background: #121416; color: #d9dde2; overflow: hidden; container-type: inline-size; font-size: 12px; }
+.pcb-view .stage { position: absolute; inset: 34px 240px 0 0; touch-action: none; cursor: grab; }
 .pcb-view .stage.panning { cursor: grabbing; }
 .pcb-view svg.pcb { width: 100%; height: 100%; display: block; }
-.pcb-view .three { position: absolute; inset: 0; }
+.pcb-view .three { position: absolute; inset: 34px 240px 0 0; }
 .pcb-view .three[hidden] { display: none; }
-.pcb-view [data-net], .pcb-view [data-ref] { transition: opacity 0.25s; }
-.pcb-view svg.focusing [data-net]:not(.on) { opacity: 0.1; }
-.pcb-view svg.focusing [data-net].on { filter: drop-shadow(0 0 0.12px #fff); }
-.pcb-view .bar { position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%); display: flex; align-items: center; gap: 4px; padding: 4px; border-radius: 13px; background: rgba(20, 23, 28, 0.86); border: 1px solid rgba(255, 255, 255, 0.09); box-shadow: 0 12px 34px rgba(0, 0, 0, 0.45); backdrop-filter: blur(10px); animation: rise-far 0.45s var(--apple) both; white-space: nowrap; max-width: calc(100% - 24px); overflow-x: auto; scrollbar-width: none; }
-.pcb-view .bar button, .pcb-view .bar a { padding: 6px 11px; border-radius: 9px; font-size: 12.5px; color: #aab3bf; text-decoration: none; display: inline-flex; align-items: center; gap: 6px; }
-.pcb-view .bar button:hover, .pcb-view .bar a:hover { background: rgba(255, 255, 255, 0.07); color: #fff; }
-.pcb-view .bar button[aria-pressed="true"] { background: rgba(255, 255, 255, 0.11); color: #fff; }
-.pcb-view .bar svg { width: 14px; height: 14px; }
-.pcb-view .bar .sep { width: 1px; height: 18px; background: rgba(255, 255, 255, 0.1); margin: 0 3px; }
-.pcb-view .card { position: absolute; top: 12px; right: 12px; width: 248px; max-height: calc(100% - 90px); overflow: hidden; border-radius: 16px; background: rgba(20, 23, 28, 0.84); border: 1px solid rgba(255, 255, 255, 0.08); box-shadow: 0 14px 40px rgba(0, 0, 0, 0.4); backdrop-filter: blur(12px); display: flex; flex-direction: column; animation: rise-far 0.5s var(--apple) both; }
-.pcb-view .card .scroll { padding: 14px; overflow-y: auto; min-height: 0; display: flex; flex-direction: column; gap: 12px; scrollbar-width: thin; overscroll-behavior: contain; }
-.pcb-view .card h3 { margin: 0; font-size: 14px; font-weight: 650; letter-spacing: -0.01em; }
-.pcb-view .card .sub { color: #8d97a4; font-size: 12px; margin-top: 2px; }
-.pcb-view .stats { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
-.pcb-view .stat { padding: 8px 9px; border-radius: 10px; background: rgba(255, 255, 255, 0.04); border: 1px solid rgba(255, 255, 255, 0.06); }
-.pcb-view .stat b { display: block; font-size: 15px; font-weight: 650; font-variant-numeric: tabular-nums; }
-.pcb-view .stat span { color: #8d97a4; font-size: 11px; }
-.pcb-view .layers { display: flex; flex-direction: column; gap: 2px; }
-.pcb-view .layers button { display: flex; align-items: center; gap: 8px; padding: 5px 7px; border-radius: 8px; font-size: 12.5px; color: #d6dce3; text-align: left; }
-.pcb-view .layers button:hover { background: rgba(255, 255, 255, 0.06); }
-.pcb-view .layers button i { width: 10px; height: 10px; border-radius: 3px; flex: none; box-shadow: 0 0 10px var(--c); background: var(--c); }
-.pcb-view .layers button small { margin-left: auto; color: #7d8794; }
+.pcb-view [data-net], .pcb-view [data-ref] { transition: opacity 0.2s; }
+.pcb-view svg.focusing [data-net]:not(.on) { opacity: 0.12; }
+.pcb-view .bar { position: absolute; left: 0; right: 0; top: 0; height: 34px; display: flex; align-items: center; gap: 0; padding: 0 6px; background: #181a1d; border-bottom: 1px solid #2a2d31; white-space: nowrap; overflow-x: auto; scrollbar-width: none; }
+.pcb-view .bar button, .pcb-view .bar a { height: 24px; padding: 0 9px; border-radius: 3px; font-size: 12px; color: #a3aab3; text-decoration: none; display: inline-flex; align-items: center; gap: 5px; }
+.pcb-view .bar button:hover, .pcb-view .bar a:hover { background: #24272b; color: #eef0f2; }
+.pcb-view .bar button[aria-pressed="true"] { background: #2b2f34; color: #fff; box-shadow: inset 0 -2px 0 #c9b458; }
+.pcb-view .bar svg { width: 13px; height: 13px; }
+.pcb-view .bar .sep { width: 1px; height: 16px; background: #2f3338; margin: 0 6px; flex: none; }
+.pcb-view .bar .grow { flex: 1; }
+.pcb-view .card { position: absolute; top: 34px; right: 0; bottom: 0; width: 240px; overflow: hidden; border-radius: 0; border: 0; box-shadow: none; animation: none; background: #16181b; border-left: 1px solid #2a2d31; display: flex; flex-direction: column; }
+.pcb-view .card .scroll { overflow-y: auto; min-height: 0; display: flex; flex-direction: column; scrollbar-width: thin; overscroll-behavior: contain; }
+.pcb-view .card .scroll > * { padding: 10px 12px; border-bottom: 1px solid #24272b; }
+.pcb-view .card .scroll > :empty { display: none; }
+.pcb-view .card h3 { margin: 0; font-size: 13px; font-weight: 600; word-break: break-all; }
+.pcb-view .card .sub { color: #848c96; font: 11px/1.4 var(--mono); margin-top: 3px; }
+.pcb-view .card .label { display: block; color: #6f7781; font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 6px; }
+.pcb-view .stats { display: grid; grid-template-columns: 1fr auto; gap: 3px 10px; }
+.pcb-view .stats span { color: #8b939c; }
+.pcb-view .stats b { font: 500 11.5px/1.5 var(--mono); text-align: right; color: #dfe3e7; }
+.pcb-view .layers { display: flex; flex-direction: column; }
+.pcb-view .layers button { display: flex; align-items: center; gap: 8px; padding: 4px 2px; font-size: 12px; color: #d2d7dc; text-align: left; }
+.pcb-view .layers button:hover { color: #fff; }
+.pcb-view .layers button i { width: 9px; height: 9px; flex: none; background: var(--c); }
+.pcb-view .layers button small { margin-left: auto; color: #6f7781; font: 10.5px var(--mono); }
 .pcb-view .layers button[aria-pressed="false"] { opacity: 0.4; }
-.pcb-view .layers button[aria-pressed="false"] i { box-shadow: none; }
-.pcb-view .drc { border-radius: 11px; padding: 9px 10px; font-size: 12px; display: flex; flex-direction: column; gap: 4px; }
-.pcb-view .drc.clean { background: rgba(51, 209, 122, 0.1); border: 1px solid rgba(51, 209, 122, 0.25); color: #8ee8b4; }
-.pcb-view .drc.issues { background: rgba(255, 176, 32, 0.08); border: 1px solid rgba(255, 176, 32, 0.25); color: #f3c47e; }
-.pcb-view .drc b { font-weight: 650; }
-.pcb-view .drc .head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 2px; }
-.pcb-view .drc .fix { padding: 4px 11px; border-radius: 8px; background: #ffb020; color: #1a1205; font-weight: 650; font-size: 12px; opacity: 1; text-decoration: none; }
-.pcb-view .drc .fix:hover { background: #ffc24d; text-decoration: none; }
+.pcb-view .layers button[aria-pressed="false"] i { background: none; outline: 1px solid var(--c); outline-offset: -1px; }
+.pcb-view .drc { display: flex; flex-direction: column; gap: 3px; }
+.pcb-view .drc b { font-weight: 600; display: flex; align-items: center; gap: 7px; }
+.pcb-view .drc b::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; flex: none; }
+.pcb-view .drc.clean b { color: #7fbf8e; }
+.pcb-view .drc.issues b { color: #e0a84a; }
+.pcb-view .drc > span { color: #8b939c; }
+.pcb-view .drc .head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 3px; }
+.pcb-view .drc .fix { padding: 2px 10px; border-radius: 3px; border: 1px solid #6b5426; background: #2a2316; color: #f0c472; font-size: 11.5px; }
+.pcb-view .drc .fix:hover { background: #3a3019; }
 .pcb-view .drc .fix:disabled { opacity: 0.6; }
-.pcb-view .drc .more { opacity: 0.7; font-weight: 600; }
-.pcb-view .notes { font-size: 11.5px; color: #9aa4b1; line-height: 1.4; display: flex; flex-direction: column; gap: 3px; }
-.pcb-view .drc button { text-align: left; color: inherit; opacity: 0.85; padding: 3px 0; font-size: 11.5px; line-height: 1.35; }
-.pcb-view .drc button:hover { opacity: 1; text-decoration: underline; }
-.pcb-view .tip { position: absolute; pointer-events: none; padding: 7px 10px; border-radius: 10px; background: rgba(12, 14, 18, 0.92); border: 1px solid rgba(255, 255, 255, 0.1); font-size: 12px; line-height: 1.35; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4); transform: translate(12px, 12px); max-width: 240px; }
-.pcb-view .tip b { display: block; font-size: 12.5px; }
-.pcb-view .tip span { color: #9aa4b1; }
+.pcb-view .drc .more { opacity: 0.7; }
+.pcb-view .notes { font-size: 11.5px; color: #8b939c; line-height: 1.45; display: flex; flex-direction: column; gap: 4px; }
+.pcb-view .drc button { text-align: left; color: #c7cdd3; padding: 2px 0 2px 14px; font-size: 11.5px; line-height: 1.35; }
+.pcb-view .drc button:hover { color: #fff; text-decoration: underline; }
+.pcb-view .tip { position: absolute; pointer-events: none; padding: 5px 8px; border-radius: 3px; background: #0d0f11; border: 1px solid #33373c; font-size: 11.5px; line-height: 1.4; transform: translate(12px, 12px); max-width: 240px; z-index: 2; }
+.pcb-view .tip b { display: block; font-weight: 600; }
+.pcb-view .tip span { color: #8b939c; font-family: var(--mono); font-size: 11px; }
 .pcb-view .tip[hidden] { display: none; }
-.pcb-view .note { position: absolute; inset: 0; display: grid; place-items: center; color: #8d97a4; font-size: 13px; }
-.pcb-view .ring { fill: none; stroke: #ffb020; animation: pcb-ping 1.6s ease-out 2; }
-@keyframes pcb-ping { 0% { stroke-opacity: 1; } 100% { stroke-opacity: 0.25; } }
-.pcb-view .via-pop { animation: pcb-pop 0.35s var(--apple) both; transform-box: fill-box; transform-origin: center; }
+.pcb-view .note { position: absolute; inset: 0; display: grid; place-items: center; color: #848c96; font-size: 13px; }
+.pcb-view .ring { fill: none; stroke: #e0a84a; }
+.pcb-view .via-pop { animation: pcb-pop 0.2s ease-out both; transform-box: fill-box; transform-origin: center; }
 @keyframes pcb-pop { from { transform: scale(0); } to { transform: scale(1); } }
-@container (max-width: 620px) { .pcb-view .card { left: 12px; right: 12px; width: auto; max-height: 38%; top: auto; bottom: 66px; } .pcb-view .card .layers, .pcb-view .card .stats { display: none; } }
-@media (prefers-reduced-motion: reduce) { .pcb-view .via-pop, .pcb-view .ring { animation: none; } }
+@container (max-width: 620px) { .pcb-view .stage, .pcb-view .three { right: 0; bottom: 40%; } .pcb-view .card { left: 0; width: auto; top: 60%; border-left: 0; border-top: 1px solid #2a2d31; } .pcb-view .card .wide-only { display: none; } }
+@media (prefers-reduced-motion: reduce) { .pcb-view .via-pop { animation: none; } }
 
 /* A narrow viewer, beside the chat: the bar keeps its buttons, not the hint. */
 .model-view { container-type: inline-size; }
@@ -7055,7 +7058,9 @@ async function openMidi(entry, body) {
 // in the order they were routed.
 
 let pcbView = null;
-const PCB_COLOURS = ["#ff6b4a", "#33d17a", "#4aa8ff", "#f5c542", "#4fd1c5", "#c38cff"];
+// The colours board tools use: top copper red, bottom blue, inner layers
+// yellow, green and the rest, muted so a dense board stays readable.
+const PCB_COLOURS = ["#c8503e", "#c9a23c", "#5b9e6b", "#a86bb0", "#4fa3a3", "#4d7cc9"];
 const PCB_LOOKS = { ic: "#15161a", passive: "#b48a57", led: "#f3efe4", usb: "#c9cbce", crystal: "#cfd2d6", can: "#d3d5d8", antenna: "#ece8dc", connector: "#262626", header: "#1d1d1d", switch: "#3a3a3a", diode: "#202022" };
 
 function pcbColour(board, layer) {
@@ -7104,20 +7109,16 @@ async function openPcb(entry, body) {
 
   // The view: fitted to the board, then zoomed and panned.
   let vb;
-  // Fitted into what the card and the bar leave free, not under them.
+  // Fitted into the stage, which the bar and the panel sit beside.
   const fit = () => {
     const pad = Math.max(box.x1 - box.x0, box.y1 - box.y0) * 0.08;
     const r = stage.getBoundingClientRect();
-    const sideCard = view.querySelector(".card");
-    const c = sideCard ? sideCard.getBoundingClientRect() : null;
-    const right = c && c.top < r.top + r.height / 2 && c.width < r.width * 0.6 ? c.width + 24 : 0;
-    const below = 70 + (c && !right ? c.height + 12 : 0);
-    const free = { w: Math.max(80, r.width - right), h: Math.max(80, r.height - below) };
+    const free = { w: Math.max(80, r.width), h: Math.max(80, r.height) };
     const bw = box.x1 - box.x0 + 2 * pad, bh = box.y1 - box.y0 + 2 * pad;
     const scale = Math.max(bw / free.w, bh / free.h);   // mm a pixel
     const w = (r.width || 1) * scale, h = (r.height || 1) * scale;
     const cx = (box.x0 + box.x1) / 2, cy = -(box.y0 + box.y1) / 2;
-    vb = { x: cx - free.w / 2 * scale, y: cy - (free.h / 2 + 8) * scale, w, h };
+    vb = { x: cx - free.w / 2 * scale, y: cy - free.h / 2 * scale, w, h };
     applyView();
   };
   const applyView = () => svg.setAttribute("viewBox", `${vb.x} ${vb.y} ${vb.w} ${vb.h}`);
@@ -7196,20 +7197,18 @@ async function openPcb(entry, body) {
   function draw() {
     svg.textContent = "";
     const defs = add("defs", {}, svg);
-    defs.innerHTML = `<filter id="pcb-glow" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="0.05" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>` +
-      `<linearGradient id="pcb-gold" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#f4d27a"/><stop offset="1" stop-color="#b8892e"/></linearGradient>` +
-      `<clipPath id="pcb-clip"><polygon points="${outline}"/></clipPath>`;
+    defs.innerHTML = `<clipPath id="pcb-clip"><polygon points="${outline}"/></clipPath>`;
     if (state.mode === "layers") drawLayers(); else drawSide(state.mode);
     markFocus();
   }
 
   function drawLayers() {
-    add("polygon", { points: outline, fill: "#0f1216", stroke: "#3b424d", "stroke-width": 0.06 }, svg);
+    add("polygon", { points: outline, fill: "#1a1c1f" }, svg);
     const g = add("g", { "clip-path": "url(#pcb-clip)" }, svg);
     for (const L of [...Array(board.layers).keys()].reverse()) {
       if (state.hidden.has(L)) continue;
       const colour = pcbColour(board, L);
-      const lg = add("g", { opacity: L === 0 ? 1 : 0.8, filter: "url(#pcb-glow)" }, g);
+      const lg = add("g", { opacity: L === 0 ? 0.92 : 0.7 }, g);
       const plane = (board.planes || {})[L];
       if (plane) add("polygon", { points: outline, fill: colour, opacity: 0.08, "data-net": plane }, lg);
       for (const r of board.pours[L] || []) add("rect", { x: r[0], y: Y(r[3]), width: r[2] - r[0], height: r[3] - r[1], fill: colour, opacity: 0.16, "data-net": board.ground }, lg);
@@ -7218,17 +7217,18 @@ async function openPcb(entry, body) {
     }
     for (const v of board.vias) {
       const vg = add("g", { "data-net": v.net, "data-order": v.order, class: "via" }, svg);
-      add("circle", { cx: v.x, cy: Y(v.y), r: board.rules.via / 2, fill: "#e9edf2" }, vg);
-      add("circle", { cx: v.x, cy: Y(v.y), r: board.rules.drill / 2, fill: "#0a0c0f" }, vg);
+      add("circle", { cx: v.x, cy: Y(v.y), r: board.rules.via / 2, fill: "#a9afb6" }, vg);
+      add("circle", { cx: v.x, cy: Y(v.y), r: board.rules.drill / 2, fill: "#121416" }, vg);
     }
     for (const part of board.parts) {
       if (part.kind === "pad" || part.kind === "hole") continue;
       const [x0, y0, x1, y1] = part.box;
       const pg = add("g", { "data-ref": part.ref }, svg);
-      add("rect", { x: x0, y: Y(y1), width: x1 - x0, height: y1 - y0, rx: 0.08, fill: "rgba(255,255,255,0.001)", stroke: part.side === "top" ? "rgba(255,255,255,.3)" : "rgba(195,140,255,.4)", "stroke-width": 0.03, "stroke-dasharray": part.side === "top" ? "" : "0.12 0.08" }, pg);
-      const label = add("text", { x: (x0 + x1) / 2, y: Y((y0 + y1) / 2) + 0.12, "font-size": Math.max(0.18, Math.min(0.55, (x1 - x0) / 4)), fill: "rgba(255,255,255,.55)", "text-anchor": "middle", "font-weight": 600, "pointer-events": "none", "font-family": "system-ui, sans-serif" }, pg);
+      add("rect", { x: x0, y: Y(y1), width: x1 - x0, height: y1 - y0, fill: "rgba(255,255,255,0.001)", stroke: part.side === "top" ? "rgba(226,222,208,.42)" : "rgba(141,163,196,.45)", "stroke-width": 0.04, "stroke-dasharray": part.side === "top" ? "" : "0.12 0.08" }, pg);
+      const label = add("text", { x: (x0 + x1) / 2, y: Y((y0 + y1) / 2) + 0.12, "font-size": Math.max(0.18, Math.min(0.5, (x1 - x0) / 4)), fill: part.side === "top" ? "rgba(226,222,208,.7)" : "rgba(141,163,196,.7)", "text-anchor": "middle", "pointer-events": "none", "font-family": "ui-monospace, Menlo, Consolas, monospace" }, pg);
       label.textContent = part.ref;
     }
+    add("polygon", { points: outline, fill: "none", stroke: "#c9b458", "stroke-width": 0.08, "pointer-events": "none" }, svg);
     for (const p of board.problems) if (!p.warning) add("circle", { cx: p.x, cy: Y(p.y), r: 0.35, class: "ring", "stroke-width": 0.07 }, svg);
   }
 
@@ -7240,7 +7240,7 @@ async function openPcb(entry, body) {
     for (const r of board.pours[L] || []) add("rect", { x: r[0], y: Y(r[3]), width: r[2] - r[0], height: r[3] - r[1], fill: "#ffffff", opacity: 0.045 }, cg);
     for (const t of board.tracks) if (t.layer === L) trackEl(t, cg, "rgba(255,255,255,.13)");
     for (const v of board.vias) add("circle", { cx: v.x, cy: Y(v.y), r: board.rules.via / 2, fill: "rgba(255,255,255,.15)", "data-net": v.net }, cg);
-    for (const p of board.pads) if (p.layers.includes(L)) padEl(p, cg, "url(#pcb-gold)", { "data-net": p.net, "data-pin": `${p.part}.${p.name}` });
+    for (const p of board.pads) if (p.layers.includes(L)) padEl(p, cg, "#c4a55a", { "data-net": p.net, "data-pin": `${p.part}.${p.name}` });
     for (const part of board.parts) {
       if (part.side !== side || part.kind === "pad" || part.kind === "hole") continue;
       let [bw, bl] = part.body;
@@ -7250,7 +7250,7 @@ async function openPcb(entry, body) {
       add("rect", { x: part.x - bw / 2, y: Y(part.y) - bl / 2, width: bw, height: bl, rx: Math.min(bw, bl) * 0.12, fill: look, stroke: "rgba(255,255,255,.08)", "stroke-width": 0.03 }, pg);
       if (part.kind === "ic" && Object.keys(part.pins).length > 6) add("circle", { cx: part.x - bw / 2 + 0.4, cy: Y(part.y) - bl / 2 + 0.4, r: 0.15, fill: "rgba(255,255,255,.2)" }, pg);
       if (part.kind === "ic" && bw > 2.4 && part.value) {
-        const t = add("text", { x: part.x, y: Y(part.y) + 0.12, "font-size": Math.min(0.42, bw / 9), fill: "rgba(255,255,255,.45)", "text-anchor": "middle", "font-weight": 600, "pointer-events": "none", "font-family": "system-ui, sans-serif", ...(side === "bottom" ? { transform: `translate(${2 * part.x},0) scale(-1,1)` } : {}) }, pg);
+        const t = add("text", { x: part.x, y: Y(part.y) + 0.12, "font-size": Math.min(0.42, bw / 9), fill: "rgba(255,255,255,.4)", "text-anchor": "middle", "pointer-events": "none", "font-family": "ui-monospace, Menlo, Consolas, monospace", ...(side === "bottom" ? { transform: `translate(${2 * part.x},0) scale(-1,1)` } : {}) }, pg);
         t.textContent = part.value.length < 18 ? part.value : part.ref;
       }
     }
@@ -7330,15 +7330,15 @@ async function openPcb(entry, body) {
   const kicad = el("a", "", `${icon("chip")}<span>KiCad</span>`);
   kicad.href = `/api/files/${encodeURIComponent(entry.id)}/board?format=kicad`;
   kicad.dataset.tip = "Open it in KiCad to go on with";
-  bar.append(replayBtn, fitBtn, el("span", "sep"), fab, kicad);
+  bar.append(replayBtn, fitBtn, el("span", "grow"), fab, kicad);
 
   // The card: what it is, its layers, and what the checks found.
   const card = view.appendChild(el("aside", "card"));
-  card.innerHTML = `<div class="scroll"><div><h3></h3><div class="sub"></div></div><div class="stats"></div><div class="layers"></div><div class="drc"></div><div class="notes"></div></div>`;
+  card.innerHTML = `<div class="scroll"><div><h3></h3><div class="sub"></div></div><div class="wide-only"><span class="label">Board</span><div class="stats"></div></div><div class="wide-only"><span class="label">Layers</span><div class="layers"></div></div><div><span class="label">Checks</span><div class="drc"></div></div><div class="notes"></div></div>`;
   card.querySelector("h3").textContent = board.name;
   card.querySelector(".sub").textContent = `${s.width} × ${s.height} mm · ${board.layers} layer${board.layers === 1 ? "" : "s"} · ${board.thickness} mm`;
-  const stat = (v, label) => `<div class="stat"><b>${v}</b><span>${label}</span></div>`;
-  card.querySelector(".stats").innerHTML = stat(s.parts, "parts") + stat(s.pads, "pads") + stat(`${s.routed}/${s.nets}`, "nets routed") + stat(s.vias, "vias") + stat(`${s.length} mm`, "of track") + stat(`${Math.round(s.place_s + s.route_s)} s`, "to lay out");
+  const stat = (v, label) => `<span>${label}</span><b>${v}</b>`;
+  card.querySelector(".stats").innerHTML = stat(s.parts, "Parts") + stat(s.pads, "Pads") + stat(`${s.routed}/${s.nets}`, "Nets routed") + stat(s.vias, "Vias") + stat(`${s.length} mm`, "Track") + stat(`${Math.round(s.place_s + s.route_s)} s`, "Layout time");
   const layerBox = card.querySelector(".layers");
   board.layer_names.forEach((name, L) => {
     const b = el("button", "", `<i style="--c:${pcbColour(board, L)}"></i><span></span><small></small>`);
@@ -7358,7 +7358,7 @@ async function openPcb(entry, body) {
   const drc = card.querySelector(".drc");
   const errors = board.problems.filter((p) => !p.warning);
   drc.className = `drc ${errors.length ? "issues" : "clean"}`;
-  drc.innerHTML = errors.length ? `<div class="head"><b>${errors.length} to fix</b><button type="button" class="fix">Fix</button></div>` : "<b>Design rules: clean</b><span>Every net routed, every gap within the rules.</span>";
+  drc.innerHTML = errors.length ? `<div class="head"><b>${errors.length} error${errors.length === 1 ? "" : "s"}</b><button type="button" class="fix">Fix</button></div>` : "<b>DRC passed</b><span>All nets routed, no clearance errors.</span>";
   // Fix: Flash takes the problems on, in the chat, and makes the board
   // again with what it changes.
   const fixBtn = drc.querySelector(".fix");
@@ -7403,8 +7403,6 @@ async function openPcb(entry, body) {
   mine.cleanup = () => resized.disconnect();
   setMode("layers");
   fit();
-  // The first look draws it as it was routed.
-  if (!matchMedia("(prefers-reduced-motion: reduce)").matches) requestAnimationFrame(replay);
 }
 
 function dropModel() {
