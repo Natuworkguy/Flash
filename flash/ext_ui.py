@@ -60,7 +60,7 @@ ID_RE = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
 # an icon in the bar of a 3D model being looked at, its program given
 # the model's file.
 PLACES = ("sidebar", "composer", "message", "header", "terminal",
-          "palette", "selection", "input", "model")
+          "palette", "selection", "input", "model", "image")
 # A web keyboard shortcut: modifiers, then one key.
 SHORTCUT_RE = re.compile(
     r"^(?:(?:ctrl|alt|shift|meta|mod)\+){1,3}(?:[a-z0-9]|f[1-9]|f1[0-2])$")
