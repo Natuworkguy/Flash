@@ -1626,6 +1626,11 @@ body.empty #top-model, body.on-page #top-model { position: absolute; }
 #send:disabled { opacity: 0.35; cursor: default; }
 #send.stop { background: var(--invert-bg); color: var(--invert-text); }
 #send.stop svg { width: 13px; height: 13px; }
+#busy-send { display: inline-flex; align-items: center; gap: 4px; flex: none; animation: rise 0.2s var(--ease) both; }
+#busy-send[hidden] { display: none; }
+#busy-send .pill { height: 30px; padding: 0 10px; font-size: 12.5px; }
+#stop-btn { width: 30px; padding: 0 !important; display: grid; place-items: center; }
+#stop-btn svg { width: 11px; height: 11px; }
 .fine { text-align: center; font-size: 12px; color: var(--text-3); margin-top: 10px; }
 body.empty .fine { display: none; }
 /* While a reply is on its way, a tip takes the line's place. */
@@ -4268,6 +4273,7 @@ body.empty #ext-head, body.on-page #ext-head { display: none; }
             <span id="context" role="meter" aria-label="Context used" aria-valuemin="0" aria-valuemax="100" hidden><span class="ctx-track"><span class="ctx-fill"></span></span><span class="ctx-pct"></span></span>
             <button type="button" class="pill model-pick" id="model-btn" data-tip="Switch model" data-keys="Alt M"></button>
             <span id="ext-input"></span>
+            <span id="busy-send" hidden><button type="button" class="pill" id="queue-btn" data-tip="Run it after this turn" data-keys="Ctrl Enter">Queue</button><button type="button" class="pill" id="now-btn" data-tip="Stop this turn and send it now" data-keys="Alt Enter">Send now</button><button type="button" class="pill" id="stop-btn" data-tip="Stop" data-keys="Esc" aria-label="Stop"></button></span>
             <button type="submit" id="send" data-tip="Send" data-keys="Enter" aria-label="Send" disabled></button>
           </div>
         </form>
@@ -19803,6 +19809,10 @@ function updateSend() {
   // steers. Otherwise: send.
   // Idle with nothing typed, where a browser can record: voice mode.
   const state = busy ? (typed ? "steer" : "stop") : (typed || !canRecord ? "up" : "voice");
+  // Working with something typed: Queue, Send now and Stop sit beside
+  // Steer, so each way of sending is one click.
+  const both = $("#busy-send");
+  if (both) both.hidden = state !== "steer" || view !== "chat";
   const send = $("#send");
   send.classList.toggle("stop", state === "stop");
   document.body.classList.toggle("working", !!busy && view === "chat");
@@ -19920,7 +19930,8 @@ function takeThink() {
 }
 
 // While a turn runs, a message waits: MODE "steer" (Enter) reaches the
-// model at the turn's next step, "queue" (Ctrl Enter) runs after it.
+// model at the turn's next step, "queue" (Ctrl Enter) runs after it,
+// "now" (Alt Enter) stops the turn and runs at once.
 async function send(text, mode = "steer") {
   text = text.trim();
   if (uploading()) { toast("Still uploading. Send once it is in."); return; }
@@ -21400,7 +21411,11 @@ function renderPending() {
     mode.type = "button";
     mode.dataset.tip = steer ? "Switch to running after this turn" : "Switch to steering this turn";
     mode.onclick = () => command("pending-mode", item.id, current, { mode: steer ? "queue" : "steer" }).catch(showFailure);
-    row.append(mode, button("icon-btn", "x", "Remove", "", () => command("pending-remove", item.id).catch(showFailure)));
+    const now = el("button", "mode", "Send now");
+    now.type = "button";
+    now.dataset.tip = "Stop this turn and run this next";
+    now.onclick = () => command("pending-mode", item.id, current, { mode: "now" }).catch(showFailure);
+    row.append(mode, now, button("icon-btn", "x", "Remove", "", () => command("pending-remove", item.id).catch(showFailure)));
     box.appendChild(row);
   }
 }
@@ -24588,7 +24603,7 @@ input.addEventListener("keydown", (e) => {
       return;
     }
   }
-  if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(input.value, e.ctrlKey || e.metaKey ? "queue" : "steer"); return; }
+  if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(input.value, e.altKey ? "now" : e.ctrlKey || e.metaKey ? "queue" : "steer"); return; }
   if (e.key === "Tab" && e.shiftKey) { e.preventDefault(); toggleAuto(); return; }
   if (e.key === "Escape") {
     if (menuEl) return;
@@ -24618,6 +24633,10 @@ $("#composer").addEventListener("submit", (e) => {
   if (input.value.trim() || attached.length) send(input.value);
   else if (!stopReply() && canRecord) startVoice();
 });
+$("#queue-btn").onclick = () => { send(input.value, "queue"); input.focus(); };
+$("#now-btn").onclick = () => { send(input.value, "now"); input.focus(); };
+$("#stop-btn").innerHTML = icon("stop");
+$("#stop-btn").onclick = () => { stopReply(); input.focus(); };
 $("#composer").addEventListener("mousedown", (e) => { if (e.target === e.currentTarget) { e.preventDefault(); input.focus(); } });
 $("#new-chat").onclick = newChat;
 $("#top-new").onclick = newChat;
