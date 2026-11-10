@@ -147,6 +147,49 @@ def mark_seen(card_ids: Iterable[str]) -> None:
         workspace._write(SEEN, seen)
     _new["value"] = False
     _new["at"] = time.time()
+    for listener in list(_on_seen):
+        try:
+            listener()
+        except Exception:  # noqa: BLE001 -- a page that is gone
+            pass
+
+
+# Told when the briefing is marked read, by the page or by Flash reading it
+# out: an open page clears its dot.
+_on_seen: list = []
+
+
+def on_seen(listener) -> None:
+    _on_seen.append(listener)
+
+
+def read_out(session: Any = None, now: Optional[float] = None) -> str:
+    """The whole briefing as text for the model to brief the user from,
+    marked read as the page's opening it would be."""
+
+    from . import briefing_view
+
+    problems: list[str] = []
+    since = opened(now)
+    shown = cards(session, now=now, problems=problems, since=since)
+    mark_seen(c["id"] for c in shown)
+    if not shown:
+        lines = ["Nothing new: the briefing is empty."]
+    else:
+        lines = [f"{len(shown)} item{'s' if len(shown) != 1 else ''}, newest first:"]
+        for c in shown:
+            body = " ".join(str(c.get("body") or "").split())
+            body = body if len(body) <= 400 else body[:399] + "..."
+            who = f", {c['who']}" if c.get("who") else ""
+            try:
+                when = briefing_view.when(c)
+            except Exception:  # noqa: BLE001
+                when = ""
+            lines.append(f"- [{c.get('label', '')}{who}{', ' + when if when else ''}] "
+                         f"{c.get('title', '')}" + (f": {body}" if body else ""))
+    if problems:
+        lines.append("Could not look at: " + "; ".join(problems))
+    return "\n".join(lines)
 
 
 def has_new(session: Any = None) -> bool:

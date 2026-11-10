@@ -364,3 +364,18 @@ def test_reading_something_has_the_dot_looked_at_again(monkeypatch):
     briefing.stale()
     NEW_WAITING()
     assert looked and NEW_WAITING() is False  # nosec B101
+
+
+def test_flash_reads_the_briefing_out_and_marks_it_read(monkeypatch):
+    from flash import briefing, tools
+
+    fake = [{"id": "spark:1", "label": "Spark report", "title": "Repo Watch", "body": "CI is green again.", "at": 1}]
+    monkeypatch.setattr(briefing, "cards", lambda *a, **k: list(fake))
+    heard = []
+    briefing.on_seen(lambda: heard.append(True))
+
+    said = tools.FUNCTIONS["read_briefing"]()
+
+    assert "Repo Watch" in said and "CI is green again." in said
+    assert heard, "the page was not told it is read"
+    assert briefing._seen().get("ids") == ["spark:1"]

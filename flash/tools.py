@@ -432,6 +432,21 @@ def trim_tool_output(text: str, name: str = "") -> str:
     )
 
 
+def read_briefing_tool() -> str:
+    """The user's briefing, read for them and marked read."""
+
+    from . import briefing
+
+    tool_line("ReadBriefing()")
+    said = briefing.read_out(_BRIEFING_SESSION[0])
+    tool_result(said.splitlines()[0])
+    return said
+
+
+# The web UI's session, when there is one, so the briefing has its chats too.
+_BRIEFING_SESSION: list = [None]
+
+
 def more_output(chars: Any = 0) -> str:
     """Raise the output limit for the rest of this task, and show the
     last result that was cut, whole up to the new limit."""
@@ -9592,6 +9607,24 @@ tools: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "read_briefing",
+            "description": (
+                "The user's briefing: what came in while they were away "
+                "(spark reports, unread email and iMessages, chats that "
+                "answered, waits that finished, calendar, connected apps, "
+                "notifications). Reading it marks it read, as opening the "
+                "Briefing page does. Use it when they ask for their "
+                "briefing, what they missed, or to be caught up. Then brief "
+                "them: what needs them first, the rest grouped and short, "
+                "with the next step for each that has one, and say where "
+                "each came from."
+            ),
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "more_output",
             "description": (
                 "Tool results are cut to a few thousand characters, the "
@@ -10267,6 +10300,7 @@ FUNCTIONS = {
     "get_date": get_date,
     "refresh_tools": refresh_tools,
     "more_output": more_output,
+    "read_briefing": lambda **_: read_briefing_tool(),
     "review_code": review_code,
     "read_aloud": read_aloud,
     "teach_chess": teach_chess,

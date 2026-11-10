@@ -7937,6 +7937,11 @@ def _attach(server: "Server", standalone: bool) -> None:
         "state": teamchat._state(entry)}))
     # A spark's @user: the page plays a ping and says who it was.
     pings.on_ping(lambda said: session.hub.publish({"type": "ping", **said}))
+    # Flash read the briefing out: the page's dot clears.
+    briefing.on_seen(lambda: session.hub.publish({"type": "status"}))
+    from . import tools as tools_for_briefing
+
+    tools_for_briefing._BRIEFING_SESSION[0] = session
     # A terminal's Flash, or the keeper, talking in a team's chat is news
     # to the page as soon as it is written.
     teamchat.watch()
