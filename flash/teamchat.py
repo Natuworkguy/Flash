@@ -719,6 +719,12 @@ def ring(spark: sparks.Spark, reason: str) -> dict:
 
     if not calls_allowed():
         raise TeamChatError(CALLS_OFF)
+    from . import checkins
+
+    if checkins.is_quiet():
+        raise TeamChatError(
+            f"It is the user's quiet hours ({checkins.quiet_words()}): no "
+            "calls. Put it in your report, and they read it after.")
     reason = " ".join(str(reason or "").split())[:300]
     if not reason:
         raise TeamChatError("Say why you are calling.")
