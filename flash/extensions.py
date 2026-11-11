@@ -1381,9 +1381,21 @@ def _env_value(value: Any) -> str:
     return str(value)
 
 
-def environment(extension: Extension) -> dict[str, str]:
+def environment(extension: Extension, chat: str = "") -> dict[str, str]:
     env = dict(os.environ)
     env["FLASH_EXTENSION_DIR"] = str(extension.path)
+    # The chat it runs for: the one its button was pressed in, or whose
+    # turn called its tool (a chat's commands run as that chat). An
+    # extension keeps things of its own per chat by it.
+    if not chat:
+        from . import tools
+
+        owner = getattr(tools._owner, "name", "") or ""
+        chat = owner if re.fullmatch(r"[0-9a-f]{8}", owner) else ""
+    if chat:
+        env["FLASH_CHAT"] = chat
+    else:
+        env.pop("FLASH_CHAT", None)
     if extension.settings:
         values = settings_values(extension)
         env["FLASH_SETTINGS"] = json.dumps(

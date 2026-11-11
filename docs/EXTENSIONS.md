@@ -175,7 +175,10 @@ same on every platform and needs no quoting.
   is available.
 - Programs run in your current working directory, with
   `FLASH_EXTENSION_DIR` set to the extension's folder, and its
-  [settings](#settings) in `FLASH_SETTINGS`.
+  [settings](#settings) in `FLASH_SETTINGS`. A tool called in a web
+  chat, and a button pressed in one, also get `FLASH_CHAT`, that chat's
+  id, to keep something of their own per chat (Riptide gives each chat
+  a window of its own and sends that chat's work to it).
 - `timeout` sets a limit in seconds (default 30, maximum 600).
 
 A tool in Python:
@@ -784,11 +787,17 @@ A button does one of three things:
   [{"value", "label"}]}}` asks the user to pick one in a dialog first;
   the program then runs again with `"choice"`, the value picked, in its
   JSON. Riptide's Send to Riptide uses it to ask which window to send to.
+  `{"dock": "<id>", "query": "a=1&b=2"}` opens one of the extension's
+  docks beside the chat, the query added to its page's address (and
+  kept for when it opens again); `{"open": "https://..."}` opens a web
+  address in a new tab. Riptide's Riptide button starts its server, then
+  docks its editor beside the chat this way.
 
 **The page's API.** A `script`, and a panel as `parent.Flash`, gets:
 
 ```js
 Flash.on("assistant", (event) => { /* every event the page hears; "*" for all */ });
+Flash.on("chat-open", ({chat, title}) => { /* another chat opened: keep a dock in step with it */ });
 Flash.send("Will it rain?");       // send a message in the open chat
 Flash.insert("Draft: ");           // put text in the box
 Flash.toast("Saved");
