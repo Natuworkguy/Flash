@@ -15,6 +15,8 @@ from flash import loop, sources, sparks
     "Version 2.4.1 is out.",
     "1. Reply to Sam",
     "3 new issues today.",
+    "Issue 12 looks like a bug.",
+    "PR 340 is merged; step 3 failed on version 2.4.",
 ])
 def test_cited_or_no_figure_passes(line):
     assert sources.uncited(line) == []
