@@ -364,3 +364,41 @@ def test_the_page_finds_the_model_by_its_id(tmp_path, monkeypatch):
     with pytest.raises(ValueError, match="not here any more"):
         web.command(session, {"name": "ext-button", "arg": "send",
                               "extension": "weather", "file": "gone"})
+
+
+DOCKING = """\
+import json, os, sys
+asked = json.load(sys.stdin)
+print(json.dumps({"dock": "radar", "query": "chat=" + os.environ.get("FLASH_CHAT", "none"),
+                  "open": "https://example.com/" + asked["chat"], "say": "opened"}))
+"""
+
+
+def test_a_button_can_open_its_dock_or_a_page_and_knows_the_chat(tmp_path):
+    folder = surfaces(tmp_path / "w", {"buttons": [
+        {"id": "dockit", "label": "Dock it", "where": ["header"], "run": ["python", "./dock.py"]}]})
+    (folder / "dock.py").write_text(DOCKING, encoding="utf-8")
+    install(folder)
+
+    said = ext_ui.pressed("weather", "dockit", "", "ab12cd34")
+    assert said == {"say": "opened", "dock": "weather/radar", "query": "chat=ab12cd34",
+                    "open": "https://example.com/ab12cd34"}
+
+
+def test_a_dock_it_does_not_have_and_an_address_that_is_not_the_web_are_dropped(tmp_path):
+    folder = surfaces(tmp_path / "w", {"buttons": [
+        {"id": "bad", "label": "Bad", "where": ["header"], "run": ["python", "./bad.py"]}]})
+    (folder / "bad.py").write_text('print(\'{"dock": "nope", "open": "file:///etc/passwd"}\')', encoding="utf-8")
+    install(folder)
+    assert ext_ui.pressed("weather", "bad", "", "ab12cd34") == {}
+
+
+def test_a_tool_called_in_a_chat_is_told_which(tmp_path):
+    from flash import tools
+
+    ext = install(surfaces(tmp_path / "w"))
+    with tools.running_as("ab12cd34"):
+        assert extensions.environment(ext)["FLASH_CHAT"] == "ab12cd34"
+    with tools.running_as("agent:x1"):
+        assert "FLASH_CHAT" not in extensions.environment(ext)
+    assert extensions.environment(ext, "cd34ab12")["FLASH_CHAT"] == "cd34ab12"

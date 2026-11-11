@@ -647,7 +647,7 @@ def press(ext: Any, button: Button, text: str = "", chat: str = "",
             input=json.dumps(given),
             capture_output=True, text=True, encoding="utf-8", errors="replace",
             timeout=button.timeout,
-            cwd=ext.path, env=extensions.environment(ext), check=False,
+            cwd=ext.path, env=extensions.environment(ext, chat), check=False,
         )
     except subprocess.TimeoutExpired:
         return {"say": f"{button.label} took longer than "
@@ -675,9 +675,20 @@ def press(ext: Any, button: Button, text: str = "", chat: str = "",
                 "options": options,
             }}
     if isinstance(said, dict) and any(
-            k in said for k in ("say", "insert", "send")):
-        return {k: str(said[k]) for k in ("say", "insert", "send")
-                if said.get(k)}
+            k in said for k in ("say", "insert", "send", "dock", "open")):
+        out = {k: str(said[k]) for k in ("say", "insert", "send")
+               if said.get(k)}
+        # one of its own docks to open beside the chat, with a query for
+        # its page; or a web address to open in a new tab
+        docks = {d.id for d in getattr(ext.ui, "docks", []) or []}
+        if str(said.get("dock") or "") in docks:
+            out["dock"] = f"{ext.name}/{said['dock']}"
+            if said.get("query"):
+                out["query"] = str(said["query"])[:2000]
+        link = str(said.get("open") or "")
+        if re.match(r"^https?://", link):
+            out["open"] = link[:2000]
+        return out
     return {"say": out[:8000]} if out else {}
 
 
