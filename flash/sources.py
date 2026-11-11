@@ -54,10 +54,20 @@ _CITED = re.compile(
 )
 
 
+# A number that names a thing rather than counts it: issue 12, PR 340, step 3, version 2, page 14, room 101.
+_LABEL = re.compile(
+    r"\b(?:issues?|prs?|pull requests?|tickets?|bugs?|steps?|parts?|chapters?|pages?|lines?|versions?|v|"
+    r"orders?|invoices?|rooms?|flights?|items?|tasks?|cards?|no\.?|number|ids?|builds?|runs?|commits?|"
+    r"episodes?|seasons?|levels?|rounds?|slides?|figures?|tables?|sections?|rules?|phases?|weeks?|days?)"
+    r"\s+#?\d[\w.-]*",
+    re.I,
+)
+
+
 def figures(line: str) -> list[str]:
     """The figures in LINE that a reader would want sourced."""
 
-    text = _LIST_ITEM.sub("", _DATEISH.sub("", _TIME.sub("", line)))
+    text = _LIST_ITEM.sub("", _LABEL.sub("", _DATEISH.sub("", _TIME.sub("", line))))
     found = []
     for match in _FIGURE.finditer(text):
         figure = match.group(0).strip()

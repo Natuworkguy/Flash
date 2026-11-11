@@ -950,14 +950,14 @@ def _inbox(name, flag):
 
 def test_work_handed_over_is_answered_to_whoever_handed_it(studio):
     _hand("flash manager", "test runner", "Run the web UI tests.")
-    client = FakeClient([_reply("All 48 pass.")])
+    client = FakeClient([_reply("All 48 pass (from the test run).")])
 
     report = sparks.shift(sparks.find("test runner").id, client=client)
 
-    assert report.text == "All 48 pass."
+    assert report.text == "All 48 pass (from the test run)."
     answers = _inbox("flash manager", "answer")
     assert [(a["from"], a["text"]) for a in answers] == [
-        ("Test Runner", "All 48 pass."),
+        ("Test Runner", "All 48 pass (from the test run)."),
     ]
     # Not its lead's work, so not rolled up to it.
     assert _inbox("engine manager", "rollup") == []
@@ -992,7 +992,7 @@ def test_its_own_shift_still_goes_up_to_its_lead(studio):
 def test_both_managers_are_answered_when_both_handed_work(studio):
     _hand("engine manager", "test runner", "Run the renderer tests.")
     _hand("flash manager", "test runner", "Run the web UI tests.")
-    client = FakeClient([_reply("Renderer 12 pass, web UI 48 pass.")])
+    client = FakeClient([_reply("Renderer 12 pass, web UI 48 pass (from the test run).")])
 
     sparks.shift(sparks.find("test runner").id, client=client)
 
@@ -1037,11 +1037,11 @@ def test_the_answer_waits_through_an_approval(studio, monkeypatch):
     assert _inbox("flash manager", "answer") == []
 
     sparks.answer_step(runner, True)
-    sparks.shift(runner, client=FakeClient([_reply("48 pass.")]))
+    sparks.shift(runner, client=FakeClient([_reply("48 pass (from the test run).")]))
 
     assert ran == ["make test"]
     assert [a["text"] for a in _inbox("flash manager", "answer")] == [
-        "48 pass.",
+        "48 pass (from the test run).",
     ]
 
 
@@ -1055,7 +1055,7 @@ def test_an_answer_starts_an_on_call_manager_and_waits_for_others(studio):
                      lambda s: setattr(s, "asked", False))
 
     sparks.shift(sparks.find("test runner").id,
-                 client=FakeClient([_reply("48 pass.")]))
+                 client=FakeClient([_reply("48 pass (from the test run).")]))
 
     assert sparks.find("flash manager").asked
     assert not sparks.find("engine manager").asked
@@ -1064,14 +1064,14 @@ def test_an_answer_starts_an_on_call_manager_and_waits_for_others(studio):
 def test_the_manager_reads_the_answer_on_its_next_shift(studio):
     _hand("flash manager", "test runner", "Run the tests.")
     sparks.shift(sparks.find("test runner").id,
-                 client=FakeClient([_reply("48 pass.")]))
+                 client=FakeClient([_reply("48 pass (from the test run).")]))
     client = FakeClient([_reply("Tests are green; shipping.")])
 
     sparks.shift(sparks.find("flash manager").id, client=client)
 
     opening = client.calls[0]["messages"][1]["content"]
     assert "Answers to the work you handed off" in opening
-    assert "Test Runner: 48 pass." in opening
+    assert "Test Runner: 48 pass (from the test run)." in opening
 
 
 def test_a_report_on_handed_work_says_who_it_was_for(studio):
@@ -1079,7 +1079,7 @@ def test_a_report_on_handed_work_says_who_it_was_for(studio):
 
     _hand("flash manager", "test runner", "Run the tests.")
     sparks.shift(sparks.find("test runner").id,
-                 client=FakeClient([_reply("48 pass.")]))
+                 client=FakeClient([_reply("48 pass (from the test run).")]))
 
     news = [e for e in teamchat.history("dev")["entries"]
             if e.get("what") == "report"]
@@ -1139,7 +1139,7 @@ def test_work_one_lead_hands_it_goes_back_to_that_one(studio):
     _hand("flash manager", "test runner", "Run the web UI tests.")
 
     sparks.shift(sparks.find("test runner").id,
-                 client=FakeClient([_reply("48 pass.")]))
+                 client=FakeClient([_reply("48 pass (from the test run).")]))
 
     assert len(_inbox("flash manager", "answer")) == 1
     assert _inbox("engine manager", "answer") == []
