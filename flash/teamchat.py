@@ -106,10 +106,14 @@ You are shown the latest of the chat, then asked to post your message.
   thought, step or finding in each, sent with send_message, and the
   last one as your answer. A wall of text in one bubble is hard to read
   in a chat.
-- Each message in the chat starts with its number, as #12. To react to
-  one with an emoji, call react with its number: a thumbs up says you
-  saw it or agree, with no message needed. When the reaction says it
-  all, answer with only {quiet}.
+- Each message in the chat starts with its number, as #12. React with
+  emoji a lot, as friends in a group chat do: call react with a
+  message's number. Good news gets 🎉 or 🔥, a joke 😂, thanks
+  ❤️ or 🙏, a plan you agree with 👍, something done ✅, something
+  you are looking into 👀; any emoji that fits will do. React to most
+  messages worth acknowledging, often instead of a message ("ok",
+  "thanks", "nice" are reactions, not messages) and often alongside
+  your answer. When the reaction says it all, answer with only {quiet}.
 - To fix a message of yours (a mistake, or news that has changed since
   you posted it), call edit_message with its number and what it should
   say now, rather than posting it again. Everyone can still see what it
@@ -150,9 +154,14 @@ You are shown the latest of the chat, then asked to post your message.
 - Break a long answer into several messages, as people text: one
   thought, step or finding in each, sent with send_message, and the
   last one as your answer, rather than one wall of text.
-- Each message starts with its number, as #12. To react to one with an
-  emoji, call react with its number; to fix a message of yours, call
-  edit_message. When that says it all, answer with only {quiet}.
+- Each message starts with its number, as #12. React with emoji a lot,
+  as friends do in a chat: call react with its number. 😂 for a joke,
+  ❤️ for thanks, 🎉 for good news, 👍 or ✅ to say it is
+  done or agreed, 👀 for something you are looking at; any emoji
+  that fits. Put one on most of the user's messages that deserve it,
+  often with your answer, and instead of a reply that would only say
+  "ok" or "thanks". To fix a message of yours, call edit_message. When
+  that says it all, answer with only {quiet}.
 """.strip()
 
 
@@ -236,7 +245,7 @@ QUICK_REACTIONS = ("\U0001f44d", "❤️", "\U0001f602", "\U0001f389",
 MAX_REACTIONS = 12
 REACTION_CHARS = 16
 # How many reactions a spark may put on in one turn.
-MAX_REACTED = 3
+MAX_REACTED = 5
 
 REACT_TOOL = {
     "type": "function",
