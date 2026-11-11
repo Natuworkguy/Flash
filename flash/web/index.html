@@ -1042,6 +1042,9 @@ body.course-open { overflow: hidden; }
 .debate-until { max-width: none; margin: 4px 0 14px; }
 .spark-voice-row { display: flex; gap: 8px; align-items: center; }
 .spark-voice-row select { flex: 1; min-width: 0; }
+.morning-row { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.morning-row input[type=time] { width: auto; }
+.check-inline { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text-2); cursor: pointer; }
 .spark-pitch { display: flex; align-items: center; gap: 12px; margin-top: 8px; font-size: 13px; color: var(--text-2); }
 .spark-pitch > span { white-space: nowrap; }
 .spark-pitch b { font-variant-numeric: tabular-nums; display: inline-block; min-width: 2.2ch; }
@@ -13921,6 +13924,7 @@ function sparkForm(spark, inProjectId = "", template = "") {
     <label class="field"><span>Goal</span><textarea name="goal" rows="4" placeholder="Check github.com/me/app for new issues. Tell me which look like bugs, and skip ones you have already told me about."></textarea></label>
     <label class="field"><span>How often</span><select name="every">${choices.map(([m, label]) => `<option value="${m}"${!atTimes && !called && m === every ? " selected" : ""}>${label}</option>`).join("")}<option value="at"${atTimes ? " selected" : ""}>At set times…</option><option value="oncall"${called ? " selected" : ""}>Only when called on</option></select><small class="every-said">${called ? ON_CALL_SAID : "It works while Flash is open, in the terminal or here."}</small></label>
     <label class="field at-field"${atTimes ? "" : " hidden"}><span>When</span><input name="at" placeholder="9am weekdays" autocomplete="off" spellcheck="false"><small class="at-said">Like <b>9am weekdays</b>, <b>mon, thu 8:30</b>, <b>the 1st at 9am</b>, or a cron line such as <b>0 9 * * 1-5</b>. On this computer's clock.</small></label>
+    <div class="field morning-field"><span>Good morning <em class="count">optional</em></span><div class="morning-row"><input type="time" name="morning" aria-label="Good morning at"><label class="check-inline"><input type="checkbox" name="morning_tasks"><span>With what I left unfinished</span></label></div><small>Each day at this time it says good morning in its chat with you (never in your quiet hours). With the box ticked, on by default for a lead, it runs through your open reminders, unfinished chat checklists, approvals waiting on you and work you gave sparks.</small></div>
     <label class="field"><span>Project</span><select name="project"><option value="">No project</option>${[...projects].reverse().map((p) => `<option value="${esc(p.id)}"${editing && spark.project === p.id ? " selected" : ""}>${esc(p.name)}</option>`).join("")}</select><small>${projects.length ? "Its shifts work on the project's folder and follow its instructions, and a chat with it starts there." : "Make a project on the Projects page to give it one: a folder, and how to work in it."}</small></label>
     <div class="field more-projects-field" hidden><span>Also works on <em class="count">optional</em></span><div class="project-chips" role="group" aria-label="Also works on"></div><small>More projects it works on besides its main one. Its shifts are told each one's folder and instructions, and do each piece of work in the project it belongs to.</small></div>
     <label class="field"><span>Watch a folder <em class="count">optional</em></span><input name="watch" class="mono" placeholder="~/Downloads" autocomplete="off" spellcheck="false" role="combobox" aria-autocomplete="list" aria-expanded="false"><small>A change to its files starts a shift too, besides the schedule, and it is told which files changed. Tab takes a suggestion and shows what is inside it.</small></label>
@@ -13955,6 +13959,8 @@ function sparkForm(spark, inProjectId = "", template = "") {
         if ((data.mode || "") !== (was.mode || "")) await command("spark-mode", id, null, { mode: data.mode || "" });
         const falls = (data.fallbacks || "").split(/[>,\n]/).map((m) => m.trim()).filter(Boolean);
         if (falls.join(" > ") !== (was.fallbacks || []).join(" > ")) await command("spark-update", id, null, { fallbacks: falls });
+        const morning = data.morning || "", morningTasks = !!data.morning_tasks;
+        if (morning !== (was.morning || "") || morningTasks !== !!was.morning_tasks) await command("spark-update", id, null, { morning, morning_tasks: morningTasks });
         const callVoice = data.callvoice || "", pitch = Number(data.pitch) || 0;
         if (callVoice !== (was.voice || "") || pitch !== (was.pitch || 0)) await command("spark-update", id, null, { voice: callVoice, pitch });
       };
@@ -14090,6 +14096,8 @@ function sparkForm(spark, inProjectId = "", template = "") {
     form.fallbacks.value = (spark.fallbacks || []).join(" > ");
     form.goal.value = spark.goal;
     form.boundaries.value = spark.boundaries;
+    form.morning.value = spark.morning || "";
+    form.morning_tasks.checked = !!spark.morning_tasks;
     form.watch.value = spark.watch || "";
     form.at.value = spark.at || "";
     if (spark.at) form.at.dispatchEvent(new Event("input"));
