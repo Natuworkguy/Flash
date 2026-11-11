@@ -435,6 +435,38 @@ def trim_tool_output(text: str, name: str = "") -> str:
     )
 
 
+def flash_icons_tool(action: str = "get", names: str = "", format: str = "html", **style_args) -> str:
+    """Flash Icons: get them, list them, or read and change their style."""
+
+    from . import icons
+
+    wanted = [n.strip() for n in re.split(r"[,\n]+", str(names or "")) if n.strip()]
+    try:
+        if action == "list":
+            return "\n".join(f"{cat}: {', '.join(keys)}" for cat, keys in icons.catalogue().items())
+        if action == "reset":
+            return "Back to Flash's own icon style: " + icons.describe(icons.reset_style()) + "."
+        if action == "style":
+            changes = {k: v for k, v in style_args.items() if k in icons.DEFAULT_STYLE and v not in (None, "")}
+            now = icons.set_style(changes) if changes else icons.style()
+            return (("Saved. " if changes else "") + "Icon style: " + icons.describe(now) + ". "
+                    + "Every icon you make follows it; pages made before keep the stylesheet they were made with "
+                    "until it is replaced with the new one (action get, format css).")
+        if action == "preview":
+            page = icons.FLASH_DIR / "icons-preview.html"
+            page.parent.mkdir(parents=True, exist_ok=True)
+            page.write_text(icons.preview_page(wanted or None), encoding="utf-8")
+            return (f"Wrote a preview of {'those icons' if wanted else 'every icon'} in the current style to {page}. "
+                    "Show it with send_html.")
+        if action == "get":
+            if not wanted:
+                return "Error: name the icons to get, comma-separated. action list shows them."
+            return icons.pack(wanted, (format or "html").lower())
+        return "Error: action is get, list, style, preview or reset."
+    except icons.IconError as exc:
+        return f"Error: {exc}"
+
+
 def checkin_preferences_tool(interests=None, quiet_hours=None) -> str:
     """Read the user's check-in preferences, or change them."""
 
@@ -9686,6 +9718,44 @@ tools: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "flash_icons",
+            "description": (
+                "Flash Icons: Flash's own animated icon set, for every website "
+                "and app you build. Use these, never emoji, an icon font or an "
+                "icon CDN, unless the user asks for something else. "
+                "action \"get\" gives the icons named (as inline SVG with the "
+                "one stylesheet they need, or a React module); paste them into "
+                "the page. action \"list\" shows every icon by kind. Each moves "
+                "a little when pointed at (an arrow nudges, a bell rings, a "
+                "check draws itself). action \"style\" reads or changes the "
+                "user's icon style, which every icon you make follows: when they "
+                "ask for thicker, rounder, filled, bigger, calmer, bouncier, "
+                "faster or still icons, set it, then action \"preview\" to show "
+                "them all in it, and update the pages you made with the new "
+                "stylesheet. action \"reset\" goes back to Flash's own style."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string", "enum": ["get", "list", "style", "preview", "reset"]},
+                    "names": {"type": "string", "description": "For get and preview: icon names, comma-separated (home, search, arrow-right, bell, heart, ...). Common names work too (x, cog, trash-can)."},
+                    "format": {"type": "string", "enum": ["html", "react", "css"], "description": "For get: html (default), react, or css (the stylesheet alone)."},
+                    "stroke": {"type": "number", "description": "For style: line width at 24 px, 0.5 to 4 (default 1.75)."},
+                    "corners": {"type": "string", "enum": ["round", "square"]},
+                    "variant": {"type": "string", "enum": ["line", "duotone"], "description": "duotone puts a soft fill behind the lines."},
+                    "size": {"type": "string", "description": "Any CSS length, like 1.5em (default) or 24px."},
+                    "color": {"type": "string", "description": "A CSS colour, or currentColor (default) to follow the text."},
+                    "motion": {"type": "string", "enum": ["lively", "subtle", "none"]},
+                    "trigger": {"type": "string", "enum": ["hover", "load", "loop"], "description": "When they move: hover (pointed at or focused; default), load (once, as they appear) or loop (all the time)."},
+                    "speed": {"type": "integer", "description": "Milliseconds for one motion, 100 to 5000 (default 600)."},
+                },
+                "required": ["action"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "checkin_preferences",
             "description": (
                 "What the user wants to hear about from Flash's check-ins "
@@ -10399,6 +10469,7 @@ FUNCTIONS = {
     "refresh_tools": refresh_tools,
     "more_output": more_output,
     "read_briefing": lambda **_: read_briefing_tool(),
+    "flash_icons": lambda **kw: flash_icons_tool(**kw),
     "checkin_preferences": lambda interests=None, quiet_hours=None, **_:
         checkin_preferences_tool(interests, quiet_hours),
     "review_code": review_code,

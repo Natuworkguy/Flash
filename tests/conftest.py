@@ -147,6 +147,10 @@ def isolated_home(tmp_path_factory, monkeypatch):
     from flash import checkins
 
     monkeypatch.setattr(checkins, "FLASH_DIR", home / ".flash")
+    # the user's icon style
+    from flash import icons
+
+    monkeypatch.setattr(icons, "FLASH_DIR", home / ".flash")
     monkeypatch.setattr(vault, "_load_key", lambda: (
         vault._key_file().read_bytes() if vault._key_file().exists()
         else None))
