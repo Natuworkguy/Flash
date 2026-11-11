@@ -1953,6 +1953,26 @@ class TestShownFiles:
         request(server, "GET", f"/api/files/{kept['id']}?download=1")
         assert request.last.getheader("Content-Disposition") == "attachment"
 
+    def test_a_video_is_served_in_the_pieces_asked_for(self, server, tmp_path):
+        clip = tmp_path / "playthrough.webm"
+        clip.write_bytes(b"\x1aE\xdf\xa3" + bytes(range(256)) * 4)
+        kept = web.workspace.keep_file(str(clip))
+        size = clip.stat().st_size
+
+        status, body = request(server, "GET", f"/api/files/{kept['id']}",
+                               headers={"Range": "bytes=4-13"})
+        assert status == 206 and body == clip.read_bytes()[4:14]
+        assert request.last.getheader("Content-Range") == f"bytes 4-13/{size}"
+        assert request.last.getheader("Accept-Ranges") == "bytes"
+        status, body = request(server, "GET", f"/api/files/{kept['id']}",
+                               headers={"Range": "bytes=-4"})
+        assert status == 206 and body == clip.read_bytes()[-4:]
+        status, _ = request(server, "GET", f"/api/files/{kept['id']}",
+                            headers={"Range": f"bytes={size}-"})
+        assert status == 416
+        status, body = request(server, "GET", f"/api/files/{kept['id']}")
+        assert status == 200 and len(body) == size
+
     def test_not_without_it_and_not_by_path(self, server, tmp_path):
         doc = tmp_path / "report.pdf"
         doc.write_bytes(PDF)

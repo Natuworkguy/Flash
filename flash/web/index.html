@@ -1870,7 +1870,9 @@ body.page-projects #dock, body.page-settings #dock, body.page-tool #dock { displ
 .made-card { display: flex; flex-direction: column; gap: 8px; text-align: left; animation: rise-far 0.35s var(--ease) both; animation-delay: calc(var(--i, 0) * 0.025s); }
 .made-card .look { position: relative; aspect-ratio: 4 / 3; border-radius: 10px; border: 1px solid var(--border); background: var(--surface); overflow: hidden; display: grid; place-items: center; align-content: center; gap: 6px; color: var(--text-3); transition: border-color 0.15s; }
 .made-card:hover .look { border-color: var(--border-strong); }
-.made-card .look img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; display: block; }
+.made-card .look img, .made-card .look video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; display: block; }
+.made-card .look .play { position: relative; z-index: 1; width: 40px; height: 40px; border-radius: 50%; display: grid; place-items: center; background: rgba(0, 0, 0, 0.55); color: #fff; }
+.made-card .look .play svg { width: 16px; height: 16px; margin-left: 2px; }
 .made-card .look svg { width: 26px; height: 26px; }
 .made-card .look i { font-style: normal; font-size: 12px; }
 .made-card .words { min-width: 0; display: flex; flex-direction: column; gap: 1px; }
@@ -10686,6 +10688,7 @@ const drawMadePage = () => toolPage("Made", async (body) => {
     const shown = files.filter((f) => madeFilter === "all" || madeGroup(f) === madeFilter);
     if (!shown.length) grid.appendChild(el("p", "page-empty", files.length ? "Nothing of that kind yet." : "Nothing yet. Images, documents, pages, 3D models, boards and videos Flash makes land here."));
     shown.forEach((f, i) => {
+      mendKind(f);
       const card = el("button", "made-card");
       card.type = "button";
       card.style.setProperty("--i", Math.min(i, 20));
@@ -10696,6 +10699,15 @@ const drawMadePage = () => toolPage("Made", async (body) => {
         img.alt = "";
         img.src = fileUrl(f);
         look.appendChild(img);
+      } else if (f.kind === "video") {
+        // a still from early in the clip, and a play mark
+        const clip = el("video");
+        clip.muted = true;
+        clip.playsInline = true;
+        clip.preload = "metadata";
+        clip.src = `${fileUrl(f)}#t=0.5`;
+        clip.onerror = () => { clip.remove(); look.insertAdjacentHTML("afterbegin", icon("film") + `<i>Video</i>`); };
+        look.append(clip, el("span", "play", icon("play")));
       } else look.innerHTML = icon(FILE_ICONS[f.kind] || "file") + `<i>${esc(fileKind(f))}</i>`;
       card.appendChild(look);
       const words = el("span", "words", `<b></b><span></span>`);
