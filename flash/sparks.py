@@ -518,6 +518,10 @@ TAKE_ON_TOOL = {
 }
 
 
+# The shapes a spark can be drawn as.
+SHAPES = ("round", "diamond", "square", "gem")
+
+
 class SparkError(ValueError):
     """A spark that could not be made or found as asked."""
 
@@ -632,6 +636,8 @@ class Spark:
     # MORNING_TASKS (on by default for a lead). The day it last said it.
     morning: str = ""
     morning_tasks: bool = False
+    # The shape it is drawn as: round, diamond, square or gem; "" for one picked by its id.
+    shape: str = ""
     morning_sent: str = ""
     # When the answer being made now was started, or 0; and what it is
     # doing meanwhile.
@@ -3200,6 +3206,11 @@ def update(key: str, **changes) -> Spark:
             spark.title = _title(changes["title"])
         if "colour" in changes:
             spark.colour = parse_colour(changes["colour"])
+        if "shape" in changes:
+            shape = str(changes["shape"] or "").strip().lower()
+            if shape not in ("", *SHAPES):
+                raise SparkError(f"A spark's shape is one of {', '.join(SHAPES)}.")
+            spark.shape = shape
         if "name" in changes:
             name = " ".join(str(changes["name"] or "").split())[:NAME_CHARS]
             if not name:
@@ -3216,7 +3227,7 @@ def update(key: str, **changes) -> Spark:
         name: {"from": before.get(name), "to": after.get(name)}
         for name in ("name", "title", "goal", "boundaries", "every", "at",
                      "project", "more_projects", "watch", "events", "model",
-                     "fallbacks", "colour", "morning", "morning_tasks")
+                     "fallbacks", "colour", "morning", "morning_tasks", "shape")
         if before.get(name) != after.get(name)
     }
     if changed:

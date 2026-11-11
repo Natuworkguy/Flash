@@ -6856,6 +6856,8 @@ def _spark_command(name: str, arg: str, body: dict) -> dict:
                 str(body.get("colour") or ""),
                 body.get("events") or (),
             )
+            if body.get("shape"):
+                spark = sparks.update(spark.id, shape=str(body["shape"]))
             # Several projects: the first its main one.
             if isinstance(body.get("projects"), list) and \
                     len(body["projects"]) > 1:
@@ -6868,7 +6870,7 @@ def _spark_command(name: str, arg: str, body: dict) -> dict:
                       "watch": "watch", "model": "model",
                       "title": "title", "colour": "colour",
                       "voice": "voice", "pitch": "pitch",
-                      "morning": "morning", "morning_tasks": "morning_tasks"}
+                      "morning": "morning", "morning_tasks": "morning_tasks", "shape": "shape"}
             changes = {
                 field: str(body[key])
                 for key, field in fields.items() if key in body
