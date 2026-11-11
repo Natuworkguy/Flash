@@ -3844,6 +3844,23 @@ def chat_files(session: "Session") -> list[dict]:
 MOST_MADE = 500
 
 
+def byte_range(header: str, size: int):
+    """The part of a SIZE-byte file a Range header asks for, as (first,
+    last) bytes; None for the whole file; "bad" for a part past its end."""
+
+    m = re.fullmatch(r"\s*bytes=(\d*)-(\d*)\s*", header or "")
+    if not m or not (m.group(1) or m.group(2)):
+        return None
+    if m.group(1):
+        start = int(m.group(1))
+        end = min(int(m.group(2)), size - 1) if m.group(2) else size - 1
+    else:   # the last N bytes
+        start, end = max(0, size - int(m.group(2))), size - 1
+    if start >= size or start > end:
+        return "bad"
+    return start, end
+
+
 def made_files(session: "Session") -> list[dict]:
     """Everything Flash made, in every chat, newest first: each file it
     showed, once, with the chat it is in and its place in that chat's
@@ -3864,9 +3881,14 @@ def made_files(session: "Session") -> list[dict]:
                 made = os.path.getmtime(kept[0])
             except OSError:
                 continue
+            kind = str(entry.get("kind") or "file")
+            # Kept before videos had a kind of their own, a recording was
+            # filed as a picture: its type says what it is.
+            if kind in ("image", "file") and str(kept[1]).startswith("video/"):
+                kind = "video"
             found[file_id] = {
                 "id": file_id, "name": str(entry.get("name") or kept[0].name),
-                "kind": str(entry.get("kind") or "file"),
+                "kind": kind,
                 "mime": kept[1], "size": entry.get("size") or 0,
                 "made": made, "chat": chat.id, "chat_title": chat.title,
                 "index": index,
@@ -7639,6 +7661,20 @@ class Handler(BaseHTTPRequestHandler):
             headers["Content-Security-Policy"] = HTML_SANDBOX
             if design and not download:
                 data = with_design_kit(data)
+        # Videos and sound are asked for in pieces (Safari will not play
+        # one otherwise, and seeking asks for the part it needs).
+        headers["Accept-Ranges"] = "bytes"
+        part = byte_range(self.headers.get("Range", ""), len(data))
+        if part == "bad":
+            self._send(HTTPStatus.REQUESTED_RANGE_NOT_SATISFIABLE, b"", mime,
+                       {"Content-Range": f"bytes */{len(data)}"})
+            return
+        if part:
+            start, end = part
+            headers["Content-Range"] = f"bytes {start}-{end}/{len(data)}"
+            self._send(HTTPStatus.PARTIAL_CONTENT, data[start:end + 1], mime,
+                       headers)
+            return
         self._send(HTTPStatus.OK, data, mime, headers)
 
     def _board(self, file_id: str, fmt: str) -> None:
