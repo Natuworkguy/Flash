@@ -6867,7 +6867,8 @@ def _spark_command(name: str, arg: str, body: dict) -> dict:
                       "boundaries": "boundaries", "project": "project",
                       "watch": "watch", "model": "model",
                       "title": "title", "colour": "colour",
-                      "voice": "voice", "pitch": "pitch"}
+                      "voice": "voice", "pitch": "pitch",
+                      "morning": "morning", "morning_tasks": "morning_tasks"}
             changes = {
                 field: str(body[key])
                 for key, field in fields.items() if key in body

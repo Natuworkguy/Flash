@@ -786,6 +786,14 @@ org chart (`/sparks teams` in the terminal), and Dev Team and Personal
 Desk come ready made (`/sparks teams add "Dev Team"`), paused until you
 have looked them over.
 
+- **Good morning.** A spark can say good morning in its chat with you
+  every day at a time you set: Good morning on its form, or just tell it
+  ("say good morning at 7:30"). A lead adds what you left unfinished, on
+  by default and a tick box for any other spark: your open Apple
+  Reminders due today, chats whose checklist still has steps open, hires
+  waiting on your yes, and work you gave sparks that is not done. It is
+  sent once a day, never in quiet hours, and skipped if Flash was off
+  until three hours past the time.
 - **Team chat.** Every team has a group chat, the user and its sparks in
   one room (the chat button on the team, or `/sparks teamchat <team>
   [message]`). The leads answer what is said to no one; `@scout` calls

@@ -236,6 +236,47 @@ KEEP_NOTES_TOOL = {
     },
 }
 
+GOOD_MORNING_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "good_morning",
+        "description": (
+            "Say good morning to the user every day at a time they choose, "
+            "here in your chat with them: when they ask for a morning "
+            "message, or for you to tell them each morning what they left "
+            "unfinished. tasks true adds that rundown (their open "
+            "reminders, unfinished chat checklists, approvals waiting on "
+            "them, work they gave sparks). at '' or 'off' stops it."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "at": {"type": "string", "description": "A time of day, as 7:30 or 7:30am; '' or off for none."},
+                "tasks": {"type": "boolean", "description": "Include what they left unfinished."},
+            },
+            "required": ["at"],
+        },
+    },
+}
+
+
+def _good_morning(spark: "Spark"):
+    def set_it(args: dict) -> str:
+        changes = {"morning": args.get("at", "")}
+        if "tasks" in args:
+            changes["morning_tasks"] = args.get("tasks")
+        try:
+            done = update(spark.id, **changes)
+        except SparkError as exc:
+            return f"Error: {exc}"
+        tool_line(f"GoodMorning({done.morning or 'off'})")
+        if not done.morning:
+            return "Good mornings are off."
+        return (f"Set: a good morning every day at {done.morning}"
+                + (", with what they left unfinished." if done.morning_tasks else "."))
+    return set_it
+
+
 REMIND_SELF_TOOL = {
     "type": "function",
     "function": {
@@ -586,6 +627,12 @@ class Spark:
     # What it set itself to do at a time: {id, at, text, every}, EVERY
     # being "", "day", "week", "month" or "year" (a birthday).
     reminders: list = field(default_factory=list)
+    # A good morning to the user each day at this time ("HH:MM", "" for
+    # none), in its chat with them; with what they left unfinished, when
+    # MORNING_TASKS (on by default for a lead). The day it last said it.
+    morning: str = ""
+    morning_tasks: bool = False
+    morning_sent: str = ""
     # When the answer being made now was started, or 0; and what it is
     # doing meanwhile.
     replying: float = 0.0
@@ -3128,6 +3175,18 @@ def update(key: str, **changes) -> Spark:
             spark.model = model
         if "fallbacks" in changes:
             spark.fallbacks = fallbacks_of(changes["fallbacks"], spark.model)
+        if "morning" in changes:
+            from . import mornings
+
+            try:
+                spark.morning = mornings.parse_time(changes["morning"])
+            except ValueError as exc:
+                raise SparkError(f"Good morning at: {exc}.") from None
+            if spark.morning and "morning_tasks" not in changes and not before.get("morning"):
+                # a lead says what is left to do unless told not to
+                spark.morning_tasks = bool(reports_of(spark))
+        if "morning_tasks" in changes:
+            spark.morning_tasks = str(changes["morning_tasks"]).strip().lower() not in ("", "0", "false", "no", "off")
         if "voice" in changes:
             spark.voice = str(changes["voice"] or "").strip()[:120]
         if "pitch" in changes:
@@ -3157,7 +3216,7 @@ def update(key: str, **changes) -> Spark:
         name: {"from": before.get(name), "to": after.get(name)}
         for name in ("name", "title", "goal", "boundaries", "every", "at",
                      "project", "more_projects", "watch", "events", "model",
-                     "fallbacks", "colour")
+                     "fallbacks", "colour", "morning", "morning_tasks")
         if before.get(name) != after.get(name)
     }
     if changed:
@@ -5037,6 +5096,49 @@ def fire_reminders(now: Optional[float] = None, client=None,
     return fired
 
 
+def mornings_due(now: Optional[float] = None) -> list[Spark]:
+    """Each spark whose good morning is due now, marked sent for today:
+    said once a day, and not in the user's quiet hours."""
+
+    from . import mornings
+
+    now = time.time() if now is None else now
+    if checkins.is_quiet(now):
+        return []
+    out = []
+    for spark in all_sparks():
+        if spark.paused or not mornings.due(spark.morning, spark.morning_sent, now):
+            continue
+        day = mornings.today(now)
+        out.append(_edit(spark.id, lambda s, day=day: setattr(s, "morning_sent", day)))
+    return out
+
+
+def fire_mornings(now: Optional[float] = None, client=None,
+                  start=threading.Thread) -> list[Spark]:
+    """Each good morning due now said in the spark's chat with the user,
+    as its own message, with what the user left unfinished for a lead.
+    Each on a thread of its own, as reminders are."""
+
+    from . import mornings, notify, teamchat
+
+    said = mornings_due(now)
+    for spark in said:
+        log(spark.id, "morning", tasks=spark.morning_tasks)
+
+        def run(spark=spark) -> None:
+            with contextlib.suppress(Exception):
+                room = teamchat.dm_id(spark.id)
+                asked = teamchat.say(room, mornings.note(spark.morning_tasks), hidden=True)
+                teamchat.answer(room, asked, client)
+            # (with nothing of Flash open, the desktop is how they hear of it)
+            with contextlib.suppress(Exception):
+                notify.desktop(f"{spark.name} says good morning", "Open Flash to read it.")
+
+        start(target=run, daemon=True).start()
+    return said
+
+
 def _keeping_notes(notes: list[str]):
     def keep(args: dict) -> str:
         notes[0] = str(args.get("notes", "")).strip()
@@ -5300,6 +5402,7 @@ def _shift(spark_id: str, client=None) -> Optional[Report]:
         "keep_notes": _keeping_notes(notes),
         "wait_for_events": _waiting_for_events(spark),
         "remind_self": _reminding(spark),
+        "good_morning": _good_morning(spark),
         "hand_off": _handing_off(spark),
         "ask_spark": _asking(spark),
         "make_document": _documenting(spark, made),
@@ -5385,7 +5488,7 @@ def _shift(spark_id: str, client=None) -> Optional[Report]:
                 else contextlib.nullcontext():
             text = _work(
                 spark, messages, own,
-                [KEEP_NOTES_TOOL, WAIT_FOR_EVENTS_TOOL, REMIND_SELF_TOOL,
+                [KEEP_NOTES_TOOL, WAIT_FOR_EVENTS_TOOL, REMIND_SELF_TOOL, GOOD_MORNING_TOOL,
                  HAND_OFF_TOOL,
                  ASK_SPARK_TOOL,
                  # Not offered at all with calls switched off.
@@ -5823,7 +5926,7 @@ class ChatKit:
 
     schemas = [
         KEEP_NOTES_TOOL, HAND_OFF_TOOL, ASK_SPARK_TOOL, TAKE_ON_TOOL,
-        MAKE_DOCUMENT_TOOL, REMIND_SELF_TOOL, *PROPOSAL_TOOLS, *CHAT_TOOLS,
+        MAKE_DOCUMENT_TOOL, REMIND_SELF_TOOL, GOOD_MORNING_TOOL, *PROPOSAL_TOOLS, *CHAT_TOOLS,
     ]
 
     def __init__(self, spark: Spark, chat: str = "") -> None:
@@ -5838,6 +5941,7 @@ class ChatKit:
         self.tools: dict[str, Callable[[dict], str]] = {
             "keep_notes": _keeping_notes(self.notes),
             "remind_self": _reminding(spark),
+        "good_morning": _good_morning(spark),
             "learn": self._learn,
             "set_goal": self._set_goal,
             "set_schedule": self._set_schedule,
@@ -6601,6 +6705,9 @@ def _keep(
             # The sparks' own reminders: each said in its chat.
             with contextlib.suppress(OSError, SparkError):
                 fire_reminders()
+            # Good mornings, each once a day at its time.
+            with contextlib.suppress(OSError, SparkError):
+                fire_mornings()
             for spark in due():
                 _safe_shift(spark.id, prepare, announce)
 
