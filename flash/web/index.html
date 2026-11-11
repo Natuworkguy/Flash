@@ -2742,6 +2742,67 @@ body.all-stopped .org-node, body.all-stopped .spark-card { animation: all-halt 0
 @keyframes hire-stamp { 30% { transform: scale(1.03); border-color: var(--add); background: color-mix(in srgb, var(--add) 14%, var(--surface)); } 100% { transform: translateY(-8px) scale(0.96); opacity: 0; } }
 @keyframes hire-wave { to { transform: translateX(48px); opacity: 0; } }
 
+/* Flows: steps handed from spark to spark, drawn left to right. */
+.flow-stack { margin-bottom: 22px; }
+.flow-stack .flow-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 4px 2px 10px; }
+.flow-stack .flow-head .team-loose { margin: 0; }
+.flow-card { padding: 14px 14px 12px; margin-bottom: 10px; border-radius: 18px; border: 1px solid var(--border); background: var(--surface); animation: rise 0.35s var(--ease) both; }
+.flow-stack.again .flow-card { animation: none; }
+.flow-card .flow-top { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 12px; }
+.flow-card .flow-name { font-weight: 650; font-size: 15px; letter-spacing: -0.01em; }
+.flow-card .flow-chip { font-size: 12px; padding: 2px 9px; border-radius: 99px; background: var(--bg); border: 1px solid var(--border); color: var(--text-2); }
+.flow-card .flow-chip[data-state="running"] { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); }
+.flow-card .flow-chip[data-state="done"] { color: var(--add); border-color: color-mix(in srgb, var(--add) 45%, var(--border)); }
+.flow-card .flow-chip[data-state="failed"], .flow-card .flow-chip[data-state="stopped"] { color: var(--del); border-color: color-mix(in srgb, var(--del) 40%, var(--border)); }
+.flow-card .flow-top .buttons { margin-left: auto; display: flex; flex-wrap: wrap; gap: 6px; }
+.flow-map { display: flex; flex-wrap: wrap; align-items: center; row-gap: 14px; padding: 4px 2px 8px; }
+.flow-col { display: flex; flex-direction: column; gap: 10px; flex: none; position: relative; }
+.flow-col + .flow-col { margin-left: 34px; }
+.flow-col.wrapped { margin-left: 0 !important; }
+.flow-col.wrapped::before, .flow-col.wrapped::after { display: none; }
+.flow-col + .flow-col::before { content: ""; position: absolute; left: -30px; top: 50%; width: 26px; border-top: 2px dashed color-mix(in srgb, var(--text-3) 55%, transparent); }
+.flow-col + .flow-col::after { content: ""; position: absolute; left: -9px; top: calc(50% - 4px); border: 5px solid transparent; border-left-color: color-mix(in srgb, var(--text-3) 70%, transparent); border-right: 0; }
+.flow-node { display: flex; align-items: center; gap: 9px; width: 210px; min-height: 52px; padding: 9px 11px; border-radius: 14px; text-align: left; font: inherit; color: inherit;
+  border: 1px solid var(--border); background: var(--bg); position: relative; cursor: default; transition: border-color 0.2s, box-shadow 0.2s, opacity 0.2s; }
+button.flow-node { cursor: pointer; }
+button.flow-node:hover { border-color: color-mix(in srgb, var(--c, var(--accent)) 55%, var(--border)); }
+.flow-node .words { display: flex; flex-direction: column; min-width: 0; gap: 1px; }
+.flow-node .who { font-size: 13px; font-weight: 600; }
+.flow-node .task { font-size: 12px; color: var(--text-2); overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.flow-node .glyph { flex: none; width: 34px; height: 34px; display: grid; place-items: center; border-radius: 10px; background: color-mix(in srgb, var(--c, var(--accent)) 16%, var(--surface)); color: var(--c, var(--accent)); }
+.flow-node .glyph svg { width: 17px; height: 17px; }
+.flow-node.trigger { --c: var(--accent); width: 170px; }
+.flow-node.approval { --c: var(--warn); }
+.flow-node.approval .glyph { transform: rotate(45deg); border-radius: 8px; }
+.flow-node.approval .glyph svg { transform: rotate(-45deg); }
+.flow-node .mark { position: absolute; top: -7px; right: -7px; width: 18px; height: 18px; border-radius: 50%; display: grid; place-items: center; color: #fff; font-size: 11px; box-shadow: 0 0 0 2px var(--surface); }
+.flow-node .mark svg { width: 11px; height: 11px; stroke-width: 3; }
+.flow-node[data-state="done"] { border-color: color-mix(in srgb, var(--add) 50%, var(--border)); }
+.flow-node[data-state="done"] .mark { background: var(--add); }
+.flow-node[data-state="failed"], .flow-node[data-state="refused"] { border-color: color-mix(in srgb, var(--del) 50%, var(--border)); }
+.flow-node[data-state="failed"] .mark, .flow-node[data-state="refused"] .mark { background: var(--del); }
+.flow-node[data-state="skipped"] { opacity: 0.45; }
+.flow-node[data-state="working"] { border-color: var(--c, var(--accent)); animation: flow-work 1.6s ease-in-out infinite; }
+.flow-node[data-state="asking"] { border-color: var(--warn); box-shadow: 0 0 0 3px color-mix(in srgb, var(--warn) 18%, transparent); flex-wrap: wrap; }
+@keyframes flow-work { 50% { box-shadow: 0 0 0 4px color-mix(in srgb, var(--c, var(--accent)) 20%, transparent); } }
+.flow-node .decide { display: flex; gap: 6px; width: 100%; margin-top: 4px; }
+.flow-node .decide .btn { flex: 1; justify-content: center; }
+.flow-out { margin-top: 8px; padding: 10px 12px; border-radius: 12px; background: var(--bg); border: 1px solid var(--border); font-size: 13px; max-height: 240px; overflow: auto; white-space: pre-wrap; }
+.flow-out b { display: block; margin-bottom: 4px; }
+.flow-meta { font-size: 12px; color: var(--text-3); margin-top: 6px; }
+.flow-steps { display: flex; flex-direction: column; gap: 8px; margin-bottom: 8px; }
+.flow-step { display: grid; grid-template-columns: 26px minmax(120px, 170px) 1fr 30px; gap: 8px; align-items: start; padding: 8px; border-radius: 12px; border: 1px solid var(--border); background: var(--bg); }
+.flow-step .num { font-size: 12px; font-weight: 650; color: var(--text-3); padding-top: 8px; text-align: center; }
+.flow-step select, .flow-step textarea { width: 100%; font: 13px var(--sans); padding: 6px 8px; border-radius: 9px; border: 1px solid var(--border); background: var(--surface); color: var(--text); }
+.flow-step textarea { resize: vertical; min-height: 34px; }
+.flow-step .together { grid-column: 2 / 4; font-size: 12px; color: var(--text-2); display: flex; align-items: center; gap: 6px; }
+.flow-step .gone { width: 28px; height: 28px; padding: 0; justify-content: center; }
+.flow-step.together-on { margin-left: 22px; border-style: dashed; }
+.field .flow-step span { display: inline; margin: 0; font-size: 12px; }
+.field .flow-step .together input { width: auto; margin: 0; flex: none; }
+.flow-step .together[hidden] { display: none; }
+@media (max-width: 600px) { .flow-step { grid-template-columns: 22px 1fr 30px; } .flow-step textarea { grid-column: 2 / 3; } .flow-node { width: 180px; } }
+
 /* The team forms and the spark window's team line. */
 .team-line { display: flex; align-items: center; gap: 7px; font-size: 12.5px; color: var(--text-2); margin-top: 4px; }
 .team-line .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--t); box-shadow: 0 0 0 3px color-mix(in srgb, var(--t) 22%, transparent); }
@@ -11211,6 +11272,7 @@ async function drawSparks(body, again = false) {
   if (r.always.other) host.before(otherKeeperBanner(r.always));
   if (r.sparks.length) host.appendChild(sparksBar(r, again));
   if (r.hires.length) host.appendChild(hireCards(r.hires, r.sparks, again));
+  if (r.sparks.length) host.appendChild(flowStack(r.sparks, again));
   if (!r.sparks.length && !r.teams.length) {
     host.insertAdjacentHTML("beforeend", `<div class="mem-empty"><b>No sparks yet</b>Give one a goal like “every morning, check my repo for new issues and tell me which look like bugs”. Or ask Flash in a chat to make one, or start a whole team from New team.</div>`);
     sparksTrash(body, r.trash || []);
@@ -12936,6 +12998,201 @@ function budgetMeter(spark) {
 }
 
 // Hires and let-gos waiting on the user, at the top of the page.
+// Flows: a trigger, then steps handed from spark to spark, with a stop
+// for the user's yes where one asks. Drawn as a map, left to right: each
+// column runs once every step in the one before it is done.
+function flowStack(all, again = false) {
+  const box = el("section", "flow-stack", `<div class="flow-head"><h3 class="team-loose">Flows</h3></div><div class="flow-list"></div>`);
+  if (again) box.classList.add("again");
+  const add = el("button", "btn small with-icon", `${icon("plus")}<span>New flow</span>`);
+  add.type = "button";
+  add.onclick = () => flowForm(null, all, fill);
+  box.querySelector(".flow-head").appendChild(add);
+  const list = box.querySelector(".flow-list");
+  const fill = async () => {
+    let r;
+    try { r = await command("flows", "", null); } catch { box.remove(); return; }
+    if (!box.isConnected && list.childElementCount) return;
+    list.replaceChildren();
+    if (!r.flows.length) {
+      list.appendChild(el("p", "flow-meta", "Hand work from one spark to the next: Scout finds, Writer drafts, you say yes, Poster sends. Make one here or ask Flash in a chat."));
+      return;
+    }
+    r.flows.forEach((f, i) => list.appendChild(flowCard(f, all, fill, i)));
+    // While one runs, the map keeps up with it.
+    clearTimeout(box._poll);
+    if (r.flows.some((f) => f.last && f.last.state === "running"))
+      box._poll = setTimeout(() => { if (box.isConnected && view === "sparks") { box.classList.add("again"); fill(); } }, 8000);
+  };
+  fill();
+  return box;
+}
+
+function flowDepths(steps) {
+  const depth = new Map();
+  for (const s of steps) depth.set(s.id, 1 + Math.max(0, ...s.after.map((a) => depth.get(a) || 0)));
+  return depth;
+}
+
+function flowCard(flow, all, refresh, i = 0) {
+  const card = el("div", "flow-card", `<div class="flow-top"><span class="flow-name"></span><span class="flow-chip when"></span><span class="flow-chip last" hidden></span><span class="buttons"></span></div><div class="flow-map"></div><div class="flow-meta"></div>`);
+  card.style.setProperty("--i", i);
+  card.querySelector(".flow-name").textContent = flow.name;
+  card.querySelector(".when").textContent = flow.trigger ? (flow.paused ? `${flow.trigger} (paused)` : flow.trigger) : "By hand";
+  const run = flow.last;
+  const running = run && run.state === "running";
+  if (run) {
+    const chip = card.querySelector(".last");
+    chip.hidden = false;
+    chip.dataset.state = run.state;
+    chip.textContent = { running: "Running", done: "Finished", failed: "Stopped short", stopped: "Stopped" }[run.state] || run.state;
+  }
+  const buttons = card.querySelector(".buttons");
+  const act = async (b, name, extra = {}, said = "") => {
+    b.disabled = true;
+    try { await command(name, flow.id, null, extra); if (said) toast(said); refresh(); }
+    catch (error) { showFailure(error); b.disabled = false; }
+  };
+  const btn = (label, ic, fn, cls = "") => {
+    const b = el("button", `btn small with-icon ${cls}`.trim(), `${icon(ic)}<span>${label}</span>`);
+    b.type = "button";
+    b.onclick = () => fn(b);
+    buttons.appendChild(b);
+    return b;
+  };
+  if (running) btn("Stop", "stop", (b) => act(b, "flow-stop", {}, `${flow.name} stopped`));
+  else btn("Run now", "play", (b) => act(b, "flow-run", {}, `${flow.name} started`), "primary");
+  if (flow.trigger) btn(flow.paused ? "Resume" : "Pause", flow.paused ? "play" : "pause", (b) => act(b, "flow-update", { paused: !flow.paused }));
+  btn("Edit", "edit", () => flowForm(flow, all, refresh));
+  btn("Delete", "trash", (b) => {
+    if (!b.classList.contains("sure")) { b.classList.add("sure", "danger"); b.querySelector("span").textContent = "Delete it?"; return; }
+    act(b, "flow-delete", {}, `${flow.name} deleted`);
+  });
+  // The map.
+  const map = card.querySelector(".flow-map");
+  const depth = flowDepths(flow.steps);
+  const cols = [];
+  const col = (n) => cols[n] || (cols[n] = el("div", "flow-col"));
+  const trig = el("div", "flow-node trigger", `<span class="glyph">${icon(flow.trigger ? "clock" : "bolt")}</span><span class="words"><span class="who">Trigger</span><span class="task"></span></span>`);
+  trig.querySelector(".task").textContent = flow.trigger || "When you press Run";
+  col(0).appendChild(trig);
+  const out = el("div", "flow-out");
+  out.hidden = true;
+  const byId = new Map(all.map((s) => [s.id, s]));
+  for (const step of flow.steps) {
+    const st = run ? (run.steps[step.id] || { state: "waiting" }) : null;
+    const node = el(st && st.output ? "button" : "div", `flow-node ${step.kind}`, `<span class="words"><span class="who"></span><span class="task"></span></span>`);
+    if (node.tagName === "BUTTON") node.type = "button";
+    if (st && st.state !== "waiting") node.dataset.state = st.state;
+    node.querySelector(".task").textContent = step.task;
+    if (step.kind === "spark") {
+      // Only its look: its own news belongs on its card, not here.
+      const known = byId.get(step.who.id);
+      const who = { id: step.who.id, name: (known || step.who).name, colour: (known || step.who).colour, shape: (known || step.who).shape };
+      node.style.setProperty("--c", who.colour);
+      node.prepend(sparkAvatar({ ...who, status: st && st.state === "working" ? "working" : "" }, 34));
+      node.querySelector(".who").textContent = who.name;
+    } else {
+      node.prepend(el("span", "glyph", icon("lock")));
+      node.querySelector(".who").textContent = "Your yes";
+    }
+    const mark = { done: "check", failed: "x", refused: "x" }[st && st.state];
+    if (mark) node.appendChild(el("span", "mark", icon(mark)));
+    if (st && st.state === "asking") {
+      const decide = el("span", "decide", `<button type="button" class="btn small" data-no>Decline</button><button type="button" class="btn small primary" data-yes>Approve</button>`);
+      decide.querySelector("[data-yes]").onclick = (e) => { e.stopPropagation(); act(e.currentTarget, "flow-answer", { step: step.id, yes: true }, "Approved"); };
+      decide.querySelector("[data-no]").onclick = (e) => { e.stopPropagation(); act(e.currentTarget, "flow-answer", { step: step.id, yes: false }, "Declined"); };
+      node.appendChild(decide);
+    }
+    if (st && st.output) node.onclick = () => {
+      const same = !out.hidden && out.dataset.step === step.id;
+      out.hidden = same;
+      out.dataset.step = step.id;
+      out.innerHTML = "<b></b><span></span>";
+      out.querySelector("b").textContent = step.kind === "spark" ? `${node.querySelector(".who").textContent} reported` : "Your answer";
+      out.querySelector("span").textContent = st.output;
+    };
+    col(depth.get(step.id)).appendChild(node);
+  }
+  cols.filter(Boolean).forEach((c) => map.appendChild(c));
+  map.after(out);
+  // Too wide for the page, the map wraps: a column that starts a new
+  // line has no arrow in from the left.
+  const wrapped = () => {
+    const shown = [...map.children];
+    shown.forEach((c) => c.classList.remove("wrapped"));
+    shown.forEach((c, n) => { if (n && c.offsetTop > shown[n - 1].offsetTop + shown[n - 1].offsetHeight / 2) c.classList.add("wrapped"); });
+  };
+  if (window.ResizeObserver) new ResizeObserver(wrapped).observe(map);
+  const meta = card.querySelector(".flow-meta");
+  const bits = [`${flow.steps.length} step${flow.steps.length === 1 ? "" : "s"}`];
+  if (run) bits.push(`last run ${ago(run.started)}${run.why === "on schedule" ? ", on schedule" : ""}`);
+  if (flow.next && !flow.paused) bits.push(`next ${when(flow.next)}`);
+  meta.textContent = bits.join(" · ");
+  return card;
+}
+
+// Making or changing a flow: its name, when it runs, and its steps. A
+// step ticked "with the one above" runs beside it, both handed the same
+// work before them.
+function flowForm(flow, all, refresh) {
+  const editing = !!flow;
+  const form = openForm(`
+    <h2>${editing ? "Edit flow" : "New flow"}</h2>
+    <p class="sub">Steps run in order, each spark handed what the ones before it found. Add a step that asks you first and the flow waits for your yes.</p>
+    <label class="field"><span>Name</span><input name="flowname" maxlength="60" placeholder="Weekly release notes" autocomplete="off"></label>
+    <label class="field"><span>When <em class="count">optional</em></span><input name="trigger" placeholder="9am mondays" autocomplete="off" spellcheck="false"><small>Like <b>9am weekdays</b> or <b>every 2 hours</b>. Empty: only when you press Run.</small></label>
+    <div class="field"><span>Steps</span><div class="flow-steps"></div><button type="button" class="btn small with-icon" data-add>${icon("plus")}<span>Add step</span></button></div>
+    <div class="dialog-buttons"><button type="button" class="btn" data-cancel>Cancel</button><button type="submit" class="btn primary">${editing ? "Save" : "Make flow"}</button></div>`,
+    async (data, f) => {
+      const rows = [...f.querySelectorAll(".flow-step")];
+      if (!rows.length) throw new Error("Add a step.");
+      const steps = [];
+      let group = [], before = [];
+      rows.forEach((row, i) => {
+        const id = `s${i + 1}`;
+        if (i && !row.querySelector("[data-together]").checked) { before = group; group = []; }
+        const who = row.querySelector("select").value;
+        const task = row.querySelector("textarea").value.trim();
+        steps.push(who === "@ask" ? { id, approval: task || "Carry on?", after: before } : { id, spark: who, task, after: before });
+        group.push(id);
+      });
+      const name = data.flowname.trim();
+      if (editing) await command("flow-update", flow.id, null, { rename: name, trigger: data.trigger, steps });
+      else await command("flow-create", name, null, { trigger: data.trigger, steps });
+      toast(editing ? "Flow saved" : `${name} made`);
+      refresh();
+    });
+  form.querySelector("[data-cancel]").onclick = closeForm;
+  const list = form.querySelector(".flow-steps");
+  const renumber = () => list.querySelectorAll(".flow-step").forEach((row, i) => {
+    row.querySelector(".num").textContent = i + 1;
+    row.querySelector(".together").hidden = i === 0;
+    if (i === 0) row.querySelector("[data-together]").checked = false;
+    row.classList.toggle("together-on", row.querySelector("[data-together]").checked);
+  });
+  const addRow = (step = null, together = false) => {
+    const row = el("div", "flow-step", `<span class="num"></span><select aria-label="Who"><option value="@ask">Ask me first</option>${all.map((s) => `<option value="${esc(s.id)}">${esc(s.name)}</option>`).join("")}</select><textarea rows="2" maxlength="1200" placeholder="What this step does"></textarea><button type="button" class="btn small gone" aria-label="Remove step">${icon("x")}</button><label class="together"><input type="checkbox" data-together><span>At the same time as the step above</span></label>`);
+    const sel = row.querySelector("select");
+    sel.value = step ? (step.kind === "approval" ? "@ask" : step.spark) : (all[0] ? all[0].id : "@ask");
+    row.querySelector("textarea").value = step ? step.task : "";
+    const ta = row.querySelector("textarea");
+    const hint = () => { ta.placeholder = sel.value === "@ask" ? "What to ask you, like: Post this?" : "What this step does"; };
+    sel.onchange = hint; hint();
+    row.querySelector("[data-together]").checked = together;
+    row.querySelector("[data-together]").onchange = renumber;
+    row.querySelector(".gone").onclick = () => { row.remove(); renumber(); };
+    list.appendChild(row);
+    renumber();
+  };
+  if (editing) {
+    form.querySelector("[name=flowname]").value = flow.name;
+    form.querySelector("[name=trigger]").value = flow.trigger || "";
+    flow.steps.forEach((s, i) => addRow(s, i > 0 && JSON.stringify(s.after) === JSON.stringify(flow.steps[i - 1].after)));
+  } else { addRow(); addRow(); }
+  form.querySelector("[data-add]").onclick = () => addRow();
+}
+
 function hireCards(hires, all, again = false) {
   const box = el("section", "hire-stack", `<h3 class="team-loose">Waiting on you</h3>`);
   // Drawn again for news: the cards stay put rather than rise again.

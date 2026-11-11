@@ -794,6 +794,19 @@ have looked them over.
   waiting on your yes, and work you gave sparks that is not done. It is
   sent once a day, never in quiet hours, and skipped if Flash was off
   until three hours past the time.
+- **Flows.** A flow hands work from spark to spark: Scout finds, Writer
+  drafts, you say yes, Poster sends. Make one with New flow on the
+  Sparks page, or ask Flash in a chat. Each step is a spark and its task,
+  or "Ask me first", which waits for your Approve on the flow's card (and
+  a desktop notification). Steps run in order; tick "At the same time as
+  the step above" to run two side by side, and the step after waits for
+  both. Every spark is handed what the steps before it reported, through
+  any yes in between. A flow runs when you press Run now, or on a
+  schedule ("9am mondays") that Pause holds. The card draws the flow as
+  a map from its trigger, each step marked done, working, waiting on you
+  or failed; click a finished step to read its report. A step that fails
+  or a No skips what comes after it, and a spark that has not reported in
+  six hours has failed. Flows live in `~/.flash/flows.json`.
 - **Team chat.** Every team has a group chat, the user and its sparks in
   one room (the chat button on the team, or `/sparks teamchat <team>
   [message]`). The leads answer what is said to no one; `@scout` calls

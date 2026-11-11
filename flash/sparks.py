@@ -6719,6 +6719,11 @@ def _keep(
             # Good mornings, each once a day at its time.
             with contextlib.suppress(OSError, SparkError):
                 fire_mornings()
+            # Flows: started by their triggers, each step handed on as the one before it reports.
+            from . import flows
+
+            with contextlib.suppress(OSError, flows.FlowError, SparkError):
+                flows.tick()
             for spark in due():
                 _safe_shift(spark.id, prepare, announce)
 

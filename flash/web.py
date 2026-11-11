@@ -5587,6 +5587,9 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
     if name == "sparks-resume-all":
         return {"resumed": len(sparks.resume_all())}
 
+    if name == "flows" or name.startswith("flow-"):
+        return _flow_command(name, arg, body)
+
     if name.startswith(("team-", "hire-")):
         return _team_command(name, arg, body)
 
@@ -6837,6 +6840,44 @@ def _team_command(name: str, arg: str, body: dict) -> dict:
     except (sparks.SparkError, teamchat.TeamChatError) as exc:
         raise ValueError(str(exc)) from None
     raise ValueError(f"unknown command {name!r}")
+
+
+def _flow_command(name: str, arg: str, body: dict) -> dict:
+    """Flows on the Sparks page: steps handed from spark to spark, with
+    the user's yes where a step asks for it."""
+    from . import flows  # deferred: only the Sparks page asks
+
+    try:
+        if name == "flows":
+            return {"flows": [flows.summary(f) for f in flows.all_flows()]}
+        if name == "flow-create":
+            flow = flows.create(arg, body.get("steps"),
+                                body.get("trigger") or "")
+        elif name == "flow-update":
+            flow = flows.update(
+                arg, body.get("rename"), body.get("steps"),
+                body.get("trigger"), body.get("paused"))
+        elif name == "flow-run":
+            flows.start(arg)
+            flow = flows.find(arg)
+        elif name == "flow-answer":
+            flows.answer(arg, str(body.get("step") or ""),
+                         bool(body.get("yes")))
+            flow = flows.find(arg)
+        elif name == "flow-stop":
+            flows.stop(arg)
+            flow = flows.find(arg)
+        elif name == "flow-delete":
+            if not flows.remove(arg):
+                raise flows.FlowError(f"No flow called {arg!r}.")
+            return {"deleted": arg}
+        else:
+            raise ValueError(f"unknown command {name!r}")
+    except flows.FlowError as exc:
+        raise ValueError(str(exc)) from None
+    if flow is None:
+        raise ValueError(f"No flow called {arg!r}.")
+    return {"flow": flows.summary(flow)}
 
 
 def _spark_command(name: str, arg: str, body: dict) -> dict:
