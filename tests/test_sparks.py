@@ -1196,6 +1196,22 @@ def test_a_spark_hands_work_to_another(model):
     assert sparks.find(fixer.id).inbox == []
 
 
+def test_a_hand_off_shows_in_the_team_chat(model):
+    from flash import teamchat
+
+    team = sparks.create_team("Crew")
+    scout = sparks.create("Scout", "Watch the issues.")
+    sparks.create("Fixer", "Fix the bugs you are handed.")
+    sparks.set_team(scout.id, team.id)
+    sparks.shift(scout.id, client=FakeClient([
+        _reply("", ("hand_off", {"spark": "fixer", "note": "Issue 12."})),
+        _reply("Handed it on."),
+    ]))
+    handed = [e for e in teamchat.history(team.id)["entries"] if e.get("what") == "handed"]
+    assert handed and handed[0]["name"] == "Scout" and handed[0]["for"] == "Fixer"
+    assert handed[0]["text"] == "Issue 12."
+
+
 def test_a_hand_off_note_has_no_dashes(model):
     scout = sparks.create("Scout", "Watch the issues.")
     fixer = sparks.create("Fixer", "Fix the bugs you are handed.")

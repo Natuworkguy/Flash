@@ -1102,7 +1102,9 @@ def _said_line(entry: dict, by_id: dict) -> str:
         "report": "filed a report", "failed": "could not finish a shift",
         "joined": "joined the team", "left": "left the team",
     }.get(entry.get("what", ""), entry.get("what", ""))
-    if entry.get("for"):
+    if entry.get("what") == "handed":
+        what = f"handed {entry.get('for') or 'a teammate'} a task"
+    elif entry.get("for"):
         what += f" for {entry['for']}"
     return f"({who} {what}{': ' + text if text else ''})"
 
