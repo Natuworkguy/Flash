@@ -4192,6 +4192,13 @@ def _handing_off(spark: Spark) -> Callable[[dict], str]:
         _edit(target.id, give)
         log(target.id, "handed", by=spark.name, note=note,
             project=spark.project)
+        # The team sees the work change hands: "Ada handed Linus ...".
+        if spark.team:
+            from . import teamchat  # deferred: teamchat imports sparks
+
+            with contextlib.suppress(Exception):
+                teamchat.event(spark.team, spark, "handed", note,
+                               whom=target.name)
         wake()
         tool_line(f"HandOff({target.name})")
         tool_result(note)
