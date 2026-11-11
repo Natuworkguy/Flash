@@ -2104,6 +2104,53 @@ def skill_view(name: str, path: str = "") -> str:
     return result
 
 
+def flows_tool(action: str = "list", name: str = "", steps: Any = None, trigger: Any = None,
+               step: str = "", yes: Any = None) -> str:
+    """Flows: several sparks in order, side by side, with the user's yes where it matters."""
+
+    from . import flows
+
+    act = (action or "list").strip().lower()
+    tool_line(f"Flows({act}{' ' + name if name else ''})")
+    try:
+        if act == "list":
+            found = flows.all_flows()
+            if not found:
+                return "No flows yet."
+            out = []
+            for f in found:
+                sm = flows.summary(f)
+                last = sm["last"]
+                out.append(f"{f['name']} ({sm['trigger'] or 'run by hand'}): " + " -> ".join(
+                    (s["who"]["name"] + ": " + s["task"][:50]) if s["kind"] == "spark" else f"[approval] {s['task'][:50]}"
+                    for s in sm["steps"]) + (f". Last run: {last['state']}" if last else ""))
+            return "\n".join(out)
+        if act == "create":
+            f = flows.create(name, steps, trigger or "")
+            return (f"Made the flow {f['name']}, {len(f['steps'])} steps, "
+                    + (f"on schedule ({f['trigger']['text']})." if f["trigger"]["text"] else "run by hand (run starts it).")
+                    + " It shows on the Sparks page.")
+        if act == "update":
+            f = flows.update(name, steps=steps, trigger=trigger)
+            return f"Changed {f['name']}."
+        if act == "run":
+            run = flows.start(name)
+            return f"Started {name}: " + ", ".join(f"{k} {v['state']}" for k, v in run.get("steps", {}).items())
+        if act == "answer":
+            run = flows.answer(name, step, _truthy(yes))
+            return f"Answered. The run is {run.get('state')}."
+        if act == "stop":
+            return "Stopped." if flows.stop(name) else "It was not running."
+        if act in ("pause", "resume"):
+            flows.update(name, paused=act == "pause")
+            return f"{'Paused' if act == 'pause' else 'Resumed'} {name}."
+        if act == "delete":
+            return "Deleted." if flows.remove(name) else f"No flow called {name!r}."
+        return "Error: action is list, create, update, run, answer, stop, pause, resume or delete."
+    except flows.FlowError as exc:
+        return f"Error: {exc}"
+
+
 def skill_manage_tool(
     action: str = "",
     name: str = "",
@@ -10359,6 +10406,41 @@ tools: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "flows",
+            "description": (
+                "Flows: work that takes several sparks in order, with the user's yes where it matters. A flow is "
+                "a trigger (a schedule like mon 9:00, daily, 9am weekdays; or none, run by hand) and steps: each "
+                "a spark and its task, or an approval (a question the user answers yes or no). A step runs when "
+                "the steps it comes after are done, and is handed their reports: steps with after [] at the start, "
+                "or after the same step, run side by side. Use it when the user wants a recurring process across "
+                "sparks (a weekly report: two collect, one writes, the user approves posting). Actions: list, "
+                "create, update, run, answer (an approval step: name, step id, yes), stop, pause, resume, delete."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string", "enum": ["list", "create", "update", "run", "answer", "stop",
+                                                          "pause", "resume", "delete"]},
+                    "name": {"type": "string", "description": "The flow's name."},
+                    "trigger": {"type": "string", "description": "When it runs by itself; '' for by hand."},
+                    "steps": {
+                        "type": "array",
+                        "description": (
+                            "In order. {\"spark\": name, \"task\": what to do, \"after\": [step numbers, 1 "
+                            "first]} or {\"approval\": the question}. Left out, after is the step before."
+                        ),
+                        "items": {"type": "object"},
+                    },
+                    "step": {"type": "string", "description": "answer: the step's id, as s4."},
+                    "yes": {"type": "boolean", "description": "answer: the user's answer."},
+                },
+                "required": ["action"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "skill_manage",
             "description": (
                 "Save or fix a skill: a procedure for a kind of task that "
@@ -10511,6 +10593,7 @@ FUNCTIONS = {
     "forget": forget,
     "skill_view": skill_view,
     "skill_manage": skill_manage_tool,
+    "flows": flows_tool,
     "agent": agent_tool,
     "agent_result": agent_result,
     "make_spark": make_spark,
