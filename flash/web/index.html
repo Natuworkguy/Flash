@@ -25074,6 +25074,8 @@ $("#extensions-btn").innerHTML = icon("puzzle") + "<span>Extensions</span>";
 // the row they belong to.
 const SIDE_ROWS = [["search-btn", "Search"], ["briefing-btn", "Briefing"], ["projects-btn", "Projects"], ["made-btn", "Made"],
   ["skills-btn", "Skills"], ["sparks-btn", "Sparks"], ["extensions-btn", "Extensions"]];
+// Rows in the More menu until you move them out: the ones most people open now and then, not every day.
+const SIDE_TUCKED = new Set(["made-btn", "skills-btn", "extensions-btn"]);
 const SIDE_WITH = { "sparks-btn": "spark-roster", "extensions-btn": "ext-side" };
 // An extension's panel or sidebar button, as a row of the sidebar's own: an id that stays the same from one load to the next.
 function sideExtId(key) { return "sx-" + String(key).replace(/[^\w-]+/g, "_"); }
@@ -25094,7 +25096,7 @@ function sideLayout() {
   for (const r of Array.isArray(saved) ? saved : []) {
     if (r && known.includes(r.id) && !out.some((o) => o.id === r.id)) out.push({ id: r.id, more: !!r.more });
   }
-  for (const id of known) if (!out.some((r) => r.id === id)) out.push({ id, more: false });
+  for (const id of known) if (!out.some((r) => r.id === id)) out.push({ id, more: SIDE_TUCKED.has(id) });
   return out;
 }
 function setSideLayout(layout) {
