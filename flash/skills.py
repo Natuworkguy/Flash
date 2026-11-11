@@ -30,8 +30,11 @@ and listed the same way, and cannot be changed: a skill the user saves
 under a guide's name is used instead of it.
 """
 
+import base64
+import json
 import re
 import shutil
+import zlib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -441,6 +444,62 @@ def manage(
     existing.body = existing.body.replace(old, new_string or "", 1)
     _write(existing)
     return f"Patched skill {name}."
+
+
+# ----- skill codes: a skill passed to someone else as one line of text -----
+# The skill itself, compressed: no server holds it, so a code works
+# offline and forever, and says nothing more than the skill does.
+CODE_PREFIX = "flashskill1-"
+
+
+def share_code(name: str) -> str:
+    """A code for the skill NAME (one of the user's, or a guide) that
+    add_from_code turns back into the same skill on any Flash."""
+
+    found = find(_check_name(name))
+    if found is None:
+        raise SkillError(f"No skill called {name!r}.")
+    packed = json.dumps({"n": found.name, "d": found.description, "b": found.body},
+                        ensure_ascii=False, separators=(",", ":")).encode()
+    return CODE_PREFIX + base64.urlsafe_b64encode(zlib.compress(packed, 9)).decode().rstrip("=")
+
+
+def read_code(code: str) -> dict:
+    """The skill in CODE: its name, description and procedure. Spaces and
+    line breaks a chat or an email put in it are ignored."""
+
+    text = "".join(str(code or "").split())
+    at = text.find(CODE_PREFIX)
+    if at < 0:
+        raise SkillError(f"that is not a skill code: one starts {CODE_PREFIX}")
+    data = text[at + len(CODE_PREFIX):]
+    try:
+        raw = zlib.decompress(base64.urlsafe_b64decode(data + "=" * (-len(data) % 4)),
+                              bufsize=MAX_SKILL_CHARS * 8)
+        got = json.loads(raw.decode())
+        name, description, body = got["n"], got["d"], got["b"]
+    except (ValueError, KeyError, TypeError, zlib.error):
+        raise SkillError("that skill code is damaged or cut short; copy all of it") from None
+    if not all(isinstance(x, str) for x in (name, description, body)):
+        raise SkillError("that skill code is damaged; copy all of it")
+    return {"name": _check_name(name), "description": _description(description), "content": body}
+
+
+def add_from_code(code: str, name: str = "", replace: bool = False) -> str:
+    """Save the skill in CODE as one of the user's, under NAME if given
+    (to keep one of the same name); say what happened. One already
+    saved under its name is kept unless REPLACE."""
+
+    got = read_code(code)
+    name = _check_name(name) if name else got["name"]
+    existing = find(name, guides=False)
+    if existing is not None and not replace:
+        raise SkillError(f"you already have a skill called {name}: add it under another name, or replace yours")
+    if len(got["content"]) > MAX_SKILL_CHARS:
+        raise SkillError(f"that skill is longer than {MAX_SKILL_CHARS} characters")
+    _write(Skill(name=name, description=got["description"], body=got["content"], managed=False,
+                 path=skills_dir() / name, by="you"))
+    return f"{'Replaced' if existing else 'Added'} skill {name}: {got['description']}"
 
 
 def remove(name: str) -> bool:

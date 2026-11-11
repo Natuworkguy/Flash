@@ -2116,6 +2116,22 @@ def skill_manage_tool(
     """Create, patch, rewrite, or delete a skill."""
 
     tool_line(f"SkillManage({action} {name})")
+    act = (action or "").strip().lower()
+    if act in ("share", "add"):
+        # A skill as a code to give someone, or one added from a code.
+        try:
+            if act == "share":
+                result = (f"The code for {name} (give it whole; it is added with skill_manage add, or "
+                          f"Add from code on the Skills page):\n{skills.share_code(name)}")
+            else:
+                result = skills.add_from_code(content or "", name=name or "")
+                learning.refresh()
+        except (skills.SkillError, OSError) as exc:
+            result = f"Error: {exc}"
+            tool_result(result, style=ERROR)
+            return result
+        tool_result(result if act == "add" else f"Code for {name}")
+        return result
     try:
         result = skills.manage(
             action,
@@ -10349,15 +10365,18 @@ tools: list[dict[str, Any]] = [
                 "will come up again. create writes a new one; patch swaps "
                 "one exact passage for another (call skill_view first and "
                 "copy old_string from it); rewrite replaces the whole "
-                "procedure; delete removes it. Write steps and pitfalls, "
-                "not a story of what happened."
+                "procedure; delete removes it; share gives the skill as a "
+                "code to pass to someone; add saves a skill from a code "
+                "someone gave (the code in content; name to save it under "
+                "another name). Write steps and pitfalls, not a story of "
+                "what happened."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "action": {
                         "type": "string",
-                        "enum": list(skills.ACTIONS),
+                        "enum": [*skills.ACTIONS, "share", "add"],
                     },
                     "name": {
                         "type": "string",

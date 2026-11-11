@@ -107,7 +107,7 @@ COMMANDS = [
     ("/forget", "delete one memory by its 1-based index (/forget N)"),
     ("/import-memories", "save the facts in a file to memory "
      "(/import-memories <file>)"),
-    ("/skills", "procedures Flash has learned (/skills show|remove <name>)"),
+    ("/skills", "procedures Flash has learned (/skills show|remove|code <name>, /skills add <code>)"),
     ("/plan", "show the checklist the model is working through"),
     ("/agents", "watch sub-agents work live (/agents <id> for one)"),
     ("/sparks", "agents that keep working on a goal (new, chat <name>)"),
