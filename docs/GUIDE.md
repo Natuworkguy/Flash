@@ -317,7 +317,8 @@ python run.py
   turn down one calling you.
 - `/skills [show|remove|improve|history <name>]`: List, read, delete,
   improve, or see how a skill has done. `/skills restore <name>
-  <version>` puts an earlier version back.
+  <version>` puts an earlier version back. `/skills code <name>` gives
+  a skill as a code to pass on, and `/skills add <code>` adds one.
 - `/plan`: Show the checklist the model is working through.
 - `/hook [install|remove]`: Let Flash see the commands you run in VS
   Code's terminal (zsh and bash).
@@ -1574,6 +1575,14 @@ Flash learns from its own work.
   the Skills page. Every version is kept, and `/skills history <name>`
   or the skill's page shows the runs, what was tried, and a Restore
   button for each earlier version.
+
+A skill can be passed on as a code: one line of text starting
+`flashskill1-` that holds the whole skill, so it needs no account or
+server and works offline. Copy code on a skill's page (or `/skills
+code <name>`, or ask Flash to share it) makes one; Add from code on
+the Skills page (or `/skills add <code>`, or pasting it to Flash)
+saves it as one of yours. A code that has been wrapped onto several
+lines in a message still works.
 
 What is learned reaches the system prompt in your next session, or
 after `/clear`. The prompt stays the same for the rest of a session,

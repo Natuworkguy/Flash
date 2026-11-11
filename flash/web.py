@@ -5500,6 +5500,23 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
             raise ValueError(str(exc)) from None
         return {"said": said}
 
+    if name == "skill-code":
+        # The skill as a code, to give someone.
+        try:
+            return {"code": skills.share_code(arg)}
+        except skills.SkillError as exc:
+            raise ValueError(str(exc)) from None
+
+    if name == "skill-add-code":
+        # A skill someone gave as a code, saved as one of the user's.
+        try:
+            message = skills.add_from_code(str(body.get("code") or ""), name=arg or "",
+                                           replace=bool(body.get("replace")))
+        except (skills.SkillError, OSError) as exc:
+            raise ValueError(str(exc)) from None
+        learning.refresh()
+        return {"message": message, "name": skills.read_code(str(body.get("code") or ""))["name"] if not arg else arg}
+
     if name in ("skill-save", "skill-delete"):
         found = skills.find(arg)
         if found is not None and found.builtin:

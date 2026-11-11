@@ -2067,9 +2067,25 @@ def _skills_command(arg: str) -> None:
         _skill_trial_command(action, name)
         return
 
+    if action in ("code", "share") and name:
+        try:
+            console.print(Text(f"Give this code whole; /skills add <code> adds it:", style=DIM))
+            console.print(skills.share_code(name), soft_wrap=True)
+        except skills.SkillError as exc:
+            warn(str(exc))
+        return
+
+    if action == "add" and name:
+        try:
+            console.print(Text(skills.add_from_code(name), style=DIM))
+            learning.refresh()
+        except skills.SkillError as exc:
+            warn(str(exc))
+        return
+
     if action:
-        warn("Usage: /skills [show | remove | improve | history <name> | "
-             "restore <name> <version>]")
+        warn("Usage: /skills [show | remove | improve | history | code <name> | "
+             "add <code> | restore <name> <version>]")
         return
 
     saved = skills.all_skills()
