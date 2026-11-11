@@ -1336,6 +1336,25 @@ display. Windows uses user32 and PowerShell. Linux needs `xdotool`, an
 X session, and a screenshot program (`gnome-screenshot`, `grim`,
 `scrot` or ImageMagick's `import`).
 
+### Flash Icons
+
+Every website and app Flash builds uses Flash Icons, its own icon set:
+about seventy icons (arrows, actions, mail and chat, media, shopping,
+time and places, files, weather and moods) drawn in one style, 24 by 24,
+rounded lines in the colour of the text around them. Each moves a little
+when the button or link it is in is pointed at or focused: an arrow
+nudges the way it points, a bell rings, a heart beats, a gear turns, a
+check draws itself. They are inline SVG with one small stylesheet, so a
+page needs no icon font or CDN, and motion stops for anyone whose system
+asks for reduced motion.
+
+Ask Flash to change them, in your own words: "thicker icons", "square
+corners", "give them a soft fill", "calmer", "no animation", "animate
+them as they appear", "make them blue". It changes your icon style,
+shows every icon in it, and updates the pages it made. The style is
+kept in `~/.flash/icon-style.json`, and every icon Flash makes after
+follows it; "go back to the default icons" resets it.
+
 ### Page screenshots
 
 The `screenshot` tool renders a local `.html` file or a URL in a headless
