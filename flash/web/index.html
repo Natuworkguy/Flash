@@ -1042,6 +1042,11 @@ body.course-open { overflow: hidden; }
 .debate-until { max-width: none; margin: 4px 0 14px; }
 .spark-voice-row { display: flex; gap: 8px; align-items: center; }
 .spark-voice-row select { flex: 1; min-width: 0; }
+.shape-picks { display: flex; gap: 8px; }
+.shape-pick { display: grid; place-items: center; width: 44px; height: 44px; border-radius: 12px; border: 1px solid var(--border); background: var(--surface); cursor: pointer; transition: border-color .15s, background .15s; }
+.shape-pick:hover { border-color: var(--border-strong); }
+.shape-pick[aria-checked="true"] { border-color: var(--text); background: var(--hover); }
+.field .shape-pick .spark-av { display: inline-flex; position: relative; margin: 0; font: inherit; color: inherit; }
 .morning-row { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
 .morning-row input[type=time] { width: auto; }
 .check-inline { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text-2); cursor: pointer; }
@@ -2341,8 +2346,30 @@ button.item-row:hover { background: var(--hover); }
 .spark-av { --c: var(--accent); --s: 36px; --ink: #1b1a19; position: relative; flex: none; width: var(--s); height: var(--s);
   /* A little mochi: a touch softer below than above, as a soft thing sits. */
   border-radius: 50% 50% 47% 47% / 54% 54% 46% 46%;
-  display: inline-flex; align-items: center; justify-content: center; background: var(--c);
+  display: inline-flex; align-items: center; justify-content: center;
   animation: spark-float 3.4s ease-in-out infinite; animation-delay: calc(var(--i, 0) * -0.8s); }
+/* Its body: a shape of its own (round, square, diamond or gem), glossy, lit from the top left, on a layer under the
+   face so the shape can turn and squash while the face stays upright. */
+.spark-av > .body { --k: var(--c); position: absolute; inset: 0; z-index: 0; border-radius: inherit; pointer-events: none;
+  background: radial-gradient(120% 110% at 30% 22%, color-mix(in srgb, var(--k) 55%, #fff) 0%, var(--k) 46%, color-mix(in srgb, var(--k) 72%, #000) 100%);
+  box-shadow: inset 0 calc(var(--s) * -0.05) calc(var(--s) * 0.12) color-mix(in srgb, var(--k) 60%, #000), inset 0 calc(var(--s) * 0.04) calc(var(--s) * 0.06) color-mix(in srgb, #fff 45%, transparent); }
+.spark-av > .face { position: relative; z-index: 1; }
+.spark-av[data-shape="square"] { border-radius: 30%; }
+.spark-av[data-shape="diamond"] > .body { border-radius: 26%; transform: rotate(45deg) scale(0.78); animation: spark-diamond 5.5s ease-in-out infinite; animation-delay: calc(var(--i, 0) * -1.1s);
+  background: radial-gradient(120% 110% at 6% 50%, color-mix(in srgb, var(--k) 55%, #fff) 0%, var(--k) 46%, color-mix(in srgb, var(--k) 72%, #000) 100%); }
+.spark-av[data-shape="gem"] > .body { border-radius: 0; clip-path: polygon(50% 0, 96% 26%, 96% 74%, 50% 100%, 4% 74%, 4% 26%); box-shadow: none; animation: spark-gem 4.8s ease-in-out infinite; animation-delay: calc(var(--i, 0) * -0.9s); }
+.spark-av[data-shape="square"] > .body { animation: spark-square 4.2s var(--spring) infinite; animation-delay: calc(var(--i, 0) * -0.7s); }
+/* working, each its own way: the diamond spins a quarter at a time, the square flips, the gem shimmers */
+.spark-av[data-state="working"][data-shape="diamond"] > .body { animation: spark-diamond-work 1.6s var(--spring) infinite; }
+.spark-av[data-state="working"][data-shape="square"] > .body { animation: spark-square-work 1.3s var(--spring) infinite; }
+.spark-av[data-state="working"][data-shape="gem"] > .body { animation: spark-gem-work 1.2s ease-in-out infinite; }
+@keyframes spark-diamond { 0%, 100% { transform: rotate(45deg) scale(0.78); } 50% { transform: rotate(53deg) scale(0.8, 0.76); } }
+@keyframes spark-square { 0%, 70%, 100% { transform: none; } 78% { transform: scale(1.08, 0.9); } 88% { transform: translateY(-6%) scale(0.95, 1.06) rotate(-4deg); } 95% { transform: scale(1.03, 0.97); } }
+@keyframes spark-gem { 0%, 100% { transform: none; filter: brightness(1); } 50% { transform: rotate(-6deg) scale(1.02); filter: brightness(1.12); } }
+@keyframes spark-diamond-work { 0% { transform: rotate(45deg) scale(0.78); } 40%, 100% { transform: rotate(135deg) scale(0.78); } 20% { transform: rotate(95deg) scale(0.84, 0.72); } }
+@keyframes spark-square-work { 0%, 100% { transform: none; } 30% { transform: scale(1.1, 0.88); } 60% { transform: rotate(90deg) scale(0.94, 1.05); } 61% { transform: none; } }
+@keyframes spark-gem-work { 0%, 100% { filter: brightness(1) saturate(1); transform: none; } 50% { filter: brightness(1.3) saturate(1.2); transform: scale(1.05) rotate(4deg); } }
+@media (prefers-reduced-motion: reduce) { .spark-av > .body { animation: none !important; } }
 /* Big eyes set a little low and wide: the younger a face, the lower. */
 .spark-av .face { display: flex; margin-top: calc(var(--s) * -0.01); pointer-events: none; }
 .spark-av .eyes { display: flex; gap: calc(var(--s) * 0.16);
@@ -2360,7 +2387,7 @@ button.item-row:hover { background: var(--hover); }
 :is(.spark-av:hover, .spark-card:hover .spark-av, #spark-btn:hover .spark-av, .project-sparks button:hover .spark-av, .spark-head .spark-av:hover, .spark-mate:hover .spark-av):is([data-state="idle"], [data-state="waiting"]) .eye { height: calc(var(--s) * 0.08); background: transparent; border: max(1.3px, calc(var(--s) * 0.04)) solid var(--ink); border-bottom: 0; border-radius: 999px 999px 0 0; animation: none; }
 
 /* Working: a bounce, darting eyes, and a purple ring. */
-.spark-av[data-state="working"] { animation: spark-bounce 0.95s var(--spring) infinite; box-shadow: 0 0 0 2px var(--surface), 0 0 0 3.5px var(--working), 0 0 14px color-mix(in srgb, var(--working) 55%, transparent); }
+.spark-av[data-state="working"] { animation: spark-bounce 0.95s var(--spring) infinite; filter: drop-shadow(0 0 1.5px var(--working)) drop-shadow(0 0 7px color-mix(in srgb, var(--working) 60%, transparent)); }
 .spark-av[data-state="working"] .eyes { animation: spark-look 2.2s ease-in-out infinite; }
 
 /* Asleep: shut eyes, and z's drifting up. */
@@ -2396,7 +2423,8 @@ button.item-row:hover { background: var(--hover); }
 
 /* Unavailable: its model failed. Grey, eyes flat, and now and then a
    flicker, as a screen with no signal; a "!" says it needs you. */
-.spark-av[data-state="unavailable"] { background: color-mix(in srgb, var(--c) 14%, #8b8b8b); animation: spark-flicker 4.6s steps(1) infinite; }
+.spark-av[data-state="unavailable"] { animation: spark-flicker 4.6s steps(1) infinite; }
+.spark-av[data-state="unavailable"] > .body { --k: color-mix(in srgb, var(--c) 14%, #8b8b8b); }
 .spark-av[data-state="unavailable"] .eyes { animation: none; translate: none; }
 .spark-av[data-state="unavailable"] .eye { height: max(1.5px, calc(var(--s) * 0.05)); border-radius: 2px; animation: none; }
 .spark-av[data-state="unavailable"]::before { content: "!"; position: absolute; top: -26%; right: -8%; width: calc(var(--s) * 0.36); height: calc(var(--s) * 0.36); border-radius: 50%; display: grid; place-items: center; font: 800 calc(var(--s) * 0.24)/1 var(--sans); color: #fff; background: var(--del); box-shadow: 0 0 0 2px var(--surface); }
@@ -2854,7 +2882,7 @@ body.all-stopped .org-node, body.all-stopped .spark-card { animation: all-halt 0
 #spark-btn[hidden] { display: none; }
 /* The spark lives in its badge: it floats and blinks while it waits,
    and bounces with its glint circling while it answers. */
-#spark-btn .spark-av { --s: 18px; box-shadow: 0 1px 5px color-mix(in srgb, var(--c) 40%, transparent); animation-name: spark-bob; }
+#spark-btn .spark-av { --s: 18px; filter: drop-shadow(0 1px 3px color-mix(in srgb, var(--c) 40%, transparent)); animation-name: spark-bob; }
 #spark-btn .spark-av[data-state="working"] { animation: spark-hop 0.95s var(--spring) infinite; }
 @keyframes spark-bob { 50% { transform: translateY(-1px); } }
 @keyframes spark-hop { 0%, 100% { transform: translateY(0) scale(1); } 35% { transform: translateY(-2px) scale(0.95, 1.05); } 65% { transform: translateY(0) scale(1.06, 0.94); } }
@@ -10634,8 +10662,17 @@ function openMade(f) {
 const ON_CALL_SAID = "No schedule: it works only when it is called on. Run now, a hand-off from another spark, a job Flash gives it, an @mention in a chat or its team's chat, or another spark's report.";
 const EVERY_CHOICES = [[15, "Every 15 minutes"], [30, "Every 30 minutes"], [60, "Every hour"], [120, "Every 2 hours"], [360, "Every 6 hours"], [720, "Every 12 hours"], [1440, "Every day"], [10080, "Every week"]];
 
+// Each spark's shape: the one it was given, else one picked for it by its id, so it keeps it.
+const SPARK_SHAPES = ["round", "diamond", "square", "gem"];
+function sparkShape(spark) {
+  if (SPARK_SHAPES.includes(spark.shape)) return spark.shape;
+  let h = 0; for (const ch of String(spark.id || spark.name || "")) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+  return SPARK_SHAPES[h % SPARK_SHAPES.length];
+}
+
 function sparkAvatar(spark, size = 36, i = 0) {
-  const av = el("span", "spark-av", `<i class="face"><i class="eyes"><i class="eye"></i><i class="eye"></i></i></i>`);
+  const av = el("span", "spark-av", `<i class="body"></i><i class="face"><i class="eyes"><i class="eye"></i><i class="eye"></i></i></i>`);
+  av.dataset.shape = sparkShape(spark);
   av.dataset.state = spark.status === "working" ? "working" : spark.waiting ? "waiting" : spark.paused ? "paused"
     : spark.unavailable ? "unavailable" : spark.status === "failed" ? "failed" : frozen(spark) ? "frozen"
     : onCall(spark) ? "oncall" : "idle";
@@ -13919,6 +13956,7 @@ function sparkForm(spark, inProjectId = "", template = "") {
     <label class="field"><span>Name</span><input name="sparkname" maxlength="24" placeholder="Scout" autocomplete="off"><small>Its handle: <b data-handle>@scout-spark</b></small></label>
     <label class="field"><span>Title <em class="count">optional</em></span><input name="title" maxlength="40" placeholder="Repo watcher" autocomplete="off"><small>Its job, as a teammate's: shown under its name, and it knows it.</small></label>
     <div class="field"><span>Colour</span><div class="swatches spark-colours" role="radiogroup" aria-label="Colour">${TEAM_COLOURS.map((c) => `<button type="button" class="swatch" role="radio" data-c="${c}" style="--c:${c}" aria-label="${c}"></button>`).join("")}<label class="swatch custom" data-tip="Any colour"><input type="color" aria-label="Any colour"></label></div><small class="colour-said">${editing ? "Its face, its chips and its messages wear it." : "Left alone, it gets the next in the palette."}</small></div>
+    <div class="field"><span>Shape</span><div class="shape-picks" role="radiogroup" aria-label="Shape">${SPARK_SHAPES.map((sh) => `<button type="button" class="shape-pick" role="radio" data-shape="${sh}" aria-label="${sh}" data-tip="${sh[0].toUpperCase() + sh.slice(1)}"></button>`).join("")}</div><small>How it is drawn, and how it moves: a diamond sways, a square hops, a gem glints.</small></div>
     ${modelField()}
     <label class="field"><span>Fallbacks <em class="count">optional</em></span><input name="fallbacks" class="mono" placeholder="another-model > a-third" autocomplete="off" spellcheck="false"><small>When its model fails (down, refused, out of quota), it carries on with these, in order, up to 4. Then the model's own fallbacks.</small></label>
     <div class="field spark-voice-field"><span>Voice on calls <em class="count">optional</em></span><div class="spark-voice-row"><select name="callvoice" aria-label="Voice on calls"><option value="">Picked for it</option></select><button type="button" class="btn small with-icon" data-hear>${icon("play")}<span>Hear it</span></button></div><label class="spark-pitch"><span>Pitch <b class="pitch-n">0</b></span><input type="range" name="pitch" min="-8" max="8" step="1" value="0" aria-label="Pitch, in semitones"></label><small>How it sounds when you call it: any voice downloaded in Settings, Voice, including extensions' voices, and higher or lower.</small></div>
@@ -13943,6 +13981,7 @@ function sparkForm(spark, inProjectId = "", template = "") {
       const more = data.project ? [...form.querySelectorAll(".project-chips .chip-btn.on")].map((b) => b.dataset.id).filter((id) => id !== data.project) : [];
       const fields = { goal: data.goal, every: data.every === "at" ? data.at.trim() : data.every, boundaries: data.boundaries, project: data.project || "", projects: data.project ? [data.project, ...more] : [], watch: data.watch || "", events: [...form.querySelectorAll(".event-checks input:checked")].map((box) => box.value), model: data.model || "", title: data.title || "" };
       if (form.dataset.colour) fields.colour = form.dataset.colour;
+      if (form.dataset.shape) fields.shape = form.dataset.shape;
       const name = data.sparkname.trim();
       // Its team, who it reports to and its budget, each only if changed.
       const placement = async (id, was) => {
@@ -13984,6 +14023,7 @@ function sparkForm(spark, inProjectId = "", template = "") {
   const custom = form.querySelector(".spark-colours .custom");
   const pickColour = (c) => {
     form.dataset.colour = c;
+    form.querySelectorAll(".shape-pick .spark-av").forEach((av) => av.style.setProperty("--c", c || (editing && spark.colour) || TEAM_COLOURS[0]));
     form.querySelectorAll(".spark-colours .swatch[data-c]").forEach((b) => b.setAttribute("aria-checked", String(b.dataset.c === c)));
     const own = !!c && !TEAM_COLOURS.includes(c);
     custom.classList.toggle("on", own);
@@ -13991,8 +14031,20 @@ function sparkForm(spark, inProjectId = "", template = "") {
     if (own) custom.querySelector("input").value = c;
   };
   form.querySelectorAll(".spark-colours .swatch[data-c]").forEach((b) => { b.onclick = () => pickColour(b.dataset.c); });
+  // its shape, each choice shown as a face in its colour
+  const shapeOf = editing ? sparkShape(spark) : SPARK_SHAPES[Math.floor(Math.random() * SPARK_SHAPES.length)];
+  const pickShape = (sh) => {
+    form.dataset.shape = sh;
+    form.querySelectorAll(".shape-pick").forEach((b) => b.setAttribute("aria-checked", String(b.dataset.shape === sh)));
+  };
+  form.querySelectorAll(".shape-pick").forEach((b) => {
+    b.appendChild(sparkAvatar({ id: "pick", name: "", shape: b.dataset.shape, colour: (editing && spark.colour) || TEAM_COLOURS[0], status: "idle" }, 26));
+    b.onclick = () => pickShape(b.dataset.shape);
+  });
+  pickShape(shapeOf);
   custom.querySelector("input").addEventListener("input", (e) => pickColour(e.target.value));
   pickColour(editing ? spark.colour : "");
+  form.querySelectorAll(".shape-pick .spark-av").forEach((av) => av.style.setProperty("--c", form.dataset.colour || (editing && spark.colour) || TEAM_COLOURS[0]));
   // The folder to watch, suggested as you type, as a project's is.
   suggestFolders(form.watch);
   eventFields(form, editing ? spark.events || [] : []);

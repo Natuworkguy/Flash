@@ -96,3 +96,12 @@ def test_a_spark_sets_its_own_from_its_chat(team):
     assert "good_morning" in kit.tools
     assert kit.tools["good_morning"]({"at": "7:15am", "tasks": True}).startswith("Set: a good morning every day at 07:15, with")
     assert kit.tools["good_morning"]({"at": "off"}) == "Good mornings are off."
+
+
+def test_a_spark_keeps_the_shape_it_is_given(team):
+    lead, _ = team
+    assert sparks.update(lead.id, shape="Diamond").shape == "diamond"
+    assert sparks.find(lead.id).shape == "diamond"
+    with pytest.raises(sparks.SparkError, match="shape"):
+        sparks.update(lead.id, shape="blob")
+    assert sparks.update(lead.id, shape="").shape == ""
