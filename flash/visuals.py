@@ -28,7 +28,7 @@ _BLOCK = re.compile(
 
 TYPES = (
     "chart", "compare", "stats", "steps", "flow", "calc", "choices",
-    "form", "checklist", "card", "molecule", "chats",
+    "form", "checklist", "card", "molecule", "chats", "map",
 )
 
 # What the model is told about the blocks it can write.
@@ -273,6 +273,22 @@ def _markdown(spec: dict) -> str:
             for r in rows:
                 note = f" ({r['note']})" if r.get("note") else ""
                 lines.append(f"- {r.get('label', '')}: **{r.get('value', '')}**{note}")
+    elif kind == "map":
+        route = spec.get("route")
+        if isinstance(route, dict) and route.get("summary"):
+            lines.append(f"Route: {route['summary']}")
+        n = 0
+        for p in spec.get("places") or []:
+            if not isinstance(p, dict):
+                continue
+            mark = "Start" if p.get("home") else str(n := n + 1)
+            name = p.get("name") or p.get("address") or ""
+            try:
+                link = f"https://www.openstreetmap.org/?mlat={float(p['lat'])}&mlon={float(p['lng'])}#map=17/{float(p['lat'])}/{float(p['lng'])}"
+                name = f"[{name}]({link})"
+            except (KeyError, TypeError, ValueError):
+                pass
+            lines.append(f"{mark}. {name}" + (f": {p['note']}" if p.get("note") else ""))
     elif kind == "chats":
         for i in spec.get("items") or []:
             if isinstance(i, dict):
@@ -340,6 +356,11 @@ def _spoken(spec: dict) -> str:
             for r in spec.get("rows") or [] if isinstance(r, dict) and not r.get("divider")
         ]
         return ". ".join(b for b in bits if b)
+    if kind == "map":
+        names = [str(p.get("name", "")) for p in spec.get("places") or [] if isinstance(p, dict) and not p.get("home")]
+        route = spec.get("route") if isinstance(spec.get("route"), dict) else {}
+        said = (f"{title}. " if title else "") + (f"{route['summary']}. " if route.get("summary") else "")
+        return (said + (", ".join(names[:4]) + ("." if names else ""))).strip() + " The map is on screen."
     if kind == "chats":
         names = [str(i.get("title", "")) for i in spec.get("items") or [] if isinstance(i, dict)]
         return ("Found " + ", ".join(names[:3]) + ".") if names else ""

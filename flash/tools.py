@@ -2104,6 +2104,18 @@ def skill_view(name: str, path: str = "") -> str:
     return result
 
 
+def maps_tool(action: str = "", query: str = "", near: str = "", what: str = "", places: Any = None, mode: str = "driving",
+              radius: Any = 1500, limit: Any = 8) -> str:
+    """Places, what is near them, and routes, from OpenStreetMap (flash/maps.py)."""
+
+    from . import maps
+
+    tool_line(f"Maps({(action or '').strip()}{': ' + str(query or what or places or '')[:60] if (query or what or places) else ''})")
+    result = maps.run(action, query=query, near=near, what=what, places=places, mode=mode, radius=radius, limit=limit)
+    tool_result(result.split("\n", 1)[0][:120], style=ERROR if result.startswith("Error") else None)
+    return result
+
+
 def science_tool(action: str = "", query: str = "", id: str = "", source: str = "all", limit: Any = None, full: Any = False,
                  status: str = "", style: str = "bibtex", sort: str = "relevance", sequence: Any = False, activity: Any = True) -> str:
     """The research databases: papers, trials, compounds, proteins, citations (flash/science.py)."""
@@ -10421,6 +10433,33 @@ tools: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "maps",
+            "description": (
+                "Maps, from OpenStreetMap: find (a place, an address or 'lat,lng', with its coordinates), nearby (places of a "
+                "kind, like cafe, pharmacy, ev charger, supermarket, hotel, or a name like Lidl, within radius metres of near, "
+                "closest first, with hours and phone where known), route (the way through places in order, by driving, "
+                "walking or cycling, with distance and time per leg). Each result ends with a map block to put in the reply. "
+                "Use it for anything about where things are, how far, or how long it takes to get there."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string", "enum": ["find", "nearby", "route"]},
+                    "query": {"type": "string", "description": "find: the place or address."},
+                    "what": {"type": "string", "description": "nearby: the kind of place, or a name."},
+                    "near": {"type": "string", "description": "nearby: the place to search around."},
+                    "places": {"type": "array", "items": {"type": "string"}, "description": "route: two to twelve places, in order."},
+                    "mode": {"type": "string", "enum": ["driving", "walking", "cycling"]},
+                    "radius": {"type": "integer", "description": "nearby: metres, 100 to 20000 (default 1500)."},
+                    "limit": {"type": "integer", "description": "How many results."},
+                },
+                "required": ["action"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "science",
             "description": (
                 "Research databases, for science questions: the literature, trials, compounds and proteins, all with links. "
@@ -10644,6 +10683,7 @@ FUNCTIONS = {
     "skill_manage": skill_manage_tool,
     "flows": flows_tool,
     "science": science_tool,
+    "maps": maps_tool,
     "agent": agent_tool,
     "agent_result": agent_result,
     "make_spark": make_spark,
@@ -10676,7 +10716,7 @@ FUNCTIONS = {
 # adding, renaming, or removing one only means updating this file.
 SUBAGENT_TOOL_NAMES = (
     "shell", "glob", "grep", "read", "write", "edit", "multi_edit",
-    "web_search", "fetch", "science", "get_os", "get_date", "reason",
+    "web_search", "fetch", "science", "maps", "get_os", "get_date", "reason",
     "check_inbox", "read_email", "notify_user", "read_imessages",
     "refresh_tools", "more_output",
 )
@@ -10861,7 +10901,7 @@ def run_tool(call):
 # Tools whose words come from someone other than the user: marked when
 # they read like orders to an assistant (guard.py).
 OUTSIDE = {
-    "fetch": "a web page", "web_search": "search results", "science": "research databases",
+    "fetch": "a web page", "web_search": "search results", "science": "research databases", "maps": "map data",
     "open_page": "a web page", "interact": "a web page",
     "watch_youtube": "a YouTube video",
     "read_email": "an email", "check_inbox": "the user's inbox",

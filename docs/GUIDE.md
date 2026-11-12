@@ -1143,6 +1143,25 @@ meeting far better than the small Vosk one. It hears one microphone, so
 for a call, leave the sound on the speakers rather than in headphones,
 and it does not say who said what.
 
+### Maps, trips and shopping
+
+Ask where something is, what is near, or how long it takes to get
+somewhere, and the answer comes with a map: numbered places on
+OpenStreetMap, a list under it where a click flies to each, and for a
+route the road or path drawn in order with its distance and time, by car,
+bike or on foot. Flash finds places by name or address, and what is
+around one (cafes, pharmacies, chargers, supermarkets, hotels) with
+opening hours where they are known. Nothing needs an account or a key.
+
+Ask Flash to plan a trip and it builds the days around where things are,
+with a map and the walking times for each day, travel options compared
+side by side, the costs added up and a packing list for the weather.
+Ask it to help you buy something and it compares real specs side by side,
+reads the reviews with an eye for fakes, checks prices and makes one
+pick. Give it terms and conditions or a sign-up page and it finds the
+traps: auto-renewals, cancellation hoops, extra fees and data sharing,
+quoting the line each one is in.
+
 ### Science
 
 Ask Flash a science or medical question in any chat and it reads the
