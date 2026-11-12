@@ -6898,13 +6898,16 @@ def play_music(query: str = "", service: str = "youtube",
     return result
 
 
-CALENDAR_ACTIONS = ("list", "add", "update", "delete", "calendars")
+CALENDAR_ACTIONS = ("list", "add", "update", "delete", "calendars", "find_time", "invite")
 
 
 def calendar_tool(action: str = "list", start: str = "", end: str = "",
                   query: str = "", title: str = "", where: str = "",
                   notes: str = "", all_day: Any = False, id: str = "",
-                  calendar: str = "") -> str:
+                  calendar: str = "", minutes: Any = 30, attendees: Any = None,
+                  busy: Any = None, their_calendars: Any = None,
+                  day_start: str = "09:00", day_end: str = "18:00",
+                  weekends: Any = False) -> str:
     """Read the user's calendars, and change them."""
 
     from . import calendars
@@ -6951,6 +6954,26 @@ def calendar_tool(action: str = "list", start: str = "", end: str = "",
             made = calendars.add(title, start, end, _truthy(all_day), where,
                                  notes, calendar)
             result = "Added: " + calendars.describe(made)
+        elif action == "find_time":
+            problems = []
+            slots = calendars.free_slots(minutes, start, end, day_start or "09:00", day_end or "18:00",
+                                         _truthy(weekends), busy, their_calendars, problems=problems)
+            if not slots:
+                result = "No free time that long in those hours. Try a longer stretch, other hours, or a shorter meeting."
+            else:
+                said = [f"{a:%a %b %d, %H:%M}-{b:%H:%M}" for a, b in slots]
+                result = ("Free in every calendar given:\n" + "\n".join(f"- {s} (start {a.isoformat()})" for s, (a, _) in zip(said, slots))
+                          + "\n\nOffer them as a choices block (the user's click answers you), then invite with the one picked:\n```ui\n"
+                          + json.dumps({"type": "choices", "prompt": f"Which time for {title or 'it'}?", "options": [f"Book {s}" for s in said[:5]]})
+                          + "\n```")
+            result += "".join(f"\n(Could not read: {p})" for p in problems)
+        elif action == "invite":
+            people = attendees if isinstance(attendees, list) else [a for a in str(attendees or "").split(",") if a.strip()]
+            if not ultra_auto() and not _user_allows(
+                    f"Add {title!r} at {start} and invite {', '.join(map(str, people)) or 'no one'}?"):
+                return "The user said no to sending the invitation."
+            made, how = calendars.invite(title, start, end, people, where, notes, calendar)
+            result = "Booked: " + calendars.describe(made) + "\n" + how
         elif action == "update":
             made = calendars.update(
                 id, title=title, start=start, end=end, where=where,
@@ -9161,7 +9184,12 @@ tools: list[dict[str, Any]] = [
                 "calendar named; the user is asked first); 'update' or "
                 "'delete' one by the id list gives in [brackets] (Apple "
                 "Calendar events can be deleted, not updated); "
-                "'calendars' names them. Times are ISO 8601, local unless "
+                "'calendars' names them; 'find_time' finds times free in "
+                "every calendar (the user's, others' busy times or calendar "
+                "addresses), to offer as choices; 'invite' books one and "
+                "invites people by email (Google sends it when connected, "
+                "else an invitation with accept and decline goes from the "
+                "user's mail). Times are ISO 8601, local unless "
                 "they say a zone: work out dates like 'next Tuesday' from "
                 "today's date first."
             ),
@@ -9187,6 +9215,16 @@ tools: list[dict[str, Any]] = [
                         "Where to add it: flash, google, "
                         "google:<calendar id>, apple, or "
                         "apple:<calendar name>.")},
+                    "minutes": {"type": "integer", "description": "find_time: how long the meeting is (default 30)."},
+                    "attendees": {"type": "array", "items": {"type": "string"},
+                                  "description": "invite: the email addresses to invite."},
+                    "busy": {"type": "array", "items": {"type": "string"}, "description": (
+                        "find_time: times others said they are busy, each 'start/end' in ISO 8601.")},
+                    "their_calendars": {"type": "array", "items": {"type": "string"}, "description": (
+                        "find_time: others' calendar or free/busy addresses (iCal), to find a time free for them too.")},
+                    "day_start": {"type": "string", "description": "find_time: earliest time of day, HH:MM (default 09:00)."},
+                    "day_end": {"type": "string", "description": "find_time: latest end, HH:MM (default 18:00)."},
+                    "weekends": {"type": "boolean", "description": "find_time: weekends count too."},
                 },
                 "required": ["action"],
             },

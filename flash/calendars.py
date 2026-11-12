@@ -823,3 +823,147 @@ def coming_up(hours: float = 24) -> list[Event]:
 
 def as_json(found: list[Event]) -> str:
     return json.dumps([e.summary() for e in found])
+
+
+# Finding a time, and inviting people ------------------------------------------
+
+# An all-day event only blocks the day when it says so: a birthday or a reminder does not.
+_AWAY = re.compile(r"\b(ooo|out of office|off|away|vacation|holiday|leave|sick|travel|trip|flight|wedding|busy)\b", re.I)
+
+
+def _busy_ranges(text_ranges: Any, tz: Any) -> list[tuple[datetime, datetime]]:
+    out = []
+    for item in text_ranges or []:
+        if isinstance(item, dict):
+            a, b = item.get("start"), item.get("end")
+        else:
+            a, _, b = str(item).partition("/")
+        try:
+            out.append((parse_time(a), parse_time(b)))
+        except (CalendarError, ValueError, TypeError):
+            continue
+    return out
+
+
+def free_slots(minutes: int = 30, start: Any = "", end: Any = "", day_start: str = "09:00", day_end: str = "18:00",
+               weekends: bool = False, busy: Any = None, feeds_of_others: Any = None, limit: int = 6,
+               problems: Optional[list] = None) -> list[tuple[datetime, datetime]]:
+    """Times MINUTES long, between START and END (from the next half hour to a week on), inside working hours
+    DAY_START to DAY_END, when nothing is on in the user's calendars, nor in BUSY (ranges others gave: "start/end"
+    or {start, end}), nor in the iCal feeds of the others (FEEDS_OF_OTHERS: their free/busy or calendar addresses).
+    Spread over the days, the earliest first, so the choice is a real one."""
+
+    tz = _local()
+    now = datetime.now(tz)
+    begin = parse_time(start) if start else now
+    if begin < now:
+        begin = now
+    finish = parse_time(end) if end else begin + timedelta(days=7)
+    minutes = max(5, min(int(minutes or 30), 600))
+    taken: list[tuple[datetime, datetime]] = []
+    for e in events(begin - timedelta(days=1), finish, problems=problems):
+        a = parse_time(e.start)
+        b = parse_time(e.end) if e.end else a + timedelta(hours=1)
+        if e.all_day and not _AWAY.search(f"{e.title} {e.notes}"):
+            continue
+        taken.append((a, b))
+    taken += _busy_ranges(busy, tz)
+    for url in feeds_of_others or []:
+        try:
+            for raw in _feed("their calendar", str(url)):
+                for ev in _expand(raw, begin, finish):
+                    a = parse_time(ev.start)
+                    taken.append((a, parse_time(ev.end) if ev.end else a + timedelta(hours=1)))
+        except CalendarError as exc:
+            if problems is not None:
+                problems.append(str(exc))
+    h0, m0 = (int(x) for x in day_start.split(":"))
+    h1, m1 = (int(x) for x in day_end.split(":"))
+    step = timedelta(minutes=30 if minutes >= 30 else 15)
+    length = timedelta(minutes=minutes)
+    found: list[tuple[datetime, datetime]] = []
+    per_day: dict = {}
+    day = begin.astimezone(tz).replace(hour=0, minute=0, second=0, microsecond=0)
+    while day <= finish and len(found) < limit * 4:
+        if weekends or day.weekday() < 5:
+            t = day.replace(hour=h0, minute=m0)
+            close = day.replace(hour=h1, minute=m1)
+            if t < begin:  # from the next whole step
+                mins = int(step.total_seconds() // 60)
+                t = begin.replace(second=0, microsecond=0)
+                t += timedelta(minutes=(-t.minute) % mins or (mins if begin.second or begin.microsecond else 0))
+            while t + length <= close and t + length <= finish:
+                if not any(a < t + length and t < b for a, b in taken):
+                    found.append((t, t + length))
+                    per_day[day.date()] = per_day.get(day.date(), 0) + 1
+                    t += max(length, timedelta(hours=1))
+                else:
+                    t += step
+        day += timedelta(days=1)
+    # at most two a day, so a week's worth of options shows
+    picked, counted = [], {}
+    for a, b in found:
+        if counted.get(a.date(), 0) < 2:
+            picked.append((a, b))
+            counted[a.date()] = counted.get(a.date(), 0) + 1
+        if len(picked) >= limit:
+            break
+    return picked
+
+
+def invitation(title: str, start: datetime, end: datetime, organizer: str, attendees: list[str], where: str = "",
+               notes: str = "", uid: str = "") -> str:
+    """An iCalendar invitation (METHOD:REQUEST) that any mail app shows with accept and decline buttons."""
+
+    def esc(text: str) -> str:
+        return str(text).replace("\\", "\\\\").replace(";", "\\;").replace(",", "\\,").replace("\n", "\\n")
+
+    def utc(moment: datetime) -> str:
+        return moment.astimezone(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+
+    lines = ["BEGIN:VCALENDAR", "PRODID:-//Flash//Calendar//EN", "VERSION:2.0", "CALSCALE:GREGORIAN", "METHOD:REQUEST",
+             "BEGIN:VEVENT", f"UID:{uid or uuid.uuid4().hex}@flash", f"DTSTAMP:{utc(datetime.now(timezone.utc))}",
+             f"DTSTART:{utc(start)}", f"DTEND:{utc(end)}", f"SUMMARY:{esc(title)}",
+             f"ORGANIZER:mailto:{organizer}"]
+    lines += [f"ATTENDEE;ROLE=REQ-PARTICIPANT;PARTSTAT=NEEDS-ACTION;RSVP=TRUE:mailto:{a}" for a in attendees]
+    if where:
+        lines.append(f"LOCATION:{esc(where)}")
+    if notes:
+        lines.append(f"DESCRIPTION:{esc(notes)}")
+    lines += ["SEQUENCE:0", "STATUS:CONFIRMED", "END:VEVENT", "END:VCALENDAR"]
+    return "\r\n".join(lines) + "\r\n"
+
+
+def invite(title: str, start: Any, end: Any = "", attendees: Any = None, where: str = "", notes: str = "",
+           calendar: str = "") -> tuple[Event, str]:
+    """Put the event in the user's calendar and invite ATTENDEES (email addresses): through Google Calendar when it is
+    connected (Google sends the invitations), else as an email with the invitation attached from the user's mail
+    account. The event, and who was invited how."""
+
+    people = [a.strip() for a in (attendees if isinstance(attendees, list) else str(attendees or "").split(",")) if "@" in str(a)]
+    begin = parse_time(start)
+    finish = parse_time(end) if end else begin + timedelta(hours=1)
+    target = _where_to(calendar)
+    if target.startswith("google:") and people:
+        cal = target.split(":", 1)[1]
+        body = _google_body(title, begin, finish, False, where, notes)
+        body["attendees"] = [{"email": a} for a in people]
+        made = _google("POST", f"/calendars/{quote(cal, safe='')}/events?sendUpdates=all", json=body)
+        found = _from_google(made, cal)
+        if found is None:
+            raise CalendarError("Google made it, but sent back nothing.")
+        return found, f"Google Calendar sent the invitation to {', '.join(people)}."
+    made = add(title, begin, finish, False, where, notes, calendar)
+    if not people:
+        return made, "No one to invite."
+    from . import mail  # deferred: mail is only needed to invite
+
+    if not mail.configured():
+        return made, "Added, but no email account is set up to send the invitation: connect one, or share the time."
+    message = mail.compose(to=", ".join(people), subject=f"Invitation: {title}",
+                           body=(f"{title}\n{describe(made)}\n" + (f"\n{notes}\n" if notes else "")))
+    ics = invitation(title, begin, finish, str(message["From"]), people, where, notes, made.id)
+    message.add_attachment(ics.encode(), maintype="text", subtype="calendar", filename="invite.ics",
+                           params={"method": "REQUEST"})
+    sent = mail.send(message)
+    return made, f"Invitation emailed to {sent}, with the event attached for their calendars."
