@@ -1536,6 +1536,10 @@ body.spark-calling #on-call:not([hidden]) { display: flex; animation: rise-far 0
 #meeting .mt-words p { margin: 0 0 3px; }
 #meeting .mt-words time { font: 11.5px var(--mono); color: var(--text-3); margin-right: 8px; }
 #meeting .mt-words p:last-child span { color: var(--text-3); }
+#meeting .mt-words p.asked span { color: var(--text); font-weight: 500; }
+#meeting [data-mt-notes][aria-pressed="true"], #meeting [data-mt-call].on { background: color-mix(in srgb, var(--accent) 16%, var(--surface)); border-color: color-mix(in srgb, var(--accent) 50%, var(--border-strong)); }
+#meeting .mt-ask { margin-top: 8px; }
+#meeting .mt-ask input { width: 100%; box-sizing: border-box; font: inherit; font-size: 13.5px; padding: 7px 10px; border-radius: 10px; border: 1px solid var(--border-strong); background: var(--surface); color: var(--text); }
 @media (max-width: 560px) { #meeting .mt-acts { width: 100%; } #meeting .mt-acts .primary { margin-left: auto; } }
 #recording .rec-mic i { width: 3px; border-radius: 2px; background: var(--text-2); height: calc(4px + var(--v, 0) * 12px); transition: height 0.08s; }
 @keyframes rec-beat { 0% { box-shadow: 0 0 0 0 #ff4d5e80; } 70%, 100% { box-shadow: 0 0 0 8px #ff4d5e00; } }
@@ -4589,12 +4593,17 @@ body.empty #ext-head, body.on-page #ext-head { display: none; }
             <span class="rec-words"><b>Recording a meeting</b><span class="mt-meta"></span></span>
             <span class="rec-mic" aria-hidden="true"><i></i><i></i><i></i><i></i></span>
             <span class="mt-acts">
+              <button type="button" class="btn small" data-mt-call title="Hear the other people on a call in a tab or app on this computer, not only the microphone">Hear the call</button>
+              <button type="button" class="btn small" data-mt-notes aria-pressed="false" title="Flash keeps notes in the chat as the meeting goes">Live notes</button>
               <button type="button" class="btn small" data-mt-pause>Pause</button>
               <button type="button" class="btn small" data-mt-discard>Discard</button>
               <button type="button" class="btn small primary" data-mt-stop>Stop and write up</button>
             </span>
           </div>
           <div class="mt-words" aria-live="polite"></div>
+          <form class="mt-ask" autocomplete="off">
+            <input type="text" name="ask" placeholder="Ask Flash, or just say “Flash, …” out loud" aria-label="Ask Flash during the meeting">
+          </form>
         </div>
         <div id="spark-ask" hidden aria-live="polite"></div>
         <div id="voice-guide" hidden aria-live="polite"></div>
@@ -23223,7 +23232,7 @@ function openPlus() {
     rows.push({ html: `${icon("record")}<span class="label">Record your screen</span>`, act: () => recordScreen(false) });
     rows.push({ html: `${icon("mic")}<span class="label">Record and narrate</span>`, act: () => recordScreen(true) });
   }
-  if (canRecord) rows.push({ html: `${icon("users")}<span class="label">Record a meeting</span><span class="desc">written up when it ends</span>`, act: startMeeting });
+  if (canRecord) rows.push({ html: `${icon("users")}<span class="label">Record a meeting</span><span class="desc">Flash works along live, writes it up after</span>`, act: startMeeting });
   if (navigator.clipboard && navigator.clipboard.read) rows.push({ html: `${icon("copy")}<span class="label">Paste an image</span>`, act: pasteImage });
   rows.push({ header: true, rule: true, html: "" });
   const thinking = thinkBtn.getAttribute("aria-pressed") === "true";
@@ -23507,7 +23516,8 @@ async function startMeeting() {
   if (!canRecord) { toast("Recording needs this page opened on this computer, or over HTTPS"); return; }
   if (voice.on) { toast("End voice mode first: a meeting needs the microphone to itself"); return; }
   let started;
-  try { started = await api("/api/meeting/start", {}); }
+  const here = current && chats.get(current);
+  try { started = await api("/api/meeting/start", { project: (here && here.project) || viewProject || "" }); }
   catch (error) {
     const packages = packagesIn(error.message);
     if (packages.length) askInstall(packages, error.message, startMeeting); else showFailure(error);
@@ -23525,13 +23535,16 @@ async function startMeeting() {
   const ctx = new AudioContext();
   if (ctx.state === "suspended") await ctx.resume().catch(() => {});
   const source = ctx.createMediaStreamSource(stream);
+  // The microphone, and the call's sound when it is added, meet here.
+  const mix = ctx.createGain();
   const tap = ctx.createScriptProcessor(4096, 1, 1);
   const hush = ctx.createGain();
   hush.gain.value = 0;
-  source.connect(tap);
+  source.connect(mix);
+  mix.connect(tap);
   tap.connect(hush);
   hush.connect(ctx.destination);
-  meeting = { id: started.id, stream, ctx, parts: [], lines: [], seconds: 0, paused: false, sending: null, level: 0 };
+  meeting = { id: started.id, chat: started.chat, stream, ctx, mix, call: null, asked: [], notes: false, parts: [], lines: [], seconds: 0, paused: false, sending: null, level: 0 };
   const m = meeting;
   tap.onaudioprocess = (e) => {
     if (m.paused || meeting !== m) return;
@@ -23547,7 +23560,42 @@ async function startMeeting() {
   bar.classList.remove("paused");
   bar.querySelector(".mt-words").textContent = "";
   bar.querySelector("[data-mt-pause]").textContent = "Pause";
+  bar.querySelector("[data-mt-notes]").setAttribute("aria-pressed", "false");
+  bar.querySelector("[data-mt-call]").classList.remove("on");
+  bar.querySelector("[data-mt-call]").hidden = !navigator.mediaDevices.getDisplayMedia;
+  bar.querySelector("[data-mt-call]").textContent = "Hear the call";
   drawMeeting();
+  toast("Let everyone know Flash is writing this meeting down");
+  if (started.chat) { await loadState().catch(() => {}); switchTo(started.chat); }
+}
+
+// The other side of a call (Meet, Zoom or Teams in a tab, or the whole
+// computer's sound): shared once, mixed in with the microphone.
+async function addCallSound(m) {
+  if (m.call) {
+    m.call.getTracks().forEach((t) => t.stop());
+    m.call = null;
+    drawCallButton(m);
+    return;
+  }
+  let shared;
+  try { shared = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: { echoCancellation: false, noiseSuppression: false } }); }
+  catch (_) { return; }
+  const sound = shared.getAudioTracks();
+  shared.getVideoTracks().forEach((t) => t.stop());
+  if (!sound.length) { toast("No sound came with that: share the call's tab, or the whole screen, with “Share audio” ticked"); return; }
+  if (meeting !== m) { sound.forEach((t) => t.stop()); return; }
+  m.call = new MediaStream(sound);
+  m.ctx.createMediaStreamSource(m.call).connect(m.mix);
+  sound[0].addEventListener("ended", () => { if (m.call && m.call.getAudioTracks()[0] === sound[0]) { m.call = null; drawCallButton(m); } });
+  drawCallButton(m);
+  toast("Flash hears the call now, as well as you");
+}
+
+function drawCallButton(m) {
+  const b = $("#meeting [data-mt-call]");
+  b.classList.toggle("on", !!m.call);
+  b.textContent = m.call ? "Hearing the call" : "Hear the call";
 }
 
 // What was heard since the last send, sent; the transcript it comes back
@@ -23564,6 +23612,7 @@ function sendMeeting(m) {
     .then((r) => {
       m.lines.splice(r.from, m.lines.length - r.from, ...r.lines);
       m.seconds = r.seconds;
+      if (r.asked && r.asked.length) { m.asked.push(...r.asked); toast(`Flash heard: “${r.asked[r.asked.length - 1]}”`); }
       if (meeting === m) drawMeeting(true);
     })
     .catch((error) => {
@@ -23591,6 +23640,7 @@ function drawMeeting(words = false) {
     const p = el("p", "", `<time></time><span></span>`);
     p.firstChild.textContent = clock(line.at);
     p.lastChild.textContent = line.text;
+    if (m.asked.some((ask) => line.text.endsWith(ask))) p.classList.add("asked");
     box.appendChild(p);
   }
   if (atEnd) box.scrollTop = box.scrollHeight;
@@ -23599,6 +23649,7 @@ function drawMeeting(words = false) {
 function endMeetingAudio(m) {
   clearInterval(m.timer);
   m.stream.getTracks().forEach((t) => t.stop());
+  if (m.call) m.call.getTracks().forEach((t) => t.stop());
   m.ctx.close().catch(() => {});
   if (meeting === m) meeting = null;
   $("#meeting").hidden = true;
@@ -23623,11 +23674,33 @@ async function stopMeeting() {
   try { r = await api("/api/meeting/stop", { id: m.id, project: (here && here.project) || viewProject || "" }); }
   catch (error) { showFailure(error); return; }
   toast(`Meeting of ${clock(r.seconds)} kept, and being written up`);
+  if (r.chat === m.chat && current === r.chat) return;
   await loadState().catch(() => {});
   switchTo(r.chat);
 }
 
 $("#meeting [data-mt-stop]").onclick = () => stopMeeting();
+$("#meeting [data-mt-call]").onclick = () => { if (meeting) addCallSound(meeting); };
+$("#meeting [data-mt-notes]").onclick = async (e) => {
+  const m = meeting;
+  if (!m) return;
+  const on = !m.notes;
+  try { await api("/api/meeting/notes", { id: m.id, on }); } catch (error) { toast(error.message); return; }
+  m.notes = on;
+  e.currentTarget.setAttribute("aria-pressed", String(on));
+  toast(on ? "Flash keeps notes in the chat every few minutes" : "Live notes off");
+};
+$("#meeting .mt-ask").onsubmit = async (e) => {
+  e.preventDefault();
+  const m = meeting;
+  const input = e.currentTarget.ask;
+  const text = input.value.trim();
+  if (!m || !text) return;
+  input.value = "";
+  try { await api("/api/meeting/ask", { id: m.id, text }); }
+  catch (error) { input.value = text; toast(error.message); return; }
+  if (current !== m.chat) switchTo(m.chat);
+};
 $("#meeting [data-mt-pause]").onclick = (e) => {
   if (!meeting) return;
   meeting.paused = !meeting.paused;

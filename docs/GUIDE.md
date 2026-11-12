@@ -26,7 +26,7 @@ version; [CONFIGURATION.md](CONFIGURATION.md) lists every setting and
 - **Page Control**: The AI opens a page with `open_page` and then clicks buttons, fills forms, presses keys, and runs JavaScript on it with `interact`, seeing a fresh screenshot, the page's elements, and its console errors after every step, so it can debug what a page *does*, not just how it looks.
 - **Read Aloud**: In the web UI, the play button under any reply, or under a spark's report, reads it out a sentence at a time, marking each as it is said: in Flash's own voice when voice mode is set up, and in the browser's otherwise.
 - **Waits**: In the web UI, Flash can set a task aside until something happens, then pick it up in the same chat: "when CI goes green, deploy", "if Sam hasn't replied by Friday, follow up". Waits outlast restarts.
-- **Record a Meeting**: In the web UI, + > Record a meeting writes down what is said as it is said, on this computer, then hands the transcript to the model in a new chat for the summary, decisions and to-dos.
+- **Record a Meeting**: In the web UI, + > Record a meeting writes down what is said as it is said, on this computer (the other side of a call too), does what is asked of it out loud ("Flash, put that in a sheet") with live notes if wanted, then writes up the summary, decisions and to-dos.
 - **Connectors**: Plug in any MCP server (GitHub, Notion, a database, your files) with `/mcp add` or Settings > Connectors, and its tools join Flash's own. Read-only tools run straight away; anything else asks first.
 - **Acts on Your Computer**: With `/computer on`, or the switch in the web UI's Settings, "stop the music", "turn it down" or "open Spotify" just happens: Flash plays, pauses and skips music, sets the volume, opens and quits apps, opens links and files, locks the screen, copies to the clipboard and switches dark mode. On a Mac, "text Sam I'm running late" sends an iMessage once you say yes, and "mark Sam's messages read" marks them read: Messages shows each conversation for a moment, then you are back where you were (group chats are left, as Messages cannot be told to open one). Off by default, and it never clicks, types or runs commands this way.
 - **Voice Mode**: `/voice on` downloads a Vosk speech model and a Piper voice, then lets you talk to Flash and hear its replies, with typing still available at any time. Flash talks warmly, like a person rather than a document, and its voice has a style of its own: Warm (the default: unhurried, friendly, a breath between sentences, questions that lift and exclamations with a little bounce), Lively, Calm, or Plain, picked with `/voice style` or under Voice models in the web UI's Settings, where you can hear it first. Kristin and HFC join the voices on offer, for a warmer sound still.
@@ -1141,19 +1141,38 @@ over the moment it is back. Deleting a chat cancels its waits.
 
 In the web UI, + > Record a meeting (or `/meeting`) listens through the
 microphone and writes down what is said as it is said, with the
-listening model on this computer: nothing leaves it. The bar over the
-message box shows the transcript as it grows, with Pause, Discard, and
-Stop and write up.
+listening model on this computer: nothing leaves it. The meeting gets a
+chat of its own, and the bar over the message box shows the transcript
+as it grows, with Hear the call, Live notes, Pause, Discard, and Stop
+and write up. Tell everyone Flash is writing it down.
 
-Stopping keeps the transcript in `~/.flash/meetings`, and opens a new
-chat with it attached, where the model writes up what the meeting was
-about, what was decided, the action items with who and by when where
-they were said, and the questions left open. A short meeting goes to the
-model whole; a long one it reads from the file a part at a time. A
-Moonshine listening model (see [Voice mode](#voice-mode)) hears a
-meeting far better than the small Vosk one. It hears one microphone, so
-for a call, leave the sound on the speakers rather than in headphones,
-and it does not say who said what.
+Flash works along while you talk:
+
+- **Say "Flash, ..."** (or "hey Flash ...") and it does it in the
+  meeting's chat as soon as the sentence is finished: "Flash, put those
+  dates in a sheet", "Flash, sketch that flow on a whiteboard", "Flash,
+  what did that report say about Q3?". It is given what has been said so
+  far, and keeps what it makes (documents, whiteboards, sheets,
+  checklists) in canvases it updates as the meeting goes. The box under
+  the transcript takes typed asks too.
+- **Hear the call** shares the sound of a call in a tab or app (Meet,
+  Zoom, Teams) and mixes it with your microphone, so the other people
+  are written down too, headphones and all. Pick the call's tab, or the
+  whole screen, with "Share audio" ticked.
+- **Live notes** has Flash keep one notes canvas up to date every few
+  minutes: what it is about so far, decisions, action items and open
+  questions.
+
+Stopping keeps the transcript in `~/.flash/meetings` and attaches it to
+the meeting's chat, where the model writes up what the meeting was
+about, what was decided, the action items as a checklist with who and
+by when where they were said, and the questions left open. A short
+meeting goes to the model whole; a long one it reads from the file a
+part at a time. Later, ask about any meeting ("what did we decide about
+pricing on Tuesday?"): the meetings tool finds the ones that talked
+about it and reads their transcripts. A Moonshine listening model (see
+[Voice mode](#voice-mode)) hears a meeting far better than the small
+Vosk one. It does not say who said what.
 
 ### Pictures
 

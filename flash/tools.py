@@ -2164,6 +2164,34 @@ def digest_tool(source: str = "", question: str = "", fresh: Any = False) -> str
     return result
 
 
+def meetings_tool(query: str = "", limit: Any = 10) -> str:
+    """Meetings recorded in Flash, newest first, or those that talked about QUERY (flash/meeting.py)."""
+
+    from . import meeting
+
+    tool_line(f"Meetings({query[:60]})" if query else "Meetings()")
+    try:
+        n = max(1, min(int(limit or 10), 50))
+    except (TypeError, ValueError):
+        n = 10
+    found = meeting.past(str(query or ""), n)
+    if not found:
+        result = "No meetings found" + (f" that talk about {query}." if query else " yet.")
+        tool_result(result)
+        return result
+    parts = []
+    for item in found:
+        lines = [f"- {item['title']} ({item['length']}), transcript: {item['path']}"]
+        if item.get("matches"):
+            lines += [f"    {line}" for line in item["matches"]]
+        elif item["opening"]:
+            lines.append(f"    Opens: {item['opening']}")
+        parts.append("\n".join(lines))
+    tool_result(f"{len(found)} meeting{'s' if len(found) != 1 else ''}")
+    return ("\n".join(parts) + "\n\nRead a transcript with read for the whole of it; "
+            "the chat each was written up in can be found with past chats.")
+
+
 def maps_tool(action: str = "", query: str = "", near: str = "", what: str = "", places: Any = None, mode: str = "driving",
               radius: Any = 1500, limit: Any = 8) -> str:
     """Places, what is near them, and routes, from OpenStreetMap (flash/maps.py)."""
@@ -10575,6 +10603,24 @@ tools: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "meetings",
+            "description": (
+                "The meetings recorded in Flash: newest first, or with query, the ones that talked about it, with the "
+                "lines that did and where each transcript is. Use it for questions about a past meeting (what was "
+                "decided, who said they would do what, when something came up), then read the transcript."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Words the meeting talked about; empty for the latest."},
+                    "limit": {"type": "integer", "description": "How many meetings, 10 if not given."},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "digest",
             "description": (
                 "Read something too big to read at once, all of it: a long PDF or Word file, a big text or log file, "
@@ -10850,6 +10896,7 @@ FUNCTIONS = {
     "science": science_tool,
     "maps": maps_tool,
     "digest": digest_tool,
+    "meetings": meetings_tool,
     "image": image_tool,
     "agent": agent_tool,
     "agent_result": agent_result,
@@ -10883,7 +10930,7 @@ FUNCTIONS = {
 # adding, renaming, or removing one only means updating this file.
 SUBAGENT_TOOL_NAMES = (
     "shell", "glob", "grep", "read", "write", "edit", "multi_edit",
-    "web_search", "fetch", "science", "maps", "digest", "get_os", "get_date", "reason",
+    "web_search", "fetch", "science", "maps", "digest", "meetings", "get_os", "get_date", "reason",
     "check_inbox", "read_email", "notify_user", "read_imessages",
     "refresh_tools", "more_output",
 )
@@ -11068,7 +11115,7 @@ def run_tool(call):
 # Tools whose words come from someone other than the user: marked when
 # they read like orders to an assistant (guard.py).
 OUTSIDE = {
-    "fetch": "a web page", "web_search": "search results", "science": "research databases", "maps": "map data", "digest": "the file or video it read",
+    "fetch": "a web page", "web_search": "search results", "science": "research databases", "maps": "map data", "digest": "the file or video it read", "meetings": "meeting transcripts",
     "open_page": "a web page", "interact": "a web page",
     "watch_youtube": "a YouTube video",
     "read_email": "an email", "check_inbox": "the user's inbox",

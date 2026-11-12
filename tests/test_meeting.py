@@ -178,3 +178,72 @@ def test_clock():
     assert meeting.clock(0) == "0:00"  # nosec B101
     assert meeting.clock(754) == "12:34"  # nosec B101
     assert meeting.clock(3725) == "1:02:05"  # nosec B101
+
+
+def test_it_works_along_when_spoken_to(ready, monkeypatch):
+    import base64
+
+    monkeypatch.setattr(_Hearing, "said", [
+        "okay let's look at the dates",
+        "flash put the launch dates in a sheet",
+        "we need a flash drive for the demo",
+        "and that's it",
+    ])
+    session = web.Session()
+    sent = []
+    monkeypatch.setattr(session, "send", lambda chat, text, **kw: sent.append((chat.id, text, kw)))
+    started = post(session, "start", notes=False)
+    assert started["chat"] in session.chats  # nosec B101
+    assert session.chats[started["chat"]].title.startswith("Meeting, ")  # nosec
+
+    got = {}
+    for count in range(4):
+        got = post(session, "hear", id=started["id"], count=count,
+                   data=base64.b64encode(_pcm(1.0)).decode())
+    # Asked once, in the meeting's chat, when the sentence was done; the
+    # flash drive was not asked of anyone.
+    asks = [text for _, text, _ in sent]
+    assert asks == [meeting.ASKED.format(ask="put the launch dates in a sheet")]  # nosec
+    assert sent[0][0] == started["chat"]  # nosec B101
+    # A turn in that chat is told the meeting is going on, and what was said.
+    live = session.meetings.in_chat(started["chat"])
+    assert "flash put the launch dates" in live.context()  # nosec B101
+    assert "happening now" in live.context()  # nosec B101
+
+    post(session, "stop", id=started["id"])
+    # The write-up goes to the same chat.
+    assert sent[-1][0] == started["chat"] and sent[-1][2]["files"]  # nosec
+    assert session.meetings.in_chat(started["chat"]) is None  # nosec B101
+
+
+def test_live_notes_come_every_so_often(ready, monkeypatch):
+    session = web.Session()
+    started = post(session, "start", notes=True)
+    live = session.meetings.get(started["id"])
+    monkeypatch.setattr(live, "words", lambda: 200)
+    live._noted_at -= meeting.NOTES_SECONDS + 1  # pylint: disable=W0212
+    live._noted_words = 0  # pylint: disable=W0212
+    assert live.notes_due()  # nosec B101
+    assert not live.notes_due()  # nosec B101  (just brought up to date)
+    post(session, "notes", id=started["id"], on=False)
+    live._noted_at -= meeting.NOTES_SECONDS + 1  # pylint: disable=W0212
+    monkeypatch.setattr(live, "words", lambda: 900)
+    assert not live.notes_due()  # nosec B101
+
+
+def test_past_meetings_are_found_by_what_they_said():
+    folder = meeting.folder()
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / "2026-11-10 09.00 aaa.md").write_text(
+        "# Meeting, November 10, 09:00\n\n12 minutes, written down as it was said by the listening model on this computer.\n\n"
+        "[0:00] morning all\n[3:10] we settled the pricing at nine dollars\n", encoding="utf-8")
+    (folder / "2026-11-11 09.00 bbb.md").write_text(
+        "# Meeting, November 11, 09:00\n\n5 minutes, written down as it was said by the listening model on this computer.\n\n"
+        "[0:00] hiring plan\n", encoding="utf-8")
+    newest = meeting.past()
+    assert [m["title"] for m in newest] == ["Meeting, November 11, 09:00", "Meeting, November 10, 09:00"]  # nosec
+    found = meeting.past("pricing")
+    assert len(found) == 1 and found[0]["length"] == "12 minutes"  # nosec B101
+    assert found[0]["matches"] == ["[3:10] we settled the pricing at nine dollars"]  # nosec B101
+    from flash import tools
+    assert "pricing at nine dollars" in tools.FUNCTIONS["meetings"](query="pricing")  # nosec B101
