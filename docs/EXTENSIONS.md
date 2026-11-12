@@ -739,7 +739,7 @@ script with an API.
 | `placeholder` | What the empty box says, on the web and in the terminal. |
 | `banner` | A text file (up to 20 lines) shown under Flash's welcome box in the terminal. |
 | `widgets` | Up to 4 cards on a new chat's empty page, each a page (`.html` in `web`) `height` pixels tall (60 to 480, 160 by default). |
-| `docks` | Up to 3 pages that sit beside the chat, `width` pixels wide (260 to 720, 360 by default), each opened and shut from a button at the top. The one open stays open from chat to chat, and through a reload. |
+| `docks` | Up to 3 pages that sit beside the chat, `width` pixels wide (260 to 720, 360 by default), each opened from the + menu by the message box and shut from its own close button. The one open stays open from chat to chat, and through a reload. |
 | `blocks` | Up to 8 kinds of block a reply can hold: a ```` ```lang ```` fence whose text the extension's page draws, `height` pixels tall to start (60 to 900). `about` (up to 200 characters) tells the model what the block is for and what to put in it; it goes in the system prompt. A language the page draws itself (`ui`, `mermaid`, `serif`), one people write code in, or one another extension draws is refused. |
 
 **Blocks.** The page gets the block as its window's name, JSON
