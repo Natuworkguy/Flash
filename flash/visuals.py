@@ -28,7 +28,7 @@ _BLOCK = re.compile(
 
 TYPES = (
     "chart", "compare", "stats", "steps", "flow", "calc", "choices",
-    "form", "checklist", "card", "molecule", "chats", "map",
+    "form", "checklist", "card", "molecule", "chats", "map", "sheet",
 )
 
 # What the model is told about the blocks it can write.
@@ -273,6 +273,13 @@ def _markdown(spec: dict) -> str:
             for r in rows:
                 note = f" ({r['note']})" if r.get("note") else ""
                 lines.append(f"- {r.get('label', '')}: **{r.get('value', '')}**{note}")
+    elif kind == "sheet":
+        cols = [str(c) for c in spec.get("columns") or []]
+        rows = [r for r in spec.get("rows") or [] if isinstance(r, list)]
+        if cols:
+            cell = lambda v: str("" if v is None else v).replace("|", "\\|")
+            lines += ["| " + " | ".join(map(cell, cols)) + " |", "|" + "---|" * len(cols)]
+            lines += ["| " + " | ".join(cell(v) for v in (r + [""] * len(cols))[:len(cols)]) + " |" for r in rows[:60]]
     elif kind == "map":
         route = spec.get("route")
         if isinstance(route, dict) and route.get("summary"):
@@ -356,6 +363,9 @@ def _spoken(spec: dict) -> str:
             for r in spec.get("rows") or [] if isinstance(r, dict) and not r.get("divider")
         ]
         return ". ".join(b for b in bits if b)
+    if kind == "sheet":
+        n = len([r for r in spec.get("rows") or [] if isinstance(r, list)])
+        return f"{title + ': ' if title else ''}a table of {n} row{'s' if n != 1 else ''}, on screen."
     if kind == "map":
         names = [str(p.get("name", "")) for p in spec.get("places") or [] if isinstance(p, dict) and not p.get("home")]
         route = spec.get("route") if isinstance(spec.get("route"), dict) else {}

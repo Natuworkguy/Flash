@@ -190,3 +190,10 @@ def test_speech_says_the_choices_and_skips_the_numbers():
 
     assert "Which one? Faster, Cheaper or Both." in text  # nosec B101
     assert "Sales, on screen." in text and "20" not in text  # nosec B101
+
+
+def test_a_sheet_reads_as_a_table_in_the_terminal_and_aloud():
+    text = '```ui\n{"type": "sheet", "title": "Budget", "columns": ["Item", "Cost"], "rows": [["Rent", 900], ["Total", "=SUM(B2:B2)"]]}\n```'
+    shown = visuals.for_terminal(text)
+    assert "| Item | Cost |" in shown and "| Total | =SUM(B2:B2) |" in shown
+    assert visuals.plain(text) == "Budget: a table of 2 rows, on screen."
