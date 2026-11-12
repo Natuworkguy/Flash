@@ -27,6 +27,12 @@ OSRM = {"driving": "https://router.project-osrm.org/route/v1/driving/",
         "walking": "https://routing.openstreetmap.de/routed-foot/route/v1/foot/",
         "cycling": "https://routing.openstreetmap.de/routed-bike/route/v1/bike/"}
 AGENT = "Flash (an open-source desktop assistant)"
+# OpenStreetMap's tile servers ask every app to name itself and keep the tiles it fetched: the map's tiles are
+# fetched here, by Flash, named, and kept on disk, never asked for again within TILE_DAYS.
+TILES = "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
+TILE_AGENT = "Flash/{version} (open-source desktop assistant; +https://github.com/Natuworkguy/flash)"
+TILE_DAYS = 14
+TILE_ZOOM = 19
 TIMEOUT = 25
 _gate = threading.Lock()
 _last = [0.0]
@@ -248,3 +254,28 @@ def run(action: str, query: str = "", near: str = "", what: str = "", places: An
     except MapsError as exc:
         return f"Error: {exc}"
     return "\n".join(lines) + "\n\nTo show it, put this map block in the reply (trim or add places as you like):\n```ui\n" + json.dumps(block, ensure_ascii=False) + "\n```"
+
+
+def tile(z: int, x: int, y: int) -> bytes:
+    """One map tile, as PNG bytes: from disk when it was fetched in the last TILE_DAYS, else from OpenStreetMap."""
+
+    from .version import __version__
+
+    if not (0 <= z <= TILE_ZOOM and 0 <= x < 2 ** z and 0 <= y < 2 ** z):
+        raise MapsError("no such tile")
+    folder = _cache_dir() / "tiles" / str(z) / str(x)
+    path = folder / f"{y}.png"
+    if path.is_file() and time.time() - path.stat().st_mtime < TILE_DAYS * 86400:
+        return path.read_bytes()
+    req = urllib.request.Request(TILES.format(z=z, x=x, y=y), headers={
+        "User-Agent": TILE_AGENT.format(version=__version__), "Referer": "https://github.com/Natuworkguy/flash"})
+    try:
+        with urllib.request.urlopen(req, timeout=TIMEOUT) as r:  # nosec B310 -- the fixed tile server
+            data = r.read(2_000_000)
+    except (urllib.error.URLError, OSError) as exc:
+        if path.is_file():   # old is better than none
+            return path.read_bytes()
+        raise MapsError(f"could not fetch the map: {getattr(exc, 'reason', exc)}") from None
+    folder.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(data)
+    return data

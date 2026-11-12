@@ -7302,7 +7302,8 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Connection", "close")
         self.send_header("Content-Type", kind)
         self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "no-store")
+        if "Cache-Control" not in (headers or {}):
+            self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Referrer-Policy", "no-referrer")
         self.end_headers()
@@ -7440,6 +7441,15 @@ class Handler(BaseHTTPRequestHandler):
             self._file(url.path.removeprefix("/api/files/"),
                        download=query.get("download", [""])[0] == "1",
                        design=query.get("design", [""])[0] == "1")
+        elif url.path.startswith("/api/tile/"):
+            # The map's tiles, through Flash: named and kept, as the tile servers ask.
+            from . import maps
+
+            try:
+                z, x, y = (int(p) for p in url.path.removeprefix("/api/tile/").removesuffix(".png").split("/"))
+                self._send(HTTPStatus.OK, maps.tile(z, x, y), "image/png", {"Cache-Control": "private, max-age=604800"})
+            except (ValueError, maps.MapsError):
+                self._send(HTTPStatus.NOT_FOUND, b"", "image/png")
         elif url.path == "/api/geocode":
             from . import maps
 
