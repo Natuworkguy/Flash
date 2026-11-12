@@ -1141,6 +1141,23 @@ meeting far better than the small Vosk one. It hears one microphone, so
 for a call, leave the sound on the speakers rather than in headphones,
 and it does not say who said what.
 
+### Science
+
+Ask Flash a science or medical question in any chat and it reads the
+research itself, with links to everything it used. It searches papers in
+PubMed, Europe PMC, bioRxiv and medRxiv preprints, and arXiv. It reads a
+paper's abstract, or its whole text when it is open access, and finds
+related papers. It looks up clinical trials on ClinicalTrials.gov,
+compounds in PubChem with their measured potency on targets in ChEMBL,
+and proteins and genes in UniProt, and writes citations in BibTeX, APA or
+any other style. None of them needs an account or a key.
+
+It says when a finding comes from a preprint that is not peer reviewed,
+weighs trials above case reports, and runs any numbers (statistics, unit
+and dose maths, fits and charts) as Python rather than estimating them.
+Sparks can use it too, for example to watch a field for new papers each
+morning.
+
 ### Connectors
 
 A connector is an MCP server: a program that offers tools (GitHub's
