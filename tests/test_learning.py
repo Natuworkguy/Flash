@@ -503,3 +503,32 @@ class TestTheLoopCountsTurns:
         assert counted == [("Thursday.", 2)]
         # The review is stopped before the user's turn asks the model.
         assert order[:2] == ["cancel", "chat"]
+
+
+class TestDecisionsAreKeptAtOnce:
+    def test_a_stated_decision_starts_a_memory_review_now(self, monkeypatch):
+        monkeypatch.setenv("MEMORY_REVIEW_EVERY", "10")
+        started = []
+
+        def start(**kwargs):
+            started.append(kwargs["args"][0])
+            return SimpleNamespace(start=lambda: None)
+
+        turn = [{"role": "user", "content": "Let's go with Postgres, SQLite won't take the writes."},
+                {"role": "assistant", "content": "Postgres it is."}]
+        review = learning.after_turn(turn, 0, host="h", model="m", start=start)
+        assert review is not None and review.memory and review.decision
+        sent = learning.review_messages(review, turn)
+        assert "Decided:" in sent[0]["content"]
+        assert "keep the decision" in sent[1]["content"]
+        learning.reset()
+
+    def test_plain_talk_waits_its_turn(self, monkeypatch):
+        monkeypatch.setenv("MEMORY_REVIEW_EVERY", "10")
+        turn = [{"role": "user", "content": "what time is it in Tokyo?"}, {"role": "assistant", "content": "9am."}]
+        assert learning.after_turn(turn, 0, host="h", model="m") is None
+
+    @pytest.mark.parametrize("said", ["from now on use pnpm", "I prefer short answers", "never use semicolons",
+                                      "we decided to ship on Fridays", "call it Lumen instead"])
+    def test_what_counts_as_a_decision(self, said):
+        assert learning.decided(said)

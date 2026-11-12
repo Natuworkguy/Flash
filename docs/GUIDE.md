@@ -1673,6 +1673,14 @@ and `/skills remove <name>` deletes one. `SKILL_REVIEW_AFTER` and
 `MEMORY_REVIEW_EVERY` change how often reviews run, and `0` turns them
 off (see [docs/CONFIGURATION.md](CONFIGURATION.md)).
 
+Decisions are kept at once. Say one ("let's go with Postgres", "from
+now on use pnpm", "I prefer short answers", "call it Lumen instead") and
+a review runs right after that reply instead of waiting its turn: the
+decision is saved as one "Decided:" line, with its reason, in the
+project's memory when it is about the project and in yours when it is
+about you, and an older line that says the opposite is corrected rather
+than kept beside it. So it is never asked again, in this chat or a new one.
+
 ### Web UI
 
 ```bash
