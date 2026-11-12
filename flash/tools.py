@@ -2116,6 +2116,38 @@ def skill_view(name: str, path: str = "") -> str:
     return result
 
 
+def image_tool(action: str = "create", prompt: str = "", path: str = "", size: str = "square", steps: Any = None,
+               count: Any = 1, model: str = "", factor: Any = 2) -> str:
+    """Make pictures with an image model, change one, cut its background away, or make it bigger (flash/imagine.py)."""
+
+    from . import imagine
+
+    action = str(action or "create").strip().lower()
+    tool_line(f"Image({action}{': ' + prompt[:60] if prompt else ''}{' ' + path if path and not prompt else ''})")
+    try:
+        if action in ("create", "edit"):
+            if action == "edit" and not path:
+                raise imagine.ImageError("edit needs the picture's path")
+            made = imagine.make(prompt, size, int(steps) if steps else None, model, path if action == "edit" else "",
+                                int(count or 1), progress=lambda said: tool_result(said, style=DIM))
+        elif action == "remove_background":
+            made = [imagine.remove_background(path)]
+        elif action == "upscale":
+            made = [imagine.upscale(path, int(factor or 2))]
+        else:
+            raise imagine.ImageError("action is create, edit, remove_background or upscale")
+    except imagine.ImageError as exc:
+        result = f"Error: {exc}"
+        tool_result(result, style=ERROR)
+        return result
+    for p in made:
+        tool_file(str(p))
+    result = "Made, and shown to the user:\n" + "\n".join(str(p) for p in made) + \
+        "\nLook at it with view_image before saying it is right; edit it with action edit and this path."
+    tool_result(f"{len(made)} picture{'s' if len(made) > 1 else ''}")
+    return result
+
+
 def digest_tool(source: str = "", question: str = "", fresh: Any = False) -> str:
     """Something too big to read at once, read in full part by part and mapped (flash/digest.py)."""
 
@@ -10501,6 +10533,33 @@ tools: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "image",
+            "description": (
+                "Pictures on this computer. create: a picture from a prompt with an image model in Ollama (a full "
+                "description works best: subject, setting, light, style, camera); edit: change a picture at path as "
+                "the prompt says (make it night, change the outfit, the same character in a new pose), for keeping a "
+                "character the same across pictures; remove_background: the subject cut out as a transparent PNG; "
+                "upscale: twice to four times bigger. Each is shown to the user and saved under ~/.flash/images."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string", "enum": ["create", "edit", "remove_background", "upscale"]},
+                    "prompt": {"type": "string", "description": "create and edit: what to make, or what to change."},
+                    "path": {"type": "string", "description": "edit, remove_background, upscale: the picture."},
+                    "size": {"type": "string", "description": "square, portrait, landscape, wide, story, banner, or WIDTHxHEIGHT."},
+                    "steps": {"type": "integer", "description": "Diffusion steps: fewer is faster, more is finer."},
+                    "count": {"type": "integer", "description": "create: how many to pick from (1 to 4)."},
+                    "model": {"type": "string", "description": "An image model in Ollama, if not the usual one."},
+                    "factor": {"type": "integer", "description": "upscale: 2, 3 or 4."},
+                },
+                "required": ["action"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "digest",
             "description": (
                 "Read something too big to read at once, all of it: a long PDF or Word file, a big text or log file, "
@@ -10776,6 +10835,7 @@ FUNCTIONS = {
     "science": science_tool,
     "maps": maps_tool,
     "digest": digest_tool,
+    "image": image_tool,
     "agent": agent_tool,
     "agent_result": agent_result,
     "make_spark": make_spark,
