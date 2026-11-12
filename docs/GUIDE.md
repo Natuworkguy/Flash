@@ -223,6 +223,12 @@ python run.py
   Connectors > Calendar), both ways. Ask Flash what is on, to find a
   free afternoon, or to book, move or cancel something, and it does,
   adding to Google's main calendar when connected and its own when not.
+  To meet with others, ask it to find a time: it looks for times free in
+  your calendars and theirs (busy times they told you, or a calendar
+  address they shared), inside working hours, and offers a few as
+  buttons; pick one and it books it and invites them, through Google
+  Calendar when connected or as an email invitation with accept and
+  decline buttons from your own account.
   What starts in the next day shows in the briefing as Coming up.
   Connecting Google needs an OAuth client of your own (Google Cloud
   console: turn on the Google Calendar API, then make a Desktop app
