@@ -28,7 +28,7 @@ _BLOCK = re.compile(
 
 TYPES = (
     "chart", "compare", "stats", "steps", "flow", "calc", "choices",
-    "form", "checklist",
+    "form", "checklist", "card", "molecule",
 )
 
 # What the model is told about the blocks it can write.
@@ -260,7 +260,44 @@ def _markdown(spec: dict) -> str:
                 lines.append(f"- {label}:{hint}")
     elif kind == "checklist":
         lines += [f"- [ ] {item}" for item in spec.get("items") or []]
+    elif kind == "card":
+        if spec.get("badge"):
+            lines = [f"**{title}** · {spec['badge']}", ""] if title else [f"{spec['badge']}", ""]
+        if spec.get("value") not in (None, ""):
+            lines.append(f"## {spec['value']}")
+        if spec.get("sub") or spec.get("subtitle"):
+            lines.append(str(spec.get("sub") or spec.get("subtitle")))
+        rows = [r for r in spec.get("rows") or [] if isinstance(r, dict) and not r.get("divider")]
+        if rows:
+            lines += ["", "---"]
+            for r in rows:
+                note = f" ({r['note']})" if r.get("note") else ""
+                lines.append(f"- {r.get('label', '')}: **{r.get('value', '')}**{note}")
+    elif kind == "molecule":
+        name, link = molecule_page(spec)
+        if name:
+            lines.append(f"3D structure: [{name}]({link})")
+        if spec.get("caption"):
+            lines.append(str(spec["caption"]))
     return "\n".join(lines).strip()
+
+
+def molecule_page(spec: dict) -> tuple[str, str]:
+    """The name of the structure a molecule block shows, and the page to see it on."""
+
+    pdb = str(spec.get("pdb") or "").strip().upper()
+    af = str(spec.get("alphafold") or spec.get("uniprot") or "").strip().upper()
+    cid = str(spec.get("cid") or "").strip()
+    smiles = str(spec.get("smiles") or "").strip()
+    if pdb:
+        return f"PDB {pdb}", f"https://www.rcsb.org/3d-view/{pdb}"
+    if af:
+        return f"AlphaFold {af}", f"https://alphafold.ebi.ac.uk/entry/{af}"
+    if cid:
+        return f"PubChem CID {cid}", f"https://pubchem.ncbi.nlm.nih.gov/compound/{cid}#section=3D-Conformer"
+    if smiles:
+        return smiles, f"https://pubchem.ncbi.nlm.nih.gov/#query={smiles}"
+    return "", ""
 
 
 def _terminal_block(match: re.Match) -> str:
@@ -293,6 +330,15 @@ def _spoken(spec: dict) -> str:
             f"{i.get('label', '')}: {i.get('value', '')}"
             for i in spec.get("items") or [] if isinstance(i, dict)
         )
+    if kind == "card":
+        bits = [title, str(spec.get("value") or "")] + [
+            f"{r.get('label', '')}: {r.get('value', '')}"
+            for r in spec.get("rows") or [] if isinstance(r, dict) and not r.get("divider")
+        ]
+        return ". ".join(b for b in bits if b)
+    if kind == "molecule":
+        name = title or molecule_page(spec)[0]
+        return f"{name}, in 3D on screen." if name else ""
     if kind == "steps":
         return ". ".join(
             str(i.get("title", "")) for i in spec.get("items") or []

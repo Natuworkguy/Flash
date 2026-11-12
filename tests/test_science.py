@@ -117,3 +117,39 @@ def test_flash_offers_it_and_a_guide_for_it():
     assert any(t["function"]["name"] == "science" for t in tools.tools)
     from flash import skills
     assert skills.find("do-science") is not None
+
+
+def test_structures_are_fetched_once_and_kept(monkeypatch, tmp_path):
+    calls = []
+
+    def get(url, params=None, accept="application/json"):
+        calls.append(url)
+        if "alphafold" in url and "/api/" in url:
+            return json.dumps([{"pdbUrl": "https://alphafold.ebi.ac.uk/files/AF-P68871-F1-model_v4.pdb"}]).encode()
+        if url.endswith(".pdb"):
+            return b"ATOM      1  N   VAL A   1"
+        if url.endswith(".cif"):
+            return b"data_1HHO"
+        if "record/SDF" in url:
+            return b"702\n  sdf"
+        raise AssertionError(url)
+
+    monkeypatch.setattr(science, "_get", get)
+    monkeypatch.setattr(science, "_cache_dir", lambda: tmp_path)
+    assert science.structure("pdb", "1hho") == ("cif", "data_1HHO")
+    assert science.structure("alphafold", "P68871")[0] == "pdb"
+    assert science.structure("cid", "702") == ("sdf", "702\n  sdf")
+    n = len(calls)
+    assert science.structure("pdb", "1HHO") == ("cif", "data_1HHO")
+    assert len(calls) == n  # from disk the second time
+    for kind, ident in (("pdb", "../etc"), ("cid", "abc"), ("nope", "1")):
+        with pytest.raises(science.ScienceError):
+            science.structure(kind, ident)
+
+
+def test_molecule_blocks_read_in_the_terminal_and_aloud():
+    from flash import visuals
+
+    text = 'Here.\n\n```ui\n{"type": "molecule", "pdb": "1hho", "title": "Haemoglobin"}\n```\n'
+    assert "https://www.rcsb.org/3d-view/1HHO" in visuals.for_terminal(text)
+    assert "Haemoglobin, in 3D on screen." in visuals.plain(text)

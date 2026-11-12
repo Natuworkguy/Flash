@@ -1152,6 +1152,15 @@ compounds in PubChem with their measured potency on targets in ChEMBL,
 and proteins and genes in UniProt, and writes citations in BibTeX, APA or
 any other style. None of them needs an account or a key.
 
+Proteins and molecules show up in 3D right in the reply: an experimental
+structure from the Protein Data Bank, the AlphaFold prediction for a
+protein (coloured by how confident it is), or a compound from PubChem.
+Drag to turn it, scroll to zoom, switch between cartoon, sticks and
+surface, colour it by chain, rainbow, helices and sheets or element, and
+hover an atom to see its residue. The residues Flash is talking about are
+picked out and labelled. A structure seen once is kept, so it opens again
+offline.
+
 It says when a finding comes from a preprint that is not peer reviewed,
 weighs trials above case reports, and runs any numbers (statistics, unit
 and dose maths, fits and charts) as Python rather than estimating them.

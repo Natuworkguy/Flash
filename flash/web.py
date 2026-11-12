@@ -239,6 +239,14 @@ STATIC.update({
     for path in sorted((WEB_DIR / "three").glob("*.js"))
 })
 
+# 3Dmol.js, which draws proteins and molecules in 3D in replies: shipped
+# with Flash too (BSD licence, web/3dmol/LICENSE.txt), loaded only once a
+# structure shows.
+STATIC.update({
+    path.relative_to(WEB_DIR).as_posix(): KATEX_TYPES[path.suffix]
+    for path in sorted((WEB_DIR / "3dmol").glob("*.js"))
+})
+
 # Mermaid, which draws the diagrams in replies and documents: shipped
 # with Flash as well, and loaded only once a diagram shows.
 STATIC.update({
@@ -7319,6 +7327,18 @@ class Handler(BaseHTTPRequestHandler):
             self._file(url.path.removeprefix("/api/files/"),
                        download=query.get("download", [""])[0] == "1",
                        design=query.get("design", [""])[0] == "1")
+        elif url.path == "/api/structure":
+            # A protein or molecule for the 3D viewer in a reply, fetched
+            # here (and kept), so the page needs no other site.
+            from . import science
+
+            try:
+                fmt, text = science.structure(query.get("kind", [""])[0],
+                                              query.get("id", [""])[0])
+            except science.ScienceError as exc:
+                self._json({"error": str(exc)}, HTTPStatus.NOT_FOUND)
+            else:
+                self._json({"format": fmt, "data": text})
         elif url.path == "/api/background":
             self._json(self.server.session.background())
         elif url.path == "/api/agents":
