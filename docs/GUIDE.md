@@ -350,6 +350,7 @@ python run.py
   stop it.
 - `/clear`: Clear the conversation history.
 - `/undo`: Take back the file changes from the last turn.
+- `/setup`: The first-run checklist, again: a model, your name and how you like answers, email, calendar, Flash on your phone, and where your files are, each ticked off as it is done and one click from where it is set up. It shows on a new chat until all six are done or you say Not now.
 - `/history`: The time machine: every turn's file changes this session, and going back to before any of them.
 - `/compact`: Summarize the conversation to free up room. It works in the browser too, from the message box or the command palette.
 - `/review`: Review your uncommitted changes for bugs. `/review main`

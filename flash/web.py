@@ -6491,6 +6491,33 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
                 listed.append(where)
         return saved
 
+    if name == "setup-status":
+        # The first run's checklist: what is set up already, so it only asks for the rest.
+        from . import calendars, mail
+
+        kept = " \n".join(memory.list_memory()).lower()
+        return {
+            "model": bool(ai.Config.model),
+            "you": "the user's name is" in kept or "name:" in kept,
+            "mail": mail.configured(),
+            "calendar": calendars.google_connected() or bool(calendars.feeds()) or calendars.apple_connected(),
+            "files": "documents are in" in kept or "files are in" in kept,
+            "phone": bool(session.lan or session.tunnel.url),
+        }
+
+    if name == "setup-about-me":
+        said = []
+        who = " ".join(str(body.get("who") or "").split())[:60]
+        if who:
+            said.append(memory.add_memory(f"The user's name is {who}."))
+        how = " ".join(str(body.get("style") or "").split())[:200]
+        if how:
+            said.append(memory.add_memory(f"How the user likes answers: {how}."))
+        where = " ".join(str(body.get("folder") or "").split())[:300]
+        if where:
+            said.append(memory.add_memory(f"The user's documents are in {where}."))
+        return {"saved": len(said)}
+
     if name == "history":
         return {"turns": checkpoint.history()}
 
