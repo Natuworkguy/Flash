@@ -347,3 +347,28 @@ class TestFallbacksAndAuto:
         monkeypatch.setenv("AUTO_MODELS", "small:2b, big:9b")
         assert modelchain.pick("x", [{"role": "user", "content": "hi"}])[0] \
             == "small:2b"
+
+
+def test_a_kept_model_list_comes_back_at_once_and_is_asked_again_behind(monkeypatch):
+    import time as _time
+
+    from flash import providers
+
+    asked = []
+
+    def slow(provider):
+        asked.append(provider)
+        _time.sleep(0.2)
+        return [{"name": f"m{len(asked)}"}]
+
+    monkeypatch.setattr(providers, "_ask_models", slow)
+    monkeypatch.setattr(providers, "_saved_models", lambda: {})
+    monkeypatch.setattr(providers, "MODELS_SECONDS", 0)
+    providers.forget_models()
+    assert providers.provider_models("p") == [{"name": "m1"}]          # nothing kept: waited for, once
+    started = _time.monotonic()
+    assert providers.provider_models("p") == [{"name": "m1"}]          # kept: at once, though old
+    assert _time.monotonic() - started < 0.1
+    _time.sleep(0.4)
+    assert providers.provider_models("p")[0]["name"] == "m2"            # asked again behind the scenes
+    providers.forget_models()

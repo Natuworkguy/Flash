@@ -31,6 +31,7 @@ is a failure, shown to the user as Ollama's own errors are.
 from __future__ import annotations
 
 import base64
+import concurrent.futures
 import itertools
 import json
 import os
@@ -237,17 +238,13 @@ def _check(found: dict, provider) -> None:
 
 _models: dict[str, tuple[float, list[dict]]] = {}
 _models_lock = threading.Lock()
+_asking: set = set()
+MODELS_FILE = "provider-models.json"
 
 
-def provider_models(provider: str) -> list[dict]:
-    """PROVIDER's models, each {"name", "capabilities", "context"},
-    asked at most every MODELS_SECONDS. [] when it cannot say."""
+def _ask_models(provider: str) -> list[dict]:
+    """PROVIDER's models, asked now: [] when it cannot say."""
 
-    now = time.monotonic()
-    with _models_lock:
-        kept = _models.get(provider)
-        if kept and now - kept[0] < MODELS_SECONDS:
-            return kept[1]
     try:
         extension, found = _find(provider)
     except ResponseError:
@@ -266,9 +263,65 @@ def provider_models(provider: str) -> list[dict]:
                     listed.append(entry)
     except ResponseError:
         listed = []
-    with _models_lock:
-        _models[provider] = (now, listed)
     return listed
+
+
+def _saved_models() -> dict:
+    """The last lists, kept on disk, so the menu has them at once after a restart."""
+
+    from . import workspace
+
+    data = workspace._read(MODELS_FILE, {})  # pylint: disable=W0212
+    return data if isinstance(data, dict) else {}
+
+
+def _refresh(provider: str) -> list[dict]:
+    listed = _ask_models(provider)
+    with _models_lock:
+        _models[provider] = (time.monotonic(), listed)
+        _asking.discard(provider)
+    if listed:
+        from . import workspace
+
+        with _models_lock:
+            saved = _saved_models()
+            saved[provider] = listed
+            workspace._write(MODELS_FILE, saved)  # pylint: disable=W0212
+    return listed
+
+
+def provider_models(provider: str, wait: bool = True) -> list[dict]:
+    """PROVIDER's models, each {"name", "capabilities", "context"}. What
+    was last heard comes back at once, even if it is old (from disk after a
+    restart), and an old list is asked again in the background: a slow
+    extension never holds up the model menu. Only the very first time,
+    with nothing kept anywhere, is it waited for (unless WAIT is false)."""
+
+    now = time.monotonic()
+    with _models_lock:
+        kept = _models.get(provider)
+        if kept is None:
+            disk = _saved_models().get(provider)
+            if disk:
+                kept = (0.0, disk)          # known, but old: shown, and asked again
+                _models[provider] = kept
+        fresh = kept is not None and now - kept[0] < MODELS_SECONDS
+        asking = provider in _asking
+        if kept is not None and not fresh and not asking:
+            _asking.add(provider)
+    if kept is not None:
+        if not fresh and not asking:
+            threading.Thread(target=_refresh, args=(provider,), daemon=True).start()
+        return kept[1]
+    if not wait:
+        with _models_lock:
+            if provider not in _asking:
+                _asking.add(provider)
+                threading.Thread(target=_refresh, args=(provider,), daemon=True).start()
+        return []
+    with _models_lock:
+        _asking.add(provider)
+    return _refresh(provider)
 
 
 def forget_models() -> None:
@@ -279,11 +332,13 @@ def forget_models() -> None:
 def every_model() -> list[str]:
     """Every provider model, by its full @provider/model name."""
 
-    return [
-        name_of(found.name, str(entry["name"]))
-        for _, found in extensions.providers()
-        for entry in provider_models(found.name)
-    ]
+    # Every provider at once: the slowest sets the wait, not their sum.
+    found = [f for _, f in extensions.providers()]
+    if len(found) <= 1:
+        return [name_of(f.name, str(e["name"])) for f in found for e in provider_models(f.name)]
+    with concurrent.futures.ThreadPoolExecutor(len(found)) as pool:
+        lists = list(pool.map(lambda f: provider_models(f.name), found))
+    return [name_of(f.name, str(e["name"])) for f, listed in zip(found, lists) for e in listed]
 
 
 def _entry(model: str) -> dict:

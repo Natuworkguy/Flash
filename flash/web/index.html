@@ -6058,6 +6058,7 @@ function sayScore(target, heard) {
     return "missed";
   });
 }
+const sayAudio = { ctx: null, cache: new Map(), playing: null, ownEars: false };
 function sayVoice(lang) {
   const all = speechSynthesis.getVoices(), l = String(lang || "").toLowerCase();
   return all.find((v) => v.lang.toLowerCase() === l) || all.find((v) => v.lang.toLowerCase().startsWith(l.split("-")[0])) || null;
@@ -6083,12 +6084,35 @@ document.addEventListener("click", async (e) => {
   const phrase = phrases[+row.dataset.say] || {}, lang = phrase.lang || spec.lang || "en-US", text = String(phrase.text || "");
   const act = btn.dataset.sayAct;
   if (act === "hear" || act === "slow") {
-    if (!("speechSynthesis" in window)) { toast("This browser can’t read aloud."); return; }
-    speechSynthesis.cancel();
-    const u = new SpeechSynthesisUtterance(text);
-    u.lang = lang; u.rate = act === "slow" ? 0.6 : 0.95;
-    const v = sayVoice(lang); if (v) u.voice = v;
-    speechSynthesis.speak(u);
+    // Flash's own voice, the one it speaks with everywhere else (slowed, its pitch kept, for "Slowly"); the
+    // browser's only when Flash's voice is not set up here.
+    const slow = act === "slow";
+    btn.disabled = true;
+    try {
+      if (!(await haveOwnVoice())) throw new Error("no own voice");
+      sayAudio.ctx = sayAudio.ctx || new AudioContext();
+      if (sayAudio.ctx.state === "suspended") await sayAudio.ctx.resume();
+      const key = text;
+      if (!sayAudio.cache.has(key)) sayAudio.cache.set(key, await makeSpeech(text, sayAudio.ctx));
+      const audio = sayAudio.cache.get(key);
+      if (sayAudio.playing) { try { sayAudio.playing.stop(); } catch (_) { /* done already */ } }
+      const node = sayAudio.ctx.createBufferSource();
+      node.buffer = audio;
+      // Slower without the chipmunk: down a little in rate, the pitch put back.
+      node.playbackRate.value = slow ? 0.72 : 1;
+      node.detune.value = (audio.detune || 0) + (slow ? 1200 * Math.log2(1 / 0.72) : 0);
+      node.connect(sayAudio.ctx.destination);
+      node.start();
+      sayAudio.playing = node;
+    } catch (_) {
+      if (!("speechSynthesis" in window)) { toast("This browser can’t read aloud."); btn.disabled = false; return; }
+      speechSynthesis.cancel();
+      const u = new SpeechSynthesisUtterance(text);
+      u.lang = lang; u.rate = slow ? 0.6 : 0.95;
+      const v = sayVoice(lang); if (v) u.voice = v;
+      speechSynthesis.speak(u);
+    }
+    btn.disabled = false;
     return;
   }
   if (act !== "rec" || btn.classList.contains("on")) return;
@@ -6097,7 +6121,8 @@ document.addEventListener("click", async (e) => {
   btn.classList.add("on"); btn.lastChild.textContent = "Listening…";
   let heard = "";
   try {
-    const Rec = window.SpeechRecognition || window.webkitSpeechRecognition;
+    const Rec = !sayAudio.ownEars && (window.SpeechRecognition || window.webkitSpeechRecognition);
+    let fallback = !Rec;
     if (Rec) {
       heard = await new Promise((resolve, reject) => {
         const rec = new Rec();
@@ -6109,11 +6134,19 @@ document.addEventListener("click", async (e) => {
           alts.sort((a, b) => sayScore(target, b.split(/\s+/)).filter((x) => x === "right").length - sayScore(target, a.split(/\s+/)).filter((x) => x === "right").length);
           resolve(alts[0] || "");
         };
-        rec.onerror = (ev) => reject(new Error(ev.error === "not-allowed" ? "The microphone is blocked for this page." : ev.error === "no-speech" ? "Nothing was heard. Try again, a little louder." : ev.error));
+        rec.onerror = (ev) => {
+          // "network", "service-not-allowed", "language-not-supported": the browser's recogniser cannot be reached
+          // here (Brave, the Mac app, offline): Flash listens instead, from now on.
+          if (["network", "service-not-allowed", "language-not-supported", "audio-capture"].includes(ev.error)) { sayAudio.ownEars = true; resolve(null); return; }
+          reject(new Error(ev.error === "not-allowed" ? "The microphone is blocked for this page." : ev.error === "no-speech" ? "Nothing was heard. Try again, a little louder." : ev.error));
+        };
         rec.onnomatch = () => resolve("");
-        rec.start();
+        try { rec.start(); } catch (_) { sayAudio.ownEars = true; resolve(null); }
       });
-    } else {
+      if (heard === null) { heard = ""; fallback = true; }
+    }
+    if (fallback) {
+      btn.lastChild.textContent = "Listening…";
       heard = await sayHearPcm(Math.min(12, 2 + text.split(/\s+/).length * 0.6));
     }
   } catch (error) { toast(error.message || String(error)); }
@@ -24426,7 +24459,18 @@ const sectionRow = (key, name, picked, rule) => ({
   html: `${icon("chevRight")}<span>${name}</span><span class="picked">${esc(picked)}</span>`,
 });
 
+// A list that fills in while a row is being pressed would be drawn again under the pointer, and the click lost:
+// the redraw waits until the press is over.
+let menuPressed = false, menuRedraw = null;
+document.addEventListener("pointerdown", (e) => { menuPressed = !!(menuEl && menuEl.contains(e.target)); }, true);
+document.addEventListener("pointerup", () => {
+  if (!menuPressed) return;
+  menuPressed = false;
+  setTimeout(() => { const later = menuRedraw; menuRedraw = null; if (later && menuEl) drawModelMenu(...later); }, 0);
+}, true);
+
 function drawModelMenu(focusHosts, keepSelection) {
+  if (keepSelection && menuEl && menuPressed) { menuRedraw = [focusHosts, keepSelection]; return; }
   const active = info.host_url || normalHost(info.host);
   const shown = hosts.length ? hosts : [{ name: "This computer", url: "http://localhost:11434" }];
   if (!shown.some((h) => h.url === active)) shown.push({ name: info.host_name || "Current", url: active });
