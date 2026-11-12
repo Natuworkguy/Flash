@@ -1861,6 +1861,8 @@ feed full screen: Reply and Ask Flash start a message in the box, Open
 shows a spark's report, opens a team's chat, or the email in your
 browser, and `q` closes it.
 
+**The sidebar** shows its rows as one strip of icons under New chat (their names in tooltips, their counts on their corners), so the chats get the room. Right-click a row for Show names, to move it, or to put it in More; Customize sidebar orders them, puts any in More, and switches the compact strip off and on. An extension's panels start in More.
+
 **Pinned chats** stay at the top of the sidebar, under Pinned, whatever
 project they are in: the pin beside a chat (on hover), or `/pin` for the
 open one, pins and unpins it. Scrolled up in a chat, a down arrow over
