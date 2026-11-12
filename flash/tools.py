@@ -2116,6 +2116,22 @@ def skill_view(name: str, path: str = "") -> str:
     return result
 
 
+def digest_tool(source: str = "", question: str = "", fresh: Any = False) -> str:
+    """Something too big to read at once, read in full part by part and mapped (flash/digest.py)."""
+
+    from . import digest
+
+    tool_line(f"Digest({source}{': ' + question[:50] if question else ''})")
+    try:
+        result = digest.digest(source, question, progress=lambda said: tool_result(said, style=DIM), fresh=_truthy(fresh))
+    except digest.DigestError as exc:
+        result = f"Error: {exc}"
+        tool_result(result, style=ERROR)
+        return result
+    tool_result(result.split("\n", 1)[0][:120])
+    return result
+
+
 def maps_tool(action: str = "", query: str = "", near: str = "", what: str = "", places: Any = None, mode: str = "driving",
               radius: Any = 1500, limit: Any = 8) -> str:
     """Places, what is near them, and routes, from OpenStreetMap (flash/maps.py)."""
@@ -7534,7 +7550,9 @@ tools: list[dict[str, Any]] = [
                 "legacy .doc file needs converting to .docx first. "
                 "Returns at most "
                 f"{DEFAULT_READ_LINES} lines per call, so use offset to "
-                "page through a longer file."
+                "page through a longer file. For a file too long to page "
+                "through (a book-length PDF, a huge log), digest it first "
+                "and read the parts it points to."
             ),
             "parameters": {
                 "type": "object",
@@ -10483,6 +10501,29 @@ tools: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "digest",
+            "description": (
+                "Read something too big to read at once, all of it: a long PDF or Word file, a big text or log file, "
+                "a whole folder or repository, a long YouTube video, or an audio or video recording. It is read in "
+                "parts, each summed up with where it is (pages, lines, files, times), then mapped: an overview, where "
+                "everything is, and with question, what it says about that and where. Use it first for anything over "
+                "a few hundred lines or a long video, then read the exact parts it points to before quoting. Kept, so "
+                "asking again is instant; fresh=true reads it again."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "source": {"type": "string", "description": "A file or folder path, or a YouTube link."},
+                    "question": {"type": "string", "description": "What the user wants from it, if anything in particular."},
+                    "fresh": {"type": "boolean", "description": "Read it again instead of using the kept digest."},
+                },
+                "required": ["source"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "maps",
             "description": (
                 "Maps, from OpenStreetMap: find (a place, an address or 'lat,lng', with its coordinates), nearby (places of a "
@@ -10734,6 +10775,7 @@ FUNCTIONS = {
     "flows": flows_tool,
     "science": science_tool,
     "maps": maps_tool,
+    "digest": digest_tool,
     "agent": agent_tool,
     "agent_result": agent_result,
     "make_spark": make_spark,
@@ -10766,7 +10808,7 @@ FUNCTIONS = {
 # adding, renaming, or removing one only means updating this file.
 SUBAGENT_TOOL_NAMES = (
     "shell", "glob", "grep", "read", "write", "edit", "multi_edit",
-    "web_search", "fetch", "science", "maps", "get_os", "get_date", "reason",
+    "web_search", "fetch", "science", "maps", "digest", "get_os", "get_date", "reason",
     "check_inbox", "read_email", "notify_user", "read_imessages",
     "refresh_tools", "more_output",
 )
@@ -10951,7 +10993,7 @@ def run_tool(call):
 # Tools whose words come from someone other than the user: marked when
 # they read like orders to an assistant (guard.py).
 OUTSIDE = {
-    "fetch": "a web page", "web_search": "search results", "science": "research databases", "maps": "map data",
+    "fetch": "a web page", "web_search": "search results", "science": "research databases", "maps": "map data", "digest": "the file or video it read",
     "open_page": "a web page", "interact": "a web page",
     "watch_youtube": "a YouTube video",
     "read_email": "an email", "check_inbox": "the user's inbox",

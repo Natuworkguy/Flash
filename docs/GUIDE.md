@@ -1153,6 +1153,18 @@ meeting far better than the small Vosk one. It hears one microphone, so
 for a call, leave the sound on the speakers rather than in headphones,
 and it does not say who said what.
 
+### Big files, whole repos, long videos
+
+Nothing is too long. Give Flash a 600-page PDF, a log of a million lines,
+a whole repository, a two-hour YouTube talk or a recording of your own,
+and it reads all of it, a part at a time, each part summed up with where
+it is (the pages, the lines, the file, the minutes), then puts the parts
+together into one map: what it is, where everything is, and what it says
+about your question and where. From the map it reads the exact pages or
+lines before it quotes them. A digest is kept, so a second question about
+the same file is answered at once. Recordings are heard by Flash's own
+listening model, which needs ffmpeg.
+
 ### Spreadsheets in the chat
 
 When numbers are meant to be worked with (a budget, a split, a plan),
