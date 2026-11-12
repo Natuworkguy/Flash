@@ -1179,6 +1179,19 @@ lines before it quotes them. A digest is kept, so a second question about
 the same file is answered at once. Recordings are heard by Flash's own
 listening model, which needs ffmpeg.
 
+### Speaking a language
+
+Ask Flash to help you speak a language and it gives you phrases to hear
+(in its own voice, or slowly) and say back. Your recording is judged by
+its sound, not by a guess at the words: an acoustic model of the language
+listens with only the phrase's words and the words a sound away from them
+to choose from, so "box" for "fox" or "lady" for "lazy" is caught and
+shown as what it sounded like, and each word is lined up against Flash's
+own voice to say what you rushed or dragged. In a course (the tutor),
+phrases are steps like any other: said well, they count as learned, and
+they come back for review as they fade. Other languages download their
+listening model the first time.
+
 ### Spreadsheets in the chat
 
 When numbers are meant to be worked with (a budget, a split, a plan),

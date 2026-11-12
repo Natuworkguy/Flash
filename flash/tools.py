@@ -9377,7 +9377,10 @@ tools: list[dict[str, Any]] = [
                 "quiz (2 to 6 choices and the answer's place, from 0), a "
                 "blank (a sentence with ___ to type into, and the answers "
                 "that count), an order (3 to 8 items, given in the right "
-                "order, that the user puts back in order) or, for a "
+                "order, that the user puts back in order), for a spoken "
+                "language a say (a phrase they say aloud, scored by its "
+                "sound word by word, so pronunciation is learned and "
+                "tracked like the rest) or, for a "
                 "programming language or the command line, an exercise. "
                 "Only a unit's first step, with no needs, may be just a "
                 "lesson. Six to twelve small ones "
@@ -9445,6 +9448,18 @@ tools: list[dict[str, Any]] = [
                                         "explain": {"type": "string"},
                                     },
                                     "required": ["prompt", "accept"]},
+                                "say": {
+                                    "type": "object",
+                                    "description": (
+                                        "For a language: a phrase to say "
+                                        "aloud, judged by how it sounds."),
+                                    "properties": {
+                                        "text": {"type": "string"},
+                                        "lang": {"type": "string", "description": "BCP 47, like fr-FR."},
+                                        "translation": {"type": "string"},
+                                        "hint": {"type": "string", "description": "The sound that trips learners up."},
+                                    },
+                                    "required": ["text", "lang"]},
                                 "order": {
                                     "type": "object",
                                     "description": (
