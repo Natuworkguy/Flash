@@ -867,9 +867,21 @@ def shell_tool(command: str, timeout=None, is_user=False,
             if returncode:
                 return f"(exit {returncode})"
             return ""
-        out, err, returncode, stopped = _run_owned(
-            args, shell=shell, seconds=seconds, env=env,  # nosec B604
-        )
+        # What the command changes is kept as it was, so /undo and the time machine can put it back.
+        try:
+            watch = checkpoint.ShellWatch(command)
+        except Exception:  # noqa: BLE001  (never in the way of the command)
+            watch = None
+        try:
+            out, err, returncode, stopped = _run_owned(
+                args, shell=shell, seconds=seconds, env=env,  # nosec B604
+            )
+        finally:
+            if watch is not None:
+                try:
+                    watch.finish()
+                except Exception:  # noqa: BLE001
+                    pass
     except subprocess.TimeoutExpired:
         message = (
             f"Error: Command timed out after {seconds} seconds. "

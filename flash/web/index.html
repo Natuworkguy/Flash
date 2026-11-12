@@ -557,6 +557,19 @@ body.empty #suggestions { display: flex; flex-wrap: wrap; justify-content: cente
 /* Headline figures. */
 /* summary card: title and badge, a big figure, rows of label and value */
 .ui-card.ui-summary { padding: 20px 22px; }
+/* the time machine */
+.tm-sub, .tm-empty { color: var(--text-2); font-size: 13.5px; margin: 0 0 12px; }
+.tm-list { display: flex; flex-direction: column; gap: 10px; max-height: 60vh; overflow-y: auto; }
+.tm-turn { border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; }
+.tm-head { display: flex; gap: 10px; align-items: baseline; }
+.tm-label { flex: 1; font-weight: 600; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tm-when { font-size: 12px; color: var(--text-3); }
+.tm-files { display: flex; flex-wrap: wrap; gap: 5px; }
+.tm-file { font: 12px var(--mono); padding: 2px 7px; border-radius: 6px; background: var(--hover); color: var(--text-2); }
+.tm-file i { font-family: var(--sans); font-style: normal; color: var(--text-3); }
+.tm-made { color: var(--add); } .tm-deleted { color: var(--del); }
+.tm-back { align-self: flex-start; display: inline-flex; gap: 6px; align-items: center; }
+.tm-back svg { width: 14px; height: 14px; }
 /* spreadsheets */
 .sheet-wrap { overflow: auto; max-height: 460px; margin: 10px -4px 8px; border: 1px solid var(--border); border-radius: 10px; }
 .sheet { border-collapse: separate; border-spacing: 0; font-size: 13.5px; min-width: 100%; font-variant-numeric: tabular-nums; }
@@ -23635,6 +23648,33 @@ async function setDefaultModel(name) {
 
 async function undo() { const { message } = await command("undo"); toast(message); }
 
+// The time machine: every turn that changed files this session, newest first, with what changed (by an edit or a
+// command), and a button that puts every file back as it was before that turn.
+async function openTimeMachine() {
+  let turns;
+  try { ({ turns } = await command("history")); } catch (error) { showFailure(error); return; }
+  const ago = (t) => { const s = Math.max(0, Date.now() / 1000 - t); return s < 60 ? "just now" : s < 3600 ? `${Math.round(s / 60)} min ago` : `${Math.round(s / 3600)} h ago`; };
+  const draw = (list) => {
+    if (!list.length) return `<p class="tm-empty">Nothing Flash changed this session is waiting to be undone. Files it edits, and files its commands change, show up here turn by turn.</p>`;
+    return `<div class="tm-list">${[...list].reverse().map((t) => `<div class="tm-turn">
+      <div class="tm-head"><span class="tm-label">${esc(t.label || "A turn")}</span><span class="tm-when">${ago(t.at)}</span></div>
+      <div class="tm-files">${t.files.slice(0, 12).map((f) => `<span class="tm-file tm-${f.change.split(" ")[0]}" title="${esc(f.path)}">${f.change === "made" ? "+" : f.change === "deleted" ? "−" : "~"} ${esc(f.name)}${f.shell ? ` <i>by a command</i>` : ""}${f.change === "too big to keep" ? " <i>too big to keep</i>" : ""}</span>`).join("")}${t.files.length > 12 ? `<span class="tm-file">and ${t.files.length - 12} more</span>` : ""}</div>
+      <button type="button" class="btn tm-back" data-tm="${t.index}">${icon("retry")}Go back to before this</button>
+    </div>`).join("")}</div>`;
+  };
+  const form = openForm(`<h2>Time machine</h2><p class="tm-sub">Everything Flash changed this session, newest first. Going back undoes that turn and every one after it.</p><div class="tm-body">${draw(turns)}</div><div class="dialog-buttons"><button type="button" class="btn" data-cancel>Close</button></div>`, () => {});
+  form.querySelector("[data-cancel]").onclick = closeForm;
+  form.addEventListener("click", async (e) => {
+    const b = e.target.closest("[data-tm]"); if (!b) return;
+    b.disabled = true;
+    try {
+      const r = await command("undo_to", "", current, { index: +b.dataset.tm });
+      toast(r.message);
+      form.querySelector(".tm-body").innerHTML = draw(r.turns || []);
+    } catch (error) { showFailure(error); b.disabled = false; }
+  });
+}
+
 async function clearChat() {
   if (!current) return;
   await command("clear");
@@ -25078,6 +25118,7 @@ const ACTIONS = [
   { label: "Argue a question out: two sides, then a summary", keys: "", slash: "/debate", run: () => debateForm() },
   { label: "Two models answer blind; you pick the better", keys: "", slash: "/compare", run: () => { input.value = "/compare "; autosize(); input.focus(); } },
   { label: "Undo the last turn's file changes", keys: "Alt Z", slash: "/undo", run: undo },
+  { label: "Time machine: go back to before any turn", keys: "", slash: "/history", run: openTimeMachine },
   { label: "Stop the reply", keys: "Esc", slash: "/stop", run: stopReply },
   { label: "Copy last reply", keys: "Alt C", slash: "/copy", run: copyLastReply },
   { label: "Copy last code block", keys: "Alt Shift C", slash: "/code", run: copyLastCode },
