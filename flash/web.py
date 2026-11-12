@@ -6491,6 +6491,27 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
                 listed.append(where)
         return saved
 
+    if name == "inbox":
+        from . import inbox
+
+        return {"items": inbox.items()}
+
+    if name in ("inbox-yes", "inbox-no"):
+        from . import inbox
+
+        said = inbox.answer(arg, name == "inbox-yes", str(body.get("why") or ""))
+        session.hub.publish({"type": "sparks"})
+        return {"said": said, "items": inbox.items()}
+
+    if name == "inbox-seen":
+        from . import inbox
+
+        if arg == "all":
+            inbox.seen_all()
+        else:
+            inbox.seen(arg)
+        return {"items": inbox.items()}
+
     if name == "setup-status":
         # The first run's checklist: what is set up already, so it only asks for the rest.
         from . import calendars, mail
