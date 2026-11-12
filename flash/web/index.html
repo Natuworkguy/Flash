@@ -21319,7 +21319,7 @@ async function startCompare(arg) {
   card.querySelector(".compare-q").textContent = arg.replace(/^\S+\s+vs\.?\s+\S+?[:;]\s+/, "");
   toBottom(true, true);
   let r;
-  try { r = await command("compare", arg, null); } catch (error) { card.remove(); showFailure(error); return; }
+  try { r = await command("compare", arg, current); } catch (error) { card.remove(); showFailure(error); return; }
   card.querySelectorAll(".compare-body").forEach((b, i) => { b.innerHTML = markdown(r.answers[i] || "(nothing)"); });
   const picks = card.querySelector(".compare-pick");
   picks.hidden = false;
@@ -21334,6 +21334,18 @@ async function startCompare(arg) {
     labels[0].textContent = `A · ${shortModel(told.a)}`;
     labels[1].textContent = `B · ${shortModel(told.b)}`;
     if (told.choice !== "tie") card.querySelectorAll(".compare-side")[told.choice === "a" ? 0 : 1].classList.add("won");
+    // carry on from the winner (either, after a tie): its answer kept, and its model this chat's from now on
+    const sides = told.choice === "tie" ? ["a", "b"] : [told.choice];
+    for (const side of sides) {
+      const keepBtn = el("button", "btn", `Continue with ${esc(shortModel(told[side]))}`);
+      keepBtn.type = "button";
+      keepBtn.onclick = async () => {
+        if (!current) await createChat(viewProject || "", viewSpark || "");
+        try { await command("compare-keep", r.id, current, { side }); card.remove(); toast(`This chat now uses ${shortModel(told[side])}.`); }
+        catch (error) { showFailure(error); }
+      };
+      picks.appendChild(keepBtn);
+    }
   };
 }
 
