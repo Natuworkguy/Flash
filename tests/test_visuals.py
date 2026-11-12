@@ -197,3 +197,9 @@ def test_a_sheet_reads_as_a_table_in_the_terminal_and_aloud():
     shown = visuals.for_terminal(text)
     assert "| Item | Cost |" in shown and "| Total | =SUM(B2:B2) |" in shown
     assert visuals.plain(text) == "Budget: a table of 2 rows, on screen."
+
+
+def test_a_say_block_reads_in_the_terminal_and_aloud():
+    text = '```ui\n{"type": "say", "lang": "fr-FR", "phrases": [{"text": "Merci beaucoup", "translation": "Thanks a lot"}]}\n```'
+    assert "- **Merci beaucoup**: Thanks a lot" in visuals.for_terminal(text)
+    assert visuals.plain(text) == "Say after me: Merci beaucoup"

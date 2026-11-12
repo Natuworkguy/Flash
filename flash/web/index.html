@@ -557,6 +557,22 @@ body.empty #suggestions { display: flex; flex-wrap: wrap; justify-content: cente
 /* Headline figures. */
 /* summary card: title and badge, a big figure, rows of label and value */
 .ui-card.ui-summary { padding: 20px 22px; }
+/* pronunciation */
+.say-list { display: flex; flex-direction: column; gap: 10px; margin-top: 6px; }
+.say-row { border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; background: var(--bg); }
+.say-words { font-size: 20px; font-weight: 600; line-height: 1.4; }
+.say-w { border-radius: 4px; padding: 0 2px; transition: background .2s, color .2s; }
+.say-w.right { color: var(--add); }
+.say-w.close { color: var(--warn); text-decoration: underline dotted; }
+.say-w.missed { color: var(--del); text-decoration: line-through; text-decoration-thickness: 1px; }
+.say-tr { color: var(--text-2); font-size: 14px; margin-top: 2px; }
+.say-hint { color: var(--text-3); font-size: 13px; margin-top: 2px; font-style: italic; }
+.say-bar { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 10px; }
+.say-rec.on { border-color: var(--del); color: var(--del); }
+.say-score { margin-left: auto; font: 700 18px var(--sans); font-variant-numeric: tabular-nums; }
+.say-score.good { color: var(--add); } .say-score.ok { color: var(--warn); } .say-score.low { color: var(--del); }
+.say-heard { font-size: 13px; color: var(--text-3); margin-top: 6px; }
+.say-heard:empty { display: none; }
 /* the time machine */
 .tm-sub, .tm-empty { color: var(--text-2); font-size: 13.5px; margin: 0 0 12px; }
 .tm-list { display: flex; flex-direction: column; gap: 10px; max-height: 60vh; overflow-y: auto; }
@@ -5485,8 +5501,8 @@ function table(rows) {
 // the kinds). Drawn as HTML here; the controls in it work through the
 // listeners under uiBlock, so a reply drawn again keeps working.
 
-const UI_TYPES = new Set(["chart", "compare", "stats", "steps", "flow", "calc", "choices", "form", "checklist", "card", "molecule", "chats", "map", "sheet"]);
-const UI_BUILDING = { chart: "Drawing a chart", compare: "Laying out the options", stats: "Gathering the figures", steps: "Setting out the steps", flow: "Drawing a diagram", calc: "Building a calculator", choices: "Getting your options ready", form: "Building a form", checklist: "Making a checklist", card: "Filling in the details", molecule: "Folding a structure", chats: "Finding the chats", map: "Drawing a map", sheet: "Filling in the table" };
+const UI_TYPES = new Set(["chart", "compare", "stats", "steps", "flow", "calc", "choices", "form", "checklist", "card", "molecule", "chats", "map", "sheet", "say"]);
+const UI_BUILDING = { chart: "Drawing a chart", compare: "Laying out the options", stats: "Gathering the figures", steps: "Setting out the steps", flow: "Drawing a diagram", calc: "Building a calculator", choices: "Getting your options ready", form: "Building a form", checklist: "Making a checklist", card: "Filling in the details", molecule: "Folding a structure", chats: "Finding the chats", map: "Drawing a map", sheet: "Filling in the table", say: "Setting up the phrase" };
 
 function uiBlock(src, closed) {
   let specs = null;
@@ -5520,9 +5536,9 @@ function uiCard(spec) {
   const title = spec.title && !["choices", "card", "molecule", "map"].includes(spec.type) ? `<div class="ui-title">${uiText(spec.title)}</div>` : "";
   const body = {
     chart: uiChart, compare: uiCompare, stats: uiStats, steps: uiSteps, flow: uiFlow,
-    calc: uiCalc, choices: uiChoices, form: uiForm, checklist: uiChecklist, card: uiSummary, molecule: uiMolecule, chats: uiChats, map: uiMap, sheet: uiSheet,
+    calc: uiCalc, choices: uiChoices, form: uiForm, checklist: uiChecklist, card: uiSummary, molecule: uiMolecule, chats: uiChats, map: uiMap, sheet: uiSheet, say: uiSay,
   }[spec.type](spec);
-  const data = ["calc", "form", "choices", "molecule", "map", "sheet"].includes(spec.type) ? ` data-spec="${esc(JSON.stringify(spec))}"` : "";
+  const data = ["calc", "form", "choices", "molecule", "map", "sheet", "say"].includes(spec.type) ? ` data-spec="${esc(JSON.stringify(spec))}"` : "";
   const kind = spec.type === "card" ? "summary" : spec.type;
   return `<div class="ui-card ui-${kind}"${data}>${title}${body}</div>`;
 }
@@ -5968,6 +5984,111 @@ document.addEventListener("submit", (e) => {
   const title = card.querySelector(".ui-title")?.textContent || "";
   send(`${ask}\n\nThe table${title ? ` "${title}"` : ""} as it is now (CSV, formulas kept, row 1 is the header):\n\`\`\`csv\n${sheetCSV(card._sheet, false)}\n\`\`\`\nAnswer with the whole table back as a sheet block.`);
   form.querySelector("input").value = "";
+});
+
+// Pronunciation practice: a phrase to hear and to say back. The browser's own speech recognition, in the phrase's
+// language, hears the attempt (Flash's listening model where the browser has none), and each word is marked right,
+// close or missed, with a score and what was heard.
+function uiSay(spec) {
+  const lines = (Array.isArray(spec.phrases) ? spec.phrases : [{ text: spec.text, translation: spec.translation, hint: spec.hint }])
+    .filter((p) => p && String(p.text || "").trim()).slice(0, 8);
+  if (!lines.length) return `<div class="ui-note">No phrase to practise.</div>`;
+  return `<div class="say-list">${lines.map((p, i) => `<div class="say-row" data-say="${i}">
+    <div class="say-words">${String(p.text).trim().split(/\s+/).map((w) => `<span class="say-w">${esc(w)}</span>`).join(" ")}</div>
+    ${p.translation ? `<div class="say-tr">${uiText(p.translation)}</div>` : ""}${p.hint ? `<div class="say-hint">${uiText(p.hint)}</div>` : ""}
+    <div class="say-bar"><button type="button" class="ui-btn-lite" data-say-act="hear">${icon("volume")}Hear it</button><button type="button" class="ui-btn-lite" data-say-act="slow">Slowly</button><button type="button" class="ui-btn-lite say-rec" data-say-act="rec">${icon("voice")}Say it</button><span class="say-score"></span></div>
+    <div class="say-heard"></div></div>`).join("")}</div>`;
+}
+const sayNorm = (w) => w.toLocaleLowerCase().normalize("NFC").replace(/[^\p{L}\p{N}']/gu, "");
+const sayLoose = (w) => sayNorm(w).normalize("NFD").replace(/\p{M}/gu, "");
+function sayEdit(a, b) {
+  const d = Array.from({ length: a.length + 1 }, (_, i) => [i, ...Array(b.length).fill(0)]);
+  for (let j = 1; j <= b.length; j++) d[0][j] = j;
+  for (let i = 1; i <= a.length; i++) for (let j = 1; j <= b.length; j++) d[i][j] = Math.min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+  return d[a.length][b.length];
+}
+// each target word against the best matching heard word, in order: right, close (an accent or a sound off), or missed
+function sayScore(target, heard) {
+  const t = target.map(sayNorm), h = heard.map(sayNorm).filter(Boolean);
+  let j = 0;
+  return t.map((w) => {
+    let best = null;
+    for (let k = j; k < Math.min(h.length, j + 3); k++) {
+      if (h[k] === w) { best = ["right", k]; break; }
+      const loose = sayLoose(h[k]) === sayLoose(w) || sayEdit(h[k], w) <= Math.max(1, Math.floor(w.length / 4));
+      if (loose && !best) best = ["close", k];
+    }
+    if (best) { j = best[1] + 1; return best[0]; }
+    return "missed";
+  });
+}
+function sayVoice(lang) {
+  const all = speechSynthesis.getVoices(), l = String(lang || "").toLowerCase();
+  return all.find((v) => v.lang.toLowerCase() === l) || all.find((v) => v.lang.toLowerCase().startsWith(l.split("-")[0])) || null;
+}
+async function sayHearPcm(seconds) {
+  const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
+  const ctx = new AudioContext({ sampleRate: 16000 });
+  const src = ctx.createMediaStreamSource(stream), proc = ctx.createScriptProcessor(4096, 1, 1), chunks = [];
+  proc.onaudioprocess = (e) => chunks.push(new Float32Array(e.inputBuffer.getChannelData(0)));
+  src.connect(proc); proc.connect(ctx.destination);
+  await new Promise((r) => setTimeout(r, seconds * 1000));
+  proc.disconnect(); src.disconnect(); stream.getTracks().forEach((t) => t.stop()); ctx.close();
+  const pcm = new Int16Array(chunks.reduce((n, c) => n + c.length, 0));
+  let at = 0; for (const c of chunks) for (const v of c) pcm[at++] = Math.max(-1, Math.min(1, v)) * 0x7fff;
+  const r = await api("/api/voice/hear", { data: base64Of(new Uint8Array(pcm.buffer)) });
+  return String(r && (r.text || r.heard) || "");
+}
+document.addEventListener("click", async (e) => {
+  const btn = e.target.closest("[data-say-act]"); if (!btn) return;
+  const card = btn.closest(".ui-say"), row = btn.closest(".say-row");
+  let spec; try { spec = JSON.parse(card.dataset.spec); } catch (_) { return; }
+  const phrases = Array.isArray(spec.phrases) ? spec.phrases : [{ text: spec.text }];
+  const phrase = phrases[+row.dataset.say] || {}, lang = phrase.lang || spec.lang || "en-US", text = String(phrase.text || "");
+  const act = btn.dataset.sayAct;
+  if (act === "hear" || act === "slow") {
+    if (!("speechSynthesis" in window)) { toast("This browser can’t read aloud."); return; }
+    speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance(text);
+    u.lang = lang; u.rate = act === "slow" ? 0.6 : 0.95;
+    const v = sayVoice(lang); if (v) u.voice = v;
+    speechSynthesis.speak(u);
+    return;
+  }
+  if (act !== "rec" || btn.classList.contains("on")) return;
+  const words = [...row.querySelectorAll(".say-w")];
+  const heardEl = row.querySelector(".say-heard"), scoreEl = row.querySelector(".say-score");
+  btn.classList.add("on"); btn.lastChild.textContent = "Listening…";
+  let heard = "";
+  try {
+    const Rec = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (Rec) {
+      heard = await new Promise((resolve, reject) => {
+        const rec = new Rec();
+        rec.lang = lang; rec.interimResults = false; rec.maxAlternatives = 3;
+        rec.onresult = (ev) => {
+          // the alternative closest to the phrase: recognisers guess, and the learner should get the benefit
+          const alts = [...ev.results[0]].map((a) => a.transcript);
+          const target = text.split(/\s+/);
+          alts.sort((a, b) => sayScore(target, b.split(/\s+/)).filter((x) => x === "right").length - sayScore(target, a.split(/\s+/)).filter((x) => x === "right").length);
+          resolve(alts[0] || "");
+        };
+        rec.onerror = (ev) => reject(new Error(ev.error === "not-allowed" ? "The microphone is blocked for this page." : ev.error === "no-speech" ? "Nothing was heard. Try again, a little louder." : ev.error));
+        rec.onnomatch = () => resolve("");
+        rec.start();
+      });
+    } else {
+      heard = await sayHearPcm(Math.min(12, 2 + text.split(/\s+/).length * 0.6));
+    }
+  } catch (error) { toast(error.message || String(error)); }
+  btn.classList.remove("on"); btn.lastChild.textContent = "Say it";
+  if (!heard.trim()) { heardEl.textContent = "Nothing was heard."; return; }
+  const marks = sayScore(text.split(/\s+/), heard.split(/\s+/));
+  words.forEach((w, i) => { w.className = `say-w ${marks[i]}`; });
+  const score = Math.round(100 * marks.reduce((n, m) => n + (m === "right" ? 1 : m === "close" ? 0.5 : 0), 0) / marks.length);
+  scoreEl.textContent = `${score}%`;
+  scoreEl.className = `say-score ${score >= 85 ? "good" : score >= 55 ? "ok" : "low"}`;
+  heardEl.textContent = `Heard: “${heard.trim()}”`;
 });
 
 // Past chats as links: each opens its chat at the message that matched, glowing.

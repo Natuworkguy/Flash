@@ -28,7 +28,7 @@ _BLOCK = re.compile(
 
 TYPES = (
     "chart", "compare", "stats", "steps", "flow", "calc", "choices",
-    "form", "checklist", "card", "molecule", "chats", "map", "sheet",
+    "form", "checklist", "card", "molecule", "chats", "map", "sheet", "say",
 )
 
 # What the model is told about the blocks it can write.
@@ -273,6 +273,12 @@ def _markdown(spec: dict) -> str:
             for r in rows:
                 note = f" ({r['note']})" if r.get("note") else ""
                 lines.append(f"- {r.get('label', '')}: **{r.get('value', '')}**{note}")
+    elif kind == "say":
+        phrases = spec.get("phrases") if isinstance(spec.get("phrases"), list) else [spec]
+        for p in phrases:
+            if isinstance(p, dict) and p.get("text"):
+                lines.append(f"- **{p['text']}**" + (f": {p['translation']}" if p.get("translation") else "")
+                             + (f" ({p['hint']})" if p.get("hint") else ""))
     elif kind == "sheet":
         cols = [str(c) for c in spec.get("columns") or []]
         rows = [r for r in spec.get("rows") or [] if isinstance(r, list)]
@@ -363,6 +369,10 @@ def _spoken(spec: dict) -> str:
             for r in spec.get("rows") or [] if isinstance(r, dict) and not r.get("divider")
         ]
         return ". ".join(b for b in bits if b)
+    if kind == "say":
+        phrases = spec.get("phrases") if isinstance(spec.get("phrases"), list) else [spec]
+        first = next((p for p in phrases if isinstance(p, dict) and p.get("text")), {})
+        return f"Say after me: {first.get('text', '')}" if first else ""
     if kind == "sheet":
         n = len([r for r in spec.get("rows") or [] if isinstance(r, list)])
         return f"{title + ': ' if title else ''}a table of {n} row{'s' if n != 1 else ''}, on screen."
