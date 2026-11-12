@@ -5124,7 +5124,7 @@ async function drawMap(stage) {
     stage.classList.toggle("dark", darkPage());
     const map = L.map(stage, { zoomControl: true, attributionControl: false, scrollWheelZoom: false, tap: true });
     stage._map = map;
-    L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 19, crossOrigin: true }).addTo(map);
+    L.tileLayer("/api/tile/{z}/{x}/{y}.png", { maxZoom: 19 }).addTo(map);
     let n = 0;
     stage._markers = places.map((p) => {
       if (!pts.includes(p)) { if (!p.home) n++; return null; }

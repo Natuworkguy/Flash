@@ -76,3 +76,32 @@ def test_a_map_reads_in_the_terminal_and_aloud():
     text = '```ui\n{"type": "map", "title": "Walk", "route": {"mode": "walking", "summary": "4 km · 50 min"}, "places": [{"name": "A", "lat": 1, "lng": 2}]}\n```'
     assert "openstreetmap.org/?mlat=1.0&mlon=2.0" in visuals.for_terminal(text)
     assert "4 km · 50 min" in visuals.plain(text)
+
+
+def test_tiles_come_through_flash_named_and_kept(monkeypatch, tmp_path):
+    import io
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(maps, "_cache_dir", lambda: tmp_path)
+    asked = []
+
+    def opened(req, timeout=0):
+        asked.append(req)
+        return SimpleNamespace(read=lambda n: b"PNG", __enter__=lambda s: s, __exit__=lambda *a: None)
+
+    class Open:
+        def __init__(self, req, timeout=0):
+            asked.append(req)
+
+        def __enter__(self):
+            return io.BytesIO(b"PNG")
+
+        def __exit__(self, *a):
+            return False
+
+    monkeypatch.setattr(maps.urllib.request, "urlopen", Open)
+    assert maps.tile(3, 4, 2) == b"PNG" and maps.tile(3, 4, 2) == b"PNG"
+    assert len(asked) == 1                                   # kept: asked once
+    assert asked[0].get_header("User-agent").startswith("Flash/")
+    with pytest.raises(maps.MapsError):
+        maps.tile(3, 9, 0)
