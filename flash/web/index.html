@@ -590,6 +590,23 @@ body.empty #suggestions { display: flex; flex-wrap: wrap; justify-content: cente
 .say-score.good { color: var(--add); } .say-score.ok { color: var(--warn); } .say-score.low { color: var(--del); }
 .say-heard { font-size: 13px; color: var(--text-3); margin-top: 6px; }
 .say-heard:empty { display: none; }
+/* the inbox */
+.inbox-list { display: flex; flex-direction: column; gap: 10px; }
+.inbox-clear { margin: -4px 0 12px; }
+.inbox-item { border: 1px solid var(--border); border-radius: 14px; padding: 12px 14px; background: var(--surface); transition: opacity .2s, transform .2s; }
+.inbox-item.ask { border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); background: color-mix(in srgb, var(--accent) 6%, var(--surface)); }
+.inbox-item.failed { border-color: color-mix(in srgb, var(--del) 40%, var(--border)); }
+.inbox-item.leaving { opacity: 0; transform: translateX(20px); }
+.inbox-top { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.inbox-top b { font-size: 14px; }
+.inbox-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--c); flex: none; }
+.inbox-tag { font-size: 12px; color: var(--text-3); } .inbox-when { margin-left: auto; font-size: 12px; color: var(--text-3); }
+.inbox-ask { font-weight: 600; margin: 8px 0 6px; }
+.inbox-detail { margin: 0 0 8px; padding: 8px 10px; max-height: 160px; overflow: auto; border-radius: 9px; background: var(--code-bg); font: 12px/1.5 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+.inbox-text { font-size: 14px; margin: 6px 0; max-height: 220px; overflow: auto; }
+.inbox-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 6px; }
+.inbox-row input { flex: 1 1 160px; min-width: 0; font: 13.5px var(--sans); color: var(--text); background: var(--bg); border: 1px solid var(--border-strong); border-radius: 9px; padding: 7px 10px; outline: 0; }
+@media (max-width: 600px) { .inbox-row .btn { flex: 1; } }
 /* the time machine */
 .tm-sub, .tm-empty { color: var(--text-2); font-size: 13.5px; margin: 0 0 12px; }
 .tm-list { display: flex; flex-direction: column; gap: 10px; max-height: 60vh; overflow-y: auto; }
@@ -4471,6 +4488,7 @@ body.empty #ext-head, body.on-page #ext-head { display: none; }
     <button class="side-row" id="briefing-btn" data-tip="Briefing" data-keys="Alt B"></button>
     <button class="side-row" id="projects-btn" data-tip="Projects" data-keys="Alt P"></button>
     <button class="side-row" id="made-btn" data-tip="Everything Flash made, newest first"></button>
+    <button class="side-row" id="inbox-btn" data-tip="What your sparks and flows left for you"></button>
     <button class="side-row" id="skills-btn" data-tip="Skills"></button>
     <button class="side-row" id="sparks-btn" data-tip="Sparks"></button>
     <div id="spark-roster" aria-label="Your sparks"></div>
@@ -10111,11 +10129,11 @@ function drawPage() {
   document.body.classList.toggle("page-projects", view === "projects");
   document.body.classList.toggle("page-project", view === "project");
   document.body.classList.toggle("page-settings", view === "settings");
-  document.body.classList.toggle("page-tool", view === "skills" || view === "sparks" || view === "extensions" || view === "made");
+  document.body.classList.toggle("page-tool", view === "skills" || view === "sparks" || view === "extensions" || view === "made" || view === "inbox");
   messagesEl.textContent = "";
   streamNode = null;
   $("#crumb").hidden = true;
-  const pages = { projects: drawProjects, settings: drawSettings, skills: drawSkillsPage, sparks: drawSparksPage, extensions: drawExtensionsPage, made: drawMadePage };
+  const pages = { projects: drawProjects, settings: drawSettings, skills: drawSkillsPage, sparks: drawSparksPage, extensions: drawExtensionsPage, made: drawMadePage, inbox: drawInboxPage };
   (pages[view] || drawProject)();
   renderPending();
   renderBtw();
@@ -11446,6 +11464,68 @@ const MADE_KINDS = [["all", "All"], ["image", "Images"], ["doc", "Documents"], [
 let madeFilter = "all";
 const madeGroup = (f) => (["image", "doc", "html", "model", "pcb", "video"].includes(f.kind) ? f.kind
   : f.kind === "pdf" ? "doc" : f.kind === "audio" || f.kind === "midi" ? "audio" : "other");
+// The inbox: what background work left. Approvals first, each answered with one tap (a reason optional), then the
+// reports filed since you last looked, each opened or put away. Laid out for a phone as much as a desk.
+let inboxCount = -1;
+function inboxItem(it) {
+  const when = new Date(it.at * 1000).toLocaleString(undefined, { weekday: "short", hour: "numeric", minute: "2-digit" });
+  const dot = `<span class="inbox-dot" style="--c:${esc(it.colour || "var(--accent)")}"></span>`;
+  if (it.kind === "approval") return `<div class="inbox-item ask" data-inbox="${esc(it.id)}">
+    <div class="inbox-top">${dot}<b>${esc(it.name)}</b><span class="inbox-tag">${it.source === "flow" ? "flow" : "spark"} · needs your yes</span><span class="inbox-when">${esc(when)}</span></div>
+    <div class="inbox-ask">${esc(it.ask)}</div>${it.detail ? `<pre class="inbox-detail">${esc(it.detail)}</pre>` : ""}
+    <div class="inbox-row"><input type="text" maxlength="300" placeholder="Why not? (optional)" aria-label="Why not"><button type="button" class="btn small" data-inbox-no>Deny</button><button type="button" class="btn small primary" data-inbox-yes>Approve</button></div></div>`;
+  return `<div class="inbox-item${it.failed ? " failed" : ""}" data-inbox="${esc(it.id)}" data-spark="${esc(it.spark || "")}">
+    <div class="inbox-top">${dot}<b>${esc(it.name)}</b><span class="inbox-tag">${it.failed ? "could not finish" : "report"}</span><span class="inbox-when">${esc(when)}</span></div>
+    <div class="inbox-text assistant">${markdown(it.text)}</div>
+    <div class="inbox-row"><button type="button" class="btn small" data-inbox-seen>Done</button><button type="button" class="btn small" data-inbox-open>Open ${esc(it.name)}</button></div></div>`;
+}
+const drawInboxPage = () => toolPage("Inbox", async (body) => {
+  body.appendChild(el("p", "page-sub", "What your sparks and flows did while you were away. Anything that needs your yes is at the top."));
+  const clear = body.appendChild(el("button", "btn small inbox-clear", "Clear the reports"));
+  clear.type = "button";
+  clear.onclick = async () => { try { draw((await command("inbox-seen", "all")).items); } catch (error) { showFailure(error); } };
+  const list = body.appendChild(el("div", "inbox-list"));
+  const draw = (items) => {
+    inboxCount = items.length; markInbox();
+    clear.hidden = !items.some((i) => i.kind === "report");
+    list.innerHTML = items.length ? items.map(inboxItem).join("") : `<p class="page-empty">Nothing waiting. Sparks and flows put their approvals and reports here as they work.</p>`;
+  };
+  try { draw((await command("inbox")).items); } catch (error) { list.appendChild(el("p", "page-empty", error.message)); return; }
+  list.onclick = async (e) => {
+    const item = e.target.closest("[data-inbox]"); if (!item) return;
+    const id = item.dataset.inbox;
+    try {
+      if (e.target.closest("[data-inbox-yes], [data-inbox-no]")) {
+        const yes = !!e.target.closest("[data-inbox-yes]");
+        item.querySelectorAll("button").forEach((b) => { b.disabled = true; });
+        const r = await command(yes ? "inbox-yes" : "inbox-no", id, null, { why: item.querySelector("input")?.value || "" });
+        toast(r.said); draw(r.items);
+      } else if (e.target.closest("[data-inbox-seen]")) {
+        item.classList.add("leaving");
+        draw((await command("inbox-seen", id)).items);
+      } else if (e.target.closest("[data-inbox-open]")) {
+        await command("inbox-seen", id).catch(() => {});
+        openSparkSafe(item.dataset.spark);
+      }
+    } catch (error) { showFailure(error); }
+  };
+});
+function openSparkSafe(id) { if (typeof openSpark === "function") openSpark(id); else showPage("sparks"); }
+function markInbox() { const n = $("#inbox-n"); if (n) n.textContent = inboxCount > 0 ? String(inboxCount) : ""; }
+// Checked every minute and when sparks change: a new ask, with the page out of sight, is a notification.
+async function checkInbox() {
+  let items; try { items = (await command("inbox")).items; } catch (_) { return; }
+  const asks = items.filter((i) => i.kind === "approval");
+  const before = checkInbox.asks || new Set();
+  const fresh = asks.filter((a) => !before.has(a.id));
+  checkInbox.asks = new Set(asks.map((a) => a.id));
+  if (checkInbox.started && fresh.length) extNotify(`${fresh[0].name} needs your yes`, fresh[0].ask);
+  checkInbox.started = true;
+  inboxCount = items.length; markInbox();
+}
+setTimeout(checkInbox, 3000);
+setInterval(checkInbox, 60000);
+
 const drawMadePage = () => toolPage("Made", async (body) => {
   body.appendChild(el("p", "page-sub", "Everything Flash made, in every chat. Each one opens in the chat that made it, and stays editable there."));
   const chips = body.appendChild(el("div", "made-chips"));
@@ -20767,7 +20847,7 @@ function refreshLite() {
     // Not while something on the page is being edited: redrawing it
     // would throw away what is half typed.
     const editing = messagesEl.contains(document.activeElement) && /TEXTAREA|INPUT/.test(document.activeElement.tagName);
-    if (!["chat", "settings", "skills", "sparks", "extensions", "made"].includes(view) && !editing && $("#form").hidden) drawPage();
+    if (!["chat", "settings", "skills", "sparks", "extensions", "made", "inbox"].includes(view) && !editing && $("#form").hidden) drawPage();
     renderChats();
     renderInfo();
     renderSparkBtn();
@@ -25293,6 +25373,7 @@ const ACTIONS = [
   { label: "Brief me: Flash reads the briefing to you", keys: "", slash: "/brief", run: () => briefMe() },
   { label: "Skills", keys: "", slash: "/skills", run: () => showPage("skills") },
   { label: "Made: everything Flash made", keys: "", slash: "/made", run: () => showPage("made") },
+  { label: "Inbox: approvals and reports from background work", keys: "", slash: "/inbox", run: () => showPage("inbox") },
   { label: "Sparks", keys: "", slash: "/sparks", run: () => showPage("sparks") },
   { label: "Background", keys: "", slash: "/background", run: () => showSettings("general") },
   { label: "Extensions", keys: "", slash: "/extensions", run: () => showPage("extensions") },
@@ -26287,6 +26368,8 @@ $("#new-chat .plus").innerHTML = icon("plus");
 $("#projects-btn").innerHTML = icon("folder") + "<span>Projects</span>";
 $("#made-btn").innerHTML = icon("image") + "<span>Made</span>";
 $("#made-btn").onclick = () => showPage("made");
+$("#inbox-btn").innerHTML = icon("bell") + "<span>Inbox</span><span class=\"ext-badge\" id=\"inbox-n\"></span>";
+$("#inbox-btn").onclick = () => showPage("inbox");
 $("#skills-btn").innerHTML = icon("book") + "<span>Skills</span>";
 $("#sparks-btn").innerHTML = icon("spark") + "<span>Sparks</span><span class=\"count\"></span><span class=\"fold\" role=\"button\" tabindex=\"0\" hidden>" + icon("chevDown") + "</span>";
 // The chevron folds the roster; the rest of the row opens the page.
