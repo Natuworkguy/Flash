@@ -608,6 +608,13 @@ body.empty #suggestions { display: flex; flex-wrap: wrap; justify-content: cente
 .say-heard:empty { display: none; }
 /* the inbox */
 .inbox-list { display: flex; flex-direction: column; gap: 10px; }
+/* the bell at the top right of every page */
+#inbox-btn { margin-left: auto; position: relative; flex: none; }
+#status-pills ~ #inbox-btn { margin-left: 6px; }
+#inbox-btn svg { width: 19px; height: 19px; }
+.inbox-badge { position: absolute; top: 2px; right: 1px; min-width: 16px; height: 16px; padding: 0 4px; border-radius: 8px; background: var(--accent); color: #fff; font: 700 10px/16px var(--sans); text-align: center; pointer-events: none; }
+.inbox-badge:empty { display: none; }
+#inbox-btn.on { color: var(--text); background: var(--hover); }
 .inbox-clear { margin: -4px 0 12px; }
 .inbox-item { border: 1px solid var(--border); border-radius: 14px; padding: 12px 14px; background: var(--surface); transition: opacity .2s, transform .2s; }
 .inbox-item.ask { border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); background: color-mix(in srgb, var(--accent) 6%, var(--surface)); }
@@ -4505,7 +4512,6 @@ body.empty #ext-head, body.on-page #ext-head { display: none; }
     <button class="side-row" id="briefing-btn" data-tip="Briefing" data-keys="Alt B"></button>
     <button class="side-row" id="projects-btn" data-tip="Projects" data-keys="Alt P"></button>
     <button class="side-row" id="made-btn" data-tip="Everything Flash made, newest first"></button>
-    <button class="side-row" id="inbox-btn" data-tip="What your sparks and flows left for you"></button>
     <button class="side-row" id="skills-btn" data-tip="Skills"></button>
     <button class="side-row" id="sparks-btn" data-tip="Sparks"></button>
     <div id="spark-roster" aria-label="Your sparks"></div>
@@ -4536,6 +4542,7 @@ body.empty #ext-head, body.on-page #ext-head { display: none; }
       <span id="ext-head"></span>
       <span id="ext-docks"></span>
       <span id="status-pills"><button type="button" id="tunnel-pill" class="status-pill" hidden data-tip="Flash is on the internet through a tunnel" aria-label="Flash is on the internet through a tunnel"><span class="wake-dot"><i></i></span><span class="wake-label"><span>Tunnel</span></span></button><span id="wake-pill" class="status-pill" role="status" hidden data-tip="Listening for “Hey Flash”" aria-label="Listening for “Hey Flash”"><span class="wake-dot"><i></i></span><span class="wake-label"><span>Voice</span></span></span></span>
+      <button type="button" class="icon-btn" id="inbox-btn" data-tip="Inbox: what your sparks and flows left for you" aria-label="Inbox"></button>
     </header>
 
     <section id="ext-panel" hidden aria-label="Extension"><header><span class="ext-panel-name"></span><button type="button" class="icon-btn ext-panel-close" aria-label="Close" data-tip="Close"></button></header><iframe title="Extension"></iframe></section>
@@ -17505,6 +17512,7 @@ function markSide() {
   $("#projects-btn").classList.toggle("active", !panel && (view === "projects" || view === "project"));
   $("#skills-btn").classList.toggle("active", !panel && view === "skills");
   $("#made-btn").classList.toggle("active", !panel && view === "made");
+  $("#inbox-btn").classList.toggle("on", view === "inbox");
   $("#sparks-btn").classList.toggle("active", !panel && view === "sparks");
   $("#extensions-btn").classList.toggle("active", !panel && view === "extensions");
   $("#settings-btn").classList.toggle("active", !panel && view === "settings");
@@ -26430,7 +26438,7 @@ $("#new-chat .plus").innerHTML = icon("plus");
 $("#projects-btn").innerHTML = icon("folder") + "<span>Projects</span>";
 $("#made-btn").innerHTML = icon("image") + "<span>Made</span>";
 $("#made-btn").onclick = () => showPage("made");
-$("#inbox-btn").innerHTML = icon("bell") + "<span>Inbox</span><span class=\"ext-badge\" id=\"inbox-n\"></span>";
+$("#inbox-btn").innerHTML = icon("bell") + "<span class=\"inbox-badge\" id=\"inbox-n\"></span>";
 $("#inbox-btn").onclick = () => showPage("inbox");
 $("#skills-btn").innerHTML = icon("book") + "<span>Skills</span>";
 $("#sparks-btn").innerHTML = icon("spark") + "<span>Sparks</span><span class=\"count\"></span><span class=\"fold\" role=\"button\" tabindex=\"0\" hidden>" + icon("chevDown") + "</span>";
@@ -26457,7 +26465,7 @@ $("#extensions-btn").innerHTML = icon("puzzle") + "<span>Extensions</span>";
 // Right-click a row to move it, or More > Customize sidebar for them all.
 // Kept for this browser. A spark list and the extensions' rows go with
 // the row they belong to.
-const SIDE_ROWS = [["search-btn", "Search"], ["briefing-btn", "Briefing"], ["projects-btn", "Projects"], ["inbox-btn", "Inbox"], ["made-btn", "Made"],
+const SIDE_ROWS = [["search-btn", "Search"], ["briefing-btn", "Briefing"], ["projects-btn", "Projects"], ["made-btn", "Made"],
   ["skills-btn", "Skills"], ["sparks-btn", "Sparks"], ["extensions-btn", "Extensions"]];
 // Rows in the More menu until you move them out: the ones most people open now and then, not every day.
 const SIDE_TUCKED = new Set(["made-btn", "skills-btn", "extensions-btn"]);

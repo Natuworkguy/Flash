@@ -350,7 +350,7 @@ python run.py
   stop it.
 - `/clear`: Clear the conversation history.
 - `/undo`: Take back the file changes from the last turn.
-- `/inbox`: Everything background work left for you, newest first: steps your sparks will not take without a yes, flows stopped at an approval, and the reports filed since you last looked. Approve or deny with one tap (a reason is optional and the spark hears it), open a report or put it away, or clear them all. It is laid out for a phone too, so open Flash on yours (`/web lan` or a tunnel) and answer from anywhere; with the page open in the background, a new ask is a notification.
+- `/inbox` (or the bell at the top right of every page, with its count): Everything background work left for you, newest first: steps your sparks will not take without a yes, flows stopped at an approval, and the reports filed since you last looked. Approve or deny with one tap (a reason is optional and the spark hears it), open a report or put it away, or clear them all. It is laid out for a phone too, so open Flash on yours (`/web lan` or a tunnel) and answer from anywhere; with the page open in the background, a new ask is a notification.
 - `/setup`: The first-run checklist, again: a model, your name and how you like answers, email, calendar, Flash on your phone, and where your files are, each ticked off as it is done and one click from where it is set up. It shows on a new chat until all six are done or you say Not now.
 - `/history`: The time machine: every turn's file changes this session, and going back to before any of them.
 - `/compact`: Summarize the conversation to free up room. It works in the browser too, from the message box or the command palette.
