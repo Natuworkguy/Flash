@@ -202,7 +202,7 @@ def storyboard_urls(spec: str, limit: int = MAX_SHEETS) -> list[str]:
     ]
 
 
-def read_video(vid: str, want_frames: bool = True) -> Video:
+def read_video(vid: str, want_frames: bool = True, transcript_chars: int = MAX_TRANSCRIPT_CHARS) -> Video:
     """Fetch everything we can about one video. Raises on a page that
     cannot be loaded at all; missing captions or frames are noted."""
 
@@ -236,7 +236,7 @@ def read_video(vid: str, want_frames: bool = True) -> Video:
     if track:
         try:
             xml = _get(track["baseUrl"]).decode("utf-8", "replace")
-            video.transcript = parse_captions(xml)[:MAX_TRANSCRIPT_CHARS]
+            video.transcript = parse_captions(xml)[:transcript_chars]
             video.caption_language = track.get("languageCode", "") + (
                 " (automatic)" if track.get("kind") == "asr" else ""
             )
