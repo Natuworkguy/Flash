@@ -6475,6 +6475,19 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
                 listed.append(where)
         return saved
 
+    if name == "history":
+        return {"turns": checkpoint.history()}
+
+    if name == "undo_to":
+        try:
+            index = int(body.get("index"))
+        except (TypeError, ValueError):
+            raise ValueError("Say which point to go back to.") from None
+        message = checkpoint.undo_to(index)
+        if chat_id in session.chats:
+            session.emit(session.chat(chat_id), {"type": "note", "text": message})
+        return {"message": message, "turns": checkpoint.history()}
+
     if name == "undo":
         message = checkpoint.undo()
         if chat_id in session.chats:

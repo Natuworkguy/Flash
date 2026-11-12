@@ -7681,6 +7681,26 @@ def _main() -> None:
                 console.print(Text(checkpoint.undo(), style=DIM))
                 continue
 
+            if uin == "/history":
+                # the time machine: each turn that changed files, and /undo to N to go back to before one
+                turns = checkpoint.history()
+                if not turns:
+                    console.print(Text("Nothing Flash changed this session is waiting to be undone.", style=DIM))
+                for t in turns:
+                    files = ", ".join(("+" if f["change"] == "made" else "-" if f["change"] == "deleted" else "~") + f["name"]
+                                      + (" (command)" if f["shell"] else "") for f in t["files"][:8])
+                    console.print(Text(f"  {t['index']}  {t['label'] or 'a turn'}: {files}", style=DIM))
+                if turns:
+                    console.print(Text("  /undo to N goes back to before turn N.", style=DIM))
+                continue
+
+            if uin.startswith("/undo to "):
+                try:
+                    console.print(Text(checkpoint.undo_to(int(uin.split()[-1])), style=DIM))
+                except ValueError:
+                    warn("Say which turn: /undo to N, with N from /history.")
+                continue
+
             if uin == "/context":
                 _render_context(messages)
                 continue

@@ -10,7 +10,7 @@ version; [CONFIGURATION.md](CONFIGURATION.md) lists every setting and
 - **Interactive AI Chat**: Chat with local or self-hosted models served by Ollama, directly from your terminal.
 - **Switchable Backend**: Point Flash at `localhost` or any remote Ollama server via a single config option.
 - **Precise File Edits**: The AI changes a file by naming the exact lines that change, not by retyping the file. A one-line fix in a thousand-line file costs one line of output, so big files stop being out of reach and long writes stop truncating half way. Several changes to the same file go in one call that either lands whole or not at all.
-- **Undo**: `/undo` puts back every file the last turn changed, including deleting the ones it created. Snapshots are taken the moment you approve an edit, so a yes you regret costs you one command instead of your afternoon.
+- **Undo**: `/undo` puts back every file the last turn changed, including deleting the ones it created. Snapshots are taken the moment you approve an edit, so a yes you regret costs you one command instead of your afternoon. Commands are covered too: before Flash runs one, the folder it runs in is noted, and whatever the command changes, makes or deletes (a formatter, a `sed -i`, an `rm -rf dist`) is kept as it was. `/history` is the time machine: every turn that changed files this session, with each file and whether an edit or a command changed it, and a button (or `/undo to N` in the terminal) that goes back to before any of them.
 - **Context That Lasts**: History is measured against the model's real context window instead of a fixed message count, and dropped in whole exchanges so a tool result is never left without the call that produced it. When it overflows, the model summarizes what is falling off and keeps the summary, so a long session keeps its thread. On a long task Flash also keeps working notes of its own (what it found, what it decided, what is left) with the `notes` tool, and every compaction carries them over word for word beside the summary, so no detail is squeezed out however often the chat is compacted. `/context` shows the usage, `/compact` summarizes on demand.
 - **Shell Command Execution**:
   - AI can use a `shell` tool to execute commands and see their output.
@@ -341,6 +341,7 @@ python run.py
   stop it.
 - `/clear`: Clear the conversation history.
 - `/undo`: Take back the file changes from the last turn.
+- `/history`: The time machine: every turn's file changes this session, and going back to before any of them.
 - `/compact`: Summarize the conversation to free up room. It works in the browser too, from the message box or the command palette.
 - `/review`: Review your uncommitted changes for bugs. `/review main`
   reviews what this branch adds to main, and `/review a..b` a range of
