@@ -40,3 +40,22 @@ def test_a_tie_counts_for_both():
     done = compare.run(Client(), ["x", "y"], "q")
     compare.pick(done["id"], "tie")
     assert compare.tally()["x"]["ties"] == compare.tally()["y"]["ties"] == 1
+
+
+def test_both_answer_in_the_middle_of_the_chat_and_the_winner_carries_on():
+    seen = []
+
+    class Client:
+        def chat(self, model, messages, **_):
+            seen.append(messages)
+            return iter([SimpleNamespace(message=SimpleNamespace(content=f"from {model}"))])
+
+    history = [{"role": "user", "content": "we are planning a trip to Rome"},
+               {"role": "assistant", "content": "Rome it is."},
+               {"role": "tool", "content": "never shown"}]
+    done = compare.run(Client(), ["x", "y"], "where should we eat?", history=history,
+                       rng=random.Random(0))
+    assert all(m[0]["content"] == "we are planning a trip to Rome" and len(m) == 3 for m in seen)
+    told = compare.pick(done["id"], "a")
+    prompt, answer, model = compare.keep(done["id"], "a")
+    assert (prompt, model) == ("where should we eat?", told["a"]) and answer == f"from {told['a']}"

@@ -229,7 +229,10 @@ python run.py
   client); its secret and the sign-in are kept in the vault.
 - `/compare a vs b: question`: Both models answer it, shown as A and B in
   an order chosen at random; you pick the better (or call it even), and
-  only then see which was which. `/compare board` is the tally, which
+  only then see which was which. In a chat, both answer in the middle
+  of it, knowing what was said so far, and in the web UI "Continue with"
+  keeps the winner's answer as the reply and switches the chat to that
+  model, the conversation intact. `/compare board` is the tally, which
   says over time which model does best for what you ask.
 - `/model fit`: How much this computer can run quickly (its memory, its
   graphics card's), and whether each of your models fits, is tight, or

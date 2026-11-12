@@ -5221,7 +5221,8 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
             models, prompt = compare.parse(arg)
         except ValueError as exc:
             raise ValueError(str(exc)) from None
-        return compare.run(ai._client(), models, prompt, ai._chat_options())
+        history = list(session.chat(chat_id).messages) if chat_id in session.chats else []
+        return compare.run(ai._client(), models, prompt, ai._chat_options(), history=history)
 
     if name.startswith("course"):
         return _course_command(session, name, arg, body)
@@ -5230,6 +5231,21 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
         from . import compare
 
         return compare.pick(arg, str(body.get("choice") or ""))
+
+    if name == "compare-keep":
+        # Carry on the chat from one side: its answer kept as the reply, and its model the chat's from now on.
+        from . import compare
+
+        prompt, answer, model = compare.keep(arg, str(body.get("side") or "a"))
+        chat = session.chat(chat_id)
+        chat.messages.append(ai._message("user", prompt))
+        chat.messages.append(ai._message("assistant", answer))
+        session.emit(chat, {"type": "user", "text": prompt})
+        session.emit(chat, {"type": "assistant", "text": answer})
+        chat.model = model
+        session.save(chat)
+        session.hub.publish({"type": "chats", "chat": chat.id})
+        return {"model": model}
 
     if name == "music":
         # Said by voice with no player on the page that heard it: the

@@ -23,6 +23,19 @@ USAGE = "Usage: /compare model-a vs model-b: what to ask them"
 _lock = threading.Lock()
 # Comparisons waiting for a pick, by id: kept only until it is made.
 _open: dict[str, dict] = {}
+# Picked ones, for a while, so the chat can carry on from the winner.
+_picked: dict[str, dict] = {}
+
+
+def keep(compare_id: str, side: str) -> tuple[str, str, str]:
+    """The prompt, side "a" or "b"'s answer, and its model, to carry on the chat from."""
+
+    with _lock:
+        held = _picked.get(compare_id)
+    if held is None:
+        raise ValueError("That comparison is gone: run it again.")
+    i = 0 if str(side).lower() == "a" else 1
+    return held["prompt"], held["answers"][i], held["models"][i]
 
 
 def parse(text: str) -> tuple[list[str], str]:
@@ -36,12 +49,21 @@ def parse(text: str) -> tuple[list[str], str]:
 
 
 def run(client: Any, models: list[str], prompt: str,
-        options: Optional[dict] = None, rng: Optional[random.Random] = None
-        ) -> dict:
+        options: Optional[dict] = None, rng: Optional[random.Random] = None,
+        history: Optional[list] = None) -> dict:
     """Both models' answers, side by side in a random order: {id,
-    prompt, answers: [a, b]}. Who wrote which waits for pick()."""
+    prompt, answers: [a, b]}. Who wrote which waits for pick(). HISTORY:
+    the chat so far, so both answer in the middle of it."""
 
-    asked = [{"role": "user", "content": prompt}]
+    said = [{"role": m["role"], "content": m["content"]} for m in (history or [])
+            if m.get("role") in ("user", "assistant") and isinstance(m.get("content"), str) and m["content"].strip()]
+    kept, size = [], 0
+    for m in reversed(said):  # the end of a long chat, not all of it
+        size += len(m["content"])
+        if size > 24_000:
+            break
+        kept.insert(0, m)
+    asked = kept + [{"role": "user", "content": prompt}]
     answers = ["", ""]
     failed: list = []
 
@@ -62,6 +84,7 @@ def run(client: Any, models: list[str], prompt: str,
     compare_id = uuid.uuid4().hex[:8]
     with _lock:
         _open[compare_id] = {"models": [models[i] for i in order],
+                             "answers": [answers[i] for i in order],
                              "prompt": prompt, "at": time.time()}
     return {"id": compare_id, "prompt": prompt,
             "answers": [answers[i] for i in order]}
@@ -87,6 +110,9 @@ def pick(compare_id: str, choice: str) -> dict:
         raise ValueError("Pick a, b or tie.")
     a, b = held["models"]
     with _lock:
+        _picked[compare_id] = held
+        while len(_picked) > 20:
+            _picked.pop(next(iter(_picked)))
         board = tally()
         for name in (a, b):
             board.setdefault(name, {"wins": 0, "losses": 0, "ties": 0})
