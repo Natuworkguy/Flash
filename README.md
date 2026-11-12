@@ -149,7 +149,7 @@ Commands
 | --- | --- |
 | `/model [name]` | Pick a model, or download one |
 | `/host [name\|url]` | Switch Ollama server: `add`, `remove`, `list` |
-| `/btw <question>` | A side question, even mid-turn, that doesn't interrupt or join the chat |
+| `/btw <question>` | A side question, even mid-turn, that doesn't interrupt the work; Flash sees it at its next step |
 | `/email progress on` | Email yourself a request's milestones as it goes: started, plan steps, needs you, done |
 | `/loader [name]` | Pick the loading animation; `morph on` cycles them |
 | `/auto [on\|off]` | Run commands and edits without asking |

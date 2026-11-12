@@ -5271,7 +5271,7 @@ def _handle_extension_flags(args) -> bool:
     return True
 
 
-def _btw(question: str, history: list, working_on: str = "") -> None:
+def _btw(question: str, history: list, working_on: str = "") -> str:
     """Answer a side question from the conversation so far, with no
     tools, and show it apart from the conversation, which it never
     joins. Run on a thread of its own while a turn is going."""
@@ -5280,10 +5280,10 @@ def _btw(question: str, history: list, working_on: str = "") -> None:
 
     if not question:
         warn(btw.USAGE)
-        return
+        return ""
     if not Config.model:
         warn("No model is set. Pick one with /model.")
-        return
+        return ""
     asked = Text(f"  {BRANCH} btw ", style=f"bold {ACCENT}")
     asked.append(question, style=DIM)
     console.print(asked)
@@ -5294,11 +5294,12 @@ def _btw(question: str, history: list, working_on: str = "") -> None:
         )
     except Exception as exc:  # noqa: BLE001
         warn(f"  The side question went unanswered: {exc}")
-        return
+        return ""
     console.print(Panel(
         Markdown(answer or "(no answer)"), border_style=DIM,
         title=Text("btw", style=DIM), title_align="left", padding=(0, 1),
     ))
+    return answer
 
 
 def _secret_command(arg: str) -> None:
@@ -7144,15 +7145,23 @@ def _main() -> None:
         elif key == EXPAND:
             expand_collapsed()
 
+    asides: list = []
+    asides_lock = threading.Lock()
+
     def dock_btw(line: str) -> None:
         """A /btw sent mid-turn: answered on the side, on a thread of its
         own, while the turn carries on."""
 
-        threading.Thread(
-            target=_btw,
-            args=(btw_question(line) or "", list(messages), uin),
-            daemon=True,
-        ).start()
+        question = btw_question(line) or ""
+
+        def answer() -> None:
+            said = _btw(question, list(messages), uin)
+            if said:
+                # the working model hears of it at its next step
+                with asides_lock:
+                    asides.append((question, said))
+
+        threading.Thread(target=answer, daemon=True).start()
 
     def start_dock(heard: bool) -> Optional[Dock]:
         """The input box and status bar, kept up while the turn runs."""
@@ -7417,7 +7426,11 @@ def _main() -> None:
 
             asked_aside = btw_question(uin)
             if asked_aside is not None:
-                _btw(asked_aside, messages)
+                said = _btw(asked_aside, messages)
+                if said:
+                    from . import btw as side
+
+                    messages.append(_message("user", side.aside(asked_aside, said)))
                 continue
 
             if uin == "/resume" or uin.startswith("/resume "):
@@ -7986,6 +7999,13 @@ def _main() -> None:
                 # the model decides its next step.
                 for said in steers(dock):
                     convo.append(_message("user", f"{STEER_NOTE}\n{said}"))
+                # and what was asked on the side meanwhile, with its answer
+                with asides_lock:
+                    taken, asides[:] = list(asides), []
+                for question, said in taken:
+                    from . import btw as side
+
+                    convo.append(_message("user", side.aside(question, said)))
 
             # The one agent loop (loop.py): changed code is checked before
             # the turn ends, and at the round limit the steps the model
