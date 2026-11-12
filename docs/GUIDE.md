@@ -1155,6 +1155,18 @@ meeting far better than the small Vosk one. It hears one microphone, so
 for a call, leave the sound on the speakers rather than in headphones,
 and it does not say who said what.
 
+### Pictures
+
+Ask for a picture and Flash makes it on your computer, with an image model
+in Ollama (`ollama pull x/z-image-turbo` for fast pictures, or
+`ollama pull x/flux2-klein`, which also edits them; set
+`FLASH_IMAGE_MODEL` to pick one). It writes the full prompt, makes one to
+four to pick from in the size for where it is going, looks at each before
+showing you, and changes them as you say: "make it night", "the same
+character, now waving", "a red coat instead". It also cuts the background
+away (with rembg installed) and makes a picture up to four times bigger.
+Pictures are kept in `~/.flash/images`.
+
 ### Big files, whole repos, long videos
 
 Nothing is too long. Give Flash a 600-page PDF, a log of a million lines,
