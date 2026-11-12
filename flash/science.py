@@ -484,6 +484,7 @@ def compound(name: str, activity: bool = True, limit: Any = 8) -> str:
                        f"rotatable bonds {p.get('RotatableBondCount', '?')}")
             out.append("Lipinski's rule of five: " + ("passes" if not broken else f"breaks {len(broken)} ({', '.join(broken)})"))
             out.append(f"https://pubchem.ncbi.nlm.nih.gov/compound/{cid}")
+            out.append(f"In 3D: a molecule ui block with \"cid\": \"{cid}\"")
             if activity and p.get("InChIKey"):
                 with_key = _json(CHEMBL + "molecule.json", {"molecule_structures__standard_inchi_key": p["InChIKey"], "limit": 1})
                 mols = with_key.get("molecules") or []
@@ -584,6 +585,8 @@ def protein(query: str, limit: Any = 5, sequence: bool = False) -> str:
             out.append(f"   Disease: {_clip(disease, 300)}")
         if pdb:
             out.append(f"   Structures: {len(pdb)} in PDB, e.g. {', '.join(pdb[:5])} · predicted: https://alphafold.ebi.ac.uk/entry/{acc_}")
+        out.append(f"   In 3D: a molecule ui block with " + (f"\"pdb\": \"{pdb[0]}\" (an experimental structure) or " if pdb else "")
+                   + f"\"alphafold\": \"{acc_}\" (the prediction)")
         out.append(f"   https://www.uniprot.org/uniprotkb/{acc_}")
     if sequence:
         acc0 = items[0].get("primaryAccession", "")
@@ -592,6 +595,66 @@ def protein(query: str, limit: Any = 5, sequence: bool = False) -> str:
         except ScienceError as exc:
             out.append(f"(no sequence: {exc})")
     return "\n".join(out)
+
+
+# ----- 3D structures, for the viewer ---------------------------------------
+
+RCSB = "https://files.rcsb.org/download/"
+ALPHAFOLD = "https://alphafold.ebi.ac.uk/api/prediction/"
+STRUCTURE_BYTES = 30_000_000
+
+
+def _cache_dir():
+    from . import paths  # deferred: paths reads the environment
+
+    d = paths.FLASH_DIR / "structures"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def structure(kind: str, ident: str) -> tuple[str, str]:
+    """A 3D structure for the viewer, as (format, text): KIND pdb (a PDB entry), alphafold (the prediction for a
+    UniProt accession), cid (PubChem's 3D conformer) or smiles. Kept on disk, so a structure seen once opens offline."""
+    kind = (kind or "").lower()
+    ident = (ident or "").strip()
+    if kind == "pdb" and not re.fullmatch(r"[0-9][A-Za-z0-9]{3}", ident):
+        raise ScienceError("a PDB id is four characters, like 1A3N")
+    if kind == "alphafold" and not re.fullmatch(r"[A-Za-z0-9]{6,10}", ident):
+        raise ScienceError("give a UniProt accession, like P68871")
+    if kind == "cid" and not ident.isdigit():
+        raise ScienceError("a PubChem CID is a number")
+    if kind not in ("pdb", "alphafold", "cid", "smiles"):
+        raise ScienceError("the structure is a pdb id, an alphafold accession, a cid or a smiles")
+    if kind == "smiles":
+        cid = str(_pubchem(ident).get("CID") or "")
+        if not cid:
+            raise ScienceError(f"PubChem has no compound for {ident!r}")
+        kind, ident = "cid", cid
+    import hashlib
+
+    key = hashlib.sha1(f"{kind}:{ident.upper()}".encode()).hexdigest()[:16]
+    fmt = "sdf" if kind == "cid" else ("cif" if kind == "pdb" else "pdb")
+    cached = _cache_dir() / f"{kind}-{key}.{fmt}"
+    if cached.is_file():
+        return fmt, cached.read_text(encoding="utf-8", errors="replace")
+    if kind == "pdb":
+        text = _get(RCSB + ident.upper() + ".cif", accept="text/plain")
+    elif kind == "alphafold":
+        found = _json(ALPHAFOLD + ident.upper())
+        url = (found[0] if isinstance(found, list) and found else {}).get("pdbUrl", "")
+        if not url:
+            raise ScienceError(f"AlphaFold has no prediction for {ident}")
+        text = _get(url, accept="text/plain")
+    else:
+        try:
+            text = _get(PUBCHEM + f"compound/cid/{ident}/record/SDF", {"record_type": "3d"}, accept="text/plain")
+        except ScienceError:   # no 3D conformer (a salt, a big molecule): its 2D drawing
+            text = _get(PUBCHEM + f"compound/cid/{ident}/record/SDF", accept="text/plain")
+    if len(text) > STRUCTURE_BYTES:
+        raise ScienceError("that structure is too big to show")
+    out = text.decode("utf-8", "replace")
+    cached.write_text(out, encoding="utf-8")
+    return fmt, out
 
 
 # ----- the tool -----------------------------------------------------------

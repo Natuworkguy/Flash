@@ -550,6 +550,56 @@ body.empty #suggestions { display: flex; flex-wrap: wrap; justify-content: cente
 @media (max-width: 640px) { .ui-cols { grid-template-columns: 1fr; } }
 
 /* Headline figures. */
+/* summary card: title and badge, a big figure, rows of label and value */
+.ui-card.ui-summary { padding: 20px 22px; }
+/* 3D structures */
+.mol-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+.mol-head .ui-title { margin-bottom: 2px; }
+.mol-src { font-size: 12.5px; color: var(--text-3); }
+.mol-src a { color: inherit; text-decoration: underline; text-underline-offset: 2px; }
+.mol-tools { display: flex; gap: 4px; flex: none; }
+.mol-btn { width: 30px; height: 30px; display: grid; place-items: center; border-radius: 8px; border: 1px solid var(--border); background: var(--bg); color: var(--text-2); cursor: pointer; }
+.mol-btn:hover { color: var(--text); border-color: var(--border-strong); }
+.mol-btn svg { width: 15px; height: 15px; }
+.mol-stage { position: relative; height: clamp(260px, 52vh, 420px); margin: 12px -4px 10px; border-radius: 12px; overflow: hidden; touch-action: none;
+  background: radial-gradient(circle at 50% 40%, color-mix(in srgb, var(--text) 5%, var(--bg)), var(--bg)); }
+.mol-stage:fullscreen { height: 100vh; border-radius: 0; margin: 0; }
+.mol-stage canvas { outline: none; }
+.mol-wait { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; gap: 8px; color: var(--text-3); font-size: 13px; padding: 16px; text-align: center; }
+.mol-still { width: 100%; height: 100%; object-fit: contain; cursor: pointer; }
+.mol-wake { position: absolute; bottom: 10px; left: 50%; transform: translateX(-50%); font-size: 12px; color: var(--text-2); background: var(--surface); border: 1px solid var(--border); border-radius: 99px; padding: 3px 10px; pointer-events: none; }
+.mol-bar { display: flex; flex-wrap: wrap; gap: 8px; }
+.mol-seg { display: inline-flex; padding: 2px; border-radius: 9px; background: var(--bg); border: 1px solid var(--border); }
+.mol-seg button { border: 0; background: none; color: var(--text-2); font: 500 12.5px var(--sans); padding: 5px 10px; border-radius: 7px; cursor: pointer; }
+.mol-seg button.on { background: var(--surface); color: var(--text); box-shadow: 0 1px 2px rgba(0, 0, 0, 0.15); }
+.mol-legend { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 10px; font-size: 12px; color: var(--text-3); }
+.mol-legend i { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 5px; vertical-align: -1px; }
+.sum-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.sum-title { font-size: 17px; font-weight: 600; letter-spacing: -0.01em; }
+.sum-pill { flex: none; display: inline-block; padding: 3px 11px; border-radius: 99px; font-size: 13px; font-weight: 550; letter-spacing: 0.04em; font-variant-numeric: tabular-nums;
+  color: var(--text-2); background: color-mix(in srgb, var(--text-3) 14%, transparent); }
+.sum-value { font-size: 34px; font-weight: 650; letter-spacing: -0.02em; margin-top: 14px; line-height: 1.1; font-variant-numeric: tabular-nums; }
+.sum-sub { color: var(--text-2); margin-top: 10px; font-size: 14px; }
+.sum-rule { border: 0; border-top: 1px solid var(--border); margin: 18px 0 6px; }
+.sum-rows { display: flex; flex-direction: column; }
+.sum-row { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 9px 0; }
+.sum-row.below { flex-direction: column; align-items: flex-start; gap: 4px; }
+.sum-label { font-size: 15.5px; font-weight: 550; }
+.sum-note { font-size: 12.5px; color: var(--text-3); margin-top: 2px; }
+.sum-v { font-size: 15.5px; font-weight: 550; text-align: right; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.sum-row.below .sum-v { text-align: left; }
+.sum-v.big { font-size: 24px; font-weight: 650; letter-spacing: -0.01em; }
+.sum-rows .sum-rule { margin: 6px 0; }
+.tone-good { color: var(--add); }
+.tone-warn { color: var(--warn); }
+.tone-bad { color: var(--del); }
+.tone-info { color: #5b9cf5; }
+.tone-muted { color: var(--text-3); }
+.sum-pill.tone-good { background: color-mix(in srgb, var(--add) 15%, transparent); }
+.sum-pill.tone-warn { background: color-mix(in srgb, var(--warn) 16%, transparent); }
+.sum-pill.tone-bad { background: color-mix(in srgb, var(--del) 15%, transparent); }
+.sum-pill.tone-info { background: color-mix(in srgb, #5b9cf5 16%, transparent); }
+.sum-badge { text-transform: uppercase; letter-spacing: 0.06em; }
 .ui-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px; }
 .ui-stat { padding: 12px 14px; border-radius: 12px; background: var(--bg); border: 1px solid var(--border); }
 .ui-stat .label { font-size: 12px; color: var(--text-3); font-weight: 500; }
@@ -4894,6 +4944,125 @@ new MutationObserver((changes) => {
   }
 }).observe(document.documentElement, { childList: true, subtree: true });
 
+// ----- 3D structures -----
+let molLoading = null;
+const molViewers = [];          // live viewers, oldest first: past MOL_LIVE the oldest becomes a picture until clicked
+const MOL_LIVE = 6;
+const molData = new Map();      // "kind:id" -> {format, data}
+function loadMol() {
+  if (window.$3Dmol) return Promise.resolve();
+  molLoading = molLoading || loadScript("/static/3dmol/3Dmol-min.js").catch((e) => { molLoading = null; throw e; });
+  return molLoading;
+}
+async function molFetch(src) {
+  const key = `${src.kind}:${src.id}`;
+  if (!molData.has(key)) {
+    const r = await api(`/api/structure?kind=${encodeURIComponent(src.kind)}&id=${encodeURIComponent(src.id)}`);
+    if (r.error) throw new Error(r.error);
+    molData.set(key, r);
+  }
+  return molData.get(key);
+}
+const PLDDT = (b) => (b > 90 ? "#0053d6" : b > 70 ? "#65cbf3" : b > 50 ? "#ffdb13" : "#ff7d45");
+function molPaint(stage) {
+  const v = stage._mol; if (!v) return;
+  const style = stage.dataset.style, color = stage.dataset.color, small = stage._small;
+  const scheme = color === "plddt" ? { colorfunc: (a) => PLDDT(a.b) } : color === "spectrum" ? { color: "spectrum" }
+    : color === "ss" ? { colorscheme: "ssJmol" } : color === "element" ? { colorscheme: small ? "default" : "Jmol" } : { colorscheme: "chain" };
+  v.removeAllSurfaces();
+  v.setStyle({}, {});
+  if (small) {
+    v.setStyle({}, style === "sphere" ? { sphere: { scale: 0.9 } } : style === "line" ? { line: { linewidth: 2 } } : { stick: { radius: 0.16 }, sphere: { scale: 0.26 } });
+  } else if (style === "stick") {
+    v.setStyle({ hetflag: false }, { stick: { radius: 0.2, ...scheme } });
+  } else {
+    v.setStyle({ hetflag: false }, { cartoon: { ...scheme, thickness: 0.6, arrows: true } });
+    if (style === "surface") v.addSurface($3Dmol.SurfaceType.VDW, { opacity: 0.86, ...scheme }, { hetflag: false });
+  }
+  if (!small) {
+    // ligands and ions as sticks, water hidden
+    v.setStyle({ hetflag: true, not: { resn: ["HOH", "WAT", "DOD"] } }, { stick: { radius: 0.22, colorscheme: "greenCarbon" }, sphere: { scale: 0.25, colorscheme: "greenCarbon" } });
+  }
+  for (const h of stage._spec.highlight || []) {
+    if (!h || typeof h !== "object") continue;
+    const sel = {};
+    if (h.chain) sel.chain = String(h.chain);
+    if (h.resi !== undefined) sel.resi = Array.isArray(h.resi) ? h.resi : String(h.resi);
+    if (h.resn) sel.resn = String(h.resn);
+    const c = h.color && CSS.supports("color", h.color) ? h.color : "#ff5a36";
+    v.addStyle(sel, h.style === "sphere" ? { sphere: { color: c, scale: 0.9 } } : { stick: { color: c, radius: 0.28 } });
+    if (h.label) { const at = v.selectedAtoms(sel)[0]; if (at) v.addLabel(String(h.label).slice(0, 40), { position: at, backgroundColor: c, backgroundOpacity: 0.9, fontColor: "#fff", fontSize: 12, borderRadius: 6 }); }
+  }
+  v.render();
+}
+async function drawMol(stage) {
+  if (stage.dataset.mol !== "new" || stage.closest(".streaming")) return;
+  stage.dataset.mol = "drawing";
+  const card = stage.closest(".ui-molecule");
+  let spec; try { spec = JSON.parse(card.dataset.spec); } catch (_) { return; }
+  const src = molSource(spec);
+  try {
+    await loadMol();
+    const got = await molFetch(src);
+    stage.textContent = "";
+    // past the cap, the oldest live view becomes a still picture, back to 3D when clicked
+    for (let i = molViewers.length - 1; i >= 0; i--) if (!molViewers[i].isConnected) molViewers.splice(i, 1);
+    while (molViewers.length >= MOL_LIVE) molSleep(molViewers.shift());
+    const v = $3Dmol.createViewer(stage, { backgroundColor: "white", backgroundAlpha: 0, antialias: true });
+    v.addModel(got.data, got.format);
+    stage._mol = v; stage._spec = spec; stage._small = got.format === "sdf";
+    v.setHoverable({}, true, (atom, viewer) => {
+      if (atom.label) return;
+      const text = stage._small ? `${atom.elem}${atom.serial}` : `${atom.resn} ${atom.resi}${atom.chain ? " · chain " + atom.chain : ""}${stage.dataset.color === "plddt" ? ` · pLDDT ${Math.round(atom.b)}` : ""}`;
+      atom.label = viewer.addLabel(text, { position: atom, backgroundColor: "#111", backgroundOpacity: 0.85, fontColor: "#fff", fontSize: 11, borderRadius: 5 });
+    }, (atom, viewer) => { if (atom.label) { viewer.removeLabel(atom.label); delete atom.label; } });
+    molPaint(stage);
+    v.zoomTo(); v.render();
+    if (spec.spin) { v.spin("y", 0.5); stage.dataset.spin = "1"; }
+    molViewers.push(stage);
+    new ResizeObserver(() => { if (stage._mol) { stage._mol.resize(); stage._mol.render(); } }).observe(stage);
+    stage.dataset.mol = "drawn";
+  } catch (error) {
+    stage.innerHTML = `<div class="mol-wait"></div>`;
+    stage.firstChild.textContent = `Couldn’t show this structure: ${String(error && error.message || error).slice(0, 160)}`;
+    stage.dataset.mol = "failed";
+  }
+}
+function molSleep(stage) {
+  const v = stage && stage._mol; if (!v) return;
+  let pic = ""; try { pic = v.pngURI(); } catch (_) { /* a picture is a nicety */ }
+  try { v.clear(); const gl = stage.querySelector("canvas")?.getContext("webgl2") || stage.querySelector("canvas")?.getContext("webgl"); gl?.getExtension("WEBGL_lose_context")?.loseContext(); } catch (_) { /* gone already */ }
+  stage._mol = null; stage.innerHTML = pic ? `<img class="mol-still" alt="" src="${pic}"><div class="mol-wake">Click to turn it again</div>` : `<div class="mol-wait">Click to show it again</div>`;
+  stage.dataset.mol = "asleep";
+}
+function drawMols(root = document) { for (const n of root.querySelectorAll('.mol-stage[data-mol="new"]')) drawMol(n); }
+new MutationObserver((changes) => {
+  for (const change of changes) for (const node of change.addedNodes) {
+    if (node.nodeType !== 1) continue;
+    if (node.matches('.mol-stage[data-mol="new"]')) drawMol(node);
+    else if (node.querySelector('.mol-stage[data-mol="new"]')) drawMols(node);
+  }
+}).observe(document.documentElement, { childList: true, subtree: true });
+document.addEventListener("click", (e) => {
+  const stage0 = e.target.closest('.mol-stage[data-mol="asleep"]');
+  if (stage0) { stage0.dataset.mol = "new"; stage0.innerHTML = `<div class="mol-wait"><span class="ui-spin"></span>Folding the structure…</div>`; drawMol(stage0); return; }
+  const card = e.target.closest(".ui-molecule"); if (!card) return;
+  const stage = card.querySelector(".mol-stage"), v = stage && stage._mol;
+  const set = e.target.closest("[data-mol-set] button");
+  if (set && v) {
+    const what = set.parentElement.dataset.molSet;
+    stage.dataset[what] = set.dataset.v;
+    set.parentElement.querySelectorAll("button").forEach((b) => b.classList.toggle("on", b === set));
+    molPaint(stage); return;
+  }
+  const act = e.target.closest("[data-mol-act]")?.dataset.molAct;
+  if (!act || !v) return;
+  if (act === "spin") { const on = stage.dataset.spin !== "1"; v.spin(on ? "y" : false, 0.5); stage.dataset.spin = on ? "1" : ""; }
+  else if (act === "reset") { v.zoomTo(); v.render(); }
+  else if (act === "full") { (document.fullscreenElement ? document.exitFullscreen() : stage.requestFullscreen?.())?.catch?.(() => {}); }
+  else if (act === "png") { const a = document.createElement("a"); a.href = v.pngURI(); a.download = `${(card.querySelector(".ui-title")?.textContent || "structure").replace(/[^\w-]+/g, "-")}.png`; a.click(); }
+});
+
 document.addEventListener("click", (e) => {
   const flip = e.target.closest("[data-diagram-code]");
   if (!flip) return;
@@ -5126,8 +5295,8 @@ function table(rows) {
 // the kinds). Drawn as HTML here; the controls in it work through the
 // listeners under uiBlock, so a reply drawn again keeps working.
 
-const UI_TYPES = new Set(["chart", "compare", "stats", "steps", "flow", "calc", "choices", "form", "checklist"]);
-const UI_BUILDING = { chart: "Drawing a chart", compare: "Laying out the options", stats: "Gathering the figures", steps: "Setting out the steps", flow: "Drawing a diagram", calc: "Building a calculator", choices: "Getting your options ready", form: "Building a form", checklist: "Making a checklist" };
+const UI_TYPES = new Set(["chart", "compare", "stats", "steps", "flow", "calc", "choices", "form", "checklist", "card", "molecule"]);
+const UI_BUILDING = { chart: "Drawing a chart", compare: "Laying out the options", stats: "Gathering the figures", steps: "Setting out the steps", flow: "Drawing a diagram", calc: "Building a calculator", choices: "Getting your options ready", form: "Building a form", checklist: "Making a checklist", card: "Filling in the details", molecule: "Folding a structure" };
 
 function uiBlock(src, closed) {
   let specs = null;
@@ -5158,13 +5327,14 @@ function uiFormat(value, spec = {}, decimals) {
 }
 
 function uiCard(spec) {
-  const title = spec.title && spec.type !== "choices" ? `<div class="ui-title">${uiText(spec.title)}</div>` : "";
+  const title = spec.title && !["choices", "card", "molecule"].includes(spec.type) ? `<div class="ui-title">${uiText(spec.title)}</div>` : "";
   const body = {
     chart: uiChart, compare: uiCompare, stats: uiStats, steps: uiSteps, flow: uiFlow,
-    calc: uiCalc, choices: uiChoices, form: uiForm, checklist: uiChecklist,
+    calc: uiCalc, choices: uiChoices, form: uiForm, checklist: uiChecklist, card: uiSummary, molecule: uiMolecule,
   }[spec.type](spec);
-  const data = ["calc", "form", "choices"].includes(spec.type) ? ` data-spec="${esc(JSON.stringify(spec))}"` : "";
-  return `<div class="ui-card ui-${spec.type}"${data}>${title}${body}</div>`;
+  const data = ["calc", "form", "choices", "molecule"].includes(spec.type) ? ` data-spec="${esc(JSON.stringify(spec))}"` : "";
+  const kind = spec.type === "card" ? "summary" : spec.type;
+  return `<div class="ui-card ui-${kind}"${data}>${title}${body}</div>`;
 }
 
 // A round number at or above X, for an axis to end on.
@@ -5252,6 +5422,55 @@ function uiStats(spec) {
   const items = (spec.items || []).filter((x) => x && typeof x === "object").slice(0, 6);
   const tone = (note) => (/^\s*[+↑▲]/.test(note) ? " up" : /^\s*[-−↓▼]/.test(note) ? " down" : "");
   return `<div class="ui-stats">${items.map((s) => `<div class="ui-stat"><div class="label">${uiText(s.label)}</div><div class="value">${uiText(s.value)}</div>${s.note ? `<div class="ui-note${tone(String(s.note))}">${uiText(s.note)}</div>` : ""}</div>`).join("")}</div>`;
+}
+
+// A summary card: a title with a badge, a big figure, a line under it, then rows of label and value, each value plain,
+// big, under its label, or in a pill. Tones colour a figure or a pill: good, warn, bad, info.
+const UI_TONES = new Set(["good", "warn", "bad", "info", "muted"]);
+const uiTone = (t) => (UI_TONES.has(t) ? ` tone-${t}` : "");
+function uiSummary(spec) {
+  const head = spec.title || spec.badge ? `<div class="sum-head"><div class="sum-title">${uiText(spec.title)}</div>${spec.badge ? `<span class="sum-pill sum-badge${uiTone(spec.badgeTone || spec.tone || "good")}">${uiText(spec.badge)}</span>` : ""}</div>` : "";
+  const hero = spec.value !== undefined && spec.value !== "" ? `<div class="sum-value${uiTone(spec.tone)}">${uiText(spec.value)}</div>` : "";
+  const sub = spec.sub || spec.subtitle ? `<div class="sum-sub">${inline(String(spec.sub || spec.subtitle))}</div>` : "";
+  const rows = (spec.rows || []).filter((r) => r && typeof r === "object").slice(0, 16).map((r) => {
+    if (r.divider) return `<hr class="sum-rule">`;
+    const v = r.value === undefined ? "" : r.value;
+    const shown = r.pill ? `<span class="sum-pill${uiTone(r.tone || "good")}">${uiText(v)}</span>` : `<span class="sum-v${r.big ? " big" : ""}${uiTone(r.tone)}">${uiText(v)}</span>`;
+    const note = r.note ? `<div class="sum-note">${inline(String(r.note))}</div>` : "";
+    return r.below ? `<div class="sum-row below"><div class="sum-label">${uiText(r.label)}</div>${shown}${note}</div>`
+      : `<div class="sum-row"><div><div class="sum-label">${uiText(r.label)}</div>${note}</div>${shown}</div>`;
+  }).join("");
+  const rule = (head || hero || sub) && rows && !(spec.rows[0] || {}).divider ? `<hr class="sum-rule">` : "";
+  return `${head}${hero}${sub}${rule}${rows ? `<div class="sum-rows">${rows}</div>` : ""}`;
+}
+
+// A protein or molecule in 3D (3Dmol.js, shipped with Flash): a PDB entry, the AlphaFold prediction for a UniProt
+// accession, or a PubChem compound. Drawn once the reply has finished, then turned, zoomed, restyled and recoloured by
+// hand; hovering an atom names its residue.
+function uiMolecule(spec) {
+  const src = molSource(spec);
+  if (!src) return `<div class="ui-note">No structure named: give a pdb id, an alphafold accession, a cid or a smiles.</div>`;
+  const small = src.kind === "cid" || src.kind === "smiles";
+  const styles = small ? [["stick", "Sticks"], ["sphere", "Spheres"], ["line", "Lines"]] : [["cartoon", "Cartoon"], ["stick", "Sticks"], ["surface", "Surface"]];
+  const colors = small ? [["element", "Elements"]] : [["chain", "Chains"], ["spectrum", "Rainbow"], ["ss", "Structure"], ...(src.kind === "alphafold" ? [["plddt", "Confidence"]] : []), ["element", "Elements"]];
+  const style = styles.some(([v]) => v === spec.style) ? spec.style : styles[0][0];
+  const color = colors.some(([v]) => v === spec.color) ? spec.color : (src.kind === "alphafold" ? "plddt" : colors[0][0]);
+  const seg = (name, items, on) => `<div class="mol-seg" data-mol-set="${name}">${items.map(([v, l]) => `<button type="button" data-v="${v}"${v === on ? ' class="on"' : ""}>${l}</button>`).join("")}</div>`;
+  return `<div class="mol-head"><div><div class="ui-title">${uiText(spec.title || src.label)}</div><div class="mol-src"><a href="${src.page}" target="_blank" rel="noopener">${spec.title ? uiText(src.label) : src.site}</a>${spec.caption ? ` · ${inline(String(spec.caption))}` : ""}</div></div>
+    <div class="mol-tools"><button type="button" class="mol-btn" data-mol-act="spin" title="Spin">${icon("retry")}</button><button type="button" class="mol-btn" data-mol-act="reset" title="Fit to view">${icon("eye")}</button><button type="button" class="mol-btn" data-mol-act="full" title="Full screen">${icon("expand")}</button><button type="button" class="mol-btn" data-mol-act="png" title="Save a picture">${icon("download")}</button></div></div>
+    <div class="mol-stage" data-mol="new" data-style="${style}" data-color="${color}"><div class="mol-wait"><span class="ui-spin"></span>Folding the structure…</div></div>
+    <div class="mol-bar">${seg("style", styles, style)}${colors.length > 1 ? seg("color", colors, color) : ""}</div>
+    ${src.kind === "alphafold" ? `<div class="mol-legend"><span><i style="background:#0053d6"></i>Very high (pLDDT &gt; 90)</span><span><i style="background:#65cbf3"></i>Confident</span><span><i style="background:#ffdb13"></i>Low</span><span><i style="background:#ff7d45"></i>Very low (&lt; 50)</span></div>` : ""}`;
+}
+
+function molSource(spec) {
+  const pdb = String(spec.pdb || "").trim(), af = String(spec.alphafold || spec.uniprot || "").trim();
+  const cid = String(spec.cid || "").trim(), smiles = String(spec.smiles || "").trim();
+  if (/^[0-9][A-Za-z0-9]{3}$/.test(pdb)) return { kind: "pdb", id: pdb.toUpperCase(), label: `PDB ${pdb.toUpperCase()}`, site: "Open on RCSB PDB", page: `https://www.rcsb.org/structure/${pdb.toUpperCase()}` };
+  if (/^[A-Za-z0-9]{6,10}$/.test(af)) return { kind: "alphafold", id: af.toUpperCase(), label: `Predicted structure, UniProt ${af.toUpperCase()}`, site: "Open in the AlphaFold database", page: `https://alphafold.ebi.ac.uk/entry/${af.toUpperCase()}` };
+  if (/^\d+$/.test(cid)) return { kind: "cid", id: cid, label: `PubChem CID ${cid}`, site: "Open on PubChem", page: `https://pubchem.ncbi.nlm.nih.gov/compound/${cid}` };
+  if (smiles) return { kind: "smiles", id: smiles, label: smiles.length > 40 ? smiles.slice(0, 40) + "…" : smiles, site: "Look it up on PubChem", page: `https://pubchem.ncbi.nlm.nih.gov/#query=${encodeURIComponent(smiles)}` };
+  return null;
 }
 
 function uiSteps(spec) {

@@ -6,8 +6,9 @@ description: Answer a science or medical question from the literature and the da
 2. Read before you claim: open the papers you will lean on with paper (full=true for open-access text), not just their abstracts in the list. For a key paper, related finds the work around it.
 3. Weigh it: a systematic review or a large randomised trial outweighs a small study, a study in people outweighs one in cells or mice, and a preprint is not yet peer reviewed. Say which is which, give the sizes (n, effect, confidence interval) and say where studies disagree.
 4. Numbers come from code: for data, statistics, unit conversions, dose or concentration maths, fits and plots, write Python and run it with shell (numpy, scipy, pandas, matplotlib; pip install what is missing). Show the result as a chart or a stats block, and keep the script.
-5. Answer first, then the evidence, each claim with its link (PubMed, DOI, NCT number). Offer citations in the user's style with cite.
-6. Medicine: what the evidence says is not advice for one person; say when to see a clinician, and never invent a dose.
+5. Show the molecule: when the answer is about a protein or a compound, put it in a molecule ui block (a pdb id or AlphaFold accession from protein, a cid from compound), with the residues or site you are talking about highlighted.
+6. Answer first, then the evidence, each claim with its link (PubMed, DOI, NCT number). Offer citations in the user's style with cite.
+7. Medicine: what the evidence says is not advice for one person; say when to see a clinician, and never invent a dose.
 
 Pitfalls:
 - A title is not a finding: the abstract or the text says what was found, and in whom.
