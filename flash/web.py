@@ -7532,6 +7532,7 @@ class Handler(BaseHTTPRequestHandler):
         limit = {
             "/api/upload": MAX_RECORDING_BODY,
             "/api/voice/hear": MAX_VOICE_BODY,
+            "/api/pronounce": MAX_VOICE_BODY,
             "/api/voice/live": MAX_VOICE_BODY,
             "/api/voice/wake": MAX_VOICE_BODY,
         }.get(url.path, MAX_BODY_BYTES)
@@ -7593,6 +7594,24 @@ class Handler(BaseHTTPRequestHandler):
                 deep=bool(body.get("deep")),
             )
             return {"chat": chat.id, **sent}
+
+        if path == "/api/pronounce":
+            # A phrase said aloud, judged by its sound; a tutor's say step is measured with it.
+            from . import pronounce, tutor
+
+            def flash_says(word: str) -> bytes:
+                wav, why = voice.synthesize(word)
+                return b"" if why else wav
+
+            try:
+                pcm = base64.b64decode(str(body.get("audio") or ""))
+                said = pronounce.assess(str(body.get("text") or ""), str(body.get("lang") or "en-US"), pcm, flash_says)
+            except pronounce.PronounceError as exc:
+                raise ValueError(str(exc)) from None
+            if body.get("subject") and body.get("id"):
+                said["measured"] = tutor.spoken(str(body["subject"]), str(body["id"]), said["score"])
+                session.hub.publish({"type": "course-changed", "subject": tutor._key(str(body["subject"]))})
+            return said
 
         if path == "/api/btw":
             chat_id = str(body.get("chat") or "")

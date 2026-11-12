@@ -598,6 +598,7 @@ body.empty #suggestions { display: flex; flex-wrap: wrap; justify-content: cente
 .say-w.right { color: var(--add); }
 .say-w.close { color: var(--warn); text-decoration: underline dotted; }
 .say-w.missed { color: var(--del); text-decoration: line-through; text-decoration-thickness: 1px; }
+.say-w.rushed, .say-w.dragged { border-bottom: 2px dashed var(--warn); }
 .say-tr { color: var(--text-2); font-size: 14px; margin-top: 2px; }
 .say-hint { color: var(--text-3); font-size: 13px; margin-top: 2px; font-style: italic; }
 .say-bar { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 10px; }
@@ -6060,46 +6061,10 @@ function uiSay(spec) {
     <div class="say-bar"><button type="button" class="ui-btn-lite" data-say-act="hear">${icon("volume")}Hear it</button><button type="button" class="ui-btn-lite" data-say-act="slow">Slowly</button><button type="button" class="ui-btn-lite say-rec" data-say-act="rec">${icon("voice")}Say it</button><span class="say-score"></span></div>
     <div class="say-heard"></div></div>`).join("")}</div>`;
 }
-const sayNorm = (w) => w.toLocaleLowerCase().normalize("NFC").replace(/[^\p{L}\p{N}']/gu, "");
-const sayLoose = (w) => sayNorm(w).normalize("NFD").replace(/\p{M}/gu, "");
-function sayEdit(a, b) {
-  const d = Array.from({ length: a.length + 1 }, (_, i) => [i, ...Array(b.length).fill(0)]);
-  for (let j = 1; j <= b.length; j++) d[0][j] = j;
-  for (let i = 1; i <= a.length; i++) for (let j = 1; j <= b.length; j++) d[i][j] = Math.min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
-  return d[a.length][b.length];
-}
-// each target word against the best matching heard word, in order: right, close (an accent or a sound off), or missed
-function sayScore(target, heard) {
-  const t = target.map(sayNorm), h = heard.map(sayNorm).filter(Boolean);
-  let j = 0;
-  return t.map((w) => {
-    let best = null;
-    for (let k = j; k < Math.min(h.length, j + 3); k++) {
-      if (h[k] === w) { best = ["right", k]; break; }
-      const loose = sayLoose(h[k]) === sayLoose(w) || sayEdit(h[k], w) <= Math.max(1, Math.floor(w.length / 4));
-      if (loose && !best) best = ["close", k];
-    }
-    if (best) { j = best[1] + 1; return best[0]; }
-    return "missed";
-  });
-}
-const sayAudio = { ctx: null, cache: new Map(), playing: null, ownEars: false };
+const sayAudio = { ctx: null, cache: new Map(), playing: null };
 function sayVoice(lang) {
   const all = speechSynthesis.getVoices(), l = String(lang || "").toLowerCase();
   return all.find((v) => v.lang.toLowerCase() === l) || all.find((v) => v.lang.toLowerCase().startsWith(l.split("-")[0])) || null;
-}
-async function sayHearPcm(seconds) {
-  const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
-  const ctx = new AudioContext({ sampleRate: 16000 });
-  const src = ctx.createMediaStreamSource(stream), proc = ctx.createScriptProcessor(4096, 1, 1), chunks = [];
-  proc.onaudioprocess = (e) => chunks.push(new Float32Array(e.inputBuffer.getChannelData(0)));
-  src.connect(proc); proc.connect(ctx.destination);
-  await new Promise((r) => setTimeout(r, seconds * 1000));
-  proc.disconnect(); src.disconnect(); stream.getTracks().forEach((t) => t.stop()); ctx.close();
-  const pcm = new Int16Array(chunks.reduce((n, c) => n + c.length, 0));
-  let at = 0; for (const c of chunks) for (const v of c) pcm[at++] = Math.max(-1, Math.min(1, v)) * 0x7fff;
-  const r = await api("/api/voice/hear", { data: base64Of(new Uint8Array(pcm.buffer)) });
-  return String(r && (r.text || r.heard) || "");
 }
 document.addEventListener("click", async (e) => {
   const btn = e.target.closest("[data-say-act]"); if (!btn) return;
@@ -6108,82 +6073,94 @@ document.addEventListener("click", async (e) => {
   const phrases = Array.isArray(spec.phrases) ? spec.phrases : [{ text: spec.text }];
   const phrase = phrases[+row.dataset.say] || {}, lang = phrase.lang || spec.lang || "en-US", text = String(phrase.text || "");
   const act = btn.dataset.sayAct;
-  if (act === "hear" || act === "slow") {
-    // Flash's own voice, the one it speaks with everywhere else (slowed, its pitch kept, for "Slowly"); the
-    // browser's only when Flash's voice is not set up here.
-    const slow = act === "slow";
-    btn.disabled = true;
-    try {
-      if (!(await haveOwnVoice())) throw new Error("no own voice");
-      sayAudio.ctx = sayAudio.ctx || new AudioContext();
-      if (sayAudio.ctx.state === "suspended") await sayAudio.ctx.resume();
-      const key = text;
-      if (!sayAudio.cache.has(key)) sayAudio.cache.set(key, await makeSpeech(text, sayAudio.ctx));
-      const audio = sayAudio.cache.get(key);
-      if (sayAudio.playing) { try { sayAudio.playing.stop(); } catch (_) { /* done already */ } }
-      const node = sayAudio.ctx.createBufferSource();
-      node.buffer = audio;
-      // Slower without the chipmunk: down a little in rate, the pitch put back.
-      node.playbackRate.value = slow ? 0.72 : 1;
-      node.detune.value = (audio.detune || 0) + (slow ? 1200 * Math.log2(1 / 0.72) : 0);
-      node.connect(sayAudio.ctx.destination);
-      node.start();
-      sayAudio.playing = node;
-    } catch (_) {
-      if (!("speechSynthesis" in window)) { toast("This browser can’t read aloud."); btn.disabled = false; return; }
+  if (act === "hear" || act === "slow") { sayHear(text, lang, act === "slow", btn); return; }
+  if (act !== "rec" || btn.classList.contains("on")) return;
+  btn.classList.add("on"); btn.lastChild.textContent = "Listening…";
+  await sayAttempt(row, text, lang, spec.subject && phrase.id ? { subject: spec.subject, id: phrase.id } : {});
+  btn.classList.remove("on"); btn.lastChild.textContent = "Say it";
+});
+
+// The phrase in Flash's own voice, the one it speaks with everywhere else (slowed, its pitch kept, for "Slowly"); the
+// browser's only when Flash's voice is not set up here.
+async function sayHear(text, lang, slow, btn) {
+  btn.disabled = true;
+  try {
+    if (!(await haveOwnVoice())) throw new Error("no own voice");
+    sayAudio.ctx = sayAudio.ctx || new AudioContext();
+    if (sayAudio.ctx.state === "suspended") await sayAudio.ctx.resume();
+    if (!sayAudio.cache.has(text)) sayAudio.cache.set(text, await makeSpeech(text, sayAudio.ctx));
+    const audio = sayAudio.cache.get(text);
+    if (sayAudio.playing) { try { sayAudio.playing.stop(); } catch (_) { /* done already */ } }
+    const node = sayAudio.ctx.createBufferSource();
+    node.buffer = audio;
+    // slower without the chipmunk: down a little in rate, the pitch put back
+    node.playbackRate.value = slow ? 0.72 : 1;
+    node.detune.value = (audio.detune || 0) + (slow ? 1200 * Math.log2(1 / 0.72) : 0);
+    node.connect(sayAudio.ctx.destination);
+    node.start();
+    sayAudio.playing = node;
+  } catch (_) {
+    if ("speechSynthesis" in window) {
       speechSynthesis.cancel();
       const u = new SpeechSynthesisUtterance(text);
       u.lang = lang; u.rate = slow ? 0.6 : 0.95;
       const v = sayVoice(lang); if (v) u.voice = v;
       speechSynthesis.speak(u);
-    }
-    btn.disabled = false;
-    return;
+    } else toast("This browser can’t read aloud.");
   }
-  if (act !== "rec" || btn.classList.contains("on")) return;
+  btn.disabled = false;
+}
+
+// The learner's voice, recorded here at 16 kHz until they stop talking (or a time that fits the phrase), and judged
+// by its sound on Flash's side: each word marked, with what it sounded like when it was not itself.
+async function sayRecord(seconds) {
+  const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
+  const ctx = new AudioContext({ sampleRate: 16000 });
+  const src = ctx.createMediaStreamSource(stream), proc = ctx.createScriptProcessor(2048, 1, 1), chunks = [];
+  let spoke = 0, quiet = 0;
+  const done = new Promise((resolve) => {
+    const stop = setTimeout(resolve, seconds * 1000);
+    proc.onaudioprocess = (e) => {
+      const d = new Float32Array(e.inputBuffer.getChannelData(0));
+      chunks.push(d);
+      let sum = 0; for (const v of d) sum += v * v;
+      const loud = Math.sqrt(sum / d.length) > 0.015;
+      if (loud) { spoke += d.length; quiet = 0; } else if (spoke > 16000 * 0.25) quiet += d.length;
+      if (spoke > 16000 * 0.25 && quiet > 16000 * 0.9) { clearTimeout(stop); resolve(); }   // a second of quiet after speech
+    };
+  });
+  src.connect(proc); proc.connect(ctx.destination);
+  await done;
+  proc.disconnect(); src.disconnect(); stream.getTracks().forEach((t) => t.stop()); ctx.close();
+  const pcm = new Int16Array(chunks.reduce((n, c) => n + c.length, 0));
+  let at = 0; for (const c of chunks) for (const v of c) pcm[at++] = Math.max(-1, Math.min(1, v)) * 0x7fff;
+  return pcm;
+}
+async function sayAttempt(row, text, lang, extra = {}) {
   const words = [...row.querySelectorAll(".say-w")];
   const heardEl = row.querySelector(".say-heard"), scoreEl = row.querySelector(".say-score");
-  btn.classList.add("on"); btn.lastChild.textContent = "Listening…";
-  let heard = "";
+  let r;
   try {
-    const Rec = !sayAudio.ownEars && (window.SpeechRecognition || window.webkitSpeechRecognition);
-    let fallback = !Rec;
-    if (Rec) {
-      heard = await new Promise((resolve, reject) => {
-        const rec = new Rec();
-        rec.lang = lang; rec.interimResults = false; rec.maxAlternatives = 3;
-        rec.onresult = (ev) => {
-          // the alternative closest to the phrase: recognisers guess, and the learner should get the benefit
-          const alts = [...ev.results[0]].map((a) => a.transcript);
-          const target = text.split(/\s+/);
-          alts.sort((a, b) => sayScore(target, b.split(/\s+/)).filter((x) => x === "right").length - sayScore(target, a.split(/\s+/)).filter((x) => x === "right").length);
-          resolve(alts[0] || "");
-        };
-        rec.onerror = (ev) => {
-          // "network", "service-not-allowed", "language-not-supported": the browser's recogniser cannot be reached
-          // here (Brave, the Mac app, offline): Flash listens instead, from now on.
-          if (["network", "service-not-allowed", "language-not-supported", "audio-capture"].includes(ev.error)) { sayAudio.ownEars = true; resolve(null); return; }
-          reject(new Error(ev.error === "not-allowed" ? "The microphone is blocked for this page." : ev.error === "no-speech" ? "Nothing was heard. Try again, a little louder." : ev.error));
-        };
-        rec.onnomatch = () => resolve("");
-        try { rec.start(); } catch (_) { sayAudio.ownEars = true; resolve(null); }
-      });
-      if (heard === null) { heard = ""; fallback = true; }
-    }
-    if (fallback) {
-      btn.lastChild.textContent = "Listening…";
-      heard = await sayHearPcm(Math.min(12, 2 + text.split(/\s+/).length * 0.6));
-    }
-  } catch (error) { toast(error.message || String(error)); }
-  btn.classList.remove("on"); btn.lastChild.textContent = "Say it";
-  if (!heard.trim()) { heardEl.textContent = "Nothing was heard."; return; }
-  const marks = sayScore(text.split(/\s+/), heard.split(/\s+/));
-  words.forEach((w, i) => { w.className = `say-w ${marks[i]}`; });
-  const score = Math.round(100 * marks.reduce((n, m) => n + (m === "right" ? 1 : m === "close" ? 0.5 : 0), 0) / marks.length);
-  scoreEl.textContent = `${score}%`;
-  scoreEl.className = `say-score ${score >= 85 ? "good" : score >= 55 ? "ok" : "low"}`;
-  heardEl.textContent = `Heard: “${heard.trim()}”`;
-});
+    const pcm = await sayRecord(Math.min(15, 3 + text.split(/\s+/).length * 0.9));
+    heardEl.textContent = "Listening back…";
+    r = await api("/api/pronounce", { text, lang, audio: base64Of(new Uint8Array(pcm.buffer)), ...extra });
+  } catch (error) {
+    heardEl.textContent = /denied|not allowed|permission/i.test(error.message || "") ? "The microphone is blocked for this page." : (error.message || String(error));
+    return null;
+  }
+  r.words.forEach((m, i) => {
+    const w = words[i]; if (!w) return;
+    w.className = `say-w ${m.mark}${m.pace ? " " + m.pace : ""}`;
+    w.title = m.mark === "right" ? (m.pace ? `Right, but ${m.pace}` : "Right") : m.heard ? `Sounded like “${m.heard}”` : "Not heard";
+  });
+  scoreEl.textContent = `${r.score}%`;
+  scoreEl.className = `say-score ${r.score >= 85 ? "good" : r.score >= 55 ? "ok" : "low"}`;
+  const off = r.words.filter((m) => m.mark !== "right" && m.heard).map((m) => `“${m.word}” sounded like “${m.heard}”`);
+  const pace = r.words.filter((m) => m.pace).map((m) => `“${m.word}” ${m.pace}`);
+  heardEl.textContent = [...off, ...pace].join(" · ") || (r.score >= 85 ? "Sounded right." : "");
+  if (r.measured) heardEl.textContent += r.measured.right ? " · Counted as learned." : " · Try it again tomorrow.";
+  return r;
+}
 
 // Past chats as links: each opens its chat at the message that matched, glowing.
 function uiChats(spec) {
@@ -22628,6 +22605,7 @@ function drawCourseStep(card, st) {
   if (st.kind === "quiz") drawCourseQuiz(card, box, st);
   else if (st.kind === "blank") drawCourseBlank(card, box, st);
   else if (st.kind === "order") drawCourseOrder(card, box, st);
+  else if (st.kind === "say") drawCourseSay(card, box, st);
   else if (st.kind === "code") drawCourseCode(card, box, st);
   else {
     const row = box.appendChild(el("div", "course-buttons"));
@@ -22696,6 +22674,31 @@ async function courseMark(card, box, st, given, show) {
     () => { if (said.right) { card._open = null; loadCourse(card, null); } else drawCourseStep(card, st); });
   loadCourse(card, st.id, true);
   return said;
+}
+
+// A phrase to say aloud: heard, said back, judged by its sound, and measured like any answer.
+function drawCourseSay(card, box, st) {
+  const sp = st.say;
+  const row = box.appendChild(el("div", "say-row"));
+  row.innerHTML = `<div class="say-words">${sp.text.split(/\s+/).map((w) => `<span class="say-w">${esc(w)}</span>`).join(" ")}</div>
+    ${sp.translation ? `<div class="say-tr">${esc(sp.translation)}</div>` : ""}${sp.hint ? `<div class="say-hint">${esc(sp.hint)}</div>` : ""}
+    <div class="say-bar"><button type="button" class="ui-btn-lite" data-c="hear">${icon("volume")}Hear it</button><button type="button" class="ui-btn-lite" data-c="slow">Slowly</button><button type="button" class="ui-btn-lite say-rec" data-c="rec">${icon("voice")}Say it</button><span class="say-score"></span></div>
+    <div class="say-heard"></div>`;
+  row.onclick = async (e) => {
+    const b = e.target.closest("[data-c]"); if (!b) return;
+    if (b.dataset.c !== "rec") { sayHear(sp.text, sp.lang, b.dataset.c === "slow", b); return; }
+    if (b.classList.contains("on")) return;
+    b.classList.add("on"); b.lastChild.textContent = "Listening…";
+    const r = await sayAttempt(row, sp.text, sp.lang, { subject: card.dataset.course, id: st.id });
+    b.classList.remove("on"); b.lastChild.textContent = "Say it";
+    if (r && r.measured) {
+      courseFeedback(card, box, r.measured.right, r.measured.right ? `Said well: ${r.score}%` : `${r.score}%: listen again, and try once more`, "",
+        () => { if (r.measured.right) { card._open = null; loadCourse(card, null); } else drawCourseStep(card, st); });
+      loadCourse(card, st.id, true);
+    }
+  };
+  const buttons = box.appendChild(el("div", "course-buttons"));
+  courseAskButton(buttons, card, st);
 }
 
 function drawCourseBlank(card, box, st) {

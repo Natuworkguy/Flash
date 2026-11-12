@@ -231,17 +231,19 @@ def add(subject: str, propositions: list[dict]) -> list[str]:
             quiz = _quiz(given.get("quiz"), pid)
             blank = _blank(given.get("blank"), pid)
             order = _order(given.get("order"), pid)
+            say = _say(given.get("say"), pid)
             needs = [_key(n) for n in given.get("needs") or []
                      if _key(n) and _key(n) != pid]
-            if needs and not (exercise or quiz or blank or order):
+            if needs and not (exercise or quiz or blank or order or say):
                 raise TutorError(
                     f"{pid} has nothing to answer. Every step after a "
                     "unit's introduction needs one of: quiz {question, "
                     "choices, answer}, blank {prompt, accept}, order "
-                    "{prompt, items}, or exercise {task, language, expect}."
+                    "{prompt, items}, say {text, lang} (to say aloud), or "
+                    "exercise {task, language, expect}."
                     " Add the steps again, each with one.")
             props[pid] = {"text": text, "exercise": exercise, "quiz": quiz,
-                          "blank": blank, "order": order,
+                          "blank": blank, "order": order, "say": say,
                           "title": str(given.get("title") or "").strip()[:60],
                           "lesson": str(given.get("lesson") or "").strip()[
                               :MOST_LESSON],
@@ -336,6 +338,30 @@ def _quiz(given: Any, pid: str) -> Optional[dict]:
                          "or its place among them, from 0.")
     return {"question": question, "choices": choices, "answer": answer,
             "explain": str(given.get("explain") or "").strip()}
+
+
+def _say(given: Any, pid: str) -> Optional[dict]:
+    """A phrase to say aloud, judged by how it sounds: {text, lang (BCP 47), translation, hint}, or None."""
+
+    if not given:
+        return None
+    if not isinstance(given, dict) or not str(given.get("text") or "").strip():
+        raise TutorError(f"{pid}: say is {{text, lang}}: the phrase, and its language like fr-FR.")
+    return {"text": " ".join(str(given["text"]).split())[:200], "lang": str(given.get("lang") or "en-US").strip()[:12],
+            "translation": str(given.get("translation") or "").strip()[:200], "hint": str(given.get("hint") or "").strip()[:200]}
+
+
+SAID_WELL = 75   # a phrase said this well (of 100) counts as known
+
+
+def spoken(subject: str, pid: str, score: int, now: Optional[float] = None) -> dict:
+    """A say step, said: its score from the sound, measured like any answer."""
+
+    prop = _subject(_load(), subject)["props"].get(_key(pid))
+    if not prop or not prop.get("say"):
+        raise TutorError(f"{pid} is not a phrase to say.")
+    right = int(score) >= SAID_WELL
+    return {"right": right, "score": int(score), "measured": measure(subject, pid, right, now)}
 
 
 def _blank(given: Any, pid: str) -> Optional[dict]:
@@ -676,7 +702,7 @@ def streak(days: list[str], today: Optional[dt.date] = None) -> int:
 
 def kind_of(prop: dict) -> str:
     for kind, key in (("code", "exercise"), ("quiz", "quiz"),
-                      ("blank", "blank"), ("order", "order")):
+                      ("blank", "blank"), ("order", "order"), ("say", "say")):
         if prop.get(key):
             return kind
     return "read"
@@ -734,6 +760,7 @@ def step(subject: str, pid: str) -> dict:
             shuffled = shuffled[1:] + shuffled[:1]
     return {"id": _key(pid), "title": title_of(_key(pid), prop),
             "blank": {"prompt": blank["prompt"]} if blank else None,
+            "say": prop.get("say"),
             "order": {"prompt": order["prompt"], "items": shuffled}
             if order else None,
             "kind": kind_of(prop), "text": prop["text"],
