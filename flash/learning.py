@@ -111,6 +111,24 @@ line each, nothing the project's memory below already says."""
 PROJECT_TASK = " And save what it taught you about this project in the " \
     "project's memory."
 
+# Said by the user, a decision or a standing preference is worth keeping at once, not ten messages later: the
+# next turn may already be in a new session.
+import re as _re  # noqa: E402
+
+DECIDED = _re.compile(
+    r"\b(let'?s (go|stick) with|we'?ll (go with|use)|(i|we) (decided|chose|picked|went with)|decided (to|on)|"
+    r"from now on|going forward|always (use|do|write|keep|put|call|ask)|never (use|do|write|put|call|again)|"
+    r"don'?t ever|stop (doing|using|adding)|i (prefer|want you to|like it when|hate it when)|"
+    r"(use|call it|name it) .{1,40} instead|stick to|the rule is|make sure (you|to) always)\b", _re.I)
+
+DECISION_GUIDE = """The user just stated a decision or a standing preference. Keep it now, so it is never asked again: the decision as one short line that starts with "Decided:" and ends with the reason when they gave one, in the project's memory (remember with project true) when it is about the project, else in plain memory. If an older line says the opposite, correct that line instead of adding a second one. Save nothing for a choice that only held for this one task."""
+
+
+def decided(text: str) -> bool:
+    """Whether TEXT, the user's words, states a decision or a standing preference."""
+
+    return bool(DECIDED.search(text or ""))
+
 PROFILE_TASK = " Then, only if the conversation showed something lasting " \
     "about the user that the profile misses or gets wrong, update that " \
     "section of the profile."
@@ -230,6 +248,8 @@ class Review:
     # Whether it may rewrite the user profile (flash/usermodel.py), which
     # it does alongside memory while the setting is on.
     profile: bool = False
+    # Started because the user stated a decision or a standing preference: kept at once.
+    decision: bool = False
     actions: list[str] = field(default_factory=list)
     reply: str = ""
     error: str = ""
@@ -339,6 +359,8 @@ def review_messages(review: Review, messages: list[dict]) -> list[dict]:
         guides.append(
             skills.listing() or "=== Skills ===\nNo skills saved yet."
         )
+    if review.decision:
+        guides.append(DECISION_GUIDE)
     if review.memory:
         guides.append(MEMORY_GUIDE)
         guides.append(memory_block() or "=== Memory ===\nNothing saved yet.")
@@ -378,6 +400,7 @@ def review_messages(review: Review, messages: list[dict]) -> list[dict]:
                 + (PROJECT_TASK if review.memory and review.project
                    else "")
                 + (PROFILE_TASK if review.profile else "")
+                + (" First of all, keep the decision or preference the user just stated." if review.decision else "")
             ),
         },
     ]
@@ -546,6 +569,10 @@ def after_turn(
 
         due_skills = bool(skill_every) and _state.tool_calls >= skill_every
         due_memory = bool(memory_every) and _state.turns >= memory_every
+        asked = next((m.get("content") for m in reversed(messages) if m.get("role") == "user"
+                      and isinstance(m.get("content"), str)), "")
+        due_decision = bool(memory_every) and decided(asked)
+        due_memory = due_memory or due_decision
 
         if not (due_skills or due_memory):
             return None
@@ -562,7 +589,8 @@ def after_turn(
         review = Review(skills=due_skills,
                         memory=due_memory or bool(project),
                         project=project or "",
-                        profile=due_memory and usermodel.enabled())
+                        profile=due_memory and usermodel.enabled(),
+                        decision=due_decision)
         _state.running = review
         _state.cancel.clear()
 
