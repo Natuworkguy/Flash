@@ -4694,6 +4694,13 @@ def _spark_default(models: Optional[list[str]]) -> dict:
 MODEL_SIZES: dict[str, int] = {}
 
 
+def _quietly(job) -> None:
+    try:
+        job()
+    except Exception:  # noqa: BLE001  (a warm-up; the menu asks again)
+        pass
+
+
 def list_models(ai) -> Optional[list[str]]:
     """The models on the current host, or None if it did not answer."""
 
@@ -7953,6 +7960,8 @@ class Server(ThreadingHTTPServer):
         self.session = session
         self.session.lan = lan
         self.lan = lan
+        # Extensions' models asked for now, in the background, so the model menu has them when first opened.
+        threading.Thread(target=lambda: _quietly(providers.every_model), daemon=True).start()
         # A LAN switch in progress: the server that replaces this one,
         # once it is listening, and whether to leave the session open.
         self.swapping = False
