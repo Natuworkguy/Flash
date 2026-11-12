@@ -4072,7 +4072,10 @@ def run_turn(
     # Heard, not typed: how they sounded, and what was said to them at
     # once, for the model alone.
     spoken = session.voice_notes.pop(chat.id, "") if chat.heard else ""
-    content = "\n\n".join(part for part in (news, said, spoken) if part)
+    # A meeting going on in this chat: what it is, and what was said.
+    live = session.meetings.in_chat(chat.id)
+    happening = live.context() if live is not None else ""
+    content = "\n\n".join(part for part in (happening, news, said, spoken) if part)
     asked = ai._message("user", content, images or None)
     # Which turn it began, so editing the message finds where to cut.
     at = session.started.get(chat.id)
@@ -6698,8 +6701,10 @@ def _connector_command(name: str, arg: str, body: dict) -> dict:
 
 
 def _meeting_post(session: "Session", path: str, body: dict) -> dict:
-    """A meeting being recorded: started, heard a piece at a time, and
-    ended, its transcript then attached to a new chat for the write-up."""
+    """A meeting being recorded: started in a chat of its own, heard a
+    piece at a time (anything said to Flash in it asked there as it is
+    said, and live notes kept if wanted), and ended, its transcript then
+    attached to that chat for the write-up."""
 
     meetings = session.meetings
     what = path.removeprefix("/api/meeting/")
@@ -6707,7 +6712,16 @@ def _meeting_post(session: "Session", path: str, body: dict) -> dict:
         if what == "start":
             session.always.page_listening()
             started = meetings.start()
-            return {"id": started.id}
+            project = str(body.get("project") or "")
+            if project and workspace.project(project) is None:
+                project = ""
+            chat = session.new_chat(project=project)
+            chat.title = f"Meeting, {started.began:%b} {started.began.day} {started.began:%H:%M}"
+            chat.auto_title = chat.title
+            session.hub.publish({"type": "chats", "chat": chat.id})
+            started.chat = chat.id
+            started.live_notes = bool(body.get("notes"))
+            return {"id": started.id, "chat": chat.id}
         if what == "hear":
             session.always.page_listening()
             found = meetings.get(str(body.get("id") or ""))
@@ -6721,14 +6735,41 @@ def _meeting_post(session: "Session", path: str, body: dict) -> dict:
                 ) from None
             if pcm:
                 found.hear(pcm)
-            return found.since(int(body.get("count") or 0))
+            heard = found.since(int(body.get("count") or 0))
+            chat = session.chats.get(found.chat)
+            if chat is not None:
+                asked = found.asks()
+                for ask in asked:
+                    session.send(chat, meeting.ASKED.format(ask=ask["ask"]))
+                if asked:
+                    heard["asked"] = [ask["ask"] for ask in asked]
+                elif found.notes_due() and not (chat.busy or chat.queued):
+                    session.send(chat, meeting.NOTES_ASK.format(cid=found.notes_id()),
+                                 wake=True, note="Bringing the live notes up to date")
+            return heard
+        if what == "ask":
+            # Typed in the meeting bar, for when saying it aloud is not
+            # the moment.
+            found = meetings.get(str(body.get("id") or ""))
+            text = " ".join(str(body.get("text") or "").split())
+            chat = session.chats.get(found.chat)
+            if not text or chat is None:
+                raise ValueError("say what Flash should do")
+            session.send(chat, text)
+            return {}
+        if what == "notes":
+            found = meetings.get(str(body.get("id") or ""))
+            found.live_notes = bool(body.get("on"))
+            return {"notes": found.live_notes}
         if what == "stop":
             ended, lines = meetings.stop(str(body.get("id") or ""))
             info = meeting.keep(ended, lines)
-            project = str(body.get("project") or "")
-            if project and workspace.project(project) is None:
-                project = ""
-            chat = session.new_chat(project=project)
+            chat = session.chats.get(ended.chat)
+            if chat is None:
+                project = str(body.get("project") or "")
+                if project and workspace.project(project) is None:
+                    project = ""
+                chat = session.new_chat(project=project)
             session.send(chat, "", files=[info["id"]])
             return {"chat": chat.id, "file": info,
                     "seconds": round(ended.seconds)}
