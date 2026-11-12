@@ -557,6 +557,30 @@ body.empty #suggestions { display: flex; flex-wrap: wrap; justify-content: cente
 /* Headline figures. */
 /* summary card: title and badge, a big figure, rows of label and value */
 .ui-card.ui-summary { padding: 20px 22px; }
+/* spreadsheets */
+.sheet-wrap { overflow: auto; max-height: 460px; margin: 10px -4px 8px; border: 1px solid var(--border); border-radius: 10px; }
+.sheet { border-collapse: separate; border-spacing: 0; font-size: 13.5px; min-width: 100%; font-variant-numeric: tabular-nums; }
+.sheet th, .sheet td { border-right: 1px solid var(--border); border-bottom: 1px solid var(--border); padding: 6px 10px; text-align: left; white-space: nowrap; max-width: 22em; overflow: hidden; text-overflow: ellipsis; }
+.sheet thead th { position: sticky; top: 0; background: var(--surface); z-index: 1; font-weight: 600; cursor: pointer; user-select: none; }
+.sheet .sheet-letter { display: block; font-size: 10.5px; font-weight: 500; color: var(--text-3); letter-spacing: .04em; }
+.sheet .sheet-col { cursor: text; }
+.sheet .sheet-n, .sheet .sheet-corner { position: sticky; left: 0; background: var(--surface); color: var(--text-3); font-weight: 500; font-size: 11.5px; text-align: right; width: 1%; }
+.sheet .sheet-corner { z-index: 2; }
+.sheet td { cursor: cell; }
+.sheet td:hover { background: var(--hover); }
+.sheet td.num { text-align: right; }
+.sheet td.fx { color: var(--text); background: color-mix(in srgb, var(--accent) 5%, transparent); }
+.sheet td.err { color: var(--del); }
+.sheet tr > :last-child { border-right: 0; }
+.sheet-edit { width: 100%; min-width: 6em; border: 0; outline: 2px solid var(--accent); border-radius: 3px; background: var(--bg); color: var(--text); font: inherit; padding: 1px 3px; margin: -2px -4px; }
+.sheet-bar { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.ui-btn-lite { display: inline-flex; align-items: center; gap: 5px; padding: 5px 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--bg); color: var(--text-2); font: 500 12.5px var(--sans); cursor: pointer; }
+.ui-btn-lite:hover { color: var(--text); border-color: var(--border-strong); }
+.ui-btn-lite svg { width: 13px; height: 13px; }
+.sheet-ask { flex: 1 1 220px; display: flex; gap: 4px; border: 1px solid var(--border); border-radius: 9px; background: var(--bg); padding: 2px 2px 2px 10px; }
+.sheet-ask input { flex: 1; min-width: 0; border: 0; background: none; color: var(--text); font: 13px var(--sans); outline: none; }
+.sheet-ask button { width: 26px; height: 26px; border-radius: 7px; border: 0; background: var(--accent); color: #fff; display: grid; place-items: center; cursor: pointer; }
+.sheet-ask button svg { width: 14px; height: 14px; }
 /* maps */
 .map-route { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text-2); margin-top: 2px; }
 .map-route svg { width: 14px; height: 14px; }
@@ -5448,8 +5472,8 @@ function table(rows) {
 // the kinds). Drawn as HTML here; the controls in it work through the
 // listeners under uiBlock, so a reply drawn again keeps working.
 
-const UI_TYPES = new Set(["chart", "compare", "stats", "steps", "flow", "calc", "choices", "form", "checklist", "card", "molecule", "chats", "map"]);
-const UI_BUILDING = { chart: "Drawing a chart", compare: "Laying out the options", stats: "Gathering the figures", steps: "Setting out the steps", flow: "Drawing a diagram", calc: "Building a calculator", choices: "Getting your options ready", form: "Building a form", checklist: "Making a checklist", card: "Filling in the details", molecule: "Folding a structure", chats: "Finding the chats", map: "Drawing a map" };
+const UI_TYPES = new Set(["chart", "compare", "stats", "steps", "flow", "calc", "choices", "form", "checklist", "card", "molecule", "chats", "map", "sheet"]);
+const UI_BUILDING = { chart: "Drawing a chart", compare: "Laying out the options", stats: "Gathering the figures", steps: "Setting out the steps", flow: "Drawing a diagram", calc: "Building a calculator", choices: "Getting your options ready", form: "Building a form", checklist: "Making a checklist", card: "Filling in the details", molecule: "Folding a structure", chats: "Finding the chats", map: "Drawing a map", sheet: "Filling in the table" };
 
 function uiBlock(src, closed) {
   let specs = null;
@@ -5483,9 +5507,9 @@ function uiCard(spec) {
   const title = spec.title && !["choices", "card", "molecule", "map"].includes(spec.type) ? `<div class="ui-title">${uiText(spec.title)}</div>` : "";
   const body = {
     chart: uiChart, compare: uiCompare, stats: uiStats, steps: uiSteps, flow: uiFlow,
-    calc: uiCalc, choices: uiChoices, form: uiForm, checklist: uiChecklist, card: uiSummary, molecule: uiMolecule, chats: uiChats, map: uiMap,
+    calc: uiCalc, choices: uiChoices, form: uiForm, checklist: uiChecklist, card: uiSummary, molecule: uiMolecule, chats: uiChats, map: uiMap, sheet: uiSheet,
   }[spec.type](spec);
-  const data = ["calc", "form", "choices", "molecule", "map"].includes(spec.type) ? ` data-spec="${esc(JSON.stringify(spec))}"` : "";
+  const data = ["calc", "form", "choices", "molecule", "map", "sheet"].includes(spec.type) ? ` data-spec="${esc(JSON.stringify(spec))}"` : "";
   const kind = spec.type === "card" ? "summary" : spec.type;
   return `<div class="ui-card ui-${kind}"${data}>${title}${body}</div>`;
 }
@@ -5740,6 +5764,198 @@ function uiMap(spec) {
     ${spec.caption ? `<div class="map-cap">${inline(String(spec.caption))}</div>` : ""}
     <div class="map-credit">© OpenStreetMap contributors</div>`;
 }
+
+// A spreadsheet: cells the user edits, formulas that work like a spreadsheet's (=B2*C2, =SUM(D2:D9), IF, ROUND...),
+// sorting by a column, CSV out, and a line to ask Flash to fill or change it, which sends the table along.
+// Row 1 is the header, as in any spreadsheet, so the first row of data is row 2.
+const SHEET_MAX_ROWS = 200, SHEET_MAX_COLS = 16;
+const colName = (i) => String.fromCharCode(65 + i);
+function sheetData(spec) {
+  const cols = (Array.isArray(spec.columns) ? spec.columns : []).slice(0, SHEET_MAX_COLS).map((c) => String(c ?? ""));
+  const rows = (Array.isArray(spec.rows) ? spec.rows : []).slice(0, SHEET_MAX_ROWS).map((r) => (Array.isArray(r) ? r : []).slice(0, SHEET_MAX_COLS).map((v) => (v === null || v === undefined ? "" : String(v))));
+  const width = Math.max(cols.length, ...rows.map((r) => r.length), 1);
+  while (cols.length < width) cols.push("");
+  rows.forEach((r) => { while (r.length < width) r.push(""); });
+  return { cols, rows, format: spec.format && typeof spec.format === "object" ? spec.format : {} };
+}
+// one cell's value: a number, text, or an error mark; formulas are evaluated with the cells they name
+function sheetValues(data) {
+  const memo = new Map(), busy = new Set();
+  const raw = (r, c) => (r === 0 ? data.cols[c] : (data.rows[r - 1] || [])[c]) ?? "";
+  const value = (r, c) => {
+    const key = r * 64 + c;
+    if (memo.has(key)) return memo.get(key);
+    if (busy.has(key)) return "#CYCLE";
+    busy.add(key);
+    const t = String(raw(r, c)).trim();
+    let v;
+    if (t.startsWith("=")) v = sheetEval(t.slice(1), value);
+    else if (t !== "" && /^[-+]?(\d+\.?\d*|\.\d+)(e[-+]?\d+)?%?$/i.test(t.replace(/[$,€£\s]/g, ""))) { const n = Number(t.replace(/[$,€£%\s]/g, "")); v = t.endsWith("%") ? n / 100 : n; }
+    else v = t;
+    busy.delete(key); memo.set(key, v);
+    return v;
+  };
+  return value;
+}
+const SHEET_FUNCS = {
+  SUM: (a) => a.reduce((s, x) => s + x, 0), AVERAGE: (a) => (a.length ? a.reduce((s, x) => s + x, 0) / a.length : NaN),
+  MIN: (a) => Math.min(...a), MAX: (a) => Math.max(...a), COUNT: (a) => a.length, MEDIAN: (a) => { const b = [...a].sort((x, y) => x - y), m = b.length >> 1; return b.length % 2 ? b[m] : (b[m - 1] + b[m]) / 2; },
+};
+function sheetEval(formula, value) {
+  const tokens = String(formula).match(/[A-Z]+\d+:[A-Z]+\d+|[A-Z]+\d+|\d+\.?\d*(?:e[+-]?\d+)?%?|\.\d+|[A-Za-z_]\w*|"[^"]*"|<=|>=|<>|[-+*/^(),<>=&]|\S/gi) || [];
+  let at = 0;
+  const take = (t) => (tokens[at] && tokens[at].toUpperCase() === t ? (at++, true) : false);
+  const fail = () => { throw new Error("#ERROR"); };
+  const num = (v) => { if (typeof v === "number") return v; if (v === "" || v === undefined) return 0; if (typeof v === "string" && v.startsWith("#")) throw new Error(v); fail(); };
+  const cell = (ref) => { const m = /^([A-Z]+)(\d+)$/i.exec(ref); return [Number(m[2]) - 1, m[1].toUpperCase().charCodeAt(0) - 65]; };
+  const range = (ref) => {
+    const [a, b] = ref.split(":").map(cell), out = [];
+    for (let r = Math.min(a[0], b[0]); r <= Math.max(a[0], b[0]); r++) for (let c = Math.min(a[1], b[1]); c <= Math.max(a[1], b[1]); c++) {
+      const v = value(r, c); if (typeof v === "string" && v.startsWith("#")) throw new Error(v); if (typeof v === "number") out.push(v);
+    }
+    return out;
+  };
+  const compare = () => {
+    let v = concat();
+    for (;;) {
+      const op = ["<=", ">=", "<>", "<", ">", "="].find((o) => take(o));
+      if (!op) return v;
+      const w = concat();
+      v = { "<=": v <= w, ">=": v >= w, "<>": v !== w, "<": v < w, ">": v > w, "=": v === w }[op];
+    }
+  };
+  const concat = () => { let v = expr(); while (take("&")) v = String(v) + String(expr()); return v; };
+  const expr = () => { let v = term(); for (;;) { if (take("+")) v = num(v) + num(term()); else if (take("-")) v = num(v) - num(term()); else return v; } };
+  const term = () => { let v = unary(); for (;;) { if (take("*")) v = num(v) * num(unary()); else if (take("/")) { const d = num(unary()); if (d === 0) throw new Error("#DIV/0"); v = num(v) / d; } else return v; } };
+  const unary = () => (take("-") ? -num(unary()) : take("+") ? num(unary()) : power());
+  const power = () => { const b = atom(); return take("^") ? num(b) ** num(unary()) : b; };
+  const args = () => { const out = []; if (take(")")) return out; do { const t = tokens[at]; if (t && /^[A-Z]+\d+:[A-Z]+\d+$/i.test(t)) { at++; out.push(range(t)); } else out.push(compare()); } while (take(",")); if (!take(")")) fail(); return out; };
+  const atom = () => {
+    const t = tokens[at++];
+    if (t === undefined) fail();
+    if (t === "(") { const v = compare(); if (!take(")")) fail(); return v; }
+    if (t.startsWith('"')) return t.slice(1, -1);
+    if (/^[\d.]/.test(t)) return t.endsWith("%") ? Number(t.slice(0, -1)) / 100 : Number(t);
+    if (/^[A-Z]+\d+$/i.test(t) && tokens[at] !== "(") { const [r, c] = cell(t); const v = value(r, c); if (typeof v === "string" && v.startsWith("#")) throw new Error(v); return v; }
+    const name = t.toUpperCase();
+    if (tokens[at] === "(") {
+      at++;
+      const a = args();
+      const flat = () => a.flatMap((x) => (Array.isArray(x) ? x : [num(x)]));
+      if (SHEET_FUNCS[name] || name === "AVG") return (SHEET_FUNCS[name] || SHEET_FUNCS.AVERAGE)(flat());
+      if (name === "IF") return a[0] ? a[1] : (a[2] ?? "");
+      if (name === "ROUND") return Math.round(num(a[0]) * 10 ** num(a[1] ?? 0)) / 10 ** num(a[1] ?? 0);
+      if (name === "ABS") return Math.abs(num(a[0]));
+      if (name === "SQRT") return Math.sqrt(num(a[0]));
+      if (name === "AND") return a.every(Boolean);
+      if (name === "OR") return a.some(Boolean);
+      if (name === "CONCAT") return a.map(String).join("");
+    }
+    if (name === "TRUE") return true;
+    if (name === "FALSE") return false;
+    return fail();
+  };
+  try {
+    const v = compare();
+    if (at !== tokens.length) fail();
+    return typeof v === "number" && !isFinite(v) ? "#NUM" : v;
+  } catch (e) { return /^#/.test(e.message) ? e.message : "#ERROR"; }
+}
+function sheetShow(v, fmt) {
+  if (typeof v === "boolean") return v ? "TRUE" : "FALSE";
+  if (typeof v !== "number") return String(v ?? "");
+  const f = String(fmt || "");
+  const dec = /\.(0+)/.exec(f)?.[1].length;
+  if (f.includes("%")) return (v * 100).toLocaleString(undefined, { maximumFractionDigits: dec ?? 1, minimumFractionDigits: dec ?? 0 }) + "%";
+  const cur = /^[$€£¥]/.exec(f)?.[0];
+  const s = v.toLocaleString(undefined, { maximumFractionDigits: dec ?? (cur ? 2 : 6), minimumFractionDigits: dec ?? (cur ? 2 : 0) });
+  return cur ? (v < 0 ? "-" + cur + s.slice(1) : cur + s) : s;
+}
+function uiSheet(spec) {
+  return `<div class="sheet-wrap" data-sheet="new"></div>
+    <div class="sheet-bar"><button type="button" class="ui-btn-lite" data-sheet-act="row">${icon("plus")}Row</button><button type="button" class="ui-btn-lite" data-sheet-act="csv">${icon("download")}CSV</button><button type="button" class="ui-btn-lite" data-sheet-act="copy">${icon("copy")}Copy</button>
+    <form class="sheet-ask"><input type="text" placeholder="Ask Flash to fill or change this table…" aria-label="Ask Flash about this table"><button type="submit" aria-label="Send">${icon("up")}</button></form></div>`;
+}
+function sheetDraw(card) {
+  const data = card._sheet, value = sheetValues(data), wrap = card.querySelector(".sheet-wrap");
+  const fmt = (c) => data.format[colName(c)] ?? data.format[data.cols[c]];
+  const head = `<tr><th class="sheet-corner"></th>${data.cols.map((name, c) => `<th data-sort="${c}"><span class="sheet-letter">${colName(c)}</span><span class="sheet-col" data-r="0" data-c="${c}">${uiText(sheetShow(value(0, c)))}</span>${card._sort && card._sort[0] === c ? (card._sort[1] > 0 ? " ▲" : " ▼") : ""}</th>`).join("")}</tr>`;
+  const body = data.rows.map((row, i) => `<tr><th class="sheet-n">${i + 2}</th>${row.map((_, c) => {
+    const v = value(i + 1, c), raw = row[c];
+    const cls = [typeof v === "number" ? "num" : "", String(raw).startsWith("=") ? "fx" : "", typeof v === "string" && v.startsWith("#") ? "err" : ""].filter(Boolean).join(" ");
+    return `<td data-r="${i + 1}" data-c="${c}" class="${cls}" title="${String(raw).startsWith("=") ? esc(raw) : ""}">${uiText(sheetShow(v, fmt(c)))}</td>`;
+  }).join("")}</tr>`).join("");
+  wrap.innerHTML = `<table class="sheet"><thead>${head}</thead><tbody>${body}</tbody></table>`;
+}
+function sheetCSV(data, computed) {
+  const value = sheetValues(data);
+  const q = (s) => (/[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s);
+  const lines = [data.cols.map(q).join(",")];
+  data.rows.forEach((row, i) => lines.push(row.map((raw, c) => q(computed ? sheetShow(value(i + 1, c)) : raw)).join(",")));
+  return lines.join("\n");
+}
+function drawSheets(root = document) {
+  for (const wrap of root.querySelectorAll('.sheet-wrap[data-sheet="new"]')) {
+    const card = wrap.closest(".ui-sheet");
+    if (!card || wrap.closest(".streaming")) continue;
+    let spec; try { spec = JSON.parse(card.dataset.spec); } catch (_) { continue; }
+    card._sheet = sheetData(spec);
+    wrap.dataset.sheet = "drawn";
+    sheetDraw(card);
+  }
+}
+new MutationObserver((changes) => {
+  for (const change of changes) for (const node of change.addedNodes) {
+    if (node.nodeType === 1 && (node.matches('.sheet-wrap[data-sheet="new"]') || node.querySelector('.sheet-wrap[data-sheet="new"]'))) { drawSheets(node.parentElement || node); }
+  }
+}).observe(document.documentElement, { childList: true, subtree: true });
+function sheetEdit(td) {
+  const card = td.closest(".ui-sheet"), data = card._sheet, r = +td.dataset.r, c = +td.dataset.c;
+  const raw = r === 0 ? data.cols[c] : data.rows[r - 1][c];
+  const box = document.createElement("input");
+  box.className = "sheet-edit"; box.value = raw;
+  td.textContent = ""; td.appendChild(box); box.focus(); box.select();
+  let done = false;
+  const commit = (move) => {
+    if (done) return; done = true;
+    if (r === 0) data.cols[c] = box.value; else data.rows[r - 1][c] = box.value;
+    sheetDraw(card);
+    if (move) { const next = card.querySelector(`[data-r="${r + move[0]}"][data-c="${c + move[1]}"]`); if (next) sheetEdit(next.tagName === "SPAN" ? next : next); }
+  };
+  box.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { e.preventDefault(); commit(r < data.rows.length ? [1, 0] : null); }
+    else if (e.key === "Tab") { e.preventDefault(); commit(c + (e.shiftKey ? -1 : 1) >= 0 && c + (e.shiftKey ? -1 : 1) < data.cols.length ? [0, e.shiftKey ? -1 : 1] : null); }
+    else if (e.key === "Escape") { done = true; sheetDraw(card); }
+  });
+  box.addEventListener("blur", () => commit(null));
+}
+document.addEventListener("click", (e) => {
+  const card = e.target.closest(".ui-sheet"); if (!card || !card._sheet) return;
+  const cellEl = e.target.closest(".sheet td[data-r], .sheet .sheet-col");
+  if (cellEl && !e.target.closest(".sheet-edit")) { if (e.detail >= 2 || cellEl.tagName === "TD" || e.target.closest(".sheet-col")) sheetEdit(cellEl); return; }
+  const sortBy = e.target.closest("th[data-sort]");
+  if (sortBy && !e.target.closest(".sheet-col")) {
+    const c = +sortBy.dataset.sort, data = card._sheet, value = sheetValues(data);
+    if (data.rows.some((row) => row.some((v) => String(v).startsWith("=")))) { toast("This table has formulas: sorting would move the cells they point at."); return; }
+    const dir = card._sort && card._sort[0] === c ? -card._sort[1] : 1;
+    const keyed = data.rows.map((row, i) => [value(i + 1, c), row]);
+    keyed.sort((a, b) => (typeof a[0] === "number" && typeof b[0] === "number" ? a[0] - b[0] : String(a[0]).localeCompare(String(b[0]))) * dir);
+    data.rows = keyed.map((k) => k[1]); card._sort = [c, dir]; sheetDraw(card); return;
+  }
+  const act = e.target.closest("[data-sheet-act]")?.dataset.sheetAct;
+  if (act === "row") { card._sheet.rows.push(card._sheet.cols.map(() => "")); sheetDraw(card); const last = card.querySelector(`td[data-r="${card._sheet.rows.length}"][data-c="0"]`); if (last) sheetEdit(last); }
+  else if (act === "csv") { const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([sheetCSV(card._sheet, true)], { type: "text/csv" })); a.download = `${(card.querySelector(".ui-title")?.textContent || "table").replace(/[^\w-]+/g, "-")}.csv`; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 2000); }
+  else if (act === "copy") { navigator.clipboard?.writeText(sheetCSV(card._sheet, true).replace(/,/g, "\t")).then(() => toast("Copied: paste it into any spreadsheet."), () => {}); }
+});
+document.addEventListener("submit", (e) => {
+  const form = e.target.closest(".sheet-ask"); if (!form) return;
+  e.preventDefault();
+  const card = form.closest(".ui-sheet"), ask = form.querySelector("input").value.trim();
+  if (!ask || !card._sheet) return;
+  const title = card.querySelector(".ui-title")?.textContent || "";
+  send(`${ask}\n\nThe table${title ? ` "${title}"` : ""} as it is now (CSV, formulas kept, row 1 is the header):\n\`\`\`csv\n${sheetCSV(card._sheet, false)}\n\`\`\`\nAnswer with the whole table back as a sheet block.`);
+  form.querySelector("input").value = "";
+});
 
 // Past chats as links: each opens its chat at the message that matched, glowing.
 function uiChats(spec) {

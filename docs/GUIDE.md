@@ -1143,6 +1143,17 @@ meeting far better than the small Vosk one. It hears one microphone, so
 for a call, leave the sound on the speakers rather than in headphones,
 and it does not say who said what.
 
+### Spreadsheets in the chat
+
+When numbers are meant to be worked with (a budget, a split, a plan),
+Flash answers with a spreadsheet you edit in place. Click a cell to change
+it, and formulas (`=B2*C2`, `=SUM(D2:D9)`, `IF`, `ROUND`, `AVERAGE`) work
+it all out again at once. Click a column's header to sort by it, add rows,
+copy it into any spreadsheet app or save it as CSV. The line under it asks
+Flash to fill in or change the table ("find the population of each
+city", "add a 10% tip column"), sending the table as it stands, and the
+answer comes back as the whole table again.
+
 ### Maps, trips and shopping
 
 Ask where something is, what is near, or how long it takes to get
