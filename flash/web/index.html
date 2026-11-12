@@ -557,6 +557,28 @@ body.empty #suggestions { display: flex; flex-wrap: wrap; justify-content: cente
 /* Headline figures. */
 /* summary card: title and badge, a big figure, rows of label and value */
 .ui-card.ui-summary { padding: 20px 22px; }
+/* maps */
+.map-route { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text-2); margin-top: 2px; }
+.map-route svg { width: 14px; height: 14px; }
+.map-stage { position: relative; height: clamp(240px, 46vh, 380px); margin: 12px -4px 10px; border-radius: 12px; overflow: hidden; background: var(--hover); z-index: 0; }
+.map-stage.dark .leaflet-tile-pane { filter: invert(1) hue-rotate(180deg) brightness(0.92) contrast(0.88) saturate(0.7); }
+.map-stage .leaflet-container, .map-stage.leaflet-container { font: inherit; background: var(--hover); }
+.map-stage .leaflet-control-zoom a { background: var(--surface); color: var(--text); border-color: var(--border); }
+.map-stage .leaflet-popup-content-wrapper, .map-stage .leaflet-popup-tip { background: var(--surface); color: var(--text); box-shadow: 0 6px 24px rgba(0, 0, 0, 0.3); }
+.map-stage .leaflet-popup-content { margin: 10px 14px; font-size: 13px; line-height: 1.4; }
+.map-pin { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 50%; background: var(--accent); color: #fff; font: 700 12.5px var(--sans);
+  border: 2px solid #fff; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35); }
+.map-pin.home { background: #111; }
+.map-rows { display: flex; flex-direction: column; gap: 2px; max-height: 260px; overflow-y: auto; }
+.map-row { display: flex; align-items: flex-start; gap: 10px; padding: 7px 8px; border: 0; border-radius: 8px; background: none; color: var(--text); text-align: left; font: inherit; cursor: pointer; }
+.map-row:hover, .map-row.on { background: var(--hover); }
+.map-dot { flex: none; display: grid; place-items: center; width: 22px; height: 22px; border-radius: 50%; background: var(--accent); color: #fff; font-size: 11.5px; font-weight: 700; }
+.map-dot.home { background: var(--text); color: var(--bg); }
+.map-row-text { display: flex; flex-direction: column; min-width: 0; }
+.map-row-name { font-size: 14px; font-weight: 550; }
+.map-row-note { font-size: 12.5px; color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.map-cap { font-size: 13px; color: var(--text-2); margin-top: 8px; }
+.map-credit { font-size: 11px; color: var(--text-3); margin-top: 6px; text-align: right; }
 /* past chats, as links */
 .chat-links { display: flex; flex-direction: column; gap: 6px; }
 .chat-link { position: relative; display: flex; flex-direction: column; gap: 3px; width: 100%; text-align: left; padding: 10px 36px 10px 12px; border-radius: 10px;
@@ -4984,6 +5006,97 @@ document.addEventListener("click", (e) => {
   if (id === current && view === "chat") drawChat(); else switchTo(id);
 });
 
+// ----- maps -----
+let mapLoading = null;
+function loadMap() {
+  if (window.L) return Promise.resolve();
+  if (!document.querySelector('link[href="/static/leaflet/leaflet.css"]')) {
+    const css = document.createElement("link"); css.rel = "stylesheet"; css.href = "/static/leaflet/leaflet.css"; document.head.appendChild(css);
+  }
+  mapLoading = mapLoading || loadScript("/static/leaflet/leaflet.js").catch((e) => { mapLoading = null; throw e; });
+  return mapLoading;
+}
+async function drawMap(stage) {
+  if (stage.dataset.map !== "new" || stage.closest(".streaming")) return;
+  stage.dataset.map = "drawing";
+  const card = stage.closest(".ui-map");
+  let spec; try { spec = JSON.parse(card.dataset.spec); } catch (_) { return; }
+  const places = mapPlaces(spec);
+  try {
+    await loadMap();
+    // a place given by name or address only is looked up
+    await Promise.all(places.map(async (p) => {
+      if (Number.isFinite(+p.lat) && Number.isFinite(+p.lng)) return;
+      try { const r = await api(`/api/geocode?q=${encodeURIComponent(p.address || p.name)}`); if (r.lat !== undefined) { p.lat = r.lat; p.lng = r.lng; } } catch (_) { /* left off the map */ }
+    }));
+    const pts = places.filter((p) => Number.isFinite(+p.lat) && Number.isFinite(+p.lng));
+    if (!pts.length) throw new Error("none of the places could be found");
+    stage.textContent = "";
+    stage.classList.toggle("dark", darkPage());
+    const map = L.map(stage, { zoomControl: true, attributionControl: false, scrollWheelZoom: false, tap: true });
+    stage._map = map;
+    L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 19, crossOrigin: true }).addTo(map);
+    let n = 0;
+    stage._markers = places.map((p) => {
+      if (!pts.includes(p)) { if (!p.home) n++; return null; }
+      const label = p.home ? "★" : String(++n);
+      const m = L.marker([+p.lat, +p.lng], { icon: L.divIcon({ className: "", html: `<span class="map-pin${p.home ? " home" : ""}">${label}</span>`, iconSize: [28, 28], iconAnchor: [14, 14] }) }).addTo(map);
+      m.bindPopup(`<b>${esc(p.name || p.address || "")}</b>${p.note ? `<br>${esc(String(p.note))}` : ""}`);
+      return m;
+    });
+    const bounds = L.latLngBounds(pts.map((p) => [+p.lat, +p.lng]));
+    const fit = () => (pts.length > 1 ? map.fitBounds(bounds, { padding: [36, 36], maxZoom: 16 }) : map.setView(bounds.getCenter(), +spec.zoom || 15));
+    stage._fit = fit; fit();
+    // wheel zoom once the map has been clicked, so scrolling the chat never gets stuck on it
+    map.once("click", () => map.scrollWheelZoom.enable());
+    new ResizeObserver(() => map.invalidateSize()).observe(stage);
+    stage.dataset.map = "drawn";
+    if (stage.dataset.mode && pts.length > 1) {
+      try {
+        const r = await api(`/api/route?mode=${stage.dataset.mode}&points=${pts.map((p) => `${+p.lat},${+p.lng}`).join(";")}`);
+        if (r.error) throw new Error(r.error);
+        const line = L.polyline(r.line, { color: "#3b82f6", weight: 5, opacity: 0.85, lineJoin: "round" }).addTo(map);
+        line.bringToBack();
+        const sum = card.querySelector("[data-map-summary] span");
+        if (sum && /Finding/.test(sum.textContent)) {
+          const km = r.metres >= 950 ? `${(r.metres / 1000).toFixed(1)} km` : `${r.metres} m`;
+          const min = Math.round(r.seconds / 60), h = Math.floor(min / 60);
+          sum.textContent = `${km} · ${h ? `${h} h ${min % 60} min` : `${Math.max(1, min)} min`}`;
+        }
+      } catch (_) {
+        L.polyline(pts.map((p) => [+p.lat, +p.lng]), { color: "#3b82f6", weight: 3, dashArray: "6 8", opacity: 0.7 }).addTo(map);
+        const sum = card.querySelector("[data-map-summary] span");
+        if (sum && /Finding/.test(sum.textContent)) sum.textContent = "Straight lines: no route found";
+      }
+    }
+  } catch (error) {
+    stage.innerHTML = `<div class="mol-wait"></div>`;
+    stage.firstChild.textContent = `Couldn’t draw this map: ${String(error && error.message || error).slice(0, 160)}`;
+    stage.dataset.map = "failed";
+  }
+}
+function drawMaps(root = document) { for (const n of root.querySelectorAll('.map-stage[data-map="new"]')) drawMap(n); }
+new MutationObserver((changes) => {
+  for (const change of changes) for (const node of change.addedNodes) {
+    if (node.nodeType !== 1) continue;
+    if (node.matches('.map-stage[data-map="new"]')) drawMap(node);
+    else if (node.querySelector('.map-stage[data-map="new"]')) drawMaps(node);
+  }
+}).observe(document.documentElement, { childList: true, subtree: true });
+document.addEventListener("click", (e) => {
+  const card = e.target.closest(".ui-map"); if (!card) return;
+  const stage = card.querySelector(".map-stage"); if (!stage || !stage._map) return;
+  const row = e.target.closest("[data-map-i]");
+  if (row) {
+    const m = stage._markers[+row.dataset.mapI]; if (!m) return;
+    stage._map.flyTo(m.getLatLng(), Math.max(stage._map.getZoom(), 16), { duration: 0.6 });
+    m.openPopup();
+    card.querySelectorAll(".map-row").forEach((r) => r.classList.toggle("on", r === row));
+    return;
+  }
+  if (e.target.closest('[data-map-act="fit"]')) stage._fit();
+});
+
 // ----- 3D structures -----
 let molLoading = null;
 const molViewers = [];          // live viewers, oldest first: past MOL_LIVE the oldest becomes a picture until clicked
@@ -5335,8 +5448,8 @@ function table(rows) {
 // the kinds). Drawn as HTML here; the controls in it work through the
 // listeners under uiBlock, so a reply drawn again keeps working.
 
-const UI_TYPES = new Set(["chart", "compare", "stats", "steps", "flow", "calc", "choices", "form", "checklist", "card", "molecule", "chats"]);
-const UI_BUILDING = { chart: "Drawing a chart", compare: "Laying out the options", stats: "Gathering the figures", steps: "Setting out the steps", flow: "Drawing a diagram", calc: "Building a calculator", choices: "Getting your options ready", form: "Building a form", checklist: "Making a checklist", card: "Filling in the details", molecule: "Folding a structure", chats: "Finding the chats" };
+const UI_TYPES = new Set(["chart", "compare", "stats", "steps", "flow", "calc", "choices", "form", "checklist", "card", "molecule", "chats", "map"]);
+const UI_BUILDING = { chart: "Drawing a chart", compare: "Laying out the options", stats: "Gathering the figures", steps: "Setting out the steps", flow: "Drawing a diagram", calc: "Building a calculator", choices: "Getting your options ready", form: "Building a form", checklist: "Making a checklist", card: "Filling in the details", molecule: "Folding a structure", chats: "Finding the chats", map: "Drawing a map" };
 
 function uiBlock(src, closed) {
   let specs = null;
@@ -5367,12 +5480,12 @@ function uiFormat(value, spec = {}, decimals) {
 }
 
 function uiCard(spec) {
-  const title = spec.title && !["choices", "card", "molecule"].includes(spec.type) ? `<div class="ui-title">${uiText(spec.title)}</div>` : "";
+  const title = spec.title && !["choices", "card", "molecule", "map"].includes(spec.type) ? `<div class="ui-title">${uiText(spec.title)}</div>` : "";
   const body = {
     chart: uiChart, compare: uiCompare, stats: uiStats, steps: uiSteps, flow: uiFlow,
-    calc: uiCalc, choices: uiChoices, form: uiForm, checklist: uiChecklist, card: uiSummary, molecule: uiMolecule, chats: uiChats,
+    calc: uiCalc, choices: uiChoices, form: uiForm, checklist: uiChecklist, card: uiSummary, molecule: uiMolecule, chats: uiChats, map: uiMap,
   }[spec.type](spec);
-  const data = ["calc", "form", "choices", "molecule"].includes(spec.type) ? ` data-spec="${esc(JSON.stringify(spec))}"` : "";
+  const data = ["calc", "form", "choices", "molecule", "map"].includes(spec.type) ? ` data-spec="${esc(JSON.stringify(spec))}"` : "";
   const kind = spec.type === "card" ? "summary" : spec.type;
   return `<div class="ui-card ui-${kind}"${data}>${title}${body}</div>`;
 }
@@ -5603,6 +5716,29 @@ function uiForm(spec) {
     return `<input type="${type}" data-id="${id}" placeholder="${esc(f.placeholder || "")}">`;
   };
   return `<form class="ui-fields">${fields.map((f) => `<label class="ui-field"><span>${uiText(f.label || f.id)}</span>${control(f)}</label>`).join("")}<button type="submit" class="ui-submit">${uiText(spec.submit || "Send")}</button></form>`;
+}
+
+// A map on OpenStreetMap's tiles (Leaflet, shipped with Flash): numbered places, the road or path between them when
+// it is a route, and the list under it, where a click flies to that place. Drawn once the reply has finished.
+const mapPlaces = (spec) => (Array.isArray(spec.places) ? spec.places : []).filter((p) => p && (p.name || p.address || Number.isFinite(+p.lat))).slice(0, 30);
+function uiMap(spec) {
+  const places = mapPlaces(spec);
+  if (!places.length) return `<div class="ui-note">No places to show.</div>`;
+  const route = spec.route ? (typeof spec.route === "object" ? spec.route : { mode: "driving" }) : null;
+  const mode = route && ["walking", "cycling"].includes(route.mode) ? route.mode : "driving";
+  let n = 0;
+  const rows = places.map((p, i) => {
+    const label = p.home ? "★" : String(++n);
+    return `<button type="button" class="map-row" data-map-i="${i}"><span class="map-dot${p.home ? " home" : ""}">${label}</span><span class="map-row-text"><span class="map-row-name">${uiText(p.name || p.address || "")}</span>${p.note ? `<span class="map-row-note">${uiText(p.note)}</span>` : ""}</span></button>`;
+  }).join("");
+  const first = places.find((p) => Number.isFinite(+p.lat));
+  const osm = first ? `https://www.openstreetmap.org/?mlat=${+first.lat}&mlon=${+first.lng}#map=15/${+first.lat}/${+first.lng}` : "https://www.openstreetmap.org";
+  return `<div class="mol-head"><div>${spec.title ? `<div class="ui-title">${uiText(spec.title)}</div>` : ""}${route ? `<div class="map-route" data-map-summary>${icon(mode === "walking" ? "pointer" : "globe")}<span>${uiText(route.summary || "Finding the way…")}</span></div>` : ""}</div>
+    <div class="mol-tools"><button type="button" class="mol-btn" data-map-act="fit" title="Show everything">${icon("eye")}</button><a class="mol-btn" href="${osm}" target="_blank" rel="noopener" title="Open in OpenStreetMap">${icon("external")}</a></div></div>
+    <div class="map-stage" data-map="new" data-mode="${route ? mode : ""}"><div class="mol-wait"><span class="ui-spin"></span>Drawing the map…</div></div>
+    ${places.length > 1 || places[0].note ? `<div class="map-rows">${rows}</div>` : ""}
+    ${spec.caption ? `<div class="map-cap">${inline(String(spec.caption))}</div>` : ""}
+    <div class="map-credit">© OpenStreetMap contributors</div>`;
 }
 
 // Past chats as links: each opens its chat at the message that matched, glowing.

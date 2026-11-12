@@ -248,6 +248,13 @@ STATIC.update({
     for path in sorted((WEB_DIR / "3dmol").glob("*.js"))
 })
 
+# Leaflet, which draws the maps in replies on OpenStreetMap's tiles: shipped
+# with Flash (BSD licence, web/leaflet/LICENSE.txt), loaded once a map shows.
+STATIC.update({
+    "leaflet/leaflet.js": "text/javascript; charset=utf-8",
+    "leaflet/leaflet.css": "text/css; charset=utf-8",
+})
+
 # Mermaid, which draws the diagrams in replies and documents: shipped
 # with Flash as well, and loaded only once a diagram shows.
 STATIC.update({
@@ -7349,6 +7356,23 @@ class Handler(BaseHTTPRequestHandler):
             self._file(url.path.removeprefix("/api/files/"),
                        download=query.get("download", [""])[0] == "1",
                        design=query.get("design", [""])[0] == "1")
+        elif url.path == "/api/geocode":
+            from . import maps
+
+            try:
+                self._json(maps.geocode(query.get("q", [""])[0])[0])
+            except maps.MapsError as exc:
+                self._json({"error": str(exc)}, HTTPStatus.NOT_FOUND)
+        elif url.path == "/api/route":
+            # the road or path between a map block's places, for it to draw
+            from . import maps
+
+            try:
+                points = [tuple(float(x) for x in p.split(",")[:2])
+                          for p in query.get("points", [""])[0].split(";") if p]
+                self._json(maps.line(points, query.get("mode", ["driving"])[0]))
+            except (ValueError, maps.MapsError) as exc:
+                self._json({"error": str(exc)}, HTTPStatus.NOT_FOUND)
         elif url.path == "/api/structure":
             # A protein or molecule for the 3D viewer in a reply, fetched
             # here (and kept), so the page needs no other site.

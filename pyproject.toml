@@ -62,6 +62,9 @@ flash = [
     "web/mermaid/*.txt",
     "web/3dmol/*.js",
     "web/3dmol/*.txt",
+    "web/leaflet/*.js",
+    "web/leaflet/*.css",
+    "web/leaflet/*.txt",
     "web/*.txt",
 ]
 
