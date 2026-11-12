@@ -353,6 +353,11 @@ body.empty #title { visibility: hidden; }
 }
 .col { width: 100%; max-width: var(--chat-width, 768px); margin: 0 auto; padding: 0 24px; }
 #messages { padding-top: 8px; padding-bottom: 40px; }
+/* A long chat opens at once: what is off screen is laid out only when it is scrolled to. The last few, the one
+   being read or used, and the reply being written are always drawn in full, so menus and tips are never clipped. */
+#messages > * { content-visibility: auto; contain-intrinsic-size: auto 160px; }
+#messages > :nth-last-child(-n+6), #messages > :hover, #messages > :focus-within, #messages > .streaming,
+#messages > .landed, #messages > .found, #messages > .canvas-card, #messages > .chess-card, #messages.laid-out > * { content-visibility: visible; }
 body.empty #log { display: none; }
 /* The pixel-art scene behind a new chat, the terminal's /background.
    Stretched to fill the pane the way the terminal fills its screen, so
@@ -9317,9 +9322,11 @@ function drawEntry(entry, ctx) {
       break;
     }
     case "assistant": {
-      messagesEl.appendChild(assistantBlock(entry));
-      const replies = messagesEl.querySelectorAll("[data-reply]");
-      ctx.lastReply = replies[replies.length - 1] || null;
+      const frag = assistantBlock(entry);
+      const own = frag.querySelector("[data-reply]");
+      messagesEl.appendChild(frag);
+      // its own reply, found before it goes in: asking the whole chat each time made a long chat slow to open
+      ctx.lastReply = own || [...messagesEl.querySelectorAll("[data-reply]")].pop() || null;
       if (ctx.lastReply && entry.text && entry.text.trim()) ctx.lastReply.dataset.log = ctx.index;
       break;
     }
@@ -22471,6 +22478,7 @@ function openPlus() {
   rows.push({ header: true, rule: true, html: "" });
   const thinking = thinkBtn.getAttribute("aria-pressed") === "true";
   rows.push({ html: `${icon("think")}<span class="label">${thinking ? "Skip the harder think" : "Think harder"}</span><span class="desc">${thinking ? "" : "on the next message"}</span>`, act: () => setThink(!thinking) });
+  for (const d of extDocks()) rows.push({ html: `${icon(ICON[d.icon] ? d.icon : "puzzle")}<span class="label">${dockOpen === d.key ? `Hide ${esc(d.label)}` : esc(d.label)}</span><span class="desc">${dockOpen === d.key ? "" : "beside the chat"}</span>`, act: () => (dockOpen === d.key ? closeDock() : openDock(d.key)) });
   for (const b of extButtonsAt("composer")) rows.push({ html: `${icon(ICON[b.icon] ? b.icon : "puzzle")}<span class="label">${esc(b.label)}</span><span class="desc">${esc(b.extension || "")}</span>`, act: () => pressExt(b, input.value.trim()) });
   rows.push({ html: `${icon("chat")}<span class="label">Ask on the side</span><span class="desc">/btw, without interrupting</span>`, act: () => { input.value = "/btw " + input.value.replace(/^\/btw\s*/, ""); autosize(); updateSend(); input.focus(); input.setSelectionRange(input.value.length, input.value.length); } });
   rows.push({ html: `${icon("users")}<span class="label">Debate it</span><span class="desc">/debate, two sides argue it out</span>`, act: () => { const q = input.value.replace(/^\/debate\s*/, "").trim(); clearInput(); debateForm(q); } });
@@ -24522,16 +24530,7 @@ function renderExtExtras() {
     node.onclick = () => pressExt(b, input.value.trim());
     boxes.appendChild(node);
   }
-  const head = $("#ext-docks");
-  head.textContent = "";
-  for (const d of extDocks()) {
-    const pill = el("button", "pill ext-pill", `${icon(ICON[d.icon] ? d.icon : "puzzle")}<span>${esc(d.label)}</span>`);
-    pill.type = "button";
-    pill.dataset.dock = d.key;
-    pill.dataset.tip = `${d.label}, beside the chat`;
-    pill.onclick = () => (dockOpen === d.key ? closeDock() : openDock(d.key));
-    head.appendChild(pill);
-  }
+  // A dock is opened from the + menu, and shut with its own close button: the top of a chat stays the chat's.
   // Before the page knows its extensions, a remembered dock is kept.
   if (Array.isArray(info.extension_ui)) {
     if (dockOpen && !$("#ext-dock").classList.contains("open")) { if (!openDock(dockOpen)) closeDock(); }
@@ -25146,6 +25145,10 @@ function showFound({ index, terms }) {
   const block = messagesEl.querySelector(`[data-log="${index}"]`);
   if (!block) { follow = true; toBottom(true); return; }
   follow = false;
+  // Lay out everything once so each message's real height is known (and remembered), or the jump lands on guesses.
+  messagesEl.classList.add("laid-out");
+  void messagesEl.offsetHeight;
+  messagesEl.classList.remove("laid-out");
   const top = block.getBoundingClientRect().top - logEl.getBoundingClientRect().top + logEl.scrollTop;
   logEl.scrollTo({ top: Math.max(0, top - logEl.clientHeight / 3), behavior: calm.matches ? "auto" : "smooth" });
   flash(block, "found", 2300);
@@ -25212,6 +25215,7 @@ const highlight = (text, marks) => [...text].map((ch, i) => (marks.includes(i) ?
 function paletteItems(query) {
   const rows = [];
   for (const a of ACTIONS) rows.push({ group: "Action", label: a.label, keys: a.keys, run: a.run });
+  for (const d of extDocks()) rows.push({ group: d.ext || "Extension", label: dockOpen === d.key ? `Hide ${d.label}` : `${d.label} beside the chat`, keys: "", run: () => (dockOpen === d.key ? closeDock() : openDock(d.key)) });
   for (const b of extButtonsAt("palette")) rows.push({ group: b.extension || "Extension", label: b.label, keys: shortcutLabel(b.shortcut), run: () => pressExt(b, input.value.trim()) });
   for (const c of extCommandsAdded) rows.push({ group: c.group || "Extension", label: c.label, keys: shortcutLabel(c.shortcut), run: () => c.run() });
   for (const id of visibleChats()) {
