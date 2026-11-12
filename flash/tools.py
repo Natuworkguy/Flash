@@ -2104,6 +2104,21 @@ def skill_view(name: str, path: str = "") -> str:
     return result
 
 
+def science_tool(action: str = "", query: str = "", id: str = "", source: str = "all", limit: Any = None, full: Any = False,
+                 status: str = "", style: str = "bibtex", sort: str = "relevance", sequence: Any = False, activity: Any = True) -> str:
+    """The research databases: papers, trials, compounds, proteins, citations (flash/science.py)."""
+
+    from . import science
+
+    what = (query or id or "").strip()
+    tool_line(f"Science({(action or '').strip()}{': ' + what[:60] if what else ''})")
+    result = science.run(action, query=query, id=id, source=source, limit=limit, full=full, status=status, style=style,
+                         sort=sort, sequence=sequence, activity=activity)
+    first = result.split("\n", 1)[0]
+    tool_result(first[:120], style=ERROR if result.startswith("Error") else None)
+    return result
+
+
 def flows_tool(action: str = "list", name: str = "", steps: Any = None, trigger: Any = None,
                step: str = "", yes: Any = None) -> str:
     """Flows: several sparks in order, side by side, with the user's yes where it matters."""
@@ -10406,6 +10421,40 @@ tools: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "science",
+            "description": (
+                "Research databases, for science questions: the literature, trials, compounds and proteins, all with links. "
+                "Actions: papers (search PubMed, Europe PMC, preprints from bioRxiv and medRxiv, and arXiv; source all|pubmed|"
+                "europepmc|preprints|arxiv; sort relevance|date), paper (one paper by PMID, PMCID, DOI or arXiv id; full=true "
+                "for its open-access full text), related (papers most like one), cite (a citation by DOI, PMID or arXiv id; "
+                "style bibtex|apa|vancouver|...), trials (ClinicalTrials.gov; status recruiting|completed|active|...), trial (one "
+                "by NCT number: design, arms, outcomes, eligibility), compound (a drug or molecule by name, SMILES, PubChem CID "
+                "or ChEMBL id: properties, rule of five, potency on targets), protein (UniProt by gene, protein name or "
+                "accession: function, location, disease, structures; sequence=true for its FASTA). Prefer it to web_search for "
+                "anything scientific or medical; read the paper before quoting it, and say when evidence is a preprint."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string", "enum": ["papers", "paper", "related", "cite", "trials", "trial", "compound", "protein"]},
+                    "query": {"type": "string", "description": "What to search for, or a compound or protein to look up."},
+                    "id": {"type": "string", "description": "A PMID, PMCID, DOI, arXiv id, NCT number, CID, ChEMBL id or UniProt accession."},
+                    "source": {"type": "string", "enum": ["all", "pubmed", "europepmc", "preprints", "arxiv"]},
+                    "limit": {"type": "integer", "description": "How many results (1 to 25)."},
+                    "full": {"type": "boolean", "description": "paper: include the open-access full text."},
+                    "status": {"type": "string", "description": "trials: recruiting, completed, active, not yet recruiting, terminated, withdrawn, suspended."},
+                    "style": {"type": "string", "description": "cite: bibtex (default), apa, vancouver, harvard-cite-them-right, nature, ..."},
+                    "sort": {"type": "string", "enum": ["relevance", "date"]},
+                    "sequence": {"type": "boolean", "description": "protein: include the amino-acid sequence."},
+                    "activity": {"type": "boolean", "description": "compound: include measured potency on targets (default true)."},
+                },
+                "required": ["action"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "flows",
             "description": (
                 "Flows: work that takes several sparks in order, with the user's yes where it matters. A flow is "
@@ -10594,6 +10643,7 @@ FUNCTIONS = {
     "skill_view": skill_view,
     "skill_manage": skill_manage_tool,
     "flows": flows_tool,
+    "science": science_tool,
     "agent": agent_tool,
     "agent_result": agent_result,
     "make_spark": make_spark,
@@ -10626,7 +10676,7 @@ FUNCTIONS = {
 # adding, renaming, or removing one only means updating this file.
 SUBAGENT_TOOL_NAMES = (
     "shell", "glob", "grep", "read", "write", "edit", "multi_edit",
-    "web_search", "fetch", "get_os", "get_date", "reason",
+    "web_search", "fetch", "science", "get_os", "get_date", "reason",
     "check_inbox", "read_email", "notify_user", "read_imessages",
     "refresh_tools", "more_output",
 )
@@ -10811,7 +10861,7 @@ def run_tool(call):
 # Tools whose words come from someone other than the user: marked when
 # they read like orders to an assistant (guard.py).
 OUTSIDE = {
-    "fetch": "a web page", "web_search": "search results",
+    "fetch": "a web page", "web_search": "search results", "science": "research databases",
     "open_page": "a web page", "interact": "a web page",
     "watch_youtube": "a YouTube video",
     "read_email": "an email", "check_inbox": "the user's inbox",
