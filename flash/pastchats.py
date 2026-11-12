@@ -41,6 +41,7 @@ class Found:
     project: str = ""
     score: float = 0.0
     snippets: list[str] = field(default_factory=list)
+    find: str = ""        # words from the best match, for the page to find the message by
 
 
 def _text(message: dict) -> str:
@@ -89,10 +90,84 @@ def _chats() -> Iterator[tuple[str, str, str, float, str, list]]:
                    "", raw.get("messages") or [])
 
 
+def stem(word: str) -> str:
+    """WORD without the ending that changes nothing about what it means here: "flats" and "flat", "booked" and
+    "booking" find the same chats."""
+    for end in ("ings", "ing", "edly", "ies", "ed", "es", "s", "ly"):
+        if word.endswith(end) and len(word) - len(end) >= 4:
+            return word[: -len(end)] + ("y" if end == "ies" else "")
+    return word
+
+
 def terms(query: str) -> list[str]:
     words = re.findall(r"[\w'-]+", (query or "").lower())
-    kept = [w.strip("'-") for w in words if w not in STOP and len(w) > 1]
+    kept = [stem(w.strip("'-")) for w in words if w not in STOP and len(w) > 1]
     return list(dict.fromkeys(w for w in kept if w))
+
+
+MONTHS = ["january", "february", "march", "april", "may", "june", "july", "august", "september", "october",
+          "november", "december"]
+SEASONS = {"spring": 3, "summer": 6, "autumn": 9, "fall": 9, "winter": 12}
+_TIME = re.compile(
+    r"\b(?:(?:in|from|during|around|back in)\s+)?(?:(last|this|past)\s+)?"
+    r"(today|yesterday|week|month|year|spring|summer|autumn|fall|winter|" + "|".join(MONTHS) + r"|(?:19|20)\d\d)\b"
+    r"|\b(\d+)\s+(day|week|month)s?\s+ago\b", re.I)
+
+
+def timeframe(query: str, now: Optional[float] = None) -> tuple[Optional[tuple[float, float]], str]:
+    """The stretch of time QUERY points at ("last spring", "in March", "2 weeks ago", "yesterday"), as (start, end)
+    epoch seconds, and the query without it. (None, QUERY) when it names no time."""
+    import datetime as dt
+
+    now_dt = dt.datetime.fromtimestamp(now or time.time())
+    m = _TIME.search(query or "")
+    if not m:
+        return None, query
+    if m.group(2) and m.group(2).lower() in ("may", "march", "fall") and not re.match(r"(in|from|during|around|back|last|this|past)\s", m.group(0), re.I):
+        return None, query        # "you may", "march on", "fall over": words before they are times
+    rest = (query[:m.start()] + " " + query[m.end():]).strip()
+    day0 = now_dt.replace(hour=0, minute=0, second=0, microsecond=0)
+
+    def span(a: dt.datetime, b: dt.datetime) -> tuple[float, float]:
+        return a.timestamp(), b.timestamp()
+
+    def month_start(y: int, mo: int) -> dt.datetime:
+        y += (mo - 1) // 12
+        return dt.datetime(y, (mo - 1) % 12 + 1, 1)
+
+    if m.group(3):
+        n, unit = int(m.group(3)), m.group(4).lower()
+        days = {"day": 1, "week": 7, "month": 30}[unit] * n
+        mid = day0 - dt.timedelta(days=days)
+        pad = dt.timedelta(days=max(1, days // 4))
+        return span(mid - pad, mid + pad + dt.timedelta(days=1)), rest
+    which, what = (m.group(1) or "").lower(), m.group(2).lower()
+    if what == "today":
+        return span(day0, day0 + dt.timedelta(days=1)), rest
+    if what == "yesterday":
+        return span(day0 - dt.timedelta(days=1), day0), rest
+    if what == "week":
+        start = day0 - dt.timedelta(days=day0.weekday())
+        return (span(start - dt.timedelta(days=7), start) if which in ("last", "past") else span(start, day0 + dt.timedelta(days=1))), rest
+    if what == "month":
+        this = month_start(day0.year, day0.month)
+        return (span(month_start(day0.year, day0.month - 1), this) if which in ("last", "past") else span(this, day0 + dt.timedelta(days=1))), rest
+    if what == "year":
+        this = dt.datetime(day0.year, 1, 1)
+        return (span(dt.datetime(day0.year - 1, 1, 1), this) if which in ("last", "past") else span(this, day0 + dt.timedelta(days=1))), rest
+    if what.isdigit():
+        y = int(what)
+        return span(dt.datetime(y, 1, 1), dt.datetime(y + 1, 1, 1)), rest
+    first = SEASONS.get(what) or MONTHS.index(what) + 1
+    length = 3 if what in SEASONS else 1
+    # the latest one that has begun; "last" means the one before it when we are in it now
+    year = day0.year
+    start = month_start(year, first)
+    if start > day0:
+        start = month_start(year - 1, first)
+    if which in ("last", "past") and month_start(start.year, start.month + length) > day0:
+        start = month_start(start.year - 1, first)
+    return span(start, month_start(start.year, start.month + length)), rest
 
 
 def _snippet(text: str, words: list[str], phrase: str) -> str:
@@ -114,11 +189,12 @@ def search(query: str, limit: int = 5, exclude: str = "") -> list[Found]:
     the title for more still, and a recent chat a little more than an old
     one. A chat with fewer than half the words in it is left out."""
 
+    now = time.time()
+    window, query = timeframe(query, now)
     words = terms(query)
     if not words:
         return []
     phrase = " ".join((query or "").lower().split())
-    now = time.time()
     found = []
     for chat_id, where, title, updated, project, messages in _chats():
         if exclude and chat_id == exclude:
@@ -146,12 +222,17 @@ def search(query: str, limit: int = 5, exclude: str = "") -> list[Found]:
             continue
         age_days = max(0.0, (now - updated) / 86400)
         score *= (.5 + coverage) * (1 + .3 * math.exp(-age_days / 30))
+        if window:
+            # a chat goes on after the day it began, so one updated a little later still counts
+            start, end = window
+            score *= 3 if start <= updated <= end + 14 * 86400 else .25
         hits.sort(key=lambda h: -h[0])
         found.append(Found(
             id=chat_id, where=where, title=title or "Untitled",
             updated=updated, project=project, score=round(score, 2),
             snippets=[f"{who}: {_snippet(text, words, phrase)}"
-                      for _, who, text in hits[:SNIPPETS]]))
+                      for _, who, text in hits[:SNIPPETS]],
+            find=_snippet(hits[0][2], words, phrase).strip("…").strip()[:80] if hits else ""))
     found.sort(key=lambda f: -f.score)
     return found[:max(1, min(int(limit or 5), MOST))]
 
@@ -183,6 +264,10 @@ def describe(found: list[Found], query: str) -> str:
                      + (f", project {f.project}" if f.project else ""))
         lines += [f"  {s}" for s in f.snippets]
     lines.append("\nCall search_chats with a chat_id to read one of these.")
+    items = [{"id": f.id, "title": f.title, "when": when(f.updated), "snippet": (f.snippets[0].split(": ", 1)[-1] if f.snippets else "")[:160],
+              "find": f.find, **({"where": "terminal"} if f.where == "terminal" else {})} for f in found[:5]]
+    lines.append("To give the user these as links that open the chat at that message, put this block in the reply "
+                 "(keep the best ones, in order):\n```ui\n" + json.dumps({"type": "chats", "items": items}, ensure_ascii=False) + "\n```")
     return "\n".join(lines)
 
 

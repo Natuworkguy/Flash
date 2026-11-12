@@ -557,6 +557,19 @@ body.empty #suggestions { display: flex; flex-wrap: wrap; justify-content: cente
 /* Headline figures. */
 /* summary card: title and badge, a big figure, rows of label and value */
 .ui-card.ui-summary { padding: 20px 22px; }
+/* past chats, as links */
+.chat-links { display: flex; flex-direction: column; gap: 6px; }
+.chat-link { position: relative; display: flex; flex-direction: column; gap: 3px; width: 100%; text-align: left; padding: 10px 36px 10px 12px; border-radius: 10px;
+  border: 1px solid var(--border); background: var(--bg); color: var(--text); font: inherit; cursor: pointer; transition: border-color .15s, background .15s; }
+.chat-link:hover:not(:disabled) { border-color: var(--border-strong); background: var(--hover); }
+.chat-link:disabled { cursor: default; opacity: .75; }
+.chat-link-top { display: flex; align-items: baseline; gap: 10px; }
+.chat-link-title { font-weight: 600; font-size: 14px; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-link-when { font-size: 12px; color: var(--text-3); flex: none; }
+.chat-link-snip { font-size: 13px; color: var(--text-2); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.chat-link-away { font-size: 12px; color: var(--text-3); }
+.chat-link-go { position: absolute; right: 10px; top: 50%; transform: translateY(-50%); color: var(--text-3); }
+.chat-link-go svg { width: 16px; height: 16px; }
 /* 3D structures */
 .mol-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
 .mol-head .ui-title { margin-bottom: 2px; }
@@ -4954,6 +4967,23 @@ new MutationObserver((changes) => {
   }
 }).observe(document.documentElement, { childList: true, subtree: true });
 
+document.addEventListener("click", (e) => {
+  const link = e.target.closest("[data-open-chat]");
+  if (!link || link.disabled) return;
+  const id = link.dataset.openChat, chat = chats.get(id);
+  if (!chat) { toast("That chat isn’t on this page."); return; }
+  const flat = (t) => String(t || "").replace(/\s+/g, " ").toLowerCase();
+  const find = flat(link.dataset.find);
+  let index = find ? chat.log.findIndex((x) => x.text && flat(x.text).includes(find)) : -1;
+  if (index < 0 && find) {
+    // the words, if not the exact run of them
+    const words = find.split(" ").filter((w) => w.length > 3).slice(0, 6);
+    index = chat.log.findIndex((x) => x.text && words.every((w) => flat(x.text).includes(w)));
+  }
+  jumpTo = index >= 0 ? { chat: id, index, terms: [] } : null;
+  if (id === current && view === "chat") drawChat(); else switchTo(id);
+});
+
 // ----- 3D structures -----
 let molLoading = null;
 const molViewers = [];          // live viewers, oldest first: past MOL_LIVE the oldest becomes a picture until clicked
@@ -5305,8 +5335,8 @@ function table(rows) {
 // the kinds). Drawn as HTML here; the controls in it work through the
 // listeners under uiBlock, so a reply drawn again keeps working.
 
-const UI_TYPES = new Set(["chart", "compare", "stats", "steps", "flow", "calc", "choices", "form", "checklist", "card", "molecule"]);
-const UI_BUILDING = { chart: "Drawing a chart", compare: "Laying out the options", stats: "Gathering the figures", steps: "Setting out the steps", flow: "Drawing a diagram", calc: "Building a calculator", choices: "Getting your options ready", form: "Building a form", checklist: "Making a checklist", card: "Filling in the details", molecule: "Folding a structure" };
+const UI_TYPES = new Set(["chart", "compare", "stats", "steps", "flow", "calc", "choices", "form", "checklist", "card", "molecule", "chats"]);
+const UI_BUILDING = { chart: "Drawing a chart", compare: "Laying out the options", stats: "Gathering the figures", steps: "Setting out the steps", flow: "Drawing a diagram", calc: "Building a calculator", choices: "Getting your options ready", form: "Building a form", checklist: "Making a checklist", card: "Filling in the details", molecule: "Folding a structure", chats: "Finding the chats" };
 
 function uiBlock(src, closed) {
   let specs = null;
@@ -5340,7 +5370,7 @@ function uiCard(spec) {
   const title = spec.title && !["choices", "card", "molecule"].includes(spec.type) ? `<div class="ui-title">${uiText(spec.title)}</div>` : "";
   const body = {
     chart: uiChart, compare: uiCompare, stats: uiStats, steps: uiSteps, flow: uiFlow,
-    calc: uiCalc, choices: uiChoices, form: uiForm, checklist: uiChecklist, card: uiSummary, molecule: uiMolecule,
+    calc: uiCalc, choices: uiChoices, form: uiForm, checklist: uiChecklist, card: uiSummary, molecule: uiMolecule, chats: uiChats,
   }[spec.type](spec);
   const data = ["calc", "form", "choices", "molecule"].includes(spec.type) ? ` data-spec="${esc(JSON.stringify(spec))}"` : "";
   const kind = spec.type === "card" ? "summary" : spec.type;
@@ -5573,6 +5603,20 @@ function uiForm(spec) {
     return `<input type="${type}" data-id="${id}" placeholder="${esc(f.placeholder || "")}">`;
   };
   return `<form class="ui-fields">${fields.map((f) => `<label class="ui-field"><span>${uiText(f.label || f.id)}</span>${control(f)}</label>`).join("")}<button type="submit" class="ui-submit">${uiText(spec.submit || "Send")}</button></form>`;
+}
+
+// Past chats as links: each opens its chat at the message that matched, glowing.
+function uiChats(spec) {
+  const items = (Array.isArray(spec.items) ? spec.items : []).filter((i) => i && i.id).slice(0, 8);
+  if (!items.length) return `<div class="ui-note">No chats.</div>`;
+  return `<div class="chat-links">${items.map((i) => {
+    const away = i.where === "terminal" || (typeof chats !== "undefined" && !chats.has(String(i.id)));
+    return `<button type="button" class="chat-link"${away ? " disabled" : ""} data-open-chat="${esc(String(i.id))}" data-find="${esc(String(i.find || ""))}">
+      <span class="chat-link-top"><span class="chat-link-title">${uiText(i.title || "Untitled")}</span><span class="chat-link-when">${uiText(i.when || "")}</span></span>
+      ${i.snippet ? `<span class="chat-link-snip">${uiText(i.snippet)}</span>` : ""}
+      ${away ? `<span class="chat-link-away">${i.where === "terminal" ? "In the terminal: /resume there" : "Not on this page"}</span>` : `<span class="chat-link-go">${icon("chevRight")}</span>`}
+    </button>`;
+  }).join("")}</div>`;
 }
 
 function uiChecklist(spec) {

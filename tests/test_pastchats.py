@@ -109,3 +109,31 @@ def test_the_tool_reads_by_id_and_says_when_there_is_none():
 def test_it_is_a_tool_the_model_can_call():
     names = [t["function"]["name"] for t in tools.tools]
     assert "search_chats" in names and "search_chats" in tools.FUNCTIONS
+
+
+def test_a_time_in_the_question_finds_the_chat_from_then():
+    start, _ = pastchats.timeframe("last spring")[0]
+    a_web_chat("cccc0001", "Flat hunting", ["Look at this flat in Lisbon", "Two bedrooms, near the river."], (time.time() - start) / 86400 - 20)
+    a_web_chat("cccc0002", "Lisbon again", ["Another flat in Lisbon", "This one is smaller."], 1)
+    found = pastchats.search("the lisbon flats last spring", 5)
+    assert found[0].id == "cccc0001"
+
+
+def test_times_are_read_from_plain_words():
+    import datetime as dt
+    now = dt.datetime(2026, 11, 12, 15).timestamp()
+    day = lambda w: [dt.datetime.fromtimestamp(x).strftime("%Y-%m-%d") for x in w]
+    window, rest = pastchats.timeframe("the logo in march", now)
+    assert day(window) == ["2026-03-01", "2026-04-01"] and rest == "the logo"
+    assert day(pastchats.timeframe("budget yesterday", now)[0]) == ["2026-11-11", "2026-11-12"]
+    assert day(pastchats.timeframe("last winter", now)[0]) == ["2025-12-01", "2026-03-01"]
+    assert pastchats.timeframe("you may want the logo", now)[0] is None
+
+
+def test_results_come_with_a_block_of_links():
+    import json
+    a_web_chat("bbbb0001", "Logo talk", ["What colour for the logo?", "Go with the deep blue logo."])
+    said = tools.search_chats("logo colour")
+    block = json.loads(said.split("```ui\n", 1)[1].split("\n```", 1)[0])
+    assert block["type"] == "chats" and block["items"][0]["id"] == "bbbb0001"
+    assert "logo" in block["items"][0]["find"].lower()
