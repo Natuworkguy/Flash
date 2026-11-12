@@ -385,6 +385,23 @@ body.empty #dock { flex: 1; display: flex; flex-direction: column; justify-conte
 #greeting .soft { color: var(--text-3); font-weight: 400; }
 #greeting .in { display: block; font: 500 15px/1.4 var(--sans); letter-spacing: 0; color: var(--text-3); margin-top: 8px; }
 #suggestions { display: none; }
+#setup-card { display: none; }
+body.empty #setup-card:not([hidden]) { display: block; width: min(560px, 100%); margin: 22px auto 0; border: 1px solid var(--border); border-radius: 16px; padding: 16px 18px; background: var(--surface); text-align: left; }
+.setup-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 4px; }
+.setup-head b { font-size: 15px; flex: 1; } .setup-head .setup-n { font-size: 12.5px; color: var(--text-3); }
+.setup-head button { border: 0; background: none; color: var(--text-3); font: 12.5px var(--sans); cursor: pointer; }
+.setup-bar { height: 4px; border-radius: 4px; background: var(--hover); margin: 8px 0 10px; overflow: hidden; }
+.setup-bar i { display: block; height: 100%; background: var(--add); border-radius: 4px; transition: width .4s var(--ease); }
+.setup-steps { display: flex; flex-direction: column; gap: 2px; }
+.setup-step { display: flex; align-items: center; gap: 10px; padding: 7px 8px; border-radius: 10px; border: 0; background: none; color: var(--text); font: inherit; text-align: left; cursor: pointer; width: 100%; }
+.setup-step:hover:not(.done) { background: var(--hover); }
+.setup-step .tick { flex: none; width: 20px; height: 20px; border-radius: 50%; border: 1.5px solid var(--border-strong); display: grid; place-items: center; }
+.setup-step.done .tick { background: var(--add); border-color: var(--add); color: #fff; }
+.setup-step.done .tick svg { width: 12px; height: 12px; }
+.setup-step .what { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.setup-step .what b { font-weight: 550; font-size: 14px; } .setup-step .what span { font-size: 12.5px; color: var(--text-3); }
+.setup-step.done .what b { color: var(--text-2); text-decoration: line-through; text-decoration-color: var(--text-3); }
+.setup-step .go { color: var(--text-3); } .setup-step .go svg { width: 15px; height: 15px; }
 /* The Usage tab's first card: what Flash has done, in the user's numbers. */
 .yours { display: grid; gap: 4px; }
 .yours .big { font: 600 30px/1.1 var(--brand); letter-spacing: -0.02em; color: var(--text); }
@@ -4566,6 +4583,7 @@ body.empty #ext-head, body.on-page #ext-head { display: none; }
         </form>
         </div>
         <div id="suggestions"></div>
+        <div id="setup-card" hidden></div>
         <div id="ext-widgets"></div>
         <div class="fine"><span class="caution">Flash runs commands on this machine. Check what it asks to do.</span><span class="ext-status" hidden></span><span class="tip" hidden></span></div>
       </div>
@@ -21076,7 +21094,50 @@ function greeting() {
   return text;
 }
 
+// The first run: six things that make Flash useful in five minutes, each ticked off as it is done, each one click
+// from where it is set up. It stays on the empty screen until all are done or it is put away.
+const SETUP_STEPS = [
+  ["model", "Pick a model", "the brain Flash thinks with", () => openModelMenuSafe()],
+  ["you", "Tell Flash about you", "your name, how you like answers, where your documents are", () => setupAboutMe()],
+  ["mail", "Connect your email", "so it can triage, draft and send for you", () => showSettings("email")],
+  ["calendar", "Connect your calendar", "so it knows your day and can book things", () => showSettings("connectors")],
+  ["phone", "Open Flash on your phone", "the same chats, in your pocket", () => openPhone()],
+  ["files", "Point it at your files", "so it can search and answer from them", () => setupAboutMe(true)],
+];
+function openModelMenuSafe() { const b = document.querySelector("#model-btn, .model-btn, [data-model-menu]"); if (b) b.click(); else toast("Pick a model from the menu at the top of a chat."); }
+let setupState = null;
+async function drawSetup(force = false) {
+  const card = $("#setup-card");
+  let hidden = false; try { hidden = localStorage.getItem("flash-setup-hidden") === "1"; } catch (_) { /* shown */ }
+  if (hidden && !force) { card.hidden = true; return; }
+  try { setupState = await command("setup-status", "", null); } catch (_) { card.hidden = true; return; }
+  const done = SETUP_STEPS.filter(([k]) => setupState[k]).length;
+  if (done === SETUP_STEPS.length && !force) { card.hidden = true; return; }
+  card.hidden = false;
+  card.innerHTML = `<div class="setup-head"><b>Set up Flash</b><span class="setup-n">${done} of ${SETUP_STEPS.length}</span><button type="button" data-setup-hide>Not now</button></div>
+    <div class="setup-bar"><i style="width:${Math.round(100 * done / SETUP_STEPS.length)}%"></i></div>
+    <div class="setup-steps">${SETUP_STEPS.map(([k, label, sub], i) => `<button type="button" class="setup-step${setupState[k] ? " done" : ""}" data-setup="${i}"><span class="tick">${setupState[k] ? icon("check") : ""}</span><span class="what"><b>${label}</b><span>${sub}</span></span><span class="go">${setupState[k] ? "" : icon("chevRight")}</span></button>`).join("")}</div>`;
+}
+document.addEventListener("click", (e) => {
+  if (e.target.closest("[data-setup-hide]")) { try { localStorage.setItem("flash-setup-hidden", "1"); } catch (_) { /* this visit */ } $("#setup-card").hidden = true; toast("Set it up any time with /setup."); return; }
+  const step = e.target.closest("[data-setup]");
+  if (step && !step.classList.contains("done")) SETUP_STEPS[+step.dataset.setup][3]();
+});
+function setupAboutMe(filesFirst = false) {
+  const form = openForm(`<h2>${filesFirst ? "Your files" : "About you"}</h2><p class="tm-sub">Kept in Flash's memory on this computer, and used in every chat. Change it any time in Settings, Memory.</p>
+    <label class="field"><span>What should Flash call you?</span><input name="who" placeholder="Your name"></label>
+    <label class="field"><span>How do you like answers?</span><input name="style" placeholder="Short and direct, with examples"></label>
+    <label class="field"><span>Where are your documents?</span><input name="folder" placeholder="~/Documents"></label>
+    <div class="dialog-buttons"><button type="button" class="btn" data-cancel>Cancel</button><button type="submit" class="btn primary">Save</button></div>`, async (data) => {
+    await command("setup-about-me", "", null, data);
+    drawSetup();
+  });
+  form.querySelector("[data-cancel]").onclick = closeForm;
+  if (filesFirst) form.querySelector('[name="folder"]').focus();
+}
+
 function greet() {
+  if (!current && !greet.setupDrawn) { greet.setupDrawn = true; drawSetup(); }
   const inProject = projectOf(viewProject);
   const withSpark = !current && sparkOf(viewSpark);
   const extGreeting = !withSpark && !inProject && (extUI().find((e) => e.greeting) || {}).greeting;
@@ -25252,6 +25313,7 @@ const ACTIONS = [
   { label: "Two models answer blind; you pick the better", keys: "", slash: "/compare", run: () => { input.value = "/compare "; autosize(); input.focus(); } },
   { label: "Undo the last turn's file changes", keys: "Alt Z", slash: "/undo", run: undo },
   { label: "Time machine: go back to before any turn", keys: "", slash: "/history", run: openTimeMachine },
+  { label: "Set up Flash: model, you, email, calendar, phone, files", keys: "", slash: "/setup", run: () => { try { localStorage.removeItem("flash-setup-hidden"); } catch (_) { /* fine */ } newChat().then(() => drawSetup(true), () => drawSetup(true)); } },
   { label: "Stop the reply", keys: "Esc", slash: "/stop", run: stopReply },
   { label: "Copy last reply", keys: "Alt C", slash: "/copy", run: copyLastReply },
   { label: "Copy last code block", keys: "Alt Shift C", slash: "/code", run: copyLastCode },
