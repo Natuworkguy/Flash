@@ -28,7 +28,7 @@ _BLOCK = re.compile(
 
 TYPES = (
     "chart", "compare", "stats", "steps", "flow", "calc", "choices",
-    "form", "checklist", "card", "molecule",
+    "form", "checklist", "card", "molecule", "chats",
 )
 
 # What the model is told about the blocks it can write.
@@ -273,6 +273,10 @@ def _markdown(spec: dict) -> str:
             for r in rows:
                 note = f" ({r['note']})" if r.get("note") else ""
                 lines.append(f"- {r.get('label', '')}: **{r.get('value', '')}**{note}")
+    elif kind == "chats":
+        for i in spec.get("items") or []:
+            if isinstance(i, dict):
+                lines.append(f"- {i.get('title', 'Untitled')} ({i.get('when', '')}): {i.get('snippet', '')}".rstrip(": "))
     elif kind == "molecule":
         name, link = molecule_page(spec)
         if name:
@@ -336,6 +340,9 @@ def _spoken(spec: dict) -> str:
             for r in spec.get("rows") or [] if isinstance(r, dict) and not r.get("divider")
         ]
         return ". ".join(b for b in bits if b)
+    if kind == "chats":
+        names = [str(i.get("title", "")) for i in spec.get("items") or [] if isinstance(i, dict)]
+        return ("Found " + ", ".join(names[:3]) + ".") if names else ""
     if kind == "molecule":
         name = title or molecule_page(spec)[0]
         return f"{name}, in 3D on screen." if name else ""
