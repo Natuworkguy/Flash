@@ -56,6 +56,7 @@ import segno
 from rich.text import Text
 
 from . import agent as subagents
+from . import btw as btw_side
 from . import (
     background,
     briefing,
@@ -451,6 +452,8 @@ class Chat:
     # {"id", "text", "mode"}. A "steer" one goes to the model at the
     # running turn's next step; a "queue" one becomes the next turn.
     pending: list[dict] = field(default_factory=list)
+    # Side questions answered while a turn ran, for the model at its next step: (question, answer).
+    asides: list = field(default_factory=list)
     stop: threading.Event = field(default_factory=threading.Event)
     # The turn running now came from voice mode: its reply is heard, so
     # the model is asked to keep it short and plain.
@@ -2131,7 +2134,7 @@ class Session:
 
         def answer() -> None:
             try:
-                side.ask(
+                said = side.ask(
                     ai._client(), model, messages, ai._chat_options(),
                     on_text=lambda piece: say(text=piece),
                 )
@@ -2139,6 +2142,12 @@ class Session:
                 say(done=True, error=f"{exc.__class__.__name__}: {exc}")
                 return
             say(done=True)
+            # The working model hears of it: at its next step while a turn runs, else with the next message.
+            with self._lock:
+                if chat.busy or chat.queued:
+                    chat.asides.append((question, said))
+                else:
+                    chat.messages.append(ai._message("user", side.aside(question, said)))
 
         say(question=question)
         threading.Thread(target=answer, daemon=True).start()
@@ -2585,6 +2594,13 @@ class Session:
             "type": "pending", "chat": chat.id,
             "pending": [dict(p) for p in chat.pending],
         })
+
+    def take_asides(self, chat: Chat) -> list:
+        """Side questions answered since the model's last step, taken off the list."""
+
+        with self._lock:
+            taken, chat.asides = chat.asides, []
+        return taken
 
     def take_steers(self, chat: Chat) -> list[dict]:
         """The steering messages waiting for this turn, taken off the
@@ -4309,6 +4325,9 @@ def _respond(
                 messages.append(ai._message(
                     "user", f"{STEER_NOTE}\n{said}", shown_files or None,
                 ))
+            # And what they asked on the side meanwhile, with the answer they got.
+            for question, said in session.take_asides(chat):
+                messages.append(ai._message("user", btw_side.aside(question, said)))
 
         # The one agent loop (loop.py): an empty reply is asked for
         # again, changed code is checked, and at the round limit the
@@ -4350,6 +4369,9 @@ def _respond(
         chat.messages.extend(ai._worth_keeping(convo, keep_from))
         if reply.content:
             chat.messages.append(ai._message("assistant", reply.content))
+    # Side questions answered after the turn's last step: kept for the next one.
+    for question, said in session.take_asides(chat):
+        chat.messages.append(ai._message("user", btw_side.aside(question, said)))
 
     if not nothing:
         session.emit(chat, {

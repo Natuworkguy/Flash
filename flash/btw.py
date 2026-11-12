@@ -2,9 +2,11 @@
 
 A side question is answered from what the conversation already holds,
 with no tools, on a thread of its own, so the work in progress goes on
-undisturbed. Neither the question nor its answer joins the
-conversation: it is a quick word on the side, and the model working on
-the real thing never hears of it.
+undisturbed. Once answered, the question and its answer are passed to
+the model doing the real work at its next step (or with the next
+message, when nothing is running), marked as an aside, so it knows what
+the user wondered about and what they were told, without treating it as
+a new request.
 """
 
 from collections.abc import Callable
@@ -26,6 +28,19 @@ PROMPT = (
 # "why did you pick that file?", not a second copy of a long chat.
 HISTORY_CHARS = 24_000
 WORKING_CHARS = 2_000
+
+ASIDE_NOTE = (
+    "[While you worked, the user asked this on the side and got the answer below, given without tools. It is not a "
+    "new request and needs no reply; take it into account if it bears on the work, and correct the answer later if "
+    "your work shows it was wrong.]"
+)
+
+
+def aside(question: str, answer: str) -> str:
+    """What the working model is told about a side question and its answer."""
+
+    return f"{ASIDE_NOTE}\nAsked: {question.strip()}\nAnswered: {(answer or '(no answer)').strip()}"
+
 
 USAGE = "Ask something after /btw, like /btw what does this function return?"
 

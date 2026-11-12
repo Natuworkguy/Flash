@@ -138,7 +138,7 @@ class TestTheWeb:
 
         return drain
 
-    def test_answered_while_a_turn_runs_and_never_kept(self):
+    def test_answered_while_a_turn_runs_and_passed_to_the_model(self):
         gate = threading.Event()
 
         def held():
@@ -161,14 +161,25 @@ class TestTheWeb:
         assert "".join(e.get("text", "") for e in events) == "It is the cache."
         sent = FakeClient.requests[-1]["messages"]
         assert "working on: speed up the build" in sent[-2]["content"]
-        # The turn was never held up, and nothing of it is in the chat.
+        # The turn was never held up, and the page shows no message for it.
         assert chat.busy
         gate.set()
         wait_for(lambda: not chat.busy)
         said = [e.get("text") for e in chat.log]
         assert "what is slow?" not in said
-        assert all("cache" not in (m.get("content") or "")
-                   for m in chat.messages)
+        # The model hears of it, as an aside, from its next step on.
+        asides = [m["content"] for m in chat.messages if btw.ASIDE_NOTE in str(m.get("content"))]
+        assert len(asides) == 1 and "what is slow?" in asides[0] and "the cache" in asides[0]
+
+    def test_asked_between_turns_goes_with_the_next_message(self):
+        FakeClient.scripts = [[part("Blue.")]]
+        session = web.Session()
+        drain = self.events_of(session)
+        chat = session.new_chat()
+        session.btw(chat, "which colour did we pick?")
+        wait_for(lambda: any(e.get("done") for e in drain()))
+        wait_for(lambda: chat.messages)
+        assert btw.ASIDE_NOTE in chat.messages[-1]["content"] and "Blue." in chat.messages[-1]["content"]
 
     def test_the_route(self):
         FakeClient.scripts = [[part("Yes.")]]

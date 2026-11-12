@@ -242,9 +242,11 @@ python run.py
   "Fallbacks for ..." in the model menu.
 - `/btw <question>`: Ask something on the side, even while Flash is
   working. It is answered at once from what the conversation already
-  holds, with no tools, and shown apart from the chat: neither the
-  question nor the answer joins the conversation, and the work in
-  progress carries on undisturbed. The web UI takes `/btw` too, and
+  holds, with no tools, and shown apart from the chat, and the work in
+  progress carries on undisturbed. Flash still sees it: the question
+  and its answer reach the work at its next step (or go with your next
+  message), as an aside, so it can take them into account or correct
+  the answer once its work shows something different. The web UI takes `/btw` too, and
   shows the answer in a card above the message box until you close it.
 - `/resume [words]`: Pick up an earlier conversation from a list, the
   latest first (or the latest whose title has the words). Every
