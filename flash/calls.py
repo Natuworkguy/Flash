@@ -167,6 +167,12 @@ GONE_LOOKS = 3
 LONGEST_TURN = 30.0
 # The model's word for "this call is over".
 HANG_UP = "[hang up]"
+# Said by Flash when the other side wants the user, or something needs the
+# user's own answer: the user is pinged to join, and Flash holds the line.
+GET_USER = "[get the user]"
+# How long Flash holds the line for the user to come on, before it goes
+# back and says they could not.
+JOIN_WAIT = 90.0
 RATE = voice.SAMPLE_RATE
 BLOCK = 0.1  # seconds of sound read at a time
 CALLS_DIR = FLASH_DIR / "calls"
@@ -609,7 +615,9 @@ def live() -> dict:
         on = _owner is not None
     return {"live": on, "talking": line is not None,
             "mic": bool(line is not None and getattr(line, "mic", None)),
-            "paused": bool(line is not None and line._paused())}
+            "paused": bool(line is not None and line._paused()),
+            "taken": bool(line is not None and getattr(line, "taken", False)),
+            "asking": bool(line is not None and getattr(line, "asking_since", 0.0))}
 
 
 def set_paused(on: bool, owner: str = "") -> dict:
@@ -621,6 +629,31 @@ def set_paused(on: bool, owner: str = "") -> dict:
     if line is None:
         raise CallError("Flash isn't talking on a call right now.")
     line.pause(on)
+    return live()
+
+
+def take_over(on: bool, owner: str = "") -> dict:
+    """The user takes the call over from Flash (ON), or hands it back:
+    taking it puts their mic in and Flash goes quiet, still writing down
+    what the other side says; handing back takes the mic out, and Flash
+    carries on from where the call is."""
+
+    with _lock:
+        line = _line if _mine(owner) else None
+    if line is None:
+        raise CallError("Flash isn't on a call right now.")
+    if on:
+        line.set_mic(True)
+        line.pause(True)
+        line.taken = True
+        line.asking_since = 0.0
+        tool_call({"state": "taken"})
+    else:
+        line.taken = False
+        line.handed_back = True
+        line.set_mic(False)
+        line.pause(False)
+        tool_call({"state": "back"})
     return live()
 
 
@@ -1309,9 +1342,52 @@ def _instructions(call: Call, user: str, greeted: str = "") -> str:
         "then let them answer. No lists, no markdown, nothing to read.\n"
         f"- Agree to nothing {user} did not ask for: no payments, no "
         "personal details, no promises. Say you will pass it on.\n"
+        f"- If they ask to speak to {user} themselves, or something needs "
+        f"{user}'s own answer that you cannot give, say you will get "
+        f"{user} on the line, ask them to hold a moment, and end with "
+        f"{GET_USER}. {user} is pinged and joins if they can.\n"
         f"- Once the goal is done, or they say goodbye, say a short goodbye "
         f"and end with {HANG_UP}."
     )
+
+
+# A line in a call's record for the model alone: what happened on the
+# line that nobody said (the user took over, or did not come).
+NOTE = "(note)"
+
+
+def _ask_user_to_join(call: Call, line, user: str) -> None:
+    """Ping the user to come on the call, and hold the line for them."""
+
+    from . import notify
+
+    who = call.who or "the other side"
+    why = call.lines[-2][1] if len(call.lines) >= 2 and call.lines[-2][0] != "Flash" else ""
+    line.asking_since = time.monotonic()
+    line.pause(True)
+    tool_call({"state": "join", "with": call.who, "why": why})
+    with contextlib.suppress(Exception):
+        notify.notify("Join the call", f"{who} wants to talk to you. Flash is holding the line.")
+
+
+def _join_due(line) -> bool:
+    since = getattr(line, "asking_since", 0.0)
+    return bool(since) and not getattr(line, "taken", False) and time.monotonic() - since >= JOIN_WAIT
+
+
+def _join_timed_out(call: Call, line, user: str) -> bool:
+    """The user was asked to join and has not: Flash goes back on."""
+
+    since = getattr(line, "asking_since", 0.0)
+    if not since or getattr(line, "taken", False) or time.monotonic() - since < JOIN_WAIT:
+        return False
+    line.asking_since = 0.0
+    line.pause(False)
+    tool_call({"state": "join-missed"})
+    first = _first_name(user) or "the user"
+    call.lines.append((NOTE, f"{first} did not come to the phone. Tell them {first} can't come to the phone "
+                             "right now, and offer to pass a message on."))
+    return True
 
 
 def _reply(call: Call, user: str, ask: Callable[[list[dict]], str],
@@ -1319,6 +1395,9 @@ def _reply(call: Call, user: str, ask: Callable[[list[dict]], str],
     messages = [{"role": "system",
                  "content": _instructions(call, user, greeted)}]
     for who, said in call.lines:
+        if who == NOTE:
+            messages.append({"role": "system", "content": said})
+            continue
         messages.append({"role": "assistant" if who == "Flash" else "user",
                          "content": said})
     if not call.lines or call.lines[-1][0] == "Flash":
@@ -1397,10 +1476,20 @@ def talk(call: Call, line: Line, user: str, ask: Callable[[list[dict]], str],
         if time.monotonic() - started > MOST_SECONDS:
             call.ended = "it ran past ten minutes"
             break
+        if getattr(line, "handed_back", False):
+            line.handed_back = False
+            first = _first_name(user) or "the user"
+            call.lines.append((NOTE, f"{first} was on the line themselves for a while and has handed the call back "
+                                     "to you; what they said is not in this record. Carry on from where it is, "
+                                     "briefly."))
+        if held() and _join_timed_out(call, line, user):
+            continue
         if held():
-            # Paused: still listening, so what they say is kept, but
-            # Flash answers nothing until resumed.
-            heard = line.hear(stopping=lambda: stopping() or not held())
+            # Paused, taken over, or holding for the user: still
+            # listening, so what they say is kept, but Flash answers
+            # nothing until it is back on.
+            heard = line.hear(stopping=lambda: stopping() or not held() or (
+                bool(getattr(line, "asking_since", 0.0)) and _join_due(line)))
             if heard:
                 call.say(call.who or "Them", heard)
             continue
@@ -1417,7 +1506,9 @@ def talk(call: Call, line: Line, user: str, ask: Callable[[list[dict]], str],
         else:
             said, wav = _reply(call, user, ask), b""
         done = HANG_UP in said.lower()
-        said = said.replace(HANG_UP, "").replace(HANG_UP.title(), "").strip()
+        wants_user = GET_USER in said.lower()
+        said = said.replace(HANG_UP, "").replace(HANG_UP.title(), "")
+        said = said.replace(GET_USER, "").replace(GET_USER.title(), "").strip()
         if said:
             call.say("Flash", said)
             if wav and hasattr(line, "play"):
@@ -1427,6 +1518,9 @@ def talk(call: Call, line: Line, user: str, ask: Callable[[list[dict]], str],
         if done:
             call.ended = "the call was done"
             break
+        if wants_user and hasattr(line, "pause"):
+            _ask_user_to_join(call, line, user)
+            continue
         heard = line.hear(stopping=stopping)
         if not heard and stopping():
             break

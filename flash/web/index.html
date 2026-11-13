@@ -1492,6 +1492,9 @@ body.course-open { overflow: hidden; }
 body.voice-on .shell, body.voice-on #suggestions, body.voice-on #pending { display: none !important; }
 #recording, #call-bar { display: flex; align-items: center; gap: 12px; margin: 0 0 10px; padding: 10px 12px 10px 16px; border: 1px solid color-mix(in srgb, #ff4d5e 45%, var(--border-strong)); border-radius: 16px; background: color-mix(in srgb, #ff4d5e 7%, var(--surface)); animation: pop 0.2s var(--ease); }
 #recording[hidden], #call-bar[hidden] { display: none; }
+#call-bar.asking { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, var(--surface)); }
+#call-bar.asking [data-call-take] { animation: pulse-ring 1.6s ease-out infinite; }
+@keyframes pulse-ring { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 55%, transparent); } 100% { box-shadow: 0 0 0 10px transparent; } }
 /* A call with a spark going on: in place of the message box, which voice
    mode takes away, under the greeting on a new chat. */
 #on-call { display: none; align-items: center; gap: 12px; margin: 0 auto 10px; max-width: 520px; padding: 10px 10px 10px 16px; border: 1px solid color-mix(in srgb, var(--c, #2f9e5b) 45%, var(--border-strong)); border-radius: 16px; background: color-mix(in srgb, var(--c, #2f9e5b) 8%, var(--surface)); }
@@ -4584,6 +4587,7 @@ body.empty #ext-head, body.on-page #ext-head { display: none; }
           <span class="rec-words"><b>On a call</b><span class="rec-meta">Flash is talking. Add your own mic to speak too.</span></span>
           <button type="button" class="btn small" aria-pressed="false" data-call-pause>Pause Flash</button>
           <button type="button" class="btn small" aria-pressed="false" data-call-mic>Add my mic</button>
+          <button type="button" class="btn small primary" aria-pressed="false" data-call-take>Take over</button>
         </div>
         <div id="recording" hidden role="group" aria-label="Screen recording">
           <span class="rec-dot" aria-hidden="true"></span>
@@ -9870,6 +9874,29 @@ function drawCallEntry(entry) {
   const callBar = document.getElementById("call-bar");
   const mic = callBar.querySelector("[data-call-mic]");
   const pause = callBar.querySelector("[data-call-pause]");
+  const take = callBar.querySelector("[data-call-take]");
+  const meta = callBar.querySelector(".rec-meta");
+  // Taken over by the user, or handed back: the buttons say where it stands.
+  const drawTaken = (on) => {
+    take.setAttribute("aria-pressed", on ? "true" : "false");
+    take.textContent = on ? "Hand back to Flash" : "Take over";
+    take.classList.toggle("primary", !on);
+    callBar.classList.toggle("asking", false);
+    mic.hidden = pause.hidden = on;
+    meta.textContent = on ? "You're on the call. Flash is quiet, still writing down what they say." : "Flash is talking. Add your own mic to speak too.";
+  };
+  if (entry.state === "join") {
+    // The other side wants the user: a ping, and the bar asks them to come on.
+    callBar.classList.add("asking");
+    meta.textContent = `${entry.with || "They"} want${entry.with ? "s" : ""} to talk to you. Flash is holding the line.`;
+    take.textContent = "Join the call";
+    try { if (document.hidden && "Notification" in window && Notification.permission === "granted") new Notification("Join the call", { body: meta.textContent }); } catch (_) { /* the bar still asks */ }
+    playPing();
+    return;
+  }
+  if (entry.state === "join-missed") { drawTaken(false); toast("You didn't join in time, so Flash went back on the call"); return; }
+  if (entry.state === "taken") { drawTaken(true); return; }
+  if (entry.state === "back") { drawTaken(false); return; }
   if (entry.state === "start") {
     const bar = el("div", "speaker", `<span class="name"></span><span class="from">live</span>`);
     bar.style.setProperty("--c", "var(--accent)");
@@ -9903,6 +9930,15 @@ function drawCallEntry(entry) {
       } catch (e) { toast(e.message); }
       pause.disabled = callBar.hidden;
     };
+    drawTaken(false);
+    take.disabled = false;
+    take.onclick = async () => {
+      const on = take.getAttribute("aria-pressed") !== "true";
+      take.disabled = true;
+      try { const now = await command("call-takeover", on ? "on" : "off"); drawTaken(!!now.taken); }
+      catch (e) { toast(e.message); }
+      take.disabled = callBar.hidden;
+    };
     callBar.hidden = false;
     return;
   }
@@ -9915,8 +9951,10 @@ function drawCallEntry(entry) {
     // apart from them: the same rule a reply's own --- draws.
     messagesEl.appendChild(el("div", "block turn")).appendChild(el("div", "assistant")).appendChild(el("hr"));
     callBar.hidden = true;
+    callBar.classList.remove("asking");
     mic.onclick = null;
     pause.onclick = null;
+    take.onclick = null;
     return;
   }
   const when = `${entry.who} · ${entry.at || ""}`;
