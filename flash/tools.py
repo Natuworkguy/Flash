@@ -783,6 +783,15 @@ def shell_tool(command: str, timeout=None, is_user=False,
     from . import sandbox as walls
 
     seconds = _shell_timeout(timeout)
+    from . import worktrees
+
+    if not is_user and worktrees.publishes(command) and worktrees.is_private(os.getcwd()):
+        tool_line(f"Bash({command})")
+        result = ("Error: not run. This chat works in a private worktree: its branch stays on this computer, "
+                  "and pushing it or opening a pull request is the user's to do. Commit here instead, and tell "
+                  "the user it is ready to merge.")
+        tool_result(result, style=ERROR)
+        return result
     walled = not is_user and (walls.enabled() or sandbox is True or str(
         sandbox).strip().lower() in ("true", "yes", "1"))
 

@@ -506,6 +506,9 @@ class Chat:
     seen: int = 0
     # The model it talks to; "" for Flash's default (MODEL).
     model: str = ""
+    # The git worktree it works in instead of its project's folder, if
+    # one was picked (worktrees.py).
+    worktree: str = ""
 
     def summary(self) -> dict:
         return {
@@ -522,6 +525,7 @@ class Chat:
             "updated": self.updated,
             "pinned": self.pinned,
             "model": self.model,
+            "worktree": self.worktree,
             "forks": len(self.forks),
             # What it is waiting for, while it is: a clock in the list.
             "waiting": [w.what for w in waits.for_chat(self.id)
@@ -547,6 +551,7 @@ class Chat:
             "fork": self.fork,
             "seen": self.seen,
             "model": self.model,
+            "worktree": self.worktree,
         }
 
     @classmethod
@@ -567,6 +572,7 @@ class Chat:
             fork=str(data.get("fork") or ""),
             seen=int(data.get("seen") or 0),
             model=str(data.get("model") or ""),
+            worktree=str(data.get("worktree") or ""),
         )
 
 
@@ -1254,7 +1260,7 @@ class Session:
                          if chat.project else None)
                 with self.turn_lock, \
                         capture_tool_output(_sink(self, chat)), \
-                        inside(found.path if found else None), \
+                        inside(where(chat, found)), \
                         _tools().running_as(chat.id):
                     job()
             except Exception as exc:  # noqa: BLE001
@@ -2759,7 +2765,7 @@ class Session:
                         self.emit(chat, {"type": "note", "text": "Stopped."})
                     else:
                         # Its commands are this chat's, for Stop to end.
-                        with inside(found.path if found else None), \
+                        with inside(where(chat, found)), \
                                 _tools().running_as(chat.id):
                             run_turn(self, chat, text, found, files)
                     progress.end(*_outcome(chat, begun))
@@ -3733,6 +3739,15 @@ def _snippet(flat: str, at: int) -> str:
     )
 
 
+def where(chat: "Chat", found: Optional["workspace.Project"]) -> Optional[str]:
+    """The folder CHAT's turns run in: its worktree when it has one that
+    is still there, else its project's folder."""
+
+    if chat.worktree and os.path.isdir(chat.worktree):
+        return chat.worktree
+    return found.path if found else None
+
+
 @contextmanager
 def inside(folder: Optional[str]):
     """Run a project's turn in its folder, then go back.
@@ -4189,6 +4204,10 @@ def _respond(
                 + "\n\n" + WEB_PROMPT
         if found is not None:
             prompt = f"{prompt}\n\n{project_prompt(found)}".strip()
+        if chat.worktree and os.path.isdir(chat.worktree):
+            from . import worktrees
+
+            prompt = f"{prompt}\n\n{worktrees.describe(chat.worktree)}"
         if chat.deep:
             prompt = f"{prompt}\n\n{THINK_HARDER_PROMPT}"
         system = ai._message("system", prompt)
@@ -5241,6 +5260,9 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
         from . import compare
 
         return compare.pick(arg, str(body.get("choice") or ""))
+
+    if name.startswith("worktree"):
+        return _worktree_command(session, name, arg, chat_id, body)
 
     if name == "compare-keep":
         # Carry on the chat from one side: its answer kept as the reply, and its model the chat's from now on.
@@ -6698,6 +6720,60 @@ def _connector_command(name: str, arg: str, body: dict) -> dict:
         "connectors": connectors.listing(),
         "path": str(connectors.config_path()),
     }
+
+
+def _worktree_command(session: "Session", name: str, arg: str,
+                      chat_id: str, body: dict) -> dict:
+    """A chat's git worktrees: listed, made, picked, merged back or
+    removed. The folder they belong to is the chat's project's, or the
+    folder Flash runs in."""
+
+    from . import worktrees
+
+    chat = session.chats.get(chat_id)
+    if chat is None:
+        raise ValueError("no such chat")
+    found = workspace.project(chat.project) if chat.project else None
+    base = found.path if found else os.getcwd()
+    try:
+        if name == "worktrees":
+            listed = worktrees.listing(base)
+            current = chat.worktree if chat.worktree and os.path.isdir(chat.worktree) else ""
+            for wt in listed:
+                wt["current"] = (os.path.realpath(wt["path"]) == os.path.realpath(current)) if current else wt["main"]
+            return {"worktrees": listed, "repo": worktrees.repo_of(base)}
+        if chat.busy or chat.queued:
+            raise ValueError("Wait for the reply to finish first.")
+        said = ""
+        if name == "worktree-new":
+            made = worktrees.create(base, arg or body.get("label") or chat.title)
+            chat.worktree = made["path"]
+            said = f"This chat now works in its own worktree, on the branch {made['branch']}."
+        elif name == "worktree-use":
+            if not arg:
+                chat.worktree = ""
+                said = "This chat works in the main checkout again."
+            else:
+                picked = worktrees.find(base, arg)
+                chat.worktree = "" if picked["main"] else picked["path"]
+                said = (f"This chat now works in the worktree on {picked['branch']}." if chat.worktree
+                        else "This chat works in the main checkout again.")
+        elif name == "worktree-merge":
+            said = worktrees.merge(base, arg or chat.worktree)
+        elif name == "worktree-remove":
+            path = arg or chat.worktree
+            said = worktrees.remove(base, path, force=bool(body.get("force")))
+            for other in session.chats.values():
+                if other.worktree and os.path.realpath(other.worktree) == os.path.realpath(path):
+                    other.worktree = ""
+        else:
+            raise ValueError("no such worktree step")
+    except worktrees.WorktreeError as exc:
+        raise ValueError(str(exc)) from None
+    session.emit(chat, {"type": "note", "text": said})
+    session.save(chat)
+    session.hub.publish({"type": "chats", "chat": chat.id})
+    return {"worktree": chat.worktree, "said": said}
 
 
 def _meeting_post(session: "Session", path: str, body: dict) -> dict:

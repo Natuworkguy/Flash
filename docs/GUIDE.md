@@ -1137,6 +1137,23 @@ it will do then, how its last look went, and Cancel. Waits are kept in
 the laptop sleeping. A time that passed while Flash was not running is
 over the moment it is back. Deleting a chat cancels its waits.
 
+### Worktrees
+
+A chat can work in a git worktree of its own: a second checkout of the
+project's repository, on its own branch, in its own folder under
+`~/.flash/worktrees`. Its changes stay there, so two chats can work on
+the same project at once and the main checkout stays as it was. Open
++ > Work in a worktree (or `/worktree`) and pick New worktree for this
+chat: the branch is named after the chat. The pill by the message box
+shows the branch; click it to switch to another checkout, merge the
+work into the main checkout, or remove the worktree.
+
+These branches stay on your computer. Flash commits in them but never
+pushes them or opens a pull request: it refuses `git push` and `gh pr
+create` there, and the branch has no upstream, so a bare `git push`
+goes nowhere. Merge brings the work into whatever branch the main
+checkout has out, as a local merge; pushing it is yours to do.
+
 ### Recording a meeting
 
 In the web UI, + > Record a meeting (or `/meeting`) listens through the

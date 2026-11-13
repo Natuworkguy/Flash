@@ -1762,6 +1762,8 @@ body.empty #model-btn { min-width: 70px; }
 .menu .agent-row .state.running { color: var(--accent); }
 .menu .agent-row .detail { font: 11.5px var(--mono); color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* Only before the first message: after that, the chat has its project. */
+#tree-btn { max-width: 200px; min-width: 34px; flex: 0 4 auto; color: var(--text); }
+#tree-btn span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #project-btn { display: none; max-width: 220px; min-width: 34px; flex: 0 4 auto; }
 body.empty:not(.on-page) #project-btn { display: inline-flex; }
 #project-btn span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -4625,6 +4627,7 @@ body.empty #ext-head, body.on-page #ext-head { display: none; }
             <button type="button" class="pill" id="auto-btn" data-tip="Autonomous mode" data-keys="Shift Tab"></button>
             <button type="button" class="pill" id="think-btn" aria-pressed="false" hidden data-tip="Your next message gets a harder think. Click to skip it."></button>
             <button type="button" class="pill" id="project-btn" data-tip="Start in a project" aria-haspopup="listbox"></button>
+            <button type="button" class="pill" id="tree-btn" hidden data-tip="This chat's worktree" aria-haspopup="menu"></button>
             <button type="button" class="pill" id="spark-btn" hidden data-tip="Open this spark"></button>
             <button type="button" class="pill" id="agents-btn" hidden data-tip="Sub-agents"><span class="pulse-dot"></span><span id="agents-count"></span></button>
             <span id="context" role="meter" aria-label="Context used" aria-valuemin="0" aria-valuemax="100" hidden><span class="ctx-track"><span class="ctx-fill"></span></span><span class="ctx-pct"></span></span>
@@ -4756,6 +4759,7 @@ const ICON = {
   globe: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/>',
   alert: '<circle cx="12" cy="12" r="9"/><path d="M12 8v4M12 16h.01"/>',
   dot: '<circle cx="12" cy="12" r="3"/>',
+  branch: '<circle cx="6" cy="5" r="2"/><circle cx="6" cy="19" r="2"/><circle cx="18" cy="7" r="2"/><path d="M6 7v10M18 9a6 6 0 0 1-6 6H8"/>',
   folder: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/>',
   download: '<path d="M12 4v11M7 10.5l5 5 5-5M5 20h14"/>',
   external: '<path d="M14 4h6v6M20 4l-9 9M18 14v4a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4"/>',
@@ -10144,6 +10148,7 @@ function drawChat() {
   const extPlaceholder = (extUI().find((e) => e.placeholder) || {}).placeholder;
   input.placeholder = empty ? (inProject ? `Message ${who} in ${inProject.name}` : extPlaceholder && !withSpark ? extPlaceholder : `Message ${who}`) : `Reply to ${who}`;
   renderProjectBtn();
+  renderTreeBtn();
   renderSparkBtn();
   renderPending();
   renderBtw();
@@ -23234,6 +23239,7 @@ function openPlus() {
   }
   if (canRecord) rows.push({ html: `${icon("users")}<span class="label">Record a meeting</span><span class="desc">Flash works along live, writes it up after</span>`, act: startMeeting });
   if (navigator.clipboard && navigator.clipboard.read) rows.push({ html: `${icon("copy")}<span class="label">Paste an image</span>`, act: pasteImage });
+  if (current && chats.get(current)) rows.push({ html: `${icon("branch")}<span class="label">Work in a worktree</span><span class="desc">a branch of its own, local only</span>`, act: () => openWorktrees($("#plus-btn")) });
   rows.push({ header: true, rule: true, html: "" });
   const thinking = thinkBtn.getAttribute("aria-pressed") === "true";
   rows.push({ html: `${icon("think")}<span class="label">${thinking ? "Skip the harder think" : "Think harder"}</span><span class="desc">${thinking ? "" : "on the next message"}</span>`, act: () => setThink(!thinking) });
@@ -23831,6 +23837,49 @@ function renderProjectBtn() {
   b.lastChild.textContent = p ? p.name : "Project";
   b.classList.toggle("on", !!p);
 }
+
+// A chat working in a git worktree of its own: the branch it is on, and
+// the menu to pick another, make one, merge it back or remove it. The
+// work stays local: Flash never pushes these branches.
+const treeName = (path) => String(path || "").split(/[\\/]/).filter(Boolean).pop() || "";
+function renderTreeBtn() {
+  const chat = chats.get(current);
+  const b = $("#tree-btn");
+  b.hidden = !(chat && chat.worktree);
+  if (b.hidden) return;
+  b.innerHTML = `${icon("branch")}<span></span>`;
+  b.lastChild.textContent = treeName(chat.worktree);
+}
+async function openWorktrees(anchor) {
+  anchor = anchor || (!$("#tree-btn").hidden ? $("#tree-btn") : $("#plus-btn"));
+  const chat = chats.get(current);
+  if (!chat) { toast("Start the chat first, then give it a worktree"); return; }
+  let r;
+  try { r = await command("worktrees", "", chat.id); } catch (error) { toast(error.message); return; }
+  const step = async (name, arg = "", extra = {}) => {
+    try { const done = await command(name, arg, chat.id, extra); if (done.said) toast(done.said); chat.worktree = done.worktree || ""; renderTreeBtn(); }
+    catch (error) { toast(error.message); }
+  };
+  const repo = treeName(r.repo);
+  const rows = [{ header: true, html: `<span class="label">Checkouts of ${esc(repo)}</span>` }];
+  for (const wt of r.worktrees) {
+    const what = wt.main ? `Main checkout${wt.branch ? ` · ${esc(wt.branch)}` : ""}` : esc(wt.branch || treeName(wt.path));
+    const desc = [wt.changed ? `${wt.changed} changed` : "", wt.private ? "local only" : "", wt.gone ? "missing" : ""].filter(Boolean).join(" · ");
+    rows.push({ html: `${icon(wt.main ? "folder" : "branch")}<span class="label">${what}</span><span class="desc">${desc}</span>`, current: wt.current,
+      act: () => (wt.current ? null : step("worktree-use", wt.main ? "" : wt.path)) });
+  }
+  rows.push({ header: true, rule: true, html: "" });
+  rows.push({ html: `${icon("plus")}<span class="label">New worktree</span><span class="desc">own branch, local</span>`, act: () => step("worktree-new", "", { label: chat.title }) });
+  if (chat.worktree) {
+    rows.push({ html: `${icon("check")}<span class="label">Merge into main checkout</span><span class="desc">not pushed</span>`, act: () => step("worktree-merge", chat.worktree) });
+    rows.push({ html: `${icon("trash")}<span class="label">Remove this worktree</span>`, act: async () => {
+      if (!(await confirmPop(anchor, { title: "Remove this worktree?", text: "Its folder goes. Its branch is kept if its work is not merged yet.", yes: "Remove" }))) return;
+      step("worktree-remove", chat.worktree);
+    } });
+  }
+  openMenu(anchor, rows, (row) => row.act && row.act(), "", true);
+}
+$("#tree-btn").onclick = (e) => openWorktrees(e.currentTarget);
 
 // The badge on a chat with a spark: its bubble and name. It opens the
 // spark's window; on a new chat nothing has been said in, its x makes
@@ -25529,6 +25578,7 @@ const ACTIONS = [
   { label: "Signed-in browsers", keys: "", slash: "/security", run: () => showSettings("security") },
   { label: "Let Flash act on this computer", keys: "", slash: "/computer", run: () => showSettings("general") },
   { label: "Record a meeting", keys: "", slash: "/meeting", run: () => startMeeting() },
+  { label: "Worktrees for this chat", keys: "", slash: "/worktree", run: () => openWorktrees() },
   { label: "Search chats", keys: "Alt F", slash: "/search", run: () => openSearch() },
   { label: "Show or hide the file panel", keys: "Alt V", slash: "/file", run: toggleViewer },
   { label: "New project", keys: "", slash: "/project", run: () => projectForm() },
