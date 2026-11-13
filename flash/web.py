@@ -6365,6 +6365,9 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
                              hardware.TIGHT, hardware.TOO_BIG)},
                 "machine": hardware.machine().describe(),
                 "reachable": models is not None,
+                # Extensions still being asked: shown as loading, and the
+                # menu asks again until they answer.
+                "loading": providers.loading(),
                 "favorites": workspace.favorite_models(ai.Config.host),
                 **_spark_default(models)}
 
