@@ -17868,10 +17868,21 @@ function drawTip() {
 }
 setInterval(drawTip, 1000);
 
+// Some models think in short titled summaries ("**Acknowledging voice
+// test**", then a line or two): while one is working, its latest title is
+// what the loader says, rather than a thinking box opening for each.
+function thoughtTitle(text) {
+  const t = String(text || "").trimStart();
+  if (!t.startsWith("**")) return "";
+  const titles = [...t.matchAll(/^\s*\*\*([^*\n]{2,80})\*\*\s*$/gm)];
+  return titles.length ? titles[titles.length - 1][1].trim().replace(/[.…:]+$/, "") : "";
+}
+
 function drawStreaming() {
   drawTip();
   const chat = chats.get(current);
-  const waiting = chat && (chat.busy || chat.queued) && !chat.partial && !chat.thinking && !pendingAsk();
+  const titled = chat && chat.thinking && thoughtTitle(chat.thinking);
+  const waiting = chat && (chat.busy || chat.queued) && !chat.partial && (!chat.thinking || titled) && !pendingAsk();
   // Put back where it already is, the loader would start its
   // animations over on every event; left alone, it keeps going.
   if (waiting && streamNode && streamNode.classList.contains("loading") && streamNode === messagesEl.lastElementChild && (streamNode.dataset.speaker || "") === (chat.speaker || "") && (streamNode.querySelector(".loader")?.dataset.activity || "") === activityOf(chat)) return;
@@ -17884,7 +17895,7 @@ function drawStreaming() {
     tag.querySelector(".spark-av").dataset.state = "working";
     streamNode.appendChild(tag);
   }
-  if (chat.thinking) streamNode.appendChild(thinkingBlock(chat.thinking, true));
+  if (chat.thinking && !(titled && !chat.partial)) streamNode.appendChild(thinkingBlock(chat.thinking, true));
   if (chat.partial) {
     const wrap = el("div", "block");
     const body = el("div", "assistant", markdown(chat.partial));
@@ -18340,15 +18351,18 @@ function tickLoader(node, first) {
   morphLoader(node);
   const age = Date.now() - (busySince.get(node.dataset.chat) || Date.now());
   const at = Math.floor(age / WORD_MS);
-  if (at !== node.wordAt) {
+  const thinking = (chats.get(node.dataset.chat) || {}).thinking;
+  const title = thinking ? thoughtTitle(thinking) : "";
+  if (at !== node.wordAt || title !== (node.title || "")) {
     node.wordAt = at;
+    node.title = title;
     const box = node.querySelector(".word");
     for (const old of box.querySelectorAll("span:not(.out)")) {
       if (first || calm.matches) old.remove();
       else { old.classList.add("out"); setTimeout(() => old.remove(), 320); }
     }
     const word = el("span");
-    word.textContent = node.dataset.activity ? `${taskStep(node.dataset.activity)[2]}…` : procrastinating.has(node.dataset.chat) ? "Procrastinating…" : `${words[((wordOffset.get(node.dataset.chat) || 0) + at) % words.length]}…`;
+    word.textContent = title ? `${title}…` : node.dataset.activity ? `${taskStep(node.dataset.activity)[2]}…` : procrastinating.has(node.dataset.chat) ? "Procrastinating…" : `${words[((wordOffset.get(node.dataset.chat) || 0) + at) % words.length]}…`;
     box.appendChild(word);
   }
   const seconds = Math.floor(age / 1000);
