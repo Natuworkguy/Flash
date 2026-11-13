@@ -5790,6 +5790,15 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
         except calls.CallError as exc:
             raise ValueError(str(exc)) from None
 
+    if name == "call-takeover":
+        # The user takes the call over from Flash (on), or hands it back.
+        if arg not in ("on", "off"):
+            raise ValueError("call-takeover takes on or off")
+        try:
+            return calls.take_over(arg == "on", owner=chat_id)
+        except calls.CallError as exc:
+            raise ValueError(str(exc)) from None
+
     if name == "call-mic":
         # The user's own mic into the call Flash is on, or out of it;
         # no arg: only where it stands.

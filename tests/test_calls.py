@@ -950,3 +950,85 @@ def test_a_custom_greeting_is_saved_and_said(monkeypatch, tmp_path):
 def test_own_mode_has_no_fixed_greeting():
     call = calls.Call(who="Ann", number="1", goal="", incoming=False)
     assert calls._greeting(call, "Sam") == ""
+
+
+class HoldingLine(FakeLine):
+    """A line that can be paused and have the user's mic put in."""
+
+    pause = calls.Line.pause
+    _paused = calls.Line._paused
+
+    def __init__(self, heard):
+        super().__init__(heard)
+        self.mic = None
+
+    def set_mic(self, on):
+        self.mic = on or None
+
+
+def _on_the_line(monkeypatch, line):
+    shown = []
+    monkeypatch.setattr(calls, "tool_call", lambda entry: shown.append(entry) or True)
+    monkeypatch.setattr(calls, "_owner", "")
+    monkeypatch.setattr(calls, "_line", line)
+    from flash import notify
+    pinged = []
+    monkeypatch.setattr(notify, "notify", lambda title, text: pinged.append((title, text)))
+    return shown, pinged
+
+
+def test_flash_pings_the_user_to_join_and_they_take_over_and_hand_back(monkeypatch):
+    line = HoldingLine([])
+    shown, pinged = _on_the_line(monkeypatch, line)
+    script = iter(["Can I talk to Sam directly?", "TAKE", "So, about that invoice.", "BACK", "Great, thanks."])
+
+    def hear(longest=calls.QUIET_SECONDS, stopping=lambda: False):
+        said = next(script, "")
+        if said == "TAKE":
+            calls.take_over(True)
+            return ""
+        if said == "BACK":
+            calls.take_over(False)
+            return ""
+        return said
+
+    line.hear = hear
+    call = calls.Call(who="Alex", number="", goal="sort out the invoice", incoming=True)
+    replies = iter(["Hi Alex, Flash here for Sam.", "Sure, let me get Sam, one moment. [get the user]",
+                    "Thanks Alex, Sam has it from here. Goodbye! [hang up]"])
+    asked = []
+
+    def model(messages):
+        asked.append(messages)
+        return next(replies)
+
+    calls.talk(call, line, "Sam", model)
+    assert pinged and pinged[0][0] == "Join the call"  # nosec B101
+    assert [e.get("state") for e in shown if e.get("state")] == ["join", "taken", "back"]  # nosec B101
+    # The marker is never said aloud; what they said while Sam had the call is kept.
+    assert line.said[1] == "Sure, let me get Sam, one moment."  # nosec B101
+    assert ("Alex", "So, about that invoice.") in call.lines  # nosec B101
+    # Handed back, Flash is told Sam was on the line, and goes on from there.
+    notes = [m["content"] for m in asked[-1] if m["role"] == "system"]
+    assert any("handed the call back" in n for n in notes)  # nosec B101
+    assert line.mic is None and not line._paused()  # nosec B101
+    assert call.ended == "the call was done"  # nosec B101
+
+
+def test_flash_goes_back_on_when_the_user_does_not_join(monkeypatch):
+    line = HoldingLine(["Can I talk to Sam?", "Okay.", "Bye."])
+    shown, _ = _on_the_line(monkeypatch, line)
+    monkeypatch.setattr(calls, "JOIN_WAIT", 0.0)
+    call = calls.Call(who="Alex", number="", goal="hi", incoming=True)
+    replies = iter(["Hi, Flash here for Sam.", "One moment, I'll get Sam. [get the user]",
+                    "Sorry, Sam can't come to the phone right now. Can I take a message? [hang up]"])
+    asked = []
+
+    def model(messages):
+        asked.append(messages)
+        return next(replies)
+
+    calls.talk(call, line, "Sam", model)
+    assert "join-missed" in [e.get("state") for e in shown]  # nosec B101
+    assert any("can't come to the phone" in m["content"] for m in asked[-1] if m["role"] == "system")  # nosec B101
+    assert line.said[-1].startswith("Sorry, Sam can't come")  # nosec B101
