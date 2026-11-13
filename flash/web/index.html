@@ -3288,6 +3288,9 @@ button.flow-node:hover { border-color: color-mix(in srgb, var(--c, var(--accent)
 .menu .fav:hover { color: var(--text); background: var(--hover); }
 .menu .fav svg { width: 14px; height: 14px; display: block; }
 .menu .menu-note { font-weight: 400; }
+.menu .menu-note.ext-loading { display: inline-flex; align-items: center; gap: 8px; }
+.menu .menu-note .ext-spin { width: 10px; height: 10px; border-radius: 50%; border: 1.5px solid var(--text-3); border-top-color: transparent; animation: ext-spin .8s linear infinite; flex: none; }
+@keyframes ext-spin { to { transform: rotate(360deg); } }
 .menu .item.add { color: var(--text-3); }
 .menu .item.add svg { width: 16px; height: 16px; }
 .menu hr { border: 0; border-top: 1px solid var(--border); margin: 6px 4px; }
@@ -23239,7 +23242,7 @@ function openPlus() {
   }
   if (canRecord) rows.push({ html: `${icon("users")}<span class="label">Record a meeting</span><span class="desc">Flash works along live, writes it up after</span>`, act: startMeeting });
   if (navigator.clipboard && navigator.clipboard.read) rows.push({ html: `${icon("copy")}<span class="label">Paste an image</span>`, act: pasteImage });
-  if (current && chats.get(current)) rows.push({ html: `${icon("branch")}<span class="label">Work in a worktree</span><span class="desc">a branch of its own, local only</span>`, act: () => openWorktrees($("#plus-btn")) });
+  rows.push({ html: `${icon("branch")}<span class="label">Work in a worktree</span><span class="desc">a branch of its own, local only</span>`, act: () => openWorktrees($("#plus-btn")) });
   rows.push({ header: true, rule: true, html: "" });
   const thinking = thinkBtn.getAttribute("aria-pressed") === "true";
   rows.push({ html: `${icon("think")}<span class="label">${thinking ? "Skip the harder think" : "Think harder"}</span><span class="desc">${thinking ? "" : "on the next message"}</span>`, act: () => setThink(!thinking) });
@@ -23852,8 +23855,13 @@ function renderTreeBtn() {
 }
 async function openWorktrees(anchor) {
   anchor = anchor || (!$("#tree-btn").hidden ? $("#tree-btn") : $("#plus-btn"));
-  const chat = chats.get(current);
-  if (!chat) { toast("Start the chat first, then give it a worktree"); return; }
+  let chat = chats.get(current);
+  if (!chat) {
+    // A chat not started yet: made now, in the project picked for it, so it has somewhere to keep its worktree.
+    try { const made = await command("new", "", "", { project: viewProject || "" }); await loadState(); switchTo(made.chat); chat = chats.get(made.chat); }
+    catch (error) { toast(error.message); return; }
+    if (!chat) return;
+  }
   let r;
   try { r = await command("worktrees", "", chat.id); } catch (error) { toast(error.message); return; }
   const step = async (name, arg = "", extra = {}) => {
@@ -24562,6 +24570,8 @@ function openMenu(anchor, rows, pick, emptyText, alignLeft) {
 }
 
 let modelsLoading = false;
+// Extensions still being asked for their models: [{provider, first}].
+let modelsPending = [], modelsPoll = null;
 let modelsReachable = true;
 // System One's side of the menu: the System One models on this host,
 // scanned when the menu opens, and which is in use.
@@ -24585,13 +24595,19 @@ async function openModels(focusHosts = false) {
   systemOne = { ...systemOne, loading: true };
   drawModelMenu(focusHosts);
   const stillOpen = () => menuEl && !slashOpen && menuEl.dataset.kind === "models";
-  command("model").then(
-    (r) => { models = r.models || []; favorites = r.favorites || []; modelFits = r.fits || {}; machineSaid = r.machine || ""; modelsReachable = r.reachable !== false; },
-    () => { modelsReachable = false; },
-  ).finally(() => {
+  const take = (r) => { models = r.models || []; favorites = r.favorites || []; modelFits = r.fits || {}; machineSaid = r.machine || ""; modelsReachable = r.reachable !== false; modelsPending = r.loading || []; };
+  command("model").then(take, () => { modelsReachable = false; modelsPending = []; }).finally(() => {
     modelsLoading = false;
     // Where the highlight goes if nothing had loaded to put it on yet.
     if (stillOpen()) drawModelMenu(focusHosts, hadModels || focusHosts);
+    // Extensions still answering: asked again until they have, while the menu stays open.
+    clearTimeout(modelsPoll);
+    let tries = 0;
+    const again = () => {
+      if (!modelsPending.length || !stillOpen() || ++tries > 40) return;
+      modelsPoll = setTimeout(() => command("model").then((r) => { take(r); if (stillOpen()) drawModelMenu(focusHosts, true); again(); }, () => {}), 1500);
+    };
+    again();
   });
   command("hosts").then((r) => {
     hosts = r.hosts;
@@ -24665,7 +24681,8 @@ function drawModelMenu(focusHosts, keepSelection) {
         const tag = (sameModel(m, info.model) ? '<span class="default-tag">Default</span>' : "") + fitTag;
         rows.push({ html: modelParts(m) + tag + star, value: m, current: m === using, rule: pinned.length > 0 && i === pinned.length });
       });
-      if (!chatty.length) rows.push({ header: true, html: '<span class="menu-note">No models on this host</span>' });
+      for (const p of modelsPending) rows.push({ header: true, html: `<span class="menu-note ext-loading"><span class="ext-spin"></span>@${esc(p.provider)}: ${p.first ? "loading its models…" : "checking for new models…"}</span>` });
+      if (!chatty.length && !modelsPending.length) rows.push({ header: true, html: '<span class="menu-note">No models on this host</span>' });
       // This chat's own model, for every new one too.
       if (using && !sameModel(using, info.model)) rows.push({ html: `${icon("check")}<span class="label">Make <b>${esc(using === "auto" ? "Auto" : shortModel(using))}</b> the default</span>`, makeDefault: using, cls: "add" });
       if (using && using !== "auto") rows.push({ html: `${icon("retry")}<span class="label">Fallbacks for <b>${esc(shortModel(using))}</b>…</span>`, fallbacks: using, cls: "add" });

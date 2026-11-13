@@ -372,3 +372,29 @@ def test_a_kept_model_list_comes_back_at_once_and_is_asked_again_behind(monkeypa
     _time.sleep(0.4)
     assert providers.provider_models("p")[0]["name"] == "m2"            # asked again behind the scenes
     providers.forget_models()
+
+
+def test_a_slow_provider_shows_as_loading_and_never_holds_up_the_list(echo, monkeypatch):
+    import threading
+    import time
+
+    gate = threading.Event()
+    asked = providers._ask_models  # pylint: disable=W0212
+
+    def slow(name):
+        gate.wait(5)
+        return asked(name)
+
+    monkeypatch.setattr(providers, "_ask_models", slow)
+    monkeypatch.setattr(providers, "FIRST_WAIT", 0.2)
+    began = time.monotonic()
+    assert providers.every_model() == []  # nosec B101
+    assert time.monotonic() - began < 1  # nosec B101
+    assert providers.loading() == [{"provider": "echo", "first": True}]  # nosec B101
+    gate.set()
+    for _ in range(100):
+        if not providers.loading():
+            break
+        time.sleep(0.02)
+    assert providers.loading() == []  # nosec B101
+    assert "@echo/echo-1" in providers.every_model()  # nosec B101

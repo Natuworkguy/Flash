@@ -31,7 +31,6 @@ is a failure, shown to the user as Ollama's own errors are.
 from __future__ import annotations
 
 import base64
-import concurrent.futures
 import itertools
 import json
 import os
@@ -240,6 +239,8 @@ _models: dict[str, tuple[float, list[dict]]] = {}
 _models_lock = threading.Lock()
 _asking: set = set()
 MODELS_FILE = "provider-models.json"
+# How long a listing waits for a provider asked for its models the first time.
+FIRST_WAIT = 1.5
 
 
 def _ask_models(provider: str) -> list[dict]:
@@ -330,15 +331,32 @@ def forget_models() -> None:
 
 
 def every_model() -> list[str]:
-    """Every provider model, by its full @provider/model name."""
+    """Every provider model, by its full @provider/model name. Never
+    waits: a provider asked for the first time is asked in the
+    background, and loading() says so meanwhile."""
 
-    # Every provider at once: the slowest sets the wait, not their sum.
     found = [f for _, f in extensions.providers()]
-    if len(found) <= 1:
-        return [name_of(f.name, str(e["name"])) for f in found for e in provider_models(f.name)]
-    with concurrent.futures.ThreadPoolExecutor(len(found)) as pool:
-        lists = list(pool.map(lambda f: provider_models(f.name), found))
-    return [name_of(f.name, str(e["name"])) for f, listed in zip(found, lists) for e in listed]
+    lists = {f.name: provider_models(f.name, wait=False) for f in found}
+    # One asked for the first time gets a moment to answer (all of them
+    # at once), then the list goes without it.
+    end = time.monotonic() + FIRST_WAIT
+    while time.monotonic() < end and any(
+            not lists[f.name] and f.name in _asking for f in found):
+        time.sleep(0.05)
+        for f in found:
+            if not lists[f.name] and f.name not in _asking:
+                lists[f.name] = provider_models(f.name, wait=False)
+    return [name_of(f.name, str(e["name"])) for f in found for e in lists[f.name]]
+
+
+def loading() -> list[dict]:
+    """The providers being asked for their models right now: each with
+    whether it has never answered yet (first) or is only being checked
+    again over a list already shown."""
+
+    with _models_lock:
+        return [{"provider": name, "first": not (_models.get(name) or (0, []))[1]}
+                for name in sorted(_asking)]
 
 
 def _entry(model: str) -> dict:
