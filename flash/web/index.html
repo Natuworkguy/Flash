@@ -15183,7 +15183,7 @@ function sparkForm(spark, inProjectId = "", template = "") {
     <div class="field"><span>Colour</span><div class="swatches spark-colours" role="radiogroup" aria-label="Colour">${TEAM_COLOURS.map((c) => `<button type="button" class="swatch" role="radio" data-c="${c}" style="--c:${c}" aria-label="${c}"></button>`).join("")}<label class="swatch custom" data-tip="Any colour"><input type="color" aria-label="Any colour"></label></div><small class="colour-said">${editing ? "Its face, its chips and its messages wear it." : "Left alone, it gets the next in the palette."}</small></div>
     <div class="field"><span>Shape</span><div class="shape-picks" role="radiogroup" aria-label="Shape">${SPARK_SHAPES.map((sh) => `<button type="button" class="shape-pick" role="radio" data-shape="${sh}" aria-label="${sh}" data-tip="${sh[0].toUpperCase() + sh.slice(1)}"></button>`).join("")}</div><small>How it is drawn, and how it moves: a diamond sways, a square hops, a gem glints.</small></div>
     ${modelField()}
-    <label class="field"><span>Fallbacks <em class="count">optional</em></span><input name="fallbacks" class="mono" placeholder="another-model > a-third" autocomplete="off" spellcheck="false"><small>When its model fails (down, refused, out of quota), it carries on with these, in order, up to 4. Then the model's own fallbacks.</small></label>
+    <div class="field"><span>Fallbacks <em class="count">optional</em></span><div class="spark-fallbacks"></div><small>When its model fails (down, refused, out of quota), it carries on with these, in order, up to 4. Then the model's own fallbacks.</small></div>
     <div class="field spark-voice-field"><span>Voice on calls <em class="count">optional</em></span><div class="spark-voice-row"><select name="callvoice" aria-label="Voice on calls"><option value="">Picked for it</option></select><button type="button" class="btn small with-icon" data-hear>${icon("play")}<span>Hear it</span></button></div><label class="spark-pitch"><span>Pitch <b class="pitch-n">0</b></span><input type="range" name="pitch" min="-8" max="8" step="1" value="0" aria-label="Pitch, in semitones"></label><small>How it sounds when you call it: any voice downloaded in Settings, Voice, including extensions' voices, and higher or lower.</small></div>
     <label class="field"><span>Goal</span><textarea name="goal" rows="4" placeholder="Check github.com/me/app for new issues. Tell me which look like bugs, and skip ones you have already told me about."></textarea></label>
     <label class="field"><span>How often</span><select name="every">${choices.map(([m, label]) => `<option value="${m}"${!atTimes && !called && m === every ? " selected" : ""}>${label}</option>`).join("")}<option value="at"${atTimes ? " selected" : ""}>At set times…</option><option value="oncall"${called ? " selected" : ""}>Only when called on</option></select><small class="every-said">${called ? ON_CALL_SAID : "It works while Flash is open, in the terminal or here."}</small></label>
@@ -15222,7 +15222,7 @@ function sparkForm(spark, inProjectId = "", template = "") {
           await command("spark-budget", id, null, { on, tokens: on ? tokens : "", period });
         }
         if ((data.mode || "") !== (was.mode || "")) await command("spark-mode", id, null, { mode: data.mode || "" });
-        const falls = (data.fallbacks || "").split(/[>,\n]/).map((m) => m.trim()).filter(Boolean);
+        const falls = [...form.fallbackChain];
         if (falls.join(" > ") !== (was.fallbacks || []).join(" > ")) await command("spark-update", id, null, { fallbacks: falls });
         const morning = data.morning || "", morningTasks = !!data.morning_tasks;
         if (morning !== (was.morning || "") || morningTasks !== !!was.morning_tasks) await command("spark-update", id, null, { morning, morning_tasks: morningTasks });
@@ -15272,11 +15272,16 @@ function sparkForm(spark, inProjectId = "", template = "") {
   form.querySelectorAll(".shape-pick .spark-av").forEach((av) => av.style.setProperty("--c", form.dataset.colour || (editing && spark.colour) || TEAM_COLOURS[0]));
   // The folder to watch, suggested as you type, as a project's is.
   suggestFolders(form.watch);
+  // Its fallbacks: picked from the models, as the model menu's are.
+  form.fallbackChain = [];
+  const falls = fallbackPicker(form.querySelector(".spark-fallbacks"), form.fallbackChain, { own: () => form.model.value, most: 4, empty: "None: it uses its model's own fallbacks." });
+  form.model.addEventListener("change", falls.draw);
   eventFields(form, editing ? spark.events || [] : []);
   setTimesField(form);
   teamFields(form, spark);
   // Chosen, not assumed: a spark from before it had one picks one now.
-  fillModelField(form, editing ? spark.model || "" : "", !editing);
+  // Once its model is picked, that one is no fallback for itself.
+  fillModelField(form, editing ? spark.model || "" : "", !editing).then(() => falls.draw());
   const handle = form.querySelector("[data-handle]");
   const handleNote = handle.parentNode;
   // As it is typed: a handle another spark already has is said at once,
@@ -15371,7 +15376,8 @@ function sparkForm(spark, inProjectId = "", template = "") {
   if (editing) {
     form.sparkname.value = spark.name;
     form.title.value = spark.title || "";
-    form.fallbacks.value = (spark.fallbacks || []).join(" > ");
+    form.fallbackChain.splice(0, form.fallbackChain.length, ...(spark.fallbacks || []));
+    falls.draw();
     form.goal.value = spark.goal;
     form.boundaries.value = spark.boundaries;
     form.morning.value = spark.morning || "";
@@ -24094,23 +24100,14 @@ function modeMenu() {
 
 // The models to try, in order, when MODEL fails, before giving up: added
 // from the host's list, moved up and down, taken off.
-async function fallbackForm(model) {
-  let said;
-  try { said = await command("fallbacks", model, null); } catch (error) { showFailure(error); return; }
-  let chain = [...said.chain];
-  const form = openForm(`
-    <h2>Fallbacks</h2>
-    <p class="sub">When <b class="mono">${esc(model)}</b> fails before it answers (its host is down, its provider errors, it is not there), Flash tries these in turn, then gives up.</p>
-    <ol class="fallback-list"></ol>
-    <div class="fallback-add"><select aria-label="Add a fallback"></select><button type="button" class="btn small">Add</button></div>
-    <div class="dialog-buttons"><button type="button" class="btn" data-cancel>Cancel</button><button type="submit" class="btn primary">Save</button></div>`,
-    async () => {
-      await command("fallbacks-set", model, null, { chain });
-      toast(chain.length ? `If ${shortModel(model)} fails: ${chain.map(shortModel).join(" › ")}` : `No fallbacks for ${shortModel(model)}`);
-    });
-  form.querySelector("[data-cancel]").onclick = closeForm;
-  const list = form.querySelector(".fallback-list");
-  const select = form.querySelector(".fallback-add select");
+// A list of models to fall back on, in order: each can move up or down or
+// come off, and more are added from a picker of the models there are. CHAIN
+// is changed in place. OWN is the model they are for (never offered).
+function fallbackPicker(box, chain, { own = () => "", most = 6, empty = "None yet: it fails on its own." } = {}) {
+  box.innerHTML = `<ol class="fallback-list"></ol><div class="fallback-add"><select aria-label="Add a fallback"></select><button type="button" class="btn small">Add</button></div>`;
+  const list = box.querySelector(".fallback-list");
+  const select = box.querySelector(".fallback-add select");
+  const add = box.querySelector(".fallback-add .btn");
   const draw = () => {
     list.textContent = "";
     chain.forEach((m, i) => {
@@ -24122,13 +24119,34 @@ async function fallbackForm(model) {
       li.querySelector("[data-down]").onclick = () => { [chain[i + 1], chain[i]] = [chain[i], chain[i + 1]]; draw(); };
       li.querySelector("[data-gone]").onclick = () => { chain.splice(i, 1); draw(); };
     });
-    if (!chain.length) list.appendChild(el("li", "fallback-none", "None yet: it fails on its own."));
-    const left = models.filter((m) => m !== model && !chain.includes(m));
-    select.innerHTML = left.length ? left.map((m) => `<option value="${esc(m)}">${esc(m)}</option>`).join("") : `<option value="">No other models here</option>`;
-    select.disabled = !left.length;
+    if (!chain.length) list.appendChild(el("li", "fallback-none", esc(empty)));
+    const left = models.filter((m) => m !== "auto" && m !== own() && !chain.includes(m));
+    const full = chain.length >= most;
+    select.innerHTML = full ? `<option value="">That's the most it takes</option>` : left.length ? left.map((m) => `<option value="${esc(m)}">${esc(m)}</option>`).join("") : `<option value="">No other models here</option>`;
+    select.disabled = add.disabled = full || !left.length;
   };
-  form.querySelector(".fallback-add .btn").onclick = () => { if (select.value && chain.length < 6) { chain.push(select.value); draw(); } };
+  add.onclick = () => { if (select.value && chain.length < most) { chain.push(select.value); draw(); } };
   draw();
+  // The models, if the menu has not asked for them yet.
+  if (!models.length) command("model").then((r) => { models = r.models || []; if (box.isConnected) draw(); }, () => {});
+  return { draw };
+}
+
+async function fallbackForm(model) {
+  let said;
+  try { said = await command("fallbacks", model, null); } catch (error) { showFailure(error); return; }
+  const chain = [...said.chain];
+  const form = openForm(`
+    <h2>Fallbacks</h2>
+    <p class="sub">When <b class="mono">${esc(model)}</b> fails before it answers (its host is down, its provider errors, it is not there), Flash tries these in turn, then gives up.</p>
+    <div class="fallback-picker"></div>
+    <div class="dialog-buttons"><button type="button" class="btn" data-cancel>Cancel</button><button type="submit" class="btn primary">Save</button></div>`,
+    async () => {
+      await command("fallbacks-set", model, null, { chain });
+      toast(chain.length ? `If ${shortModel(model)} fails: ${chain.map(shortModel).join(" › ")}` : `No fallbacks for ${shortModel(model)}`);
+    });
+  form.querySelector("[data-cancel]").onclick = closeForm;
+  fallbackPicker(form.querySelector(".fallback-picker"), chain, { own: () => model });
 }
 
 // Each chat has its own model; a new one starts on the default, which
