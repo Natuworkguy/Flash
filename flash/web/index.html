@@ -3013,7 +3013,9 @@ button.flow-node:hover { border-color: color-mix(in srgb, var(--c, var(--accent)
 .flow-step select, .flow-step textarea { width: 100%; font: 13px var(--sans); padding: 6px 8px; border-radius: 9px; border: 1px solid var(--border); background: var(--surface); color: var(--text); }
 .flow-step textarea { resize: vertical; min-height: 34px; }
 .flow-step .together { grid-column: 2 / 4; font-size: 12px; color: var(--text-2); display: flex; align-items: center; gap: 6px; }
-.flow-step .gone { width: 28px; height: 28px; padding: 0; justify-content: center; }
+.flow-step .gone { width: 30px; height: 30px; margin-top: 8px; padding: 0; justify-content: center; border-color: transparent; background: none; color: var(--text-3); border-radius: 8px; }
+.flow-step .gone svg { width: 16px; height: 16px; }
+.flow-step .gone:hover, .flow-step .gone:focus-visible { color: var(--del); background: color-mix(in srgb, var(--del) 12%, transparent); border-color: transparent; }
 .flow-step.together-on { margin-left: 22px; border-style: dashed; }
 .field .flow-step span { display: inline; margin: 0; font-size: 12px; }
 .field .flow-step .together input { width: auto; margin: 0; flex: none; }
