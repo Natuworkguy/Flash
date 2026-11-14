@@ -44,6 +44,7 @@ flash = [
     "design_prompt.txt",
     "thinking_states.json",
     "suggestions.json",
+    "calltap.swift",
     "backgrounds/*.scene",
     "games/*.html",
     "knowledge/*.md",

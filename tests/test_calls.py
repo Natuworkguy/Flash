@@ -63,12 +63,32 @@ def test_a_call_flash_places_goes_to_its_goal_and_hangs_up():
     assert "running late" in system
 
 
-def test_a_quiet_line_ends_the_call():
+def test_a_quiet_line_is_flashs_to_decide_about_and_ends_only_at_the_limit():
     call = calls.Call(who="John", number="1", goal="ask", incoming=True)
     line = FakeLine([])
-    calls.talk(call, line, "Sam", lambda m: "Hi, Flash here for Sam.")
-    assert call.ended == "the other side went quiet"
-    assert line.said == ["Hi, Flash here for Sam."]
+    asked = []
+
+    def model(messages):
+        asked.append(messages)
+        # Says hello once, then chooses to wait in silence.
+        return "Hi, Flash here for Sam." if len(asked) == 1 else calls.STAY_SILENT
+
+    calls.talk(call, line, "Sam", model)
+    assert line.said == ["Hi, Flash here for Sam."]  # nosec B101  (the marker is never said)
+    # Each quiet stretch was put to the model, saying how long it has been.
+    notes = [m["content"] for m in asked[-1] if m["role"] == "system"][1:]
+    assert notes[0] == "Nobody has said anything for 12 seconds."  # nosec B101
+    assert call.ended == "the line stayed quiet"  # nosec B101
+    assert len(asked) == int(calls.SILENCE_LIMIT // calls.SILENCE_CHECK)  # nosec B101
+
+
+def test_flash_can_check_in_on_a_quiet_line_then_hang_up():
+    call = calls.Call(who="John", number="1", goal="ask", incoming=True)
+    line = FakeLine(["", "", "Sorry, I'm back."])
+    replies = iter(["Hi John, Flash here for Sam.", "Are you still there?", "No problem. Bye! [hang up]"])
+    calls.talk(call, line, "Sam", lambda m: next(replies))
+    assert line.said == ["Hi John, Flash here for Sam.", "Are you still there?", "No problem. Bye!"]  # nosec B101
+    assert call.ended == "the call was done"  # nosec B101
 
 
 def test_stop_hangs_up():
@@ -912,7 +932,7 @@ def test_the_standard_greeting_is_said_first_with_the_first_name_only(
 
     def model(messages):
         asked.append(messages)
-        return "Sam is running late."
+        return "Sam is running late. [hang up]"
 
     calls.talk(call, line, "Sam Smith", model)
     assert line.said == ["Hi, this is an automated assistant calling on "
