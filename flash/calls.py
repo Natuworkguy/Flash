@@ -140,6 +140,8 @@ def set_monitor(on: Optional[bool] = None,
 
 SWITCH = "SwitchAudioSource"
 INSTALL = "brew install blackhole-2ch blackhole-16ch switchaudio-osx"
+# With the call heard through a tap (calltap.py), the speakers' loopback is not needed.
+INSTALL_TAPPED = "brew install blackhole-2ch switchaudio-osx"
 
 # How long a call may last, how long Flash waits for a word before it
 # hangs up, and how long a pause ends what someone is saying.
@@ -167,6 +169,14 @@ GONE_LOOKS = 3
 LONGEST_TURN = 30.0
 # The model's word for "this call is over".
 HANG_UP = "[hang up]"
+# Said by Flash when it chooses to say nothing this turn: someone is
+# mid-thought, talking to someone else, or asked it to hold on.
+STAY_SILENT = "[stay silent]"
+# A quiet line never ends the call by itself: after this long with
+# nothing said, Flash is told and decides (check in, wait, or hang up).
+SILENCE_CHECK = 12.0
+# The most it waits on a line where nobody says anything, all told.
+SILENCE_LIMIT = 4 * 60.0
 # Said by Flash when the other side wants the user, or something needs the
 # user's own answer: the user is pinged to join, and Flash holds the line.
 GET_USER = "[get the user]"
@@ -477,12 +487,40 @@ def missing() -> str:
 
     if computer.system() != "mac":
         return "Flash can only talk on calls on a Mac."
+    from . import calltap
+
+    tapped = calltap.usable()
     devices = _devices()
-    lacking = [d for d in (to_call(), from_call()) if d not in devices]
+    needed = (to_call(),) if tapped else (to_call(), from_call())
+    lacking = [d for d in needed if d not in devices]
     if lacking or not shutil.which(SWITCH):
-        return ("For Flash to hear a call and speak on it, install the "
-                f"free audio loopback devices and switcher: {INSTALL}")
+        command = INSTALL_TAPPED if tapped else INSTALL
+        opened = open_setup(command)
+        return ("For Flash to speak on a call, it needs a free audio loopback "
+                "device and a switcher. "
+                + ("Flash opened Terminal with the install: type your Mac's "
+                   "password there, then ask again." if opened
+                   else f"Install them with: {command}"))
     return ""
+
+
+def open_setup(command: str) -> bool:
+    """COMMAND in a new Terminal window, where the installer can ask for the
+    Mac's password: once per run of Flash. Whether it opened."""
+
+    global _setup_opened
+
+    if _setup_opened or not shutil.which("brew"):
+        return _setup_opened
+    script = f'tell application "Terminal" to do script "{command}"'
+    with contextlib.suppress(Exception):
+        computer._run(["osascript", "-e", script, "-e",  # pylint: disable=W0212
+                       'tell application "Terminal" to activate'], timeout=10)
+        _setup_opened = True
+    return _setup_opened
+
+
+_setup_opened = False
 
 
 def _devices() -> set[str]:
@@ -531,15 +569,50 @@ def restore() -> None:
 atexit.register(restore)
 
 
+# The call's other side, heard straight from what the Mac plays (calltap.py),
+# while a call is on and the Mac can: then its speakers are never switched.
+_tap = None
+
+
+def _start_tap():
+    """The call listener, started: None where the Mac can't (older macOS,
+    no permission, no compiler), and the loopback speakers are used."""
+
+    global _tap
+
+    from . import calltap
+
+    _tap = None
+    if not calltap.usable():
+        return None
+    try:
+        _tap = calltap.Tap(RATE)
+    except (calltap.TapError, OSError) as exc:
+        tool_result(f"Hearing the call the older way ({exc}).", style=DIM)
+    return _tap
+
+
+def _stop_tap() -> None:
+    global _tap
+
+    tap, _tap = _tap, None
+    if tap is not None:
+        with contextlib.suppress(Exception):
+            tap.close()
+
+
 @contextlib.contextmanager
 def _routed():
     """The call's sound through the loopback devices, and the Mac's own
-    devices back afterwards, whatever happened."""
+    devices back afterwards, whatever happened. Heard through a tap, only
+    the call's microphone is switched: the speakers stay as they are."""
 
     global _speakers
 
+    tapped = _start_tap() is not None
+    routes = [("input", to_call())] + ([] if tapped else [("output", from_call())])
     try:
-        for kind, name in (("input", to_call()), ("output", from_call())):
+        for kind, name in routes:
             was = _switch(kind, name)
             if was and was != name:
                 with _lock:
@@ -547,6 +620,7 @@ def _routed():
         _speakers = _was.get("output", "")
         yield
     finally:
+        _stop_tap()
         restore()
 
 
@@ -1066,13 +1140,20 @@ class Line:
         self.sd = sounddevice
         self.stopped = threading.Event()
         self.mic: Optional[_MicPass] = None
-        self.device_rate = int(sounddevice.query_devices(
-            from_call(), "input")["default_samplerate"])
-        self.stream = sounddevice.RawInputStream(
-            device=from_call(), channels=1, dtype="int16",
-            samplerate=self.device_rate,
-            blocksize=int(self.device_rate * BLOCK))
-        self.stream.start()
+        # Heard through the tap, the call is already on the user's
+        # speakers: only Flash's own voice is played to them.
+        self.tapped = _tap is not None
+        if self.tapped:
+            self.device_rate = RATE
+            self.stream = _tap
+        else:
+            self.device_rate = int(sounddevice.query_devices(
+                from_call(), "input")["default_samplerate"])
+            self.stream = sounddevice.RawInputStream(
+                device=from_call(), channels=1, dtype="int16",
+                samplerate=self.device_rate,
+                blocksize=int(self.device_rate * BLOCK))
+            self.stream.start()
         # The user hears the call too, on their own speakers.
         self.monitor = None
         if name := monitor():
@@ -1177,7 +1258,8 @@ class Line:
         while not stopping() and not self._halted():
             block, _ = self.stream.read(frames)
             block = bytes(block)
-            self._monitor(block)
+            if not getattr(self, "tapped", False):
+                self._monitor(block)
             level = voice._level(block)
             if floor is None:
                 learning.append(level)
@@ -1346,6 +1428,13 @@ def _instructions(call: Call, user: str, greeted: str = "") -> str:
         f"{user}'s own answer that you cannot give, say you will get "
         f"{user} on the line, ask them to hold a moment, and end with "
         f"{GET_USER}. {user} is pinged and joins if they can.\n"
+        f"- You do not have to answer every time. When they are mid-thought, "
+        f"talking to someone else, or asked you to hold on, reply with only "
+        f"{STAY_SILENT} and you say nothing and keep listening.\n"
+        f"- When the line goes quiet you are told how long. Decide: check in "
+        f"briefly (\"Are you still there?\"), keep waiting with {STAY_SILENT}, "
+        f"or, if the call is clearly over, say a short goodbye and end with "
+        f"{HANG_UP}.\n"
         f"- Once the goal is done, or they say goodbye, say a short goodbye "
         f"and end with {HANG_UP}."
     )
@@ -1400,7 +1489,7 @@ def _reply(call: Call, user: str, ask: Callable[[list[dict]], str],
             continue
         messages.append({"role": "assistant" if who == "Flash" else "user",
                          "content": said})
-    if not call.lines or call.lines[-1][0] == "Flash":
+    if not call.lines or call.lines[-1][0] in ("Flash", NOTE):
         messages.append({"role": "user", "content": "(silence on the line)"})
     return ask(messages).strip()
 
@@ -1470,6 +1559,7 @@ def talk(call: Call, line: Line, user: str, ask: Callable[[list[dict]], str],
         return bool(paused and paused())
 
     started = time.monotonic()
+    quiet_for = 0.0
     # Placed, answered or joined: once live, Flash greets first, with the
     # goal, instead of waiting for a hello that may never come.
     while not stopping():
@@ -1507,8 +1597,10 @@ def talk(call: Call, line: Line, user: str, ask: Callable[[list[dict]], str],
             said, wav = _reply(call, user, ask), b""
         done = HANG_UP in said.lower()
         wants_user = GET_USER in said.lower()
-        said = said.replace(HANG_UP, "").replace(HANG_UP.title(), "")
-        said = said.replace(GET_USER, "").replace(GET_USER.title(), "").strip()
+        for marker in (HANG_UP, GET_USER, STAY_SILENT):
+            said = said.replace(marker, "").replace(marker.title(), "")
+        # Choosing to say nothing: it only listens, this turn.
+        said = said.strip()
         if said:
             call.say("Flash", said)
             if wav and hasattr(line, "play"):
@@ -1521,14 +1613,21 @@ def talk(call: Call, line: Line, user: str, ask: Callable[[list[dict]], str],
         if wants_user and hasattr(line, "pause"):
             _ask_user_to_join(call, line, user)
             continue
-        heard = line.hear(stopping=stopping)
+        heard = line.hear(longest=SILENCE_CHECK, stopping=stopping)
         if not heard and stopping():
             break
         if not heard and held():
             continue
         if not heard:
-            call.ended = "the other side went quiet"
-            break
+            # Quiet: not the end of the call by itself. Flash is told, and
+            # decides what to do about it, up to a limit.
+            quiet_for += SILENCE_CHECK
+            if quiet_for >= SILENCE_LIMIT:
+                call.ended = "the line stayed quiet"
+                break
+            call.lines.append((NOTE, f"Nobody has said anything for {int(quiet_for)} seconds."))
+            continue
+        quiet_for = 0.0
         call.say(call.who or "Them", heard)
     if stopping() and not call.ended:
         call.ended = getattr(told, "why", "") or "you stopped it"
@@ -1671,12 +1770,15 @@ def join(goal: str, user: str, ask: Callable[[list[dict]], str],
          stopping: Callable[[], bool] = lambda: False,
          owner: str = "") -> Call:
     """Talk on a call USER is already on (Google Meet, Zoom...), towards
-    GOAL, until told to stop, the call goes quiet, or it runs too long.
+    GOAL, until the goal is met, Flash hangs up, or it runs too long.
 
-    The user sets the call app's microphone to to_call() and its speaker
-    to from_call(); Flash opens those devices by name, so the Mac's own
-    devices are never switched and there is nothing to put back. Nothing
-    is hung up either: the call is the user's.
+    Where the Mac can hear the call through a tap (joins_by_itself()),
+    Flash does the rest: it hears what the call app plays, and points the
+    Mac's microphone at its own voice for the length of the call, then
+    puts it back; an app on its default microphone needs nothing changed.
+    Otherwise the user sets the call app's microphone to to_call() and its
+    speaker to from_call(), and Flash opens those devices by name. Nothing
+    is hung up either way: the call is the user's.
     """
 
     why = missing()
@@ -1685,14 +1787,24 @@ def join(goal: str, user: str, ask: Callable[[list[dict]], str],
     call = Call(who=who or "the people on the call", number="", goal=goal,
                 incoming=True, joined=True)
     opening = _Opening(call, user, ask)
+    routed = _routed() if joins_by_itself() else contextlib.nullcontext()
     with _holding(owner, call.who):
         try:
-            with _opened() as line:
+            with routed, _opened() as line:
                 talk(call, line, user, ask, stopping, opening)
         finally:
             # Nothing was switched for it, unless something else was.
             restore()
     return call
+
+
+def joins_by_itself() -> bool:
+    """Whether Flash can join a call the user is on with nothing for them
+    to set: the call heard through a tap, the microphone switched by Flash."""
+
+    from . import calltap
+
+    return computer.system() == "mac" and calltap.usable() and bool(shutil.which(SWITCH))
 
 
 def summary(call: Call, path: Path) -> str:

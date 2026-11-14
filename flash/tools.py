@@ -5542,7 +5542,7 @@ def phone_call(action: str = "call", who: str = "", goal: str = "",
     since = time.time()
     if isinstance(ready, str):
         ready = ready.strip().lower() in ("true", "yes", "1")
-    if action == "join" and not _truthy(ready):
+    if action == "join" and not _truthy(ready) and not calls.joins_by_itself():
         # The call app's mic and speakers have to be the loopback
         # devices first, and only the user can set them: ask, and wait.
         ask = (f"Okay. Set the mic to {calls.to_call()} and speakers to "
