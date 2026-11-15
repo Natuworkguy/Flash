@@ -63,21 +63,29 @@ def _line(text: str) -> str:
         else line[:TEXT_CHARS - 1].rstrip() + "…"
 
 
-def ping(spark: Any, text: str, where: str, team: str = "") -> bool:
-    """SPARK wrote TEXT, in its report (WHERE "report") or in TEAM's
-    chat ("team"): if it says @user, ping the user. Whether it did."""
+def ping(spark: Any, text: str, where: str, team: str = "",
+         always: bool = False, thread: int = 0) -> bool:
+    """SPARK wrote TEXT, in its report (WHERE "report"), in TEAM's chat
+    ("team") or in a thread there ("thread"): if it says @user, ping the
+    user. ALWAYS: ping them whatever it says, past the limit too, for a
+    thread, where the user asked to hear of every message; THREAD, the
+    number of the message it hangs off, for the page to open. Whether it
+    did."""
 
     from . import briefing, notify, progress
 
-    if not mentions_user(text):
-        return False
-    if notify.take_notify_turn():
-        return False
+    if not always:
+        if not mentions_user(text):
+            return False
+        if notify.take_notify_turn():
+            return False
     said = {
         "spark": spark.id, "name": spark.name, "handle": spark.handle,
         "colour": spark.colour, "where": where, "team": team,
         "text": _line(text),
     }
+    if thread:
+        said["thread"] = thread
     with _lock:
         listeners = list(_listeners)
     for listener in listeners:
@@ -86,7 +94,8 @@ def ping(spark: Any, text: str, where: str, team: str = "") -> bool:
     progress.tell("mention", **said)
     # And in the briefing, for when it was missed.
     with contextlib.suppress(Exception):
-        briefing.notice("ping", f"{spark.name} mentioned you", said["text"],
+        briefing.notice("ping", f"{spark.name} in a thread" if where == "thread"
+                        else f"{spark.name} mentioned you", said["text"],
                         spark=spark.id, who=spark.name, colour=spark.colour,
                         team=team, where=where)
     return True

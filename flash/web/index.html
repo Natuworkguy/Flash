@@ -3395,6 +3395,24 @@ button.flow-node:hover { border-color: color-mix(in srgb, var(--c, var(--accent)
 .tc-face { padding: 0; margin-left: -6px; border-radius: 50%; background: var(--surface); box-shadow: 0 0 0 2px var(--surface); transition: transform 0.25s var(--spring); }
 .tc-face:hover { transform: translateY(-3px) scale(1.08); z-index: 1; }
 .tc-log { flex: 1; overflow-y: auto; padding: 16px 16px 8px; display: flex; flex-direction: column; gap: 3px; overscroll-behavior: contain; }
+.tc-thread { flex: 1; min-height: 0; display: flex; flex-direction: column; animation: tc-thread-in 0.28s var(--apple); }
+.tc-thread[hidden] { display: none; }
+@keyframes tc-thread-in { from { opacity: 0; transform: translateX(14px); } }
+.tc-thread-head { display: flex; align-items: center; gap: 6px; padding: 8px 12px; border-bottom: 1px solid var(--border); }
+.tc-thread-head .icon-btn { width: 32px; height: 32px; }
+.tc-thread-title { display: flex; flex-direction: column; line-height: 1.2; min-width: 0; }
+.tc-thread-title .sub { font-size: 12px; color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tc-thread-log { flex: 1; overflow-y: auto; padding: 14px 16px 8px; display: flex; flex-direction: column; gap: 3px; overscroll-behavior: contain; }
+.tc-thread-rule { display: flex; align-items: center; gap: 10px; margin: 10px 0 6px; font-size: 12px; color: var(--text-3); }
+.tc-thread-rule::before, .tc-thread-rule::after { content: ""; flex: 1; height: 1px; background: var(--border); }
+.tc-thread-link { align-self: flex-start; display: inline-flex; align-items: center; gap: 7px; margin: 3px 0 2px; padding: 3px 10px 3px 4px; border-radius: 999px; font-size: 12.5px; color: var(--text-2); background: transparent; border: 1px solid transparent; transition: background 0.15s, border-color 0.15s; }
+.tc-thread-link:hover { background: var(--hover); border-color: var(--border); }
+.tc-thread-link b { font-weight: 600; color: color-mix(in srgb, var(--c, var(--accent)) 70%, var(--text)); }
+.tc-thread-link .when { color: var(--text-3); }
+.tc-thread-link .faces { display: inline-flex; }
+.tc-thread-link .faces > * + * { margin-left: -6px; }
+.tc-msg.mine .tc-thread-link { align-self: flex-end; }
+.tc-wrap > .tc-thread-link, .tc-log > .tc-thread-link { align-self: center; }
 .tc-loading, .tc-empty { margin: auto; text-align: center; color: var(--text-3); font-size: 14px; max-width: 34ch; display: flex; flex-direction: column; gap: 6px; }
 .tc-empty b { color: var(--text); font-weight: 600; font-size: 15px; }
 .tc-day { align-self: center; margin: 14px 0 8px; font-size: 11.5px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--text-3); }
@@ -4697,7 +4715,7 @@ body.empty #ext-head, body.on-page #ext-head { display: none; }
 <div id="toast" role="status"></div>
 <div id="briefing" role="dialog" aria-modal="true" aria-label="Briefing" hidden><div class="bf-top"><span class="bf-name">Briefing</span><span class="bf-count" aria-live="polite"></span><span class="grow"></span><button type="button" class="pill bf-brief" data-tip="Flash reads it to you in a chat, and marks it read">Brief me</button><button type="button" class="icon-btn bf-refresh" aria-label="Refresh" data-tip="Refresh"></button><button type="button" class="icon-btn bf-close" aria-label="Close" data-tip="Close" data-keys="Esc"></button></div><div class="bf-feed" tabindex="-1"></div><div class="bf-rail" role="tablist" aria-label="Cards"></div><div class="bf-hint">j / k or ↑ ↓ to move · Esc to close</div></div>
 <div id="spark-call" class="sc-wrap" hidden><div class="tc-scrim"></div><section class="sc" role="dialog" aria-modal="true" aria-labelledby="sc-name"><button type="button" class="icon-btn sc-mini" aria-label="Minimise" data-tip="Keep the call going in a small bar"></button><span class="sc-face"></span><b id="sc-name" class="sc-name"></b><span class="sc-status" aria-live="polite"></span><p class="sc-caption" aria-live="polite"></p><div class="sc-btns"><button type="button" class="icon-btn sc-mute" aria-pressed="false" aria-label="Mute" data-tip="Mute"></button><button type="button" class="icon-btn sc-hang" aria-label="Hang up" data-tip="Hang up"></button><button type="button" class="icon-btn sc-screen" aria-pressed="false" aria-label="Share your screen" data-tip="Share your screen"></button></div><div class="sc-answer" hidden><button type="button" class="icon-btn sc-decline" aria-label="Decline" data-tip="Decline"></button><button type="button" class="icon-btn sc-pick" aria-label="Answer" data-tip="Answer"></button></div><video class="sc-screen-view" muted playsinline hidden></video></section></div>
-<div id="team-chat" class="tc-wrap" hidden><div class="tc-scrim" data-close></div><section class="tc" role="dialog" aria-modal="true" aria-labelledby="tc-name"><header class="tc-head"><span class="tc-badge"><span class="letter"></span></span><span class="tc-who"><b id="tc-name"></b><span class="tc-sub"></span></span><span class="tc-faces"></span><button type="button" class="icon-btn tc-call" aria-label="Voice call" data-tip="Voice call"></button><button type="button" class="icon-btn tc-full" aria-label="Full screen" data-tip="Full screen"></button><button type="button" class="icon-btn tc-close" data-close aria-label="Close"></button></header><div class="tc-log" aria-live="polite"></div><div class="tc-typing" hidden></div><form class="tc-compose"><div class="tc-chips"></div><div class="tc-replying" hidden><span class="words"><b></b><span></span></span><button type="button" class="icon-btn tc-unreply" aria-label="Cancel the reply" data-tip="Cancel the reply"></button></div><div class="tc-tray" hidden></div><div class="tc-box"><button type="button" class="icon-btn tc-attach" aria-label="Attach files" data-tip="Attach files"></button><textarea rows="1" placeholder="Message the team" aria-label="Message the team"></textarea><button type="submit" class="tc-send" aria-label="Send"></button></div><div class="tc-mention" role="listbox" hidden></div></form></section></div>
+<div id="team-chat" class="tc-wrap" hidden><div class="tc-scrim" data-close></div><section class="tc" role="dialog" aria-modal="true" aria-labelledby="tc-name"><header class="tc-head"><span class="tc-badge"><span class="letter"></span></span><span class="tc-who"><b id="tc-name"></b><span class="tc-sub"></span></span><span class="tc-faces"></span><button type="button" class="icon-btn tc-call" aria-label="Voice call" data-tip="Voice call"></button><button type="button" class="icon-btn tc-full" aria-label="Full screen" data-tip="Full screen"></button><button type="button" class="icon-btn tc-close" data-close aria-label="Close"></button></header><div class="tc-log" aria-live="polite"></div><div class="tc-thread" hidden><div class="tc-thread-head"><button type="button" class="icon-btn tc-thread-back" aria-label="Back to the chat" data-tip="Back to the chat"></button><span class="tc-thread-title"><b>Thread</b><span class="sub"></span></span></div><div class="tc-thread-log" aria-live="polite"></div></div><div class="tc-typing" hidden></div><form class="tc-compose"><div class="tc-chips"></div><div class="tc-replying" hidden><span class="words"><b></b><span></span></span><button type="button" class="icon-btn tc-unreply" aria-label="Cancel the reply" data-tip="Cancel the reply"></button></div><div class="tc-tray" hidden></div><div class="tc-box"><button type="button" class="icon-btn tc-attach" aria-label="Attach files" data-tip="Attach files"></button><textarea rows="1" placeholder="Message the team" aria-label="Message the team"></textarea><button type="submit" class="tc-send" aria-label="Send"></button></div><div class="tc-mention" role="listbox" hidden></div></form></section></div>
 
 <script src="/static/katex/katex.min.js" id="katex" async></script>
 <script>
@@ -4783,6 +4801,7 @@ const ICON = {
   link: '<path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/>',
   code: '<path d="m8 7-5 5 5 5M16 7l5 5-5 5"/>',
   reply: '<path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/>',
+  thread: '<path d="M20 14.5a2 2 0 0 1-2 2H8.5L4 20V6a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2Z"/><path d="M8 8.5h8M8 12.5h5"/>',
   smile: '<circle cx="12" cy="12" r="9"/><path d="M8.5 14.5a4.5 4.5 0 0 0 7 0"/><path d="M9 9.5h.01M15 9.5h.01"/>',
   expand: '<path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/>',
   shrink: '<path d="M4 14h6v6M20 10h-6V4M14 10l7-7M3 21l7-7"/>',
@@ -12339,7 +12358,7 @@ const TEAM_COLOURS = ["#f2a65a", "#5ab0f2", "#7bd88f", "#c792ea", "#ff7a90", "#f
 // goes to the sparks it @mentions, or to the lead, and a spark can bring
 // a teammate in. The team's news lands in it as it happens.
 
-const teamChat = { id: null, seq: 0, team: null, sparks: new Map(), typing: [], timer: null, drawnDay: "", lastWho: "", loading: false, replyTo: null, pickerAnchor: null, who: null, whoTimer: null, pressTimer: null, files: [] };
+const teamChat = { id: null, seq: 0, team: null, sparks: new Map(), typing: [], timer: null, drawnDay: "", lastWho: "", loading: false, replyTo: null, pickerAnchor: null, who: null, whoTimer: null, pressTimer: null, files: [], thread: 0, byId: new Map(), inThread: false };
 
 function tcSpark(id) { return teamChat.sparks.get(id) || sparkList.find((s) => s.id === id) || null; }
 
@@ -12390,8 +12409,9 @@ const tcClock = (at) => new Date(at * 1000).toLocaleTimeString(undefined, { hour
 async function openTeamChat(teamId) {
   const wrap = $("#team-chat");
   clearTimeout(teamChat.timer);
-  Object.assign(teamChat, { id: teamId, seq: 0, typing: [], drawnDay: "", lastWho: "" });
+  Object.assign(teamChat, { id: teamId, seq: 0, typing: [], drawnDay: "", lastWho: "", byId: new Map() });
   tcCancelReply();
+  tcCloseThread();
   const log = wrap.querySelector(".tc-log");
   log.textContent = "";
   log.appendChild(el("div", "tc-loading", "Gathering the team…"));
@@ -12460,6 +12480,7 @@ function closeTeamChat() {
   if (voice.on && voice.team && !sparkCall.on) endVoice();
   if (reading.key && reading.key.startsWith("tc:")) stopReading();
   teamChat.id = null;
+  tcCloseThread();
   tcClearTray();
   setTimeout(() => { if (!teamChat.id) wrap.hidden = true; }, calm.matches ? 0 : 320);
   if (view === "sparks") sparksChanged();
@@ -12593,7 +12614,9 @@ async function tcFetch(first = false) {
   // Messages already drawn that were reacted to: only their pills change.
   // One a retry replaced leaves the chat.
   (r.changed || []).forEach((entry) => {
-    if (entry.retried) { tcRemove(entry.id); return; }
+    teamChat.byId.set(entry.id, entry);
+    tcFillThreadLink(entry);
+    if (entry.retried) { tcRemove(entry.id); if (entry.thread && entry.thread === teamChat.thread) tcDrawThread(); return; }
     if (entry.kind === "call") {
       log.querySelector(`.tc-call[data-id="${CSS.escape(String(entry.id))}"]`)?.replaceWith(tcCallRow(entry, false));
       return;
@@ -12646,6 +12669,13 @@ function teamChatChanged(teamId, sparksToo = false) {
 }
 
 function tcEntry(entry, fresh) {
+  if (!teamChat.inThread) teamChat.byId.set(entry.id, entry);
+  // In a thread: kept for it, counted on the message it hangs off, and
+  // drawn in the thread when that is open, never in the chat itself.
+  if (entry.thread && !teamChat.inThread) {
+    if (teamChat.thread === entry.thread) setTimeout(tcDrawThread, 0);
+    return document.createDocumentFragment();
+  }
   // Said on a call: drawn but never shown, so the call reads it out and
   // its Call Log can list it; the chat runs on as if it was not there.
   if (entry.call && entry.kind !== "call") {
@@ -12696,7 +12726,9 @@ function tcEntry(entry, fresh) {
     const line = el("div", "tc-event-row");
     line.dataset.id = entry.id;
     line.append(row, tcReactButton(entry), tcReplyButton(entry));
+    if (!teamChat.inThread) line.appendChild(tcThreadButton(entry));
     frag.appendChild(line);
+    if (!teamChat.inThread && entry.thread_count) frag.appendChild(tcThreadLink(entry));
     const reacts = tcReacts(entry);
     reacts.classList.add("tc-event-reacts");
     frag.appendChild(reacts);
@@ -12738,9 +12770,11 @@ function tcEntry(entry, fresh) {
   // The reply sits just beside the bubble, however short it is.
   const line = el("div", "tc-line");
   if (mine) line.append(tcReplyButton(entry), tcReactButton(entry), bubble); else line.append(bubble, tcReactButton(entry), tcReplyButton(entry));
+  if (!teamChat.inThread) { if (mine) line.prepend(tcThreadButton(entry)); else line.appendChild(tcThreadButton(entry)); }
   col.append(line);
   if (entry.versions && entry.versions.length) col.appendChild(tcVersions(entry, bubble));
   col.appendChild(tcReacts(entry));
+  if (!teamChat.inThread && entry.thread_count) col.appendChild(tcThreadLink(entry));
   if (mine) col.appendChild(tcReceipt(entry));
   // A spark's message can be read aloud, or answered again in its place.
   if (!mine && spark) {
@@ -13028,6 +13062,119 @@ function tcReplyButton(entry) {
   b.dataset.tip = "Reply";
   b.onclick = (e) => { e.stopPropagation(); tcReplyTo(entry); };
   return b;
+}
+
+// Threads: a side conversation hanging off one message. Any message can
+// start one; the spark that said it answers there, and every message in
+// it pings the user. The chat shows "3 replies" under the message, and
+// the thread opens in place of the chat, with the composer posting to it.
+function tcThreadButton(entry) {
+  const b = el("button", "icon-btn tc-reply-btn tc-thread-btn", icon("thread"));
+  b.type = "button";
+  b.dataset.tip = entry.thread_count ? "Open the thread" : "Reply in a thread";
+  b.setAttribute("aria-label", b.dataset.tip);
+  b.onclick = (e) => { e.stopPropagation(); tcOpenThread(entry.id); };
+  return b;
+}
+
+function tcThreadLink(entry) {
+  const b = el("button", "tc-thread-link");
+  b.type = "button";
+  b.dataset.for = entry.id;
+  b.onclick = () => tcOpenThread(entry.id);
+  tcFillThreadLink(entry, b);
+  return b;
+}
+
+function tcFillThreadLink(entry, b) {
+  const log = $("#team-chat .tc-log");
+  b = b || log?.querySelector(`.tc-thread-link[data-for="${CSS.escape(String(entry.id))}"]`);
+  if (!b && entry.thread_count && log) {
+    // The first reply: the link goes under the message, as drawn.
+    const row = log.querySelector(`[data-id="${CSS.escape(String(entry.id))}"]`);
+    if (!row) return;
+    b = tcThreadLink(entry);
+    const col = row.querySelector(".tc-col");
+    if (col) col.insertBefore(b, col.querySelector(".tc-receipt")); else row.after(b);
+    return;
+  }
+  if (!b) return;
+  const n = entry.thread_count || 0;
+  b.textContent = "";
+  const faces = el("span", "faces");
+  (entry.thread_who || []).slice(0, 3).forEach((who) => {
+    const sp = who === "user" ? null : tcSpark(who);
+    if (sp) faces.appendChild(sparkAvatar(sp, 18));
+  });
+  b.append(faces, el("b", "", `${n} ${n === 1 ? "reply" : "replies"}`));
+  if (entry.thread_last) b.appendChild(el("span", "when", `Last ${esc(tcClock(entry.thread_last))}`));
+  b.dataset.tip = "Open the thread";
+}
+
+function tcOpenThread(id) {
+  const root = teamChat.byId.get(id);
+  if (!root) { toast("That message is no longer in the chat"); return; }
+  if (root.thread) return tcOpenThread(root.thread);
+  teamChat.thread = id;
+  const wrap = $("#team-chat");
+  wrap.classList.add("threaded");
+  wrap.querySelector(".tc-log").hidden = true;
+  const pane = wrap.querySelector(".tc-thread");
+  pane.hidden = false;
+  const back = pane.querySelector(".tc-thread-back");
+  back.innerHTML = icon("chevLeft");
+  back.onclick = tcCloseThread;
+  tcCancelReply();
+  const area = wrap.querySelector("textarea");
+  area.dataset.placeholder = area.dataset.placeholder || area.placeholder;
+  area.placeholder = "Reply in the thread";
+  tcDrawThread();
+  area.focus({ preventScroll: true });
+}
+
+function tcCloseThread() {
+  const wrap = $("#team-chat");
+  if (!wrap) return;
+  const was = teamChat.thread;
+  teamChat.thread = 0;
+  wrap.classList.remove("threaded");
+  const pane = wrap.querySelector(".tc-thread");
+  if (pane) { pane.hidden = true; pane.querySelector(".tc-thread-log").textContent = ""; }
+  wrap.querySelector(".tc-log").hidden = false;
+  const area = wrap.querySelector("textarea");
+  if (area && area.dataset.placeholder) area.placeholder = area.dataset.placeholder;
+  if (was) tcJump(was);
+}
+
+// The thread drawn whole: the message it hangs off, then its replies.
+function tcDrawThread() {
+  const id = teamChat.thread;
+  if (!id) return;
+  const pane = $("#team-chat .tc-thread");
+  const log = pane.querySelector(".tc-thread-log");
+  const atEnd = log.scrollHeight - log.scrollTop - log.clientHeight < 32;
+  const root = teamChat.byId.get(id);
+  const replies = [...teamChat.byId.values()].filter((e) => e.thread === id && !e.retried).sort((a, b) => a.id - b.id);
+  const saved = [teamChat.drawnDay, teamChat.lastWho];
+  teamChat.inThread = true;
+  teamChat.drawnDay = "";
+  teamChat.lastWho = "";
+  log.textContent = "";
+  try {
+    if (root) {
+      log.appendChild(tcEntry(root, false));
+      log.appendChild(el("div", "tc-thread-rule", `<span>${replies.length ? `${replies.length} ${replies.length === 1 ? "reply" : "replies"}` : "Start the thread"}</span>`));
+      teamChat.lastWho = "";
+    }
+    replies.forEach((e) => log.appendChild(tcEntry(e, false)));
+  } finally {
+    teamChat.inThread = false;
+    [teamChat.drawnDay, teamChat.lastWho] = saved;
+  }
+  const who = root?.kind === "user" ? "you" : root?.name || tcSpark(root?.spark)?.name || "a spark";
+  pane.querySelector(".tc-thread-title .sub").textContent = `On a message from ${who}`;
+  if (atEnd || !replies.length || log.dataset.drawn !== String(id)) log.scrollTop = log.scrollHeight;
+  log.dataset.drawn = String(id);
 }
 
 // Reactions: an emoji on a message, the user's or a spark's. Each is a
@@ -13520,6 +13667,7 @@ function tcWireComposer() {
       if (e.key === "Escape") { e.preventDefault(); closeMenu(); return; }
     }
     if (e.key === "Escape" && teamChat.replyTo) { e.preventDefault(); tcCancelReply(); return; }
+    if (e.key === "Escape" && teamChat.thread && !area.value) { e.preventDefault(); tcCloseThread(); return; }
     if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); form.requestSubmit(); }
   });
   area.addEventListener("blur", () => setTimeout(closeMenu, 120));
@@ -13545,7 +13693,7 @@ function tcWireComposer() {
     grow();
     const reply = teamChat.replyTo;
     tcCancelReply();
-    try { await command("team-chat-say", teamChat.id, null, { text, files: files.map((f) => f.id), reply_to: reply ? reply.id : 0 }); await tcFetch(); }
+    try { await command("team-chat-say", teamChat.id, null, { text, files: files.map((f) => f.id), reply_to: reply ? reply.id : 0, thread: teamChat.thread || 0 }); await tcFetch(); }
     catch (error) { area.value = text; tcReattach(files); grow(); if (reply) tcReplyTo(reply); showFailure(error); }
   });
   grow();
@@ -20885,8 +21033,13 @@ for (const kind of ["pointerdown", "keydown"]) {
 }
 function pinged(event) {
   playPing();
-  const open = () => (event.where === "team" && event.team ? openTeamChat(event.team) : openSpark(event.spark));
-  notified({ title: `${event.name} mentioned you`, text: event.text, seq: event.seq, open });
+  const open = async () => {
+    if ((event.where === "team" || event.where === "thread") && event.team) {
+      if (teamChat.id !== event.team) await openTeamChat(event.team);
+      if (event.thread) tcOpenThread(event.thread);
+    } else openSpark(event.spark);
+  };
+  notified({ title: event.where === "thread" ? `${event.name} in a thread` : `${event.name} mentioned you`, text: event.text, seq: event.seq, open });
 }
 
 // What a live entry does beyond being drawn: a question takes the keys,

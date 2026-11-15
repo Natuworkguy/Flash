@@ -7028,6 +7028,10 @@ def _team_command(name: str, arg: str, body: dict) -> dict:
                 reply_to = int(body.get("reply_to") or 0)
             except (TypeError, ValueError):
                 reply_to = 0
+            try:
+                thread = int(body.get("thread") or 0)
+            except (TypeError, ValueError):
+                thread = 0
             return {"entry": teamchat.send(
                 arg, str(body.get("text") or ""), reply_to=reply_to,
                 files=attachments(body.get("files")),
@@ -7038,6 +7042,7 @@ def _team_command(name: str, arg: str, body: dict) -> dict:
                 else bool(body.get("call")),
                 hidden=bool(body.get("hidden")),
                 note=humanvoice.note_for(body.get("voice_note")),
+                thread=thread,
             )}
         if name == "team-chat-call":
             # A call begun (with a spark, or a team), or a step of one:

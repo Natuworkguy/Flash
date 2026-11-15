@@ -1662,3 +1662,124 @@ def test_opening_the_chat_says_when_it_was_last_read(team):
     assert news and news[-1]["text"].startswith("Found two new bugs")  # nosec B101
     assert opened["unread"] == 0  # nosec B101
     assert teamchat.read_at(team.id) > before  # nosec B101
+
+
+# Threads: a side conversation hanging off one message.
+
+def _writer_said(team, text="The summary is half done."):
+    return teamchat._change(team.id, lambda data: teamchat._add(data, {
+        "kind": teamchat.SPARK, "spark": sparks.find("writer").id,
+        "name": "Writer", "text": text,
+    }))
+
+
+@pytest.fixture
+def heard(monkeypatch):
+    """The pings the user got."""
+
+    from flash import pings
+
+    got = []
+    pings.on_ping(got.append)
+    yield got
+    pings.off_ping(got.append)
+
+
+def test_a_thread_is_answered_by_the_spark_that_said_it(team, heard):
+    said = _writer_said(team)
+    message = teamchat.say("desk", "What is left?", thread=said["id"])
+    client = FakeClient([_reply("The ending.")])
+
+    posted = teamchat.answer("desk", message, client)
+
+    # Writer answers in the thread, not the lead.
+    assert [(e["name"], e["thread"]) for e in posted] == [  # nosec B101
+        ("Writer", said["id"]),
+    ]
+    root = next(e for e in _said(team.id) if e["id"] == said["id"])
+    assert root["thread_count"] == 2  # nosec B101
+    assert root["thread_who"][0] == sparks.find("writer").id  # nosec B101
+    # It read the thread, told it was in one.
+    seen = client.calls[0]["messages"]
+    assert f"=== The thread on #{said['id']} ===" in seen[-1]["content"]  # nosec B101
+    assert "answering in a thread" in seen[0]["content"]  # nosec B101
+    # And the user heard of it, with no @user.
+    assert [(p["where"], p["thread"]) for p in heard] == [  # nosec B101
+        ("thread", said["id"]),
+    ]
+
+
+def test_every_message_in_a_thread_pings_past_the_limit(team, heard,
+                                                        monkeypatch):
+    from flash import notify
+
+    monkeypatch.setattr(notify, "take_notify_turn", lambda: True)
+    said = _writer_said(team)
+    message = teamchat.say("desk", "Go on", thread=said["id"])
+    client = FakeClient([_send("One."), _send("Two."), _reply("Three.")])
+
+    teamchat.answer("desk", message, client)
+
+    assert [p["text"] for p in heard] == ["One.", "Two.", "Three."]  # nosec B101
+
+
+def test_the_main_chat_leaves_threads_out(team):
+    said = _writer_said(team)
+    teamchat.say("desk", "A side question", thread=said["id"])
+    message = teamchat.say("desk", "@scout and the bugs?")
+    client = FakeClient([_reply("None.")])
+
+    teamchat.answer("desk", message, client)
+
+    seen = client.calls[0]["messages"][-1]["content"]
+    assert "A side question" not in seen  # nosec B101
+    assert "[thread: 1 reply]" in seen  # nosec B101
+    assert "A side question" not in teamchat.prompt_block(  # nosec B101
+        sparks.find("scout"))
+
+
+def test_a_spark_starts_a_thread_and_its_author_answers(team, heard):
+    said = _writer_said(team)
+    message = teamchat.say("desk", "@scout look at the summary")
+    client = FakeClient([
+        _reply("", ("send_message", {"text": "Which part?",
+                                     "thread": said["id"]})),
+        _reply("Looking."),
+        _reply("The intro."),
+    ])
+
+    posted = teamchat.answer("desk", message, client)
+
+    assert [(e["name"], e.get("thread", 0)) for e in posted] == [  # nosec B101
+        ("Scout", said["id"]), ("Scout", 0), ("Writer", said["id"]),
+    ]
+
+
+def test_a_thread_on_a_reply_is_the_same_thread(team):
+    said = _writer_said(team)
+    first = teamchat.say("desk", "One", thread=said["id"])
+
+    second = teamchat.say("desk", "Two", thread=first["id"])
+
+    assert second["thread"] == said["id"]  # nosec B101
+
+
+def test_a_call_has_no_thread(team):
+    call = teamchat.start_call("desk")
+
+    with pytest.raises(teamchat.TeamChatError):
+        teamchat.say("desk", "Hi", thread=call["id"])
+
+
+def test_the_page_sends_into_a_thread(team, monkeypatch):
+    monkeypatch.setattr(teamchat, "answer", lambda *a, **k: None)
+    said = _writer_said(team)
+
+    posted = web.command(web.Session(), {
+        "name": "team-chat-say", "arg": team.id, "text": "More?",
+        "thread": said["id"],
+    })
+
+    assert posted["entry"]["thread"] == said["id"]  # nosec B101
+    changed = teamchat.history(team.id, said["id"])["changed"]
+    assert [e["thread_count"] for e in changed] == [1]  # nosec B101
