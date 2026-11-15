@@ -647,6 +647,21 @@ def tool_notify(title: str, message: str) -> bool:
     }), ""))
 
 
+def tool_say(text: str) -> None:
+    """Show the user a line in the chat now, in the middle of a turn, not
+    folded into a tool's output: a link they need before the reply comes,
+    say. Markdown, so a link can be clicked."""
+
+    sink = _sink()
+    if sink:
+        sink("say", text, "")
+        return
+    line = Text()
+    line.append(f"{BULLET} ", style=ACCENT)
+    line.append(text)
+    console.print(line)
+
+
 def _scrub(text: str) -> str:
     """TEXT with any secret's value hidden behind its name (vault.py)."""
 

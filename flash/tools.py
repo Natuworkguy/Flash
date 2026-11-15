@@ -6710,6 +6710,14 @@ def open_page(
         return result
 
     _new_browser_run()
+    if together:
+        from . import tether
+        from .theme import tool_say
+
+        # The user's link, shown as soon as the arena is up, so they have
+        # it before the game starts and play_realtime holds the turn.
+        tool_say(f"Tether is ready. Open [{tether.address()}]"
+                 f"({tether.address()}) to play with Flash.")
     headline = (
         f"Opened {url} at {shape}. The browser stays open, so use the "
         "interact tool to click, type, or run JavaScript on this page, "
@@ -6722,8 +6730,9 @@ def open_page(
             "Tether is open. You and the user are on the same side: you "
             "are orange (Flash), they are blue, tied by a rope; sparks are "
             "caught by sweeping the rope through them, and a drone touching "
-            "the rope snaps it and costs three. Give the user this address "
-            f"to open in their browser: {tether.address()} . Then play with "
+            "the rope snaps it and costs three. The user has already been "
+            f"shown their link ({tether.address()}); say it once more in "
+            "a line, then play with "
             "play_realtime: seconds 110, until "
             "\"/over/.test(document.title)\". The title says the phase "
             "(lobby, countdown, play, over), 'snapped' while the rope is "
