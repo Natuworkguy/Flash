@@ -1,6 +1,7 @@
 """Tether: the game's rules, and its server."""
 
 import json
+import urllib.error
 import urllib.request
 
 from flash import tether
@@ -122,7 +123,61 @@ def test_server_serves_the_page_state_and_keys():
     assert tether.address() is None
 
 
-def test_the_reflex_plays_as_a_teammate_at_a_persons_pace():
-    assert 'const LEVEL = "fair"' in tether.REFLEX
-    for colour in ("#ff5a36", "#2f6bff", "#d7ff3a", "#141210"):
-        assert colour in tether.REFLEX
+def test_flash_walks_where_it_decided_and_stops_there():
+    g = fresh()
+    start(g)
+    place(g, (300, 300), (500, 300))
+    g.act("flash", [(600, 300), (600, 200)])
+    for _ in range(60):
+        g.step(tether.TICK)
+    f = g.p["flash"]
+    assert (round(f["x"]), round(f["y"])) == (600, 200)
+    assert g.p["flash"]["goals"] == []
+    g.step(1)
+    assert (round(f["x"]), round(f["y"])) == (600, 200)
+
+
+def test_flash_is_no_faster_than_a_held_key():
+    g = fresh()
+    start(g)
+    place(g, (300, 300), (500, 300))
+    g.act("flash", [(800, 300)])
+    g.step(0.5)
+    assert abs(g.p["flash"]["x"] - (500 + tether.SPEED * 0.5)) < 1
+
+
+def test_flash_readies_and_speaks_through_its_moves():
+    g = fresh()
+    g.act("flash", [], ready=True, say="Ready when you are!")
+    st = g.state()["players"]["flash"]
+    assert st["ready"] and st["here"]
+    assert st["say"] == "Ready when you are!"
+    g.keys("you", [], True)
+    assert g.phase == "countdown"
+
+
+def test_flash_reads_the_game_in_words():
+    g = fresh()
+    start(g)
+    place(g, (300, 300), (500, 300))
+    g.sparks = [{"x": 400, "y": 300}]
+    g.drones = [{"x": 400, "y": 350, "vx": 0, "vy": -120}]
+    seen = tether.look(g)
+    assert "You (Flash, orange) at 500,300" in seen
+    assert "The user (blue) at 300,300" in seen
+    assert "Spark 1 at 400,300" in seen and "0 off the rope" in seen
+    assert "Drone 1 at 400,350, heading up 120/s: 50 off the rope (close!)" in seen
+
+
+def test_the_page_cannot_play_for_flash():
+    url = tether.start()
+    try:
+        req = urllib.request.Request(
+            url + "keys?as=flash", data=b"{}", method="POST")
+        try:
+            urllib.request.urlopen(req, timeout=5)
+            raise AssertionError("it let a page play as Flash")
+        except urllib.error.HTTPError as e:
+            assert e.code == 403
+    finally:
+        tether.stop()
