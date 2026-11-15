@@ -3610,7 +3610,9 @@ def _sink(session: Session, chat: Chat):
             stop = going.get("stop")
             return {"stopped": chat.stop.is_set()
                     or bool(stop and stop.is_set()), "steers": steers}
-        if kind == "line":
+        if kind == "say":
+            session.emit(chat, {"type": "note", "text": text})
+        elif kind == "line":
             session.emit(chat, {"type": "tool", "label": text})
         elif kind == "result":
             session.emit(chat, {
