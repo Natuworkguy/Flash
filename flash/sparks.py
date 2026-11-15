@@ -2361,6 +2361,53 @@ def set_models(keys: list, model) -> list[Spark]:
     return [update(spark.id, model=model) for spark in found]
 
 
+# Words for "keep what each one has" in a change to many sparks.
+KEEP_WORDS = ("keep", "")
+
+
+def set_many(keys: list, model=None, fallbacks=None) -> list[Spark]:
+    """Change every spark KEYS names at once: its MODEL (as set_models
+    takes it), its FALLBACKS (a list, or "global" for its model's global
+    fallbacks alone), or both. None leaves that as each one has it. Every
+    key, and the fallbacks, are checked before any spark changes."""
+
+    found: list[Spark] = []
+    for key in keys or []:
+        spark = _must_find(str(key))
+        if all(spark.id != other.id for other in found):
+            found.append(spark)
+    if not found:
+        raise SparkError("Pick at least one spark.")
+    if model is not None and str(model).strip().lower() == "keep":
+        model = None
+    if model is None and fallbacks is None:
+        raise SparkError("Pick a model or fallbacks to change.")
+    changes: dict = {}
+    if model is not None:
+        model = _model_name(model)
+        changes["model"] = "" if model.lower() in FLASH_MODEL_WORDS else model
+    if fallbacks is not None:
+        falls = fallbacks_of(fallbacks)  # checked once, for every spark
+        # Global fallbacks alone are what a spark with none has: kept as
+        # none, so it follows them however they change.
+        changes["fallbacks"] = [] if falls == [GLOBAL_FALLBACKS] else falls
+    return [update(spark.id, **changes) for spark in found]
+
+
+def expand_fallbacks(spark: Spark, model: str) -> list[str]:
+    """SPARK's fallbacks to try on MODEL, in order, "global" put out as
+    its model's global fallbacks as they are now."""
+
+    from . import modelchain
+
+    out: list[str] = []
+    for name in spark.fallbacks or []:
+        names = modelchain.fallbacks(model) if name == GLOBAL_FALLBACKS \
+            else [name]
+        out += [n for n in names if n != model and n not in out]
+    return out
+
+
 def set_team_model(team_key: str, model) -> tuple[Team, list[Spark]]:
     """Put everyone on TEAM_KEY's team on MODEL, as set_models does."""
 
@@ -2386,17 +2433,24 @@ def _model_name(model) -> str:
 
 # The most models a spark falls back on.
 MOST_FALLBACKS = 4
+# In a spark's fallbacks: its model's global fallbacks (/fallbacks), as
+# they are when it runs, tried at that point in its list.
+GLOBAL_FALLBACKS = "@global"
+_GLOBAL_WORDS = ("@global", "global", "global fallbacks")
 
 
 def fallbacks_of(given, model: str = "") -> list[str]:
     """GIVEN as a spark's fallbacks: a list, or "a > b, c" as typed. Its
-    own model, repeats and blanks left out."""
+    own model, repeats and blanks left out. "global" stands for its
+    model's global fallbacks, wherever it comes in the list."""
 
     if isinstance(given, str):
         given = re.split(r"[>,\n]", given)
     found: list[str] = []
     for item in given or []:
         name = _model_name(item)
+        if name.lower() in _GLOBAL_WORDS:
+            name = GLOBAL_FALLBACKS
         if name and name != model and name not in found:
             found.append(name)
     if len(found) > MOST_FALLBACKS:
@@ -4774,7 +4828,7 @@ def _work(
 
     # Its own fallbacks, when its model fails: a client that knows them
     # goes on down them, and says which answered.
-    falls = list(spark.fallbacks or [])
+    falls = expand_fallbacks(spark, model)
     knows = isinstance(client, providers.Client)
 
     def ask(**request):
@@ -5558,7 +5612,8 @@ def _shift(spark_id: str, client=None) -> Optional[Report]:
             f"{this_period(find(spark.id) or spark)}.",
         )
     except ModelFailed as e:
-        tried = (f" Its fallbacks failed too: {', '.join(spark.fallbacks)}."
+        tried = (f" Its fallbacks failed too: "
+                 f"{', '.join(expand_fallbacks(spark, model_of(spark)))}."
                  if spark.fallbacks else "")
         waits = (" It tries again on its next shift." if retry_shifts()
                  else f" {spark.name} is marked unavailable, and no shift "

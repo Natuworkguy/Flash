@@ -103,3 +103,61 @@ def test_models_lists_them_by_team(desk, monkeypatch):
     text = shown[-1]
     assert text.index("Desk") < text.index("Scout") < text.index("No team")
     assert "Loner" in text and "Flash's model" in text
+
+
+# Fallbacks, many at once, and the global ones as a choice.
+
+def _falls():
+    return {s.name: s.fallbacks for s in sparks.all_sparks()}
+
+
+def test_many_sparks_get_the_same_fallbacks(desk):
+    changed = sparks.set_many(["scout", "loner"], fallbacks="a:1b > b:2b")
+
+    assert sorted(s.name for s in changed) == ["Loner", "Scout"]
+    assert _falls()["Scout"] == ["a:1b", "b:2b"]
+    # Their models stay as they were.
+    assert _models()["Scout"] == "old:1b"
+
+
+def test_global_fallbacks_alone_clear_their_own(desk):
+    sparks.set_many(["scout"], fallbacks=["a:1b"])
+
+    sparks.set_many(["scout"], fallbacks=["global"])
+
+    assert _falls()["Scout"] == []
+
+
+def test_a_model_and_fallbacks_change_together(desk):
+    sparks.set_many(["lead", "writer"], model="new:8b",
+                    fallbacks=["@global", "c:3b"])
+
+    assert _models()["Lead"] == "new:8b"
+    assert _falls()["Writer"] == [sparks.GLOBAL_FALLBACKS, "c:3b"]
+
+
+def test_nothing_to_change_is_refused(desk):
+    with pytest.raises(sparks.SparkError):
+        sparks.set_many(["lead"], model="keep")
+
+
+def test_global_fallbacks_go_where_they_are_in_the_list(desk, monkeypatch):
+    from flash import modelchain
+
+    monkeypatch.setattr(modelchain, "fallbacks",
+                        lambda model: ["g:1b", "c:3b"])
+    spark = sparks.update("scout", fallbacks=["c:3b", "global", "d:4b"])
+
+    assert sparks.expand_fallbacks(spark, "old:1b") == [  # nosec B101
+        "c:3b", "g:1b", "d:4b"]
+
+
+def test_the_page_changes_fallbacks_and_keeps_models(desk):
+    said = web.command(web.Session(), {
+        "name": "spark-models", "arg": "", "ids": ["scout"],
+        "model": "keep", "fallbacks": ["@global", "z:9b"],
+    })
+
+    assert said["changed"] == ["Scout"]
+    assert _models()["Scout"] == "old:1b"
+    assert _falls()["Scout"] == ["@global", "z:9b"]
