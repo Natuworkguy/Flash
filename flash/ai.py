@@ -3394,6 +3394,9 @@ def _team_chat(rest: str) -> None:
 
     def show(entry: dict) -> None:
         spark = by_id.get(entry.get("spark", ""))
+        if entry.get("thread"):
+            console.print(Text(f"  ↳ in the thread on #{entry['thread']}",
+                               style=DIM))
         reply = entry.get("reply")
         if reply:
             whose = "yourself" if reply.get("kind") == teamchat.USER else (

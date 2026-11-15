@@ -58,6 +58,9 @@ PROMPT_CHARS = 300
 # How much of the message a reply is to it carries, for the page's quote
 # and for the sparks reading it.
 QUOTE_CHARS = 600
+# How much of the main chat, before a thread's first message, a spark
+# answering in the thread reads too.
+THREAD_LEAD_IN = 6
 # A spark marked typing for longer than this has gone quiet: a Flash
 # that quit half way through an answer.
 TYPING_STALE = 10 * 60
@@ -118,6 +121,22 @@ You are shown the latest of the chat, then asked to post your message.
   you posted it), call edit_message with its number and what it should
   say now, rather than posting it again. Everyone can still see what it
   said before. When the edit says it all, answer with only {quiet}.
+- A message can have a thread: a side conversation hanging off it, so
+  the chat is not buried in one topic. A message with one says so, as
+  [thread: 3 replies]. To start one, or add to one, call send_message
+  with the message's number as thread: for back and forth on a single
+  message, details only some need, or a long look into one thing. The
+  spark who said that message answers there. The user is pinged for
+  every message in a thread, so keep them for what they would want.
+""".strip()
+
+# A spark answering in a thread: told where it is, after the room's rules.
+THREAD_PROMPT = """
+=== You are answering in a thread ===
+This turn is in the thread on message #{root}, not the main chat. Your
+answer and what you send go in the thread. Stay on what the thread is
+about. The user is pinged for every message here: keep each one worth
+it, and stay quiet when there is nothing to add.
 """.strip()
 
 # A spark @mentioned into a team's chat that is not on the team: told
@@ -199,6 +218,14 @@ SEND_MESSAGE_TOOL = {
                 "text": {
                     "type": "string",
                     "description": "The message, in a sentence or a few.",
+                },
+                "thread": {
+                    "type": "integer",
+                    "description": (
+                        "Post it in the thread on this message's number "
+                        "instead, starting one if it has none. 0 for the "
+                        "main chat. In a thread, it goes there anyway."
+                    ),
                 },
             },
             "required": ["text"],
@@ -429,6 +456,16 @@ def _add(data: dict, entry: dict) -> dict:
     data["seq"] += 1
     entry = {"id": data["seq"], "at": time.time(), **entry}
     data["entries"].append(entry)
+    if entry.get("thread"):
+        # The message it hangs off counts it, for the chat's "3 replies".
+        root = _entry(data, entry["thread"])
+        if root is not None:
+            root["thread_count"] = int(root.get("thread_count") or 0) + 1
+            root["thread_last"] = entry["at"]
+            who = entry.get("spark") or USER
+            seen = [w for w in root.get("thread_who") or [] if w != who]
+            root["thread_who"] = [who, *seen][:6]
+            root["changed"] = data["seq"]
     # The chat and its calls' lines each keep their own latest.
     said = [e for e in data["entries"] if _on_call(e)]
     rest = [e for e in data["entries"] if not _on_call(e)]
@@ -437,6 +474,37 @@ def _add(data: dict, entry: dict) -> dict:
     if drop:
         data["entries"] = [e for e in data["entries"] if id(e) not in drop]
     return entry
+
+
+def _entry(data: dict, entry_id: int) -> Optional[dict]:
+    return next(
+        (e for e in data["entries"] if e.get("id") == entry_id), None,
+    )
+
+
+def _thread_root(data: dict, thread: int) -> dict:
+    """The message numbered THREAD, which a thread can hang off: one
+    still in the chat, not itself in a thread, and not a call."""
+
+    root = _entry(data, thread)
+    if root is None or root.get("retried"):
+        raise TeamChatError("That message is no longer in the chat.")
+    if root.get("thread"):
+        # A thread in a thread is the same thread.
+        return _thread_root(data, int(root["thread"]))
+    if root.get("kind") == CALL or _on_call(root) or root.get("hidden"):
+        raise TeamChatError("A call can't have a thread.")
+    return root
+
+
+def _main(entries: list) -> list:
+    """ENTRIES in the main chat: without the ones in threads."""
+
+    return [e for e in entries if not e.get("thread")]
+
+
+def _in_thread(entries: list, thread: int) -> list:
+    return [e for e in entries if e.get("thread") == thread]
 
 
 def _live(entries: list) -> list:
@@ -988,10 +1056,12 @@ def _quote(entry: dict) -> dict:
 def say(
     team_key: str, text: str, reply_to: int = 0,
     files: Optional[list] = None, hidden: bool = False, call: str = "",
+    thread: int = 0,
 ) -> dict:
     """Post what the user wrote in TEAM_KEY's chat, as a reply to the
     message numbered REPLY_TO if one is given, with the uploaded FILES
-    it carries (as the page shows them). HIDDEN: the sparks answer it,
+    it carries (as the page shows them). THREAD: in the thread on that
+    message, starting it if it has none. HIDDEN: the sparks answer it,
     but it is left out of the chat's history (a call's opening hello).
     CALL: the id of the call it was said on, from start_call().
     The sparks' answers are answer()'s to make."""
@@ -1020,6 +1090,8 @@ def say(
                 on["beat"] = time.time()
         if files:
             entry["attachments"] = files
+        if thread and not call:
+            entry["thread"] = _thread_root(data, thread)["id"]
         if reply_to:
             to = next(
                 (e for e in data["entries"] if e.get("id") == reply_to), None,
@@ -1037,6 +1109,9 @@ def say(
 
 def _line(entry: dict, by_id: dict) -> str:
     line = _said_line(entry, by_id)
+    replies = int(entry.get("thread_count") or 0)
+    if replies:
+        line += f" [thread: {replies} repl{'y' if replies == 1 else 'ies'}]"
     reactions = _reactions(entry)
     if not reactions:
         return line
@@ -1137,11 +1212,31 @@ def _call_line(entry: dict) -> str:
     return f"(A voice call with {with_}, {length})"
 
 
-def _view(team: sparks.Team, spark: sparks.Spark, entries: list) -> str:
+def _view(team: sparks.Team, spark: sparks.Spark, entries: list,
+          thread: int = 0) -> str:
     by_id = {s.id: s for s in sparks.all_sparks()}
-    lines = [f"#{e.get('id', 0)} {_line(e, by_id)}" for e in entries]
     room = "Your private chat with the user" if is_dm(team.id) \
         else f"{team.name}'s chat"
+    if thread:
+        root = next((e for e in entries if e.get("id") == thread), None)
+        said = _in_thread(entries, thread)[-CONTEXT_ENTRIES:]
+        main = _main(entries)
+        at = next((i for i, e in enumerate(main) if e.get("id") == thread),
+                  len(main))
+        before = main[max(0, at - THREAD_LEAD_IN):at]
+        lines = [f"#{e.get('id', 0)} {_line(e, by_id)}" for e in before]
+        top = [f"#{thread} {_line(root, by_id)}"] if root else []
+        inside = [f"#{e.get('id', 0)} {_line(e, by_id)}" for e in said]
+        return (
+            f"=== {room}, just before the thread ===\n"
+            + ("\n\n".join(lines) or "(nothing)")
+            + f"\n\n=== The thread on #{thread} ===\n"
+            + "\n\n".join(top + inside)
+            + "\n=== End of the thread ===\n\n"
+            f"Post your message in the thread now, as {spark.name}."
+        )
+    entries = _main(entries)
+    lines = [f"#{e.get('id', 0)} {_line(e, by_id)}" for e in entries]
     return (
         f"=== {room}: its latest {len(lines)} messages ===\n"
         + "\n\n".join(lines)
@@ -1172,14 +1267,21 @@ def _post(team_id: str, spark: sparks.Spark, entry: dict,
         })
 
     posted = _change(team_id, change)
-    # An @user in it pings the user.
-    pings.ping(spark, str(entry.get("text") or ""), "team", team_id)
+    if entry.get("thread"):
+        # Every message in a thread pings the user: they asked for that.
+        pings.ping(spark, str(entry.get("text") or ""), "thread", team_id,
+                   always=True, thread=int(entry["thread"]))
+    else:
+        # An @user in it pings the user.
+        pings.ping(spark, str(entry.get("text") or ""), "team", team_id)
     return posted
 
 
 def _sending(team_id: str, spark: sparks.Spark, sent: list[dict],
-             call: str = ""):
-    """send_message, for SPARK: posted now, and kept in SENT."""
+             call: str = "", thread: int = 0):
+    """send_message, for SPARK: posted now, and kept in SENT. THREAD: the
+    thread it answers in, where all it sends goes; without one, a message
+    it names starts or joins that message's thread."""
 
     def send(args: dict) -> str:
         # Posted as it is sent, so its dashes go here, as an answer's do.
@@ -1193,11 +1295,24 @@ def _sending(team_id: str, spark: sparks.Spark, sent: list[dict],
                 f"Error: that is {MAX_SENT} messages this turn already. "
                 "Put the rest in your answer."
             )
+        where = thread
+        if not where and not call:
+            try:
+                where = int(args.get("thread") or 0)
+            except (TypeError, ValueError):
+                where = 0
+        if where:
+            try:
+                where = _thread_root(_read(team_id), where)["id"]
+            except TeamChatError as exc:
+                return f"Error: {exc}"
         sent.append(_post(
-            team_id, spark, {"text": text, **({"call": call} if call else {})},
+            team_id, spark, {"text": text, **({"call": call} if call else {}),
+                             **({"thread": where} if where else {})},
         ))
         sparks.tool_line(f"SendMessage({text[:60]})")
-        return "(posted in the chat)"
+        return f"(posted in the thread on #{where})" if where \
+            else "(posted in the chat)"
 
     return send
 
@@ -1454,6 +1569,7 @@ def _ultra_tools() -> tuple[str, ...]:
 
 def _reply(
     team: sparks.Team, spark: sparks.Spark, client=None, call=False,
+    thread: int = 0,
 ) -> list[dict]:
     """SPARK's messages in TEAM's chat, made now and posted: those it
     sent as it worked, then its answer. [] if it chose to stay quiet.
@@ -1470,7 +1586,8 @@ def _reply(
     reacted: list[str] = []
     edited: list[int] = []
     tools = {
-        **kit.tools, "send_message": _sending(team.id, spark, sent, call_id),
+        **kit.tools,
+        "send_message": _sending(team.id, spark, sent, call_id, thread),
         "react": _reacting(team.id, spark, reacted),
         "edit_message": _editing(team.id, spark, edited),
     }
@@ -1509,6 +1626,8 @@ def _reply(
             said = said.replace(
                 "The others on the team:", "The sparks on the team:",
             ) + "\n\n" + GUEST_PROMPT.format(team=team.name)
+        if thread:
+            said += "\n\n" + THREAD_PROMPT.format(root=thread)
         on_call = ""
         if call:
             on_call = (CALL_PROMPT if is_dm(team.id) else GROUP_CALL_PROMPT) \
@@ -1520,11 +1639,13 @@ def _reply(
         heard = _call_notes.get(team.id, "") if call else ""
         if heard:
             system += "\n\nHeard on the call just now: " + heard
-        entries = _live(_settled(team.id)["entries"])[-CONTEXT_ENTRIES:]
+        entries = _live(_settled(team.id)["entries"])
+        if not thread:
+            entries = _main(entries)[-CONTEXT_ENTRIES:]
         _seen(team.id, spark, entries)
         messages = [
             {"role": "system", "content": system},
-            {"role": "user", "content": _view(team, spark, entries)},
+            {"role": "user", "content": _view(team, spark, entries, thread)},
         ]
         # What the user's camera or screen showed with their latest
         # message, for a model that can see it.
@@ -1567,6 +1688,8 @@ def _reply(
     if entry is not None:
         if call_id:
             entry = {**entry, "call": call_id}
+        elif thread:
+            entry = {**entry, "thread": thread}
         return [*sent, _post(team.id, spark, entry, done=True)]
     _set_typing(team.id, spark.id, "")
     if not sent and not reacted and not edited:
@@ -1613,38 +1736,60 @@ def _replied_to(team_id: str, message: dict) -> Optional[sparks.Spark]:
 
 
 def _round(team: sparks.Team, message: dict, client=None) -> list[dict]:
-    answered: set[str] = set()
-    queue = _named(team.id, message.get("text", ""), answered, everyone=True)
+    """One message's answers. Each turn is a spark and where it answers:
+    the main chat (0) or the thread on a message's number."""
+
+    thread = int(message.get("thread") or 0)
+    answered: set[tuple[str, int]] = set()
+    named = _named(team.id, message.get("text", ""), set(), everyone=True)
+    queue: list[tuple[sparks.Spark, int]] = [(s, thread) for s in named]
     # @everyone: each of them gets its turn, past the usual few replies.
     limit = REPLY_LIMIT
     if sparks.mentions_everyone(message.get("text", "")):
         limit = max(REPLY_LIMIT, len(queue))
     call = message.get("call") or False
-    replied = _replied_to(team.id, message)
-    if replied is not None and all(q.id != replied.id for q in queue):
+    first = _replied_to(team.id, message)
+    if thread:
+        # In a thread, the spark whose message it hangs off answers.
+        root = _entry(_read(team.id), thread) or {}
+        first = _speaker(team.id, root.get("spark", "")) or first
+    if first is not None and all(q.id != first.id for q, _ in queue):
         # The one replied to answers first, then any it named besides.
-        queue.insert(0, replied)
+        queue.insert(0, (first, thread))
     if not queue:
         # Named no one: the team's leads answer, each of them, as equals.
-        queue = _leads(team.id)
+        queue = [(s, thread) for s in _leads(team.id)]
         limit = max(limit, len(queue))
     posted: list[dict] = []
     turns = 0
     while queue and turns < limit:
-        spark = sparks.find(queue.pop(0).id)
-        if spark is None or spark.id in answered:
+        found, where = queue.pop(0)
+        spark = sparks.find(found.id)
+        if spark is None or (spark.id, where) in answered:
             continue
-        answered.add(spark.id)
+        answered.add((spark.id, where))
         turns += 1
         # One turn, and any messages in it: one quiet brings no one in.
-        said = _reply(team, spark, client, call=call)
+        said = _reply(team, spark, client, call=call, thread=where)
         posted += said
         for entry in said:
-            if not entry.get("failed"):
-                queue += [
-                    s for s in _named(team.id, entry["text"], answered)
-                    if all(q.id != s.id for q in queue)
-                ]
+            if entry.get("failed"):
+                continue
+            at = int(entry.get("thread") or 0)
+            bring = list(_named(
+                team.id, entry["text"], {k for k, w in answered if w == at},
+            ))
+            if at and at != where:
+                # It started a thread on someone's message: they answer.
+                root = _entry(_read(team.id), at) or {}
+                owner = _speaker(team.id, root.get("spark", ""))
+                if owner is not None and owner.id != spark.id:
+                    bring.insert(0, owner)
+            queue += [
+                (s, at) for s in bring
+                if (s.id, at) not in answered
+                and all(q.id != s.id or w != at for q, w in queue)
+            ]
     return posted
 
 
@@ -1721,7 +1866,8 @@ def retry(team_key: str, entry_id: int, client=None) -> dict:
         try:
             spark = sparks.find(old["spark"])
             if spark is not None:
-                _reply(team, spark, client)
+                _reply(team, spark, client,
+                       thread=int(old.get("thread") or 0))
         finally:
             with _busy_lock:
                 _busy.discard(team.id)
@@ -1742,7 +1888,7 @@ _call_notes: dict[str, str] = {}
 def send(
     team_key: str, text: str, client=None, reply_to: int = 0,
     files: Optional[list] = None, call=False, hidden: bool = False,
-    note: str = "",
+    note: str = "", thread: int = 0,
 ) -> dict:
     """Post what the user wrote, a reply to REPLY_TO if given, with
     FILES attached, and have the sparks answer it in the background: the
@@ -1755,7 +1901,7 @@ def send(
         _call_notes[_team(team_key).id] = note
     message = say(
         team_key, text, reply_to, files, hidden=hidden,
-        call=call if isinstance(call, str) else "",
+        call=call if isinstance(call, str) else "", thread=thread,
     )
     heard = {**message, "call": call or True} if call else message
     threading.Thread(
@@ -1776,7 +1922,7 @@ def _dm_block(spark: sparks.Spark) -> str:
     """The latest of SPARK's private chat with the user: "" if none."""
 
     room = dm_id(spark.id)
-    entries = _shown(_settled(room)["entries"])[-PROMPT_ENTRIES:]
+    entries = _main(_shown(_settled(room)["entries"]))[-PROMPT_ENTRIES:]
     if not entries:
         return ""
     with contextlib.suppress(OSError):
@@ -1797,7 +1943,7 @@ def _dm_block(spark: sparks.Spark) -> str:
 def _team_block(spark: sparks.Spark) -> str:
     if not spark.team:
         return ""
-    entries = _shown(_read(spark.team)["entries"])[-PROMPT_ENTRIES:]
+    entries = _main(_shown(_read(spark.team)["entries"]))[-PROMPT_ENTRIES:]
     if not entries:
         return ""
     # What is in its prompt it reads, on a shift as in a chat.
