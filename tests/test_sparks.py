@@ -2355,8 +2355,8 @@ def test_a_failing_model_marks_the_spark_unavailable(model, no_waits):
     found = sparks.find(made.id)
     assert report.failed  # nosec B101
     assert "glm-4.6:cloud is unavailable" in report.text  # nosec B101
-    assert "never switched to another model" in report.text  # nosec B101
-    assert "give it fallbacks" in report.text  # nosec B101
+    assert "global fallbacks when configured" in report.text  # nosec B101
+    assert "set fallbacks" in report.text  # nosec B101
     assert found.unavailable  # nosec B101
     assert found.unavailable_model == "glm-4.6:cloud"  # nosec B101
     # Only its own model was ever asked.
