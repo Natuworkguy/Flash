@@ -5918,8 +5918,13 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
     if name == "spark-models":
         # Many sparks onto one model at once, from the bulk editor.
         try:
-            changed = sparks.set_models(
-                list(body.get("ids") or []), str(body.get("model") or ""),
+            # A model and fallbacks, either left as each has them when
+            # not given ("keep").
+            falls = body.get("fallbacks")
+            changed = sparks.set_many(
+                list(body.get("ids") or []),
+                None if body.get("model") is None else str(body["model"]),
+                None if falls is None or falls == "keep" else falls,
             )
         except sparks.SparkError as exc:
             raise ValueError(str(exc)) from None

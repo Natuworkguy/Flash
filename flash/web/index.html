@@ -4185,6 +4185,9 @@ body.resizing-viewer iframe { pointer-events: none; }
 .fallback-list li { counter-increment: fb; display: flex; align-items: center; gap: 10px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); animation: rise 0.2s var(--ease) both; }
 .fallback-list li::before { content: counter(fb); flex: none; width: 20px; height: 20px; border-radius: 50%; display: grid; place-items: center; font-size: 11px; font-weight: 600; color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent); }
 .fallback-list li.fallback-none { color: var(--text-3); counter-increment: none; }
+.fallback-global { flex: 1; display: flex; flex-direction: column; min-width: 0; line-height: 1.25; }
+.fallback-global b { font-weight: 600; }
+.fallback-global small { font-size: 12px; color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .fallback-list li.fallback-none::before { content: none; }
 .fallback-list .mono { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 13px var(--mono); }
 .fallback-list .moves { display: flex; gap: 2px; }
@@ -13900,7 +13903,7 @@ function sparksBar(r, again = false) {
       catch (error) { showFailure(error); }
     });
   }
-  if (r.sparks.length > 1) add("Change models", "chip", "", () => modelsForm());
+  if (r.sparks.length > 1) add("Change models and fallbacks", "chip", "", () => modelsForm());
   if (awake || working) {
     add("Stop all", "halt", "danger", async (b) => {
       if (!b.classList.contains("sure")) { b.classList.add("sure"); b.querySelector("span").textContent = "Stop everything?"; return; }
@@ -14368,27 +14371,43 @@ async function modelsForm(teamId = "") {
   try { [r, said] = await Promise.all([command("sparks", "", null), command("model", "", null)]); }
   catch (error) { showFailure(error); return; }
   const form = openForm(`
-    <h2>Change models</h2>
-    <p class="sub">Tick the sparks to move, a whole team at once or one by one, then pick the model they all run on.</p>
+    <h2>Change models and fallbacks</h2>
+    <p class="sub">Tick the sparks, a whole team at once or one by one, then pick the model they all run on, their fallbacks, or both.</p>
     <label class="field check all-row"><input type="checkbox" data-all><span>Every spark</span></label>
     <div class="bulk-models"></div>
     <label class="field"><span>Model</span><span class="model-slot"></span><small>Flash's model follows whatever Flash itself runs on.</small></label>
+    <label class="field"><span>Fallbacks</span><select name="falls"><option value="keep">Keep each one's fallbacks</option><option value="global">Global fallbacks: each follows its model's own</option><option value="pick">These fallbacks…</option></select><small class="falls-said">What each tries when its model fails.</small></label>
+    <div class="bulk-falls fallback-picker" hidden></div>
     <div class="dialog-buttons"><span class="bulk-count"></span><button type="button" class="btn" data-cancel>Cancel</button><button type="submit" class="btn primary">Change</button></div>`,
     async (data, f) => {
       const ids = [...f.querySelectorAll("[data-spark]:checked")].map((b) => b.dataset.spark);
       if (!ids.length) throw new Error("Tick at least one spark.");
-      const model = (data.model || "").trim();
-      if (!model) throw new Error("Pick a model.");
-      const { changed } = await command("spark-models", "", null, { ids, model });
-      const on = model === "flash" ? "Flash's model" : model;
-      toast(`${changed.length === 1 ? `**${changed[0]}** runs` : `**${changed.length} sparks** run`} on **${on}** now`);
+      const model = (data.model || "keep").trim() || "keep";
+      const falls = data.falls === "global" ? [GLOBAL_FALLS] : data.falls === "pick" ? [...bulkChain] : "keep";
+      if (model === "keep" && falls === "keep") throw new Error("Pick a model or fallbacks to change.");
+      if (data.falls === "pick" && !bulkChain.length) throw new Error("Add a fallback, or pick Global fallbacks.");
+      const { changed } = await command("spark-models", "", null, { ids, model, fallbacks: falls });
+      const who = changed.length === 1 ? `**${changed[0]}**` : `**${changed.length} sparks**`;
+      const parts = [];
+      if (model !== "keep") parts.push(`on **${model === "flash" ? "Flash's model" : model}**`);
+      if (falls !== "keep") parts.push(data.falls === "global" ? "on the global fallbacks" : `falling back on ${bulkChain.map((m) => (m === GLOBAL_FALLS ? "the global ones" : shortModel(m))).join(" › ")}`);
+      toast(`${who} ${changed.length === 1 ? "is" : "are"} ${parts.join(", ")} now`);
     });
   form.querySelector("[data-cancel]").onclick = closeForm;
   // The model: the host's list, or a box to type one in when it has none.
   const listed = said.models || [];
   form.querySelector(".model-slot").outerHTML = listed.length
-    ? `<select name="model" required><option value="flash">Flash's model${info.model ? ` (${esc(shortModel(info.model))})` : ""}</option>${listed.map((m) => `<option value="${esc(m)}">${esc(m)}</option>`).join("")}</select>`
-    : `<input name="model" placeholder="model:8b, or flash" autocomplete="off" spellcheck="false" required>`;
+    ? `<select name="model"><option value="keep">Keep each one's model</option><option value="flash">Flash's model${info.model ? ` (${esc(shortModel(info.model))})` : ""}</option>${listed.map((m) => `<option value="${esc(m)}">${esc(m)}</option>`).join("")}</select>`
+    : `<input name="model" placeholder="model:8b, or flash; empty keeps each one's" autocomplete="off" spellcheck="false">`;
+  // Fallbacks for all of them: kept, the global ones, or a list.
+  const bulkChain = [];
+  const fallsBox = form.querySelector(".bulk-falls");
+  fallbackPicker(fallsBox, bulkChain, { most: 4, empty: "None yet: add one, or Global fallbacks.", global: true });
+  form.querySelector("[name=falls]").addEventListener("change", (e) => {
+    fallsBox.hidden = e.target.value !== "pick";
+    form.querySelector(".falls-said").textContent = { keep: "What each tries when its model fails.", global: "Each follows its model's global fallbacks, as they change.", pick: "Tried in order; Global fallbacks can go anywhere in the list." }[e.target.value];
+  });
+  const fallsWords = (s) => !(s.fallbacks || []).length ? "global fallbacks" : s.fallbacks.map((m) => (m === GLOBAL_FALLS ? "global" : shortModel(m))).join(" › ");
   const box = form.querySelector(".bulk-models");
   const groups = [...r.teams.map((t) => ({ id: t.id, name: t.name, colour: t.colour })), { id: "", name: "No team", colour: "var(--text-3)" }];
   for (const g of groups) {
@@ -14403,8 +14422,8 @@ async function modelsForm(teamId = "") {
       const row = el("label", "one", `<input type="checkbox" data-spark="${esc(s.id)}" data-in="${esc(g.id)}"><i class="dot"></i><span class="name"></span><span class="now"></span>`);
       row.style.setProperty("--c", s.colour);
       row.querySelector(".name").textContent = s.name;
-      row.querySelector(".now").textContent = s.model ? shortModel(s.model) : "Flash's model";
-      row.querySelector(".now").title = s.model || "";
+      row.querySelector(".now").textContent = `${s.model ? shortModel(s.model) : "Flash's model"} · ${fallsWords(s)}`;
+      row.querySelector(".now").title = `${s.model || "Flash's model"}, then ${fallsWords(s)}`;
       if (teamId && s.team === teamId) row.querySelector("input").checked = true;
       group.appendChild(row);
     }
@@ -15422,7 +15441,7 @@ function sparkForm(spark, inProjectId = "", template = "") {
   suggestFolders(form.watch);
   // Its fallbacks: picked from the models, as the model menu's are.
   form.fallbackChain = [];
-  const falls = fallbackPicker(form.querySelector(".spark-fallbacks"), form.fallbackChain, { own: () => form.model.value, most: 4, empty: "None: it uses its model's own fallbacks." });
+  const falls = fallbackPicker(form.querySelector(".spark-fallbacks"), form.fallbackChain, { own: () => form.model.value, most: 4, empty: "None: it uses its model's global fallbacks.", global: true });
   form.model.addEventListener("change", falls.draw);
   eventFields(form, editing ? spark.events || [] : []);
   setTimesField(form);
@@ -24256,7 +24275,17 @@ function modeMenu() {
 // A list of models to fall back on, in order: each can move up or down or
 // come off, and more are added from a picker of the models there are. CHAIN
 // is changed in place. OWN is the model they are for (never offered).
-function fallbackPicker(box, chain, { own = () => "", most = 6, empty = "None yet: it fails on its own." } = {}) {
+// "@global" in a spark's list: its model's global fallbacks, tried there.
+const GLOBAL_FALLS = "@global";
+const globalChains = new Map();
+// The global fallbacks of MODEL, as words: "a › b", or why there are none.
+async function globalChainWords(model) {
+  if (!globalChains.has(model)) globalChains.set(model, command("fallbacks", model, null).then((r) => r.chain || [], () => []));
+  const chain = await globalChains.get(model);
+  return chain.length ? chain.map(shortModel).join(" › ") : "none set yet";
+}
+
+function fallbackPicker(box, chain, { own = () => "", most = 6, empty = "None yet: it fails on its own.", global = false } = {}) {
   box.innerHTML = `<ol class="fallback-list"></ol><div class="fallback-add"><select aria-label="Add a fallback"></select><button type="button" class="btn small">Add</button></div>`;
   const list = box.querySelector(".fallback-list");
   const select = box.querySelector(".fallback-add select");
@@ -24265,7 +24294,12 @@ function fallbackPicker(box, chain, { own = () => "", most = 6, empty = "None ye
     list.textContent = "";
     chain.forEach((m, i) => {
       const li = list.appendChild(el("li", "", `<span class="mono"></span><span class="moves"><button type="button" class="icon-btn" data-up aria-label="Try sooner">${icon("chevUp")}</button><button type="button" class="icon-btn" data-down aria-label="Try later">${icon("chevDown")}</button><button type="button" class="icon-btn" data-gone aria-label="Take off">${icon("x")}</button></span>`));
-      li.querySelector(".mono").textContent = m;
+      if (m === GLOBAL_FALLS) {
+        const words = li.querySelector(".mono");
+        words.className = "fallback-global";
+        words.innerHTML = `<b>Global fallbacks</b><small></small>`;
+        globalChainWords(own()).then((w) => { words.querySelector("small").textContent = w; });
+      } else li.querySelector(".mono").textContent = m;
       li.querySelector("[data-up]").disabled = i === 0;
       li.querySelector("[data-down]").disabled = i === chain.length - 1;
       li.querySelector("[data-up]").onclick = () => { [chain[i - 1], chain[i]] = [chain[i], chain[i - 1]]; draw(); };
@@ -24274,8 +24308,10 @@ function fallbackPicker(box, chain, { own = () => "", most = 6, empty = "None ye
     });
     if (!chain.length) list.appendChild(el("li", "fallback-none", esc(empty)));
     const left = models.filter((m) => m !== "auto" && m !== own() && !chain.includes(m));
+    if (global && !chain.includes(GLOBAL_FALLS)) left.unshift(GLOBAL_FALLS);
     const full = chain.length >= most;
-    select.innerHTML = full ? `<option value="">That's the most it takes</option>` : left.length ? left.map((m) => `<option value="${esc(m)}">${esc(m)}</option>`).join("") : `<option value="">No other models here</option>`;
+    const name = (m) => (m === GLOBAL_FALLS ? "Global fallbacks (its model's own)" : m);
+    select.innerHTML = full ? `<option value="">That's the most it takes</option>` : left.length ? left.map((m) => `<option value="${esc(m)}">${esc(name(m))}</option>`).join("") : `<option value="">No other models here</option>`;
     select.disabled = add.disabled = full || !left.length;
   };
   add.onclick = () => { if (select.value && chain.length < most) { chain.push(select.value); draw(); } };
