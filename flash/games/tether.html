@@ -133,6 +133,14 @@
         if (P.stun) { g.strokeStyle = COL.ink; g.lineWidth = 3; g.setLineDash([4, 5]); g.beginPath(); g.arc(p.x, p.y, 30, 0, Math.PI * 2); g.stroke(); g.setLineDash([]); }
         g.fillStyle = COL.paper; g.font = '600 13px "Space Grotesk", Arial'; g.textAlign = 'center'; g.textBaseline = 'middle';
         g.fillText(who === 'flash' ? 'F' : me === 'you' ? 'YOU' : '', p.x, p.y + 1);
+        // what Flash says as it plays, over its head
+        if (P.say) {
+          g.font = '500 14px "Space Grotesk", Arial'; const w = g.measureText(P.say).width + 20;
+          const bx = Math.min(Math.max(p.x - w / 2, 6), 954 - w), by = Math.max(p.y - 62, 6);
+          g.fillStyle = COL.ink; g.beginPath(); g.roundRect(bx, by, w, 28, 8); g.fill();
+          g.beginPath(); g.moveTo(p.x - 6, by + 28); g.lineTo(p.x + 6, by + 28); g.lineTo(p.x, by + 35); g.fill();
+          g.fillStyle = COL.paper; g.fillText(P.say, bx + w / 2, by + 15);
+        }
       }
     }
     requestAnimationFrame(frame);

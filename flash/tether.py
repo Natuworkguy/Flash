@@ -7,10 +7,10 @@ wander the arena; if one touches the rope it snaps, costing three sparks and a
 moment to tie it again. One shared score, ninety seconds, three marks to reach.
 
 The game runs here, in Flash, thirty times a second, so both players see one
-game. You play in your browser with the keyboard; Flash plays the same page
-the way it plays any real-time game, with a reflex that reads the screen's
-pixels and presses keys (see play_realtime). The arena listens on this
-computer only.
+game. You play in your browser with the keyboard. Flash plays it itself,
+turn by turn, through its tether tool: it looks at the game, decides where
+to go and what to say, and its player walks there while it looks again.
+Nothing plays for it. The arena listens on this computer only.
 """
 
 from __future__ import annotations
@@ -38,6 +38,8 @@ MARKS = (25, 45, 65)  # good, great, legendary
 SNAP_COST, SNAP_FOR = 3, 1.5
 STUN = 0.8
 PLAYERS = ("you", "flash")
+PRESENT = 30  # seconds Flash counts as at the table after its last move
+SAY_FOR = 4.0  # seconds a line Flash says stays over its head
 
 
 def seg_dist(px, py, ax, ay, bx, by) -> float:
@@ -76,6 +78,13 @@ class Game:
                 "stun": 0.0,
                 "dash": 0.0,
                 "cool": 0.0,
+                "goals": [],
+                "dash_ask": False,
+                "said": "",
+                "said_until": 0.0,
+                "vx": 0.0,
+                "vy": 0.0,
+                "away": 0.0,
             }
             for who, x in (("you", 0.38), ("flash", 0.62))
         }
@@ -113,11 +122,37 @@ class Game:
             if ready and self.phase in ("lobby", "over"):
                 me["ready"] = True
                 if all(q["ready"] for q in self.p.values()):
-                    here = {k: q["here"] for k, q in self.p.items()}
+                    kept = {k: (q["here"], q["away"]) for k, q in self.p.items()}
                     self.reset()
                     for k, q in self.p.items():
-                        q["here"] = here[k]
+                        q["here"], q["away"] = kept[k]
                     self.phase, self.clock = "countdown", 3.0
+
+    def act(self, who: str, goals: list, dash: bool = False,
+            say: str = "", ready: bool = False) -> None:
+        """A player's decision, not a key held: where to walk, in order,
+        whether to dash on the way, a line to say, and ready in the lobby.
+        Its player walks there at the same speed a held key moves it."""
+        if who not in self.p:
+            return
+        now = time.monotonic()
+        with self.lock:
+            me = self.p[who]
+            me["here"], me["away"] = now, now + PRESENT
+            me["keys"] = set()
+            me["goals"] = [
+                (min(max(float(x), RADIUS), W - RADIUS),
+                 min(max(float(y), RADIUS), H - RADIUS))
+                for x, y in goals[:6]
+            ]
+            me["dash_ask"] = bool(dash)
+            if say:
+                me["said"] = " ".join(str(say).split())[:80]
+                me["said_until"] = now + SAY_FOR
+        if ready:
+            self.keys(who, [], True)
+            with self.lock:
+                self.p[who]["away"] = now + PRESENT
 
     # ----- one step of the world -----
     def step(self, dt: float) -> None:
@@ -141,8 +176,15 @@ class Game:
                     d["vy"] *= -1
                     d["y"] = min(max(d["y"], DRONE_R), H - DRONE_R)
             for me in self.p.values():
+                was = me["x"], me["y"]
                 self._move(me, dt)
+                me["_was"] = was
             self._rope()
+            for me in self.p.values():
+                ox, oy = me.pop("_was")
+                if dt > 0:
+                    me["vx"] = me["vx"] * .6 + (me["x"] - ox) / dt * .4
+                    me["vy"] = me["vy"] * .6 + (me["y"] - oy) / dt * .4
             a, b = self.p["you"], self.p["flash"]
             tied = self.snapped == 0
             for i, s in enumerate(self.sparks):
@@ -200,6 +242,22 @@ class Game:
         dx = ("ArrowRight" in k or "d" in k) - ("ArrowLeft" in k or "a" in k)
         dy = ("ArrowDown" in k or "s" in k) - ("ArrowUp" in k or "w" in k)
         dashing = " " in k or "Space" in k or "Shift" in k
+        # walking to where its player decided, as holding the keys would
+        while not (dx or dy) and me["goals"]:
+            gx, gy = me["goals"][0]
+            far = math.hypot(gx - me["x"], gy - me["y"])
+            if far < 4:
+                me["goals"].pop(0)
+                continue
+            step = SPEED * (DASH if me["dash"] > 0 else 1) * dt
+            if far <= step and me["dash"] == 0:
+                me["x"], me["y"] = gx, gy
+                me["goals"].pop(0)
+                return
+            dx, dy = (gx - me["x"]) / far, (gy - me["y"]) / far
+            if me["dash_ask"] and me["cool"] == 0:
+                dashing, me["dash_ask"] = True, False
+            break
         if dashing and me["cool"] == 0 and (dx or dy):
             me["dash"], me["cool"] = DASH_FOR, DASH_EVERY
         n = math.hypot(dx, dy) or 1
@@ -255,27 +313,86 @@ class Game:
                     w: {
                         "x": r(q["x"]),
                         "y": r(q["y"]),
-                        "here": now - q["here"] < 3,
+                        "here": now - q["here"] < 3 or now < q["away"],
+                        "say": q["said"] if now < q["said_until"] else "",
                         "ready": q["ready"],
                         "stun": q["stun"] > 0,
                         "dash": q["dash"] > 0,
                     }
                     for w, q in self.p.items()
                 },
+                "moving": {
+                    w: {"vx": r(q["vx"]), "vy": r(q["vy"])}
+                    for w, q in self.p.items()
+                },
                 "sparks": [
                     {"x": r(s["x"]), "y": r(s["y"])} for s in self.sparks
                 ],
                 "drones": [
-                    {"x": r(d["x"]), "y": r(d["y"])} for d in self.drones
+                    {"x": r(d["x"]), "y": r(d["y"]),
+                     "vx": r(d["vx"]), "vy": r(d["vy"])}
+                    for d in self.drones
                 ],
             }
 
 
-# A reflex for Flash to start from (play_realtime runs it every frame); it
-# plays at a person's reaction time unless its LEVEL is "sharp".
-REFLEX = (Path(__file__).parent / "games" / "tether-reflex.js").read_text(
-    encoding="utf-8"
-)
+def _heading(vx: float, vy: float) -> str:
+    speed = math.hypot(vx, vy)
+    if speed < 15:
+        return "still"
+    names = ("right", "down-right", "down", "down-left", "left", "up-left",
+             "up", "up-right")
+    at = round(math.atan2(vy, vx) / (math.pi / 4)) % 8
+    return f"{names[at]} {speed:.0f}/s"
+
+
+def look(game: "Game | None" = None) -> str:
+    """The game as words, for Flash to decide its next move on: where
+    everyone is and is heading, what's near the rope, and the score."""
+    s = (game or GAME).state()
+    me, mate = s["players"]["flash"], s["players"]["you"]
+    mv = s["moving"]
+    lines = [
+        f"{s['phase']}"
+        + (f", {s['clock']:.0f}s left" if s["phase"] == "play" else "")
+        + (f", starts in {s['clock']:.0f}" if s["phase"] == "countdown"
+           else "")
+        + f". Together {s['score']} (run {s['run']}, best {s['bestRun']}); "
+        f"marks {', '.join(map(str, s['marks']))}."
+        + (" The rope is CUT." if s["snapped"] else ""),
+        f"You (Flash, orange) at {me['x']:.0f},{me['y']:.0f}, "
+        f"{_heading(mv['flash']['vx'], mv['flash']['vy'])}"
+        + (", stunned" if me["stun"] else "")
+        + (", ready" if me["ready"] and s["phase"] != "play" else "") + ".",
+        f"The user (blue) at {mate['x']:.0f},{mate['y']:.0f}, "
+        f"{_heading(mv['you']['vx'], mv['you']['vy'])}"
+        + (", stunned" if mate["stun"] else "")
+        + ("" if mate["here"] else ", NOT in the game yet")
+        + (", ready" if mate["ready"] and s["phase"] != "play" else "") + ".",
+    ]
+    gap = math.hypot(me["x"] - mate["x"], me["y"] - mate["y"])
+    lines.append(f"Rope {gap:.0f} of {s['rope']} long. Arena "
+                 f"{s['w']}x{s['h']}, 0,0 top left.")
+    for i, sp in enumerate(s["sparks"], 1):
+        line = seg_dist(sp["x"], sp["y"], me["x"], me["y"], mate["x"],
+                        mate["y"])
+        lines.append(
+            f"Spark {i} at {sp['x']:.0f},{sp['y']:.0f}: "
+            f"{math.hypot(sp['x'] - me['x'], sp['y'] - me['y']):.0f} from "
+            f"you, {math.hypot(sp['x'] - mate['x'], sp['y'] - mate['y']):.0f}"
+            f" from the user, {line:.0f} off the rope.")
+    for i, d in enumerate(s["drones"], 1):
+        line = seg_dist(d["x"], d["y"], me["x"], me["y"], mate["x"],
+                        mate["y"])
+        lines.append(
+            f"Drone {i} at {d['x']:.0f},{d['y']:.0f}, heading "
+            f"{_heading(d['vx'], d['vy'])}: {line:.0f} off the rope"
+            + (" (close!)" if line < 60 else "") + ".")
+    if s["phase"] == "over":
+        lines.append(f"Over: {s['score']} together, mark "
+                     f"{s['mark'] or 'none'}, rope cut {s['snaps']} times.")
+    return "\n".join(lines)
+
 
 GAME = Game()
 _server: dict[str, Any] = {"httpd": None, "port": 0}
@@ -323,13 +440,17 @@ class _Handler(BaseHTTPRequestHandler):
         if url.path != "/keys":
             self._send(404, b"not here", "text/plain")
             return
+        who = (parse_qs(url.query).get("as") or [""])[0]
+        if who == "flash":
+            # Flash plays through its tool, never through this page.
+            self._send(403, b"Flash plays through its tool", "text/plain")
+            return
         size = min(int(self.headers.get("Content-Length") or 0), 4096)
         try:
             body = json.loads(self.rfile.read(size) or b"{}")
         except ValueError:
             self._send(400, b"not JSON", "text/plain")
             return
-        who = (parse_qs(url.query).get("as") or [""])[0]
         GAME.keys(who, list(body.get("keys") or []), bool(body.get("ready")))
         self._send(204, b"", "text/plain")
 
