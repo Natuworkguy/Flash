@@ -47,6 +47,7 @@ flash = [
     "calltap.swift",
     "backgrounds/*.scene",
     "games/*.html",
+    "games/*.js",
     "knowledge/*.md",
     "web/*.html",
     "web/*.js",

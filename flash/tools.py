@@ -6684,6 +6684,12 @@ def open_page(
     # The demo game that ships with Flash, by name.
     if str(target).strip().lower() in GAMES:
         target = str(GAMES[str(target).strip().lower()])
+    # Tether: a game the user and Flash play together, in one arena run here.
+    together = str(target).strip().lower() in ("tether", "flash-tether")
+    if together:
+        from . import tether
+
+        target = tether.start() + "?as=flash"
 
     url, why = resolve_target(target)
     if url is None:
@@ -6704,16 +6710,39 @@ def open_page(
         return result
 
     _new_browser_run()
+    headline = (
+        f"Opened {url} at {shape}. The browser stays open, so use the "
+        "interact tool to click, type, or run JavaScript on this page, "
+        "and close it when you are done."
+    )
+    if together:
+        from . import tether
+
+        headline = (
+            "Tether is open. You and the user are on the same side: you "
+            "are orange (Flash), they are blue, tied by a rope; sparks are "
+            "caught by sweeping the rope through them, and a drone touching "
+            "the rope snaps it and costs three. Give the user this address "
+            f"to open in their browser: {tether.address()} . Then play with "
+            "play_realtime: seconds 110, until "
+            "\"/over/.test(document.title)\". The title says the phase "
+            "(lobby, countdown, play, over), 'snapped' while the rope is "
+            "cut, and your shared score; press Space in the lobby to say "
+            "you're ready (it starts when you both are). Arrow keys move, "
+            "Space dashes. You are Ember #ff5a36 with an ink ring, they are "
+            "Tide #2f6bff, the rope is #8f7fe0, sparks Volt #d7ff3a, drones "
+            "Ink #141210 discs. A reflex to start from: it plays the far "
+            "side of each spark from the user so the rope sweeps it, at a "
+            "person's reaction time; if the user wants you quicker, set "
+            "LEVEL to \"sharp\". Afterwards, tell them how you did "
+            "together.\n" + tether.REFLEX.strip()
+        )
     return _page_report(
         step=(
             f"Opened {Path(urllib.parse.urlparse(url).path).name or url} "
             f"at {shape}"
         ),
-        headline=(
-            f"Opened {url} at {shape}. The browser stays open, so use the "
-            "interact tool to click, type, or run JavaScript on this page, "
-            "and close it when you are done."
-        ),
+        headline=headline,
     )
 
 
@@ -9707,7 +9736,10 @@ tools: list[dict[str, Any]] = [
                 "policy can learn where it died. open_page('flash-dash') "
                 "opens a practice level like a rhythm runner: spikes, "
                 "blocks, pads, rings and a ship. open_page('flash-dash-glitched') "
-                "opens the same level with secrets hidden in it that make it easier."
+                "opens the same level with secrets hidden in it that make it easier. "
+                "open_page('tether') starts Tether, a game you play WITH the "
+                "user, on the same side, at once: it gives you their address "
+                "and a reflex to start from."
             ),
             "parameters": {
                 "type": "object",
