@@ -1589,6 +1589,13 @@ It has what a hard game needs:
   `api.deaths`), until it wins or the attempts run out. It says how far
   each try got, and films the best one.
 
+- **A head as well as hands.** Played live (`look_every`), the reflex
+  keeps going between the AI's turns instead of stopping. Every few
+  seconds the AI looks in at a screenshot and at what the reflex noticed
+  and makes the calls: a plan the reflex carries out (`api.plan`), a new
+  reflex swapped in without a pause, or a line said to you. The reflex
+  handles what's too fast to think about; the AI does the thinking.
+
 ```prompt
 Open flash-dash and beat it.
 ```
@@ -1626,6 +1633,37 @@ running it yourself:
 ```bash
 playwright install chromium
 ```
+
+
+### Games you play with Flash
+
+```prompt
+Play Tether with me.
+```
+
+Tether is a co-op game that comes with Flash: you're blue, Flash is
+orange, and you're tied together by a rope. Sweep the rope through
+sparks to catch them, and keep it away from the drones. Flash shows you
+a link as soon as the game is up and plays it live: its reflex moves
+and dodges every frame, while Flash watches, picks which sparks to go
+for, holds still for you to swing round it, and talks to you in the
+game.
+
+You can make your own. A game becomes one Flash knows how to play when
+its page carries three things, and `open_page` shows Flash all three:
+
+```html
+<meta name="flash-game" content="How to play, for Flash: the colours,
+  the goal, what the title says, the plans its reflex understands.">
+<meta name="flash-invite" content="/join">
+<script type="text/flash-reflex">
+  // run every frame; reads api.plan, Flash's decisions
+</script>
+```
+
+The invite is the link you're shown to join, relative to the page. Add
+`window.flashSay = text => ...` and what Flash says shows in your game;
+without it, it goes to the chat.
 
 ### Live canvas
 

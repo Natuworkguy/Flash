@@ -1370,6 +1370,12 @@ def _play(policy: str, seconds: float = 20, until: str = "",
         return "", _first_line(exc)
     if found.get("error") and not found.get("frames"):
         return "", found["error"]
+    return _played(found, record), ""
+
+
+def _played(found: dict, record: str = "") -> str:
+    """How a run went, in words, from what play.js handed back."""
+
     lines = [
         f"Ran {found['frames']} frames in {found['seconds']}s, "
         f"{found['actions']} actions"
@@ -1412,6 +1418,155 @@ def _play(policy: str, seconds: float = 20, until: str = "",
             lines.append(f"Recording: {record}")
         except (OSError, ValueError):
             pass
+    lines.extend(_said_lines(found.get("said")))
+    return "\n".join(lines)
+
+
+def _said_lines(said: Any) -> list[str]:
+    out = []
+    for one in said or []:
+        where = "in the game" if one.get("shown") else "in the chat"
+        out.append(f"Said {where}: {one.get('text')}")
+    return out
+
+
+# Live: the reflex plays on in the page while the model thinks -------------
+
+# A reflex alone plays fast but never thinks; a model alone thinks but is
+# far too slow for a frame. Live runs are both: the reflex keeps playing
+# every frame, and every few seconds the model looks in, at the screen and
+# at what the reflex noticed, and decides: a new plan the reflex reads
+# (api.plan), a new reflex, a word to whoever it is playing with. The game
+# never waits for it.
+MOST_LIVE_SECONDS = 600
+
+_LIVE_START = """async (args) => {
+  if (window.__flashPlay && !window.__flashPlay.done) { window.__flashPlay.stop(); await window.__flashPlay.promise; }
+  window.__flashPlay = null;
+  const going = (RUN)(args);
+  if (!window.__flashPlay) { const r = await going; return r.error || "It did not start."; }
+  window.__flashPlay.promise = going;
+  return "";
+}"""
+
+_LIVE_LOOK = """async ([ms, plan, policy, say, stop]) => {
+  const P = window.__flashPlay;
+  if (!P) return { gone: true };
+  let problem = "";
+  if (!P.done) {
+    if (plan !== null) P.api.plan = plan;
+    if (policy) problem = P.setPolicy(policy);
+    if (say) P.api.say(say);
+    if (stop) P.stop();
+    await Promise.race([P.promise, new Promise((r) => setTimeout(r, stop ? 0 : ms))]);
+    if (stop) await P.promise;
+  }
+  if (P.done) { const result = P.result; window.__flashPlay = null; return { done: true, result, problem }; }
+  let memory = "";
+  try { memory = JSON.stringify(P.api.memory, (k, v) => typeof v === "number" ? Math.round(v * 10) / 10 : v); } catch { memory = "(not JSON)"; }
+  return { done: false, problem, frames: P.api.frame, t: +P.api.t.toFixed(1), title: document.title,
+    log: P.fresh.splice(0), said: P.said.splice(0), memory: memory.slice(0, 2500), plan: P.api.plan,
+    actions: P.actions(), threw: P.threw() };
+}"""
+
+
+def _game_card() -> dict:
+    """What a game made for playing with Flash says about itself, in its
+    page: <meta name="flash-game"> (how to play it, for the model),
+    <meta name="flash-invite"> (the address the user opens to join, made
+    whole against the page's), and <script type="text/flash-reflex"> (a
+    reflex to start from). Empty for any other page."""
+
+    if not is_open():
+        return {}
+    try:
+        return _session.page.evaluate("""() => {
+          const meta = (n) => document.querySelector(`meta[name="${n}"]`)?.content?.trim() || "";
+          const invite = meta("flash-invite");
+          let link = "";
+          if (invite) { try { const u = new URL(invite, location.href); link = u.href; } catch { link = ""; } }
+          const reflex = document.querySelector('script[type="text/flash-reflex"]')?.textContent?.trim() || "";
+          return { about: meta("flash-game").slice(0, 3000), invite: link, reflex: reflex.slice(0, 20000) };
+        }""") or {}
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def _live_running() -> bool:
+    if not is_open():
+        return False
+    try:
+        return bool(_session.page.evaluate(
+            "() => !!(window.__flashPlay && !window.__flashPlay.done)"))
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _play_live(policy: str = "", seconds: float = 120, until: str = "",
+               canvas: str = "", start_keys: Optional[list] = None,
+               record: str = "", look_every: float = 4, plan: Any = None,
+               say: str = "", stop: bool = False) -> tuple[str, str]:
+    """Start a live run of POLICY, or carry on the one going: set PLAN
+    (what api.plan holds), swap in POLICY if given, SAY something, then
+    let it play LOOK_EVERY seconds and say how it is going. STOP ends it.
+    Returns (what happened, "") or ("", why not)."""
+
+    if not is_open():
+        return "", NO_PAGE
+    if taken():
+        return "", TAKEN
+    page = _session.page
+    going = _live_running()
+    started = False
+    if not going:
+        if stop:
+            return "", "There is no live run going to stop."
+        if not str(policy or "").strip():
+            return "", "Start a live run with a policy."
+        seconds = max(1.0, min(float(seconds or 120), MOST_LIVE_SECONDS))
+        args = [policy, seconds, until or "", canvas or "",
+                [str(k) for k in start_keys or []], bool(record), 1, "",
+                [], "", True]
+        try:
+            why = page.evaluate(
+                _LIVE_START.replace("(RUN)", "(" + _play_js().strip() + ")"),
+                args)
+        except Exception as exc:  # noqa: BLE001
+            return "", _first_line(exc)
+        if why:
+            return "", why
+        started, policy = True, ""
+    wait = max(0.0, min(float(look_every if look_every is not None else 4),
+                        30.0))
+    try:
+        seen = page.evaluate(_LIVE_LOOK, [
+            int(wait * 1000), plan if plan is not None else None,
+            str(policy or ""), str(say or ""), bool(stop)])
+    except Exception as exc:  # noqa: BLE001
+        return "", _first_line(exc)
+    if seen.get("gone"):
+        return "", "The live run is gone: the page was left or reloaded."
+    lines = []
+    if seen.get("problem"):
+        lines.append(seen["problem"] + " The old policy plays on.")
+    if seen.get("done"):
+        lines.append("The live run is over.")
+        lines.append(_played(seen.get("result") or {}, record))
+        return "\n".join(lines), ""
+    lines.insert(0, (
+        ("Started a live run: it plays on in the page between your looks. "
+         if started else "Still playing. ")
+        + f"{seen.get('t')}s in, {seen.get('frames')} frames, "
+        f"{seen.get('actions')} actions."))
+    lines.append(f"The page's title now: {seen.get('title') or '(none)'}")
+    lines.append("api.plan: " + json.dumps(seen.get("plan"))[:600])
+    lines.append("api.memory: " + str(seen.get("memory") or "{}"))
+    if seen.get("threw"):
+        lines.append(f"The policy is throwing: {seen['threw']}")
+    if seen.get("log"):
+        lines.append("Logged since you last looked:\n"
+                     + "\n".join(seen["log"][-30:]))
+    lines.extend(_said_lines(seen.get("said")))
     return "\n".join(lines), ""
 
 
@@ -1539,6 +1694,9 @@ def _user_act(kind: str, x: float = 0, y: float = 0, text: str = "",
 
 viewport = _on_browser_thread(_viewport)
 play = _on_browser_thread(_play)
+play_live = _on_browser_thread(_play_live)
+live_running = _on_browser_thread(_live_running)
+game_card = _on_browser_thread(_game_card)
 live_frame = _on_browser_thread(_live_frame)
 user_act = _on_browser_thread(_user_act)
 

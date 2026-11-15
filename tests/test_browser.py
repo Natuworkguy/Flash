@@ -1,5 +1,7 @@
 # pylint: disable=C0114,C0115,C0116
 
+import time
+
 import pytest
 
 
@@ -157,5 +159,67 @@ def test_the_agents_reflex_beats_flash_dash():
                                  until="window.dash.over && document.title")
         assert not why
         assert "Flash Dash: won" in said
+    finally:
+        browser.close_session()
+
+
+def _game_page(tmp_path):
+    """A tiny game made for playing with Flash: it says how, gives a
+    reflex, and shows what Flash says."""
+    from flash import browser
+
+    pytest.importorskip("playwright")
+    page = tmp_path / "game.html"
+    page.write_text(
+        '<!doctype html><title>start</title>'
+        '<meta name="flash-game" content="Press keys to score.">'
+        '<meta name="flash-invite" content="join.html">'
+        '<script type="text/flash-reflex">api.press(api.plan.key || "a");'
+        '</script><canvas width="50" height="50"></canvas><script>'
+        'window.heard = []; window.flashSay = t => heard.push(t);'
+        'window.down = new Set(); addEventListener("keydown", e => '
+        '{ down.add(e.key); document.title = [...down].join(""); });'
+        'addEventListener("keyup", e => down.delete(e.key));</script>')
+    why = browser.open_page(page.as_uri(), width=400, height=300, wait_ms=50)
+    if why:
+        pytest.skip(why)
+    return browser, page
+
+
+def test_a_game_page_says_how_to_play_with_flash(tmp_path):
+    browser, page = _game_page(tmp_path)
+    try:
+        card = browser.game_card()
+        assert card["about"] == "Press keys to score."
+        assert card["invite"] == (tmp_path / "join.html").as_uri()
+        assert card["reflex"] == 'api.press(api.plan.key || "a");'
+    finally:
+        browser.close_session()
+
+
+def test_a_live_run_plays_on_between_looks_and_takes_a_plan(tmp_path):
+    browser, _ = _game_page(tmp_path)
+    try:
+        reflex = browser.game_card()["reflex"]
+        said, why = browser.play_live(reflex, seconds=60, look_every=0.3,
+                                      say="hi")
+        assert not why and "Started a live run" in said
+        assert "Said in the game: hi" in said
+        assert browser.live_running()
+        # it keeps playing while nobody is looking
+        time.sleep(0.3)
+        said, why = browser.play_live(plan={"key": "b"}, look_every=0.3)
+        assert not why and "Still playing" in said
+        assert 'api.plan: {"key": "b"}' in said
+        assert "title now: ab" in said
+        # a new reflex swaps in without stopping, and stop ends it
+        said, why = browser.play_live('api.log("new one")', look_every=0.2)
+        assert "new one" in said
+        said, why = browser.play_live(stop=True)
+        assert "The live run is over" in said and "stopped by Flash" in said
+        assert not browser.live_running()
+        # keys it held are let go
+        said, _ = browser.run_script("down.size")
+        assert said.splitlines()[1] == "0"
     finally:
         browser.close_session()

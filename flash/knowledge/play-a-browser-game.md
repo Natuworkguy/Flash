@@ -12,8 +12,11 @@ description: Play or beat a real-time browser game, like a Geometry Dash level, 
 4. play_realtime runs it for some seconds (or until a condition) and reports frames, actions, logs, the title and a screenshot. It films the game's canvas and sends the user the recording (WebM).
 5. To beat a hard level, give attempts (up to 50) with died, a JavaScript expression true when a try is lost (often the title or a pixel of the death screen), restart_keys, and progress (how far a try got, 0 to 100). It retries, keeping api.memory, so the policy can learn where it died (api.deaths). The best try is filmed.
 6. Improve the policy from what happened: where it died, what it logged, and run again.
+7. To play with a head as well as hands (a game with someone, or one that needs choices): play live. Give look_every and the reflex plays on between calls. Each call is a look: decide from the screenshot and api.memory, set plan (the reflex reads api.plan every frame), swap the policy if it needs to be different, say something to whoever you play with, and keep calling until it's over. stop ends it. A page made for playing with you has a flash-game meta, a flash-invite link for the user and a text/flash-reflex script, and open_page shows them.
 
 open_page('flash-dash') opens a practice level like Geometry Dash: spikes, blocks to land on, pads, rings to tap in the air, a speed-up, and a ship to fly between pillars.
+
+open_page('tether') opens Tether, a co-op game to play live with the user.
 
 ## Examples
 
@@ -29,4 +32,14 @@ play_realtime {"policy": "const x = api.find('#ff3b5c', 236, 160, 300); if (x >=
 Keep trying until the level is beaten, retrying on a crash.
 ```
 play_realtime {"policy": "...", "seconds": 120, "attempts": 10, "until": "document.title.includes('won')", "died": "document.title.includes('crashed')", "restart_keys": "r", "progress": "+(document.title.match(/(\\d+)%/) || [0, 0])[1]"}
+```
+
+Play live: start the reflex, then look in every few seconds and decide.
+```
+play_realtime {"policy": "...", "seconds": 200, "until": "/over/.test(document.title)", "look_every": 4, "say": "Let's go!"}
+```
+
+Each look after that sets a plan for the reflex to carry out.
+```
+play_realtime {"plan": {"near": [480, 300]}, "look_every": 4, "say": "Going for the middle one"}
 ```
