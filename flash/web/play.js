@@ -8,7 +8,13 @@
 // is true it presses the restart keys and goes again, the policy's
 // api.memory kept from try to try so it can learn where it died, until
 // UNTIL is true or the attempts run out.
-(async ([policySrc, seconds, untilSrc, canvasSel, startKeys, record, attempts, diedSrc, restartKeys, progressSrc]) => {
+//
+// With live, it plays on in the background after the call returns, so the
+// model can look in every few seconds and decide: the run is kept on
+// window.__flashPlay, where the model sets api.plan (its decisions, which
+// the reflex reads every frame), swaps in a new policy, says things, and
+// reads what the reflex noticed, all without the game stopping.
+(async ([policySrc, seconds, untilSrc, canvasSel, startKeys, record, attempts, diedSrc, restartKeys, progressSrc, live]) => {
   attempts = Math.max(1, Math.min(50, +attempts || 1));
   const canvas = canvasSel ? document.querySelector(canvasSel) : document.querySelector("canvas");
   // Pixels: a 2D canvas is read as it is; a WebGL one (most game engines)
@@ -29,8 +35,8 @@
     }
     return copy2d;
   };
-  const logged = [];
-  let actions = 0;
+  const logged = [], fresh = [], said = [];
+  let actions = 0, stopAsked = false, lastThrow = "";
   const target = () => document.activeElement && document.activeElement !== document.body ? document.activeElement : (canvas || document.body);
   const codeOf = (k) => k === " " ? "Space" : k.length === 1 ? (/[a-z]/i.test(k) ? "Key" + k.toUpperCase() : /\d/.test(k) ? "Digit" + k : k) : k;
   const key = (k, type) => {
@@ -61,6 +67,7 @@
   let lastBand = null, speeds = [];
   const timers = [];
   let mouseHeld = false;
+  const held = new Set();   // keys pressed and not let go, let go when it ends
   const api = {
     width: canvas ? canvas.width : innerWidth, height: canvas ? canvas.height : innerHeight,
     memory: {}, frame: 0, t: 0, dt: 0, attempt: 1, deaths: [],
@@ -152,8 +159,8 @@
       const sorted = [...speeds].sort((a, b) => a - b);
       return sorted.length ? sorted[sorted.length >> 1] : 0;
     },
-    press: (k) => { key(k, "keydown"); actions++; },
-    release: (k) => key(k, "keyup"),
+    press: (k) => { key(k, "keydown"); held.add(k); actions++; },
+    release: (k) => { key(k, "keyup"); held.delete(k); },
     tap: (k) => { key(k, "keydown"); key(k, "keyup"); actions++; },
     click: (x, y) => { mouse("mousedown", x, y); mouse("mouseup", x, y); mouse("click", x, y); actions++; },
     move: (x, y) => mouse("mousemove", x, y),
@@ -163,7 +170,13 @@
     held: () => mouseHeld,
     // Do FN in MS milliseconds, between frames, for timing finer than one.
     later: (ms, fn) => { timers.push(setTimeout(() => { try { fn(api); } catch (e) { api.log("later threw: " + e); } }, Math.max(0, +ms || 0))); },
-    log: (...said) => { logged.push(`${api.attempt > 1 ? `#${api.attempt} ` : ""}${api.frame}: ${said.join(" ")}`); if (logged.length > 60) logged.shift(); },
+    log: (...words) => { const line = `${api.attempt > 1 ? `#${api.attempt} ` : ""}${api.frame}: ${words.join(" ")}`; logged.push(line); fresh.push(line); if (logged.length > 60) logged.shift(); if (fresh.length > 60) fresh.shift(); },
+    // The model's decisions, set when it looks in (live runs): the reflex
+    // reads them every frame and carries them out.
+    plan: {},
+    // Say something to whoever is playing: a game that shows speech defines
+    // window.flashSay(text); anywhere else it goes to the chat.
+    say: (text) => { text = String(text || "").slice(0, 200); if (!text) return; let shown = false; try { if (typeof window.flashSay === "function") { window.flashSay(text); shown = true; } } catch { shown = false; } said.push({ text, shown }); if (said.length > 20) said.shift(); },
   };
   let policy, until, died, progress;
   try {
@@ -172,6 +185,15 @@
     died = diedSrc ? new Function("api", "return (" + diedSrc + ");") : null;
     progress = progressSrc ? new Function("api", "return (" + progressSrc + ");") : null;
   } catch (error) { return { error: "The policy does not parse: " + error.message }; }
+  if (live) {
+    window.__flashPlay = {
+      api, said, fresh, done: false, result: null,
+      stop: () => { stopAsked = true; },
+      actions: () => actions,
+      setPolicy: (src) => { try { policy = new Function("api", src); lastThrow = ""; return ""; } catch (e) { return "The new policy does not parse: " + e.message; } },
+      threw: () => lastThrow,
+    };
+  }
 
   const types = ["video/webm;codecs=vp9", "video/webm;codecs=vp8", "video/webm"];
   const canRecord = record && canvas && canvas.captureStream && window.MediaRecorder;
@@ -213,7 +235,13 @@
         api.frame++;
         api.dt = (now - last) / 1000; last = now;
         api.t = (now - start) / 1000;
-        try { policy(api); } catch (e) { error = String(e && e.stack || e).split("\n")[0]; ended = "error"; return done(); }
+        if (stopAsked) { stopped = "stopped by Flash"; ended = "won"; return done(); }
+        try { policy(api); } catch (e) {
+          const why = String(e && e.stack || e).split("\n")[0];
+          // Live, the game goes on while the model fixes it: said once, and the frame skipped.
+          if (!live) { error = why; ended = "error"; return done(); }
+          if (why !== lastThrow) { lastThrow = why; api.log("the policy threw: " + why); }
+        }
         if (until) { let u; try { u = until(api); } catch (e) { u = "until threw: " + e; } if (u) { stopped = String(u === true ? "until was true" : u); ended = "won"; return done(); } }
         if (died) { let x; try { x = died(api); } catch { x = false; } if (x) { ended = "died"; return done(); } }
         if ((now - begun) / 1000 >= seconds) { ended = "time"; return done(); }
@@ -232,10 +260,13 @@
     if (ended !== "died") break;
   }
   if (mouseHeld) api.up();
+  for (const k of [...held]) api.release(k);
   let video = "";
   if (record && bestVideo) {
     video = await new Promise((done) => { const r = new FileReader(); r.onload = () => done(String(r.result)); r.onerror = () => done(""); r.readAsDataURL(bestVideo); });
   }
-  return { video, frames: api.frame, seconds: +((performance.now() - begun) / 1000).toFixed(2), actions, stopped, error, title: document.title,
-    log: logged, canvas: !!canvas, webgl: !!(canvas && !own2d), attempts: tries, best };
+  const out = { video, frames: api.frame, seconds: +((performance.now() - begun) / 1000).toFixed(2), actions, stopped, error, title: document.title,
+    log: logged, canvas: !!canvas, webgl: !!(canvas && !own2d), attempts: tries, best, said: said.splice(0) };
+  if (live && window.__flashPlay && window.__flashPlay.api === api) { window.__flashPlay.result = out; window.__flashPlay.done = true; }
+  return out;
 })

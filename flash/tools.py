@@ -6684,9 +6684,11 @@ def open_page(
     # The demo game that ships with Flash, by name.
     if str(target).strip().lower() in GAMES:
         target = str(GAMES[str(target).strip().lower()])
-    # Tether is played through the tether tool, not in a page.
+    # Tether: a game the user and Flash play together, in one arena run here.
     if str(target).strip().lower() in ("tether", "flash-tether"):
-        return play_tether("start")
+        from . import tether
+
+        target = tether.start() + "?as=flash"
 
     url, why = resolve_target(target)
     if url is None:
@@ -6712,6 +6714,23 @@ def open_page(
         "interact tool to click, type, or run JavaScript on this page, "
         "and close it when you are done."
     )
+    # A game made for playing with Flash says so in its page: how to play
+    # it, where the user joins, and a reflex to start from.
+    card = page_devtools.game_card()
+    if card.get("invite"):
+        from .theme import tool_say
+
+        link = card["invite"]
+        tool_say(f"The game is ready. Open [{link}]({link}) to play with "
+                 "Flash.")
+        headline += (f"\nThe user has been shown their link to join: "
+                     f"{link} . Say it again in a line, then play.")
+    if card.get("about"):
+        headline += "\nThis page is a game made for playing with you:\n" \
+            + card["about"]
+    if card.get("reflex"):
+        headline += ("\nIts reflex to start from (play_realtime's policy; "
+                     "change it as you like):\n" + card["reflex"])
     return _page_report(
         step=(
             f"Opened {Path(urllib.parse.urlparse(url).path).name or url} "
@@ -6775,14 +6794,22 @@ GAMES = {
 }
 
 
-def play_realtime(policy: str, seconds: Any = 20, until: str = "",
+def play_realtime(policy: str = "", seconds: Any = 20, until: str = "",
                   canvas: str = "", start_keys: Any = None,
                   attempts: Any = 1, died: str = "",
-                  restart_keys: Any = None, progress: str = "") -> str:
+                  restart_keys: Any = None, progress: str = "",
+                  look_every: Any = None, plan: Any = None, say: str = "",
+                  stop: Any = False) -> str:
     """Run a reflex the model wrote, every frame, in the open page: for a
-    game that moves faster than a turn can look and think."""
+    game that moves faster than a turn can look and think. Live (with
+    look_every, or while a live run is going), the reflex plays on between
+    calls and the model looks in, decides and talks."""
 
     policy = str(policy or "")
+    if look_every not in (None, "") or _truthy(stop) or (
+            plan is not None or say) or page_devtools.live_running():
+        return _play_live(policy, seconds, until, canvas, start_keys,
+                          look_every, plan, say, stop)
     tool_line(f"PlayRealtime({_clamp(seconds, 1, 120, 20)}s, "
               f"{len(policy)} chars)")
     if not policy.strip():
@@ -6818,65 +6845,50 @@ def play_realtime(policy: str, seconds: Any = 20, until: str = "",
     return _page_report(said)
 
 
-TETHER_ACTIONS = ("start", "look", "move", "ready")
+def _play_live(policy: str, seconds: Any, until: str, canvas: str,
+               start_keys: Any, look_every: Any, plan: Any, say: str,
+               stop: Any) -> str:
+    """A live run: the reflex in the page plays every frame; each call is
+    the model looking in, deciding a plan and talking."""
 
-
-def _points(given: Any) -> list:
-    """Where to walk: [[x, y], ...], [x, y], or "x,y; x,y"."""
-    if isinstance(given, str):
-        given = [p.split(",") for p in given.replace("|", ";").split(";")
-                 if p.strip()]
-    if (isinstance(given, (list, tuple)) and len(given) == 2
-            and all(isinstance(v, (int, float)) for v in given)):
-        given = [given]
-    out = []
-    for p in given or []:
+    if isinstance(plan, str):
+        text = plan.strip()
         try:
-            out.append((float(p[0]), float(p[1])))
-        except (TypeError, ValueError, IndexError):
-            continue
-    return out
+            plan = json.loads(text) if text else None
+        except ValueError:
+            plan = {"note": text}
+    try:
+        every = float(look_every) if look_every not in (None, "") else 4.0
+    except (TypeError, ValueError):
+        every = 4.0
+    every = min(max(every, 0.0), 30.0)
+    going = page_devtools.live_running()
+    tool_line("PlayRealtime(live"
+              + (", stop" if _truthy(stop) else
+                 f", {'new reflex, ' if policy.strip() else ''}"
+                 f"looks in {every:g}s")
+              + (f", says {say[:40]!r}" if say else "") + ")")
+    keys = start_keys if isinstance(start_keys, list) else [
+        k for k in str(start_keys or "").split(",") if k]
+    said, why = page_devtools.play_live(
+        policy, seconds=_clamp(seconds, 1, 600, 120) if not going else 120,
+        until=str(until or ""), canvas=str(canvas or ""), start_keys=keys,
+        record=str(Path(SCRATCH_DIR) / f"playthrough-{int(time.time())}.webm"),
+        look_every=every, plan=plan, say=str(say or ""), stop=_truthy(stop))
+    if why:
+        tool_result(why, style=ERROR)
+        return _page_report(f"That did not run: {why}")
+    tool_result(said.splitlines()[0])
+    for line in said.splitlines():
+        if line.startswith("Said in the chat: "):
+            from .theme import tool_say
 
-
-def play_tether(action: str = "look", to: Any = None, dash: Any = False,
-                say: str = "", wait: Any = 0.6) -> str:
-    """Tether, played by the model itself: each call is a decision."""
-
-    from . import tether
-
-    action = str(action or "look").strip().lower()
-    tool_line(f"Tether({action}{f' {say!r}' if say else ''})")
-    if action not in TETHER_ACTIONS:
-        result = (f"Error: unknown action {action!r}. Use one of: "
-                  + ", ".join(TETHER_ACTIONS) + ".")
-        tool_result(result, style=ERROR)
-        return result
-    fresh = tether.address() is None
-    url = tether.start()
-    if action == "start" or fresh:
-        from .theme import tool_say
-
-        # The user's link, the moment the arena is up.
-        tool_say(f"Tether is ready. Open [{url}]({url}) to play with Flash.")
-    goals = _points(to)
-    if action == "move" and not goals and not say:
-        result = "Error: move needs to, where to walk ([[x, y], ...])."
-        tool_result(result, style=ERROR)
-        return result
-    if action in ("start", "move", "ready") or say:
-        tether.GAME.act("flash", goals, dash=_truthy(dash), say=str(say or ""),
-                        ready=action == "ready")
-    if action in ("move", "ready"):
-        try:
-            pause = min(max(float(wait), 0.0), 3.0)
-        except (TypeError, ValueError):
-            pause = 0.6
-        time.sleep(pause)
-    seen = tether.look()
-    tool_result(seen.splitlines()[0])
-    if action == "start":
-        seen = (f"The user's link, already shown to them: {url}\n" + seen)
-    return seen
+            tool_say(line[len("Said in the chat: "):])
+        if line.startswith("Recording: "):
+            film = line[len("Recording: "):]
+            if tool_file(film):
+                said += "\nThe recording was sent to the user's screen."
+    return _page_report(said)
 
 
 DEVTOOLS_ACTIONS = ("network", "request", "console", "run", "inspect")
@@ -9773,14 +9785,43 @@ tools: list[dict[str, Any]] = [
                 "opens a practice level like a rhythm runner: spikes, "
                 "blocks, pads, rings and a ship. open_page('flash-dash-glitched') "
                 "opens the same level with secrets hidden in it that make it easier. "
-                "Tether, the game you play WITH the user, is not played "
-                "with this: use the tether tool."
+                "Live, you play with your head as well as your hands: "
+                "give look_every and the reflex plays on in the page "
+                "between your calls instead of stopping. Each call is you "
+                "looking in (a screenshot, api.memory, what it logged) "
+                "and deciding: plan sets api.plan, which the reflex reads "
+                "every frame, a new policy swaps in without a pause, say "
+                "talks to whoever you play with (in the game when the page "
+                "defines window.flashSay, else in the chat), stop ends it. "
+                "Keep calling until the game is over. So the reflex does "
+                "what's too fast to think about and you make the calls. "
+                "open_page('tether') starts Tether, a co-op game you play "
+                "WITH the user, live. Any page can be a game made for "
+                "playing with you the same way: a <meta name=\"flash-game\"> "
+                "telling you how, a <meta name=\"flash-invite\"> with the "
+                "user's link, and a <script type=\"text/flash-reflex\"> to "
+                "start from; open_page shows you all three."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "policy": {"type": "string", "description": (
-                        "The body of a function of api, run every frame.")},
+                        "The body of a function of api, run every frame. "
+                        "Needed to start; live, give it only to swap the "
+                        "reflex.")},
+                    "look_every": {"type": "number", "description": (
+                        "Play live: seconds to let it play before you look "
+                        "again, 0 to 30. The reflex keeps going between "
+                        "calls; a live run lasts up to seconds (600 at "
+                        "most) or until until.")},
+                    "plan": {"type": "object", "description": (
+                        "Live: your decisions, put in api.plan for the "
+                        "reflex to carry out, such as {\"go\": [400, 200]}"
+                        ". Replaces the last plan.")},
+                    "say": {"type": "string", "description": (
+                        "Live: a short line to whoever you play with.")},
+                    "stop": {"type": "boolean", "description": (
+                        "Live: end the run and get its report.")},
                     "seconds": {"type": "integer", "description": (
                         "How long to run it, at most 120. Default 20.")},
                     "until": {"type": "string", "description": (
@@ -9810,57 +9851,7 @@ tools: list[dict[str, Any]] = [
                         "try's film, such as +document.title.match(/\\d+/)"
                         "?.[0].")},
                 },
-                "required": ["policy"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "tether",
-            "description": (
-                "Play Tether with the user, yourself: a real-time co-op "
-                "game. You are orange, they are blue, tied by a rope 340 "
-                "long. Sparks are caught by sweeping the rope through them "
-                "or touching them; a drone touching the rope cuts it (minus "
-                "three, and a moment to retie); one touching a player stuns "
-                "them. 90 seconds, one shared score. start: opens the arena "
-                "and shows the user their link. look: the game in words. "
-                "ready: say you're ready in the lobby (it starts when you "
-                "both are). move: your decision, where to walk next (to, "
-                "a few points in order), whether to dash, and a short line "
-                "to say over your head; it waits a moment and shows you the "
-                "game again. Nothing plays for you between calls: your "
-                "player only walks where you last sent it. So keep moving "
-                "while it plays: read where the user is going, plan where "
-                "the rope will sweep, keep it off drones' paths, and call "
-                "out what you're doing (\"I'll swing wide, hold still\", "
-                "\"drone, pull in!\") like a teammate. Short replies, no "
-                "chat in between, until the phase is over; then tell them "
-                "how you did together."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "action": {"type": "string",
-                               "enum": list(TETHER_ACTIONS)},
-                    "to": {"type": "array", "items": {
-                        "type": "array", "items": {"type": "number"}},
-                        "description": (
-                            "Points to walk to in order, [[x, y], ...], "
-                            "in the arena's 960 x 600, 0,0 top left. "
-                            "Replaces where you were going.")},
-                    "dash": {"type": "boolean", "description": (
-                        "Dash once on the way: 2.3x speed briefly, every "
-                        "two seconds at most.")},
-                    "say": {"type": "string", "description": (
-                        "A short line shown over your head for four "
-                        "seconds.")},
-                    "wait": {"type": "number", "description": (
-                        "Seconds to let it play before looking again, 0 "
-                        "to 3. Default 0.6.")},
-                },
-                "required": ["action"],
+                "required": [],
             },
         },
     },
@@ -10976,7 +10967,6 @@ FUNCTIONS = {
     "interact": interact,
     "devtools": devtools,
     "play_realtime": play_realtime,
-    "tether": play_tether,
     "make_project": make_project,
     "calendar": calendar_tool,
     "tutor": tutor,
