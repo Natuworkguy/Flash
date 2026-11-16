@@ -85,13 +85,17 @@ class TestSkills:
         (lambda: skills.manage(
             "create", "x", description="d" * 200, content="y"),
          "limit"),
-        (lambda: create(body="x" * (skills.MAX_SKILL_CHARS + 1)), "under"),
         (lambda: skills.manage("explode", "x"), "unknown action"),
         (lambda: skills.manage("patch", "nope"), "No skill"),
     ])
     def test_refusals(self, call, message):
         with pytest.raises(SkillError, match=message):
             call()
+
+    def test_a_long_skill_is_kept_whole(self):
+        body = "1. A step.\n" * 2000
+        create(body=body)
+        assert len(skills.find("deploy-app").body) >= len(body.strip())
 
     def test_creating_twice_says_to_patch(self):
         create()

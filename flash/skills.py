@@ -46,7 +46,6 @@ SKILL_FILE = "SKILL.md"
 NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,47}$")
 
 MAX_DESCRIPTION_CHARS = 120
-MAX_SKILL_CHARS = 8000
 
 # The list in the system prompt stops here. Past it, the names alone
 # would cost a local model a noticeable slice of its window.
@@ -102,7 +101,7 @@ def _guides(folder: Path, source: str, prefix: str = "") -> list[Skill]:
         if not NAME_RE.match(name) or not body:
             continue
         found.append(Skill(name=name, description=fields.get(
-            "description", ""), body=body[:MAX_SKILL_CHARS], managed=False,
+            "description", ""), body=body, managed=False,
             path=file, builtin=source))
     return found
 
@@ -337,13 +336,6 @@ def view(name: str, path: str = "") -> str:
 
 
 def _write(skill: Skill) -> None:
-    if len(skill.body) > MAX_SKILL_CHARS:
-        raise SkillError(
-            f"the skill is {len(skill.body)} characters; keep it under "
-            f"{MAX_SKILL_CHARS} by cutting narrative and keeping the steps "
-            "and pitfalls"
-        )
-
     skill.path.mkdir(parents=True, exist_ok=True)
     (skill.path / SKILL_FILE).write_text(_render(skill), encoding="utf-8")
 
@@ -475,7 +467,7 @@ def read_code(code: str) -> dict:
     data = text[at + len(CODE_PREFIX):]
     try:
         raw = zlib.decompress(base64.urlsafe_b64decode(data + "=" * (-len(data) % 4)),
-                              bufsize=MAX_SKILL_CHARS * 8)
+                              bufsize=64 * 1024)
         got = json.loads(raw.decode())
         name, description, body = got["n"], got["d"], got["b"]
     except (ValueError, KeyError, TypeError, zlib.error):
@@ -495,8 +487,6 @@ def add_from_code(code: str, name: str = "", replace: bool = False) -> str:
     existing = find(name, guides=False)
     if existing is not None and not replace:
         raise SkillError(f"you already have a skill called {name}: add it under another name, or replace yours")
-    if len(got["content"]) > MAX_SKILL_CHARS:
-        raise SkillError(f"that skill is longer than {MAX_SKILL_CHARS} characters")
     _write(Skill(name=name, description=got["description"], body=got["content"], managed=False,
                  path=skills_dir() / name, by="you"))
     return f"{'Replaced' if existing else 'Added'} skill {name}: {got['description']}"
