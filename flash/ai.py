@@ -7029,6 +7029,12 @@ def _main() -> None:
         console.print(Text(said, style=DIM))
         return
 
+    # The Mac's Flash app, made again if it is out of date (a fix to it,
+    # or Flash moved), on a thread of its own so nothing waits for it.
+    if sys.platform == "darwin":
+        from . import launcher
+        threading.Thread(target=launcher.refresh, daemon=True).start()
+
     # flash://open: the web UI, wherever it is running, or here. With
     # --web, any flash:// link opens there too, its prompt waiting in the
     # message box (how the Mac app opens links, with no terminal to ask in).

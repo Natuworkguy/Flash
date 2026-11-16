@@ -44,7 +44,12 @@ def test_a_mac_gets_an_app_that_opens_flash_and_flash_links(monkeypatch, tmp_pat
     assert info["CFBundleName"] == "Flash" and info["LSUIElement"]
     assert info["CFBundleURLTypes"][0]["CFBundleURLSchemes"] == ["flash"]
     # opened: the web UI; a link: the web UI with its prompt, both in the background
-    assert "on run" in script and "'--uri' 'flash://open' >/dev/null 2>&1 &" in script
+    assert "on run" in script and "launch(\"'" in script
+    assert "'--uri' 'flash://open'\")" in script
+    # it says why when Flash cannot start, rather than doing nothing
+    assert "launcher.log" in script and "display alert" in script
+    assert "test -x" in script
+    assert "/opt/homebrew/bin" in script
     assert "on open location theURL" in script and "'--web' '--uri'" in script
     assert "quoted form of theURL" in script
     assert (app / "Resources" / "applet.icns").read_bytes()[:4] == b"icns"
@@ -107,3 +112,21 @@ def test_with_no_console_flash_writes_to_a_log(monkeypatch, tmp_path):
 
     log = tmp_path / ".flash" / "background.log"
     assert "hello from the background" in log.read_text(encoding="utf-8")
+
+
+def test_the_mac_app_is_made_again_when_out_of_date(monkeypatch, tmp_path):
+    monkeypatch.setattr(launcher, "_host", lambda: "mac")
+    monkeypatch.setattr(launcher.Path, "home", lambda: tmp_path)
+    monkeypatch.setattr(launcher, "FLASH_DIR", tmp_path / ".flash")
+    made = []
+    monkeypatch.setattr(launcher, "_mac",
+                        lambda target, argv: made.append(argv))
+    # no app yet: nothing to refresh
+    assert launcher.refresh() is False and not made
+    (tmp_path / "Applications" / "Flash.app").mkdir(parents=True)
+    # an app made by an older Flash
+    assert launcher.refresh() is True and made
+    (tmp_path / ".flash").mkdir(exist_ok=True)
+    (tmp_path / ".flash" / "launcher.applescript").write_text(
+        launcher._applescript(launcher.base_command()), encoding="utf-8")
+    assert launcher.refresh() is False  # already current
