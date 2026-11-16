@@ -117,8 +117,13 @@ LSREGISTER = ("/System/Library/Frameworks/CoreServices.framework/Frameworks/"
 
 def _applescript(base: list[str]) -> str:
     """The applet: opened, the web UI; given a flash:// link, the web UI
-    with the link's prompt. Flash starts in the background and the applet
-    quits, so nothing waits on it."""
+    with the link's prompt. Flash starts in the background, with the
+    places a Mac keeps its tools (Homebrew's, pipx's) on its PATH, and
+    writes what it says to ~/.flash/launcher.log. The applet waits up to
+    ten seconds: if Flash stops by then with an error, or the Python it
+    runs on is gone (moved, or replaced by an update), it says so in an
+    alert rather than doing nothing; a Flash that is still running by
+    then is serving, and the applet quits."""
 
     def shell(parts: list[str]) -> str:
         return " ".join("'" + p.replace("'", "'\\''") + "'" for p in parts)
@@ -126,15 +131,66 @@ def _applescript(base: list[str]) -> str:
     def literal(text: str) -> str:
         return '"' + text.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
-    quiet = " >/dev/null 2>&1 &"
-    return (
-        "on run\n"
-        f"  do shell script {literal(shell([*base, *OPEN]) + quiet)}\n"
-        "end run\n"
-        "on open location theURL\n"
-        f"  do shell script {literal(shell([*base, '--web', '--uri']) + ' ')}"
-        f" & quoted form of theURL & {literal(quiet)}\n"
-        "end open location\n")
+    log, status = FLASH_DIR / "launcher.log", FLASH_DIR / "launcher.status"
+    opened = literal(shell([*base, *OPEN]))
+    linked = literal(shell([*base, "--web", "--uri"]) + " ")
+    return APPLET.format(
+        opened=opened, linked=linked, log=literal(str(log)),
+        status=literal(str(status)), py=literal(base[0]))
+
+
+# The applet's script: see _applescript. Kept to short lines, the parts of
+# its long commands put together a piece at a time.
+APPLET = """on run
+  launch({opened})
+end run
+on open location theURL
+  launch({linked} & quoted form of theURL)
+end open location
+on launch(cmd)
+  set logPath to {log}
+  set statusPath to {status}
+  set py to {py}
+  try
+    do shell script "test -x " & quoted form of py
+  on error
+    activate
+    set why to "The Python it runs on is gone (" & py & "): Flash was "
+    set why to why & "moved or updated. Open Terminal and run "
+    set why to why & "flash --shortcut to fix this app."
+    display alert "Flash can't start" message why as critical
+    return
+  end try
+  set here to do shell script "dirname " & quoted form of logPath
+  set job to cmd & " >" & quoted form of logPath & " 2>&1; "
+  set job to job & "echo $? >" & quoted form of statusPath
+  set todo to "mkdir -p " & quoted form of here & "; "
+  set todo to todo & "rm -f " & quoted form of statusPath & "; "
+  set todo to todo & "export PATH=/opt/homebrew/bin:/usr/local/bin:"
+  set todo to todo & "$HOME/.local/bin:$PATH; "
+  set todo to todo & "/bin/sh -c " & quoted form of job
+  do shell script todo & " >/dev/null 2>&1 &"
+  repeat 40 times
+    delay 0.25
+    try
+      set code to do shell script "cat " & quoted form of statusPath
+    on error
+      set code to ""
+    end try
+    if code is not "" then
+      if code is not "0" then
+        set said to do shell script "tail -n 12 " & quoted form of logPath
+        set said to said & linefeed & linefeed & "(All of it is in "
+        set said to said & logPath & ".)"
+        activate
+        set title to "Flash stopped as it started"
+        display alert title message said as critical
+      end if
+      return
+    end if
+  end repeat
+end launch
+"""
 
 
 def _mac(target: Path, argv: list[str]) -> None:
@@ -173,6 +229,29 @@ def _mac(target: Path, argv: list[str]) -> None:
     if Path(LSREGISTER).exists():
         subprocess.run([LSREGISTER, "-f", str(target)],  # nosec B603
                        capture_output=True, timeout=60, check=False)
+
+
+def refresh() -> bool:
+    """On a Mac, make the Flash app again when what it would run has
+    changed (a newer applet, or Flash moved), so a fix to the app reaches
+    it without anyone running --shortcut. Quiet, and never in the way:
+    True when it was made again."""
+
+    if _host() != "mac" or not place().exists():
+        return False
+    source = FLASH_DIR / "launcher.applescript"
+    base = base_command()
+    try:
+        if source.read_text(encoding="utf-8") == _applescript(base):
+            return False
+    except OSError:
+        pass
+    try:
+        _mac(place(), [*base, *OPEN])
+    # a shortcut is never worth failing over
+    except Exception:  # noqa: BLE001
+        return False
+    return True
 
 
 def _linux(target: Path, argv: list[str]) -> None:
