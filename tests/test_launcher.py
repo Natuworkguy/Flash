@@ -16,19 +16,39 @@ def test_the_shortcut_opens_flash_in_the_browser_from_this_flash():
     assert Path(argv[0]).name.startswith(Path(sys.executable).name[:6])
 
 
-def test_a_mac_gets_an_app_that_runs_it(monkeypatch, tmp_path):
+def test_a_mac_gets_an_app_that_opens_flash_and_flash_links(monkeypatch, tmp_path):
     monkeypatch.setattr(launcher, "_host", lambda: "mac")
     monkeypatch.setattr(launcher.Path, "home", lambda: tmp_path)
+    monkeypatch.setattr(launcher, "FLASH_DIR", tmp_path / ".flash")
+    ran = []
 
+    def run(argv, **_kw):
+        # osacompile, standing in: an applet bundle, as a Mac makes one
+        ran.append(argv)
+        if argv[0] == "osacompile":
+            app = Path(argv[2]) / "Contents"
+            (app / "Resources").mkdir(parents=True)
+            (app / "MacOS").mkdir()
+            (app / "Info.plist").write_bytes(plistlib.dumps(
+                {"CFBundleExecutable": "applet", "CFBundleName": "launcher"}))
+            ran.append(Path(argv[3]).read_text(encoding="utf-8"))
+        return launcher.subprocess.CompletedProcess(argv, 0, "", "")
+
+    monkeypatch.setattr(launcher.subprocess, "run", run)
     said = launcher.install()
 
     app = tmp_path / "Applications" / "Flash.app" / "Contents"
     info = plistlib.loads((app / "Info.plist").read_bytes())
-    runner = (app / "MacOS" / "Flash").read_text(encoding="utf-8")
-    assert "~/Applications" in said
-    assert info["CFBundleExecutable"] == "Flash" and info["LSUIElement"]
-    assert "'flash://open'" in runner and runner.startswith("#!/bin/sh")
-    assert (app / "Resources" / "flash.icns").read_bytes()[:4] == b"icns"
+    script = ran[1]
+    assert "~/Applications" in said and "flash:// links" in said
+    assert info["CFBundleName"] == "Flash" and info["LSUIElement"]
+    assert info["CFBundleURLTypes"][0]["CFBundleURLSchemes"] == ["flash"]
+    # opened: the web UI; a link: the web UI with its prompt, both in the background
+    assert "on run" in script and "'--uri' 'flash://open' >/dev/null 2>&1 &" in script
+    assert "on open location theURL" in script and "'--web' '--uri'" in script
+    assert "quoted form of theURL" in script
+    assert (app / "Resources" / "applet.icns").read_bytes()[:4] == b"icns"
+    assert any(argv[:3] == ["codesign", "--force", "--sign"] for argv in ran if isinstance(argv, list))
     assert launcher.remove() == "Removed the Flash shortcut."
     assert not (tmp_path / "Applications" / "Flash.app").exists()
 

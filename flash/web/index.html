@@ -4907,6 +4907,8 @@ function slideBox(parent) {
 // shown over a shoulder.
 
 const params = new URLSearchParams(location.search);
+// a flash://?prompt= link's words (#prompt=...), kept before the address is tidied below
+const linkHash = location.hash;
 if (params.has("token")) window.history.replaceState(null, "", location.pathname);
 try { sessionStorage.removeItem("flash-token"); } catch (_) { /* where older pages kept it */ }
 
@@ -27110,10 +27112,27 @@ if (innerWidth <= 800 || pref("side", "open") === "closed") document.body.classL
 renderInfo();
 updateSend();
 
+// A flash://?prompt= link opened here (#prompt=...): its words wait in the
+// box, not sent, so they are read before anything is asked. As for every
+// such link, a / command or ! shell line is not taken.
+function promptFromLink() {
+  const found = /(?:^#|&)prompt=([^&]*)/.exec(linkHash || location.hash);
+  if (!found) return;
+  if (location.hash) history.replaceState(null, "", location.pathname + location.search);
+  let text = "";
+  try { text = decodeURIComponent(found[1].replace(/\+/g, " ")); } catch { return; }
+  text = text.replace(/[\u0000-\u001f\u007f]/g, " ").trim();
+  if (!text || "/!".includes(text[0])) return;
+  input.value = text;
+  autosize();
+  updateSend();
+  input.focus();
+}
+
 // The server only sends this page to a browser it let in, by link or by
 // cookie, so there is nothing to check before starting.
 connect();
-loadState().catch(showFailure);
+loadState().then(promptFromLink).catch(showFailure);
 input.focus();
 </script>
 </body>

@@ -3,9 +3,16 @@ new one started out of sight (flash://open, which web.open_ui answers).
 
 `flash --shortcut` makes it, called "Flash", where each system keeps
 such things: the Start menu on Windows (a .lnk that runs pythonw, so no
-console window opens), ~/Applications on a Mac (a small app), and the
-applications menu on Linux (a .desktop entry). `flash --shortcut remove`
-takes it away again. The installers do both.
+console window opens), ~/Applications on a Mac, and the applications
+menu on Linux (a .desktop entry). `flash --shortcut remove` takes it
+away again. The installers do both.
+
+On a Mac it is a real app, an AppleScript applet, so it can also be what
+opens flash:// links: macOS hands an app a link as an Apple event, which
+only an app can answer, not a script. Opened, it starts Flash's web UI
+(or brings up the one running); a flash://?prompt= link opens the web UI
+with the prompt waiting in the message box. Either way Flash runs out of
+sight, with no Terminal.
 """
 
 from __future__ import annotations
@@ -38,6 +45,12 @@ def command() -> list[str]:
     """What the shortcut runs: this Python (pythonw on Windows, which
     opens no console), this Flash, flash://open."""
 
+    return [*base_command(), *OPEN]
+
+
+def base_command() -> list[str]:
+    """This Python (pythonw on Windows) and this Flash, to give a flag."""
+
     from . import keepalive  # it knows this Python and a clone's run.py
 
     python = Path(sys.executable)
@@ -47,7 +60,7 @@ def command() -> list[str]:
             python = quiet
     script = keepalive._checkout_script()  # pylint: disable=W0212
     flash = [str(script)] if script is not None else ["-m", "flash"]
-    return [str(python), *flash, *OPEN]
+    return [str(python), *flash]
 
 
 def place() -> Path:
@@ -98,26 +111,68 @@ def _windows(target: Path, argv: list[str]) -> None:
                             + (done.stderr.strip() or "no reason given"))
 
 
+LSREGISTER = ("/System/Library/Frameworks/CoreServices.framework/Frameworks/"
+              "LaunchServices.framework/Support/lsregister")
+
+
+def _applescript(base: list[str]) -> str:
+    """The applet: opened, the web UI; given a flash:// link, the web UI
+    with the link's prompt. Flash starts in the background and the applet
+    quits, so nothing waits on it."""
+
+    def shell(parts: list[str]) -> str:
+        return " ".join("'" + p.replace("'", "'\\''") + "'" for p in parts)
+
+    def literal(text: str) -> str:
+        return '"' + text.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+    quiet = " >/dev/null 2>&1 &"
+    return (
+        "on run\n"
+        f"  do shell script {literal(shell([*base, *OPEN]) + quiet)}\n"
+        "end run\n"
+        "on open location theURL\n"
+        f"  do shell script {literal(shell([*base, '--web', '--uri']) + ' ')}"
+        f" & quoted form of theURL & {literal(quiet)}\n"
+        "end open location\n")
+
+
 def _mac(target: Path, argv: list[str]) -> None:
+    base = argv[:-len(OPEN)] if argv[-len(OPEN):] == list(OPEN) else argv
+    if target.exists():
+        shutil.rmtree(target)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    source = FLASH_DIR / "launcher.applescript"
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_text(_applescript(base), encoding="utf-8")
+    done = subprocess.run(  # nosec B603 B607 -- a fixed tool
+        ["osacompile", "-o", str(target), str(source)],
+        capture_output=True, text=True, timeout=60, check=False)
+    if done.returncode or not target.exists():
+        raise ShortcutError("macOS would not make the Flash app: "
+                            + (done.stderr.strip() or "no reason given"))
     contents = target / "Contents"
-    (contents / "MacOS").mkdir(parents=True, exist_ok=True)
-    (contents / "Resources").mkdir(parents=True, exist_ok=True)
-    quoted = " ".join("'" + a.replace("'", "'\\''") + "'" for a in argv)
-    runner = contents / "MacOS" / NAME
-    runner.write_text(f"#!/bin/sh\nexec {quoted} >/dev/null 2>&1\n",
-                      encoding="utf-8")
-    runner.chmod(0o755)
-    shutil.copyfile(WEB / "flash.icns", contents / "Resources" / "flash.icns")
-    with open(contents / "Info.plist", "wb") as out:
-        plistlib.dump({
-            "CFBundleName": NAME, "CFBundleDisplayName": NAME,
-            "CFBundleExecutable": NAME, "CFBundleIconFile": "flash",
-            "CFBundleIdentifier": "app.flash.open",
-            "CFBundlePackageType": "APPL", "CFBundleVersion": "1",
-            # It opens the browser and keeps the web UI running out of
-            # sight: no Dock icon for that.
-            "LSUIElement": True,
-        }, out)
+    # its own name, Flash's icon, no Dock icon while it runs, and flash://
+    shutil.copyfile(WEB / "flash.icns", contents / "Resources" / "applet.icns")
+    with open(contents / "Info.plist", "rb") as f:
+        info = plistlib.load(f)
+    info.update({
+        "CFBundleName": NAME, "CFBundleDisplayName": NAME,
+        "CFBundleIdentifier": "app.flash.open", "CFBundleIconFile": "applet",
+        "LSUIElement": True,
+        "CFBundleURLTypes": [{"CFBundleURLName": "Flash link",
+                              "CFBundleURLSchemes": ["flash"]}],
+    })
+    with open(contents / "Info.plist", "wb") as f:
+        plistlib.dump(info, f)
+    # The plist changed after osacompile signed it: sign it again (ad hoc,
+    # as osacompile does), or Apple silicon will not open it. Then tell
+    # Launch Services, so links find it now rather than at the next login.
+    subprocess.run(["codesign", "--force", "--sign", "-", str(target)],  # nosec B603 B607
+                   capture_output=True, timeout=60, check=False)
+    if Path(LSREGISTER).exists():
+        subprocess.run([LSREGISTER, "-f", str(target)],  # nosec B603
+                       capture_output=True, timeout=60, check=False)
 
 
 def _linux(target: Path, argv: list[str]) -> None:
@@ -140,7 +195,8 @@ def install() -> str:
         target, argv)
     where = {"windows": "in the Start menu", "mac": "in ~/Applications",
              "linux": "in your applications menu"}[_host()]
-    return f"Added {NAME} {where}: it opens Flash in your browser."
+    links = " It also opens flash:// links." if _host() == "mac" else ""
+    return f"Added {NAME} {where}: it opens Flash in your browser.{links}"
 
 
 def remove() -> str:
@@ -148,6 +204,9 @@ def remove() -> str:
     if not target.exists():
         return f"There was no {NAME} shortcut to remove."
     if target.is_dir():
+        if _host() == "mac" and Path(LSREGISTER).exists():
+            subprocess.run([LSREGISTER, "-u", str(target)],  # nosec B603
+                           capture_output=True, timeout=60, check=False)
         shutil.rmtree(target)
     else:
         target.unlink()

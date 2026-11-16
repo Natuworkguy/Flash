@@ -7029,12 +7029,22 @@ def _main() -> None:
         console.print(Text(said, style=DIM))
         return
 
-    # flash://open: the web UI, wherever it is running, or here.
-    if args.url and is_open_url(args.url):
+    # flash://open: the web UI, wherever it is running, or here. With
+    # --web, any flash:// link opens there too, its prompt waiting in the
+    # message box (how the Mac app opens links, with no terminal to ask in).
+    if args.url and (is_open_url(args.url) or args.web):
         from . import web
 
+        prompt = ""
+        if not is_open_url(args.url):
+            try:
+                prompt = parse_flash_url(args.url)
+            except SchemeError as exc:
+                show_error(str(exc))
+                sys.exit(2)
         try:
-            web.open_ui(port=args.port or web.DEFAULT_PORT, lan=args.lan)
+            web.open_ui(port=args.port or web.DEFAULT_PORT, lan=args.lan,
+                        prompt=prompt)
         except OSError as exc:
             show_error(str(exc))
             # From a shortcut there is no terminal to wait in.
