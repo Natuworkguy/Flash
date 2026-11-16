@@ -36,6 +36,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
+import urllib.parse
 import uuid
 import webbrowser
 from collections import Counter, deque
@@ -8622,20 +8623,25 @@ def running_url() -> Optional[str]:
         return None
 
 
-def open_ui(port: int = DEFAULT_PORT, lan: bool = False) -> None:
+def open_ui(port: int = DEFAULT_PORT, lan: bool = False,
+            prompt: str = "") -> None:
     """flash://open: the web UI in the browser, the one already running
-    if there is one, else a new one, served from here."""
+    if there is one, else a new one, served from here. With PROMPT (a
+    flash://?prompt= link's), the page opens with it in the message box,
+    not sent: it is read before anything is asked."""
 
+    tail = f"#prompt={urllib.parse.quote(prompt)}" if prompt else ""
     url = running_url()
     if url:
         console.print(Text("Opening Flash in your browser.", style=DIM))
-        webbrowser.open(url)
+        webbrowser.open(url + tail)
         return
-    serve(port=port, open_browser=True, lan=lan)
+    serve(port=port, open_browser=True, lan=lan, **({"tail": tail} if tail else {}))
 
 
 def serve(
-    port: int = DEFAULT_PORT, open_browser: bool = True, lan: bool = False
+    port: int = DEFAULT_PORT, open_browser: bool = True, lan: bool = False,
+    tail: str = "",
 ) -> None:
     """Run the web UI until Ctrl+C."""
 
@@ -8656,7 +8662,7 @@ def serve(
             f"{server.port}:localhost:{server.port} ...) and open the "
             "link above where you are.", style=DIM))
     elif open_browser:
-        webbrowser.open(server.url)
+        webbrowser.open(server.url + tail)
 
     running = [server]
     try:

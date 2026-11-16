@@ -141,3 +141,26 @@ def test_the_installers_take_dev():
     ps = (root / "install.ps1").read_text(encoding="utf-8")
     assert "--dev) BRANCH=\"dev\"" in sh and "--branch \"$BRANCH\"" in sh
     assert "[switch]$Dev" in ps and "--branch $Branch" in ps
+
+
+def test_a_mac_registers_links_by_making_the_flash_app(monkeypatch):
+    from flash import launcher, urlscheme
+
+    made = []
+    monkeypatch.setattr(urlscheme, "_host_os", lambda: "macos")
+    monkeypatch.setattr(launcher, "install", lambda: made.append(1) or "Added Flash.")
+    said = urlscheme.register()
+    assert made and "opens flash:// links" in said
+
+
+def test_a_link_opened_with_web_waits_in_the_web_ui(monkeypatch):
+    from flash import web
+
+    opened = []
+    monkeypatch.setattr(web, "running_url", lambda: "http://127.0.0.1:8765/?token=t")
+    monkeypatch.setattr(web.webbrowser, "open", opened.append)
+    web.open_ui(prompt="Plan my week & tidy it")
+    assert opened == ["http://127.0.0.1:8765/?token=t#prompt=Plan%20my%20week%20%26%20tidy%20it"]
+    opened.clear()
+    web.open_ui()
+    assert opened == ["http://127.0.0.1:8765/?token=t"]

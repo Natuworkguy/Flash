@@ -181,9 +181,6 @@ def _run_quiet(command: list[str]) -> None:
         pass
 
 
-_MACOS_HELP = (
-    "The flash:// handler cannot be installed or uninstalled on macOS."
-)
 
 
 def _host_os() -> str:
@@ -199,7 +196,15 @@ def register() -> str:
     host = _host_os()
 
     if host == "macos":
-        raise SchemeError(_MACOS_HELP)
+        # On a Mac a link goes to an app, as an Apple event: the Flash app
+        # (launcher.py) is that app, and declares flash:// itself.
+        from . import launcher
+
+        try:
+            said = launcher.install()
+        except launcher.ShortcutError as exc:
+            raise SchemeError(str(exc)) from exc
+        return f"{launcher.place()} opens flash:// links. {said}"
 
     command = launch_command()
 
@@ -215,7 +220,11 @@ def unregister() -> bool:
     host = _host_os()
 
     if host == "macos":
-        raise SchemeError(_MACOS_HELP)
+        from . import launcher
+
+        had = launcher.place().exists()
+        launcher.remove()
+        return had
 
     if host == "windows":
         return _unregister_windows()
