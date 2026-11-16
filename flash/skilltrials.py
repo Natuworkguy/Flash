@@ -52,7 +52,7 @@ asked, which tool calls failed and how, and what the user thought.
 
 Write a better version. Fix the steps that led to the failures, add the \
 pitfalls the runs show, and cut what did not help. Keep what worked. \
-Write steps and commands, not narrative. Stay under {limit} characters.
+Write steps and commands, not narrative, and no longer than it needs to be.
 
 Reply with only the new skill, in one ```markdown block, without the \
 --- header. If nothing in the runs is the skill's fault, reply NO CHANGE.\
@@ -358,8 +358,7 @@ def _prompt(skill: "skills.Skill", recent: list[dict]) -> list[dict]:
         for failure in run.get("failures") or []:
             lines.append(f"  failed: {failure}")
     return [
-        {"role": "system", "content": REWRITE_PROMPT.format(
-            limit=skills.MAX_SKILL_CHARS)},
+        {"role": "system", "content": REWRITE_PROMPT},
         {"role": "user", "content": (
             f"Skill: {skill.name}\n{skill.description}\n\n"
             f"```markdown\n{skill.body.strip()}\n```\n\nRecent runs:\n"
@@ -418,10 +417,6 @@ def improve(name: str, ask: Ask, *, asked: bool = False) -> str:
         if not body or version_of(body) == version:
             _note(name, "unchanged", version=version, asked=asked)
             return f"Nothing in {name}'s runs called for a change."
-        if len(body) > skills.MAX_SKILL_CHARS:
-            _note(name, "unchanged", version=version, asked=asked,
-                  why="too long")
-            return f"The rewrite of {name} came out too long; kept as is."
         _keep_version(name, skill.body)
         baseline = average(_runs_of(name, version)[-BASELINE_RUNS:])
         skills.manage("rewrite", name, content=body)

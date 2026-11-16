@@ -34,7 +34,6 @@ def test_every_guide_reads_and_is_listed():
     for guide in guides:
         assert guide.builtin == "flash"
         assert guide.description and len(guide.description) <= 120
-        assert len(guide.body) <= skills.MAX_SKILL_CHARS
         assert "—" not in guide.body
         assert guide.body.startswith(guide.body.lstrip())
     listed = skills.listing()

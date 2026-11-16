@@ -890,10 +890,9 @@ def _knowledge(root: Path, folder: Any) -> Path:
             raise ExtensionError(
                 f'"knowledge": {guide.name} needs a description: line at '
                 "the top, between --- lines, saying when to read it")
-        if not body or len(body) > skills.MAX_SKILL_CHARS:
+        if not body:
             raise ExtensionError(
-                f'"knowledge": {guide.name} has to hold a guide of at most '
-                f"{skills.MAX_SKILL_CHARS} characters")
+                f'"knowledge": {guide.name} has to hold a guide')
     return path
 
 
