@@ -4,6 +4,12 @@ set -euo pipefail
 
 uninstall() {
     echo "Uninstalling flash..."
+    # flash uninstall turns off its login services, removes the flash://
+    # handler and shortcut, then the package. --purge also deletes ~/.flash.
+    if command -v flash >/dev/null 2>&1 && \
+        flash uninstall --yes $PURGE_FLAG; then
+        return
+    fi
     if command -v flash >/dev/null 2>&1; then
         echo "Removing the flash:// URL handler..."
         flash --unregister-url-scheme || true
@@ -16,18 +22,29 @@ uninstall() {
     else
         echo "pipx is not installed. Cannot uninstall flash via pipx."
     fi
+    if [ -n "$PURGE_FLAG" ]; then
+        rm -rf "$HOME/.flash" && echo "Deleted $HOME/.flash."
+    fi
 }
 
 
 # --dev installs the dev branch, where changes land before a release.
+# --uninstall removes Flash; add --purge to delete ~/.flash as well.
 BRANCH="main"
+UNINSTALL=""
+PURGE_FLAG=""
 for arg in "$@"; do
     case "$arg" in
-        --uninstall) uninstall; exit 0 ;;
+        --uninstall) UNINSTALL=1 ;;
+        --purge) PURGE_FLAG="--purge" ;;
         --dev) BRANCH="dev" ;;
-        *) echo "Unknown option: $arg (use --dev or --uninstall)"; exit 1 ;;
+        *) echo "Unknown option: $arg (use --dev, --uninstall or --purge)"; exit 1 ;;
     esac
 done
+if [ -n "$UNINSTALL" ]; then
+    uninstall
+    exit 0
+fi
 
 REPO_URL="https://github.com/Natuworkguy/Flash"
 TEMP_DIR="$(mktemp -d)"

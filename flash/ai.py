@@ -6861,6 +6861,21 @@ def _speak_reply(text: str, heard: bool = True) -> bool:
     return True
 
 
+def _uninstall_command(args) -> None:
+    """flash uninstall: everything Flash set up, then Flash."""
+
+    from . import uninstall
+
+    if not confirm("Uninstall Flash from this machine?"):
+        console.print(Text("Nothing was changed.", style=DIM))
+        return
+    purge = True if args.purge else False if args.keep_data else None
+    if purge is None and getattr(args, "yes", False):
+        purge = False  # -y never deletes what you made
+    uninstall.run(purge=purge, ask=confirm,
+                  say=lambda line: console.print(Text(line, style=DIM)))
+
+
 def _handle_scheme_flags(args) -> None:
     """Run --register-url-scheme / --unregister-url-scheme and exit."""
 
@@ -7032,6 +7047,10 @@ def _main() -> None:
 
     if args.command == "doctor":
         sys.exit(1 if _doctor_command(fix=args.fix, cli=True) else 0)
+
+    if args.command == "uninstall":
+        _uninstall_command(args)
+        return
 
     if (
         args.extension_install

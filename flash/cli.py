@@ -10,7 +10,7 @@ from .version import __version__
 
 EXTENSION_COMMANDS = ("install", "update", "remove", "list")
 # Commands of their own, not about extensions.
-OTHER_COMMANDS = ("doctor", "completion")
+OTHER_COMMANDS = ("doctor", "completion", "uninstall")
 # The shells `flash completion` writes the hook for.
 SHELLS = ("bash", "zsh", "fish", "tcsh", "powershell")
 # zsh's completion system, which the hook's compdef needs, started when
@@ -100,7 +100,8 @@ def build_parser() -> argparse.ArgumentParser:
             "remove NAME, or list; "
             "doctor checks that everything Flash needs works; "
             "completion [SHELL] prints what turns on Tab completion for "
-            "flash in your shell (bash by default)"
+            "flash in your shell (bash by default); "
+            "uninstall takes Flash off this machine"
         ),
     )
     command.completer = _commands  # type: ignore[attr-defined]
@@ -116,6 +117,17 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="answer yes to every question, as for installing an "
              "extension",
+    )
+    parser.add_argument(
+        "--purge",
+        action="store_true",
+        help="with uninstall, also delete your chats, memories and "
+             "settings in ~/.flash without asking",
+    )
+    parser.add_argument(
+        "--keep-data",
+        action="store_true",
+        help="with uninstall, keep ~/.flash without asking",
     )
     parser.add_argument(
         "--fix",
@@ -302,6 +314,10 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     args.extension_update = (args.target or "") \
         if args.command == "update" else None
     args.url = args.uri
+    if (args.purge or args.keep_data) and args.command != "uninstall":
+        parser.error("--purge and --keep-data go with uninstall")
+    if args.purge and args.keep_data:
+        parser.error("--purge or --keep-data, not both")
     if args.force and not args.update:
         parser.error("--force can only be used with --update")
     if (args.port is not None or args.no_open or args.lan) and not args.web:

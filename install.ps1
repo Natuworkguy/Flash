@@ -7,6 +7,8 @@
 
 param(
     [switch]$Uninstall,
+    # With -Uninstall, also delete your chats, memories and settings.
+    [switch]$Purge,
     # The dev branch, where changes land before a release.
     [switch]$Dev
 )
@@ -60,6 +62,16 @@ function Install-Ollama {
 
 function Uninstall-Flash {
     Write-Host "Uninstalling flash..."
+    # flash uninstall turns off its login tasks, removes the flash://
+    # handler and shortcut, then the package.
+    if (Get-Command flash -ErrorAction SilentlyContinue) {
+        $flashArgs = @("uninstall", "--yes")
+        if ($Purge) { $flashArgs += "--purge" }
+        try {
+            & flash @flashArgs
+            if ($LASTEXITCODE -eq 0) { return }
+        } catch { }
+    }
     if (Get-Command flash -ErrorAction SilentlyContinue) {
         Write-Host "Removing the flash:// URL handler..."
         Invoke-FlashScheme -FlashExe "flash" -Flag "--unregister-url-scheme" `
@@ -78,6 +90,10 @@ function Uninstall-Flash {
         }
     } else {
         Write-Host "pipx is not installed. Cannot uninstall flash via pipx."
+    }
+    if ($Purge) {
+        Remove-Item -Recurse -Force (Join-Path $HOME ".flash") `
+            -ErrorAction SilentlyContinue
     }
 }
 
