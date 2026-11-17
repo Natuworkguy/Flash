@@ -5042,6 +5042,33 @@ def _course_command(session: Session, name: str, subject: str,
     return said
 
 
+# What a small screen (the watch) keeps of each log entry, and how much
+# of any one text: a chat with screenshots and long tool output is
+# megabytes as it is, and the watch asks for it every second or two.
+SMALL_FIELDS = ("type", "text", "label", "id", "question", "answer", "what",
+                "name", "at", "versions")
+SMALL_TEXT = 4000
+
+
+def small_view(summary: dict) -> dict:
+    """SUMMARY (a chat's) with each log entry cut to what a small screen
+    shows: no tool output, no pictures, long texts shortened."""
+
+    def cut(value: Any) -> Any:
+        if isinstance(value, str) and len(value) > SMALL_TEXT:
+            return value[:SMALL_TEXT] + "\u2026"
+        return value
+
+    out = dict(summary)
+    out["log"] = [
+        {k: cut(entry[k]) for k in SMALL_FIELDS if k in entry}
+        for entry in summary.get("log") or [] if isinstance(entry, dict)
+    ]
+    out["partial"] = cut(out.get("partial") or "")
+    out["thinking"] = cut(out.get("thinking") or "")
+    return out
+
+
 def command(session: Session, body: dict, browser: str = "") -> dict:
     """The page's commands: models, modes, chats, undo.
 
@@ -6037,8 +6064,10 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
 
     if name == "chat-view":
         # One chat, log and all: what a small screen asks for instead
-        # of every chat at once.
-        return {"chat": session.chat(chat_id).summary()}
+        # of every chat at once. Each entry keeps only what a small
+        # screen shows (no tool output, no pictures), so a long chat
+        # stays small: a watch asks for it again every second or two.
+        return {"chat": small_view(session.chat(chat_id).summary())}
 
     if name == "browsers":
         return {"browsers": session.access.listing(

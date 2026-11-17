@@ -5589,3 +5589,23 @@ def test_the_page_sets_how_replies_are_interrupted(monkeypatch):
     with pytest.raises(ValueError):
         web.command(session, {"name": "interrupt-setting", "arg": "calls",
                               "how": "loudly"})
+
+
+def test_a_chat_for_a_small_screen_leaves_out_what_it_cannot_show():
+    from flash import web as _web
+
+    big = "x" * 20000
+    summary = {"id": "c1", "title": "T", "partial": big, "log": [
+        {"type": "user", "text": "hi"},
+        {"type": "tool", "label": "Looked at the screen", "result": big, "images": ["data:image/png;base64," + big]},
+        {"type": "assistant", "text": big},
+        {"type": "ask", "id": "a1", "question": "Go?", "extra": big},
+    ]}
+    small = _web.small_view(summary)
+    log = small["log"]
+    assert log[0] == {"type": "user", "text": "hi"}
+    assert log[1] == {"type": "tool", "label": "Looked at the screen"}
+    assert len(log[2]["text"]) == _web.SMALL_TEXT + 1
+    assert log[3] == {"type": "ask", "id": "a1", "question": "Go?"}
+    assert len(small["partial"]) == _web.SMALL_TEXT + 1
+    assert summary["log"][1]["result"] == big      # the chat itself is untouched
