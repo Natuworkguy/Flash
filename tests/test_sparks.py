@@ -3001,3 +3001,17 @@ def test_the_page_sets_several_projects(two_projects):
     changed = web._spark_command("spark-update", spark["id"], {
         "project": site.id, "projects": [site.id]})
     assert changed["spark"]["project_ids"] == [site.id]  # nosec B101
+
+
+def test_a_chat_on_a_model_takes_the_fallbacks_its_sparks_have():
+    from flash import sparks as sp
+
+    a = sp.create("Ada", "Write", model="alpha:8b")
+    sp.update(a.id, fallbacks=["beta:8b", "gamma:12b"])
+    b = sp.create("Bo", "Test", model="alpha:8b")
+    sp.update(b.id, fallbacks=["gamma:12b", "delta:4b"])
+    c = sp.create("Cy", "Plan", model="other:1b")
+    sp.update(c.id, fallbacks=["zeta:1b"])
+    assert sp.fallbacks_for_model("alpha:8b") == [
+        "beta:8b", "gamma:12b", "delta:4b"]
+    assert sp.fallbacks_for_model("nobody:1b") == []

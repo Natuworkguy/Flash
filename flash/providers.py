@@ -557,7 +557,17 @@ class Client:
         if how:
             self._notes.append({"kind": "auto", "model": model, "how": how})
         chain = [model]
-        for name in (*own, *modelchain.fallbacks(model)):
+        # A chat with no fallbacks of its own (not a spark's) also goes
+        # on to those the sparks on its model were given, so the chat
+        # falls back the way they do.
+        sparked: list[str] = []
+        if not own:
+            try:
+                from . import sparks  # deferred: sparks imports this
+                sparked = sparks.fallbacks_for_model(model)
+            except Exception:  # noqa: BLE001 -- never in the way
+                sparked = []
+        for name in (*own, *modelchain.fallbacks(model), *sparked):
             if name and name not in chain:
                 chain.append(name)
         held = self._turn_held(kwargs.get("messages"))
