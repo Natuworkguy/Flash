@@ -90,6 +90,7 @@ import stat
 import subprocess  # nosec B404
 import sys
 import tempfile
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -1088,6 +1089,12 @@ def wanting_network() -> list[str]:
 # the tool list is asked for on every turn, and the command list on
 # every keystroke the completion menu sees.
 _cache: Optional[tuple[list[Extension], list[str]]] = None
+# What the manifests on disk looked like when they were read, and when that
+# was last looked at: an extension updated while Flash runs (a new setting,
+# say) is read again, not kept as it was until a restart.
+_stamp: tuple = ()
+_looked = 0.0
+LOOK_EVERY = 2.0
 
 
 def reload() -> None:
@@ -1095,6 +1102,20 @@ def reload() -> None:
 
     global _cache
     _cache = None
+
+
+def _manifests_stamp() -> tuple:
+    try:
+        folders = sorted(p for p in extensions_dir().iterdir() if p.is_dir())
+    except OSError:
+        return ()
+    out = []
+    for folder in folders:
+        try:
+            out.append((folder.name, (folder / MANIFEST).stat().st_mtime_ns))
+        except OSError:
+            out.append((folder.name, 0))
+    return tuple(out)
 
 
 def _scan() -> tuple[list[Extension], list[str]]:
@@ -1124,8 +1145,15 @@ def _scan() -> tuple[list[Extension], list[str]]:
 def installed() -> list[Extension]:
     """Every extension that loads, in name order."""
 
-    global _cache
+    global _cache, _stamp, _looked
+    now = time.monotonic()
+    if _cache is not None and now - _looked > LOOK_EVERY:
+        _looked = now
+        if _manifests_stamp() != _stamp:
+            _cache = None
     if _cache is None:
+        _stamp = _manifests_stamp()
+        _looked = now
         _cache = _scan()
     return _cache[0]
 

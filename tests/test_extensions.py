@@ -1019,3 +1019,27 @@ class TestSpeechAndBriefing:
         assert cards[0]["label"] == "talky"
         assert cards[0]["url"] == "https://example.com/b1"
         assert cards[0]["id"] == "extension:talky:b1"
+
+
+def test_an_extension_updated_on_disk_is_read_again(tmp_path, monkeypatch):
+    # a running Flash learns of a setting added by an update, without a restart
+    import json as _json
+    import os as _os
+    from flash import extensions as ext
+
+    home = tmp_path / "exts"
+    folder = home / "demo"
+    folder.mkdir(parents=True)
+    monkeypatch.setattr(ext, "extensions_dir", lambda: home)
+    manifest = {"name": "demo", "description": "d", "commands": [{"name": "hi", "description": "h", "run": ["true"]}],
+                "settings": [{"id": "effort", "label": "Effort", "type": "text"}]}
+    (folder / ext.MANIFEST).write_text(_json.dumps(manifest))
+    ext.reload()
+    assert [s.id for s in ext.find("demo").settings] == ["effort"]
+    manifest["settings"].append({"id": "credits", "label": "Use credits", "type": "switch", "default": False})
+    (folder / ext.MANIFEST).write_text(_json.dumps(manifest))
+    st = (folder / ext.MANIFEST).stat()
+    _os.utime(folder / ext.MANIFEST, ns=(st.st_atime_ns, st.st_mtime_ns + 10_000_000))
+    monkeypatch.setattr(ext, "_looked", 0.0)
+    assert [s.id for s in ext.find("demo").settings] == ["effort", "credits"]
+    ext.reload()
