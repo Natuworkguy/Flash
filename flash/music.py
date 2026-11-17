@@ -267,5 +267,5 @@ def wait_until_started(seconds: float = 3.0) -> bool:
     """Whether mpv is still going a moment on: it quits at once on a
     link it cannot play."""
 
-    time.sleep(min(seconds, 3.0))
+    time.sleep(max(0.0, min(seconds, 3.0)))
     return playing_here()
