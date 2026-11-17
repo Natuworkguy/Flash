@@ -3015,3 +3015,15 @@ def test_a_chat_on_a_model_takes_the_fallbacks_its_sparks_have():
     assert sp.fallbacks_for_model("alpha:8b") == [
         "beta:8b", "gamma:12b", "delta:4b"]
     assert sp.fallbacks_for_model("nobody:1b") == []
+
+
+def test_a_retry_pause_never_sleeps_a_negative_time(monkeypatch):
+    # the clock passes the end between the check and the sleep: once raised "sleep length must be non-negative"
+    import flash.sparks as sparks_mod
+
+    ticks = iter([100.0, 100.0, 100.2, 100.3])
+    monkeypatch.setattr(sparks_mod.time, "monotonic", lambda: next(ticks, 101.0))
+    slept = []
+    monkeypatch.setattr(sparks_mod.time, "sleep", lambda s: (slept.append(s), None)[1] if s >= 0 else (_ for _ in ()).throw(ValueError("sleep length must be non-negative")))
+    sparks_mod._pause(.1, None)
+    assert all(s >= 0 for s in slept)

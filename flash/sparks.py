@@ -4928,11 +4928,15 @@ def _passing(error: Exception) -> bool:
 def _pause(seconds: float, stopping: Optional[Callable[[], bool]]) -> None:
     """Wait SECONDS, a little at a time, so Stop still stops."""
 
-    until = time.monotonic() + seconds
-    while time.monotonic() < until:
+    until = time.monotonic() + max(0.0, float(seconds))
+    while True:
         if stopping is not None and stopping():
             raise Stopped()
-        time.sleep(min(RETRY_STEP_SECONDS, until - time.monotonic()))
+        # the time left, read once: it can run out between the check and the sleep
+        left = until - time.monotonic()
+        if left <= 0:
+            return
+        time.sleep(min(RETRY_STEP_SECONDS, left))
 
 
 def _ask_model(
