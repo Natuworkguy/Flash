@@ -2408,6 +2408,30 @@ def expand_fallbacks(spark: Spark, model: str) -> list[str]:
     return out
 
 
+def fallbacks_for_model(model: str, limit: int = 6) -> list[str]:
+    """The fallbacks the sparks running on MODEL have been given, in the
+    order the sparks are listed: what a chat on MODEL also tries when
+    MODEL fails, so the chat and the sparks fall back alike. A spark with
+    no model runs on Flash's, so it counts for whatever model Flash is
+    on. Never MODEL itself, nor one twice."""
+
+    model = str(model or "").strip()
+    if not model:
+        return []
+    out: list[str] = []
+    try:
+        found = all_sparks()
+    except Exception:  # noqa: BLE001 -- no sparks to go by
+        return []
+    for spark in found:
+        if model_of(spark, model) != model:
+            continue
+        for name in expand_fallbacks(spark, model):
+            if name != model and name not in out:
+                out.append(name)
+    return out[:limit]
+
+
 def set_team_model(team_key: str, model) -> tuple[Team, list[Spark]]:
     """Put everyone on TEAM_KEY's team on MODEL, as set_models does."""
 

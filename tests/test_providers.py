@@ -239,6 +239,32 @@ class TestFallbacksAndAuto:
         assert said == ["alpha:8b (model is gone), beta:8b (model is gone) "
                         "failed, so **gamma:12b** answered."]
 
+    def test_a_chat_falls_back_on_the_sparks_fallbacks(self, monkeypatch):
+        from flash import sparks
+
+        class Flaky(Ollama):
+            def chat(self, **kwargs):
+                self.asked.append(kwargs["model"])
+                if kwargs["model"] == "alpha:8b":
+                    raise ollama.ResponseError("model is gone", 404)
+                return SimpleNamespace(
+                    message=SimpleNamespace(content=kwargs["model"]))
+
+        monkeypatch.setattr(ollama, "Client", Flaky)
+        # sparks on alpha were given beta to fall back on; the chat,
+        # with none of its own, follows them
+        monkeypatch.setattr(sparks, "fallbacks_for_model",
+                            lambda model: ["beta:8b"] if model == "alpha:8b"
+                            else [])
+        client = providers.client("x")
+        reply = client.chat(model="alpha:8b", messages=[])
+        assert reply.message.content == "beta:8b"
+        # a spark's own fallbacks are its own: the others' are not added
+        client = providers.client("x")
+        reply = client.chat(model="alpha:8b", messages=[],
+                            fallbacks=["gamma:12b"])
+        assert client._inner.asked == ["alpha:8b", "gamma:12b"]
+
     def test_a_turn_keeps_its_fallback_and_says_so_once(self, monkeypatch):
         from flash import modelchain
 
