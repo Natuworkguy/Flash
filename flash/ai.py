@@ -3548,7 +3548,25 @@ def _chat_with_spark(key: str, first: str) -> None:
         said = ""
 
 
+def _chart_lines(tree: list, out: list, pad: str = "", changed=()) -> list:
+    """A team chart as indented lines, a changed spark marked with *."""
+
+    for k, node in enumerate(tree):
+        last = k == len(tree) - 1
+        mark = " *" if node["id"] in changed else ""
+        out.append(f"{pad}{'└─ ' if last else '├─ '}{node.get('name', '?')}"
+                   f"{mark}")
+        _chart_lines(node.get("reports", []), out,
+                     pad + ("   " if last else "│  "), changed)
+    return out
+
+
 def _hire_words(hire: dict) -> str:
+    if hire.get("kind") == "reorg":
+        return (
+            f"{hire.get('by_name', 'A spark')} proposes reorganizing "
+            f"{hire.get('team_name', 'the team')}"
+        )
     if hire.get("kind") == "remove":
         return (
             f"{hire.get('by_name', 'A spark')} proposes letting "
@@ -3576,6 +3594,19 @@ def _list_hires() -> None:
             details = sparks.hire_details(hire)
             if details:
                 body.append(f"     {' · '.join(details)}\n", style=DIM)
+        if hire.get("kind") == "reorg":
+            for line in sparks.hire_details(hire):
+                body.append(f"     {line}\n")
+            moved = {m["spark"] for m in hire.get("changes", [])}
+            now = _chart_lines(hire.get("before", []), [])
+            then = _chart_lines(hire.get("after", []), [], changed=moved)
+            wide = max(len(line) for line in now + ["Now"]) + 4
+            body.append(f"     {'Now'.ljust(wide)}After (* changed)\n",
+                        style=DIM)
+            for k in range(max(len(now), len(then))):
+                left = now[k] if k < len(now) else ""
+                right = then[k] if k < len(then) else ""
+                body.append(f"     {left.ljust(wide)}{right}\n", style=DIM)
         if hire.get("reason"):
             body.append(f"     Why: {hire['reason'][:200]}\n", style=DIM)
     body.append(
@@ -4182,6 +4213,14 @@ def _sparks_command(arg: str) -> None:
                        else ".") if yes else
                     f"{hire['by_name']} will not hire "
                     f"{hire['spark']['name']}."
+                )
+            elif hire["kind"] == "reorg":
+                said = (
+                    f"{hire.get('team_name', 'The team')} is reorganized: "
+                    + "; ".join(sparks.reorg_line(m)
+                                for m in hire.get("changes", []))
+                    + "." if yes else
+                    f"{hire.get('team_name', 'The team')} stays as it is."
                 )
             else:
                 said = (

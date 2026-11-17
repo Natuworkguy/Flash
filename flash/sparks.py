@@ -1598,19 +1598,31 @@ def org_chart(team_id: str) -> list[dict]:
     each with its reports under it, as {"id", "reports": [...]}."""
 
     found = members(team_id)
-    ids = {s.id for s in found}
-    under: dict[str, list[Spark]] = {}
-    for spark in found:
-        lead = spark.reports_to if spark.reports_to in ids else ""
-        under.setdefault(lead, []).append(spark)
+    return _tree(
+        [s.id for s in found], {s.id: [s.reports_to] for s in found},
+    )
 
-    def node(spark: Spark, seen: frozenset) -> dict:
-        return {"id": spark.id, "reports": [
-            node(r, seen | {r.id}) for r in under.get(spark.id, [])
-            if r.id not in seen
+
+def _tree(ids: list, leads: dict, names: Optional[dict] = None) -> list:
+    """IDS as a tree by each one's first lead in LEADS (id to a list of
+    lead ids): those whose first lead is not among them at the top, as
+    {"id", "reports": [...]}, with "name" from NAMES when given."""
+
+    present = set(ids)
+    under: dict[str, list[str]] = {}
+    for i in ids:
+        first = next(iter(leads.get(i) or []), "")
+        under.setdefault(first if first in present else "", []).append(i)
+
+    def node(i: str, seen: frozenset) -> dict:
+        out = {"id": i, "reports": [
+            node(r, seen | {r}) for r in under.get(i, []) if r not in seen
         ]}
+        if names is not None:
+            out["name"] = names.get(i, "")
+        return out
 
-    return [node(s, frozenset({s.id})) for s in under.get("", [])]
+    return [node(i, frozenset({i})) for i in under.get("", [])]
 
 
 def _roll_up(spark: Spark, report: "Report") -> None:
@@ -2159,6 +2171,8 @@ def hire_details(hire: dict) -> list[str]:
     """What else a proposed hire would be, besides its name and goal,
     each as it reads: "reports to Lead", "every 2 hours"..."""
 
+    if hire.get("kind") == "reorg":
+        return [reorg_line(m) for m in hire.get("changes", [])]
     if hire.get("kind") != "hire":
         return []
     wanted = hire.get("spark") or {}
@@ -2221,6 +2235,186 @@ def propose_removal(by_key: str, target_key: str, reason: str = "") -> dict:
         reason=hire["reason"])
     _changed()
     return hire
+
+
+MAX_REORG_CHANGES = 20
+
+
+def _team_leads(team_id: str) -> dict[str, list[str]]:
+    """Each spark on TEAM_ID and the ids of the leads it reports to on it,
+    first lead first."""
+
+    return {
+        s.id: [lead.id for lead in leads_of(s)] for s in members(team_id)
+    }
+
+
+def _circle_in(leads: dict[str, list[str]]) -> list[str]:
+    """A loop of reporting in LEADS (id to lead ids), as the ids round
+    it, or [] when there is none."""
+
+    state: dict[str, int] = {}
+    path: list[str] = []
+
+    def visit(i: str) -> list[str]:
+        state[i] = 1
+        path.append(i)
+        for up in leads.get(i, []):
+            if state.get(up) == 1:
+                return path[path.index(up):] + [up]
+            if up in leads and not state.get(up):
+                found = visit(up)
+                if found:
+                    return found
+        state[i] = 2
+        path.pop()
+        return []
+
+    for i in leads:
+        if not state.get(i):
+            found = visit(i)
+            if found:
+                return found
+    return []
+
+
+def _reorg_after(team_id: str, changes: list[dict]) -> tuple[dict, dict]:
+    """TEAM_ID's leads now and after CHANGES ({"spark": id, "to": [lead
+    ids]}), checked: everyone still on the team, nobody their own lead,
+    at most MAX_LEADS each and no loops. Raises SparkError otherwise."""
+
+    before = _team_leads(team_id)
+    after = {k: list(v) for k, v in before.items()}
+    for change in changes:
+        if change["spark"] not in after:
+            raise SparkError(
+                f"{change.get('name') or 'A spark'} is no longer on the team."
+            )
+        for lead in change["to"]:
+            if lead not in after:
+                raise SparkError("A lead in it is no longer on the team.")
+        after[change["spark"]] = list(change["to"])
+    loop = _circle_in(after)
+    if loop:
+        names = {s.id: s.name for s in members(team_id)}
+        raise SparkError(
+            "That makes a loop: " + " reports to ".join(
+                names.get(i, "?") for i in loop
+            ) + "."
+        )
+    return before, after
+
+
+def propose_reorg(by_key: str, changes: list, reason: str = "") -> dict:
+    """BY_KEY asks the user to change who reports to whom on its team:
+    CHANGES is a list of {"spark": name, "reports_to": [names]} (["none"]
+    or [] for no one). Kept with the chart as it is and as it would be,
+    and what changed, for the user to see before saying yes."""
+
+    by = _must_find(by_key)
+    if not by.team:
+        raise SparkError("You are not on a team, so there is none to change.")
+    team = _must_find_team(by.team)
+    if not isinstance(changes, list) or not changes:
+        raise SparkError("Say who should report to whom.")
+    if len(changes) > MAX_REORG_CHANGES:
+        raise SparkError(f"At most {MAX_REORG_CHANGES} changes at a time.")
+    asked: dict[str, list[str]] = {}
+    for change in changes:
+        if not isinstance(change, dict):
+            raise SparkError("Each change is {spark, reports_to}.")
+        who = _must_find(str(change.get("spark", "")))
+        if who.team != by.team:
+            raise SparkError(f"{who.name} is not on {team.name}.")
+        wanted = change.get("reports_to") or []
+        if isinstance(wanted, str):
+            wanted = re.split(r",|\band\b", wanted)
+        leads: list[str] = []
+        for key in wanted:
+            key = " ".join(str(key or "").split())
+            if not key or key.lower() == "none":
+                continue
+            lead = by if key.lower() in ("me", "myself") else _must_find(key)
+            if lead.id == who.id:
+                raise SparkError(f"{who.name} cannot report to itself.")
+            if lead.team != by.team:
+                raise SparkError(f"{lead.name} is not on {team.name}.")
+            if lead.id not in leads:
+                leads.append(lead.id)
+        if len(leads) > MAX_LEADS:
+            raise SparkError(f"A spark reports to at most {MAX_LEADS}.")
+        asked[who.id] = leads
+    before, after = _reorg_after(
+        team.id, [{"spark": k, "to": v} for k, v in asked.items()],
+    )
+    names = {s.id: s.name for s in members(team.id)}
+    moves = [
+        {"spark": k, "name": names[k],
+         "from": before[k], "from_names": [names[i] for i in before[k]],
+         "to": v, "to_names": [names[i] for i in v]}
+        for k, v in asked.items() if before[k] != v
+    ]
+    if not moves:
+        raise SparkError("Nothing would change: that is the team as it is.")
+    order = [s.id for s in members(team.id)]
+    with _held():
+        found = _read_hires()
+        if any(
+            h.get("status") == "pending" and h.get("kind") == "reorg"
+            and h.get("team") == team.id for h in found
+        ):
+            raise SparkError(
+                f"A change to {team.name} is already waiting on the user."
+            )
+        hire = {
+            "id": uuid.uuid4().hex[:8], "kind": "reorg", "by": by.id,
+            "by_name": by.name, "at": time.time(), "status": "pending",
+            "team": team.id, "team_name": team.name,
+            "team_colour": team.colour, "changes": moves,
+            "before": _tree(order, before, names),
+            "after": _tree(order, after, names),
+            "reason": " ".join(
+                tidy(str(reason or "")).split()
+            )[:REASON_CHARS],
+        }
+        _write_hires([*found, hire])
+    log(by.id, "reorg_proposed", hire=hire["id"], team=team.name,
+        changes=[reorg_line(m) for m in moves], reason=hire["reason"])
+    _changed()
+    return hire
+
+
+def reorg_line(move: dict) -> str:
+    """One change of a reorganization, as it reads: "Mia: reports to Ana,
+    then Leo"."""
+
+    def leads(names: list) -> str:
+        return "reports to " + " and ".join(names) if names \
+            else "reports to no one"
+
+    return (f"{move.get('name', 'A spark')}: {leads(move.get('from_names'))}"
+            f" → {leads(move.get('to_names'))}")
+
+
+def _apply_reorg(hire: dict) -> None:
+    """Make the change the user said yes to, checked again against the
+    team as it is now: all of it, or none of it."""
+
+    changes = [
+        {"spark": m["spark"], "name": m.get("name"), "to": m["to"]}
+        for m in hire.get("changes", [])
+    ]
+    _reorg_after(hire["team"], changes)
+    for change in changes:
+
+        def move(spark: Spark, to=change["to"]) -> None:
+            spark.reports_to = to[0] if to else ""
+            spark.also_reports_to = list(to[1:])
+
+        spark = _edit(change["spark"], move)
+        names = [lead.name for lead in leads_of(spark)]
+        log(spark.id, "reports_to", lead=" and ".join(names), leads=names,
+            by=hire.get("by_name", ""))
 
 
 def _hire(wanted: dict, by: Optional[Spark]) -> Spark:
@@ -2297,6 +2491,10 @@ def decide_hire(hire_id: str, yes: bool, why: str = "") -> dict:
         elif yes and hire["kind"] == "remove":
             with contextlib.suppress(SparkError):
                 remove(hire["target"])
+        elif yes and hire["kind"] == "reorg":
+            # Checked again: the team may have changed since. A change that
+            # no longer fits is not half made; the user hears why.
+            _apply_reorg(hire)
         hire["status"] = "approved" if yes else "declined"
         hire["decided"] = time.time()
         hire["why"] = why
@@ -2304,6 +2502,9 @@ def decide_hire(hire_id: str, yes: bool, why: str = "") -> dict:
         if by is not None:
             what = (
                 f"hiring {hire['spark']['name']}" if hire["kind"] == "hire"
+                else f"reorganizing {hire.get('team_name', 'the team')} ("
+                + "; ".join(reorg_line(m) for m in hire.get("changes", []))
+                + ")" if hire["kind"] == "reorg"
                 else f"letting {hire.get('target_name', 'a spark')} go"
             )
             note = (
@@ -4480,6 +4681,49 @@ PROPOSAL_TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "propose_reorg",
+            "description": (
+                "Ask the user to change who reports to whom on your team, "
+                "when the way it is set up gets in the way of the work: a "
+                "spark under the wrong lead, a lead with too many reports, "
+                "a new layer or one fewer. List only the sparks whose leads "
+                "change. The user sees the chart as it is and as it would "
+                "be, with each change marked, and nothing changes until "
+                "they say yes."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "changes": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "spark": {"type": "string", "description": (
+                                    "A spark on your team, by name or "
+                                    "handle.")},
+                                "reports_to": {
+                                    "type": "array",
+                                    "items": {"type": "string"},
+                                    "description": (
+                                        "Who it should report to, first "
+                                        f"lead first, at most {MAX_LEADS}; "
+                                        "[] for no one (a lead)."),
+                                },
+                            },
+                            "required": ["spark", "reports_to"],
+                        },
+                    },
+                    "reason": {"type": "string", "description": (
+                        "Why, for the user to decide on.")},
+                },
+                "required": ["changes", "reason"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "propose_removal",
             "description": (
                 "Ask the user to let go of a spark that reports to you, "
@@ -4506,7 +4750,7 @@ ULTRA_YES = "UltraAuto is on, so it was a yes without asking."
 
 
 def _proposing(spark: Spark) -> dict[str, Callable[[dict], str]]:
-    """propose_hire and propose_removal, for SPARK."""
+    """propose_hire, propose_removal and propose_reorg, for SPARK."""
 
     def hire(args: dict) -> str:
         try:
@@ -4558,7 +4802,32 @@ def _proposing(spark: Spark) -> dict[str, Callable[[dict], str]]:
             "You hear their answer at a later shift.)"
         )
 
-    return {"propose_hire": hire, "propose_removal": removal}
+    def reorg(args: dict) -> str:
+        try:
+            made = propose_reorg(
+                spark.id, args.get("changes") or [],
+                str(args.get("reason", "")),
+            )
+        except SparkError as exc:
+            return f"Error: {exc}"
+        tool_line(f"ProposeReorg({made['team_name']})")
+        lines = "; ".join(reorg_line(m) for m in made["changes"])
+        if mode_of(spark) == "ultra":
+            try:
+                decide_hire(made["id"], True, ULTRA_YES)
+            except SparkError as exc:
+                return f"Error: {exc}"
+            tool_result("Reorganized: UltraAuto said yes")
+            return (f"(done: {lines}. UltraAuto is on, so the user was not "
+                    "asked.)")
+        tool_result("Waiting for the user to say yes or no")
+        return (
+            f"(proposed: {lines}. It waits on the user, who sees the chart "
+            "before and after. You hear their answer at a later shift.)"
+        )
+
+    return {"propose_hire": hire, "propose_removal": removal,
+            "propose_reorg": reorg}
 
 
 def team_block(spark: Spark) -> str:
@@ -4603,12 +4872,14 @@ def _team_lines(spark: Spark) -> str:
                 "- Reporting to you: "
                 + ", ".join(f"{r.name} ({r.handle})" for r in under)
                 + ". Hand them work that is theirs with hand_off. You can "
-                "propose_removal one whose work is done, and propose_hire "
-                "when the team needs another."
+                "propose_removal one whose work is done, propose_hire "
+                "when the team needs another, and propose_reorg to change "
+                "who reports to whom."
             )
         else:
             lines.append(
-                "- You can propose_hire when the team needs another spark."
+                "- You can propose_hire when the team needs another spark, "
+                "and propose_reorg to change who reports to whom."
             )
     if not others:
         return "\n".join(lines)

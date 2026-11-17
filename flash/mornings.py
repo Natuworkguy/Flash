@@ -124,7 +124,7 @@ def open_spark_work() -> list[str]:
     out = []
     with_hires = sparks.hires()
     if with_hires:
-        out.append(f"{len(with_hires)} hire{'s' if len(with_hires) != 1 else ''} waiting for your yes or no")
+        out.append(f"{len(with_hires)} proposal{'s' if len(with_hires) != 1 else ''} from your sparks waiting for your yes or no")
     for spark in sparks.all_sparks():
         jobs = [item for item in spark.inbox if item.get("job") and item.get("from") == "the user"]
         for job in jobs[:3]:
