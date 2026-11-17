@@ -516,7 +516,7 @@ In UltraAuto nothing stops to ask you about anything:
 
 - commands and edits run, as in autonomous mode;
 - email and iMessages go out without you seeing them first;
-- a spark's proposals to hire or let go of a spark are a yes;
+- a spark's proposals to hire, let go of or reorganize sparks are a yes;
 - sparks answering in a team chat get every tool a shift has;
 - connected apps' tools that change things run, and a wait's command is
   not put to you;
@@ -901,6 +901,14 @@ have looked them over.
   boundaries, who on the team it reports to (the proposer unless it
   says), its colour, model, project, a folder to watch, a budget, and
   whether it starts paused. Anything it leaves out takes the usual.
+- **Reorganizing.** A spark can propose changing who reports to whom on
+  its team: moving a spark under a new lead, making one a lead, adding or
+  taking away a layer. You see each change and the team's chart as it is
+  and as it would be, side by side, with every moved spark marked, in
+  the Sparks page or in `/sparks hires`. Nothing moves until you say yes;
+  then it is checked again against the team as it is, and made whole or
+  not at all (a change that would now make a loop is refused, saying
+  why). One change per team waits at a time.
 - **Budgets.** Off by default. Give a spark tokens per hour, day, week
   or month and it pauses itself once they are spent
   (`/sparks budget scout 50k day`).

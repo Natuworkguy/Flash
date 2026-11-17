@@ -376,6 +376,102 @@ def test_a_spark_proposes_a_hire_from_its_shift(org, model):
     assert sparks.hires()[0]["spark"]["name"] == "Docs"
 
 
+def test_a_reorg_shows_the_chart_before_and_after_and_waits(org):
+    lead, scout, tester = (sparks.find(n) for n in ("lead", "scout", "tester"))
+
+    asked = sparks.propose_reorg(
+        "lead", [{"spark": "tester", "reports_to": ["scout"]}],
+        "Scout reviews what Tester finds.",
+    )
+
+    assert asked["kind"] == "reorg" and asked["team_name"] == "Dev"
+    assert asked["changes"] == [{
+        "spark": tester.id, "name": "Tester",
+        "from": [lead.id], "from_names": ["Lead"],
+        "to": [scout.id], "to_names": ["Scout"],
+    }]
+    assert asked["before"] == [{"id": lead.id, "name": "Lead", "reports": [
+        {"id": scout.id, "name": "Scout", "reports": []},
+        {"id": tester.id, "name": "Tester", "reports": []},
+    ]}]
+    assert asked["after"] == [{"id": lead.id, "name": "Lead", "reports": [
+        {"id": scout.id, "name": "Scout", "reports": [
+            {"id": tester.id, "name": "Tester", "reports": []},
+        ]},
+    ]}]
+    assert sparks.hire_details(asked) == [
+        "Tester: reports to Lead \u2192 reports to Scout"
+    ]
+    # Nothing changes until the user says yes.
+    assert sparks.lead_of(sparks.find("tester")).name == "Lead"
+
+    sparks.decide_hire(asked["id"], True)
+
+    assert sparks.lead_of(sparks.find("tester")).name == "Scout"
+    assert "reorganizing Dev" in sparks.find("lead").inbox[-1]["text"]
+
+
+def test_a_reorg_can_make_a_new_lead_and_take_one_away(org):
+    asked = sparks.propose_reorg("lead", [
+        {"spark": "lead", "reports_to": ["scout"]},
+        {"spark": "scout", "reports_to": []},
+    ], "Scout leads now.")
+
+    sparks.decide_hire(asked["id"], True)
+
+    assert sparks.lead_of(sparks.find("scout")) is None
+    assert sparks.lead_of(sparks.find("lead")).name == "Scout"
+    assert sparks.lead_of(sparks.find("tester")).name == "Lead"
+
+
+def test_a_reorg_that_loops_or_changes_nothing_is_refused(org):
+    with pytest.raises(sparks.SparkError, match="loop"):
+        sparks.propose_reorg(
+            "lead", [{"spark": "lead", "reports_to": ["tester"]}], "")
+    with pytest.raises(sparks.SparkError, match="Nothing would change"):
+        sparks.propose_reorg(
+            "lead", [{"spark": "scout", "reports_to": ["lead"]}], "")
+    with pytest.raises(sparks.SparkError, match="itself"):
+        sparks.propose_reorg(
+            "lead", [{"spark": "scout", "reports_to": ["scout"]}], "")
+    sparks.create("Outsider", "Elsewhere.")
+    with pytest.raises(sparks.SparkError, match="not on Dev"):
+        sparks.propose_reorg(
+            "lead", [{"spark": "scout", "reports_to": ["outsider"]}], "")
+
+
+def test_one_reorg_waits_per_team_and_a_stale_one_is_not_half_made(org):
+    first = sparks.propose_reorg(
+        "lead", [{"spark": "tester", "reports_to": ["scout"]}], "")
+    with pytest.raises(sparks.SparkError, match="already waiting"):
+        sparks.propose_reorg(
+            "scout", [{"spark": "scout", "reports_to": []}], "")
+
+    # Meanwhile Scout came to report to Tester: the yes would make a loop.
+    sparks.set_lead("scout", "tester")
+    with pytest.raises(sparks.SparkError, match="loop"):
+        sparks.decide_hire(first["id"], True)
+    assert sparks.lead_of(sparks.find("tester")).name == "Lead"
+    assert sparks.hires()[0]["id"] == first["id"]
+
+
+def test_a_spark_proposes_a_reorg_from_its_shift(org, model):
+    client = FakeClient([
+        _reply("", ("propose_reorg", {
+            "changes": [{"spark": "Tester", "reports_to": ["Scout"]}],
+            "reason": "Scout should check Tester's work.",
+        })),
+        _reply("Asked to move Tester under Scout."),
+    ])
+
+    report = sparks.shift("lead", client=client)
+
+    offered = {t["function"]["name"] for t in client.calls[0]["tools"]}
+    assert "propose_reorg" in offered
+    assert "ProposeReorg(Dev)" in report.steps
+    assert sparks.hires()[0]["kind"] == "reorg"
+
+
 def test_a_proposal_s_reason_has_no_dashes(org):
     asked = sparks.propose_removal("lead", "tester",
                                    "Tests moved \u2014 CI runs them now.")

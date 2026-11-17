@@ -2952,6 +2952,26 @@ body.all-stopped .org-node, body.all-stopped .spark-card { animation: all-halt 0
 .hire-card .more { font-size: 12.5px; color: var(--text-3); }
 .hire-card .hire-dot { display: inline-block; width: 9px; height: 9px; margin: 0 5px 1px 2px; border-radius: 50%; background: var(--c); vertical-align: middle; }
 .hire-card .decide { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.hire-card .reorg-changes { display: flex; flex-direction: column; gap: 4px; margin-top: 4px; color: var(--text-2); }
+.reorg-change { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 13px; }
+.reorg-change .who { font-weight: 600; color: var(--text); }
+.reorg-change .was, .reorg-change .now { white-space: nowrap; }
+.reorg-change .was { color: var(--text-3); text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--text-3) 60%, transparent); }
+.reorg-change .arrow { color: var(--text-3); }
+.reorg-change .now { color: var(--text); }
+.reorg-preview { flex: 1 1 100%; display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.reorg-side { min-width: 0; padding: 10px; border-radius: 12px; border: 1px solid var(--border); background: var(--bg); }
+.reorg-side:last-child { border-color: color-mix(in srgb, var(--t) 45%, var(--border)); }
+.reorg-label { display: block; margin-bottom: 6px; font-size: 11.5px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--text-3); }
+.reorg-fit { overflow: hidden; display: flex; justify-content: center; align-items: flex-start; }
+.reorg-fit > .reorg-tree { width: max-content; min-width: 0; transform-origin: top center; flex: none; }
+.reorg-tree { --line: color-mix(in srgb, var(--text-3) 45%, transparent); }
+.reorg-tree ul { padding-top: 14px; }
+.reorg-tree li { padding: 14px 4px 0; }
+.reorg-tree li::before, .reorg-tree li::after, .reorg-tree ul::before { height: 14px; }
+.reorg-tree > li { padding-top: 0; }
+.reorg-node { display: inline-flex; align-items: center; gap: 6px; padding: 4px 9px 4px 4px; border-radius: 999px; border: 1px solid var(--border); background: var(--surface); font-size: 12.5px; white-space: nowrap; }
+.reorg-node.moved { border-color: var(--t); box-shadow: 0 0 0 3px color-mix(in srgb, var(--t) 18%, transparent); font-weight: 600; }
 .hire-card .decide input { width: 180px; font: 13px var(--sans); padding: 6px 10px; border-radius: 9px; border: 1px solid var(--border); background: var(--bg); color: var(--text); }
 .hire-stack.again .hire-card:not(.stamped):not(.waved) { animation: none; }
 .hire-card.stamped { animation: hire-stamp 0.7s var(--spring) forwards; }
@@ -3064,6 +3084,7 @@ button.flow-node:hover { border-color: color-mix(in srgb, var(--c, var(--accent)
   .audit-line { grid-template-columns: 1fr; gap: 2px; }
   .team-faces { display: none; }
   .hire-card .decide input { width: 100%; }
+  .reorg-preview { grid-template-columns: 1fr; }
 }
 @media (prefers-reduced-motion: reduce) {
   .team-block, .team-block .org-node, .team-badge, .team-badge .ring, .team-badge .aura, .team-badge .moons i, .team-badge .letter, .team-block .org-tree li::before, .team-block .org-tree li::after, .team-block .org-tree ul::before, .face-wrap, .team-faces i, .hire-card { animation: none !important; }
@@ -14324,7 +14345,17 @@ function hireCards(hires, all, again = false) {
     const card = el("div", "hire-card", `<span class="face"></span><span class="words"><span class="hire-ask"></span><span class="goal"></span><span class="more"></span><span class="why"></span></span><span class="decide"><input type="text" maxlength="300" placeholder="Why not? (optional)" aria-label="Why not"><button type="button" class="btn small" data-no>Decline</button><button type="button" class="btn small primary" data-yes></button></span>`);
     if (by) card.querySelector(".face").appendChild(sparkAvatar(by, 36));
     const ask = card.querySelector(".hire-ask");
-    if (hire.kind === "hire") {
+    if (hire.kind === "reorg") {
+      ask.innerHTML = `<b></b> wants to reorganize <b class="who"></b>`;
+      ask.querySelector("b").textContent = hire.by_name;
+      ask.querySelector(".who").textContent = hire.team_name;
+      card.querySelector(".goal").remove();
+      const more = card.querySelector(".more");
+      more.replaceChildren(...(hire.changes || []).map((m) => reorgChange(m, byId)));
+      more.classList.add("reorg-changes");
+      card.appendChild(reorgPreview(hire, byId));
+      card.querySelector("[data-yes]").textContent = "Reorganize";
+    } else if (hire.kind === "hire") {
       ask.innerHTML = `<b></b> wants to hire <b class="who"></b>`;
       ask.querySelector("b").textContent = hire.by_name;
       ask.querySelector(".who").textContent = hire.spark.name + (hire.spark.title ? `, ${hire.spark.title}` : "");
@@ -14354,13 +14385,72 @@ function hireCards(hires, all, again = false) {
       try {
         await command("hire-decide", hire.id, null, { yes, why: card.querySelector("input").value });
         card.classList.add(yes ? "stamped" : "waved");
-        toast(yes ? (hire.kind === "hire" ? `${hire.spark.name} is hired` : `${hire.target_name} is let go`) : "Declined");
+        toast(yes ? (hire.kind === "hire" ? `${hire.spark.name} is hired` : hire.kind === "reorg" ? `${hire.team_name} is reorganized` : `${hire.target_name} is let go`) : "Declined");
       } catch (error) { showFailure(error); card.querySelectorAll("button").forEach((b) => { b.disabled = false; }); }
     };
     card.querySelector("[data-yes]").onclick = () => decide(true);
     card.querySelector("[data-no]").onclick = () => decide(false);
     box.appendChild(card);
   }
+  return box;
+}
+
+// One change of a proposed reorganization: the spark, who it reports to
+// now, struck through, and who it would.
+function reorgChange(move, byId) {
+  const row = el("span", "reorg-change", `<span class="who"></span><span class="was"></span><span class="arrow" aria-label="becomes">→</span><span class="now"></span>`);
+  const spark = byId.get(move.spark);
+  if (spark) row.prepend(sparkAvatar(spark, 18));
+  row.querySelector(".who").textContent = move.name;
+  const leads = (names) => names && names.length ? `reports to ${names.join(" and ")}` : "reports to no one";
+  row.querySelector(".was").textContent = leads(move.from_names);
+  row.querySelector(".now").textContent = leads(move.to_names);
+  return row;
+}
+
+// The team's chart as it is and as it would be, side by side: in the
+// second, every spark whose lead changes is marked, so a yes is to a
+// picture, not only a list.
+function reorgPreview(hire, byId) {
+  const box = el("div", "reorg-preview");
+  box.style.setProperty("--t", hire.team_colour || "var(--accent)");
+  const moved = new Set((hire.changes || []).map((m) => m.spark));
+  const chart = (label, nodes, mark) => {
+    const side = el("div", "reorg-side", `<span class="reorg-label"></span>`);
+    side.querySelector(".reorg-label").textContent = label;
+    const tree = el("ul", "org-tree reorg-tree");
+    const grow = (node, into) => {
+      const li = el("li");
+      const chip = el("span", "reorg-node", `<span class="name"></span>`);
+      const spark = byId.get(node.id);
+      if (spark) { chip.style.setProperty("--c", spark.colour); chip.prepend(sparkAvatar(spark, 22)); }
+      chip.querySelector(".name").textContent = node.name || spark?.name || "?";
+      if (mark && moved.has(node.id)) { chip.classList.add("moved"); chip.dataset.tip = "Reports to someone new"; }
+      li.appendChild(chip);
+      if (node.reports && node.reports.length) {
+        const ul = el("ul");
+        node.reports.forEach((child) => grow(child, ul));
+        li.appendChild(ul);
+      }
+      into.appendChild(li);
+    };
+    (nodes || []).forEach((node) => grow(node, tree));
+    const fit = el("div", "reorg-fit");
+    fit.appendChild(tree);
+    side.appendChild(fit);
+    // Zoomed out to fit its half of the card, never scrolled: the whole
+    // team is seen at once, on both sides.
+    const apply = () => {
+      if (!fit.isConnected) return;
+      const room = fit.clientWidth, wide = tree.offsetWidth;
+      const zoom = room && wide > room ? Math.max(0.35, room / wide) : 1;
+      tree.style.transform = zoom < 1 ? `scale(${zoom})` : "";
+      fit.style.height = `${tree.offsetHeight * zoom}px`;
+    };
+    if (window.ResizeObserver) new ResizeObserver(apply).observe(fit); else requestAnimationFrame(apply);
+    return side;
+  };
+  box.append(chart("Now", hire.before, false), chart("After", hire.after, true));
   return box;
 }
 
@@ -14571,7 +14661,7 @@ async function shareTeam(team) {
 
 // A spark's audit log: every shift, tool call, approval and change, newest
 // first, each opening to the whole of what was kept.
-const AUDIT_WORDS = { made: "Made", shift_start: "Shift started", shift_end: "Shift ended", tool: "Tool", approval_asked: "Asked first", approval_answered: "Answered", changed: "Changed", taught: "Taught", paused: "Paused", resumed: "Resumed", stopped: "Stopped", team: "Team", reports_to: "Reports to", budget: "Budget", budget_paused: "Budget used", budget_renewed: "New month", hire_proposed: "Proposed a hire", removal_proposed: "Proposed a let-go", hire_decided: "Your answer", hired: "Hired", asked: "Asked", removed: "Removed" };
+const AUDIT_WORDS = { made: "Made", shift_start: "Shift started", shift_end: "Shift ended", tool: "Tool", approval_asked: "Asked first", approval_answered: "Answered", changed: "Changed", taught: "Taught", paused: "Paused", resumed: "Resumed", stopped: "Stopped", team: "Team", reports_to: "Reports to", budget: "Budget", budget_paused: "Budget used", budget_renewed: "New month", hire_proposed: "Proposed a hire", removal_proposed: "Proposed a let-go", reorg_proposed: "Proposed a new chart", hire_decided: "Your answer", hired: "Hired", asked: "Asked", removed: "Removed" };
 
 function auditSummary(e) {
   if (e.kind === "tool") return `${e.tool}${e.during && e.during !== "shift" ? ` (in a ${e.during})` : ""}`;
