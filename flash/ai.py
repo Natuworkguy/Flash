@@ -2000,7 +2000,8 @@ MAX_WAKES_IN_A_ROW = 3
 
 WAKE_NOTE = (
     "(The user has not written anything new. You were woken because a "
-    "sub-agent finished; tell them what it found.)"
+    "sub-agent or a background task you started finished; tell them what "
+    "came of it, and carry on with what it was for.)"
 )
 
 
@@ -2010,6 +2011,11 @@ def _announce_wake() -> None:
     for entry in subagents.unseen():
         verb = "finished" if entry.status == subagents.DONE else "failed"
         tool_line(f"Sub-agent {entry.id} {verb}")
+    from . import bgtasks
+
+    for task in bgtasks.unseen(""):
+        verb = {"done": "finished", "failed": f"failed (exit {task.code})"}.get(task.status, task.status)
+        tool_line(f"Background task {task.id} {verb}: {task.label()}")
 
 
 def _note_running_agents() -> None:
@@ -7186,9 +7192,11 @@ def _main() -> None:
     def wake_ready() -> bool:
         if _ring_waiting():
             return True
+        from . import bgtasks
+
         return (
             wakes_in_a_row < MAX_WAKES_IN_A_ROW
-            and bool(subagents.unseen())
+            and bool(subagents.unseen() or bgtasks.unseen(""))
         )
 
     update = check_for_update()
@@ -7826,6 +7834,19 @@ def _main() -> None:
                 _hook_command(uin[len("/hook"):].strip().lower())
                 continue
 
+            if uin == "/tasks" or uin.startswith("/tasks "):
+                from . import bgtasks
+
+                rest = uin[len("/tasks"):].split()
+                if rest[:1] == ["stop"] and len(rest) > 1:
+                    said = bgtasks.stop(rest[1])
+                elif rest:
+                    said = bgtasks.output(rest[0], everything=True)
+                else:
+                    said = bgtasks.listing("")
+                console.print(Text(said, style=DIM))
+                continue
+
             if uin == "/agents" or uin.startswith("/agents "):
                 subagents.watch(uin[len("/agents"):].strip())
                 console.print()
@@ -7969,6 +7990,10 @@ def _main() -> None:
             if not woken:
                 uin = _capture_keys(uin)
             agent_news, delivered_ids = subagents.notices()
+            from . import bgtasks
+
+            task_news, task_ids = bgtasks.notices("")
+            agent_news = "\n\n".join(p for p in (agent_news, task_news) if p)
             looked_at = time.time()
             ran = "" if woken else terminal.since(terminal_seen)
             content = "\n\n".join(
@@ -8014,6 +8039,7 @@ def _main() -> None:
                 continue
 
             subagents.mark_delivered(delivered_ids)
+            bgtasks.mark_delivered(task_ids)
             if not woken:
                 terminal_seen = looked_at
             clear_user_runs()

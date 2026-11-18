@@ -334,6 +334,7 @@ python run.py
 - `/plan`: Show the checklist the model is working through.
 - `/hook [install|remove]`: Let Flash see the commands you run in VS
   Code's terminal (zsh and bash).
+- `/tasks`: The background tasks: `/tasks <id>` shows one's output, `/tasks stop <id>` ends it.
 - `/agents`: Watch sub-agents work live. `/agents <id>` shows one in full,
   with its answer once it is done.
 - `/sparks [new|<name>]`: List your sparks, make one, or read one's
@@ -466,6 +467,25 @@ like a secret (`TOKEN=…`, `--password …`, credentials in URLs) is
 redacted before the model sees it, and the log in
 `~/.flash/terminal.log` is readable only by you and keeps the last 500
 commands. `/hook remove` takes the lines back out.
+
+### Background tasks
+
+A command that takes a while, or never ends on its own (a dev server, a
+watcher, a full test run, a long build or download), the model starts in
+the background: the shell tool's `background` gives it a task id at once
+and it carries on with the conversation while the command runs. What the
+command prints goes to a log. The model reads what is new in it whenever
+it likes (`task_output`) and ends it when it is done with it
+(`task_stop`). When a task ends on its own, its chat is told what came of
+it with the last of its output: on its next turn, or straight away if the
+chat is idle, so "start the server, then run the tests against it, and
+tell me when the slow suite is done" all happens without anyone waiting.
+
+Each chat sees only its own tasks. Stop on a reply does not end them,
+since they were set aside to outlive it; they show in the Background
+panel, which can stop them, and quitting Flash ends them all. `/tasks`
+lists them in the terminal, `/tasks <id>` shows one's output and
+`/tasks stop <id>` ends it.
 
 ### Sub-agents
 

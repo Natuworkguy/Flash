@@ -59,6 +59,7 @@ from . import (
     triggers,
     visuals,
     xcode,
+    bgtasks,
     youtube,
 )
 from .browser import (
@@ -698,6 +699,9 @@ def running_shells() -> list[dict]:
              "seconds": round(now - started)}
             for pid, (owner, command, started) in _running_info.items()
         ]
+    # and the background tasks, which run on past their turns
+    rows += [{"pid": t.pid, "owner": t.owner, "command": t.command, "seconds": round(t.seconds()),
+              "background": True, "task": t.id} for t in bgtasks.running()]
     return sorted(rows, key=lambda r: -r["seconds"])
 
 
@@ -711,7 +715,7 @@ def stop_shell(pid: int) -> bool:
         if proc is not None:
             _stopped.add(proc.pid)
     if proc is None:
-        return False
+        return bgtasks.stop_pid(pid)
     threading.Thread(target=_end_tree, args=(proc,), daemon=True).start()
     return True
 
@@ -775,8 +779,37 @@ def _run_owned(args, *, shell: bool, seconds: int,
     return out or "", err or "", proc.returncode, stopped
 
 
+def task_output_tool(task_id: str = "", everything: Any = False) -> str:
+    """A background task's output since last read; or the list of them."""
+
+    owner = getattr(_owner, "name", "")
+    if not str(task_id or "").strip():
+        tool_line("TaskList()")
+        return bgtasks.listing(owner)
+    tool_line(f"TaskOutput({task_id})")
+    task = bgtasks.get(task_id)
+    if task is None or task.owner != owner:
+        return f"No background task {task_id!r} of yours. " + bgtasks.listing(owner)
+    said = bgtasks.output(task_id, everything is True or str(everything).lower() == "true")
+    return trim_tool_output(said, "task_output")
+
+
+def task_stop_tool(task_id: str) -> str:
+    """End a background task."""
+
+    tool_line(f"TaskStop({task_id})")
+    owner = getattr(_owner, "name", "")
+    task = bgtasks.get(task_id)
+    if task is None or task.owner != owner:
+        return f"No background task {task_id!r} of yours."
+    said = bgtasks.stop(task_id)
+    tool_result(said, style=DIM)
+    return said
+
+
 def shell_tool(command: str, timeout=None, is_user=False,
-               sandbox: Any = None) -> str:
+               sandbox: Any = None, background: Any = False,
+               description: str = "") -> str:
     """Tool to execute a shell command. SANDBOX: run it in the OS sandbox
     (sandbox.py), as every command Flash runs does when the user turned
     that on."""
@@ -797,7 +830,8 @@ def shell_tool(command: str, timeout=None, is_user=False,
         sandbox).strip().lower() in ("true", "yes", "1"))
 
     if not is_user:
-        suffix = "" \
+        background = background is True or str(background).strip().lower() in ("true", "yes", "1")
+        suffix = " in the background" if background else "" \
             if seconds == DEFAULT_SHELL_TIMEOUT \
             else f" (timeout {seconds}s)"
         tool_line(f"Bash({command}){suffix}"
@@ -862,6 +896,21 @@ def shell_tool(command: str, timeout=None, is_user=False,
     else:
         args = command
         shell = True
+
+    if background and not is_user:
+        # Set aside to run on: an id now, its output to a log, its chat
+        # told when it ends (bgtasks).
+        try:
+            task = bgtasks.start(args, shell=shell, command=command, env=env,
+                                 owner=getattr(_owner, "name", ""), description=description)
+        except (RuntimeError, OSError) as exc:
+            tool_result(f"Error: {exc}", style=ERROR)
+            return f"Error: {exc}"
+        said = (f"Started background task {task.id}. It runs on while you carry on; you are told "
+                f"when it ends. task_output reads what it printed (what is new since you last "
+                f"looked), task_stop ends it.")
+        tool_result(f"Running in the background as {task.id}", style=DIM)
+        return said
 
     try:
         if is_user:
@@ -7752,8 +7801,53 @@ tools: list[dict[str, Any]] = [
                         "minimum": 1,
                         "maximum": MAX_SHELL_TIMEOUT,
                     },
+                    "background": {
+                        "type": "boolean",
+                        "description": (
+                            "True runs it in the background: you get a task "
+                            "id at once and carry on, and are told when it "
+                            "ends. For anything long or that keeps running: "
+                            "a dev server, a watcher, a long build or test "
+                            "run, a download. Read its output with "
+                            "task_output, end it with task_stop. No timeout."
+                        ),
+                    },
+                    "description": {
+                        "type": "string",
+                        "description": "With background: a few words for what it is (\"dev server\", \"full test run\").",
+                    },
                 },
                 "required": ["command"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "task_output",
+            "description": (
+                "Read a background task's output: what it printed since you "
+                "last read it, and whether it is still running, finished or "
+                "failed. With no task_id, lists your background tasks."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "task_id": {"type": "string", "description": "The id shell gave when it started it."},
+                    "everything": {"type": "boolean", "description": "All of it (its last 4000 characters), not only what is new."},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "task_stop",
+            "description": "End a background task, and all it started.",
+            "parameters": {
+                "type": "object",
+                "properties": {"task_id": {"type": "string", "description": "The task's id."}},
+                "required": ["task_id"],
             },
         },
     },
@@ -11086,6 +11180,8 @@ tools: list[dict[str, Any]] = [
 
 FUNCTIONS = {
     "shell": shell_tool,
+    "task_output": task_output_tool,
+    "task_stop": task_stop_tool,
     "glob": glob_tool,
     "grep": grep_tool,
     "read": read_tool,
