@@ -335,6 +335,18 @@ class Briefing:
 
 
 @dataclass
+class Inbox:
+    """A program that puts items in the inbox: run when it is read, with
+    {"event": "list"} on stdin, it writes a JSON list of {"title",
+    "body"} and maybe "id", "url", "at", "ask", "detail", "colour",
+    "label"; run again with {"event": "answer", "id", "yes", "why"}
+    when the user answers one that asked."""
+
+    run: list[str]
+    timeout: int = 10
+
+
+@dataclass
 class Extension:
     """One installed (or about to be installed) extension."""
 
@@ -359,6 +371,7 @@ class Extension:
     system_one: list[SystemOne] = field(default_factory=list)
     tunnels: list[TunnelService] = field(default_factory=list)
     briefing: Optional[Briefing] = None
+    inbox: Optional[Inbox] = None
     # A folder of guides for the knowledge base (skills.knowledge).
     knowledge: Optional[Path] = None
     # Flash's web UI is opened to the network when Flash starts, as with
@@ -432,6 +445,8 @@ class Extension:
                 t.name for t in self.tunnels))
         if self.briefing is not None:
             lines.append("cards in the briefing")
+        if self.inbox is not None:
+            lines.append("notes and questions in the inbox")
         if self.ui is not None:
             lines += self.ui.contents()
 
@@ -775,6 +790,17 @@ def _briefing(entry: Any, root: Path) -> Briefing:
                     timeout=timeout)
 
 
+def _inbox(entry: Any, root: Path) -> Inbox:
+    where = '"inbox"'
+    if not isinstance(entry, dict):
+        raise ExtensionError(f"{where} has to be an object")
+    timeout = 10
+    if entry.get("timeout") is not None:
+        # Run while someone waits for the inbox to open.
+        timeout = min(_timeout(entry.get("timeout"), where), 30)
+    return Inbox(run=_argv(entry.get("run"), root, where), timeout=timeout)
+
+
 def _setting(entry: Any, index: int) -> Setting:
     where = f"setting {index + 1}"
     if not isinstance(entry, dict):
@@ -1026,6 +1052,10 @@ def load(root: Path) -> Extension:
         _briefing(manifest["briefing"], root)
         if manifest.get("briefing") is not None else None
     )
+    inbox = (
+        _inbox(manifest["inbox"], root)
+        if manifest.get("inbox") is not None else None
+    )
 
     ui = None
     if manifest.get("ui") is not None:
@@ -1035,11 +1065,11 @@ def load(root: Path) -> Extension:
 
     if not (commands or tools or prompt or backgrounds or providers
             or themes or loaders or events or voice or ui or speech
-            or system_one or tunnels or briefing or knowledge):
+            or system_one or tunnels or briefing or inbox or knowledge):
         raise ExtensionError(
             f"{MANIFEST} declares nothing: no commands, tools, prompt, "
             "backgrounds, providers, themes, loaders, events, voice, "
-            "speech, system_one, tunnels, briefing, ui, or knowledge"
+            "speech, system_one, tunnels, briefing, inbox, ui, or knowledge"
         )
 
     try:
@@ -1069,6 +1099,7 @@ def load(root: Path) -> Extension:
         system_one=system_one,
         tunnels=tunnels,
         briefing=briefing,
+        inbox=inbox,
         network=_network(manifest.get("network", False)),
     )
 
@@ -1640,6 +1671,40 @@ def briefing_cards() -> list[tuple[Extension, list[dict]]]:
             found.append((extension, [c for c in cards
                                       if isinstance(c, dict)]))
     return found
+
+
+# The inbox ---------------------------------------------------------------
+
+
+def inbox_items() -> list[tuple[Extension, list[dict]]]:
+    """What each extension with an inbox program puts there now, as the
+    program wrote it; one that fails is left out."""
+
+    found = []
+    for extension in installed():
+        if extension.inbox is None:
+            continue
+        try:
+            out = _run_bytes(extension, extension.inbox.run, b'{"event": "list"}',
+                             extension.inbox.timeout, f"{extension.name}'s inbox")
+            items = json.loads(out.decode("utf-8", "replace") or "[]")
+        except (ExtensionError, ValueError):
+            continue
+        if isinstance(items, dict):
+            items = [items]
+        if isinstance(items, list):
+            found.append((extension, [i for i in items if isinstance(i, dict)]))
+    return found
+
+
+def inbox_answer(extension: Extension, item_id: str, yes: bool, why: str = "") -> None:
+    """Tell EXTENSION's inbox program the user's answer to ITEM_ID."""
+
+    if extension.inbox is None:
+        return
+    _run_bytes(extension, extension.inbox.run,
+               json.dumps({"event": "answer", "id": item_id, "yes": bool(yes), "why": why}).encode(),
+               extension.inbox.timeout, f"{extension.name}'s inbox")
 
 
 # Installing ------------------------------------------------------------

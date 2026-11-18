@@ -522,6 +522,49 @@ extension's name if left out). A Python program can also add a card
 whenever it likes, since it can import Flash:
 `from flash import briefing; briefing.notice("extension", title, body)`.
 
+### Inbox
+
+An extension can put notes and questions in the inbox, beside what
+sparks and flows leave there. A note is put away with Done (and opens
+its `url`, if it has one); a question gets Approve and Deny, with a
+reason the user can add, and the answer goes back to the extension. A
+new item pops up as a notification when the page is out of sight.
+
+From its code, whenever it likes (Python can import Flash):
+
+```python
+from flash import inbox
+inbox.notify("ci", "Build 881 failed", "3 tests broke in `auth`.", id="build-881",
+             url="https://ci.example.com/881")
+inbox.notify("deploy", "Ship v2 to production?", "3 changes since v1.", id="ship-v2", ask=True)
+inbox.answer_of("deploy", "ship-v2")   # {"yes": True, "why": "", "at": ...}, or None while it waits
+inbox.withdraw("ci", "build-881")      # it no longer matters
+```
+
+The same `id` replaces the last item with it. From its page, `Flash.inbox({from, title, body, id, url, ask})`
+does the same (and `Flash.inboxAnswer(from, id)` reads the answer).
+
+Or with a program, in any language, run when the inbox is read (at most
+every 30 seconds), with `{"event": "list"}` on stdin; it writes a JSON
+list:
+
+```json
+"inbox": {"run": ["python", "./inbox.py"], "timeout": 10}
+```
+
+```json
+[{"title": "Review PR 12?", "body": "Two files changed.", "id": "pr-12", "ask": true},
+ {"title": "Nightly backup done", "id": "backup-2026-11-18", "url": "https://example.com/backups"}]
+```
+
+Each item has a `title` or a `body` (Markdown), and maybe `id`, `url`
+(https, http, or a path in Flash), `at` (a Unix time), `ask`, `detail`
+(shown under a question), `colour` (`#rrggbb`) and `label` (the
+extension's name if left out). When the user answers a question, the
+program runs again with `{"event": "answer", "id", "yes", "why"}`. An
+item put away or answered stays away, even if the program lists it
+again; give a new `id` to bring something back.
+
 ### Knowledge
 
 Flash comes with a knowledge base: guides to doing each kind of task
@@ -809,6 +852,8 @@ Flash.openPanel("/ext/weather/radar.html", "Radar");
 Flash.request("pin", "on");        // any of the page's own commands
 Flash.icon("sun");                 // an icon's SVG
 Flash.notify("Done", "The export finished");  // a notification when the page is hidden, a toast otherwise
+await Flash.inbox({from: "Weather", title: "Rain at 4", body: "Take a coat.", id: "rain"});  // a note in the inbox (ask: true for a question)
+await Flash.inboxAnswer("Weather", "rain");   // a question's answer: {yes, why, at}, or null while it waits
 const store = Flash.storage("weather");       // kept in this browser
 store.set("city", "Paris"); store.get("city"); store.remove("city"); store.keys();
 const answer = await Flash.dialog({title: "Which city?", text: "**Markdown** works",

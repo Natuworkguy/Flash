@@ -6584,6 +6584,28 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
         session.hub.publish({"type": "sparks"})
         return {"said": said, "items": inbox.items()}
 
+    if name == "inbox-add":
+        # From an extension's page (Flash.inbox): a note or a question
+        from . import inbox
+
+        item = body.get("item") if isinstance(body.get("item"), dict) else {}
+        try:
+            got = inbox.notify(str(item.get("from") or item.get("label") or "Extension"),
+                               str(item.get("title") or ""), str(item.get("body") or ""),
+                               id=str(item.get("id") or ""), url=str(item.get("url") or ""),
+                               ask=bool(item.get("ask")), detail=str(item.get("detail") or ""),
+                               colour=str(item.get("colour") or item.get("color") or ""))
+        except ValueError as exc:
+            return {"error": str(exc)}
+        session.hub.publish({"type": "sparks"})
+        return {"id": got}
+
+    if name == "inbox-answer":
+        # From an extension's page: the user's answer to one it asked, or null while it waits
+        from . import inbox
+
+        return {"answer": inbox.answer_of(str(body.get("from") or ""), arg)}
+
     if name == "inbox-seen":
         from . import inbox
 
