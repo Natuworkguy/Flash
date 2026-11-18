@@ -1059,3 +1059,21 @@ def test_an_extension_updated_on_disk_is_read_again(tmp_path, monkeypatch):
     monkeypatch.setattr(ext, "_looked", 0.0)
     assert [s.id for s in ext.find("demo").settings] == ["effort", "credits"]
     ext.reload()
+
+
+def test_a_speaker_needs_one_of_its_switches(tmp_path):
+    ok = make(tmp_path / "ok", {
+        "name": "robot", "prompt": "p.md",
+        "settings": [{"id": "out", "label": "Speak here", "type": "switch"}],
+        "speaker": {"setting": "out", "label": "Desk robot"},
+    }, {"p.md": "hi"})
+    ext = extensions.load(ok)
+    assert ext.speaker == extensions.Speaker(setting="out", label="Desk robot")  # nosec B101
+
+    bad = make(tmp_path / "bad", {
+        "name": "robot", "prompt": "p.md",
+        "settings": [{"id": "out", "label": "Speak here", "type": "text"}],
+        "speaker": {"setting": "out"},
+    }, {"p.md": "hi"})
+    with pytest.raises(extensions.ExtensionError, match="switch"):
+        extensions.load(bad)
