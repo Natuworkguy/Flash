@@ -4599,7 +4599,7 @@ body.empty #ext-head, body.on-page #ext-head { display: none; }
       <span id="ext-head"></span>
       <span id="ext-docks"></span>
       <span id="status-pills"><button type="button" id="tunnel-pill" class="status-pill" hidden data-tip="Flash is on the internet through a tunnel" aria-label="Flash is on the internet through a tunnel"><span class="wake-dot"><i></i></span><span class="wake-label"><span>Tunnel</span></span></button><span id="wake-pill" class="status-pill" role="status" hidden data-tip="Listening for “Hey Flash”" aria-label="Listening for “Hey Flash”"><span class="wake-dot"><i></i></span><span class="wake-label"><span>Voice</span></span></span></span>
-      <button type="button" class="icon-btn" id="inbox-btn" data-tip="Inbox: what your sparks and flows left for you" aria-label="Inbox"></button>
+      <button type="button" class="icon-btn" id="inbox-btn" data-tip="Inbox: what your sparks, flows and extensions left for you" aria-label="Inbox"></button>
     </header>
 
     <section id="ext-panel" hidden aria-label="Extension"><header><span class="ext-panel-name"></span><button type="button" class="icon-btn ext-panel-close" aria-label="Close" data-tip="Close"></button></header><iframe title="Extension"></iframe></section>
@@ -11608,16 +11608,18 @@ function inboxItem(it) {
   const when = new Date(it.at * 1000).toLocaleString(undefined, { weekday: "short", hour: "numeric", minute: "2-digit" });
   const dot = `<span class="inbox-dot" style="--c:${esc(it.colour || "var(--accent)")}"></span>`;
   if (it.kind === "approval") return `<div class="inbox-item ask" data-inbox="${esc(it.id)}">
-    <div class="inbox-top">${dot}<b>${esc(it.name)}</b><span class="inbox-tag">${it.source === "flow" ? "flow" : "spark"} · needs your yes</span><span class="inbox-when">${esc(when)}</span></div>
+    <div class="inbox-top">${dot}<b>${esc(it.name)}</b><span class="inbox-tag">${it.source === "flow" ? "flow" : it.source === "extension" ? "extension" : "spark"} · needs your yes</span><span class="inbox-when">${esc(when)}</span></div>
     <div class="inbox-ask">${esc(it.ask)}</div>${it.detail ? `<pre class="inbox-detail">${esc(it.detail)}</pre>` : ""}
     <div class="inbox-row"><input type="text" maxlength="300" placeholder="Why not? (optional)" aria-label="Why not"><button type="button" class="btn small" data-inbox-no>Deny</button><button type="button" class="btn small primary" data-inbox-yes>Approve</button></div></div>`;
+  const ext = it.source === "extension";
+  const open = ext ? (it.url ? `<button type="button" class="btn small" data-inbox-url="${esc(it.url)}">Open</button>` : "") : `<button type="button" class="btn small" data-inbox-open>Open ${esc(it.name)}</button>`;
   return `<div class="inbox-item${it.failed ? " failed" : ""}" data-inbox="${esc(it.id)}" data-spark="${esc(it.spark || "")}">
-    <div class="inbox-top">${dot}<b>${esc(it.name)}</b><span class="inbox-tag">${it.failed ? "could not finish" : "report"}</span><span class="inbox-when">${esc(when)}</span></div>
+    <div class="inbox-top">${dot}<b>${esc(it.name)}</b><span class="inbox-tag">${it.failed ? "could not finish" : ext ? "extension" : "report"}</span><span class="inbox-when">${esc(when)}</span></div>
     <div class="inbox-text assistant">${markdown(it.text)}</div>
-    <div class="inbox-row"><button type="button" class="btn small" data-inbox-seen>Done</button><button type="button" class="btn small" data-inbox-open>Open ${esc(it.name)}</button></div></div>`;
+    <div class="inbox-row"><button type="button" class="btn small" data-inbox-seen>Done</button>${open}</div></div>`;
 }
 const drawInboxPage = () => toolPage("Inbox", async (body) => {
-  body.appendChild(el("p", "page-sub", "What your sparks and flows did while you were away. Anything that needs your yes is at the top."));
+  body.appendChild(el("p", "page-sub", "What your sparks, flows and extensions left for you while you were away. Anything that needs your yes is at the top."));
   const clear = body.appendChild(el("button", "btn small inbox-clear", "Clear the reports"));
   clear.type = "button";
   clear.onclick = async () => { try { draw((await command("inbox-seen", "all")).items); } catch (error) { showFailure(error); } };
@@ -11625,7 +11627,7 @@ const drawInboxPage = () => toolPage("Inbox", async (body) => {
   const draw = (items) => {
     inboxCount = items.length; markInbox();
     clear.hidden = !items.some((i) => i.kind === "report");
-    list.innerHTML = items.length ? items.map(inboxItem).join("") : `<p class="page-empty">Nothing waiting. Sparks and flows put their approvals and reports here as they work.</p>`;
+    list.innerHTML = items.length ? items.map(inboxItem).join("") : `<p class="page-empty">Nothing waiting. Sparks, flows and extensions put their questions and notes here as they work.</p>`;
   };
   try { draw((await command("inbox")).items); } catch (error) { list.appendChild(el("p", "page-empty", error.message)); return; }
   list.onclick = async (e) => {
@@ -11643,6 +11645,10 @@ const drawInboxPage = () => toolPage("Inbox", async (body) => {
       } else if (e.target.closest("[data-inbox-open]")) {
         await command("inbox-seen", id).catch(() => {});
         openSparkSafe(item.dataset.spark);
+      } else if (e.target.closest("[data-inbox-url]")) {
+        const url = e.target.closest("[data-inbox-url]").dataset.inboxUrl;
+        await command("inbox-seen", id).catch(() => {});
+        window.open(url, "_blank", "noopener"); draw((await command("inbox")).items);
       }
     } catch (error) { showFailure(error); }
   };
@@ -11657,6 +11663,12 @@ async function checkInbox() {
   const fresh = asks.filter((a) => !before.has(a.id));
   checkInbox.asks = new Set(asks.map((a) => a.id));
   if (checkInbox.started && fresh.length) extNotify(`${fresh[0].name} needs your yes`, fresh[0].ask);
+  // an extension's new note pops up too (a spark's reports stay quiet, as they always have)
+  const notes = items.filter((i) => i.kind === "report" && i.source === "extension");
+  const seenNotes = checkInbox.notes || new Set();
+  const freshNotes = notes.filter((n) => !seenNotes.has(n.id));
+  checkInbox.notes = new Set(notes.map((n) => n.id));
+  if (checkInbox.started && freshNotes.length && !fresh.length) extNotify(freshNotes[0].name, freshNotes[0].text.replace(/[*_#`]/g, "").slice(0, 140));
   checkInbox.started = true;
   inboxCount = items.length; markInbox();
 }
@@ -25881,6 +25893,10 @@ window.Flash = Object.freeze({
   openPanel: (url, label = "") => openExtPanel(url, label),
   closePanel: shutExtPanel,
   notify: extNotify,
+  // a note in the inbox ({from, title, body, id?, url?}), or with ask: true a yes or no question; resolves to its id
+  inbox: async (item) => { const r = await command("inbox-add", "", current, { item: item || {} }); setTimeout(checkInbox, 300); return r.id; },
+  // the answer to a question put in the inbox: {yes, why, at}, or null while it waits
+  inboxAnswer: async (from, id) => (await command("inbox-answer", String(id), current, { from: String(from) })).answer,
   storage: extStorage,
   dialog: extDialog,
   theme: extTheme,
