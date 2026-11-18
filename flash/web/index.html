@@ -18799,6 +18799,7 @@ async function startVoice(team = null, how = "button") {
   voice.toldWords = "";
   voice.talk = Math.random().toString(36).slice(2, 12);
   voice.how = how;
+  voice.firstTurn = how === "wake";
   voice.endAfter = false;
   voiceTell("start", { how });
   document.body.classList.add("voice-on");
@@ -19086,7 +19087,13 @@ function base64Of(bytes) {
 // Flash is reading out, so its own words coming back through the
 // microphone are not taken for an interruption. Null if it failed.
 async function hear(pcm, speaking = "") {
-  try { return await api("/api/voice/hear", { data: base64Of(new Uint8Array(pcm.buffer)), speaking }); }
+  // The first words after "Hey Flash": "never mind" and the like end it there, with no chat made.
+  const first = !!voice.firstTurn && !speaking;
+  try {
+    const heard = await api("/api/voice/hear", { data: base64Of(new Uint8Array(pcm.buffer)), speaking, first });
+    if (heard && heard.text && heard.text.trim()) voice.firstTurn = false;
+    return heard;
+  }
   catch (error) { if (voice.on) toast(error.message); return null; }
 }
 

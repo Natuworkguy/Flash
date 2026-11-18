@@ -462,7 +462,7 @@ def test_flash_can_end_the_conversation_itself(wakes):
             return super().send(chat, text, heard)
 
     session = Ending()
-    found, spoken = listener(session, heard=["ok bye", "never heard"])
+    found, spoken = listener(session, heard=["thanks for that, bye for now", "never heard"])
     found.start()
     until(lambda: found.listening)
     wakes.set()
@@ -471,5 +471,19 @@ def test_flash_can_end_the_conversation_itself(wakes):
     found.stop()
 
     # It said its goodbye, and listened no more.
-    assert spoken == ["You said ok bye."]  # nosec B101
+    assert spoken == ["You said thanks for that, bye for now."]  # nosec B101
     assert len(session.sent) == 1  # nosec B101
+
+
+def test_never_mind_first_makes_no_chat_and_says_nothing(wakes):
+    heyflash.set_enabled(True)
+    session = FakeSession()
+    found, spoken = listener(session, heard=["Never mind."])
+    found.start()
+    until(lambda: found.listening)
+    wakes.set()
+    until(lambda: found.chimes.count("down") >= 1)
+    found.stop()
+
+    # Woken by mistake: no chat, nothing sent, nothing said.
+    assert spoken == [] and session.sent == []  # nosec B101
