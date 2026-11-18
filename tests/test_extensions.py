@@ -709,6 +709,15 @@ class TestSettings:
                 "id": "size", "value": "huge",
             })
 
+        # A page and its device can signal each other ("sleep now").
+        web.command(session, {"name": "extension-signal", "arg": "tuned",
+                              "signal": "sleep", "data": {"why": "asked"}})
+        said = [e for e in list(heard.queue) if e and e.get("type") == "extension-signal"]
+        assert said[-1].items() >= {"name": "tuned", "signal": "sleep",  # nosec B101
+                                    "data": {"why": "asked"}}.items()
+        with pytest.raises(ValueError, match="which signal"):
+            web.command(session, {"name": "extension-signal", "arg": "tuned"})
+
 
 def test_a_secret_setting_is_used_but_never_shown(tmp_path):
     import os

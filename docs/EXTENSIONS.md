@@ -234,6 +234,18 @@ in capitals), `1` or `0` for a switch. They are kept in
 `~/.flash/extension-settings`, so updating the extension keeps them;
 removing it drops them. Up to 24 settings.
 
+A changed setting is said at once to everything listening on the event
+stream, as `{"type": "extension-setting", "name", "id", "value"}`, so a
+device showing it (a robot's eye colour) changes as it is picked.
+
+**Signals.** An extension's page and a device paired with Flash can say
+things to each other that are not settings: "sleep now", "here is how I
+am". `Flash.request("extension-signal", "<extension>", {signal, data})`
+(or the same through `/api/command`, from a device) puts
+`{"type": "extension-signal", "name", "signal", "data"}` on the event
+stream, kept nowhere. `signal` is a short name, `data` an object of up
+to 4,000 characters.
+
 ### Themes
 
 A theme is a set of the web UI's colours for dark mode, light mode, or
