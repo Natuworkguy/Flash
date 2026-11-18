@@ -11194,7 +11194,9 @@ function drawGeneral(body) {
       wordInput.value = r.word;
       wordSave.hidden = true;
       toast(`Flash wakes to “${r.word}” now`);
-      redrawSettingsTab("voice");
+      // The rows that name the wake word, drawn again where they are. ("voice" is no page: shown
+      // as one, it fell through to a project page, and the address became /projects.)
+      if (view === "settings") drawPage();
     } catch (error) { showFailure(error); wordInput.value = wakeName(); }
     finally { wordSave.disabled = false; }
   };
