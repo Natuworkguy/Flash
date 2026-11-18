@@ -424,3 +424,13 @@ def test_a_slow_provider_shows_as_loading_and_never_holds_up_the_list(echo, monk
         time.sleep(0.02)
     assert providers.loading() == []  # nosec B101
     assert "@echo/echo-1" in providers.every_model()  # nosec B101
+
+
+def test_a_crashed_provider_says_its_error_not_traceback():
+    from flash.providers import _what_failed
+
+    trace = ('Traceback (most recent call last):\n  File "provider.py", line 9, in <module>\n'
+             '    main()\nTypeError: Messages.stream() got an unexpected keyword argument \'fallbacks\'\n')
+    assert _what_failed(trace) == (  # nosec B101
+        "TypeError: Messages.stream() got an unexpected keyword argument 'fallbacks'")
+    assert _what_failed("  no key set \n") == "no key set"  # nosec B101

@@ -210,7 +210,7 @@ def _lines(extension, provider, request: dict) -> Iterator[dict]:
         code = process.wait()
         reader.join(timeout=1)
         if code:
-            said = "".join(errors).strip()
+            said = _what_failed("".join(errors))
             raise ResponseError(
                 f"The @{provider.name} provider failed (exit {code})"
                 + (f": {said}" if said else
@@ -222,6 +222,18 @@ def _lines(extension, provider, request: dict) -> Iterator[dict]:
         if process.poll() is None:
             process.kill()
             process.wait()
+
+
+def _what_failed(stderr: str) -> str:
+    """What a provider's program printed as it failed, said usefully: a
+    Python traceback's first line ("Traceback (most recent call last):")
+    says nothing, its last says what went wrong."""
+
+    text = stderr.strip()
+    if "Traceback (most recent call last):" not in text:
+        return text
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    return lines[-1] if lines else text
 
 
 def _check(found: dict, provider) -> None:
