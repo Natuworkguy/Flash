@@ -18804,6 +18804,7 @@ async function startVoice(team = null, how = "button") {
   voice.talk = Math.random().toString(36).slice(2, 12);
   voice.how = how;
   voice.firstTurn = how === "wake";
+  findSpeaker();
   voice.endAfter = false;
   voiceTell("start", { how });
   document.body.classList.add("voice-on");
@@ -18890,6 +18891,8 @@ function quickPrepare(spark = "") {
 // LINE said now, quietly by GAIN, if it is made: nothing waits on it.
 function quickSay(line, spark = "", gain = 1) {
   const audio = line && quickMade.get(`${spark}|${line}`);
+  // Speaking through a device: its quick words are left out (they would come late, and out of turn).
+  if (audio && audio.remote !== undefined) { quickMade.delete(`${spark}|${line}`); return 0; }
   if (!audio || !voice.on || !voice.ctx) return 0;
   try {
     const source = voice.ctx.createBufferSource();
@@ -20115,9 +20118,51 @@ function markSpoken(range) {
 }
 const unmarkSpoken = () => { if (window.CSS && CSS.highlights) CSS.highlights.delete("speaking"); };
 
+// A device voice mode speaks through instead of this computer (a desk
+// robot), when an extension has one and its switch is on: looked up as
+// voice mode starts. Each line goes to it as a signal and voice mode waits
+// for it to say it is done, so turns still take their turn.
+async function findSpeaker() {
+  voice.speaker = null;
+  try {
+    const listed = (await command("extensions", "", null)).extensions || [];
+    const ext = listed.find((e) => e.speaker && e.values && e.values[e.speaker.setting] === true);
+    if (ext) voice.speaker = { ext: ext.name, label: ext.speaker.label };
+  } catch (_) { /* this computer, then */ }
+}
+const remoteWaits = new Map();
+function remoteSaid(id) { const done = remoteWaits.get(id); if (done) done(); }
+// Plays a line on the device: resolves once it says it is done, or after
+// as long as the line could take to say, if it never does.
+function playRemote(line) {
+  return new Promise((resolve) => {
+    const id = Math.random().toString(36).slice(2, 10);
+    const signal = (name, data) => command("extension-signal", voice.speaker.ext, null, { signal: name, data }).catch(() => {});
+    let over = false;
+    const ended = () => {
+      if (over) return;
+      over = true;
+      clearTimeout(late);
+      remoteWaits.delete(id);
+      if (voice.played === ended) voice.played = null;
+      if (voice.source === source) voice.source = null;
+      resolve();
+    };
+    // Cut short (talked over, "stop voice"): the device is hushed too.
+    const source = { stop: () => { signal("hush", { id }); ended(); } };
+    const late = setTimeout(ended, 8000 + line.length * 90);
+    remoteWaits.set(id, ended);
+    voice.played = ended;
+    voice.source = source;
+    signal("say", { text: line, id });
+  });
+}
+
 // A line of speech, made on this computer, ready to play.
 // SPARK: a spark on a call, said in a voice of its own.
 function makeSpeech(line, ctx = voice.ctx, spark = "") {
+  // Through the device: it makes the speech itself, from the words.
+  if (voice.on && voice.speaker && !spark && ctx === voice.ctx) return Promise.resolve({ remote: line });
   return api("/api/voice/say", { text: line, ...(spark ? { spark } : {}) }).then((r) => {
     const raw = atob(r.audio);
     const bytes = new Uint8Array(raw.length);
@@ -20280,6 +20325,7 @@ function placeOf(spark) {
 }
 
 function playSpeech(audio, spark = "") {
+  if (audio && audio.remote !== undefined) return playRemote(audio.remote);
   return new Promise((resolve) => {
     const source = voice.ctx.createBufferSource();
     source.buffer = audio;
@@ -20990,6 +21036,7 @@ function apply(event) {
   if (event.type === "retitle") { retypeTitle(event.chat, event.title); return; }
   if (event.type === "install") { installHeard(event); return; }
   if (event.type === "voice-end") { if (voice.on && event.chat === current) voice.endAfter = true; return; }
+  if (event.type === "extension-signal" && event.signal === "said") { remoteSaid(event.data && event.data.id); }
   if (event.type === "update") { info.update = event.update; onUpdate(); return; }
   if (event.type === "voice-setup") { voiceSetupEvent(event); return; }
   if (event.type === "voice-model") { voiceModelEvent(event); return; }

@@ -4924,6 +4924,10 @@ def _extension_info(ext: "extensions.Extension") -> dict:
         # Its own settings panel: each choice, and what the user picked.
         "settings": [s.summary() for s in ext.settings],
         "values": extensions.shown_values(ext) if ext.settings else {},
+        # A device voice mode can speak through, while its switch is on.
+        **({"speaker": {"setting": ext.speaker.setting,
+                        "label": ext.speaker.label}}
+           if ext.speaker else {}),
     }
 
 

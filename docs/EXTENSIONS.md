@@ -246,6 +246,20 @@ am". `Flash.request("extension-signal", "<extension>", {signal, data})`
 stream, kept nowhere. `signal` is a short name, `data` an object of up
 to 4,000 characters.
 
+**A speaker.** An extension with a device that can talk (a desk robot)
+can have voice mode speak through it instead of this computer:
+
+```json
+"settings": [{"id": "voice_out", "label": "Voice mode speaks through the robot", "type": "switch"}],
+"speaker": {"setting": "voice_out", "label": "Flash Bot"}
+```
+
+While that switch is on, voice mode in the web page hands each line to
+the device as the signal `say` (`{"text", "id"}`) instead of playing it,
+and waits for the device's `said` (`{"id"}`) before the next; a line it
+never hears back about is given up on after as long as it could take to
+say. Cut short (talked over, "stop voice"), it signals `hush`.
+
 ### Themes
 
 A theme is a set of the web UI's colours for dark mode, light mode, or

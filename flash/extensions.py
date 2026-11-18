@@ -207,6 +207,17 @@ class Voice:
 
 
 @dataclass
+class Speaker:
+    """A device voice mode can speak through instead of this computer (a
+    desk robot), while the extension's switch SETTING is on. Voice mode
+    hands it each line as an "extension-signal" ("say", {text, id}) and
+    waits for "said" ({id}) back; "hush" stops it."""
+
+    setting: str
+    label: str
+
+
+@dataclass
 class Setting:
     """One choice in an extension's settings panel."""
 
@@ -364,6 +375,7 @@ class Extension:
     loaders: list = field(default_factory=list)
     events: Optional[Events] = None
     voice: Optional[Voice] = None
+    speaker: Optional[Speaker] = None
     settings: list[Setting] = field(default_factory=list)
     # What it changes of the web page and the terminal (ext_ui.UI).
     ui: Any = None
@@ -1033,6 +1045,18 @@ def load(root: Path) -> Extension:
             f"{len(settings)} settings; the most is {MAX_SETTINGS}")
     _unique([s.id for s in settings], "setting")
 
+    speaker = None
+    if manifest.get("speaker") is not None:
+        entry = manifest["speaker"]
+        if not isinstance(entry, dict):
+            raise ExtensionError('"speaker" has to be an object')
+        which = str(entry.get("setting") or "")
+        if not any(s.id == which and s.type == "switch" for s in settings):
+            raise ExtensionError(
+                '"speaker": "setting" has to be one of its switch settings')
+        speaker = Speaker(setting=which, label=_text(
+            entry.get("label"), "speaker.label") or name)
+
     speech = [
         _speech(entry, root, index)
         for index, entry in enumerate(_entries(manifest, "speech"))
@@ -1092,7 +1116,7 @@ def load(root: Path) -> Extension:
         themes=themes,
         loaders=loaders,
         events=events,
-        voice=voice,
+        voice=voice, speaker=speaker,
         settings=settings,
         ui=ui,
         speech=speech,
