@@ -6020,6 +6020,25 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
                                  "id": setting, "value": values.get(setting)})
         return {"values": values}
 
+    if name == "extension-signal":
+        # A word between an extension's page and its device ("sleep now",
+        # "here is how I am"): said to everything listening, kept nowhere.
+        ext = extensions.find(arg)
+        if ext is None:
+            raise ValueError(f"No extension called {arg!r}.")
+        signal = str(body.get("signal") or "").strip()[:40]
+        if not signal:
+            raise ValueError("which signal?")
+        data = body.get("data")
+        if data is not None and not isinstance(data, dict):
+            raise ValueError("a signal's data is an object")
+        if len(json.dumps(data or {})) > 4000:
+            raise ValueError("that signal's data is too long")
+        if session is not None:
+            session.hub.publish({"type": "extension-signal", "name": ext.name,
+                                 "signal": signal, "data": data or {}})
+        return {}
+
     if name == "extension-remove":
         try:
             removed = extensions.remove(arg)
