@@ -696,6 +696,13 @@ class TestSettings:
             "id": "size", "value": "large",
         })
         assert changed["values"]["size"] == "large"  # nosec B101
+        # Said at once to whatever is listening (a robot's eye colour changes as it is picked).
+        heard = session.hub.subscribe()
+        web.command(session, {"name": "extension-setting", "arg": "tuned",
+                              "id": "size", "value": "small"})
+        said = [e for e in list(heard.queue) if e and e.get("type") == "extension-setting"]
+        assert said[0].items() >= {"name": "tuned", "id": "size",  # nosec B101
+                                   "value": "small"}.items()
         with pytest.raises(ValueError, match="one of"):
             web.command(session, {
                 "name": "extension-setting", "arg": "tuned",

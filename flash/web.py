@@ -6012,7 +6012,13 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
             )
         except extensions.ExtensionError as exc:
             raise ValueError(str(exc)) from None
-        return {"values": extensions.shown_values(ext)}
+        values = extensions.shown_values(ext)
+        # Said at once, so a device showing it (a robot's eye colour) changes as you pick it.
+        setting = str(body.get("id") or "")
+        if session is not None:
+            session.hub.publish({"type": "extension-setting", "name": ext.name,
+                                 "id": setting, "value": values.get(setting)})
+        return {"values": values}
 
     if name == "extension-remove":
         try:
