@@ -7919,7 +7919,8 @@ class Handler(BaseHTTPRequestHandler):
             speaking = str(body.get("speaking") or "")
             return {
                 "text": text,
-                **voice.voice_command(text, speaking),
+                **voice.voice_command(text, speaking,
+                                      bool(body.get("first"))),
                 # Said over a reply, it is not a turn of its own to read.
                 **({} if speaking else {
                     "mood": session.ear.mood(pcm, text),

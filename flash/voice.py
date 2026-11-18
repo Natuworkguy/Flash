@@ -7,6 +7,7 @@ CLI keeps one voice for its output.
 """
 
 import array
+import difflib
 import io
 import json
 import logging
@@ -1042,6 +1043,10 @@ def _level(block: bytes) -> float:
 # never arrive. These are what "stop the conversation" sounds like
 # instead; leaving voice mode for good stays a typed command.
 EXIT_PHRASES = {
+    "close",
+    "close voice",
+    "close voice mode",
+    "close it",
     "voice off",
     "voice ah",
     "voice mode off",
@@ -1059,6 +1064,29 @@ EXIT_PHRASES = {
     "disable voice",
     "disable voice mode",
 }
+
+
+# Said first, straight after the wake word, these mean it woke by mistake
+# or is not wanted after all: no chat, no reply, back to waiting.
+DISMISS_PHRASES = {
+    "stop", "cancel", "never mind", "nevermind", "nothing", "no",
+    "go away", "go back to sleep", "false alarm", "not you", "sorry",
+    "wrong", "ignore that", "ignore me", "forget it", "bye", "goodbye",
+    "nope", "not now", "nah",
+}
+
+
+def is_dismissal(text: str) -> bool:
+    """True when the first words after the wake word say it is not wanted:
+    an exit phrase, or one of DISMISS_PHRASES, with or without a greeting
+    or the name in front ("okay never mind", "flash stop")."""
+
+    words = re.sub(r"[^a-z ]", " ", (text or "").lower()).split()
+    names = set(WAKE_GREETINGS) | wake_words()
+    while words and words[0] in names:
+        words = words[1:]
+    said = " ".join(words)
+    return is_exit_phrase(said) or said in DISMISS_PHRASES
 
 
 def is_exit_phrase(text: str) -> bool:
@@ -2055,6 +2083,12 @@ WAKE_IDLE_SECONDS = 30.0
 WAKE_STREAMS = 4
 _wake: dict[str, tuple[float, object, threading.Lock]] = {}
 _wake_lock = threading.Lock()
+# The last few seconds each stream heard, to hear again when it seems to
+# have said the wake word.
+WAKE_CONFIRM_SECONDS = 3.5
+_wake_audio: dict[str, bytearray] = {}
+# How close a word heard freely must sound to the name ("flesh" for "flash").
+WAKE_NAME_LIKENESS = 0.75
 
 
 # At this sensitivity and above, the phrase wakes Flash as soon as it is
@@ -2136,7 +2170,7 @@ def _woke(result: str, key: str) -> bool:
 def wake_confidence(sensitivity: int) -> float:
     """How sure of each wake word the model has to be."""
 
-    return 0.95 - 0.006 * max(0, min(100, sensitivity))
+    return 0.97 - 0.006 * max(0, min(100, sensitivity))
 
 
 def _woke_surely(result: str, sensitivity: int) -> bool:
@@ -2158,6 +2192,38 @@ def _woke_surely(result: str, sensitivity: int) -> bool:
     return not sure or min(sure) >= wake_confidence(sensitivity)
 
 
+def _name_heard(said: str, phrases: list[str]) -> bool:
+    """Whether SAID, heard freely, holds a wake phrase's name: each of its
+    words other than a greeting, or something that sounds close to it."""
+
+    heard = re.sub(r"[^a-z ]", " ", said.lower()).split()
+    for phrase in phrases:
+        names = [w for w in phrase.split() if w not in WAKE_GREETINGS] \
+            or phrase.split()
+        if all(any(difflib.SequenceMatcher(None, name, w).ratio()
+                   >= WAKE_NAME_LIKENESS for w in heard) for name in names):
+            return True
+    return False
+
+
+def _confirm_wake(audio: bytes) -> bool:
+    """AUDIO heard again with every word the model knows: whether the
+    wake word's name is in it. A model that cannot hear freely is taken
+    at its word."""
+
+    try:
+        import vosk
+
+        with _models_lock:
+            model = _load_listener()
+        free = vosk.KaldiRecognizer(model, SAMPLE_RATE)
+        free.AcceptWaveform(audio)
+        said = _result_text(free.FinalResult(), "text")
+    except Exception:  # noqa: BLE001
+        return True
+    return _name_heard(said, wake_phrases())
+
+
 def hear_wake(stream: str, pcm: bytes, end: bool = False) -> tuple[bool, str]:
     """Whether the wake word was just said in STREAM, now PCM (16 kHz mono
     16-bit) is heard too. END lets it go. Returns `(woke, "")`, or
@@ -2168,10 +2234,17 @@ def hear_wake(stream: str, pcm: bytes, end: bool = False) -> tuple[bool, str]:
         for key in [k for k, v in _wake.items()
                     if now - v[0] > WAKE_IDLE_SECONDS]:
             del _wake[key]
+        for key in [k for k in _wake_audio if k not in _wake and k != stream]:
+            del _wake_audio[key]
         if end:
             _wake.pop(stream, None)
+            _wake_audio.pop(stream, None)
             return False, ""
         found = _wake.get(stream)
+        heard = _wake_audio.setdefault(stream, bytearray())
+        heard += pcm
+        del heard[:max(0, len(heard) - int(WAKE_CONFIRM_SECONDS * SAMPLE_RATE * 2))]
+        recent = bytes(heard)
     phrases = wake_phrases()
     if found is not None and found[3] != phrases:
         # The wake word changed: a recognizer held to the old one goes.
@@ -2215,6 +2288,16 @@ def hear_wake(stream: str, pcm: bytes, end: bool = False) -> tuple[bool, str]:
                 # Heard once: the next phrase starts from nothing.
                 recognizer.Reset()
                 break
+    # Listening only for the wake word, the model hears it in anything a
+    # little like it (a TV, a cough, a word with the same vowels). So the
+    # last few seconds are heard again, with every word it knows, and it
+    # wakes only if the name is really in them.
+    if woke and not _confirm_wake(recent):
+        woke = False
+    if woke:
+        with _wake_lock:
+            if stream in _wake_audio:
+                _wake_audio[stream].clear()
     with _wake_lock:
         if stream in _wake:
             _wake[stream] = (time.monotonic(), recognizer, lock, phrases)
@@ -2382,12 +2465,14 @@ def _words(text: str) -> list[str]:
     return re.sub(r"[^a-z' ]", "", (text or "").lower()).split()
 
 
-def voice_command(text: str, speaking: str = "") -> dict:
+def voice_command(text: str, speaking: str = "", first: bool = False) -> dict:
     """What a turn of speech asks of voice mode, beyond being a message.
 
     `speaking` is the line Flash was reading out when it was heard: said
     over a reply, "interrupt" cuts it off, but not when the word came
-    from the reply itself, echoing back through the microphone.
+    from the reply itself, echoing back through the microphone. `first`:
+    the first words after the wake word, where "never mind" and the like
+    end it too, before any chat is made.
     """
 
     from . import music
@@ -2397,7 +2482,8 @@ def voice_command(text: str, speaking: str = "") -> dict:
     wants = music.intent(text)
     return {
         "music": wants,
-        "exit": is_exit_phrase(text) and not wants,
+        "exit": (is_dismissal(text) if first else is_exit_phrase(text))
+        and not wants,
         "pause": " ".join(words) in PAUSE_PHRASES and not wants,
         "resume": RESUME_WORD in words and not wants,
         "interrupt": _heard_interruption(text)

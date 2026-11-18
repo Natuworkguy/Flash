@@ -1695,3 +1695,47 @@ class TestPhonon:
 
         with pytest.raises(ValueError, match="in use"):
             voice.remove_voice("phonon-miles")
+
+
+class TestFalseWakes:
+    def test_the_name_must_really_be_heard(self):
+        phrases = voice.wake_phrases("hey flash")
+        assert voice._name_heard("hey flash what time is it", phrases)  # nosec B101
+        assert voice._name_heard("a flesh", phrases)  # nosec B101
+        assert not voice._name_heard("hey fella", phrases)  # nosec B101
+        assert not voice._name_heard("the weather today", phrases)  # nosec B101
+
+    def test_heard_again_freely_before_it_wakes(self, monkeypatch):
+        monkeypatch.setenv("VOICE_WAKE_SENSITIVITY", "100")
+        _fake_audio(monkeypatch)
+        monkeypatch.setattr(voice, "_wake", {})
+        monkeypatch.setattr(voice, "_wake_audio", {})
+        said = {"free": "the weather is nice"}
+
+        class Free(_Waking):
+            def FinalResult(self):
+                return json.dumps({"text": said["free"]})
+
+        sys.modules["vosk"].KaldiRecognizer = Free
+        piece = b"\0" * (voice.BLOCK_FRAMES * 2)
+        voice.hear_wake("w", piece)
+        # The grammar heard "hey flash", but nothing like it was said.
+        assert voice.hear_wake("w", piece) == (False, "")  # nosec B101
+        said["free"] = "hey flash"
+        voice.hear_wake("w", piece)
+        assert voice.hear_wake("w", piece) == (True, "")  # nosec B101
+        voice.hear_wake("w", b"", end=True)
+        assert "w" not in voice._wake_audio  # nosec B101
+
+
+class TestDismissals:
+    @pytest.mark.parametrize("text", ["Stop voice.", "close", "Never mind", "okay cancel",
+                                      "flash stop", "nothing", "go away"])
+    def test_first_words_that_end_it(self, text):
+        assert voice.voice_command(text, first=True)["exit"]  # nosec B101
+
+    def test_later_only_the_exit_phrases_do(self):
+        assert not voice.voice_command("never mind", first=False)["exit"]  # nosec B101
+        assert voice.voice_command("close", first=False)["exit"]  # nosec B101
+        assert not voice.voice_command("stop the music now please", first=True)["exit"]  # nosec B101
+        assert not voice.voice_command("what can you do", first=True)["exit"]  # nosec B101

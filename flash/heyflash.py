@@ -435,7 +435,10 @@ class Listener:
                 if why:
                     self._set(problem=why)
                     return
-                if not text or voice.is_exit_phrase(text):
+                # First, straight after the wake word, "never mind" ends it
+                # too: no chat is made and nothing is said.
+                if not text or voice.is_exit_phrase(text) or (
+                        chat is None and voice.is_dismissal(text)):
                     return
                 # Heard, words and all: a ping says so, before the wait.
                 self._ping()
