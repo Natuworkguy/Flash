@@ -1610,11 +1610,14 @@ class Session:
                 running = now
                 self.hub.publish({"type": "status"})
 
-            for chat_id in set(self.agents.values()):
+            from . import bgtasks
+
+            ended = {t.owner for t in bgtasks.unseen()}
+            for chat_id in set(self.agents.values()) | ended:
                 chat = self.chats.get(chat_id)
                 if chat is None or chat.busy or chat.queued:
                     continue
-                if not subagents.unseen(self.owned(chat_id)):
+                if not (subagents.unseen(self.owned(chat_id)) or chat_id in ended):
                     continue
                 if self.wakes.get(chat_id, 0) >= MAX_WAKES_IN_A_ROW:
                     continue
@@ -4076,6 +4079,10 @@ def run_turn(
     # its own sub-agents and never another chat's.
     owned = session.owned(chat.id)
     news, delivered = subagents.notices(owned) if owned else ("", [])
+    from . import bgtasks
+
+    task_news, task_ids = bgtasks.notices(chat.id)
+    news = "\n\n".join(p for p in (news, task_news) if p)
     edited = session.edited.pop(chat.id, [])
     if edited:
         news = "\n\n".join(
@@ -4126,6 +4133,8 @@ def run_turn(
 
     if delivered and not stopped:
         subagents.mark_delivered(delivered)
+    if task_ids and not stopped:
+        bgtasks.mark_delivered(task_ids)
 
     if flash_spoke and not stopped:
         learning.after_turn(
