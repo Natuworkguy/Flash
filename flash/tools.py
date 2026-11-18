@@ -58,6 +58,7 @@ from . import (
     textures,
     triggers,
     visuals,
+    xcode,
     youtube,
 )
 from .browser import (
@@ -2667,8 +2668,20 @@ def available_tools() -> list[dict[str, Any]]:
         + (PRINT_TOOLS + REMINDERS_TOOLS if computer.system() == "mac"
            else [])
         + (LOCATION_TOOLS if location.current() else [])
+        + (XCODE_TOOLS if computer.system() == "mac" and _has_xcode() else [])
         + TIMER_TOOLS
     )
+
+
+_XCODE_SEEN: dict[str, bool] = {}
+
+
+def _has_xcode() -> bool:
+    """Whether this Mac has Xcode, asked once."""
+
+    if "ok" not in _XCODE_SEEN:
+        _XCODE_SEEN["ok"] = xcode.available()
+    return _XCODE_SEEN["ok"]
 
 
 def turn_tools() -> list[dict[str, Any]]:
@@ -3971,6 +3984,51 @@ def devices_tool(**_: Any) -> str:
 
 # On a Mac: Apple Reminders. Adding and ticking off ask every time.
 REMINDERS_ACTIONS = ("list", "add", "complete", "lists")
+XCODE_TOOLS: list[dict[str, Any]] = [
+    {
+        "type": "function",
+        "function": {
+            "name": "xcode",
+            "description": (
+                "Build, run and debug Apple apps with Xcode on this Mac: in "
+                "a simulator or on a real iPhone, iPad or Watch paired with "
+                "it. Work the way a developer does: status (Xcode, the "
+                "simulators, the paired devices), schemes (of a project), "
+                "build or test (errors and warnings come back with file and "
+                "line: fix them and build again), run (builds if a project "
+                "is given, installs, launches; console_seconds watches the "
+                "app's own output for that long), screenshot (see the "
+                "simulator's screen), logs (the system log for the app's "
+                "process), crashes (the newest crash report, crashed thread "
+                "first), backtrace (every thread of a running app, for a "
+                "hang), stop, boot, open_url, appearance (light or dark), "
+                "devices_window (Xcode's device window). After a change, "
+                "run it and look at a screenshot before saying it works."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string", "enum": list(xcode.ACTIONS)},
+                    "project": {"type": "string", "description": "The .xcodeproj, .xcworkspace, or the folder holding one (or a Swift package)."},
+                    "scheme": {"type": "string", "description": "The scheme to build; schemes lists them."},
+                    "target": {"type": "string", "description": "A simulator or device: its name, part of it, or its id. Empty: the booted simulator, else the newest iPhone."},
+                    "configuration": {"type": "string", "description": "Debug (default) or Release."},
+                    "bundle_id": {"type": "string", "description": "The app's bundle id, for run, stop and logs without a build (found from the last build otherwise)."},
+                    "console_seconds": {"type": "integer", "description": "With run: watch the app's console output this long (1 to 120)."},
+                    "args": {"type": "array", "items": {"type": "string"}, "description": "With run: launch arguments."},
+                    "process": {"type": "string", "description": "For logs, crashes and backtrace: the app's process name (the last built app's by default)."},
+                    "minutes": {"type": "number", "description": "For logs: how far back (default 2)."},
+                    "contains": {"type": "string", "description": "For logs: only lines containing this."},
+                    "url": {"type": "string", "description": "For open_url: a link or deep link."},
+                    "mode": {"type": "string", "enum": ["light", "dark"], "description": "For appearance."},
+                },
+                "required": ["action"],
+            },
+        },
+    },
+]
+
+
 REMINDERS_TOOLS: list[dict[str, Any]] = [
     {
         "type": "function",
@@ -5191,6 +5249,91 @@ def _show_model(model_path: Path, label: str) -> str:
         "It opened in the user's default 3D viewer, with its path on "
         "screen."
     )
+
+
+# ----- Xcode: what was built last, so run, logs and crashes know the app -----
+_XCODE_LAST: dict[str, str] = {}
+
+
+def xcode_tool(action: str, project: str = "", scheme: str = "", target: str = "",
+               configuration: str = "Debug", bundle_id: str = "", console_seconds: Any = 0,
+               args: Any = None, process: str = "", minutes: Any = 2, contains: str = "",
+               url: str = "", mode: str = "") -> str:
+    """Build, run and debug an app with Xcode, a simulator or a device."""
+
+    action = str(action or "").strip().lower()
+    tool_line(f"Xcode({action}{' ' + scheme if scheme else ''}{' on ' + target if target else ''})")
+    if action not in xcode.ACTIONS:
+        return f"Unknown action {action!r}. One of: {', '.join(xcode.ACTIONS)}."
+    if computer.system() != "mac" or not xcode.available():
+        return "Xcode is not on this computer: it needs a Mac with Xcode installed (not only the command line tools)."
+    x, last = xcode.Xcode(), _XCODE_LAST
+    configuration = configuration or "Debug"
+    try:
+        if action == "status":
+            return x.status()
+        if action == "schemes":
+            return x.schemes(project or last.get("project", "."))
+        if action == "devices_window":
+            return x.devices_window()
+        if action == "crashes":
+            return x.crashes(process or last.get("process", ""))
+        if action == "backtrace":
+            name = process or last.get("process", "")
+            if not name:
+                return "Which app? Give process (its name)."
+            return x.backtrace(name)
+        where = x.target(target or last.get("target", ""))
+        if action in ("build", "test"):
+            if not (project and scheme):
+                return "build and test need project and scheme (schemes lists them)."
+            result = x.build(project, scheme, where, configuration, test=action == "test")
+            if result.get("app"):
+                last.update(project=project, scheme=scheme, app=result["app"],
+                            bundle=x.bundle_id(result["app"]), process=Path(result["app"]).stem,
+                            target=where.get("udid") or where.get("id", ""))
+            return xcode.describe(result)
+        if action == "boot":
+            return x.boot(where)
+        if action == "run":
+            app = ""
+            if project and scheme:
+                result = x.build(project, scheme, where, configuration)
+                if not result["ok"]:
+                    return xcode.describe(result)
+                app = result.get("app", "")
+                last.update(project=project, scheme=scheme, app=app, bundle=x.bundle_id(app),
+                            process=Path(app).stem, target=where.get("udid") or where.get("id", ""))
+            elif last.get("app") and not bundle_id:
+                app = last["app"]
+            bundle = bundle_id or last.get("bundle", "")
+            if not bundle:
+                return "Which app? Give project and scheme to build it, or bundle_id for one already installed."
+            secs = max(0, min(120, int(float(console_seconds or 0))))
+            said = x.install_and_launch(where, app, bundle, secs, args if isinstance(args, list) else None)
+            head = f"Running {bundle} on {where['name']}."
+            return head + (f"\nConsole ({secs} s):\n{said[-6000:]}" if secs else (f" {said}" if said else ""))
+        if action == "stop":
+            bundle = bundle_id or last.get("bundle", "")
+            return x.stop(where, bundle) if bundle else "Which app? Give bundle_id."
+        if action == "logs":
+            name = process or last.get("process", "")
+            if not name:
+                return "Which app? Give process (its name)."
+            return x.logs(where, name, float(minutes or 2), contains)
+        if action == "screenshot":
+            path = str(Path(SCRATCH_DIR) / f"simulator-{int(time.time())}.png")
+            x.screenshot(where, path)
+            return view_image(path)
+        if action == "open_url":
+            return x.open_url(where, url) if url else "open_url needs url."
+        if action == "appearance":
+            return x.appearance(where, mode)
+    except xcode.XcodeError as exc:
+        return f"Xcode: {exc}"
+    except (OSError, ValueError) as exc:
+        return f"Xcode could not do that: {exc}"
+    return ""
 
 
 def design_pcb(path: str, design: Any, caption: str = "") -> str:
@@ -10957,6 +11100,7 @@ FUNCTIONS = {
     "send_document": send_document,
     "make_3d_model": make_3d_model,
     "design_pcb": design_pcb,
+    "xcode": xcode_tool,
     "test_3d_model": test_3d_model,
     "phone_call": phone_call,
     "send_3d_model": send_3d_model,
