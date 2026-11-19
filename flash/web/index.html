@@ -19382,7 +19382,11 @@ async function sendAndWait(text) {
     if (!replies.length) return null;
     const said = replies[replies.length - 1].text;
     const shown = [...messagesEl.querySelectorAll("[data-reply]")].reverse().find((n) => n.dataset.raw === said);
-    return shown || null;
+    if (replies.length === 1) return shown || null;
+    // What it said before using a tool is said too, not only the answer after.
+    const all = el("div");
+    all.textContent = replies.map((e) => spokenOf(e.text)).filter((t) => t.trim()).join("\n\n");
+    return all;
   }
 }
 

@@ -493,7 +493,9 @@ class Listener:
                 if event.get("type") == "assistant"
                 and str(event.get("text") or "").strip()
             ]
-            return (replies[-1], False) if replies else (NOTHING, False)
+            # All of it: what Flash says before using a tool, as well as
+            # the answer after.
+            return ("\n\n".join(replies), False) if replies else (NOTHING, False)
         return SLOW, True
 
 

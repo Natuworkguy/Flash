@@ -1091,3 +1091,12 @@ def test_an_extension_tool_can_show_the_model_a_picture():
     assert tools._pending_images == [jpeg]  # nosec B101
     assert tools._tool_pictures("plain words") == "plain words"  # nosec B101
     tools._pending_images.clear()
+
+
+
+def test_extension_programs_get_the_web_token(tmp_path, monkeypatch):
+    from flash import extensions
+
+    monkeypatch.setattr(extensions, "web_token", "t" * 24)
+    ext = extensions.Extension(name="bot", path=tmp_path)
+    assert extensions.environment(ext)["FLASH_WEB_TOKEN"] == "t" * 24  # nosec B101
