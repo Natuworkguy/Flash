@@ -30,7 +30,7 @@ import threading
 import time
 import uuid
 from collections.abc import Callable
-from typing import Any, Callable, Optional
+from typing import Any, Optional
 
 from . import paths, voice, voicehooks
 from .paths import ENV_PATH
@@ -462,7 +462,8 @@ class Listener:
                         problem.append(why)
                         return False
                     # Flash still at work on the rest: thinking again.
-                    if getattr(chat, "busy", False) or getattr(chat, "queued", False):
+                    if (getattr(chat, "busy", False)
+                            or getattr(chat, "queued", False)):
                         tell("state", state="thinking")
                     return not interrupted
 
