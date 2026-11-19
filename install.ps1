@@ -241,6 +241,14 @@ try {
     if (-not (Test-Path $FlashExe)) { $FlashExe = "flash" }
     $FlashVersion = try { ((& $FlashExe --version) | Out-String).Trim() } catch { "Flash" }
     if (-not $FlashVersion) { $FlashVersion = "Flash" }
+    # Which branch and commit this is, so `flash --update` keeps to the same branch.
+    try {
+        $FlashHome = Join-Path $HOME ".flash"
+        New-Item -ItemType Directory -Force -Path $FlashHome | Out-Null
+        $Commit = (git -C $RepoDir rev-parse HEAD 2>$null | Out-String).Trim()
+        @{ branch = $Branch; commit = $Commit } | ConvertTo-Json -Compress |
+            Set-Content -Path (Join-Path $FlashHome "install.json") -Encoding UTF8
+    } catch { }
     Complete-Step $FlashVersion
 
     # --- 6. The browser for screenshots ----------------------------------------------------

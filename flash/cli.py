@@ -155,6 +155,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="check for a newer Flash version and update if one exists",
     )
     parser.add_argument(
+        "--dev",
+        action="store_true",
+        help=(
+            "with --update, update to the dev branch (changes before a "
+            "release), and keep updating from it"
+        ),
+    )
+    parser.add_argument(
         "--force",
         action="store_true",
         help=(

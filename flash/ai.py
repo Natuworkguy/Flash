@@ -6907,9 +6907,48 @@ def _handle_scheme_flags(args) -> None:
         sys.exit(1)
 
 
-def _run_update(*, force: bool = False) -> bool:
+def _run_update(*, force: bool = False, dev: bool = False) -> bool:
     """Check for a newer Flash version and, if one exists (or FORCE),
-    install it. Returns False only on an actual failure."""
+    install it. Returns False only on an actual failure. Installed from
+    the dev branch (or DEV), the newest commit there is what's newer: its
+    version number doesn't change with every change."""
+
+    from . import updater
+
+    was = updater.installed()
+    branch = "dev" if dev else was["branch"]
+    if branch != "main":
+        with console.status(
+            f"[bold {ACCENT}]Checking for updates{ELLIPSIS}",
+            spinner="bouncingBall", spinner_style=ACCENT
+        ):
+            newest = updater.remote_commit(branch)
+        if newest is None and not force:
+            warn("Could not check for updates "
+                 "(no network, GitHub unreachable, or git missing).")
+            return False
+        if (newest and newest == was["commit"] and branch == was["branch"]
+                and not force):
+            console.print(Text(f"Already up to date ({branch}, "
+                               f"{newest[:7]}).", style=DIM))
+            return True
+        if not force:
+            target = f"the latest {branch}" + (f" ({newest[:7]})"
+                                               if newest else "")
+            ask = Text(f"  Update Flash to {target}? ", style=DIM)
+            ask.append("y", style=f"bold {ACCENT}")
+            ask.append("/n ", style=DIM)
+            console.print(ask, end="")
+            try:
+                answer = yes_no()
+            except EOFError:
+                console.print()
+                return True
+            console.print()
+            if answer != "y":
+                console.print(Text("Update cancelled.", style=DIM))
+                return True
+        return _install_update(branch)
 
     with console.status(
         f"[bold {ACCENT}]Checking for updates{ELLIPSIS}",
@@ -6944,6 +6983,10 @@ def _run_update(*, force: bool = False) -> bool:
             console.print(Text("Update cancelled.", style=DIM))
             return True
 
+    return _install_update("main")
+
+
+def _install_update(branch: str) -> bool:
     with console.status(
         f"[bold {ACCENT}]Updating{ELLIPSIS} ",
         spinner="arrow3", spinner_style=ACCENT
@@ -6957,6 +7000,7 @@ def _run_update(*, force: bool = False) -> bool:
                 f"[bold {ACCENT}]{label}{ELLIPSIS} "
             ),
             on_output=lambda line: console.print(Text(line, style=DIM)),
+            branch=branch,
         )
 
     if ok:
@@ -7043,7 +7087,8 @@ def _main() -> None:
         theme.assume_yes()
 
     if args.update:
-        sys.exit(0 if _run_update(force=args.force) else 1)
+        sys.exit(0 if _run_update(force=args.force,
+                                  dev=getattr(args, "dev", False)) else 1)
 
     if args.command == "completion":
         from .cli import completion_script
