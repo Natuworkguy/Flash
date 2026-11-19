@@ -30,7 +30,7 @@ import threading
 import time
 import uuid
 from collections.abc import Callable
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from . import paths, voice, voicehooks
 from .paths import ENV_PATH
@@ -447,23 +447,40 @@ class Listener:
                 if middle["end"]:
                     return
                 tell("state", state="thinking")
+                problem: list[str] = []
+
+                def say(part: str) -> bool:
+                    """Says PART now; False once it can't, or was cut off."""
+
+                    part = voicehooks.ask(
+                        "reply", talk, text=voice.speakable(part),
+                        source=SOURCE,
+                    )["text"]
+                    tell("state", state="speaking")
+                    why, interrupted = self._speak(part)
+                    if why:
+                        problem.append(why)
+                        return False
+                    # Flash still at work on the rest: thinking again.
+                    if getattr(chat, "busy", False) or getattr(chat, "queued", False):
+                        tell("state", state="thinking")
+                    return not interrupted
+
                 last = False
                 if middle["reply"] is not None:
-                    reply = middle["reply"]
+                    rest = middle["reply"]
                 else:
                     if chat is None:
                         chat = self.session.new_chat()
-                    reply, last = self._answer(chat, middle["text"])
+                    # Each reply said as it comes: what Flash says before
+                    # using a tool, while the tool runs, then the answer.
+                    rest, last = self._answer(chat, middle["text"], say)
                     # Flash ended the conversation itself: after this.
                     last = last or bool(getattr(chat, "voice_ended", False))
-                reply = voicehooks.ask(
-                    "reply", talk, text=voice.speakable(reply),
-                    source=SOURCE,
-                )["text"]
-                tell("state", state="speaking")
-                why, _interrupted = self._speak(reply)
-                if why:
-                    self._set(problem=why)
+                if rest and not problem:
+                    say(rest)
+                if problem:
+                    self._set(problem=problem[0])
                     return
                 if last:
                     return
@@ -472,30 +489,46 @@ class Listener:
             tell("end")
             self._set(talking=False)
 
-    def _answer(self, chat: Any, text: str) -> tuple[str, bool]:
-        """What Flash says to TEXT in CHAT, and whether the conversation
-        ends there: Flash is waiting on an answer only the page can
-        give, or took too long."""
+    def _answer(self, chat: Any, text: str,
+                say: Callable[[str], bool]) -> tuple[str, bool]:
+        """Sends TEXT in CHAT and hands each reply to SAY as it lands:
+        what Flash says before using a tool while the tool runs, then the
+        answer. Gives back what is left to say (a word on why nothing
+        was, or ""), and whether the conversation ends there: Flash is
+        waiting on an answer only the page can give, took too long, or
+        SAY could not go on."""
 
         session = self.session
         before = len(chat.log)
         session.send(chat, text, heard=True)
+        said = 0
+
+        def replies() -> list[str]:
+            return [
+                str(event.get("text") or "") for event in chat.log[before:]
+                if event.get("type") == "assistant"
+                and str(event.get("text") or "").strip()
+            ]
+
         deadline = time.monotonic() + REPLY_SECONDS
         while time.monotonic() < deadline and not self._stop.is_set():
             time.sleep(POLL_SECONDS)
+            found = replies()
+            while said < len(found):
+                said += 1
+                if not say(found[said - 1]):
+                    return "", True
+                # Time spent saying it isn't time waiting on Flash.
+                deadline = time.monotonic() + REPLY_SECONDS
             if any(ask.chat == chat.id and not ask.done.is_set()
                    for ask in list(session.asks.values())):
                 return WAITING, True
             if chat.busy or chat.queued:
                 continue
-            replies = [
-                str(event.get("text") or "") for event in chat.log[before:]
-                if event.get("type") == "assistant"
-                and str(event.get("text") or "").strip()
-            ]
-            # All of it: what Flash says before using a tool, as well as
-            # the answer after.
-            return ("\n\n".join(replies), False) if replies else (NOTHING, False)
+            found = replies()
+            if said < len(found):
+                continue  # the last one, in as the turn ended: said first
+            return ("" if said else NOTHING), False
         return SLOW, True
 
 

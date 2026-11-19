@@ -19199,14 +19199,16 @@ async function voiceLoop() {
       if (how && how.barge) carried = { text: how.barge, cut: how.cut || "" };
       continue;
     } else {
-      // With the camera on, what it sees goes with what was said.
+      // With the camera on, what it sees goes with what was said. Each
+      // reply is read as it lands, through the extensions in the middle:
+      // what Flash says before a tool while the tool runs, then the answer.
       await attachSight();
-      reply = await sendAndWait(middle && middle.text ? middle.text : heard.text);
+      const how = await sayAsItLands(middle && middle.text ? middle.text : heard.text);
       if (!voice.on) return;
-      if (!reply) {
-        if (voice.endAfter) { endVoice(); toast("Voice mode off"); return; }
-        continue;
-      }
+      if (how === "exit" || voice.endAfter) { endVoice(); toast("Voice mode off"); return; }
+      if (how === "pause" && !(await pausedUntilResume())) return;
+      if (how && how.barge) carried = { text: how.barge, cut: how.cut || "" };
+      continue;
     }
     // And may change what is read out.
     const spoken = sentencesOf(reply.querySelector(".assistant") || reply).map((p) => p.text).join(" ");
@@ -19358,35 +19360,42 @@ async function speakAsItComes(text, acked = false) {
 // page once the turn it starts is over, or null if there was none. A
 // permission Flash asks for on the way is asked out loud, and answered
 // by voice.
-async function sendAndWait(text) {
+async function sayAsItLands(text) {
   const before = current;
   const startedAt = current && chats.get(current) ? chats.get(current).log.length : 0;
   await send(text);
   const asked = new Set();
+  let said = 0;
   for (;;) {
     await new Promise((r) => setTimeout(r, 250));
-    if (!voice.on) return null;
+    if (!voice.on) return "exit";
     const card = pendingAsk();
     if (card && !asked.has(card)) {
       asked.add(card);
       await askAloud(card);
-      if (!voice.on) return null;
+      if (!voice.on) return "exit";
       setVoice("thinking");
       continue;
     }
     const chat = chats.get(current);
     if (!chat) continue;
     const from = current === before ? startedAt : 0;
-    if (chat.busy || chat.queued || chat.log.length <= from) continue;
     const replies = chat.log.slice(from).filter((e) => e.type === "assistant" && e.text && e.text.trim());
-    if (!replies.length) return null;
-    const said = replies[replies.length - 1].text;
-    const shown = [...messagesEl.querySelectorAll("[data-reply]")].reverse().find((n) => n.dataset.raw === said);
-    if (replies.length === 1) return shown || null;
-    // What it said before using a tool is said too, not only the answer after.
-    const all = el("div");
-    all.textContent = replies.map((e) => spokenOf(e.text)).filter((t) => t.trim()).join("\n\n");
-    return all;
+    // Each one as soon as it is there, while Flash may still be at work.
+    while (said < replies.length) {
+      const spoken = spokenOf(replies[said++].text);
+      if (!spoken.trim()) continue;
+      // And an extension may change what is read out.
+      const changed = await voiceAsk("reply", { text: spoken });
+      if (!voice.on) return "exit";
+      const node = el("div");
+      node.textContent = changed && typeof changed.text === "string" ? changed.text : spoken;
+      const how = await readAloud(node);
+      if (how !== "done") return how;
+      setVoice("thinking");
+    }
+    if (chat.busy || chat.queued || chat.log.length <= from) continue;
+    return said ? "done" : null;
   }
 }
 
