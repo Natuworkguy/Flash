@@ -893,6 +893,8 @@ DEVICE_NAME_CHARS = 40
 # How long a pairing code lasts, and how many wrong tries end it.
 PAIR_SECONDS = 300
 PAIR_TRIES = 5
+# Where a device listens to find Flash on its network while it pairs.
+PAIR_BEACON_PORT = 7435
 # What a paired device's requests say they are, so the list of
 # signed-in devices can name it.
 DEVICE_AGENT = "FlashDevice/"
@@ -913,6 +915,44 @@ class Pairing:
         self.code = ""
         self.until = 0.0
         self.tries = 0
+        self._announcing = False
+
+    def waiting(self) -> bool:
+        """Whether a code is out and still good."""
+
+        with self._lock:
+            return bool(self.code) and time.time() <= self.until
+
+    def announce(self, port: int) -> None:
+        """While a code is waiting, say once a second, to this network
+        only, that Flash is here and on which port, so a device being
+        set up (a robot with no phone to type an address on) can find
+        it. Says nothing else: the code is still typed in by hand."""
+
+        with self._lock:
+            if self._announcing:
+                return
+            self._announcing = True
+
+        def say() -> None:
+            message = f"FLASH-PAIR {port}".encode()
+            try:
+                with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as out:
+                    out.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+                    while self.waiting():
+                        try:
+                            out.sendto(message, ("255.255.255.255",
+                                                 PAIR_BEACON_PORT))
+                        except OSError:
+                            pass  # no network for now: try again in a second
+                        time.sleep(1)
+            except OSError:
+                pass
+            finally:
+                with self._lock:
+                    self._announcing = False
+
+        threading.Thread(target=say, name="pair-beacon", daemon=True).start()
 
     def start(self) -> dict:
         with self._lock:
@@ -6094,7 +6134,10 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
         if arg == "cancel":
             session.pairing.cancel()
             return {}
-        return {**session.pairing.start(), "addresses": session.addresses()}
+        made = session.pairing.start()
+        if session.lan and session.port:
+            session.pairing.announce(session.port)
+        return {**made, "addresses": session.addresses()}
 
     if name == "addresses":
         # Where this Flash can be reached from now: a device away from

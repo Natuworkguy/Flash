@@ -611,6 +611,31 @@ class TestNotes:
 
 
 class TestPairing:
+    def test_flash_says_where_it_is_while_a_code_waits(self, monkeypatch):
+        import socket as sockets
+
+        heard = sockets.socket(sockets.AF_INET, sockets.SOCK_DGRAM)
+        heard.setsockopt(sockets.SOL_SOCKET, sockets.SO_REUSEADDR, 1)
+        heard.bind(("", 0))
+        heard.settimeout(5)
+        monkeypatch.setattr(web, "PAIR_BEACON_PORT", heard.getsockname()[1])
+        pairing = web.Pairing()
+        pairing.start()
+        pairing.announce(7433)
+        try:
+            try:
+                said, _ = heard.recvfrom(64)
+            except OSError:
+                pytest.skip("this machine can't broadcast")
+            assert said == b"FLASH-PAIR 7433"
+        finally:
+            pairing.cancel()
+            heard.close()
+        deadline = time.time() + 3
+        while pairing._announcing and time.time() < deadline:
+            time.sleep(0.05)
+        assert not pairing._announcing  # stops once the code is gone
+
     def test_a_code_signs_a_device_in(self, server):
         code = web.command(server.session, {"name": "device-pair"})["code"]
         assert len(code) == 6 and code.isdigit()
