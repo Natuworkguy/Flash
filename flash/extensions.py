@@ -1463,9 +1463,16 @@ def _env_value(value: Any) -> str:
     return str(value)
 
 
+# The web page's token, set as it starts: given to extension programs as
+# FLASH_WEB_TOKEN, so they can call Flash's API (FLASH_WEB_URL).
+web_token = ""
+
+
 def environment(extension: Extension, chat: str = "") -> dict[str, str]:
     env = dict(os.environ)
     env["FLASH_EXTENSION_DIR"] = str(extension.path)
+    if web_token:
+        env["FLASH_WEB_TOKEN"] = web_token
     # The chat it runs for: the one its button was pressed in, or whose
     # turn called its tool (a chat's commands run as that chat). An
     # extension keeps things of its own per chat by it.
