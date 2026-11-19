@@ -1,6 +1,7 @@
 """Extensions' services: started, started again, and stopped."""
 
 import json
+import os
 import time
 
 import pytest
@@ -111,5 +112,24 @@ def test_removing_the_extension_stops_its_service(tmp_path, home):
         shutil.rmtree(folder)
         extensions.reload()
         until(lambda: keeper.names() == [])
+    finally:
+        keeper.stop()
+
+
+def test_an_update_starts_it_again_with_the_new_program(tmp_path, home):
+    # An update that changes the program, not the command that runs it: the
+    # old program must not keep running.
+    folder = install(home, tmp_path)
+    keeper = services.Supervisor(check_seconds=0.1)
+    keeper.start()
+    try:
+        until(lambda: (tmp_path / "starts").exists())
+        time.sleep(0.3)
+        assert (tmp_path / "starts").read_text() == "1"  # nosec B101 -- left running
+        program = folder / "svc.py"
+        program.write_text(PROGRAM + "\n# updated\n")
+        later = time.time() + 5
+        os.utime(program, (later, later))
+        until(lambda: int((tmp_path / "starts").read_text()) >= 2)
     finally:
         keeper.stop()
