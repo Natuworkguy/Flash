@@ -752,8 +752,11 @@ class Access:
             given.encode("utf-8", "replace"), self.token.encode()
         )
 
-    def browser(self, key: str, address: str) -> Optional[dict]:
-        """The signed-in browser holding KEY, now marked as seen."""
+    def browser(self, key: str, address: str,
+                user_agent: str = "") -> Optional[dict]:
+        """The signed-in browser holding KEY, now marked as seen. A paired
+        device that never said what it is (paired before Flash asked) says
+        it now, from USER_AGENT."""
 
         if not key:
             return None
@@ -762,14 +765,18 @@ class Access:
             if found is not None:
                 found["seen"] = time.time()
                 found["address"] = address
+                if (not found.get("product") and DEVICE_AGENT in user_agent
+                        and DEVICE_AGENT in found.get("agent", "")):
+                    found["product"] = device_product(user_agent)
             return found
 
     def signed_out(self, key: str) -> bool:
         with self._lock:
             return bool(key) and _hashed(key) in self._gone
 
-    def sign_in(self, address: str, agent: str) -> str:
-        """Sign a browser in, and give back the key for its cookie."""
+    def sign_in(self, address: str, agent: str, product: str = "") -> str:
+        """Sign a browser in, and give back the key for its cookie.
+        PRODUCT: what a paired device says it is ("watchOS", "FlashBot/0.1")."""
 
         key = secrets.token_urlsafe(24)
         now = time.time()
@@ -780,6 +787,7 @@ class Access:
                 "address": address,
                 "since": now,
                 "seen": now,
+                **({"product": product[:AGENT_CHARS]} if product else {}),
             }
             while len(self._browsers) > MAX_BROWSERS:
                 stalest = min(
@@ -860,6 +868,9 @@ class Access:
                 "kind": describe_agent(b.get("agent", "")),
                 "phone": _is_phone(b.get("agent", "")),
                 "paired": DEVICE_AGENT in b.get("agent", ""),
+                # What a paired device is: "watch", "robot", or "device".
+                "product": device_kind(b.get("product", ""))
+                if DEVICE_AGENT in b.get("agent", "") else "",
                 "address": b.get("address", ""),
                 "here": _is_loopback(b.get("address", "")),
                 "since": b.get("since", 0),
@@ -939,6 +950,26 @@ _SYSTEM_NAMES = (
     ("Windows", "Windows"), ("CrOS", "ChromeOS"), ("Mac OS X", "macOS"),
     ("Macintosh", "macOS"), ("Linux", "Linux"),
 )
+
+
+def device_product(user_agent: str) -> str:
+    """What a paired device says it is, after "FlashDevice/1.0": "watchOS",
+    "FlashBot/0.1"."""
+
+    return user_agent.split(DEVICE_AGENT, 1)[1].partition(" ")[2].strip() \
+        if DEVICE_AGENT in user_agent else ""
+
+
+def device_kind(product: str) -> str:
+    """"watch", "robot" or "device", from what a paired device says it is,
+    so each extension lists only its own (a robot is no watch)."""
+
+    said = product.lower()
+    if "watchos" in said or "watch" in said:
+        return "watch"
+    if "flashbot" in said or "robot" in said:
+        return "robot"
+    return "device"
 
 
 def describe_agent(agent: str) -> str:
@@ -7497,7 +7528,8 @@ class Handler(BaseHTTPRequestHandler):
         cookie = self._cookie()
         # A paired device sends its key in a header: it keeps no cookies.
         for key in (cookie, self.headers.get("X-Flash-Device", "")):
-            if access.browser(key, self._address()) is not None:
+            if access.browser(key, self._address(),
+                              self.headers.get("User-Agent", "")) is not None:
                 self.browser = key
                 return True
         self.browser = ""
@@ -7801,7 +7833,8 @@ class Handler(BaseHTTPRequestHandler):
             if DEVICE_AGENT not in agent:
                 agent = f"{DEVICE_AGENT}1"
             key = session.access.sign_in(
-                self._address(), f"{agent.split()[0]} {name}".strip())
+                self._address(), f"{agent.split()[0]} {name}".strip(),
+                device_product(agent))
             session.hub.publish({"type": "browsers"})
             session.hub.publish({"type": "paired", "name": name})
             return {"key": key}
