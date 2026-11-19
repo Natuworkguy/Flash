@@ -12,6 +12,7 @@ FLASH_WEB_TOKEN for Flash's API, its settings, and Flash's own Python as
 from __future__ import annotations
 
 import contextlib
+import os
 import subprocess  # nosec B404 -- an installed extension's own program
 import threading
 import time
@@ -29,6 +30,38 @@ LONGEST_WAIT = 60
 STOP_SECONDS = 3
 
 
+# Folders an extension's program never runs from: not looked through for
+# changes.
+SKIP = {".git", "__pycache__", "node_modules", ".venv", "venv", ".pio",
+        "build", "dist"}
+
+
+def stamp(folder: Path) -> tuple[int, int]:
+    """How the files in FOLDER stand now (how many, and the newest
+    change): different once an update has changed any of them, though the
+    command that starts the service has not."""
+
+    count, newest = 0, 0
+    todo = [folder]
+    while todo:
+        try:
+            with os.scandir(todo.pop()) as entries:
+                for entry in entries:
+                    try:
+                        if entry.is_dir(follow_symlinks=False):
+                            if entry.name not in SKIP:
+                                todo.append(Path(entry.path))
+                        elif entry.is_file(follow_symlinks=False):
+                            count += 1
+                            changed = entry.stat(follow_symlinks=False)
+                            newest = max(newest, changed.st_mtime_ns)
+                    except OSError:
+                        continue
+        except OSError:
+            continue
+    return count, newest
+
+
 def log_path(extension: str, service: str) -> Path:
     safe = "".join(c if c.isalnum() or c in "-_" else "-" for c in service)
     return FLASH_DIR / "logs" / f"{extension}-{safe}.log"
@@ -37,8 +70,11 @@ def log_path(extension: str, service: str) -> Path:
 class Running:
     """One service's program, and how its stops have gone."""
 
-    def __init__(self, argv: list[str]) -> None:
+    def __init__(
+        self, argv: list[str], files: tuple[int, int] = (0, 0)
+    ) -> None:
         self.argv = argv
+        self.files = files
         self.process: Optional[subprocess.Popen] = None
         self.started = 0.0
         self.stops = 0
@@ -112,6 +148,9 @@ class Supervisor:
 
         wanted = self._wanted()
         now = time.monotonic()
+        # An update that changed its files (not its command) starts it
+        # again too, with the new program.
+        stamps = {e.name: stamp(e.path) for e, _ in wanted.values()}
         with self._lock:
             for key in list(self._running):
                 running = self._running[key]
@@ -119,6 +158,7 @@ class Supervisor:
                 gone = (
                     found is None
                     or extensions.argv(found[0], found[1].run) != running.argv
+                    or stamps.get(key[0]) != running.files
                 )
                 # Removed, or changed by an update: stopped (and, if
                 # changed, started anew below).
@@ -127,7 +167,8 @@ class Supervisor:
                     del self._running[key]
             for key, (extension, service) in wanted.items():
                 argv = extensions.argv(extension, service.run)
-                running = self._running.setdefault(key, Running(argv))
+                running = self._running.setdefault(
+                    key, Running(argv, stamps.get(key[0], (0, 0))))
                 process = running.process
                 if process is not None and process.poll() is None:
                     continue
