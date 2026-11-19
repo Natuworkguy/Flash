@@ -487,3 +487,44 @@ def test_never_mind_first_makes_no_chat_and_says_nothing(wakes):
 
     # Woken by mistake: no chat, nothing sent, nothing said.
     assert spoken == [] and session.sent == []  # nosec B101
+
+
+def test_what_flash_says_before_a_tool_is_said_while_it_works(wakes):
+    """Flash says something, uses a tool, then answers: the first part is
+    said as soon as it is there, while Flash is still at work, not saved up
+    for the end."""
+
+    heyflash.set_enabled(True)
+
+    class Working(FakeSession):
+        def send(self, chat, text, heard=False):
+            self.sent.append((chat.id, text, heard))
+            chat.log.append({"type": "user", "text": text})
+            chat.log.append({"type": "assistant", "text": "Let me look around."})
+            chat.busy = True
+
+            def finish():
+                time.sleep(0.4)  # the tool, running
+                chat.log.append({"type": "assistant", "text": "I see a desk."})
+                chat.busy = False
+
+            threading.Thread(target=finish, daemon=True).start()
+            return {}
+
+    session = Working()
+    found, spoken = listener(session, heard=["what is around you"])
+    busy_when_said = []
+    plain = found._speak
+
+    def speak(text):
+        busy_when_said.append(any(c.busy for c in session.chats.values()))
+        return plain(text)
+
+    found._speak = speak
+    found.start()
+    until(lambda: found.listening)
+    wakes.set()
+    until(lambda: len(spoken) == 2)
+    found.stop()
+    assert spoken == ["Let me look around.", "I see a desk."]  # nosec B101
+    assert busy_when_said == [True, False]  # nosec B101
