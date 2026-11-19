@@ -72,7 +72,8 @@ class Supervisor:
             return
         self._stop.clear()
         self._thread = threading.Thread(
-            target=self._watch, name="extension-services", daemon=True)
+            target=self._watch, name="extension-services", daemon=True
+        )
         self._thread.start()
 
     def stop(self) -> None:
@@ -86,11 +87,14 @@ class Supervisor:
             self._running.clear()
 
     def names(self) -> list[str]:
-        """"bot: eyes", for each one running now."""
+        """ "bot: eyes", for each one running now."""
 
         with self._lock:
-            return [f"{e}: {s}" for (e, s), r in self._running.items()
-                    if r.process is not None and r.process.poll() is None]
+            return [
+                f"{e}: {s}"
+                for (e, s), r in self._running.items()
+                if r.process is not None and r.process.poll() is None
+            ]
 
     def _wanted(self) -> dict[tuple[str, str], tuple[Any, Any]]:
         wanted = {}
@@ -112,8 +116,13 @@ class Supervisor:
             for key in list(self._running):
                 running = self._running[key]
                 found = wanted.get(key)
-                gone = found is None or extensions.argv(found[0], found[1].run) != running.argv
-                if gone:  # removed, or changed by an update: stopped, and started anew below
+                gone = (
+                    found is None
+                    or extensions.argv(found[0], found[1].run) != running.argv
+                )
+                # Removed, or changed by an update: stopped (and, if
+                # changed, started anew below).
+                if gone:
                     running.stop()
                     del self._running[key]
             for key, (extension, service) in wanted.items():
@@ -129,27 +138,38 @@ class Supervisor:
                     if now - running.started >= SETTLED_SECONDS:
                         running.stops = 0
                     running.stops += 1
-                    running.not_before = now + min(LONGEST_WAIT, 2 ** running.stops)
+                    running.not_before = now + min(
+                        LONGEST_WAIT, 2**running.stops
+                    )
                 if now < running.not_before:
                     continue
                 running.process = self._launch(extension, service, argv)
                 running.started = now
-                if running.process is None:  # couldn't start at all: tried again later
+                if (
+                    running.process is None
+                ):  # couldn't start at all: tried again later
                     running.stops += 1
-                    running.not_before = now + min(LONGEST_WAIT, 2 ** running.stops)
+                    running.not_before = now + min(
+                        LONGEST_WAIT, 2**running.stops
+                    )
 
-    def _launch(self, extension: Any, service: Any,
-                argv: list[str]) -> Optional[subprocess.Popen]:
+    def _launch(
+        self, extension: Any, service: Any, argv: list[str]
+    ) -> Optional[subprocess.Popen]:
         path = log_path(extension.name, service.name)
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
-            log = open(path, "w", encoding="utf-8")  # noqa: SIM115 -- the child keeps it
+            log = open(path, "w", encoding="utf-8")
         except OSError:
             log = subprocess.DEVNULL
         try:
             return subprocess.Popen(  # nosec B603 -- an installed extension's program
-                argv, cwd=str(extension.path), env=extensions.environment(extension),
-                stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
+                argv,
+                cwd=str(extension.path),
+                env=extensions.environment(extension),
+                stdin=subprocess.DEVNULL,
+                stdout=log,
+                stderr=subprocess.STDOUT,
             )
         except OSError as exc:
             if log is not subprocess.DEVNULL:
