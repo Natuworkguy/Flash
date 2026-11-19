@@ -1,6 +1,7 @@
 #Requires -Version 5.1
 <#
-    Flash CLI installer for Windows (PowerShell).
+    Flash's installer for Windows (PowerShell):
+        irm https://raw.githubusercontent.com/Natuworkguy/Flash/main/install.ps1 | iex
     Mirrors install.sh: clones the repo into a temp dir, installs it with
     pipx, and cleans up after itself.
 #>
@@ -14,6 +15,82 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch { }
+
+# --- How it looks -----------------------------------------------------------------
+# Steps that settle into a tick (or a "!" and why), the noisy output of each kept in
+# a log, shown only if something goes wrong.
+
+$Log = Join-Path ([System.IO.Path]::GetTempPath()) ("flash-install-" + [System.Guid]::NewGuid().ToString("N").Substring(0, 8) + ".log")
+$Script:Step = 0
+$Script:Steps = 8
+$Script:Current = ""
+$Script:Notes = @()
+$Script:KeepLog = $false
+
+function Show-Banner {
+    Write-Host ""
+    Write-Host "  Flash" -ForegroundColor DarkYellow -NoNewline
+    Write-Host "  installer" -ForegroundColor DarkGray
+    Write-Host "  --------------------" -ForegroundColor DarkGray
+    Write-Host ""
+}
+
+function Start-Step([string]$Title) {
+    $Script:Step++
+    $Script:Current = $Title
+    Write-Host "  .    " -ForegroundColor DarkGray -NoNewline
+    Write-Host $Title -NoNewline
+    Write-Host ("  {0}/{1}" -f $Script:Step, $Script:Steps) -ForegroundColor DarkGray -NoNewline
+    "`n== $Title" | Out-File -FilePath $Log -Append -Encoding utf8
+}
+
+function Complete-Step([string]$Said = "") {
+    Write-Host ("`r" + (" " * 78) + "`r") -NoNewline
+    Write-Host "  $([char]0x221A)    " -ForegroundColor Green -NoNewline
+    Write-Host $Script:Current -NoNewline
+    if ($Said) { Write-Host "  $Said" -ForegroundColor DarkGray } else { Write-Host "" }
+}
+
+function Warn-Step([string]$Why) {
+    Write-Host ("`r" + (" " * 78) + "`r") -NoNewline
+    Write-Host "  !    " -ForegroundColor Yellow -NoNewline
+    Write-Host $Script:Current -NoNewline
+    Write-Host "  $Why" -ForegroundColor DarkGray
+    $Script:Notes += $Why
+}
+
+function Stop-Install([string]$What, [string]$Hint = "") {
+    Write-Host ("`r" + (" " * 78) + "`r") -NoNewline
+    Write-Host "  x    " -ForegroundColor Red -NoNewline
+    Write-Host $Script:Current
+    Write-Host ""
+    Write-Host "  $What" -ForegroundColor Red
+    if ($Hint) { Write-Host "  $Hint" }
+    if (Test-Path $Log) {
+        Write-Host ""
+        Write-Host "  The last of what happened:" -ForegroundColor DarkGray
+        Get-Content $Log -Tail 12 | ForEach-Object { Write-Host "    $_" -ForegroundColor DarkGray }
+        Write-Host ""
+        Write-Host "  All of it: $Log" -ForegroundColor DarkGray
+    }
+    $Script:KeepLog = $true
+    exit 1
+}
+
+# Runs a command with its output in the log; true when it worked.
+function Invoke-Quietly([scriptblock]$Command) {
+    # A tool's progress on stderr (git's, pip's) is not a failure: only its exit code says.
+    $ErrorActionPreference = "Continue"
+    $global:LASTEXITCODE = 0
+    try {
+        & $Command 2>&1 | ForEach-Object { "$_" } | Out-File -FilePath $Log -Append -Encoding utf8
+        return ($LASTEXITCODE -eq 0)
+    } catch {
+        $_.ToString() | Out-File -FilePath $Log -Append -Encoding utf8
+        return $false
+    }
+}
 
 function Invoke-FlashScheme {
     param(
@@ -32,36 +109,9 @@ function Invoke-FlashScheme {
     }
 }
 
-function Install-Ollama {
-    # Install Ollama only when it is missing. Reinstalling over an existing
-    # install wipes the models and data already on the machine, so an existing
-    # ollama on PATH is always left exactly as it is.
-    if (Get-Command ollama -ErrorAction SilentlyContinue) {
-        Write-Host "Ollama is already installed."
-        return
-    }
-
-    Write-Host "Ollama is not installed. Installing Ollama..."
-    if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
-        Write-Host "winget is not available, so Ollama cannot be installed automatically."
-        Write-Host "Install it manually: https://ollama.com/download"
-        return
-    }
-
-    try {
-        winget install --id Ollama.Ollama -e --accept-source-agreements --accept-package-agreements
-        if ($LASTEXITCODE -ne 0) {
-            Write-Host "Failed to install Ollama via winget."
-            Write-Host "Install it manually: https://ollama.com/download"
-        }
-    } catch {
-        Write-Host "Failed to install Ollama via winget."
-        Write-Host "Install it manually: https://ollama.com/download"
-    }
-}
-
 function Uninstall-Flash {
-    Write-Host "Uninstalling flash..."
+    Show-Banner
+    Write-Host "  Uninstalling Flash..."
     # flash uninstall turns off its login tasks, removes the flash://
     # handler and shortcut, then the package.
     if (Get-Command flash -ErrorAction SilentlyContinue) {
@@ -73,23 +123,23 @@ function Uninstall-Flash {
         } catch { }
     }
     if (Get-Command flash -ErrorAction SilentlyContinue) {
-        Write-Host "Removing the flash:// URL handler..."
+        Write-Host "  Removing the flash:// URL handler..."
         Invoke-FlashScheme -FlashExe "flash" -Flag "--unregister-url-scheme" `
-            -SkipMessage "Could not remove the flash:// URL handler."
-        Write-Host "Removing the Start menu shortcut..."
+            -SkipMessage "  Could not remove the flash:// URL handler."
+        Write-Host "  Removing the Start menu shortcut..."
         try { & flash --shortcut remove } catch {
-            Write-Host "Could not remove the Start menu shortcut."
+            Write-Host "  Could not remove the Start menu shortcut."
         }
     }
     if (Get-Command pipx -ErrorAction SilentlyContinue) {
-        Write-Host "Uninstalling flash via pipx..."
+        Write-Host "  Uninstalling flash via pipx..."
         try {
             pipx uninstall flash
         } catch {
-            Write-Host "flash is not installed via pipx."
+            Write-Host "  flash is not installed via pipx."
         }
     } else {
-        Write-Host "pipx is not installed. Cannot uninstall flash via pipx."
+        Write-Host "  pipx is not installed. Cannot uninstall flash via pipx."
     }
     if ($Purge) {
         Remove-Item -Recurse -Force (Join-Path $HOME ".flash") `
@@ -109,147 +159,147 @@ $RepoDir = Join-Path $TempDir "flash"
 New-Item -ItemType Directory -Path $TempDir -Force | Out-Null
 
 try {
-    if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
-        Write-Host "git is not installed. Please install git and try again."
-        exit 1
-    }
-
+    Show-Banner
     $Branch = if ($Dev) { "dev" } else { "main" }
-    if ($Dev) { Write-Host "Installing the dev version of Flash." }
-    git clone --branch $Branch $RepoUrl $RepoDir
-    if ($LASTEXITCODE -ne 0) {
-        Write-Host "Failed to clone repository. Please check your internet connection and try again."
-        exit 1
+    if ($Dev) {
+        Write-Host "  The dev version" -ForegroundColor Yellow -NoNewline
+        Write-Host ": changes land here before a release."
+        Write-Host ""
     }
 
-    if (-not (Test-Path $RepoDir)) {
-        Write-Host "Repository directory $RepoDir does not exist after cloning."
-        exit 1
+    # --- 1. Flash's code ----------------------------------------------------------
+    Start-Step "Getting Flash"
+    if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
+        Stop-Install "git isn't installed." "Install it from https://git-scm.com/download/win and run this again."
     }
-
+    if (-not (Invoke-Quietly { git clone --depth 1 --branch $Branch $RepoUrl $RepoDir })) {
+        Stop-Install "Couldn't download Flash." "Check your internet connection and try again."
+    }
+    if (-not (Test-Path $RepoDir)) { Stop-Install "Flash's download is missing after cloning." }
     Push-Location $RepoDir
+    Complete-Step $Branch
 
-    function Get-PythonCommand {
-        foreach ($candidate in @("python", "python3", "py")) {
-            $cmd = Get-Command $candidate -ErrorAction SilentlyContinue
-            if ($cmd) {
-                Write-Host "Detected python command: $candidate"
-                return $candidate
-            }
-        }
-        Write-Host "Python is not installed. Please install Python 3."
-        exit 1
+    # --- 2. Python ----------------------------------------------------------------------
+    Start-Step "Finding Python"
+    $Python = $null
+    foreach ($candidate in @("python", "python3", "py")) {
+        if (Get-Command $candidate -ErrorAction SilentlyContinue) { $Python = $candidate; break }
     }
-
-    $Python = Get-PythonCommand
-
-    # Flash can also talk to a remote Ollama server, so never fail the
-    # install over a missing local one.
-    Install-Ollama
-
-    if (-not (Get-Command pipx -ErrorAction SilentlyContinue)) {
-        Write-Host "pipx is not installed. Installing pipx..."
-        & $Python -m pip --version | Out-Null
-        if ($LASTEXITCODE -ne 0) {
-            Write-Host "Could not install pipx automatically: pip is not available for $Python."
-            Write-Host "Install it manually: https://pipx.pypa.io/latest/how-to/install-pipx.html"
-            exit 1
-        }
-
-        & $Python -m pip install --user pipx
-        if ($LASTEXITCODE -ne 0) {
-            Write-Host "Failed to install pipx via pip."
-            exit 1
-        }
-
-        & $Python -m pipx ensurepath
+    if (-not $Python) {
+        Stop-Install "Python 3 isn't installed." "Install it from https://www.python.org/downloads/ (tick 'Add to PATH'), then run this again."
     }
+    Complete-Step ((& $Python --version 2>&1) | Out-String).Trim()
 
-    if (-not (Get-Command pipx -ErrorAction SilentlyContinue)) {
-        # pipx was just installed into the user's Python scripts dir, which may
-        # not be on PATH in this session yet. Fall back to `python -m pipx`.
-        $PipxCmd = { & $Python -m pipx @args }
+    # --- 3. Ollama ----------------------------------------------------------------------
+    # Install Ollama only when it is missing. Reinstalling over an existing
+    # install wipes the models and data already on the machine, so an existing
+    # ollama on PATH is always left exactly as it is. Flash can also use a remote
+    # Ollama server or hosted models, so a missing one never stops the install.
+    Start-Step "Ollama, for models on this computer"
+    if (Get-Command ollama -ErrorAction SilentlyContinue) {
+        Complete-Step "already here"
+    } elseif (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
+        Warn-Step "Not installed: get it from https://ollama.com/download, or use hosted models."
+    } elseif (Invoke-Quietly { winget install --id Ollama.Ollama -e --accept-source-agreements --accept-package-agreements }) {
+        Complete-Step "installed"
     } else {
+        Warn-Step "Not installed: get it from https://ollama.com/download, or use hosted models."
+    }
+
+    # --- 4. pipx ------------------------------------------------------------------------
+    Start-Step "pipx, to keep Flash in its own space"
+    if (Get-Command pipx -ErrorAction SilentlyContinue) {
         $PipxCmd = { & pipx @args }
+        $said = "already here"
+    } else {
+        if (-not (Invoke-Quietly { & $Python -m pip --version })) {
+            Stop-Install "Couldn't install pipx: pip isn't available for $Python." "See https://pipx.pypa.io/latest/how-to/install-pipx.html"
+        }
+        if (-not (Invoke-Quietly { & $Python -m pip install --user pipx })) {
+            Stop-Install "Couldn't install pipx with pip."
+        }
+        Invoke-Quietly { & $Python -m pipx ensurepath } | Out-Null
+        # pipx was just installed into the user's Python scripts dir, which may
+        # not be on PATH in this session yet: `python -m pipx` until it is.
+        $PipxCmd = if (Get-Command pipx -ErrorAction SilentlyContinue) { { & pipx @args } } else { { & $Python -m pipx @args } }
+        $said = "installed"
     }
+    Invoke-Quietly { & $PipxCmd ensurepath --force } | Out-Null
+    Complete-Step $said
 
-    & $PipxCmd ensurepath --force
-
+    # --- 5. Flash itself ----------------------------------------------------------------
+    Start-Step "Installing Flash"
     # Install (or reinstall, if already present) flash from this repo
-    & $PipxCmd install --force $RepoDir
-    if ($LASTEXITCODE -ne 0) {
-        Write-Host "Failed to install flash via pipx."
-        exit 1
+    if (-not (Invoke-Quietly { & $PipxCmd install --force $RepoDir })) {
+        Stop-Install "Couldn't install Flash." "The details are below."
     }
-
     $PipxBinDir = & $PipxCmd environment --value PIPX_BIN_DIR 2>$null
-    if (-not $PipxBinDir) {
-        $PipxBinDir = Join-Path $env:USERPROFILE ".local\bin"
-    }
-
+    if (-not $PipxBinDir) { $PipxBinDir = Join-Path $env:USERPROFILE ".local\bin" }
     $PipxVenvs = & $PipxCmd environment --value PIPX_LOCAL_VENVS 2>$null
     $VenvPython = Join-Path $PipxVenvs "flash\Scripts\python.exe"
-
-    Write-Host ""
-    Write-Host "Downloading the headless browser used for page screenshots..."
-    if (Test-Path $VenvPython) {
-        & $VenvPython -m playwright install chromium
-        if ($LASTEXITCODE -ne 0) {
-            Write-Host "Download failed. Screenshots stay unavailable until it succeeds."
-        }
-    } else {
-        Write-Host "Could not find the flash environment. Screenshots need chromium."
-    }
-
-    # A failure here leaves the rest of Flash working, so it never
-    # stops the install.
-    Write-Host ""
-    Write-Host "Installing the voice mode packages..."
-    $NeededVoicePackages = @("sounddevice", "vosk", "piper-tts")
-    # `inject` leaves a package that is already in the venv at whatever
-    # version it was, so the forced reinstall behind it is what actually
-    # moves one. `runpip` hands its arguments straight to pip, so the
-    # subcommand here is `install`, not `pip install`.
-    & $PipxCmd inject flash @NeededVoicePackages
-    if ($LASTEXITCODE -eq 0) {
-        & $PipxCmd runpip flash install --upgrade --force-reinstall @NeededVoicePackages
-    }
-    if ($LASTEXITCODE -ne 0) {
-        Write-Host "Voice packages failed to install. Voice mode stays unavailable."
-    }
-
-    # Register the flash:// URL handler. Never fail the install over it.
     $FlashExe = Join-Path $PipxBinDir "flash.exe"
-    if (-not (Test-Path $FlashExe)) {
-        $FlashExe = "flash"
+    if (-not (Test-Path $FlashExe)) { $FlashExe = "flash" }
+    $FlashVersion = try { ((& $FlashExe --version) | Out-String).Trim() } catch { "Flash" }
+    if (-not $FlashVersion) { $FlashVersion = "Flash" }
+    Complete-Step $FlashVersion
+
+    # --- 6. The browser for screenshots ----------------------------------------------------
+    Start-Step "A browser for page screenshots"
+    if ((Test-Path $VenvPython) -and (Invoke-Quietly { & $VenvPython -m playwright install chromium })) {
+        Complete-Step
+    } else {
+        Warn-Step "Screenshots stay off until it downloads (run: flash --update)."
     }
 
-    Write-Host ""
-    Write-Host "Registering the flash:// URL handler..."
-    Invoke-FlashScheme -FlashExe $FlashExe -Flag "--register-url-scheme" `
-        -SkipMessage "Unable to install flash:// URL handler. Continuing."
+    # --- 7. Voice ---------------------------------------------------------------------------
+    # A failure here leaves the rest of Flash working, so it never stops the install.
+    # `inject` leaves a package that is already in the venv at whatever version it
+    # was, so the forced reinstall behind it is what actually moves one. `runpip`
+    # hands its arguments straight to pip, so the subcommand is `install`, not
+    # `pip install`.
+    Start-Step "Voice mode"
+    $NeededVoicePackages = @("sounddevice", "vosk", "piper-tts")
+    if ((Invoke-Quietly { & $PipxCmd inject flash @NeededVoicePackages }) -and
+        (Invoke-Quietly { & $PipxCmd runpip flash install --upgrade --force-reinstall @NeededVoicePackages })) {
+        Complete-Step "speech models download the first time you use it"
+    } else {
+        Warn-Step "Voice mode stays off until its packages install."
+    }
 
-    # A Start menu shortcut, "Flash": the web UI in the browser, started
-    # out of sight if it is not running. Never fail the install over it.
-    Write-Host ""
-    Write-Host "Adding Flash to the Start menu..."
-    Invoke-FlashScheme -FlashExe $FlashExe -Flag "--shortcut" `
-        -SkipMessage "Could not add the Start menu shortcut. Continuing."
+    # --- 8. Links and the Start menu --------------------------------------------------------
+    # The flash:// URL handler, and a Start menu shortcut, "Flash": the web UI in
+    # the browser, started out of sight if it is not running. Neither ever fails
+    # the install.
+    Start-Step "flash:// links and the Start menu"
+    $linksOk = (Invoke-Quietly { & $FlashExe --register-url-scheme })
+    $linksOk = (Invoke-Quietly { & $FlashExe --shortcut }) -and $linksOk
+    if ($linksOk) { Complete-Step } else { Warn-Step "Not all set up; Flash works without them." }
 
+    # --- Done ---------------------------------------------------------------------------------
     Write-Host ""
-    Write-Host "=== flash installed via pipx. ==="
-
-    Write-Host "Run /voice on inside Flash to talk to it (it downloads"
-    Write-Host "the speech models the first time)."
+    Write-Host "  $FlashVersion is installed." -ForegroundColor Green
+    Write-Host ""
+    Write-Host "  Start it        " -NoNewline; Write-Host "flash            " -NoNewline; Write-Host "in a terminal" -ForegroundColor DarkGray
+    Write-Host "                  flash --web      " -NoNewline; Write-Host "in your browser, or Flash in the Start menu" -ForegroundColor DarkGray
+    Write-Host "  Talk to it      " -NoNewline; Write-Host "/voice on        " -NoNewline; Write-Host "inside Flash" -ForegroundColor DarkGray
 
     $PathEntries = $env:PATH -split ";"
     if ($PathEntries -notcontains $PipxBinDir) {
-        Write-Host "$PipxBinDir is not on your PATH yet."
-        Write-Host "Open a new terminal, or run this in your current session:"
-        Write-Host "    `$env:PATH = `"$PipxBinDir;`$env:PATH`""
+        Write-Host ""
+        Write-Host "  Open a new terminal first" -ForegroundColor Yellow -NoNewline
+        Write-Host ", or run this to use it in this one:"
+        Write-Host "      `$env:PATH = `"$PipxBinDir;`$env:PATH`""
     }
+    if ($Script:Notes.Count -gt 0) {
+        Write-Host ""
+        Write-Host "  Worth knowing:" -ForegroundColor DarkGray
+        foreach ($note in $Script:Notes) { Write-Host "  - $note" }
+        Write-Host "  Details: $Log" -ForegroundColor DarkGray
+        $Script:KeepLog = $true
+    }
+    Write-Host ""
 } finally {
     Pop-Location -ErrorAction SilentlyContinue
-    Write-Host "Cleaning up..."
     Remove-Item -Recurse -Force $TempDir -ErrorAction SilentlyContinue
+    if (-not $Script:KeepLog) { Remove-Item -Force $Log -ErrorAction SilentlyContinue }
 }
