@@ -18797,11 +18797,15 @@ async function startVoice(team = null, how = "button") {
   if (voice.on) return;
   if (meeting) { toast("A meeting is being recorded: stop it first, and voice mode can have the microphone"); return; }
   stopWake();
-  if (!canRecord) { toast("Voice mode needs this page opened on this computer, or over HTTPS"); return; }
   let status;
   try { status = await command("voice-status"); } catch (error) { showFailure(error); return; }
   if (status.missing.length) { askInstall(status.missing, status.install, () => startVoice(team, how)); return; }
   if (team && teamChat.id !== team) return;
+  // Listening through a device instead (a desk robot, its microphone switch on): it hears you and
+  // says the replies itself, in this chat; this page only shows the conversation.
+  if (!team && await listenThroughDevice()) return;
+  // This page's own microphone, from here on.
+  if (!canRecord) { toast("Voice mode needs this page opened on this computer, or over HTTPS"); return; }
   voice.on = true;
   voice.cut = false;
   voice.team = team;
@@ -20141,6 +20145,34 @@ const unmarkSpoken = () => { if (window.CSS && CSS.highlights) CSS.highlights.de
 // robot), when an extension has one and its switch is on: looked up as
 // voice mode starts. Each line goes to it as a signal and voice mode waits
 // for it to say it is done, so turns still take their turn.
+// A device voice mode listens through, its microphone switch on: {ext, label}, or null.
+async function findMicrophone() {
+  try {
+    const listed = (await command("extensions", "", null)).extensions || [];
+    const ext = listed.find((e) => e.speaker && e.speaker.microphone && e.values && e.values[e.speaker.microphone] === true);
+    return ext ? { ext: ext.name, label: ext.speaker.label } : null;
+  } catch (_) { return null; }
+}
+
+// Hands this conversation to that device: true if one took it.
+async function listenThroughDevice() {
+  const mic = await findMicrophone();
+  if (!mic) return false;
+  try {
+    if (!current) {
+      const made = await command("new", "", null, { project: viewProject || "" });
+      await loadState();
+      switchTo(made.chat);
+    }
+    await command("extension-signal", mic.ext, null, { signal: "listen", data: { chat: current } });
+    toast(`Listening through ${mic.label}: talk to it. Say "voice off" to stop.`);
+    return true;
+  } catch (error) {
+    toast(`${mic.label} couldn't listen (${error.message}), so this computer will.`);
+    return false;
+  }
+}
+
 async function findSpeaker() {
   voice.speaker = null;
   try {

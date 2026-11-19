@@ -211,10 +211,15 @@ class Speaker:
     """A device voice mode can speak through instead of this computer (a
     desk robot), while the extension's switch SETTING is on. Voice mode
     hands it each line as an "extension-signal" ("say", {text, id}) and
-    waits for "said" ({id}) back; "hush" stops it."""
+    waits for "said" ({id}) back; "hush" stops it.
+
+    While its switch MICROPHONE is on, voice mode listens through the
+    device too: the page sends it "listen" ({chat}) and the device hears,
+    sends what it heard to that chat, and says the replies itself."""
 
     setting: str
     label: str
+    microphone: str = ""
 
 
 @dataclass
@@ -696,8 +701,10 @@ def _services(entry: Any, root: Path) -> list[Service]:
         where = f'"services"[{index}]'
         if not isinstance(one, dict):
             raise ExtensionError(f"{where} has to be an object")
-        name = _text(one.get("name"), f"{where}.name") or f"service {index + 1}"
-        found.append(Service(name=name, run=_argv(one.get("run"), root, where)))
+        name = (_text(one.get("name"), f"{where}.name")
+                or f"service {index + 1}")
+        found.append(Service(
+            name=name, run=_argv(one.get("run"), root, where)))
     _unique([s.name for s in found], "service")
     return found
 
@@ -1084,8 +1091,13 @@ def load(root: Path) -> Extension:
         if not any(s.id == which and s.type == "switch" for s in settings):
             raise ExtensionError(
                 '"speaker": "setting" has to be one of its switch settings')
+        mic = str(entry.get("microphone") or "")
+        if mic and not any(
+                s.id == mic and s.type == "switch" for s in settings):
+            raise ExtensionError(
+                '"speaker": "microphone" has to be one of its switch settings')
         speaker = Speaker(setting=which, label=_text(
-            entry.get("label"), "speaker.label") or name)
+            entry.get("label"), "speaker.label") or name, microphone=mic)
 
     speech = [
         _speech(entry, root, index)
