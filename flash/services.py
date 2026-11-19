@@ -245,3 +245,33 @@ def start() -> Supervisor:
 def stop() -> None:
     if _supervisor is not None:
         _supervisor.stop()
+
+
+def report(extension: str) -> list[dict]:
+    """How EXTENSION's services are doing, for its page to show when one
+    doesn't answer: each one's name, whether it runs now, how many times
+    it has stopped, and the end of its log."""
+
+    found = extensions.find(extension)
+    if found is None:
+        return []
+    out = []
+    for service in found.services:
+        running = None
+        if _supervisor is not None:
+            with _supervisor._lock:
+                running = _supervisor._running.get((found.name, service.name))
+        process = running.process if running is not None else None
+        try:
+            lines = log_path(found.name, service.name).read_text(
+                encoding="utf-8", errors="replace").splitlines()
+        except OSError:
+            lines = []
+        out.append({
+            "name": service.name,
+            "running": process is not None and process.poll() is None,
+            "started": _supervisor is not None,
+            "stops": running.stops if running is not None else 0,
+            "log": "\n".join(lines[-15:])[-3000:],
+        })
+    return out
