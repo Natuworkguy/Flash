@@ -8551,8 +8551,7 @@ def _listen(
         # call Flash's API with it), not for every command run: Access
         # took it out of the environment as it started.
         from . import extensions as installed
-        if session is not None:
-            installed.web_token = session.access.token
+        installed.web_token = server.session.access.token
         return server
     except OSError as exc:
         raise OSError(
