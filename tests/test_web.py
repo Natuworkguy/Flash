@@ -5609,3 +5609,18 @@ def test_a_chat_for_a_small_screen_leaves_out_what_it_cannot_show():
     assert log[3] == {"type": "ask", "id": "a1", "question": "Go?"}
     assert len(small["partial"]) == _web.SMALL_TEXT + 1
     assert summary["log"][1]["result"] == big      # the chat itself is untouched
+
+
+
+def test_a_paired_device_says_what_it_is():
+    from flash import web
+
+    access = web.Access()
+    watch = access.sign_in("10.0.0.2", "FlashDevice/1.0 My watch", "watchOS")
+    robot = access.sign_in("10.0.0.3", "FlashDevice/1 Flash Bot", "FlashBot/0.1")
+    # Paired before Flash asked: it says what it is on its next request.
+    old = access.sign_in("10.0.0.4", "FlashDevice/1 Desk")
+    access.browser(old, "10.0.0.4", "FlashDevice/1 FlashBot/0.1")
+    kinds = {b["device"]: b["product"] for b in access.listing("", set())}
+    assert kinds == {"My watch": "watch", "Flash Bot": "robot", "Desk": "robot"}  # nosec B101
+    assert web.device_kind("") == "device"  # nosec B101
