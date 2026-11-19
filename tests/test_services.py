@@ -133,3 +133,17 @@ def test_an_update_starts_it_again_with_the_new_program(tmp_path, home):
         until(lambda: int((tmp_path / "starts").read_text()) >= 2)
     finally:
         keeper.stop()
+
+
+def test_its_page_can_see_how_its_services_are_doing(tmp_path, home):
+    install(home, tmp_path)
+    keeper = services.start()
+    try:
+        until(lambda: (tmp_path / "beat").exists())
+        until(lambda: services.report("watcher")[0]["log"].startswith("up"))
+        found = services.report("watcher")
+        assert found[0]["name"] == "eyes" and found[0]["running"]  # nosec B101
+    finally:
+        keeper.stop()
+        services._supervisor = None
+    assert services.report("nobody") == []  # nosec B101

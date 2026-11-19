@@ -6099,6 +6099,15 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
                                  "id": setting, "value": values.get(setting)})
         return {"values": values}
 
+    if name == "extension-services":
+        # How an extension's background programs are doing (its page asks
+        # when one of them doesn't answer).
+        from . import services
+
+        if extensions.find(arg) is None:
+            raise ValueError(f"No extension called {arg!r}.")
+        return {"services": services.report(arg)}
+
     if name == "extension-signal":
         # A word between an extension's page and its device ("sleep now",
         # "here is how I am"): said to everything listening, kept nowhere.
