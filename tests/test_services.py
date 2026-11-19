@@ -13,7 +13,8 @@ PROGRAM = """
 import pathlib, sys, time
 here = pathlib.Path(sys.argv[1])
 starts = here / "starts"
-starts.write_text(str(int(starts.read_text() or 0) + 1) if starts.exists() else "1")
+count = int(starts.read_text()) if starts.exists() else 0
+starts.write_text(str(count + 1))
 print("up", flush=True)
 for _ in range(400):
     (here / "beat").write_text(str(time.time()))
@@ -46,10 +47,18 @@ def install(home, tmp_path, *extra, name="watcher"):
     folder = home / name
     folder.mkdir()
     (folder / "svc.py").write_text(PROGRAM)
-    (folder / extensions.MANIFEST).write_text(json.dumps({
-        "name": name, "description": "d",
-        "services": {"name": "eyes", "run": ["python", "./svc.py", str(tmp_path), *extra]},
-    }))
+    (folder / extensions.MANIFEST).write_text(
+        json.dumps(
+            {
+                "name": name,
+                "description": "d",
+                "services": {
+                    "name": "eyes",
+                    "run": ["python", "./svc.py", str(tmp_path), *extra],
+                },
+            }
+        )
+    )
     extensions.reload()
     return folder
 
@@ -57,7 +66,9 @@ def install(home, tmp_path, *extra, name="watcher"):
 def test_a_manifest_names_its_services(tmp_path, home):
     install(home, tmp_path)
     ext = extensions.find("watcher")
-    assert [(s.name, s.run[-2]) for s in ext.services] == [("eyes", "./svc.py")]  # nosec B101
+    assert [(s.name, s.run[-2]) for s in ext.services] == [
+        ("eyes", "./svc.py")
+    ]  # nosec B101
     assert any("runs in the background" in line for line in ext.contents())  # nosec B101
 
 
@@ -79,7 +90,12 @@ def test_one_that_stops_is_started_again(tmp_path, home):
     keeper = services.Supervisor(check_seconds=0.1)
     keeper.start()
     try:
-        until(lambda: (tmp_path / "starts").exists() and int((tmp_path / "starts").read_text()) >= 2)
+        until(
+            lambda: (
+                (tmp_path / "starts").exists()
+                and int((tmp_path / "starts").read_text()) >= 2
+            )
+        )
     finally:
         keeper.stop()
 
