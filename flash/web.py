@@ -8554,6 +8554,11 @@ def _listen(
         serving = getattr(server, "session", None) or session
         if serving is not None:
             installed.web_token = serving.access.token
+        # Extensions' services (programs that run while Flash is open), now
+        # that they can reach Flash's API.
+        from . import services
+
+        services.start()
         return server
     except OSError as exc:
         raise OSError(
@@ -8578,6 +8583,10 @@ def _restart(
     """
 
     server.session.access.hand_over()
+    # The restarted Flash starts them again; left running, they'd be twice.
+    from . import services
+
+    services.stop()
     # As it is now, which a LAN switch may have changed since it began.
     args = [a for a in sys.argv[1:] if a != "--lan"]
     if server.lan:

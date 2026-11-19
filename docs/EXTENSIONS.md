@@ -125,6 +125,7 @@ and cannot point outside it.
 | `commands` | Slash commands. See below. |
 | `tools` | Tools the model can call. See below. |
 | `backgrounds` | A folder of `.scene` files, added to `/background`. |
+| `services` | Programs that run while Flash's web page is open. See Services. |
 | `providers` | Model providers. See below. |
 | `themes` | Colour themes for the web UI. See below. |
 | `loaders` | Loading animations for the terminal and the web UI. See below. |
@@ -348,6 +349,24 @@ own, so a slow program never holds a turn up; one too slow to keep up
 misses events rather than queueing them forever. A program run on
 Flash's own Python (`"python"`) can `import flash` and use what Flash
 has, such as `flash.mail` and the email account set up with `/email`.
+
+### Services
+
+A program that runs for as long as Flash's web page is open: one that
+watches something, or answers a device as it goes, rather than running
+once when asked.
+
+```json
+"services": {"name": "eyes", "run": ["python", "./eyes.py"]}
+```
+
+`services` is one of these or a list of them. Flash starts each with its
+web page, starts it again if it stops (waiting a little longer each time
+it keeps stopping), starts it anew when the extension is installed,
+updated or removed, and stops it when Flash stops or restarts. It gets
+what a tool gets: its settings, `FLASH_WEB_URL` and `FLASH_WEB_TOKEN` to
+use Flash's API, and Flash's own Python as `python`. What it prints goes
+to `logs/<extension>-<service>.log` in Flash's folder.
 
 ### Voice
 
