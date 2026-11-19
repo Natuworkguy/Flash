@@ -358,6 +358,15 @@ class Inbox:
 
 
 @dataclass
+class Service:
+    """A program that runs for as long as Flash's web page does: started
+    with it, started again if it stops, stopped with it (services.py)."""
+
+    name: str
+    run: list[str]
+
+
+@dataclass
 class Extension:
     """One installed (or about to be installed) extension."""
 
@@ -384,6 +393,7 @@ class Extension:
     tunnels: list[TunnelService] = field(default_factory=list)
     briefing: Optional[Briefing] = None
     inbox: Optional[Inbox] = None
+    services: list[Service] = field(default_factory=list)
     # A folder of guides for the knowledge base (skills.knowledge).
     knowledge: Optional[Path] = None
     # Flash's web UI is opened to the network when Flash starts, as with
@@ -438,6 +448,11 @@ class Extension:
         if self.voice is not None:
             lines.append(
                 "in the middle of voice mode: " + ", ".join(self.voice.on)
+            )
+        if self.services:
+            lines.append(
+                "runs in the background while Flash is open: "
+                + ", ".join(s.name for s in self.services)
             )
         if self.settings:
             lines.append(
@@ -670,6 +685,21 @@ def _events(entry: Any, root: Path) -> Events:
         run=_argv(entry.get("run"), root, where),
         on=tuple(dict.fromkeys(wanted)), timeout=timeout,
     )
+
+
+def _services(entry: Any, root: Path) -> list[Service]:
+    """"services": one {"name", "run"} or a list of them."""
+
+    entries = entry if isinstance(entry, list) else [entry]
+    found = []
+    for index, one in enumerate(entries):
+        where = f'"services"[{index}]'
+        if not isinstance(one, dict):
+            raise ExtensionError(f"{where} has to be an object")
+        name = _text(one.get("name"), f"{where}.name") or f"service {index + 1}"
+        found.append(Service(name=name, run=_argv(one.get("run"), root, where)))
+    _unique([s.name for s in found], "service")
+    return found
 
 
 def _voice(entry: Any, root: Path) -> Voice:
@@ -1087,13 +1117,17 @@ def load(root: Path) -> Extension:
 
         ui = ext_ui.parse(manifest["ui"], root, {c.name for c in commands})
 
+    services = (_services(manifest["services"], root)
+                if manifest.get("services") is not None else [])
     if not (commands or tools or prompt or backgrounds or providers
             or themes or loaders or events or voice or ui or speech
-            or system_one or tunnels or briefing or inbox or knowledge):
+            or system_one or tunnels or briefing or inbox or knowledge
+            or services):
         raise ExtensionError(
             f"{MANIFEST} declares nothing: no commands, tools, prompt, "
             "backgrounds, providers, themes, loaders, events, voice, "
-            "speech, system_one, tunnels, briefing, inbox, ui, or knowledge"
+            "speech, system_one, tunnels, briefing, inbox, ui, knowledge "
+            "or services"
         )
 
     try:
@@ -1124,6 +1158,7 @@ def load(root: Path) -> Extension:
         tunnels=tunnels,
         briefing=briefing,
         inbox=inbox,
+        services=services,
         network=_network(manifest.get("network", False)),
     )
 
