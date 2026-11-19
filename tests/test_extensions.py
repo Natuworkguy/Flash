@@ -1079,6 +1079,24 @@ def test_a_speaker_needs_one_of_its_switches(tmp_path):
         extensions.load(bad)
 
 
+def test_a_speaker_can_listen_through_its_device_too(tmp_path):
+    ok = make(tmp_path / "ok", {
+        "name": "robot", "prompt": "p.md",
+        "settings": [{"id": "out", "label": "Speak here", "type": "switch"},
+                     {"id": "in", "label": "Listen here", "type": "switch"}],
+        "speaker": {"setting": "out", "label": "Desk robot", "microphone": "in"},
+    }, {"p.md": "hi"})
+    assert extensions.load(ok).speaker.microphone == "in"  # nosec B101
+
+    bad = make(tmp_path / "bad", {
+        "name": "robot", "prompt": "p.md",
+        "settings": [{"id": "out", "label": "Speak here", "type": "switch"}],
+        "speaker": {"setting": "out", "microphone": "missing"},
+    }, {"p.md": "hi"})
+    with pytest.raises(extensions.ExtensionError, match="microphone"):
+        extensions.load(bad)
+
+
 def test_an_extension_tool_can_show_the_model_a_picture():
     import base64
     from flash import tools

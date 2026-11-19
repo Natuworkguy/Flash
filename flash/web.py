@@ -4960,7 +4960,8 @@ def _extension_info(ext: "extensions.Extension") -> dict:
         "values": extensions.shown_values(ext) if ext.settings else {},
         # A device voice mode can speak through, while its switch is on.
         **({"speaker": {"setting": ext.speaker.setting,
-                        "label": ext.speaker.label}}
+                        "label": ext.speaker.label,
+                        "microphone": ext.speaker.microphone}}
            if ext.speaker else {}),
     }
 
