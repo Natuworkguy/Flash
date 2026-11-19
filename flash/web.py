@@ -8607,6 +8607,7 @@ def _listen(
         serving = getattr(server, "session", None) or session
         if serving is not None:
             installed.web_token = serving.access.token
+            installed.web_token_source = lambda: serving.access.token
         # Extensions' services (programs that run while Flash is open), now
         # that they can reach Flash's API.
         from . import services

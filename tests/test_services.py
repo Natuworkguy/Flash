@@ -147,3 +147,27 @@ def test_its_page_can_see_how_its_services_are_doing(tmp_path, home):
         keeper.stop()
         services._supervisor = None
     assert services.report("nobody") == []  # nosec B101
+
+
+def test_a_new_key_to_flash_starts_it_again_with_that_key(
+        tmp_path, home, monkeypatch):
+    # The key changes while Flash runs (a new link, other browsers signed
+    # out): a service still holding the old one would be refused.
+    key = {"now": "first-key-0123456789"}
+    monkeypatch.setattr(extensions, "web_token_source",
+                        lambda: key["now"])
+    folder = install(home, tmp_path)
+    (folder / "svc.py").write_text(
+        "import os, pathlib, sys, time\n"
+        "token = os.environ.get('FLASH_WEB_TOKEN', '')\n"
+        "pathlib.Path(sys.argv[1], 'key').write_text(token)\n"
+        "time.sleep(30)\n")
+    keeper = services.Supervisor(check_seconds=0.1)
+    keeper.start()
+    try:
+        kept = tmp_path / "key"
+        until(lambda: kept.exists() and kept.read_text() == key["now"])
+        key["now"] = "second-key-0123456789"
+        until(lambda: kept.read_text() == "second-key-0123456789")
+    finally:
+        keeper.stop()
