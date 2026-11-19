@@ -71,10 +71,13 @@ class Running:
     """One service's program, and how its stops have gone."""
 
     def __init__(
-        self, argv: list[str], files: tuple[int, int] = (0, 0)
+        self, argv: list[str], files: tuple[int, int] = (0, 0),
+        token: str = "",
     ) -> None:
         self.argv = argv
         self.files = files
+        # The key to Flash's API it was started with.
+        self.token = token
         self.process: Optional[subprocess.Popen] = None
         self.started = 0.0
         self.stops = 0
@@ -151,6 +154,9 @@ class Supervisor:
         # An update that changed its files (not its command) starts it
         # again too, with the new program.
         stamps = {e.name: stamp(e.path) for e, _ in wanted.values()}
+        # A new key to Flash's API (a new link, other browsers signed out)
+        # leaves the old one refused: started again with the new one.
+        token = extensions.current_web_token()
         with self._lock:
             for key in list(self._running):
                 running = self._running[key]
@@ -159,6 +165,7 @@ class Supervisor:
                     found is None
                     or extensions.argv(found[0], found[1].run) != running.argv
                     or stamps.get(key[0]) != running.files
+                    or running.token != token
                 )
                 # Removed, or changed by an update: stopped (and, if
                 # changed, started anew below).
@@ -168,7 +175,7 @@ class Supervisor:
             for key, (extension, service) in wanted.items():
                 argv = extensions.argv(extension, service.run)
                 running = self._running.setdefault(
-                    key, Running(argv, stamps.get(key[0], (0, 0))))
+                    key, Running(argv, stamps.get(key[0], (0, 0)), token))
                 process = running.process
                 if process is not None and process.poll() is None:
                     continue
