@@ -2870,10 +2870,37 @@ def _extension_tool(name: str, args: dict) -> Optional[str]:
         tool_result(str(exc), style=ERROR)
         return f"Error: {exc}"
     result = extensions.call_tool(extension, tool, given)
+    result = _tool_pictures(result)
     tool_result(
         result, style=ERROR if result.startswith(("(exit", "Error")) else DIM
     )
     return result
+
+
+def _tool_pictures(output: str) -> str:
+    """An extension tool's output, with any pictures it gave handed to the
+    model as built-in tools' are: a tool that prints
+    {"text": "...", "images": ["<base64>", ...]} shows the model what it
+    sees (a robot's camera). Anything else is passed on as it is."""
+
+    if not output.startswith("{") or '"images"' not in output:
+        return output
+    try:
+        found = json.loads(output)
+    except ValueError:
+        return output
+    if not isinstance(found, dict) or not isinstance(found.get("images"), list):
+        return output
+    shown = 0
+    for item in found["images"][:4]:
+        try:
+            _pending_images.append(base64.b64decode(str(item), validate=True))
+            shown += 1
+        except (ValueError, TypeError):
+            continue
+    text = str(found.get("text") or "")
+    return (text + ("\n" if text else "")
+            + (f"({shown} picture{'s' if shown != 1 else ''} attached)" if shown else "")).strip() or "(no output)"
 
 
 def _connector_tool(name: str, args: dict) -> Optional[str]:

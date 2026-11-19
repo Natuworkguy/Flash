@@ -620,6 +620,9 @@ STEER_NOTE = "[Sent while you were working. Take it into account from here.]"
 # the one that replaces it after an update, across the exec that starts
 # the new version.
 TOKEN_ENV = "FLASH_WEB_TOKEN"  # nosec B105 -- a variable name
+# Where this Flash's web API is, for an extension's programs: with the token,
+# a tool can ask Flash things (its paired devices) and signal its device.
+URL_ENV = "FLASH_WEB_URL"
 BROWSERS_ENV = "FLASH_WEB_BROWSERS"
 
 # The most browsers kept signed in at once: past it, the one seen least
@@ -8542,7 +8545,9 @@ def _listen(
                 + ": its extension asks for that.",
                 style=DIM))
     try:
-        return Server(port, session=session, lan=lan)
+        server = Server(port, session=session, lan=lan)
+        os.environ[URL_ENV] = f"http://127.0.0.1:{server.port}"
+        return server
     except OSError as exc:
         raise OSError(
             f"could not listen on port {port} ({exc.strerror}); pass "

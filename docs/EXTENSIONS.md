@@ -157,6 +157,16 @@ The program gets the model's arguments as a JSON object on stdin.
 Whatever it prints to stdout goes back to the model. A non-zero exit
 reports the exit code and stderr instead.
 
+To show the model a picture (what a device's camera sees), print JSON:
+`{"text": "What it sees.", "images": ["<base64 JPEG or PNG>"]}`; up to
+four pictures go to the model as a built-in tool's do, the text with
+them.
+
+A tool can use Flash's own API: `FLASH_WEB_URL` is where it is, and
+`FLASH_WEB_TOKEN` goes in the `X-Flash-Token` header. A device's
+extension uses it to find its device among the paired ones (`browsers`)
+and to signal it (`extension-signal`).
+
 Set `"confirm": true` on a tool that changes things. Flash then asks
 before each call, unless autonomous mode (`/auto`) is on.
 

@@ -1077,3 +1077,17 @@ def test_a_speaker_needs_one_of_its_switches(tmp_path):
     }, {"p.md": "hi"})
     with pytest.raises(extensions.ExtensionError, match="switch"):
         extensions.load(bad)
+
+
+def test_an_extension_tool_can_show_the_model_a_picture():
+    import base64
+    from flash import tools
+
+    tools._pending_images.clear()
+    jpeg = b"\xff\xd8\xff\xe0 a picture"
+    said = tools._tool_pictures(json.dumps({"text": "What the robot sees.",
+                                            "images": [base64.b64encode(jpeg).decode()]}))
+    assert said == "What the robot sees.\n(1 picture attached)"  # nosec B101
+    assert tools._pending_images == [jpeg]  # nosec B101
+    assert tools._tool_pictures("plain words") == "plain words"  # nosec B101
+    tools._pending_images.clear()
