@@ -8546,7 +8546,7 @@ def _listen(
                 style=DIM))
     try:
         server = Server(port, session=session, lan=lan)
-        os.environ[URL_ENV] = f"http://127.0.0.1:{server.port}"
+        os.environ[URL_ENV] = f"http://127.0.0.1:{getattr(server, 'port', port)}"
         return server
     except OSError as exc:
         raise OSError(
