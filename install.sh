@@ -266,6 +266,10 @@ if [ ! -x "$FLASH_BIN" ]; then
     FLASH_BIN="flash"
 fi
 FLASH_VERSION="$("$FLASH_BIN" --version 2>/dev/null || echo "Flash")"
+# Which branch and commit this is, so `flash --update` keeps to the same branch.
+mkdir -p "$HOME/.flash"
+printf '{"branch": "%s", "commit": "%s"}\n' "$BRANCH" "$(git -C "$REPO_DIR" rev-parse HEAD 2>/dev/null)" \
+    > "$HOME/.flash/install.json" 2>/dev/null || true
 done_ok "$FLASH_VERSION"
 
 # --- 6. The browser for screenshots ------------------------------------------------------------

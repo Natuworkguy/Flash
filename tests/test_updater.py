@@ -2,6 +2,8 @@
 
 import sys
 
+import pytest
+
 from flash import updater
 from flash.updater import (
     check_for_update,
@@ -43,6 +45,14 @@ def test_check_for_update_available(monkeypatch):
         "flash.updater.fetch_latest_version", lambda: "99.0.0"
     )
     assert check_for_update() == "99.0.0"  # nosec B101
+
+
+@pytest.fixture(autouse=True)
+def _installed_here(monkeypatch, tmp_path):
+    """Updates in these tests record what they installed here, never in
+    the real ~/.flash."""
+
+    monkeypatch.setattr(updater, "INSTALLED", tmp_path / "install-record.json")
 
 
 def _fake_tools(monkeypatch):
@@ -349,3 +359,40 @@ def test_windows_handoff_only_restores_voice_after_a_good_install(
         "inject flash"
     )
     assert "if ($code -eq 0) {" in script  # nosec B101
+
+
+def test_an_update_keeps_to_the_branch_it_was_installed_from(monkeypatch, tmp_path):
+    monkeypatch.setattr(updater, "INSTALLED", tmp_path / "install.json")
+    updater.record("dev", "abc123")
+    assert updater.installed() == {"branch": "dev", "commit": "abc123"}  # nosec B101
+    _fake_posix(monkeypatch)
+    cloned = []
+
+    def stream(command, on_output=None):
+        cloned.append(command)
+        return 0, "fine"
+
+    monkeypatch.setattr(updater, "_stream", stream)
+    monkeypatch.setattr(updater, "_cloned_commit", lambda _folder: "def456")
+    ok, _ = perform_update()
+    assert ok  # nosec B101
+    assert cloned[0][:6] == ["git", "clone", "--depth", "1", "--branch", "dev"]  # nosec B101
+    assert updater.installed() == {"branch": "dev", "commit": "def456"}  # nosec B101
+
+
+def test_nothing_recorded_is_the_released_branch(monkeypatch, tmp_path):
+    monkeypatch.setattr(updater, "INSTALLED", tmp_path / "missing.json")
+    assert updater.installed()["branch"] == "main"  # nosec B101
+    (tmp_path / "bom.json").write_bytes(b'\xef\xbb\xbf{"branch": "dev", "commit": "x"}')
+    monkeypatch.setattr(updater, "INSTALLED", tmp_path / "bom.json")
+    assert updater.installed()["branch"] == "dev"  # nosec B101 -- as Windows PowerShell writes it
+
+
+def test_a_fresh_clones_commit_is_read_from_its_files(tmp_path):
+    git = tmp_path / ".git"
+    (git / "refs" / "heads").mkdir(parents=True)
+    (git / "HEAD").write_text("ref: refs/heads/dev\n")
+    (git / "packed-refs").write_text("# pack-refs\n1234abcd refs/heads/dev\n")
+    assert updater._cloned_commit(str(tmp_path)) == "1234abcd"  # nosec B101
+    (git / "refs" / "heads" / "dev").write_text("5678ef\n")
+    assert updater._cloned_commit(str(tmp_path)) == "5678ef"  # nosec B101
