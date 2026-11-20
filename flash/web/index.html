@@ -2494,6 +2494,11 @@ body.page-projects #dock, body.page-settings #dock, body.page-tool #dock { displ
 .mem-empty b { display: block; color: var(--text); font-size: 15px; font-weight: 600; margin-bottom: 6px; }
 .mem-empty .btn { margin-top: 14px; }
 .item-list { border: 1px solid var(--border); border-radius: 14px; background: var(--surface); overflow: hidden; }
+/* Extensions: the switch above the list stands apart from it, and an extension's buttons wrap under its words
+   when there isn't room beside them, instead of running off the edge. */
+.ext-updates-row { margin: 0 0 18px; }
+.ext-list .item-row { flex-wrap: wrap; row-gap: 10px; }
+.ext-list .item-row .main { flex: 1 1 320px; }
 .item-row { display: flex; align-items: flex-start; gap: 12px; width: 100%; padding: 13px 14px 13px 16px; text-align: left; border-top: 1px solid var(--border); animation: rise 0.3s var(--ease) both; animation-delay: calc(var(--i, 0) * 0.03s); }
 .item-row:first-child { border-top: 0; }
 /* An extension's own settings, sliding open under its row and shut
@@ -16066,7 +16071,7 @@ async function drawExtensions(body) {
     host.appendChild(el("div", "mem-empty", `<b>No extensions installed</b>Install one with <code>github@owner/repo</code> (add <code>#branch</code> for another branch), <code>git@</code> and any repository URL, <code>path@/some/folder</code> while you write your own, or <code>path@/some/file.bundle</code> for one passed around as a git bundle.`));
     return;
   }
-  const list = el("div", "item-list");
+  const list = el("div", "item-list ext-list");
   r.extensions.forEach((ext, i) => {
     ext.secrets = r.secrets || [];
     const row = el("div", "item-row", `<span class="main"><span class="top"><span class="name"></span><span class="ver"></span></span><span class="desc"></span><span class="chips"></span><span class="src"></span></span>`);
