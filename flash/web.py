@@ -773,6 +773,14 @@ class Access:
                     found["product"] = device_product(user_agent)
             return found
 
+    def about(self, key: str) -> dict:
+        """The signed-in browser holding KEY, as a copy ({} for none)."""
+
+        if not key:
+            return {}
+        with self._lock:
+            return dict(self._browsers.get(_hashed(key)) or {})
+
     def signed_out(self, key: str) -> bool:
         with self._lock:
             return bool(key) and _hashed(key) in self._gone
@@ -2138,6 +2146,7 @@ class Session:
         self, chat: Chat, text: str, wake: bool = False, mode: str = "",
         files: Optional[list] = None, heard: bool = False,
         note: str = "", quiet: str = "", deep: bool = False,
+        asked_from: Optional[dict] = None,
     ) -> dict:
         """Start a turn on a thread of its own and return at once.
 
@@ -2176,6 +2185,9 @@ class Session:
                     # Only when asked, so a plain one stays as it was.
                     **({"deep": True} if deep else {}),
                 }
+                # Where it was asked from, kept beside it (not shown).
+                extensions.turn_from[f"{chat.id}:{item['id']}"] = \
+                    dict(asked_from or {})
                 if mode == "now":
                     chat.pending.insert(0, item)
                 else:
@@ -2185,6 +2197,10 @@ class Session:
                 chat.stop.clear()
                 chat.queued = True
                 chat.heard = heard
+                # Where the person asked from, for extension tools (a robot
+                # may only be used when asked from one, or by voice): none
+                # for a turn nobody typed or said.
+                extensions.turn_from[chat.id] = dict(asked_from or {})
                 chat.voice_ended = False
                 waiting = False
 
@@ -2822,6 +2838,9 @@ class Session:
         item = chat.pending.pop(0)
         chat.queued = True
         chat.stop.clear()
+        # The turn it starts was asked from where it was.
+        extensions.turn_from[chat.id] = extensions.turn_from.pop(
+            f"{chat.id}:{item.get('id', '')}", {})
         return item
 
     def halt(self, chat: Chat) -> None:
@@ -8316,12 +8335,21 @@ class Handler(BaseHTTPRequestHandler):
                     not (chat.busy or chat.queued):
                 session.voice_notes[chat.id] = humanvoice.note_for(
                     body["voice_note"])
+            device = session.access.about(self.browser)
+            kind = device_kind(device.get("product", "")) \
+                if DEVICE_AGENT in device.get("agent", "") else ""
             sent = session.send(
                 chat, str(body.get("text", "")),
                 mode=str(body.get("mode") or ""),
                 files=[str(f) for f in body.get("files") or []],
                 heard=bool(body.get("voice")),
                 deep=bool(body.get("deep")),
+                asked_from={
+                    "from": "robot" if kind == "robot" else
+                    "voice" if body.get("voice") else "typed",
+                    "device": device.get("id", ""),
+                    "name": device.get("name", "") or kind,
+                },
             )
             return {"chat": chat.id, **sent}
 
