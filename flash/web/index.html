@@ -2082,6 +2082,18 @@ body.on-page #hero, body.on-page #suggestions { display: none; }
 body.page-projects #dock, body.page-settings #dock, body.page-tool #dock { display: none; }
 .page { padding: 18px 0 40px; animation: rise 0.22s cubic-bezier(0.2, 0, 0, 1); }
 .page-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 22px; }
+/* Settings search: beside the title; while it has words in it, the tabs step back and only what matches shows. */
+.settings-search { display: flex; align-items: center; gap: 8px; width: min(300px, 100%); padding: 0 12px; height: 36px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); color: var(--text-3); align-self: center; }
+.settings-search:focus-within { border-color: var(--text-3); }
+.settings-search .i { width: 15px; height: 15px; flex: none; }
+.settings-search input { flex: 1; min-width: 0; border: 0; outline: 0; background: none; color: var(--text); font: inherit; font-size: 14px; }
+.settings-search input::-webkit-search-cancel-button { cursor: pointer; }
+.page.settings.searching .tabs { opacity: .45; }
+.search-body .search-part + .search-part { margin-top: 30px; }
+.search-body .search-tab { font-size: 11.5px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--text-3); margin-bottom: 10px; }
+.search-body .search-hidden { display: none !important; }
+.search-body .search-none { color: var(--text-3); text-align: center; padding: 40px 0; }
+@media (max-width: 640px) { .page.settings .page-head { flex-direction: column; align-items: stretch; } .settings-search { width: 100%; } }
 .page h1 { font: 600 28px/1.2 var(--brand); letter-spacing: -0.025em; margin: 0; }
 .page .path { font: 13px var(--mono); color: var(--text-3); margin-top: 6px; word-break: break-all; }
 .more-folders .folder-rows { display: flex; flex-direction: column; gap: 6px; }
@@ -10525,7 +10537,7 @@ function drawSettings() {
   $("#title").textContent = "Settings";
   document.title = "Settings · Flash";
   const page = el("div", "page settings");
-  page.innerHTML = `<div class="page-head"><h1>Settings</h1></div><div class="tabs" role="tablist"><span class="thumb"></span><button type="button" role="tab" data-tab="general">General</button><button type="button" role="tab" data-tab="usage">Usage</button><button type="button" role="tab" data-tab="memory">Memory</button><button type="button" role="tab" data-tab="email">Email</button><button type="button" role="tab" data-tab="connectors">Connectors</button><button type="button" role="tab" data-tab="security">Security</button></div><div class="tab-body"></div>`;
+  page.innerHTML = `<div class="page-head"><h1>Settings</h1><label class="settings-search">${icon("search")}<input type="search" placeholder="Search settings" aria-label="Search settings" autocomplete="off" spellcheck="false"></label></div><div class="tabs" role="tablist"><span class="thumb"></span><button type="button" role="tab" data-tab="general">General</button><button type="button" role="tab" data-tab="usage">Usage</button><button type="button" role="tab" data-tab="memory">Memory</button><button type="button" role="tab" data-tab="email">Email</button><button type="button" role="tab" data-tab="connectors">Connectors</button><button type="button" role="tab" data-tab="security">Security</button></div><div class="tab-body"></div>`;
   messagesEl.appendChild(page);
   const tabs = page.querySelector(".tabs");
   const thumb = tabs.querySelector(".thumb");
@@ -10559,9 +10571,78 @@ function drawSettings() {
   };
   tabs.onclick = (e) => {
     const b = e.target.closest("button");
-    if (b && b.dataset.tab !== settingsTab) select(b.dataset.tab, true);
+    if (search.value) { search.value = ""; page.classList.remove("searching"); }
+    if (b && (b.dataset.tab !== settingsTab || !page.querySelector(".tab-body:not(.search-body)"))) select(b.dataset.tab, true);
   };
   select(settingsTab, false);
+
+  // Search: every tab drawn once, live (each control still works), with only what matches shown.
+  const search = page.querySelector(".settings-search input");
+  const DRAW = { general: drawGeneral, usage: drawUsage, memory: drawMemory, email: drawEmail, connectors: drawConnectors, security: drawSecurity };
+  let found = null, timer = 0;
+  const run = () => {
+    const q = search.value.trim().toLowerCase();
+    if (!q) {
+      found = null;
+      page.classList.remove("searching");
+      select(settingsTab, false);
+      return;
+    }
+    page.classList.add("searching");
+    if (!found || !found.isConnected) {
+      found = el("div", "tab-body search-body");
+      for (const b of tabs.querySelectorAll("button[data-tab]")) {
+        const part = found.appendChild(el("section", "search-part"));
+        part.appendChild(el("div", "search-tab")).textContent = b.textContent;
+        const body = part.appendChild(el("div", "search-tab-body"));
+        try { DRAW[b.dataset.tab](body); } catch (_) { /* a tab that can't draw now has nothing to find */ }
+      }
+      page.querySelector(".tab-body").replaceWith(found);
+      // Some tabs fill in once Flash answers: looked through again as they do.
+      setTimeout(() => filterSettings(found, search.value), 500);
+      setTimeout(() => filterSettings(found, search.value), 1500);
+    }
+    filterSettings(found, q);
+  };
+  search.oninput = () => { clearTimeout(timer); timer = setTimeout(run, 90); };
+  search.onkeydown = (e) => { if (e.key === "Escape" && search.value) { e.stopPropagation(); search.value = ""; run(); } };
+}
+
+// Shows only the settings that match QUERY (every word, anywhere in a setting's name or help): a whole
+// section when its own heading or description matches, else the rows in it that do, under its heading.
+function filterSettings(root, query) {
+  const words = String(query || "").toLowerCase().split(/\s+/).filter(Boolean);
+  const hit = (node) => { const t = (node.textContent || "").toLowerCase(); return words.every((w) => t.includes(w)); };
+  let any = false;
+  for (const part of root.querySelectorAll(".search-part")) {
+    const body = part.querySelector(".search-tab-body");
+    let partHit = false;
+    // Sections: a heading and everything after it until the next one.
+    const sections = [];
+    for (const node of body.children) {
+      if (node.matches("h2.settings-section") || !sections.length) sections.push({ head: node.matches("h2.settings-section") ? node : null, nodes: [] });
+      if (!node.matches("h2.settings-section")) sections[sections.length - 1].nodes.push(node);
+    }
+    for (const { head, nodes } of sections) {
+      const sub = nodes.find((n) => n.matches(".settings-sub"));
+      const whole = head && (hit(head) || (sub && hit(sub)));
+      let shown = false;
+      for (const n of nodes) {
+        const on = whole || (!n.matches(".settings-sub") && hit(n));
+        n.classList.toggle("search-hidden", !on);
+        shown = shown || on;
+      }
+      if (sub && shown && !whole) sub.classList.remove("search-hidden");
+      if (head) head.classList.toggle("search-hidden", !shown);
+      partHit = partHit || shown;
+    }
+    part.hidden = !partHit;
+    any = any || partHit;
+  }
+  let none = root.querySelector(".search-none");
+  if (!none) none = root.appendChild(el("p", "search-none"));
+  none.textContent = any ? "" : `No settings match “${query.trim()}”.`;
+  none.hidden = any;
 }
 
 const THEMES = [["light", "Light", "sun"], ["dark", "Dark", "moon"], ["system", "System", "monitor"]];
@@ -25740,6 +25821,8 @@ function renderExtUI() {
       row.dataset.tip = p.label.toLowerCase() === ext.name ? p.label : `${p.label}, from ${ext.name}`;
       row.dataset.url = p.url;
       row.dataset.panel = `${ext.name}/${p.id}`;
+      // "sidebar": false, a panel opened from another: hidden here until Customize sidebar shows it
+      if (p.sidebar === false) row.dataset.sideHidden = "1";
       row.onclick = () => openExtPanel(p.url, p.label, { ...p, ext: ext.name });
       side.appendChild(row);
     }
@@ -27183,7 +27266,9 @@ function sideLayout() {
     if (r && known.includes(r.id) && !out.some((o) => o.id === r.id)) out.push({ id: r.id, more: !!r.more, hidden: !!r.hidden });
   }
   // an extension's panel starts in More: the sidebar is not every extension's to fill
-  for (const id of known) if (!out.some((r) => r.id === id)) out.push({ id, more: SIDE_TUCKED.has(id) || id.startsWith("sx-") });
+  for (const id of known) if (!out.some((r) => r.id === id)) {
+    out.push({ id, more: SIDE_TUCKED.has(id) || id.startsWith("sx-"), hidden: document.getElementById(id)?.dataset.sideHidden === "1" });
+  }
   return out;
 }
 function setSideLayout(layout) {
