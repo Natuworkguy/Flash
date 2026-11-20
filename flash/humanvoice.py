@@ -66,10 +66,40 @@ _STAGE = re.compile(r"\*(?:laughs?|chuckles?|sighs?|smiles?|grins?)\*"
                     re.IGNORECASE)
 
 
+# A cue for a device an extension drives, "[bot:love]": the robot makes
+# that face right there as the reply is said. Hidden and unsaid by Flash,
+# like its own cues, but only for an installed extension's name, so
+# "[note:x]" in a reply is left as it was.
+_DEVICE = re.compile(r"\[([a-z][a-z0-9_]{0,40}):([a-z][a-z0-9_-]{0,40})\][ \t]*",
+                     re.IGNORECASE)
+
+
+def device_cues(text: str) -> list[tuple[str, str]]:
+    """The device cues in TEXT, in order: (extension, name)."""
+
+    from . import extensions  # deferred: extensions imports a lot
+
+    return [(m.group(1).lower(), m.group(2).lower())
+            for m in _DEVICE.finditer(text or "")
+            if extensions.find(m.group(1).lower()) is not None]
+
+
+def drop_device_cues(text: str) -> str:
+    """TEXT without its device cues (an installed extension's only)."""
+
+    if "[" not in (text or "") or ":" not in text:
+        return text or ""
+    from . import extensions
+
+    return _DEVICE.sub(
+        lambda m: "" if extensions.find(m.group(1).lower()) is not None
+        else m.group(0), text)
+
+
 def strip(text: str) -> str:
     """TEXT with its cues taken out: as it is shown, captioned, or kept."""
 
-    return _STAGE.sub("", _CUE.sub("", text or ""))
+    return _STAGE.sub("", _CUE.sub("", drop_device_cues(text or "")))
 
 
 def pieces(sentence: str) -> tuple[str, list[tuple[str, str]]]:
@@ -203,8 +233,9 @@ def for_ear(text: str) -> str:
     "web.py" as "web dot py", "e.g." as "for example", "40%" as "40
     percent". Cues pass through as they are."""
 
+    text = drop_device_cues(text or "")
     for pattern, said in _SAID:
-        text = pattern.sub(said, text or "")
+        text = pattern.sub(said, text)
     text = _TOKEN.sub(_path_said, text)
     return _FILE.sub(r"\1 dot \2", text)
 
