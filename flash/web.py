@@ -393,6 +393,11 @@ class Hub:
         with self._lock:
             return bool(self._queues)
 
+    # Which paired device a browser key is, by its id ("" for a page, not a
+    # device): set by the session, so an event "to" one device reaches only
+    # it (and the pages, which show everything).
+    device_of: Optional[Callable[[str], str]] = None
+
     def subscribe(self, owner: str = "") -> Queue:
         queue: Queue = Queue()
         with self._lock:
@@ -434,10 +439,15 @@ class Hub:
             who = event.get("name") or "A spark"
             self.note("mention", f"{who} mentioned you",
                       str(event.get("text") or ""))
+        to = str(event.get("to") or "")
         with self._lock:
             self.seq += 1
             event = {**event, "seq": self.seq}
-            for queue in self._queues:
+            for queue, owner in self._queues.items():
+                if to and owner and self.device_of is not None:
+                    device = self.device_of(owner)
+                    if device and device != to:
+                        continue  # meant for another device
                 queue.put(event)
         return event
 
@@ -829,6 +839,34 @@ class Access:
             self.remember()
         return bool(found)
 
+    def set_desk(self, browser_id: str, on: bool) -> bool:
+        """The paired device BROWSER_ID is the one on the user's desk (ON),
+        or not: voice mode on this computer talks through that one of its
+        kind (a robot), so asking at the desk doesn't answer in another
+        room. One of each kind at most."""
+
+        with self._lock:
+            found = [b for b in self._browsers.values() if b["id"] == browser_id]
+            if not found:
+                return False
+            kind = device_kind(found[0].get("product", ""))
+            for b in self._browsers.values():
+                if device_kind(b.get("product", "")) == kind:
+                    b.pop("desk", None)
+            if on:
+                found[0]["desk"] = True
+        self.remember()
+        return True
+
+    def desk(self, kind: str = "") -> str:
+        """The id of the device of KIND on the user's desk, or ""."""
+
+        with self._lock:
+            for b in self._browsers.values():
+                if b.get("desk") and (not kind or device_kind(b.get("product", "")) == kind):
+                    return b["id"]
+        return ""
+
     def sign_out(self, browser_id: str) -> list[str]:
         """Sign out the browser the page knows as BROWSER_ID."""
 
@@ -888,6 +926,7 @@ class Access:
                 "seen": b.get("seen", 0),
                 "current": key == mine,
                 "active": key in live,
+                "desk": bool(b.get("desk")),
             }
             for key, b in items
         ]
@@ -1210,6 +1249,7 @@ class Session:
         # The link's token and the browsers signed in with it. A server
         # restarted after an update takes over the old one's (Server).
         self.access = Access()
+        self.hub.device_of = self._device_id
         # The code a device types in to sign in (see Pairing).
         self.pairing = Pairing()
         # Tells whoever started Flash its new link, once the old one is
@@ -1274,6 +1314,12 @@ class Session:
 
     # Chats ---------------------------------------------------------
 
+
+    def _device_id(self, key: str) -> str:
+        """The id of the paired device holding KEY, or "" for a page."""
+
+        found = self.access.about(key)
+        return found.get("id", "") if DEVICE_AGENT in found.get("agent", "") else ""
     def new_chat(self, project: str = "", spark: str = "") -> Chat:
         if project and workspace.project(project) is None:
             raise KeyError(project)
@@ -6551,9 +6597,20 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
             raise ValueError("a signal's data is an object")
         if len(json.dumps(data or {})) > 4000:
             raise ValueError("that signal's data is too long")
+        # Which device said it (a robot's status, say, among several), and
+        # the one device it is for, if only one.
+        sender = session.access.about(browser) if session is not None else {}
+        to = str(body.get("to") or "")[:16]
+        if to == "desk":
+            # Voice mode here: the robot on the desk, when one is marked;
+            # every one listening otherwise.
+            to = session.access.desk("robot") if session is not None else ""
         if session is not None:
             session.hub.publish({"type": "extension-signal", "name": ext.name,
-                                 "signal": signal, "data": data or {}})
+                                 "signal": signal, "data": data or {},
+                                 **({"from": sender.get("id", "")} if sender.get("id") and
+                                    DEVICE_AGENT in sender.get("agent", "") else {}),
+                                 **({"to": to} if to else {})})
         return {}
 
     if name == "extension-remove":
@@ -6600,6 +6657,13 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
         return {"device": devices.save_watch(
             body.get("battery"), body.get("charging"),
             str(body.get("watch") or ""))}
+
+    if name == "device-desk":
+        # The device on the user's desk: voice mode here talks through it.
+        if not session.access.set_desk(arg, bool(body.get("on", True))):
+            raise ValueError("That device is not signed in any more.")
+        session.hub.publish({"type": "browsers"})
+        return {}
 
     if name == "device-rename":
         if not session.access.rename(arg, str(body.get("to") or "")):
