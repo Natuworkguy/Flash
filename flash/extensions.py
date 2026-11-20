@@ -82,6 +82,7 @@ on stdout; a command gets whatever was typed after it as arguments.
 """
 
 import contextlib
+import hashlib
 import json
 import os
 import re
@@ -2044,6 +2045,57 @@ def fetch(spec: str) -> Path:
     except BaseException:
         _remove_tree(staging)
         raise
+
+
+# Whether extensions keep themselves up to date: on unless switched off.
+UPDATES_SETTING = "EXTENSION_UPDATES"
+
+
+def updates_on() -> bool:
+    """Whether extensions update themselves (from where each came from)."""
+
+    from .notify import _saved
+
+    return _saved(UPDATES_SETTING).strip().lower() not in (
+        "0", "off", "false", "no")
+
+
+def asks(extension: Extension) -> set[str]:
+    """What EXTENSION asks to do beyond being read: the programs it runs
+    and what it reaches. An update asking for nothing more than this
+    goes in by itself; one asking for more waits for the user."""
+
+    wants = {f"command:{c.name}" for c in extension.commands}
+    wants |= {f"tool:{t.name}" for t in extension.tools}
+    wants |= {f"service:{s.name}" for s in extension.services}
+    wants |= {f"provider:{p.name}" for p in extension.providers}
+    wants |= {f"speech:{s.name}" for s in extension.speech}
+    wants |= {f"tunnel:{t.name}" for t in extension.tunnels}
+    for flag, on in (("events", extension.events), ("voice", extension.voice),
+                     ("briefing", extension.briefing), ("inbox", extension.inbox),
+                     ("system one", extension.system_one),
+                     ("network", extension.network)):
+        if on:
+            wants.add(flag)
+    return wants
+
+
+def tree_digest(folder: Path) -> str:
+    """One hash of everything in FOLDER an extension is made of (not its
+    git history, nor the note of where it came from): the same for the
+    same version, whoever fetched it."""
+
+    digest = hashlib.sha256()
+    for path in sorted(p for p in Path(folder).rglob("*") if p.is_file()):
+        rel = path.relative_to(folder)
+        if rel.parts[0] in (".git", SOURCE_FILE) or "__pycache__" in rel.parts:
+            continue
+        digest.update(str(rel.as_posix()).encode())
+        digest.update(b"\0")
+        with contextlib.suppress(OSError):
+            digest.update(path.read_bytes())
+        digest.update(b"\0")
+    return digest.hexdigest()
 
 
 def update_source(name: str) -> str:

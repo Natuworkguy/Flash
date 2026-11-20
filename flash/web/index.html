@@ -15921,6 +15921,18 @@ async function drawExtensions(body) {
   add.type = "button";
   add.onclick = () => extensionForm();
   body.querySelector(".mem-head").appendChild(add);
+  // Extensions keeping themselves up to date: on unless switched off.
+  const updatesRow = el("button", "setting-row ext-updates-row", `<span class="what"><b>Keep extensions up to date</b><span>Each pulls its newest version from where it came from, a few minutes after Flash opens and every 6 hours, or when it asks to. One that wants to run something new waits for you to look first.</span></span><span class="switch" aria-hidden="true"></span>`);
+  updatesRow.type = "button";
+  updatesRow.setAttribute("role", "switch");
+  updatesRow.setAttribute("aria-checked", info.extension_updates !== false);
+  updatesRow.onclick = async () => {
+    const on = updatesRow.getAttribute("aria-checked") !== "true";
+    updatesRow.setAttribute("aria-checked", on);
+    try { info.extension_updates = (await command("extension-updates-setting", on ? "on" : "off")).extension_updates; }
+    catch (error) { updatesRow.setAttribute("aria-checked", !on); showFailure(error); }
+  };
+  body.querySelector(".mem-head").after(updatesRow);
   const host = body.querySelector(".host");
   if (r.problems.length) {
     const warn = el("div", "warn-list");
