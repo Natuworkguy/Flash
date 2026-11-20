@@ -64,7 +64,9 @@ KINDS = {
 
 
 def _clip(text: str, most: int, one_line: bool = False) -> str:
-    text = str(text or "").strip()
+    # Apple's logo (" Cash") only draws in Apple's fonts, and a character
+    # that couldn't be read shows as a question mark in a diamond.
+    text = str(text or "").replace("\uf8ff", "Apple").replace("\ufffd", "").strip()
     if one_line:
         text = " ".join(text.split())
     return text if len(text) <= most else text[:most - 1].rstrip() + "…"

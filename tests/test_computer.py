@@ -643,6 +643,29 @@ def test_recent_imessages_read_newest_first_with_names(monkeypatch, ran,
     assert lines[4].endswith("Sam Lee: Are we still on for 7?")  # nosec
 
 
+def test_apple_cash_says_what_was_sent(monkeypatch, ran, messages):
+    """Apple Cash is an app's message: its words are only a placeholder,
+    the amount is in its data. And Apple's logo character reads as Apple."""
+    import sqlite3
+
+    on(monkeypatch, "mac")
+    with sqlite3.connect(messages) as db:
+        db.execute("ALTER TABLE message ADD COLUMN balloon_bundle_id TEXT")
+        db.execute("ALTER TABLE message ADD COLUMN payload_data BLOB")
+        app = ("com.apple.messages.MSMessageExtensionBalloonPlugin:0000000000:"
+               "com.apple.PassbookUIService.PeerPaymentMessagesExtension")
+        db.execute("INSERT INTO message VALUES (5, ?, 0, 0, ?, NULL, 0, 1, 0, ?, ?)",
+                   (760_000_000 * 10**9, "\ufffc", app, b"bplist00..$25.00..\xff"))
+        db.execute("INSERT INTO message VALUES (6, ?, 0, 0, ?, NULL, 0, 1, 0, NULL, NULL)",
+                   (760_000_100 * 10**9, "Paid with \uf8ff Pay \ufffd"))
+        db.execute("INSERT INTO chat_message_join VALUES (1, 5), (1, 6)")
+
+    said = tools.read_imessages()
+    assert "Sam Lee (unread): Sent you $25.00 with Apple Cash" in said  # nosec B101
+    assert "Paid with Apple Pay" in said and "\ufffd" not in said  # nosec B101
+    assert "\ufffc" not in said  # nosec B101
+
+
 def test_unread_and_one_person_only(monkeypatch, ran, messages):
     mac_messages(monkeypatch, ran)
 

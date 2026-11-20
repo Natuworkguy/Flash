@@ -1021,7 +1021,8 @@ _APPLE_EPOCH = datetime(2001, 1, 1, tzinfo=timezone.utc)
 _RECENT = """
 SELECT m.ROWID, m.date, m.is_from_me, m.is_read, m.text, m.attributedBody,
        m.cache_has_attachments, h.id, c.display_name, c.chat_identifier,
-       (SELECT COUNT(*) FROM chat_handle_join j WHERE j.chat_id = c.ROWID)
+       (SELECT COUNT(*) FROM chat_handle_join j WHERE j.chat_id = c.ROWID),
+       {app}, {payload}
 FROM message m
 LEFT JOIN handle h ON h.ROWID = m.handle_id
 LEFT JOIN chat_message_join cm ON cm.message_id = m.ROWID
@@ -1036,6 +1037,56 @@ _FULL_DISK = (
     "Settings > Privacy & Security > Full Disk Access, quit and reopen "
     "that app, then ask again."
 )
+
+
+def _app_message(app, payload, mine: bool) -> str:
+    """What a message made by an app inside Messages says, when its own
+    words are only a placeholder: Apple Cash (an amount sent or asked
+    for). Empty for any other app's."""
+
+    if not app or "PeerPayment" not in str(app):
+        return ""
+    data = bytes(payload or b"")
+    amount = re.search(rb"\$\s?\d[\d,]*(?:\.\d\d)?", data)
+    money = amount.group(0).decode("ascii", "ignore").replace(" ", "") \
+        if amount else ""
+    asked = b"request" in data.lower()
+    if mine:
+        return (f"You asked for {money} with Apple Cash" if asked else
+                f"You sent {money} with Apple Cash").replace("  ", " ")
+    return (f"Asked you for {money} with Apple Cash" if asked else
+            f"Sent you {money} with Apple Cash").replace("  ", " ")
+
+
+def _recent(db, where: str, limit: int) -> list:
+    """The newest messages matching WHERE. An app's messages (Apple Cash)
+    say what they are in columns an older Messages database may not
+    have: those come back as None there."""
+
+    have = {r[1] for r in db.execute("PRAGMA table_info(message)")}
+    app = "m.balloon_bundle_id" if "balloon_bundle_id" in have else "NULL"
+    payload = "m.payload_data" if "payload_data" in have else "NULL"
+    return db.execute(_RECENT.format(where=where, app=app, payload=payload),  # nosec B608
+                      (limit,)).fetchall()
+
+
+def _words(text, body, app, payload, mine: bool) -> str:
+    """A message's words as shown: an app's (Apple Cash) said plainly."""
+
+    words = _readable((text or _body_text(body)).replace("\ufffc", "")).strip()
+    made = _app_message(app, payload, mine)
+    if made:
+        words = made + (f": {words}" if words and "$" not in words
+                        and not words.startswith("Apple Cash") else "")
+    return words
+
+
+def _readable(words: str) -> str:
+    """Characters only Apple's fonts draw, made plain: its logo (as in
+    " Cash") becomes "Apple", and a character that could not be read
+    (shown as a question mark in a diamond) is dropped."""
+
+    return words.replace("\uf8ff", "Apple").replace("\ufffd", "")
 
 
 def _when(stamp) -> Optional[datetime]:
@@ -1175,8 +1226,7 @@ def read_imessages(with_: str = "", limit=READ_LIMIT,
                 f"file:{MESSAGES_DB}?mode=ro", uri=True, timeout=5)) as db:
             # Filtered here rather than in SQL: a number is matched by
             # its digits, however it was written.
-            rows = db.execute(_RECENT.format(where=where),
-                              (limit * 20 if keys else limit,)).fetchall()
+            rows = _recent(db, where, limit * 20 if keys else limit)
             files = _attachments(db, [r[0] for r in rows if r[6]])
     except sqlite3.Error as exc:
         if "unable to open" in str(exc) or "authoriz" in str(exc):
@@ -1185,10 +1235,10 @@ def read_imessages(with_: str = "", limit=READ_LIMIT,
 
     lines = []
     for (rowid, date, mine, read, text, body, attached, handle, group,
-         chat, people) in rows:
+         chat, people, app, payload) in rows:
         if keys and _key(handle or chat or "") not in keys:
             continue
-        words = (text or _body_text(body)).replace("\ufffc", "").strip()
+        words = _words(text, body, app, payload, bool(mine))
         if attached:
             sent = files.get(rowid)
             tag = ("[attachment: " + "; ".join(sent) + "]") if sent \
@@ -1410,14 +1460,13 @@ def imessages_after(number: int, most: int = 20) -> list[str]:
     try:
         with contextlib.closing(sqlite3.connect(
                 f"file:{MESSAGES_DB}?mode=ro", uri=True, timeout=5)) as db:
-            rows = db.execute(_RECENT.format(where=where),  # nosec B608
-                              (most,)).fetchall()
+            rows = _recent(db, where, most)
     except sqlite3.Error:
         return []
     lines = []
     for (_, date, _, _, text, body, attached, handle, group, _,
-         people) in reversed(rows):
-        words = (text or _body_text(body)).replace("\ufffc", "").strip()
+         people, app, payload) in reversed(rows):
+        words = _words(text, body, app, payload, False)
         if attached:
             words = (words + " [attachment]").strip()
         if not words:
