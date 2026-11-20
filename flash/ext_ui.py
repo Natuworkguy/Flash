@@ -138,6 +138,9 @@ class Panel:
     # Whether the page shows its X: a panel that is a place of its own,
     # left from the sidebar like any page, can go without.
     close: bool = True
+    # Whether it starts in the sidebar: false starts it hidden there
+    # (Customize sidebar puts it back), for a panel opened from another.
+    sidebar: bool = True
 
 
 @dataclass
@@ -239,6 +242,7 @@ class UI:
             # link to, reload, and come back to.
             "panels": [{"id": p.id, "label": p.label, "icon": p.icon,
                         "url": base + p.file, "close": p.close,
+                        "sidebar": p.sidebar,
                         "route": f"/x/{name}/{p.id}"} for p in self.panels],
             "buttons": [b.summary() for b in self.buttons
                         if set(b.where) - {"terminal"}],
@@ -452,6 +456,7 @@ def parse(entry: Any, root: Path, commands: set[str]) -> UI:
                            (".html",)),
             icon=_text(panel.get("icon"), f"{where} icon")[:24],
             close=_flag(panel.get("close", True), f"{where} close"),
+            sidebar=_flag(panel.get("sidebar", True), f"{where} sidebar"),
         ))
     buttons = entry.get("buttons", [])
     if not isinstance(buttons, list) or len(buttons) > MOST_BUTTONS:
