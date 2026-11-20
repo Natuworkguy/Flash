@@ -2108,7 +2108,33 @@ def update_source(name: str) -> str:
         raise ExtensionError(
             f"{extension.name} does not say where it came from, so it "
             "cannot be pulled again. Install it again from its source.")
+    pull_folder(extension.source)
     return extension.source
+
+
+def pull_folder(spec: str) -> bool:
+    """A folder SPEC names that is a git checkout, brought up to date
+    from its own remote first, so pulling an extension again from a
+    clone gets what was pushed since, not only what the clone had.
+    Only fast-forwards, and never with changes of the user's in it:
+    otherwise the folder is used as it is. Whether it pulled."""
+
+    try:
+        kind, target = parse_source(spec)
+    except ExtensionError:
+        return False
+    folder = Path(target)
+    if kind != "path" or is_bundle(target) or not (folder / ".git").exists():
+        return False
+    try:
+        changed = _git(["-C", str(folder), "status", "--porcelain",
+                        "--untracked-files=no"])
+        if changed.returncode or changed.stdout.strip():
+            return False
+        return _git(["-C", str(folder), "pull", "--ff-only",
+                     "--quiet"]).returncode == 0
+    except (ExtensionError, OSError, subprocess.SubprocessError):
+        return False
 
 
 def discard(checkout: Path) -> None:

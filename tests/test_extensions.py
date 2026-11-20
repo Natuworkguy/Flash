@@ -1199,6 +1199,43 @@ def test_an_extension_updates_itself_unless_it_asks_for_more(tmp_path):
         session.close()
 
 
+def test_updating_from_a_clone_pulls_it_first(tmp_path):
+    """Installed from a folder that is a git clone: updating pulls what was pushed since."""
+    import subprocess  # nosec B404
+
+    from flash import web
+
+    def git(*args, cwd):
+        subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *args], cwd=cwd,  # nosec B603 B607
+                       check=True, capture_output=True)
+
+    origin = tmp_path / "origin"
+    make(origin, {"name": "pulled", "version": "1", "prompt": "p.md"}, {"p.md": "one"})
+    git("init", "-q", "-b", "main", cwd=origin)
+    git("add", "-A", cwd=origin)
+    git("commit", "-qm", "one", cwd=origin)
+    clone = tmp_path / "clone"
+    git("clone", "-q", str(origin), str(clone), cwd=tmp_path)
+    session = web.Session()
+    try:
+        staged = web.command(session, {"name": "extension-preview", "arg": f"path@{clone}"})
+        web.command(session, {"name": "extension-install", "arg": staged["id"]})
+        # Pushed after it was cloned: the clone itself is behind.
+        make(origin, {"name": "pulled", "version": "2", "prompt": "p.md"}, {"p.md": "two"})
+        git("commit", "-qam", "two", cwd=origin)
+        said = web.command(session, {"name": "extension-self-update", "arg": "pulled"})
+        assert said["status"] == "updated" and extensions.find("pulled").version == "2"  # nosec B101
+
+        # The user's own changes in the clone are never pulled over.
+        make(origin, {"name": "pulled", "version": "3", "prompt": "p.md"}, {"p.md": "three"})
+        git("commit", "-qam", "three", cwd=origin)
+        (clone / "p.md").write_text("mine", encoding="utf-8")
+        assert not extensions.pull_folder(f"path@{clone}")  # nosec B101
+        assert (clone / "p.md").read_text(encoding="utf-8") == "mine"  # nosec B101
+    finally:
+        session.close()
+
+
 def test_the_updates_switch(monkeypatch):
     from flash import web
 
