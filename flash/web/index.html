@@ -15929,7 +15929,7 @@ async function drawExtensions(body) {
     for (const c of ext.commands) chips.appendChild(el("span", "chip")).textContent = c;
     for (const t of ext.tools) chips.appendChild(el("span", "chip")).textContent = `tool ${t}`;
     let panel = null;
-    if (ext.settings.length) {
+    if (ext.settings.some((s) => !s.hidden)) {
       const open = el("button", "btn small", "Settings");
       open.type = "button";
       open.setAttribute("aria-expanded", "false");
@@ -15981,6 +15981,7 @@ function extensionPanel(ext) {
     } catch (error) { undo(); showFailure(error); }
   };
   for (const s of ext.settings) {
+    if (s.hidden) continue;  // kept by the extension's own page
     const value = ext.values[s.id];
     if (s.type === "switch") {
       const row = el("button", "setting-row", `<span class="what"><b></b><span></span></span><span class="switch" aria-hidden="true"></span>`);

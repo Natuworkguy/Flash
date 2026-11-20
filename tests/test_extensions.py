@@ -755,6 +755,46 @@ def test_a_secret_setting_is_used_but_never_shown(tmp_path):
         assert mode == 0o600
 
 
+def test_a_long_hidden_text_setting_for_the_extensions_own_records(tmp_path):
+    import json
+    import shutil
+
+    folder = make(tmp_path / "src", {
+        "name": "recorder",
+        "prompt": "p.md",
+        "settings": [
+            {"id": "cards", "label": "Cards", "type": "text", "max": 8000, "hidden": True},
+            {"id": "note", "label": "Note", "type": "text"},
+        ],
+    }, {"p.md": "hi"})
+    dest = extensions.extensions_dir() / "recorder"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(folder, dest)
+    extensions.reload()
+    ext = extensions.find("recorder")
+    cards, note = ext.settings
+    assert cards.hidden and cards.summary()["hidden"] and not note.hidden  # nosec B101
+
+    records = json.dumps({f"04:{i:02X}:7A:1B": {"name": f"card {i}", "do": "ask", "value": "x" * 30}
+                          for i in range(60)})
+    assert len(records) > extensions.SETTING_CHARS  # nosec B101
+    extensions.set_setting(ext, "cards", records)
+    assert json.loads(extensions.settings_values(ext)["cards"]) == json.loads(records)  # nosec B101
+    with pytest.raises(extensions.ExtensionError, match="at most 8000"):
+        extensions.set_setting(ext, "cards", "y" * 8001)  # kept whole or refused, never cut
+    # An ordinary text setting is cut at the usual length, as it always was.
+    extensions.set_setting(ext, "note", "z" * 900)
+    assert len(extensions.settings_values(ext)["note"]) == extensions.SETTING_CHARS  # nosec B101
+    # More than Flash allows at all is held to that.
+    folder2 = make(tmp_path / "src2", {
+        "name": "greedy", "prompt": "p.md",
+        "settings": [{"id": "big", "type": "text", "max": 10 ** 9}],
+    }, {"p.md": "hi"})
+    shutil.copytree(folder2, extensions.extensions_dir() / "greedy")
+    extensions.reload()
+    assert extensions.find("greedy").settings[0].chars == extensions.SETTING_CHARS_MOST  # nosec B101
+
+
 def test_removing_empties_it_from_the_deepest_up(tmp_path, monkeypatch):
     import os
     import stat
