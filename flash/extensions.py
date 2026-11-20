@@ -1545,6 +1545,12 @@ def current_web_token() -> str:
     return web_token
 
 
+# Where each chat's turn running now was asked from, by chat id: {"from":
+# "robot" (said to a paired robot), "voice" (voice mode here), "typed"},
+# and the device it came from. A turn nobody asked for has none.
+turn_from: dict[str, dict] = {}
+
+
 def environment(extension: Extension, chat: str = "") -> dict[str, str]:
     env = dict(os.environ)
     env["FLASH_EXTENSION_DIR"] = str(extension.path)
@@ -1563,6 +1569,13 @@ def environment(extension: Extension, chat: str = "") -> dict[str, str]:
         env["FLASH_CHAT"] = chat
     else:
         env.pop("FLASH_CHAT", None)
+    # How the turn it runs for was asked for: FLASH_TURN_FROM is robot,
+    # voice, typed, or empty (nobody asked: a spark, a schedule, another
+    # chat), with the device it came from.
+    asked = turn_from.get(chat, {}) if chat else {}
+    env["FLASH_TURN_FROM"] = str(asked.get("from", ""))
+    env["FLASH_TURN_DEVICE"] = str(asked.get("device", ""))
+    env["FLASH_TURN_DEVICE_NAME"] = str(asked.get("name", ""))
     if extension.settings:
         values = settings_values(extension)
         env["FLASH_SETTINGS"] = json.dumps(

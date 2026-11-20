@@ -1244,3 +1244,26 @@ def test_the_updates_switch(monkeypatch):
     assert not extensions.updates_on()  # nosec B101
     web.command(None, {"name": "extension-updates-setting", "arg": "on"})
     assert extensions.updates_on()  # nosec B101
+
+
+def test_a_tool_knows_how_its_turn_was_asked_for(tmp_path):
+    """FLASH_TURN_FROM: robot, voice or typed for a turn someone asked for, empty for one nobody did."""
+    from flash import web
+
+    ext = extensions.load(make(tmp_path / "e", {"name": "origin", "version": "1", "prompt": "p.md"}, {"p.md": "x"}))
+    session = web.Session()
+    try:
+        chat = session.new_chat()
+        with session._lock:
+            chat.busy = True  # waits in line: nothing runs, and where it came from rides with it
+        session.send(chat, "hello", asked_from={"from": "robot", "device": "ab12", "name": "Desk"})
+        item = chat.pending[-1]
+        asked = extensions.turn_from[f"{chat.id}:{item['id']}"]
+        assert asked["from"] == "robot"  # nosec B101
+        extensions.turn_from[chat.id] = asked  # as it is when that turn starts
+        env = extensions.environment(ext, chat.id)
+        assert env["FLASH_TURN_FROM"] == "robot" and env["FLASH_TURN_DEVICE"] == "ab12"  # nosec B101
+        assert env["FLASH_TURN_DEVICE_NAME"] == "Desk"  # nosec B101
+        assert extensions.environment(ext, "")["FLASH_TURN_FROM"] == ""  # nosec B101
+    finally:
+        session.close()
