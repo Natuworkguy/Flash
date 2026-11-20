@@ -141,6 +141,9 @@ SETTING_ID_RE = re.compile(r"^[a-z][a-z0-9_]{0,31}$")
 MAX_SETTINGS = 24
 MAX_OPTIONS = 24
 SETTING_CHARS = 500
+# A text setting can ask for more room ("max" on a text setting: an
+# extension's own records, such as a robot's NFC cards), up to this.
+SETTING_CHARS_MOST = 20000
 MAX_TIMEOUT = 600
 # A provider answers a whole turn, which a big model can take minutes on.
 DEFAULT_PROVIDER_TIMEOUT = 300
@@ -237,6 +240,11 @@ class Setting:
     # A text setting that is a secret, such as an API key: shown as
     # bullets, and its value never sent to a page or printed.
     secret: bool = False
+    # Kept by the extension's own page (records it manages there), so
+    # left out of Flash's settings panel; and for a text setting, how
+    # long it may be.
+    hidden: bool = False
+    chars: int = SETTING_CHARS
 
     def check(self, value: Any) -> Any:
         """VALUE as this setting keeps it, or ExtensionError."""
@@ -269,7 +277,11 @@ class Setting:
                 raise ExtensionError(
                     f"{self.label} is one of: {', '.join(self.options)}")
             return text
-        return text[:SETTING_CHARS]
+        if self.chars != SETTING_CHARS and len(text) > self.chars:
+            # Asked-for room is a record kept whole, never cut short.
+            raise ExtensionError(
+                f"{self.label} is at most {self.chars} characters")
+        return text[:self.chars]
 
     def summary(self) -> dict:
         return {
@@ -277,6 +289,7 @@ class Setting:
             "default": self.default, "help": self.help,
             "options": self.options, "min": self.minimum,
             "max": self.maximum, "secret": self.secret,
+            "hidden": self.hidden,
             **({"default": ""} if self.secret else {}),
         }
 
@@ -890,6 +903,9 @@ def _setting(entry: Any, index: int) -> Setting:
         minimum=bounds[0] if kind == "number" else None,
         maximum=bounds[1] if kind == "number" else None,
         secret=kind == "text" and entry.get("secret") is True,
+        hidden=entry.get("hidden") is True,
+        chars=(min(SETTING_CHARS_MOST, max(1, int(bounds[1])))
+               if kind == "text" and bounds[1] is not None else SETTING_CHARS),
     )
     fallback = {"switch": False, "text": "", "number": 0,
                 "select": options[0] if options else ""}[kind]
