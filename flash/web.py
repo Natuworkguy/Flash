@@ -3386,6 +3386,79 @@ def _reply_since(chat: Chat, begun: int) -> str:
     return ""
 
 
+SWITCH_MODEL_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "switch_model",
+        "description": (
+            "Carry on this chat on another model, from your next step: when "
+            "the user asks (\"switch to X, write the code, then go back to Y "
+            "and do the rest\"), or a part of the work wants one. Say the "
+            "model by its name as the model menu shows it. The user is asked "
+            "first unless UltraAuto is on. Switch back the same way when that "
+            "part is done, if they asked you to."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "model": {"type": "string", "description": "The model, as named in the model menu (\"Fable 5.2\")."},
+                "why": {"type": "string", "description": "A few words: what it is for."},
+            },
+            "required": ["model"],
+        },
+    },
+}
+
+
+def _model_key(name: str) -> str:
+    """NAME as compared: lower case, letters and digits only."""
+
+    return re.sub(r"[^a-z0-9]", "", str(name or "").lower())
+
+
+def find_model(asked: str, listed: list[str]) -> str:
+    """The model in LISTED that ASKED names ("Fable 5.2", "fable-5-2",
+    "claude-fable-5-2:latest"), or ""."""
+
+    want = _model_key(asked)
+    if not want:
+        return ""
+    keys = {name: _model_key(name.split(":")[0].split("/")[-1].removeprefix("@")) for name in listed}
+    for name, key in keys.items():
+        if key == want or _model_key(name) == want:
+            return name
+    found = [name for name, key in keys.items() if want in key]
+    return min(found, key=len) if found else ""
+
+
+def switch_model(session: "Session", chat: Chat, args: dict, ai_mod) -> str:
+    """switch_model: CHAT carries on, from the next step, on another model."""
+
+    from . import tools as flash_tools  # deferred: tools imports a lot
+
+    asked = str(args.get("model") or "").strip()
+    if not asked:
+        return "Error: say the model."
+    listed = list_models(ai_mod) or []
+    model = find_model(asked, listed)
+    if not model:
+        shown = ", ".join(listed[:20]) or "none could be listed"
+        return f"Error: no model called {asked!r} here. The models: {shown}."
+    if model == chat_model(chat):
+        return f"Already on {model}."
+    why = " ".join(str(args.get("why") or "").split())[:120]
+    if not flash_tools.ultra_auto() and not flash_tools._user_allows(
+            f"Switch this chat to {model}" + (f" ({why})" if why else "") + "?"):
+        return f"The user said no: this chat stays on {chat_model(chat) or 'its model'}."
+    before = chat_model(chat)
+    chat.model = model
+    session.emit(chat, {"type": "note", "text": f"Switched to {model}" + (f": {why}" if why else "") + "."})
+    session.hub.publish({"type": "chats", "chat": chat.id})
+    session.save(chat)
+    return (f"Switched from {before or 'the default'} to {model}. Your next step runs on it. "
+            "Switch back with switch_model when that part is done, if the user asked.")
+
+
 def chat_tools(chat: Chat) -> list[dict]:
     """The tools for CHAT itself: retitling it, waiting for something,
     working with other chats, and in a spoken conversation, ending
@@ -3393,6 +3466,7 @@ def chat_tools(chat: Chat) -> list[dict]:
 
     return [TITLE_TOOL, WAIT_TOOL, EDIT_WAIT_TOOL, CANCEL_WAIT_TOOL,
             START_CHAT_TOOL, MESSAGE_CHAT_TOOL, READ_CHAT_TOOL,
+            *([] if chat.spark else [SWITCH_MODEL_TOOL]),
             *([END_VOICE_TOOL] if chat.heard else []),
             *([GUIDE_TOOL] if latest_photo(chat) else [])]
 
@@ -4717,9 +4791,11 @@ def _respond(
 
         def ask(messages: list, with_tools: bool) -> loop.Reply:
             nonlocal tokens, generating
+            # switch_model may have moved this chat to another model mid-turn.
             streamed = stream_reply(
                 session, chat, client, messages,
-                offered if with_tools else None, model,
+                offered if with_tools else None,
+                (chat_model(chat) or model) if spark is None else model,
             )
             tokens += streamed.tokens
             generating += streamed.seconds
@@ -4764,6 +4840,8 @@ def _respond(
                 output = message_chat(session, chat, args)
             elif name == "read_chat":
                 output = read_chat(session, chat, args)
+            elif name == "switch_model":
+                output = switch_model(session, chat, args, ai)
             elif name == "end_conversation":
                 output = end_voice(session, chat)
             elif name == "guide_step":

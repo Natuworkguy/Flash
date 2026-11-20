@@ -5762,3 +5762,40 @@ class TestDevicesOnTheDesk:
             assert listed[room_id] and not listed[desk_id]  # nosec B101
         finally:
             session.close()
+
+
+class TestSwitchingModels:
+    """switch_model: "switch to Fable 5.2, write it, then go back": asked first, unless UltraAuto."""
+
+    LISTED = ["claude-fable-5-2", "claude-opus-5-5", "llama3:latest", "@ext/fast"]
+
+    def test_names_as_the_menu_shows_them(self):
+        assert web.find_model("Fable 5.2", self.LISTED) == "claude-fable-5-2"  # nosec B101
+        assert web.find_model("opus 5.5", self.LISTED) == "claude-opus-5-5"  # nosec B101
+        assert web.find_model("llama3", self.LISTED) == "llama3:latest"  # nosec B101
+        assert web.find_model("gpt", self.LISTED) == ""  # nosec B101
+
+    def test_asked_first_unless_ultra(self, monkeypatch):
+        from flash import tools as flash_tools
+
+        session = web.Session()
+        try:
+            chat = session.new_chat()
+            chat.model = "claude-opus-5-5"
+            monkeypatch.setattr(web, "list_models", lambda ai: self.LISTED)
+            asked = []
+            monkeypatch.setattr(flash_tools, "ultra_auto", lambda: False)
+            monkeypatch.setattr(flash_tools, "_user_allows", lambda q, **k: asked.append(q) or False)
+            said = web.switch_model(session, chat, {"model": "Fable 5.2"}, None)
+            assert "said no" in said and chat.model == "claude-opus-5-5" and asked  # nosec B101
+            monkeypatch.setattr(flash_tools, "_user_allows", lambda q, **k: True)
+            assert "Switched" in web.switch_model(session, chat, {"model": "Fable 5.2"}, None)  # nosec B101
+            assert chat.model == "claude-fable-5-2"  # nosec B101
+            # UltraAuto: no asking at all.
+            monkeypatch.setattr(flash_tools, "ultra_auto", lambda: True)
+            monkeypatch.setattr(flash_tools, "_user_allows", lambda q, **k: pytest.fail("asked in UltraAuto"))
+            web.switch_model(session, chat, {"model": "opus 5.5"}, None)
+            assert chat.model == "claude-opus-5-5"  # nosec B101
+            assert "no model called" in web.switch_model(session, chat, {"model": "gpt-9"}, None)  # nosec B101
+        finally:
+            session.close()
