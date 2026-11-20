@@ -248,3 +248,15 @@ def test_a_call_hears_how_the_user_sounded(monkeypatch):
     teamchat.send("t1", "hi", call="c1", note="(They sound upbeat.)")
 
     assert teamchat._call_notes["t1"] == "(They sound upbeat.)"
+
+
+def test_a_device_cue_is_hidden_and_unsaid_but_kept_for_the_device(monkeypatch):
+    from flash import extensions, humanvoice, voice
+
+    monkeypatch.setattr(extensions, "find", lambda name: object() if name == "bot" else None)
+    reply = "Wait... [bot:love]IT WORKS! See [note:this] too."
+    assert humanvoice.device_cues(reply) == [("bot", "love")]
+    assert humanvoice.strip(reply) == "Wait... IT WORKS! See [note:this] too."
+    assert "[bot" not in humanvoice.for_ear(reply) and "[note:this]" in humanvoice.for_ear(reply)
+    assert voice.speakable("[BOT:Love] Yes") == "Yes"
+    assert "[bot:" not in voice.for_speech(reply)

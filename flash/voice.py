@@ -2452,7 +2452,10 @@ def speakable(line: str) -> str:
     to hear: an address is said as "a link", not spelled out, and emojis
     are left unsaid."""
 
-    return " ".join(_EMOJI.sub("", _URL.sub("a link", line or "")).split())
+    from . import humanvoice
+
+    line = humanvoice.drop_device_cues(line or "")
+    return " ".join(_EMOJI.sub("", _URL.sub("a link", line)).split())
 
 
 # Said to a paused session, these wake it; said as a whole turn, these
@@ -2529,9 +2532,11 @@ def for_speech(text: str, limit: int = 0) -> str:
     # the reader can finish on screen.
     limit = limit or max_speech_chars()
 
+    from . import humanvoice
+
     # A passage set apart in Newsreader is prose, not code: its words
-    # are read like the rest.
-    text = serif.plain(text or "")
+    # are read like the rest. A device's cue ("[bot:love]") is not said.
+    text = serif.plain(humanvoice.drop_device_cues(text or ""))
     # A rich answer's piece says its few spoken words; its numbers and
     # boxes are on screen.
     text = visuals.plain(text)

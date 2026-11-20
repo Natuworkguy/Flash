@@ -6321,7 +6321,22 @@ const MATH_RE = /\uE000(\d+)\uE001/g;
 // A spoken reply's cues: a feeling ("[happy]") or a sound ("[laugh]"),
 // said in its voice and never shown (humanvoice.py has the list).
 const CUE_RE = /\[(happy|excited|playful|warm|curious|surprised|thoughtful|calm|serious|sorry|sad|laugh|chuckle|sigh|breath|hm|gasp)\][ \t]*/gi;
-const uncue = (text) => String(text || "").replace(CUE_RE, "");
+// A cue for a device an installed extension drives, "[bot:love]": hidden, and passed on with the
+// line when voice mode speaks through that device, which acts on it as it says the line.
+const DEVICE_CUE_RE = /\[([a-z][a-z0-9_]{0,40}):([a-z][a-z0-9_-]{0,40})\][ \t]*/gi;
+const deviceCueNames = new Set();
+const isDeviceCue = (ext) => deviceCueNames.has(String(ext).toLowerCase());
+const dropDeviceCues = (text) => String(text || "").replace(DEVICE_CUE_RE, (m, ext) => (isDeviceCue(ext) ? "" : m));
+const uncue = (text) => dropDeviceCues(String(text || "").replace(CUE_RE, ""));
+// Which extensions are installed, for their cues: looked up as the page starts, and again when
+// extensions change.
+async function loadDeviceCues() {
+  try {
+    const listed = (await command("extensions", "", null)).extensions || [];
+    deviceCueNames.clear();
+    for (const e of listed) if (e && e.name) deviceCueNames.add(String(e.name).toLowerCase());
+  } catch (_) { /* no extensions to hide cues for */ }
+}
 const CODE_RE = /```[\s\S]*?(?:```|$)|~~~[\s\S]*?(?:~~~|$)|(`+)(?!`)[^\n]+?\1(?!`)/g;
 // A backslash before the \[ or \( means a backslash typed as text.
 const DISPLAY_MATH_RE = /\$\$([\s\S]+?)\$\$|(?<!\\)\\\[([\s\S]+?)\\\]/g;
@@ -6339,10 +6354,11 @@ function markdown(text) {
   const front = frontMatter(lead ? String(text).slice(lead[0].length) : String(text));
   // Cues go through as marks of their own, and come out as hidden spans:
   // never seen, but there for the reading aloud to find.
-  const body = (front ? front.rest : String(text)).replace(CUE_RE, (_, name) => `\uE002${name.toLowerCase()}\uE003`);
+  const body = (front ? front.rest : String(text)).replace(CUE_RE, (_, name) => `\uE002${name.toLowerCase()}\uE003`)
+    .replace(DEVICE_CUE_RE, (m, ext, name) => (isDeviceCue(ext) ? `\uE002${ext.toLowerCase()}:${name.toLowerCase()}\uE003` : m));
   let html = markdownBody(pullMath(body, spans));
   if (spans.length) html = html.replace(MATH_RE, (_, i) => renderMath(spans[+i]));
-  html = html.replace(/\uE002(\w+)\uE003/g, '<span class="cue">[$1]</span>');
+  html = html.replace(/\uE002([\w:-]+)\uE003/g, '<span class="cue">[$1]</span>');
   return front ? frontTable(front, lead ? lead[0].trim().slice(2).trim() : "") + html : html;
 }
 
@@ -15962,6 +15978,7 @@ async function drawExtensions(body) {
       try { await command("extension-remove", ext.name); } catch (error) { showFailure(error); return; }
       toast(`Removed ${ext.name}`);
       redrawSettingsTab("extensions");
+      loadDeviceCues();
     };
     row.appendChild(remove);
     list.appendChild(row);
@@ -27359,7 +27376,8 @@ function promptFromLink() {
 // The server only sends this page to a browser it let in, by link or by
 // cookie, so there is nothing to check before starting.
 connect();
-loadState().then(promptFromLink).catch(showFailure);
+// The extensions first (quick), so a reply's device cues are hidden from its first drawing.
+loadDeviceCues().finally(() => loadState().then(promptFromLink).catch(showFailure));
 input.focus();
 </script>
 </body>
