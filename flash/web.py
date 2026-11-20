@@ -1253,6 +1253,8 @@ class Session:
         self.started: dict[str, int] = {}
         self.asked: dict[str, dict] = {}
         self._watching: Optional[threading.Thread] = None
+        # What each extension's waiting update asks for more, once said.
+        self.update_asked: dict[str, list] = {}
         # One at a time, so a report is never posted twice.
         self._posting = threading.Lock()
         self._stop_watching = threading.Event()
@@ -1690,6 +1692,21 @@ class Session:
             said = [str(e.get("text")) for e in new][-2:]
             self.send(parent, handoff_note(child, said), wake=True,
                       note=f"{child.title} answered.")
+
+    def keep_extensions_updated(self) -> None:
+        """Extensions brought up to date by themselves: a few minutes
+        after Flash opens, then every UPDATE_CHECK_SECONDS, while the
+        setting is on (Settings, Extensions)."""
+
+        def run() -> None:
+            wait = 300
+            while not self._stop_watching.wait(wait):
+                wait = UPDATE_CHECK_SECONDS
+                if extensions.updates_on():
+                    _quietly(lambda: update_extensions(self))
+
+        threading.Thread(target=run, name="extension-updates",
+                         daemon=True).start()
 
     def owned(self, chat_id: str) -> set:
         return {a for a, c in list(self.agents.items()) if c == chat_id}
@@ -5011,6 +5028,7 @@ def status(ai) -> dict:
         "voice_fillers": list(humanvoice.FILLERS),
         "voice_quiet": dict(humanvoice.QUIET),
         "spark_calls": teamchat.calls_allowed(),
+        "extension_updates": extensions.updates_on(),
         "call_interrupt": voice.interrupt_how("calls"),
         "wake_sensitivity": voice.wake_sensitivity(),
         "wake_word": voice.wake_title(),
@@ -5362,6 +5380,89 @@ def _stage_extension(session: Session, spec: str) -> dict:
         # Where it comes from, when that is worth a line: a git bundle.
         "note": extensions.source_note(spec),
     }
+
+
+def self_update(session: Session, name: str, quiet: bool = False) -> dict:
+    """Extension NAME pulled again from where it came from and, when it
+    asks for nothing more than the copy in place does (no new programs,
+    tools, services or reach), put in at once. An update asking for more
+    waits for the user, shown like an install. QUIET: from the
+    background check, so a copy already current says nothing."""
+
+    from .repl_input import RESERVED_COMMANDS
+    from .tools import FUNCTIONS
+
+    have = extensions.find(name)
+    if have is None:
+        raise ValueError(f"No extension called {name!r}.")
+    try:
+        spec = extensions.update_source(name)
+        checkout = extensions.fetch(spec)
+    except (extensions.ExtensionError, OSError) as exc:
+        raise ValueError(str(exc)) from None
+    try:
+        new = extensions.load(checkout)
+        if new.name != have.name:
+            raise extensions.ExtensionError(
+                f"it is now called {new.name!r}")
+        if extensions.tree_digest(checkout) == extensions.tree_digest(have.path):
+            extensions.discard(checkout)
+            return {"status": "current", "name": have.name,
+                    "version": have.version}
+        clashes = extensions.clashes(new, RESERVED_COMMANDS,
+                                     frozenset(FUNCTIONS))
+        if clashes:
+            raise extensions.ExtensionError("; ".join(clashes))
+        more = sorted(extensions.asks(new) - extensions.asks(have))
+    except extensions.ExtensionError as exc:
+        extensions.discard(checkout)
+        raise ValueError(f"Could not update {name}: {exc}") from None
+    if more:
+        # Asking for more than the user said yes to: their yes again first.
+        extensions.discard(checkout)
+        if quiet and session.update_asked.get(have.name) == more:
+            return {"status": "review", "name": have.name, "adds": more}
+        session.update_asked[have.name] = more  # said once, not every check
+        session.hub.publish({
+            "type": "notify", "title": f"{have.name} has an update",
+            "text": ("It asks for more than before (" + ", ".join(more)
+                     + "), so it waits for you: Settings, Extensions, "
+                     "Update."),
+        })
+        return {"status": "review", "name": have.name, "adds": more}
+    try:
+        ext = extensions.install(checkout, spec)
+    except (extensions.ExtensionError, OSError) as exc:
+        raise ValueError(f"Could not update {name}: {exc}") from None
+    finally:
+        extensions.discard(checkout)
+    session.hub.publish({"type": "status"})
+    session.hub.publish({"type": "extension-updated", "name": ext.name,
+                         "version": ext.version})
+    session.hub.publish({
+        "type": "notify", "title": f"{ext.name} updated",
+        "text": f"Now {ext.version or 'the newest version'}.",
+    })
+    return {"status": "updated", "name": ext.name, "version": ext.version}
+
+
+UPDATE_CHECK_SECONDS = 6 * 3600
+
+
+def update_extensions(session: Session) -> list[dict]:
+    """Every extension with a source, kept up to date by itself (the
+    background check, while the setting is on)."""
+
+    done = []
+    for ext in extensions.installed():
+        if not ext.source:
+            continue
+        try:
+            done.append(self_update(session, ext.name, quiet=True))
+        except ValueError as exc:
+            done.append({"status": "failed", "name": ext.name,
+                         "error": str(exc)})
+    return done
 
 
 def _install_staged(session: Session, staged_id: str) -> dict:
@@ -6366,6 +6467,18 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
         except extensions.ExtensionError as exc:
             raise ValueError(str(exc)) from None
         return _stage_extension(session, source)
+
+    if name == "extension-self-update":
+        # From the extension's own page or programs ("update me"): from
+        # where it came from, in at once unless it asks for more.
+        return self_update(session, arg)
+
+    if name == "extension-updates-setting":
+        on = arg in ("on", "1", "true")
+        ai.set_config_var(extensions.UPDATES_SETTING, "1" if on else "0")
+        if session is not None:
+            session.hub.publish({"type": "status"})
+        return {"extension_updates": on}
 
     if name == "extension-preview":
         return _stage_extension(session, arg)
@@ -8604,6 +8717,7 @@ class Server(ThreadingHTTPServer):
         if session is None:
             session = Session()
             session.access = Access.kept()
+            session.keep_extensions_updated()
         self.session = session
         self.session.lan = lan
         self.lan = lan

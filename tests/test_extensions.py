@@ -1158,3 +1158,52 @@ def test_extension_programs_get_the_web_token(tmp_path, monkeypatch):
     monkeypatch.setattr(extensions, "web_token", "t" * 24)
     ext = extensions.Extension(name="bot", path=tmp_path)
     assert extensions.environment(ext)["FLASH_WEB_TOKEN"] == "t" * 24  # nosec B101
+
+
+def test_an_extension_updates_itself_unless_it_asks_for_more(tmp_path):
+    from flash import web
+
+    source = make(tmp_path / "src", {"name": "selfup", "version": "1", "prompt": "p.md"},
+                  {"p.md": "one"})
+    session = web.Session()
+    try:
+        staged = web.command(session, {"name": "extension-preview", "arg": f"path@{source}"})
+        web.command(session, {"name": "extension-install", "arg": staged["id"]})
+        assert extensions.find("selfup").version == "1"  # nosec B101
+
+        # Nothing new where it came from: left as it is.
+        said = web.command(session, {"name": "extension-self-update", "arg": "selfup"})
+        assert said["status"] == "current"  # nosec B101
+
+        # A new version asking for nothing more goes in by itself.
+        make(source, {"name": "selfup", "version": "2", "prompt": "p.md"}, {"p.md": "two"})
+        said = web.command(session, {"name": "extension-self-update", "arg": "selfup"})
+        assert said == {"status": "updated", "name": "selfup", "version": "2"}  # nosec B101
+        assert extensions.find("selfup").version == "2"  # nosec B101
+
+        # One that wants to run something new waits for the user.
+        make(source, {"name": "selfup", "version": "3", "prompt": "p.md",
+                      "services": [{"name": "watcher", "run": ["python3", "w.py"]}]},
+             {"p.md": "three", "w.py": "print('hi')"})
+        said = web.command(session, {"name": "extension-self-update", "arg": "selfup"})
+        assert said["status"] == "review" and "service:watcher" in said["adds"]  # nosec B101
+        assert extensions.find("selfup").version == "2"  # nosec B101
+
+        # The background check updates every extension with a source, the same way.
+        done = web.update_extensions(session)
+        assert [d["status"] for d in done if d["name"] == "selfup"] == ["review"]  # nosec B101
+
+        with pytest.raises(ValueError, match="No extension"):
+            web.command(session, {"name": "extension-self-update", "arg": "nope"})
+    finally:
+        session.close()
+
+
+def test_the_updates_switch(monkeypatch):
+    from flash import web
+
+    assert extensions.updates_on()  # nosec B101  (on unless switched off)
+    assert web.command(None, {"name": "extension-updates-setting", "arg": "off"}) == {"extension_updates": False}  # nosec B101
+    assert not extensions.updates_on()  # nosec B101
+    web.command(None, {"name": "extension-updates-setting", "arg": "on"})
+    assert extensions.updates_on()  # nosec B101
