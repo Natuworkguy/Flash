@@ -1236,6 +1236,11 @@ class Session:
         # each chat has been woken for one, with no message in between.
         self.agents: dict[str, str] = {}
         self.wakes: dict[str, int] = {}
+        # Chats another chat started or messaged (start_chat,
+        # message_chat): which chat to tell when each answers, and how
+        # much of its log that chat has been told of.
+        self.handoffs: dict[str, str] = {}
+        self.handoff_seen: dict[str, int] = {}
         # Debates being argued now, by id: their chat, how to stop it,
         # and what the user has said to steer it, not yet taken in.
         self.debating: dict[str, dict] = {}
@@ -1659,6 +1664,33 @@ class Session:
             self.save(chat)
             sparks.posted(spark.id, report.at, chat_id)
 
+    def tell_handoffs(self) -> None:
+        """Wake each chat that started or messaged another, once that one
+        has answered and is done (not mid-reply, nothing waiting)."""
+
+        for child_id, parent_id in list(self.handoffs.items()):
+            child = self.chats.get(child_id)
+            parent = self.chats.get(parent_id)
+            if child is None or parent is None:
+                self.handoffs.pop(child_id, None)
+                continue
+            if child.busy or child.queued or child.pending:
+                continue
+            seen = self.handoff_seen.get(child_id, 0)
+            new = [e for e in child.log[seen:]
+                   if e.get("type") == "assistant" and e.get("text")]
+            if not new:
+                continue
+            if parent.busy or parent.queued:
+                continue  # told once it is free
+            if self.wakes.get(parent_id, 0) >= MAX_WAKES_IN_A_ROW:
+                continue
+            self.handoff_seen[child_id] = len(child.log)
+            self.wakes[parent_id] = self.wakes.get(parent_id, 0) + 1
+            said = [str(e.get("text")) for e in new][-2:]
+            self.send(parent, handoff_note(child, said), wake=True,
+                      note=f"{child.title} answered.")
+
     def owned(self, chat_id: str) -> set:
         return {a for a, c in list(self.agents.items()) if c == chat_id}
 
@@ -1686,6 +1718,7 @@ class Session:
 
             from . import bgtasks
 
+            self.tell_handoffs()
             ended = {t.owner for t in bgtasks.unseen()}
             for chat_id in set(self.agents.values()) | ended:
                 chat = self.chats.get(chat_id)
@@ -2920,6 +2953,117 @@ class Streamed:
 
 
 # Tools the model has in a chat in the browser, for the chat itself.
+# Chats working with chats: one starts another for a piece of work that
+# wants its own conversation (another model, another project, a long
+# job the user can watch and join in the sidebar), sends it more, and
+# reads what it said. The chat that sent is woken when it answers.
+HANDOFF_PREVIEW = 1500   # characters of an answer carried in the wake note
+HANDOFF_READ = 6000      # characters read_chat gives back, at most
+
+START_CHAT_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "start_chat",
+        "description": (
+            "Start a new chat of its own for a piece of work, give it the "
+            "task, and return at once with its id. It shows in the "
+            "user's sidebar, where they can watch it and join in. Use it "
+            "when the work wants its own conversation: on another model, "
+            "in another project, or long enough to follow separately, "
+            "and when you will want to send it more afterwards "
+            "(message_chat). For a one-off you only need the answer to, "
+            "use agent instead. You are woken with its answer when it "
+            "finishes each reply; end your turn after starting it."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "task": {
+                    "type": "string",
+                    "description": (
+                        "Everything the new chat needs to do the work "
+                        "with no other context: what, where, what to "
+                        "report back."
+                    ),
+                },
+                "title": {
+                    "type": "string",
+                    "description": "A few words for the sidebar.",
+                },
+                "model": {
+                    "type": "string",
+                    "description": (
+                        "The model it runs on, when the user named one "
+                        "or the work needs a different one. Leave it out "
+                        "for this chat's."
+                    ),
+                },
+                "project": {
+                    "type": "string",
+                    "description": (
+                        "The user's project it works in, by name, if not "
+                        "this chat's."
+                    ),
+                },
+            },
+            "required": ["task"],
+        },
+    },
+}
+
+MESSAGE_CHAT_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "message_chat",
+        "description": (
+            "Send a message to another of the user's chats (one you "
+            "started, or one the user named) as from this chat: a follow-"
+            "up, an answer to its question, more work. It replies in "
+            "that chat on its own, and you are woken with what it says. "
+            "If it is busy, the message waits for its turn."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "chat": {
+                    "type": "string",
+                    "description": "Its id, or its title.",
+                },
+                "text": {"type": "string", "description": "The message."},
+            },
+            "required": ["chat", "text"],
+        },
+    },
+}
+
+READ_CHAT_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "read_chat",
+        "description": (
+            "Read another of the user's chats: whether it is working, "
+            "and its latest replies. With no chat, the chats this one "
+            "started or messaged, and how each stands."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "chat": {
+                    "type": "string",
+                    "description": "Its id, or its title.",
+                },
+                "last": {
+                    "type": "integer",
+                    "description": (
+                        "How many of its latest replies (1 to 5, "
+                        "default 2)."
+                    ),
+                },
+            },
+        },
+    },
+}
+
 TITLE_TOOL = {
     "type": "function",
     "function": {
@@ -3161,9 +3305,11 @@ def _reply_since(chat: Chat, begun: int) -> str:
 
 def chat_tools(chat: Chat) -> list[dict]:
     """The tools for CHAT itself: retitling it, waiting for something,
-    and in a spoken conversation, ending that."""
+    working with other chats, and in a spoken conversation, ending
+    that."""
 
     return [TITLE_TOOL, WAIT_TOOL, EDIT_WAIT_TOOL, CANCEL_WAIT_TOOL,
+            START_CHAT_TOOL, MESSAGE_CHAT_TOOL, READ_CHAT_TOOL,
             *([END_VOICE_TOOL] if chat.heard else []),
             *([GUIDE_TOOL] if latest_photo(chat) else [])]
 
@@ -3333,6 +3479,151 @@ def cancel_wait(session: "Session", chat: Chat, args: dict) -> str:
         return f"Error: {exc}"
     session.wait_changed(wait)
     return f"Stopped waiting for {wait.what}."
+
+
+def find_chat(session: "Session", key: str) -> Optional[Chat]:
+    """A chat by its id, or else its title (exactly, then the newest
+    whose title contains KEY), ignoring case."""
+
+    key = " ".join(str(key or "").split())
+    if not key:
+        return None
+    chats = sorted(session.chats.values(), key=lambda c: c.updated,
+                   reverse=True)
+    for c in chats:
+        if c.id == key:
+            return c
+    low = key.lower()
+    for c in chats:
+        if c.title.lower() == low:
+            return c
+    return next((c for c in chats if low in c.title.lower()), None)
+
+
+def chat_state(chat: Chat) -> str:
+    return "working" if chat.busy else "waiting to start" if chat.queued \
+        else "idle"
+
+
+def replies(chat: Chat, last: int = 2,
+            chars: int = HANDOFF_READ) -> list[str]:
+    """CHAT's latest LAST replies, oldest first, cut to CHARS in all."""
+
+    said = [str(e.get("text") or "") for e in chat.log
+            if e.get("type") == "assistant" and e.get("text")]
+    picked = said[-max(1, min(5, last)):]
+    out, room = [], chars
+    for text in reversed(picked):
+        if room <= 0:
+            break
+        out.insert(0, text if len(text) <= room else text[-room:])
+        room -= len(text)
+    return out
+
+
+def start_chat(session: "Session", chat: Chat, args: dict) -> str:
+    """start_chat: a new chat for a piece of work, started on it."""
+
+    task = str(args.get("task") or "").strip()
+    if not task:
+        return "Error: say the task."
+    project = str(args.get("project") or "").strip() or chat.project
+    try:
+        child = session.new_chat(project=project)
+    except KeyError:
+        return f"Error: there is no project called {project!r}."
+    title = " ".join(str(args.get("title") or "").split())
+    # Named for its work, not for the note that hands it over.
+    child.title = (title or " ".join(task.split())[:TITLE_CHARS])[:TITLE_CHARS]
+    child.named = bool(title)
+    model = str(args.get("model") or "").strip()
+    child.model = model or chat.model
+    child.worktree = chat.worktree if child.project == chat.project else ""
+    session.handoffs[child.id] = chat.id
+    session.handoff_seen[child.id] = 0
+    session.ensure_watching()
+    session.send(child, handoff_text(chat, task))
+    session.save(child)
+    session.hub.publish({"type": "chats", "chat": child.id})
+    return (
+        f"Started the chat {child.title!r} (id {child.id})"
+        + (f" on {child.model}" if child.model else "")
+        + (f" in {child.project}" if child.project else "")
+        + ". It is working now; you are woken with its answer. End your "
+        "turn unless there is other work to do meanwhile."
+    )
+
+
+def handoff_text(sender: Chat, text: str) -> str:
+    return (
+        f"[From the chat {sender.title!r}, not typed by the user. Do the "
+        "work it asks; your reply is passed back to it.]\n\n" + text
+    )
+
+
+def message_chat(session: "Session", chat: Chat, args: dict) -> str:
+    """message_chat: a message to another chat, as from CHAT."""
+
+    target = find_chat(session, str(args.get("chat") or ""))
+    text = str(args.get("text") or "").strip()
+    if target is None:
+        return ("Error: no chat by that id or title. read_chat lists "
+                "the ones you started.")
+    if target.id == chat.id:
+        return "Error: that is this chat."
+    if not text:
+        return "Error: say the message."
+    if target.spark:
+        return (f"Error: {target.title!r} is a chat with a spark: use "
+                "give_spark or ask_spark for sparks.")
+    session.handoffs[target.id] = chat.id
+    session.handoff_seen.setdefault(target.id, len(target.log))
+    session.ensure_watching()
+    queued = bool(session.send(target, handoff_text(chat, text)))
+    return (f"Sent to {target.title!r}"
+            + (" (it is busy: the message waits for its turn)"
+               if queued else "")
+            + ". You are woken with its answer.")
+
+
+def read_chat(session: "Session", chat: Chat, args: dict) -> str:
+    """read_chat: another chat's state and latest replies, or the chats
+    this one works with."""
+
+    key = str(args.get("chat") or "").strip()
+    if not key:
+        mine = [session.chats[c] for c, p in session.handoffs.items()
+                if p == chat.id and c in session.chats]
+        if not mine:
+            return "This chat hasn't started or messaged any other chat."
+        return "\n".join(f"- {c.title!r} (id {c.id}): {chat_state(c)}"
+                         for c in mine)
+    target = find_chat(session, key)
+    if target is None:
+        return "Error: no chat by that id or title."
+    try:
+        last = int(args.get("last") or 2)
+    except (TypeError, ValueError):
+        last = 2
+    said = replies(target, last)
+    head = f"{target.title!r} (id {target.id}) is {chat_state(target)}."
+    if not said:
+        return head + " It hasn't replied yet."
+    return head + "\n\n" + "\n\n---\n\n".join(said)
+
+
+def handoff_note(child: Chat, said: list[str]) -> str:
+    """For the chat that started or messaged CHILD: what it answered."""
+
+    text = "\n\n".join(said)
+    if len(text) > HANDOFF_PREVIEW:
+        text = text[:HANDOFF_PREVIEW] + (
+            f"\n[... cut short: read_chat {child.id!r} for all of it]")
+    return (
+        f"[The chat {child.title!r} (id {child.id}) answered. Carry on "
+        "with your work using it, tell the user what matters, or send it "
+        f"more with message_chat.]\n\n{text}"
+    )
 
 
 def retitle(session: "Session", chat: Chat, args: dict) -> str:
@@ -4370,6 +4661,12 @@ def _respond(
                 output = flash_tools.THOUGHT_HARDER
             elif name == "title_chat":
                 output = retitle(session, chat, args)
+            elif name == "start_chat":
+                output = start_chat(session, chat, args)
+            elif name == "message_chat":
+                output = message_chat(session, chat, args)
+            elif name == "read_chat":
+                output = read_chat(session, chat, args)
             elif name == "end_conversation":
                 output = end_voice(session, chat)
             elif name == "guide_step":

@@ -5649,3 +5649,87 @@ def test_a_paired_device_says_what_it_is():
     kinds = {b["device"]: b["product"] for b in access.listing("", set())}
     assert kinds == {"My watch": "watch", "Flash Bot": "robot", "Desk": "robot"}  # nosec B101
     assert web.device_kind("") == "device"  # nosec B101
+
+
+class TestChatsWorkingWithChats:
+    """start_chat, message_chat and read_chat: one chat handing work to
+    another and woken with its answer."""
+
+    @pytest.fixture
+    def answering(self, monkeypatch):
+        """A model that answers by what it was sent: the user's chat
+        starts a helper chat, the helper does the work, and the first
+        chat reports what the helper said."""
+
+        monkeypatch.setattr(web, "WATCH_SECONDS", 0.02)
+        asked = []
+
+        class Model(FakeClient):
+            def chat(self, **kwargs):
+                FakeClient.requests.append(kwargs)
+                last = kwargs["messages"][-1]
+                said = str(last.get("content") or "")
+                asked.append(said)
+                if last.get("role") == "tool":
+                    return iter([part("Started it; I'll report back."), part(done=True)])
+                if said.startswith("[From the chat"):
+                    if "again" in said:
+                        return iter([part("Second answer: 7 files."), part(done=True)])
+                    return iter([part("Built it: 3 warnings, no errors."), part(done=True)])
+                if "answered" in said:
+                    return iter([part("The build chat says: 3 warnings."), part(done=True)])
+                return iter([
+                    part(calls=[call("start_chat", task="build the firmware and report",
+                                     title="Firmware build", model="other-model")]),
+                    part(done=True),
+                ])
+
+        monkeypatch.setattr(ollama, "Client", Model)
+        return asked
+
+    def test_a_chat_starts_another_and_hears_its_answer(self, answering):
+        session = web.Session()
+        chat = session.new_chat()
+        chat.title = "Robot work"
+
+        run(session, chat, "get the firmware built")
+        wait_for(lambda: any(e["type"] == "assistant" and "3 warnings" in e["text"]
+                             for e in chat.log))
+
+        helper = next(c for c in session.chats.values() if c.id != chat.id)
+        assert helper.title == "Firmware build" and helper.model == "other-model"
+        # The helper was handed the task as from the first chat, and shows it.
+        handed = [e["text"] for e in helper.log if e["type"] == "user"]
+        assert handed and handed[0].startswith("[From the chat 'Robot work'")
+        assert "build the firmware" in handed[0]
+        # The first chat was woken with the helper's answer, not by a user.
+        woke = [m for m in answering if "answered" in m]
+        assert woke and "Built it: 3 warnings" in woke[0] and helper.id in woke[0]
+        assert [e["text"] for e in chat.log if e["type"] == "user"] == ["get the firmware built"]
+
+    def test_message_and_read_another_chat(self, answering):
+        session = web.Session()
+        chat = session.new_chat()
+        chat.title = "Robot work"
+        run(session, chat, "get the firmware built")
+        helper = next(c for c in session.chats.values() if c.id != chat.id)
+        wait_for(lambda: not (helper.busy or helper.queued) and any(
+            e["type"] == "assistant" for e in helper.log))
+        wait_for(lambda: not (chat.busy or chat.queued))
+
+        said = web.read_chat(session, chat, {"chat": "firmware"})
+        assert "'Firmware build'" in said and "idle" in said and "3 warnings" in said
+        assert "Firmware build" in web.read_chat(session, chat, {})
+
+        out = web.message_chat(session, chat, {"chat": helper.id, "text": "count them again"})
+        assert out.startswith("Sent to 'Firmware build'")
+        wait_for(lambda: any("Second answer" in str(e.get("text")) for e in helper.log))
+
+        assert web.message_chat(session, chat, {"chat": chat.id, "text": "x"}).startswith("Error")
+        assert web.message_chat(session, chat, {"chat": "nope", "text": "x"}).startswith("Error")
+        assert web.read_chat(session, chat, {"chat": "nope"}).startswith("Error")
+        assert web.start_chat(session, chat, {"task": " "}).startswith("Error")
+
+    def test_the_tools_are_offered_in_every_chat(self):
+        names = {t["function"]["name"] for t in web.chat_tools(web.Chat(id="x"))}
+        assert {"start_chat", "message_chat", "read_chat"} <= names
