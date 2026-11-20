@@ -618,7 +618,7 @@ class Ask:
 KEPT = {
     "user", "assistant", "tool", "result", "diff", "ask", "answered",
     "error", "stats", "note", "thought", "file", "plan", "browser", "wait",
-    "seen", "debate", "course", "chess", "guide", "call", "canvas",
+    "seen", "debate", "course", "chess", "guide", "call", "canvas", "chatmsg",
 }
 
 
@@ -1745,7 +1745,8 @@ class Session:
             self.wakes[parent_id] = self.wakes.get(parent_id, 0) + 1
             said = [str(e.get("text")) for e in new][-2:]
             self.send(parent, handoff_note(child, said), wake=True,
-                      note=f"{child.title} answered.")
+                      note=f"{child.title} answered.",
+                      note_card=chat_message_entry("from", child, said[-1]))
 
     def keep_extensions_updated(self) -> None:
         """Extensions brought up to date by themselves: a few minutes
@@ -2192,7 +2193,7 @@ class Session:
         self, chat: Chat, text: str, wake: bool = False, mode: str = "",
         files: Optional[list] = None, heard: bool = False,
         note: str = "", quiet: str = "", deep: bool = False,
-        asked_from: Optional[dict] = None,
+        asked_from: Optional[dict] = None, note_card: Optional[dict] = None,
     ) -> dict:
         """Start a turn on a thread of its own and return at once.
 
@@ -2256,7 +2257,7 @@ class Session:
                 self.halt(chat)
             return {"pending": item["id"]}
 
-        self._begin(chat, text, wake, attached, note=note)
+        self._begin(chat, text, wake, attached, note=note, note_card=note_card)
         threading.Thread(
             target=self._run, args=(chat, text, attached, quiet, deep),
             daemon=True,
@@ -2266,7 +2267,7 @@ class Session:
     def _begin(
         self, chat: Chat, text: str, wake: bool = False,
         files: Optional[list] = None, version: Optional[dict] = None,
-        note: str = "",
+        note: str = "", note_card: Optional[dict] = None,
     ) -> None:
         """Put a turn's message in the chat, as its turn starts. An
         edited one says which of its versions it is. One nobody typed
@@ -2274,7 +2275,7 @@ class Session:
 
         if wake:
             self.started.pop(chat.id, None)
-            self.emit(chat, {"type": "note", "text": note or WAKE_TEXT})
+            self.emit(chat, note_card or {"type": "note", "text": note or WAKE_TEXT})
             return
         self.wakes[chat.id] = 0
         if chat.title == "New chat":
@@ -3625,6 +3626,7 @@ def start_chat(session: "Session", chat: Chat, args: dict) -> str:
     session.handoff_seen[child.id] = 0
     session.ensure_watching()
     session.send(child, handoff_text(chat, task))
+    session.emit(chat, chat_message_entry("to", child, task, started=True))
     session.save(child)
     session.hub.publish({"type": "chats", "chat": child.id})
     return (
@@ -3637,10 +3639,22 @@ def start_chat(session: "Session", chat: Chat, args: dict) -> str:
 
 
 def handoff_text(sender: Chat, text: str) -> str:
+    # The page shows it as a message from that chat (with a way back to
+    # it), not as something the user typed.
     return (
-        f"[From the chat {sender.title!r}, not typed by the user. Do the "
-        "work it asks; your reply is passed back to it.]\n\n" + text
+        f"[From the chat {sender.title!r} (id {sender.id}), not typed by "
+        "the user. Do the work it asks; your reply is passed back to "
+        "it.]\n\n" + text
     )
+
+
+def chat_message_entry(direction: str, other: Chat, text: str, **more) -> dict:
+    """A message between chats, as the page draws it: DIRECTION "to"
+    (this chat sent it to OTHER) or "from" (OTHER's reply)."""
+
+    # "other", not "chat": every event already names the chat it is in.
+    return {"type": "chatmsg", "dir": direction, "other": other.id,
+            "title": other.title, "text": text[:HANDOFF_PREVIEW], **more}
 
 
 def message_chat(session: "Session", chat: Chat, args: dict) -> str:
@@ -3662,6 +3676,7 @@ def message_chat(session: "Session", chat: Chat, args: dict) -> str:
     session.handoff_seen.setdefault(target.id, len(target.log))
     session.ensure_watching()
     queued = bool(session.send(target, handoff_text(chat, text)))
+    session.emit(chat, chat_message_entry("to", target, text, waits=queued))
     return (f"Sent to {target.title!r}"
             + (" (it is busy: the message waits for its turn)"
                if queued else "")

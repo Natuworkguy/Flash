@@ -1364,6 +1364,21 @@ body.course-open { overflow: hidden; }
 .ask.done .q svg { width: 15px; height: 15px; }
 
 .note { text-align: center; color: var(--text-3); font-size: 13px; }
+/* Messages between chats: what this chat sent another, what came back, and, in the chat that got one,
+   who it is from. A small card each, with the other chat a click away. */
+.chatmsg { border: 1px solid var(--border); border-radius: 14px; background: var(--surface); overflow: hidden; max-width: 560px; }
+.chatmsg.to { margin-left: auto; }
+.chatmsg .cm-head { display: flex; align-items: center; gap: 8px; padding: 9px 12px; border-bottom: 1px solid var(--border); font-size: 12.5px; color: var(--text-3); }
+.chatmsg .cm-head .i { width: 14px; height: 14px; flex: none; }
+.chatmsg .cm-head b { color: var(--text); font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chatmsg .cm-head .cm-open { margin-left: auto; flex: none; font-size: 12px; color: var(--text-2); background: none; border: 1px solid var(--border); border-radius: 999px; padding: 2px 10px; cursor: pointer; }
+.chatmsg .cm-head .cm-open:hover { color: var(--text); border-color: var(--text-3); }
+.chatmsg .cm-body { padding: 10px 14px 12px; font-size: 14px; line-height: 1.55; color: var(--text-2); max-height: 220px; overflow: hidden; position: relative; }
+.chatmsg .cm-body.long::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 36px; background: linear-gradient(transparent, var(--surface)); }
+.chatmsg .cm-body > :first-child { margin-top: 0; }
+.chatmsg .cm-body > :last-child { margin-bottom: 0; }
+.chatmsg .cm-tag { font-size: 11px; padding: 1px 8px; border-radius: 999px; border: 1px solid var(--border); color: var(--text-3); flex: none; }
+.chatmsg.from .cm-head .i { color: var(--accent); }
 /* A task set aside until something happens (wait_for). */
 .wait { display: flex; gap: 12px; align-items: flex-start; padding: 12px 14px; border: 1px solid var(--border); border-radius: 14px; background: var(--surface); }
 .wait .ico { flex: none; width: 30px; height: 30px; border-radius: 9px; display: grid; place-items: center; background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--accent); }
@@ -9773,8 +9788,32 @@ function codeBits(text, ticks = false) {
   return out;
 }
 
+// A message between chats as a card. DIR: "to" (sent from here to the other chat), "from" (its reply
+// here), "in" (in the chat that was sent it: who it came from).
+function chatMessageCard(dir, otherId, title, text, tag = "") {
+  const card = el("div", `block chatmsg ${dir === "to" ? "to" : "from"}`);
+  const head = card.appendChild(el("div", "cm-head", icon(dir === "to" ? "steer" : dir === "in" ? "chat" : "reply")));
+  head.append(dir === "to" ? "To " : dir === "in" ? "From " : "Reply from ");
+  head.appendChild(el("b")).textContent = title || "another chat";
+  if (tag) head.appendChild(el("span", "cm-tag")).textContent = tag;
+  if (otherId && chats.has(otherId)) {
+    const open = head.appendChild(el("button", "cm-open"));
+    open.type = "button";
+    open.textContent = "Open chat";
+    open.onclick = () => switchTo(otherId);
+  }
+  const body = card.appendChild(el("div", "cm-body"));
+  body.innerHTML = markdown(text || "");
+  if ((text || "").length > 600 || (text || "").split("\n").length > 9) body.classList.add("long");
+  return card;
+}
+// "[From the chat 'Title' (id abc12345), not typed by the user. ...]\n\nthe message": who sent it, and what.
+const HANDOFF_HEAD = /^\[From the chat (['"])(.*?)\1(?: \(id ([0-9a-f]{8})\))?, not typed by the user\.[^\]]*\]\s*/s;
+
 function userBlock(entry, at) {
   const { text, steer: steered, files } = entry;
+  const handed = typeof text === "string" && text.match(HANDOFF_HEAD);
+  if (handed) return chatMessageCard("in", handed[3] || "", handed[2], text.slice(handed[0].length));
   const sent = !(files && files.length) && parseComments(text);
   if (sent) return commentsBlock(sent, text, steered);
   const wrap = el("div", "block user-wrap turn");
@@ -10115,6 +10154,8 @@ function drawEntry(entry, ctx) {
       break;
     }
     case "note": richText(messagesEl.appendChild(el("div", "block note")), entry.text); break;
+    case "chatmsg": messagesEl.appendChild(chatMessageCard(entry.dir, entry.other, entry.title, entry.text,
+      entry.started ? "New chat" : entry.waits ? "Waiting its turn" : "")); break;
     case "wait": messagesEl.appendChild(waitCard(entry)); queueWaitBar(); break;
     case "stats": {
       const reply = ctx.lastReply;
