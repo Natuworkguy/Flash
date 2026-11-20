@@ -217,6 +217,9 @@ color:#f5f4ee;display:grid;place-items:center;height:100vh;margin:0">
 
 STATIC = {"orbit.woff2": "font/woff2", "logo-icon.svg": "image/svg+xml"}
 
+# Flash's own colour picker, opened in place of the system's by every colour field.
+STATIC["colour.js"] = "text/javascript; charset=utf-8"
+
 # Newsreader, the face the agent writes in: its replies and the
 # documents it sends. Shipped with Flash so it reads the same offline.
 STATIC.update({
