@@ -5733,3 +5733,32 @@ class TestChatsWorkingWithChats:
     def test_the_tools_are_offered_in_every_chat(self):
         names = {t["function"]["name"] for t in web.chat_tools(web.Chat(id="x"))}
         assert {"start_chat", "message_chat", "read_chat"} <= names
+
+
+class TestDevicesOnTheDesk:
+    """With more than one robot: a signal for one reaches only it (pages still see all), and the one marked as on
+    the desk is the one voice mode here talks through."""
+
+    def test_a_signal_to_one_device_reaches_only_it(self):
+        session = web.Session()
+        try:
+            agent = f"{web.DEVICE_AGENT}1 FlashBot/0.1"
+            desk = session.access.sign_in("10.0.0.2", agent, "FlashDevice/1 FlashBot/0.1")
+            room = session.access.sign_in("10.0.0.3", agent, "FlashDevice/1 FlashBot/0.1")
+            page = session.access.sign_in("127.0.0.1", "Mozilla/5.0")
+            queues = {k: session.hub.subscribe(k) for k in (desk, room, page)}
+            desk_id = session.access.about(desk)["id"]
+            session.hub.publish({"type": "extension-signal", "signal": "say", "to": desk_id})
+            got = {k: not q.empty() for k, q in queues.items()}
+            assert got == {desk: True, room: False, page: True}  # nosec B101
+
+            assert session.access.desk("robot") == ""  # nosec B101
+            assert session.access.set_desk(desk_id, True)  # nosec B101
+            assert session.access.desk("robot") == desk_id  # nosec B101
+            room_id = session.access.about(room)["id"]
+            session.access.set_desk(room_id, True)  # one desk robot at most
+            assert session.access.desk("robot") == room_id  # nosec B101
+            listed = {b["id"]: b["desk"] for b in session.access.listing(page, set())}
+            assert listed[room_id] and not listed[desk_id]  # nosec B101
+        finally:
+            session.close()
