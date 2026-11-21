@@ -96,3 +96,14 @@ def test_notes_from_threads_wait_for_the_first_prompt(monkeypatch):
         assert said == ["could not take over"]
     finally:
         repl_input._starting = False
+
+
+def test_the_line_under_the_face_stays_put_as_the_eyes_move():
+    def row_of(out, words):
+        rows = PLAIN.sub("", out.replace("\x1b[H", "", 1)).split("\n")
+        return next(i for i, row in enumerate(rows) if words in row)
+
+    for height in (24, 30, 41, 60):
+        rows = {row_of(startup.frame(100, height, x, y, open_, "Checking", 0), "Checking")
+                for x in (-1, 0, 1) for y in (-1, 0, 0.75, 1) for open_ in (0.1, 1)}
+        assert len(rows) == 1
