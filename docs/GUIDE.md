@@ -241,6 +241,16 @@ python run.py
   keeps the winner's answer as the reply and switches the chat to that
   model, the conversation intact. `/compare board` is the tally, which
   says over time which model does best for what you ask.
+- `/fleet task`: Several chats take on the same task at once, side by
+  side in the terminal, each in a private worktree of its own, so none
+  touches your checkout or the others. Three on this model by default;
+  `/fleet 4: task` for four, `/fleet model-a, model-b: task` for one a
+  model. When they are done, a table says what each changed; `d 2`
+  shows chat 2's diff, `r 2` what it said, `c pytest -q` runs a check
+  in every one. A number merges that one into your checkout and deletes
+  the rest; `keep` leaves them all, `drop` deletes them all. Nothing is
+  pushed. In Ask first mode Flash asks once for the whole fleet, and
+  their commands run in the OS sandbox when it is there.
 - `/model fit`: How much this computer can run quickly (its memory, its
   graphics card's), and whether each of your models fits, is tight, or
   is too big. The web UI's model menu marks the tight and too big ones.
