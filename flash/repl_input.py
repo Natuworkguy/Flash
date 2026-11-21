@@ -67,6 +67,8 @@ COMMANDS = [
     ("/btw", "a side question, even while Flash works, without interrupting"),
     ("/compare", "two models answer blind, you pick the better: /compare a "
                  "vs b: question; /compare board for the tally"),
+    ("/fleet", "several chats take the same task at once, each in its own "
+               "worktree; compare them and merge the best: /fleet 3: task"),
     ("/calendar", "what is on (or /calendar 30 for a month); feed add NAME "
                   "URL; google to connect Google Calendar"),
     ("/fallbacks", "models to try when one fails: /fallbacks a > b > c "

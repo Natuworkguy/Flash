@@ -5089,6 +5089,147 @@ def _compare_command(arg: str) -> None:
     console.print(line)
 
 
+def _fleet_view(fleet) -> "Any":
+    """Every chat of a fleet side by side: what each is doing now."""
+
+    from rich.columns import Columns
+    from rich.console import Group
+    from rich.panel import Panel
+
+    from . import fleet as fleets
+    from .theme import CROSS, SPINNER_FRAMES, TICK
+
+    frame = SPINNER_FRAMES[int(time.time() * 10) % len(SPINNER_FRAMES)]
+    width = max(30, (console.width - 2) // min(3, len(fleet.members)) - 1)
+    cards = []
+    for m in fleet.members:
+        mark, style = {
+            fleets.DONE: (TICK, ACCENT), fleets.FAILED: (CROSS, ERROR),
+            fleets.STOPPED: (CROSS, WARN),
+        }.get(m.state, (frame, ACCENT))
+        head = Text(f"{mark} ", style=style)
+        head.append(m.activity if m.state == fleets.RUNNING else m.state.capitalize(),
+                    style="bold")
+        clock = f"{int(m.elapsed) // 60}:{int(m.elapsed) % 60:02d}"
+        head.append(f"  {clock}", style=DIM)
+        if m.rounds:
+            head.append(f" {MIDDOT} {m.rounds} rounds", style=DIM)
+        head.no_wrap, head.overflow = True, "ellipsis"
+        rows = [head]
+        for step in m.steps[-4:]:
+            rows.append(Text(f"  {step}"[:width - 4], style=DIM, no_wrap=True))
+        if m.state != fleets.RUNNING and m.summary:
+            rows.append(Text(m.summary[:width * 2 - 8], style=DIM))
+        cards.append(Panel(Group(*rows), width=width, border_style=DIM,
+                           title=Text(f" {m.n} ", style=f"bold {ACCENT}"),
+                           title_align="left", subtitle=Text(f" {m.model} ", style=DIM),
+                           subtitle_align="right", height=8))
+    hint = Text("  Ctrl+C stops them all", style=DIM)
+    return Group(Columns(cards, padding=(0, 1)), hint)
+
+
+def _fleet_board(fleet) -> None:
+    """What each chat of a finished fleet did, in a table."""
+
+    from rich.table import Table
+
+    from .theme import CROSS, TICK
+
+    fleet.tally()
+    table = Table(box=None, padding=(0, 2), header_style=DIM, show_edge=False)
+    for name in ("", "model", "files", "lines", "check", "what it says"):
+        table.add_column(name, no_wrap=name != "what it says")
+    for m in fleet.members:
+        check = Text("")
+        if m.check is not None:
+            check = Text(TICK if m.check else CROSS, style=ACCENT if m.check else ERROR)
+        lines = Text(f"+{m.added}", style="#3fb950")
+        lines.append(f" -{m.removed}", style=ERROR)
+        table.add_row(Text(str(m.n), style=f"bold {ACCENT}"), m.model, str(len(m.files)),
+                      lines, check, Text(m.summary or m.state, style=DIM))
+    console.print(table)
+
+
+def _fleet_command(arg: str) -> None:
+    """/fleet [N or a, b:] task: several chats at once, each in its own
+    worktree; then compare them and merge the one picked."""
+
+    from rich.markdown import Markdown
+    from rich.syntax import Syntax
+
+    from . import fleet as fleets
+    from . import sandbox, worktrees
+
+    try:
+        models, task = fleets.parse(arg, Config.model or "")
+    except ValueError as exc:
+        warn(str(exc))
+        return
+    walled = False
+    if not Config.no_command_confirmation:
+        walled = sandbox.available()
+        where = " in the sandbox" if walled else ""
+        if not confirm(f"{len(models)} chats will change files and run commands{where} "
+                       "in worktrees of their own without asking you. Start them?"):
+            return
+    try:
+        fleet = fleets.Fleet.start(os.getcwd(), task, models, sandbox=walled)
+    except (worktrees.WorktreeError, OSError) as exc:
+        warn(f"  {exc}")
+        return
+    try:
+        with Live(_fleet_view(fleet), console=console, refresh_per_second=8,
+                  transient=False) as live:
+            while fleet.running():
+                fleet.refresh()
+                live.update(_fleet_view(fleet))
+                time.sleep(0.25)
+            live.update(_fleet_view(fleet))
+    except KeyboardInterrupt:
+        fleet.stop()
+        console.print(Text("  Stopped. What they did so far is kept to compare.", style=DIM))
+
+    _fleet_board(fleet)
+    console.print(Text(
+        "  A number merges that one and deletes the rest. d 2 shows its diff, r 2 what it "
+        "said, c pytest -q runs a check in each, keep leaves them all, drop deletes them all.",
+        style=DIM))
+    while True:
+        try:
+            said = console.input(Text("  Which one? ", style=f"bold {ACCENT}")).strip()
+        except (KeyboardInterrupt, EOFError):
+            said = "keep"
+        word, _, rest = said.partition(" ")
+        word, rest = word.lower(), rest.strip()
+        try:
+            if word.isdigit():
+                console.print(Text(f"  {fleet.merge(int(word))}", style=f"bold {ACCENT}"))
+                return
+            if word in ("d", "diff") and rest.isdigit():
+                patch = fleet.diff(int(rest))
+                console.print(Syntax(patch, "diff", theme="ansi_dark", background_color="default")
+                              if patch.strip() else Text("  No changes.", style=DIM))
+            elif word in ("r", "read") and rest.isdigit():
+                console.print(Markdown(fleet.member(int(rest)).result or "(nothing)"))
+            elif word in ("c", "check") and rest:
+                with console.status(f"Running {rest} in each", spinner="dots"):
+                    fleet.run_check(rest)
+                _fleet_board(fleet)
+            elif word == "keep":
+                for m in fleet.members:
+                    console.print(Text(f"  {m.n}  {m.branch}  {m.path}", style=DIM))
+                console.print(Text("  Kept: each is a worktree on its own branch.", style=DIM))
+                return
+            elif word in ("drop", "none"):
+                fleet.discard()
+                console.print(Text("  Deleted them all.", style=DIM))
+                return
+            else:
+                console.print(Text("  A number, d N, r N, c COMMAND, keep or drop.", style=DIM))
+        except (ValueError, worktrees.WorktreeError) as exc:
+            warn(f"  {exc}")
+
+
 def _model_fit(client) -> None:
     """/model fit: which models on this machine fit it, and how big a
     model it could take."""
@@ -7586,6 +7727,10 @@ def _main() -> None:
 
             if uin == "/secret" or uin.startswith("/secret "):
                 _secret_command(uin[len("/secret"):].strip())
+                continue
+
+            if uin == "/fleet" or uin.startswith("/fleet "):
+                _fleet_command(uin[len("/fleet"):].strip())
                 continue
 
             if uin == "/compare" or uin.startswith("/compare "):
