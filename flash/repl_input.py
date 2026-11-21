@@ -1537,6 +1537,20 @@ _held: list[Callable[[], None]] = []
 _held_lock = threading.Lock()
 
 
+def hold_until_prompt() -> None:
+    """From now until the first prompt is up, what print_above is given
+    waits for it: said while the opening screen is still being painted,
+    it would land in the middle of the picture. Anything still waiting
+    when Flash exits is said then."""
+
+    global _starting
+    with _held_lock:
+        _starting = True
+    import atexit
+
+    atexit.register(_flush_held, None)
+
+
 def _flush_held(app) -> None:
     """Print what was held, above APP's prompt if given, else at once."""
 

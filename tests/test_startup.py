@@ -79,3 +79,20 @@ def test_a_slow_start_shows_the_face_then_puts_the_screen_back(monkeypatch):
     assert said.startswith("\x1b[?1049h")
     assert said.endswith("\x1b[?1049l")
     assert "Waking the sparks" in PLAIN.sub("", said)
+
+
+def test_notes_from_threads_wait_for_the_first_prompt(monkeypatch):
+    from flash import repl_input
+
+    monkeypatch.setattr(repl_input, "_session", None)
+    monkeypatch.setattr(repl_input, "_held", [])
+    said = []
+    repl_input.hold_until_prompt()
+    try:
+        # Said while the opening screen is painted: held, not printed.
+        repl_input.print_above(lambda: said.append("could not take over"))
+        assert said == []
+        repl_input._flush_held(None)
+        assert said == ["could not take over"]
+    finally:
+        repl_input._starting = False
