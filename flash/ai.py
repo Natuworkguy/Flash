@@ -7198,10 +7198,14 @@ def _main() -> None:
             input("\n\nPress any key to continue ")
             sys.exit(2)
 
+    from . import startup
+
+    startup.say("Finding your models")
     client = _client()
 
     # Sparks work for as long as Flash is open, and the MCP servers start
     # with it, so their tools are there for the first turn and shift.
+    startup.say("Waking the sparks")
     sparks.start()
     from . import keepalive
 
@@ -7210,6 +7214,7 @@ def _main() -> None:
         "say": lambda said: print_above(
             lambda: console.print(Text(f"  {said}", style=DIM)))},
         daemon=True).start()
+    startup.say("Connecting your tools")
     connectors.start()
     # A spark's @user rings the terminal's bell and shows on the desktop.
     pings.on_ping(_terminal_ping)
@@ -7218,7 +7223,9 @@ def _main() -> None:
 
     sparkcalls.listen(_terminal_ring, _terminal_ring_end)
 
-    _clear_screen()
+    if not startup.active():
+        # (Behind the startup face, the screen is cleared as it goes.)
+        _clear_screen()
 
     messages: list = []
 
@@ -7245,9 +7252,12 @@ def _main() -> None:
             and bool(subagents.unseen() or bgtasks.unseen(""))
         )
 
+    startup.say("Checking for updates")
     update = check_for_update()
     _check_system_one()
 
+    if startup.stop():
+        _clear_screen()
     backdrop = open_screen(console, update)
 
     banner_showing = True

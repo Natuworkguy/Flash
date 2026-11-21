@@ -54,15 +54,27 @@ def main() -> None:
         args = cli.parse_args()
         print(cli.completion_script(args.target or ""))
         return
+    # The robot's face, full screen, while the rest of Flash loads: started
+    # before the imports that take the time.
+    from . import startup
+
+    startup.start(sys.argv[1:])
     try:
-        from .ai import main as flash
-    except ModuleNotFoundError as error:
-        _repair(error)
-        return
-    try:
-        flash()
-    except ModuleNotFoundError as error:
-        _repair(error)
+        try:
+            from .ai import main as flash
+        except ModuleNotFoundError as error:
+            startup.stop()
+            _repair(error)
+            return
+        try:
+            flash()
+        except ModuleNotFoundError as error:
+            startup.stop()
+            _repair(error)
+    except BaseException:
+        # Whatever is said on the way out is said on the first screen.
+        startup.stop()
+        raise
 
 
 if __name__ == "__main__":

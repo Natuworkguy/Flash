@@ -71,6 +71,7 @@ Requirements:
 | `SYSTEM_ONE` | No | `0` | - | `1` (with `SYSTEM_ONE_MODEL` set) puts System One to work in autonomous mode: a small model that reviews each command and edit before it runs and answers the model's quick questions. Needs Ollama v0.35 or later. Usually set with `/systemone on` or in the web UI's Settings, which check the server's version first. See [System One](../README.md#system-one). |
 | `SYSTEM_ONE_MODEL` | No | unset | - | The model System One asks: any model on the server whose capabilities include `decision`, such as `nimble`. Unset, System One stays off until one is picked; `/systemone on` picks the first such model it finds. |
 | `WEB_REMEMBER_BROWSERS` | No | `0` | - | `1` keeps browsers signed in to the web UI across restarts of Flash, so after opening the link once a browser opens Flash at its plain address. Usually set under Settings, Security. |
+| `FLASH_NO_LOADER` | No | unset | - | `1` skips the robot's face that fills the terminal while Flash starts. It only shows when starting takes longer than a moment, and goes as soon as Flash is ready. |
 | `FLASH_NO_DOCK` | No | unset | - | `1` takes the message box and status bar down while Flash works, as it was before you could steer or queue mid-turn. |
 | `PROGRESS_EMAIL` | No | `0` | - | `1` emails you a request's milestones as it goes (see the guide's Progress emails). Set with `/email progress on` or under Settings, Email. |
 | `PROGRESS_EMAIL_TO` | No | your default address | - | Where progress emails go. |
