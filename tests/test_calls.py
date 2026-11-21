@@ -111,14 +111,44 @@ def test_what_is_missing_is_said_with_the_command(monkeypatch):
     assert "only" in calls.missing()
 
 
-def test_the_tool_is_offered_only_in_ultraauto_on_a_mac(monkeypatch):
+def phone_actions():
+    for tool in tools.available_tools():
+        if tool["function"]["name"] == "phone_call":
+            return tool["function"]["parameters"]["properties"]["action"]["enum"]
+    return None
+
+
+def test_calling_is_offered_only_in_ultraauto_on_a_mac(monkeypatch):
     monkeypatch.setattr(tools.computer, "system", lambda: "mac")
     monkeypatch.setattr(tools, "ultra_auto", lambda: True)
-    names = {t["function"]["name"] for t in tools.available_tools()}
-    assert "phone_call" in names
+    assert phone_actions() == ["call", "answer", "join", "hang_up"]
+    # Outside UltraAuto, it can only hang up.
     monkeypatch.setattr(tools, "ultra_auto", lambda: False)
-    names = {t["function"]["name"] for t in tools.available_tools()}
-    assert "phone_call" not in names
+    assert phone_actions() == ["hang_up"]
+    monkeypatch.setattr(tools.computer, "system", lambda: "linux")
+    assert phone_actions() is None
+
+
+def test_hanging_up_in_any_mode(monkeypatch):
+    monkeypatch.setattr(tools, "ultra_auto", lambda: False)
+    monkeypatch.setattr(calls.computer, "system", lambda: "mac")
+    pressed = []
+    monkeypatch.setattr(calls, "_press", lambda names, want="": pressed.append(names) or "ok")
+    # Flash's own call: it stops talking, and the call ends.
+    monkeypatch.setattr(calls, "halt", lambda owner="": True)
+    assert tools.phone_call("hang_up") == "Ended the call Flash was on."
+    # One ringing: declined.
+    monkeypatch.setattr(calls, "halt", lambda owner="": False)
+    monkeypatch.setattr(calls, "ringing", lambda: "John is calling")
+    assert "Declined" in tools.phone_call("hang_up")
+    assert ["Decline"] in pressed
+    # The user's own call.
+    monkeypatch.setattr(calls, "ringing", lambda: "")
+    monkeypatch.setattr(calls, "_state", lambda: {"live": True})
+    assert tools.phone_call("hang_up") == "Hung up the call."
+    # None at all.
+    monkeypatch.setattr(calls, "_state", lambda: {"live": False})
+    assert "nothing to hang up" in tools.phone_call("hang_up")
 
 
 def test_an_email_only_contact_is_called_with_facetime(monkeypatch):

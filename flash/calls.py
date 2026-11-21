@@ -681,6 +681,27 @@ def halt(owner: str = "") -> bool:
     return True
 
 
+def hang_up_now() -> str:
+    """End the call on this Mac now, whoever is on it: the one Flash is
+    holding (it stops talking at once), one ringing (declined), or one the
+    user is on themselves. What was done, or "" when no call was there."""
+
+    if computer.system() != "mac":
+        raise CallError("Flash hangs up calls on a Mac, where it holds them.")
+    if halt():
+        # Flash's own call: it stops talking; its call ends here too.
+        _hang_up()
+        return "Ended the call Flash was on."
+    who = ringing()
+    if who:
+        if _press(["Decline"]):
+            return f"Declined the incoming call ({who})."
+    if _state().get("live"):
+        _hang_up()
+        return "Hung up the call."
+    return ""
+
+
 def live() -> dict:
     """The call going now, as the page shows it."""
 
