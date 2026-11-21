@@ -5224,7 +5224,8 @@ def status(ai) -> dict:
         # What extensions change of the page, and their status lines.
         "extension_ui": [e.ui.summary(e.name) for e in ext_ui.with_ui()],
         "extension_status": [
-            {"name": name, "text": text}
+            {"name": name, "text": text,
+             "when_model": ext_ui.status_model(name)}
             for name, text in ext_ui.status_lines()
         ],
     }
@@ -7155,7 +7156,8 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
         return {"loader_tasks": on}
 
     if name == "ext-status":
-        return {"status": [{"name": n, "text": t}
+        return {"status": [{"name": n, "text": t,
+                            "when_model": ext_ui.status_model(n)}
                            for n, t in ext_ui.status_lines()]}
 
     if name == "ext-button":

@@ -832,7 +832,7 @@ script with an API.
 | `script` | A script in `web`, run in the page with `window.Flash` (below). |
 | `panels` | Up to 6 pages of the extension's own (`.html` in `web`), each a row in the sidebar that shows it in place of the chat, at an address of its own: `/x/<extension>/<id>`, to link to, reload and come back to with Back. A panel reaches the same API as `parent.Flash`. It has an X to close it unless it sets `"close": false`, for a panel that is a place of its own, left from the sidebar like any page. |
 | `buttons` | Up to 12. See below. |
-| `status` | A program whose first line of output, up to 80 characters, shows under the message box on the web and in the terminal's status line, read again every `every` seconds (5 to 3600). |
+| `status` | A program whose first line of output, up to 80 characters, shows under the message box on the web and in the terminal's status line, read again every `every` seconds (5 to 3600). With `when_model` (the start of a model name, like `"@claude/"`), it shows only while a chat uses such a model. |
 | `greeting`, `suggestions` | A new chat's greeting, and up to 8 suggestions offered under the box (and in the terminal's empty box). |
 | `placeholder` | What the empty box says, on the web and in the terminal. |
 | `banner` | A text file (up to 20 lines) shown under Flash's welcome box in the terminal. |

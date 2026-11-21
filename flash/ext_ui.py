@@ -181,6 +181,9 @@ class Status:
     run: list[str]
     every: int = STATUS_EVERY
     timeout: int = STATUS_TIMEOUT
+    # Shown only while a model whose name starts with this is in use
+    # ("@claude/"): empty, always.
+    when_model: str = ""
 
 
 @dataclass
@@ -487,8 +490,14 @@ def parse(entry: Any, root: Path, commands: set[str]) -> UI:
             raise ExtensionError(
                 f'"ui" status: "every" has to be {MIN_STATUS_EVERY} to '
                 "3600 seconds")
+        when_model = status.get("when_model", "")
+        if not isinstance(when_model, str) or len(when_model) > 80:
+            raise ExtensionError(
+                '"ui" status: "when_model" has to be the start of a model '
+                'name, like "@claude/"')
         ui.status = Status(
             run=_argv(status.get("run"), root, '"ui" status'), every=every,
+            when_model=when_model.strip(),
             timeout=min(_timeout(status.get("timeout"), '"ui" status'),
                         STATUS_TIMEOUT) if status.get("timeout") is not None
             else STATUS_TIMEOUT,
@@ -770,15 +779,35 @@ def _refresh(ext: Any) -> None:
         _running.discard(ext.name)
 
 
-def status_lines(wait: bool = False) -> list[tuple[str, str]]:
+def status_model(name: str) -> str:
+    """The start of the model names extension NAME's status line is for,
+    or "" when it is for every model."""
+
+    for ext in with_ui():
+        if ext.name == name and ext.ui.status is not None:
+            return ext.ui.status.when_model
+    return ""
+
+
+def model_matches(when_model: str, model: str) -> bool:
+    return not when_model or str(model or "").lower().startswith(
+        when_model.lower())
+
+
+def status_lines(wait: bool = False,
+                 model: Optional[str] = None) -> list[tuple[str, str]]:
     """Each extension's status line, as last read: one older than its
     "every" is read again on a thread of its own (or here, with WAIT),
-    so nothing that asks waits on a slow program."""
+    so nothing that asks waits on a slow program. Given MODEL, a line
+    meant only for other models is left out, and not read again."""
 
     now = time.time()
     found = []
     for ext in with_ui():
         if ext.ui.status is None:
+            continue
+        if model is not None and not model_matches(
+                ext.ui.status.when_model, model):
             continue
         with _status_lock:
             at, line = _status.get(ext.name, (0.0, ""))

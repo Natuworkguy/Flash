@@ -176,6 +176,23 @@ def test_status_greeting_and_the_terminal(tmp_path):
                for b in keys.bindings)
 
 
+def test_a_status_line_for_some_models_only(tmp_path):
+    folder = everything(tmp_path / "w")
+    manifest = folder / "flash-extension.json"
+    data = json.loads(manifest.read_text())
+    data["ui"]["status"]["when_model"] = "@claude/"
+    manifest.write_text(json.dumps(data))
+    install(folder)
+
+    assert ext_ui.status_lines(wait=True, model="@claude/opus-5-5") == [
+        ("weather", "cloudy, 14C")]
+    assert ext_ui.status_lines(wait=True, model="qwen3:8b") == []
+    assert ext_ui.status_model("weather") == "@claude/"
+    from flash import ai
+
+    assert web.status(ai)["extension_status"][0]["when_model"] == "@claude/"
+
+
 def test_the_page_gets_it(tmp_path):
     install(everything(tmp_path / "w"))
     from flash import ai
