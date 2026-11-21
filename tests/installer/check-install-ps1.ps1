@@ -4,6 +4,10 @@ $path = Join-Path $PSScriptRoot "..\..\install.ps1"
 $tokens = $null; $errors = $null
 $ast = [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $path), [ref]$tokens, [ref]$errors)
 if ($errors.Count) { $errors | ForEach-Object { Write-Host "$($_.Extent.StartLineNumber): $($_.Message)" }; exit 1 }
+# The setup window's helpers parse too.
+$kit = Join-Path $PSScriptRoot "..\..\installer\window\window.ps1"
+$null = [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $kit), [ref]$tokens, [ref]$errors)
+if ($errors.Count) { $errors | ForEach-Object { Write-Host "window.ps1 $($_.Extent.StartLineNumber): $($_.Message)" }; exit 1 }
 # Format-PipLine on its own, out of the installer, without running the install.
 $fn = $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq "Format-PipLine" }, $true)[0]
 . ([scriptblock]::Create($fn.Extent.Text))
