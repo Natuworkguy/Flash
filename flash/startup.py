@@ -131,8 +131,12 @@ def frame(width: int, height: int, look_x: float, look_y: float,
     bg = _rgb(BG, True)
     eye_fg = _rgb(EYE, False)
     blank = bg + " " * width
-    band_top = int((cy - eye_h / 2) // 2) - 1
-    band_bottom = int((cy + eye_h / 2) // 2) + 1
+    # The rows the eyes can reach, wherever they look: the line under
+    # them is placed from these, so it stays put as they move.
+    rest = px_h * 0.42
+    reach = px_h * 0.05
+    band_top = int((rest - reach - eye_h / 2) // 2) - 1
+    band_bottom = int((rest + reach + eye_h / 2) // 2) + 1
     text_row = min(height - 2, band_bottom + max(2, height // 8))
     rows = []
     for row in range(height):
