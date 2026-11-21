@@ -920,6 +920,10 @@ def dim(text: str) -> None:
 
 
 def error(text: str) -> None:
+    # Said on the first screen, not lost with the startup face's.
+    from . import startup
+
+    startup.stop()
     console.print(Markdown(text, style=ERROR))
 
 
