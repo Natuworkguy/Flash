@@ -2712,8 +2712,8 @@ def available_tools() -> list[dict[str, Any]]:
         + (EMAIL_TOOLS if mail.configured() else [])
         + computer_tools()
         + (computer_use_tools() if computeruse.enabled() else [])
-        + ([PHONE_TOOL] if computer.system() == "mac" and ultra_auto()
-           else [])
+        + ([PHONE_TOOL if ultra_auto() else HANG_UP_TOOL]
+           if computer.system() == "mac" else [])
         + (PRINT_TOOLS + REMINDERS_TOOLS if computer.system() == "mac"
            else [])
         + (LOCATION_TOOLS if location.current() else [])
@@ -3320,16 +3320,20 @@ PHONE_TOOL = {
             "Google Meet (\"talk to my friend\"). You say first that you "
             "are an automated assistant "
             "calling for the user, talk towards the goal, hang up, and "
-            "get the transcript. Only in UltraAuto."
+            "get the transcript. Only in UltraAuto. hang_up ends the call "
+            "on this computer now, in any mode: the one you are on, one "
+            "ringing (declined), or the user's own (\"hang up\", "
+            "\"end the call\", \"decline it\")."
         ),
         "parameters": {
             "type": "object",
             "properties": {
                 "action": {"type": "string",
-                           "enum": ["call", "answer", "join"],
+                           "enum": ["call", "answer", "join", "hang_up"],
                            "description": "call them now, answer "
-                           "their next call, or join the call the user "
-                           "is on now (who is optional)."},
+                           "their next call, join the call the user "
+                           "is on now (who is optional), or hang up the "
+                           "call going now (who and goal are not needed)."},
                 "who": {"type": "string",
                         "description": "A name from Contacts, or a "
                         "phone number."},
@@ -3351,7 +3355,30 @@ PHONE_TOOL = {
                         "description": "join: the call app, as the user "
                         "would say it: Meet, Zoom, Teams..."},
             },
-            "required": ["action", "who", "goal"],
+            "required": ["action"],
+        },
+    },
+}
+
+
+# Outside UltraAuto, phone_call can only end a call: hanging up asks for
+# nothing that calling or answering would.
+HANG_UP_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "phone_call",
+        "description": (
+            "Hang up the call going on this computer now: one ringing is "
+            "declined, one the user is on is ended (\"hang up\", \"end "
+            "the call\", \"decline it\"). Making, answering and talking "
+            "on calls needs UltraAuto."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "action": {"type": "string", "enum": ["hang_up"]},
+            },
+            "required": ["action"],
         },
     },
 }
@@ -5744,7 +5771,19 @@ def phone_call(action: str = "call", who: str = "", goal: str = "",
 
     from . import calls
 
-    tool_line(f"PhoneCall({action} {who})")
+    tool_line(f"PhoneCall({action} {who})".replace(" )", ")"))
+    if action == "hang_up":
+        # Only ends a call: allowed whatever the mode.
+        try:
+            done = calls.hang_up_now()
+        except (calls.CallError, computer.ComputerError) as exc:
+            result = f"Error: {exc}"
+            tool_result(result, style=ERROR)
+            return result
+        result = done or ("No call is going on this computer, so there was "
+                          "nothing to hang up.")
+        tool_result(result, style=DIM)
+        return result
     if not ultra_auto():
         result = ("Error: Flash only talks on calls in UltraAuto. Tell the "
                   "user to switch it on to let Flash make and take calls.")
