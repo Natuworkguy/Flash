@@ -100,6 +100,9 @@ jobs:
           pip install -r requirements.txt
           pip install pytest
           pip install -e .
+      - name: Check the Windows installer
+        shell: powershell
+        run: ./tests/installer/check-install-ps1.ps1
       - name: Run tests
         run: pytest
 
