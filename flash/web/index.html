@@ -21798,6 +21798,8 @@ function modelParts(name) {
 }
 
 function renderModelButtons() {
+  // Status lines meant for some models follow the chat's model.
+  try { renderExtStatus(); } catch (_) { /* not loaded yet */ }
   const local = !info.host_name || info.host_name === "This computer";
   const full = chatModel();
   const html = `<span class="name">${local ? "" : `<span class="host">${esc(info.host_name)} · </span>`}${esc(full === "auto" ? "Auto" : shortModel(full) || "No model")}</span>` +
@@ -25873,10 +25875,12 @@ function renderExtUI() {
 
 function renderExtStatus() {
   const line = $(".fine .ext-status");
-  const said = (info.extension_status || []).map((s) => s.text).filter(Boolean);
-  line.hidden = !said.length;
-  line.textContent = said.join(" · ");
-  line.title = (info.extension_status || []).map((s) => `${s.name}: ${s.text}`).join("\n");
+  // A line meant for some models only (an account balance for @claude/ models) shows while this chat uses one.
+  const model = String(chatModel() || "").toLowerCase();
+  const shown = (info.extension_status || []).filter((s) => s.text && (!s.when_model || model.startsWith(String(s.when_model).toLowerCase())));
+  line.hidden = !shown.length;
+  line.textContent = shown.map((s) => s.text).join(" · ");
+  line.title = shown.map((s) => `${s.name}: ${s.text}`).join("\n");
 }
 
 // Status lines change on their own clocks: asked for while any is shown.

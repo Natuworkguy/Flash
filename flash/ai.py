@@ -1860,7 +1860,8 @@ def _status_text(messages: list[dict]) -> str:
     # Extensions' status lines, as last read: never waited on here.
     from . import ext_ui
 
-    parts += [line for _name, line in ext_ui.status_lines()]
+    parts += [line for _name, line in
+              ext_ui.status_lines(model=str(Config.model or ""))]
 
     return "   ".join(parts)
 
