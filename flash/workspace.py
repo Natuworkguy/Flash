@@ -540,6 +540,30 @@ def folder_suggestions(typed: str) -> list[str]:
     ]
 
 
+def make_folder(typed: str) -> str:
+    """Makes the folder TYPED in the new project form, inside one that is
+    there already, and gives it back as the form shows paths.
+
+    Only the last part is new: a typo higher up the path is an error, not
+    a tree of folders nobody meant to make.
+    """
+
+    path = Path(os.path.expanduser((typed or "").strip().rstrip("/\\")))
+    name = path.name
+    if not name or name in (".", "..") or any(c in name for c in '<>:"|?*\0'):
+        raise ValueError("That isn't a name a folder can have.")
+    if not path.is_absolute():
+        raise ValueError("Start the path from ~ or /.")
+    if not path.parent.is_dir():
+        raise ValueError(f"There is no folder {path.parent}.")
+    if path.exists():
+        raise ValueError(f"{name} is there already.")
+    path.mkdir()
+    home = str(Path.home())
+    shown = str(path)
+    return "~" + shown[len(home):] if shown.startswith(home + os.sep) else shown
+
+
 # --- Files the agent showed ---------------------------------------------
 
 # What can be shown, and as what. A page is the one type that can run a
