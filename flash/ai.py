@@ -7209,6 +7209,12 @@ def _main() -> None:
     sparks.start()
     from . import keepalive
 
+    # Notes from these threads wait for the first prompt, so none lands in
+    # the middle of the opening screen as it is painted.
+    from .repl_input import hold_until_prompt
+
+    hold_until_prompt()
+
     threading.Thread(target=keepalive.take_over_if_wanted, kwargs={
         # Said above the prompt, which may already be drawn.
         "say": lambda said: print_above(
