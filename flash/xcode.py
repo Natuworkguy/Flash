@@ -30,7 +30,69 @@ from typing import Callable, Optional
 
 ACTIONS = ("status", "schemes", "build", "test", "boot", "run", "stop",
            "logs", "screenshot", "crashes", "backtrace", "open_url",
-           "appearance", "devices_window")
+           "appearance", "devices_window", "show", "open_app")
+
+# The apps every iPhone has, by the names people call them: open_app
+# opens one by name on a simulator or a device.
+APPS = {
+    "wallet": "com.apple.Passbook", "apple pay": "com.apple.Passbook",
+    "settings": "com.apple.Preferences", "safari": "com.apple.mobilesafari",
+    "photos": "com.apple.mobileslideshow", "camera": "com.apple.camera",
+    "maps": "com.apple.Maps", "messages": "com.apple.MobileSMS",
+    "phone": "com.apple.mobilephone", "contacts": "com.apple.MobileAddressBook",
+    "mail": "com.apple.mobilemail", "calendar": "com.apple.mobilecal",
+    "notes": "com.apple.mobilenotes", "reminders": "com.apple.reminders",
+    "files": "com.apple.DocumentsApp", "app store": "com.apple.AppStore",
+    "shortcuts": "com.apple.shortcuts", "clock": "com.apple.mobiletimer",
+    "weather": "com.apple.weather", "music": "com.apple.Music",
+    "health": "com.apple.Health", "fitness": "com.apple.Fitness",
+    "find my": "com.apple.findmy", "home": "com.apple.Home",
+    "watch": "com.apple.Bridge", "news": "com.apple.news",
+    "podcasts": "com.apple.podcasts", "books": "com.apple.iBooks",
+    "translate": "com.apple.Translate", "passwords": "com.apple.Passwords",
+}
+
+# What Flash may show on a device but never does itself: the user's own
+# money and identity. It stops at that step and says what the user does.
+HANDS_OFF = ("Never pay, add or remove a card, confirm Apple Pay, send money, "
+             "or sign in: at that step, stop and tell the user what to do "
+             "themselves (for a payment: the side button twice, Face ID or "
+             "the passcode, then the top of the phone held near the reader).")
+
+
+def bundle_for(app: str) -> str:
+    """The bundle id APP means: a name from APPS, or a bundle id as is."""
+
+    name = " ".join(str(app or "").lower().split()).removesuffix(" app")
+    if name in APPS:
+        return APPS[name]
+    if "." in str(app):
+        return str(app).strip()
+    raise XcodeError(f"No built-in app called {app!r}: give its bundle id. "
+                     f"Known: {', '.join(sorted(set(APPS) - {'apple pay'}))}.")
+
+
+def device_hub() -> str:
+    """Where Device Hub is (Xcode 27 and later), or "": the app that shows
+    simulators and plugged-in devices, which replaced Simulator."""
+
+    dev = os.environ.get("DEVELOPER_DIR", "")
+    if not dev:
+        try:
+            dev = subprocess.run(["xcode-select", "-p"], capture_output=True,  # nosec B603 B607
+                                 text=True, timeout=10, check=False).stdout.strip()
+        except (OSError, subprocess.SubprocessError):
+            dev = ""
+    if dev:
+        app = Path(dev.removesuffix("/Contents/Developer")) / "Contents" / "Applications" / "DeviceHub.app"
+        if app.is_dir():
+            return str(app)
+    try:
+        found = subprocess.run(["mdfind", "kMDItemFSName == 'DeviceHub.app'"],  # nosec B603 B607
+                               capture_output=True, text=True, timeout=10, check=False).stdout
+    except (OSError, subprocess.SubprocessError):
+        found = ""
+    return next((ln for ln in found.splitlines() if ln.strip()), "")
 BUILD_SECONDS = 1200
 QUICK_SECONDS = 60
 DERIVED = Path.home() / ".flash" / "xcode" / "DerivedData"
@@ -329,8 +391,8 @@ class Xcode:
             if code and "current state: Booted" not in err:
                 raise XcodeError(err.strip()[-800:])
             self.run(["xcrun", "simctl", "bootstatus", where["udid"], "-b"], 300)
-        self.run(["open", "-a", "Simulator", "--args", "-CurrentDeviceUDID", where["udid"]], QUICK_SECONDS)
-        return f"{where['name']} ({where['runtime']}) is booted and showing in Simulator."
+        shown = self.show(where)
+        return f"{where['name']} ({where['runtime']}) is booted. {shown}"
 
     def install_and_launch(self, where: dict, app: str, bundle: str, console_seconds: int = 0, args: Optional[list] = None) -> str:
         args = [str(a) for a in (args or [])]
@@ -372,10 +434,62 @@ class Xcode:
         lines = [ln for ln in out.splitlines() if ln.strip() and not ln.startswith("Timestamp")]
         return "\n".join(lines[-200:]) or f"Nothing logged by {process} in the last {minutes:g} min."
 
+    def show(self, where: dict) -> str:
+        """WHERE on the Mac's screen, to watch and work: in Device Hub,
+        else (an older Xcode) Simulator or Xcode's device window."""
+
+        ident = where.get("udid") or where.get("id", "")
+        hub = self.hub()
+        if hub:
+            self.run(["open", hub], QUICK_SECONDS)
+            self.run(["open", f"devices://device/open?id={ident}"], QUICK_SECONDS)
+            return f"{where['name']} is showing in Device Hub."
+        if where["kind"] == "simulator":
+            self.run(["open", "-a", "Simulator", "--args", "-CurrentDeviceUDID", ident], QUICK_SECONDS)
+            return f"{where['name']} is showing in Simulator."
+        self.devices_window()
+        return f"{where['name']} is in Xcode's device window."
+
+    hub = staticmethod(device_hub)
+
+    def open_app(self, where: dict, app: str) -> str:
+        """A built-in app (or any installed one, by bundle id) opened on
+        WHERE, as it is, without closing it first."""
+
+        bundle = bundle_for(app)
+        if where["kind"] == "simulator":
+            self.boot(where)
+            self._out(["xcrun", "simctl", "launch", where["udid"], bundle])
+        else:
+            self._out(["xcrun", "devicectl", "device", "process", "launch", "--device", where["id"], bundle], 120)
+            self.show(where)
+        return f"Opened {app} ({bundle}) on {where['name']}."
+
+    def _window_box(self) -> str:
+        """Where Device Hub's front window is on screen, as screencapture's
+        -R takes it, or "" when it has none."""
+
+        out, _err, code = self.run(["osascript", "-e",
+                                    'tell application "System Events" to tell (first process whose name is '
+                                    '"DeviceHub") to get {position, size} of front window'], QUICK_SECONDS)
+        nums = re.findall(r"-?\d+", out)
+        return ",".join(nums[:4]) if code == 0 and len(nums) >= 4 else ""
+
     def screenshot(self, where: dict, path: str) -> str:
-        if where["kind"] != "simulator":
-            raise XcodeError("Screenshots are taken of simulators; for a device, use Xcode's device window.")
-        self._out(["xcrun", "simctl", "io", where["udid"], "screenshot", path], QUICK_SECONDS)
+        if where["kind"] == "simulator":
+            self._out(["xcrun", "simctl", "io", where["udid"], "screenshot", path], QUICK_SECONDS)
+            return path
+        # A device: its screen as Device Hub shows it.
+        if not self.hub():
+            raise XcodeError("A device's screen is seen through Device Hub (Xcode 27 or later); "
+                             "with this Xcode, screenshots are of simulators.")
+        self.show(where)
+        time.sleep(1.0)
+        box = self._window_box()
+        if not box:
+            raise XcodeError("Device Hub has no window to see: give Flash Screen Recording and "
+                             "Accessibility in System Settings, Privacy and Security.")
+        self._out(["screencapture", "-x", "-R", box, path], QUICK_SECONDS)
         return path
 
     def open_url(self, where: dict, url: str) -> str:

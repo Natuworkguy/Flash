@@ -4105,8 +4105,17 @@ XCODE_TOOLS: list[dict[str, Any]] = [
                 "process), crashes (the newest crash report, crashed thread "
                 "first), backtrace (every thread of a running app, for a "
                 "hang), stop, boot, open_url, appearance (light or dark), "
-                "devices_window (Xcode's device window). After a change, "
-                "run it and look at a screenshot before saying it works."
+                "devices_window (Xcode's device window), show (a simulator or "
+                "a plugged-in device on screen in Device Hub, where the "
+                "computer tool can see and tap it), open_app (a built-in app "
+                "by name, like Wallet or Settings, or any by bundle id). After "
+                "a change, run it and look at a screenshot before saying it "
+                "works. When asked to show how to do something on an iPhone "
+                "(\"show me how to use Wallet tap to pay\"): show the device "
+                "(target, else the booted simulator), open_app, then do each "
+                "step on its screen in Device Hub with the computer tool, a "
+                "screenshot after each, and answer with numbered steps, each "
+                "with its screenshot. " + xcode.HANDS_OFF
             ),
             "parameters": {
                 "type": "object",
@@ -4123,6 +4132,7 @@ XCODE_TOOLS: list[dict[str, Any]] = [
                     "minutes": {"type": "number", "description": "For logs: how far back (default 2)."},
                     "contains": {"type": "string", "description": "For logs: only lines containing this."},
                     "url": {"type": "string", "description": "For open_url: a link or deep link."},
+                    "app": {"type": "string", "description": "For open_app: Wallet, Settings, Safari, Photos, Maps... or a bundle id."},
                     "mode": {"type": "string", "enum": ["light", "dark"], "description": "For appearance."},
                 },
                 "required": ["action"],
@@ -5361,7 +5371,7 @@ _XCODE_LAST: dict[str, str] = {}
 def xcode_tool(action: str, project: str = "", scheme: str = "", target: str = "",
                configuration: str = "Debug", bundle_id: str = "", console_seconds: Any = 0,
                args: Any = None, process: str = "", minutes: Any = 2, contains: str = "",
-               url: str = "", mode: str = "") -> str:
+               url: str = "", mode: str = "", app: str = "") -> str:
     """Build, run and debug an app with Xcode, a simulator or a device."""
 
     action = str(action or "").strip().lower()
@@ -5424,8 +5434,12 @@ def xcode_tool(action: str, project: str = "", scheme: str = "", target: str = "
             if not name:
                 return "Which app? Give process (its name)."
             return x.logs(where, name, float(minutes or 2), contains)
+        if action == "show":
+            return x.show(where)
+        if action == "open_app":
+            return x.open_app(where, app) if app else "open_app needs app: its name, like Wallet, or bundle id."
         if action == "screenshot":
-            path = str(Path(SCRATCH_DIR) / f"simulator-{int(time.time())}.png")
+            path = str(Path(SCRATCH_DIR) / f"{where['kind']}-{int(time.time())}.png")
             x.screenshot(where, path)
             return view_image(path)
         if action == "open_url":
