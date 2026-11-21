@@ -92,6 +92,155 @@ function Invoke-Quietly([scriptblock]$Command) {
     }
 }
 
+# Fancy: a real console, where the live lines and the bar can be drawn; plain lines anywhere else (a log, CI).
+$Script:Fancy = $false
+try { $Script:Fancy = (-not [Console]::IsOutputRedirected) -and (-not $env:NO_COLOR) -and ([Console]::WindowWidth -gt 30) } catch { }
+$Script:Installed = 0
+
+# What pip, or uv under pipx, is up to, as a line of its own; $null for its noise.
+function Format-PipLine([string]$Line) {
+    $l = $Line.TrimEnd()
+    if ($l -match '^DEBUG Selecting: (\S+)==(\S+)') { return "found $($Matches[1]) $($Matches[2])" }
+    if ($l -match '^DEBUG Adding transitive dependency for ([^=]+)==[^:]*: (.+)$') {
+        $needs = ($Matches[2] -replace '\{[^}]*\}', '') -replace '\*$', ''
+        return "$($Matches[1]) needs $needs"
+    }
+    if ($l -match '^(DEBUG|pipx >|warning:)' -or $l -match '\.metadata') { return $null }
+    if ($l -match '^creating virtual environment') { return 'making Flash a space of its own' }
+    if ($l -match '^installing (\S+) from spec') { return "installing $($Matches[1])" }
+    if ($l -match '^\s*Installing build dependencies: started') { return 'getting what it takes to build Flash' }
+    if ($l -match '^\s*Preparing metadata.*started') { return 'reading what Flash needs' }
+    if ($l -match '^Collecting (\S+)') { return "looking at $($Matches[1])" }
+    if ($l -match '^\s*Downloading (\S+?\.(whl|tar\.gz|zip))\s*(.*)$') {
+        $part = $Matches[1] -split '-'
+        return ("downloading {0} {1} {2}" -f $part[0], $part[1], $Matches[3]).Trim()
+    }
+    if ($l -match '^\s*Using cached (\S+\.whl)') { $part = $Matches[1] -split '-'; return "have $($part[0]) $($part[1]) already" }
+    if ($l -match '^\s*Building wheel for (\S+)' -and $l -notmatch 'finished') { return "building $($Matches[1])" }
+    if ($l -match '^Installing collected packages: (.+)$') { return "installing $(($Matches[1] -split ',').Count) packages" }
+    if ($l -match '^Successfully installed (.+)$') { return "installed $(($Matches[1] -split ' ').Count) packages" }
+    if ($l -match '^(Resolved|Prepared|Installed) \d+ packages') { return $l.Substring(0, 1).ToLower() + $l.Substring(1) }
+    if ($l -match '^\s*Building (\S+) @') { return "building $($Matches[1])" }
+    if ($l -match '^\s*Built (\S+) @') { return "built $($Matches[1])" }
+    if ($l -match '^Downloading (\S+) \((.+)\)') { return "downloading $($Matches[1]) ($($Matches[2]))" }
+    if ($l -match '^ Downloaded (\S+)') { return "downloaded $($Matches[1])" }
+    if ($l -match '^ \+ (\S+)==(\S+)') { return "added $($Matches[1]) $($Matches[2])" }
+    return $null
+}
+
+# Rows of dim lines under the step's own line, drawn in place; the cursor goes back to the end of the step's line.
+function Show-Live([int]$Top, [int]$Col, [string[]]$Lines, [int]$Rows, [string]$Mark) {
+    $width = [Math]::Max(20, [Console]::WindowWidth - 1)
+    for ($i = 0; $i -lt $Rows; $i++) {
+        [Console]::SetCursorPosition(0, $Top + 1 + $i)
+        $text = if ($i -lt $Lines.Count) { "       " + $Lines[$i] } else { "" }
+        if ($text.Length -gt $width) { $text = $text.Substring(0, $width) }
+        Write-Host $text.PadRight($width) -ForegroundColor DarkGray -NoNewline
+    }
+    if ($Mark) {
+        [Console]::SetCursorPosition(2, $Top)
+        Write-Host $Mark -ForegroundColor DarkYellow -NoNewline
+    }
+    [Console]::SetCursorPosition($Col, $Top)
+}
+
+# Like Invoke-Quietly, but what pip is doing shows live under the step, and goes once it's done.
+function Invoke-Watching([scriptblock]$Command, [int]$Rows = 5) {
+    if (-not $Script:Fancy) { return (Invoke-Quietly $Command) }
+    $ErrorActionPreference = "Continue"
+    $global:LASTEXITCODE = 0
+    $col = [Console]::CursorLeft
+    for ($i = 0; $i -lt $Rows; $i++) { [Console]::WriteLine() }
+    $top = [Console]::CursorTop - $Rows
+    $shown = New-Object System.Collections.Generic.List[string]
+    $frames = @('|', '/', '-', '\')
+    $n = 0
+    $ok = $true
+    try {
+        & $Command 2>&1 | ForEach-Object {
+            $line = "$_"
+            $line | Out-File -FilePath $Log -Append -Encoding utf8
+            if ($line -match '^Installed (\d+) packages') { $Script:Installed += [int]$Matches[1] }
+            elseif ($line -match '^Successfully installed (.+)$') { $Script:Installed += ($Matches[1] -split ' ').Count }
+            $said = Format-PipLine $line
+            $n++
+            if ($said) {
+                $shown.Add($said)
+                while ($shown.Count -gt $Rows) { $shown.RemoveAt(0) }
+                Show-Live $top $col $shown.ToArray() $Rows ($frames[$n % 4])
+            } elseif ($n % 6 -eq 0) {
+                Show-Live $top $col $shown.ToArray() $Rows ($frames[$n % 4])
+            }
+        }
+        $ok = ($LASTEXITCODE -eq 0)
+    } catch {
+        $_.ToString() | Out-File -FilePath $Log -Append -Encoding utf8
+        $ok = $false
+    }
+    Show-Live $top $col @() $Rows ""
+    return $ok
+}
+
+# The screenshot browser's download, as a bar: Playwright says which browser and how big; how much has come is
+# the size of its file so far, in a temp folder of the installer's own.
+function Invoke-BrowserDownload([string]$Python) {
+    if (-not $Script:Fancy) { return (Invoke-Quietly { & $Python -m playwright install chromium }) }
+    $tmp = Join-Path $TempDir "browser"
+    New-Item -ItemType Directory -Force -Path $tmp | Out-Null
+    $out = Join-Path $TempDir "browser-out.log"
+    $err = Join-Path $TempDir "browser-err.log"
+    $was = @($env:TEMP, $env:TMP)
+    $env:TEMP = $tmp
+    $env:TMP = $tmp
+    try {
+        $proc = Start-Process -FilePath $Python -ArgumentList @('-m', 'playwright', 'install', 'chromium') -NoNewWindow -PassThru `
+            -RedirectStandardOutput $out -RedirectStandardError $err
+        $null = $proc.Handle  # so its exit code is kept
+    } catch {
+        $_.ToString() | Out-File -FilePath $Log -Append -Encoding utf8
+        return $false
+    } finally {
+        $env:TEMP = $was[0]
+        $env:TMP = $was[1]
+    }
+    $col = [Console]::CursorLeft
+    [Console]::WriteLine(); [Console]::WriteLine()
+    $top = [Console]::CursorTop - 2
+    $frames = @('|', '/', '-', '\')
+    $n = 0
+    $full = [char]0x2588
+    $empty = [char]0x2591
+    while (-not $proc.HasExited) {
+        $said = if (Test-Path $out) { Get-Content $out -Raw -ErrorAction SilentlyContinue } else { "" }
+        $title = ""; $total = 0.0
+        foreach ($m in [regex]::Matches("$said", 'Downloading (.+?) \(playwright')) { $title = $m.Groups[1].Value; $total = 0.0 }
+        foreach ($m in [regex]::Matches("$said", '% of ([\d.]+) MiB')) { $total = [double]$m.Groups[1].Value }
+        $lines = @()
+        if ($title) {
+            $file = Get-ChildItem -Path $tmp -File -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+            $got = if ($file) { $file.Length / 1MB } else { 0 }
+            if ($total -gt 0) {
+                $got = [Math]::Min($got, $total)
+                $cells = [Math]::Max(8, [Math]::Min(32, [Console]::WindowWidth - 40))
+                $k = [int][Math]::Round($got / $total * $cells)
+                $bar = ([string]$full * $k) + ([string]$empty * ($cells - $k))
+                $lines = @($title, $(if ($got -ge $total) { "$bar  unpacking" } else { "{0}  {1,3}%  {2:N1} of {3:N1} MB" -f $bar, [int]($got / $total * 100), $got, $total }))
+            } else {
+                $lines = @($title, ("{0:N1} MB" -f $got))
+            }
+        } else {
+            $lines = @("finding the browser")
+        }
+        $n++
+        Show-Live $top $col $lines 2 ($frames[$n % 4])
+        Start-Sleep -Milliseconds 150
+    }
+    $proc.WaitForExit()
+    foreach ($f in @($out, $err)) { if (Test-Path $f) { Get-Content $f | Out-File -FilePath $Log -Append -Encoding utf8 } }
+    Show-Live $top $col @() 2 ""
+    return ($proc.ExitCode -eq 0)
+}
+
 function Invoke-FlashScheme {
     param(
         [string]$FlashExe,
@@ -230,7 +379,8 @@ try {
     # --- 5. Flash itself ----------------------------------------------------------------
     Start-Step "Installing Flash"
     # Install (or reinstall, if already present) flash from this repo
-    if (-not (Invoke-Quietly { & $PipxCmd install --force $RepoDir })) {
+    $Script:Installed = 0
+    if (-not (Invoke-Watching { & $PipxCmd install --verbose --force $RepoDir })) {
         Stop-Install "Couldn't install Flash." "The details are below."
     }
     $PipxBinDir = & $PipxCmd environment --value PIPX_BIN_DIR 2>$null
@@ -249,11 +399,12 @@ try {
         @{ branch = $Branch; commit = $Commit } | ConvertTo-Json -Compress |
             Set-Content -Path (Join-Path $FlashHome "install.json") -Encoding UTF8
     } catch { }
-    Complete-Step $FlashVersion
+    $FlashPackages = $Script:Installed
+    Complete-Step $(if ($FlashPackages) { "$FlashVersion  " + [char]0x00B7 + "  $FlashPackages packages" } else { $FlashVersion })
 
     # --- 6. The browser for screenshots ----------------------------------------------------
     Start-Step "A browser for page screenshots"
-    if ((Test-Path $VenvPython) -and (Invoke-Quietly { & $VenvPython -m playwright install chromium })) {
+    if ((Test-Path $VenvPython) -and (Invoke-BrowserDownload $VenvPython)) {
         Complete-Step
     } else {
         Warn-Step "Screenshots stay off until it downloads (run: flash --update)."
@@ -267,8 +418,8 @@ try {
     # `pip install`.
     Start-Step "Voice mode"
     $NeededVoicePackages = @("sounddevice", "vosk", "piper-tts")
-    if ((Invoke-Quietly { & $PipxCmd inject flash @NeededVoicePackages }) -and
-        (Invoke-Quietly { & $PipxCmd runpip flash install --upgrade --force-reinstall @NeededVoicePackages })) {
+    if ((Invoke-Watching { & $PipxCmd inject --verbose flash @NeededVoicePackages }) -and
+        (Invoke-Watching { & $PipxCmd runpip flash install --upgrade --force-reinstall @NeededVoicePackages })) {
         Complete-Step "speech models download the first time you use it"
     } else {
         Warn-Step "Voice mode stays off until its packages install."
