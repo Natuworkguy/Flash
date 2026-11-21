@@ -3319,6 +3319,8 @@ button.flow-node:hover { border-color: color-mix(in srgb, var(--c, var(--accent)
 .suggest[hidden] { display: none; }
 .suggest-row { display: flex; align-items: center; gap: 9px; padding: 7px 10px; border-radius: 8px; font: 13.5px var(--mono); color: var(--text-3); cursor: pointer; white-space: nowrap; overflow: hidden; }
 .suggest-row svg { width: 15px; height: 15px; flex: none; }
+.suggest-row.make-row { color: var(--accent); font-family: var(--sans); }
+.suggest-row.make-row b { font-family: var(--mono); font-weight: 600; }
 .suggest-row .path { display: flex; min-width: 0; }
 .suggest-row .where { flex: none; }
 .suggest-row .name { color: var(--text-2); overflow: hidden; text-overflow: ellipsis; }
@@ -18131,7 +18133,7 @@ function suggestFolders(field) {
   list.setAttribute("role", "listbox");
   list.hidden = true;
   document.body.appendChild(list);
-  let found = [], sel = -1, timer = 0, asked = 0;
+  let found = [], sel = -1, timer = 0, asked = 0, making = "";
 
   const place = () => {
     const r = field.getBoundingClientRect();
@@ -18144,16 +18146,27 @@ function suggestFolders(field) {
     [...list.children].forEach((row, i) => row.classList.toggle("sel", i === sel));
     if (sel >= 0) reveal(list, list.children[sel], false, 4);
   };
-  const take = (i) => {
-    field.value = found[i] + "/";
+  const take = async (i) => {
+    if (i === found.length && making) {
+      // The last row: a folder of that name, made here.
+      try {
+        const { path } = await command("mkdir", making);
+        toast(`Made ${path.slice(path.lastIndexOf("/") + 1)}`);
+        field.value = path + "/";
+      } catch (error) { showFailure(error); return; }
+    } else field.value = found[i] + "/";
     field.setSelectionRange(field.value.length, field.value.length);
+    field.dispatchEvent(new Event("input", { bubbles: true }));
     ask(0);
   };
+  const rows = () => found.length + (making ? 1 : 0);
   const draw = () => {
     list.textContent = "";
-    if (!found.length || document.activeElement !== field) { close(); return; }
     // What was typed after the last slash, to bold in each name.
     const typed = field.value.slice(field.value.lastIndexOf("/") + 1);
+    // A name no folder here has yet can be made one.
+    making = typed.trim() && !/[<>:"|?*\\]/.test(typed) && !found.some((d) => d.slice(d.lastIndexOf("/") + 1).toLowerCase() === typed.trim().toLowerCase()) ? field.value.trim() : "";
+    if (!rows() || document.activeElement !== field) { close(); return; }
     found.forEach((d, i) => {
       const cut = d.lastIndexOf("/") + 1;
       const name = d.slice(cut);
@@ -18166,6 +18179,15 @@ function suggestFolders(field) {
       row.onmousemove = () => { if (sel !== i) { sel = i; mark(); } };
       list.appendChild(row);
     });
+    if (making) {
+      const row = el("div", "suggest-row make-row", `${icon("plus")}<span class="path"><span class="name">New folder <b></b></span></span>`);
+      row.setAttribute("role", "option");
+      row.querySelector("b").textContent = typed.trim();
+      const i = found.length;
+      row.onmousedown = (e) => { e.preventDefault(); take(i); };
+      row.onmousemove = () => { if (sel !== i) { sel = i; mark(); } };
+      list.appendChild(row);
+    }
     place();
     list.hidden = false;
     field.setAttribute("aria-expanded", "true");
@@ -18190,12 +18212,13 @@ function suggestFolders(field) {
     if (list.hidden) return;
     if (e.key === "ArrowDown" || e.key === "ArrowUp") {
       e.preventDefault();
-      if (e.key === "ArrowDown") sel = sel + 1 < found.length ? sel + 1 : 0;
-      else sel = sel <= 0 ? found.length - 1 : sel - 1;
+      if (e.key === "ArrowDown") sel = sel + 1 < rows() ? sel + 1 : 0;
+      else sel = sel <= 0 ? rows() - 1 : sel - 1;
       mark();
     } else if (e.key === "Tab" && !e.shiftKey) {
       e.preventDefault();
-      take(sel >= 0 ? sel : 0);
+      // Tab completes a folder that is there; it never makes one.
+      if (sel >= 0) take(sel); else if (found.length) take(0);
     } else if (e.key === "Enter" && sel >= 0) {
       e.preventDefault();
       e.stopPropagation();

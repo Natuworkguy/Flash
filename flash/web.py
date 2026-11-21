@@ -7252,6 +7252,9 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
     if name == "dirs":
         return {"dirs": workspace.folder_suggestions(arg)}
 
+    if name == "mkdir":
+        return {"path": workspace.make_folder(arg)}
+
     if name == "design-save":
         saved = design.save(
             arg, list(body.get("edits") or []), dict(body.get("vars") or {}),

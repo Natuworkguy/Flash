@@ -270,6 +270,18 @@ class TestProjects:
                 "x", str(tmp_path), "x" * (workspace.MAX_INSTRUCTIONS + 1)
             )
 
+    def test_make_folder(self, tmp_path):
+        made = workspace.make_folder(f"{tmp_path}/new-app/")
+        assert made == str(tmp_path / "new-app")  # nosec B101
+        assert (tmp_path / "new-app").is_dir()  # nosec B101
+        # Only the last part is made, never a tree of them; one that is
+        # there, or a name no folder can have, is an error.
+        for bad in (f"{tmp_path}/nope/deeper", f"{tmp_path}/new-app",
+                    f"{tmp_path}/a:b", "relative/path", ""):
+            with pytest.raises(ValueError):
+                workspace.make_folder(bad)
+        assert not (tmp_path / "nope").exists()  # nosec B101
+
     def test_folder_suggestions(self, tmp_path):
         for name in ("alpha", "alps", "beta", ".hidden"):
             (tmp_path / name).mkdir()
