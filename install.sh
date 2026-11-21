@@ -99,6 +99,116 @@ quietly() {
     wait "$pid"
 }
 
+# Like quietly, but what the command is doing shows live under the step's
+# line, a few dim lines that go again once it's done:
+#     watching ROWS FEED command...
+# FEED reads the step's log so far on stdin and prints the lines to show.
+watching() {
+    local rows="$1" feed="$2"
+    shift 2
+    WATCH_FROM=$(( $(wc -c < "$LOG") + 1 ))
+    if [ -z "$FANCY" ]; then
+        "$@" >> "$LOG" 2>&1
+        return
+    fi
+    "$@" >> "$LOG" 2>&1 &
+    local pid=$! i=0 n line shown="" drawn=""
+    local frames=("⠋" "⠙" "⠹" "⠸" "⠼" "⠴" "⠦" "⠧" "⠇" "⠏")
+    WIDTH=$(( $(tput cols 2>/dev/null || echo 80) - 10 ))
+    [ "$WIDTH" -lt 20 ] && WIDTH=20
+    # Room for the lines, then back up to the step's line.
+    for ((n = 0; n < rows; n++)); do printf "\n"; done
+    printf "\033[%dA" "$rows"
+    while kill -0 "$pid" 2>/dev/null; do
+        printf "\r  ${ORANGE}%s${RESET}" "${frames[i % 10]}"
+        if [ $((i % 3)) -eq 0 ]; then
+            shown="$(tail -c +"$WATCH_FROM" "$LOG" 2>/dev/null | "$feed" | tail -n "$rows")"
+        fi
+        if [ "$shown" != "$drawn" ]; then
+            n=0
+            while IFS= read -r line; do
+                printf "\n\033[K       ${DIM}%s${RESET}" "$line"
+                n=$((n + 1))
+            done <<< "$shown"
+            for ((; n < rows; n++)); do printf "\n\033[K"; done
+            printf "\033[%dA" "$rows"
+            drawn="$shown"
+        fi
+        i=$((i + 1))
+        sleep 0.08
+    done
+    for ((n = 0; n < rows; n++)); do printf "\n\033[K"; done
+    printf "\033[%dA" "$rows"
+    wait "$pid"
+}
+
+# What pip, or uv under pipx, is up to, a line for each thing it does,
+# from its verbose output.
+pip_feed() {
+    awk -v w="${WIDTH:-70}" '
+        function say(t) { print substr(t, 1, w) }
+        /^DEBUG Selecting: / { split($3, a, "=="); say("found " a[1] " " a[2]); next }
+        /^DEBUG Adding transitive dependency for / {
+            t = $0; sub(/^DEBUG Adding transitive dependency for /, "", t); sub(/==[^:]*:/, " needs", t); sub(/\{[^}]*\}/, "", t); sub(/\*$/, "", t); say(t); next }
+        /^DEBUG/ || /^pipx >/ || /^warning:/ || /\.metadata/ { next }
+        /^creating virtual environment/ { say("making Flash a space of its own"); next }
+        /^installing .* from spec/ { say("installing " $2); next }
+        /^ *Installing build dependencies: started/ { say("getting what it takes to build Flash"); next }
+        /^ *Preparing metadata.*started/ { say("reading what Flash needs"); next }
+        /^Collecting / { say("looking at " $2); next }
+        /^ *Downloading [^ ]+\.(whl|tar\.gz|zip)/ { split($2, f, "-"); say("downloading " f[1] " " f[2] " " $3 $4); next }
+        /^ *Using cached [^ ]+\.whl/ { split($3, f, "-"); say("have " f[1] " " f[2] " already"); next }
+        /^ *Building wheel for / && !/finished/ { say("building " $4); next }
+        /^Installing collected packages:/ { say("installing " (NF - 3) " packages"); next }
+        /^Successfully installed/ { say("installed " (NF - 2) " packages"); next }
+        /^Resolved [0-9]+ packages/ || /^Prepared [0-9]+ packages/ || /^Installed [0-9]+ packages/ { say(tolower(substr($0, 1, 1)) substr($0, 2)); next }
+        /^ *Building [^ ]+ @/ { say("building " $2); next }
+        /^ *Built [^ ]+ @/ { say("built " $2); next }
+        /^Downloading [^ ]+ \(/ { say("downloading " $2 " " $3); next }
+        /^ Downloaded / { say("downloaded " $2); next }
+        /^ \+ / { split($2, a, "=="); say("added " a[1] " " a[2]); next }
+    '
+}
+
+# How many packages pip or uv put in, from the step's log.
+packages_installed() {
+    tail -c +"$WATCH_FROM" "$LOG" 2>/dev/null | awk '
+        /^Installed [0-9]+ packages/ { n += $2 }
+        /^Successfully installed/ { n += NF - 2 }
+        END { if (n) print n }'
+}
+
+# The browser's download as a bar. Playwright says which browser and how
+# big it is; how much has come is the size of its file so far, in a
+# folder of the installer's own (PW_TMP).
+browser_feed() {
+    local said title total file bytes
+    said="$(awk '
+        /^Downloading / { t = $0; sub(/^Downloading /, "", t); sub(/ \(playwright.*$/, "", t); sub(/ from .*$/, "", t); title = t; total = "" }
+        /% of [0-9.]+ MiB/ { m = $0; sub(/.*% of /, "", m); sub(/ MiB.*/, "", m); total = m }
+        END { print title "|" total }')"
+    title="${said%%|*}"
+    total="${said##*|}"
+    [ -z "$title" ] && { echo "finding the browser"; return; }
+    echo "$title"
+    file="$(ls -t "$PW_TMP" 2>/dev/null | head -n 1)"
+    bytes=0
+    [ -n "$file" ] && bytes=$(wc -c < "$PW_TMP/$file" 2>/dev/null || echo 0)
+    if [ -z "$total" ]; then
+        awk -v b="$bytes" 'BEGIN { printf "%.1f MB\n", b / 1048576 }'
+        return
+    fi
+    awk -v b="$bytes" -v t="$total" -v w="${WIDTH:-70}" 'BEGIN {
+        got = b / 1048576; if (got > t) got = t
+        f = t > 0 ? got / t : 0
+        cells = w - 30; if (cells > 32) cells = 32; if (cells < 8) cells = 8
+        full = int(f * cells + 0.5); bar = ""
+        for (i = 0; i < cells; i++) bar = bar (i < full ? "━" : "─")
+        if (f >= 1) printf "%s  unpacking\n", bar
+        else printf "%s  %3d%%  %.1f of %.1f MB\n", bar, f * 100, got, t
+    }'
+}
+
 # A command that may ask for a password (sudo, Ollama's own installer): no
 # spinner over the prompt, and its output kept in the log.
 asking() {
@@ -257,7 +367,8 @@ fi
 
 step "Installing Flash"
 # Install (or reinstall, if already present) flash from this repo
-quietly pipx install --force "$REPO_DIR" || fail "Couldn't install Flash." "The details are below."
+watching 5 pip_feed pipx install --verbose --force "$REPO_DIR" || fail "Couldn't install Flash." "The details are below."
+FLASH_PACKAGES="$(packages_installed)"
 PIPX_BIN_DIR="$(pipx environment --value PIPX_BIN_DIR 2>/dev/null || echo "$HOME/.local/bin")"
 PIPX_VENVS="$(pipx environment --value PIPX_LOCAL_VENVS 2>/dev/null || echo "")"
 VENV_PYTHON="$PIPX_VENVS/flash/bin/python"
@@ -270,12 +381,14 @@ FLASH_VERSION="$("$FLASH_BIN" --version 2>/dev/null || echo "Flash")"
 mkdir -p "$HOME/.flash"
 printf '{"branch": "%s", "commit": "%s"}\n' "$BRANCH" "$(git -C "$REPO_DIR" rev-parse HEAD 2>/dev/null)" \
     > "$HOME/.flash/install.json" 2>/dev/null || true
-done_ok "$FLASH_VERSION"
+done_ok "$FLASH_VERSION${FLASH_PACKAGES:+  ·  $FLASH_PACKAGES packages}"
 
 # --- 6. The browser for screenshots ------------------------------------------------------------
 
 step "A browser for page screenshots"
-if [ -x "$VENV_PYTHON" ] && quietly "$VENV_PYTHON" -m playwright install chromium; then
+PW_TMP="$TEMP_DIR/browser"
+mkdir -p "$PW_TMP"
+if [ -x "$VENV_PYTHON" ] && watching 2 browser_feed env TMPDIR="$PW_TMP" "$VENV_PYTHON" -m playwright install chromium; then
     done_ok
 else
     done_warn "Screenshots stay off until it downloads (run: flash --update)."
@@ -290,8 +403,8 @@ NEEDED_VOICE_PACKAGES="sounddevice vosk piper-tts"
 # moves one. `runpip` hands its arguments straight to pip, so the
 # subcommand here is `install`, not `pip install`.
 # shellcheck disable=SC2086
-if quietly pipx inject flash $NEEDED_VOICE_PACKAGES &&
-    quietly pipx runpip flash install --upgrade --force-reinstall \
+if watching 5 pip_feed pipx inject --verbose flash $NEEDED_VOICE_PACKAGES &&
+    watching 5 pip_feed pipx runpip flash install --upgrade --force-reinstall \
         $NEEDED_VOICE_PACKAGES; then
     voice_ok=1
 else
