@@ -5092,15 +5092,15 @@ function routeTo(path) {
 }
 
 window.addEventListener("popstate", () => {
+  // Back out of the briefing to where it was opened from, which is
+  // still under it, or forward into it again.
+  const toBriefing = /^\/briefing\/?$/.test(location.pathname);
+  if (toBriefing) { if (briefEl.hidden) openBriefing(false); return; }
+  if (!briefEl.hidden) { closeBriefing(); if (location.pathname === routeFor()) return; }
   closeExtPanel();
   // Back or forward to an extension's panel: open again.
   const panel = location.pathname.match(PANEL_PATH);
   if (panel) { openRoutedPanel({ ext: panel[1], id: panel[2] }, false); return; }
-  // Back out of the briefing to where it was opened from, or forward
-  // into it again.
-  const toBriefing = /^\/briefing\/?$/.test(location.pathname);
-  if (toBriefing) { if (briefEl.hidden) openBriefing(false); return; }
-  if (!briefEl.hidden) { closeBriefing(); return; }
   routeTo(location.pathname);
   closeMenu();
   renderChats();
@@ -25528,7 +25528,8 @@ async function loadBriefing(open = false) {
 }
 
 async function openBriefing(push = true) {
-  closeExtPanel();
+  // Over whatever is open, an extension's panel too, so closing it
+  // goes back there.
   // An address of its own, so it can be linked to, bookmarked, and left
   // with Back.
   if (push && !/^\/briefing\/?$/.test(location.pathname)) history.pushState(null, "", "/briefing");
