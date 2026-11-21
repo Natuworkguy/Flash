@@ -21,6 +21,11 @@ LOG="$(mktemp "${TMPDIR:-/tmp}/flash-install.XXXXXX")"
 STEP=0
 STEPS=8
 NOTES=()   # what didn't work but needn't stop it, said again at the end
+# While the setup window is open (installer/window), the steps show there and the terminal stays quiet.
+QUIET=""
+WINDOW=""
+TITLES=("Getting Flash" "Finding Python" "Ollama, for models on this computer" "pipx, to keep Flash in its own space"
+        "Installing Flash" "A browser for page screenshots" "Voice mode" "flash:// links and a Flash shortcut")
 
 banner() {
     echo ""
@@ -34,17 +39,21 @@ banner() {
 step() {
     STEP=$((STEP + 1))
     CURRENT="$1"
+    [ -n "$WINDOW" ] && window_set $((STEP - 1)) run
+    echo "" >> "$LOG"
+    echo "== $CURRENT" >> "$LOG"
+    [ -n "$QUIET" ] && return
     if [ -n "$FANCY" ]; then
         printf "  ${DIM}·${RESET}    %s  ${DIM}%d/%d${RESET}" "$CURRENT" "$STEP" "$STEPS"
     else
         printf "  %d/%d  %s" "$STEP" "$STEPS" "$CURRENT"
     fi
-    echo "" >> "$LOG"
-    echo "== $CURRENT" >> "$LOG"
 }
 
 done_ok() {
     local said="${1:-}"
+    [ -n "$WINDOW" ] && window_set $((STEP - 1)) ok "$said"
+    [ -n "$QUIET" ] && return
     if [ -n "$FANCY" ]; then
         printf "\r\033[K  ${GREEN}✓${RESET}    %s" "$CURRENT"
     else
@@ -55,6 +64,8 @@ done_ok() {
 }
 
 done_warn() {
+    [ -n "$WINDOW" ] && window_set $((STEP - 1)) warn "$1"
+    if [ -n "$QUIET" ]; then NOTES+=("$1"); return; fi
     if [ -n "$FANCY" ]; then
         printf "\r\033[K  ${YELLOW}!${RESET}    %s  ${DIM}%s${RESET}\n" "$CURRENT" "$1"
     else
@@ -64,7 +75,10 @@ done_warn() {
 }
 
 fail() {
-    if [ -n "$FANCY" ]; then
+    if [ -n "$WINDOW" ]; then window_set $((STEP - 1)) fail; window_fail "$1"; fi
+    if [ -n "$QUIET" ]; then
+        printf "  ${RED}✗${RESET}    %s\n" "$CURRENT"
+    elif [ -n "$FANCY" ]; then
         printf "\r\033[K  ${RED}✗${RESET}    %s\n" "$CURRENT"
     else
         printf " ... failed\n"
@@ -85,7 +99,7 @@ fail() {
 
 # Runs a command with its output in the log and a spinner while it goes.
 quietly() {
-    if [ -z "$FANCY" ]; then
+    if [ -z "$FANCY" ] || [ -n "$QUIET" ]; then
         "$@" >> "$LOG" 2>&1
         return
     fi
@@ -107,7 +121,7 @@ watching() {
     local rows="$1" feed="$2"
     shift 2
     WATCH_FROM=$(( $(wc -c < "$LOG") + 1 ))
-    if [ -z "$FANCY" ]; then
+    if [ -z "$FANCY" ] || [ -n "$QUIET" ]; then
         "$@" >> "$LOG" 2>&1
         return
     fi
@@ -212,6 +226,15 @@ browser_feed() {
 # A command that may ask for a password (sudo, Ollama's own installer): no
 # spinner over the prompt, and its output kept in the log.
 asking() {
+    if [ -n "$QUIET" ]; then
+        # The window says to look here; the terminal says what for.
+        window_set $((STEP - 1)) ask
+        echo "  ${BOLD}$CURRENT${RESET} ${DIM}needs your password:${RESET}"
+        local status=0
+        "$@" >> "$LOG" 2>&1 || status=$?
+        window_set $((STEP - 1)) run
+        return $status
+    fi
     # The step's line keeps a quiet dot, not a frozen spinner, above any prompt.
     [ -n "$FANCY" ] && printf "\r  ${DIM}·${RESET}"
     echo ""
@@ -303,6 +326,19 @@ else
     fail "Python 3 isn't installed." "Install it from https://www.python.org/downloads/ and run this again."
 fi
 done_ok "$($PYTHON --version 2>&1)"
+
+# From here on, the setup window shows the steps, when there is a screen to show it on.
+if [ -n "$FANCY" ] && [ -f "$REPO_DIR/installer/window/window.sh" ]; then
+    # shellcheck source=/dev/null
+    . "$REPO_DIR/installer/window/window.sh"
+    if window_open "Flash" "#ff8a5c" "$PYTHON" "${TITLES[@]}"; then
+        window_set 0 ok "$BRANCH"
+        window_set 1 ok "$($PYTHON --version 2>&1)"
+        QUIET=1
+        echo "  Flash is setting up in its own window. Leave this terminal open until it's done."
+        echo ""
+    fi
+fi
 
 # --- 3. Ollama -------------------------------------------------------------------------
 
@@ -439,6 +475,17 @@ else
 fi
 
 # --- Done -----------------------------------------------------------------------------------------------
+
+if [ -n "$QUIET" ]; then
+    window_done "Type flash in a new terminal, or open it from your apps." "$FLASH_BIN" --web
+    echo "  ${GREEN}✓${RESET}  ${BOLD}$FLASH_VERSION is installed.${RESET}  ${DIM}Start it with: flash${RESET}"
+    case ":$PATH:" in
+        *":$PIPX_BIN_DIR:"*) ;;
+        *) echo "     ${DIM}Open a new terminal first, or run: export PATH=\"$PIPX_BIN_DIR:\$PATH\"${RESET}" ;;
+    esac
+    echo ""
+    exit 0
+fi
 
 echo ""
 echo "  ${GREEN}${BOLD}$FLASH_VERSION is installed.${RESET}"

@@ -1,0 +1,195 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Setup</title>
+<style>
+  :root {
+    --accent: #ff7a4d;
+    --ink: #ffffff;
+    --soft: rgba(255, 255, 255, .68);
+    --faint: rgba(255, 255, 255, .38);
+    --glass: rgba(255, 255, 255, .08);
+    --edge: rgba(255, 255, 255, .16);
+    --ease: cubic-bezier(.22, 1, .36, 1);
+    --display: "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI Variable Display", "Segoe UI", Inter, system-ui, sans-serif;
+    --mono: "SF Mono", ui-monospace, "Cascadia Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  html, body { height: 100%; background: #000; color: var(--ink); font-family: var(--display); overflow: hidden;
+    -webkit-font-smoothing: antialiased; user-select: none; cursor: default; }
+  video { position: fixed; inset: 0; width: 100%; height: 100%; object-fit: cover; transform: scale(1.04); }
+  .scrim { position: fixed; inset: 0;
+    background: linear-gradient(100deg, rgba(0, 0, 0, .62) 0%, rgba(0, 0, 0, .28) 55%, rgba(0, 0, 0, .12) 100%),
+                linear-gradient(0deg, rgba(0, 0, 0, .5), transparent 45%); }
+  .grain { position: fixed; inset: -50%; opacity: .07; pointer-events: none; animation: grain 1.2s steps(6) infinite;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>"); }
+  @keyframes grain { 0% { transform: translate(0, 0) } 50% { transform: translate(-4%, 3%) } 100% { transform: translate(3%, -2%) } }
+
+  main { position: relative; height: 100%; display: grid; grid-template-columns: 1.15fr .85fr; gap: 40px; padding: 52px 56px 64px; }
+  .left { display: flex; flex-direction: column; justify-content: space-between; min-width: 0; }
+  .eyebrow { display: flex; align-items: center; gap: 10px; font: 600 11px/1 var(--mono); letter-spacing: .24em; text-transform: uppercase; color: var(--soft); }
+  .eyebrow i { width: 22px; height: 2px; background: var(--ink); border-radius: 2px; }
+  h1 { font-weight: 900; font-size: clamp(54px, 8.2vw, 92px); line-height: .9; letter-spacing: -.045em; margin-top: 18px;
+    text-shadow: 0 20px 60px rgba(0, 0, 0, .25); }
+  h1 span { display: block; }
+  h1 .hot { background: linear-gradient(90deg, #fff, var(--accent)); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .sub { margin-top: 18px; max-width: 420px; font-size: 15px; font-weight: 500; line-height: 1.45; color: var(--soft); }
+  .big { display: flex; align-items: flex-start; gap: 6px; font-weight: 900; font-variant-numeric: tabular-nums; letter-spacing: -.06em; }
+  .big b { font-size: clamp(80px, 13vw, 140px); line-height: .8; }
+  .big small { font-size: 28px; margin-top: 4px; color: var(--soft); letter-spacing: 0; }
+  .tick { width: 112px; height: 112px; display: none; }
+  .tick path { stroke: #fff; stroke-width: 9; fill: none; stroke-linecap: round; stroke-linejoin: round;
+    stroke-dasharray: 120; stroke-dashoffset: 120; transition: stroke-dashoffset .9s var(--ease) .2s; }
+  .done .tick { display: block; } .done .tick path { stroke-dashoffset: 0; } .done .big b, .done .big small { display: none; }
+
+  .card { align-self: center; padding: 10px; border-radius: 26px; background: var(--glass);
+    border: 1px solid var(--edge); box-shadow: inset 0 1px 0 rgba(255, 255, 255, .22), 0 30px 80px rgba(0, 0, 0, .35);
+    backdrop-filter: blur(28px) saturate(1.4); -webkit-backdrop-filter: blur(28px) saturate(1.4); }
+  .row { display: grid; grid-template-columns: 30px 1fr; gap: 12px; align-items: center; padding: 11px 12px; border-radius: 16px;
+    opacity: 0; transform: translateY(10px); filter: blur(8px); transition: opacity .7s var(--ease), transform .7s var(--ease), filter .7s var(--ease), background .4s; }
+  .row.in { opacity: 1; transform: none; filter: none; }
+  .row.run { background: rgba(255, 255, 255, .08); }
+  .row .t { font-size: 14px; font-weight: 650; letter-spacing: -.01em; }
+  .row .n { font-size: 12px; color: var(--soft); margin-top: 2px; line-height: 1.35; }
+  .row.wait .t { color: var(--faint); font-weight: 550; }
+  .mark { width: 26px; height: 26px; position: relative; }
+  .mark svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+  .wait .mark svg circle { stroke: rgba(255, 255, 255, .25); }
+  .run .mark svg { animation: spin .9s linear infinite; }
+  .run .mark svg circle { stroke: var(--accent); stroke-dasharray: 22 60; }
+  .ok .mark svg, .warn .mark svg, .fail .mark svg, .ask .mark svg { animation: pop .5s var(--ease); }
+  @keyframes spin { to { transform: rotate(360deg) } }
+  @keyframes pop { 0% { transform: scale(.4); opacity: 0 } 100% { transform: scale(1); opacity: 1 } }
+  .ask .mark { animation: pulse 1.4s ease-in-out infinite; }
+  @keyframes pulse { 50% { opacity: .45 } }
+
+  .bar { position: fixed; left: 56px; right: 56px; bottom: 34px; height: 3px; border-radius: 3px; background: rgba(255, 255, 255, .14); overflow: hidden; }
+  .bar i { display: block; height: 100%; width: 0; background: linear-gradient(90deg, #fff, var(--accent)); border-radius: 3px;
+    box-shadow: 0 0 18px var(--accent); transition: width .8s var(--ease); }
+  .done .bar, .failed .bar { opacity: 0; transition: opacity .6s; }
+
+  .actions { display: flex; gap: 10px; margin-top: 26px; opacity: 0; transform: translateY(10px); pointer-events: none;
+    transition: opacity .7s var(--ease) .5s, transform .7s var(--ease) .5s; }
+  .done .actions { opacity: 1; transform: none; pointer-events: auto; }
+  button { font: 700 14px var(--display); border: 0; border-radius: 999px; height: 42px; padding: 0 24px; cursor: pointer;
+    transition: transform .25s var(--ease), box-shadow .25s; }
+  .primary { background: #fff; color: #000; } .primary:hover { transform: scale(1.04); box-shadow: 0 0 30px rgba(255, 255, 255, .35); }
+  .primary:active { transform: scale(.96); }
+  .ghost { background: rgba(255, 255, 255, .1); color: #fff; border: 1px solid var(--edge); } .ghost:hover { background: rgba(255, 255, 255, .16); }
+
+  .swap { transition: opacity .5s var(--ease), filter .5s var(--ease), transform .5s var(--ease); }
+  .swap.out { opacity: 0; filter: blur(12px); transform: translateY(-8px); }
+  .failed h1 .hot { background: linear-gradient(90deg, #fff, #ff6b6b); -webkit-background-clip: text; background-clip: text; }
+  @media (max-width: 760px) { main { grid-template-columns: 1fr; } .card { display: none; } }
+  @media (prefers-reduced-motion: reduce) { .grain, .run .mark svg { animation: none; } }
+</style>
+</head>
+<body>
+<video id="film" src="film.mp4" autoplay muted loop playsinline></video>
+<div class="scrim"></div>
+<div class="grain"></div>
+<main id="main">
+  <section class="left">
+    <div>
+      <div class="eyebrow"><i></i><span id="eyebrow">Setup</span></div>
+      <h1 class="swap" id="title"><span id="t1">Setting up</span><span class="hot" id="t2">&nbsp;</span></h1>
+      <p class="sub swap" id="sub">&nbsp;</p>
+      <div class="actions">
+        <button class="primary" id="open">Open</button>
+        <button class="ghost" id="close">Close</button>
+      </div>
+    </div>
+    <div class="big"><b id="pct">0</b><small>%</small>
+      <svg class="tick" viewBox="0 0 100 100"><path d="M24 52 L42 70 L78 32"/></svg></div>
+  </section>
+  <section class="card" id="steps"></section>
+</main>
+<div class="bar"><i id="bar"></i></div>
+<script>
+  // The installer writes status.json as it goes; this page only reads it. Steps are {title, state, note}, state one of
+  // wait, run, ok, warn, ask (waiting on the terminal, for a password), fail.
+  const $ = id => document.getElementById(id);
+  const marks = {
+    wait: '<svg viewBox="0 0 26 26"><circle cx="13" cy="13" r="10" fill="none" stroke-width="2"/></svg>',
+    run: '<svg viewBox="0 0 26 26"><circle cx="13" cy="13" r="10" fill="none" stroke-width="3" stroke-linecap="round"/></svg>',
+    ok: '<svg viewBox="0 0 26 26"><circle cx="13" cy="13" r="12" fill="#fff"/><path d="M8 13.5l3.2 3.2L18.5 9.5" fill="none" stroke="#000" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+    warn: '<svg viewBox="0 0 26 26"><circle cx="13" cy="13" r="12" fill="#ffb648"/><path d="M13 7.5v7" stroke="#000" stroke-width="2.6" stroke-linecap="round"/><circle cx="13" cy="18.5" r="1.6" fill="#000"/></svg>',
+    ask: '<svg viewBox="0 0 26 26"><circle cx="13" cy="13" r="12" fill="rgba(255,255,255,.18)"/><circle cx="10" cy="13" r="3.2" fill="none" stroke="#fff" stroke-width="2"/><path d="M13 13h7m-2 0v3" stroke="#fff" stroke-width="2" stroke-linecap="round"/></svg>',
+    fail: '<svg viewBox="0 0 26 26"><circle cx="13" cy="13" r="12" fill="#ff5d5d"/><path d="M9 9l8 8M17 9l-8 8" stroke="#fff" stroke-width="2.4" stroke-linecap="round"/></svg>',
+  };
+  let shown = 0, phase = '', rows = [];
+
+  function swapText(el, text) {
+    if (el.dataset.text === text) return;
+    el.dataset.text = text;
+    if (!el.dataset.ready) { el.dataset.ready = 1; el.textContent = text; return; }
+    const box = el.closest('.swap') || el;
+    box.classList.add('out');
+    setTimeout(() => { el.textContent = text; box.classList.remove('out'); }, 420);
+  }
+
+  function draw(s) {
+    document.documentElement.style.setProperty('--accent', s.accent || '#ff7a4d');
+    document.title = `${s.product} setup`;
+    $('eyebrow').textContent = `${s.product} · Setup`;
+    const steps = s.steps || [];
+    // rows, built once, then updated in place
+    steps.forEach((step, i) => {
+      if (!rows[i]) {
+        const row = document.createElement('div');
+        row.innerHTML = '<div class="mark"></div><div><div class="t"></div><div class="n"></div></div>';
+        $('steps').appendChild(row); rows[i] = row;
+        setTimeout(() => row.classList.add('in'), 120 + i * 70);
+      }
+      const row = rows[i];
+      if (row.dataset.state !== step.state) { row.dataset.state = step.state; row.querySelector('.mark').innerHTML = marks[step.state] || marks.wait; }
+      row.className = `row ${step.state}${row.classList.contains('in') ? ' in' : ''}`;
+      row.querySelector('.t').textContent = step.title;
+      row.querySelector('.n').textContent = step.state === 'ask' ? 'Type your password in the terminal window.' : (step.note || '');
+    });
+    const total = steps.length || 1;
+    const got = steps.reduce((n, st) => n + (st.state === 'ok' || st.state === 'warn' ? 1 : st.state === 'run' || st.state === 'ask' ? .45 : 0), 0);
+    const pct = s.done ? 100 : Math.min(99, Math.round(got / total * 100));
+    $('bar').style.width = pct + '%';
+
+    const now = s.failed ? 'failed' : s.done ? 'done' : 'run';
+    if (now !== phase) {
+      phase = now;
+      document.body.className = now === 'run' ? '' : now;
+    }
+    if (s.failed) {
+      swapText($('t1'), "That didn't"); swapText($('t2'), 'work.');
+      swapText($('sub'), `${s.failed} The details are in the terminal window.`);
+    } else if (s.done) {
+      swapText($('t1'), `${s.product} is`); swapText($('t2'), 'ready.');
+      swapText($('sub'), s.doneNote || 'Everything is in place.');
+      $('open').textContent = s.open || `Open ${s.product}`;
+      $('open').style.display = s.open === '' ? 'none' : '';
+    } else {
+      swapText($('t1'), 'Setting up'); swapText($('t2'), `${s.product}.`);
+      swapText($('sub'), s.note || 'This takes a few minutes. You can leave it running.');
+    }
+    // the number counts up to where it should be, never jumps
+    const target = pct;
+    const step = () => { if (shown < target) { shown += Math.max(1, Math.round((target - shown) / 8)); $('pct').textContent = Math.min(shown, target); requestAnimationFrame(step); } };
+    step();
+  }
+
+  async function poll() {
+    try {
+      const r = await fetch('status.json?t=' + Date.now(), { cache: 'no-store' });
+      if (r.ok) draw(await r.json());
+    } catch (e) { /* the installer has finished and its server gone: leave the page as it is */ }
+    if (phase !== 'done' && phase !== 'failed') setTimeout(poll, 400);
+  }
+  poll();
+
+  const post = path => fetch(path, { method: 'POST' }).catch(() => {});
+  $('open').onclick = async () => { await post('/open'); setTimeout(() => window.close(), 300); };
+  $('close').onclick = async () => { await post('/close'); window.close(); };
+  if (matchMedia('(prefers-reduced-motion: reduce)').matches) $('film').pause();
+</script>
+</body>
+</html>

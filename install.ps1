@@ -27,6 +27,10 @@ $Script:Steps = 8
 $Script:Current = ""
 $Script:Notes = @()
 $Script:KeepLog = $false
+# While the setup window is open (installer\window), the steps show there and the terminal stays quiet.
+$Script:Quiet = $false
+$Script:Titles = @("Getting Flash", "Finding Python", "Ollama, for models on this computer", "pipx, to keep Flash in its own space",
+    "Installing Flash", "A browser for page screenshots", "Voice mode", "flash:// links and the Start menu")
 
 function Show-Banner {
     Write-Host ""
@@ -39,13 +43,15 @@ function Show-Banner {
 function Start-Step([string]$Title) {
     $Script:Step++
     $Script:Current = $Title
+    "`n== $Title" | Out-File -FilePath $Log -Append -Encoding utf8
+    if ($Script:Quiet) { Set-SetupStep ($Script:Step - 1) "run"; return }
     Write-Host "  .    " -ForegroundColor DarkGray -NoNewline
     Write-Host $Title -NoNewline
     Write-Host ("  {0}/{1}" -f $Script:Step, $Script:Steps) -ForegroundColor DarkGray -NoNewline
-    "`n== $Title" | Out-File -FilePath $Log -Append -Encoding utf8
 }
 
 function Complete-Step([string]$Said = "") {
+    if ($Script:Quiet) { Set-SetupStep ($Script:Step - 1) "ok" $Said; return }
     Write-Host ("`r" + (" " * 78) + "`r") -NoNewline
     Write-Host "  $([char]0x221A)    " -ForegroundColor Green -NoNewline
     Write-Host $Script:Current -NoNewline
@@ -53,6 +59,7 @@ function Complete-Step([string]$Said = "") {
 }
 
 function Warn-Step([string]$Why) {
+    if ($Script:Quiet) { Set-SetupStep ($Script:Step - 1) "warn" $Why; $Script:Notes += $Why; return }
     Write-Host ("`r" + (" " * 78) + "`r") -NoNewline
     Write-Host "  !    " -ForegroundColor Yellow -NoNewline
     Write-Host $Script:Current -NoNewline
@@ -61,6 +68,7 @@ function Warn-Step([string]$Why) {
 }
 
 function Stop-Install([string]$What, [string]$Hint = "") {
+    if ($Script:Quiet) { Set-SetupStep ($Script:Step - 1) "fail"; Stop-SetupWindow $What }
     Write-Host ("`r" + (" " * 78) + "`r") -NoNewline
     Write-Host "  x    " -ForegroundColor Red -NoNewline
     Write-Host $Script:Current
@@ -146,7 +154,7 @@ function Show-Live([int]$Top, [int]$Col, [string[]]$Lines, [int]$Rows, [string]$
 
 # Like Invoke-Quietly, but what pip is doing shows live under the step, and goes once it's done.
 function Invoke-Watching([scriptblock]$Command, [int]$Rows = 5) {
-    if (-not $Script:Fancy) { return (Invoke-Quietly $Command) }
+    if (-not $Script:Fancy -or $Script:Quiet) { return (Invoke-Quietly $Command) }
     $ErrorActionPreference = "Continue"
     $global:LASTEXITCODE = 0
     $col = [Console]::CursorLeft
@@ -184,7 +192,7 @@ function Invoke-Watching([scriptblock]$Command, [int]$Rows = 5) {
 # The screenshot browser's download, as a bar: Playwright says which browser and how big; how much has come is
 # the size of its file so far, in a temp folder of the installer's own.
 function Invoke-BrowserDownload([string]$Python) {
-    if (-not $Script:Fancy) { return (Invoke-Quietly { & $Python -m playwright install chromium }) }
+    if (-not $Script:Fancy -or $Script:Quiet) { return (Invoke-Quietly { & $Python -m playwright install chromium }) }
     $tmp = Join-Path $TempDir "browser"
     New-Item -ItemType Directory -Force -Path $tmp | Out-Null
     $out = Join-Path $TempDir "browser-out.log"
@@ -337,7 +345,22 @@ try {
     if (-not $Python) {
         Stop-Install "Python 3 isn't installed." "Install it from https://www.python.org/downloads/ (tick 'Add to PATH'), then run this again."
     }
-    Complete-Step ((& $Python --version 2>&1) | Out-String).Trim()
+    $PythonVersion = ((& $Python --version 2>&1) | Out-String).Trim()
+    Complete-Step $PythonVersion
+
+    # From here on, the setup window shows the steps.
+    $WindowKit = Join-Path $RepoDir "installer\window\window.ps1"
+    if ($Script:Fancy -and (Test-Path $WindowKit)) {
+        . $WindowKit
+        $PythonPath = (Get-Command $Python).Source
+        if (Open-SetupWindow "Flash" "#ff8a5c" $PythonPath $Script:Titles) {
+            Set-SetupStep 0 "ok" $Branch
+            Set-SetupStep 1 "ok" $PythonVersion
+            $Script:Quiet = $true
+            Write-Host "  Flash is setting up in its own window. Leave this terminal open until it's done."
+            Write-Host ""
+        }
+    }
 
     # --- 3. Ollama ----------------------------------------------------------------------
     # Install Ollama only when it is missing. Reinstalling over an existing
@@ -435,28 +458,40 @@ try {
     if ($linksOk) { Complete-Step } else { Warn-Step "Not all set up; Flash works without them." }
 
     # --- Done ---------------------------------------------------------------------------------
-    Write-Host ""
-    Write-Host "  $FlashVersion is installed." -ForegroundColor Green
-    Write-Host ""
-    Write-Host "  Start it        " -NoNewline; Write-Host "flash            " -NoNewline; Write-Host "in a terminal" -ForegroundColor DarkGray
-    Write-Host "                  flash --web      " -NoNewline; Write-Host "in your browser, or Flash in the Start menu" -ForegroundColor DarkGray
-    Write-Host "  Talk to it      " -NoNewline; Write-Host "/voice on        " -NoNewline; Write-Host "inside Flash" -ForegroundColor DarkGray
+    if ($Script:Quiet) {
+        Complete-SetupWindow "Type flash in a new terminal, or open Flash from the Start menu." @($FlashExe, "--web")
+        Write-Host "  $([char]0x221A)  " -ForegroundColor Green -NoNewline
+        Write-Host "$FlashVersion is installed." -NoNewline
+        Write-Host "  Start it with: flash" -ForegroundColor DarkGray
+        if (($env:PATH -split ";") -notcontains $PipxBinDir) {
+            Write-Host "     Open a new terminal first, or run: `$env:PATH = `"$PipxBinDir;`$env:PATH`"" -ForegroundColor DarkGray
+        }
+        if ($Script:Notes.Count -gt 0) { $Script:KeepLog = $true }
+        Write-Host ""
+    } else {
+        Write-Host ""
+        Write-Host "  $FlashVersion is installed." -ForegroundColor Green
+        Write-Host ""
+        Write-Host "  Start it        " -NoNewline; Write-Host "flash            " -NoNewline; Write-Host "in a terminal" -ForegroundColor DarkGray
+        Write-Host "                  flash --web      " -NoNewline; Write-Host "in your browser, or Flash in the Start menu" -ForegroundColor DarkGray
+        Write-Host "  Talk to it      " -NoNewline; Write-Host "/voice on        " -NoNewline; Write-Host "inside Flash" -ForegroundColor DarkGray
 
-    $PathEntries = $env:PATH -split ";"
-    if ($PathEntries -notcontains $PipxBinDir) {
+        $PathEntries = $env:PATH -split ";"
+        if ($PathEntries -notcontains $PipxBinDir) {
+            Write-Host ""
+            Write-Host "  Open a new terminal first" -ForegroundColor Yellow -NoNewline
+            Write-Host ", or run this to use it in this one:"
+            Write-Host "      `$env:PATH = `"$PipxBinDir;`$env:PATH`""
+        }
+        if ($Script:Notes.Count -gt 0) {
+            Write-Host ""
+            Write-Host "  Worth knowing:" -ForegroundColor DarkGray
+            foreach ($note in $Script:Notes) { Write-Host "  - $note" }
+            Write-Host "  Details: $Log" -ForegroundColor DarkGray
+            $Script:KeepLog = $true
+        }
         Write-Host ""
-        Write-Host "  Open a new terminal first" -ForegroundColor Yellow -NoNewline
-        Write-Host ", or run this to use it in this one:"
-        Write-Host "      `$env:PATH = `"$PipxBinDir;`$env:PATH`""
     }
-    if ($Script:Notes.Count -gt 0) {
-        Write-Host ""
-        Write-Host "  Worth knowing:" -ForegroundColor DarkGray
-        foreach ($note in $Script:Notes) { Write-Host "  - $note" }
-        Write-Host "  Details: $Log" -ForegroundColor DarkGray
-        $Script:KeepLog = $true
-    }
-    Write-Host ""
 } finally {
     Pop-Location -ErrorAction SilentlyContinue
     Remove-Item -Recurse -Force $TempDir -ErrorAction SilentlyContinue
