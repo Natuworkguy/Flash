@@ -79,6 +79,15 @@ jobs:
       - name: Run tests
         run: pytest
 
+  installer-windows:
+    name: Windows installer
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check the Windows installer
+        shell: powershell
+        run: ./tests/installer/check-install-ps1.ps1
+
   test-windows:
     name: Test (Windows)
     needs: [lint-ruff, lint-flake8, lint-bandit]
@@ -100,9 +109,6 @@ jobs:
           pip install -r requirements.txt
           pip install pytest
           pip install -e .
-      - name: Check the Windows installer
-        shell: powershell
-        run: ./tests/installer/check-install-ps1.ps1
       - name: Run tests
         run: pytest
 
