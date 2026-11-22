@@ -1249,7 +1249,12 @@ body.course-open { overflow: hidden; }
 .debate-wait { font-size: 13px; color: var(--text-3); }
 .debate-settled { align-self: center; font-size: 13px; font-weight: 600; color: var(--text); padding: 5px 12px; border-radius: 999px; background: color-mix(in srgb, var(--accent) 16%, transparent); }
 .debate-rounds.off { opacity: 0.45; pointer-events: none; }
-.debate-until { max-width: none; margin: 4px 0 14px; }
+.debate-how { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 4px 0 14px; }
+.debate-how button { display: flex; flex-direction: column; gap: 3px; text-align: left; padding: 10px 12px; border-radius: 12px; border: 1px solid var(--border); background: var(--surface); color: var(--text-2); font: 12px/1.35 var(--sans); cursor: pointer; transition: border-color .15s, background .15s; }
+.debate-how button b { font-size: 13px; color: var(--text); }
+.debate-how button[aria-checked=true] { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, var(--surface)); }
+.debate-how button[data-how=win][aria-checked=true] { border-color: #e8794a; background: color-mix(in srgb, #e8794a 10%, var(--surface)); }
+@media (max-width: 520px) { .debate-how { grid-template-columns: 1fr; } }
 .spark-voice-row { display: flex; gap: 8px; align-items: center; }
 .spark-voice-row select { flex: 1; min-width: 0; }
 .shape-picks { display: flex; gap: 8px; }
@@ -1726,6 +1731,15 @@ body.spark-calling #on-call:not([hidden]) { display: flex; animation: rise-far 0
 /* [text](link) while it is typed: the words as a link, the rest faint */
 .input-shade .md-link { color: var(--accent); text-decoration: underline; text-decoration-color: color-mix(in srgb, var(--accent) 45%, transparent); text-underline-offset: 2px; }
 .input-shade .md-url { color: var(--text-3); opacity: 0.55; }
+/* a command as it is typed: the command, models, keywords and numbers each their own colour */
+.input-shade .cmd-word { color: var(--accent); }
+.input-shade .cmd-model { color: var(--accent); background: color-mix(in srgb, var(--accent) 13%, transparent); border-radius: 4px; box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 22%, transparent); }
+.input-shade .cmd-model.alt { color: #5b8def; background: color-mix(in srgb, #5b8def 13%, transparent); box-shadow: 0 0 0 1px color-mix(in srgb, #5b8def 25%, transparent); }
+.input-shade .cmd-key { color: #c27be8; }
+.input-shade .cmd-key.win { color: #e8794a; }
+.input-shade .cmd-num { color: #e0a13a; }
+.input-shade .cmd-sep { color: var(--text-3); }
+.input-shade .cmd-text { color: var(--text); }
 .user a.user-link { color: inherit; text-decoration: underline; text-decoration-color: color-mix(in srgb, currentColor 45%, transparent); text-underline-offset: 2px; }
 .user a.user-link:hover { text-decoration-color: currentColor; }
 .tc-box { position: relative; }
@@ -22326,13 +22340,22 @@ function debateArgs(typed) {
   if (m) return models.filter((x) => x !== m[1] && x.toLowerCase().includes(m[2].toLowerCase())).slice(0, 12).map((x) => put(x + "; ", "the second side's model", m[2].length));
   m = lead.match(/^(\S+)\s+(\S*)$/);
   if (m && models.includes(m[1]) && "vs".startsWith(m[2].toLowerCase())) return [put("vs ", "then the second side's model", m[2].length)];
+  m = lead.match(/^(?:until|till)\s+(\S*(?:\s+\S*)*)$/i);
+  if (m) {
+    const q = m[1].toLowerCase(), opts = [["settled", "they agree or one side wins"], ["one side wins", "only a winner ends it"]];
+    return opts.filter(([o]) => o.startsWith(q)).map(([o, about]) => put(`${o}; `, about, m[1].length));
+  }
   m = lead.match(/^rounds?\s+(\d*)$/i);
   if (m) return Array.from({ length: 10 }, (_, i) => String(i + 1)).filter((n) => n.startsWith(m[1])).map((n) => put(`${n}; `, `each side speaks ${n === "1" ? "once" : `${n} times`}${n === "2" ? " (the usual)" : ""}`, m[1].length));
   if (/\s/.test(lead)) return [];
   const word = lead.toLowerCase();
   const rows = [];
   if (!done && word && "more".startsWith(word)) rows.push(put("more", "keep the last debate going", lead.length));
-  if (!/(^|;)\s*rounds?\b/i.test(done) && "rounds".startsWith(word)) rows.push(put("rounds ", "how many times each side speaks (2 if not said)", lead.length));
+  if (!/(^|;)\s*rounds?\b/i.test(done) && !/(^|;)\s*(until|till|to the end)\b/i.test(done) && "rounds".startsWith(word)) rows.push(put("rounds ", "how many times each side speaks (2 if not said)", lead.length));
+  if (!/(^|;)\s*(until|till|to the end|no limit)\b/i.test(done) && (word ? "until".startsWith(word) || "till".startsWith(word) : true)) {
+    rows.push(put("until settled; ", "go on until they agree or one side wins (up to 12 rounds)", lead.length));
+    rows.push(put("until one side wins; ", "only a winner ends it: agreeing does not (up to 20 rounds)", lead.length));
+  }
   if (!done.split(";").some((p) => /^\s*\S+\s+vs\.?\s+\S+\s*$/i.test(p))) rows.push(...models.filter((x) => x.toLowerCase().includes(word)).slice(0, 12).map((x) => put(x + " ", "the first side's model", lead.length)));
   return rows;
 }
@@ -22351,7 +22374,11 @@ function debateForm(question = "") {
       <div class="debate-side side-1"><span class="debate-side-name">Against</span>${pick("b")}</div>
     </div>
     <label class="field debate-rounds"><span>Rounds <b class="debate-rounds-n">2</b><small class="debate-rounds-say">each side speaks twice</small></span><input type="range" name="rounds" min="1" max="10" value="2"></label>
-    <button type="button" class="setting-row debate-until" role="switch" aria-checked="false"><span class="what"><b>Until it is settled</b><span>Go on until they agree or one side wins, however many rounds that takes (up to 12).</span></span><span class="switch" aria-hidden="true"></span></button>
+    <div class="debate-how" role="radiogroup" aria-label="How long it goes">
+      <button type="button" role="radio" aria-checked="true" data-how=""><b>Rounds</b><span>As many as set above</span></button>
+      <button type="button" role="radio" aria-checked="false" data-how="settled"><b>Until settled</b><span>They agree or one side wins (up to 12)</span></button>
+      <button type="button" role="radio" aria-checked="false" data-how="win"><b>Until one side wins</b><span>Agreeing does not end it (up to 20)</span></button>
+    </div>
     <div class="dialog-buttons"><button type="button" class="btn" data-cancel>Cancel</button><button type="submit" class="btn primary with-icon">${icon("users")}<span>Start debating</span></button></div>`,
     async (data) => {
       const asked = String(data.question || "").trim();
@@ -22359,14 +22386,14 @@ function debateForm(question = "") {
       const sides = [data.a, data.b].filter(Boolean);
       // One picked: the other side is the chat's own.
       const both = sides.length === 1 ? (data.a ? [data.a, chatModel()] : [chatModel(), data.b]) : sides;
-      startDebate(asked, both, Number(data.rounds) || 2, form.querySelector(".debate-until").getAttribute("aria-checked") === "true");
+      startDebate(asked, both, Number(data.rounds) || 2, form.querySelector(".debate-how [aria-checked=true]")?.dataset.how || "");
     });
   form.querySelector("[name=question]").value = question;
-  const until = form.querySelector(".debate-until");
-  until.onclick = () => {
-    const on = until.getAttribute("aria-checked") !== "true";
-    until.setAttribute("aria-checked", on);
-    form.querySelector(".debate-rounds").classList.toggle("off", on);
+  const how = form.querySelector(".debate-how");
+  how.onclick = (e) => {
+    const b = e.target.closest("[data-how]"); if (!b) return;
+    for (const o of how.querySelectorAll("[data-how]")) o.setAttribute("aria-checked", o === b);
+    form.querySelector(".debate-rounds").classList.toggle("off", !!b.dataset.how);
   };
   form.querySelector("[data-cancel]").onclick = closeForm;
   const range = form.querySelector("[name=rounds]");
@@ -26997,16 +27024,48 @@ inputShade.hidden = true;
 input.before(inputShade);
 // Draw AREA's text into SHADE, the layer under it, when it has code or a
 // link to show; HOLDER takes "shaded", which makes the box's own text clear.
+// A command being typed, coloured by its parts (colour only: a bolder
+// letter is wider, and the caret would drift from what shows): the
+// command, and for /debate each side's model, "vs", "rounds N" and how
+// long it goes, so it reads as it will be taken. Null for anything else.
+function commandBits(area, text) {
+  if (area !== input) return null;
+  const m = text.match(/^(\/[\w-]+)(\s[\s\S]*)?$/);
+  if (!m) return null;
+  const word = m[1], known = word === "/debate" || ACTIONS.some((a) => a.slash === word) || extCommands().some((c) => c.slash === word);
+  if (!known) return null;
+  const frag = document.createDocumentFragment();
+  const span = (cls, t) => { const e = el("span", cls); e.textContent = t; frag.appendChild(e); };
+  span("cmd-word", word);
+  const rest = m[2] || "";
+  if (word !== "/debate") { if (rest) frag.append(rest); return frag; }
+  // /debate: parts between semicolons
+  const parts = rest.split(/(;)/);
+  for (const part of parts) {
+    if (part === ";") { span("cmd-sep", ";"); continue; }
+    const lead = part.match(/^\s*/)[0], body = part.slice(lead.length), tail = body.match(/\s*$/)[0], core = body.slice(0, body.length - tail.length);
+    frag.append(lead);
+    let vs = core.match(/^(\S+)(\s+)(vs\.?)(\s+)(\S+)$/i), r = core.match(/^(rounds?)(\s*[:=]?\s*)(\d{1,2})$/i);
+    if (vs) { span("cmd-model", vs[1]); frag.append(vs[2]); span("cmd-key", vs[3]); frag.append(vs[4]); span("cmd-model alt", vs[5]); }
+    else if (r) { span("cmd-key", r[1]); frag.append(r[2]); span("cmd-num", r[3]); }
+    else if (/^(?:until|till)\b/i.test(core) || /^(?:to the end|no limit|more)$/i.test(core)) span(/win|winner|end|no limit/i.test(core) ? "cmd-key win" : "cmd-key", core);
+    else if (core) span("cmd-text", core);
+    frag.append(tail);
+  }
+  return frag;
+}
+
 function paintShade(area, shade, holder) {
   const text = area.value;
-  const shaded = (/`/.test(text) && CODE_BITS_RE.test(text)) || hasMdLink(text);
+  const command = commandBits(area, text);
+  const shaded = !!command || (/`/.test(text) && CODE_BITS_RE.test(text)) || hasMdLink(text);
   CODE_BITS_RE.lastIndex = 0;
   holder.classList.toggle("shaded", shaded);
   shade.hidden = !shaded;
   if (!shaded) { shade.textContent = ""; return; }
   shade.textContent = "";
   // A last empty line, as the box keeps one.
-  shade.append(codeBits(text, true), "\u200b");
+  shade.append(command || codeBits(text, true), "\u200b");
   Object.assign(shade.style, {
     top: `${area.offsetTop}px`, left: `${area.offsetLeft}px`,
     width: `${area.clientWidth}px`, height: `${area.clientHeight}px`,
