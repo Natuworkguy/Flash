@@ -4054,8 +4054,9 @@ TIMER_TOOLS: list[dict[str, Any]] = [
                 "What is connected and how charged: the Mac's battery, "
                 "its network, connected Bluetooth devices (AirPods, "
                 "keyboard...) with battery where known, and the paired "
-                "Apple Watch's battery and when it was last heard from. "
-                "Read-only."
+                "Apple Watch's battery and when it was last heard from, "
+                "and the iPhones and Watches paired with Xcode. Read-only: "
+                "to open an app on one of those, use the xcode tool."
             ),
             "parameters": {"type": "object", "properties": {}},
         },
@@ -4095,7 +4096,9 @@ XCODE_TOOLS: list[dict[str, Any]] = [
             "description": (
                 "Build, run and debug Apple apps with Xcode on this Mac: in "
                 "a simulator or on a real iPhone, iPad or Watch paired with "
-                "it. Work the way a developer does: status (Xcode, the "
+                "it. Also how Flash opens apps on the user's own iPhone or "
+                "Apple Watch (\"open Wallet on my watch\": open_app, app "
+                "Wallet, target watch); the computer tool only opens Mac apps. Work the way a developer does: status (Xcode, the "
                 "simulators, the paired devices), schemes (of a project), "
                 "build or test (errors and warnings come back with file and "
                 "line: fix them and build again), run (builds if a project "
@@ -4123,7 +4126,7 @@ XCODE_TOOLS: list[dict[str, Any]] = [
                     "action": {"type": "string", "enum": list(xcode.ACTIONS)},
                     "project": {"type": "string", "description": "The .xcodeproj, .xcworkspace, or the folder holding one (or a Swift package)."},
                     "scheme": {"type": "string", "description": "The scheme to build; schemes lists them."},
-                    "target": {"type": "string", "description": "A simulator or device: its name, part of it, or its id. Empty: the booted simulator, else the newest iPhone."},
+                    "target": {"type": "string", "description": "A simulator or device: its name, part of it, or its id; watch, iphone or ipad for the user's own one. Empty: the booted simulator, else the newest iPhone."},
                     "configuration": {"type": "string", "description": "Debug (default) or Release."},
                     "bundle_id": {"type": "string", "description": "The app's bundle id, for run, stop and logs without a build (found from the last build otherwise)."},
                     "console_seconds": {"type": "integer", "description": "With run: watch the app's console output this long (1 to 120)."},

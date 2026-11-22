@@ -117,6 +117,20 @@ def _ago(seconds: float) -> str:
     return f"{seconds // 3600} hours ago"
 
 
+def xcode_devices() -> list[dict]:
+    """The iPhones, iPads and Apple Watches paired with this Mac's Xcode,
+    which Flash can open apps on: none without Xcode."""
+
+    from . import xcode
+
+    if sys.platform != "darwin" or not xcode.available():
+        return []
+    try:
+        return xcode.Xcode().phones()
+    except Exception:  # noqa: BLE001  (a look, never a failure)
+        return []
+
+
 def report(now: Optional[float] = None) -> str:
     now = time.time() if now is None else now
     lines = []
@@ -135,6 +149,13 @@ def report(now: Optional[float] = None) -> str:
             lines.append("Bluetooth: nothing connected.")
     else:
         lines.append("Battery and Bluetooth are read only on a Mac.")
+    reachable = xcode_devices()
+    if reachable:
+        lines.append("Through Xcode (the xcode tool opens apps on these, "
+                     "with target their name and action open_app):")
+        for d in reachable:
+            lines.append(f"- {d['name']} ({d['model'] or d['os']}, {d['os']}): "
+                         f"{d['connected'] or 'not connected'}")
     seen = watch()
     if seen:
         lines.append(
