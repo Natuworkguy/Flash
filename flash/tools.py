@@ -359,6 +359,8 @@ def build_system_prompt(model_prompt: str = "") -> str:
 DEFAULT_SHELL_TIMEOUT = 15
 MAX_SHELL_TIMEOUT = 600
 NO_COMMAND_CONFIRMATION = False
+# Careful: autonomous, but high-stakes commands still ask (stakes.py).
+CAREFUL = False
 # UltraAuto: not even what asks in autonomous mode asks.
 ULTRA_AUTO = False
 OLLAMA_HOST = ""
@@ -368,8 +370,9 @@ MAX_TOOL_OUTPUT_CHARS = 4000
 
 def init(config, ):
     global NO_COMMAND_CONFIRMATION, OLLAMA_HOST, MODEL_NAME
-    global MAX_TOOL_OUTPUT_CHARS, ULTRA_AUTO
+    global MAX_TOOL_OUTPUT_CHARS, ULTRA_AUTO, CAREFUL
     NO_COMMAND_CONFIRMATION = config.no_command_confirmation
+    CAREFUL = bool(getattr(config, "careful", False))
     ULTRA_AUTO = bool(getattr(config, "ultra_auto", False))
     OLLAMA_HOST = config.host
     MODEL_NAME = config.model or ""
@@ -847,11 +850,16 @@ def shell_tool(command: str, timeout=None, is_user=False,
 
         # In Ask first mode, a sandboxed command runs without asking when
         # the user allowed that: what it can do is walled in.
-        if not NO_COMMAND_CONFIRMATION and not (
+        from . import stakes
+
+        risky = stakes.why(command) if CAREFUL else ""
+        if (not NO_COMMAND_CONFIRMATION or risky) and not (
                 walled and walls.auto_allow()):
             notify_needs_input()
 
-            user_input = remote_answer(f"Run this command?\n{command}")
+            user_input = remote_answer(
+                f"Run this command?{f' It {risky}.' if risky else ''}"
+                f"\n{command}")
 
             if user_input is None:
                 prompt = Text("  ⎿  ", style=DIM)

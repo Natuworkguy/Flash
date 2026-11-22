@@ -279,6 +279,7 @@ class Config:
     no_command_confirmation: bool
     ultra_allowed: bool
     ultra_auto: bool
+    careful: bool
     system_one: bool
     show_stats: bool
     voice: bool
@@ -320,6 +321,9 @@ class Config:
         cls.no_command_confirmation = bool(
             _int_env("NO_COMMAND_CONFIRMATION", 0, minimum=0)
         ) or cls.ultra_auto
+        # Careful: autonomous, but high-stakes commands still ask.
+        cls.careful = cls.no_command_confirmation and not cls.ultra_auto \
+            and bool(_int_env("CAREFUL_AUTO", 0, minimum=0))
         # On only with a model to ask: "none" is how the picker says off.
         cls.system_one = bool(_int_env("SYSTEM_ONE", 0, minimum=0)) and \
             bool((os.getenv("SYSTEM_ONE_MODEL") or "").strip())
@@ -359,8 +363,9 @@ def set_config_var(name: str, value: str) -> None:
 
 # How much Flash asks: before commands and edits, not about those
 # (autonomous), or about nothing at all (UltraAuto, once allowed).
-MODES = ("ask", "auto", "ultra")
-MODE_WORDS = {"ask": "Ask first", "auto": "Auto", "ultra": "UltraAuto"}
+MODES = ("ask", "careful", "auto", "ultra")
+MODE_WORDS = {"ask": "Ask first", "careful": "Careful", "auto": "Auto",
+              "ultra": "UltraAuto"}
 
 
 def mode() -> str:
@@ -368,6 +373,8 @@ def mode() -> str:
 
     if Config.ultra_auto:
         return "ultra"
+    if Config.careful:
+        return "careful"
     return "auto" if Config.no_command_confirmation else "ask"
 
 
@@ -378,13 +385,16 @@ def set_mode(name: str) -> str:
     name = {"on": "auto", "off": "ask", "autonomous": "auto",
             "ultraauto": "ultra"}.get(name, name)
     if name not in MODES:
-        raise ValueError(f"{name!r} is not a mode: ask, auto or ultra.")
+        raise ValueError(
+            f"{name!r} is not a mode: ask, careful, auto or ultra.")
     if name == "ultra" and not Config.ultra_allowed:
         raise ValueError(
             "UltraAuto is not allowed yet: turn it on in Settings, or "
             "with /auto ultra allow."
         )
     set_config_var("NO_COMMAND_CONFIRMATION", "0" if name == "ask" else "1")
+    if name == "careful" or (os.getenv("CAREFUL_AUTO") or "0") != "0":
+        set_config_var("CAREFUL_AUTO", "1" if name == "careful" else "0")
     set_config_var("ULTRA_AUTO", "1" if name == "ultra" else "0")
     return name
 
@@ -393,9 +403,13 @@ def next_mode() -> str:
     """The mode after this one, as Shift+Tab goes round them: UltraAuto
     only once allowed."""
 
-    offered = [m for m in MODES if m != "ultra" or Config.ultra_allowed]
-    return offered[(offered.index(mode()) + 1) % len(offered)] \
-        if mode() in offered else "ask"
+    # Careful is picked by name (the mode menu, /auto careful): from it,
+    # Shift+Tab goes on to Auto.
+    offered = [m for m in MODES if m != "careful"
+               and (m != "ultra" or Config.ultra_allowed)]
+    now = "auto" if mode() == "careful" else mode()
+    return offered[(offered.index(now) + 1) % len(offered)] \
+        if now in offered else "ask"
 
 
 def allow_ultra(on: bool) -> None:
@@ -520,6 +534,8 @@ def _banner_lines(update_version: Optional[str] = None) -> list:
     if Config.ultra_auto:
         notices.append("UltraAuto, nothing asks first: not email, "
                        "iMessages, hires or Computer Use")
+    elif Config.careful:
+        notices.append("careful, only high-stakes commands ask first")
     elif Config.no_command_confirmation:
         notices.append("autonomous, commands run without confirmation")
     if systemone.enabled():
@@ -1848,7 +1864,8 @@ def _status_text(messages: list[dict]) -> str:
 
     if Config.no_command_confirmation:
         # "auto + S1": autonomous, with System One reviewing each call.
-        word = "ultra" if Config.ultra_auto else "auto"
+        word = "ultra" if Config.ultra_auto else \
+            "careful" if Config.careful else "auto"
         parts.append(f"{word} + S1" if Config.system_one else word)
 
     if Config.voice:
@@ -1941,6 +1958,90 @@ def _note_showcase(turn: Turn, tools: int) -> None:
     """Count the reply toward /stats."""
 
     showcase.record(Config.host, Config.model or "", turn.tokens, tools)
+
+
+def _activity_command(arg: str) -> None:
+    """/activity: each model's calls this week, from the activity log:
+    how many, how many failed, the time to the first word and words a
+    second, with the models resting after failures marked.
+    /activity clear empties the log."""
+
+    from . import routing
+
+    if arg == "clear":
+        routing.clear_activity()
+        console.print(Text("  Activity log cleared.", style=DIM))
+        return
+    rows = routing.summary(7)
+    if not rows:
+        console.print(Text("  No model calls logged yet.", style=DIM))
+        return
+    health = routing.health()
+    now = time.time()
+    body = Text()
+    body.append(f"  {'model':<30}{'calls':>7}{'failed':>8}"
+                f"{'first word':>12}{'speed':>13}\n", style=DIM)
+    for row in rows[:15]:
+        ttft = row["ttft_ms"]
+        first = "-" if ttft is None else (
+            f"{ttft} ms" if ttft < 1000 else f"{ttft / 1000:.1f} s")
+        speed = f"{row['tok_s']:.1f} tok/s" if row["tok_s"] else "-"
+        resting = float((health.get(row["model"]) or {}).get(
+            "rest_until") or 0) > now
+        body.append(f"  {row['model'][:29]:<30}",
+                    style=DIM if resting else "")
+        body.append(f"{row['calls']:>7}{row['failed'] or '-':>8}"
+                    f"{first:>12}{speed:>13}")
+        if resting:
+            body.append("  resting", style=WARN)
+        body.append("\n")
+    fast = routing.fastest()
+    if fast:
+        body.append(f"\n  @fast is {fast} right now.", style=DIM)
+    console.print(body)
+
+
+def _preset_command(arg: str) -> None:
+    """/preset: the presets; /preset NAME MODEL [system prompt] saves
+    one; /preset remove NAME takes it off."""
+
+    from . import modelchain, routing
+
+    words = arg.split(maxsplit=2)
+    if not words:
+        held = routing.presets()
+        if not held:
+            console.print(Text(
+                "  No presets yet. /preset NAME MODEL [system prompt], "
+                "then use @NAME as the model.", style=DIM))
+            return
+        for name, preset in held.items():
+            line = Text(f"  @{name}", style=f"bold {ACCENT}")
+            line.append(f"  {preset['model']}", style=DIM)
+            if preset.get("fallbacks"):
+                line.append(f", then {', '.join(preset['fallbacks'])}",
+                            style=DIM)
+            if preset.get("system"):
+                line.append("  (own system prompt)", style=DIM)
+            console.print(line)
+        return
+    if words[0] == "remove" and len(words) > 1:
+        said = "Removed" if routing.remove_preset(words[1]) else "No preset"
+        console.print(Text(f"  {said} @{words[1].lstrip('@')}.", style=DIM))
+        return
+    if len(words) < 2:
+        warn("Usage: /preset NAME MODEL [system prompt]")
+        return
+    try:
+        model, fallbacks = modelchain.parse_chain(words[1])
+        routing.save_preset(words[0], {
+            "model": model, "fallbacks": fallbacks,
+            "system": words[2] if len(words) > 2 else ""})
+    except ValueError as exc:
+        warn(str(exc))
+        return
+    console.print(Text(f"  Saved @{words[0].lstrip('@').lower()}.",
+                       style=f"bold {ACCENT}"))
 
 
 def _stats_command() -> None:
@@ -6564,6 +6665,7 @@ def _set_auto(on) -> None:
         return
     said = {"ask": "Autonomous mode disabled.",
             "auto": "Autonomous mode enabled.",
+            "careful": "Careful mode on: only high-stakes commands ask.",
             "ultra": "UltraAuto on: nothing asks first."}[name]
     colour = WARN if name == "ultra" else ACCENT
     console.print(Text(said, style=f"bold {colour}"))
@@ -7794,10 +7896,20 @@ def _main() -> None:
                     _set_auto(True)
                 elif arg in ("off", "disable", "false", "0", "ask"):
                     _set_auto(False)
+                elif arg == "careful":
+                    _set_auto("careful")
                 elif arg.split()[:1] == ["ultra"]:
                     _ultra_command(arg.split()[1:])
                 else:
-                    warn("Usage: /auto [on|off|toggle|ultra [off]]")
+                    warn("Usage: /auto [on|off|toggle|careful|ultra [off]]")
+                continue
+
+            if uin == "/activity" or uin.startswith("/activity "):
+                _activity_command(uin[len("/activity"):].strip().lower())
+                continue
+
+            if uin == "/preset" or uin.startswith("/preset "):
+                _preset_command(uin[len("/preset"):].strip())
                 continue
 
             if uin == "/stats":

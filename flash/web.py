@@ -6809,6 +6809,44 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
             browser, session.hub.owners()
         ), "remember": remembering()}
 
+    if name == "routing":
+        # Settings > Usage: each model's calls, health, the presets, and
+        # how the cache, health routing and traces are set.
+        from . import routing
+
+        if arg == "clear-activity":
+            routing.clear_activity()
+        elif arg == "clear-cache":
+            routing.clear_cache()
+        elif arg == "forget-health":
+            routing.forget_health(str(body.get("model") or ""))
+        elif arg == "set":
+            for key, setting in (("cache", routing.CACHE_SETTING),
+                                 ("health", routing.HEALTH_SETTING)):
+                if key in body:
+                    ai.set_config_var(setting, "1" if body[key] else "0")
+            if "trace" in body:
+                ai.set_config_var(routing.TRACE_SETTING,
+                                  str(body["trace"] or "").strip()[:500])
+        elif arg == "save-preset":
+            routing.save_preset(str(body.get("preset") or ""),
+                                dict(body.get("value") or {}))
+        elif arg == "remove-preset":
+            routing.remove_preset(str(body.get("preset") or ""))
+        now = time.time()
+        return {
+            "models": routing.summary(float(body.get("days") or 7)),
+            "recent": routing.activity(1, most=40),
+            "health": [{"model": m, **h, "resting": float(
+                h.get("rest_until") or 0) > now}
+                for m, h in sorted(routing.health().items())],
+            "presets": routing.presets(),
+            "cache": routing.cache_on(),
+            "health_on": routing.health_on(),
+            "trace": os.getenv(routing.TRACE_SETTING, ""),
+            "fastest": routing.fastest(),
+        }
+
     if name == "keep-deleted-usage":
         # No arg: only how it stands, for the switch on the usage tab.
         if arg:
