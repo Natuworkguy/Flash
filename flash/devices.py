@@ -117,6 +117,14 @@ def _ago(seconds: float) -> str:
     return f"{seconds // 3600} hours ago"
 
 
+def _watch_name(name: str) -> str:
+    """"Apple Watch", or its own name, said once: "Apple Watch Apple
+    Watch" is what the watch's default name made before."""
+
+    name = " ".join(str(name or "").split())
+    return name if "watch" in name.lower() else f"Apple Watch {name}".strip()
+
+
 def xcode_devices() -> list[dict]:
     """The iPhones, iPads and Apple Watches paired with this Mac's Xcode,
     which Flash can open apps on: none without Xcode."""
@@ -159,7 +167,7 @@ def report(now: Optional[float] = None) -> str:
     seen = watch()
     if seen:
         lines.append(
-            f"Apple Watch{' ' + seen['name'] if seen.get('name') else ''}: "
+            f"{_watch_name(seen.get('name', ''))}: "
             f"{seen['battery']}%"
             f"{', charging' if seen.get('charging') else ''}, "
             f"last heard from {_ago(now - float(seen.get('at', 0)))}."

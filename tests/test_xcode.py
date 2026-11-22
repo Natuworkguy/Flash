@@ -219,3 +219,53 @@ def test_the_mac_says_where_a_phone_app_opens(monkeypatch):
     assert computer._device_hint("Spotify") == ""  # nosec B101
     monkeypatch.setattr(xcode, "available", lambda: False)
     assert "needs Xcode" in computer._device_hint("Wallet")  # nosec B101
+
+
+REAL_WATCH = {"result": {"devices": [
+    {"identifier": "6AA3F84E", "deviceProperties": {"name": "Nathan’s Apple Watch", "osVersionNumber": "27.0.1"},
+     "hardwareProperties": {"marketingName": "Apple Watch SE 3", "platform": "watchOS", "deviceType": "appleWatch"},
+     "connectionProperties": {"tunnelState": "connected"}}]}}
+WATCH_APP_TABLE = (
+    "Name                 Bundle Identifier                      Version   Bundle Version\n"
+    "-------------------  -------------------------------------  --------  --------------\n"
+    "Compass              com.apple.NanoCompass.watchkitapp      1.0       1\n"
+    "Wallet               com.apple.NanoPassbook                 1.0       1.0\n"
+)
+
+
+class RealWatch(Fake):
+    def __call__(self, argv, seconds):
+        self.calls.append(argv)
+        if argv[:4] == ["xcrun", "devicectl", "list", "devices"]:
+            with open(argv[argv.index("--json-output") + 1], "w") as f:
+                json.dump(REAL_WATCH, f)
+            return "", "", 0
+        if argv[:5] == ["xcrun", "devicectl", "device", "info", "apps"]:
+            return WATCH_APP_TABLE, "", 0
+        return super().__call__(argv, seconds)
+
+
+def test_the_watch_is_found_by_its_name_typed_plainly(monkeypatch):
+    x = xcode.Xcode(RealWatch())
+    # Apple writes a curly apostrophe and a no-break space; people don't.
+    assert x.target("Nathan's Apple Watch")["id"] == "6AA3F84E"  # nosec B101
+    assert x.target("nathan’s apple watch")["id"] == "6AA3F84E"  # nosec B101
+
+
+def test_a_watch_app_id_comes_from_the_watch_itself(monkeypatch):
+    monkeypatch.setattr(xcode.Xcode, "hub", staticmethod(lambda: ""))
+    fake = RealWatch()
+    x = xcode.Xcode(fake)
+    watch = x.target("my watch")
+    assert x.app_id(watch, "Compass") == "com.apple.NanoCompass.watchkitapp"  # nosec B101
+    x.open_app(watch, "Wallet app")
+    assert ["xcrun", "devicectl", "device", "process", "launch", "--device", "6AA3F84E",  # nosec B101
+            "com.apple.NanoPassbook"] in fake.calls
+    with pytest.raises(xcode.XcodeError, match="Compass, Wallet"):
+        x.app_id(watch, "Flappy")
+
+
+def test_app_lists_are_read_as_json_or_a_table():
+    assert xcode.installed_listing(WATCH_APP_TABLE)[1] == {"name": "Wallet", "id": "com.apple.NanoPassbook"}  # nosec B101
+    as_json = json.dumps({"result": {"apps": [{"name": "Wallet", "bundleIdentifier": "com.apple.NanoPassbook"}]}})
+    assert xcode.installed_listing(as_json) == [{"name": "Wallet", "id": "com.apple.NanoPassbook"}]  # nosec B101
