@@ -52,6 +52,32 @@ APPS = {
     "translate": "com.apple.Translate", "passwords": "com.apple.Passwords",
 }
 
+# The same apps on Apple Watch, which has its own builds of them.
+WATCH_APPS = {
+    "wallet": "com.apple.NanoPassbook", "apple pay": "com.apple.NanoPassbook",
+    "workout": "com.apple.SessionTrackerApp", "heart rate": "com.apple.HeartRate",
+    "music": "com.apple.NanoMusic", "maps": "com.apple.NanoMaps",
+    "weather": "com.apple.NanoWeather", "messages": "com.apple.MobileSMS",
+    "calendar": "com.apple.NanoCalendar", "reminders": "com.apple.NanoReminders",
+    "settings": "com.apple.NanoSettings", "camera": "com.apple.NanoCamera",
+    "camera remote": "com.apple.NanoCamera", "alarms": "com.apple.NanoAlarm",
+    "timers": "com.apple.NanoTimer", "stopwatch": "com.apple.NanoStopwatch",
+    "compass": "com.apple.NanoCompass", "photos": "com.apple.NanoPhotos",
+    "find my": "com.apple.findmy", "home": "com.apple.Home",
+}
+
+# What a person calls a kind of device, to find theirs: "my watch". Said
+# alone, it means their real one before a simulator of that name.
+GENERIC = {"watch", "apple watch", "iphone", "phone", "ipad", "vision pro"}
+FAMILIES = (("watch", "watchOS"), ("ipad", "iPadOS"), ("iphone", "iOS"),
+            ("phone", "iOS"), ("vision", "xrOS"), ("tv", "tvOS"))
+
+
+def is_watch(where: dict) -> bool:
+    said = " ".join(str(where.get(k, "")) for k in ("platform", "type", "os", "runtime", "model", "name"))
+    return "watch" in said.lower()
+
+
 # What Flash may show on a device but never does itself: the user's own
 # money and identity. It stops at that step and says what the user does.
 HANDS_OFF = ("Never pay, add or remove a card, confirm Apple Pay, send money, "
@@ -60,10 +86,13 @@ HANDS_OFF = ("Never pay, add or remove a card, confirm Apple Pay, send money, "
              "the passcode, then the top of the phone held near the reader).")
 
 
-def bundle_for(app: str) -> str:
-    """The bundle id APP means: a name from APPS, or a bundle id as is."""
+def bundle_for(app: str, watch: bool = False) -> str:
+    """The bundle id APP means: a name from APPS (WATCH_APPS for an Apple
+    Watch), or a bundle id as is."""
 
     name = " ".join(str(app or "").lower().split()).removesuffix(" app")
+    if watch and name in WATCH_APPS:
+        return WATCH_APPS[name]
     if name in APPS:
         return APPS[name]
     if "." in str(app):
@@ -209,6 +238,8 @@ def devices(listing: str) -> list[dict]:
         out.append({"name": props.get("name", ""), "id": d.get("identifier", ""),
                     "model": hw.get("marketingName") or hw.get("productType", ""),
                     "os": f"{hw.get('platform', '')} {props.get('osVersionNumber', '')}".strip(),
+                    "platform": hw.get("platform", ""),
+                    "type": hw.get("deviceType", ""),
                     "connected": conn.get("tunnelState", "") or conn.get("transportType", "")})
     return out
 
@@ -282,11 +313,17 @@ class Xcode:
 
         sims, want = self.sims(), (name or "").strip().lower()
         if want:
-            for d in self.phones():
+            phones = self.phones()
+            for d in phones:
                 if want in (d["id"].lower(), d["name"].lower()) or want in d["name"].lower():
                     return {"kind": "device", **d}
+            plain = re.sub(r"^(?:my|the)\s+", "", want)
             hits = [s for s in sims if want in (s["udid"].lower(), s["name"].lower())] or \
                 [s for s in sims if want in s["name"].lower()]
+            if not hits or plain in GENERIC:
+                mine = self._own(phones, want)
+                if mine:
+                    return mine
             if not hits:
                 raise XcodeError(f"No simulator or device called {name!r}. Ask for status to see them.")
             hits.sort(key=lambda s: (s["state"] != "Booted", s["runtime"]), reverse=False)
@@ -299,6 +336,22 @@ class Xcode:
             raise XcodeError("No simulators are installed: add one in Xcode (Window > Devices and Simulators).")
         phones.sort(key=lambda s: (s["runtime"], s["name"]))
         return {"kind": "simulator", **phones[-1]}
+
+    @staticmethod
+    def _own(phones: list[dict], want: str) -> Optional[dict]:
+        """The user's own device of the kind WANT names ("my apple watch",
+        "my phone"), a connected one first, or None."""
+
+        for word, platform in FAMILIES:
+            if word not in want:
+                continue
+            mine = [d for d in phones if platform.lower() in (d.get("platform") or d.get("os", "")).lower()
+                    or (word == "watch" and is_watch(d))]
+            if word in ("iphone", "phone"):
+                mine = [d for d in mine if not is_watch(d) and "ipad" not in d.get("model", "").lower()]
+            mine.sort(key=lambda d: d.get("connected") not in ("connected", "wired", "localNetwork"))
+            return {"kind": "device", **mine[0]} if mine else None
+        return None
 
     def status(self) -> str:
         path = self._out(["xcode-select", "-p"]).strip()
@@ -456,7 +509,7 @@ class Xcode:
         """A built-in app (or any installed one, by bundle id) opened on
         WHERE, as it is, without closing it first."""
 
-        bundle = bundle_for(app)
+        bundle = bundle_for(app, watch=is_watch(where))
         if where["kind"] == "simulator":
             self.boot(where)
             self._out(["xcrun", "simctl", "launch", where["udid"], bundle])

@@ -638,10 +638,32 @@ def _app_name(value: str) -> str:
     return name
 
 
+def _device_hint(name: str) -> str:
+    """For an app that is on an iPhone or Apple Watch, not the Mac (like
+    Wallet): where to open it instead."""
+
+    from . import xcode
+
+    key = " ".join(name.lower().split()).removesuffix(" app")
+    if key not in xcode.APPS and key not in xcode.WATCH_APPS:
+        return ""
+    if not xcode.available():
+        return (f". {name} is an iPhone and Apple Watch app, not a Mac one. Opening it on "
+                "the user's iPhone or Watch needs Xcode on this Mac (from the App Store), "
+                "with the device paired in it.")
+    return (f". {name} is an iPhone and Apple Watch app, not a Mac one: open it on the "
+            "user's device with the xcode tool, action open_app, app "
+            f"{name}, target the device (\"watch\" for their Apple Watch, "
+            "\"iphone\" for their iPhone).")
+
+
 def _app(kind: str, action: str, name: str) -> str:
     if kind == "mac":
         if action == "open_app":
-            _run(["open", "-a", name])
+            try:
+                _run(["open", "-a", name])
+            except ComputerError as exc:
+                raise ComputerError(f"{exc}{_device_hint(name)}") from None
             return f"Opened {name}."
         said = _jxa(
             f"const app = Application({json.dumps(name)});"

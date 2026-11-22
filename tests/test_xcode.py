@@ -58,14 +58,15 @@ def test_simulators_and_devices_are_read():
     assert {s["udid"] for s in sims} == {"AAA", "BBB", "CCC"}
     assert next(s for s in sims if s["udid"] == "AAA")["runtime"] == "iOS 26.0"
     assert xcode.devices(json.dumps(PHONES)) == [{"name": "My Phone", "id": "DEV-1", "model": "iPhone 16",
-                                                  "os": "iOS 26.1", "connected": "connected"}]
+                                                  "os": "iOS 26.1", "platform": "iOS", "type": "",
+                                                  "connected": "connected"}]
 
 
 def test_target_prefers_names_then_the_booted_simulator():
     x = xcode.Xcode(Fake())
     assert x.target("")["udid"] == "BBB"                       # the booted one
     assert x.target("iphone 17")["udid"] == "AAA"
-    assert x.target("my phone") == {"kind": "device", "name": "My Phone", "id": "DEV-1", "model": "iPhone 16", "os": "iOS 26.1", "connected": "connected"}
+    assert x.target("my phone") == {"kind": "device", "name": "My Phone", "id": "DEV-1", "model": "iPhone 16", "os": "iOS 26.1", "platform": "iOS", "type": "", "connected": "connected"}
     with pytest.raises(xcode.XcodeError):
         x.target("pixel")
 
@@ -175,3 +176,46 @@ def test_the_tool_keeps_its_hands_off_payments():
     said = tools.XCODE_TOOLS[0]["function"]["description"]
     assert "Never pay" in said and "show me how" in said  # nosec B101
     assert "open_app" in tools.XCODE_TOOLS[0]["function"]["parameters"]["properties"]["action"]["enum"]  # nosec B101
+
+
+WATCHED = {"result": {"devices": [
+    {"identifier": "DEV-1", "deviceProperties": {"name": "Nathan's iPhone", "osVersionNumber": "26.1"},
+     "hardwareProperties": {"marketingName": "iPhone 16", "platform": "iOS", "deviceType": "iPhone"},
+     "connectionProperties": {"tunnelState": "connected"}},
+    {"identifier": "W-1", "deviceProperties": {"name": "Nathan's Watch", "osVersionNumber": "12.1"},
+     "hardwareProperties": {"marketingName": "Apple Watch Series 11", "platform": "watchOS",
+                            "deviceType": "appleWatch"},
+     "connectionProperties": {"tunnelState": "connected"}}]}}
+
+
+def test_wallet_opens_on_my_apple_watch_as_the_watch_app(monkeypatch):
+    monkeypatch.setattr(xcode.Xcode, "hub", staticmethod(lambda: ""))
+    fake = Fake()
+    real = Fake.__call__
+
+    def answer(self, argv, seconds):
+        if argv[:4] == ["xcrun", "devicectl", "list", "devices"]:
+            with open(argv[argv.index("--json-output") + 1], "w") as f:
+                json.dump(WATCHED, f)
+            return "", "", 0
+        return real(self, argv, seconds)
+    monkeypatch.setattr(Fake, "__call__", answer)
+    x = xcode.Xcode(fake)
+    watch = x.target("my apple watch")
+    assert watch["id"] == "W-1" and xcode.is_watch(watch)  # nosec B101
+    assert x.target("my phone")["id"] == "DEV-1"  # nosec B101
+    # Said alone, the real watch, not the simulator called Apple Watch Ultra.
+    assert x.target("watch")["id"] == "W-1"  # nosec B101
+    assert x.target("apple watch ultra")["udid"] == "CCC"  # nosec B101
+    x.open_app(watch, "Wallet")
+    joined = [" ".join(c) for c in fake.calls]
+    assert "xcrun devicectl device process launch --device W-1 com.apple.NanoPassbook" in joined  # nosec B101
+
+
+def test_the_mac_says_where_a_phone_app_opens(monkeypatch):
+    from flash import computer
+    monkeypatch.setattr(xcode, "available", lambda: True)
+    assert "xcode tool" in computer._device_hint("Wallet")  # nosec B101
+    assert computer._device_hint("Spotify") == ""  # nosec B101
+    monkeypatch.setattr(xcode, "available", lambda: False)
+    assert "needs Xcode" in computer._device_hint("Wallet")  # nosec B101
