@@ -2207,6 +2207,48 @@ def image_tool(action: str = "create", prompt: str = "", path: str = "", size: s
     return result
 
 
+def table_tool(action: str = "", path: str = "", name: str = "", sheet: str = "", sql: str = "") -> str:
+    """Spreadsheets kept as tables: import, query, list, export, remove."""
+
+    from . import tables
+
+    action = str(action or "").strip().lower()
+    tool_line(f"Table({action}{' ' + (name or Path(path).name if (name or path) else '')})")
+    try:
+        if action == "import":
+            if not path:
+                return "import needs path: the spreadsheet's file."
+            made = tables.import_file(path, name, sheet)
+            said = tables.describe_import(made)
+            tool_result(said.splitlines()[0])
+            return said
+        if action == "query":
+            cols, rows, more = tables.query(sql)
+            tool_result(f"{len(rows)}{'+' if more else ''} row{'s' if len(rows) != 1 else ''}")
+            return tables.markdown(cols, rows, more) if cols else "The query gave nothing back."
+        if action == "list":
+            found = tables.listing()
+            if not found:
+                return "No tables yet: import a spreadsheet first."
+            return "\n".join(f"{t['name']}: {t['rows']:,} rows from {t['source']} ({t['what']}), imported "
+                             f"{t['imported']}. Columns: " + ", ".join(f"{c['name']} {c['type']}" for c in t['columns'])
+                             for t in found)
+        if action == "export":
+            if not (name and path):
+                return "export needs name (the table) and path (the CSV to write)."
+            return f"Wrote {name} to {tables.export(name, path)}."
+        if action == "remove":
+            if not name:
+                return "remove needs name."
+            return f"Forgot table {tables.table_name(name)}; the file it came from is as it was." \
+                if tables.drop(name) else f"There is no table {name}."
+        return "action is import, query, list, export or remove."
+    except tables.TableError as exc:
+        return f"Error: {exc}"
+    except (OSError, ValueError, zipfile.BadZipFile) as exc:
+        return f"Error: could not read that file: {exc}"
+
+
 def digest_tool(source: str = "", question: str = "", fresh: Any = False) -> str:
     """Something too big to read at once, read in full part by part and mapped (flash/digest.py)."""
 
@@ -11081,6 +11123,33 @@ tools: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "table",
+            "description": (
+                "Spreadsheets as tables to answer questions from. import: read a CSV, TSV, Excel .xlsx or JSON file "
+                "(sheet for one sheet of a workbook), find its header under any title rows, tidy it (trim, drop empty "
+                "rows and columns and duplicates) and type each column (numbers, money, percents, dates, yes/no, "
+                "text), kept under name; the file is not changed. Say what was imported and tidied. query: SQLite "
+                "SQL over the kept tables, read-only (SELECT; sums, group by, joins across tables); answer from the "
+                "rows it gives, never estimate. list: the tables kept, with their columns. export: a table written "
+                "out as a clean CSV at path. remove: forget a table (the file stays). For a question about a "
+                "spreadsheet the user gives, import it first, then query it."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string", "enum": ["import", "query", "list", "export", "remove"]},
+                    "path": {"type": "string", "description": "For import, the file; for export, where to write the CSV."},
+                    "name": {"type": "string", "description": "The table's name (import names it after the file if not given)."},
+                    "sheet": {"type": "string", "description": "For import from a workbook: which sheet (the first by default)."},
+                    "sql": {"type": "string", "description": "For query: one SELECT statement."},
+                },
+                "required": ["action"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "maps",
             "description": (
                 "Maps, from OpenStreetMap: find (a place, an address or 'lat,lng', with its coordinates), nearby (places of a "
@@ -11336,6 +11405,7 @@ FUNCTIONS = {
     "science": science_tool,
     "maps": maps_tool,
     "digest": digest_tool,
+    "table": table_tool,
     "meetings": meetings_tool,
     "image": image_tool,
     "agent": agent_tool,
@@ -11370,7 +11440,7 @@ FUNCTIONS = {
 # adding, renaming, or removing one only means updating this file.
 SUBAGENT_TOOL_NAMES = (
     "shell", "glob", "grep", "read", "write", "edit", "multi_edit",
-    "web_search", "fetch", "science", "maps", "digest", "meetings", "get_os", "get_date", "reason",
+    "web_search", "fetch", "science", "maps", "digest", "table", "meetings", "get_os", "get_date", "reason",
     "check_inbox", "read_email", "notify_user", "read_imessages",
     "refresh_tools", "more_output",
 )
@@ -11555,7 +11625,7 @@ def run_tool(call):
 # Tools whose words come from someone other than the user: marked when
 # they read like orders to an assistant (guard.py).
 OUTSIDE = {
-    "fetch": "a web page", "web_search": "search results", "science": "research databases", "maps": "map data", "digest": "the file or video it read", "meetings": "meeting transcripts",
+    "fetch": "a web page", "web_search": "search results", "science": "research databases", "maps": "map data", "digest": "the file or video it read", "table": "the spreadsheet's cells", "meetings": "meeting transcripts",
     "open_page": "a web page", "interact": "a web page",
     "watch_youtube": "a YouTube video",
     "read_email": "an email", "check_inbox": "the user's inbox",
