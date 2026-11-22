@@ -261,6 +261,13 @@ python run.py
   `*` stands for every model without its own, `/fallbacks` lists them
   and `/fallbacks clear model` takes them off. In the web UI it is
   "Fallbacks for ..." in the model menu.
+- `/preset name model [> fallback ...] [system prompt]`: Save a model,
+  its fallbacks and a system prompt under a name, then use `@name`
+  anywhere a model goes. `/preset` lists them and `/preset remove name`
+  takes one off. See [Model routing](#model-routing).
+- `/activity`: Each model's calls this week: how many, how many failed,
+  the time to the first word and words a second, with the models
+  resting after failures marked. `/activity clear` empties the log.
 - `/btw <question>`: Ask something on the side, even while Flash is
   working. It is answered at once from what the conversation already
   holds, with no tools, and shown apart from the chat, and the work in
@@ -330,8 +337,9 @@ python run.py
   show a loader's characters, it draws a plain ASCII version.
 - `/host [name|url]`: Pick or switch the Ollama server. `add <url>
   [name]`, `remove <name>`, and `list` manage the saved hosts.
-- `/auto [on|off]`: Toggle autonomous mode: commands and edits run
-  without asking first. `/auto ultra` switches to [UltraAuto](#ultraauto),
+- `/auto [on|off|careful]`: Toggle autonomous mode: commands and edits
+  run without asking first. `/auto careful` is [Careful](#careful)
+  mode: the same, except high-stakes commands still ask. `/auto ultra` switches to [UltraAuto](#ultraauto),
   allowing it first after a warning, and `/auto ultra off` stops
   offering it.
 - `/systemone [on|off|model [name]]`: Show, switch, or pick the model for
@@ -404,7 +412,8 @@ python run.py
   `~/.flash/history`. `/set` lines are never saved, since that is how
   API keys get typed in. `Ctrl+R` searches them.
 - `Shift+Tab` goes round the modes, the same as `/auto`: ask first,
-  autonomous, then UltraAuto once it is allowed.
+  autonomous, then UltraAuto once it is allowed. Careful is picked by
+  name, and Shift+Tab from it goes on as from autonomous.
 - `Ctrl+O` prints in full any tool output that was cut short this turn.
   Output longer than 12 lines shows its first 5 lines, or its last 5 if
   the command failed, since the error is usually at the end. The model
@@ -539,6 +548,66 @@ Sub-agents keep running after a reply, and `/agents` watches all of them
 update in place (Ctrl+C goes back to the prompt). They cannot talk to you,
 so they get no tool that asks first: `shell` and `write` are only theirs
 in autonomous mode (`/auto on`).
+
+### Careful
+
+Between ask first and autonomous: commands and edits run without
+asking, except the ones that cannot easily be taken back or reach past
+this computer. Those still wait for your yes, with the reason:
+
+- deleting files with `rm -r`/`-f`, `find -delete`, or `rm` of many
+  files or of a home or root folder;
+- `git push`, and git commands that throw work away or rewrite
+  history (`reset --hard`, `clean -f`, `rebase`, `branch -D` ...);
+- `sudo`, wiping disks, piping a download into a shell, changing
+  permissions across the system, stopping programs, shutting down;
+- dropping database tables, publishing packages, deploying
+  (`terraform apply`, `kubectl delete`, `fly deploy` ...), and
+  GitHub changes like merging a pull request.
+
+Pick it from the mode button by the message box or with `/auto careful`. It errs on the side of asking: a command that only
+mentions one of those, in a commit message say, asks too.
+
+### Model routing
+
+Every model call, in the terminal, the web UI, sparks and tools, goes
+through the same few steps:
+
+- **Presets.** `@name` in any model field is a saved preset: a model,
+  its fallbacks, a system prompt and options such as temperature.
+  Change the preset and every chat and spark that uses it changes too.
+  Make them under Settings > Usage > Presets or with `/preset`.
+- **Shortcuts.** `@fast` is the model that has given the most words a
+  second lately (measured on at least three answers), and `@small` the
+  smallest one the server has. A preset of your own with either name
+  wins.
+- **`:online`.** Add `:online` to a model, as in `qwen3:8b:online`,
+  and what a web search finds for your message (or the pages it links)
+  goes to the model with it, for models that cannot search themselves.
+- **Health.** A model that fails three times in a row waits at the
+  back of its [fallbacks](#internal-commands) for a minute, then
+  longer each time it fails again, up to fifteen. One good answer
+  brings it back. Turn it off under Settings > Usage.
+- **Cache.** Off by default. On, the very same question to the same
+  model, with no tools and not streamed, is answered from what it said
+  last time, for a day (`RESPONSE_CACHE_HOURS` changes that). Code can
+  ask for it on one call with `cache=True`.
+- **Activity log.** Each call is written to `~/.flash/activity.jsonl`:
+  the model, how long it took, the time to the first word, words a
+  second, tokens in and out, and the error if it failed. Settings >
+  Usage shows it per model, and `/activity` in the terminal.
+- **Traces.** Set "Send traces" (`TRACE_EXPORT`) to `file` for
+  OpenTelemetry JSON in `~/.flash/traces`, or to a collector's
+  `https://.../v1/traces` address to send each call as a span named
+  the way the GenAI conventions name them. `TRACE_EXPORT_HEADERS`
+  takes `key=value` pairs, comma between, for a collector that wants a
+  key.
+
+Code that needs an answer in a fixed shape can use
+`routing.structured(client, model, messages, schema)`: the model is
+asked with the JSON schema as its format, the answer is checked
+against it, and when it does not fit the model is asked again with
+what was wrong, up to three times.
 
 ### UltraAuto
 

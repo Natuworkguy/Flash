@@ -206,6 +206,12 @@ def isolated_home(tmp_path_factory, monkeypatch):
     monkeypatch.setattr(sparks, "_told", set())
     # The web UI's saved hosts, projects, and chats.
     monkeypatch.setattr(workspace, "FLASH_DIR", home / ".flash")
+    # Each model call's health, log, cache and traces.
+    from flash import routing
+
+    monkeypatch.setattr(routing, "FLASH_DIR", home / ".flash")
+    monkeypatch.setattr(routing, "_health", None)
+    monkeypatch.setattr(routing, "_small", {})
     monkeypatch.setattr(usermodel, "FLASH_DIR", home / ".flash")
     # Search indexes of folders.
     monkeypatch.setattr(filesearch, "FLASH_DIR", home / ".flash")

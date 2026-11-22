@@ -130,6 +130,8 @@ COMMANDS = [
                    "Assistant (connect <address>, off, <words> to narrow)"),
     ("/context", "show how much of the window is in use"),
     ("/stats", "what Flash has done for you so far"),
+    ("/activity", "each model's calls, speed and failures this week"),
+    ("/preset", "save a model, fallbacks and prompt as @name"),
     ("/notify", "how often the agent may notify you (/notify 4 per 15m)"),
     ("/image", "send an image to the model (/image <path> [prompt])"),
     ("/web", "open Flash in your browser (lan for your phone, port N, "

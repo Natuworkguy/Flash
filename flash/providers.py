@@ -560,9 +560,17 @@ class Client:
 
         kwargs = {**dict(zip(("model", "messages", "tools", "stream",
                               "think"), args)), **kwargs}
+        from . import routing  # deferred: it reads the workspace
+
         model = str(kwargs.pop("model", "") or "")
         # The caller's own fallbacks, a spark's, first: then the model's.
         own = [str(m) for m in kwargs.pop("fallbacks", None) or []]
+        asked_cache = kwargs.pop("cache", None)
+        # A preset, a shortcut or ":online": the real model, and what
+        # comes with it (routing.py).
+        model, preset_fallbacks = routing.prepare(
+            self, model, kwargs, default=os.getenv("MODEL", ""))
+        own += [m for m in preset_fallbacks if m not in own]
         model, how = modelchain.resolve(
             self._host, model, kwargs.get("messages"),
             default=os.getenv("MODEL", ""))
@@ -589,17 +597,42 @@ class Client:
             # the one that failed is not asked again.
             chain = [took_over] + [n for n in chain
                                    if n not in (model, took_over)]
+        else:
+            # Models that keep failing wait at the back for a while.
+            chain = routing.order(chain)
         stream = bool(kwargs.get("stream"))
+        tools = bool(kwargs.get("tools"))
+        keep = routing.cacheable(kwargs, asked_cache)
+        if keep:
+            for name in chain[:1]:
+                hit = routing.cached(name, kwargs)
+                if hit is not None:
+                    routing.record(name, time.monotonic(), ok=True,
+                                   answer=hit, cached_hit=True)
+                    return hit
         failed: list[tuple[str, str]] = []
         last: Optional[BaseException] = None
         for name in chain:
+            started = time.monotonic()
+            watched = False
             try:
                 answer = self._one(name, **kwargs)
                 if stream:
-                    answer = _peeked(iter(answer))
+                    watched = True
+                    answer = _peeked(routing.watch(
+                        name, iter(answer), started, tools=tools))
+                else:
+                    routing.record(name, started, ok=True, answer=answer,
+                                   tools=tools)
+                    if keep:
+                        routing.remember(name, kwargs, answer)
             except (KeyboardInterrupt, SystemExit):
                 raise
             except Exception as exc:
+                if not watched:
+                    routing.record(name, started, ok=False,
+                                   error=_why(exc), stream=stream,
+                                   tools=tools)
                 if len(chain) == 1 and not took_over:
                     raise
                 failed.append((name, _why(exc)))

@@ -4257,6 +4257,22 @@ body.resizing-viewer iframe { pointer-events: none; }
 .menu .default-tag + .fav, .menu .default-tag + .default-tag { margin-left: 6px; }
 .menu .default-tag.fit-tight { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 40%, transparent); }
 .menu .default-tag.fit-big { color: var(--del); border-color: color-mix(in srgb, var(--del) 40%, transparent); }
+.routing-table { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 6px; }
+.routing-table th { text-align: left; font-weight: 500; color: var(--text-3); padding: 6px 8px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+.routing-table td { padding: 7px 8px; border-bottom: 1px solid var(--border); }
+.routing-table td.num, .routing-table th:not(:first-child) { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.routing-table td.mono { font: 12.5px var(--mono); max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.routing-table tr.resting td { color: var(--text-3); }
+.routing-rest { margin-left: 8px; font: 11px var(--sans); padding: 1px 7px; border-radius: 999px; color: var(--warn, #c98a1b); background: color-mix(in srgb, var(--warn, #c98a1b) 14%, transparent); }
+.routing-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.routing-none { color: var(--text-3); margin: 8px 0 0; }
+.routing-card { overflow-x: auto; margin-top: 14px; }
+.preset-list > .btn { display: inline-flex; align-items: center; gap: 6px; }
+.routing-trace input { min-width: 220px; font: 13px var(--mono); color: var(--text); background: var(--bg); border: 1px solid var(--border-strong); border-radius: 10px; padding: 7px 10px; }
+.preset-list { display: flex; flex-direction: column; gap: 6px; align-items: stretch; }
+.preset-list > .btn { align-self: flex-start; margin-top: 4px; }
+.preset-row .side { display: flex; gap: 6px; }
+@media (max-width: 640px) { .routing-trace input { min-width: 0; width: 100%; } }
 .fallback-list { list-style: none; counter-reset: fb; margin: 0 0 12px; padding: 0; display: flex; flex-direction: column; gap: 6px; }
 .fallback-list li { counter-increment: fb; display: flex; align-items: center; gap: 10px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); animation: rise 0.2s var(--ease) both; }
 .fallback-list li::before { content: counter(fb); flex: none; width: 20px; height: 20px; border-radius: 50%; display: grid; place-items: center; font-size: 11px; font-weight: 600; color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent); }
@@ -17047,6 +17063,107 @@ async function drawUsage(body) {
     } catch (error) { keep.setAttribute("aria-checked", !on); showFailure(error); }
   };
   body.appendChild(keep);
+  drawRouting(body);
+}
+
+// Model routing, on the usage tab: how each model's calls went (from the
+// activity log), which are resting after failures, the presets, and the
+// cache, health routing and trace export switches.
+async function drawRouting(body, given) {
+  let r = given;
+  if (!r) { try { r = await command("routing", "", null); } catch (error) { showFailure(error); return; } }
+  if (!body.isConnected) return;
+  let box = body.querySelector(".routing-box");
+  if (!box) box = body.appendChild(el("div", "routing-box"));
+  box.innerHTML = `<h2 class="settings-section settings-gap">Model routing</h2><p class="settings-sub">Every model call goes through here: models that keep failing wait at the back of their fallbacks for a while, plain answers can be given again from the cache, and each call is written to an activity log you can send on as OpenTelemetry traces. Type <code>@fast</code>, <code>@small</code>, a preset's <code>@name</code>, or a model with <code>:online</code> in any model field.</p>`;
+  const again = async (arg, extra = {}) => {
+    try { await drawRouting(body, await command("routing", arg, null, extra)); }
+    catch (error) { showFailure(error); }
+  };
+  const toggle = (label, about, on, key) => {
+    const row = el("button", "setting-row", `<span class="what"><b></b><span></span></span><span class="switch" aria-hidden="true"></span>`);
+    row.type = "button";
+    row.setAttribute("role", "switch");
+    row.setAttribute("aria-checked", !!on);
+    row.querySelector("b").textContent = label;
+    row.querySelector(".what span").textContent = about;
+    row.onclick = () => again("set", { [key]: !on });
+    box.appendChild(row);
+  };
+  toggle("Move failing models back", "After three failures in a row a model waits at the back of its fallbacks, a minute at first and longer each time, up to fifteen. One answer brings it back.", r.health_on, "health");
+  toggle("Cache plain answers", "The very same question to the same model, with no tools and not streamed, is answered from what it said last time for a day. Nothing is cached until this is on.", r.cache, "cache");
+
+  const trace = el("div", "setting-row static routing-trace", `<span class="what"><b>Send traces</b><span>Off, to files in ~/.flash/traces, or to an OpenTelemetry collector's /v1/traces address. Each call is one span with the model, tokens and timings.</span></span><span class="side"><input type="text" spellcheck="false" placeholder="off, file or https://…/v1/traces"></span>`);
+  const field = trace.querySelector("input");
+  field.value = r.trace || "";
+  field.onchange = () => again("set", { trace: field.value.trim() });
+  box.appendChild(trace);
+
+  const card = el("div", "usage-card routing-card");
+  card.innerHTML = `<div class="label"><span>Calls this week</span><small>${r.fastest ? `Fastest: ${esc(r.fastest)}` : "Per model"}</small></div>`;
+  const resting = new Set((r.health || []).filter((h) => h.resting).map((h) => h.model));
+  if (!r.models.length) card.appendChild(el("p", "routing-none", "No calls logged yet."));
+  else {
+    const table = el("table", "routing-table");
+    table.innerHTML = `<thead><tr><th>Model</th><th>Calls</th><th>Failed</th><th>First word</th><th>Speed</th><th>Tokens</th></tr></thead><tbody></tbody>`;
+    for (const m of r.models.slice(0, 12)) {
+      const tr = el("tr", resting.has(m.model) ? "resting" : "");
+      const cells = [m.model, fmtCount(m.calls), m.failed ? fmtCount(m.failed) : "–",
+        m.ttft_ms == null ? "–" : m.ttft_ms < 1000 ? `${m.ttft_ms} ms` : `${(m.ttft_ms / 1000).toFixed(1)} s`,
+        m.tok_s ? `${m.tok_s.toFixed(1)} tok/s` : "–", fmtCount(m.tokens_in + m.tokens_out)];
+      for (const [i, c] of cells.entries()) {
+        const td = tr.appendChild(el("td", i ? "num" : "mono"));
+        td.textContent = c;
+        if (!i && resting.has(m.model)) { const b = td.appendChild(el("span", "routing-rest", "resting")); b.dataset.tip = "Failing lately: tried after its fallbacks for now"; }
+      }
+      table.tBodies[0].appendChild(tr);
+    }
+    card.appendChild(table);
+  }
+  const tools = el("div", "routing-actions");
+  for (const [label, arg] of [["Clear the log", "clear-activity"], ["Empty the cache", "clear-cache"], ["Forget health", "forget-health"]]) {
+    const b = el("button", "btn", label);
+    b.type = "button";
+    b.onclick = () => again(arg);
+    tools.appendChild(b);
+  }
+  card.appendChild(tools);
+  box.appendChild(card);
+
+  box.insertAdjacentHTML("beforeend", `<h2 class="settings-section settings-gap">Presets</h2><p class="settings-sub">A model with its fallbacks, a system prompt and options, saved under a name. Pick it anywhere a model goes as <code>@name</code>, so changing the preset changes every chat and spark that uses it.</p>`);
+  const list = el("div", "preset-list");
+  const edit = async (name = "", p = {}) => {
+    const got = await extDialog({
+      title: name ? `@${name}` : "New preset", ok: "Save",
+      fields: [
+        { name: "name", label: "Name", value: name, placeholder: "writer" },
+        { name: "model", label: "Model", value: p.model || info.model || "", placeholder: "qwen3:8b" },
+        { name: "fallbacks", label: "Fallbacks, comma between", value: (p.fallbacks || []).join(", ") },
+        { name: "system", label: "System prompt", type: "textarea", value: p.system || "" },
+        { name: "temperature", label: "Temperature (blank for the model's own)", value: p.options?.temperature ?? "" },
+      ],
+    });
+    if (!got) return;
+    const options = { ...(p.options || {}) };
+    if (String(got.temperature).trim() === "") delete options.temperature; else options.temperature = Number(got.temperature);
+    const value = { model: got.model, system: got.system, options, fallbacks: String(got.fallbacks || "").split(",").map((x) => x.trim()).filter(Boolean) };
+    if (name && got.name.trim().replace(/^@/, "").toLowerCase() !== name) await command("routing", "remove-preset", null, { preset: name });
+    await again("save-preset", { preset: got.name, value });
+  };
+  for (const [name, p] of Object.entries(r.presets || {})) {
+    const row = el("div", "setting-row static preset-row", `<span class="what"><b class="mono"></b><span></span></span><span class="side"></span>`);
+    row.querySelector("b").textContent = `@${name}`;
+    row.querySelector(".what span").textContent = [p.model, (p.fallbacks || []).length ? `then ${p.fallbacks.join(", ")}` : "", p.system ? "own system prompt" : ""].filter(Boolean).join(" · ");
+    const side = row.querySelector(".side");
+    const e = side.appendChild(el("button", "btn", "Edit")); e.type = "button"; e.onclick = () => edit(name, p);
+    const d = side.appendChild(el("button", "btn danger", "Remove")); d.type = "button"; d.onclick = () => again("remove-preset", { preset: name });
+    list.appendChild(row);
+  }
+  const add = el("button", "btn", `${icon("plus")}<span>New preset</span>`);
+  add.type = "button";
+  add.onclick = () => edit();
+  list.appendChild(add);
+  box.appendChild(list);
 }
 
 // Security: every browser signed in with the link, each one signed out
@@ -24684,7 +24801,7 @@ function stepChat(delta) {
   if (next) switchTo(next);
 }
 
-const MODE_WORDS = { ask: "Ask first", auto: "Auto", ultra: "UltraAuto" };
+const MODE_WORDS = { ask: "Ask first", careful: "Careful", auto: "Auto", ultra: "UltraAuto" };
 
 async function setMode(mode) {
   try { Object.assign(info, await command("auto", mode)); }
@@ -24697,13 +24814,13 @@ async function toggleAuto() { await setMode("toggle"); }
 
 // The button: a toggle, or with UltraAuto allowed, a pick of three.
 function modeMenu() {
-  if (!info.ultra_allowed) return toggleAuto();
   const about = {
     ask: "Asks before commands and edits.",
+    careful: "Runs commands and edits, but still asks before anything high-stakes: deleting, pushing, sudo, deploys.",
     auto: "Runs commands and edits without asking. Email, iMessages, hires and Computer Use still ask.",
     ultra: "Never stops to ask about anything. Nothing it sends or changes can be taken back.",
   };
-  const rows = Object.keys(MODE_WORDS).map((mode) => ({
+  const rows = Object.keys(MODE_WORDS).filter((mode) => mode !== "ultra" || info.ultra_allowed).map((mode) => ({
     mode, current: (info.mode || (info.auto ? "auto" : "ask")) === mode,
     html: `<span class="mode-row${mode === "ultra" ? " ultra" : ""}"><b>${MODE_WORDS[mode]}</b><small>${about[mode]}</small></span>`,
   }));
