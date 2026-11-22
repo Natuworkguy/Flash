@@ -840,6 +840,12 @@ have looked them over.
   waiting on your yes, and work you gave sparks that is not done. It is
   sent once a day, never in quiet hours, and skipped if Flash was off
   until three hours past the time.
+- **Milestones.** When a team works on a project in a git repository,
+  its lead tells the team in the team chat when the project passes one:
+  a round number of commits ("Hey team, the repo just passed 10,000
+  commits!"), a new release tag, or another year since the first commit.
+  Flash looks every few minutes; what was passed before it started
+  watching is not announced, and nothing is said in quiet hours.
 - **Flows.** A flow hands work from spark to spark: Scout finds, Writer
   drafts, you say yes, Poster sends. Make one with New flow on the
   Sparks page, or ask Flash in a chat. Each step is a spark and its task,

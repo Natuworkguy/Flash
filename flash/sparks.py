@@ -7080,6 +7080,11 @@ def _keep(
             # Good mornings, each once a day at its time.
             with contextlib.suppress(OSError, SparkError):
                 fire_mornings()
+            # A team's project passing a milestone: its lead tells the team.
+            from . import milestones
+
+            with contextlib.suppress(OSError, SparkError):
+                milestones.tick()
             # Flows: started by their triggers, each step handed on as the one before it reports.
             from . import flows
 
