@@ -6420,6 +6420,14 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
             session.hub.publish({"type": "status"})
         return {"sensitivity": voice.wake_sensitivity()}
 
+    if name == "briefing-trash-email":
+        # on or off; no arg: only what it is, for Settings.
+        if arg not in ("", "on", "off"):
+            raise ValueError(f"{name} takes on or off")
+        if arg:
+            briefing.set_trash_dismissed_email(arg == "on")
+        return {"on": briefing.trash_dismissed_email()}
+
     if name in ("remove-dashes", "remove-emojis"):
         # on or off; no arg: only what they are, for Settings.
         if arg not in ("", "on", "off"):

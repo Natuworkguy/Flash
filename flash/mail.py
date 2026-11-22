@@ -669,6 +669,69 @@ def read(uid: str, folder: str = "INBOX", account: str = "") -> dict:
     }
 
 
+# What servers call the trash, when the server does not mark it \Trash itself.
+TRASH_NAMES = ("Trash", "[Gmail]/Trash", "[Google Mail]/Trash", "Deleted Items", "Deleted Messages", "Deleted",
+               "INBOX.Trash", "Bin", "[Gmail]/Bin")
+
+
+def _trash_folder(box: imaplib.IMAP4) -> str:
+    status, data = box.list()
+    if status != "OK":
+        return ""
+    names = []
+    for line in data or []:
+        text = line.decode("utf-8", "replace") if isinstance(line, bytes) else str(line or "")
+        found = re.match(r'\((?P<flags>[^)]*)\)\s+(?:"[^"]*"|NIL)\s+(?P<name>.+)$', text)
+        if not found:
+            continue
+        name = found.group("name").strip()
+        if name.startswith('"') and name.endswith('"'):
+            name = name[1:-1].replace('\\"', '"')
+        if "\\trash" in found.group("flags").lower():
+            return name
+        names.append(name)
+    for wanted in TRASH_NAMES:
+        for name in names:
+            if name.lower() == wanted.lower():
+                return name
+    return ""
+
+
+def trash(uid: str, account: str = "", folder: str = "INBOX") -> str:
+    """Message UID moved to ACCOUNT's trash (the folder the server marks as
+    its trash, else the usual names), where it can still be got back."""
+
+    uid = str(uid or "").strip()
+    if not uid.isdigit():
+        raise MailError(f"{uid!r} is not a message's uid.")
+    _one_account_or(account)
+    account = _account(account)
+    box = _imap(account)
+    try:
+        bin_name = _trash_folder(box)
+        if not bin_name:
+            raise MailError(f"{account['address']} has no trash folder Flash can find.")
+        quoted = '"' + folder.replace("\\", "\\\\").replace('"', '\\"') + '"'
+        status, _ = box.select(quoted)
+        if status != "OK":
+            raise MailError(f"There is no folder called {folder!r}.")
+        target = '"' + bin_name.replace("\\", "\\\\").replace('"', '\\"') + '"'
+        if "MOVE" in getattr(box, "capabilities", ()):
+            status, _ = box.uid("MOVE", uid, target)
+        else:
+            status, _ = box.uid("COPY", uid, target)
+            if status == "OK":
+                box.uid("STORE", uid, "+FLAGS.SILENT", "(\\Deleted)")
+                box.expunge()
+        if status != "OK":
+            raise MailError(f"Moving message {uid} to {bin_name} failed.")
+    except imaplib.IMAP4.error as e:
+        raise MailError(f"Moving message {uid} to the trash failed: {_said(e)}") from None
+    finally:
+        _close(box)
+    return bin_name
+
+
 def _one_account_or(account: str) -> None:
     """Refuse a message's uid without its account, when there are
     several: the same uid is a different message in each."""

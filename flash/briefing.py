@@ -10,6 +10,7 @@ at a time, full screen, newest first. A card that is dismissed stays gone.
 from __future__ import annotations
 
 import hashlib
+import os
 import re
 import threading
 import time
@@ -98,17 +99,65 @@ def dismissed() -> dict[str, float]:
             if isinstance(v, (int, float))}
 
 
+TRASH_SETTING = "BRIEFING_TRASH_EMAIL"
+
+
+def trash_dismissed_email() -> bool:
+    """Whether dismissing an email's card also moves the email to its
+    account's trash. Off unless switched on in Settings, Email."""
+
+    return (os.getenv(TRASH_SETTING) or "").strip().lower() in ("on", "1", "true", "yes")
+
+
+def set_trash_dismissed_email(on: bool) -> bool:
+    from .envfile import set_env_var
+    from .paths import ENV_PATH
+
+    value = "on" if on else "off"
+    os.environ[TRASH_SETTING] = value
+    set_env_var(ENV_PATH, TRASH_SETTING, value)
+    return on
+
+
+def _trash_emails(card_ids: Iterable[str]) -> list[str]:
+    """The emails behind these cards moved to the trash, each on a thread
+    of its own so dismissing never waits on a mail server. What failed is
+    noted in the briefing, not raised."""
+
+    from . import mail
+
+    wanted = []
+    for card_id in card_ids:
+        kind, _, key = str(card_id or "").partition(":")
+        account, _, uid = key.rpartition(":")
+        if kind == "email" and uid.isdigit():
+            wanted.append((account, uid))
+
+    def run(account: str, uid: str) -> None:
+        try:
+            mail.trash(uid, account)
+        except Exception as e:  # noqa: BLE001
+            note("email", f"Could not move a dismissed email to the trash: {e}")
+
+    for account, uid in wanted:
+        threading.Thread(target=run, args=(account, uid), daemon=True).start()
+    return [uid for _, uid in wanted]
+
+
 def dismiss(card_ids: Iterable[str], now: Optional[float] = None) -> int:
-    """Take these cards out of the feed for good. How many there are."""
+    """Take these cards out of the feed for good. How many there are.
+    Emails among them go to the trash too, when that is switched on."""
 
     now = time.time() if now is None else now
     with _lock:
         kept = {k: v for k, v in dismissed().items()
                 if now - v < FORGET_AFTER}
+        card_ids = [str(c)[:200] for c in card_ids if c]
         for card_id in card_ids:
-            if card_id:
-                kept[str(card_id)[:200]] = now
+            kept[card_id] = now
         workspace._write(DISMISSED, kept)
+    if trash_dismissed_email():
+        _trash_emails(card_ids)
     stale()
     return len(kept)
 
