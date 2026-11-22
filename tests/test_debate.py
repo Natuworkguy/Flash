@@ -315,3 +315,46 @@ def test_until_settled_stops_at_the_most_rounds_when_it_never_settles():
 def test_agreement_is_a_settlement_too():
     done = debate.run("q", Referee(["AGREED"]), [], "m", until=True)
     assert done["settled"] == "agreed" and len(done["turns"]) == 2
+
+
+def test_until_one_side_wins_is_its_own_mode():
+    for said in ("until one side wins", "until someone wins", "to the end",
+                 "until there is a winner", "winner takes all"):
+        assert debate.parse_full(f"/debate {said}; Tabs?")["until"] == "win", said
+    assert debate.parse_full("/debate until settled; Tabs?")["until"] == "settled"
+    offered = [s[0] for s in debate.suggest("unt", [])]
+    assert "until settled; " in offered and "until one side wins; " in offered
+
+
+def test_until_one_side_wins_does_not_stop_when_they_agree():
+    # agreed first, then the referee names a winner: only the winner ends it
+    client = Referee(["AGREED", "FOR"])
+    done = debate.run("tabs?", client, [], "m", until="win")
+    assert done["settled"] == "0" and done["until"] == "win"
+    assert "agreeing does not end it" in str(client.asked)
+
+
+def test_a_new_chat_on_auto_debates_with_the_model_auto_picks(monkeypatch):
+    """Auto is not a model: the debate goes to the one it picks, not "auto"."""
+    import time
+
+    from flash import ai, modelchain, web
+
+    used = []
+
+    class Seen(Client):
+        def chat(self, model, messages, options=None, stream=True):
+            used.append(model)
+            return super().chat(model, messages, options, stream)
+
+    monkeypatch.setattr(ai, "_client", Seen)
+    monkeypatch.setattr(ai.Config, "model", "auto")
+    monkeypatch.setattr(modelchain, "auto_models", lambda host, default="": ["real:8b"])
+    session = web.Session()
+    chat = session.new_chat()
+    session.debate(chat, "/debate until one side wins; tabs or spaces?")
+    for _ in range(200):
+        if any(e["type"] == "debate" for e in chat.log):
+            break
+        time.sleep(0.02)
+    assert used and "auto" not in used and set(used) == {"real:8b"}

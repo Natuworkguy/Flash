@@ -292,11 +292,17 @@ python run.py
   leans. Parts go between semicolons, in any order:
   `/debate alpha:8b vs beta:8b; rounds 4; Should I rewrite this in C?`
   gives each side its own model and has each speak four times (up to
-  10). Tab completes the models, `vs` and `rounds`, in the terminal and
-  the web UI. The summary joins the conversation, so you can ask about
-  it. In the web UI, `/debate` on its own or Debate it in the + menu
-  opens a form: the question, a model for each side facing each other
-  across a VS, and a slider for the rounds. While it runs,
+  10). `until settled` goes on until the sides agree or one wins (up to
+  12 rounds); `until one side wins` only stops for a winner, agreeing
+  does not end it (up to 20). Tab completes the models, `vs`, `rounds`
+  and `until`, in the terminal and the web UI, and in the web UI the
+  command is coloured as you type it: the command, each side's model,
+  `vs`, the rounds and how long it goes. The summary joins the
+  conversation, so you can ask about it. A new chat on Auto debates with
+  the model Auto picks. In the web UI, `/debate` on its own or Debate it
+  in the + menu opens a form: the question, a model for each side facing
+  each other across a VS, a slider for the rounds, and how long it goes
+  (the rounds, until settled, or until one side wins). While it runs,
   Stop (or Esc) ends it there, keeping what was said, and the box under
   it steers it ("think about the team size"): both sides take it in from
   their next turn, and so does the summary. Done, Keep debating goes on

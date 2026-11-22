@@ -2385,7 +2385,7 @@ class Session:
 
     def debate(self, chat: Chat, text: str = "", continues: str = "",
                steer: str = "", models: Optional[list] = None,
-               rounds: int = 0, until: bool = False) -> str:
+               rounds: int = 0, until: "bool | str" = False) -> str:
         """Argue a question out (debate.py), in CHAT, on a thread of its
         own: each side's words stream to the page as "debate-live"
         events, and the whole debate is kept in the chat at the end, its
@@ -2404,7 +2404,7 @@ class Session:
             if before is None:
                 raise ValueError("That debate is gone.")
             question, models = before["question"], before.get("models", [])
-            until = until or bool(before.get("until"))
+            until = until or argue.until_mode(before.get("until"))
         else:
             asked = argue.parse_full(text)
             question = asked["question"]
@@ -2412,7 +2412,7 @@ class Session:
             models = [str(m) for m in models or [] if str(m).strip()][:2] \
                 or asked["models"]
             rounds = rounds or asked["rounds"]
-            until = until or asked["until"]
+            until = argue.until_mode(until) or asked["until"]
         if not question:
             raise ValueError(argue.USAGE)
         if chat.busy or chat.queued:
@@ -2422,6 +2422,18 @@ class Session:
         judge = chat_model(chat)
         if not judge:
             raise ValueError("No model is set. Pick one with Alt+M.")
+        # Auto is not a model: the one it picks for the question argues and
+        # judges (a new chat starts on Auto, and "auto" on its own reached the
+        # model server as a name it did not know)
+        from . import modelchain
+        asked_for = [{"role": "user", "content": question}]
+        judge, _ = modelchain.resolve(ai.Config.host, judge, asked_for,
+                                      ai.Config.model)
+        if modelchain.is_auto(judge) or not judge:
+            raise ValueError("Auto has no models to pick from: pin one, or "
+                             "pick a model with Alt+M.")
+        models = [modelchain.resolve(ai.Config.host, m, asked_for, judge)[0]
+                  for m in models]
         debate_id = uuid.uuid4().hex[:8]
         going = {"chat": chat.id, "stop": threading.Event(),
                  "steers": [steer] if steer.strip() else []}
@@ -8567,7 +8579,7 @@ class Handler(BaseHTTPRequestHandler):
                     steer=str(body.get("steer") or ""),
                     models=list(body.get("models") or []),
                     rounds=_int(body.get("rounds")),
-                    until=bool(body.get("until"))),
+                    until=body.get("until") or ""),
             }
 
         if path == "/api/browser/control":
