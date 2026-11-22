@@ -52,18 +52,12 @@ APPS = {
     "translate": "com.apple.Translate", "passwords": "com.apple.Passwords",
 }
 
-# The same apps on Apple Watch, which has its own builds of them.
+# Apple Watch has its own builds of these, with ids of their own. On a
+# real watch the id is read from the watch itself (installed_apps); these
+# are the ones seen on one, for when that list can't be had.
 WATCH_APPS = {
     "wallet": "com.apple.NanoPassbook", "apple pay": "com.apple.NanoPassbook",
-    "workout": "com.apple.SessionTrackerApp", "heart rate": "com.apple.HeartRate",
-    "music": "com.apple.NanoMusic", "maps": "com.apple.NanoMaps",
-    "weather": "com.apple.NanoWeather", "messages": "com.apple.MobileSMS",
-    "calendar": "com.apple.NanoCalendar", "reminders": "com.apple.NanoReminders",
-    "settings": "com.apple.NanoSettings", "camera": "com.apple.NanoCamera",
-    "camera remote": "com.apple.NanoCamera", "alarms": "com.apple.NanoAlarm",
-    "timers": "com.apple.NanoTimer", "stopwatch": "com.apple.NanoStopwatch",
-    "compass": "com.apple.NanoCompass", "photos": "com.apple.NanoPhotos",
-    "find my": "com.apple.findmy", "home": "com.apple.Home",
+    "compass": "com.apple.NanoCompass.watchkitapp",
 }
 
 # What a person calls a kind of device, to find theirs: "my watch". Said
@@ -86,11 +80,37 @@ HANDS_OFF = ("Never pay, add or remove a card, confirm Apple Pay, send money, "
              "the passcode, then the top of the phone held near the reader).")
 
 
+def plain(text: str) -> str:
+    """TEXT as a person would type it, to compare names: Apple writes
+    "Nathan’s Apple Watch" with a curly apostrophe and a no-break space."""
+
+    text = str(text or "").replace("\u2019", "'").replace("\u2018", "'")
+    return " ".join(text.replace("\u00a0", " ").replace("\u202f", " ").lower().split())
+
+
+def installed_listing(text: str) -> list[dict]:
+    """devicectl device info apps, as JSON or its table: name and id."""
+
+    try:
+        data = json.loads(text)
+        apps = (data.get("result") or {}).get("apps") or []
+        return [{"name": a.get("name", ""), "id": a.get("bundleIdentifier", "")}
+                for a in apps if a.get("bundleIdentifier")]
+    except (ValueError, AttributeError):
+        pass
+    found = []
+    for line in text.splitlines():
+        parts = re.split(r"\s{2,}", line.strip())
+        if len(parts) >= 2 and re.fullmatch(r"[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+", parts[1]):
+            found.append({"name": parts[0], "id": parts[1]})
+    return found
+
+
 def bundle_for(app: str, watch: bool = False) -> str:
     """The bundle id APP means: a name from APPS (WATCH_APPS for an Apple
     Watch), or a bundle id as is."""
 
-    name = " ".join(str(app or "").lower().split()).removesuffix(" app")
+    name = plain(app).removesuffix(" app")
     if watch and name in WATCH_APPS:
         return WATCH_APPS[name]
     if name in APPS:
@@ -311,16 +331,16 @@ class Xcode:
         part of a name); with none, the booted simulator, else the newest
         iPhone one."""
 
-        sims, want = self.sims(), (name or "").strip().lower()
+        sims, want = self.sims(), plain(name)
         if want:
             phones = self.phones()
             for d in phones:
-                if want in (d["id"].lower(), d["name"].lower()) or want in d["name"].lower():
+                if want == d["id"].lower() or want in plain(d["name"]):
                     return {"kind": "device", **d}
-            plain = re.sub(r"^(?:my|the)\s+", "", want)
-            hits = [s for s in sims if want in (s["udid"].lower(), s["name"].lower())] or \
-                [s for s in sims if want in s["name"].lower()]
-            if not hits or plain in GENERIC:
+            bare = re.sub(r"^(?:my|the)\s+", "", want)
+            hits = [s for s in sims if want in (s["udid"].lower(), plain(s["name"]))] or \
+                [s for s in sims if want in plain(s["name"])]
+            if not hits or bare in GENERIC:
                 mine = self._own(phones, want)
                 if mine:
                     return mine
@@ -505,11 +525,45 @@ class Xcode:
 
     hub = staticmethod(device_hub)
 
+    def installed_apps(self, where: dict) -> list[dict]:
+        """Every app on a real device, Apple's own too: name and id."""
+
+        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
+            path = f.name
+        try:
+            out, _err, code = self.run(["xcrun", "devicectl", "device", "info", "apps", "--device", where["id"],
+                                        "--include-all-apps", "--json-output", path, "--quiet"], 120)
+            text = Path(path).read_text() if os.path.exists(path) and os.path.getsize(path) else out
+            return installed_listing(text) if code == 0 or text else []
+        except (OSError, ValueError):
+            return []
+        finally:
+            with contextlib.suppress(OSError):
+                os.unlink(path)
+
+    def app_id(self, where: dict, app: str) -> str:
+        """The id of the app APP names on WHERE. On a real device, from its
+        own list of apps, so a watch's own builds are found by name."""
+
+        if re.fullmatch(r"[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+", str(app).strip()):
+            return str(app).strip()
+        if where["kind"] == "device":
+            apps = self.installed_apps(where)
+            want = plain(app).removesuffix(" app")
+            for match in (lambda a: plain(a["name"]) == want, lambda a: want in plain(a["name"])):
+                hit = next((a for a in apps if match(a)), None)
+                if hit:
+                    return hit["id"]
+            if apps and want not in APPS and want not in WATCH_APPS:
+                raise XcodeError(f"{where['name']} has no app called {app!r}. Its apps include: "
+                                 + ", ".join(sorted({a['name'] for a in apps if a['name']})[:40]) + ".")
+        return bundle_for(app, watch=is_watch(where))
+
     def open_app(self, where: dict, app: str) -> str:
         """A built-in app (or any installed one, by bundle id) opened on
         WHERE, as it is, without closing it first."""
 
-        bundle = bundle_for(app, watch=is_watch(where))
+        bundle = self.app_id(where, app)
         if where["kind"] == "simulator":
             self.boot(where)
             self._out(["xcrun", "simctl", "launch", where["udid"], bundle])
