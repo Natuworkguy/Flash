@@ -18,6 +18,7 @@ def test_the_shortcut_opens_flash_in_the_browser_from_this_flash():
 
 def test_a_mac_gets_an_app_that_opens_flash_and_flash_links(monkeypatch, tmp_path):
     monkeypatch.setattr(launcher, "_host", lambda: "mac")
+    monkeypatch.setattr(launcher, "_swiftc", lambda: None)  # no Swift: the applet, in the browser
     monkeypatch.setattr(launcher.Path, "home", lambda: tmp_path)
     monkeypatch.setattr(launcher, "FLASH_DIR", tmp_path / ".flash")
     ran = []
@@ -116,6 +117,7 @@ def test_with_no_console_flash_writes_to_a_log(monkeypatch, tmp_path):
 
 def test_the_mac_app_is_made_again_when_out_of_date(monkeypatch, tmp_path):
     monkeypatch.setattr(launcher, "_host", lambda: "mac")
+    monkeypatch.setattr(launcher, "_swiftc", lambda: None)
     monkeypatch.setattr(launcher.Path, "home", lambda: tmp_path)
     monkeypatch.setattr(launcher, "FLASH_DIR", tmp_path / ".flash")
     made = []
@@ -130,3 +132,61 @@ def test_the_mac_app_is_made_again_when_out_of_date(monkeypatch, tmp_path):
     (tmp_path / ".flash" / "launcher.applescript").write_text(
         launcher._applescript(launcher.base_command()), encoding="utf-8")
     assert launcher.refresh() is False  # already current
+
+
+def test_a_mac_with_swift_gets_flash_in_a_window_of_its_own(monkeypatch, tmp_path):
+    """Where Apple's Swift compiler is there, Flash.app is window.swift built: the web UI in a native window."""
+
+    import json
+
+    monkeypatch.setattr(launcher, "_host", lambda: "mac")
+    monkeypatch.setattr(launcher.Path, "home", lambda: tmp_path)
+    monkeypatch.setattr(launcher, "FLASH_DIR", tmp_path / ".flash")
+    monkeypatch.setattr(launcher, "_swiftc", lambda: "/usr/bin/swiftc")
+    ran = []
+
+    def run(argv, **_kw):
+        ran.append(argv)
+        if argv[0] == "/usr/bin/swiftc":
+            Path(argv[argv.index("-o") + 1]).write_bytes(b"\xcf\xfa\xed\xfe binary")
+        return launcher.subprocess.CompletedProcess(argv, 0, "", "")
+
+    monkeypatch.setattr(launcher.subprocess, "run", run)
+    said = launcher.install()
+    app = tmp_path / "Applications" / "Flash.app" / "Contents"
+    info = plistlib.loads((app / "Info.plist").read_bytes())
+    launch = json.loads((app / "Resources" / "launch.json").read_text(encoding="utf-8"))
+    assert "in a window of its own" in said and "flash:// links" in said
+    assert (app / "MacOS" / "Flash").read_bytes().startswith(b"\xcf\xfa")
+    assert info["CFBundleExecutable"] == "Flash" and "LSUIElement" not in info  # a Dock icon, as an app has
+    assert info["CFBundleURLTypes"][0]["CFBundleURLSchemes"] == ["flash"] and info["NSMicrophoneUsageDescription"]
+    assert launch["command"][-2:] == ["--uri", "flash://open"] and launch["running"].endswith("running.json")
+    swift = next(a for a in ran if a[0] == "/usr/bin/swiftc")
+    assert str(launcher.WINDOW_SOURCE) in swift and "WebKit" in swift
+    # up to date now; a different Flash makes it again
+    made = []
+    monkeypatch.setattr(launcher, "_mac", lambda target, argv: made.append(argv))
+    assert launcher.refresh() is False and not made
+    monkeypatch.setattr(launcher, "base_command", lambda: ["/new/python", "-m", "flash"])
+    assert launcher.refresh() is True and made
+
+
+def test_without_swift_or_when_it_fails_the_mac_still_gets_the_applet(monkeypatch, tmp_path):
+    monkeypatch.setattr(launcher, "_host", lambda: "mac")
+    monkeypatch.setattr(launcher.Path, "home", lambda: tmp_path)
+    monkeypatch.setattr(launcher, "FLASH_DIR", tmp_path / ".flash")
+    monkeypatch.setattr(launcher, "_swiftc", lambda: "/usr/bin/swiftc")
+
+    def run(argv, **_kw):
+        if argv[0] == "/usr/bin/swiftc":
+            return launcher.subprocess.CompletedProcess(argv, 1, "", "error: no SDK")
+        if argv[0] == "osacompile":
+            app = Path(argv[2]) / "Contents"
+            (app / "Resources").mkdir(parents=True)
+            (app / "Info.plist").write_bytes(plistlib.dumps({"CFBundleExecutable": "applet"}))
+        return launcher.subprocess.CompletedProcess(argv, 0, "", "")
+
+    monkeypatch.setattr(launcher.subprocess, "run", run)
+    assert "in your browser" in launcher.install()
+    info = plistlib.loads((tmp_path / "Applications" / "Flash.app" / "Contents" / "Info.plist").read_bytes())
+    assert info["LSUIElement"] and not (tmp_path / ".flash" / "window.stamp").exists()

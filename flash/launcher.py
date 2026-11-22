@@ -17,12 +17,16 @@ sight, with no Terminal.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
+import platform
 import plistlib
 import shutil
 import subprocess  # nosec B404
 import sys
 from pathlib import Path
+from typing import Optional
 
 from .paths import FLASH_DIR
 
@@ -193,8 +197,89 @@ end launch
 """
 
 
+WINDOW_SOURCE = Path(__file__).with_name("window.swift")
+
+
+def _swiftc() -> Optional[str]:
+    """Apple's Swift compiler, from the Command Line Tools or Xcode, or None."""
+
+    found = shutil.which("swiftc")
+    if found:
+        return found
+    if _host() != "mac":
+        return None
+    try:
+        done = subprocess.run(["xcrun", "--find", "swiftc"],  # nosec B603 B607
+                              capture_output=True, text=True, timeout=30, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return (done.stdout.strip() or None) if done.returncode == 0 else None
+
+
+def _window_stamp(base: list[str]) -> str:
+    """What the window app is made from: its source and the command it runs."""
+
+    return hashlib.sha256(WINDOW_SOURCE.read_bytes() + json.dumps(base).encode()).hexdigest()
+
+
+def _window_app(target: Path, base: list[str], swiftc: str) -> None:
+    """Flash.app as a window of its own (window.swift): Flash's web UI in a native window, not a browser tab."""
+
+    from .web import RUNNING_FILE
+    from . import workspace
+
+    work = FLASH_DIR / "window-build"
+    shutil.rmtree(work, ignore_errors=True)
+    contents = work / f"{NAME}.app" / "Contents"
+    (contents / "MacOS").mkdir(parents=True)
+    (contents / "Resources").mkdir()
+    arch = "arm64" if platform.machine() == "arm64" else "x86_64"
+    done = subprocess.run(  # nosec B603 -- a fixed tool, on Flash's own source
+        [swiftc, "-O", "-target", f"{arch}-apple-macos12.0", "-framework", "Cocoa", "-framework", "WebKit",
+         str(WINDOW_SOURCE), "-o", str(contents / "MacOS" / NAME)],
+        capture_output=True, text=True, timeout=600, check=False)
+    if done.returncode:
+        raise ShortcutError("Swift would not build Flash's window: " + (done.stderr.strip()[-600:] or "no reason given"))
+    (contents / "Resources" / "launch.json").write_text(json.dumps({
+        "command": [*base, *OPEN], "log": str(FLASH_DIR / "launcher.log"),
+        "status": str(FLASH_DIR / "launcher.status"), "running": str(workspace.store() / RUNNING_FILE),
+    }), encoding="utf-8")
+    shutil.copyfile(WEB / "flash.icns", contents / "Resources" / "Flash.icns")
+    with open(contents / "Info.plist", "wb") as f:
+        plistlib.dump({
+            "CFBundleName": NAME, "CFBundleDisplayName": NAME, "CFBundleExecutable": NAME,
+            "CFBundleIdentifier": "app.flash.open", "CFBundleIconFile": "Flash", "CFBundlePackageType": "APPL",
+            "CFBundleShortVersionString": "1.0", "CFBundleVersion": "1", "LSMinimumSystemVersion": "12.0",
+            "NSHighResolutionCapable": True,
+            "NSMicrophoneUsageDescription": "Flash listens when you talk to it in voice mode and on calls.",
+            "NSCameraUsageDescription": "Flash sees what you show it when you turn the camera on.",
+            "CFBundleURLTypes": [{"CFBundleURLName": "Flash link", "CFBundleURLSchemes": ["flash"]}],
+        }, f)
+    subprocess.run(["codesign", "--force", "--deep", "--sign", "-", str(work / f"{NAME}.app")],  # nosec B603 B607
+                   capture_output=True, timeout=120, check=False)
+    if target.exists():
+        shutil.rmtree(target)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.move(str(work / f"{NAME}.app"), str(target))
+    shutil.rmtree(work, ignore_errors=True)
+    (FLASH_DIR / "window.stamp").write_text(_window_stamp(base), encoding="utf-8")
+    if Path(LSREGISTER).exists():
+        subprocess.run([LSREGISTER, "-f", str(target)],  # nosec B603
+                       capture_output=True, timeout=60, check=False)
+
+
 def _mac(target: Path, argv: list[str]) -> None:
     base = argv[:-len(OPEN)] if argv[-len(OPEN):] == list(OPEN) else argv
+    # A window of its own where Swift is there to build it (Apple's Command Line Tools), else the applet that
+    # opens Flash in the browser. FLASH_WINDOW=0 asks for the browser.
+    swiftc = _swiftc() if os.environ.get("FLASH_WINDOW", "1") != "0" else None
+    if swiftc:
+        try:
+            _window_app(target, base, swiftc)
+            return
+        except (ShortcutError, OSError, subprocess.SubprocessError):
+            pass
+    (FLASH_DIR / "window.stamp").unlink(missing_ok=True)
     if target.exists():
         shutil.rmtree(target)
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -242,7 +327,13 @@ def refresh() -> bool:
     source = FLASH_DIR / "launcher.applescript"
     base = base_command()
     try:
-        if source.read_text(encoding="utf-8") == _applescript(base):
+        stamp = (FLASH_DIR / "window.stamp").read_text(encoding="utf-8")
+    except OSError:
+        stamp = ""
+    try:
+        if stamp and stamp == _window_stamp(base):
+            return False
+        if not stamp and source.read_text(encoding="utf-8") == _applescript(base) and not _swiftc():
             return False
     except OSError:
         pass
@@ -275,7 +366,8 @@ def install() -> str:
     where = {"windows": "in the Start menu", "mac": "in ~/Applications",
              "linux": "in your applications menu"}[_host()]
     links = " It also opens flash:// links." if _host() == "mac" else ""
-    return f"Added {NAME} {where}: it opens Flash in your browser.{links}"
+    how = "in a window of its own" if _host() == "mac" and (FLASH_DIR / "window.stamp").exists() else "in your browser"
+    return f"Added {NAME} {where}: it opens Flash {how}.{links}"
 
 
 def remove() -> str:
