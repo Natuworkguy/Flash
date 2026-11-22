@@ -57,7 +57,11 @@ dev branch, where changes land first. It also adds a Flash shortcut (the Start m
 Windows, ~/Applications on a Mac, the applications menu on Linux) that
 opens the web UI in your browser, starting it out of sight if it is not
 running; `flash --shortcut` makes it again, `flash --shortcut remove`
-takes it away.
+takes it away. On a Mac with Apple's Command Line Tools
+(`xcode-select --install`), the Flash app opens Flash in a window of its
+own instead of a browser tab, with its own Dock icon, menus, microphone
+for voice mode, uploads and downloads; `FLASH_WINDOW=0 flash --shortcut`
+keeps it in the browser.
 
 To take Flash off a machine, run `flash uninstall`. It turns off the
 sparks and Hey Flash services that start at login, removes the flash://
