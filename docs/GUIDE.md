@@ -1984,7 +1984,10 @@ last briefing gets one card for the whole team: each spark's newest
 report as a line, what the ones at work are doing, and how much the team
 chat said (Open goes to the team chat). Each card can be answered (Reply), opened
 (the chat, the spark's report, or the email), asked about in a new chat
-(Ask Flash), or dismissed for good. An iMessage from one person can be
+(Ask Flash), or dismissed for good. With Trash emails I dismiss in the
+briefing on (Settings, Email; off by default), dismissing an email's card
+also moves the email to that account's trash, where it can still be got
+back. An iMessage from one person can be
 marked read (Mark read, `m`): Messages shows the conversation for a
 moment, and every card from it goes. `j`/`k` or the arrow keys move,
 `r`, `o`, `a`, `d` and `m` do the actions, and `Esc` closes it; the rail on

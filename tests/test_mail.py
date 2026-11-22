@@ -676,3 +676,65 @@ def test_the_settings_page_picks_the_default(two):
         web.command(session, {
             "name": "email-default", "address": "x@example.com",
         })
+
+
+class TrashIMAP(FakeIMAP):
+    """The mailbox above, on a server that marks its trash folder and moves messages."""
+
+    capabilities = ("IMAP4REV1", "MOVE")
+    folders = [b'(\\HasNoChildren) "/" "INBOX"', b'(\\HasNoChildren \\Trash) "/" "[Gmail]/Bin"',
+               b'(\\HasNoChildren) "/" "Archive"']
+
+    def list(self, *args):
+        return "OK", list(self.folders)
+
+    def select(self, mailbox, readonly=False):
+        self.selected, self.readonly = mailbox, readonly
+        return "OK", [b"3"]
+
+    def uid(self, command, *args):
+        if command in ("MOVE", "COPY", "STORE"):
+            self.moves = getattr(self, "moves", []) + [(command, *args)]
+            return "OK", [b""]
+        return super().uid(command, *args)
+
+    def expunge(self):
+        self.expunged = True
+        return "OK", []
+
+
+@pytest.fixture
+def account(monkeypatch, tmp_path):
+    monkeypatch.setattr(mail, "_path", lambda: tmp_path / "email.json")
+    mail.save("me@gmail.com", FakeIMAP.password)
+    FakeIMAP.instances.clear()
+    return "me@gmail.com"
+
+
+def test_trash_moves_to_the_folder_the_server_calls_its_trash(account, monkeypatch):
+    monkeypatch.setattr(imaplib, "IMAP4_SSL", TrashIMAP)
+    assert mail.trash("9") == "[Gmail]/Bin"  # nosec B101
+    box = FakeIMAP.instances[-1]
+    assert box.moves == [("MOVE", "9", '"[Gmail]/Bin"')] and box.readonly is False  # nosec B101
+
+
+def test_trash_without_move_copies_marks_and_expunges(account, monkeypatch):
+    class Old(TrashIMAP):
+        capabilities = ("IMAP4REV1",)
+        folders = [b'(\\HasNoChildren) "." "INBOX"', b'(\\HasNoChildren) "." "Deleted Items"']
+
+    monkeypatch.setattr(imaplib, "IMAP4_SSL", Old)
+    assert mail.trash("8") == "Deleted Items"  # nosec B101
+    box = FakeIMAP.instances[-1]
+    assert [m[0] for m in box.moves] == ["COPY", "STORE"] and box.expunged  # nosec B101
+
+
+def test_no_trash_folder_is_said(account, monkeypatch):
+    class Bare(TrashIMAP):
+        folders = [b'(\\HasNoChildren) "/" "INBOX"']
+
+    monkeypatch.setattr(imaplib, "IMAP4_SSL", Bare)
+    with pytest.raises(mail.MailError, match="no trash folder"):
+        mail.trash("9")
+    with pytest.raises(mail.MailError, match="uid"):
+        mail.trash("abc")

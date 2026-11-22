@@ -17278,6 +17278,22 @@ async function drawEmail(body) {
   body.innerHTML = `<h2 class="settings-section">Email</h2><p class="settings-sub">Connect your email accounts, as many as you use, and Flash and your sparks can look through your inboxes, read what matters, and send email you approve first, every time. Looking never marks anything read, moves it, or deletes it.</p><div class="email-body"></div><h2 class="settings-section settings-gap">Progress emails</h2><p class="settings-sub">What Flash is working on, as it happens: when it starts, its plan as it goes, when it needs your yes or no, and when it is done or stopped. Short subjects, one thread for each request, so they read well on a phone or a watch. The same as <code>/email progress</code> in the terminal.</p><div class="progress-email look-rows"></div>`;
   drawEmailAccounts(body.querySelector(".email-body"), e);
   drawProgressEmail(body.querySelector(".progress-email"));
+  // Dismissing an email's card in the briefing: off, it only leaves the briefing; on, the email goes to the trash.
+  const trashRow = el("button", "setting-row", `<span class="what"><b>Trash emails I dismiss in the briefing</b><span>When you dismiss an email's card in the briefing, the email moves to that account's trash too, where you can still get it back. Off, it only leaves the briefing.</span></span><span class="switch" aria-hidden="true"></span>`);
+  trashRow.type = "button";
+  trashRow.setAttribute("role", "switch");
+  trashRow.setAttribute("aria-checked", "false");
+  command("briefing-trash-email", "", null).then((r) => trashRow.setAttribute("aria-checked", !!r.on)).catch(() => {});
+  trashRow.onclick = async () => {
+    const on = trashRow.getAttribute("aria-checked") !== "true";
+    trashRow.setAttribute("aria-checked", on);
+    try {
+      const r = await command("briefing-trash-email", on ? "on" : "off", null);
+      trashRow.setAttribute("aria-checked", !!r.on);
+      toast(r.on ? "Emails you dismiss in the briefing go to the trash now" : "Dismissing an email only takes it out of the briefing now");
+    } catch (error) { trashRow.setAttribute("aria-checked", !on); showFailure(error); }
+  };
+  body.querySelector(".email-body").after(trashRow);
 }
 
 const PROGRESS_KINDS = [["start", "Started"], ["plan", "Plan steps"], ["ask", "Needs you"], ["end", "Done or stopped"]];

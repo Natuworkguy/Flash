@@ -379,3 +379,38 @@ def test_flash_reads_the_briefing_out_and_marks_it_read(monkeypatch):
     assert "Repo Watch" in said and "CI is green again." in said
     assert heard, "the page was not told it is read"
     assert briefing._seen().get("ids") == ["spark:1"]
+
+
+class _Now:
+    """A thread that runs at once, so what it did can be checked."""
+
+    def __init__(self, target, args=(), daemon=None):
+        self.target, self.args = target, args
+
+    def start(self):
+        self.target(*self.args)
+
+
+def test_dismissed_emails_go_to_the_trash_only_when_switched_on(monkeypatch):
+    trashed = []
+    monkeypatch.setattr(mail, "trash", lambda uid, account="": trashed.append((account, uid)) or "Trash")
+    monkeypatch.setattr(briefing.threading, "Thread", _Now)
+    monkeypatch.delenv(briefing.TRASH_SETTING, raising=False)
+    assert briefing.trash_dismissed_email() is False  # nosec B101  (off by default)
+    briefing.dismiss(["email:me@example.com:41"], now=NOW)
+    assert trashed == []  # nosec B101
+
+    monkeypatch.setenv(briefing.TRASH_SETTING, "on")
+    briefing.dismiss(["email:me@example.com:42", "wait:w1", "email:bad"], now=NOW)
+    assert trashed == [("me@example.com", "42")]  # nosec B101
+
+
+def test_an_email_that_will_not_move_is_noted_not_raised(monkeypatch):
+    def refuse(uid, account=""):
+        raise mail.MailError("no trash folder")
+
+    monkeypatch.setattr(mail, "trash", refuse)
+    monkeypatch.setattr(briefing.threading, "Thread", _Now)
+    monkeypatch.setenv(briefing.TRASH_SETTING, "on")
+    briefing.dismiss(["email:me@example.com:43"], now=NOW)
+    assert any("trash" in str(n) for n in briefing._news)  # nosec B101
