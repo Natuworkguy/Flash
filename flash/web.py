@@ -162,6 +162,7 @@ def _computer_use() -> dict:
         "computer_use_keys": computeruse.stop_keys(),
         "computer_use_mouse": computeruse.mouse_stops(),
         "computer_use_fast": computeruse.fast(),
+        "computer_use_human": computeruse.human(),
         "computer_use_missing": computeruse.missing(),
     }
 
@@ -5436,7 +5437,7 @@ def voice_models(session: "Session") -> dict:
                 # An extension's: nothing to download or delete.
                 "extension": voice.is_extension(c.name),
                 # This Mac's own (Siri's): the same.
-                "system": voice.siri.is_siri(c.name),
+                "system": voice.siri.is_siri(c.name) or voice.apple_listen.is_apple(c.name),
                 "installed": getattr(voice, installed)(c.name),
                 "current": c.name == in_use,
                 # A Phonon or Kokoro voice or a Moonshine model, with
@@ -7088,6 +7089,12 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
             else sandbox.AUTO_ALLOW_SETTING, arg in ("on", "1", "true"))
         session.hub.publish({"type": "status"})
         return _sandbox()
+
+    if name == "computer-use-human":
+        # The mouse along curves at a hand's speed, keys in a typist's rhythm.
+        computeruse.set_human(arg in ("on", "1", "true"))
+        session.hub.publish({"type": "status"})
+        return _computer_use()
 
     if name == "computer-use-fast":
         # Fast mode: several actions a step, buttons clicked by name.

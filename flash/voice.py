@@ -28,7 +28,7 @@ from typing import Optional
 from urllib.error import URLError
 from urllib.request import Request, urlopen
 
-from . import serif, siri, visuals
+from . import apple_listen, serif, siri, visuals
 from .paths import MODELS_DIR
 
 
@@ -134,7 +134,7 @@ def wake_model() -> str:
     first."""
 
     name = vosk_model()
-    if not is_moonshine(name) and not is_extension(name):
+    if not is_moonshine(name) and not is_extension(name) and not apple_listen.is_apple(name):
         return name
     for choice in LISTENING:
         if not is_moonshine(choice.name) and listening_installed(
@@ -474,7 +474,14 @@ def offered(kind: str) -> tuple[Choice, ...]:
     Flash's own, then this Mac's Siri voices."""
 
     return (*extension_choices(kind), *KINDS[kind],
-            *(siri_choices() if kind == "speaking" else ()))
+            *(siri_choices() if kind == "speaking" else ()),
+            *(apple_choices() if kind == "listening" else ()))
+
+
+def apple_choices() -> list[Choice]:
+    """This Mac's own speech recognition, on a Mac that can build its helper; nothing to download."""
+
+    return [Choice(apple_listen.NAME, 0, apple_listen.LABEL)] if apple_listen.available() else []
 
 
 def engine_of(name: str) -> str:
@@ -485,6 +492,8 @@ def engine_of(name: str) -> str:
         return str(name)[1:].split("/", 1)[0]
     if siri.is_siri(name):
         return "Siri"
+    if apple_listen.is_apple(name):
+        return "Apple"
     if is_phonon(name):
         return "Phonon"
     if is_kokoro(name):
@@ -502,7 +511,7 @@ def engine_label(name: str) -> str:
         return f"From the {engine_of(name)} extension"
     # The voices to speak with, ranked: the best, and the second best.
     ranked = {"Phonon": "Phonon, the best", "Kokoro": "Kokoro, second best",
-              "Siri": "Siri, built into this Mac"}
+              "Siri": "Siri, built into this Mac", "Apple": "Apple, built into this Mac"}
     return ranked.get(engine_of(name), engine_of(name))
 
 
@@ -583,6 +592,8 @@ def moonshine_ready() -> bool:
 
 
 def listening_installed(name: str) -> bool:
+    if apple_listen.is_apple(name):
+        return apple_listen.available()
     if is_extension(name):
         return _extension_speech(name, "listening") is not None
     if is_moonshine(name):
@@ -997,6 +1008,8 @@ def remove_model(kind: str, name: str) -> None:
         raise ValueError(
             f"{name} belongs to macOS: remove it in System Settings, "
             "Accessibility, Spoken Content, System Voice, Manage Voices.")
+    if apple_listen.is_apple(name):
+        raise ValueError("This Mac's speech recognition belongs to macOS: there is nothing to remove.")
     (remove_listening if kind == "listening" else remove_voice)(name)
 
 
@@ -1322,6 +1335,11 @@ class ExtensionHearing:
 def _hearing(live: bool = True):
     """What hears speech with the listening model in use. Returns
     `(hearing, "")`, or `(None, reason)` when it cannot be used."""
+
+    if apple_listen.is_apple(vosk_model()):
+        if not apple_listen.available():
+            return None, "This Mac's speech recognition needs a Mac with Xcode's command line tools."
+        return apple_listen.AppleHearing(), ""
 
     if is_extension(vosk_model()):
         found = _extension_speech(vosk_model(), "listening")

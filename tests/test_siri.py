@@ -148,7 +148,8 @@ def test_settings_marks_it_as_the_macs_own(monkeypatch, nora):
     assert siri_row["system"] and siri_row["installed"]
     assert siri_row["engine"] == "Siri, built into this Mac"
     assert siri_row["size"] == 0
-    assert not any(m["system"] for m in listed["listening"])
+    # the Mac's own speech recognition is its one built-in way to listen
+    assert [m["name"] for m in listed["listening"] if m["system"]] == ["apple"]
     assert listed["siri_note"] == ""
 
 

@@ -3130,6 +3130,15 @@ def _computer_use_command(words: list[str]) -> None:
             "Moving the mouse no longer stops it; "
             f"{computeruse.stop_keys()} still does.", style=DIM))
         return
+    if words[:1] == ["human"] and words[1:] in (["on"], ["off"]):
+        computeruse.set_human(words[1] == "on")
+        console.print(Text(
+            "The mouse moves along curves at a hand's speed, pausing before "
+            "each click, and keys come in a typist's rhythm."
+            if words[1] == "on" else
+            "The mouse jumps straight to each point and text is typed at once.",
+            style=DIM))
+        return
     if words[:1] == ["fast"] and words[1:] in (["on"], ["off"]):
         computeruse.set_fast(words[1] == "on")
         console.print(Text(
@@ -3141,7 +3150,8 @@ def _computer_use_command(words: list[str]) -> None:
         return
     if words and words not in (["on"], ["off"]):
         warn("Usage: /computer use [on|off], /computer use mouse "
-             "[on|off], or /computer use fast [on|off]")
+             "[on|off], /computer use human [on|off], or /computer use "
+             "fast [on|off]")
         return
     if words:
         try:
