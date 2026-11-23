@@ -114,6 +114,8 @@ jobs:
         run: installer/mac/build.sh dist
       - name: Compile the Flash app's window
         run: swiftc -O -o /tmp/flash-window flash/window.swift -framework Cocoa -framework WebKit
+      - name: Compile the listening helper
+        run: swiftc -O -o /tmp/flash-listen flash/apple_listen.swift
       - uses: actions/upload-artifact@v4
         with:
           name: Install Flash (macOS)

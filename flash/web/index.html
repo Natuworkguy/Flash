@@ -11195,6 +11195,10 @@ function drawGeneral(body) {
   const fastRow = el("button", "setting-row computer-use-fast-row", `<span class="what"><b>Fast mode</b><span>Several clicks and keys per step with one screenshot after them, and buttons and fields clicked by name, read from the app itself. Far fewer slow steps. Off, one action and one screenshot at a time.</span></span><span class="switch" aria-hidden="true"></span>`);
   fastRow.type = "button";
   fastRow.setAttribute("role", "switch");
+  // Like a person: on unless turned off. Sites that watch for robots see a hand on the mouse.
+  const humanRow = el("button", "setting-row computer-use-human-row", `<span class="what"><b>Move like a person</b><span>The pointer travels along a curve, quick in the middle and slowing as it arrives, sometimes overshooting a little; it rests on a button before clicking, and text comes a key at a time in a typist's rhythm. Websites that block robots see a hand on the mouse. Off, it jumps straight there. Fast mode always jumps.</span></span><span class="switch" aria-hidden="true"></span>`);
+  humanRow.type = "button";
+  humanRow.setAttribute("role", "switch");
   const showUse = () => {
     useRow.setAttribute("aria-checked", !!info.computer_use);
     useRow.disabled = !info.computer;
@@ -11203,6 +11207,9 @@ function drawGeneral(body) {
     mouseRow.hidden = !info.computer_use;
     fastRow.hidden = !info.computer_use;
     fastRow.setAttribute("aria-checked", !!info.computer_use_fast);
+    humanRow.hidden = !info.computer_use;
+    humanRow.disabled = !!info.computer_use_fast;
+    humanRow.setAttribute("aria-checked", info.computer_use_human !== false && !info.computer_use_fast);
     const mouse = info.computer_use_mouse !== false;
     mouseRow.setAttribute("aria-checked", mouse);
     const stop = useWarn.querySelector(".use-stop");
@@ -11237,7 +11244,14 @@ function drawGeneral(body) {
     try { Object.assign(info, await command("computer-use-fast", on ? "on" : "off")); showUse(); }
     catch (error) { fastRow.setAttribute("aria-checked", !on); showFailure(error); }
   };
+  humanRow.onclick = async () => {
+    const on = humanRow.getAttribute("aria-checked") !== "true";
+    humanRow.setAttribute("aria-checked", on);
+    try { Object.assign(info, await command("computer-use-human", on ? "on" : "off")); showUse(); }
+    catch (error) { humanRow.setAttribute("aria-checked", !on); showFailure(error); }
+  };
   body.appendChild(mouseRow);
+  body.appendChild(humanRow);
   body.appendChild(fastRow);
   body.appendChild(useWarn);
   showUse();

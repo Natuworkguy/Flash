@@ -9,7 +9,8 @@ running, and asks it for each line as audio.
 
 The voices are the ones downloaded under System Settings, Accessibility,
 Spoken Content, System Voice, Manage Voices. Only those installed are
-offered. Hearing Siri is not here: macOS has no way to use Siri to listen.
+offered. To listen, Siri itself cannot be used, but the speech recognition under it can: see
+apple_listen.py.
 """
 
 from __future__ import annotations

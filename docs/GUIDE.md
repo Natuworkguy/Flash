@@ -1213,7 +1213,13 @@ Voices, and it shows up within half a minute. macOS keeps them out of
 `say` and AppleScript, so Flash runs a small helper with `swift` to reach
 them, which needs Xcode's command line tools (`xcode-select --install`).
 There is nothing to download in Flash, and nothing to install with pip.
-Siri cannot be used to listen: macOS gives programs no way to do that.
+Siri itself cannot be used to listen, but the speech recognition under it
+can: pick "Apple, built into this Mac" among the listening models. It hears
+on the Mac itself where the Mac can (macOS 13 and later), with punctuation,
+and needs nothing downloaded. The first time, Flash builds a small app for
+it with the same command line tools, and macOS asks once whether that app
+may use speech recognition. It hears what you said once you stop, so no
+words show while you talk.
 
 For listening that hears far more accurately, pick a Moonshine model in
 Settings, Voice models, or `/voice pull moonshine-small`: Tiny, Small or
@@ -1592,6 +1598,16 @@ as does any image a tool shows the model (a page's screenshot, an image
 it looked at); click one to see it whole. The model
 is told to use every other tool first, as this is slow and can click
 the wrong thing, and never to type passwords or card numbers.
+
+It works the mouse and keys as a person does, so websites that turn away
+robots let it through: the pointer travels along a gentle curve, quick in
+the middle and slowing as it arrives, taking longer for small or distant
+targets, and a long reach sometimes overshoots a little and comes back. It
+rests on a button for a moment before pressing and holds the click as a
+finger does. Text goes in a key at a time in a typist's uneven rhythm, and
+the wheel turns in notches. You can still take the computer back mid-move.
+Turn it off with `/computer use human off` (or Move like a person in
+Settings) to have the pointer jump straight there; fast mode always jumps.
 
 It asks before it takes your computer, every reply that wants it, even
 in autonomous mode; only UltraAuto skips the question. A yes lasts that

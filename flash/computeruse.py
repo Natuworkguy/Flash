@@ -464,6 +464,8 @@ def _point(args: dict, x: str = "x", y: str = "y") -> tuple[float, float]:
 
 def _act(action: str, args: dict) -> str:
     kind = system()
+    if human() and not fast():
+        return _act_human(kind, action, args)
     if action == "type":
         text = str(args.get("text") or "")
         if not text:
@@ -516,6 +518,78 @@ def _act(action: str, args: dict) -> str:
             "Right-clicked." if button == "right" else "Clicked.")
 
 
+def _act_human(kind: str, action: str, args: dict) -> str:
+    """ACTION as a person does it: the pointer along a curve at a hand's
+    speed, a pause before each press, keys in a typist's rhythm."""
+
+    import random
+
+    from . import humanmotion as hm
+
+    rng = random.Random()
+    if action == "type":
+        text = str(args.get("text") or "")
+        if not text:
+            raise UseError("Nothing to type: give text.")
+        if len(text) > MOST_TYPED:
+            raise UseError(f"At most {MOST_TYPED} characters at a time.")
+        _play(kind, hm.type_text(text, rng))
+        return f"Typed {len(text)} characters."
+    if action == "key":
+        mods, key = parse_keys(str(args.get("keys") or args.get("text")
+                                   or ""))
+        time.sleep(rng.uniform(.05, .15))
+        _send(kind, {"do": "key", "mods": mods, "key": key})
+        return "Pressed " + "+".join([*mods, key]) + "."
+    x, y = _point(args)
+    start = pointer()
+    if action == "drag":
+        to_x, to_y = _point(args, "to_x", "to_y")
+        _play(kind, hm.drag(start, (x, y), (to_x, to_y), rng))
+        _left_at(to_x, to_y)
+        return "Dragged."
+    if action == "scroll":
+        direction = str(args.get("direction") or "down").lower()
+        if direction not in ("up", "down", "left", "right"):
+            raise UseError("direction is up, down, left or right.")
+        amount = int(min(MOST_SCROLL, max(1, _number(args.get("amount"), 3))))
+        _play(kind, hm.scroll(start, (x, y), direction, amount, rng))
+        _left_at(x, y)
+        return f"Scrolled {direction} {amount}."
+    if action == "move":
+        _play(kind, hm.move(start, (x, y), rng))
+        _left_at(x, y)
+        return "Moved the pointer."
+    button = "right" if action == "right_click" else str(
+        args.get("button") or "left").lower()
+    if button not in ("left", "right", "middle"):
+        raise UseError("button is left, right or middle.")
+    count = 2 if action == "double_click" else 1
+    _play(kind, hm.click(start, (x, y), rng, button, count))
+    _left_at(x, y)
+    return ("Double-clicked." if count == 2 else
+            "Right-clicked." if button == "right" else "Clicked.")
+
+
+def _play(kind: str, steps: list) -> None:
+    """STEPS played a second or so at a time; between pieces, if the user
+    has pressed the stop keys or taken the mouse, it stops there."""
+
+    from . import humanmotion as hm
+
+    owner = _holder.get("owner")
+    for piece in hm.batches(steps):
+        if owner is not None and _holder.get("owner") != owner:
+            raise TakenBack("The user took the computer back. Stop here: "
+                            "do not try again unless they ask.")
+        _send(kind, {"do": "steps", "steps": piece})
+        last = next((s["m"] for s in reversed(piece) if "m" in s), None)
+        if last is not None:
+            _left_at(*last)
+        if owner is not None and mouse_stops():
+            _check_pointer(owner)
+
+
 # --- Keys -----------------------------------------------------------------
 
 _MODIFIERS = {
@@ -566,13 +640,14 @@ def parse_keys(keys: str) -> tuple[list[str], str]:
 # --- Each system ----------------------------------------------------------
 
 
-def _run(argv: list[str], env: Optional[dict] = None) -> str:
+def _run(argv: list[str], env: Optional[dict] = None,
+         timeout: float = 0.0) -> str:
     try:
         # Fixed programs, never through a shell; what the model gave only
         # ever goes in as an argument.
         done = subprocess.run(  # nosec B603
             argv, capture_output=True, text=True, encoding="utf-8",
-            errors="replace", timeout=TIMEOUT,
+            errors="replace", timeout=timeout or TIMEOUT,
             check=False, env=env,
         )
     except FileNotFoundError:
@@ -824,6 +899,29 @@ elif do == "key":
     key(KEYS[command["key"]], False, flags)
 elif do == "type":
     text(command["text"])
+elif do == "steps":
+    held = set()
+    x, y = where()["x"], where()["y"]
+    for s in command["steps"]:
+        if "w" in s:
+            time.sleep(s["w"])
+        elif "m" in s:
+            x, y = s["m"]
+            # with the left button down, a move is a drag
+            mouse(6 if "left" in held else 7 if "right" in held else 5, x, y,
+                  0 if "left" in held else 1 if "right" in held else 0)
+        elif "d" in s:
+            button, down, up, _ = BUTTONS[s["d"]]
+            held.add(s["d"])
+            mouse(down, x, y, button, s.get("n", 1))
+        elif "u" in s:
+            button, down, up, _ = BUTTONS[s["u"]]
+            held.discard(s["u"])
+            mouse(up, x, y, button, s.get("n", 1))
+        elif "t" in s:
+            text(s["t"])
+        elif "s" in s:
+            post(cg.CGEventCreateScrollWheelEvent2(None, 1, 2, s["s"][0], s["s"][1], 0))
 print(json.dumps(where()))
 """
 
@@ -948,6 +1046,27 @@ def _win(command: dict) -> dict:
             user32.keybd_event(vk, 0, 2, 0)
     elif do == "type":
         _win_type(user32, command["text"])
+    elif do == "steps":
+        held = set()
+        for s in command["steps"]:
+            if "w" in s:
+                time.sleep(s["w"])
+            elif "m" in s:
+                user32.SetCursorPos(round(s["m"][0]), round(s["m"][1]))
+            elif "d" in s:
+                user32.mouse_event(_WIN_BUTTONS[s["d"]][0], 0, 0, 0, 0)
+                held.add(s["d"])
+            elif "u" in s:
+                user32.mouse_event(_WIN_BUTTONS[s["u"]][1], 0, 0, 0, 0)
+                held.discard(s["u"])
+            elif "t" in s:
+                _win_type(user32, s["t"])
+            elif "s" in s:
+                up, side = s["s"]
+                if up:
+                    user32.mouse_event(0x800, 0, 0, (up * 120) & 0xFFFFFFFF, 0)
+                if side:
+                    user32.mouse_event(0x1000, 0, 0, (-side * 120) & 0xFFFFFFFF, 0)
     return {}
 
 
@@ -1058,6 +1177,25 @@ def _linux(command: dict) -> dict:
         _run(["xdotool", "key", "--", "+".join([*mods, key])])
     elif do == "type":
         _run(["xdotool", "type", "--delay", "8", "--", command["text"]])
+    elif do == "steps":
+        argv = ["xdotool"]
+        names = {"left": "1", "middle": "2", "right": "3"}
+        for s in command["steps"]:
+            if "w" in s:
+                argv += ["sleep", f"{s['w']:.3f}"]
+            elif "m" in s:
+                argv += ["mousemove", str(round(s["m"][0])), str(round(s["m"][1]))]
+            elif "d" in s:
+                argv += ["mousedown", names[s["d"]]]
+            elif "u" in s:
+                argv += ["mouseup", names[s["u"]]]
+            elif "t" in s:
+                argv += ["type", "--delay", "0", "--", s["t"]]
+            elif "s" in s:
+                up, side = s["s"]
+                button = "4" if up > 0 else "5" if up < 0 else "6" if side > 0 else "7"
+                argv += ["click", button]
+        _run(argv)
     return {}
 
 
@@ -1105,6 +1243,26 @@ def _linux_stop_down() -> Optional[Callable[[], bool]]:
 # can be listed by name from the system's accessibility tree (elements),
 # so the model clicks "Save" by name instead of finding it in a picture.
 # Far fewer slow look-and-click rounds for the same work.
+
+HUMAN_SETTING = "COMPUTER_USE_HUMAN"
+
+
+def human() -> bool:
+    """Whether the mouse and keys move as a person moves them: on unless
+    the user turned it off (fast mode jumps, whatever this says)."""
+
+    from .notify import _saved
+
+    return _saved(HUMAN_SETTING).strip().lower() not in ("0", "off", "false", "no")
+
+
+def set_human(on: bool) -> None:
+    from .envfile import set_env_var
+    from .paths import ENV_PATH
+
+    os.environ[HUMAN_SETTING] = "1" if on else "0"
+    set_env_var(ENV_PATH, HUMAN_SETTING, os.environ[HUMAN_SETTING])
+
 
 FAST_SETTING = "COMPUTER_USE_FAST"
 # The most actions one step may do, and the pause between them.

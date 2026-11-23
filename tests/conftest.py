@@ -72,6 +72,8 @@ def no_developer_settings(monkeypatch):
     # Model titles are on for everyone else, but here each one would take
     # a scripted reply meant for the chat; their own tests turn them on.
     monkeypatch.setenv("MODEL_TITLES", "0")
+    # Computer Use plays its plain, instant way in tests; the human way is tested on its own.
+    monkeypatch.setenv("COMPUTER_USE_HUMAN", "0")
     # Config read those settings at import; read them again without them.
     ai.Config.refresh()
 
