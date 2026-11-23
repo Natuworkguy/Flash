@@ -4630,6 +4630,11 @@ body.empty #ext-head, body.on-page #ext-head { display: none; }
 .ext-said { max-height: 60vh; overflow: auto; margin: 10px 0 18px; font-size: 15px; line-height: 1.6; }
 .ext-said > :first-child { margin-top: 0; }
 .ext-said > :last-child { margin-bottom: 0; }
+.teach-dots { display: flex; gap: 10px; margin: 18px 0 14px; }
+.teach-dots span { width: 12px; height: 12px; border-radius: 50%; background: var(--line, rgba(127,127,127,.25)); transition: background .25s, transform .25s; }
+.teach-dots span.on { background: var(--accent, #3d8fe0); transform: scale(1.15); }
+.teach-level { height: 4px; border-radius: 2px; background: var(--line, rgba(127,127,127,.2)); overflow: hidden; margin-bottom: 8px; }
+.teach-level i { display: block; height: 100%; width: 0; background: var(--accent, #3d8fe0); transition: width .08s linear; }
 </style>
 </head>
 <body class="empty">
@@ -11402,6 +11407,24 @@ function drawGeneral(body) {
     catch (error) { showSense(info.wake_sensitivity ?? 50); showFailure(error); }
   };
   body.appendChild(senseRow);
+
+  // The wake word in the owner's own voice: said four times, kept on this computer.
+  const voiceRow = el("div", "setting-row static wake-voice-row", `<span class="what"><b>Your voice</b><span></span></span><span class="side"><button type="button" class="btn small"></button></span>`);
+  const showVoice = (taught) => {
+    voiceRow.querySelector(".what span").textContent = taught
+      ? `It knows how you say “${wakeName()}”, so it wakes for you more surely and less for anything else.`
+      : `Say “${wakeName()}” four times so it learns your voice: fewer times saying it twice, fewer false starts.`;
+    const button = voiceRow.querySelector("button");
+    button.textContent = taught ? "Forget" : "Teach it";
+    button.onclick = taught
+      ? async () => {
+        try { showVoice((await api("/api/voice/wake-teach", { forget: true })).taught); }
+        catch (error) { showFailure(error); }
+      }
+      : () => teachWakeVoice(showVoice);
+  };
+  showVoice(!!info.wake_voice);
+  body.appendChild(voiceRow);
 
   // The words themselves: any the listening model knows.
   const wordRow = el("div", "setting-row static wake-word-row", `<span class="what"><b>Wake word</b><span>What starts voice mode, here and with no page open. A greeting in front works too: “Hey”, “Hi” or “Okay”.</span></span><span class="side"><span class="word-edit"><span class="word-mic">${icon("mic")}</span><input type="text" maxlength="40" spellcheck="false" autocomplete="off" aria-label="Wake word"><button type="button" class="word-save" aria-label="Save the wake word" hidden>${icon("check")}</button></span></span>`);
@@ -18282,6 +18305,83 @@ function askInstall(packages, why, then) {
   form.querySelector(".sub").textContent = "Flash installs it into its own environment, on the computer it runs on.";
   form.querySelector("[data-cancel]").onclick = closeForm;
   form.querySelector(".install-host").appendChild(installWidget(packages, why, () => { closeForm(); if (then) then(); }));
+}
+
+// Teaching the wake word in the owner's voice: four sayings, each found by how loud the room gets and goes quiet
+// again, then sent to be kept. The dots fill as each is heard.
+async function teachWakeVoice(done) {
+  if (!canRecord) { toast("Listening needs this page opened on this computer, or over HTTPS"); return; }
+  let stream;
+  try { stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true } }); }
+  catch (_) { toast("Flash could not use the microphone. Allow it for this page, then try again."); return; }
+  const WANT = 4;
+  const form = openForm(`<h2>Teach it your voice</h2><p class="sub"></p><div class="teach-dots">${"<span></span>".repeat(WANT)}</div><div class="teach-level"><i></i></div><div class="dialog-buttons"><button type="button" class="btn" data-cancel>Cancel</button></div>`, async () => false);
+  const sub = form.querySelector(".sub");
+  const dots = [...form.querySelectorAll(".teach-dots span")];
+  const level = form.querySelector(".teach-level i");
+  const ctx = new AudioContext();
+  if (ctx.state === "suspended") await ctx.resume().catch(() => {});
+  const source = ctx.createMediaStreamSource(stream);
+  const tap = ctx.createScriptProcessor(2048, 1, 1);
+  const hush = ctx.createGain();
+  hush.gain.value = 0;
+  source.connect(tap); tap.connect(hush); hush.connect(ctx.destination);
+  const clips = [];
+  let floor = 0.004, current = [], before = [], speaking = false, quietFor = 0, loudFor = 0, finished = false;
+  const say = () => { sub.textContent = clips.length < WANT ? `Say “${wakeName()}”, then pause. ${clips.length ? `Again: ${WANT - clips.length} to go.` : ""}` : "Learning your voice…"; };
+  say();
+  const stop = () => {
+    finished = true;
+    tap.onaudioprocess = null;
+    stream.getTracks().forEach((t) => t.stop());
+    ctx.close().catch(() => {});
+  };
+  form.querySelector("[data-cancel]").onclick = () => { stop(); closeForm(); };
+  const join = (parts) => {
+    const out = new Int16Array(parts.reduce((n, part) => n + part.length, 0));
+    let at = 0;
+    for (const part of parts) { out.set(part, at); at += part.length; }
+    return out;
+  };
+  tap.onaudioprocess = async (e) => {
+    if (finished) return;
+    const raw = e.inputBuffer.getChannelData(0);
+    let sum = 0;
+    for (let i = 0; i < raw.length; i++) sum += raw[i] * raw[i];
+    const rms = Math.sqrt(sum / raw.length);
+    level.style.width = `${Math.min(100, rms * 900)}%`;
+    const part = toVoiceRate(raw, ctx.sampleRate);
+    const loud = rms > floor * 3.2 && rms > 0.012;
+    if (!speaking) {
+      floor = floor * 0.97 + Math.min(rms, 0.05) * 0.03;
+      before.push(part); if (before.length > 3) before.shift();
+      loudFor = loud ? loudFor + 1 : 0;
+      if (loudFor >= 2) { speaking = true; current = [...before]; quietFor = 0; }
+      return;
+    }
+    current.push(part);
+    quietFor = loud ? 0 : quietFor + 1;
+    const seconds = current.reduce((n, p) => n + p.length, 0) / VOICE_RATE;
+    if (quietFor >= 6 || seconds > 3.5) {
+      speaking = false; loudFor = 0; before = [];
+      if (seconds < 0.5 || seconds > 3.4) { sub.textContent = seconds > 3.4 ? "That ran on: say only the wake word, then stop." : "Didn't catch that. Once more."; return; }
+      clips.push(base64Of(new Uint8Array(join(current).buffer)));
+      dots[clips.length - 1].classList.add("on");
+      say();
+      if (clips.length >= WANT) {
+        stop();
+        try {
+          await api("/api/voice/wake-teach", { clips });
+          sub.textContent = `Done. It knows how you say “${wakeName()}”.`;
+          form.querySelector("[data-cancel]").textContent = "Close";
+          if (done) done(true);
+        } catch (error) {
+          richText(form.querySelector(".form-error"), error.message || String(error));
+          if (done) done(false);
+        }
+      }
+    }
+  };
 }
 
 function openForm(html, onSubmit) {

@@ -135,6 +135,15 @@ PAGE = WEB_DIR / "index.html"
 DESIGN_KIT = WEB_DIR / "designkit.js"
 
 
+def _wake_voice_taught() -> bool:
+    try:
+        from . import wake_voice
+
+        return wake_voice.taught()
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def _sandbox() -> dict:
     """The sandbox's state, for Settings."""
 
@@ -5206,6 +5215,7 @@ def status(ai) -> dict:
         "extension_updates": extensions.updates_on(),
         "call_interrupt": voice.interrupt_how("calls"),
         "wake_sensitivity": voice.wake_sensitivity(),
+        "wake_voice": _wake_voice_taught(),
         "wake_word": voice.wake_title(),
         # The scene actually in effect: a name that no longer finds one,
         # because the extension that brought it was removed, is none.
@@ -8770,6 +8780,25 @@ class Handler(BaseHTTPRequestHandler):
             if woke and voicehooks.ask("wake")["ignore"]:
                 woke = False
             return {"woke": woke}
+
+        if path == "/api/voice/wake-teach":
+            # The owner saying the wake word a few times, kept so it knows
+            # their voice (wake_voice). "forget" drops what it kept.
+            from . import wake_voice
+
+            if body.get("forget"):
+                wake_voice.forget()
+                return {"taught": False}
+            clips = []
+            for item in body.get("clips") or []:
+                try:
+                    clips.append(base64.b64decode(str(item), validate=True))
+                except (ValueError, TypeError):
+                    raise ValueError(
+                        "that recording did not arrive whole"
+                    ) from None
+            kept = wake_voice.teach(clips[:8])
+            return {"taught": True, **kept}
 
         if path == "/api/voice/hook":
             # A moment of voice mode, for the extensions in the middle of
