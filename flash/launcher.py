@@ -100,7 +100,7 @@ def _windows(target: Path, argv: list[str]) -> None:
         "$env:FLASH_LNK); $s.TargetPath = $env:FLASH_TARGET; "
         "$s.Arguments = $env:FLASH_ARGS; $s.IconLocation = $env:FLASH_ICON; "
         "$s.WorkingDirectory = $env:USERPROFILE; "
-        "$s.Description = 'Open Flash in your browser'; $s.Save()")
+        "$s.Description = 'Open Flash'; $s.Save()")
     args = subprocess.list2cmdline(argv[1:])
     env = {**os.environ, "FLASH_LNK": str(target),
            "FLASH_TARGET": argv[0], "FLASH_ARGS": args,
@@ -330,10 +330,12 @@ def refresh() -> bool:
         stamp = (FLASH_DIR / "window.stamp").read_text(encoding="utf-8")
     except OSError:
         stamp = ""
+    wants_window = os.environ.get("FLASH_WINDOW", "1") != "0"
     try:
-        if stamp and stamp == _window_stamp(base):
+        if stamp and stamp == _window_stamp(base) and wants_window:
             return False
-        if not stamp and source.read_text(encoding="utf-8") == _applescript(base) and not _swiftc():
+        if not stamp and source.read_text(encoding="utf-8") == _applescript(base) and \
+                (not wants_window or not _swiftc()):
             return False
     except OSError:
         pass
@@ -350,7 +352,7 @@ def _linux(target: Path, argv: list[str]) -> None:
     quoted = " ".join(f'"{a}"' if " " in a else a for a in argv)
     target.write_text(
         "[Desktop Entry]\nType=Application\n"
-        f"Name={NAME}\nComment=Open Flash in your browser\n"
+        f"Name={NAME}\nComment=Open Flash\n"
         f"Exec={quoted}\nIcon={_icon('flash-256.png')}\n"
         "Terminal=false\nCategories=Utility;Development;\n",
         encoding="utf-8")
@@ -366,7 +368,11 @@ def install() -> str:
     where = {"windows": "in the Start menu", "mac": "in ~/Applications",
              "linux": "in your applications menu"}[_host()]
     links = " It also opens flash:// links." if _host() == "mac" else ""
-    how = "in a window of its own" if _host() == "mac" and (FLASH_DIR / "window.stamp").exists() else "in your browser"
+    from .web import opens_in_window
+    if _host() == "mac":
+        how = "in a window of its own" if (FLASH_DIR / "window.stamp").exists() else "in your browser"
+    else:
+        how = "in a window of its own" if opens_in_window() else "in your browser"
     return f"Added {NAME} {where}: it opens Flash {how}.{links}"
 
 

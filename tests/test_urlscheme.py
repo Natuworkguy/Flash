@@ -110,7 +110,7 @@ def test_open_finds_the_running_web_ui_or_starts_one(monkeypatch):
 
     opened, served = [], []
     monkeypatch.setattr(web.webbrowser, "open", opened.append)
-    monkeypatch.setattr(web, "serve", lambda **kw: served.append(kw))
+    monkeypatch.setattr(web, "serve", lambda **kw: served.append({k: v for k, v in kw.items() if k != "opener"}))
 
     web.open_ui()
     assert opened == [] and served == [

@@ -30,6 +30,7 @@ import re
 import secrets
 import shlex
 import socket
+import shutil
 import subprocess  # nosec B404
 import sys
 import threading
@@ -6809,6 +6810,21 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
             browser, session.hub.owners()
         ), "remember": remembering()}
 
+    if name == "shortcut-window":
+        # Settings > General: the Flash shortcut opens Flash as an app of its own, or in the browser.
+        if arg in ("app", "browser"):
+            ai.set_config_var(WINDOW_SETTING, "1" if arg == "app" else "0")
+            from . import launcher
+
+            def remake() -> None:
+                try:
+                    if launcher.place().exists():
+                        launcher.install()
+                except Exception:  # noqa: BLE001 -- the setting is saved either way
+                    pass
+            threading.Thread(target=remake, daemon=True).start()
+        return {"window": opens_in_window(), "mac": sys.platform == "darwin"}
+
     if name == "routing":
         # Settings > Usage: each model's calls, health, the presets, and
         # how the cache, health routing and traces are set.
@@ -9483,6 +9499,47 @@ def running_url() -> Optional[str]:
         return None
 
 
+WINDOW_SETTING = "FLASH_WINDOW"
+APP_BROWSERS = {
+    "windows": [r"%ProgramFiles(x86)%\Microsoft\Edge\Application\msedge.exe",
+                r"%ProgramFiles%\Microsoft\Edge\Application\msedge.exe",
+                r"%ProgramFiles%\Google\Chrome\Application\chrome.exe",
+                r"%LocalAppData%\Google\Chrome\Application\chrome.exe",
+                r"%ProgramFiles%\BraveSoftware\Brave-Browser\Application\brave.exe"],
+    "linux": ["google-chrome", "google-chrome-stable", "chromium", "chromium-browser", "microsoft-edge",
+              "brave-browser"],
+}
+
+
+def opens_in_window() -> bool:
+    """Whether the Flash shortcut opens Flash as an app of its own (the
+    setting), not a browser tab."""
+
+    # A Mac has the Flash app for it; elsewhere a browser's app window, when asked for.
+    default = "1" if sys.platform == "darwin" else "0"
+    return (os.environ.get(WINDOW_SETTING) or default).strip() != "0"
+
+
+def open_page(url: str) -> None:
+    """URL in a window of its own when the setting asks for one and a
+    browser that can make one is here (Edge, Chrome, Brave or Chromium in
+    app mode), else in the browser. On a Mac the Flash app is the window."""
+
+    if opens_in_window() and sys.platform != "darwin":
+        kind = "windows" if os.name == "nt" else "linux"
+        for found in APP_BROWSERS[kind]:
+            path = os.path.expandvars(found) if kind == "windows" else shutil.which(found)
+            if path and os.path.exists(path):
+                try:
+                    subprocess.Popen([path, f"--app={url}", "--window-size=1280,860"],  # nosec B603
+                                     stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                     stderr=subprocess.DEVNULL, start_new_session=True)
+                    return
+                except OSError:
+                    continue
+    webbrowser.open(url)
+
+
 def open_ui(port: int = DEFAULT_PORT, lan: bool = False,
             prompt: str = "") -> None:
     """flash://open: the web UI in the browser, the one already running
@@ -9493,15 +9550,15 @@ def open_ui(port: int = DEFAULT_PORT, lan: bool = False,
     tail = f"#prompt={urllib.parse.quote(prompt)}" if prompt else ""
     url = running_url()
     if url:
-        console.print(Text("Opening Flash in your browser.", style=DIM))
-        webbrowser.open(url + tail)
+        console.print(Text("Opening Flash.", style=DIM))
+        open_page(url + tail)
         return
-    serve(port=port, open_browser=True, lan=lan, **({"tail": tail} if tail else {}))
+    serve(port=port, open_browser=True, lan=lan, opener=open_page, **({"tail": tail} if tail else {}))
 
 
 def serve(
     port: int = DEFAULT_PORT, open_browser: bool = True, lan: bool = False,
-    tail: str = "",
+    tail: str = "", opener=None,
 ) -> None:
     """Run the web UI until Ctrl+C."""
 
@@ -9522,7 +9579,7 @@ def serve(
             f"{server.port}:localhost:{server.port} ...) and open the "
             "link above where you are.", style=DIM))
     elif open_browser:
-        webbrowser.open(server.url + tail)
+        (opener or webbrowser.open)(server.url + tail)
 
     running = [server]
     try:
