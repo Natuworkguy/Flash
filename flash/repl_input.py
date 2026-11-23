@@ -1613,6 +1613,19 @@ def print_above(show: Callable[[], None]) -> None:
         show()
 
 
+def print_at_prompt(show: Callable[[], None]) -> None:
+    """Run SHOW above the prompt: now if one is up, else when the next one
+    comes, never in the middle of a turn's output (a note from a thread
+    in the background: it can wait for the prompt)."""
+
+    app = _session.app if _session is not None else None
+    if app is not None and getattr(app, "loop", None) is not None and app.is_running:
+        print_above(show)
+        return
+    with _held_lock:
+        _held.append(show)
+
+
 # The dock ---------------------------------------------------------------
 #
 # While a turn runs, the input box and the status bar stay at the foot of

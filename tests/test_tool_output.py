@@ -13,6 +13,7 @@ def screen(monkeypatch):
     out = Console(file=io.StringIO(), width=120, force_terminal=False)
     monkeypatch.setattr(theme, "console", out)
     monkeypatch.setattr(theme, "_collapsed", [])
+    monkeypatch.setattr(theme, "_expanded_rows", 0)
     return out
 
 
@@ -238,3 +239,31 @@ class TestKeysInTheLoop:
         self.run(monkeypatch, [TOGGLE_AUTO, EXPAND])
 
         assert sent == []
+
+
+class TestCtrlOAgain:
+    def test_a_second_press_cuts_it_short_again(self, monkeypatch):
+        out = Console(file=io.StringIO(), width=120, force_terminal=True, height=60)
+        monkeypatch.setattr(theme, "console", out)
+        monkeypatch.setattr(theme, "_collapsed", [("Bash(ls)", "a\nb\nc")])
+        monkeypatch.setattr(theme, "_expanded_rows", 0)
+        theme.expand_collapsed()
+        assert "Ctrl+O again" in out.file.getvalue()
+        rows = theme._expanded_rows
+        assert rows == 5
+        theme.expand_collapsed()
+        assert out.file.getvalue().endswith(f"\x1b[{rows}F\x1b[J")
+        assert theme._expanded_rows == 0
+        # Pressed a third time, the whole output again.
+        theme.expand_collapsed()
+        assert theme._expanded_rows == 5
+
+    def test_anything_printed_since_keeps_the_block(self, monkeypatch):
+        out = Console(file=io.StringIO(), width=120, force_terminal=True, height=60)
+        monkeypatch.setattr(theme, "console", out)
+        monkeypatch.setattr(theme, "_collapsed", [("Bash(ls)", "a")])
+        monkeypatch.setattr(theme, "_expanded_rows", 0)
+        theme.expand_collapsed()
+        theme.forget_expanded()
+        theme.expand_collapsed()
+        assert "\x1b[J" not in out.file.getvalue()
