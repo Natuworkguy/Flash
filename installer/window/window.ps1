@@ -3,9 +3,8 @@
 #     Set-SetupStep INDEX STATE [NOTE]                  a step, from 0: wait, run, ok, warn, ask or fail
 #     Complete-SetupWindow NOTE COMMAND                 all done, and what its Open button starts (an array)
 #     Stop-SetupWindow WHY                              it stopped
-# The page (index.html beside this file) reads status.json, which these write; serve.py serves both on this
-# computer only. It opens as a window of its own in Edge (every Windows has it) or Chrome, in app mode. Nothing
-# here ever stops an install: when the window can't open, the installer carries on in the terminal.
+# The installer app (installer\windows\InstallFlash.ps1, a native window) sets SETUP_WINDOW_DIR and reads the
+# status.json these write there. Without it (run in a terminal), nothing here does anything.
 
 $Script:Window = $null
 $Script:WindowState = $null
@@ -19,41 +18,17 @@ function Write-SetupStatus {
 }
 
 function Open-SetupWindow([string]$Product, [string]$Accent, [string]$Python, [string[]]$Titles) {
+    # Only for the installer app (installer\windows), which shows the steps in a native window and says where to
+    # write them in SETUP_WINDOW_DIR. Run in a terminal, the installer shows its steps there.
     try {
-        if ($env:XN_NO_WINDOW -or [Console]::IsOutputRedirected) { return $false }
-        $kit = $PSScriptRoot
-        if (-not $kit -or -not (Test-Path (Join-Path $kit "index.html"))) { return $false }
-        $browser = @(
-            "${env:ProgramFiles(x86)}\Microsoft\Edge\Application\msedge.exe",
-            "$env:ProgramFiles\Microsoft\Edge\Application\msedge.exe",
-            "$env:ProgramFiles\Google\Chrome\Application\chrome.exe",
-            "$env:LOCALAPPDATA\Google\Chrome\Application\chrome.exe"
-        ) | Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1
-        if (-not $browser) { return $false }
-
-        $dir = Join-Path ([IO.Path]::GetTempPath()) ("setup-window-" + [Guid]::NewGuid().ToString("N").Substring(0, 8))
-        New-Item -ItemType Directory -Force $dir | Out-Null
-        foreach ($f in "index.html", "serve.py", "film.mp4") { Copy-Item (Join-Path $kit $f) $dir }
-        $Script:Window = $dir
+        if (-not $env:SETUP_WINDOW_DIR -or $env:XN_NO_WINDOW) { return $false }
+        New-Item -ItemType Directory -Force $env:SETUP_WINDOW_DIR | Out-Null
+        $Script:Window = $env:SETUP_WINDOW_DIR
         $Script:WindowState = [ordered]@{
             product = $Product; accent = $Accent; done = $false; doneNote = ""
             steps = @($Titles | ForEach-Object { [ordered]@{ title = $_; state = "wait"; note = "" } })
         }
         Write-SetupStatus
-
-        # The server outlives the installer, so the page can still say it's done, and start the app.
-        $portFile = Join-Path $dir "port"
-        Start-Process -FilePath $Python -ArgumentList "`"$(Join-Path $dir 'serve.py')`"", "`"$dir`"" `
-            -WindowStyle Hidden -RedirectStandardOutput $portFile | Out-Null
-        $port = $null
-        for ($i = 0; $i -lt 40 -and -not $port; $i++) {
-            Start-Sleep -Milliseconds 100
-            if (Test-Path $portFile) { $port = (Get-Content $portFile -ErrorAction SilentlyContinue | Select-Object -First 1) }
-        }
-        if (-not $port) { $Script:Window = $null; return $false }
-        $url = "http://127.0.0.1:$($port.Trim())/"
-        Start-Process -FilePath $browser -ArgumentList "--app=$url", "--window-size=980,640", `
-            "--user-data-dir=`"$(Join-Path $dir 'profile')`"", "--no-first-run", "--no-default-browser-check" | Out-Null
         return $true
     } catch {
         $Script:Window = $null

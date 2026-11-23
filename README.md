@@ -52,7 +52,12 @@ flash --web --lan   # ... and on your phone, with a QR code to scan
 ```
 
 The installer uses [pipx](https://pipx.pypa.io/); on Windows, run
-`install.ps1` in PowerShell. `--dev` (`-Dev` on Windows) installs the
+`install.ps1` in PowerShell. Run in a terminal, it shows its progress
+there. To install without a terminal, there is an installer app: *Install
+Flash.app* on a Mac (`installer/mac/build.sh` makes it; it is also built by
+CI) and *Install Flash.cmd* on Windows (`installer/windows`), which set
+Flash up in a native window of their own, asking for a password in the
+system's own dialog when a step needs one. `--dev` (`-Dev` on Windows) installs the
 dev branch, where changes land first. It also adds a Flash shortcut (the Start menu on
 Windows, ~/Applications on a Mac, the applications menu on Linux) that
 opens the web UI in your browser, starting it out of sight if it is not

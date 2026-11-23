@@ -177,7 +177,12 @@
     step();
   }
 
+  // In the installer app the window is native: it hands the status in (setupStatus) and handles Open and Close.
+  const native = window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.setup;
+  window.setupStatus = (s) => { try { draw(s); } catch (e) { /* a status half written: the next one comes */ } };
+
   async function poll() {
+    if (native) return;
     try {
       const r = await fetch('status.json?t=' + Date.now(), { cache: 'no-store' });
       if (r.ok) draw(await r.json());
@@ -186,7 +191,8 @@
   }
   poll();
 
-  const post = path => fetch(path, { method: 'POST' }).catch(() => {});
+  const post = path => native ? Promise.resolve(native.postMessage(path.slice(1)))
+    : fetch(path, { method: 'POST' }).catch(() => {});
   $('open').onclick = async () => { await post('/open'); setTimeout(() => window.close(), 300); };
   $('close').onclick = async () => { await post('/close'); window.close(); };
   if (matchMedia('(prefers-reduced-motion: reduce)').matches) $('film').pause();

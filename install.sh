@@ -21,7 +21,7 @@ LOG="$(mktemp "${TMPDIR:-/tmp}/flash-install.XXXXXX")"
 STEP=0
 STEPS=8
 NOTES=()   # what didn't work but needn't stop it, said again at the end
-# While the setup window is open (installer/window), the steps show there and the terminal stays quiet.
+# In the installer app (SETUP_WINDOW_DIR set), the steps show in its window and the output goes to the log.
 QUIET=""
 WINDOW=""
 TITLES=("Getting Flash" "Finding Python" "Ollama, for models on this computer" "pipx, to keep Flash in its own space"
@@ -226,6 +226,11 @@ browser_feed() {
 # A command that may ask for a password (sudo, Ollama's own installer): no
 # spinner over the prompt, and its output kept in the log.
 asking() {
+    # In the installer app there is no terminal to type a password in: sudo asks in a dialog (SUDO_ASKPASS).
+    if [ -n "${SUDO_ASKPASS:-}" ] && [ "${1:-}" = "sudo" ]; then
+        shift
+        set -- sudo -A "$@"
+    fi
     if [ -n "$QUIET" ]; then
         # The window says to look here; the terminal says what for.
         window_set $((STEP - 1)) ask
@@ -328,15 +333,13 @@ fi
 done_ok "$($PYTHON --version 2>&1)"
 
 # From here on, the setup window shows the steps, when there is a screen to show it on.
-if [ -n "$FANCY" ] && [ -f "$REPO_DIR/installer/window/window.sh" ]; then
+if [ -n "${SETUP_WINDOW_DIR:-}" ] && [ -f "$REPO_DIR/installer/window/window.sh" ]; then
     # shellcheck source=/dev/null
     . "$REPO_DIR/installer/window/window.sh"
     if window_open "Flash" "#ff8a5c" "$PYTHON" "${TITLES[@]}"; then
         window_set 0 ok "$BRANCH"
         window_set 1 ok "$($PYTHON --version 2>&1)"
         QUIET=1
-        echo "  Flash is setting up in its own window. Leave this terminal open until it's done."
-        echo ""
     fi
 fi
 
