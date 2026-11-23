@@ -6936,8 +6936,8 @@ def _voice_models() -> None:
                              Text(""), Text(""))
             current = choice.name == in_use
             have = voice.model_installed(kind, choice.name)
-            ready = "ready" if voice.is_extension(choice.name) else \
-                "downloaded"
+            ready = "ready" if voice.is_extension(choice.name) \
+                or voice.siri.is_siri(choice.name) else "downloaded"
             grid.add_row(
                 Text("  ●" if current else "   ", style=ACCENT),
                 Text(choice.name, style=ACCENT if current else ""),
