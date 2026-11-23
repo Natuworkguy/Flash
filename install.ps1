@@ -350,15 +350,13 @@ try {
 
     # From here on, the setup window shows the steps.
     $WindowKit = Join-Path $RepoDir "installer\window\window.ps1"
-    if ($Script:Fancy -and (Test-Path $WindowKit)) {
+    if ($env:SETUP_WINDOW_DIR -and (Test-Path $WindowKit)) {
         . $WindowKit
         $PythonPath = (Get-Command $Python).Source
         if (Open-SetupWindow "Flash" "#ff8a5c" $PythonPath $Script:Titles) {
             Set-SetupStep 0 "ok" $Branch
             Set-SetupStep 1 "ok" $PythonVersion
             $Script:Quiet = $true
-            Write-Host "  Flash is setting up in its own window. Leave this terminal open until it's done."
-            Write-Host ""
         }
     }
 

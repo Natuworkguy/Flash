@@ -88,6 +88,35 @@ jobs:
         shell: powershell
         run: ./tests/installer/check-install-ps1.ps1
 
+      - name: Check the installer app
+        shell: powershell
+        run: |
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path installer/windows/InstallFlash.ps1), [ref]$null, [ref]$errors) | Out-Null
+          if ($errors) { $errors | ForEach-Object { Write-Error $_.Message }; exit 1 }
+      - name: Package the installer app
+        shell: powershell
+        run: |
+          New-Item -ItemType Directory -Force "dist/Install Flash" | Out-Null
+          Copy-Item "installer/windows/Install Flash.cmd", installer/windows/InstallFlash.ps1, install.ps1 "dist/Install Flash/"
+          Compress-Archive -Path "dist/Install Flash" -DestinationPath "dist/Install Flash (Windows).zip" -Force
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Install Flash (Windows)
+          path: dist/Install Flash (Windows).zip
+
+  installer-mac:
+    name: Mac installer app
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build Install Flash.app
+        run: installer/mac/build.sh dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Install Flash (macOS)
+          path: dist/Install Flash.zip
+
   test-windows:
     name: Test (Windows)
     needs: [lint-ruff, lint-flake8, lint-bandit]
