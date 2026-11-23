@@ -17,6 +17,7 @@ from rich.console import Console
 from rich.control import Control
 from rich.live import Live as _RichLive
 from rich.markdown import Markdown
+from rich.cells import cell_len
 from rich.text import Text
 
 from . import progress
@@ -424,6 +425,7 @@ def clear_collapsed() -> None:
     """Forget the cut outputs, once a new turn starts making its own."""
 
     _collapsed.clear()
+    forget_expanded()
 
 
 def tool_line(label: str) -> None:
@@ -711,22 +713,59 @@ def tool_result(text: str, *, style: str = DIM) -> None:
         console.print(Text(f"     {line}", style=style))
 
 
-def expand_collapsed() -> None:
-    """Print, whole, every tool output this turn cut short."""
+# Rows the last Ctrl+O printed, while nothing has been printed since: a
+# second Ctrl+O takes them off the screen again. 0 when there is nothing
+# to take back.
+_expanded_rows = 0
 
+
+def forget_expanded() -> None:
+    """Something else was printed (a message, a turn): Ctrl+O's block is
+    no longer the last thing on screen, so it is no longer taken back."""
+
+    global _expanded_rows
+    _expanded_rows = 0
+
+
+def _rows(text: str) -> int:
+    width = max(20, console.width or 80)
+    return max(1, -(-cell_len(text) // width))
+
+
+def expand_collapsed() -> None:
+    """Ctrl+O: print, whole, every tool output this turn cut short; pressed
+    again, take that back off the screen, leaving them cut short."""
+
+    global _expanded_rows
+    if _expanded_rows:
+        rows, _expanded_rows = _expanded_rows, 0
+        height = getattr(console, "height", 0) or 0
+        if console.is_terminal and rows < max(1, height - 2):
+            # Up to where the block began, and clear from there down.
+            console.file.write(f"\x1b[{rows}F\x1b[J")
+            console.file.flush()
+        else:
+            dim("Cut short again (the full output has scrolled out of reach).")
+        return
     if not _collapsed:
         dim("No tool output was cut short this turn.")
         return
 
+    rows = 0
     for label, text in _collapsed:
         head = Text()
         head.append(f"{BULLET} ", style=ACCENT)
         head.append(label or "Tool output")
         console.print(head)
+        rows += _rows(head.plain)
 
         for index, line in enumerate(text.splitlines()):
             lead = f"  {BRANCH}  " if index == 0 else "     "
             console.print(Text(lead + line, style=DIM))
+            rows += _rows(lead + line)
+    hint = Text("  Ctrl+O again to cut it short.", style=DIM)
+    console.print(hint)
+    _expanded_rows = rows + 1
 
 
 def tool_diff(diff_lines: list[str], *, more: int = 0) -> None:

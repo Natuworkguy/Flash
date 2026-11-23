@@ -101,6 +101,7 @@ from .sysprompt import (
     model_sees_images,
 )
 from .theme import (
+    forget_expanded,
     ACCENT,
     ACCENT_ANSI,
     BRANCH,
@@ -7454,13 +7455,14 @@ def _main() -> None:
 
     # Notes from these threads wait for the first prompt, so none lands in
     # the middle of the opening screen as it is painted.
-    from .repl_input import hold_until_prompt
+    from .repl_input import hold_until_prompt, print_at_prompt
 
     hold_until_prompt()
 
     threading.Thread(target=keepalive.take_over_if_wanted, kwargs={
-        # Said above the prompt, which may already be drawn.
-        "say": lambda said: print_above(
+        # Said above the prompt, now or when it next comes up: never in
+        # the middle of a reply being written.
+        "say": lambda said: print_at_prompt(
             lambda: console.print(Text(f"  {said}", style=DIM)))},
         daemon=True).start()
     startup.say("Connecting your tools")
@@ -7533,6 +7535,9 @@ def _main() -> None:
         if key == TOGGLE_AUTO:
             set_mode(next_mode())
         elif key == EXPAND:
+            # Mid-turn the reply goes on printing below: never take rows
+            # back from under it, only print the outputs again.
+            forget_expanded()
             expand_collapsed()
 
     asides: list = []
@@ -7697,6 +7702,10 @@ def _main() -> None:
                 if uin == EXPAND:
                     expand_collapsed()
                     continue
+                # Anything else said or done prints below Ctrl+O's block: a
+                # second Ctrl+O no longer takes it back.
+                if uin not in (WAKE,):
+                    forget_expanded()
 
                 if uin == WAKE and _ring_waiting():
                     # A spark calling, or a call answered on the desktop.
