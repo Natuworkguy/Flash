@@ -2360,8 +2360,19 @@ def hear_wake(stream: str, pcm: bytes, end: bool = False) -> tuple[bool, str]:
     # little like it (a TV, a cough, a word with the same vowels). So the
     # last few seconds are heard again, with every word it knows, and it
     # wakes only if the name is really in them.
-    if woke and not _confirm_wake(recent):
-        woke = False
+    # With the owner's own sayings of it kept (wake_voice), a close match to
+    # those can vouch for a phrase the free hearing missed in a noisy room,
+    # and a very close one wakes Flash even when the model missed it.
+    try:
+        from . import wake_voice
+
+        own = wake_voice.verdict(recent)
+    except Exception:  # noqa: BLE001
+        own = ""
+    if woke and own != "tight" and not _confirm_wake(recent):
+        woke = own == "loose"
+    elif not woke and own == "tight":
+        woke = True
     if woke:
         with _wake_lock:
             if stream in _wake_audio:
