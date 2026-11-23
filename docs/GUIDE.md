@@ -1206,6 +1206,15 @@ the reading. They need a package of their own too:
 pipx inject flash kokoro-onnx      # or: pip install "flash[kokoro]"
 ```
 
+On a Mac, the Siri voices you have downloaded are in the same list, under
+"Siri, built into this Mac", and `/voice models` shows them. Download one
+in System Settings, Accessibility, Spoken Content, System Voice, Manage
+Voices, and it shows up within half a minute. macOS keeps them out of
+`say` and AppleScript, so Flash runs a small helper with `swift` to reach
+them, which needs Xcode's command line tools (`xcode-select --install`).
+There is nothing to download in Flash, and nothing to install with pip.
+Siri cannot be used to listen: macOS gives programs no way to do that.
+
 For listening that hears far more accurately, pick a Moonshine model in
 Settings, Voice models, or `/voice pull moonshine-small`: Tiny, Small or
 Medium. They stream, so the words on screen while you talk are already
