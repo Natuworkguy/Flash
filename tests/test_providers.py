@@ -434,3 +434,12 @@ def test_a_crashed_provider_says_its_error_not_traceback():
     assert _what_failed(trace) == (  # nosec B101
         "TypeError: Messages.stream() got an unexpected keyword argument 'fallbacks'")
     assert _what_failed("  no key set \n") == "no key set"  # nosec B101
+
+
+def test_a_model_written_another_way_keeps_what_it_can_do(monkeypatch):
+    # The list says opus-5.5 can see; picked as opus-5-5 or claude-opus-5-5, it still can.
+    listed = [{"name": "opus-5.5", "capabilities": ["completion", "tools", "vision"]}]
+    monkeypatch.setattr(providers, "provider_models", lambda provider, wait=True: listed)
+    for picked in ("@claude/opus-5.5", "@claude/opus-5-5", "@claude/claude-opus-5-5", "@claude/Opus-5.5"):
+        assert "vision" in providers.show_payload(picked)["capabilities"], picked
+    assert "vision" not in providers.show_payload("@claude/haiku-9")["capabilities"]
