@@ -112,6 +112,8 @@ jobs:
       - uses: actions/checkout@v4
       - name: Build Install Flash.app
         run: installer/mac/build.sh dist
+      - name: Compile the Flash app's window
+        run: swiftc -O -o /tmp/flash-window flash/window.swift -framework Cocoa -framework WebKit
       - uses: actions/upload-artifact@v4
         with:
           name: Install Flash (macOS)
