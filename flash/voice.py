@@ -28,7 +28,7 @@ from typing import Optional
 from urllib.error import URLError
 from urllib.request import Request, urlopen
 
-from . import serif, visuals
+from . import serif, siri, visuals
 from .paths import MODELS_DIR
 
 
@@ -462,11 +462,19 @@ def extension_choices(kind: str) -> list[Choice]:
             for e, s in extensions.speech_models(kind)]
 
 
+def siri_choices() -> list[Choice]:
+    """The Siri voices installed on this Mac: nothing to download, so no
+    size. None off a Mac, or with none installed."""
+
+    return [Choice(v["name"], 0, v["label"]) for v in siri.voices()]
+
+
 def offered(kind: str) -> tuple[Choice, ...]:
     """Every model of KIND Settings offers: extensions' first, then
-    Flash's own."""
+    Flash's own, then this Mac's Siri voices."""
 
-    return (*extension_choices(kind), *KINDS[kind])
+    return (*extension_choices(kind), *KINDS[kind],
+            *(siri_choices() if kind == "speaking" else ()))
 
 
 def engine_of(name: str) -> str:
@@ -475,6 +483,8 @@ def engine_of(name: str) -> str:
 
     if is_extension(name):
         return str(name)[1:].split("/", 1)[0]
+    if siri.is_siri(name):
+        return "Siri"
     if is_phonon(name):
         return "Phonon"
     if is_kokoro(name):
@@ -491,7 +501,8 @@ def engine_label(name: str) -> str:
     if is_extension(name):
         return f"From the {engine_of(name)} extension"
     # The voices to speak with, ranked: the best, and the second best.
-    ranked = {"Phonon": "Phonon, the best", "Kokoro": "Kokoro, second best"}
+    ranked = {"Phonon": "Phonon, the best", "Kokoro": "Kokoro, second best",
+              "Siri": "Siri, built into this Mac"}
     return ranked.get(engine_of(name), engine_of(name))
 
 
@@ -584,6 +595,8 @@ def listening_installed(name: str) -> bool:
 def voice_installed(name: str) -> bool:
     if is_extension(name):
         return _extension_speech(name, "speaking") is not None
+    if siri.is_siri(name):
+        return siri.installed(name)
     if is_phonon(name):
         return name[len(PHONON):] in PHONON_VOICES and all(
             path.is_file() for path in phonon_paths())
@@ -622,9 +635,11 @@ def missing_packages() -> list[str]:
 
     missing = []
 
-    # The voice in use decides which speaks: Piper, Kokoro or Phonon.
+    # The voice in use decides which speaks: Piper, Kokoro or Phonon. A
+    # Siri voice is the Mac's own: no package.
     speaking = (
-        ("kokoro_onnx", KOKORO_PACKAGE) if is_kokoro(piper_voice())
+        None if siri.is_siri(piper_voice())
+        else ("kokoro_onnx", KOKORO_PACKAGE) if is_kokoro(piper_voice())
         else ("ptts", PHONON_PACKAGE) if is_phonon(piper_voice())
         else ("piper", "piper-tts")
     )
@@ -636,7 +651,7 @@ def missing_packages() -> list[str]:
     for module, package in (
         ("vosk", "vosk"),
         *hearing,
-        speaking,
+        *([speaking] if speaking else []),
         ("sounddevice", "sounddevice"),
     ):
         try:
@@ -810,6 +825,9 @@ def download_voice(
     if voice_installed(name):
         return ""
 
+    if siri.is_siri(name):
+        # Macs download them, in System Settings.
+        return siri.HOW_TO_GET
     if is_kokoro(name):
         return _download_kokoro(on_progress, stop)
     if is_phonon(name):
@@ -975,6 +993,10 @@ def remove_model(kind: str, name: str) -> None:
         raise ValueError(
             f"{name} comes with an extension: remove the extension to take "
             "it out.")
+    if siri.is_siri(name):
+        raise ValueError(
+            f"{name} belongs to macOS: remove it in System Settings, "
+            "Accessibility, Spoken Content, System Voice, Manage Voices.")
     (remove_listening if kind == "listening" else remove_voice)(name)
 
 
@@ -1541,6 +1563,8 @@ def _load_speaker():
                                "gone. Pick another voice.")
         voice = _ExtensionVoice(*found)
         return voice, voice.rate
+    if siri.is_siri(name):
+        return _SiriVoice(name), SIRI_RATE
     if is_kokoro(name):
         if _speaker is None or _speaker[0] != name:
             _speaker = (name, _KokoroVoice(name), KOKORO_RATE)
@@ -1664,7 +1688,8 @@ def _pcm_chunks(voice, text: str, rate: int = 22050):
             not humanvoice.pieces(text)[1]:
         return
 
-    whole = isinstance(voice, (_KokoroVoice, _PhononVoice, _ExtensionVoice))
+    whole = isinstance(voice, (_KokoroVoice, _PhononVoice, _ExtensionVoice,
+                               _SiriVoice))
     style = STYLES[voice_style()]
     if not style.feeling and not whole and text == humanvoice.strip(text):
         yield from _said(voice, fit_for_voice(text), {})
@@ -1813,6 +1838,30 @@ class _ExtensionVoice:
         return pcm
 
 
+SIRI_RATE = 48000
+
+
+class _SiriVoice:
+    """A Siri voice of this Mac, speaking as a Piper voice is asked to. It
+    keeps its own delivery: only the pace is passed on."""
+
+    rate = SIRI_RATE
+
+    def __init__(self, name: str) -> None:
+        if not siri.installed(name):
+            raise RuntimeError(f"{name} is not installed. {siri.HOW_TO_GET}")
+        self.name = name
+
+    def pcm(self, text: str, pace: float = 1.0) -> bytes:
+        try:
+            pcm, rate = siri.speak_pcm(self.name, text, pace)
+        except siri.SiriError as exc:
+            raise RuntimeError(str(exc)) from None
+        if rate != self.rate:
+            pcm = _resample(pcm, rate, self.rate)
+        return pcm
+
+
 def _resample(pcm: bytes, rate: int, wanted: int) -> bytes:
     """16-bit mono PCM at RATE, at WANTED instead: the nearest sample."""
 
@@ -1831,7 +1880,8 @@ def _said(voice, text: str, settings: dict):
     in Kokoro or an extension's voice, which take the pace and leave the
     rest."""
 
-    if isinstance(voice, (_KokoroVoice, _PhononVoice, _ExtensionVoice)):
+    if isinstance(voice, (_KokoroVoice, _PhononVoice, _ExtensionVoice,
+                          _SiriVoice)):
         yield voice.pcm(text, settings.get("length_scale", 1.0))
         return
 
@@ -2376,6 +2426,8 @@ def _other_speaker(name: str):
         return _KokoroVoice(name), KOKORO_RATE
     if is_phonon(name):
         return _PhononVoice(name), PHONON_RATE
+    if siri.is_siri(name):
+        return _SiriVoice(name), SIRI_RATE
     if is_extension(name):
         found = _extension_speech(name, "speaking")
         if found is None:

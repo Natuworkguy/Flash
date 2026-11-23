@@ -25,6 +25,7 @@ from flash import (
     screenglow,
     sessions,
     showcase,
+    siri,
     skills,
     skilltrials,
     sparkcalls,
@@ -106,6 +107,14 @@ def nothing_opens_on_screen(monkeypatch):
             super().__init__(args, *rest, **kwargs)
 
     monkeypatch.setattr(subprocess, "Popen", NoOpeners)
+
+
+@pytest.fixture(autouse=True)
+def no_siri_helper(monkeypatch):
+    """No test starts the Siri voice helper on the developer's Mac: there
+    are no Siri voices unless a test says which."""
+
+    monkeypatch.setattr(siri, "voices", lambda refresh=False: [])
 
 
 @pytest.fixture(autouse=True)

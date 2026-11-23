@@ -1690,6 +1690,7 @@ body.spark-calling #on-call:not([hidden]) { display: flex; animation: rise-far 0
 .vm-style span { font-size: 12px; color: var(--text-3); line-height: 1.35; }
 .vm-style.on { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, var(--surface)); }
 .vm-hear { align-self: center; }
+.vm-siri { margin: 8px 2px 0; }
 .vm-row { display: flex; align-items: center; gap: 12px; padding: 11px 12px 11px 14px; }
 .vm-row + .vm-row { border-top: 1px solid var(--border); }
 .vm-mark { width: 16px; flex: none; color: var(--accent); display: grid; place-items: center; }
@@ -16511,8 +16512,8 @@ async function drawVoiceModels(box = document.querySelector(".voice-models")) {
       const fetching = r.downloading && r.downloading.kind === kind && r.downloading.name === m.name;
       const row = list.appendChild(el("div", "vm-row" + (m.current ? " current" : ""), `<span class="vm-mark">${m.current ? icon("check") : ""}</span><span class="vm-what"><b></b><small></small></span><span class="vm-act"></span>`));
       row.dataset.key = `${kind}:${m.name}`;
-      // An extension's has no download to size.
-      row.querySelector("b").innerHTML = m.extension ? esc(m.label) : `${fmtBytes(m.size)} <span class="vm-dot">&bull;</span> ${esc(m.label)}`;
+      // An extension's or the Mac's own has no download to size.
+      row.querySelector("b").innerHTML = m.extension || m.system ? esc(m.label) : `${fmtBytes(m.size)} <span class="vm-dot">&bull;</span> ${esc(m.label)}`;
       row.querySelector("small").textContent = m.name;
       const act = row.querySelector(".vm-act");
       if (fetching) { downloadingSlot(act, "Downloading"); continue; }
@@ -16529,8 +16530,9 @@ async function drawVoiceModels(box = document.querySelector(".voice-models")) {
         catch (error) { pick.disabled = false; showFailure(error); }
       };
       act.appendChild(pick);
-      // An extension's goes with the extension, not from here.
-      if (m.installed && !m.extension) {
+      // An extension's goes with the extension, and a Siri voice with macOS,
+      // not from here.
+      if (m.installed && !m.extension && !m.system) {
         const drop = button("icon-btn", "x", `Remove, freeing ${fmtBytes(m.size)}`, "", async () => {
           if (!(await confirmPop(drop, { title: kind === "listening" ? "Remove this listening model?" : "Remove this voice?", text: `Deletes ${m.name} and frees ${fmtBytes(m.size)}. You can download it again later.`, yes: "Remove" }))) return;
           try { await command("voice-model-remove", m.name, null, { kind }); drawVoiceModels(box); } catch (error) { showFailure(error); }
@@ -16538,6 +16540,8 @@ async function drawVoiceModels(box = document.querySelector(".voice-models")) {
         act.appendChild(drop);
       }
     }
+    // No Siri voices here: how to get some.
+    if (kind === "speaking" && r.siri_note) list.after(el("p", "settings-sub vm-siri", esc(r.siri_note)));
   }
 }
 
