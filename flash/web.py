@@ -5435,6 +5435,8 @@ def voice_models(session: "Session") -> dict:
                 "engine": voice.engine_label(c.name),
                 # An extension's: nothing to download or delete.
                 "extension": voice.is_extension(c.name),
+                # This Mac's own (Siri's): the same.
+                "system": voice.siri.is_siri(c.name),
                 "installed": getattr(voice, installed)(c.name),
                 "current": c.name == in_use,
                 # A Phonon or Kokoro voice or a Moonshine model, with
@@ -5459,6 +5461,8 @@ def voice_models(session: "Session") -> dict:
         "listening": listed("listening"),
         "speaking": listed("speaking"),
         "downloading": {"kind": job[0], "name": job[1]} if job else None,
+        # Why there are no Siri voices to pick, and how to get some.
+        "siri_note": voice.siri.note(),
         "missing": voice.web_missing(),
         "install": voice.install_hint(),
         # How the voice delivers what it says.

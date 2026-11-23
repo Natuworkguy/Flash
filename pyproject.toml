@@ -45,6 +45,7 @@ flash = [
     "thinking_states.json",
     "suggestions.json",
     "calltap.swift",
+    "siri_voice.swift",
     "window.swift",
     "backgrounds/*.scene",
     "games/*.html",
