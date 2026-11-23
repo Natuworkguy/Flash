@@ -34,6 +34,7 @@ import base64
 import itertools
 import json
 import os
+import re
 import subprocess  # nosec B404 -- running the extension's program
 import threading
 import time
@@ -371,10 +372,31 @@ def loading() -> list[dict]:
                 for name in sorted(_asking)]
 
 
+def _same_name(provider: str, name: str) -> str:
+    """NAME as it compares: no case, a version's dot as a dash, and without
+    the provider's own name in front (claude-opus-5-5 is opus-5.5)."""
+
+    n = re.sub(r"(?<=\d)\.(?=\d)", "-", str(name).strip().lower())
+    for lead in (provider.lower() + "-", provider.lower() + "/"):
+        if n.startswith(lead):
+            n = n[len(lead):]
+    return n
+
+
 def _entry(model: str) -> dict:
+    """What MODEL's provider listed for it. Found however its version is
+    written (opus-5.5, opus-5-5, claude-opus-5-5): a model picked by
+    another spelling than the list's is still the same model, with what
+    it can do, not a bare one that seems unable to see."""
+
     provider, name = split(model)
+    listed = provider_models(provider)
+    exact = next((e for e in listed if str(e["name"]) == name), None)
+    if exact is not None:
+        return exact
+    want = _same_name(provider, name)
     return next(
-        (e for e in provider_models(provider) if str(e["name"]) == name),
+        (e for e in listed if _same_name(provider, str(e["name"])) == want),
         {"name": name},
     )
 

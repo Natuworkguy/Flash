@@ -34,7 +34,7 @@ final class App: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDele
         web = WKWebView(frame: .zero, configuration: config)
         web.navigationDelegate = self
         web.uiDelegate = self
-        web.allowsMagnification = true
+        web.allowsMagnification = false
         window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1180, height: 820),
                           styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
                           backing: .buffered, defer: false)
@@ -208,6 +208,9 @@ final class App: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDele
 
     // the page gone blank (its process ended): load it again
     func webViewWebContentProcessDidTerminate(_ view: WKWebView) { if let base = base { open(base) } }
+    func webView(_ view: WKWebView, didFinish navigation: WKNavigation!) {
+        if view.pageZoom != 1 { setZoom(view.pageZoom) }
+    }
 
     // ----- the menu bar: Flash, Edit (so copy and paste work), View, Window -----
     func menus() {
@@ -232,9 +235,14 @@ final class App: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDele
         NSApp.mainMenu = bar
     }
     @objc func reload() { web.reload() }
-    @objc func zoomReset() { web.pageZoom = 1 }
-    @objc func zoomIn() { web.pageZoom = min(3, web.pageZoom + 0.1) }
-    @objc func zoomOut() { web.pageZoom = max(0.5, web.pageZoom - 0.1) }
+    @objc func zoomReset() { setZoom(1) }
+    @objc func zoomIn() { setZoom(min(3, web.pageZoom + 0.1)) }
+    @objc func zoomOut() { setZoom(max(0.5, web.pageZoom - 0.1)) }
+    // The window's buttons do not grow with the page: the page is told, so its title bar stays their size.
+    func setZoom(_ z: CGFloat) {
+        web.pageZoom = z
+        web.evaluateJavaScript("window.flashAppZoom && window.flashAppZoom(\(Double(z)))", completionHandler: nil)
+    }
 }
 
 let app = NSApplication.shared

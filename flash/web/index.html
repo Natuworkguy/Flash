@@ -4819,6 +4819,12 @@ body.empty #ext-head, body.on-page #ext-head { display: none; }
 <script src="/static/katex/katex.min.js" id="katex" async></script>
 <script src="/static/colour.js" defer></script>
 <script>
+// In the Mac app the window's own buttons sit over the top left and do not zoom with the page: the bars they sit in
+// are kept at their size, whatever Ctrl + or Ctrl - does to the rest.
+window.flashAppZoom = (z) => {
+  const k = String(1 / (Number(z) || 1));
+  for (const bar of document.querySelectorAll("html.mac-app .side-top, html.mac-app #top")) bar.style.zoom = k;
+};
 "use strict";
 
 // ---------------------------------------------------------------------------
