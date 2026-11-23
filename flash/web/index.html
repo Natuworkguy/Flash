@@ -152,8 +152,8 @@ body.side-closed #sidebar { margin-left: -272px; }
 .side-top { display: flex; align-items: center; justify-content: space-between; padding: 12px 10px 10px 18px; height: 56px; }
 /* In the Mac app the window's close, minimise and zoom buttons sit at the top left, over the page: the sidebar's
    top row starts to their right, and so does the bar above the chat when the sidebar is closed. */
-html.mac-app .side-top { padding-left: 84px; height: 52px; }
-html.mac-app body.side-closed #top { padding-left: 84px; }
+html.mac-app .side-top { padding: 0 10px 0 82px; height: 52px; }
+html.mac-app body.side-closed #top { padding-left: 82px; height: 52px; }
 .wordmark {
   display: inline-flex; align-items: center; gap: 6px;
   font: 700 21px/1 var(--brand);

@@ -41,6 +41,12 @@ final class App: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDele
         window.title = "Flash"
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden        // the page says "Flash" itself; no title over it
+        // An empty unified toolbar makes the title bar 52 points tall, which puts the close, minimise and zoom
+        // buttons at its middle: on one line with the page's "Flash" mark, whose row is as tall.
+        let bar = NSToolbar(identifier: "FlashBar")
+        bar.showsBaselineSeparator = false
+        window.toolbar = bar
+        window.toolbarStyle = .unified
         window.isReleasedWhenClosed = false
         window.contentView = web
         window.center()
