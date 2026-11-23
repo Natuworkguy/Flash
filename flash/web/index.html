@@ -10950,6 +10950,27 @@ function drawGeneral(body) {
   };
   body.appendChild(auto);
 
+  // The Flash shortcut (Start menu, Applications, the apps menu): Flash as an app of its own, or a browser tab.
+  body.insertAdjacentHTML("beforeend", `<h2 class="settings-section settings-gap">Flash shortcut</h2><p class="settings-sub">What the Flash shortcut opens, and flash:// links too.</p>`);
+  const opens = el("div", "setting-row static visuals-row", `<span class="what"><b>Open Flash</b><span>As its own app: a window with its own icon, no tabs or address bar. In the browser: a tab beside your others.</span></span><span class="side"><span class="seg" role="radiogroup" aria-label="Open Flash"></span></span>`);
+  const opensSeg = opens.querySelector(".seg");
+  const markOpens = (app) => { for (const b of opensSeg.children) { const on = (b.dataset.how === "app") === app; b.classList.toggle("on", on); b.setAttribute("aria-checked", on); } };
+  for (const [how, label] of [["app", "As its own app"], ["browser", "In the browser"]]) {
+    const b = el("button", "");
+    b.type = "button";
+    b.textContent = label;
+    b.dataset.how = how;
+    b.setAttribute("role", "radio");
+    b.onclick = async () => {
+      markOpens(how === "app");
+      try { const r = await command("shortcut-window", how, null); markOpens(r.window); toast(r.window ? "The Flash shortcut opens Flash as its own app" : "The Flash shortcut opens Flash in your browser"); }
+      catch (error) { showFailure(error); }
+    };
+    opensSeg.appendChild(b);
+  }
+  command("shortcut-window", "", null).then((r) => markOpens(r.window)).catch(() => markOpens(true));
+  body.appendChild(opens);
+
   body.insertAdjacentHTML("beforeend", `<h2 class="settings-section settings-gap">Conversation</h2><p class="settings-sub">What happens when a chat outgrows the model's context window, where the last three exchanges always stay word for word, how chats are named, and how replies look.</p>`);
   const row = el("button", "setting-row", `<span class="what"><b>Summarize old messages</b><span>Have the model condense what no longer fits into a summary it keeps reading. Off, the oldest messages are dropped instead, which is faster and never loses detail from the ones kept.</span></span><span class="switch" aria-hidden="true"></span>`);
   row.type = "button";
