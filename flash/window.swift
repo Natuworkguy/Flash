@@ -27,6 +27,10 @@ final class App: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDele
         let config = WKWebViewConfiguration()
         config.preferences.setValue(true, forKey: "developerExtrasEnabled")
         config.websiteDataStore = .default()   // the page's own storage (its token, its preferences) kept between runs
+        // The page makes room for the window's buttons, which sit over its top left corner.
+        config.userContentController.addUserScript(WKUserScript(
+            source: "document.documentElement.classList.add('mac-app')",
+            injectionTime: .atDocumentStart, forMainFrameOnly: true))
         web = WKWebView(frame: .zero, configuration: config)
         web.navigationDelegate = self
         web.uiDelegate = self
@@ -36,6 +40,7 @@ final class App: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDele
                           backing: .buffered, defer: false)
         window.title = "Flash"
         window.titlebarAppearsTransparent = true
+        window.titleVisibility = .hidden        // the page says "Flash" itself; no title over it
         window.isReleasedWhenClosed = false
         window.contentView = web
         window.center()
