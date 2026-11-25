@@ -396,6 +396,7 @@ def do(action: str, args: dict, owner: str) -> tuple[str, Optional[bytes]]:
         return list_elements(), None
     else:
         _check_pointer(owner)
+        _check_window(action, args)
         said = _act(action, args)
         time.sleep(SETTLE)
     with _lock:
@@ -406,6 +407,27 @@ def do(action: str, args: dict, owner: str) -> tuple[str, Optional[bytes]]:
     if woke:
         shown = "Woke the screen first. " + shown
     return (f"{said} {shown}".strip(), image)
+
+
+def _check_window(action: str, args: dict) -> None:
+    """Stop before working a window that has asked agents to keep out
+    (agentguard): the one under the point for a click where the system
+    can say, the front one for anything else."""
+
+    from . import agentguard
+
+    at = None
+    if args.get("x") is not None and _shot:
+        try:
+            at = _point(args)
+        except UseError:
+            at = None
+    why = agentguard.check(system(), at)
+    if why:
+        raise UseError(
+            f"Not doing that: {why}, which asks agents not to work it. "
+            "Tell the user what is needed there and let them do it."
+        )
 
 
 def _check_pointer(owner: str) -> None:

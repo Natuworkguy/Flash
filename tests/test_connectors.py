@@ -494,3 +494,25 @@ def test_windows_quoted_paths_lose_their_quotes_and_keep_backslashes():
         r"C:\Program Files\Python\python.exe", r"D:\a\server.py", "-y"]
     assert connectors.split_command('npx "~/My Notes"', windows=True) == [
         "npx", "~/My Notes"]
+
+
+def test_import_json_takes_a_config_or_one_server(tmp_path, monkeypatch):
+    from flash import connectors
+    monkeypatch.setattr(connectors, "config_path",
+                        lambda: tmp_path / "mcp.json")
+    monkeypatch.setattr(connectors, "start", lambda: None)
+    whole = ('{"mcpServers": {"github": {"command": "npx",'
+             ' "args": ["-y", "x"], "env": {"T": "1"}}}}')
+    assert connectors.import_json(whole) == ["github"]
+    docs = '{"docs": {"url": "https://example.com/mcp"}}'
+    assert connectors.import_json(docs) == ["docs"]
+    one = '{"command": "uvx", "args": ["mcp-server-time"]}'
+    assert connectors.import_json(one) == ["uvx"]
+    assert sorted(connectors.read_config()) == ["docs", "github", "uvx"]
+    for bad in ("nope", "[1]", '{"x": {"args": []}}',
+                '{"x": {"command": "a", "args": "b"}}', "{}"):
+        try:
+            connectors.import_json(bad)
+            raise AssertionError(bad)
+        except connectors.ConnectorError:
+            pass

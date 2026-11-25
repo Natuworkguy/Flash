@@ -4635,6 +4635,10 @@ body.empty #ext-head, body.on-page #ext-head { display: none; }
 .teach-dots span.on { background: var(--accent, #3d8fe0); transform: scale(1.15); }
 .teach-level { height: 4px; border-radius: 2px; background: var(--line, rgba(127,127,127,.2)); overflow: hidden; margin-bottom: 8px; }
 .teach-level i { display: block; height: 100%; width: 0; background: var(--accent, #3d8fe0); transition: width .08s linear; }
+.conn-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.conn-mode { display: inline-flex; border: 1px solid var(--line, rgba(127,127,127,.25)); border-radius: 8px; padding: 2px; }
+.conn-mode button { border: 0; background: none; padding: 4px 10px; border-radius: 6px; font: inherit; font-size: 12px; color: var(--dim, inherit); cursor: pointer; }
+.conn-mode button.on { background: var(--raised, rgba(127,127,127,.15)); color: var(--ink, inherit); }
 </style>
 </head>
 <body class="empty">
@@ -17920,7 +17924,8 @@ function connectorCard(body, server) {
 function drawConnectorForm(body, server = null) {
   const host = body.querySelector(".conn-form-host");
   host.innerHTML = `<form class="email-form" autocomplete="off">
-    <h3 class="email-form-title">${server ? "Edit the connector" : "Add a connector"}</h3>
+    <div class="conn-head"><h3 class="email-form-title">${server ? "Edit the connector" : "Add a connector"}</h3>${server ? "" : `<div class="seg conn-mode" role="tablist"><button type="button" class="on" data-mode="fields">Fields</button><button type="button" data-mode="json">Paste JSON</button></div>`}</div>
+    <label class="field conn-json" hidden><span>JSON</span><textarea name="json" class="mono" rows="9" spellcheck="false" placeholder='{"mcpServers": {"github": {"command": "npx", "args": ["-y", "@modelcontextprotocol/server-github"], "env": {"GITHUB_PERSONAL_ACCESS_TOKEN": "..."}}}}'></textarea><small>The <code>mcpServers</code> config other apps use, as it is, or just one server's part. Every server in it is added; one with a name already here is replaced.</small></label>
     <label class="field"><span>Name</span><input name="name" class="mono" placeholder="github" required pattern="[A-Za-z0-9_-]{1,32}"><small>Letters, digits, - and _. Its tools are called name__tool.</small></label>
     <label class="field"><span>Command or URL</span><input name="target" class="mono" placeholder="npx -y @modelcontextprotocol/server-github" required><small>A command Flash starts on this computer, or the address of a server: <code>localhost:1234/mcp</code> works too.</small></label>
     <label class="field conn-start"><span>Start command <i>(optional, with a URL)</i></span><input name="start" class="mono" placeholder="python mymcp/server.py"><small>Run first, and stopped with Flash: once it serves the URL above, Flash connects to it.</small></label>
@@ -17943,9 +17948,40 @@ function drawConnectorForm(body, server = null) {
   showStart();
   const error = form.querySelector(".form-error");
   form.querySelector("[data-cancel]").onclick = () => drawConnectors(body);
+  // Pasting a config instead of filling the fields: the fields hidden, the JSON box shown
+  let mode = "fields";
+  const fieldRows = [...form.querySelectorAll(".field")].filter((f) => !f.classList.contains("conn-json"));
+  const setMode = (m) => {
+    mode = m;
+    form.querySelectorAll(".conn-mode button").forEach((b) => b.classList.toggle("on", b.dataset.mode === m));
+    form.querySelector(".conn-json").hidden = m !== "json";
+    for (const f of fieldRows) {
+      f.hidden = m === "json" || (f.classList.contains("conn-start") && startRow.dataset.auto === "hide");
+      f.querySelectorAll("input, textarea").forEach((i) => { i.required = m === "fields" && (i.name === "name" || i.name === "target"); });
+    }
+    if (m === "fields") showStart(); else field("json").focus();
+  };
+  form.querySelectorAll(".conn-mode button").forEach((b) => { b.onclick = () => setMode(b.dataset.mode); });
   form.onsubmit = async (ev) => {
     ev.preventDefault();
     const submit = form.querySelector("[type=submit]");
+    if (mode === "json") {
+      submit.disabled = true;
+      submit.textContent = "Adding…";
+      error.textContent = "";
+      try {
+        const before = new Set((await command("connectors")).connectors.map((x) => x.name));
+        const c = await command("connector-import", "", null, { json: field("json").value });
+        const added = c.connectors.map((x) => x.name).filter((n) => !before.has(n));
+        toast(added.length ? `Added ${added.join(", ")}` : "Updated the connectors");
+        drawConnectors(body, c);
+      } catch (err) {
+        richText(error, err.message);
+        submit.disabled = false;
+        submit.textContent = "Add";
+      }
+      return;
+    }
     submit.disabled = true;
     submit.textContent = server ? "Saving…" : "Adding…";
     error.textContent = "";
