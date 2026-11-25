@@ -931,6 +931,55 @@ def add(name: str, target: str, env: Optional[dict] = None,
     start()
 
 
+KEPT_KEYS = ("command", "args", "env", "url", "headers", "start",
+             "disabled", "type", "cwd")
+
+
+def import_json(text: str) -> list[str]:
+    """Servers pasted as JSON, added as they are: a whole config
+    ({"mcpServers": {...}}), the servers alone ({"name": {...}}), or one
+    server ({"command": ...} or {"url": ...}, named after its command).
+    Returns the names added; one already there is replaced."""
+
+    try:
+        found = json.loads(text)
+    except ValueError as exc:
+        raise ConnectorError(f"That is not JSON: {exc}") from None
+    if not isinstance(found, dict):
+        raise ConnectorError(
+            "Paste a JSON object: {\"mcpServers\": {...}}.")
+    if isinstance(found.get("mcpServers"), dict):
+        servers = found["mcpServers"]
+    elif "command" in found or "url" in found:
+        base = str(found.get("command") or found.get("url") or "server")
+        tail = base.rstrip("/").rsplit("/", 1)[-1]
+        stem = re.sub(r"[^A-Za-z0-9_-]+", "-", tail).strip("-")
+        servers = {(stem or "server")[:32]: found}
+    else:
+        servers = found
+    added = {}
+    for name, spec in servers.items():
+        name = check_name(name)
+        if not isinstance(spec, dict) or not (
+                spec.get("command") or spec.get("url")):
+            raise ConnectorError(
+                f"{name}: a server needs a \"command\" or a \"url\".")
+        if "args" in spec and not isinstance(spec["args"], list):
+            raise ConnectorError(f"{name}: \"args\" should be a list.")
+        for key in ("env", "headers"):
+            if key in spec and not isinstance(spec[key], dict):
+                raise ConnectorError(
+                    f"{name}: \"{key}\" should be an object.")
+        added[name] = {k: v for k, v in spec.items() if k in KEPT_KEYS}
+    if not added:
+        raise ConnectorError("No servers in that JSON.")
+    whole = read_config()
+    whole.update(added)
+    write_config(whole)
+    start()
+    return list(added)
+
+
 def edit(name: str, target: str, env: Optional[dict] = None,
          begin: str = "", rename: str = "") -> None:
     """Change server NAME: what it runs or reaches, its start command,

@@ -7025,7 +7025,7 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
         return {"background": scene["name"], "scene": scene}
 
     if name in ("connectors", "connector-add", "connector-edit",
-                "connector-remove",
+                "connector-remove", "connector-import",
                 "connector-switch", "connector-reload"):
         return _connector_command(name, arg, body)
 
@@ -7587,6 +7587,8 @@ def _connector_command(name: str, arg: str, body: dict) -> dict:
         if name == "connector-add":
             connectors.add(arg, str(body.get("target") or ""), env,
                            str(body.get("start") or ""))
+        elif name == "connector-import":
+            connectors.import_json(str(body.get("json") or ""))
         elif name == "connector-edit":
             connectors.edit(arg, str(body.get("target") or ""), env,
                             str(body.get("start") or ""),
