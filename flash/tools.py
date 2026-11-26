@@ -4114,6 +4114,26 @@ TIMER_TOOLS: list[dict[str, Any]] = [
 ]
 
 
+def _clock_schema() -> dict[str, Any]:
+    from .clock import SCHEMA
+
+    return SCHEMA
+
+
+TIMER_TOOLS.append(_clock_schema())
+
+
+def clock_tool(**args: Any) -> str:
+    """Timers and alarms that ring: set, list, stop, snooze, pause."""
+
+    from . import clock
+
+    tool_line(f"Clock({args.get('action', 'list')})")
+    result = clock.tool(**args)
+    tool_result(result)
+    return result
+
+
 def remind_me_tool(**args: Any) -> str:
     """Flash's own reminders: add, list, cancel."""
 
@@ -11433,6 +11453,7 @@ FUNCTIONS = {
     "reminders": reminders_tool,
     "user_location": user_location_tool,
     "remind_me": remind_me_tool,
+    "clock": clock_tool,
     "devices": devices_tool,
     "read_imessages": read_imessages,
     "debate": debate_tool,
@@ -11459,7 +11480,7 @@ SPARK_TOOL_NAMES = SUBAGENT_TOOL_NAMES + ("send_email", "send_imessage",
                                           "debate", "phone_call",
                                           "watch_youtube", "view_image",
                                           "print", "list_printers",
-                                          "remind_me", "devices")
+                                          "remind_me", "clock", "devices")
 
 # Tools that ask every time, autonomous mode or not: UltraAuto aside.
 ALWAYS_ASK_TOOL_NAMES = ("send_email", "send_imessage", "print")
