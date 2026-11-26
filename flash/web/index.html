@@ -811,6 +811,7 @@ body.empty #suggestions { display: flex; flex-wrap: wrap; justify-content: cente
 /* Its own arrow, set in from the edge, where a browser's sits against
    it; and never wider than its column, however long an option is. */
 .ui-field { min-width: 0; }
+.speakers-field { margin-top: 14px; max-width: 440px; }
 .ui-select { position: relative; display: grid; min-width: 0; }
 .ui-field .ui-select select { appearance: none; -webkit-appearance: none; width: 100%; min-width: 0; padding-right: 38px; text-overflow: ellipsis; }
 /* Every other dropdown: its arrow drawn inside, with room after it, never against the edge. */
@@ -17827,8 +17828,10 @@ async function drawSmartHome(box) {
     off.type = "button";
     off.onclick = async () => { try { await command("smarthome-off"); drawSmartHome(box); } catch (error) { showFailure(error); } };
     actions.append(off);
+    drawSpeakers(box);
     return;
   }
+  drawSpeakers(box);
   const connect = el("button", "btn small primary", "Connect");
   connect.type = "button";
   connect.onclick = () => {
@@ -17843,6 +17846,29 @@ async function drawSmartHome(box) {
       });
   };
   actions.append(connect);
+}
+
+// Speakers: where "Hey Flash, play WBUR" plays when no speaker is named.
+async function drawSpeakers(box) {
+  let r;
+  try { r = await command("speakers"); } catch (_) { return; }
+  if (!box.isConnected || !r.names || !r.names.length) return;
+  const row = document.createElement("label");
+  row.className = "ui-field speakers-field";
+  row.innerHTML = `<span>Default speaker</span><span class="ui-select"><select class="speaker-pick"><option value="">This device</option></select></span><span class="settings-sub">Where music and radio play when you don't name a speaker. Say “play WBUR on the kitchen speaker” or “move the music to the bedroom” for another.</span>`;
+  const pick = row.querySelector("select");
+  for (const n of r.names) {
+    const o = document.createElement("option");
+    o.value = n.replace(" (AirPlay)", "");
+    o.textContent = n;
+    pick.append(o);
+  }
+  pick.value = r.default || "";
+  pick.onchange = async () => {
+    try { await command("speaker-default", pick.value); toast(pick.value ? `Plays on ${pick.value}` : "Plays here"); }
+    catch (error) { showFailure(error); }
+  };
+  box.append(row);
 }
 
 // Calendars: iCal feeds to read, and Google Calendar both ways, signed in

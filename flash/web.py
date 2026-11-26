@@ -6205,6 +6205,23 @@ def command(session: Session, body: dict, browser: str = "") -> dict:
         return {"connected": True, "url": url, "said": said,
                 "devices": count}
 
+    if name == "speakers":
+        from . import media
+
+        try:
+            names = media.speaker_names()
+        except Exception as exc:  # noqa: BLE001 (shown, not raised)
+            return {"names": [], "default": "", "error": str(exc)}
+        return {"names": names,
+                "default": os.environ.get(media.DEFAULT_DEVICE, "")}
+
+    if name == "speaker-default":
+        from . import media
+
+        ai.set_config_var(media.DEFAULT_DEVICE,
+                          str(arg or "").replace(" (AirPlay)", "").strip())
+        return {"default": os.environ.get(media.DEFAULT_DEVICE, "")}
+
     if name == "smarthome-off":
         from . import smarthome, vault
 

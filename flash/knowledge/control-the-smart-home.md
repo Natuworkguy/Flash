@@ -28,3 +28,17 @@ smart_home {"action": "set", "device": "thermostat", "temperature": 21}
 ```
 smart_home {"action": "activate", "device": "movie night"}
 ```
+
+## Radio, music and speakers
+
+Speakers are played with play_music, not smart_home:
+
+- "Play WBUR" / "put on KEXP": `play_music {"action": "play", "service": "radio", "query": "WBUR"}`. It plays on the default speaker set in Settings, else here.
+- "Play WBUR on the kitchen speaker": add `"device": "kitchen"` (a Home Assistant media player, or an AirPlay speaker on a Mac).
+- "Switch the media to the bedroom" / "move the music to the living room": `play_music {"action": "move", "device": "bedroom"}`.
+- "Play Apple Music 1" / "Apple Music Radio": `"service": "apple_music_radio"`, on a Mac.
+- A song on Apple Music: `"service": "apple_music"` plays it from the library or the whole catalogue on a Mac.
+- "Pause the kitchen speaker", "turn the bedroom down to 20": pause or volume with that device.
+- "What speakers are there?": `play_music {"action": "speakers"}`.
+
+Say what happened in a line: "WBUR's on in the kitchen."

@@ -7349,17 +7349,40 @@ def notify_user(message: str, title: str = "") -> str:
 
 
 def play_music(query: str = "", service: str = "youtube",
-               action: str = "play", value: Any = 0) -> str:
-    """Play a song by name without a browser tab, or pause, resume, stop
-    or turn down what plays."""
+               action: str = "play", value: Any = 0, device: str = "") -> str:
+    """Play a song by name without a browser tab, a radio station on a
+    speaker, or pause, resume, stop, move or turn down what plays."""
 
-    from . import computer, music
+    from . import computer, media, music
 
     action = str(action or "play").strip().lower()
     service = str(service or "youtube").strip().lower().replace(" ", "_")
-    tool_line(f"Music({action} {query or ''})".replace(" )", ")"))
+    device = str(device or "").strip()
+    where = f" on {device}" if device else ""
+    tool_line(f"Music({action} {query or ''}{where})".replace(" )", ")"))
     try:
-        if action == "play":
+        if action == "speakers":
+            names = media.speaker_names()
+            result = ("Speakers: " + ", ".join(names)) if names else (
+                "No speakers found: connect Home Assistant, or on a Mac "
+                "turn on AirPlay speakers.")
+        elif action == "move":
+            result = media.move(device or str(query or ""))
+        elif action == "play" and (
+                service in ("radio", "apple_music_radio")
+                or (service in ("apple_music", "apple", "music")
+                    and (device or sys.platform == "darwin"))):
+            if not str(query or "").strip():
+                raise music.MusicError("Name the station or song.")
+            kind = ("apple_music" if service in ("apple", "music")
+                    else service)
+            result = media.play(query, device, kind)
+        elif action == "play" and device and media.ha_ready():
+            raise music.MusicError(
+                "Songs on Home Assistant speakers come from radio "
+                "stations here: say which station, or use Apple Music on "
+                "the Mac with AirPlay.")
+        elif action == "play":
             if not str(query or "").strip():
                 raise music.MusicError("Name the song, or give its link.")
             if service == "spotify":
@@ -7381,6 +7404,21 @@ def play_music(query: str = "", service: str = "youtube",
                         "Here in the terminal it plays through mpv and "
                         "yt-dlp, which are not installed; or ask in the web "
                         "UI, which plays it itself.")
+        elif (action in ("pause", "resume", "stop", "next", "volume")
+              and device and media.ha_ready()):
+            level = int(_clamp(value, 0, 100, 50))
+            from . import smarthome
+            sp = media.find_speaker(device)
+            svc = {"pause": "media_pause", "resume": "media_play",
+                   "stop": "media_stop", "next": "media_next_track",
+                   "volume": "volume_set"}[action]
+            data = {"entity_id": sp["entity_id"]}
+            if action == "volume":
+                data["volume_level"] = level / 100
+            smarthome._call("POST", f"/api/services/media_player/{svc}",
+                            data)
+            did = action if action != "volume" else f"volume {level}"
+            result = f"{smarthome._name(sp)}: {did}."
         elif action in ("pause", "resume", "stop", "next", "volume"):
             level = int(_clamp(value, 0, 100, 50))
             said = tool_music({"action": action, "value": level})
@@ -7397,7 +7435,7 @@ def play_music(query: str = "", service: str = "youtube",
         else:
             raise music.MusicError("action is one of "
                                    + ", ".join(music.ACTIONS) + ".")
-    except (music.MusicError, computer.ComputerError) as exc:
+    except Exception as exc:  # noqa: BLE001 (any failure is said)
         result = f"Error: {exc}"
         tool_result(result, style=ERROR)
         return result
@@ -9703,7 +9741,17 @@ tools: list[dict[str, Any]] = [
                 "Spotify or Apple Music, in that app on a Mac. Then pause, "
                 "resume, stop or set the volume (0-100) of whatever plays, "
                 "Flash's player or an app's. The user can also say \"Hey "
-                "Flash, pause the music\" without you."
+                "Flash, pause the music\" without you. "
+                "Radio: service 'radio' plays a station by name or call "
+                "sign (\"WBUR\", \"KEXP\", \"BBC Radio 6 Music\"); with "
+                "device it plays on that speaker (a Home Assistant media "
+                "player, e.g. \"kitchen\", or an AirPlay speaker on a Mac). "
+                "'apple_music_radio' plays Apple Music 1, Hits or Country "
+                "on a Mac; 'apple_music' plays any song from the Apple Music "
+                "catalogue on a Mac. action 'move' with device moves what is "
+                "playing to that speaker (\"switch the media to the "
+                "bedroom\"); 'speakers' lists them. pause/resume/stop/"
+                "volume with device control that speaker."
             ),
             "parameters": {
                 "type": "object",
@@ -9712,10 +9760,16 @@ tools: list[dict[str, Any]] = [
                         "What to play: a song and artist, or a link.")},
                     "service": {"type": "string",
                                 "enum": ["youtube", "spotify",
-                                         "apple_music"]},
+                                         "apple_music", "apple_music_radio",
+                                         "radio"]},
                     "action": {"type": "string",
                                "enum": ["play", "pause", "resume", "stop",
-                                        "next", "volume"]},
+                                        "next", "volume", "move",
+                                        "speakers"]},
+                    "device": {"type": "string", "description": (
+                        "The speaker: a Home Assistant media player's name, "
+                        "or an AirPlay speaker on a Mac. Empty: the default "
+                        "speaker, else here.")},
                     "value": {"type": "integer",
                               "description": "The volume, 0-100."},
                 },
