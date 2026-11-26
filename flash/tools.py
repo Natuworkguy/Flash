@@ -41,6 +41,7 @@ from . import (
     computeruse,
     connectors,
     design,
+    drafts,
     editor,
     extensions,
     instructions,
@@ -98,7 +99,9 @@ from .theme import (
     denial_why,
     dock_active,
     drawn_elsewhere,
+    edited_draft,
     glimmer,
+    offer_draft,
     plural,
     remote_answer,
     set_denial_why,
@@ -3150,6 +3153,47 @@ def read_email(uid: Any = "", folder: str = "INBOX", account: str = "") -> str:
     return "\n".join(head) + f"\n\n{body}"
 
 
+def confirm_send(
+    question: str, preview: str, draft: dict,
+) -> tuple[str, Optional[dict]]:
+    """Ask QUESTION about a message going out in the user's name, shown
+    as PREVIEW, with DRAFT theirs to change first: on the web page as
+    fields, in the terminal in their editor. "y" or anything else, and
+    the draft as the user changed it, or None when they did not.
+    UltraAuto alone does not ask."""
+
+    if ultra_auto():
+        return "y", None
+    notify_needs_input()
+    edited_draft()  # nothing left over from a question before
+    offer_draft(draft)
+    try:
+        answer = remote_answer(f"{question}\n{preview}")
+    finally:
+        offer_draft(None)
+    if answer is not None:
+        return answer, drafts.changed(draft, edited_draft()
+                                      if answer == "y" else None)
+
+    current = dict(draft)
+    while True:
+        prompt = Text(f"  {BRANCH}  ", style=DIM)
+        prompt.append(f"{question} ", style=DIM)
+        prompt.append("y", style=f"bold {ACCENT}")
+        prompt.append("/n/e ", style=DIM)
+        console.print(prompt, end="")
+        answer = yes_no(edit=True)
+        if answer != "e":
+            break
+        try:
+            current = drafts.edit(current)
+        except drafts.DraftError as exc:
+            tool_result(str(exc), style=WARN)
+            continue
+        tool_result(drafts.described(current))
+    return answer, drafts.changed(draft, current) if answer == "y" else None
+
+
 def send_email(
     to: str = "", subject: str = "", body: str = "", reply_to: Any = "",
     cc: str = "", account: str = "",
@@ -3185,27 +3229,43 @@ def send_email(
 
     # Asked every time, autonomous mode or not: an email cannot be taken
     # back, and it goes out in the user's name. Only UltraAuto does not.
-    ultra = ultra_auto()
-    if not ultra:
-        notify_needs_input()
-    answer = "y" if ultra else remote_answer(f"Send this email?\n{preview}")
-    if answer is None:
-        prompt = Text(f"  {BRANCH}  ", style=DIM)
-        prompt.append("Send this email? ", style=DIM)
-        prompt.append("y", style=f"bold {ACCENT}")
-        prompt.append("/n ", style=DIM)
-        console.print(prompt, end="")
-        answer = yes_no()
+    draft = {
+        "kind": "email", "to": str(message["To"] or ""),
+        "cc": str(message.get("Cc") or ""),
+        "subject": str(message["Subject"] or ""),
+        "body": message.get_content().strip(),
+    }
+    answer, edited = confirm_send("Send this email?", preview, draft)
     if answer != "y":
         tool_result("Not sent: the user said no", style=WARN)
         return "Not sent: the user said no. Do not send it again."
+
+    if edited:
+        # What the user sent is what goes: their words, to whom they said.
+        if not edited["to"].strip():
+            tool_result("Not sent: the user took out who it goes to",
+                        style=WARN)
+            return ("Not sent: the user's edit left no one to send it to. "
+                    "Ask them who it is for.")
+        try:
+            message = mail.compose(edited["to"], edited["subject"],
+                                   edited["body"], original, edited["cc"],
+                                   account)
+        except mail.MailError as exc:
+            tool_result(f"Not sent: {exc}", style=ERROR)
+            return (f"Not sent: the user's edit could not go as written: "
+                    f"{exc} Ask them what they meant.")
 
     try:
         sent_to = mail.send(message)
     except mail.MailError as exc:
         tool_result(str(exc), style=ERROR)
         return f"Error: {exc}"
-    tool_result(f"Sent to {sent_to}")
+    tool_result(f"Sent to {sent_to}"
+                + (", as the user edited it" if edited else ""))
+    if edited:
+        return (f"Sent to {sent_to}. The user changed it before it went; "
+                f"what was sent:\n{drafts.described(edited)}")
     return f"Sent to {sent_to}."
 
 
@@ -3795,29 +3855,29 @@ def send_imessage(to: str = "", text: str = "", attachment: str = "") -> str:
     tool_result(preview)
 
     # Asked every time, autonomous mode or not: it goes out in the user's
-    # name, and cannot be taken back. Only UltraAuto does not.
-    ultra = ultra_auto()
-    if not ultra:
-        notify_needs_input()
-    answer = "y" if ultra else remote_answer(
-        f"Send this iMessage?\n{preview}")
-    if answer is None:
-        prompt = Text(f"  {BRANCH}  ", style=DIM)
-        prompt.append("Send this iMessage? ", style=DIM)
-        prompt.append("y", style=f"bold {ACCENT}")
-        prompt.append("/n ", style=DIM)
-        console.print(prompt, end="")
-        answer = yes_no()
+    # name, and cannot be taken back. Only UltraAuto does not. Its words
+    # are the user's to change; who it goes to stays as it was shown.
+    answer, edited = confirm_send("Send this iMessage?", preview,
+                                  {"kind": "imessage", "text": text})
     if answer != "y":
         tool_result("Not sent: the user said no", style=WARN)
         return "Not sent: the user said no. Do not send it again."
+    if edited:
+        text = edited["text"].strip()
+        if not text and not attachment:
+            tool_result("Not sent: the user cleared the text", style=WARN)
+            return "Not sent: the user's edit left nothing to send."
 
     try:
         computer.send_imessage(handle, text, attachment)
     except computer.ComputerError as exc:
         tool_result(str(exc), style=ERROR)
         return f"Error: {exc}"
-    tool_result(f"Sent to {shown}")
+    tool_result(f"Sent to {shown}"
+                + (", as the user edited it" if edited else ""))
+    if edited:
+        return (f"Sent to {shown}. The user changed it before it went; "
+                f"what was sent:\n{text}")
     return f"Sent to {shown}."
 
 

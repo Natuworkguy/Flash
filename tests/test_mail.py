@@ -10,7 +10,7 @@ from email.message import EmailMessage
 import pytest
 
 from flash import mail, sparks, tools, web
-from flash.theme import answer_from
+from flash.theme import answer_from, set_edited_draft
 
 
 def _message(sender, subject, text="", html="", attach="", msgid=""):
@@ -738,3 +738,44 @@ def test_no_trash_folder_is_said(account, monkeypatch):
         mail.trash("9")
     with pytest.raises(mail.MailError, match="uid"):
         mail.trash("abc")
+
+
+def test_send_email_sends_what_the_user_changed(server):
+    def edit(question):
+        set_edited_draft({"kind": "email", "to": "b@example.com", "cc": "",
+                          "subject": "Lunch", "body": "Friday works."})
+        return "y"
+
+    with answer_from(edit):
+        said = tools.send_email("a@example.com", "Hi", "Hello")
+
+    assert said.startswith("Sent to b@example.com. The user changed it")
+    assert "Friday works." in said
+    sent = FakeSMTP.sent[0]
+    assert sent["To"] == "b@example.com" and sent["Subject"] == "Lunch"
+    assert sent.get_content().strip() == "Friday works."
+
+
+def test_an_edited_reply_stays_in_its_thread(server):
+    def edit(question):
+        set_edited_draft({"kind": "email", "to": "bo@example.com", "cc": "",
+                          "subject": "Re: Contract", "body": "Signed, Bo."})
+        return "y"
+
+    with answer_from(edit):
+        tools.send_email(reply_to="9", body="Signed.")
+
+    sent = FakeSMTP.sent[0]
+    assert sent["In-Reply-To"] and sent.get_content().strip() == "Signed, Bo."
+
+
+def test_an_edit_with_no_one_to_send_to_is_not_sent(server):
+    def edit(question):
+        set_edited_draft({"kind": "email", "to": "", "cc": "",
+                          "subject": "Hi", "body": "Hello"})
+        return "y"
+
+    with answer_from(edit):
+        said = tools.send_email("a@example.com", "Hi", "Hello")
+
+    assert said.startswith("Not sent") and FakeSMTP.sent == []

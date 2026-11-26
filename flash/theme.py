@@ -394,6 +394,36 @@ def set_denial_why(why: str) -> None:
     _capture.why = why
 
 
+def offer_draft(draft: Optional[dict]) -> None:
+    """The message the next question on this thread asks to send, for an
+    answerer that can show it to be changed first (see drafts.py). None
+    takes it back, once the question is answered."""
+
+    _capture.offered = dict(draft) if draft else None
+
+
+def offered_draft() -> Optional[dict]:
+    """The draft offered beside the question being asked now, if any."""
+
+    offered = getattr(_capture, "offered", None)
+    return dict(offered) if offered else None
+
+
+def set_edited_draft(draft: Optional[dict]) -> None:
+    """The draft as the user changed it before they said yes."""
+
+    _capture.edited = dict(draft) if draft else None
+
+
+def edited_draft() -> Optional[dict]:
+    """The draft as the user sent it, when they changed it: once, then it
+    is gone."""
+
+    edited = getattr(_capture, "edited", None)
+    _capture.edited = None
+    return edited
+
+
 def denial_why() -> str:
     """Why the user said no to the last question on this thread, if they
     said: once, then it is gone."""
@@ -832,14 +862,16 @@ def mouse_on() -> bool:
     return sys.stdin.isatty() and console.is_terminal
 
 
-def yes_no() -> str:
+def yes_no(edit: bool = False) -> str:
     """The answer to a yes-or-no question just printed: "y" or "n". Two
     buttons under it take a click, and y, n, Enter, the arrows and Esc
     work too. Without a terminal to draw them on, a typed line, as
-    typed() reads it."""
+    typed() reads it. With EDIT, a third button, and e, answer "e": the
+    user wants to change what is asked about first."""
 
     if not mouse_on():
-        return typed()
+        said = typed()
+        return said if edit or said != "e" else "n"
 
     from prompt_toolkit.application import Application
     from prompt_toolkit.key_binding import KeyBindings
@@ -847,6 +879,9 @@ def yes_no() -> str:
     from prompt_toolkit.layout.controls import FormattedTextControl
     from prompt_toolkit.mouse_events import MouseEventType
 
+    choices = [("y", " Yes "), ("n", " No ")]
+    if edit:
+        choices.append(("e", " Edit "))
     picked = {"at": 0}
 
     def choose(answer: str):
@@ -854,18 +889,19 @@ def yes_no() -> str:
             if event.event_type == MouseEventType.MOUSE_UP:
                 app.exit(result=answer)
             elif event.event_type == MouseEventType.MOUSE_MOVE:
-                picked["at"] = 0 if answer == "y" else 1
+                picked["at"] = [a for a, _ in choices].index(answer)
         return handler
 
     def render() -> StyleAndTextTuples:
         out: StyleAndTextTuples = [("", "     ")]
-        for n, (answer, label) in enumerate((("y", " Yes "), ("n", " No "))):
+        for n, (answer, label) in enumerate(choices):
             on = picked["at"] == n
             style = (f"bg:{ACCENT} #ffffff bold" if on and answer == "y"
                      else "reverse bold" if on else f"{DIM_HEX}")
             out.append((style, f"[{label}]", choose(answer)))
             out.append(("", "  "))
-        out.append((DIM_HEX, "  y / n, or click"))
+        keys_said = "y / n / e" if edit else "y / n"
+        out.append((DIM_HEX, f"  {keys_said}, or click"))
         return out
 
     keys = KeyBindings()
@@ -880,15 +916,23 @@ def yes_no() -> str:
     def _no(event) -> None:
         event.app.exit(result="n")
 
-    @keys.add("left")
+    if edit:
+        @keys.add("e")
+        def _edit(event) -> None:
+            event.app.exit(result="e")
+
     @keys.add("right")
     @keys.add("tab")
     def _move(event) -> None:
-        picked["at"] = 1 - picked["at"]
+        picked["at"] = (picked["at"] + 1) % len(choices)
+
+    @keys.add("left")
+    def _back(event) -> None:
+        picked["at"] = (picked["at"] - 1) % len(choices)
 
     @keys.add("enter")
     def _enter(event) -> None:
-        event.app.exit(result="y" if picked["at"] == 0 else "n")
+        event.app.exit(result=choices[picked["at"]][0])
 
     @keys.add("c-d")
     def _eof(event) -> None:
@@ -909,7 +953,7 @@ def yes_no() -> str:
             console.asking = False
             if _dock is not None:
                 _dock.resume()
-    said = "yes" if answer == "y" else "no"
+    said = {"y": "yes", "n": "no", "e": "edit"}[answer]
     # Under the question, where the buttons were: what was picked.
     console.print(Text(f"     {said}", style=f"bold {ACCENT}" if answer ==
                        "y" else DIM))

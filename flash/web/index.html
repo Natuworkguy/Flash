@@ -1362,6 +1362,14 @@ body.course-open { overflow: hidden; }
 .ask pre { margin: 10px 0 0; }
 .ask pre code { padding: 10px 14px; }
 .ask .buttons { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+/* A draft on the card: the message's fields, the user's to change before Send. */
+.ask .ask-to { margin-top: 6px; font-size: 13.5px; color: var(--text-2); }
+.ask .ask-draft { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
+.ask .ask-field { display: flex; flex-direction: column; gap: 3px; }
+.ask .ask-field > span { font-size: 12px; font-weight: 600; color: var(--text-2); }
+.ask .ask-field input, .ask .ask-field textarea { width: 100%; box-sizing: border-box; font: 14px/1.5 var(--sans); color: var(--text); background: var(--bg); border: 1px solid var(--border-strong); border-radius: 9px; padding: 7px 10px; outline: 0; resize: vertical; }
+.ask .ask-field input:focus, .ask .ask-field textarea:focus { border-color: var(--accent); }
+.ask.done .ask-draft, .ask.done .ask-to { display: none; }
 .btn { padding: 8px 16px; border-radius: 10px; font-size: 14px; font-weight: 500; border: 1px solid var(--border-strong); transition: background 0.12s, transform 0.08s; }
 .btn:hover { background: var(--hover); }
 .btn:active { transform: scale(0.98); }
@@ -6940,19 +6948,68 @@ function addDiff(card, text) {
   slideBox(card).appendChild(body);
 }
 
+// A message the question asks to send (an email, an iMessage), drawn as a draft: fields the user changes in place
+// before pressing Send. What they send is what goes (flash/drafts.py).
+const DRAFT_FIELDS = {
+  email: [["to", "To"], ["cc", "Cc"], ["subject", "Subject"], ["body", "Message", true]],
+  imessage: [["text", "Message", true]],
+};
+function draftFields(card, draft) {
+  const box = el("div", "ask-draft");
+  box.dataset.kind = draft.kind;
+  for (const [key, label, long] of DRAFT_FIELDS[draft.kind]) {
+    const field = el("label", "ask-field");
+    const name = el("span");
+    name.textContent = label;
+    const input = el(long ? "textarea" : "input");
+    if (long) input.rows = Math.min(14, Math.max(4, String(draft[key] || "").split("\n").length + 1));
+    else { input.type = "text"; input.spellcheck = false; }
+    input.value = draft[key] || "";
+    input.dataset.field = key;
+    input.setAttribute("aria-label", label);
+    // Typing here is the draft's: y, n and Enter do not answer the card. Ctrl+Enter (Cmd+Enter) sends.
+    input.onkeydown = (e) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === "Enter") { e.preventDefault(); answer(card.dataset.ask, "y"); }
+      e.stopPropagation();
+    };
+    field.append(name, input);
+    box.appendChild(field);
+  }
+  return box;
+}
+// The draft on a card as it stands now, or null for a card without one.
+function draftOf(card) {
+  const box = card && card.querySelector(".ask-draft");
+  if (!box) return null;
+  const out = { kind: box.dataset.kind };
+  for (const input of box.querySelectorAll("[data-field]")) out[input.dataset.field] = input.value;
+  return out;
+}
+
 function askCard(entry) {
   const card = el("div", "block ask");
   card.tabIndex = -1;
   card.dataset.ask = entry.id;
   const [first, ...rest] = String(entry.question).split("\n");
-  card.innerHTML = `<div class="q"></div>${rest.length ? "<pre><code></code></pre>" : ""}<div class="buttons"></div>`;
-  card.querySelector(".q").textContent = first;
-  if (rest.length) card.querySelector("code").textContent = rest.join("\n");
-  const yes = el("button", "btn primary", "Allow");
-  yes.type = "button"; yes.dataset.tip = "Allow"; yes.dataset.keys = "Y";
+  const draft = entry.draft && DRAFT_FIELDS[entry.draft.kind] ? entry.draft : null;
+  if (draft) {
+    // The fields hold what the preview did; an iMessage's recipient stays as it was shown, a line above them.
+    card.classList.add("drafting");
+    card.innerHTML = `<div class="q"></div><div class="ask-to"></div><div class="buttons"></div>`;
+    card.querySelector(".q").textContent = first;
+    const to = draft.kind === "imessage" ? (rest.find((line) => /^To: /.test(line)) || "") : "";
+    if (to) card.querySelector(".ask-to").textContent = to; else card.querySelector(".ask-to").remove();
+    card.insertBefore(draftFields(card, draft), card.querySelector(".buttons"));
+  } else {
+    card.innerHTML = `<div class="q"></div>${rest.length ? "<pre><code></code></pre>" : ""}<div class="buttons"></div>`;
+    card.querySelector(".q").textContent = first;
+    if (rest.length) card.querySelector("code").textContent = rest.join("\n");
+  }
+  const yes = el("button", "btn primary", draft ? "Send" : "Allow");
+  yes.type = "button"; yes.dataset.tip = draft ? "Send it as it is here" : "Allow"; yes.dataset.keys = draft ? "Ctrl Enter" : "Y";
   yes.onclick = () => answer(entry.id, "y");
-  const no = el("button", "btn", "Deny");
-  no.type = "button"; no.dataset.tip = "Deny"; no.dataset.keys = "N";
+  const no = el("button", "btn", draft ? "Don't send" : "Deny");
+  no.type = "button"; no.dataset.tip = draft ? "Don't send" : "Deny"; no.dataset.keys = "N";
   no.onclick = () => answer(entry.id, "n");
   card.querySelector(".buttons").append(yes, no);
   // Asked for the computer: a no can say why, so Flash knows what to do
@@ -6970,12 +7027,19 @@ function askCard(entry) {
   return card;
 }
 
-function settleAsk(card, value, why = "") {
+function settleAsk(card, value, why = "", edited = false) {
   // Folds down from the full card to its one-line record.
   const from = card.offsetHeight;
   card.classList.add("done");
   const q = card.querySelector(".q");
-  q.innerHTML = icon(value === "y" ? "check" : "x") + `<span>${value === "y" ? "Allowed" : "Denied"}: ${esc(q.textContent)}</span>`;
+  if (card.classList.contains("drafting")) {
+    // The draft folds away: what went out is in the tool's result above, as the user left it.
+    const what = q.textContent.replace(/^Send this /i, "").replace(/\?$/, "");
+    const said = value === "y" ? `Sent the ${what}${edited ? " as you changed it" : ""}` : `Didn't send the ${what}`;
+    q.innerHTML = icon(value === "y" ? "check" : "x") + `<span>${esc(said)}</span>`;
+  } else {
+    q.innerHTML = icon(value === "y" ? "check" : "x") + `<span>${value === "y" ? "Allowed" : "Denied"}: ${esc(q.textContent)}</span>`;
+  }
   card.querySelector(".ask-why")?.remove();
   if (why) q.lastChild.append(` (${why})`);
   if (!calm.matches && from) {
@@ -10276,7 +10340,7 @@ function drawEntry(entry, ctx) {
     case "diff": if (ctx.tool) addDiff(ctx.tool, entry.text); break;
     case "plan": if (ctx.tool) addPlan(ctx.tool, entry.steps || []); break;
     case "ask": messagesEl.appendChild(askCard(entry)); break;
-    case "answered": { const card = messagesEl.querySelector(`[data-ask="${entry.id}"]`); if (card) settleAsk(card, entry.answer, entry.why); break; }
+    case "answered": { const card = messagesEl.querySelector(`[data-ask="${entry.id}"]`); if (card) settleAsk(card, entry.answer, entry.why, entry.edited); break; }
     case "error": {
       const node = el("div", "block error", icon("alert") + "<span></span>");
       richText(node.lastChild, entry.text);
@@ -25740,7 +25804,13 @@ function toggleSide() {
 
 const pendingAsk = () => messagesEl.querySelector(".ask:not(.done)");
 function focusAsk() { const card = pendingAsk(); if (card) { card.focus({ preventScroll: true }); reveal(logEl, card, true, 16); } }
-async function answer(id, value, why = "") { buzz(value === "y" ? 10 : 6); await api("/api/answer", { id, answer: value, why }).catch(showFailure); input.focus(); }
+async function answer(id, value, why = "") {
+  buzz(value === "y" ? 10 : 6);
+  // A yes to a draft sends it as the card holds it now, changes and all.
+  const draft = value === "y" ? draftOf(messagesEl.querySelector(`[data-ask="${id}"]`)) : null;
+  await api("/api/answer", { id, answer: value, why, ...(draft ? { draft } : {}) }).catch(showFailure);
+  input.focus();
+}
 function answerPending(value) { const card = pendingAsk(); if (!card) return false; answer(card.dataset.ask, value); return true; }
 
 // Reading: j / k -------------------------------------------------------------

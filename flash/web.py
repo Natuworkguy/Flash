@@ -70,6 +70,7 @@ from . import (
     context,
     demo,
     design,
+    drafts,
     ext_ui,
     extensions,
     greetings,
@@ -122,6 +123,8 @@ from .theme import (
     answer_from,
     capture_tool_output,
     console,
+    offered_draft,
+    set_edited_draft,
 )
 from .tidy import OutGuard
 from .version import __version__
@@ -626,6 +629,10 @@ class Ask:
     done: threading.Event = field(default_factory=threading.Event)
     # Why the user said no, when they said.
     why: str = ""
+    # The message the question asks to send, as a draft the page shows
+    # to be changed first, and as the user sent it, when they changed it.
+    draft: Optional[dict] = None
+    edited: Optional[dict] = None
 
 
 # Events that are part of the conversation and drawn again on reload.
@@ -2204,11 +2211,12 @@ class Session:
 
         def ask(question: str) -> str:
             entry = Ask(id=uuid.uuid4().hex[:8], chat=chat.id,
-                        question=question)
+                        question=question, draft=offered_draft())
             proposal = livedocs.take_proposal()
             self.asks[entry.id] = entry
             self.emit(chat, {
                 "type": "ask", "id": entry.id, "question": question,
+                **({"draft": entry.draft} if entry.draft else {}),
             })
             if proposal is not None:
                 self.document_proposed(entry.id, *proposal)
@@ -2220,22 +2228,33 @@ class Session:
 
             self.asks.pop(entry.id, None)
             answer = entry.answer or "n"
+            if answer == "y" and entry.edited:
+                # Read on this thread by the tool that asked.
+                set_edited_draft(entry.edited)
             self.emit(chat, {
                 "type": "answered", "id": entry.id, "answer": answer,
                 **({"why": entry.why} if entry.why else {}),
+                **({"edited": True} if answer == "y" and entry.edited
+                   else {}),
             })
             # The reason, on a line of its own after the answer.
             return f"{answer}\n{entry.why}" if entry.why else answer
 
         return ask
 
-    def answer(self, ask_id: str, answer: str, why: str = "") -> bool:
+    def answer(
+        self, ask_id: str, answer: str, why: str = "", draft: Any = None,
+    ) -> bool:
         entry = self.asks.get(ask_id)
         if entry is None:
             return False
         entry.answer = "y" if str(answer).lower().startswith("y") else "n"
         if entry.answer == "n":
             entry.why = " ".join(str(why or "").split())[:500]
+        elif entry.draft and draft:
+            # Only a draft that was offered can come back changed, and
+            # only in the fields of its own kind.
+            entry.edited = drafts.changed(entry.draft, draft)
         entry.done.set()
         return True
 
@@ -9003,7 +9022,7 @@ class Handler(BaseHTTPRequestHandler):
             return {
                 "ok": session.answer(
                     str(body.get("id", "")), str(body.get("answer", "")),
-                    str(body.get("why") or ""),
+                    str(body.get("why") or ""), body.get("draft"),
                 )
             }
 

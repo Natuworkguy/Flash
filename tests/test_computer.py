@@ -7,7 +7,7 @@ import sys
 import pytest
 
 from flash import ai, computer, tools, web
-from flash.theme import answer_from
+from flash.theme import answer_from, set_edited_draft
 
 
 @pytest.fixture
@@ -423,6 +423,21 @@ def test_an_imessage_goes_to_a_contacts_mobile_once_agreed(monkeypatch,
     argv = sent(ran)[0]
     assert argv[-2:] == ["+15550102000", "Running late, there by 7"]  # nosec
     assert not any("Running late" in part for part in argv[:-1])  # nosec
+
+
+def test_an_imessage_goes_out_as_the_user_changed_it(monkeypatch, ran):
+    mac_messages(monkeypatch, ran)
+
+    def edit(question):
+        set_edited_draft({"kind": "imessage", "text": "Running later, 7:30"})
+        return "y"
+
+    with answer_from(edit):
+        said = tools.send_imessage("sam", "Running late, there by 7")
+
+    assert said.startswith("Sent to Sam Lee")  # nosec B101
+    assert "Running later, 7:30" in said  # nosec B101
+    assert sent(ran)[0][-1] == "Running later, 7:30"  # nosec B101
 
 
 def test_an_imessage_asks_even_in_autonomous_mode(monkeypatch, ran):
